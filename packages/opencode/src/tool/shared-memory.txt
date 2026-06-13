@@ -1,0 +1,6 @@
+- Read, write, list, or delete entries in shared memory accessible across subagents
+- Operations: 'read' retrieves a value by key, 'write' stores a value with optional tags, 'list' returns all entries or filtered by tags, 'delete' removes an entry
+- Shared memory is in-memory for Phase 3; persistence comes in Phase 4
+- Keys are strings; values can be any JSON-serializable type
+- Tags are optional string arrays for filtering during list operations
+- Use for cross-subagent data sharing within a session

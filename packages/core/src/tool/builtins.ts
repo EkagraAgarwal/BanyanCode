@@ -14,13 +14,12 @@ import { TodoWriteTool } from "./todowrite"
 import { WebFetchTool } from "./webfetch"
 import { WebSearchTool } from "./websearch"
 import { WriteTool } from "./write"
-
 /**
  * Composes only the shipped Location-scoped built-in tool transforms.
  * Each tool retains its implementation and focused tests independently. Dynamic
  * MCP and plugin tools later use separate scoped canonical registrations, while
  * provider/model filtering belongs to a future materialization phase rather
- * than this static list. The caller intentionally supplies shared Location
+ * than this static built-in list. The caller intentionally supplies shared Location
  * services once to this merged set.
  *
  * TODO: Port the remaining launch-follow-up leaves deliberately: edit fuzzy

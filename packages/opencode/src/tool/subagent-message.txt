@@ -1,0 +1,6 @@
+- Send a message to a specific subagent or broadcast to all subagents in the mesh
+- Message kinds: 'request' (ask for action), 'inform' (notify), 'answer' (respond), 'poll' (query state)
+- Fire-and-persist semantics — message is written to durable storage and returns immediately; no acknowledgement required
+- The 'to' field specifies the target agent name; omit for broadcast to all agents
+- 'pending' in response shows how many undelivered messages exist for the parent session
+- Use for orchestrator-to-subagent and subagent-to-subagent communication
