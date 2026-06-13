@@ -9,6 +9,13 @@ import { Truncate } from "@/tool/truncate"
 import { Auth } from "../auth"
 import { ProviderTransform } from "@/provider/transform"
 
+import { readFileSync } from "fs"
+import { fileURLToPath } from "url"
+import { dirname, join } from "path"
+const __dirname_ = dirname(fileURLToPath(import.meta.url))
+const PROMPT_ORCHESTRATOR = readFileSync(join(__dirname_, "prompt", "orchestrator.txt"), "utf8")
+const PROMPT_RESEARCHER = readFileSync(join(__dirname_, "prompt", "researcher.txt"), "utf8")
+
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
@@ -259,6 +266,56 @@ export const layer = Layer.effect(
               user,
             ),
             prompt: PROMPT_SUMMARY,
+          },
+          orchestrator: {
+            name: "orchestrator",
+            description: "Decomposes complex tasks, fans out to parallel subagents, coordinates via shared memory and peer messages.",
+            mode: "primary",
+            native: true,
+            prompt: PROMPT_ORCHESTRATOR,
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                task: {
+                  "*": "deny",
+                  researcher: "allow",
+                  coder: "allow",
+                  explore: "allow",
+                  general: "allow",
+                  scout: "allow",
+                },
+                shared_memory: "allow",
+                subagent_message: "allow",
+                todowrite: "allow",
+                question: "allow",
+              }),
+              user,
+            ),
+            options: {},
+          },
+          researcher: {
+            name: "researcher",
+            description: "Read-only subagent. Performs free web search via DuckDuckGo and reads external docs. Writes findings to shared_memory.",
+            mode: "subagent",
+            native: true,
+            prompt: PROMPT_RESEARCHER,
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                edit: "deny",
+                bash: "deny",
+                websearch: "allow",
+                websearch_free: "allow",
+                webfetch: "allow",
+                read: "allow",
+                grep: "allow",
+                glob: "allow",
+                shared_memory: "allow",
+                subagent_message: "allow",
+              }),
+              user,
+            ),
+            options: {},
           },
         }
 
