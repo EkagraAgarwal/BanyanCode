@@ -1,0 +1,6 @@
+- Store a key-value pair in persistent cross-session memory
+- Required: 'key' (string identifier), 'value' (any JSON-serializable data)
+- Optional: 'context' (description of what this memory is about), 'tags' (array of strings for categorization), 'scope' ('global' for all sessions, 'session' for current session only, defaults to 'global'), 'sessionID' (required when scope is 'session'), 'ttlSeconds' (auto-delete after this many seconds)
+- Returns: 'id' (unique identifier for the entry), 'createdAt' (unix timestamp)
+- Quotas: max 64KB per value, max 10000 entries per scope, max 100MB total storage
+- Use memory_store when the user explicitly asks you to remember something for future sessions

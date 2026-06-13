@@ -1,0 +1,5 @@
+- Retrieve a memory entry by its key
+- Required: 'key' (string identifier to look up)
+- Optional: 'scope' ('global' or 'session', defaults to 'global'), 'sessionID' (required when scope is 'session')
+- Returns: 'entry' (the stored value, or null if not found)
+- Returns the most recent entry if multiple entries exist with the same key

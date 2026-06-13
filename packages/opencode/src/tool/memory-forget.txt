@@ -1,0 +1,5 @@
+- Delete a memory entry by key
+- Required: 'key' (string identifier of the entry to delete)
+- Optional: 'scope' ('global' or 'session', defaults to 'global'), 'sessionID' (required when scope is 'session')
+- Returns: 'ok' (true if deleted, false if entry was not found)
+- Deletes the most recent entry if multiple entries exist with the same key

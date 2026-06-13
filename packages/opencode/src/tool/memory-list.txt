@@ -1,0 +1,4 @@
+- List all memory entries, optionally filtered by prefix, tags, scope, or sessionID
+- Optional filters: 'prefix' (key starts with this string), 'tags' (array — entry must have at least one of these tags), 'scope' ('global' or 'session', defaults to 'global'), 'sessionID' (required when scope is 'session'), 'limit' (max number of entries to return, defaults to all)
+- Returns: 'entries' (array of memory entries with id, key, value, context, tags, scope, sessionID, createdAt, expiresAt)
+- Entries include all metadata, not just the value
