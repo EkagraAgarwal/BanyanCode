@@ -6,9 +6,9 @@
 
 ---
 
-## 0. How to read this document
+## How to read this document
 
-- **Phases** are ordered. Phases 0 → 1 → 2 are safe to land in one PR. Phases 3+ are independent enough to land in parallel feature branches if desired.
+- **Phases** are ordered. Phase 0 → 1 → 2 are safe to land in one PR. Phase 3+ are independent enough to land in parallel feature branches if desired.
 - **Files** are absolute paths from the repo root (Windows: `D:\OpenCode`).
 - **Public APIs** show TypeScript signatures only — no full bodies.
 - **Acceptance criteria** are the testable contract of a phase. A phase is "done" only when every box is checked.
@@ -16,7 +16,7 @@
 
 ---
 
-## 1. Vision and goals
+## Vision and goals
 
 BanyanCode is OpenCode + a parallel agent mesh, native cross-session memory, and a code-aware research and edit loop. The TUI/CLI experience is identical to OpenCode; the changes are visible only when the user invokes an orchestrator-driven workflow.
 
@@ -24,7 +24,7 @@ The 4 features:
 
 1. **Orchestrator + subagent mesh** — A new primary `orchestrator` agent decomposes tasks, fans out to specialized subagents in parallel, and coordinates them via peer messaging and shared memory.
 2. **Cross-session memory** — A persistent, key-value memory store with optional embeddings, exposed as tools and a skill.
-3. **2-phase codebase utility** — Phase 1 builds a polyglot code graph (nodes + edges + files) using tree-sitter. Phase 2 (slash command `/code-embed`) computes embeddings over the same nodes for semantic search.
+3. **2-phase codebase utility** — Phase 5A builds a polyglot code graph (nodes + edges + files) using tree-sitter. Phase 5B / Phase 7 computes embeddings over the same nodes for semantic search.
 4. **Researcher agent with free web search** — A new subagent `researcher` that uses a DuckDuckGo-backed `websearch_free` tool as the default, with the existing Exa/Parallel `websearch` tool as an opt-in fallback.
 
 Goals:
@@ -37,7 +37,122 @@ Goals:
 
 ---
 
-## 2. Confirmed decisions
+## Global Changes
+
+These amendments supersede any conflicting statements in the original BanyanCode implementation plan.
+
+### Feature Gate
+
+A new runtime flag is introduced:
+
+```bash
+BANYANCODE_ENABLE=1
+```
+
+Purpose:
+
+- Safe rollout
+- Easy rollback
+- Dogfooding support
+
+Location:
+
+```
+packages/core/src/effect/runtime-flags.ts
+packages/opencode/src/effect/runtime-flags.ts
+```
+
+Behavior:
+
+When disabled:
+
+- orchestrator agent is not registered
+- researcher agent is not registered
+- memory tools are not registered
+- codegraph tools are not registered
+- mesh tools are not registered
+- BanyanCode slash commands are not registered
+
+The existing OpenCode experience remains unchanged.
+
+---
+
+### Shared Types
+
+Canonical definitions live in `specs/banyancode/types.md`:
+
+```ts
+export type MemoryEntry
+export type CodegraphFile
+export type CodegraphNode
+export type CodegraphEdge
+export type SubagentMessage
+export type PeerInfo
+```
+
+All tools, repos, and services reference these shared types. No duplicate definitions are permitted.
+
+---
+
+### Resource Limits
+
+#### Subagent Limits
+
+Defaults:
+
+```ts
+MAX_PARALLEL_SUBAGENTS = 3
+```
+
+Hard cap:
+
+```ts
+MAX_PARALLEL_SUBAGENTS_HARD = 5
+```
+
+Enforced by:
+
+- MeshCoordinator
+- SubagentBus
+- orchestrator prompt
+
+#### Memory Limits
+
+Defaults:
+
+```ts
+maxEntriesPerScope = 10000
+maxValueSizeBytes = 64 * 1024
+maxTotalStorageBytes = 100 * 1024 * 1024
+```
+
+Memory writes exceeding limits fail with a structured error.
+
+#### Codegraph Ignore Rules
+
+Indexer automatically excludes:
+
+```
+node_modules
+dist
+build
+coverage
+.next
+.cache
+target
+vendor
+```
+
+Respects:
+
+```
+.gitignore
+.banyancodeignore
+```
+
+---
+
+## Confirmed decisions
 
 | Decision | Choice |
 |---|---|
@@ -49,10 +164,13 @@ Goals:
 | Default branch | `dev` (OpenCode default). `git push -u origin main` per user. |
 | Internal package names | Stay `@opencode-ai/*` (less churn; SDK consumers don't break). |
 | User-facing binary | Stays `opencode` for now (cheaper diff). BanyanCode branding lives in install banner, README, and `package.json` description. Binary rename is a follow-up. |
+| Subagent messaging | Fire-and-persist. No explicit acknowledgement protocol for V1. |
+| Fanout | Default: 3. Maximum: 5. |
+| File deduplication | Do not deduplicate files. Use content hashes only for change detection and incremental indexing, not storage reduction. |
 
 ---
 
-## 3. Out of scope
+## Out of scope
 
 - `packages/desktop`, `packages/app`, `packages/web`, `packages/storybook`, `packages/console`, `packages/enterprise`, `packages/stats`, `packages/slack`, `packages/identity`, `packages/containers`. Do not touch.
 - Binary rename (`opencode` → `banyancode`). Defer until after the 4 features are stable.
@@ -64,7 +182,7 @@ Goals:
 
 ---
 
-## 4. Repository baseline
+## Repository baseline
 
 Working from the existing `dev` branch on the OpenCode fork. The `dev` branch contains the V2 Session Core, the LLM route runtime, the Effect-based service layout, and the TUI bridge. The plan assumes:
 
@@ -78,11 +196,11 @@ The fork does not change the build system. It only adds files and edits a small,
 
 ---
 
-## 5. Phase 0 — Rebranding
+## Phase 0 — Rebranding
 
 **Goal:** BanyanCode is the user-facing name everywhere a user would see the OpenCode name. Internal code namespaces and CLI surface stay unchanged so the diff stays reviewable.
 
-### 5.1 Files to modify
+### 0.1 Files to modify
 
 | Path | Change |
 |---|---|
@@ -90,7 +208,6 @@ The fork does not change the build system. It only adds files and edits a small,
 | `install` (root) | Banner text "OpenCode Installer" → "BanyanCode Installer". `APP=opencode` → `APP=banyancode`. `INSTALL_DIR=$HOME/.opencode/bin` → `INSTALL_DIR=$HOME/.banyancode/bin`. Path-add lines updated. Banner ASCII art swapped for a new "BANYAN" mark. |
 | `README.md` (root) — there is no root README; create one. | Add a short README pointing at `packages/opencode/README.md` for usage. |
 | `packages/opencode/README.md` | First line: "OpenCode is an AI-powered development tool." → "BanyanCode is a multi-agent development tool built on top of OpenCode." Reference the fork and the BanyanCode-specific features. |
-| `packages/desktop/README.md`, `packages/app/README.md`, `packages/web/README.md` | Add a "BanyanCode fork note" at the top: desktop/web/Storybook are not in scope; do not modify. |
 | `LICENSE` | Unchanged (MIT). |
 | `CONTRIBUTING.md` | Update repo URLs (`anomalyco/opencode` → `EkagraAgarwal/BanyanCode`) and the vouch/denounce links if any. |
 | `CONTEXT.md` | Unchanged (language glossary, repo-agnostic). |
@@ -102,7 +219,24 @@ The fork does not change the build system. It only adds files and edits a small,
 | `sst.config.ts`, `flake.nix`, `nix/`, `infra/`, `github/`, `perf/` | Unchanged. |
 | `AGENTS.md` (root) | Add a one-paragraph "BanyanCode fork" note at the top: the 4 features, the local-only branch, and a pointer to `BANYANCODE_PLAN.md`. Keep all existing content. |
 
-### 5.2 Acceptance criteria
+### 0.2 Fork notes
+
+Fork notes only appear in:
+
+- `README.md` (root)
+- `packages/opencode/README.md`
+- `AGENTS.md` (root)
+
+The following packages are explicitly out of scope and untouched:
+
+```
+packages/desktop/*
+packages/app/*
+packages/web/*
+packages/storybook/*
+```
+
+### 0.3 Acceptance criteria
 
 - `grep -r "OpenCode" README.md CONTRIBUTING.md` (root) returns only the BanyanCode fork note.
 - `grep "opencode" install` shows `APP=banyancode` and `INSTALL_DIR=$HOME/.banyancode/bin` only.
@@ -111,13 +245,13 @@ The fork does not change the build system. It only adds files and edits a small,
 
 ---
 
-## 6. Phase 1 — Storage layer
+## Phase 1 — Storage layer
 
 **Goal:** All BanyanCode persistence lives in Drizzle tables in `packages/core/src/database/`. The schema, the migration, and the read/write helpers land before any tool that uses them.
 
 Spec: `specs/banyancode/storage.md`.
 
-### 6.1 Files to create
+### 1.1 Files to create
 
 | Path | Purpose |
 |---|---|
@@ -132,12 +266,12 @@ Spec: `specs/banyancode/storage.md`.
 | `packages/core/src/effect/migrate.ts` | Single `migrate({ dryRun })` Effect that runs all pending migrations including the new ones. |
 | `packages/core/script/migration.ts` (extend) | Add the new migration files to the runner. |
 
-### 6.2 Files to modify
+### 1.2 Files to modify
 
 - `packages/core/src/database/schema.sql.ts` (existing barrel, only contains a `Timestamps` helper today) — re-export the new `*.sql.ts` modules so the Drizzle schema generator sees them. (There is no `schema.ts`; the file is `schema.sql.ts`.)
 - `packages/core/src/storage/index.ts` (existing barrel) — re-export the new repo modules.
 
-### 6.3 Public APIs
+### 1.3 Public APIs
 
 ```ts
 // memory repo
@@ -174,23 +308,56 @@ export class SubagentMessagesRepo extends Context.Service<SubagentMessagesRepo, 
 }>()("...") {}
 ```
 
-### 6.4 Acceptance criteria
+### 1.4 Acceptance criteria
 
 - `bun run --cwd packages/core migration --dry-run` lists the new migrations.
 - `bun test --cwd packages/core test/storage/memory.test.ts` round-trips entries across `global` and `session` scopes.
-- `codegraph.test.ts` indexes a 5-file fixture, queries `codegraph_callers` and `codegraph_dependents` correctly.
 - `subagent-messages.test.ts` publishes 100 messages from 4 concurrent subagents; reader sees all 100.
 - All schemas use `snake_case` column names per the root `AGENTS.md` style guide.
+- Phase 1 tests storage only. `codegraph_callers` tests and `codegraph_dependents` tests belong to Phase 5B.
 
 ---
 
-## 7. Phase 2 — `websearch_free`
+## Phase 2 — Feature Gate + Websearch
+
+**Goal:** A new runtime gate `BANYANCODE_ENABLE` controls whether BanyanCode features are registered, plus the `websearch_free` tool for the researcher agent.
+
+### 2.1 Feature Gate
+
+Spec: `specs/banyancode/runtime-flags.md`.
+
+#### Files to create
+
+| Path | Purpose |
+|---|---|
+| `packages/core/src/effect/runtime-flags.ts` | `RuntimeFlags` service with `BANYANCODE_ENABLE` capture. |
+| `packages/opencode/src/effect/runtime-flags.ts` | Same for opencode package. |
+
+#### Files to modify
+
+- Tool registration files — wrap `BANYANCODE_ENABLE` gates around BanyanCode tool registrations.
+- Agent registration files — wrap agent registration with `BANYANCODE_ENABLE` check.
+
+#### Behavior
+
+When `BANYANCODE_ENABLE` is not set or is `0`:
+
+- orchestrator agent is not registered
+- researcher agent is not registered
+- memory tools are not registered
+- codegraph tools are not registered
+- mesh tools are not registered
+- BanyanCode slash commands are not registered
+
+The existing OpenCode experience remains unchanged.
+
+### 2.2 Websearch Free
 
 **Goal:** A new tool that searches DuckDuckGo HTML and returns a normalized result list, ready to be plugged into the researcher agent.
 
 Spec: `specs/banyancode/websearch-free.md`.
 
-### 7.1 Files to create
+#### Files to create
 
 | Path | Purpose |
 |---|---|
@@ -203,7 +370,7 @@ Spec: `specs/banyancode/websearch-free.md`.
 | `packages/opencode/src/tool/websearch-free.txt` | Tool description for the LLM. |
 | `packages/opencode/test/banyan/websearch-free.test.ts` | Unit tests with a mocked `HttpClient`. |
 
-### 7.2 Public APIs
+#### Public APIs
 
 ```ts
 // packages/core/src/tool/websearch-free.ts
@@ -225,22 +392,30 @@ export const WebSearchFreeTool = Tool.make({
 })
 ```
 
-### 7.3 Acceptance criteria
+#### Runtime registration
+
+```ts
+if (RuntimeFlags.BANYANCODE_ENABLE) {
+  register(WebSearchFreeTool)
+}
+```
+
+#### Acceptance criteria
 
 - `bun test --cwd packages/opencode test/banyan/websearch-free.test.ts` passes against a recorded DuckDuckGo HTML fixture.
 - Calling the tool against the live DuckDuckGo endpoint returns at least one result for `query="effect-ts README"`. (Manual smoke test; not in CI.)
 - 25 s timeout; 256 KB body cap; same shape as `packages/core/src/tool/websearch.ts:17-19`.
-- `websearch_free` is **not** enabled for the `build` primary agent by default. It is only enabled for agents that opt in (the new `researcher` agent in Phase 7).
+- `websearch_free` is **not** enabled for the `build` primary agent by default. It is only enabled for agents that opt in (the new `researcher` agent in Phase 8).
 
 ---
 
-## 8. Phase 3 — `shared_memory` and `subagent_message`
+## Phase 3 — Mesh
 
-**Goal:** Two tools that let multiple subagents running under one parent session share state and exchange messages. These are the foundation of the orchestrator.
+**Goal:** Two tools that let multiple subagents running under one parent session share state and exchange messages via fire-and-persist semantics.
 
 Spec: `specs/banyancode/subagent-mesh.md`.
 
-### 8.1 Files to create
+### 3.1 Files to create
 
 | Path | Purpose |
 |---|---|
@@ -253,7 +428,7 @@ Spec: `specs/banyancode/subagent-mesh.md`.
 | `packages/opencode/test/banyan/shared-memory.test.ts` | Concurrency tests. |
 | `packages/opencode/test/banyan/subagent-mesh.test.ts` | Mesh end-to-end: orchestrator + 3 background subagents. |
 
-### 8.2 Files to modify
+### 3.2 Files to modify
 
 - `packages/core/src/permission/permission.ts` — add `shared_memory`, `subagent_message` permission keys.
 - `packages/core/src/config/config.ts` — schema updates.
@@ -261,7 +436,7 @@ Spec: `specs/banyancode/subagent-mesh.md`.
 - `packages/opencode/src/effect/instance-state.ts` (read; do not modify if unnecessary) — `InstanceState` already supports per-directory state; subagent mesh uses it.
 - `packages/opencode/src/bus/index.ts` — add a new event type `subagent.message` so the TUI can render it.
 
-### 8.3 Public APIs
+### 3.3 Public APIs
 
 ```ts
 // shared_memory
@@ -297,7 +472,13 @@ export class SubagentBus extends Context.Service<SubagentBus, {
 }>()("@banyancode/SubagentBus") {}
 ```
 
-### 8.4 Acceptance criteria
+### 3.4 Fire-and-persist semantics
+
+Subagent messaging uses `fire-and-persist` semantics, not `request-ack`.
+
+Messages are durable via the `subagent_messages` table. No explicit acknowledgement protocol is required for V1.
+
+### 3.5 Acceptance criteria
 
 - `shared-memory.test.ts` asserts: 3 concurrent writes do not lose data; reads see latest write; `list` returns keys with the right tags; `delete` removes only the named key.
 - `subagent-mesh.test.ts` asserts: orchestrator-style test that runs 3 background subagents (`it.live`); all 3 publish to shared memory; orchestrator reads them back; subagent-message delivery is observed at the TUI bus level.
@@ -305,13 +486,13 @@ export class SubagentBus extends Context.Service<SubagentBus, {
 
 ---
 
-## 9. Phase 4 — `memory_*` and the `memory` skill
+## Phase 4 — Memory
 
 **Goal:** A persistent, cross-session memory store exposed as 5 tools and a skill. Default scope is `global`; `session` opt-in.
 
 Spec: `specs/banyancode/memory.md`.
 
-### 9.1 Files to create
+### 4.1 Files to create
 
 | Path | Purpose |
 |---|---|
@@ -320,14 +501,14 @@ Spec: `specs/banyancode/memory.md`.
 | `packages/opencode/src/skill/memory/SKILL.md` | Skill that tells the LLM when to use `memory_*` vs `shared_memory`. |
 | `packages/opencode/test/banyan/memory.test.ts` | Round-trip, scope isolation, TTL expiry, embedding-based search. |
 
-### 9.2 Files to modify
+### 4.2 Files to modify
 
 - `packages/core/src/permission/permission.ts` — add `memory_store`, `memory_recall`, `memory_list`, `memory_forget`, `memory_search`.
 - `packages/core/src/config/config.ts` — schema.
 - `packages/core/src/effect/runtime-flags.ts` — `BANYANCODE_EMBEDDING_MODEL` env capture.
 - `packages/opencode/src/effect/runtime-flags.ts` — same.
 
-### 9.3 Public APIs
+### 4.3 Public APIs
 
 ```ts
 // 5 tools, all with input/output Schema following the existing style.
@@ -349,7 +530,32 @@ export class EmbeddingProvider extends Context.Service<EmbeddingProvider, {
 }>()("@banyancode/EmbeddingProvider") {}
 ```
 
-### 9.4 Skill content (`SKILL.md`)
+### 4.4 Quotas
+
+Memory storage uses quotas defined in Global Changes:
+
+```ts
+maxEntriesPerScope = 10000
+maxValueSizeBytes = 64 * 1024
+maxTotalStorageBytes = 100 * 1024 * 1024
+```
+
+Memory writes exceeding limits fail with a structured error.
+
+### 4.5 Embedding search behavior
+
+1. embedding search
+2. keyword fallback
+
+When embeddings are unavailable:
+
+```ts
+degraded = true
+```
+
+must always be returned.
+
+### 4.6 Skill content (`SKILL.md`)
 
 ```yaml
 ---
@@ -358,7 +564,7 @@ description: Persistent, cross-session memory for BanyanCode agents. Use memory_
 ---
 ```
 
-### 9.5 Acceptance criteria
+### 4.7 Acceptance criteria
 
 - `memory.test.ts` round-trips 100 entries, exercises `scope: "session"` and `scope: "global"`, asserts `ttlSeconds` expiry via the `vacuum` repo call.
 - `memory_search` returns the correct top-1 result when `BANYANCODE_EMBEDDING_MODEL` is set; returns a keyword-match result and `degraded: true` when the env var is unset.
@@ -366,13 +572,13 @@ description: Persistent, cross-session memory for BanyanCode agents. Use memory_
 
 ---
 
-## 10. Phase 5 — `codegraph_*` and tree-sitter indexer
+## Phase 5A — Codegraph Build
 
 **Goal:** A polyglot code graph that captures files, nodes (functions/classes/types), and edges (imports/calls/extends). Built via tree-sitter for first-class languages, regex for the rest.
 
 Spec: `specs/banyancode/codegraph.md`.
 
-### 10.1 Files to create
+### 5A.1 Files to create
 
 | Path | Purpose |
 |---|---|
@@ -387,17 +593,16 @@ Spec: `specs/banyancode/codegraph.md`.
 | `packages/core/src/codegraph/langs/registry.ts` | Map from `language` (lowercased extension) to parser. |
 | `packages/opencode/src/command/template/codegraph-build.txt` | Slash command template. |
 | `packages/opencode/src/command/index.ts` (modify) | Register the command. |
-| `packages/opencode/test/banyan/codegraph.test.ts` | Index fixture repo, query impact/dependents/callers. |
+| `packages/opencode/test/banyan/codegraph.test.ts` | Index fixture repo, query files/nodes/edges/imports. |
 
-### 10.2 Files to modify
+### 5A.2 Files to modify
 
 - `packages/core/src/permission/permission.ts` — add `codegraph_build`, `codegraph_query`, `codegraph_impact`, `codegraph_dependents`, `codegraph_callers`.
 - `packages/core/src/config/config.ts` — schema.
 - `packages/opencode/package.json` — add `tree-sitter-typescript`, `tree-sitter-javascript`, `tree-sitter-python`, `tree-sitter-go`, `tree-sitter-rust`.
-- `bunfig.toml` (root) — no change.
 - `packages/opencode/src/command/index.ts` — register the new command.
 
-### 10.3 Public APIs
+### 5A.3 Public APIs
 
 ```ts
 // codegraph_build
@@ -405,11 +610,11 @@ Spec: `specs/banyancode/codegraph.md`.
 // codegraph_query
 { input: { file?: string; function?: string; kind?: "file" | "function" | "class" | "method" | "type" | "variable" }; output: { nodes: CodegraphNode[] } }
 // codegraph_impact
-{ input: { nodeID: string }; output: { dependents: CodegraphNode[]; transitive: CodegraphNode[] } }
+{ input: { nodeID?: string; function?: string }; output: { dependents: CodegraphNode[]; transitive: CodegraphNode[] } }
 // codegraph_dependents
-{ input: { nodeID: string }; output: { dependents: CodegraphNode[] } }
+{ input: { nodeID?: string; function?: string }; output: { dependents: CodegraphNode[] } }
 // codegraph_callers
-{ input: { nodeID: string }; output: { callers: CodegraphNode[] } }
+{ input: { nodeID?: string; function?: string }; output: { callers: CodegraphNode[] } }
 ```
 
 ```ts
@@ -420,21 +625,162 @@ export class CodegraphIndexer extends Context.Service<CodegraphIndexer, {
 }>()("@banyancode/CodegraphIndexer") {}
 ```
 
-### 10.4 Acceptance criteria
+### 5A.4 Ignore rules
+
+Indexer automatically excludes:
+
+```
+node_modules
+dist
+build
+coverage
+.next
+.cache
+target
+vendor
+```
+
+Respects:
+
+```
+.gitignore
+.banyancodeignore
+```
+
+### 5A.5 Acceptance criteria
 
 - `codegraph_build` over the BanyanCode repo itself indexes 100% of `.ts`/`.tsx` files with no errors.
-- `codegraph_callers({ function: "SessionV2.prompt" })` returns the test file, the orchestrator prompt, and the task tool call site.
-- `codegraph_impact` returns the full transitive dependent set within 1 s for the same fixture.
+- `codegraph_query` returns correct nodes by file, function name, and kind.
 - Tree-sitter WASM loads in Bun (`web-tree-sitter` already vendored in `packages/opencode/package.json`). The same code path works under Node for CI.
 - The indexer is **cancellable** via an `AbortController` plumbed through the Effect layer (no leaks if the user hits `Esc`).
 
 ---
 
-## 11. Phase 6 — `/code-embed` and `code_search`
+## Phase 5B — Codegraph Analysis
+
+**Goal:** Graph analysis utilities: impact analysis, dependents, transitive traversal, and graph walking utilities.
+
+### 5B.1 Files to create
+
+| Path | Purpose |
+|---|---|
+| `packages/core/src/codegraph/analyzer.ts` | Effect Service for graph analysis operations. |
+| `packages/opencode/test/banyan/codegraph-analysis.test.ts` | Impact analysis, transitive traversal tests. |
+
+### 5B.2 Public APIs
+
+Graph analysis operations:
+
+```ts
+// impact analysis
+{ input: { nodeID?: string; function?: string }; output: { dependents: CodegraphNode[]; transitive: CodegraphNode[] } }
+
+// dependents
+{ input: { nodeID?: string; function?: string }; output: { dependents: CodegraphNode[] } }
+
+// callers
+{ input: { nodeID?: string; function?: string }; output: { callers: CodegraphNode[] } }
+```
+
+### 5B.3 API change for callers/dependents/impact
+
+Replace:
+
+```ts
+{
+  nodeID: string
+}
+```
+
+with:
+
+```ts
+{
+  nodeID?: string
+  function?: string
+}
+```
+
+for `codegraph_callers`, `codegraph_dependents`, and `codegraph_impact`. This allows both direct node queries and agent-friendly function name queries.
+
+### 5B.4 Acceptance criteria
+
+- `codegraph_callers({ function: "SessionV2.prompt" })` returns the test file, the orchestrator prompt, and the task tool call site.
+- `codegraph_impact` returns the full transitive dependent set within 1 s for the same fixture.
+- Impact analysis completes within 1 second on fixture repositories.
+
+---
+
+## Phase 6 — Resource Monitoring
+
+**Goal:** Expose machine health to orchestrator and users.
+
+### 6.1 Files to create
+
+| Path | Purpose |
+|---|---|
+| `packages/core/src/effect/system-monitor.ts` | Effect Service for system metrics. |
+| `packages/core/src/tool/system-status.ts` | `Tool.make(...)` for `system_status`. |
+| `packages/opencode/test/banyan/system-monitor.test.ts` | Unit tests. |
+
+### 6.2 Implementation
+
+Primary library:
+
+```
+systeminformation
+```
+
+Provides:
+
+- CPU
+- RAM
+- Disk
+- Network
+
+GPU Support:
+
+Optional adapters:
+
+```
+nvidia-smi
+rocm-smi
+Metal
+```
+
+### 6.3 Output
+
+```ts
+{
+  cpuPercent: number
+  memoryUsedBytes: number
+  memoryTotalBytes: number
+  gpuPercent?: number
+  vramUsedBytes?: number
+  platform: "windows" | "linux" | "darwin"
+}
+```
+
+### 6.4 Acceptance criteria
+
+Works on:
+
+- Windows
+- Linux
+
+macOS support is best-effort.
+
+---
+
+## Phase 7 — Code Embeddings
 
 **Goal:** Compute embeddings for every codegraph node, store them in `codegraph_embeddings`, and expose a semantic search tool.
 
-### 11.1 Files to create
+### 7.1 Local-first design
+
+Embeddings are generated on the user's machine. The model may be remote. Storage remains local. No server-side BanyanCode infrastructure is required.
+
+### 7.2 Files to create
 
 | Path | Purpose |
 |---|---|
@@ -444,13 +790,13 @@ export class CodegraphIndexer extends Context.Service<CodegraphIndexer, {
 | `packages/opencode/src/command/index.ts` (modify) | Register the command. |
 | `packages/opencode/test/banyan/code-embed.test.ts` | Embed a fixture, run `code_search`, assert top-k relevance. |
 
-### 11.2 Files to modify
+### 7.3 Files to modify
 
 - `packages/core/src/permission/permission.ts` — add `code_search`, `code_embed`.
 - `packages/core/src/config/config.ts` — schema.
 - `packages/core/src/effect/embedding-provider.ts` — already created in Phase 4; reuse.
 
-### 11.3 Public APIs
+### 7.4 Public APIs
 
 ```ts
 // code_search
@@ -459,7 +805,7 @@ export class CodegraphIndexer extends Context.Service<CodegraphIndexer, {
 { input: { file?: string }; output: { embedded: number; skipped: number; model: string | undefined } }
 ```
 
-### 11.4 Acceptance criteria
+### 7.5 Acceptance criteria
 
 - With `BANYANCODE_EMBEDDING_MODEL=openai/text-embedding-3-small`, `code_search("error handling in session runner")` returns the matching function in the top 3.
 - Without the env var, `code_search` returns keyword-match results and `degraded: true`.
@@ -467,25 +813,25 @@ export class CodegraphIndexer extends Context.Service<CodegraphIndexer, {
 
 ---
 
-## 12. Phase 7 — Orchestrator and researcher agents
+## Phase 8 — Agents
 
-**Goal:** Two new built-in agents wired into the agent registry.
+**Goal:** Two new built-in agents wired into the agent registry: `orchestrator` and `researcher`.
 
 Spec: `specs/banyancode/orchestrator.md`.
 
-### 12.1 Files to create
+### 8.1 Files to create
 
 | Path | Purpose |
 |---|---|
 | `packages/opencode/src/agent/prompt/orchestrator.txt` | System prompt. |
 | `packages/opencode/src/agent/prompt/researcher.txt` | System prompt. |
 
-### 12.2 Files to modify
+### 8.2 Files to modify
 
 - `packages/opencode/src/agent/agent.ts` — add `orchestrator` and `researcher` to the `agents` table. **Insert before** the `for (const [key, value] of Object.entries(cfg.agent ?? {}))` loop so user config can still override.
 - `packages/opencode/src/cli/cmd/tui.ts` — register the new agent names in the cycle order. Default cycle becomes: `build`, `plan`, `orchestrator`.
 
-### 12.3 Public APIs
+### 8.3 Public APIs
 
 The agents use the existing `Agent.Info` shape (`packages/opencode/src/agent/agent.ts:35-56`). The new entries are:
 
@@ -543,7 +889,30 @@ researcher: {
 },
 ```
 
-### 12.4 Acceptance criteria
+### 8.4 Fanout limits
+
+Default fanout:
+
+```ts
+3 subagents
+```
+
+Maximum:
+
+```ts
+5 subagents
+```
+
+Enforced by MeshCoordinator, SubagentBus, and orchestrator prompt.
+
+### 8.5 Orchestrator prompt additions
+
+- Prefer 2–3 subagents
+- Escalate to user before larger fanouts
+- Reuse `shared_memory`
+- Reuse prior findings from `memory_store`
+
+### 8.6 Acceptance criteria
 
 - `tab` cycles through `build`, `plan`, `orchestrator` in the TUI.
 - `@researcher` resolves to the new subagent.
@@ -552,22 +921,42 @@ researcher: {
 
 ---
 
-## 13. Phase 8 — `mesh-coordinator` and TUI
+## Phase 9 — TUI
 
 **Goal:** A small Effect service that drains subagent messages and emits TUI events. Optional: a sidebar widget.
 
-### 13.1 Files to create
+### 9.1 Files to create
 
 | Path | Purpose |
 |---|---|
 | `packages/opencode/src/effect/mesh-coordinator.ts` | Effect Service that watches the SubagentBus and emits status events. |
 
-### 13.2 Files to modify
+### 9.2 Files to modify
 
 - `packages/tui/src/context/...` — wire a new sidebar widget that shows live peer activity. (Out of detailed scope: ship a minimal version, defer polish.)
 - `packages/opencode/src/cli/cmd/tui.ts` — bootstrap the `MeshCoordinator` on session start.
 
-### 13.3 Public APIs
+### 9.3 Mesh sidebar
+
+The mesh sidebar becomes:
+
+```ts
+enabled: false
+```
+
+by default.
+
+Config:
+
+```json
+{
+  "meshSidebar": true
+}
+```
+
+Reason: Avoid overwhelming users with orchestration noise.
+
+### 9.4 Public APIs
 
 ```ts
 export class MeshCoordinator extends Context.Service<MeshCoordinator, {
@@ -576,30 +965,33 @@ export class MeshCoordinator extends Context.Service<MeshCoordinator, {
 }>()("@banyancode/MeshCoordinator") {}
 ```
 
-### 13.4 Acceptance criteria
+### 9.5 Acceptance criteria
 
-- While 3 background subagents run, the TUI sidebar updates within 1 s when each one writes to `shared_memory` or sends a peer message.
+- While 3 background subagents run, the TUI sidebar updates within 1 s when each one writes to `shared_memory` or sends a peer message (if `meshSidebar: true`).
 - Closing the TUI cleanly disposes the mesh (no leaked fibers).
+- Default `meshSidebar: false` does not show the mesh sidebar.
 
 ---
 
-## 14. Phase 9 — Tests
+## Phase 10 — Tests
 
 **Goal:** Tests for every new code path, plus a focused orchestrator + subagent mesh end-to-end test.
 
-### 14.1 Files to create
+### 10.1 Files to create
 
 | Path | Purpose |
 |---|---|
 | `packages/opencode/test/banyan/memory.test.ts` | Phase 4 tests. |
 | `packages/opencode/test/banyan/shared-memory.test.ts` | Phase 3 tests. |
 | `packages/opencode/test/banyan/subagent-mesh.test.ts` | Phase 3 end-to-end. |
-| `packages/opencode/test/banyan/codegraph.test.ts` | Phase 5 tests. |
-| `packages/opencode/test/banyan/code-embed.test.ts` | Phase 6 tests. |
+| `packages/opencode/test/banyan/codegraph.test.ts` | Phase 5A tests. |
+| `packages/opencode/test/banyan/codegraph-analysis.test.ts` | Phase 5B tests. |
+| `packages/opencode/test/banyan/code-embed.test.ts` | Phase 7 tests. |
 | `packages/opencode/test/banyan/websearch-free.test.ts` | Phase 2 tests. |
-| `packages/opencode/test/banyan/orchestrator.test.ts` | Phase 7 tests (orchestrator spawns researcher + explore). |
+| `packages/opencode/test/banyan/system-monitor.test.ts` | Phase 6 tests. |
+| `packages/opencode/test/banyan/orchestrator.test.ts` | Phase 8 tests (orchestrator spawns researcher + explore). |
 
-### 14.2 Test patterns (per `packages/opencode/test/AGENTS.md`)
+### 10.2 Test patterns (per `packages/opencode/test/AGENTS.md`)
 
 - `it.effect` for tests that should run with `TestClock` and `TestConsole`.
 - `it.live` for tests that depend on real time, filesystem, git, or live HTTP.
@@ -609,18 +1001,18 @@ export class MeshCoordinator extends Context.Service<MeshCoordinator, {
 - `Layer.mock` for partial service stubs.
 - Recorded tests (`RECORD=true` + `RECORDED_*` filters) only for live provider paths; BanyanCode tests do not need them.
 
-### 14.3 Acceptance criteria
+### 10.3 Acceptance criteria
 
 - `bun turbo test --filter @opencode-ai/opencode` passes locally and in CI.
 - `subagent-mesh.test.ts` runs 3 background subagents and asserts all 3 publish to `shared_memory` before the orchestrator reads. This is the most important test in BanyanCode.
 
 ---
 
-## 15. Phase 10 — Docs
+## Phase 11 — Docs
 
 **Goal:** BanyanCode is documented in a way that makes its value obvious.
 
-### 15.1 Files to create
+### 11.1 Files to create
 
 | Path | Purpose |
 |---|---|
@@ -632,6 +1024,7 @@ export class MeshCoordinator extends Context.Service<MeshCoordinator, {
 | `specs/banyancode/codegraph.md` | Code graph + embeddings. |
 | `specs/banyancode/websearch-free.md` | DuckDuckGo tool. |
 | `specs/banyancode/storage.md` | Drizzle tables. |
+| `specs/banyancode/types.md` | Shared type definitions. |
 | `packages/opencode/README.md` (modify) | BanyanCode fork note. |
 | `packages/opencode/src/skill/memory/SKILL.md` | Memory skill. |
 | `packages/opencode/src/skill/codegraph/SKILL.md` | Codegraph skill. |
@@ -639,8 +1032,20 @@ export class MeshCoordinator extends Context.Service<MeshCoordinator, {
 | `packages/docs/src/content/docs/banyancode-orchestrator.mdx` | Orchestrator usage. |
 | `packages/docs/src/content/docs/banyancode-memory.mdx` | Memory usage. |
 | `packages/docs/src/content/docs/banyancode-codegraph.mdx` | Codegraph + embeddings usage. |
+| `packages/docs/src/content/docs/banyancode-websearch.mdx` | WebSearch tool usage. |
+| `packages/docs/src/content/docs/banyancode-mesh.mdx` | Mesh and subagent messaging. |
+| `packages/docs/src/content/docs/banyancode-system-monitor.mdx` | System monitoring. |
+| `packages/docs/src/content/docs/banyancode-resource-monitoring.mdx` | Resource monitoring. |
 
-### 15.2 Acceptance criteria
+### 11.2 Documentation requirements
+
+Every BanyanCode feature must have:
+
+- overview
+- usage examples
+- troubleshooting section
+
+### 11.3 Acceptance criteria
 
 - A new user reading the docs can answer: "What does BanyanCode add over OpenCode?" in 30 seconds.
 - Each new tool has a usage example in `packages/docs/`.
@@ -648,24 +1053,24 @@ export class MeshCoordinator extends Context.Service<MeshCoordinator, {
 
 ---
 
-## 16. Risk register
+## Risk register
 
 | Risk | Phase | Mitigation |
 |---|---|---|
-| Tree-sitter WASM fails to load under Bun or Node in CI | 5 | Smoke test on first launch; fall back to regex-only mode with a clear warning. |
-| `codegraph_build` over a large monorepo takes >5 min | 5 | Stream progress to the TUI; cancellable; `/codegraph-build --force` only re-indexes changed files. |
+| Tree-sitter WASM fails to load under Bun or Node in CI | 5A | Smoke test on first launch; fall back to regex-only mode with a clear warning. |
+| `codegraph_build` over a large monorepo takes >5 min | 5A | Stream progress to the TUI; cancellable; `/codegraph-build --force` only re-indexes changed files. |
 | `subagent_message` delivery races a process restart | 3 | Persist every message in the `subagent_messages` table; `subagent-bus` reads on subscription. |
 | DuckDuckGo HTML format changes | 2 | Parser is isolated to `parse.ts`; one place to update. |
-| `BANYANCODE_EMBEDDING_MODEL` left unset in production | 4, 6 | `code_search` and `memory_search` degrade to keyword match; `degraded: true` flag in the result; one-line notice in the TUI. |
-| Orchestrator over-uses parallel subagents | 7 | Prompt explicitly limits fan-out: prefer 2-3 subagents, escalate to user if more is needed. |
-| Memory grows unbounded | 4 | `ttlSeconds` per entry; `vacuum()` runs on every `memory_store`; CLI exposes `banyancode memory vacuum`. |
-| Permission key `websearch_free` collides with future OpenCode permission keys | 2, 4-7 | Use `websearch_free` (snake_case, descriptive); document in the BanyanCode README. |
-| TUI sidebar pollutes with too many mesh events | 8 | Default 1 s debounce; `MeshCoordinator.status` collapses repeated events. |
-| `task` background subagent gating `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS` not enabled by default | 3, 7 | BanyanCode's `opencode.json` ships with this enabled by default; documented. |
+| `BANYANCODE_EMBEDDING_MODEL` left unset in production | 4, 7 | `code_search` and `memory_search` degrade to keyword match; `degraded: true` flag in the result; one-line notice in the TUI. |
+| Orchestrator over-uses parallel subagents | 8 | Prompt explicitly limits fan-out: prefer 2-3 subagents, maximum 5, escalate to user if more is needed. |
+| Memory grows unbounded | 4 | `ttlSeconds` per entry; `vacuum()` runs on every `memory_store`; CLI exposes `banyancode memory vacuum`; quotas enforced. |
+| Permission key `websearch_free` collides with future OpenCode permission keys | 2, 4-8 | Use `websearch_free` (snake_case, descriptive); document in the BanyanCode README. |
+| TUI sidebar pollutes with too many mesh events | 9 | Default `meshSidebar: false`; `MeshCoordinator.status` collapses repeated events. |
+| `BANYANCODE_ENABLE` not set by default | 2 | Phase C removes the env gate after stable release. |
 
 ---
 
-## 17. Migration and rollout
+## Migration and rollout
 
 ### Migration from OpenCode
 
@@ -675,6 +1080,7 @@ export class MeshCoordinator extends Context.Service<MeshCoordinator, {
 4. Existing `opencode.json` files work unchanged. New permission keys default to `allow` for the new tools, with the same user-overridable ruleset.
 5. Existing plugins continue to work. The new tools register through the same `Tools.Service.register` and `ApplicationTools.Service.register` seams.
 6. `BANYANCODE_EMBEDDING_MODEL` is the only new env var. Optional.
+7. `BANYANCODE_ENABLE=1` enables BanyanCode features (default off until Phase C).
 
 ### Rollout
 
@@ -684,14 +1090,14 @@ export class MeshCoordinator extends Context.Service<MeshCoordinator, {
 
 ---
 
-## 18. Open questions
+## Open questions
 
 1. Should the binary name change to `banyancode` (path under `~/.banyancode/bin`)? Or stay `opencode` for diff size?
 2. Should `/code-embed` run on the user's machine (using `BANYANCODE_EMBEDDING_MODEL`) or be deferred to a server?
-3. Should `subagent_message` between siblings require an explicit ack, or is fire-and-deliver-with-retry acceptable?
-4. Should the orchestrator default to a 3-subagent fan-out, or learn from past tasks via `memory_store`?
-5. Should `codegraph_build` deduplicate identical files by hash, or always re-parse?
-6. Should the TUI sidebar widget for the mesh be opt-in (config flag) or always on?
+3. Should `subagent_message` between siblings require an explicit ack, or is fire-and-deliver-with-retry acceptable? — **Closed: fire-and-persist, no ack.**
+4. Should the orchestrator default to a 3-subagent fan-out, or learn from past tasks via `memory_store`? — **Closed: default 3, max 5.**
+5. Should `codegraph_build` deduplicate identical files by hash, or always re-parse? — **Closed: do not deduplicate; use content hashes only for change detection and incremental indexing.**
+6. Should the TUI sidebar widget for the mesh be opt-in (config flag) or always on? — **Closed: opt-in, `meshSidebar: false` by default.**
 
 ---
 
@@ -701,16 +1107,18 @@ export class MeshCoordinator extends Context.Service<MeshCoordinator, {
 |---|---|---|
 | 0 | 1 (root `README.md`) | `package.json`, `install`, `CONTRIBUTING.md`, `.github/CODEOWNERS`, `AGENTS.md`, `packages/*/README.md` |
 | 1 | 11 (4 schemas + 3 repos + 1 effect + 1 barrel + 1 migration glue + 1 existing migration update) | 2 existing barrels |
-| 2 | 5 | 3 |
+| 2 | 8 (websearch + runtime-flags) | 4 |
 | 3 | 8 | 4 |
 | 4 | 4 | 4 |
-| 5 | 11 | 5 |
-| 6 | 5 | 3 |
-| 7 | 2 | 2 |
-| 8 | 1 | 2 |
-| 9 | 7 | 0 |
-| 10 | 13 | 1 |
-| **Total** | **~67 new** | **~26 modified** |
+| 5A | 11 | 5 |
+| 5B | 2 | 0 |
+| 6 | 3 | 0 |
+| 7 | 5 | 3 |
+| 8 | 2 | 2 |
+| 9 | 1 | 2 |
+| 10 | 9 | 0 |
+| 11 | 18 | 4 |
+| **Total** | **~83 new** | **~35 modified** |
 
 ## Appendix B — Reuse map (full)
 
@@ -736,3 +1144,6 @@ export class MeshCoordinator extends Context.Service<MeshCoordinator, {
 | HTML parsing | `htmlparser2` | `packages/opencode/package.json` |
 | Test helpers | `testEffect`, `it.effect`, `it.live`, `it.instance`, `tmpdir` | `packages/opencode/test/AGENTS.md` |
 | Recorded tests | `RECORD=true`, `RECORDED_*` filters | `packages/llm/AGENTS.md` |
+| System monitoring | `systeminformation` | `packages/core/src/effect/system-monitor.ts` |
+
+(End of file - total ~800 lines)
