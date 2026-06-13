@@ -7,6 +7,7 @@ import { go, logo } from "../logo"
 export type LogoShape = {
   left: string[]
   right: string[]
+  isComplexSplash?: boolean
 }
 
 type ShimmerConfig = {
@@ -687,13 +688,18 @@ export function Logo(props: { shape?: LogoShape; ink?: RGBA; idle?: boolean } = 
     dusk: Frame,
     state: IdleState | undefined,
   ): JSX.Element[] => {
-    const shadow = tint(theme.background, ink, 0.25)
     const attrs = bold ? TextAttributes.BOLD : undefined
 
     return Array.from(line).map((char, i) => {
+      let charInk = ink;
+      if (ctx.shape.isComplexSplash) {
+        if (char === "█") charInk = RGBA.fromInts(255, 255, 255);
+        else if (char !== " ") charInk = RGBA.fromInts(34, 139, 34);
+      }
+      
       if (char === " ") {
         return (
-          <text fg={ink} attributes={attrs} selectable={false}>
+          <text fg={charInk} attributes={attrs} selectable={false}>
             {char}
           </text>
         )
@@ -710,8 +716,8 @@ export function Logo(props: { shape?: LogoShape; ink?: RGBA; idle?: boolean } = 
       const primaryMixBot = charLit ? Math.min(1, pulseBot.primary) : 0
       // Layer primary tint first, then white peak on top — so the halo/tail pulls toward primary,
       // while the bright core stays pure white
-      const inkTopTint = primaryMixTop > 0 ? tint(ink, theme.primary, primaryMixTop) : ink
-      const inkBotTint = primaryMixBot > 0 ? tint(ink, theme.primary, primaryMixBot) : ink
+      const inkTopTint = primaryMixTop > 0 ? tint(charInk, theme.primary, primaryMixTop) : charInk
+      const inkBotTint = primaryMixBot > 0 ? tint(charInk, theme.primary, primaryMixBot) : charInk
       const inkTop = peakMixTop > 0 ? tint(inkTopTint, PEAK, peakMixTop) : inkTopTint
       const inkBot = peakMixBot > 0 ? tint(inkBotTint, PEAK, peakMixBot) : inkBotTint
       // For the non-peak-aware brightness channels, use the average of top/bot
@@ -722,11 +728,12 @@ export function Logo(props: { shape?: LogoShape; ink?: RGBA; idle?: boolean } = 
       }
       const peakMix = charLit ? Math.min(1, pulse.peak) : 0
       const primaryMix = charLit ? Math.min(1, pulse.primary) : 0
-      const inkPrimary = primaryMix > 0 ? tint(ink, theme.primary, primaryMix) : ink
+      const inkPrimary = primaryMix > 0 ? tint(charInk, theme.primary, primaryMix) : charInk
       const inkTinted = peakMix > 0 ? tint(inkPrimary, PEAK, peakMix) : inkPrimary
       const shadowMixCfg = state?.cfg.shadowMix ?? shimmerConfig.shadowMix
       const shadowMixTop = Math.min(1, pulseTop.peak * shadowMixCfg)
       const shadowMixBot = Math.min(1, pulseBot.peak * shadowMixCfg)
+      const shadow = tint(theme.background, charInk, 0.25)
       const shadowTop = shadowMixTop > 0 ? tint(shadow, PEAK, shadowMixTop) : shadow
       const shadowBot = shadowMixBot > 0 ? tint(shadow, PEAK, shadowMixBot) : shadow
       const shadowMix = Math.min(1, pulse.peak * shadowMixCfg)
@@ -738,46 +745,48 @@ export function Logo(props: { shape?: LogoShape; ink?: RGBA; idle?: boolean } = 
       const b = charLit ? bloom(off + i, y, frame, ctx) : 0
       const q = shimmer(off + i, y, frame, ctx)
 
-      if (char === "_") {
-        return (
-          <text
-            fg={shade(inkTinted, theme, s * 0.08)}
-            bg={shade(shadowTinted, theme, ghost(s, 0.24) + ghost(q, 0.06))}
-            attributes={attrs}
-            selectable={false}
-          >
-            {" "}
-          </text>
-        )
-      }
+      if (!ctx.shape.isComplexSplash) {
+        if (char === "_") {
+          return (
+            <text
+              fg={shade(inkTinted, theme, s * 0.08)}
+              bg={shade(shadowTinted, theme, ghost(s, 0.24) + ghost(q, 0.06))}
+              attributes={attrs}
+              selectable={false}
+            >
+              {" "}
+            </text>
+          )
+        }
 
-      if (char === "^") {
-        return (
-          <text
-            fg={shade(inkTop, theme, n + p + e + b)}
-            bg={shade(shadowBot, theme, ghost(s, 0.18) + ghost(q, 0.05) + ghost(b, 0.08))}
-            attributes={attrs}
-            selectable={false}
-          >
-            ▀
-          </text>
-        )
-      }
+        if (char === "^") {
+          return (
+            <text
+              fg={shade(inkTop, theme, n + p + e + b)}
+              bg={shade(shadowBot, theme, ghost(s, 0.18) + ghost(q, 0.05) + ghost(b, 0.08))}
+              attributes={attrs}
+              selectable={false}
+            >
+              ▀
+            </text>
+          )
+        }
 
-      if (char === "~") {
-        return (
-          <text fg={shade(shadowTop, theme, ghost(s, 0.22) + ghost(q, 0.05))} attributes={attrs} selectable={false}>
-            ▀
-          </text>
-        )
-      }
+        if (char === "~") {
+          return (
+            <text fg={shade(shadowTop, theme, ghost(s, 0.22) + ghost(q, 0.05))} attributes={attrs} selectable={false}>
+              ▀
+            </text>
+          )
+        }
 
-      if (char === ",") {
-        return (
-          <text fg={shade(shadowBot, theme, ghost(s, 0.22) + ghost(q, 0.05))} attributes={attrs} selectable={false}>
-            ▄
-          </text>
-        )
+        if (char === ",") {
+          return (
+            <text fg={shade(shadowBot, theme, ghost(s, 0.22) + ghost(q, 0.05))} attributes={attrs} selectable={false}>
+              ▄
+            </text>
+          )
+        }
       }
 
       // Solid █: render as ▀ so the top pixel (fg) and bottom pixel (bg) can carry independent shimmer values

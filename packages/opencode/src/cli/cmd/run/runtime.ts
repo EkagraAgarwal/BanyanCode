@@ -644,6 +644,123 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
 
         await state.switching?.catch(() => {})
 
+        const trimmed = prompt.text.trim()
+        const firstWord = trimmed.split(/\s+/)[0]
+        if (["/variant", "/thinking", "/reasoning"].includes(firstWord)) {
+          const args = trimmed.slice(firstWord.length).trim()
+
+          if (!state.model) {
+            footer.append({
+              kind: "error",
+              text: "No active model to configure variant.",
+              phase: "start",
+              source: "system",
+            })
+            return
+          }
+
+          if (args === "") {
+            const current = state.activeVariant ? state.activeVariant : "default"
+            const listStr = state.variants.length > 0 ? state.variants.join(", ") : "none"
+            footer.append({
+              kind: "system",
+              text: `Current variant: ${current}. Available variants for ${state.model.modelID}: ${listStr}`,
+              phase: "start",
+              source: "system",
+            })
+            return
+          }
+
+          const val = args.toLowerCase()
+          if (["off", "none", "disabled", "false"].includes(val)) {
+            state.activeVariant = undefined
+            saveVariant(state.model, undefined)
+            footer.event({
+              type: "variants",
+              variants: state.variants,
+              current: undefined,
+            })
+            footer.event({
+              type: "stream.patch",
+              patch: {
+                model: formatModelLabel(state.model, undefined, state.providers),
+              },
+            })
+            footer.append({
+              kind: "system",
+              text: `Reasoning variant disabled (set to default).`,
+              phase: "start",
+              source: "system",
+            })
+            return
+          }
+
+          if (["on", "enabled", "true"].includes(val)) {
+            if (state.variants.length > 0) {
+              const target = state.variants.includes("high") ? "high" : state.variants[0]
+              state.activeVariant = target
+              saveVariant(state.model, target)
+              footer.event({
+                type: "variants",
+                variants: state.variants,
+                current: target,
+              })
+              footer.event({
+                type: "stream.patch",
+                patch: {
+                  model: formatModelLabel(state.model, target, state.providers),
+                },
+              })
+              footer.append({
+                kind: "system",
+                text: `Reasoning variant enabled (set to ${target}).`,
+                phase: "start",
+                source: "system",
+              })
+            } else {
+              footer.append({
+                kind: "error",
+                text: `No variants available for the current model.`,
+                phase: "start",
+                source: "system",
+              })
+            }
+            return
+          }
+
+          // Any other value
+          if (state.variants.includes(val)) {
+            state.activeVariant = val
+            saveVariant(state.model, val)
+            footer.event({
+              type: "variants",
+              variants: state.variants,
+              current: val,
+            })
+            footer.event({
+              type: "stream.patch",
+              patch: {
+                model: formatModelLabel(state.model, val, state.providers),
+              },
+            })
+            footer.append({
+              kind: "system",
+              text: `Reasoning variant set to ${val}.`,
+              phase: "start",
+              source: "system",
+            })
+          } else {
+            const listStr = state.variants.length > 0 ? state.variants.join(", ") : "none"
+            footer.append({
+              kind: "error",
+              text: `Variant "${args}" is not supported by current model. Available: ${listStr}`,
+              phase: "start",
+              source: "system",
+            })
+          }
+          return
+        }
+
         let outputAnchor: LocalReplayAnchor | undefined
         try {
           const next = await ensureStream()

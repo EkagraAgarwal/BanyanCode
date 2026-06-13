@@ -548,6 +548,42 @@ export function Prompt(props: PromptProps) {
           move.open()
         },
       },
+      {
+        title: "Choose reasoning variant",
+        desc: "Choose reasoning variant level (e.g. low, medium, high, off)",
+        name: "prompt.variant",
+        category: "Prompt",
+        slashName: "variant",
+        run: () => {
+          input.setText("/variant ")
+          setStore("prompt", { input: "/variant ", parts: [] })
+          input.gotoBufferEnd()
+        },
+      },
+      {
+        title: "Choose reasoning thinking budget",
+        desc: "Choose reasoning thinking budget/effort (e.g. low, high, off)",
+        name: "prompt.thinking",
+        category: "Prompt",
+        slashName: "thinking",
+        run: () => {
+          input.setText("/thinking ")
+          setStore("prompt", { input: "/thinking ", parts: [] })
+          input.gotoBufferEnd()
+        },
+      },
+      {
+        title: "Choose reasoning effort",
+        desc: "Choose reasoning effort (e.g. low, medium, high, off)",
+        name: "prompt.reasoning",
+        category: "Prompt",
+        slashName: "reasoning",
+        run: () => {
+          input.setText("/reasoning ")
+          setStore("prompt", { input: "/reasoning ", parts: [] })
+          input.gotoBufferEnd()
+        },
+      },
     ].map((entry) => ({
       namespace: "palette",
       ...entry,
@@ -957,6 +993,59 @@ export function Prompt(props: PromptProps) {
     const trimmed = store.prompt.input.trim()
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
       void exit()
+      return true
+    }
+
+    const firstWord = trimmed.split(/\s+/)[0]
+    if (["/variant", "/thinking", "/reasoning"].includes(firstWord)) {
+      const args = trimmed.slice(firstWord.length).trim()
+      const list = local.model.variant.list()
+
+      if (args === "") {
+        const current = local.model.variant.current() ? local.model.variant.current() : "default"
+        toast.show({
+          message: `Current variant: ${current}. Available variants: ${list.join(", ") || "none"}`,
+          variant: "info",
+        })
+      } else {
+        const val = args.toLowerCase()
+        if (["off", "none", "disabled", "false"].includes(val)) {
+          local.model.variant.set(undefined)
+          toast.show({
+            message: "Reasoning variant disabled (set to default).",
+            variant: "success",
+          })
+        } else if (["on", "enabled", "true"].includes(val)) {
+          if (list.length > 0) {
+            const target = list.includes("high") ? "high" : list[0]
+            local.model.variant.set(target)
+            toast.show({
+              message: `Reasoning variant enabled (set to ${target}).`,
+              variant: "success",
+            })
+          } else {
+            toast.show({
+              message: "No variants available for the current model.",
+              variant: "warning",
+            })
+          }
+        } else {
+          if (list.includes(val)) {
+            local.model.variant.set(val)
+            toast.show({
+              message: `Reasoning variant set to ${val}.`,
+              variant: "success",
+            })
+          } else {
+            toast.show({
+              message: `Variant "${args}" is not supported by current model. Available: ${list.join(", ") || "none"}`,
+              variant: "warning",
+            })
+          }
+        }
+      }
+      input.setText("")
+      setStore("prompt", { input: "", parts: [] })
       return true
     }
     const selectedModel = local.model.current()
