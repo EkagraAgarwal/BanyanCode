@@ -1,0 +1,63 @@
+---
+title: BanyanCode Websearch
+description: Free web search using DuckDuckGo HTML
+---
+
+# BanyanCode Websearch
+
+BanyanCode includes a free web search tool powered by DuckDuckGo HTML, designed to provide real-time information without requiring an API key.
+
+## Overview
+
+The `websearch_free` tool performs web searches through DuckDuckGo's HTML interface. It is available when BanyanCode features are enabled via the `BANYANCODE_ENABLE` runtime flag.
+
+## Usage
+
+The tool accepts the following parameters:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `query` | string | required | The search query |
+| `numResults` | number | 8 | Number of results (max 20) |
+| `region` | string | "wt-wt" | Search region |
+| `time` | string | none | Time range filter |
+
+### Regions
+
+- `wt-wt` - Global (default)
+- `us-en` - United States
+- `uk-en` - United Kingdom
+- `in-en` - India
+
+### Time Ranges
+
+- `d` - Past day
+- `w` - Past week
+- `m` - Past month
+- `y` - Past year
+
+## Configuration
+
+### Runtime Flags
+
+Set `BANYANCODE_ENABLE=1` in your environment to enable BanyanCode features including the websearch_free tool.
+
+### Disabling Websearch
+
+Set `BANYANCODE_DISABLE_WEBSEARCH=1` to disable the websearch_free tool even when BanyanCode is enabled.
+
+## Troubleshooting
+
+### Tool not available
+
+Ensure `BANYANCODE_ENABLE=1` is set in your environment. Without this flag, the tool will not be registered.
+
+### Search returns no results
+
+- Try a different query
+- Check if `BANYANCODE_DISABLE_WEBSEARCH=1` is set
+- Verify network connectivity
+
+### Timeout errors
+
+The tool has a 25-second timeout. For slow networks or complex queries, try reducing `numResults` or using a more specific query.
