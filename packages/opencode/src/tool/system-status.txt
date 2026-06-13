@@ -1,0 +1,4 @@
+- Get current system health information
+- Returns: 'cpuPercent' (CPU usage 0-100), 'memoryUsedBytes' (bytes in use), 'memoryTotalBytes' (total system bytes), 'platform' ('windows', 'linux', or 'darwin')
+- Optional GPU fields ('gpuPercent', 'vramUsedBytes') may be present on some systems
+- Use system_status when you need to report machine health or resource availability to the user
