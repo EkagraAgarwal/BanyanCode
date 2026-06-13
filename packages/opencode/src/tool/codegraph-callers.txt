@@ -1,0 +1,4 @@
+- Find nodes that call a given function
+- Optional: 'nodeID' (string - direct node ID), 'function' (string - function name to find callers for)
+- Returns: 'callers' (array of node IDs that call this function)
+- Note: Phase 5B feature - currently returns empty array

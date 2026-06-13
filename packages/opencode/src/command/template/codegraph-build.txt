@@ -1,0 +1,14 @@
+Build a polyglot code graph for the codebase.
+
+The code graph indexes all TypeScript, JavaScript, and Python files and extracts:
+- Functions, classes, interfaces, types as nodes
+- Import and extends relationships as edges
+
+This enables querying the codebase structure and finding dependencies.
+
+Usage: /codegraph-build [root] [--force]
+
+- root: Root directory to index (defaults to current directory)
+- --force: Re-index all files even if unchanged
+
+After building, use /codegraph-query to find specific functions, classes, or files.

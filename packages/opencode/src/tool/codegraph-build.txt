@@ -1,0 +1,5 @@
+- Build a polyglot code graph index for a codebase
+- Required: none (all parameters optional)
+- Optional: 'root' (string - root directory to index, defaults to current directory), 'force' (boolean - re-index all files even if unchanged)
+- Returns: 'indexed' (number of files indexed), 'skipped' (number of files skipped), 'duration_ms' (time taken in milliseconds)
+- Use codegraph_build before using codegraph_query, codegraph_callers, codegraph_dependents, or codegraph_impact

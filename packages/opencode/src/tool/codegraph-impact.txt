@@ -1,0 +1,4 @@
+- Analyze the impact of a node - its dependents and transitive dependencies
+- Optional: 'nodeID' (string - direct node ID), 'function' (string - function name to find impact for)
+- Returns: 'dependents' (array of node IDs that directly depend on this node), 'transitive' (array of node IDs in the full transitive closure)
+- Note: Phase 5B feature - currently returns empty arrays

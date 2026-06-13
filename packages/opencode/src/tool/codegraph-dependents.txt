@@ -1,0 +1,4 @@
+- Find nodes that depend on a given node
+- Optional: 'nodeID' (string - direct node ID), 'function' (string - function name to find dependents for)
+- Returns: 'dependents' (array of node IDs that depend on this node)
+- Note: Phase 5B feature - currently returns empty array

@@ -1,0 +1,5 @@
+- Query the code graph for nodes by file path, function name, or node kind
+- Required: none (at least one filter should be provided)
+- Optional: 'file' (string - file path to get nodes from), 'function' (string - function/class name to search for), 'kind' (string - node kind: function, class, method, type, variable)
+- Returns: 'nodes' (array of node objects with id, fileID, kind, name, signature, startLine, endLine, code)
+- Use after codegraph_build has been run

@@ -10,6 +10,8 @@ import { Skill } from "../skill"
 import { EventV2 } from "@opencode-ai/core/event"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
+import PROMPT_CODEGRAPH_BUILD from "./template/codegraph-build.txt"
+import PROMPT_CODE_EMBED from "./template/code-embed.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -54,6 +56,8 @@ export function hints(template: string) {
 export const Default = {
   INIT: "init",
   REVIEW: "review",
+  CODEGRAPH_BUILD: "codegraph-build",
+  CODE_EMBED: "code-embed",
 } as const
 
 export interface Interface {
@@ -93,6 +97,24 @@ export const layer = Layer.effect(
         },
         subtask: true,
         hints: hints(PROMPT_REVIEW),
+      }
+      commands[Default.CODEGRAPH_BUILD] = {
+        name: Default.CODEGRAPH_BUILD,
+        description: "build the code graph index for the codebase",
+        source: "command",
+        get template() {
+          return PROMPT_CODEGRAPH_BUILD
+        },
+        hints: hints(PROMPT_CODEGRAPH_BUILD),
+      }
+      commands[Default.CODE_EMBED] = {
+        name: Default.CODE_EMBED,
+        description: "compute embeddings for code graph and search code semantically",
+        source: "command",
+        get template() {
+          return PROMPT_CODE_EMBED
+        },
+        hints: hints(PROMPT_CODE_EMBED),
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {
