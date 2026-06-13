@@ -1,0 +1,11 @@
+Compute or update embeddings for code graph nodes.
+
+Re-embeds only nodes whose content hash has changed, making incremental updates efficient.
+
+Arguments:
+- file (optional): Specific file path to embed. If not provided, embeds all nodes.
+
+Returns:
+- embedded: Number of nodes newly embedded
+- skipped: Number of nodes already up-to-date
+- model: Embedding model name or null if no model configured

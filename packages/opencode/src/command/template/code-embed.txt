@@ -1,0 +1,11 @@
+Compute embeddings for code graph nodes and search code using semantic similarity.
+
+The code graph must be built first using /codegraph-build.
+
+Usage: /code-embed [--file <path>]
+
+- --file: Re-embed only a specific file (optional, embeds all by default)
+
+After embedding, use /code-search <query> to find relevant code nodes.
+
+Embedding is local-first: embeddings are generated on your machine using the configured embedding model (BANYANCODE_EMBEDDING_MODEL env var). Without an embedding model, search falls back to keyword matching and returns degraded=true.
