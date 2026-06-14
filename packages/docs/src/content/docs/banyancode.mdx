@@ -11,7 +11,7 @@ BanyanCode is a CLI/TUI-only fork of [OpenCode](https://github.com/anomalyco/ope
 
 - **Orchestrator + subagent mesh.** A primary `orchestrator` agent decomposes complex tasks, fans out to specialized subagents in parallel, and coordinates them via peer messaging and shared memory.
 - **Cross-session memory.** A persistent key-value store with optional embeddings for semantic search, exposed as tools and a skill.
-- **2-phase codebase utility.** Phase 1 builds a polyglot code graph using tree-sitter. Phase 2 computes embeddings over the same nodes for semantic search.
+- **2-phase codebase utility.** Phase 1 builds a polyglot code graph using tree-sitter. Phase 2 computes embeddings over the same nodes for semantic search. `/codegraph-build` runs in the background; a floating TUI widget shows progress, current file, and lets you cancel. See [banyancode-config](./banyancode-config.mdx#background-codegraph-build).
 - **Researcher agent with free web search.** A `researcher` subagent that uses DuckDuckGo-backed `websearch_free` by default.
 
 ## Quick start

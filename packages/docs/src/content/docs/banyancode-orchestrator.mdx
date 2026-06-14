@@ -62,6 +62,8 @@ The orchestrator has access to shared tools for coordinating subagents:
 | `codegraph_impact` | Analyze impact of a change |
 | `system_status` | Get system health information |
 
+The `/codegraph-build` command runs the `codegraph_build` tool directly. It does not prompt the agent — the build happens in the background, and a progress widget in the TUI shows the status. See [banyancode-config](./banyancode-config.mdx#background-codegraph-build).
+
 ## Choosing a model
 
 The orchestrator and each subagent can use a different model. The TUI exposes this via the `/agent-model` slash command.
