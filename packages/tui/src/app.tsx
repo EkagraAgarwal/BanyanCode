@@ -57,6 +57,7 @@ import { PromptStashProvider } from "./component/prompt/stash"
 import { DialogAlert } from "./ui/dialog-alert"
 import { DialogConfirm } from "./ui/dialog-confirm"
 import { ToastProvider, useToast } from "./ui/toast"
+import { CodegraphBuildProvider, useCodegraphBuild, CodegraphProgress, type CodegraphBuildState } from "./component/codegraph-progress"
 import { isDefaultTitle } from "./util/session"
 import { KVProvider, useKV } from "./context/kv"
 import * as Model from "./util/model"
@@ -275,6 +276,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                             <ArgsProvider {...input.args}>
                               <KVProvider>
                                 <ToastProvider>
+                                  <CodegraphBuildProvider>
                                   <RouteProvider
                                     initialRoute={
                                       input.args.continue
@@ -324,6 +326,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                       </PluginRuntimeProvider>
                                     </TuiConfigProvider>
                                   </RouteProvider>
+                                </CodegraphBuildProvider>
                                 </ToastProvider>
                               </KVProvider>
                             </ArgsProvider>
@@ -803,6 +806,17 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "System",
       },
       {
+        name: "codegraph.cancel",
+        title: "Cancel codegraph build",
+        category: "BanyanCode",
+        slashName: "codegraph-cancel",
+        run: () => {
+          ;(sdk.client.global as any).codegraph?.cancel({}).catch(() => {})
+          toast.show({ message: "Codegraph build cancelled", variant: "info" })
+          dialog.clear()
+        },
+      },
+      {
         name: "help.show",
         title: "Help",
         slashName: "help",
@@ -1012,6 +1026,13 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       message,
       duration: 5000,
     })
+  })
+
+  const build = useCodegraphBuild()
+  event.subscribe((evt, { workspace }) => {
+    if ((evt.type as string) !== "banyancode.codegraph.build") return
+    if (workspace !== project.workspace.current()) return
+    build.set(evt.properties as CodegraphBuildState)
   })
 
   event.on("installation.update-available", async (evt) => {
