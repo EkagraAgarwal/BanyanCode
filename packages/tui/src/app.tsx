@@ -811,7 +811,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "BanyanCode",
         slashName: "codegraph-cancel",
         run: () => {
-          ;(sdk.client.global as any).codegraph?.cancel({}).catch(() => {})
+          sdk.client.global.codegraph.cancel({}).catch(() => {})
           toast.show({ message: "Codegraph build cancelled", variant: "info" })
           dialog.clear()
         },

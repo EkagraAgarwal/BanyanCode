@@ -78,6 +78,8 @@ import type {
   FindTextResponses,
   FormatterStatusErrors,
   FormatterStatusResponses,
+  GlobalCodegraphCancelErrors,
+  GlobalCodegraphCancelResponses,
   GlobalConfigGetErrors,
   GlobalConfigGetResponses,
   GlobalConfigUpdateErrors,
@@ -1317,6 +1319,21 @@ export class Embedding extends HeyApiClient {
   }
 }
 
+export class Codegraph extends HeyApiClient {
+  /**
+   * Cancel codegraph build
+   *
+   * Cancel the in-flight codegraph build for the current instance.
+   */
+  public cancel<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      GlobalCodegraphCancelResponses,
+      GlobalCodegraphCancelErrors,
+      ThrowOnError
+    >({ url: "/global/codegraph-cancel", ...options })
+  }
+}
+
 export class Global extends HeyApiClient {
   /**
    * Get health
@@ -1386,6 +1403,11 @@ export class Global extends HeyApiClient {
   private _embedding?: Embedding
   get embedding(): Embedding {
     return (this._embedding ??= new Embedding({ client: this.client }))
+  }
+
+  private _codegraph?: Codegraph
+  get codegraph(): Codegraph {
+    return (this._codegraph ??= new Codegraph({ client: this.client }))
   }
 }
 

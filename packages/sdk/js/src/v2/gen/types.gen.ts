@@ -76,6 +76,7 @@ export type Event =
   | EventTuiSessionSelect2
   | EventMcpToolsChanged
   | EventMcpBrowserOpenFailed
+  | EventBanyancodeCodegraphBuild
   | EventCommandExecuted
   | EventProjectDirectoriesUpdated
   | EventProjectUpdated
@@ -1480,6 +1481,24 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "banyancode.codegraph.build"
+        properties: {
+          status: "idle" | "running" | "completed" | "failed" | "cancelled"
+          root?: string
+          done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          currentFile?: string
+          startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          result?: {
+            indexed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            skipped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            duration_ms: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }
+          error?: string
+        }
+      }
+    | {
+        id: string
         type: "command.executed"
         properties: {
           name: string
@@ -2365,6 +2384,7 @@ export type Command = {
   model?: string
   source?: "command" | "mcp" | "skill"
   template: string
+  execute?: unknown
   subtask?: boolean
   hints: Array<string>
 }
@@ -5060,6 +5080,25 @@ export type EventMcpBrowserOpenFailed = {
   }
 }
 
+export type EventBanyancodeCodegraphBuild = {
+  id: string
+  type: "banyancode.codegraph.build"
+  properties: {
+    status: "idle" | "running" | "completed" | "failed" | "cancelled"
+    root?: string
+    done: number | "NaN" | "Infinity" | "-Infinity"
+    total: number | "NaN" | "Infinity" | "-Infinity"
+    currentFile?: string
+    startedAt?: number | "NaN" | "Infinity" | "-Infinity"
+    result?: {
+      indexed: number | "NaN" | "Infinity" | "-Infinity"
+      skipped: number | "NaN" | "Infinity" | "-Infinity"
+      duration_ms: number | "NaN" | "Infinity" | "-Infinity"
+    }
+    error?: string
+  }
+}
+
 export type EventCommandExecuted = {
   id: string
   type: "command.executed"
@@ -5556,6 +5595,31 @@ export type GlobalEmbeddingModelApplyResponses = {
 
 export type GlobalEmbeddingModelApplyResponse =
   GlobalEmbeddingModelApplyResponses[keyof GlobalEmbeddingModelApplyResponses]
+
+export type GlobalCodegraphCancelData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/codegraph-cancel"
+}
+
+export type GlobalCodegraphCancelErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalCodegraphCancelError = GlobalCodegraphCancelErrors[keyof GlobalCodegraphCancelErrors]
+
+export type GlobalCodegraphCancelResponses = {
+  /**
+   * Codegraph build cancelled
+   */
+  200: boolean
+}
+
+export type GlobalCodegraphCancelResponse = GlobalCodegraphCancelResponses[keyof GlobalCodegraphCancelResponses]
 
 export type EventSubscribeData = {
   body?: never
