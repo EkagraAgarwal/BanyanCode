@@ -1,0 +1,68 @@
+---
+title: BanyanCode Mesh
+description: Subagent mesh with fire-and-persist messaging
+---
+
+# BanyanCode Mesh
+
+BanyanCode includes a subagent mesh that enables peer-to-peer messaging and shared state between subagents using a fire-and-persist coordination model.
+
+## Overview
+
+The mesh is built on `SubagentBus` and `PeerInfo`. Subagents communicate via peer messages and shared memory without requiring acknowledgment — messages are durable but not acknowledged (fire-and-persist).
+
+## Key concepts
+
+| Concept | Description |
+|---------|-------------|
+| `PeerInfo` | Metadata about a subagent including ID, role, and last activity |
+| `SubagentBus` | The message bus for peer-to-peer communication |
+| Fire-and-persist | Messages are written to a durable store and delivered asynchronously; no acknowledgment is required |
+
+## Usage
+
+### Shared memory for ephemeral state
+
+```typescript
+// Store ephemeral state accessible by all subagents
+await shared_memory({
+  key: "workflow:current-step",
+  value: { step: 2, agent: "explorer" }
+})
+```
+
+### Peer messages with subagent_message
+
+```typescript
+// Send a targeted message to a specific subagent
+await subagent_message({
+  target: "explorer",
+  payload: { action: "scan", path: "src/auth" }
+})
+
+// Broadcast to all subagents
+await subagent_message({
+  payload: { action: "checkpoint", data: { completed: true } }
+})
+```
+
+### Discovering active peers
+
+```typescript
+const peers = await Banyan.SubagentBus.peers()
+```
+
+This returns a list of active subagents that have had activity within the last 5 minutes.
+
+## Troubleshooting
+
+### Message not delivered
+
+Fire-and-persist messaging does not acknowledge delivery. If a message appears not to be delivered:
+- Verify the target subagent is active (check `Banyan.SubagentBus.peers()`)
+- Check the durable message table to confirm the message was persisted
+- Note that messages are eventually consistent — delivery may be delayed
+
+### Peer info is stale
+
+Peer information reflects the last 5 minutes of activity. Subagents that have been idle for more than 5 minutes may appear stale or absent from the peer list. This is expected behavior for the fire-and-persist model.

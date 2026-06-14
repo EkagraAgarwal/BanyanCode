@@ -1,0 +1,93 @@
+---
+title: BanyanCode Code Graph
+description: Polyglot code graph with tree-sitter and embeddings
+---
+
+# BanyanCode Code Graph
+
+BanyanCode includes a 2-phase codebase utility that builds a polyglot code graph using tree-sitter, then optionally computes embeddings over the same nodes for semantic search.
+
+## Overview
+
+**Phase 1** (`codegraph_build`) parses the codebase using tree-sitter to build a graph of functions, classes, imports, and relationships. This works across multiple languages.
+
+**Phase 2** (`/code-embed`) computes embeddings over the graph nodes when `BANYANCODE_EMBEDDING_MODEL` is configured, enabling semantic search over the codebase.
+
+## Ignore rules
+
+The code graph respects the following ignore patterns:
+
+- Default patterns: `node_modules`, `.git`, `dist`, `build`, `coverage`
+- `.gitignore` patterns from the project root
+- `.banyancodeignore` patterns (if present)
+
+## Usage
+
+### Building the code graph
+
+```typescript
+// Build over BanyanCode itself
+await codegraph_build({
+  root: "/path/to/BanyanCode",
+  incremental: true
+})
+```
+
+### Querying the code graph
+
+```typescript
+// Find a function definition
+const results = await codegraph_query({
+  query: { function: "memory_store" },
+  root: "/path/to/BanyanCode"
+})
+```
+
+### Finding callers
+
+```typescript
+const callers = await codegraph_callers({
+  function: "memory_store",
+  root: "/path/to/BanyanCode"
+})
+```
+
+### Finding dependents
+
+```typescript
+const dependents = await codegraph_dependents({
+  node: "src/memory/index.ts",
+  root: "/path/to/BanyanCode"
+})
+```
+
+### Impact analysis
+
+```typescript
+const impact = await codegraph_impact({
+  node: "src/memory/index.ts",
+  root: "/path/to/BanyanCode"
+})
+```
+
+### Semantic search with /code-embed
+
+When `BANYANCODE_EMBEDDING_MODEL` is set, use `/code-embed` for natural language queries:
+
+```
+/code-embed How does the memory store work?
+```
+
+## Troubleshooting
+
+### Index fails
+
+- Check that the root path exists and is accessible
+- Verify ignore rules in `.banyancodeignore` are not excluding necessary files
+- Ensure sufficient disk space for the graph storage
+
+### Search returns no results
+
+- Verify `codegraph_build` has been run successfully
+- If using semantic search, ensure `BANYANCODE_EMBEDDING_MODEL` is configured
+- Try a more specific query or use `codegraph_query` for exact matches

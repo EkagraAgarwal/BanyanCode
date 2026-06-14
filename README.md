@@ -4,10 +4,10 @@ BanyanCode is a CLI/TUI-only fork of [OpenCode](https://github.com/anomalyco/ope
 
 ## What BanyanCode adds
 
-1. **Orchestrator + subagent mesh.** A new primary `orchestrator` agent decomposes complex tasks, fans out to specialized subagents (`researcher`, `explore`, `coder`, `general`, `scout`) in parallel, and coordinates them via peer messaging and shared memory.
-2. **Cross-session memory.** A persistent key-value store with optional embeddings, exposed as 5 tools (`memory_store`, `memory_recall`, `memory_list`, `memory_forget`, `memory_search`) and a `memory` skill.
-3. **2-phase codebase utility.** Phase 1 (`/codegraph-build`) builds a polyglot code graph using tree-sitter. Phase 2 (`/code-embed`) computes embeddings over the same nodes for semantic search.
-4. **Researcher agent with free web search.** A new subagent (`researcher`) that uses a DuckDuckGo-backed `websearch_free` tool as the default, with the existing Exa/Parallel `websearch` as an opt-in fallback.
+1. ✅ **Orchestrator + subagent mesh.** A primary `orchestrator` agent decomposes complex tasks, fans out to specialized subagents (`researcher`, `explore`, `coder`, `general`, `scout`) in parallel, and coordinates them via peer messaging and shared memory.
+2. ✅ **Cross-session memory.** A persistent key-value store with optional embeddings, exposed as 5 tools (`memory_store`, `memory_recall`, `memory_list`, `memory_forget`, `memory_search`) and a `memory` skill.
+3. ✅ **2-phase codebase utility.** Phase 1 (`/codegraph-build`) builds a polyglot code graph using tree-sitter. Phase 2 (`/code-embed`) computes embeddings over the same nodes for semantic search.
+4. ✅ **Researcher agent with free web search.** A `researcher` subagent that uses a DuckDuckGo-backed `websearch_free` tool as the default, with the existing Exa/Parallel `websearch` as an opt-in fallback.
 
 BanyanCode is TUI/CLI only. The `desktop`, `app`, `web`, and `storybook` packages are explicitly out of scope.
 
@@ -28,7 +28,7 @@ bun dev
 
 ## Contributing and feedback
 
-This is an early fork and is still landing the 4 features above. Issues and PRs are welcome at <https://github.com/EkagraAgarwal/BanyanCode>.
+All 4 features are implemented. Issues and PRs are welcome at <https://github.com/EkagraAgarwal/BanyanCode>.
 
 ## License
 

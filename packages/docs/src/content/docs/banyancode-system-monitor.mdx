@@ -1,0 +1,84 @@
+---
+title: BanyanCode System Monitor
+description: System health monitoring for orchestrator and users
+---
+
+# BanyanCode System Monitor
+
+BanyanCode includes a system health monitoring tool that provides CPU, memory, and platform information for the orchestrator and users.
+
+## Overview
+
+The `system_status` tool collects system health data including CPU usage, memory usage, and platform detection. This information is used by the orchestrator for decision-making and can be queried directly by users.
+
+## Output shape
+
+The `SystemStatus` interface:
+
+```typescript
+interface SystemStatus {
+  cpu: {
+    usage: number       // percentage (0-100)
+    model: string        // CPU model name
+    cores: number        // number of cores
+  }
+  memory: {
+    total: number        // total memory in bytes
+    free: number          // free memory in bytes
+    usagePercent: number  // usage percentage (0-100)
+  }
+  platform: {
+    os: string            // operating system (linux, darwin, win32)
+    arch: string          // architecture (x64, arm64, etc.)
+    hostname: string      // machine hostname
+  }
+  timestamp: number       // Unix timestamp of the snapshot
+}
+```
+
+## Usage
+
+### Querying system status
+
+```typescript
+const status = await system_status()
+```
+
+Example output:
+
+```typescript
+{
+  cpu: {
+    usage: 45.2,
+    model: "Intel(R) Core(TM) i7-10700K",
+    cores: 8
+  },
+  memory: {
+    total: 17179869184,
+    free: 4294967296,
+    usagePercent: 75.0
+  },
+  platform: {
+    os: "linux",
+    arch: "x64",
+    hostname: "dev-machine"
+  },
+  timestamp: 1718342400000
+}
+```
+
+## Limitations
+
+- **GPU detection** is best-effort and may not be available on all platforms
+- **No `systeminformation` dependency** — the tool uses `os` module primitives only
+- **CPU usage on macOS** uses `/proc/stat` which is Linux-specific; macOS CPU usage may show as 0
+
+## Troubleshooting
+
+### CPU is 0 on macOS
+
+CPU usage detection relies on `/proc/stat`, which is Linux-specific. On macOS, CPU usage will report as 0. This is a known limitation.
+
+### Memory values look off
+
+The memory tool uses `os.totalmem()` and `os.freemem()` from Node.js. These values reflect what the operating system reports and may not account for all reclaimable memory or cached buffers.

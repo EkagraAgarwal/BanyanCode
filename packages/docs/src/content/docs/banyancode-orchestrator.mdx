@@ -1,0 +1,79 @@
+---
+title: BanyanCode Orchestrator
+description: Orchestrator agent usage and fan-out behavior
+---
+
+# BanyanCode Orchestrator
+
+The orchestrator is a primary agent that decomposes complex tasks, fans out to specialized subagents in parallel, and coordinates them via peer messaging and shared memory.
+
+## Overview
+
+The orchestrator activates when you use the `tab` key to cycle to it, or when you mention `@orchestrator` in your prompt. It analyzes the current task and decides whether to handle it directly or fan out to subagents.
+
+**Fan-out limits:**
+- Default: 3 concurrent subagents
+- Maximum: 5 subagents (configurable)
+
+When a task exceeds the fan-out limit, the orchestrator escalates to the user for guidance.
+
+## Usage
+
+### Activating the orchestrator
+
+Cycle to the orchestrator using `tab` in the TUI, or mention `@orchestrator` in your prompt:
+
+```
+@orchestrator Implement the user auth flow and the session management
+```
+
+### When the orchestrator fans out
+
+The orchestrator fans out when a task has independent subtasks that can run in parallel:
+
+- Explore multiple directories or files simultaneously
+- Implement multiple features that do not depend on each other
+- Research different topics in parallel
+
+### When the orchestrator escalates
+
+The orchestrator escalates to the user when:
+- The task exceeds the fan-out limit (more than 5 subagents needed)
+- A subagent task fails and requires user intervention
+- The task is ambiguous and needs clarification
+
+## Tools available to orchestrator
+
+The orchestrator has access to shared tools for coordinating subagents:
+
+| Tool | Description |
+|------|-------------|
+| `shared_memory` | Ephemeral state sharing between subagents |
+| `subagent_message` | Peer-to-peer messages between subagents |
+| `memory_store` | Store data in cross-session memory |
+| `memory_recall` | Retrieve data from cross-session memory |
+| `memory_list` | List keys in a memory scope |
+| `memory_forget` | Remove a key from memory |
+| `memory_search` | Search memory with optional embeddings |
+| `codegraph_build` | Build a polyglot code graph |
+| `codegraph_query` | Query the code graph |
+| `codegraph_callers` | Find callers of a function |
+| `codegraph_dependents` | Find dependents of a node |
+| `codegraph_impact` | Analyze impact of a change |
+| `system_status` | Get system health information |
+
+## Troubleshooting
+
+### Orchestrator not appearing
+
+Ensure `BANYANCODE_ENABLE=1` is set in your environment. Without this flag, the orchestrator is not registered as an agent.
+
+### Subagent tasks fail
+
+- Verify that `shared_memory` is working correctly — subagents rely on it for coordination
+- Ensure fire-and-persist messaging is functioning — messages are durable but not acknowledged
+- Check that the subagent mesh is healthy using `Banyan.SubagentBus.peers()`
+
+### Too many subagents
+
+When a task requires more than 5 subagents, the orchestrator escalates to the user. Consider breaking the task into smaller pieces or handling some subtasks directly.

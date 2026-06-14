@@ -1,0 +1,111 @@
+---
+title: BanyanCode Memory
+description: Cross-session memory with optional embeddings
+---
+
+# BanyanCode Memory
+
+BanyanCode includes a cross-session memory system that persists key-value data across sessions, with optional embeddings for semantic search.
+
+## Overview
+
+The memory system stores data in a durable SQLite-backed store. It supports session-scoped and global-scoped storage, with optional vector embeddings for semantic search when `BANYANCODE_EMBEDDING_MODEL` is configured.
+
+## Quotas
+
+| Limit | Value |
+|-------|-------|
+| Maximum value size | 64KB |
+| Maximum entries per scope | 10,000 |
+| Maximum total storage | 100MB |
+
+## Usage
+
+### Basic round-trip with memory_store and memory_recall
+
+```typescript
+// Store a value
+await memory_store({
+  key: "user:preferences",
+  value: { theme: "dark", language: "en" },
+  scope: "session"
+})
+
+// Recall the value
+const result = await memory_recall({
+  key: "user:preferences",
+  scope: "session"
+})
+```
+
+### Session-scoped vs global-scope
+
+```typescript
+// Session-scoped (persists for the current session)
+await memory_store({
+  key: "workflow:state",
+  value: { step: 3, status: "running" },
+  scope: "session"
+})
+
+// Global (persists across all sessions)
+await memory_store({
+  key: "project:config",
+  value: { name: "my-project" },
+  scope: "global"
+})
+```
+
+### Semantic search with memory_search
+
+```typescript
+// With embeddings configured (BANYANCODE_EMBEDDING_MODEL set)
+const results = await memory_search({
+  query: "user authentication settings",
+  scope: "global",
+  limit: 10
+})
+
+// Without embeddings (degraded mode - keyword matching only)
+const results = await memory_search({
+  query: "authentication",
+  scope: "global",
+  degraded: true,
+  limit: 10
+})
+```
+
+### Removing data with memory_forget
+
+```typescript
+await memory_forget({
+  key: "user:preferences",
+  scope: "session"
+})
+```
+
+### TTL expiry via vacuum
+
+The memory system does not auto-expire entries. Use `memory_forget` to remove stale data, or rely on the vacuum process to clean up orphaned entries periodically.
+
+## Troubleshooting
+
+### Quota exceeded
+
+Each value is limited to 64KB. If you need to store larger data, consider splitting it across multiple keys or using external storage.
+
+The maximum total storage is 100MB. Monitor usage with `memory_list` and clean up stale entries with `memory_forget`.
+
+### Search returns keyword matches only
+
+This indicates that `BANYANCODE_EMBEDDING_MODEL` is not set. The memory system falls back to keyword matching when embeddings are not available.
+
+Set `BANYANCODE_EMBEDDING_MODEL` in your environment to enable semantic search:
+
+```bash
+BANYANCODE_EMBEDDING_MODEL=your-model-name
+```
+
+### Memory persists across sessions
+
+This is the intended design. Cross-session memory is persistent by default. Use `scope: "session"` for data that should not persist, or explicitly remove data with `memory_forget`.
