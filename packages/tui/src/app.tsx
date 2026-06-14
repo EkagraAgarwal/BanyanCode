@@ -37,6 +37,8 @@ import { SyncProvider, useSync } from "./context/sync"
 import { DataProvider } from "./context/data"
 import { LocalProvider, useLocal } from "./context/local"
 import { DialogModel } from "./component/dialog-model"
+import { DialogAgentModel } from "./component/dialog-agent-model"
+import { DialogEmbeddingModel } from "./component/dialog-embedding-model"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
 import { DialogStatus } from "./component/dialog-status"
@@ -675,6 +677,24 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         slashName: "mcps",
         run: () => {
           dialog.replace(() => <DialogMcp />)
+        },
+      },
+      {
+        name: "agent.model",
+        title: "Pick model for orchestrator or subagent",
+        category: "Agent",
+        slashName: "agent-model",
+        run: () => {
+          dialog.replace(() => <DialogAgentModel agentName="orchestrator" />)
+        },
+      },
+      {
+        name: "embedding.model",
+        title: "Pick embedding model for memory and code search",
+        category: "Agent",
+        slashName: "embedding-model",
+        run: () => {
+          dialog.replace(() => <DialogEmbeddingModel />)
         },
       },
       {

@@ -12,6 +12,8 @@ import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_CODEGRAPH_BUILD from "./template/codegraph-build.txt"
 import PROMPT_CODE_EMBED from "./template/code-embed.txt"
+import PROMPT_AGENT_MODEL from "./template/agent-model.txt"
+import PROMPT_EMBEDDING_MODEL from "./template/embedding-model.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -35,7 +37,6 @@ export const Info = Schema.Struct({
   agent: Schema.optional(Schema.String),
   model: Schema.optional(Schema.String),
   source: Schema.optional(Schema.Literals(["command", "mcp", "skill"])),
-  // Some command templates are lazy promises from MCP prompt resolution.
   template: Schema.Unknown,
   subtask: Schema.optional(Schema.Boolean),
   hints: Schema.Array(Schema.String),
@@ -58,6 +59,8 @@ export const Default = {
   REVIEW: "review",
   CODEGRAPH_BUILD: "codegraph-build",
   CODE_EMBED: "code-embed",
+  AGENT_MODEL: "agent-model",
+  EMBEDDING_MODEL: "embedding-model",
 } as const
 
 export interface Interface {
@@ -115,6 +118,24 @@ export const layer = Layer.effect(
           return PROMPT_CODE_EMBED
         },
         hints: hints(PROMPT_CODE_EMBED),
+      }
+      commands[Default.AGENT_MODEL] = {
+        name: Default.AGENT_MODEL,
+        description: "pick the model for a BanyanCode agent (orchestrator, researcher, explore, general)",
+        source: "command",
+        get template() {
+          return PROMPT_AGENT_MODEL
+        },
+        hints: hints(PROMPT_AGENT_MODEL),
+      }
+      commands[Default.EMBEDDING_MODEL] = {
+        name: Default.EMBEDDING_MODEL,
+        description: "pick the embedding model for BanyanCode memory and code search",
+        source: "command",
+        get template() {
+          return PROMPT_EMBEDDING_MODEL
+        },
+        hints: hints(PROMPT_EMBEDDING_MODEL),
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

@@ -344,6 +344,31 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             }
           })
         },
+        setForAgent(agentName: string, model: { providerID: string; modelID: string }, options?: { recent?: boolean }) {
+          batch(() => {
+            if (!isModelValid(model)) {
+              toast.show({
+                message: `Model ${model.providerID}/${model.modelID} is not valid`,
+                variant: "warning",
+                duration: 3000,
+              })
+              return
+            }
+            setModelStore("model", agentName, model)
+            if (options?.recent) {
+              setModelStore("recent", recentModels(model, modelStore.recent))
+              save()
+            }
+          })
+        },
+        currentFor(agentName: string) {
+          return createMemo(() => {
+            const item = modelStore.model[agentName]
+            if (!item) return undefined
+            if (!isModelValid(item)) return undefined
+            return item
+          })
+        },
         toggleFavorite(model: { providerID: string; modelID: string }) {
           batch(() => {
             if (!isModelValid(model)) {

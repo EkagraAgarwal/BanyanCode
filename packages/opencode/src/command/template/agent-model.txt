@@ -1,0 +1,2 @@
+Pick the model for a BanyanCode agent (orchestrator, researcher, explore, general).
+Usage: /agent-model <name>
