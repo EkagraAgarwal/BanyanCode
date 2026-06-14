@@ -1,0 +1,86 @@
+---
+title: BanyanCode Configuration
+description: opencode.json keys added by BanyanCode
+---
+
+# BanyanCode Configuration
+
+BanyanCode reads its configuration from `opencode.json` alongside OpenCode settings. All BanyanCode keys are top-level for easy discoverability.
+
+## Top-level keys
+
+### `banyancode_embedding_model`
+
+The embedding model used by `memory_search` and `code_search` for semantic search.
+
+Type: `string` (provider/model format, e.g., `"openai/text-embedding-3-small"`)
+
+Default: `undefined` — when unset, embedding-based search falls back to keyword matching and returns `degraded: true`.
+
+```json
+{
+  "banyancode_embedding_model": "openai/text-embedding-3-small"
+}
+```
+
+You can change this at runtime via the TUI: `/embedding-model`. The change takes effect immediately without restarting the process.
+
+### `agent.<name>.model`
+
+Standard OpenCode key — also used by BanyanCode. Set a specific model for an agent.
+
+```json
+{
+  "agent": {
+    "orchestrator": { "model": "anthropic/claude-3-5-sonnet" },
+    "researcher": { "model": "openai/gpt-4o-mini" },
+    "explore": { "model": "anthropic/claude-3-5-haiku" },
+    "general": { "model": "anthropic/claude-3-5-sonnet" }
+  }
+}
+```
+
+You can change this at runtime via the TUI: `/agent-model`. The change persists to `opencode.json`.
+
+## Environment variables
+
+### `BANYANCODE_ENABLE`
+
+Enables all BanyanCode features. Set to `1` to register the orchestrator, researcher, mesh tools, memory tools, codegraph tools, and BanyanCode slash commands.
+
+```bash
+BANYANCODE_ENABLE=1
+```
+
+Without this, the existing OpenCode experience is unchanged.
+
+### `BANYANCODE_EMBEDDING_MODEL`
+
+Initial value for the embedding model at process boot. If `banyancode_embedding_model` is also set in `opencode.json`, the config value wins.
+
+```bash
+BANYANCODE_EMBEDDING_MODEL=openai/text-embedding-3-small
+```
+
+### `BANYANCODE_DISABLE_WEBSEARCH`
+
+Disables the `websearch_free` tool even when BanyanCode is enabled. Useful for environments that block outbound HTTP to DuckDuckGo.
+
+```bash
+BANYANCODE_DISABLE_WEBSEARCH=1
+```
+
+## TUI keybinds and slash commands
+
+| Command | Description |
+|---------|-------------|
+| `/agent-model` | Pick the model for the orchestrator (or any subagent) |
+| `/embedding-model` | Pick the embedding model and apply live |
+| `/model` | Pick the model for the current agent (OpenCode default) |
+| `/models` | Same as `/model` |
+| `/codegraph-build` | Build the code graph for the current project |
+| `/code-embed` | Compute embeddings over code graph nodes |
+
+## Feature gates
+
+All BanyanCode features (orchestrator, researcher, mesh, memory, codegraph) are gated behind `BANYANCODE_ENABLE=1`. When unset, none of the new tools, agents, or slash commands register, and the user-facing behavior is identical to upstream OpenCode.

@@ -62,6 +62,39 @@ The orchestrator has access to shared tools for coordinating subagents:
 | `codegraph_impact` | Analyze impact of a change |
 | `system_status` | Get system health information |
 
+## Choosing a model
+
+The orchestrator and each subagent can use a different model. The TUI exposes this via the `/agent-model` slash command.
+
+### Picking a model from the TUI
+
+1. Press `<leader>:` (or type `/`) to open the command palette
+2. Type `agent-model` and press Enter
+3. Select a model from the list
+4. The choice persists to `opencode.json` and applies to the next orchestrator run
+
+### Manual configuration
+
+You can also set per-agent models directly in `opencode.json`:
+
+```json
+{
+  "agent": {
+    "orchestrator": { "model": "anthropic/claude-3-5-sonnet" },
+    "researcher": { "model": "openai/gpt-4o-mini" },
+    "explore": { "model": "anthropic/claude-3-5-haiku" },
+    "general": { "model": "anthropic/claude-3-5-sonnet" }
+  }
+}
+```
+
+### When to assign different models
+
+- **Orchestrator:** Use a strong reasoning model (e.g., `claude-3-5-sonnet`) since it plans and synthesizes
+- **Researcher:** Use a fast, cheap model with good web search synthesis (e.g., `gpt-4o-mini`)
+- **Explore:** Use the cheapest model that can read code (e.g., `claude-3-5-haiku`)
+- **General:** Use the same as the orchestrator or a strong all-rounder
+
 ## Troubleshooting
 
 ### Orchestrator not appearing
