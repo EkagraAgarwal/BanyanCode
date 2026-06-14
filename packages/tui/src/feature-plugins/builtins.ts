@@ -6,6 +6,7 @@ import SidebarFiles from "./sidebar/files"
 import SidebarFooter from "./sidebar/footer"
 import SidebarLsp from "./sidebar/lsp"
 import SidebarMcp from "./sidebar/mcp"
+import SidebarAgentTree from "./sidebar/agent-tree"
 import SidebarSystemStatus from "./sidebar/system-status"
 import SidebarTodo from "./sidebar/todo"
 import DiffViewer from "./system/diff-viewer"
@@ -26,6 +27,7 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     SidebarContext,
     SidebarSystemStatus,
     SidebarMcp,
+    SidebarAgentTree,
     SidebarLsp,
     SidebarTodo,
     SidebarFiles,
