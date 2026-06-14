@@ -22,5 +22,6 @@ export {
   defaultLayer as subagentMessagesRepoDefaultLayer,
 } from "./subagent-messages-repo"
 export { Service as SubagentBus, layer as subagentBusLayer, defaultLayer as subagentBusDefaultLayer } from "./subagent-bus"
+export { Service as MeshCoordinator, layer as meshCoordinatorLayer, defaultLayer as meshCoordinatorDefaultLayer } from "./mesh-coordinator"
 export { defaultLayer as embeddingProviderDefaultLayer, EmbeddingProviderService } from "./embedding-provider"
 export { Service as SystemMonitor, defaultLayer as systemMonitorDefaultLayer } from "./system-monitor"
