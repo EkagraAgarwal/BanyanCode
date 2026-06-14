@@ -12,6 +12,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput } from "../groups/global"
+import { applyEmbeddingModel } from "@/effect/banyancode-bootstrap"
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -145,6 +146,11 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return HttpServerResponse.jsonUnsafe(result.body, { status: result.status })
     })
 
+    const applyEmbeddingModelHandler = Effect.fn("GlobalHttpApi.applyEmbeddingModel")(function* () {
+      yield* applyEmbeddingModel
+      return true
+    })
+
     return handlers
       .handle("health", health)
       .handleRaw("event", event)
@@ -152,5 +158,6 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       .handle("configUpdate", configUpdate)
       .handle("dispose", dispose)
       .handleRaw("upgrade", upgradeRaw)
+      .handle("applyEmbeddingModel", applyEmbeddingModelHandler)
   }),
 )

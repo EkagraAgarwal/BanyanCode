@@ -77,6 +77,7 @@ const mockEmbeddingProviderNoModelLayer = Layer.succeed(
     embed: (input: string | string[]) =>
       Effect.fail(new EmbeddingProvider.EmbeddingError({ message: "no embedding model configured" })),
     model: () => undefined,
+    setModel: () => Effect.void,
   }),
 )
 
@@ -133,6 +134,7 @@ const mockProviderWithModelLayer = Layer.succeed(
     embed: (input: string | string[]) =>
       Effect.succeed([new Float32Array([1, 0, 0])]),
     model: () => "test-model",
+    setModel: () => Effect.void,
   }),
 )
 

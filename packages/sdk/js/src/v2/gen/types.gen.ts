@@ -2036,6 +2036,7 @@ export type Config = {
     max_lines?: number
     max_bytes?: number
   }
+  banyancode_embedding_model?: string
   compaction?: {
     auto?: boolean
     prune?: boolean
@@ -5529,6 +5530,32 @@ export type GlobalUpgradeResponses = {
 }
 
 export type GlobalUpgradeResponse = GlobalUpgradeResponses[keyof GlobalUpgradeResponses]
+
+export type GlobalEmbeddingModelApplyData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/embedding-model"
+}
+
+export type GlobalEmbeddingModelApplyErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalEmbeddingModelApplyError = GlobalEmbeddingModelApplyErrors[keyof GlobalEmbeddingModelApplyErrors]
+
+export type GlobalEmbeddingModelApplyResponses = {
+  /**
+   * Embedding model applied
+   */
+  200: boolean
+}
+
+export type GlobalEmbeddingModelApplyResponse =
+  GlobalEmbeddingModelApplyResponses[keyof GlobalEmbeddingModelApplyResponses]
 
 export type EventSubscribeData = {
   body?: never

@@ -16,6 +16,10 @@ const enabledByExperimental = (name: string) =>
 export class Service extends ConfigService.Service<Service>()("@opencode/RuntimeFlags", {
   autoShare: bool("OPENCODE_AUTO_SHARE"),
   banyancodeEnable: bool("BANYANCODE_ENABLE"),
+  banyancodeEmbeddingModel: Config.string("BANYANCODE_EMBEDDING_MODEL").pipe(
+    Config.withDefault(""),
+    Config.map((s) => (s === "" ? undefined : s)),
+  ),
   pure: bool("OPENCODE_PURE"),
   disableDefaultPlugins: bool("OPENCODE_DISABLE_DEFAULT_PLUGINS"),
   disableEmbeddedWebUi: bool("OPENCODE_DISABLE_EMBEDDED_WEB_UI"),
