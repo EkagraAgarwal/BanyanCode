@@ -3,17 +3,16 @@ import { InstanceState } from "@/effect/instance-state"
 import { EffectBridge } from "@/effect/bridge"
 import type { InstanceContext } from "@/project/instance-context"
 import { SessionID, MessageID } from "@/session/schema"
-import { Effect, Layer, Context, Schema } from "effect"
+import { Effect, Layer, Context, Schema, Option } from "effect"
 import { Config } from "@/config/config"
 import { MCP } from "../mcp"
 import { Skill } from "../skill"
 import { EventV2 } from "@opencode-ai/core/event"
+import { Banyan } from "@opencode-ai/core/banyancode"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_CODEGRAPH_BUILD from "./template/codegraph-build.txt"
 import PROMPT_CODE_EMBED from "./template/code-embed.txt"
-import PROMPT_AGENT_MODEL from "./template/agent-model.txt"
-import PROMPT_EMBEDDING_MODEL from "./template/embedding-model.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -38,11 +37,15 @@ export const Info = Schema.Struct({
   model: Schema.optional(Schema.String),
   source: Schema.optional(Schema.Literals(["command", "mcp", "skill"])),
   template: Schema.Unknown,
+  execute: Schema.optional(Schema.Unknown),
   subtask: Schema.optional(Schema.Boolean),
   hints: Schema.Array(Schema.String),
 }).annotate({ identifier: "Command" })
 
-export type Info = Omit<Schema.Schema.Type<typeof Info>, "template"> & { template: Promise<string> | string }
+export type Info = Omit<Schema.Schema.Type<typeof Info>, "template" | "execute"> & {
+  template: Promise<string> | string
+  execute?: (input: { command: string; arguments: string }) => Effect.Effect<void, never, never>
+}
 
 export function hints(template: string) {
   const result: string[] = []
@@ -59,8 +62,6 @@ export const Default = {
   REVIEW: "review",
   CODEGRAPH_BUILD: "codegraph-build",
   CODE_EMBED: "code-embed",
-  AGENT_MODEL: "agent-model",
-  EMBEDDING_MODEL: "embedding-model",
 } as const
 
 export interface Interface {
@@ -70,12 +71,36 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Command") {}
 
+function parseArgs(input: string): { positional: string[]; flags: Record<string, string | boolean> } {
+  const parts = input.trim().split(/\s+/).filter(Boolean)
+  const positional: string[] = []
+  const flags: Record<string, string | boolean> = {}
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i]
+    if (p.startsWith("--")) {
+      const key = p.slice(2)
+      const next = parts[i + 1]
+      if (next && !next.startsWith("--")) {
+        flags[key] = next
+        i++
+      } else {
+        flags[key] = true
+      }
+    } else {
+      positional.push(p)
+    }
+  }
+  return { positional, flags }
+}
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
     const mcp = yield* MCP.Service
     const skill = yield* Skill.Service
+    const codegraphIndexer = yield* Effect.serviceOption(Banyan.CodegraphIndexer)
+    const codegraphEmbedder = yield* Effect.serviceOption(Banyan.CodegraphEmbedder)
 
     const init = Effect.fn("Command.state")(function* (ctx: InstanceContext) {
       const cfg = yield* config.get()
@@ -108,6 +133,14 @@ export const layer = Layer.effect(
         get template() {
           return PROMPT_CODEGRAPH_BUILD
         },
+        execute: (input) => {
+          const idx = Option.getOrUndefined(codegraphIndexer)
+          if (!idx) return Effect.void
+          const args = parseArgs(input.arguments)
+          const root = args.positional[0] ?? ctx.worktree
+          const force = args.flags.force === true || args.flags.force === "true"
+          return idx.index({ root, force }).pipe(Effect.mapError(() => undefined as never), Effect.asVoid)
+        },
         hints: hints(PROMPT_CODEGRAPH_BUILD),
       }
       commands[Default.CODE_EMBED] = {
@@ -117,25 +150,16 @@ export const layer = Layer.effect(
         get template() {
           return PROMPT_CODE_EMBED
         },
+        execute: (input) => {
+          const emb = Option.getOrUndefined(codegraphEmbedder)
+          if (!emb) return Effect.void
+          const args = parseArgs(input.arguments)
+          if (args.flags.file) {
+            return emb.embedFile(args.flags.file as string).pipe(Effect.mapError(() => undefined as never), Effect.asVoid)
+          }
+          return emb.embedAll().pipe(Effect.mapError(() => undefined as never), Effect.asVoid)
+        },
         hints: hints(PROMPT_CODE_EMBED),
-      }
-      commands[Default.AGENT_MODEL] = {
-        name: Default.AGENT_MODEL,
-        description: "pick the model for a BanyanCode agent (orchestrator, researcher, explore, general)",
-        source: "command",
-        get template() {
-          return PROMPT_AGENT_MODEL
-        },
-        hints: hints(PROMPT_AGENT_MODEL),
-      }
-      commands[Default.EMBEDDING_MODEL] = {
-        name: Default.EMBEDDING_MODEL,
-        description: "pick the embedding model for BanyanCode memory and code search",
-        source: "command",
-        get template() {
-          return PROMPT_EMBEDDING_MODEL
-        },
-        hints: hints(PROMPT_EMBEDDING_MODEL),
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

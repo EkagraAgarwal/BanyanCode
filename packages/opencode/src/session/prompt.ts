@@ -1416,6 +1416,36 @@ export const layer = Layer.effect(
         yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
         throw error
       }
+
+      if (cmd.execute) {
+        const messageID = MessageID.ascending()
+        const ctx = yield* InstanceState.context
+        yield* cmd.execute({ command: input.command, arguments: input.arguments })
+        yield* events.publish(Command.Event.Executed, {
+          name: input.command,
+          sessionID: input.sessionID,
+          arguments: input.arguments,
+          messageID,
+        })
+        return {
+          info: {
+            id: messageID,
+            role: "assistant" as const,
+            sessionID: input.sessionID,
+            time: { created: Date.now() },
+            parentID: MessageID.ascending(),
+            modelID: "" as ModelV2.ID,
+            providerID: "" as ProviderV2.ID,
+            mode: "",
+            agent: "",
+            path: { cwd: ctx.directory, root: ctx.worktree },
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+          parts: [],
+        }
+      }
+
       const agentName = cmd.agent ?? input.agent
 
       const raw = input.arguments.match(argsRegex) ?? []

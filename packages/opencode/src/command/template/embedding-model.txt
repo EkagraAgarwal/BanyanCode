@@ -1,1 +1,0 @@
-Pick the embedding model for BanyanCode memory and code search.
