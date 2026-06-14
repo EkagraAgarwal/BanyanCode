@@ -43,7 +43,7 @@ export type SubagentMessage = {
   fromAgent: string
   toSession?: string
   toAgent?: string
-  kind: "request" | "inform" | "answer" | "poll"
+  kind: "request" | "inform" | "answer" | "poll" | "steer" | "checkpoint" | "plan" | "kill"
   payload: unknown
   deliveredAt?: number
   createdAt: number

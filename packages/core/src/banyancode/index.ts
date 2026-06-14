@@ -3,6 +3,7 @@ export * as Banyan from "."
 export { MemoryEntriesTable } from "./memory.sql"
 export { CodegraphFilesTable, CodegraphNodesTable, CodegraphEdgesTable, CodegraphEmbeddingsTable } from "./codegraph.sql"
 export { SubagentMessagesTable } from "./subagent-messages.sql"
+export { SubagentPlansTable } from "./subagent-plans.sql"
 export type {
   MemoryEntry,
   CodegraphFile,
@@ -26,6 +27,11 @@ export {
   layer as subagentMessagesRepoLayer,
   defaultLayer as subagentMessagesRepoDefaultLayer,
 } from "./subagent-messages-repo"
+export {
+  Service as SubagentPlansRepo,
+  layer as subagentPlansRepoLayer,
+  defaultLayer as subagentPlansRepoDefaultLayer,
+} from "./subagent-plans-repo"
 export { Service as SubagentBus, layer as subagentBusLayer, defaultLayer as subagentBusDefaultLayer } from "./subagent-bus"
 export { Service as MeshCoordinator, layer as meshCoordinatorLayer, defaultLayer as meshCoordinatorDefaultLayer } from "./mesh-coordinator"
 export { defaultLayer as embeddingProviderDefaultLayer, EmbeddingProviderService } from "./embedding-provider"
