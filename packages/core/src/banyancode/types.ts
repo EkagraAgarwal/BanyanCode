@@ -49,6 +49,15 @@ export type SubagentMessage = {
   createdAt: number
 }
 
+export type PlanDefinition = {
+  title: string
+  steps: Array<{
+    content: string
+    status: "pending" | "in_progress" | "completed" | "cancelled"
+  }>
+  exitCriteria: string
+}
+
 export type PeerInfo = {
   sessionID: string
   agent: string

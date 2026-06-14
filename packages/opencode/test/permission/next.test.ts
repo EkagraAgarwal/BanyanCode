@@ -3,6 +3,7 @@ import { test, expect } from "bun:test"
 import os from "os"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
+import { Config } from "../../src/config/config"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Database } from "@opencode-ai/core/database/database"
 import { Permission } from "../../src/permission"
@@ -12,11 +13,13 @@ import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
 
-const events = EventV2Bridge.defaultLayer
+const events = Layer.succeed(EventV2Bridge.Service, {} as any)
+const config = Layer.succeed(Config.Service, Config.Service.of({ get: () => Effect.succeed({} as any), getGlobal: () => Effect.succeed({} as any), getConsoleState: () => Effect.succeed({} as any), update: () => Effect.void, updateGlobal: () => Effect.succeed({ info: {} as any, changed: false }), invalidate: () => Effect.void, directories: () => Effect.succeed([]), waitForDependencies: () => Effect.void }))
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
 const env = Layer.mergeAll(
-  Permission.layer.pipe(Layer.provide(Database.defaultLayer), Layer.provide(events)),
+  Permission.layer.pipe(Layer.provide(Database.defaultLayer), Layer.provide(events), Layer.provide(config)),
   events,
+  config,
   CrossSpawnSpawner.defaultLayer,
   InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
 )

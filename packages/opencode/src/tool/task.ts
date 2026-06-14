@@ -10,10 +10,13 @@ import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
-import { Effect, Exit, Schema, Scope } from "effect"
+import { Effect, Exit, Option, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
+import { Banyan } from "@opencode-ai/core/banyancode"
+import { Service as SubagentBusService } from "@opencode-ai/core/banyancode/subagent-bus"
+import { Service as SubagentPlansService, type PlanStep } from "@opencode-ai/core/banyancode/subagent-plans-repo"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -49,6 +52,18 @@ const BaseParameterFields = {
       "This should only be set if you mean to resume a previous task (you can pass a prior task_id and the task will continue the same subagent session as before instead of creating a fresh one)",
   }),
   command: Schema.optional(Schema.String).annotate({ description: "The command that triggered this task" }),
+  plan: Schema.optional(
+    Schema.Struct({
+      title: Schema.String,
+      steps: Schema.Array(
+        Schema.Struct({
+          content: Schema.String,
+          status: Schema.Literals(["pending", "in_progress", "completed", "cancelled"]),
+        }),
+      ),
+      exitCriteria: Schema.String,
+    }),
+  ).annotate({ description: "An optional plan to send to the subagent at session start" }),
 }
 
 const BaseParameters = Schema.Struct(BaseParameterFields)
@@ -156,6 +171,37 @@ export const TaskTool = Tool.define(
             ),
           ],
         }))
+
+      if (params.plan) {
+        const plan = params.plan
+        const busOption = yield* Effect.serviceOption(SubagentBusService)
+        const plansOption = yield* Effect.serviceOption(SubagentPlansService)
+        if (Option.isSome(busOption)) {
+          yield* busOption.value.publish({
+            id: crypto.randomUUID(),
+            parentSessionID: ctx.sessionID,
+            fromSession: ctx.sessionID,
+            fromAgent: ctx.agent,
+            toAgent: next.name,
+            kind: "plan",
+            payload: plan,
+            createdAt: Date.now(),
+          })
+        }
+        if (Option.isSome(plansOption)) {
+          yield* plansOption.value.put({
+            id: crypto.randomUUID(),
+            parentSessionID: ctx.sessionID,
+            agent: next.name,
+            sessionID: nextSession.id,
+            title: plan.title,
+            steps: [...plan.steps],
+            exitCriteria: plan.exitCriteria,
+            status: "active",
+            createdAt: Date.now(),
+          })
+        }
+      }
 
       const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
         Effect.provideService(Database.Service, database),
@@ -310,13 +356,20 @@ export const TaskTool = Tool.define(
               background.wait({ id: nextSession.id }).pipe(Effect.map((waited) => waited.info)),
               background.waitForPromotion(nextSession.id),
             )
-            if (result?.metadata?.background === true) return backgroundResult()
-            if (result?.status === "error") return yield* Effect.fail(new Error(result.error ?? "Task failed"))
-            if (result?.status === "cancelled") return yield* Effect.fail(new Error("Task cancelled"))
+            if (!result) {
+              return {
+                title: params.description,
+                metadata,
+                output: renderOutput({ sessionID: nextSession.id, state: "completed", text: "" }),
+              }
+            }
+            if (result.metadata?.background === true) return backgroundResult()
+            if (result.status === "error") return yield* Effect.fail(new Error(result.error ?? "Task failed"))
+            if (result.status === "cancelled") return yield* Effect.fail(new Error("Task cancelled"))
             return {
               title: params.description,
               metadata,
-              output: renderOutput({ sessionID: nextSession.id, state: "completed", text: result?.output ?? "" }),
+              output: renderOutput({ sessionID: nextSession.id, state: "completed", text: result.output ?? "" }),
             }
           }),
         (_, exit) =>

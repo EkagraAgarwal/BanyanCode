@@ -11,7 +11,7 @@ export const name = "subagent_message"
 
 export const Input = Schema.Struct({
   to: Schema.optional(Schema.String),
-  kind: Schema.Literals(["request", "inform", "answer", "poll"]),
+  kind: Schema.Literals(["request", "inform", "answer", "poll", "steer", "checkpoint", "plan", "kill"]),
   payload: Schema.Unknown,
 })
 
@@ -35,7 +35,15 @@ export const layer = Layer.effectDiscard(
       .register({
         [name]: Tool.make({
           description:
-            "Send a message to a subagent or broadcast to all subagents in the mesh. Fire-and-persist semantics — no acknowledgement required.",
+            `Send a message to a peer subagent or the orchestrator. Kinds:
+- "request" — ask a peer to perform an action. payload: { action: string, ...args }
+- "inform" — notify a peer of something. payload: { ... }
+- "answer" — respond to a request. payload: { result: any }
+- "poll" — check peer status. payload: {}
+- "steer" — orchestrator injects an instruction into a subagent's current plan. payload: { instruction: string, priority?: "low"|"normal"|"high" }
+- "checkpoint" — subagent reports its current state. payload: { summary: string, todos: Array<{content, status}>, blockers?: string[] }
+- "plan" — orchestrator hands a subagent its initial plan at spawn time. payload: { title: string, steps: Array<{content, status}>, exitCriteria: string }
+- "kill" — orchestrator terminates a subagent gracefully. payload: { reason: string }`,
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [

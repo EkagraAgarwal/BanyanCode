@@ -7,7 +7,8 @@ import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
-import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Config } from "@/config/config"
+
 
 export const Event = {
   Asked: EventV2.define({ type: "permission.asked", schema: PermissionV1.Request.fields }),
@@ -55,6 +56,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    const config = yield* Config.Service
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
@@ -77,8 +79,8 @@ export const layer = Layer.effect(
     )
 
     const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
-      const flags = yield* RuntimeFlags.Service
-      if (flags.banyancodeYoloMode) return
+      const globalConfig = yield* config.getGlobal()
+      if (globalConfig.banyancode_yolo_mode) return
 
       const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, ...request } = input
@@ -227,8 +229,8 @@ export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<st
   )
 }
 
-export const defaultLayer = layer.pipe(Layer.provide(EventV2Bridge.defaultLayer))
+export const defaultLayer = layer.pipe(Layer.provide(EventV2Bridge.defaultLayer), Layer.provide(Config.defaultLayer))
 
-export const node = LayerNode.make(layer, [EventV2Bridge.node])
+export const node = LayerNode.make(defaultLayer, [EventV2Bridge.node])
 
 export * as Permission from "."

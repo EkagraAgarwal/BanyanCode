@@ -23,9 +23,9 @@ describe("command execute", () => {
     expect(Command.Default.REVIEW).toBe("review")
   })
 
-  test("Default has exactly 4 commands (init, review, codegraph-build, code-embed)", () => {
+  test("Default has exactly 5 commands (init, review, codegraph-build, code-embed, yolo)", () => {
     const keys = Object.keys(Command.Default)
-    expect(keys).toHaveLength(4)
+    expect(keys).toHaveLength(5)
     expect(keys).toContain("INIT")
     expect(keys).toContain("REVIEW")
     expect(keys).toContain("CODEGRAPH_BUILD")
