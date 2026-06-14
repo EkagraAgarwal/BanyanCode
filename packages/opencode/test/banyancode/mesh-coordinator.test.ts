@@ -3,6 +3,9 @@ import { Effect, Layer, Queue } from "effect"
 import { MeshCoordinator } from "../../../core/src/banyancode/mesh-coordinator"
 import { SubagentBus } from "../../../core/src/banyancode/subagent-bus"
 import { SubagentMessagesRepo } from "../../../core/src/banyancode/subagent-messages-repo"
+import { SubagentPlans } from "../../../core/src/banyancode/subagent-plans-repo"
+import { EventV2 } from "../../../core/src/event"
+import { SessionSchema } from "../../../core/src/session/schema"
 import { testEffect } from "../lib/effect"
 
 process.env.BANYANCODE_ENABLE = "1"
@@ -24,9 +27,22 @@ const mockBusLayer = Layer.succeed(SubagentBus.Service, SubagentBus.Service.of({
   peers: () => Effect.succeed([]),
 }))
 
+const mockPlansLayer = Layer.succeed(SubagentPlans.Service, SubagentPlans.Service.of({
+  put: () => Effect.void,
+  getByID: () => Effect.succeed(undefined),
+  listByParent: () => Effect.succeed([]),
+  listBySession: () => Effect.succeed([]),
+  markCompleted: () => Effect.void,
+  markCancelled: () => Effect.void,
+}))
+
+const mockEventsLayer = Layer.succeed(EventV2.Service, {} as any)
+
 const meshLayer = MeshCoordinator.defaultLayer.pipe(
   Layer.provide(mockRepoLayer),
   Layer.provide(mockBusLayer),
+  Layer.provide(mockPlansLayer),
+  Layer.provide(mockEventsLayer),
 )
 
 const it = testEffect(meshLayer)
@@ -35,12 +51,12 @@ describe("mesh-coordinator", () => {
   it.effect("status returns expected shape", () =>
     Effect.gen(function* () {
       const svc = yield* MeshCoordinator.Service
-      const status = yield* svc.status("test-session")
+      const status = yield* svc.status(SessionSchema.ID.make("ses_test"))
       expect(status).toHaveProperty("parentSessionID")
       expect(status).toHaveProperty("peers")
       expect(status).toHaveProperty("pendingMessages")
       expect(status).toHaveProperty("recentActivity")
-      expect(status.parentSessionID).toBe("test-session")
+      expect(status.parentSessionID).toBe("ses_test")
       expect(Array.isArray(status.peers)).toBe(true)
       expect(Array.isArray(status.recentActivity)).toBe(true)
     }),
@@ -49,14 +65,14 @@ describe("mesh-coordinator", () => {
   it.effect("drain returns empty array when no messages", () =>
     Effect.gen(function* () {
       const svc = yield* MeshCoordinator.Service
-      const drained = yield* svc.drain("test-session")
+      const drained = yield* svc.drain(SessionSchema.ID.make("ses_test"))
       expect(Array.isArray(drained)).toBe(true)
     }),
   )
 
   it.live("after publishing messages via bus, status reflects them", () =>
     Effect.gen(function* () {
-      const parentSessionID = "mesh-coord-test"
+      const parentSessionID = SessionSchema.ID.make("ses_mesh")
 
       const msg = {
         id: crypto.randomUUID(),
@@ -71,7 +87,7 @@ describe("mesh-coordinator", () => {
 
       const svc = yield* MeshCoordinator.Service
       const status = yield* svc.status(parentSessionID)
-      expect(status.parentSessionID).toBe(parentSessionID)
+      expect(status.parentSessionID).toBe("ses_mesh")
     }),
   )
 })

@@ -286,6 +286,7 @@ export const layer = Layer.effect(
                 },
                 shared_memory: "allow",
                 subagent_message: "allow",
+                mesh_control: "allow",
                 todowrite: "allow",
                 question: "allow",
               }),
