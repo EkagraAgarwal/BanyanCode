@@ -99,7 +99,7 @@ export const layer = Layer.effect(
     const config = yield* Config.Service
     const mcp = yield* MCP.Service
     const skill = yield* Skill.Service
-    const codegraphIndexer = yield* Effect.serviceOption(Banyan.CodegraphIndexer)
+    const codegraphBuildService = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
     const codegraphEmbedder = yield* Effect.serviceOption(Banyan.CodegraphEmbedder)
 
     const init = Effect.fn("Command.state")(function* (ctx: InstanceContext) {
@@ -134,12 +134,12 @@ export const layer = Layer.effect(
           return PROMPT_CODEGRAPH_BUILD
         },
         execute: (input) => {
-          const idx = Option.getOrUndefined(codegraphIndexer)
-          if (!idx) return Effect.void
+          const buildSvc = Option.getOrUndefined(codegraphBuildService)
+          if (!buildSvc) return Effect.void
           const args = parseArgs(input.arguments)
           const root = args.positional[0] ?? ctx.worktree
           const force = args.flags.force === true || args.flags.force === "true"
-          return idx.index({ root, force }).pipe(Effect.mapError(() => undefined as never), Effect.asVoid)
+          return buildSvc.start({ root, force })
         },
         hints: hints(PROMPT_CODEGRAPH_BUILD),
       }

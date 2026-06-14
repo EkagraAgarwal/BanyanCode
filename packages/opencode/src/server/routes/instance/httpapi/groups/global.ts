@@ -71,6 +71,7 @@ export const GlobalPaths = {
   dispose: "/global/dispose",
   upgrade: "/global/upgrade",
   embeddingModel: "/global/embedding-model",
+  codegraphCancel: "/global/codegraph-cancel",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -141,6 +142,15 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.embedding.model.apply",
           summary: "Apply embedding model",
           description: "Apply the embedding model from config to the EmbeddingProviderService.",
+        }),
+      ),
+      HttpApiEndpoint.post("codegraphCancel", GlobalPaths.codegraphCancel, {
+        success: described(Schema.Boolean, "Codegraph build cancelled"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.codegraph.cancel",
+          summary: "Cancel codegraph build",
+          description: "Cancel the in-flight codegraph build for the current instance.",
         }),
       ),
     )
