@@ -14,6 +14,11 @@ export type {
 export { Service as MemoryRepo, layer as memoryRepoLayer, defaultLayer as memoryRepoDefaultLayer } from "./memory-repo"
 export { Service as CodegraphRepo, layer as codegraphRepoLayer, defaultLayer as codegraphRepoDefaultLayer } from "./codegraph-repo"
 export { Service as CodegraphIndexer, layer as codegraphIndexerLayer, defaultLayer as codegraphIndexerDefaultLayer } from "./codegraph-indexer"
+export {
+  Service as CodegraphBuildService,
+  layer as codegraphBuildServiceLayer,
+  defaultLayer as codegraphBuildServiceDefaultLayer,
+} from "./codegraph-build-service"
 export { Service as CodegraphAnalyzer, layer as codegraphAnalyzerLayer, defaultLayer as codegraphAnalyzerDefaultLayer } from "./codegraph-analyzer"
 export { Service as CodegraphEmbedder, layer as codegraphEmbedderLayer, defaultLayer as codegraphEmbedderDefaultLayer } from "./codegraph-embedder"
 export {

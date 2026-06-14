@@ -7,6 +7,7 @@ import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { defaultLayer as codegraphAnalyzerLayer } from "../banyancode/codegraph-analyzer"
+import { defaultLayer as codegraphBuildServiceLayer } from "../banyancode/codegraph-build-service"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE === "1"
 
@@ -71,7 +72,7 @@ export const locationLayer = Layer.effectDiscard(
 
     const tools = yield* Tools.Service
     const permission = yield* PermissionV2.Service
-    const indexer = yield* Banyan.CodegraphIndexer
+    const buildService = yield* Banyan.CodegraphBuildService
     const repo = yield* Banyan.CodegraphRepo
     const analyzer = yield* Banyan.CodegraphAnalyzer
 
@@ -97,11 +98,8 @@ export const locationLayer = Layer.effectDiscard(
               })
 
               const root = input.root ?? process.cwd()
-              const start = Date.now()
-              const result: { indexed: number; skipped: number } = yield* indexer.index({ root, force: input.force ?? false })
-              const duration_ms = Date.now() - start
-
-              return { indexed: result.indexed, skipped: result.skipped, duration_ms }
+              yield* buildService.start({ root, force: input.force ?? false })
+              return { indexed: 0, skipped: 0, duration_ms: 0 }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_build failed` })), Effect.orDie)
           },
         }),
@@ -220,4 +218,4 @@ export const locationLayer = Layer.effectDiscard(
       })
       .pipe(Effect.orDie)
   }),
-).pipe(Layer.provide(codegraphAnalyzerLayer))
+).pipe(Layer.provide(codegraphAnalyzerLayer), Layer.provide(codegraphBuildServiceLayer))
