@@ -18,3 +18,10 @@ export const applyEmbeddingModel = Effect.gen(function* () {
     yield* provider.setModel(modelName)
   }
 })
+
+export const applyYoloMode = Effect.gen(function* () {
+  const flags = yield* RuntimeFlags.Service
+  if (!flags.banyancodeEnable) return
+  const globalConfig = yield* Config.Service.use((svc) => svc.getGlobal())
+  flags.banyancodeYoloMode = globalConfig.banyancode_yolo_mode ?? false
+})

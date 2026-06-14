@@ -62,6 +62,7 @@ export const Default = {
   REVIEW: "review",
   CODEGRAPH_BUILD: "codegraph-build",
   CODE_EMBED: "code-embed",
+  YOLO: "yolo",
 } as const
 
 export interface Interface {
@@ -160,6 +161,21 @@ export const layer = Layer.effect(
           return emb.embedAll().pipe(Effect.mapError(() => undefined as never), Effect.asVoid)
         },
         hints: hints(PROMPT_CODE_EMBED),
+      }
+      commands[Default.YOLO] = {
+        name: Default.YOLO,
+        description: "toggle YOLO mode (auto-approve all permissions, including dangerous)",
+        source: "command",
+        get template() {
+          return "Toggle YOLO mode."
+        },
+        execute: () =>
+          Effect.gen(function* () {
+            const globalConfig = yield* config.getGlobal()
+            const newValue = !globalConfig.banyancode_yolo_mode
+            yield* config.updateGlobal({ banyancode_yolo_mode: newValue })
+          }),
+        hints: [],
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

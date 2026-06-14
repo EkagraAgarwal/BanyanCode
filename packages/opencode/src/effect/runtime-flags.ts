@@ -20,6 +20,7 @@ export class Service extends ConfigService.Service<Service>()("@opencode/Runtime
     Config.withDefault(""),
     Config.map((s) => (s === "" ? undefined : s)),
   ),
+  banyancodeYoloMode: bool("BANYANCODE_YOLO_MODE"),
   pure: bool("OPENCODE_PURE"),
   disableDefaultPlugins: bool("OPENCODE_DISABLE_DEFAULT_PLUGINS"),
   disableEmbeddedWebUi: bool("OPENCODE_DISABLE_EMBEDDED_WEB_UI"),

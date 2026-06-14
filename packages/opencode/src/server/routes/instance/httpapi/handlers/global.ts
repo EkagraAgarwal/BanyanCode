@@ -14,6 +14,7 @@ import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput } from "../groups/global"
 import { applyEmbeddingModel } from "@/effect/banyancode-bootstrap"
 import { applyCodegraphBuildBridge } from "@/effect/banyancode-codegraph-bridge"
+import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 
 function eventData(data: unknown): Sse.Event {
@@ -151,6 +152,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const applyEmbeddingModelHandler = Effect.fn("GlobalHttpApi.applyEmbeddingModel")(function* () {
       yield* applyEmbeddingModel
       yield* applyCodegraphBuildBridge
+      yield* applySystemMonitorBridge
       return true
     })
 

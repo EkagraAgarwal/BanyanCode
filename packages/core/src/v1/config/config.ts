@@ -146,6 +146,9 @@ export const Info = Schema.Struct({
   banyancode_embedding_model: Schema.optional(Schema.String).annotate({
     description: "Embedding model for BanyanCode memory and code search (provider/model format)",
   }),
+  banyancode_yolo_mode: Schema.optional(Schema.Boolean).annotate({
+    description: "YOLO mode: auto-approve ALL permission requests including dangerous ones, external directories, bash with no path restriction, etc.",
+  }),
   compaction: Schema.optional(
     Schema.Struct({
       auto: Schema.optional(Schema.Boolean).annotate({

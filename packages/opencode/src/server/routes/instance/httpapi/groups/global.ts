@@ -72,6 +72,7 @@ export const GlobalPaths = {
   upgrade: "/global/upgrade",
   embeddingModel: "/global/embedding-model",
   codegraphCancel: "/global/codegraph-cancel",
+  yoloMode: "/global/yolo-mode",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -151,6 +152,15 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.codegraph.cancel",
           summary: "Cancel codegraph build",
           description: "Cancel the in-flight codegraph build for the current instance.",
+        }),
+      ),
+      HttpApiEndpoint.post("applyYoloMode", GlobalPaths.yoloMode, {
+        success: described(Schema.Boolean, "YOLO mode applied"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.yolo.mode.apply",
+          summary: "Apply YOLO mode",
+          description: "Apply the YOLO mode from config to the RuntimeFlags service.",
         }),
       ),
     )
