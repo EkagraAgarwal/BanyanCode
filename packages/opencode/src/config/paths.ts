@@ -40,6 +40,41 @@ export const directories = Effect.fn("ConfigPaths.directories")(function* (direc
   ])
 })
 
+export const banyanFiles = Effect.fn("ConfigPaths.banyanProjectFiles")(function* (
+  directory: string,
+  worktree?: string,
+) {
+  const afs = yield* FSUtil.Service
+  return (yield* afs.up({
+    targets: ["banyancode.jsonc", "banyancode.json"],
+    start: directory,
+    stop: worktree,
+  })).toReversed()
+})
+
+export const banyanDirectories = Effect.fn("ConfigPaths.banyanDirectories")(function* (
+  directory: string,
+  worktree?: string,
+) {
+  const afs = yield* FSUtil.Service
+  return unique([
+    Global.Path.banyan.config,
+    ...(!Flag.BANYANCODE_DISABLE_PROJECT_CONFIG
+      ? yield* afs.up({
+          targets: [".banyancode"],
+          start: directory,
+          stop: worktree,
+        })
+      : []),
+    ...(yield* afs.up({
+      targets: [".banyancode"],
+      start: Global.Path.home,
+      stop: Global.Path.home,
+    })),
+    ...(Flag.BANYANCODE_CONFIG_DIR ? [Flag.BANYANCODE_CONFIG_DIR] : []),
+  ])
+})
+
 export function fileInDirectory(dir: string, name: string) {
   return [path.join(dir, `${name}.json`), path.join(dir, `${name}.jsonc`)]
 }
