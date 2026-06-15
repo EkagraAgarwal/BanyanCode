@@ -19,7 +19,7 @@ The code graph respects the following ignore patterns:
 
 - Default patterns: `node_modules`, `.git`, `dist`, `build`, `coverage`
 - `.gitignore` patterns from the project root
-- `.banyancodeignore` patterns (if present)
+- `.banyancode/ignore` patterns (if present)
 
 ## Usage
 
@@ -83,7 +83,7 @@ When `BANYANCODE_EMBEDDING_MODEL` is set, use `/code-embed` for natural language
 ### Index fails
 
 - Check that the root path exists and is accessible
-- Verify ignore rules in `.banyancodeignore` are not excluding necessary files
+- Verify ignore rules in `.banyancode/ignore` are not excluding necessary files
 - Ensure sufficient disk space for the graph storage
 
 ### Search returns no results

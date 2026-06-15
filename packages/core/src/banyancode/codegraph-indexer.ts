@@ -55,7 +55,7 @@ export const layer = Layer.effect(
       return Effect.gen(function* () {
         const patterns: string[] = [...DEFAULT_IGNORED]
         const gitignorePath = path.join(root, ".gitignore")
-        const banyancodeignorePath = path.join(root, ".banyancodeignore")
+        const banyancodeignorePath = path.join(root, ".banyancode", "ignore")
         const gitignoreExists = yield* fs.existsSafe(gitignorePath)
         if (gitignoreExists) {
           const content = yield* fs.readFileStringSafe(gitignorePath).pipe(Effect.orDie)
