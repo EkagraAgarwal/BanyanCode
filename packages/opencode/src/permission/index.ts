@@ -2,12 +2,13 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ConfigPermissionV1 } from "@opencode-ai/core/v1/config/permission"
 import { InstanceState } from "@/effect/instance-state"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
-import { Deferred, Effect, Layer, Context } from "effect"
+import { Deferred, Effect, Layer, Context, Option } from "effect"
 import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Config } from "@/config/config"
+import { Banyan } from "@opencode-ai/core/banyancode"
 
 
 export const Event = {
@@ -79,8 +80,11 @@ export const layer = Layer.effect(
     )
 
     const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
-      const globalConfig = yield* config.getGlobal()
-      if (globalConfig.banyancode_yolo_mode) return
+      const banyanOption = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+      const banyanConfig = Option.isSome(banyanOption) ? yield* banyanOption.value.get() : ({} as Banyan.BanyanConfigInfo)
+      if (banyanConfig.banyancode_yolo_mode) {
+        return { action: "allow" as const }
+      }
 
       const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, ...request } = input
