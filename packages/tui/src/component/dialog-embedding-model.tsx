@@ -43,7 +43,7 @@ export function DialogEmbeddingModel() {
             const modelID = model.id
             const providerID = model.providerID
             const fullModel = `${providerID}/${modelID}`
-            await sdk.client.global.config.update({
+            await (sdk.client as any).banyan?.config?.update?.({
               config: { banyancode_embedding_model: fullModel },
             })
             await sdk.client.global.embedding.model.apply({})
