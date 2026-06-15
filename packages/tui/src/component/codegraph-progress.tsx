@@ -67,24 +67,27 @@ export function CodegraphProgress() {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   return (
-    <Show when={build.state.status !== "idle"}>
-      <box
-        position="absolute"
-        bottom={2}
-        right={2}
-        maxWidth={Math.min(60, dimensions().width - 6)}
-        paddingLeft={2}
-        paddingRight={2}
-        paddingTop={1}
-        paddingBottom={1}
-        backgroundColor={theme.backgroundPanel}
-        borderColor={theme[borderColorFor(build.state.status)]}
-        border={["left", "right"]}
-        customBorderChars={SplitBorder.customBorderChars}
-      >
-        <text attributes={TextAttributes.BOLD} marginBottom={1} fg={theme.text}>
-          Codegraph build — {labelFor(build.state.status)}
-        </text>
+    <box
+      position="absolute"
+      bottom={2}
+      right={2}
+      maxWidth={Math.min(60, dimensions().width - 6)}
+      paddingLeft={2}
+      paddingRight={2}
+      paddingTop={1}
+      paddingBottom={1}
+      backgroundColor={theme.backgroundPanel}
+      borderColor={theme[borderColorFor(build.state.status)]}
+      border={["left", "right"]}
+      customBorderChars={SplitBorder.customBorderChars}
+    >
+      <text attributes={TextAttributes.BOLD} marginBottom={1} fg={theme.text}>
+        Codegraph — {labelFor(build.state.status)}
+      </text>
+      <Show when={build.state.status === "idle"}>
+        <text fg={theme.textMuted}>Not built. Type /codegraph-build to index, or /code-embed to compute embeddings.</text>
+      </Show>
+      <Show when={build.state.status !== "idle"}>
         <text fg={theme.text}>
           {bar(build.state.done, build.state.total)} {build.state.done}/{build.state.total}
         </text>
@@ -114,7 +117,7 @@ export function CodegraphProgress() {
             Press Ctrl+C to cancel
           </text>
         </Show>
-      </box>
-    </Show>
+      </Show>
+    </box>
   )
 }

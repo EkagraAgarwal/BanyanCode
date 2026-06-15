@@ -827,6 +827,59 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         },
       },
       {
+        name: "codegraph.build",
+        title: "Build code graph index",
+        category: "BanyanCode",
+        slashName: "codegraph-build",
+        run: () => {
+          if (route.data.type !== "session") {
+            toast.show({ message: "Start a session first to build the code graph", variant: "warning" })
+            dialog.clear()
+            return
+          }
+          void sdk.client.session.command({
+            sessionID: route.data.sessionID,
+            command: "codegraph-build",
+            arguments: "",
+          })
+          dialog.clear()
+        },
+      },
+      {
+        name: "codegraph.embed",
+        title: "Compute code embeddings",
+        category: "BanyanCode",
+        slashName: "code-embed",
+        run: () => {
+          if (route.data.type !== "session") {
+            toast.show({ message: "Start a session first to compute embeddings", variant: "warning" })
+            dialog.clear()
+            return
+          }
+          void sdk.client.session.command({
+            sessionID: route.data.sessionID,
+            command: "code-embed",
+            arguments: "",
+          })
+          dialog.clear()
+        },
+      },
+      {
+        name: "models.refresh",
+        title: "Refresh models catalog",
+        category: "BanyanCode",
+        slashName: "refresh-models",
+        run: () => {
+          void sdk.client.session.command({
+            sessionID: route.data.type === "session" ? route.data.sessionID : "",
+            command: "refresh-models",
+            arguments: "",
+          })
+          toast.show({ message: "Refreshing models catalog...", variant: "info" })
+          dialog.clear()
+        },
+      },
+      {
         name: "help.show",
         title: "Help",
         slashName: "help",

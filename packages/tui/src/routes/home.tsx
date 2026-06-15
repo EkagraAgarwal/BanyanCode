@@ -2,6 +2,7 @@ import { Prompt, type PromptRef } from "../component/prompt"
 import { createEffect, createMemo, createSignal, onMount } from "solid-js"
 import { Logo } from "../component/logo"
 import { useSync } from "../context/sync"
+import { useTheme } from "../context/theme"
 import { Toast } from "../ui/toast"
 import { CodegraphProgress } from "../component/codegraph-progress"
 import { useArgs } from "../context/args"
@@ -23,6 +24,7 @@ const placeholder = {
 export function Home() {
   const pluginRuntime = usePluginRuntime()
   const sync = useSync()
+  const { theme } = useTheme()
   const route = useRouteData("home")
   const promptRef = usePromptRef()
   const [ref, setRef] = createSignal<PromptRef | undefined>()
@@ -83,6 +85,11 @@ export function Home() {
           <pluginRuntime.Slot name="home_prompt" mode="replace" ref={bind}>
             <Prompt ref={bind} right={<pluginRuntime.Slot name="home_prompt_right" />} placeholders={placeholder} />
           </pluginRuntime.Slot>
+        </box>
+        <box width="100%" maxWidth={promptMaxWidth()} paddingTop={1} flexShrink={0}>
+          <text fg={theme.textMuted}>
+            Codegraph: Type /codegraph-build to index your code, or /code-embed to compute embeddings.
+          </text>
         </box>
         <pluginRuntime.Slot name="home_bottom" />
         <box flexGrow={1} minHeight={0} />
