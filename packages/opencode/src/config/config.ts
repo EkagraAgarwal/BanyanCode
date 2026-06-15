@@ -464,6 +464,16 @@ export const layer = Layer.effect(
           yield* mergePluginOrigins(dir, list)
         }
 
+        for (const dir of yield* ConfigPaths.banyanDirectories(ctx.directory, ctx.worktree)) {
+          yield* ensureGitignore(dir).pipe(Effect.orDie)
+
+          result.command = mergeDeep(result.command ?? {}, yield* Effect.promise(() => ConfigCommand.load(dir)))
+          result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.load(dir)))
+          result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.loadMode(dir)))
+          const list = yield* Effect.promise(() => ConfigPlugin.load(dir))
+          yield* mergePluginOrigins(dir, list)
+        }
+
         if (process.env.OPENCODE_CONFIG_CONTENT) {
           const source = "OPENCODE_CONFIG_CONTENT"
           const next = yield* loadConfig(process.env.OPENCODE_CONFIG_CONTENT, {

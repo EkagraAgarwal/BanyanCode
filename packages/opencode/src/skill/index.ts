@@ -11,6 +11,8 @@ import { SkillPlugin } from "@opencode-ai/core/plugin/skill"
 import { Permission } from "@/permission"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Config } from "@/config/config"
+import { Flag } from "@opencode-ai/core/flag/flag"
+import { unique } from "remeda"
 import { FrontmatterError } from "@opencode-ai/core/v1/config/error"
 import { ConfigMarkdown } from "@/config/markdown"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -204,6 +206,26 @@ const discoverSkills = Effect.fnUntraced(function* (
 
   const configDirs = yield* config.directories()
   for (const dir of configDirs) {
+    yield* scan(state, dir, OPENCODE_SKILL_PATTERN)
+  }
+
+  const banyanDirs = unique([
+    global.banyan.config,
+    ...(!Flag.BANYANCODE_DISABLE_PROJECT_CONFIG
+      ? yield* fsys.up({
+          targets: [".banyancode"],
+          start: directory,
+          stop: worktree,
+        }).pipe(Effect.orDie)
+      : []),
+    ...(yield* fsys.up({
+      targets: [".banyancode"],
+      start: global.home,
+      stop: global.home,
+    }).pipe(Effect.orDie)),
+    ...(Flag.BANYANCODE_CONFIG_DIR ? [Flag.BANYANCODE_CONFIG_DIR] : []),
+  ])
+  for (const dir of banyanDirs) {
     yield* scan(state, dir, OPENCODE_SKILL_PATTERN)
   }
 
