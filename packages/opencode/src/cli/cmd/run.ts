@@ -239,6 +239,8 @@ export const RunCommand = effectCmd({
         describe: "enable direct interactive demo slash commands; pass one as the message to run it immediately",
       }),
   handler: Effect.fn("Cli.run")(function* (args) {
+    const { ensureBanyanDirs } = yield* Effect.promise(() => import("@/cli/cmd/init-banyan"))
+    yield* Effect.promise(() => ensureBanyanDirs())
     const { Agent } = yield* Effect.promise(() => import("@/agent/agent"))
     const { RuntimeFlags } = yield* Effect.promise(() => import("@/effect/runtime-flags"))
     const { InstanceRef } = yield* Effect.promise(() => import("@/effect/instance-ref"))

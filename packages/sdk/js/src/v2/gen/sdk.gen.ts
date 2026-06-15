@@ -15,6 +15,7 @@ import type {
   AuthRemoveResponses,
   AuthSetErrors,
   AuthSetResponses,
+  BanyanConfig as BanyanConfig2,
   CommandListErrors,
   CommandListResponses,
   Config as Config3,
@@ -78,6 +79,10 @@ import type {
   FindTextResponses,
   FormatterStatusErrors,
   FormatterStatusResponses,
+  GlobalBanyanConfigGetErrors,
+  GlobalBanyanConfigGetResponses,
+  GlobalBanyanConfigUpdateErrors,
+  GlobalBanyanConfigUpdateResponses,
   GlobalCodegraphCancelErrors,
   GlobalCodegraphCancelResponses,
   GlobalConfigGetErrors,
@@ -1321,6 +1326,49 @@ export class Embedding extends HeyApiClient {
   }
 }
 
+export class BanyanConfig extends HeyApiClient {
+  /**
+   * Get BanyanCode config
+   *
+   * Get the current BanyanCode config from ~/.config/banyancode/banyancode.json.
+   */
+  public get<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      GlobalBanyanConfigGetResponses,
+      GlobalBanyanConfigGetErrors,
+      ThrowOnError
+    >({ url: "/global/banyan-config", ...options })
+  }
+
+  /**
+   * Update BanyanCode config
+   *
+   * Update the BanyanCode config in ~/.config/banyancode/banyancode.json.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters?: {
+      banyanConfig?: BanyanConfig2
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "banyanConfig", map: "body" }] }])
+    return (options?.client ?? this.client).patch<
+      GlobalBanyanConfigUpdateResponses,
+      GlobalBanyanConfigUpdateErrors,
+      ThrowOnError
+    >({
+      url: "/global/banyan-config",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Codegraph extends HeyApiClient {
   /**
    * Cancel codegraph build
@@ -1417,6 +1465,11 @@ export class Global extends HeyApiClient {
   private _embedding?: Embedding
   get embedding(): Embedding {
     return (this._embedding ??= new Embedding({ client: this.client }))
+  }
+
+  private _banyanConfig?: BanyanConfig
+  get banyanConfig(): BanyanConfig {
+    return (this._banyanConfig ??= new BanyanConfig({ client: this.client }))
   }
 
   private _codegraph?: Codegraph

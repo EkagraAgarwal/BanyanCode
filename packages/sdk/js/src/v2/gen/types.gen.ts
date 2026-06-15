@@ -68,6 +68,9 @@ export type Event =
   | EventQuestionV2Rejected
   | EventTodoUpdated
   | EventLspUpdated
+  | EventBanyancodeCodegraphBuild
+  | EventBanyancodeMeshStatus
+  | EventBanyancodeSystemUpdated
   | EventPermissionAsked
   | EventPermissionReplied
   | EventTuiPromptAppend2
@@ -76,9 +79,6 @@ export type Event =
   | EventTuiSessionSelect2
   | EventMcpToolsChanged
   | EventMcpBrowserOpenFailed
-  | EventBanyancodeCodegraphBuild
-  | EventBanyancodeMeshStatus
-  | EventBanyancodeSystemUpdated
   | EventCommandExecuted
   | EventProjectDirectoriesUpdated
   | EventProjectUpdated
@@ -1390,6 +1390,55 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "banyancode.codegraph.build"
+        properties: {
+          status: "idle" | "running" | "completed" | "failed" | "cancelled"
+          root?: string
+          done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          currentFile?: string
+          startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          result?: {
+            indexed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            skipped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            duration_ms: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }
+          error?: string
+        }
+      }
+    | {
+        id: string
+        type: "banyancode.mesh.status"
+        properties: {
+          parentSessionID: string
+          peers: Array<{
+            sessionID: string
+            agent: string
+            status: "active" | "idle" | "disconnected"
+            lastSeenAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }>
+          pendingMessages: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          recentActivity: Array<{
+            from: string
+            at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }>
+        }
+      }
+    | {
+        id: string
+        type: "banyancode.system.updated"
+        properties: {
+          cpuPercent: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          memoryUsedBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          memoryTotalBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          gpuPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          vramUsedBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          gpuTotalBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          platform: "windows" | "linux" | "darwin"
+        }
+      }
+    | {
+        id: string
         type: "permission.asked"
         properties: {
           id: string
@@ -1479,55 +1528,6 @@ export type GlobalEvent = {
         properties: {
           mcpName: string
           url: string
-        }
-      }
-    | {
-        id: string
-        type: "banyancode.codegraph.build"
-        properties: {
-          status: "idle" | "running" | "completed" | "failed" | "cancelled"
-          root?: string
-          done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          currentFile?: string
-          startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          result?: {
-            indexed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            skipped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            duration_ms: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          }
-          error?: string
-        }
-      }
-    | {
-        id: string
-        type: "banyancode.mesh.status"
-        properties: {
-          parentSessionID: string
-          peers: Array<{
-            sessionID: string
-            agent: string
-            status: "active" | "idle" | "disconnected"
-            lastSeenAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          }>
-          pendingMessages: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          recentActivity: Array<{
-            from: string
-            at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          }>
-        }
-      }
-    | {
-        id: string
-        type: "banyancode.system.updated"
-        properties: {
-          cpuPercent: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          memoryUsedBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          memoryTotalBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          gpuPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          vramUsedBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          gpuTotalBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          platform: "windows" | "linux" | "darwin"
         }
       }
     | {
@@ -2088,8 +2088,6 @@ export type Config = {
     max_lines?: number
     max_bytes?: number
   }
-  banyancode_embedding_model?: string
-  banyancode_yolo_mode?: boolean
   compaction?: {
     auto?: boolean
     prune?: boolean
@@ -2106,6 +2104,17 @@ export type Config = {
     mcp_timeout?: number
     policies?: Array<ConfigV2ExperimentalPolicy>
   }
+}
+
+export type BanyanConfig = {
+  $schema?: string
+  banyancode_embedding_model?: string
+  banyancode_yolo_mode?: boolean
+  banyancode_disable_websearch?: boolean
+  banyancode_telegram_enabled?: boolean
+  banyancode_telegram_bot_token?: string
+  banyancode_telegram_webhook_secret?: string
+  banyancode_telegram_default_session?: string
 }
 
 export type Model = {
@@ -5068,52 +5077,6 @@ export type EventLspUpdated = {
   }
 }
 
-export type EventPermissionAsked = {
-  id: string
-  type: "permission.asked"
-  properties: {
-    id: string
-    sessionID: string
-    permission: string
-    patterns: Array<string>
-    metadata: {
-      [key: string]: unknown
-    }
-    always: Array<string>
-    tool?: {
-      messageID: string
-      callID: string
-    }
-  }
-}
-
-export type EventPermissionReplied = {
-  id: string
-  type: "permission.replied"
-  properties: {
-    sessionID: string
-    requestID: string
-    reply: "once" | "always" | "reject"
-  }
-}
-
-export type EventMcpToolsChanged = {
-  id: string
-  type: "mcp.tools.changed"
-  properties: {
-    server: string
-  }
-}
-
-export type EventMcpBrowserOpenFailed = {
-  id: string
-  type: "mcp.browser.open.failed"
-  properties: {
-    mcpName: string
-    url: string
-  }
-}
-
 export type EventBanyancodeCodegraphBuild = {
   id: string
   type: "banyancode.codegraph.build"
@@ -5163,6 +5126,52 @@ export type EventBanyancodeSystemUpdated = {
     vramUsedBytes?: number | "NaN" | "Infinity" | "-Infinity"
     gpuTotalBytes?: number | "NaN" | "Infinity" | "-Infinity"
     platform: "windows" | "linux" | "darwin"
+  }
+}
+
+export type EventPermissionAsked = {
+  id: string
+  type: "permission.asked"
+  properties: {
+    id: string
+    sessionID: string
+    permission: string
+    patterns: Array<string>
+    metadata: {
+      [key: string]: unknown
+    }
+    always: Array<string>
+    tool?: {
+      messageID: string
+      callID: string
+    }
+  }
+}
+
+export type EventPermissionReplied = {
+  id: string
+  type: "permission.replied"
+  properties: {
+    sessionID: string
+    requestID: string
+    reply: "once" | "always" | "reject"
+  }
+}
+
+export type EventMcpToolsChanged = {
+  id: string
+  type: "mcp.tools.changed"
+  properties: {
+    server: string
+  }
+}
+
+export type EventMcpBrowserOpenFailed = {
+  id: string
+  type: "mcp.browser.open.failed"
+  properties: {
+    mcpName: string
+    url: string
   }
 }
 
@@ -5662,6 +5671,57 @@ export type GlobalEmbeddingModelApplyResponses = {
 
 export type GlobalEmbeddingModelApplyResponse =
   GlobalEmbeddingModelApplyResponses[keyof GlobalEmbeddingModelApplyResponses]
+
+export type GlobalBanyanConfigGetData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/banyan-config"
+}
+
+export type GlobalBanyanConfigGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalBanyanConfigGetError = GlobalBanyanConfigGetErrors[keyof GlobalBanyanConfigGetErrors]
+
+export type GlobalBanyanConfigGetResponses = {
+  /**
+   * BanyanConfig
+   */
+  200: BanyanConfig
+}
+
+export type GlobalBanyanConfigGetResponse = GlobalBanyanConfigGetResponses[keyof GlobalBanyanConfigGetResponses]
+
+export type GlobalBanyanConfigUpdateData = {
+  body?: BanyanConfig
+  path?: never
+  query?: never
+  url: "/global/banyan-config"
+}
+
+export type GlobalBanyanConfigUpdateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalBanyanConfigUpdateError = GlobalBanyanConfigUpdateErrors[keyof GlobalBanyanConfigUpdateErrors]
+
+export type GlobalBanyanConfigUpdateResponses = {
+  /**
+   * BanyanConfig updated
+   */
+  200: BanyanConfig
+}
+
+export type GlobalBanyanConfigUpdateResponse =
+  GlobalBanyanConfigUpdateResponses[keyof GlobalBanyanConfigUpdateResponses]
 
 export type GlobalCodegraphCancelData = {
   body?: never
