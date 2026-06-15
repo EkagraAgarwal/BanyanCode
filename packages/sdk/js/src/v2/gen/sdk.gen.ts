@@ -92,6 +92,8 @@ import type {
   GlobalEventResponses,
   GlobalHealthErrors,
   GlobalHealthResponses,
+  GlobalStartupErrors,
+  GlobalStartupResponses,
   GlobalUpgradeErrors,
   GlobalUpgradeResponses,
   InstanceDisposeErrors,
@@ -1392,6 +1394,18 @@ export class Global extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Startup bridges
+   *
+   * Initialize all BanyanCode bridges on TUI startup.
+   */
+  public startup<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<GlobalStartupResponses, GlobalStartupErrors, ThrowOnError>({
+      url: "/global/startup",
+      ...options,
     })
   }
 

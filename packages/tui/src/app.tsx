@@ -487,6 +487,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         })
       }
     })
+    sdk.client.global.startup({}).catch(() => {})
   })
 
   let continued = false

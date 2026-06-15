@@ -77,6 +77,8 @@ export type Event =
   | EventMcpToolsChanged
   | EventMcpBrowserOpenFailed
   | EventBanyancodeCodegraphBuild
+  | EventBanyancodeMeshStatus
+  | EventBanyancodeSystemUpdated
   | EventCommandExecuted
   | EventProjectDirectoriesUpdated
   | EventProjectUpdated
@@ -1499,6 +1501,37 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "banyancode.mesh.status"
+        properties: {
+          parentSessionID: string
+          peers: Array<{
+            sessionID: string
+            agent: string
+            status: "active" | "idle" | "disconnected"
+            lastSeenAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }>
+          pendingMessages: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          recentActivity: Array<{
+            from: string
+            at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }>
+        }
+      }
+    | {
+        id: string
+        type: "banyancode.system.updated"
+        properties: {
+          cpuPercent: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          memoryUsedBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          memoryTotalBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          gpuPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          vramUsedBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          gpuTotalBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          platform: "windows" | "linux" | "darwin"
+        }
+      }
+    | {
+        id: string
         type: "command.executed"
         properties: {
           name: string
@@ -2056,6 +2089,7 @@ export type Config = {
     max_bytes?: number
   }
   banyancode_embedding_model?: string
+  banyancode_yolo_mode?: boolean
   compaction?: {
     auto?: boolean
     prune?: boolean
@@ -5099,6 +5133,39 @@ export type EventBanyancodeCodegraphBuild = {
   }
 }
 
+export type EventBanyancodeMeshStatus = {
+  id: string
+  type: "banyancode.mesh.status"
+  properties: {
+    parentSessionID: string
+    peers: Array<{
+      sessionID: string
+      agent: string
+      status: "active" | "idle" | "disconnected"
+      lastSeenAt: number | "NaN" | "Infinity" | "-Infinity"
+    }>
+    pendingMessages: number | "NaN" | "Infinity" | "-Infinity"
+    recentActivity: Array<{
+      from: string
+      at: number | "NaN" | "Infinity" | "-Infinity"
+    }>
+  }
+}
+
+export type EventBanyancodeSystemUpdated = {
+  id: string
+  type: "banyancode.system.updated"
+  properties: {
+    cpuPercent: number | "NaN" | "Infinity" | "-Infinity"
+    memoryUsedBytes: number | "NaN" | "Infinity" | "-Infinity"
+    memoryTotalBytes: number | "NaN" | "Infinity" | "-Infinity"
+    gpuPercent?: number | "NaN" | "Infinity" | "-Infinity"
+    vramUsedBytes?: number | "NaN" | "Infinity" | "-Infinity"
+    gpuTotalBytes?: number | "NaN" | "Infinity" | "-Infinity"
+    platform: "windows" | "linux" | "darwin"
+  }
+}
+
 export type EventCommandExecuted = {
   id: string
   type: "command.executed"
@@ -5620,6 +5687,31 @@ export type GlobalCodegraphCancelResponses = {
 }
 
 export type GlobalCodegraphCancelResponse = GlobalCodegraphCancelResponses[keyof GlobalCodegraphCancelResponses]
+
+export type GlobalStartupData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/startup"
+}
+
+export type GlobalStartupErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalStartupError = GlobalStartupErrors[keyof GlobalStartupErrors]
+
+export type GlobalStartupResponses = {
+  /**
+   * Startup complete
+   */
+  200: boolean
+}
+
+export type GlobalStartupResponse = GlobalStartupResponses[keyof GlobalStartupResponses]
 
 export type EventSubscribeData = {
   body?: never
