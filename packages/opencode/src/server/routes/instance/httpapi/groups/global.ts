@@ -72,6 +72,7 @@ export const GlobalPaths = {
   upgrade: "/global/upgrade",
   embeddingModel: "/global/embedding-model",
   codegraphCancel: "/global/codegraph-cancel",
+  startup: "/global/startup",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -151,6 +152,15 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.codegraph.cancel",
           summary: "Cancel codegraph build",
           description: "Cancel the in-flight codegraph build for the current instance.",
+        }),
+      ),
+      HttpApiEndpoint.post("startup", GlobalPaths.startup, {
+        success: described(Schema.Boolean, "Startup complete"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.startup",
+          summary: "Startup bridges",
+          description: "Initialize all BanyanCode bridges on TUI startup.",
         }),
       ),
     )

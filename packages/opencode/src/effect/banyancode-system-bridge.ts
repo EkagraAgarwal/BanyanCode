@@ -1,12 +1,8 @@
 import { Effect, Queue } from "effect"
-import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 
 export const applySystemMonitorBridge = Effect.gen(function* () {
-  const flags = yield* RuntimeFlags.Service
-  if (!flags.banyancodeEnable) return
-
   const monitor = yield* Banyan.SystemMonitorService
   const events = yield* EventV2Bridge.Service
 

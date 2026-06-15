@@ -149,10 +149,16 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return HttpServerResponse.jsonUnsafe(result.body, { status: result.status })
     })
 
-    const applyEmbeddingModelHandler = Effect.fn("GlobalHttpApi.applyEmbeddingModel")(function* () {
-      yield* applyEmbeddingModel
+    const startupHandler = Effect.fn("GlobalHttpApi.startup")(function* () {
       yield* applyCodegraphBuildBridge
       yield* applySystemMonitorBridge
+      return true
+    })
+
+    const applyEmbeddingModelHandler = Effect.fn("GlobalHttpApi.applyEmbeddingModel")(function* () {
+      yield* applyCodegraphBuildBridge
+      yield* applySystemMonitorBridge
+      yield* applyEmbeddingModel
       return true
     })
 
@@ -171,6 +177,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       .handle("configUpdate", configUpdate)
       .handle("dispose", dispose)
       .handleRaw("upgrade", upgradeRaw)
+      .handle("startup", startupHandler)
       .handle("applyEmbeddingModel", applyEmbeddingModelHandler)
       .handle("codegraphCancel", codegraphCancelHandler)
   }),
