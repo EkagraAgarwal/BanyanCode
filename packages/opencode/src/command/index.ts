@@ -9,6 +9,7 @@ import { MCP } from "../mcp"
 import { Skill } from "../skill"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { ModelsDev } from "@opencode-ai/core/models-dev"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_CODEGRAPH_BUILD from "./template/codegraph-build.txt"
@@ -63,6 +64,7 @@ export const Default = {
   CODEGRAPH_BUILD: "codegraph-build",
   CODE_EMBED: "code-embed",
   YOLO: "yolo",
+  REFRESH_MODELS: "refresh-models",
 } as const
 
 export interface Interface {
@@ -175,6 +177,19 @@ export const layer = Layer.effect(
             const newValue = !globalConfig.banyancode_yolo_mode
             yield* config.updateGlobal({ banyancode_yolo_mode: newValue })
           }),
+        hints: [],
+      }
+      commands[Default.REFRESH_MODELS] = {
+        name: Default.REFRESH_MODELS,
+        description: "refresh the models catalog from models.dev",
+        source: "command",
+        get template() {
+          return "Refresh the models catalog."
+        },
+        execute: () =>
+          Effect.flatMap(Effect.serviceOption(ModelsDev.Service), (option) =>
+            option._tag === "Some" ? option.value.refresh(true) : Effect.void,
+          ),
         hints: [],
       }
 
