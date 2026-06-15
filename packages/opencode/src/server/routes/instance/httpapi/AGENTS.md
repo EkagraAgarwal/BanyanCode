@@ -37,3 +37,12 @@ Use `Effect.provideService(...)` in middleware only for request-derived context,
 Public JSON errors should be explicit `Schema.ErrorClass` contracts declared on each endpoint. Use built-in `HttpApiError.*` classes only when their empty/tagged body is the intended wire shape; for SDK-visible errors with messages, define an API error schema such as `ApiNotFoundError` and fail with that exact declared error. Keep domain and storage services free of HttpApi types, and translate expected domain errors at the handler boundary.
 
 When adding middleware, declare endpoint-contract middleware on the owning `HttpApiGroup` and provide its implementation layer at the assembly boundary in `server.ts`. Keep router middleware for truly raw fallback routes or global transport policy.
+
+## Endpoints that depend on new services
+
+When a new endpoint requires a service (e.g. `BanyanConfig.Service`), three things must change together or typecheck fails:
+1. The handler yields the service in its `Effect.gen`
+2. The `createRoutes` Layer chain provides the service's defaultLayer at the route assembly boundary
+3. After endpoint + handler + route-layer are wired, run `cd D:\OpenCode/packages/sdk/js && bun script/build.ts` to regenerate the SDK so the typed client method exists
+
+If the consumer is in a different layer (e.g. the TUI dialog), it can use `(sdk.client as any).groupName.endpointName({...})` until regen. Add a follow-up commit to remove the cast.

@@ -158,6 +158,19 @@ const failingAccountLayer = Layer.mock(Account.Service, {
 
 This is much shorter than stubbing every method with `Effect.void` / `Effect.succeed(...)` placeholders, and it keeps the test focused on the behaviour under test.
 
+## BanyanCode repos that need Database in tests
+
+Repos that use `Database.Service` (e.g. `SubagentMessagesRepo`, `SubagentPlansRepo`, `MemoryRepo`, `CodegraphRepo`) each have a `defaultLayer` that creates its own `Database.Service` from `Global.Path.banyan.data`. In tests, provide a tmpdir-based `Database.layerFromPath(tmpDbPath)` and `Layer.provide` it to EACH repo's `defaultLayer` — otherwise the test uses the real home dir DB and fails with `SQLiteError: unable to open database file`.
+
+Pattern:
+```ts
+const dbLayer = Database.layerFromPath(path.join(tmp.path, "test.sqlite"))
+const plansLayer = SubagentPlans.defaultLayer.pipe(Layer.provide(dbLayer))
+const messagesLayer = SubagentMessagesRepo.defaultLayer.pipe(Layer.provide(dbLayer))
+const busLayer = SubagentBus.defaultLayer.pipe(Layer.provide(messagesLayer))
+const testLayer = Layer.mergeAll(dbLayer, plansLayer, messagesLayer, busLayer)
+```
+
 ## Synchronizing With Concurrent Work
 
 ### The Anti-Pattern

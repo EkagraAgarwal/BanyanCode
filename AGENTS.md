@@ -147,6 +147,47 @@ const table = sqliteTable("session", {
 
 - Always run `bun typecheck` from package directories (e.g., `packages/opencode`), never `tsc` directly.
 
+## BanyanCode Product Identity
+
+BanyanCode is its own product, NOT a plugin or config of OpenCode. It has separate file locations, a separate config schema, and separate env vars. Both products can be installed side by side without interference.
+
+| Concern | OpenCode | BanyanCode |
+|---------|----------|------------|
+| Per-project config file | `./opencode.json` | `./banyancode.json` |
+| Per-project dir | `./.opencode/` | `./.banyancode/` |
+| Global config | `~/.config/opencode/` | `~/.config/banyancode/` |
+| Data dir | `~/.local/share/opencode/` | `~/.local/share/banyancode/` |
+| Cache dir | `~/.cache/opencode/` | `~/.cache/banyancode/` |
+| State dir | `~/.local/state/opencode/` | `~/.local/state/banyancode/` |
+| Temp dir | `/tmp/opencode/` | `/tmp/banyancode/` |
+| DB | `opencode.db` | `banyancode.db` |
+| Env var prefix | `OPENCODE_*` | `BANYANCODE_*` |
+| Config schema | `ConfigV1.Info` | `BanyanConfig.Info` |
+| Service namespace | (n/a) | `Banyan.X.Service` |
+
+Both load in parallel — OpenCode keeps using `.opencode/`, BanyanCode only reads/writes `.banyancode/`. The two products do NOT share config files, env vars, or service instances.
+
+## BanyanCode vs OpenCode config key separation
+
+BanyanCode-specific keys (`banyancode_embedding_model`, `banyancode_yolo_mode`, future telegram/runtime keys) live in `BanyanConfig.Info` (`packages/core/src/v1/config/banyan-config.ts`). They were REMOVED from `ConfigV1.Info`. Consumers MUST use `Banyan.BanyanConfigService` for these keys — `Config.Service.getGlobal().banyancode_*` will fail typecheck.
+
+## Sub-directories that mirror in both products
+
+For each sub-directory loader in `packages/opencode/src/config/`, the config loader iterates BOTH `.opencode/` and `.banyancode/` directories. So `.opencode/agents/foo.md` AND `.banyancode/agents/foo.md` are both discovered and merged. The sub-dir naming convention is the same: `agent/`, `agents/`, `command/`, `commands/`, `skill/`, `skills/`, `plugin/`, `plugins/`, `plans/`, plus `tui.json`.
+
+## Migration lessons (from the .banyancode migration)
+
+When adding a new product identity to a fork:
+1. Use a feature branch (e.g. `banyancode-identity`), not the main branch
+2. One logical change per commit — typecheck + tests after each
+3. Move consumers ONE AT A TIME to the new schema, then DELETE the old key — never do both in the same commit
+4. Add a new SDK endpoint as `as any` cast in the consumer, then regenerate the SDK and remove the cast as a separate commit
+5. Test fixtures need DB/tmpdir setup in the SAME commit as any data-path change, not later
+
+## Parallel subagent work
+
+When dispatching multiple subagents in parallel, expect git index.lock races and commit content races (one subagent's `git add` can pick up files meant for another). Pattern: have ONE lead agent do the commits, each subagent reports the files they edited but doesn't commit. The lead runs `git add <specific files>` and commits each change separately.
+
 ## V2 Session Core
 
 - Keep durable prompt admission separate from model execution. `SessionV2.prompt(...)` admits one durable `session_input` row before scheduling advisory `SessionExecution.wake(sessionID)` unless `resume: false` requests admit-only behavior. The serialized runner promotes admitted inputs into visible user messages at safe boundaries.

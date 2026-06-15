@@ -129,3 +129,30 @@ Use `Effect.cached` when multiple concurrent callers should share a single in-fl
 Use `EffectBridge` for native or external callbacks (`@parcel/watcher`, `node-pty`, native `fs.watch`, plugin callbacks, etc.) that need to re-enter Effect services with instance/workspace context.
 
 Plain async code should pass explicit context or stay inside an Effect fiber; do not add ambient instance context shims.
+
+## BanyanConfig consumers (read pattern)
+
+BanyanCode-specific config keys (`banyancode_embedding_model`, `banyancode_yolo_mode`, future telegram/runtime keys) live in `BanyanConfig.Info`, NOT `ConfigV1.Info`. Consumers MUST read via `Banyan.BanyanConfigService`, never `Config.Service.getGlobal().banyancode_*` (those keys are removed and any consumer still reading them will fail typecheck).
+
+When the service is not guaranteed to be in scope (e.g. permission layer that runs in many contexts), use `Effect.serviceOption`:
+```ts
+const option = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+const banyan = Option.isSome(option) ? yield* option.value.get() : ({} as BanyanConfig.Info)
+```
+
+## YOLO mode (auto-approve all permissions)
+
+YOLO mode (`banyancode_yolo_mode` in `BanyanConfig`) skips ALL permission prompts including dangerous and external-directory actions. It short-circuits in `evaluateInput` BEFORE any other permission logic — never narrow the check to specific tool categories. See `packages/opencode/src/permission/index.ts:83`.
+
+## Service deps in tool/service Init (R-leak avoidance)
+
+`Tool.define` and similar `Init`-based patterns expect R=never for the closure body. Yielding a service in the outer `Effect.gen` (e.g. `const bus = yield* SubagentBusService`) adds it to the Init's R and leaks into the AppLayer. Use one of:
+- `Effect.provideService` inside the execute body (mirrors `Database.Service` pattern at `packages/opencode/src/tool/task.ts:202-204`)
+- `Effect.serviceOption` for optional access (no R addition)
+- Capture the service in a `const` at the top of the file and pass it via closure
+
+If you must add a service to the Init, the consumer layer must `Layer.provide` it at the tool registry node (`packages/opencode/src/tool/registry.ts:418`) and at every test layer.
+
+## First-run directory setup
+
+New product identities (like BanyanCode) need a one-shot directory creation on first launch. Wire `ensureXxxDirs()` (using `Global.Path.xxx.*`, NOT `os.homedir()`) at the very start of `Cli.run` in `packages/opencode/src/cli/cmd/run.ts:241`. Use dynamic imports to keep startup cold-start fast.
