@@ -45,7 +45,7 @@ export const Info = Schema.Struct({
 
 export type Info = Omit<Schema.Schema.Type<typeof Info>, "template" | "execute"> & {
   template: Promise<string> | string
-  execute?: (input: { command: string; arguments: string }) => Effect.Effect<void, never, never>
+  execute?: (input: { command: string; arguments: string }) => Effect.Effect<void, never, any>
 }
 
 export function hints(template: string) {
@@ -102,8 +102,6 @@ export const layer = Layer.effect(
     const config = yield* Config.Service
     const mcp = yield* MCP.Service
     const skill = yield* Skill.Service
-    const codegraphBuildService = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
-    const codegraphEmbedder = yield* Effect.serviceOption(Banyan.CodegraphEmbedder)
 
     const init = Effect.fn("Command.state")(function* (ctx: InstanceContext) {
       const cfg = yield* config.get()
@@ -136,14 +134,15 @@ export const layer = Layer.effect(
         get template() {
           return PROMPT_CODEGRAPH_BUILD
         },
-        execute: (input) => {
-          const buildSvc = Option.getOrUndefined(codegraphBuildService)
-          if (!buildSvc) return Effect.void
-          const args = parseArgs(input.arguments)
-          const root = args.positional[0] ?? ctx.worktree
-          const force = args.flags.force === true || args.flags.force === "true"
-          return buildSvc.start({ root, force })
-        },
+        execute: (input) =>
+          Effect.gen(function* () {
+            const buildServiceOpt = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
+            if (Option.isNone(buildServiceOpt)) return
+            const args = parseArgs(input.arguments)
+            const root = args.positional[0] ?? ctx.worktree
+            const force = args.flags.force === true || args.flags.force === "true"
+            yield* buildServiceOpt.value.start({ root, force })
+          }).pipe(Effect.provide(Banyan.codegraphBuildServiceDefaultLayer)),
         hints: hints(PROMPT_CODEGRAPH_BUILD),
       }
       commands[Default.CODE_EMBED] = {
@@ -153,15 +152,18 @@ export const layer = Layer.effect(
         get template() {
           return PROMPT_CODE_EMBED
         },
-        execute: (input) => {
-          const emb = Option.getOrUndefined(codegraphEmbedder)
-          if (!emb) return Effect.void
-          const args = parseArgs(input.arguments)
-          if (args.flags.file) {
-            return emb.embedFile(args.flags.file as string).pipe(Effect.mapError(() => undefined as never), Effect.asVoid)
-          }
-          return emb.embedAll().pipe(Effect.mapError(() => undefined as never), Effect.asVoid)
-        },
+        execute: (input) =>
+          Effect.gen(function* () {
+            const embedderOpt = yield* Effect.serviceOption(Banyan.CodegraphEmbedder)
+            if (Option.isNone(embedderOpt)) return
+            const args = parseArgs(input.arguments)
+            const emb = embedderOpt.value
+            if (args.flags.file) {
+              yield* emb.embedFile(args.flags.file as string).pipe(Effect.mapError(() => undefined as never))
+            } else {
+              yield* emb.embedAll().pipe(Effect.mapError(() => undefined as never))
+            }
+          }).pipe(Effect.provide(Banyan.codegraphEmbedderDefaultLayer)),
         hints: hints(PROMPT_CODE_EMBED),
       }
       commands[Default.YOLO] = {

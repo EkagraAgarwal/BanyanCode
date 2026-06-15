@@ -1,11 +1,14 @@
-import { Effect, Queue } from "effect"
+import { Effect, Option, Queue } from "effect"
 import { Service as CodegraphBuildServiceService, BuildEvent as CodegraphBuildServiceBuildEvent } from "@opencode-ai/core/banyancode/codegraph-build-service"
 import { EventV2Bridge } from "@/event-v2-bridge"
 
 export const applyCodegraphBuildBridge = Effect.gen(function* () {
-  const buildService = yield* CodegraphBuildServiceService
-  const events = yield* EventV2Bridge.Service
+  const buildServiceOpt = yield* Effect.serviceOption(CodegraphBuildServiceService)
+  const eventsOpt = yield* Effect.serviceOption(EventV2Bridge.Service)
+  if (Option.isNone(buildServiceOpt) || Option.isNone(eventsOpt)) return
 
+  const buildService = buildServiceOpt.value
+  const events = eventsOpt.value
   const queue = buildService.events()
 
   const work = Effect.gen(function* () {
