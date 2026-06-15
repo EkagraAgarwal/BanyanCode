@@ -173,9 +173,13 @@ export const layer = Layer.effect(
         },
         execute: () =>
           Effect.gen(function* () {
-            const globalConfig = yield* config.getGlobal()
-            const newValue = !globalConfig.banyancode_yolo_mode
-            yield* config.updateGlobal({ banyancode_yolo_mode: newValue })
+            const banyanOption = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+            if (Option.isNone(banyanOption)) return Effect.succeed({ toggled: false }) as any
+            const banyan = banyanOption.value
+            const current = yield* banyan.get()
+            const newValue = !current.banyancode_yolo_mode
+            yield* banyan.update({ banyancode_yolo_mode: newValue })
+            return Effect.succeed({ toggled: newValue }) as any
           }),
         hints: [],
       }
