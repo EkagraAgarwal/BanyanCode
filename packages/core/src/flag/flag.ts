@@ -75,4 +75,14 @@ export const Flag = {
   get OPENCODE_CLIENT() {
     return process.env["OPENCODE_CLIENT"] ?? "cli"
   },
+
+  BANYANCODE_CONFIG: process.env["BANYANCODE_CONFIG"],
+  BANYANCODE_CONFIG_DIR: process.env["BANYANCODE_CONFIG_DIR"],
+  BANYANCODE_CONFIG_CONTENT: process.env["BANYANCODE_CONFIG_CONTENT"],
+  get BANYANCODE_TUI_CONFIG() {
+    return process.env["BANYANCODE_TUI_CONFIG"]
+  },
+  get BANYANCODE_DISABLE_PROJECT_CONFIG() {
+    return truthy("BANYANCODE_DISABLE_PROJECT_CONFIG")
+  },
 }
