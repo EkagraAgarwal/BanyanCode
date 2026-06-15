@@ -43,3 +43,5 @@ export {
   layer as subagentConsumerLayer,
   defaultLayer as subagentConsumerDefaultLayer,
 } from "./subagent-consumer"
+export { Service as BanyanConfigService, layer as banyanConfigServiceLayer, defaultLayer as banyanConfigServiceDefaultLayer } from "./banyan-config"
+export { Schema_URL as BanyanConfigSchemaURL, Info as BanyanConfigInfo } from "../v1/config/banyan-config"
