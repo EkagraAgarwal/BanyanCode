@@ -1,5 +1,6 @@
 import { Config } from "@/config/config"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+import { BanyanConfig } from "@opencode-ai/core/v1/config/banyan-config"
 import { EventV2 } from "@opencode-ai/core/event"
 import { InstanceDisposed } from "@/server/event"
 import "@opencode-ai/core/account"
@@ -73,6 +74,7 @@ export const GlobalPaths = {
   embeddingModel: "/global/embedding-model",
   codegraphCancel: "/global/codegraph-cancel",
   startup: "/global/startup",
+  banyanConfig: "/global/banyan-config",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -143,6 +145,25 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.embedding.model.apply",
           summary: "Apply embedding model",
           description: "Apply the embedding model from config to the EmbeddingProviderService.",
+        }),
+      ),
+      HttpApiEndpoint.get("getBanyanConfig", GlobalPaths.banyanConfig, {
+        success: described(BanyanConfig.Info, "BanyanConfig"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.banyanConfig.get",
+          summary: "Get BanyanCode config",
+          description: "Get the current BanyanCode config from ~/.config/banyancode/banyancode.json.",
+        }),
+      ),
+      HttpApiEndpoint.patch("updateBanyanConfig", GlobalPaths.banyanConfig, {
+        payload: BanyanConfig.Info,
+        success: described(BanyanConfig.Info, "BanyanConfig updated"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.banyanConfig.update",
+          summary: "Update BanyanCode config",
+          description: "Update the BanyanCode config in ~/.config/banyancode/banyancode.json.",
         }),
       ),
       HttpApiEndpoint.post("codegraphCancel", GlobalPaths.codegraphCancel, {

@@ -162,6 +162,16 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return true
     })
 
+    const getBanyanConfigHandler = Effect.fn("GlobalHttpApi.getBanyanConfig")(function* () {
+      const svc = yield* Banyan.BanyanConfigService
+      return yield* svc.get()
+    })
+
+    const updateBanyanConfigHandler = Effect.fn("GlobalHttpApi.updateBanyanConfig")(function* ({ payload }) {
+      const svc = yield* Banyan.BanyanConfigService
+      return yield* svc.update(payload)
+    })
+
     const codegraphCancelHandler = Effect.fn("GlobalHttpApi.codegraphCancel")(function* () {
       const buildService = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
       if (Option.isSome(buildService)) {
@@ -179,6 +189,8 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       .handleRaw("upgrade", upgradeRaw)
       .handle("startup", startupHandler)
       .handle("applyEmbeddingModel", applyEmbeddingModelHandler)
+      .handle("getBanyanConfig", getBanyanConfigHandler)
+      .handle("updateBanyanConfig", updateBanyanConfigHandler)
       .handle("codegraphCancel", codegraphCancelHandler)
   }),
 )
