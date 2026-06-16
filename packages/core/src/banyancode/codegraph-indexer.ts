@@ -124,29 +124,34 @@ export const layer = Layer.effect(
         const result = parser.parse(content, fileID, filePath, language)
         const indexedAt = Date.now()
         yield* repo.putFile({ id: fileID, rootID, path: relativePath, contentHash, byteSize: content.length, language, indexedAt })
-        for (const node of result.nodes) {
-          const fullNode: CodegraphNode = {
-            id: node.id,
-            fileID,
-            kind: node.kind,
-            name: node.name,
-            qualifiedName: node.qualifiedName,
-            startLine: node.startLine,
-            startByte: node.startByte,
-            endLine: node.endLine,
-            endByte: node.endByte,
-            language,
-            signature: node.signature,
-            doc: node.doc,
-            textExcerpt: node.textExcerpt,
-            nodeCodeHash: node.nodeCodeHash,
-            code: node.code,
-          }
-          yield* repo.putNode(fullNode)
-        }
-        for (const edge of result.edges) {
-          yield* repo.putEdge({ id: edge.id, fromNodeID: edge.fromNodeID, toNodeID: edge.toNodeID, toTargetKey: edge.toTargetKey, fileID, line: edge.line, kind: edge.kind, weight: edge.weight })
-        }
+        const nodes: CodegraphNode[] = result.nodes.map((node) => ({
+          id: node.id,
+          fileID,
+          kind: node.kind,
+          name: node.name,
+          qualifiedName: node.qualifiedName,
+          startLine: node.startLine,
+          startByte: node.startByte,
+          endLine: node.endLine,
+          endByte: node.endByte,
+          language,
+          signature: node.signature,
+          doc: node.doc,
+          textExcerpt: node.textExcerpt,
+          nodeCodeHash: node.nodeCodeHash,
+          code: node.code,
+        }))
+        const edges = result.edges.map((edge) => ({
+          id: edge.id,
+          fromNodeID: edge.fromNodeID,
+          toNodeID: edge.toNodeID,
+          toTargetKey: edge.toTargetKey,
+          fileID,
+          line: edge.line,
+          kind: edge.kind,
+          weight: edge.weight,
+        }))
+        yield* repo.putNodesAndEdges({ fileID, rootID, nodes, edges })
         indexed++
       }
 
@@ -155,11 +160,7 @@ export const layer = Layer.effect(
 
       // Set root stats at end
       const allNodes = yield* repo.listAllNodes()
-      let edgeCount = 0
-      for (const node of allNodes) {
-        const edges = yield* repo.listEdgesByNode(node.id)
-        edgeCount += edges.length
-      }
+      const edgeCount = yield* repo.countAllEdges(rootID)
 
       yield* repo.setRootStats({
         rootID,

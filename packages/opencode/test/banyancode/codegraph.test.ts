@@ -67,6 +67,8 @@ const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.o
   unresolvedEdgesFor: () => Effect.succeed([]),
   markStaleEmbeddings: () => Effect.succeed(0),
   deleteStaleFiles: () => Effect.succeed({ removed: 0 }),
+  countAllEdges: () => Effect.succeed(0),
+  putNodesAndEdges: () => Effect.void,
 }))
 
 const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(mockPermissionLayer))

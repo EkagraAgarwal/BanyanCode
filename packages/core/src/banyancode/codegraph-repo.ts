@@ -36,6 +36,13 @@ export interface Interface {
   readonly listEdgesByNode: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesFrom: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesTo: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
+  readonly countAllEdges: (rootID: string) => Effect.Effect<number, never, never>
+  readonly putNodesAndEdges: (input: {
+    fileID: string
+    rootID: string
+    nodes: CodegraphNode[]
+    edges: CodegraphEdge[]
+  }) => Effect.Effect<void, never, never>
   readonly putEmbedding: (input: {
     nodeID: string
     embedding: Uint8Array
@@ -563,6 +570,99 @@ export const layer = Layer.effect(
       return { removed: stale.length }
     })
 
+    const countAllEdges = Effect.fn("CodegraphRepo.countAllEdges")(function* (rootID: string) {
+      const result = yield* db
+        .select({ count: sql<number>`count(*)` })
+        .from(CodegraphEdgesTable)
+        .innerJoin(CodegraphFilesTable, eq(CodegraphEdgesTable.file_id, CodegraphFilesTable.id))
+        .where(eq(CodegraphFilesTable.root_id, rootID))
+        .get()
+        .pipe(Effect.orDie)
+      return result?.count ?? 0
+    })
+
+    const putNodesAndEdges = Effect.fn("CodegraphRepo.putNodesAndEdges")(function* (input: {
+      fileID: string
+      rootID: string
+      nodes: CodegraphNode[]
+      edges: CodegraphEdge[]
+    }) {
+      const txEffect = db.transaction((tx) => {
+        const now = Date.now()
+        const nodeOps = input.nodes.map((node) =>
+          tx
+            .insert(CodegraphNodesTable)
+            .values({
+              id: node.id,
+              file_id: input.fileID,
+              kind: node.kind,
+              name: node.name,
+              qualified_name: node.qualifiedName,
+              start_line: node.startLine,
+              start_byte: node.startByte,
+              end_line: node.endLine,
+              end_byte: node.endByte,
+              language: node.language,
+              signature: node.signature,
+              doc: node.doc,
+              text_excerpt: node.textExcerpt,
+              node_code_hash: node.nodeCodeHash,
+              created_at: now,
+            })
+            .onConflictDoUpdate({
+              target: CodegraphNodesTable.id,
+              set: {
+                file_id: input.fileID,
+                kind: node.kind,
+                name: node.name,
+                qualified_name: node.qualifiedName,
+                start_line: node.startLine,
+                start_byte: node.startByte,
+                end_line: node.endLine,
+                end_byte: node.endByte,
+                language: node.language,
+                signature: node.signature,
+                doc: node.doc,
+                text_excerpt: node.textExcerpt,
+                node_code_hash: node.nodeCodeHash,
+              },
+            })
+            .run()
+            .pipe(Effect.orDie),
+        )
+        const edgeOps = input.edges.map((edge) =>
+          tx
+            .insert(CodegraphEdgesTable)
+            .values({
+              id: edge.id,
+              from_node_id: edge.fromNodeID,
+              to_node_id: edge.toNodeID,
+              to_target_key: edge.toTargetKey,
+              file_id: input.fileID,
+              line: edge.line,
+              kind: edge.kind,
+              weight: edge.weight,
+            })
+            .onConflictDoUpdate({
+              target: CodegraphEdgesTable.id,
+              set: {
+                from_node_id: edge.fromNodeID,
+                to_node_id: edge.toNodeID,
+                to_target_key: edge.toTargetKey,
+                file_id: input.fileID,
+                line: edge.line,
+                kind: edge.kind,
+                weight: edge.weight,
+              },
+            })
+            .run()
+            .pipe(Effect.orDie),
+        )
+        return Effect.all([...nodeOps, ...edgeOps]).pipe(Effect.asVoid)
+      })
+      return yield* txEffect.pipe(Effect.orDie)
+    })
+
     return Service.of({
       upsertRoot,
       getRoot,
@@ -590,6 +690,8 @@ export const layer = Layer.effect(
       unresolvedEdgesFor,
       markStaleEmbeddings,
       deleteStaleFiles,
+      countAllEdges,
+      putNodesAndEdges,
     })
   }),
 )
