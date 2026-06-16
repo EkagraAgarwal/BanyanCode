@@ -9,13 +9,15 @@ export const applyEmbeddingModel = Effect.gen(function* () {
   if (!modelName) {
     const banyanConfig = yield* Banyan.BanyanConfigService.use((svc) => svc.get())
     if (banyanConfig.banyancode_embedding_model) {
-      const provider = yield* Banyan.EmbeddingProviderService
-      yield* provider.setModel(banyanConfig.banyancode_embedding_model)
+      const providerOpt = yield* Effect.serviceOption(Banyan.EmbeddingProviderService)
+      if (providerOpt._tag === "Some") {
+        yield* providerOpt.value.setModel(banyanConfig.banyancode_embedding_model)
+      }
     }
   } else {
-    const provider = yield* Banyan.EmbeddingProviderService
-    yield* provider.setModel(modelName)
+    const providerOpt = yield* Effect.serviceOption(Banyan.EmbeddingProviderService)
+    if (providerOpt._tag === "Some") {
+      yield* providerOpt.value.setModel(modelName)
+    }
   }
 })
-
-
