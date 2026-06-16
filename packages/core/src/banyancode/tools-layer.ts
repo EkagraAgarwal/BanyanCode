@@ -2,6 +2,7 @@ export * as BanyanTools from "./tools-layer"
 
 import { Layer } from "effect"
 import { CodegraphTools } from "../tool/codegraph"
+import { CodegraphStatusTools } from "../tool/codegraph-status"
 import { CodeEmbedTools } from "../tool/code-embed"
 import { MeshControlTool } from "../tool/mesh-control"
 import { MemoryTools } from "../tool/memory"
@@ -25,6 +26,7 @@ export const locationLayer = Layer.mergeAll(
   MeshControlTool.locationLayer,
   MemoryTools.locationLayer,
   CodegraphTools.locationLayer,
+  CodegraphStatusTools.locationLayer,
   CodeEmbedTools.locationLayer,
   SystemStatusTool.layer,
 ).pipe(

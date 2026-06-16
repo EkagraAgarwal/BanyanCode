@@ -31,6 +31,7 @@ const InputObject = Schema.StructWithRest(
     lsp: Schema.optional(Rule),
     doom_loop: Schema.optional(Action),
     skill: Schema.optional(Rule),
+    codegraph_status: Schema.optional(Action),
   }),
   [Schema.Record(Schema.String, Rule)],
 )
