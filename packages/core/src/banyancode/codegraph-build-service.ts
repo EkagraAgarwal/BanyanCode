@@ -54,11 +54,21 @@ export const layer = Layer.effect(
     }
 
     const indexer = yield* CodegraphIndexer.Service
+    const eventBus = yield* EventV2.Service
     const state = yield* Ref.make<State>({ status: "idle", done: 0, total: 0 })
     const inFlight = yield* Ref.make<Option.Option<Fiber.Fiber<void, CodegraphIndexer.CodegraphError>>>(Option.none())
     const events = yield* Queue.unbounded<{ type: "banyancode.codegraph.build"; properties: State }>().pipe(Effect.orDie)
 
     const publish = (s: State) => Queue.offer(events, { type: "banyancode.codegraph.build", properties: s }).pipe(Effect.orDie)
+
+    yield* Effect.forkScoped(
+      Effect.forever(
+        Effect.gen(function* () {
+          const event = yield* Queue.take(events)
+          yield* eventBus.publish(BuildEvent, event.properties)
+        }),
+      ),
+    )
 
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
@@ -75,11 +85,11 @@ export const layer = Layer.effect(
           const result = yield* indexer.index({
             root: input.root,
             force: input.force ?? false,
-            onProgress: ({ file, done, total }) => {
+            onProgress: Effect.fn("CodegraphBuildService.onProgress")(function* ({ file, done, total }) {
               const next: State = { ...initial, done, total, currentFile: file }
-              Ref.set(state, next)
-              publish(next)
-            },
+              yield* Ref.set(state, next)
+              yield* publish(next)
+            }),
           })
           const doneState: State = {
             status: "completed",

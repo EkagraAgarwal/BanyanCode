@@ -15,7 +15,7 @@ export interface Interface {
   readonly index: (input: {
     root: string
     force?: boolean
-    onProgress?: (info: { file: string; done: number; total: number }) => void
+    onProgress?: (info: { file: string; done: number; total: number }) => Effect.Effect<void>
   }) => Effect.Effect<{ indexed: number; skipped: number }, CodegraphError, never>
   readonly cancel: () => Effect.Effect<void, never, never>
 }
@@ -94,7 +94,7 @@ export const layer = Layer.effect(
     const index = Effect.fn("CodegraphIndexer.index")(function* (input: {
       root: string
       force?: boolean
-      onProgress?: (info: { file: string; done: number; total: number }) => void
+      onProgress?: (info: { file: string; done: number; total: number }) => Effect.Effect<void>
     }) {
       yield* Ref.set(cancelled, false)
       const patterns = yield* loadIgnorePatterns(input.root)
@@ -111,7 +111,7 @@ export const layer = Layer.effect(
         if (isCancelled) break
         const filePath = codeFiles[i]
         const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
-        input.onProgress?.({ file: relativePath, done: i, total })
+        if (input.onProgress) yield* input.onProgress({ file: relativePath, done: i, total })
         const ext = path.extname(filePath).toLowerCase()
         const content = yield* fs.readFileStringSafe(filePath).pipe(Effect.orDie)
         if (content === undefined) continue

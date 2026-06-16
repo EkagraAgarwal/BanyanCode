@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Cause, Effect, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
+import { EventV2 } from "@opencode-ai/core/event"
 import { tmpdir } from "../fixture/tmpdir"
 import path from "path"
 import { CodegraphBuildService, layer } from "../../src/banyancode/codegraph-build-service"
@@ -18,12 +19,14 @@ const makeMockIndexer = (options: {
     CodegraphIndexer.Service,
     CodegraphIndexer.Service.of({
       index: (input) => {
-        for (const update of options.progressUpdates ?? []) {
-          input.onProgress?.(update)
-        }
-        if (options.indexError) return Effect.fail(options.indexError)
-        if (options.indexResult) return Effect.succeed(options.indexResult)
-        return Effect.succeed({ indexed: 0, skipped: 0 })
+        return Effect.gen(function* () {
+          for (const update of options.progressUpdates ?? []) {
+            if (input.onProgress) yield* input.onProgress(update)
+          }
+          if (options.indexError) return yield* Effect.fail(options.indexError)
+          if (options.indexResult) return options.indexResult
+          return { indexed: 0, skipped: 0 }
+        })
       },
       cancel: () => Effect.void,
     }),
@@ -44,7 +47,7 @@ describe("CodegraphBuildService", () => {
       indexResult: { indexed: 5, skipped: 2 },
     })
 
-    const serviceLayer = layer.pipe(Layer.provide(mockIndexer))
+    const serviceLayer = layer.pipe(Layer.provide(mockIndexer), Layer.provide(EventV2.defaultLayer))
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -72,7 +75,7 @@ describe("CodegraphBuildService", () => {
       indexError: new CodegraphIndexer.CodegraphError({ message: "Index failed: parse error" }),
     })
 
-    const serviceLayer = layer.pipe(Layer.provide(mockIndexer))
+    const serviceLayer = layer.pipe(Layer.provide(mockIndexer), Layer.provide(EventV2.defaultLayer))
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -97,7 +100,7 @@ describe("CodegraphBuildService", () => {
 
     const mockIndexer = makeMockIndexer({})
 
-    const serviceLayer = layer.pipe(Layer.provide(mockIndexer))
+    const serviceLayer = layer.pipe(Layer.provide(mockIndexer), Layer.provide(EventV2.defaultLayer))
 
     await Effect.runPromise(
       Effect.gen(function* () {
