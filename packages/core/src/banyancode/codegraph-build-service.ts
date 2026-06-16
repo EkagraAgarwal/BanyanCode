@@ -61,7 +61,7 @@ export const layer = Layer.effect(
 
     const publish = (s: State) => Queue.offer(events, { type: "banyancode.codegraph.build", properties: s }).pipe(Effect.orDie)
 
-    yield* Effect.forkScoped(
+    yield* Effect.forkDetach(
       Effect.forever(
         Effect.gen(function* () {
           const event = yield* Queue.take(events)

@@ -58,7 +58,7 @@ import { PromptStashProvider } from "./component/prompt/stash"
 import { DialogAlert } from "./ui/dialog-alert"
 import { DialogConfirm } from "./ui/dialog-confirm"
 import { ToastProvider, useToast } from "./ui/toast"
-import { CodegraphBuildProvider, useCodegraphBuild, CodegraphProgress, type CodegraphBuildState } from "./component/codegraph-progress"
+import { CodegraphBuildProvider, type CodegraphBuildState } from "./component/codegraph-progress"
 import { isDefaultTitle } from "./util/session"
 import { KVProvider, useKV } from "./context/kv"
 import * as Model from "./util/model"
@@ -1094,11 +1094,27 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     })
   })
 
-  const build = useCodegraphBuild()
+  let lastBuildStatus: string | null = null
   event.subscribe((evt, { workspace }) => {
     if ((evt.type as string) !== "banyancode.codegraph.build") return
     if (workspace !== project.workspace.current()) return
-    build.set(evt.properties as CodegraphBuildState)
+    const props = evt.properties as CodegraphBuildState
+    if (lastBuildStatus !== props.status) {
+      if (props.status === "running") {
+        toast.show({ variant: "info", message: `Codegraph build started`, duration: 3000 })
+      } else if (props.status === "completed") {
+        toast.show({
+          variant: "success",
+          message: `Codegraph: indexed=${props.result?.indexed ?? 0} skipped=${props.result?.skipped ?? 0}`,
+          duration: 5000,
+        })
+      } else if (props.status === "failed") {
+        toast.show({ variant: "error", message: `Codegraph build failed: ${props.error ?? "unknown"}`, duration: 8000 })
+      } else if (props.status === "cancelled") {
+        toast.show({ variant: "warning", message: `Codegraph build cancelled`, duration: 4000 })
+      }
+      lastBuildStatus = props.status
+    }
   })
 
   event.on("installation.update-available", async (evt) => {

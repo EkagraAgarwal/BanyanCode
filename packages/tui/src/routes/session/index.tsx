@@ -59,7 +59,6 @@ import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
 import { Toast, useToast } from "../../ui/toast"
-import { CodegraphProgress } from "../../component/codegraph-progress"
 import { useKV } from "../../context/kv.tsx"
 import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
@@ -1322,7 +1321,6 @@ export function Session() {
               </box>
             </Show>
             <Toast />
-            <CodegraphProgress />
           </box>
           <Show when={sidebarVisible()}>
             <Switch>

@@ -4,7 +4,6 @@ import { Logo } from "../component/logo"
 import { useSync } from "../context/sync"
 import { useTheme } from "../context/theme"
 import { Toast } from "../ui/toast"
-import { CodegraphProgress } from "../component/codegraph-progress"
 import { useArgs } from "../context/args"
 import { useRouteData } from "../context/route"
 import { usePromptRef } from "../context/prompt"
@@ -94,7 +93,6 @@ export function Home() {
         <pluginRuntime.Slot name="home_bottom" />
         <box flexGrow={1} minHeight={0} />
         <Toast />
-        <CodegraphProgress />
       </box>
       <box width="100%" flexShrink={0}>
         <pluginRuntime.Slot name="home_footer" mode="single_winner" />
