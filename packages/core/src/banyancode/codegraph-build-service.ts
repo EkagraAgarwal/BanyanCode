@@ -1,7 +1,10 @@
 export * as CodegraphBuildService from "./codegraph-build-service"
 
+import { createHash } from "crypto"
 import { Cause, Context, Effect, Fiber, Layer, Option, Queue, Ref, Schema } from "effect"
 import { CodegraphIndexer } from "./codegraph-indexer"
+import { EmbeddingProvider } from "./embedding-provider"
+import { CodegraphRepo } from "./codegraph-repo"
 import { EventV2 } from "../event"
 
 export const State = Schema.Struct({
@@ -19,6 +22,7 @@ export const State = Schema.Struct({
     }),
   ),
   error: Schema.optional(Schema.String),
+  staleEmbeddingsCleaned: Schema.optional(Schema.Number),
 }).annotate({ identifier: "Banyan/CodegraphBuildState" })
 
 export type State = typeof State.Type
@@ -55,6 +59,8 @@ export const layer = Layer.effect(
 
     const indexer = yield* CodegraphIndexer.Service
     const eventBus = yield* EventV2.Service
+    const provider = yield* EmbeddingProvider.EmbeddingProviderService
+    const repo = yield* CodegraphRepo.Service
     const state = yield* Ref.make<State>({ status: "idle", done: 0, total: 0 })
     const inFlight = yield* Ref.make<Option.Option<Fiber.Fiber<void, CodegraphIndexer.CodegraphError>>>(Option.none())
     const events = yield* Queue.unbounded<{ type: "banyancode.codegraph.build"; properties: State }>().pipe(Effect.orDie)
@@ -82,6 +88,21 @@ export const layer = Layer.effect(
 
         const work = Effect.gen(function* () {
           const startTime = Date.now()
+
+          // Clean stale embeddings before indexing
+          const model = provider.model()
+          let staleCleaned = 0
+          if (model !== undefined) {
+            const cfg = provider.config()
+            const baseUrlHash = createHash("sha256").update(cfg.baseUrl).digest("hex")
+            staleCleaned = yield* repo.markStaleEmbeddings(model, baseUrlHash).pipe(
+              Effect.catch(() => Effect.succeed(0)),
+            )
+          }
+          const cleanedState: State = { ...initial, staleEmbeddingsCleaned: staleCleaned }
+          yield* Ref.set(state, cleanedState)
+          yield* publish(cleanedState)
+
           const result = yield* indexer.index({
             root: input.root,
             force: input.force ?? false,
@@ -98,6 +119,7 @@ export const layer = Layer.effect(
             total: result.indexed + result.skipped,
             startedAt: initial.startedAt,
             result: { indexed: result.indexed, skipped: result.skipped, duration_ms: Date.now() - startTime },
+            staleEmbeddingsCleaned: staleCleaned,
           }
           yield* Ref.set(state, doneState)
           yield* publish(doneState)
@@ -143,4 +165,7 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(CodegraphIndexer.defaultLayer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(CodegraphIndexer.defaultLayer),
+  Layer.provide(EmbeddingProvider.defaultLayer),
+)

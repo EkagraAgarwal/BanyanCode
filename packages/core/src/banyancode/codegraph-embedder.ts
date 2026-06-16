@@ -55,13 +55,28 @@ export const layer = Layer.effect(
       })
     })
 
+    type EmbeddingRow = { embedding: Uint8Array; model: string; dim: number; baseUrlHash: string; inputHash: string } | undefined
+    const isEmbeddingFresh = (existing: EmbeddingRow, model: string, baseUrlHash: string, inputHash: string) =>
+      existing !== undefined
+      && existing.model === model
+      && existing.baseUrlHash === baseUrlHash
+      && existing.inputHash === inputHash
+
     const embedFile = Effect.fn("CodegraphEmbedder.embedFile")(function* (fileID: string) {
       const nodes = yield* repo.listNodesByFile(fileID)
+      const cfg = provider.config()
+      const model = provider.model()
+      const baseUrlHash = createHash("sha256").update(cfg.baseUrl).digest("hex")
       let embedded = 0
       let skipped = 0
       for (const node of nodes) {
+        if (model === undefined) {
+          skipped++
+          continue
+        }
+        const inputHash = provider.inputHash(node.textExcerpt)
         const existing = yield* repo.getEmbedding(node.id)
-        if (existing) {
+        if (isEmbeddingFresh(existing, model, baseUrlHash, inputHash)) {
           skipped++
           continue
         }
@@ -73,7 +88,9 @@ export const layer = Layer.effect(
 
     const embedAll = Effect.fn("CodegraphEmbedder.embedAll")(function* () {
       const allNodes = yield* repo.listAllNodes()
+      const cfg = provider.config()
       const model = provider.model()
+      const baseUrlHash = createHash("sha256").update(cfg.baseUrl).digest("hex")
       const byFile = new Map<string, CodegraphNode[]>()
       for (const node of allNodes) {
         const list = byFile.get(node.fileID) ?? []
@@ -84,8 +101,13 @@ export const layer = Layer.effect(
       let skipped = 0
       for (const [_fileID, nodes] of byFile) {
         for (const node of nodes) {
+          if (model === undefined) {
+            skipped++
+            continue
+          }
+          const inputHash = provider.inputHash(node.textExcerpt)
           const existing = yield* repo.getEmbedding(node.id)
-          if (existing) {
+          if (isEmbeddingFresh(existing, model, baseUrlHash, inputHash)) {
             skipped++
             continue
           }
