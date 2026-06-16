@@ -43,6 +43,11 @@ export interface Interface {
     nodes: CodegraphNode[]
     edges: CodegraphEdge[]
   }) => Effect.Effect<void, never, never>
+  readonly putNodesAndEdgesBatched: (input: {
+    rootID: string
+    nodes: Array<{ fileID: string } & CodegraphNode>
+    edges: Array<{ fileID: string } & CodegraphEdge>
+  }) => Effect.Effect<void, never, never>
   readonly putEmbedding: (input: {
     nodeID: string
     embedding: Uint8Array
@@ -587,77 +592,106 @@ export const layer = Layer.effect(
       nodes: CodegraphNode[]
       edges: CodegraphEdge[]
     }) {
+      return yield* putNodesAndEdgesBatched({
+        rootID: input.rootID,
+        nodes: input.nodes.map((n) => ({ ...n, fileID: input.fileID })),
+        edges: input.edges.map((e) => ({ ...e, fileID: input.fileID })),
+      })
+    })
+
+    const putNodesAndEdgesBatched = Effect.fn("CodegraphRepo.putNodesAndEdgesBatched")(function* (input: {
+      rootID: string
+      nodes: Array<{ fileID: string } & CodegraphNode>
+      edges: Array<{ fileID: string } & CodegraphEdge>
+    }) {
+      const now = Date.now()
       const txEffect = db.transaction((tx) => {
-        const now = Date.now()
-        const nodeOps = input.nodes.map((node) =>
-          tx
+        const CHUNK_SIZE = 100 // SQLite variable limit is usually 999. Each node has ~15 fields.
+        const nodeChunks = []
+        for (let i = 0; i < input.nodes.length; i += CHUNK_SIZE) {
+          nodeChunks.push(input.nodes.slice(i, i + CHUNK_SIZE))
+        }
+
+        const nodeOps = nodeChunks.map((chunk) => {
+          const values = chunk.map((node) => ({
+            id: node.id,
+            file_id: node.fileID,
+            kind: node.kind,
+            name: node.name,
+            qualified_name: node.qualifiedName,
+            start_line: node.startLine,
+            start_byte: node.startByte,
+            end_line: node.endLine,
+            end_byte: node.endByte,
+            language: node.language,
+            signature: node.signature,
+            doc: node.doc,
+            text_excerpt: node.textExcerpt,
+            node_code_hash: node.nodeCodeHash,
+            created_at: now,
+          }))
+
+          return tx
             .insert(CodegraphNodesTable)
-            .values({
-              id: node.id,
-              file_id: input.fileID,
-              kind: node.kind,
-              name: node.name,
-              qualified_name: node.qualifiedName,
-              start_line: node.startLine,
-              start_byte: node.startByte,
-              end_line: node.endLine,
-              end_byte: node.endByte,
-              language: node.language,
-              signature: node.signature,
-              doc: node.doc,
-              text_excerpt: node.textExcerpt,
-              node_code_hash: node.nodeCodeHash,
-              created_at: now,
-            })
+            .values(values)
             .onConflictDoUpdate({
               target: CodegraphNodesTable.id,
               set: {
-                file_id: input.fileID,
-                kind: node.kind,
-                name: node.name,
-                qualified_name: node.qualifiedName,
-                start_line: node.startLine,
-                start_byte: node.startByte,
-                end_line: node.endLine,
-                end_byte: node.endByte,
-                language: node.language,
-                signature: node.signature,
-                doc: node.doc,
-                text_excerpt: node.textExcerpt,
-                node_code_hash: node.nodeCodeHash,
+                file_id: sql`excluded.file_id`,
+                kind: sql`excluded.kind`,
+                name: sql`excluded.name`,
+                qualified_name: sql`excluded.qualified_name`,
+                start_line: sql`excluded.start_line`,
+                start_byte: sql`excluded.start_byte`,
+                end_line: sql`excluded.end_line`,
+                end_byte: sql`excluded.end_byte`,
+                language: sql`excluded.language`,
+                signature: sql`excluded.signature`,
+                doc: sql`excluded.doc`,
+                text_excerpt: sql`excluded.text_excerpt`,
+                node_code_hash: sql`excluded.node_code_hash`,
               },
             })
             .run()
-            .pipe(Effect.orDie),
-        )
-        const edgeOps = input.edges.map((edge) =>
-          tx
+            .pipe(Effect.orDie)
+        })
+
+        const edgeChunks = []
+        for (let i = 0; i < input.edges.length; i += CHUNK_SIZE) {
+          edgeChunks.push(input.edges.slice(i, i + CHUNK_SIZE))
+        }
+
+        const edgeOps = edgeChunks.map((chunk) => {
+          const values = chunk.map((edge) => ({
+            id: edge.id,
+            from_node_id: edge.fromNodeID,
+            to_node_id: edge.toNodeID,
+            to_target_key: edge.toTargetKey,
+            file_id: edge.fileID,
+            line: edge.line,
+            kind: edge.kind,
+            weight: edge.weight,
+          }))
+
+          return tx
             .insert(CodegraphEdgesTable)
-            .values({
-              id: edge.id,
-              from_node_id: edge.fromNodeID,
-              to_node_id: edge.toNodeID,
-              to_target_key: edge.toTargetKey,
-              file_id: input.fileID,
-              line: edge.line,
-              kind: edge.kind,
-              weight: edge.weight,
-            })
+            .values(values)
             .onConflictDoUpdate({
               target: CodegraphEdgesTable.id,
               set: {
-                from_node_id: edge.fromNodeID,
-                to_node_id: edge.toNodeID,
-                to_target_key: edge.toTargetKey,
-                file_id: input.fileID,
-                line: edge.line,
-                kind: edge.kind,
-                weight: edge.weight,
+                from_node_id: sql`excluded.from_node_id`,
+                to_node_id: sql`excluded.to_node_id`,
+                to_target_key: sql`excluded.to_target_key`,
+                file_id: sql`excluded.file_id`,
+                line: sql`excluded.line`,
+                kind: sql`excluded.kind`,
+                weight: sql`excluded.weight`,
               },
             })
             .run()
-            .pipe(Effect.orDie),
-        )
+            .pipe(Effect.orDie)
+        })
+
         return Effect.all([...nodeOps, ...edgeOps]).pipe(Effect.asVoid)
       })
       return yield* txEffect.pipe(Effect.orDie)

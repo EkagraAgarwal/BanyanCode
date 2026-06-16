@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import * as path from "path"
 import * as os from "os"
 import * as fs from "fs/promises"
-import { Banyan } from "@opencode-ai/core/banyancode"
-import { CodegraphBuildService } from "@opencode-ai/core/banyancode/codegraph-build-service"
+import { Banyan, type BanyanConfigInfo } from "@opencode-ai/core/banyancode"
+import { CodegraphBuildService, type State as BuildState } from "@opencode-ai/core/banyancode/codegraph-build-service"
 import { Database } from "@opencode-ai/core/database/database"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -12,6 +13,35 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { pollWithTimeout } from "../lib/effect"
 
 process.env.BANYANCODE_ENABLE = "1"
+
+const makeMockHttpClient = () =>
+  Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((_request: HttpClientRequest.HttpClientRequest) =>
+      Effect.succeed(HttpClientResponse.fromWeb(_request, new Response("{}", { status: 200 }))),
+    ),
+  )
+
+const makeMockBanyanConfig = () =>
+  Layer.succeed(Banyan.BanyanConfigService, {
+    get: () => Effect.succeed({} as BanyanConfigInfo),
+    getGlobal: () => Effect.succeed({} as BanyanConfigInfo),
+    update: () => Effect.succeed({} as BanyanConfigInfo),
+  })
+
+const makeMockEmbeddingProvider = () =>
+  Layer.succeed(Banyan.EmbeddingProviderService, {
+    embed: () => Effect.succeed([] as Float32Array[]),
+    model: () => undefined,
+    setModel: () => Effect.void,
+    inputHash: () => "",
+    config: () => ({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: undefined,
+      dimensions: undefined,
+      batchSize: 64,
+    }),
+  })
 
 async function makeTmpdir(): Promise<string> {
   const dir = path.join(os.tmpdir(), "opencode-build-" + Math.random().toString(36).slice(2))
@@ -52,6 +82,9 @@ function makeTestLayer(dbPath: string) {
     Layer.provide(FSUtil.defaultLayer),
     Layer.provide(NodeFileSystem.layer),
     Layer.provide(EventV2.defaultLayer),
+    Layer.provide(makeMockHttpClient()),
+    Layer.provide(makeMockBanyanConfig()),
+    Layer.provide(makeMockEmbeddingProvider()),
   )
 }
 
@@ -69,24 +102,22 @@ describe("Manual codegraph build - progress reporting", () => {
           const buildSvc = yield* CodegraphBuildService.Service
           yield* buildSvc.start({ root: dir, force: true })
 
-          const state = yield* pollWithTimeout(
-            Effect.gen(function* () {
-              const s = yield* buildSvc.status()
-              if (s.status === "running") {
-                progressUpdates.push({
-                  done: s.done,
-                  total: s.total,
-                  currentFile: s.currentFile,
-                })
-              }
-              if (s.status === "completed" || s.status === "failed" || s.status === "cancelled") return s
-              return undefined
-            }),
-            "build never completed",
-            "30 seconds",
-          )
+          let state: BuildState
+          while (true) {
+            const s = yield* buildSvc.status()
+            state = s
+            if (s.status === "running") {
+              progressUpdates.push({
+                done: s.done,
+                total: s.total,
+                currentFile: s.currentFile,
+              })
+            }
+            if (s.status === "completed" || s.status === "failed" || s.status === "cancelled") break
+            yield* Effect.sleep("20 millis")
+          }
           return state
-        }).pipe(Effect.provide(layer), Effect.scoped),
+        }).pipe(Effect.provide(layer)),
       )
 
       expect(result.status).toBe("completed")
@@ -116,27 +147,25 @@ describe("Manual codegraph build of this workspace", () => {
         const buildSvc = yield* CodegraphBuildService.Service
         yield* buildSvc.start({ root: workspaceRoot, force: true })
 
-        const state = yield* pollWithTimeout(
-          Effect.gen(function* () {
-            const s = yield* buildSvc.status()
-            if (s.status === "running") {
-              progressUpdates.push({
-                done: s.done,
-                total: s.total,
-                currentFile: s.currentFile,
-              })
-              if (progressUpdates.length % 100 === 0) {
-                console.log(
-                  `Progress: ${s.done}/${s.total} - ${s.currentFile ?? ""}`,
-                )
-              }
+        let state: BuildState
+        while (true) {
+          const s = yield* buildSvc.status()
+          state = s
+          if (s.status === "running") {
+            progressUpdates.push({
+              done: s.done,
+              total: s.total,
+              currentFile: s.currentFile,
+            })
+            if (progressUpdates.length % 100 === 0) {
+              console.log(
+                `Progress: ${s.done}/${s.total} - ${s.currentFile ?? ""}`,
+              )
             }
-            if (s.status === "completed" || s.status === "failed" || s.status === "cancelled") return s
-            return undefined
-          }),
-          "build never completed",
-          "5 minutes",
-        )
+          }
+          if (s.status === "completed" || s.status === "failed" || s.status === "cancelled") break
+          yield* Effect.sleep("20 millis")
+        }
         return state
       }).pipe(Effect.provide(layer), Effect.scoped),
     )
