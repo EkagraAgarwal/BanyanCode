@@ -6,6 +6,8 @@ const TRAIT_REGEX = /(?:^|\n)trait\s+(\w+)/g
 const ENUM_REGEX = /(?:^|\n)enum\s+(\w+)/g
 const IMPL_REGEX = /(?:^|\n)impl\s+(?:<[^>]+>\s+)?(\w+)\s+for\s+(\w+)/g
 const IMPL_TRAIT_REGEX = /(?:^|\n)impl\s+(?:<[^>]+>\s+)?trait\s+(\w+)\s+for\s+(\w+)/g
+const USE_REGEX = /(?:^|\n)use\s+([^\n;]+)/g
+const MOD_REGEX = /(?:^|\n)mod\s+(\w+)/g
 
 function djb2Hash(content: string): string {
   let hash = 5381
@@ -52,8 +54,12 @@ export function parseRust(
   }
 
   // Extract imports
-  const USE_REGEX = /(?:^|\n)use\s+([^\n;]+)/g
   for (const match of content.matchAll(USE_REGEX)) {
+    imports.push(match[1].trim())
+  }
+
+  // Extract module declarations (mod X;)
+  for (const match of content.matchAll(MOD_REGEX)) {
     imports.push(match[1].trim())
   }
 
@@ -117,6 +123,20 @@ export function parseRust(
     textExcerpt,
     nodeCodeHash: djb2Hash(textExcerpt),
   })
+
+  // Add imports edges from file to imported modules (unresolved - to_target_key only)
+  for (const importPath of imports) {
+    edges.push({
+      id: fileID + ":imports:" + importPath,
+      fromNodeID: fileNodeId,
+      toNodeID: undefined,
+      toTargetKey: "import:" + importPath,
+      fileID,
+      line: 1,
+      kind: "imports",
+      weight: 1,
+    })
+  }
 
   // Add contains edges from file to all nodes
   for (const node of nodes) {

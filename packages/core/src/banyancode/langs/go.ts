@@ -120,6 +120,20 @@ export function parseGo(
     nodeCodeHash: djb2Hash(textExcerpt),
   })
 
+  // Add imports edges from file to imported modules (unresolved - to_target_key only)
+  for (const importPath of imports) {
+    edges.push({
+      id: fileID + ":imports:" + importPath,
+      fromNodeID: fileNodeId,
+      toNodeID: undefined,
+      toTargetKey: "import:" + importPath,
+      fileID,
+      line: 1,
+      kind: "imports",
+      weight: 1,
+    })
+  }
+
   // Add contains edges from file to all nodes
   for (const node of nodes) {
     if (node.id !== fileNodeId) {

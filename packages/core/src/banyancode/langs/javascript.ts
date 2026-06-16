@@ -57,11 +57,18 @@ export function parseJavaScript(
     imports.push(match[1])
   }
 
+  // Map from class node id to parent class name for extends edges
+  const classExtendsMap: Map<string, string> = new Map()
+
   for (const match of content.matchAll(EXPORT_CLASS_REGEX)) {
     const name = match[1]
     const startLine = content.substring(0, match.index).split("\n").length
     const endLine = startLine + match[0].split("\n").length
     addNode("class", name, startLine, endLine)
+    const nodeId = fileID + ":class:" + name + ":" + startLine
+    if (match[2]) {
+      classExtendsMap.set(nodeId, match[2])
+    }
   }
 
   for (const match of content.matchAll(CLASS_REGEX)) {
@@ -69,6 +76,10 @@ export function parseJavaScript(
     const startLine = content.substring(0, match.index).split("\n").length
     const endLine = startLine + match[0].split("\n").length
     addNode("class", name, startLine, endLine)
+    const nodeId = fileID + ":class:" + name + ":" + startLine
+    if (match[2]) {
+      classExtendsMap.set(nodeId, match[2])
+    }
   }
 
   for (const match of content.matchAll(FUNCTION_REGEX)) {
@@ -101,6 +112,34 @@ export function parseJavaScript(
     textExcerpt,
     nodeCodeHash: djb2Hash(textExcerpt),
   })
+
+  // Add imports edges from file to imported modules (unresolved - to_target_key only)
+  for (const importPath of imports) {
+    edges.push({
+      id: fileID + ":imports:" + importPath,
+      fromNodeID: fileNodeId,
+      toNodeID: undefined,
+      toTargetKey: "import:" + importPath,
+      fileID,
+      line: 1,
+      kind: "imports",
+      weight: 1,
+    })
+  }
+
+  // Add extends edges from class nodes to parent classes (unresolved - to_target_key only)
+  for (const [classNodeId, parentClass] of classExtendsMap) {
+    edges.push({
+      id: classNodeId + ":extends:" + parentClass,
+      fromNodeID: classNodeId,
+      toNodeID: undefined,
+      toTargetKey: parentClass,
+      fileID,
+      line: 1,
+      kind: "extends",
+      weight: 1,
+    })
+  }
 
   // Add contains edges from file to all nodes
   for (const node of nodes) {
