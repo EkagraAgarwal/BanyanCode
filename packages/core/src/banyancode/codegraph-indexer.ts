@@ -2,6 +2,8 @@ export * as CodegraphIndexer from "./codegraph-indexer"
 
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import path from "path"
+import { createHash } from "crypto"
+import ignore from "ignore"
 import { FSUtil } from "../fs-util"
 import { CodegraphRepo } from "./codegraph-repo"
 import type { CodegraphNode } from "./types"
@@ -23,6 +25,8 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphIndexer") {}
 
 const DEFAULT_IGNORED = ["node_modules", "dist", "build", "coverage", ".next", ".cache", "target", "vendor"]
+
+const hashContent = (content: string): string => createHash("sha256").update(content).digest("hex")
 
 export const layer = Layer.effect(
   Service,
@@ -51,9 +55,9 @@ export const layer = Layer.effect(
       })
     }
 
-    const loadIgnorePatterns = (root: string): Effect.Effect<string[]> => {
+    const loadIgnorePatterns = (root: string): Effect.Effect<ReturnType<typeof ignore>> => {
       return Effect.gen(function* () {
-        const patterns: string[] = [...DEFAULT_IGNORED]
+        const patterns: string[] = [...DEFAULT_IGNORED.map((d) => d + "/")]
         const gitignorePath = path.join(root, ".gitignore")
         const banyancodeignorePath = path.join(root, ".banyancode", "ignore")
         const gitignoreExists = yield* fs.existsSafe(gitignorePath)
@@ -66,29 +70,8 @@ export const layer = Layer.effect(
           const content = yield* fs.readFileStringSafe(banyancodeignorePath).pipe(Effect.orDie)
           if (content) patterns.push(...content.split("\n").filter((l) => l.trim() && !l.startsWith("#")))
         }
-        return patterns
+        return ignore().add(patterns)
       })
-    }
-
-    const isIgnored = (patterns: string[], filePath: string): boolean => {
-      const relative = filePath.replace(/\\/g, "/")
-      for (const pattern of patterns) {
-        if (pattern === "") continue
-        const regex = globToRegex(pattern)
-        if (regex.test(relative)) return true
-      }
-      return false
-    }
-
-    const hashContent = (content: string | undefined): string => {
-      if (!content) return ""
-      let hash = 0
-      for (let i = 0; i < content.length; i++) {
-        const char = content.charCodeAt(i)
-        hash = (hash << 5) - hash + char
-        hash = hash & hash
-      }
-      return Math.abs(hash).toString(16)
     }
 
     const index = Effect.fn("CodegraphIndexer.index")(function* (input: {
@@ -97,36 +80,50 @@ export const layer = Layer.effect(
       onProgress?: (info: { file: string; done: number; total: number }) => Effect.Effect<void>
     }) {
       yield* Ref.set(cancelled, false)
+
+      // Upsert root at start
+      const existingRoot = yield* repo.getRoot(input.root)
+      const rootID = existingRoot?.id ?? crypto.randomUUID()
+      yield* repo.upsertRoot({ id: rootID, rootPath: input.root, parserVersion: "v1" })
+
       const patterns = yield* loadIgnorePatterns(input.root)
       const allFiles = yield* walkDirectory(input.root).pipe(Effect.orDie)
       const codeFiles = allFiles.filter((f) => {
         const ext = path.extname(f).toLowerCase()
-        return [".ts", ".tsx", ".js", ".jsx", ".py"].includes(ext) && !isIgnored(patterns, f)
+        const relativePath = path.relative(input.root, f).replace(/\\/g, "/")
+        return [".ts", ".tsx", ".js", ".jsx", ".py"].includes(ext) && !patterns.ignores(relativePath)
       })
       let indexed = 0
       let skipped = 0
       const total = codeFiles.length
+      const currentRelativePathSet = new Set<string>()
+
       for (let i = 0; i < codeFiles.length; i++) {
         const isCancelled = yield* Ref.get(cancelled)
         if (isCancelled) break
         const filePath = codeFiles[i]
         const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
+        currentRelativePathSet.add(relativePath)
         if (input.onProgress) yield* input.onProgress({ file: relativePath, done: i, total })
         const ext = path.extname(filePath).toLowerCase()
         const content = yield* fs.readFileStringSafe(filePath).pipe(Effect.orDie)
         if (content === undefined) continue
         const contentHash = hashContent(content)
-        const existing = yield* repo.getFileByPath(filePath)
+        const existing = yield* repo.getFileByPath(relativePath)
         if (existing && existing.contentHash === contentHash && !input.force) {
           skipped++
           continue
+        }
+        // Incremental cleanup: delete old file row (cascades to nodes/edges/embeddings/FTS)
+        if (existing) {
+          yield* repo.deleteFile(existing.id)
         }
         const parser = getParser(ext)
         const language = ext === ".py" ? "python" : "typescript"
         const fileID = existing?.id ?? crypto.randomUUID()
         const result = parser.parse(content, fileID, filePath, language)
         const indexedAt = Date.now()
-        yield* repo.putFile({ id: fileID, rootID: input.root, path: filePath, contentHash, byteSize: content.length, language, indexedAt })
+        yield* repo.putFile({ id: fileID, rootID, path: relativePath, contentHash, byteSize: content.length, language, indexedAt })
         for (const node of result.nodes) {
           const fullNode: CodegraphNode = {
             id: node.id,
@@ -152,6 +149,29 @@ export const layer = Layer.effect(
         }
         indexed++
       }
+
+      // Clean up stale files (deleted from disk)
+      yield* repo.deleteStaleFiles(rootID, currentRelativePathSet)
+
+      // Set root stats at end
+      const allNodes = yield* repo.listAllNodes()
+      let edgeCount = 0
+      for (const node of allNodes) {
+        const edges = yield* repo.listEdgesByNode(node.id)
+        edgeCount += edges.length
+      }
+
+      yield* repo.setRootStats({
+        rootID,
+        stats: {
+          indexedFileCount: indexed,
+          nodeCount: allNodes.length,
+          edgeCount,
+          lastBuildAt: Date.now(),
+          embeddingModel: null,
+        },
+      })
+
       return { indexed, skipped }
     })
 
@@ -162,19 +182,5 @@ export const layer = Layer.effect(
     return Service.of({ index, cancel })
   }),
 )
-
-function globToRegex(pattern: string): RegExp {
-  let regexStr = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*")
-    .replace(/\?/g, ".")
-  if (!regexStr.startsWith(".*")) {
-    regexStr = "^" + regexStr
-  }
-  if (!regexStr.endsWith(".*")) {
-    regexStr = regexStr + "$"
-  }
-  return new RegExp(regexStr)
-}
 
 export const defaultLayer = layer.pipe(Layer.provide(CodegraphRepo.defaultLayer))
