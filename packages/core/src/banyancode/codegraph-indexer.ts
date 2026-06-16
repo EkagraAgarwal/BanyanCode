@@ -93,66 +93,98 @@ export const layer = Layer.effect(
         const relativePath = path.relative(input.root, f).replace(/\\/g, "/")
         return [".ts", ".tsx", ".js", ".jsx", ".py"].includes(ext) && !patterns.ignores(relativePath)
       })
-      let indexed = 0
-      let skipped = 0
+
+      const indexedRef = yield* Ref.make(0)
+      const skippedRef = yield* Ref.make(0)
       const total = codeFiles.length
       const currentRelativePathSet = new Set<string>()
 
-      for (let i = 0; i < codeFiles.length; i++) {
+      const chunkSize = 50
+      for (let i = 0; i < codeFiles.length; i += chunkSize) {
         const isCancelled = yield* Ref.get(cancelled)
         if (isCancelled) break
-        const filePath = codeFiles[i]
-        const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
-        currentRelativePathSet.add(relativePath)
-        if (input.onProgress) yield* input.onProgress({ file: relativePath, done: i, total })
-        const ext = path.extname(filePath).toLowerCase()
-        const content = yield* fs.readFileStringSafe(filePath).pipe(Effect.orDie)
-        if (content === undefined) continue
-        const contentHash = hashContent(content)
-        const existing = yield* repo.getFileByPath(relativePath)
-        if (existing && existing.contentHash === contentHash && !input.force) {
-          skipped++
-          continue
+
+        const chunk = codeFiles.slice(i, i + chunkSize)
+
+        const results = yield* Effect.forEach(
+          chunk,
+          (filePath) =>
+            Effect.gen(function* () {
+              const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
+
+              const done = yield* Ref.get(indexedRef)
+              const skipped = yield* Ref.get(skippedRef)
+              if (input.onProgress) {
+                yield* input.onProgress({ file: relativePath, done: done + skipped, total })
+              }
+
+              const ext = path.extname(filePath).toLowerCase()
+              const content = yield* fs.readFileStringSafe(filePath).pipe(Effect.orDie)
+              if (content === undefined) return { relativePath, indexed: 0, skipped: 0 }
+
+              const contentHash = hashContent(content)
+              const existing = yield* repo.getFileByPath(relativePath)
+              if (existing && existing.contentHash === contentHash && !input.force) {
+                yield* Ref.update(skippedRef, (s) => s + 1)
+                return { relativePath, indexed: 0, skipped: 1 }
+              }
+
+              // Incremental cleanup: delete old file row (cascades to nodes/edges/embeddings/FTS)
+              if (existing) {
+                yield* repo.deleteFile(existing.id)
+              }
+
+              const parser = getParser(ext)
+              const language = ext === ".py" ? "python" : "typescript"
+              const fileID = crypto.randomUUID()
+              const result = parser.parse(content, fileID, filePath, language)
+              const indexedAt = Date.now()
+
+              const file = {
+                id: fileID,
+                rootID,
+                path: relativePath,
+                content_hash: contentHash, // Ensure field names match database schema or CodegraphFile type
+                contentHash,
+                byteSize: content.length,
+                language,
+                indexedAt,
+              }
+
+              const nodes = result.nodes.map((node) => ({
+                ...node,
+                fileID,
+                language,
+              }))
+
+              const edges = result.edges.map((edge) => ({
+                ...edge,
+                fileID,
+              }))
+
+              yield* Ref.update(indexedRef, (idx) => idx + 1)
+              return { relativePath, file, nodes, edges, indexed: 1, skipped: 0 }
+            }),
+          { concurrency: "inherit" },
+        )
+
+        const batchFiles = []
+        const batchNodes = []
+        const batchEdges = []
+
+        for (const res of results) {
+          currentRelativePathSet.add(res.relativePath)
+          if (res.file) batchFiles.push(res.file)
+          if (res.nodes) batchNodes.push(...res.nodes)
+          if (res.edges) batchEdges.push(...res.edges)
         }
-        // Incremental cleanup: delete old file row (cascades to nodes/edges/embeddings/FTS)
-        if (existing) {
-          yield* repo.deleteFile(existing.id)
+
+        if (batchFiles.length > 0) {
+          for (const f of batchFiles) {
+            yield* repo.putFile(f)
+          }
+          yield* repo.putNodesAndEdgesBatched({ rootID, nodes: batchNodes, edges: batchEdges })
         }
-        const parser = getParser(ext)
-        const language = ext === ".py" ? "python" : "typescript"
-        const fileID = existing?.id ?? crypto.randomUUID()
-        const result = parser.parse(content, fileID, filePath, language)
-        const indexedAt = Date.now()
-        yield* repo.putFile({ id: fileID, rootID, path: relativePath, contentHash, byteSize: content.length, language, indexedAt })
-        const nodes: CodegraphNode[] = result.nodes.map((node) => ({
-          id: node.id,
-          fileID,
-          kind: node.kind,
-          name: node.name,
-          qualifiedName: node.qualifiedName,
-          startLine: node.startLine,
-          startByte: node.startByte,
-          endLine: node.endLine,
-          endByte: node.endByte,
-          language,
-          signature: node.signature,
-          doc: node.doc,
-          textExcerpt: node.textExcerpt,
-          nodeCodeHash: node.nodeCodeHash,
-          code: node.code,
-        }))
-        const edges = result.edges.map((edge) => ({
-          id: edge.id,
-          fromNodeID: edge.fromNodeID,
-          toNodeID: edge.toNodeID,
-          toTargetKey: edge.toTargetKey,
-          fileID,
-          line: edge.line,
-          kind: edge.kind,
-          weight: edge.weight,
-        }))
-        yield* repo.putNodesAndEdges({ fileID, rootID, nodes, edges })
-        indexed++
       }
 
       // Clean up stale files (deleted from disk)
@@ -161,6 +193,8 @@ export const layer = Layer.effect(
       // Set root stats at end
       const allNodes = yield* repo.listAllNodes()
       const edgeCount = yield* repo.countAllEdges(rootID)
+      const indexed = yield* Ref.get(indexedRef)
+      const skipped = yield* Ref.get(skippedRef)
 
       yield* repo.setRootStats({
         rootID,
