@@ -30,7 +30,7 @@ const mockCodegraphEntries: {
   files: Banyan.CodegraphFile[]
   nodes: Banyan.CodegraphNode[]
   edges: Banyan.CodegraphEdge[]
-  embeddings: Map<string, { embedding: Uint8Array; model: string; dim: number }>
+  embeddings: Map<string, { embedding: Uint8Array; model: string; dim: number; baseUrlHash: string; inputHash: string }>
 } = {
   files: [],
   nodes: [],
@@ -66,7 +66,7 @@ const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.o
   edgesTo: (nodeID: string) => Effect.sync(() => mockCodegraphEntries.edges.filter((e) => e.toNodeID === nodeID)),
   putEmbedding: (input: { nodeID: string; embedding: Uint8Array; model: string; baseUrlHash: string; inputHash: string; dim: number; encodingFormat?: "float" | "base64" }) =>
     Effect.sync(() => {
-      mockCodegraphEntries.embeddings.set(input.nodeID, { embedding: input.embedding, model: input.model, dim: input.dim })
+      mockCodegraphEntries.embeddings.set(input.nodeID, { embedding: input.embedding, model: input.model, dim: input.dim, baseUrlHash: input.baseUrlHash, inputHash: input.inputHash })
     }),
   getEmbedding: (nodeID: string) => Effect.sync(() => mockCodegraphEntries.embeddings.get(nodeID)),
   deleteFile: (id: string) => Effect.sync(() => {
@@ -86,6 +86,8 @@ const mockEmbeddingProviderNoModelLayer = Layer.succeed(
       Effect.fail(new EmbeddingProvider.EmbeddingError({ message: "no embedding model configured" })),
     model: () => undefined,
     setModel: () => Effect.void,
+    inputHash: (text: string) => Buffer.from(text).toString("hex"),
+    config: () => ({ baseUrl: "https://api.openai.com/v1", apiKey: undefined, dimensions: undefined, batchSize: 64 }),
   }),
 )
 
@@ -143,6 +145,8 @@ const mockProviderWithModelLayer = Layer.succeed(
       Effect.succeed([new Float32Array([1, 0, 0])]),
     model: () => "test-model",
     setModel: () => Effect.void,
+    inputHash: (text: string) => Buffer.from(text).toString("hex"),
+    config: () => ({ baseUrl: "https://api.openai.com/v1", apiKey: undefined, dimensions: undefined, batchSize: 64 }),
   }),
 )
 
@@ -274,11 +278,15 @@ describe("code_embed tools", () => {
         embedding: new Uint8Array(new Float32Array([1, 0, 0]).buffer),
         model: "test-model",
         dim: 3,
+        baseUrlHash: "test-url-hash",
+        inputHash: "test-input-hash",
       })
       mockCodegraphEntries.embeddings.set("node-2", {
         embedding: new Uint8Array(new Float32Array([0, 1, 0]).buffer),
         model: "test-model",
         dim: 3,
+        baseUrlHash: "test-url-hash",
+        inputHash: "test-input-hash-2",
       })
 
       const reg = yield* ToolRegistry.Service

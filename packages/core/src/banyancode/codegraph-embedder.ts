@@ -1,5 +1,6 @@
 export * as CodegraphEmbedder from "./codegraph-embedder"
 
+import { createHash } from "crypto"
 import { Context, Effect, Layer } from "effect"
 import { CodegraphRepo } from "./codegraph-repo"
 import { EmbeddingProvider } from "./embedding-provider"
@@ -21,16 +22,37 @@ export const layer = Layer.effect(
 
     const embedNode = Effect.fn("CodegraphEmbedder.embedNode")(function* (node: CodegraphNode) {
       const text = node.textExcerpt
-      const embeddings = yield* provider.embed(text)
-      const embedding = embeddings[0]
       const model = provider.model()
       if (model === undefined) {
         return yield* new EmbeddingProvider.EmbeddingError({ message: "BANYANCODE_EMBEDDING_MODEL is not set" })
       }
+
+      const cfg = provider.config()
+      const inputHash = provider.inputHash(text)
+      const baseUrlHash = createHash("sha256").update(cfg.baseUrl).digest("hex")
+
+      // Skip if already embedded with same model, baseUrl, and input hash
+      const existing = yield* repo.getEmbedding(node.id)
+      if (
+        existing
+        && existing.model === model
+        && existing.baseUrlHash === baseUrlHash
+        && existing.inputHash === inputHash
+      ) {
+        return
+      }
+
+      const [embedding] = yield* provider.embed(text)
       const bytes = new Uint8Array(embedding.buffer)
-      const baseUrlHash = ""
-      const inputHash = ""
-      yield* repo.putEmbedding({ nodeID: node.id, embedding: bytes, model, baseUrlHash, inputHash, dim: embedding.length })
+      yield* repo.putEmbedding({
+        nodeID: node.id,
+        embedding: bytes,
+        model,
+        baseUrlHash,
+        inputHash,
+        dim: embedding.length,
+        encodingFormat: "float",
+      })
     })
 
     const embedFile = Effect.fn("CodegraphEmbedder.embedFile")(function* (fileID: string) {

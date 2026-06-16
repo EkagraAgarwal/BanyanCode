@@ -45,7 +45,7 @@ export interface Interface {
     dim: number
     encodingFormat?: "float" | "base64"
   }) => Effect.Effect<void, never, never>
-  readonly getEmbedding: (nodeID: string) => Effect.Effect<{ embedding: Uint8Array; model: string; dim: number } | undefined, never, never>
+  readonly getEmbedding: (nodeID: string) => Effect.Effect<{ embedding: Uint8Array; model: string; dim: number; baseUrlHash: string; inputHash: string } | undefined, never, never>
   readonly deleteFile: (id: string) => Effect.Effect<void, never, never>
   readonly searchFTS: (query: string, limit: number) => Effect.Effect<Array<{ nodeID: string; bm25: number }>, never, never>
   readonly unresolvedEdgesFor: (rootID: string) => Effect.Effect<Array<{ fromNodeID: string; targetKey: string; kind: string }>, never, never>
@@ -446,6 +446,8 @@ export const layer = Layer.effect(
         embedding: row.embedding as Uint8Array,
         model: row.model,
         dim: row.dim,
+        baseUrlHash: row.base_url_hash,
+        inputHash: row.input_hash,
       }
     })
 

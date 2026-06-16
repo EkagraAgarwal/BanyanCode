@@ -62,6 +62,8 @@ const mockEmbeddingProviderLayer = Layer.succeed(
       Effect.fail(new EmbeddingProvider.EmbeddingError({ message: "no embedding model configured" })),
     model: () => undefined,
     setModel: () => Effect.void,
+    inputHash: (text: string) => Buffer.from(text).toString("hex"),
+    config: () => ({ baseUrl: "https://api.openai.com/v1", apiKey: undefined, dimensions: undefined, batchSize: 64 }),
   }),
 )
 
