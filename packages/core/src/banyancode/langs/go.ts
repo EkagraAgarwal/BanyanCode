@@ -1,11 +1,11 @@
 import type { ParseResult, ParsedNode, ParsedEdge } from "./types"
 
-const IMPORTS_REGEX = /import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["']([^"']+)["']/g
-const EXPORT_CLASS_REGEX = /export\s+class\s+(\w+)(?:\s+extends\s+(\w+))?/g
-const CLASS_REGEX = /(?:^|\n)(?!export\s+)class\s+(\w+)(?:\s+extends\s+(\w+))?/g
-const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?function\s+(\w+)\s*\(/g
-const INTERFACE_REGEX = /(?:^|\n)interface\s+(\w+)/g
-const TYPE_REGEX = /(?:^|\n)type\s+(\w+)\s*=/g
+// Matches: func name(...) and func (receiver) name(...)
+const FUNCTION_REGEX = /(?:^|\n)func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(/g
+// Matches: func (r *Type) name(...) - method on receiver
+const METHOD_REGEX = /(?:^|\n)func\s+\([^)]+\)\s+(\w+)\s*\(/g
+// Matches: type name struct and type name interface
+const TYPE_REGEX = /(?:^|\n)type\s+(\w+)\s+(?:struct|interface)/g
 
 function djb2Hash(content: string): string {
   let hash = 5381
@@ -16,7 +16,7 @@ function djb2Hash(content: string): string {
   return Math.abs(hash).toString(16)
 }
 
-export function parseTypeScript(
+export function parseGo(
   content: string,
   fileID: string,
   filePath: string,
@@ -33,59 +33,69 @@ export function parseTypeScript(
     name: string,
     startLine: number,
     endLine: number,
-    signature?: string,
+    qualifiedName?: string,
   ) => {
-    const qualifiedName = relativePath + "::" + name
-    const code = signature ?? content.substring(0, 200)
+    const qname = qualifiedName ?? relativePath + "::" + name
     nodes.push({
       id: fileID + ":" + kind + ":" + name + ":" + startLine,
       kind,
       name,
-      qualifiedName,
-      signature,
+      qualifiedName: qname,
       startLine,
       startByte: 0,
       endLine,
       endByte: 0,
       language,
       textExcerpt,
-      nodeCodeHash: djb2Hash(code),
-      code,
+      nodeCodeHash: djb2Hash(content.substring(0, 200)),
     })
   }
 
-  for (const match of content.matchAll(IMPORTS_REGEX)) {
-    imports.push(match[1])
+  // Extract imports from Go files
+  const IMPORT_REGEX = /(?:^|\n)import\s+(?:\(\s*([\s\S]*?)\s*\)|(["'])([^"']+)\2)/gm
+  for (const match of content.matchAll(IMPORT_REGEX)) {
+    if (match[1]) {
+      // Multi-line import
+      const importBlock = match[1]
+      const importMatches = importBlock.matchAll(/["']([^"']+)["']/g)
+      for (const im of importMatches) {
+        imports.push(im[1])
+      }
+    } else if (match[3]) {
+      imports.push(match[3])
+    }
   }
 
-  for (const match of content.matchAll(EXPORT_CLASS_REGEX)) {
+  // Find methods first (so we can skip them in function matches)
+  const methodNames = new Set<string>()
+  for (const match of content.matchAll(METHOD_REGEX)) {
+    const name = match[1]
+    methodNames.add(name)
+  }
+
+  // Add methods
+  for (const match of content.matchAll(METHOD_REGEX)) {
     const name = match[1]
     const startLine = content.substring(0, match.index).split("\n").length
     const endLine = startLine + match[0].split("\n").length
-    addNode("class", name, startLine, endLine)
+    // Extract receiver type from the match string itself
+    const receiverPart = match[0].match(/\(([^)]+)\)/)?.[1] ?? ""
+    const typeMatch = receiverPart.match(/\*\s*(\w+)|(\w+)$/)
+    const receiverType = typeMatch?.[1] ?? typeMatch?.[2] ?? ""
+    const qname = receiverType ? receiverType + "." + name : name
+    addNode("method", name, startLine, endLine, qname)
   }
 
-  for (const match of content.matchAll(CLASS_REGEX)) {
-    const name = match[1]
-    const startLine = content.substring(0, match.index).split("\n").length
-    const endLine = startLine + match[0].split("\n").length
-    addNode("class", name, startLine, endLine)
-  }
-
+  // Add functions (not methods)
   for (const match of content.matchAll(FUNCTION_REGEX)) {
     const name = match[1]
+    if (methodNames.has(name)) continue
     const startLine = content.substring(0, match.index).split("\n").length
     const endLine = startLine + match[0].split("\n").length
-    addNode("function", name, startLine, endLine, match[0].trim())
+    addNode("function", name, startLine, endLine)
   }
 
-  for (const match of content.matchAll(INTERFACE_REGEX)) {
-    const name = match[1]
-    const startLine = content.substring(0, match.index).split("\n").length
-    const endLine = startLine + match[0].split("\n").length
-    addNode("type", name, startLine, endLine)
-  }
-
+  // Add types (structs and interfaces)
   for (const match of content.matchAll(TYPE_REGEX)) {
     const name = match[1]
     const startLine = content.substring(0, match.index).split("\n").length

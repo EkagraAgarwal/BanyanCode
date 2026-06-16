@@ -1,11 +1,11 @@
 import type { ParseResult, ParsedNode, ParsedEdge } from "./types"
 
-const IMPORTS_REGEX = /import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["']([^"']+)["']/g
-const EXPORT_CLASS_REGEX = /export\s+class\s+(\w+)(?:\s+extends\s+(\w+))?/g
-const CLASS_REGEX = /(?:^|\n)(?!export\s+)class\s+(\w+)(?:\s+extends\s+(\w+))?/g
-const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?function\s+(\w+)\s*\(/g
-const INTERFACE_REGEX = /(?:^|\n)interface\s+(\w+)/g
-const TYPE_REGEX = /(?:^|\n)type\s+(\w+)\s*=/g
+const FUNCTION_REGEX = /(?:^|\n)fn\s+(\w+)\s*[<(]/g
+const STRUCT_REGEX = /(?:^|\n)struct\s+(\w+)/g
+const TRAIT_REGEX = /(?:^|\n)trait\s+(\w+)/g
+const ENUM_REGEX = /(?:^|\n)enum\s+(\w+)/g
+const IMPL_REGEX = /(?:^|\n)impl\s+(?:<[^>]+>\s+)?(\w+)\s+for\s+(\w+)/g
+const IMPL_TRAIT_REGEX = /(?:^|\n)impl\s+(?:<[^>]+>\s+)?trait\s+(\w+)\s+for\s+(\w+)/g
 
 function djb2Hash(content: string): string {
   let hash = 5381
@@ -16,7 +16,7 @@ function djb2Hash(content: string): string {
   return Math.abs(hash).toString(16)
 }
 
-export function parseTypeScript(
+export function parseRust(
   content: string,
   fileID: string,
   filePath: string,
@@ -33,64 +33,72 @@ export function parseTypeScript(
     name: string,
     startLine: number,
     endLine: number,
-    signature?: string,
+    qualifiedName?: string,
   ) => {
-    const qualifiedName = relativePath + "::" + name
-    const code = signature ?? content.substring(0, 200)
+    const qname = qualifiedName ?? relativePath + "::" + name
     nodes.push({
       id: fileID + ":" + kind + ":" + name + ":" + startLine,
       kind,
       name,
-      qualifiedName,
-      signature,
+      qualifiedName: qname,
       startLine,
       startByte: 0,
       endLine,
       endByte: 0,
       language,
       textExcerpt,
-      nodeCodeHash: djb2Hash(code),
-      code,
+      nodeCodeHash: djb2Hash(content.substring(0, 200)),
     })
   }
 
-  for (const match of content.matchAll(IMPORTS_REGEX)) {
-    imports.push(match[1])
+  // Extract imports
+  const USE_REGEX = /(?:^|\n)use\s+([^\n;]+)/g
+  for (const match of content.matchAll(USE_REGEX)) {
+    imports.push(match[1].trim())
   }
 
-  for (const match of content.matchAll(EXPORT_CLASS_REGEX)) {
-    const name = match[1]
-    const startLine = content.substring(0, match.index).split("\n").length
-    const endLine = startLine + match[0].split("\n").length
-    addNode("class", name, startLine, endLine)
-  }
-
-  for (const match of content.matchAll(CLASS_REGEX)) {
-    const name = match[1]
-    const startLine = content.substring(0, match.index).split("\n").length
-    const endLine = startLine + match[0].split("\n").length
-    addNode("class", name, startLine, endLine)
-  }
-
+  // Add functions
   for (const match of content.matchAll(FUNCTION_REGEX)) {
     const name = match[1]
     const startLine = content.substring(0, match.index).split("\n").length
     const endLine = startLine + match[0].split("\n").length
-    addNode("function", name, startLine, endLine, match[0].trim())
+    addNode("function", name, startLine, endLine)
   }
 
-  for (const match of content.matchAll(INTERFACE_REGEX)) {
+  // Add structs (as type kind)
+  for (const match of content.matchAll(STRUCT_REGEX)) {
     const name = match[1]
     const startLine = content.substring(0, match.index).split("\n").length
     const endLine = startLine + match[0].split("\n").length
     addNode("type", name, startLine, endLine)
   }
 
-  for (const match of content.matchAll(TYPE_REGEX)) {
+  // Add traits (as type kind)
+  for (const match of content.matchAll(TRAIT_REGEX)) {
     const name = match[1]
     const startLine = content.substring(0, match.index).split("\n").length
     const endLine = startLine + match[0].split("\n").length
     addNode("type", name, startLine, endLine)
+  }
+
+  // Add enums
+  for (const match of content.matchAll(ENUM_REGEX)) {
+    const name = match[1]
+    const startLine = content.substring(0, match.index).split("\n").length
+    const endLine = startLine + match[0].split("\n").length
+    addNode("enum", name, startLine, endLine)
+  }
+
+  // Add impl blocks (impl Trait for Type or impl Type)
+  // The 'trait' keyword may appear between 'impl' and the trait name
+  const IMPL_FOR_REGEX = /(?:^|\n)impl\s+(?:trait\s+)?(?:<[^>]+>\s+)?(\w+)\s+for\s+(\w+)/g
+  for (const match of content.matchAll(IMPL_FOR_REGEX)) {
+    const startLine = content.substring(0, match.index).split("\n").length
+    const endLine = startLine + match[0].split("\n").length
+    // The impl block is for implementing trait match[1] for type match[2]
+    // We name it "impl <type>" since that's what the impl is for
+    const name = "impl " + match[2]
+    addNode("type", name, startLine, endLine, relativePath + "::" + name)
   }
 
   // Add file node as root

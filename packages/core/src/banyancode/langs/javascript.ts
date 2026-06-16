@@ -4,8 +4,7 @@ const IMPORTS_REGEX = /import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["
 const EXPORT_CLASS_REGEX = /export\s+class\s+(\w+)(?:\s+extends\s+(\w+))?/g
 const CLASS_REGEX = /(?:^|\n)(?!export\s+)class\s+(\w+)(?:\s+extends\s+(\w+))?/g
 const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?function\s+(\w+)\s*\(/g
-const INTERFACE_REGEX = /(?:^|\n)interface\s+(\w+)/g
-const TYPE_REGEX = /(?:^|\n)type\s+(\w+)\s*=/g
+const VAR_DECL_REGEX = /(?:^|\n)(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=/g
 
 function djb2Hash(content: string): string {
   let hash = 5381
@@ -16,7 +15,7 @@ function djb2Hash(content: string): string {
   return Math.abs(hash).toString(16)
 }
 
-export function parseTypeScript(
+export function parseJavaScript(
   content: string,
   fileID: string,
   filePath: string,
@@ -79,18 +78,11 @@ export function parseTypeScript(
     addNode("function", name, startLine, endLine, match[0].trim())
   }
 
-  for (const match of content.matchAll(INTERFACE_REGEX)) {
+  for (const match of content.matchAll(VAR_DECL_REGEX)) {
     const name = match[1]
     const startLine = content.substring(0, match.index).split("\n").length
     const endLine = startLine + match[0].split("\n").length
-    addNode("type", name, startLine, endLine)
-  }
-
-  for (const match of content.matchAll(TYPE_REGEX)) {
-    const name = match[1]
-    const startLine = content.substring(0, match.index).split("\n").length
-    const endLine = startLine + match[0].split("\n").length
-    addNode("type", name, startLine, endLine)
+    addNode("variable", name, startLine, endLine)
   }
 
   // Add file node as root
