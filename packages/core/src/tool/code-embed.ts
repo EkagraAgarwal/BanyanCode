@@ -20,20 +20,34 @@ export const OutputEmbedUpdate = Schema.Struct({
   model: Schema.NullOr(Schema.String),
 })
 
+export const CodeSearchHit = Schema.Struct({
+  id: Schema.String,
+  file: Schema.String,
+  range: Schema.Struct({ startLine: Schema.Number, endLine: Schema.Number }),
+  name: Schema.String,
+  kind: Schema.String,
+  score: Schema.Number,
+  reason: Schema.String,
+  code: Schema.optional(Schema.String),
+})
+
 export const InputSearch = Schema.Struct({
   query: Schema.String,
-  limit: Schema.Number.pipe(Schema.optional),
+  mode: Schema.Literals(["auto", "lexical", "semantic", "graph", "hybrid"]).pipe(Schema.optional),
   fileGlob: Schema.String.pipe(Schema.optional),
+  maxDepth: Schema.Number.pipe(Schema.optional),
+  direction: Schema.Literals(["upstream", "downstream", "both"]).pipe(Schema.optional),
+  limit: Schema.Number.pipe(Schema.optional),
+  includeCode: Schema.Boolean.pipe(Schema.optional),
 })
 
 export const OutputSearch = Schema.Struct({
-  hits: Schema.Array(
-    Schema.Struct({
-      node: Schema.Unknown,
-      score: Schema.Number,
-    }),
-  ),
+  hits: Schema.Array(CodeSearchHit),
   degraded: Schema.Boolean,
+  warning: Schema.optional(Schema.String),
+  mode: Schema.String,
+  seedCount: Schema.Number,
+  expandedCount: Schema.Number,
 })
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE === "1"
@@ -50,16 +64,17 @@ function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB))
 }
 
-function keywordSearch(query: string, nodes: Banyan.CodegraphNode[]): Banyan.CodegraphNode[] {
-  const lowerQuery = query.toLowerCase()
-  return nodes
-    .filter((n) => {
-      const nameMatch = n.name.toLowerCase().includes(lowerQuery)
-      const sigMatch = n.signature?.toLowerCase().includes(lowerQuery) ?? false
-      const codeMatch = n.textExcerpt.toLowerCase().includes(lowerQuery)
-      return nameMatch || sigMatch || codeMatch
-    })
-    .slice(0, 10)
+function edgeWeight(kind: string): number {
+  switch (kind) {
+    case "imports": return 1.0
+    case "calls": return 0.8
+    case "extends": return 0.6
+    case "implements": return 0.6
+    case "references": return 0.4
+    case "contains": return 0.3
+    case "exports": return 0.5
+    default: return 0.3
+  }
 }
 
 export const locationLayer = Layer.effectDiscard(
@@ -109,11 +124,11 @@ export const locationLayer = Layer.effectDiscard(
         }),
         [name_search]: Tool.make({
           description:
-            "Search code graph nodes using semantic embedding search when available, falling back to keyword search. Returns degraded=true when embeddings are unavailable.",
+            "Search code graph nodes using GraphRAG: lexical (FTS5 BM25), semantic (vector cosine), and graph expansion (BFS with edge-weight decay). Returns degraded=true when embeddings are unavailable.",
           input: InputSearch,
           output: OutputSearch,
           toModelOutput: ({ output }) => [
-            { type: "text", text: `found ${output.hits.length} hits (degraded=${output.degraded})` },
+            { type: "text", text: `found ${output.hits.length} hits (mode=${output.mode}, degraded=${output.degraded}, seeds=${output.seedCount}, expanded=${output.expandedCount})` },
           ],
           execute: (input, context) => {
             return Effect.gen(function* () {
@@ -127,64 +142,188 @@ export const locationLayer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
-              let nodes = yield* repo.listAllNodes()
-
-              if (input.fileGlob) {
-                const allFiles = yield* repo.listAllFiles()
-                const matchedFiles = allFiles.filter((f) => {
-                  const pattern = input.fileGlob!.replace(/\./g, "\\.").replace(/\*/g, ".*")
-                  return new RegExp(pattern).test(f.path)
-                })
-                const matchedFileIDs = new Set(matchedFiles.map((f) => f.id))
-                nodes = nodes.filter((n) => matchedFileIDs.has(n.fileID))
-              }
-
+              const mode = input.mode ?? "hybrid"
+              const maxDepth = input.maxDepth ?? 2
+              const direction = input.direction ?? "both"
+              const limit = input.limit ?? 10
+              const includeCode = input.includeCode ?? true
               const model = provider.model()
 
-              if (model === undefined) {
-                const keywordMatches = keywordSearch(input.query, nodes)
-                return {
-                  hits: keywordMatches.map((n) => ({ node: n, score: 1 })),
-                  degraded: true,
+              // Filter nodes by fileGlob if provided
+              let allowedFileIDs: Set<string> | undefined
+              if (input.fileGlob) {
+                const allFiles = yield* repo.listAllFiles()
+                const pattern = input.fileGlob.replace(/\./g, "\\.").replace(/\*/g, ".*")
+                const re = new RegExp(pattern)
+                allowedFileIDs = new Set(allFiles.filter((f) => re.test(f.path)).map((f) => f.id))
+              }
+
+              // === Step 1: Lexical seeds (always) ===
+              let lexicalSeeds: Array<{ nodeID: string; rank: number }> = []
+              if (mode === "auto" || mode === "lexical" || mode === "hybrid" || mode === "graph") {
+                const ftsResults = yield* repo.searchFTS(input.query, limit * 2)
+                // Filter by fileGlob if provided
+                if (allowedFileIDs) {
+                  const allowedNodes = yield* Effect.forEach(
+                    ftsResults,
+                    (r) => Effect.map(repo.getNode(r.nodeID), (n) => (n && allowedFileIDs.has(n.fileID) ? r : null)),
+                  )
+                  lexicalSeeds = allowedNodes.filter((r) => r !== null).map((r, i) => ({ nodeID: r!.nodeID, rank: i + 1 }))
+                } else {
+                  lexicalSeeds = ftsResults.map((r, i) => ({ nodeID: r.nodeID, rank: i + 1 }))
                 }
               }
 
-              const embedResult = yield* provider
-                .embed(input.query)
-                .pipe(
-                  Effect.mapError(() => null),
+              // === Step 2: Vector seeds (if model + mode allows) ===
+              let vectorSeeds: Array<{ nodeID: string; rank: number }> = []
+              let degraded = false
+              let warning: string | undefined
+              if ((mode === "auto" || mode === "semantic" || mode === "hybrid") && model) {
+                const embedResult = yield* provider.embed(input.query).pipe(
+                  Effect.mapError((e) => e),
                   Effect.catch(() => Effect.succeed(null)),
                 )
+                if (embedResult && embedResult.length > 0) {
+                  const queryEmbedding = embedResult[0]
+                  const allNodes = yield* repo.listAllNodes()
+                  const filteredNodes = allowedFileIDs
+                    ? allNodes.filter((n) => allowedFileIDs!.has(n.fileID))
+                    : allNodes
+                  const scored = yield* Effect.forEach(filteredNodes, (node) =>
+                    Effect.map(repo.getEmbedding(node.id), (emb) => {
+                      if (!emb || emb.model !== model) return { nodeID: node.id, score: 0 }
+                      const nodeEmbedding = new Float32Array(new Uint8Array(emb.embedding).buffer)
+                      return { nodeID: node.id, score: cosineSimilarity(queryEmbedding, nodeEmbedding) }
+                    }),
+                  )
+                  vectorSeeds = scored
+                    .filter((s) => s.score > 0)
+                    .sort((a, b) => b.score - a.score)
+                    .slice(0, limit * 2)
+                    .map((s, i) => ({ nodeID: s.nodeID, rank: i + 1 }))
+                } else {
+                  degraded = true
+                  warning = "Embedding request failed; falling back to lexical search"
+                }
+              } else if ((mode === "auto" || mode === "semantic" || mode === "hybrid") && !model) {
+                degraded = true
+                warning = "No embedding model configured; using lexical search only"
+              }
 
-              if (!embedResult || embedResult.length === 0) {
-                const keywordMatches = keywordSearch(input.query, nodes)
-                return {
-                  hits: keywordMatches.map((n) => ({ node: n, score: 1 })),
-                  degraded: true,
+              // === Step 3: Reciprocal rank fusion ===
+              const rrfK = 60
+              const fusedScores = new Map<string, number>()
+              for (const { nodeID, rank } of lexicalSeeds) {
+                fusedScores.set(nodeID, (fusedScores.get(nodeID) ?? 0) + 1 / (rrfK + rank))
+              }
+              for (const { nodeID, rank } of vectorSeeds) {
+                fusedScores.set(nodeID, (fusedScores.get(nodeID) ?? 0) + 1 / (rrfK + rank))
+              }
+
+              // === Step 4: Graph expansion ===
+              const seedIDs = new Set(fusedScores.keys())
+              const expandedScores = new Map<string, { score: number; reason: string; depth: number }>()
+
+              for (const [nodeID, score] of fusedScores) {
+                expandedScores.set(nodeID, { score, reason: "seed", depth: 0 })
+              }
+
+              if (mode === "auto" || mode === "graph" || mode === "hybrid") {
+                const visited = new Set<string>(seedIDs)
+                const queue: Array<{ nodeID: string; depth: number; seedID: string; pathKind: string }> = []
+                for (const seedID of seedIDs) {
+                  const seedScore = fusedScores.get(seedID) ?? 0
+                  const seedNode = yield* repo.getNode(seedID)
+                  if (!seedNode) continue
+                  if (direction === "downstream" || direction === "both") {
+                    const outEdges = yield* repo.edgesFrom(seedID)
+                    for (const e of outEdges) {
+                      if (!e.toNodeID) continue
+                      const weight = edgeWeight(e.kind)
+                      queue.push({ nodeID: e.toNodeID, depth: 1, seedID, pathKind: e.kind })
+                      void seedNode; void seedScore; void weight
+                    }
+                  }
+                  if (direction === "upstream" || direction === "both") {
+                    const inEdges = yield* repo.edgesTo(seedID)
+                    for (const e of inEdges) {
+                      const weight = edgeWeight(e.kind)
+                      queue.push({ nodeID: e.fromNodeID, depth: 1, seedID, pathKind: e.kind })
+                      void weight
+                    }
+                  }
+                }
+
+                let head = 0
+                while (head < queue.length) {
+                  const item = queue[head++]
+                  if (item.depth > maxDepth) continue
+                  if (visited.has(item.nodeID)) continue
+                  visited.add(item.nodeID)
+
+                  const seedScore = fusedScores.get(item.seedID) ?? 0
+                  const edgeW = edgeWeight(item.pathKind)
+                  const decay = 1 / (1 + item.depth)
+                  const expansionScore = seedScore * edgeW * decay * 0.5 // expansion is weaker than seed
+
+                  if (allowedFileIDs && !allowedFileIDs.has((yield* repo.getNode(item.nodeID))?.fileID ?? "")) continue
+
+                  const existing = expandedScores.get(item.nodeID)
+                  if (!existing || existing.score < expansionScore) {
+                    const seedNode = yield* repo.getNode(item.seedID)
+                    const neighborNode = yield* repo.getNode(item.nodeID)
+                    const reason = `${seedNode?.name ?? item.seedID} --${item.pathKind}--> ${neighborNode?.name ?? item.nodeID}`
+                    expandedScores.set(item.nodeID, { score: expansionScore, reason, depth: item.depth })
+                  }
+
+                  if (item.depth < maxDepth) {
+                    const outEdges = yield* repo.edgesFrom(item.nodeID)
+                    for (const e of outEdges) {
+                      if (!e.toNodeID) continue
+                      queue.push({ nodeID: e.toNodeID, depth: item.depth + 1, seedID: item.seedID, pathKind: e.kind })
+                    }
+                    const inEdges = yield* repo.edgesTo(item.nodeID)
+                    for (const e of inEdges) {
+                      queue.push({ nodeID: e.fromNodeID, depth: item.depth + 1, seedID: item.seedID, pathKind: e.kind })
+                    }
+                  }
                 }
               }
 
-              const queryEmbedding = embedResult[0]
+              // === Step 5: Build hits ===
+              const allHits = Array.from(expandedScores.entries())
+                .sort((a, b) => b[1].score - a[1].score)
+                .slice(0, limit)
 
-              const scored = yield* Effect.forEach(nodes, (node) =>
-                Effect.map(repo.getEmbedding(node.id), (emb) => {
-                  if (!emb) return { node, score: 0 }
-                  const nodeEmbedding = new Float32Array(new Uint8Array(emb.embedding).buffer)
-                  return { node, score: cosineSimilarity(queryEmbedding, nodeEmbedding) }
+              const hits = yield* Effect.forEach(allHits, ([nodeID, info]) =>
+                Effect.gen(function* () {
+                  const node = yield* repo.getNode(nodeID)
+                  if (!node) return null
+                  const file = yield* repo.getFile(node.fileID)
+                  if (!file) return null
+                  const hit: { id: string; file: string; range: { startLine: number; endLine: number }; name: string; kind: string; score: number; reason: string; code?: string } = {
+                    id: node.id,
+                    file: file.path,
+                    range: { startLine: node.startLine, endLine: node.endLine },
+                    name: node.name,
+                    kind: node.kind,
+                    score: info.score,
+                    reason: info.reason,
+                  }
+                  if (includeCode) hit.code = node.code ?? node.textExcerpt
+                  return hit
                 }),
               )
 
-              const limit = input.limit ?? 10
-              const topResults = scored
-                .filter((s) => s.score > 0)
-                .sort((a, b) => b.score - a.score)
-                .slice(0, limit)
-
               return {
-                hits: topResults.map((s) => ({ node: s.node, score: s.score })),
-                degraded: false,
+                hits: hits.filter((h) => h !== null) as Array<{ id: string; file: string; range: { startLine: number; endLine: number }; name: string; kind: string; score: number; reason: string; code?: string }>,
+                degraded,
+                warning,
+                mode,
+                seedCount: seedIDs.size,
+                expandedCount: expandedScores.size - seedIDs.size,
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `code_search failed` })))
+            }).pipe(Effect.mapError(() => new ToolFailure({ message: "code_search failed" })))
           },
         }),
       })
