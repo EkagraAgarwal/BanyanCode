@@ -19,6 +19,8 @@ const mockRepoLayer = Layer.succeed(SubagentMessagesRepo.Service, SubagentMessag
   markDelivered: () => Effect.void,
   listPending: (parentSessionID: string) =>
     Effect.succeed(mockMessages.filter(m => m.parentSessionID === parentSessionID && !m.deliveredAt)),
+  peerState: () => Effect.succeed([]),
+  pendingCount: () => Effect.succeed(0),
 }))
 
 const mockBusLayer = Layer.succeed(SubagentBus.Service, SubagentBus.Service.of({

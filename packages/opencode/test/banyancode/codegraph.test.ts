@@ -32,6 +32,10 @@ const mockCodegraphEntries: { files: Banyan.CodegraphFile[]; nodes: Banyan.Codeg
 }
 
 const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.of({
+  upsertRoot: () => Effect.void,
+  getRoot: () => Effect.succeed(undefined),
+  listRoots: () => Effect.succeed([]),
+  setRootStats: () => Effect.void,
   putFile: (file) => Effect.sync(() => mockCodegraphEntries.files.push(file)),
   getFile: (id: string) => Effect.sync(() => mockCodegraphEntries.files.find((f) => f.id === id)),
   getFileByPath: (path: string) => Effect.sync(() => mockCodegraphEntries.files.find((f) => f.path === path)),
@@ -59,6 +63,10 @@ const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.o
     mockCodegraphEntries.files = mockCodegraphEntries.files.filter((f) => f.id !== id)
     mockCodegraphEntries.nodes = mockCodegraphEntries.nodes.filter((n) => n.fileID !== id)
   }),
+  searchFTS: () => Effect.succeed([]),
+  unresolvedEdgesFor: () => Effect.succeed([]),
+  markStaleEmbeddings: () => Effect.succeed(0),
+  deleteStaleFiles: () => Effect.succeed({ removed: 0 }),
 }))
 
 const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(mockPermissionLayer))

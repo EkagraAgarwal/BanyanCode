@@ -3,11 +3,37 @@ import type { ParseResult, ParsedNode } from "./types"
 const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?function\s+(\w+)\s*\(/g
 const CLASS_REGEX = /(?:^|\n)(?:export\s+)?class\s+(\w+)/g
 
-export function parseGeneric(content: string, fileID: string): ParseResult {
+function simpleHash(content: string): string {
+  let hash = 0
+  for (let i = 0; i < content.length; i++) {
+    const char = content.charCodeAt(i)
+    hash = (hash << 5) - hash + char
+    hash = hash & hash
+  }
+  return Math.abs(hash).toString(16)
+}
+
+export function parseGeneric(content: string, fileID: string, filePath: string, language: string): ParseResult {
   const nodes: ParsedNode[] = []
 
-  const addNode = (kind: ParsedNode["kind"], name: string, startLine: number, endLine: number) => {
-    nodes.push({ id: `${fileID}:${kind}:${name}:${startLine}`, kind, name, startLine, endLine })
+  const addNode = (kind: ParsedNode["kind"], name: string, startLine: number, endLine: number, code?: string) => {
+    const relativePath = filePath.replace(/\\\\/g, "/")
+    const qualifiedName = relativePath + "::" + name
+    const textExcerpt = code ?? ""
+    nodes.push({
+      id: fileID + ":" + kind + ":" + name + ":" + startLine,
+      kind,
+      name,
+      qualifiedName,
+      startLine,
+      startByte: 0,
+      endLine,
+      endByte: 0,
+      language,
+      textExcerpt,
+      nodeCodeHash: simpleHash(textExcerpt),
+      code,
+    })
   }
 
   for (const match of content.matchAll(FUNCTION_REGEX)) {

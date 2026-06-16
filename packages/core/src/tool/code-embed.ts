@@ -56,7 +56,7 @@ function keywordSearch(query: string, nodes: Banyan.CodegraphNode[]): Banyan.Cod
     .filter((n) => {
       const nameMatch = n.name.toLowerCase().includes(lowerQuery)
       const sigMatch = n.signature?.toLowerCase().includes(lowerQuery) ?? false
-      const codeMatch = n.code?.toLowerCase().includes(lowerQuery) ?? false
+      const codeMatch = n.textExcerpt.toLowerCase().includes(lowerQuery)
       return nameMatch || sigMatch || codeMatch
     })
     .slice(0, 10)

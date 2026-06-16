@@ -34,6 +34,8 @@ describe("SubagentConsumer", () => {
         forget: () => Effect.void,
         search: () => Effect.succeed([]),
         vacuum: () => Effect.succeed(0),
+        touch: () => Effect.void,
+        searchByEmbedding: () => Effect.succeed([]),
       }),
     )
 

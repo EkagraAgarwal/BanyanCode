@@ -21,19 +21,42 @@ export type CodegraphFile = {
 export type CodegraphNode = {
   id: string
   fileID: string
-  kind: "file" | "function" | "class" | "method" | "type" | "variable"
+  kind: "file" | "function" | "class" | "method" | "type" | "interface" | "enum" | "variable"
   name: string
-  signature?: string
+  qualifiedName: string
   startLine: number
+  startByte: number
   endLine: number
+  endByte: number
+  language: string
+  signature?: string
+  doc?: string
+  textExcerpt: string
+  nodeCodeHash: string
   code?: string
 }
 
 export type CodegraphEdge = {
   id: string
   fromNodeID: string
-  toNodeID: string
-  kind: "imports" | "calls" | "extends" | "references"
+  toNodeID?: string
+  toTargetKey?: string
+  fileID: string
+  line: number
+  kind: "contains" | "imports" | "calls" | "extends" | "implements" | "references" | "exports"
+  weight: number
+}
+
+export type CodegraphRootRow = {
+  id: string
+  rootPath: string
+  lastBuildAt: number | null
+  indexedFileCount: number
+  nodeCount: number
+  edgeCount: number
+  embeddingModel: string | null
+  parserVersion: string
+  createdAt: number
 }
 
 export type SubagentMessage = {

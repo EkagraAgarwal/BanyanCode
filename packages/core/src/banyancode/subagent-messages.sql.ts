@@ -1,5 +1,6 @@
 import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core"
 
+// Allowed `kind` values: "request" | "inform" | "answer" | "poll" | "steer" | "checkpoint" | "plan" | "kill"
 export const SubagentMessagesTable = sqliteTable(
   "subagent_messages",
   {

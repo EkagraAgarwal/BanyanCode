@@ -39,6 +39,10 @@ const mockCodegraphEntries: {
 }
 
 const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.of({
+  upsertRoot: () => Effect.void,
+  getRoot: () => Effect.succeed(undefined),
+  listRoots: () => Effect.succeed([]),
+  setRootStats: () => Effect.void,
   putFile: (file) => Effect.sync(() => mockCodegraphEntries.files.push(file)),
   getFile: (id: string) => Effect.sync(() => mockCodegraphEntries.files.find((f) => f.id === id)),
   getFileByPath: (path: string) => Effect.sync(() => mockCodegraphEntries.files.find((f) => f.path === path)),
@@ -60,15 +64,19 @@ const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.o
   listEdgesByNode: (nodeID: string) => Effect.sync(() => mockCodegraphEntries.edges.filter((e) => e.fromNodeID === nodeID)),
   edgesFrom: (nodeID: string) => Effect.sync(() => mockCodegraphEntries.edges.filter((e) => e.fromNodeID === nodeID)),
   edgesTo: (nodeID: string) => Effect.sync(() => mockCodegraphEntries.edges.filter((e) => e.toNodeID === nodeID)),
-  putEmbedding: (nodeID: string, embedding: Uint8Array, model: string, dim: number) =>
+  putEmbedding: (input: { nodeID: string; embedding: Uint8Array; model: string; baseUrlHash: string; inputHash: string; dim: number; encodingFormat?: "float" | "base64" }) =>
     Effect.sync(() => {
-      mockCodegraphEntries.embeddings.set(nodeID, { embedding, model, dim })
+      mockCodegraphEntries.embeddings.set(input.nodeID, { embedding: input.embedding, model: input.model, dim: input.dim })
     }),
   getEmbedding: (nodeID: string) => Effect.sync(() => mockCodegraphEntries.embeddings.get(nodeID)),
   deleteFile: (id: string) => Effect.sync(() => {
     mockCodegraphEntries.files = mockCodegraphEntries.files.filter((f) => f.id !== id)
     mockCodegraphEntries.nodes = mockCodegraphEntries.nodes.filter((n) => n.fileID !== id)
   }),
+  searchFTS: () => Effect.succeed([]),
+  unresolvedEdgesFor: () => Effect.succeed([]),
+  markStaleEmbeddings: () => Effect.succeed(0),
+  deleteStaleFiles: () => Effect.succeed({ removed: 0 }),
 }))
 
 const mockEmbeddingProviderNoModelLayer = Layer.succeed(
@@ -162,9 +170,15 @@ describe("code_embed tools", () => {
           fileID: "file-1",
           kind: "function",
           name: "createUser",
+          qualifiedName: "test.ts::createUser",
           signature: "(name: string) => User",
           startLine: 1,
+          startByte: 0,
           endLine: 10,
+          endByte: 0,
+          language: "typescript",
+          textExcerpt: "function createUser(name: string) { return { name }; }",
+          nodeCodeHash: "abc123",
           code: "function createUser(name: string) { return { name }; }",
         },
         {
@@ -172,9 +186,15 @@ describe("code_embed tools", () => {
           fileID: "file-1",
           kind: "function",
           name: "deleteUser",
+          qualifiedName: "test.ts::deleteUser",
           signature: "(id: string) => void",
           startLine: 12,
+          startByte: 0,
           endLine: 20,
+          endByte: 0,
+          language: "typescript",
+          textExcerpt: "function deleteUser(id: string) { console.log(id); }",
+          nodeCodeHash: "def456",
           code: "function deleteUser(id: string) { console.log(id); }",
         },
       )
@@ -221,9 +241,15 @@ describe("code_embed tools", () => {
           fileID: "file-1",
           kind: "function",
           name: "foo",
+          qualifiedName: "test.ts::foo",
           signature: "() => void",
           startLine: 1,
+          startByte: 0,
           endLine: 5,
+          endByte: 0,
+          language: "typescript",
+          textExcerpt: "function foo() { return 1 }",
+          nodeCodeHash: "abc123",
           code: "function foo() { return 1 }",
         },
         {
@@ -231,9 +257,15 @@ describe("code_embed tools", () => {
           fileID: "file-1",
           kind: "function",
           name: "bar",
+          qualifiedName: "test.ts::bar",
           signature: "() => void",
           startLine: 7,
+          startByte: 0,
           endLine: 10,
+          endByte: 0,
+          language: "typescript",
+          textExcerpt: "function bar() { return 2 }",
+          nodeCodeHash: "def456",
           code: "function bar() { return 2 }",
         },
       )
@@ -289,9 +321,15 @@ describe("code_embed tools", () => {
         fileID: "file-1",
         kind: "function",
         name: "testFunc",
+        qualifiedName: "test.ts::testFunc",
         signature: "() => void",
         startLine: 1,
+        startByte: 0,
         endLine: 5,
+        endByte: 0,
+        language: "typescript",
+        textExcerpt: "function testFunc() { return; }",
+        nodeCodeHash: "abc123",
         code: "function testFunc() { return; }",
       })
 

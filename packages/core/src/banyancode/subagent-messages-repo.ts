@@ -1,6 +1,6 @@
 export * as SubagentMessagesRepo from "./subagent-messages-repo"
 
-import { and, eq, isNotNull, isNull } from "drizzle-orm"
+import { and, count, eq, isNotNull, isNull } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { SubagentMessagesTable } from "./subagent-messages.sql"
@@ -12,6 +12,8 @@ export interface Interface {
   readonly listByParent: (parentSessionID: string, delivered: boolean) => Effect.Effect<SubagentMessage[], never, never>
   readonly markDelivered: (id: string, deliveredAt: number) => Effect.Effect<void, never, never>
   readonly listPending: (parentSessionID: string) => Effect.Effect<SubagentMessage[], never, never>
+  readonly peerState: (parentSessionID: string) => Effect.Effect<Array<{ fromAgent: string; pending: number; lastSeenAt: number }>, never, never>
+  readonly pendingCount: (input: { parentSessionID: string; toAgent?: string }) => Effect.Effect<number, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Banyan/SubagentMessagesRepo") {}
@@ -144,7 +146,55 @@ export const layer = Layer.effect(
       }))
     })
 
-    return Service.of({ put, get, listByParent, markDelivered, listPending })
+    const peerState = Effect.fn("SubagentMessagesRepo.peerState")(function* (parentSessionID: string) {
+      const rows = yield* db
+        .select({
+          fromAgent: SubagentMessagesTable.from_agent,
+          pending: count(SubagentMessagesTable.id),
+          lastSeenAt: SubagentMessagesTable.created_at,
+        })
+        .from(SubagentMessagesTable)
+        .where(
+          and(
+            eq(SubagentMessagesTable.parent_session_id, parentSessionID),
+            isNull(SubagentMessagesTable.delivered_at),
+          ),
+        )
+        .groupBy(SubagentMessagesTable.from_agent)
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        fromAgent: row.fromAgent,
+        pending: row.pending,
+        lastSeenAt: row.lastSeenAt,
+      }))
+    })
+
+    const pendingCount = Effect.fn("SubagentMessagesRepo.pendingCount")(function* (input: {
+      parentSessionID: string
+      toAgent?: string
+    }) {
+      const rows = yield* db
+        .select({ count: count(SubagentMessagesTable.id) })
+        .from(SubagentMessagesTable)
+        .where(
+          input.toAgent
+            ? and(
+                eq(SubagentMessagesTable.parent_session_id, input.parentSessionID),
+                eq(SubagentMessagesTable.to_agent, input.toAgent),
+                isNull(SubagentMessagesTable.delivered_at),
+              )
+            : and(
+                eq(SubagentMessagesTable.parent_session_id, input.parentSessionID),
+                isNull(SubagentMessagesTable.delivered_at),
+              ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      return rows[0]?.count ?? 0
+    })
+
+    return Service.of({ put, get, listByParent, markDelivered, listPending, peerState, pendingCount })
   }),
 )
 

@@ -1,7 +1,7 @@
 export * as Banyan from "."
 
 export { MemoryEntriesTable } from "./memory.sql"
-export { CodegraphFilesTable, CodegraphNodesTable, CodegraphEdgesTable, CodegraphEmbeddingsTable } from "./codegraph.sql"
+export { CodegraphRootsTable, CodegraphFilesTable, CodegraphNodesTable, CodegraphEdgesTable, CodegraphEmbeddingsTable, CodegraphFtsTable } from "./codegraph.sql"
 export { SubagentMessagesTable } from "./subagent-messages.sql"
 export { SubagentPlansTable } from "./subagent-plans.sql"
 export type {
@@ -9,6 +9,7 @@ export type {
   CodegraphFile,
   CodegraphNode,
   CodegraphEdge,
+  CodegraphRootRow,
   SubagentMessage,
   PeerInfo,
 } from "./types"

@@ -36,5 +36,6 @@ export const migrations = (
     import("./migration/20260605042240_add_context_epoch_agent"),
     import("./migration/20260613133431_banyancode_initial"),
     import("./migration/20260614000000_subagent_plans"),
+    import("./migration/20260615000001_banyancode_graphrag_v2"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

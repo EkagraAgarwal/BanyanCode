@@ -6,6 +6,228 @@
 
 ---
 
+## GraphRAG Codebase Utility Rebuild Amendment
+
+## Summary
+
+- Rebuild the current codegraph/embedding feature as a native SQLite-first GraphRAG system for BanyanCode, keeping TUI/CLI scope only.
+- Replace the regex-only parser path in `packages/core/src/banyancode/codegraph-indexer.ts` and `packages/core/src/banyancode/langs/typescript.ts` with real tree-sitter indexing, stable graph storage, and graph-aware retrieval.
+- Replace the unimplemented `aisdk.embed` hook path in `packages/core/src/banyancode/embedding-provider.ts` with an OpenAI-compatible `/v1/embeddings` client.
+- Fix TUI/codegraph UX, including mojibake in `packages/tui/src/component/codegraph-progress.tsx`, clearer status, and embedding configuration for custom endpoints.
+- Keep GraphRAG native to BanyanCode. OpenCode, Claude Code, MCP, and plugin ecosystems are design references for extension surfaces, not dependencies to vendor in this pass.
+
+## Current Implementation Gaps
+
+- The indexer is regex-based and only indexes `.ts`, `.tsx`, `.js`, `.jsx`, and `.py`; it does not implement the polyglot tree-sitter graph promised by the docs.
+- Parser output records imports but does not resolve them into durable graph edges.
+- Hashing is non-cryptographic and uses absolute file paths, which makes graph identity less stable across machines and roots.
+- Incremental indexing skips unchanged files but does not fully clean up stale nodes, edges, or embeddings for changed/deleted files.
+- `code_search` is vector scan plus keyword fallback; it does not perform GraphRAG seed selection, graph expansion, path-aware scoring, or rationale output.
+- `EmbeddingProvider` depends on an `aisdk.embed` plugin trigger that is typed and test-stubbed but not implemented as a production embedding path.
+- The TUI progress widget contains mojibake and only exposes partial build state.
+
+## Storage And Schema
+
+- Add a v2 SQLite schema around:
+  - `codegraph_roots`
+  - `codegraph_files`
+  - `codegraph_nodes`
+  - `codegraph_edges`
+  - `codegraph_embeddings`
+  - `codegraph_fts`
+- Store project-relative file paths plus `root_id`, SHA-256 content hashes, parser version, byte ranges, line ranges, node code hash, text excerpt, and optional metadata JSON.
+- Store embeddings by `(node_id, model, base_url_hash)` with `input_hash`, `dim`, `encoding_format`, `created_at`, and Float32 blob.
+- On migration, clear or supersede incompatible existing codegraph rows rather than attempting to preserve regex-derived node IDs.
+- Keep SQLite as the only required backend for v1. Do not introduce Neo4j, Kuzu, or another external graph database in this pass.
+
+## Indexing
+
+- Vendor/load tree-sitter WASM grammars through `web-tree-sitter` for:
+  - TypeScript/TSX
+  - JavaScript/JSX
+  - Python
+  - Go
+  - Rust
+- Keep regex fallback only for file-level and import-level indexing in unsupported languages.
+- Use a two-pass indexer:
+  - Pass 1 parses files and emits declarations, imports, exports, references, and symbol keys.
+  - Pass 2 resolves imports, local references, calls, inheritance, and cross-file relationships into graph edges.
+- Emit explicit edge kinds:
+  - `contains`
+  - `imports`
+  - `calls`
+  - `extends`
+  - `implements`
+  - `references`
+  - `exports`
+- Keep unresolved edges with `target_key` instead of dropping them.
+- Use the `ignore` package for `.gitignore` plus `.banyancode/ignore`.
+- Index only supported source extensions by default.
+- Incremental behavior:
+  - Unchanged files skip.
+  - Changed files delete and rewrite their nodes, edges, FTS rows, and stale embeddings.
+  - Removed files are deleted from the graph.
+  - `force` rebuilds the root.
+
+## Embeddings
+
+- Add Banyan config/env keys:
+  - `banyancode_embedding_base_url`
+  - `banyancode_embedding_model`
+  - `banyancode_embedding_api_key_env`
+  - `banyancode_embedding_dimensions`
+  - `banyancode_embedding_batch_size`
+- Default `banyancode_embedding_base_url` to `https://api.openai.com/v1`.
+- Read the API key from the configured env var, defaulting to `BANYANCODE_EMBEDDING_API_KEY`.
+- POST batches to `{base_url}/embeddings` with:
+
+```json
+{
+  "model": "MODEL_NAME",
+  "input": ["text"],
+  "encoding_format": "float",
+  "dimensions": 1536
+}
+```
+
+- Omit `dimensions` when unset.
+- Validate response order, vector dimensions, finite numeric values, and response model when present.
+- Retry transient `429` and `5xx` failures with bounded backoff.
+- Re-embed only when model, base URL, dimensions, or embedding input hash changes.
+- Embedding support is OpenAI-compatible HTTP only in this pass, not AI SDK/plugin-based.
+
+## Retrieval And Tools
+
+- Keep existing tool names:
+  - `codegraph_build`
+  - `codegraph_query`
+  - `codegraph_callers`
+  - `codegraph_dependents`
+  - `codegraph_impact`
+  - `code_embed_update`
+  - `code_search`
+- Upgrade outputs to include useful node summaries with:
+  - `id`
+  - `file`
+  - `range`
+  - `name`
+  - `kind`
+  - `score`
+  - `reason`
+  - optional `code`
+- Add `codegraph_status` for TUI and agents:
+  - root
+  - last build time
+  - indexed file count
+  - node count
+  - edge count
+  - embedding model
+  - embedded count
+  - stale embedding count
+  - active job state
+- Make `code_search` GraphRAG by default:
+  - Seed with FTS/BM25.
+  - Add vector similarity seeds when embeddings are configured.
+  - Combine seed ranks with reciprocal rank fusion.
+  - Expand over graph neighbors up to `maxDepth`, default `2`.
+  - Weight edge types and decay by graph distance.
+  - Return paths/rationales showing why related nodes were included.
+- Add optional `code_search` inputs:
+  - `mode: "auto" | "lexical" | "semantic" | "graph" | "hybrid"`
+  - `fileGlob`
+  - `maxDepth`
+  - `direction: "upstream" | "downstream" | "both"`
+  - `limit`
+  - `includeCode`
+- Degraded behavior:
+  - No embedding config: lexical + graph search still works with `degraded: true`.
+  - Embedding request failure: fall back to lexical + graph search with an explanatory warning.
+  - Empty graph: return empty hits and a status message suggesting `codegraph_build`.
+
+## TUI And CLI UX
+
+- Replace broken Unicode progress glyphs with ASCII-safe rendering.
+- Add a compact Codegraph status surface with these states:
+  - Not indexed
+  - Stale
+  - Indexing
+  - Ready
+  - Embeddings missing
+  - Embedding stale
+  - Failed
+- Add quick actions for:
+  - build
+  - cancel
+  - embed
+  - configure embeddings
+  - search
+- Replace the current embedding model picker with an OpenAI-compatible settings dialog:
+  - base URL
+  - model
+  - API key env var
+  - dimensions
+  - batch size
+  - test connection
+- Update slash command text and docs to match actual behavior, including degraded search states and GraphRAG retrieval modes.
+- Keep desktop, web, app, and Storybook packages out of scope.
+
+## Implementation Order
+
+1. Add v2 schema, migration, repo methods, and status queries.
+2. Replace embedding provider with the OpenAI-compatible HTTP client and config keys.
+3. Rework indexer identity, hashing, ignore handling, incremental cleanup, and parser registry.
+4. Add tree-sitter parsers for TypeScript/TSX, JavaScript/JSX, Python, Go, and Rust.
+5. Implement edge resolution and unresolved edge persistence.
+6. Add FTS indexing and lexical search.
+7. Implement GraphRAG rank fusion, graph expansion, path/rationale output, and upgraded `code_search`.
+8. Upgrade existing tools and add `codegraph_status`.
+9. Fix TUI status/progress UX and embedding settings.
+10. Update docs, specs, and slash command templates.
+11. Add focused tests and run package-level typechecks/tests.
+
+## Test Plan
+
+- Run existing targeted tests from `packages/opencode`.
+- Add parser fixture tests for TS/TSX, JS/JSX, Python, Go, Rust, and fallback files.
+- Add indexer tests for:
+  - SHA-256 hashing
+  - relative paths
+  - ignore rules
+  - incremental skip
+  - changed-file rewrite
+  - deleted-file cleanup
+  - unresolved edge preservation
+- Add GraphRAG retrieval tests with deterministic embeddings:
+  - lexical-only degraded mode
+  - vector seed
+  - graph-expanded caller/import neighbor
+  - edge-path output
+  - max-depth limiting
+- Add embedding provider tests using a local fake OpenAI-compatible HTTP server for:
+  - success
+  - batching
+  - missing key
+  - invalid dimensions
+  - `429` retry
+  - base URL config
+- Add TUI component/render tests for progress/status text to prevent mojibake and text overflow.
+- Run:
+
+```sh
+cd packages/core && bun typecheck
+cd packages/opencode && bun typecheck
+cd packages/tui && bun typecheck
+cd packages/opencode && bun test test/banyancode/codegraph.test.ts test/banyancode/codegraph-analysis.test.ts test/banyancode/code-embed.test.ts test/banyancode/codegraph-manual-build.test.ts
+```
+
+## Assumptions
+
+- SQLite remains the only required backend for v1 GraphRAG.
+- Embedding support is OpenAI-compatible HTTP only, not AI SDK/plugin-based.
+- External plugin ecosystems are design references only; do not vendor third-party GraphRAG/code-memory plugins in this pass.
+- BanyanCode remains TUI/CLI only for this work.
+
+---
 ## How to read this document
 
 - **Phases** are ordered. Phase 0 → 1 → 2 are safe to land in one PR. Phase 3+ are independent enough to land in parallel feature branches if desired.

@@ -122,26 +122,33 @@ export const layer = Layer.effect(
           continue
         }
         const parser = getParser(ext)
-        const result = parser.parse(content, filePath)
         const language = ext === ".py" ? "python" : "typescript"
         const fileID = existing?.id ?? crypto.randomUUID()
+        const result = parser.parse(content, fileID, filePath, language)
         const indexedAt = Date.now()
-        yield* repo.putFile({ id: fileID, path: filePath, contentHash, language, indexedAt })
+        yield* repo.putFile({ id: fileID, rootID: input.root, path: filePath, contentHash, byteSize: content.length, language, indexedAt })
         for (const node of result.nodes) {
           const fullNode: CodegraphNode = {
             id: node.id,
             fileID,
             kind: node.kind,
             name: node.name,
-            signature: node.signature,
+            qualifiedName: node.qualifiedName,
             startLine: node.startLine,
+            startByte: node.startByte,
             endLine: node.endLine,
+            endByte: node.endByte,
+            language,
+            signature: node.signature,
+            doc: node.doc,
+            textExcerpt: node.textExcerpt,
+            nodeCodeHash: node.nodeCodeHash,
             code: node.code,
           }
           yield* repo.putNode(fullNode)
         }
         for (const edge of result.edges) {
-          yield* repo.putEdge({ id: edge.id, fromNodeID: edge.fromNodeID, toNodeID: edge.toNodeID, kind: edge.kind })
+          yield* repo.putEdge({ id: edge.id, fromNodeID: edge.fromNodeID, toNodeID: edge.toNodeID, toTargetKey: edge.toTargetKey, fileID, line: edge.line, kind: edge.kind, weight: edge.weight })
         }
         indexed++
       }

@@ -37,7 +37,7 @@ export const layer = Layer.effect(
         const nodeID = input.nodeID ?? (input.function ? (yield* repo.queryNodes({ function: input.function }))[0]?.id : undefined)
         if (!nodeID) return []
         const edges = yield* repo.edgesFrom(nodeID)
-        const dependentIDs = [...new Set(edges.map((e) => e.toNodeID))]
+        const dependentIDs = [...new Set(edges.map((e) => e.toNodeID).filter((id): id is string => id !== undefined))]
         const result: CodegraphNode[] = []
         for (const id of dependentIDs) {
           const node = yield* repo.nodeByID(id)
@@ -82,7 +82,7 @@ export const layer = Layer.effect(
 
           for (const edge of edges) {
             const nextID = input.direction === "upstream" ? edge.fromNodeID : edge.toNodeID
-            if (!visited.has(nextID)) {
+            if (nextID && !visited.has(nextID)) {
               queue.push({ id: nextID, depth: current.depth + 1 })
               const node = yield* repo.nodeByID(nextID)
               if (node) result.push(node)

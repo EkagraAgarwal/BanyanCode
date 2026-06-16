@@ -20,7 +20,7 @@ export const layer = Layer.effect(
     const provider = yield* EmbeddingProvider.EmbeddingProviderService
 
     const embedNode = Effect.fn("CodegraphEmbedder.embedNode")(function* (node: CodegraphNode) {
-      const text = node.code ?? `${node.name}${node.signature ? " " + node.signature : ""}`
+      const text = node.textExcerpt
       const embeddings = yield* provider.embed(text)
       const embedding = embeddings[0]
       const model = provider.model()
@@ -28,7 +28,9 @@ export const layer = Layer.effect(
         return yield* new EmbeddingProvider.EmbeddingError({ message: "BANYANCODE_EMBEDDING_MODEL is not set" })
       }
       const bytes = new Uint8Array(embedding.buffer)
-      yield* repo.putEmbedding(node.id, bytes, model, embedding.length)
+      const baseUrlHash = ""
+      const inputHash = ""
+      yield* repo.putEmbedding({ nodeID: node.id, embedding: bytes, model, baseUrlHash, inputHash, dim: embedding.length })
     })
 
     const embedFile = Effect.fn("CodegraphEmbedder.embedFile")(function* (fileID: string) {
