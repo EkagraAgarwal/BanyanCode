@@ -55,7 +55,11 @@ export const layer = Layer.effect(
         }
       })
 
-    const start: Interface["start"] = (input) => Effect.void
+    const start: Interface["start"] = (input) =>
+      Effect.gen(function* () {
+        const queue = yield* bus.subscribe(input.sessionID)
+        yield* Effect.forkDetach(loop(input, queue))
+      })
 
     return Service.of({ start })
   }),
