@@ -5,19 +5,25 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { SplitBorder } from "../ui/border"
 import { TextAttributes } from "@opentui/core"
 
+export type CodegraphBuildStatus = "not_indexed" | "stale" | "indexing" | "ready" | "embeddings_missing" | "embedding_stale" | "failed"
+
 export type CodegraphBuildState = {
-  status: "idle" | "running" | "completed" | "failed" | "cancelled"
+  status: CodegraphBuildStatus
   root?: string
   done: number
   total: number
   currentFile?: string
   result?: { indexed: number; skipped: number; duration_ms: number }
   error?: string
+  embeddingModel?: string
+  embeddedCount?: number
+  staleEmbeddingCount?: number
+  lastBuildTime?: number
 }
 
 function init() {
   const [store, setStore] = createStore({
-    state: { status: "idle", done: 0, total: 0 } as CodegraphBuildState,
+    state: { status: "not_indexed", done: 0, total: 0 } as CodegraphBuildState,
   })
   return {
     get state() {
@@ -41,25 +47,49 @@ export function useCodegraphBuild() {
   return v
 }
 
-const BAR_WIDTH = 20
+const BAR_WIDTH = 18
 
 function bar(done: number, total: number): string {
-  if (total === 0) return "░".repeat(BAR_WIDTH)
+  if (total === 0) return "[-" + "-".repeat(BAR_WIDTH - 2) + "-]"
   const pct = Math.min(1, done / total)
-  const filled = Math.round(pct * BAR_WIDTH)
-  return "█".repeat(filled) + "░".repeat(BAR_WIDTH - filled)
+  const filled = Math.round(pct * (BAR_WIDTH - 2))
+  const empty = BAR_WIDTH - 2 - filled
+  return "[#" + "#".repeat(filled) + "-".repeat(empty) + "]"
 }
 
-function labelFor(status: CodegraphBuildState["status"]): string {
-  return { idle: "Idle", running: "Running", completed: "Completed", failed: "Failed", cancelled: "Cancelled" }[status]
+function labelFor(status: CodegraphBuildStatus): string {
+  return {
+    not_indexed: "Not indexed",
+    stale: "Stale",
+    indexing: "Indexing",
+    ready: "Ready",
+    embeddings_missing: "Embeddings missing",
+    embedding_stale: "Embedding stale",
+    failed: "Failed",
+  }[status]
 }
 
-function borderColorFor(status: CodegraphBuildState["status"]): "info" | "success" | "warning" | "error" {
-  if (status === "running") return "info"
-  if (status === "completed") return "success"
+function borderColorFor(status: CodegraphBuildStatus): "info" | "success" | "warning" | "error" {
+  if (status === "indexing") return "info"
+  if (status === "ready") return "success"
   if (status === "failed") return "error"
-  if (status === "cancelled") return "warning"
+  if (status === "stale" || status === "embedding_stale") return "warning"
+  if (status === "embeddings_missing") return "warning"
   return "info"
+}
+
+interface QuickActionProps {
+  label: string
+  onClick: () => void
+}
+
+function QuickAction(props: QuickActionProps) {
+  const { theme } = useTheme()
+  return (
+    <box paddingLeft={1} paddingRight={1} onMouseUp={props.onClick}>
+      <text fg={theme.primary}>{props.label}</text>
+    </box>
+  )
 }
 
 export function CodegraphProgress() {
@@ -84,39 +114,72 @@ export function CodegraphProgress() {
       <text attributes={TextAttributes.BOLD} marginBottom={1} fg={theme.text}>
         Codegraph — {labelFor(build.state.status)}
       </text>
-      <Show when={build.state.status === "idle"}>
-        <text fg={theme.textMuted}>Not built. Type /codegraph-build to index, or /code-embed to compute embeddings.</text>
+      <Show when={build.state.status === "not_indexed"}>
+        <text fg={theme.textMuted}>Not indexed. Quick actions:</text>
+        <box flexDirection="row" marginTop={1}>
+          <QuickAction label="build" onClick={() => {}} />
+          <QuickAction label="configure embeddings" onClick={() => {}} />
+          <QuickAction label="search" onClick={() => {}} />
+        </box>
       </Show>
-      <Show when={build.state.status !== "idle"}>
+      <Show when={build.state.status === "stale"}>
+        <text fg={theme.warning}>Previous build is stale. Quick actions:</text>
+        <box flexDirection="row" marginTop={1}>
+          <QuickAction label="build" onClick={() => {}} />
+          <QuickAction label="configure embeddings" onClick={() => {}} />
+          <QuickAction label="search" onClick={() => {}} />
+        </box>
+      </Show>
+      <Show when={build.state.status === "indexing"}>
         <text fg={theme.text}>
           {bar(build.state.done, build.state.total)} {build.state.done}/{build.state.total}
         </text>
-        <Show when={build.state.status === "running" && build.state.currentFile}>
+        <Show when={build.state.currentFile}>
           {(file) => (
             <text fg={theme.textMuted} marginTop={1}>
               Indexing: {file()}
             </text>
           )}
         </Show>
-        <Show when={build.state.status === "completed" && build.state.result}>
-          {(result) => (
-            <text fg={theme.success} marginTop={1}>
-              indexed={result().indexed} skipped={result().skipped} duration_ms={result().duration_ms}
-            </text>
-          )}
-        </Show>
-        <Show when={build.state.status === "failed" && build.state.error}>
-          {(err) => (
-            <text fg={theme.error} marginTop={1} wrapMode="word" width="100%">
-              {err()}
-            </text>
-          )}
-        </Show>
-        <Show when={build.state.status === "running"}>
-          <text fg={theme.textMuted} marginTop={1}>
-            Press Ctrl+C to cancel
+        <box flexDirection="row" marginTop={1}>
+          <QuickAction label="cancel" onClick={() => {}} />
+        </box>
+      </Show>
+      <Show when={build.state.status === "ready"}>
+        <text fg={theme.success}>Build complete. Quick actions:</text>
+        <box flexDirection="row" marginTop={1}>
+          <QuickAction label="embed" onClick={() => {}} />
+          <QuickAction label="configure embeddings" onClick={() => {}} />
+          <QuickAction label="search" onClick={() => {}} />
+        </box>
+      </Show>
+      <Show when={build.state.status === "embeddings_missing"}>
+        <text fg={theme.warning}>Embeddings not computed. Quick actions:</text>
+        <box flexDirection="row" marginTop={1}>
+          <QuickAction label="embed" onClick={() => {}} />
+          <QuickAction label="configure embeddings" onClick={() => {}} />
+          <QuickAction label="search" onClick={() => {}} />
+        </box>
+      </Show>
+      <Show when={build.state.status === "embedding_stale"}>
+        <text fg={theme.warning}>Embedding model changed. Quick actions:</text>
+        <box flexDirection="row" marginTop={1}>
+          <QuickAction label="embed" onClick={() => {}} />
+          <QuickAction label="configure embeddings" onClick={() => {}} />
+          <QuickAction label="search" onClick={() => {}} />
+        </box>
+      </Show>
+      <Show when={build.state.status === "failed" && build.state.error}>
+        {(err) => (
+          <text fg={theme.error} marginTop={1} wrapMode="word" width="100%">
+            {err()}
           </text>
-        </Show>
+        )}
+        <box flexDirection="row" marginTop={1}>
+          <QuickAction label="build" onClick={() => {}} />
+          <QuickAction label="configure embeddings" onClick={() => {}} />
+          <QuickAction label="search" onClick={() => {}} />
+        </box>
       </Show>
     </box>
   )
