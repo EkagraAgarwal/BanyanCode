@@ -21,7 +21,7 @@ import { defaultLayer as subagentPlansRepoLayer } from "./subagent-plans-repo"
 import { defaultLayer as meshCoordinatorLayer } from "./mesh-coordinator"
 
 export const locationLayer = Layer.mergeAll(
-  SharedMemoryTool.layer,
+  SharedMemoryTool.locationLayer,
   SubagentMessageTool.layer,
   MeshControlTool.locationLayer,
   MemoryTools.locationLayer,

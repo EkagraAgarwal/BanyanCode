@@ -3,6 +3,8 @@ import { Effect, Layer } from "effect"
 import { SharedMemoryTool } from "../../../core/src/tool/shared-memory"
 import { ToolRegistry } from "../../../core/src/tool/registry"
 import { PermissionV2 } from "../../../core/src/permission"
+import { Database } from "@opencode-ai/core/database/database"
+import { Banyan } from "@opencode-ai/core/banyancode"
 import { testEffect } from "../lib/effect"
 
 process.env.BANYANCODE_ENABLE = "1"
@@ -16,9 +18,22 @@ const mockPermissionLayer = Layer.succeed(PermissionV2.Service, PermissionV2.Ser
   list: () => Effect.succeed([]),
 }))
 
-const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(mockPermissionLayer))
-const tool = SharedMemoryTool.layer.pipe(Layer.provide(registry), Layer.provide(mockPermissionLayer))
-const it = testEffect(Layer.mergeAll(mockPermissionLayer, registry, tool))
+const dbLayer = Database.layerFromPath(":memory:")
+const memoryRepoLayer = Banyan.memoryRepoLayer.pipe(Layer.provide(dbLayer))
+const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(mockPermissionLayer), Layer.provide(memoryRepoLayer))
+const toolLayer = SharedMemoryTool.locationLayer.pipe(
+  Layer.provide(registry),
+  Layer.provide(mockPermissionLayer),
+  Layer.provide(memoryRepoLayer),
+)
+
+const it = testEffect(Layer.mergeAll(
+  mockPermissionLayer,
+  registry,
+  dbLayer,
+  memoryRepoLayer,
+  toolLayer,
+) as any)
 
 describe("shared_memory", () => {
   it.effect("3 concurrent writes do not lose data", () =>
@@ -229,6 +244,108 @@ describe("shared_memory", () => {
       })
       expect((readKept.output?.structured as any).ok).toBe(true)
       expect((readKept.output?.structured as any).entries[0].value).toBe("yes")
+    }),
+  )
+
+  it.effect("shared_memory isolates keys by parentSessionID", () =>
+    Effect.gen(function* () {
+      const reg = yield* ToolRegistry.Service
+      const mat = yield* reg.materialize()
+
+      const ctx = {
+        sessionID: "test-session" as any,
+        messageID: "msg-1" as any,
+        agent: "test" as any,
+        assistantMessageID: "am-1" as any,
+        toolCallID: "tc-1",
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+
+      // Write with parentSessionID="session-A"
+      yield* mat.settle({
+        sessionID: ctx.sessionID,
+        agent: ctx.agent,
+        assistantMessageID: ctx.assistantMessageID,
+        call: { type: "tool-call", id: "call-1", name: "shared_memory", input: { op: "write", key: "secret", value: "value-from-A", parentSessionID: "session-A" } },
+      })
+
+      // Write with parentSessionID="session-B"
+      yield* mat.settle({
+        sessionID: ctx.sessionID,
+        agent: ctx.agent,
+        assistantMessageID: ctx.assistantMessageID,
+        call: { type: "tool-call", id: "call-2", name: "shared_memory", input: { op: "write", key: "secret", value: "value-from-B", parentSessionID: "session-B" } },
+      })
+
+      // Read from session-A - should see value-from-A
+      const readA = yield* mat.settle({
+        sessionID: ctx.sessionID,
+        agent: ctx.agent,
+        assistantMessageID: ctx.assistantMessageID,
+        call: { type: "tool-call", id: "call-3", name: "shared_memory", input: { op: "read", key: "secret", parentSessionID: "session-A" } },
+      })
+      expect((readA.output?.structured as any).ok).toBe(true)
+      expect((readA.output?.structured as any).entries[0].value).toBe("value-from-A")
+
+      // Read from session-B - should see value-from-B
+      const readB = yield* mat.settle({
+        sessionID: ctx.sessionID,
+        agent: ctx.agent,
+        assistantMessageID: ctx.assistantMessageID,
+        call: { type: "tool-call", id: "call-4", name: "shared_memory", input: { op: "read", key: "secret", parentSessionID: "session-B" } },
+      })
+      expect((readB.output?.structured as any).ok).toBe(true)
+      expect((readB.output?.structured as any).entries[0].value).toBe("value-from-B")
+
+      // Read from session-C (defaulting to context.sessionID) - should NOT find anything
+      const readC = yield* mat.settle({
+        sessionID: ctx.sessionID,
+        agent: ctx.agent,
+        assistantMessageID: ctx.assistantMessageID,
+        call: { type: "tool-call", id: "call-5", name: "shared_memory", input: { op: "read", key: "secret" } },
+      })
+      // context.sessionID = "test-session", which is different from session-A and session-B
+      expect((readC.output?.structured as any).ok).toBe(false)
+    }),
+  )
+
+  it.effect("shared_memory uses default context.sessionID when no parentSessionID provided", () =>
+    Effect.gen(function* () {
+      const reg = yield* ToolRegistry.Service
+      const mat = yield* reg.materialize()
+
+      const ctx = {
+        sessionID: "test-session" as any,
+        messageID: "msg-1" as any,
+        agent: "test" as any,
+        assistantMessageID: "am-1" as any,
+        toolCallID: "tc-1",
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+
+      // Write WITHOUT parentSessionID - should use context.sessionID ("test-session")
+      yield* mat.settle({
+        sessionID: ctx.sessionID,
+        agent: ctx.agent,
+        assistantMessageID: ctx.assistantMessageID,
+        call: { type: "tool-call", id: "call-1", name: "shared_memory", input: { op: "write", key: "default-key", value: "default-value" } },
+      })
+
+      // Read WITHOUT parentSessionID - should find the value
+      const readDefault = yield* mat.settle({
+        sessionID: ctx.sessionID,
+        agent: ctx.agent,
+        assistantMessageID: ctx.assistantMessageID,
+        call: { type: "tool-call", id: "call-2", name: "shared_memory", input: { op: "read", key: "default-key" } },
+      })
+      expect((readDefault.output?.structured as any).ok).toBe(true)
+      expect((readDefault.output?.structured as any).entries[0].value).toBe("default-value")
     }),
   )
 })
