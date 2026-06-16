@@ -2,6 +2,7 @@ export * as MemoryTools from "./memory"
 
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
+import { SessionSchema } from "../session/schema"
 import { Banyan } from "../banyancode"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
@@ -125,17 +126,17 @@ export const locationLayer = Layer.effectDiscard(
           toModelOutput: ({ output }) => [
             { type: "text", text: `stored id=${output.id} createdAt=${output.createdAt}` },
           ],
-          execute: (input) => {
+          execute: (input, context) => {
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_store,
                 resources: [input.key],
                 save: ["*"],
                 metadata: input,
-                sessionID: (input.sessionID ?? "") as any,
-                agent: "" as any,
-                source: { type: "tool", messageID: "" as any, callID: "" },
-              } as any)
+                sessionID: (input.sessionID ?? context.sessionID) as SessionSchema.ID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
 
               const valueSize = Buffer.byteLength(JSON.stringify(input.value), "utf8")
               if (valueSize > MAX_VALUE_SIZE_BYTES) {
@@ -196,17 +197,17 @@ export const locationLayer = Layer.effectDiscard(
           toModelOutput: ({ output }) => [
             { type: "text", text: JSON.stringify(output.entry) },
           ],
-          execute: (input) => {
+          execute: (input, context) => {
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_recall,
                 resources: [input.key],
                 save: ["*"],
                 metadata: input,
-                sessionID: (input.sessionID ?? "") as any,
-                agent: "" as any,
-                source: { type: "tool", messageID: "" as any, callID: "" },
-              } as any)
+                sessionID: (input.sessionID ?? context.sessionID) as SessionSchema.ID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
 
               const scope = (input.scope ?? "global") as "global" | "session"
               const results = yield* repo.search(scope, input.sessionID, input.key)
@@ -227,17 +228,17 @@ export const locationLayer = Layer.effectDiscard(
           toModelOutput: ({ output }) => [
             { type: "text", text: `found ${output.entries.length} entries` },
           ],
-          execute: (input) => {
+          execute: (input, context) => {
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_list,
-                resources: ["*"],
+                resources: [input.prefix ?? "*"],
                 save: ["*"],
                 metadata: input,
-                sessionID: (input.sessionID ?? "") as any,
-                agent: "" as any,
-                source: { type: "tool", messageID: "" as any, callID: "" },
-              } as any)
+                sessionID: (input.sessionID ?? context.sessionID) as SessionSchema.ID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
 
               const scope = (input.scope ?? "global") as "global" | "session"
               let entries = yield* repo.list(scope, input.sessionID)
@@ -265,17 +266,17 @@ export const locationLayer = Layer.effectDiscard(
           toModelOutput: ({ output }) => [
             { type: "text", text: output.ok ? "deleted" : "not found" },
           ],
-          execute: (input) => {
+          execute: (input, context) => {
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_forget,
                 resources: [input.key],
                 save: ["*"],
                 metadata: input,
-                sessionID: (input.sessionID ?? "") as any,
-                agent: "" as any,
-                source: { type: "tool", messageID: "" as any, callID: "" },
-              } as any)
+                sessionID: (input.sessionID ?? context.sessionID) as SessionSchema.ID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
 
               const scope = (input.scope ?? "global") as "global" | "session"
               const results = yield* repo.search(scope, input.sessionID, input.key)
@@ -299,17 +300,17 @@ export const locationLayer = Layer.effectDiscard(
           toModelOutput: ({ output }) => [
             { type: "text", text: `found ${output.entries.length} entries (degraded=${output.degraded})` },
           ],
-          execute: (input) => {
+          execute: (input, context) => {
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_search,
                 resources: [input.query],
                 save: ["*"],
                 metadata: input,
-                sessionID: (input.sessionID ?? "") as any,
-                agent: "" as any,
-                source: { type: "tool", messageID: "" as any, callID: "" },
-              } as any)
+                sessionID: (input.sessionID ?? context.sessionID) as SessionSchema.ID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
 
               const scope = (input.scope ?? "global") as "global" | "session"
               const allEntries = yield* repo.list(scope, input.sessionID)

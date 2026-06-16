@@ -9,9 +9,13 @@ import { testEffect } from "../lib/effect"
 
 process.env.BANYANCODE_ENABLE = "1"
 
+let capturedAssertInput: { agent: unknown; sessionID: unknown } | undefined
 const mockPermissionLayer = Layer.succeed(PermissionV2.Service, PermissionV2.Service.of({
   ask: () => Effect.succeed({ id: { _id: "per_test" } as any, effect: "allow" as const }),
-  assert: () => Effect.void,
+  assert: (input: any) => {
+    capturedAssertInput = { agent: input.agent, sessionID: input.sessionID }
+    return Effect.void
+  },
   reply: () => Effect.void,
   get: () => Effect.succeed(undefined),
   forSession: () => Effect.succeed([]),
@@ -425,6 +429,32 @@ describe("memory tools", () => {
         },
       })
       expect((listSession.output?.structured as any).entries.length).toBe(50)
+    }),
+  )
+
+  it.effect("memory_store passes agent and sessionID to permission.assert", () =>
+    Effect.gen(function* () {
+      mockMemoryEntries.length = 0
+      capturedAssertInput = undefined
+      const reg = yield* ToolRegistry.Service
+      const mat = yield* reg.materialize()
+      const ctx = makeCtx("session-123")
+
+      yield* mat.settle({
+        sessionID: ctx.sessionID,
+        agent: ctx.agent,
+        assistantMessageID: ctx.assistantMessageID,
+        call: {
+          type: "tool-call",
+          id: "call-propagate",
+          name: "memory_store",
+          input: { key: "propagate-test", value: "data", scope: "global" },
+        },
+      })
+
+      expect(capturedAssertInput).toBeDefined()
+      expect(capturedAssertInput!.agent).toBe(ctx.agent)
+      expect(capturedAssertInput!.sessionID).toBe(ctx.sessionID)
     }),
   )
 })
