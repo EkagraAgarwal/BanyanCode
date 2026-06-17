@@ -34,12 +34,7 @@ function ProgressBar(props: { percent: number; fg: string; width?: number }) {
   const empty = w - filled
   return (
     <text fg={props.fg}>
-      {"["}
-      <text fg={props.fg}>
-        {"=".repeat(filled)}
-      </text>
-      {" ".repeat(empty)}
-      {"]"}
+      {`[${"=".repeat(filled)}${" ".repeat(empty)}]`}
     </text>
   )
 }
