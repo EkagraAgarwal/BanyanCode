@@ -203,4 +203,5 @@ export const layer = Layer.effect(
 export const defaultLayer = layer.pipe(
   Layer.provide(SubagentBus.defaultLayer),
   Layer.provide(SubagentPlans.defaultLayer),
+  Layer.provide(EventV2.defaultLayer),
 )

@@ -2,7 +2,7 @@ export * as EmbeddingProvider from "./embedding-provider"
 
 import { createHash } from "crypto"
 import { ConfigProvider, Context, Effect, Layer, Option, Ref, Schema } from "effect"
-import { HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { BanyanConfig } from "../v1/config/banyan-config"
 import { Service as BanyanConfigService } from "./banyan-config"
 
@@ -185,4 +185,7 @@ export const defaultLayer = Layer.effect(
       config: resolveConfig,
     })
   }),
-).pipe(Layer.provide(configLayer))
+).pipe(
+  Layer.provide(configLayer),
+  Layer.provide(FetchHttpClient.layer),
+)

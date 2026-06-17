@@ -1,4 +1,5 @@
 import { Layer, ManagedRuntime } from "effect"
+import { FetchHttpClient } from "effect/unstable/http"
 import { attach } from "./run-service"
 import * as Observability from "@opencode-ai/core/observability"
 
@@ -51,7 +52,7 @@ import { memoMap } from "@opencode-ai/core/effect/memo-map"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { Banyan } from "@opencode-ai/core/banyancode"
+import { BanyanSingletons } from "@/effect/banyan-singletons"
 
 export const AppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -78,8 +79,7 @@ export const AppLayer = Layer.mergeAll(
   BackgroundJob.defaultLayer,
   RuntimeFlags.defaultLayer,
   EventV2Bridge.defaultLayer,
-  Banyan.subagentBusDefaultLayer,
-  Banyan.subagentPlansRepoDefaultLayer,
+  BanyanSingletons.layer,
   SessionRunState.defaultLayer,
   SessionProcessor.defaultLayer,
   SessionCompaction.defaultLayer,
@@ -104,6 +104,7 @@ export const AppLayer = Layer.mergeAll(
   SessionShare.defaultLayer,
 ).pipe(
   Layer.provideMerge(Ripgrep.defaultLayer),
+  Layer.provideMerge(FetchHttpClient.layer),
   Layer.provideMerge(InstanceLayer.layer),
   Layer.provideMerge(Observability.layer),
 )
