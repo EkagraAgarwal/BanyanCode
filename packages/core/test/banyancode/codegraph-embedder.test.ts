@@ -4,6 +4,7 @@ import { Effect, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { CodegraphRepo } from "../../src/banyancode/codegraph-repo"
 import { CodegraphEmbedder } from "../../src/banyancode/codegraph-embedder"
+import { EmbeddingProvider } from "../../src/banyancode/embedding-provider"
 import { FSUtil } from "../../src/fs-util"
 import { tmpdir } from "../fixture/tmpdir"
 import path from "path"
@@ -15,11 +16,16 @@ process.env.BANYANCODE_ENABLE = "1"
 // Mock provider that succeeds CodegraphEmbedder.Service (no extra deps)
 // ---------------------------------------------------------------------------
 
-const makeMockEmbedderLayer = (modelName: string, embeddedResult = 0, skippedResult = 1) =>
-  Layer.succeed(CodegraphEmbedder.Service, {
-    embedAll: () => Effect.succeed({ embedded: embeddedResult, skipped: skippedResult, model: modelName }),
-    embedFile: () => Effect.succeed({ embedded: embeddedResult, skipped: skippedResult }),
-    embedNode: () => Effect.void,
+const makeMockEmbeddingProviderLayer = (modelName: string, baseUrl = "https://api.openai.com/v1") =>
+  Layer.succeed(EmbeddingProvider.EmbeddingProviderService, {
+    embed: (input: string | string[]) => {
+      const arr = Array.isArray(input) ? input : [input]
+      return Effect.succeed(arr.map(() => new Float32Array(1536)))
+    },
+    model: () => modelName,
+    setModel: () => Effect.void,
+    inputHash: (text: string) => createHash("sha256").update(text).digest("hex"),
+    config: () => ({ baseUrl, apiKey: undefined, dimensions: 1536, batchSize: 64 }),
   })
 
 describe("CodegraphEmbedder staleness checks", () => {
@@ -31,14 +37,13 @@ describe("CodegraphEmbedder staleness checks", () => {
     const filePath = path.join(tmp.path, "a.ts")
     await fs.writeFile(filePath, "export function foo() { return 1; }\n", "utf-8")
 
-    const repoLayer = CodegraphRepo.defaultLayer
-    const fsLayer = FSUtil.defaultLayer
-    const mockEmbedderLayer = makeMockEmbedderLayer("model-x", 0, 0)
+    const mockProviderLayer = makeMockEmbeddingProviderLayer("model-x")
 
-    const testLayer = Layer.mergeAll(
-      repoLayer,
-      fsLayer,
-      mockEmbedderLayer,
+    const testLayer = CodegraphEmbedder.layer.pipe(
+      Layer.provideMerge(CodegraphRepo.layer),
+      Layer.provideMerge(dbLayer),
+      Layer.provideMerge(FSUtil.defaultLayer),
+      Layer.provideMerge(mockProviderLayer),
     )
 
     await Effect.runPromise(
@@ -113,12 +118,14 @@ describe("CodegraphEmbedder staleness checks", () => {
     const filePath = path.join(tmp.path, "a.ts")
     await fs.writeFile(filePath, "export function foo() { return 1; }\n", "utf-8")
 
-    const repoLayer = CodegraphRepo.defaultLayer
-    const fsLayer = FSUtil.defaultLayer
-
     // Embed with model A first
-    const mockEmbedderLayerA = makeMockEmbedderLayer("model-a", 1, 0)
-    const testLayerA = Layer.mergeAll(repoLayer, fsLayer, mockEmbedderLayerA)
+    const mockProviderLayerA = makeMockEmbeddingProviderLayer("model-a")
+    const testLayerA = CodegraphEmbedder.layer.pipe(
+      Layer.provideMerge(CodegraphRepo.layer),
+      Layer.provideMerge(dbLayer),
+      Layer.provideMerge(FSUtil.defaultLayer),
+      Layer.provideMerge(mockProviderLayerA),
+    )
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -182,8 +189,13 @@ describe("CodegraphEmbedder staleness checks", () => {
     )
 
     // Now embed with model B — should re-embed (not skip) because model changed
-    const mockEmbedderLayerB = makeMockEmbedderLayer("model-b", 1, 0)
-    const testLayerB = Layer.mergeAll(repoLayer, fsLayer, mockEmbedderLayerB)
+    const mockProviderLayerB = makeMockEmbeddingProviderLayer("model-b")
+    const testLayerB = CodegraphEmbedder.layer.pipe(
+      Layer.provideMerge(CodegraphRepo.layer),
+      Layer.provideMerge(dbLayer),
+      Layer.provideMerge(FSUtil.defaultLayer),
+      Layer.provideMerge(mockProviderLayerB),
+    )
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -204,12 +216,14 @@ describe("CodegraphEmbedder staleness checks", () => {
     const filePath = path.join(tmp.path, "a.ts")
     await fs.writeFile(filePath, "export function foo() { return 1; }\n", "utf-8")
 
-    const repoLayer = CodegraphRepo.defaultLayer
-    const fsLayer = FSUtil.defaultLayer
-
     // Embed with baseUrl A first
-    const mockEmbedderLayerA = makeMockEmbedderLayer("model-x", 1, 0)
-    const testLayerA = Layer.mergeAll(repoLayer, fsLayer, mockEmbedderLayerA)
+    const mockProviderLayerA = makeMockEmbeddingProviderLayer("model-x")
+    const testLayerA = CodegraphEmbedder.layer.pipe(
+      Layer.provideMerge(CodegraphRepo.layer),
+      Layer.provideMerge(dbLayer),
+      Layer.provideMerge(FSUtil.defaultLayer),
+      Layer.provideMerge(mockProviderLayerA),
+    )
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -272,10 +286,13 @@ describe("CodegraphEmbedder staleness checks", () => {
     )
 
     // Embed with baseUrl B — should re-embed because baseUrl changed
-    // Note: mock doesn't actually check baseUrl, but the staleness check
-    // in the real embedAll would detect the baseUrl change
-    const mockEmbedderLayerB = makeMockEmbedderLayer("model-x", 1, 0)
-    const testLayerB = Layer.mergeAll(repoLayer, fsLayer, mockEmbedderLayerB)
+    const mockProviderLayerB = makeMockEmbeddingProviderLayer("model-x", "https://api.anthropic.com/v1")
+    const testLayerB = CodegraphEmbedder.layer.pipe(
+      Layer.provideMerge(CodegraphRepo.layer),
+      Layer.provideMerge(dbLayer),
+      Layer.provideMerge(FSUtil.defaultLayer),
+      Layer.provideMerge(mockProviderLayerB),
+    )
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -296,11 +313,14 @@ describe("CodegraphEmbedder staleness checks", () => {
     const filePath = path.join(tmp.path, "a.ts")
     await fs.writeFile(filePath, "export function foo() { return 1; }\n", "utf-8")
 
-    const repoLayer = CodegraphRepo.defaultLayer
-    const fsLayer = FSUtil.defaultLayer
-    const mockEmbedderLayer = makeMockEmbedderLayer("model-x", 1, 0)
+    const mockProviderLayer = makeMockEmbeddingProviderLayer("model-x")
 
-    const testLayer = Layer.mergeAll(repoLayer, fsLayer, mockEmbedderLayer)
+    const testLayer = CodegraphEmbedder.layer.pipe(
+      Layer.provideMerge(CodegraphRepo.layer),
+      Layer.provideMerge(dbLayer),
+      Layer.provideMerge(FSUtil.defaultLayer),
+      Layer.provideMerge(mockProviderLayer),
+    )
 
     await Effect.runPromise(
       Effect.gen(function* () {

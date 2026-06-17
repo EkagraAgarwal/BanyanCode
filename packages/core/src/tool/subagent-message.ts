@@ -9,11 +9,75 @@ import { Tools } from "./tools"
 
 export const name = "subagent_message"
 
-export const Input = Schema.Struct({
+const BaseInput = {
   to: Schema.optional(Schema.String),
-  kind: Schema.Literals(["request", "inform", "answer", "poll", "steer", "checkpoint", "plan", "kill"]),
-  payload: Schema.Unknown,
-})
+}
+
+export const Input = Schema.Union([
+  Schema.Struct({
+    ...BaseInput,
+    kind: Schema.Literal("request"),
+    payload: Schema.Record(Schema.String, Schema.Unknown),
+  }),
+  Schema.Struct({
+    ...BaseInput,
+    kind: Schema.Literal("inform"),
+    payload: Schema.Unknown,
+  }),
+  Schema.Struct({
+    ...BaseInput,
+    kind: Schema.Literal("answer"),
+    payload: Schema.Struct({ result: Schema.Unknown }),
+  }),
+  Schema.Struct({
+    ...BaseInput,
+    kind: Schema.Literal("poll"),
+    payload: Schema.Struct({}),
+  }),
+  Schema.Struct({
+    ...BaseInput,
+    kind: Schema.Literal("steer"),
+    payload: Schema.Struct({
+      instruction: Schema.String,
+      priority: Schema.optional(Schema.Literals(["low", "normal", "high"])),
+    }),
+  }),
+  Schema.Struct({
+    ...BaseInput,
+    kind: Schema.Literal("checkpoint"),
+    payload: Schema.Struct({
+      summary: Schema.String,
+      todos: Schema.Array(
+        Schema.Struct({
+          content: Schema.String,
+          status: Schema.String,
+        })
+      ),
+      blockers: Schema.optional(Schema.Array(Schema.String)),
+    }),
+  }),
+  Schema.Struct({
+    ...BaseInput,
+    kind: Schema.Literal("plan"),
+    payload: Schema.Struct({
+      title: Schema.String,
+      steps: Schema.Array(
+        Schema.Struct({
+          content: Schema.String,
+          status: Schema.String,
+        })
+      ),
+      exitCriteria: Schema.String,
+    }),
+  }),
+  Schema.Struct({
+    ...BaseInput,
+    kind: Schema.Literal("kill"),
+    payload: Schema.Struct({
+      reason: Schema.String,
+    }),
+  })
+])
 
 export const Output = Schema.Struct({
   delivered: Schema.Boolean,

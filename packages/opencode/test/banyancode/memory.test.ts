@@ -57,6 +57,7 @@ const mockRepoLayer = Layer.succeed(Banyan.MemoryRepo, Banyan.MemoryRepo.of({
     }),
   touch: () => Effect.void,
   searchByEmbedding: () => Effect.succeed([]),
+  putWithQuotaCheck: () => Effect.void,
 }))
 
 const mockEmbeddingProviderLayer = Layer.succeed(

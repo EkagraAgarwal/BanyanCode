@@ -85,6 +85,9 @@ const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.o
   deleteStaleFiles: () => Effect.succeed({ removed: 0 }),
   countAllEdges: () => Effect.succeed(0),
   putNodesAndEdges: () => Effect.void,
+  putNodesAndEdgesBatched: () => Effect.void,
+  getGraphContext: (_input: { nodeIDs: string[]; maxUpHops?: number; maxDownHops?: number; limit?: number }) =>
+    Effect.succeed({ nodes: [], edges: [] }),
 }))
 
 const mockEmbeddingProviderNoModelLayer = Layer.succeed(
@@ -100,8 +103,8 @@ const mockEmbeddingProviderNoModelLayer = Layer.succeed(
 )
 
 const mockCodegraphEmbedderLayer = Layer.succeed(Banyan.CodegraphEmbedder, Banyan.CodegraphEmbedder.of({
-  embedAll: () => Effect.succeed({ embedded: 0, skipped: 0, model: undefined }),
-  embedFile: (fileID: string) => Effect.succeed({ embedded: 0, skipped: 0 }),
+  embedAll: () => Effect.succeed({ embedded: 0, skipped: 0, failed: 0, model: undefined }),
+  embedFile: (_fileID: string) => Effect.succeed({ embedded: 0, skipped: 0, failed: 0 }),
   embedNode: (node) => Effect.void,
 }))
 

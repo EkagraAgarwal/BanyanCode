@@ -7,6 +7,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { tmpdir } from "../fixture/tmpdir"
 import path from "path"
 import type { SubagentMessage } from "../../src/banyancode/types"
+import type { SessionSchema } from "../../src/session/schema"
 
 process.env.BANYANCODE_ENABLE = "1"
 
@@ -29,6 +30,7 @@ describe("SubagentConsumer", () => {
       MemoryRepo.Service,
       MemoryRepo.Service.of({
         put: () => Effect.void,
+        putWithQuotaCheck: () => Effect.void,
         get: () => Effect.succeed(undefined),
         list: () => Effect.succeed([]),
         forget: () => Effect.void,
@@ -48,7 +50,8 @@ describe("SubagentConsumer", () => {
       Effect.gen(function* () {
         const consumer = yield* SubagentConsumer.Service
         const result = yield* consumer.start({
-          sessionID: "ses_child" as any,
+          sessionID: "ses_child" as SessionSchema.ID,
+          parentSessionID: "ses_parent" as SessionSchema.ID,
           agent: "coder",
         })
         expect(result).toBeUndefined()

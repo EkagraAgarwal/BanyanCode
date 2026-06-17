@@ -2,6 +2,7 @@ export * as MemoryRepo from "./memory-repo"
 
 import { and, eq, isNotNull, isNull, lt, sql } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
+import { SqlError } from "effect/unstable/sql/SqlError"
 import { Database } from "../database/database"
 import { CodegraphEmbeddingsTable } from "./codegraph.sql"
 import { MemoryEntriesTable } from "./memory.sql"
@@ -9,6 +10,11 @@ import type { MemoryEntry } from "./types"
 
 export interface Interface {
   readonly put: (entry: Omit<MemoryEntry, "createdAt"> & { createdAt?: number }) => Effect.Effect<void, never, never>
+  readonly putWithQuotaCheck: (
+    entry: Omit<MemoryEntry, "createdAt"> & { createdAt?: number },
+    maxEntriesPerScope: number,
+    maxTotalStorageBytes: number
+  ) => Effect.Effect<void, { readonly _tag: "QuotaExceeded"; readonly message: string } | SqlError, never>
   readonly get: (id: string) => Effect.Effect<MemoryEntry | undefined, never, never>
   readonly list: (scope: "global" | "session", sessionID?: string) => Effect.Effect<MemoryEntry[], never, never>
   readonly forget: (id: string) => Effect.Effect<void, never, never>
@@ -64,6 +70,87 @@ export const layer = Layer.effect(
         })
         .run()
         .pipe(Effect.orDie)
+    })
+
+    const putWithQuotaCheck = Effect.fn("MemoryRepo.putWithQuotaCheck")(function* (
+      entry: Omit<MemoryEntry, "createdAt"> & { createdAt?: number },
+      maxEntriesPerScope: number,
+      maxTotalStorageBytes: number
+    ) {
+      const now = entry.createdAt ?? Date.now()
+      const txEffect = db.transaction((tx) => {
+        return Effect.gen(function* () {
+          // 1. Check entries limit
+          const scopeCondition = entry.scope === "global" 
+            ? eq(MemoryEntriesTable.scope, "global")
+            : and(eq(MemoryEntriesTable.scope, "session"), eq(MemoryEntriesTable.session_id, entry.sessionID ?? ""))
+            
+          const countResult = yield* tx
+            .select({ count: sql<number>`count(*)` })
+            .from(MemoryEntriesTable)
+            .where(scopeCondition)
+            .get()
+            .pipe(Effect.orDie)
+            
+          if ((countResult?.count ?? 0) >= maxEntriesPerScope) {
+            return yield* Effect.fail({ _tag: "QuotaExceeded" as const, message: `Scope limit ${maxEntriesPerScope} reached` })
+          }
+
+          // 2. Check size limit
+          const allEntries = yield* tx
+            .select({ value: MemoryEntriesTable.value })
+            .from(MemoryEntriesTable)
+            .where(eq(MemoryEntriesTable.scope, "global"))
+            .all()
+            .pipe(Effect.orDie)
+            
+          let totalSize = Buffer.byteLength(JSON.stringify(entry.value), "utf8") // include new entry
+          for (const row of allEntries) {
+            totalSize += Buffer.byteLength(JSON.stringify(row.value), "utf8")
+          }
+          
+          if (totalSize > maxTotalStorageBytes) {
+            return yield* Effect.fail({ _tag: "QuotaExceeded" as const, message: `Total storage limit ${maxTotalStorageBytes} reached` })
+          }
+
+          // 3. Insert/Update
+          yield* tx
+            .insert(MemoryEntriesTable)
+            .values({
+              id: entry.id,
+              key: entry.key,
+              value: entry.value,
+              context: entry.context,
+              tags: entry.tags,
+              scope: entry.scope,
+              session_id: entry.sessionID,
+              created_at: now,
+              updated_at: now,
+              last_accessed_at: now,
+              access_count: 0,
+              expires_at: entry.expiresAt,
+            })
+            .onConflictDoUpdate({
+              target: MemoryEntriesTable.id,
+              set: {
+                key: entry.key,
+                value: entry.value,
+                context: entry.context,
+                tags: entry.tags,
+                scope: entry.scope,
+                session_id: entry.sessionID,
+                updated_at: now,
+                expires_at: entry.expiresAt,
+              },
+            })
+            .run()
+            .pipe(Effect.orDie)
+            
+          return Effect.void
+        })
+      })
+      
+      return yield* txEffect.pipe(Effect.flatten)
     })
 
     const get = Effect.fn("MemoryRepo.get")(function* (id: string) {
@@ -213,7 +300,10 @@ export const layer = Layer.effect(
       return scored
     })
 
-    return Service.of({ put, get, list, forget, search, vacuum, touch, searchByEmbedding })
+    return Service.of({
+      put,
+      putWithQuotaCheck,
+      get, list, forget, search, vacuum, touch, searchByEmbedding })
   }),
 )
 

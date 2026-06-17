@@ -71,6 +71,9 @@ const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.o
   deleteStaleFiles: () => Effect.succeed({ removed: 0 }),
   countAllEdges: () => Effect.succeed(0),
   putNodesAndEdges: () => Effect.void,
+  putNodesAndEdgesBatched: () => Effect.void,
+  getGraphContext: (_input: { nodeIDs: string[]; maxUpHops?: number; maxDownHops?: number; limit?: number }) =>
+    Effect.succeed({ nodes: [], edges: [] }),
 }))
 
 const mockBuildServiceLayer = Layer.succeed(Banyan.CodegraphBuildService, Banyan.CodegraphBuildService.of({
