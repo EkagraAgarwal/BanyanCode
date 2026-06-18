@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { CodegraphEmbedService } from "@opencode-ai/core/banyancode/codegraph-embed-service"
+import { EmbeddingError } from "@opencode-ai/core/banyancode/embedding-provider"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 import { tmpdir } from "../fixture/tmpdir"
 
@@ -15,23 +16,38 @@ const makeMockEmbedder = (options: {
   fileError?: Error
   delayMs?: number
 }) => {
+  const allSuccess: { embedded: number; skipped: number; model: string | undefined } = options.allResult ?? {
+    embedded: 0,
+    skipped: 0,
+    model: "test-model",
+  }
+  const fileSuccess: { embedded: number; skipped: number } = options.fileResult ?? { embedded: 0, skipped: 0 }
+
+  const mkError = (msg: string) => new EmbeddingError({ message: msg })
+
+  const embedAll: Effect.Effect<
+    { embedded: number; skipped: number; model: string | undefined },
+    EmbeddingError,
+    never
+  > = options.allError
+    ? Effect.fail(mkError(options.allError.message))
+    : Effect.gen(function* () {
+        if (options.delayMs) yield* Effect.sleep(options.delayMs)
+        return allSuccess
+      })
+
+  const embedFile: Effect.Effect<{ embedded: number; skipped: number }, EmbeddingError, never> = options.fileError
+    ? Effect.fail(mkError(options.fileError.message))
+    : Effect.gen(function* () {
+        if (options.delayMs) yield* Effect.sleep(options.delayMs)
+        return fileSuccess
+      })
+
   return Layer.succeed(
     Banyan.CodegraphEmbedder,
     Banyan.CodegraphEmbedder.of({
-      embedAll: () =>
-        options.allError
-          ? Effect.fail(options.allError)
-          : Effect.gen(function* () {
-              if (options.delayMs) yield* Effect.sleep(options.delayMs)
-              return options.allResult ?? { embedded: 0, skipped: 0, model: "test-model" }
-            }),
-      embedFile: (_fileID: string) =>
-        options.fileError
-          ? Effect.fail(options.fileError)
-          : Effect.gen(function* () {
-              if (options.delayMs) yield* Effect.sleep(options.delayMs)
-              return options.fileResult ?? { embedded: 0, skipped: 0 }
-            }),
+      embedAll: () => embedAll,
+      embedFile: (_fileID: string) => embedFile,
       embedNode: () => Effect.void,
     }),
   )

@@ -1,6 +1,6 @@
 export * as CodegraphEmbedder from "./codegraph-embedder"
 
-import { Context, Effect, Layer, Schema } from "effect"
+import { Cause, Context, Effect, Layer, Schema } from "effect"
 import { CodegraphRepo } from "./codegraph-repo"
 import { EmbeddingProvider } from "./embedding-provider"
 import type { CodegraphNode } from "./types"
@@ -27,8 +27,11 @@ export const EmbedEvent = EventV2.define({
 })
 
 export interface Interface {
-  readonly embedAll: () => Effect.Effect<{ embedded: number; skipped: number; model: string | undefined }>
-  readonly embedFile: (fileID: string) => Effect.Effect<{ embedded: number; skipped: number }>
+  readonly embedAll: () => Effect.Effect<
+    { embedded: number; skipped: number; model: string | undefined },
+    EmbeddingProvider.EmbeddingError
+  >
+  readonly embedFile: (fileID: string) => Effect.Effect<{ embedded: number; skipped: number }, EmbeddingProvider.EmbeddingError>
   readonly embedNode: (node: CodegraphNode) => Effect.Effect<void, EmbeddingProvider.EmbeddingError>
 }
 
@@ -80,7 +83,7 @@ export const layer = Layer.effect(
           } else {
             const success = yield* embedNode(node).pipe(
               Effect.as(true),
-              Effect.catchAll(() => Effect.succeed(false)),
+              Effect.catchCause(() => Effect.succeed(false)),
             )
             if (success) {
               embedded++
@@ -100,11 +103,12 @@ export const layer = Layer.effect(
       })
 
       return yield* run.pipe(
-        Effect.catchAll((err) =>
+        Effect.catchCause((cause) =>
           Effect.gen(function* () {
+            const err = Cause.squash(cause)
             const errorMsg = err instanceof Error ? err.message : String(err)
             yield* publish({ status: "failed", done: 0, total, error: errorMsg })
-            return yield* Effect.fail(err)
+            return yield* Effect.fail(err as EmbeddingProvider.EmbeddingError)
           }),
         ),
       )
@@ -142,7 +146,7 @@ export const layer = Layer.effect(
             } else {
               const success = yield* embedNode(node).pipe(
                 Effect.as(true),
-                Effect.catchAll(() => Effect.succeed(false)),
+                Effect.catchCause(() => Effect.succeed(false)),
               )
               if (success) {
                 embedded++
@@ -163,11 +167,12 @@ export const layer = Layer.effect(
       })
 
       return yield* run.pipe(
-        Effect.catchAll((err) =>
+        Effect.catchCause((cause) =>
           Effect.gen(function* () {
+            const err = Cause.squash(cause)
             const errorMsg = err instanceof Error ? err.message : String(err)
             yield* publish({ status: "failed", done: 0, total, error: errorMsg })
-            return yield* Effect.fail(err)
+            return yield* Effect.fail(err as EmbeddingProvider.EmbeddingError)
           }),
         ),
       )
