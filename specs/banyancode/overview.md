@@ -45,4 +45,4 @@ BanyanCode reuses every existing OpenCode system that fits:
 
 ## Status
 
-The master plan lives in `BANYANCODE_PLAN.md`. The detailed design for each phase lives in this directory.
+The architecture overview lives in `ARCHITECTURE.md`. The detailed design for each feature lives in this directory.

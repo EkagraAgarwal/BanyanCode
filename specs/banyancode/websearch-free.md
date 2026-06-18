@@ -1,6 +1,6 @@
 # BanyanCode — `websearch_free` (DuckDuckGo)
 
-> Companion to `BANYANCODE_PLAN.md` Phase 2.
+> See `ARCHITECTURE.md` for the broader design. This file covers the websearch tool.
 
 A new tool that searches DuckDuckGo HTML and returns a normalized result list, ready to be plugged into the researcher agent.
 

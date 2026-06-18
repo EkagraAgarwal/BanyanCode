@@ -70,12 +70,23 @@ const impact = await codegraph_impact({
 })
 ```
 
-### Semantic search with /code-embed
+### Computing embeddings with /code-embed
 
-When `BANYANCODE_EMBEDDING_MODEL` is set, use `/code-embed` for natural language queries:
+`/code-embed` walks the codegraph nodes and computes embeddings for each. It accepts an optional `--file <path>` to embed only one file. It does **not** answer search queries itself.
 
 ```
-/code-embed How does the memory store work?
+/code-embed                 # embed every node
+/code-embed --file src/foo.ts  # embed only one file
+```
+
+While the embed runs, the same floating TUI widget that shows `/codegraph-build` progress shows embed progress. If `BANYANCODE_EMBEDDING_MODEL` is unset the widget transitions to a red `failed` state with the message "BANYANCODE_EMBEDDING_MODEL is not configured".
+
+### Semantic search
+
+After `/code-embed` finishes, semantic search uses the `code_search` tool (exposed as the `/code-search` slash command):
+
+```
+/code-search How does the memory store work?
 ```
 
 ## Troubleshooting

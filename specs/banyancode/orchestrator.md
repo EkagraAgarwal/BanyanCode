@@ -1,6 +1,6 @@
 # BanyanCode — Orchestrator + subagent mesh
 
-> Companion to `BANYANCODE_PLAN.md` Phase 3, 7, 8.
+> See `ARCHITECTURE.md` for the broader design. This file covers the orchestrator and researcher agent prompts.
 
 The orchestrator is a new primary agent that fans tasks out to specialized subagents and coordinates them through shared memory and peer messaging. The mesh is the bus they communicate over.
 

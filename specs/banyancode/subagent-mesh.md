@@ -1,6 +1,6 @@
 # BanyanCode — Subagent message protocol
 
-> Companion to `BANYANCODE_PLAN.md` Phase 3.
+> See `ARCHITECTURE.md` for the broader design. This file covers the subagent mesh wire format and capacity rules.
 
 The mesh is the bus that carries `subagent_message` tool calls between running subagents. This spec defines the wire format, the routing rules, and the delivery semantics.
 

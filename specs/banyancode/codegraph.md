@@ -1,6 +1,6 @@
 # BanyanCode — Code graph + embeddings
 
-> Companion to `BANYANCODE_PLAN.md` Phase 5, 6.
+> See `ARCHITECTURE.md` for the broader design. This file covers the code graph and embeddings pipeline in detail.
 
 A polyglot code graph that captures files, nodes (functions/classes/types), and edges (imports/calls/extends). Built via tree-sitter for first-class languages, regex for the rest. Phase 2 adds embeddings over the same nodes for semantic search.
 

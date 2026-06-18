@@ -1,6 +1,6 @@
 # BanyanCode — Storage layer
 
-> Companion to `BANYANCODE_PLAN.md` Phase 1.
+> See `ARCHITECTURE.md` for the broader design. This file covers storage layout in detail.
 
 All BanyanCode persistence lives in the same Drizzle + Effect SQLite stack that `packages/core` already uses. The BanyanCode-specific tables and Effect repos live alongside the existing ones; the `packages/effect-drizzle-sqlite` adapter stays generic.
 

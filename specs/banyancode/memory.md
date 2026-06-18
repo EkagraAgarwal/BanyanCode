@@ -1,6 +1,6 @@
 # BanyanCode — Cross-session memory
 
-> Companion to `BANYANCODE_PLAN.md` Phase 4.
+> See `ARCHITECTURE.md` for the broader design. This file covers the memory tool surface and embedding flow.
 
 A persistent, key-value memory store with optional embeddings, exposed as 5 tools and a skill. Default scope is `global` (cross-session). `scope: "session"` opt-in for isolation.
 

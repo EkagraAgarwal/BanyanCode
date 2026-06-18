@@ -100,7 +100,7 @@ BANYANCODE_DISABLE_WEBSEARCH=1
 | `/model` | Pick the model for the current agent (OpenCode default) |
 | `/models` | Same as `/model` |
 | `/codegraph-build` | Build the code graph index — runs in background; a progress widget shows in the TUI |
-| `/codegraph-cancel` | Cancel an in-flight codegraph build |
+| `/codegraph-remove` | Delete the current codegraph index from the project-local database |
 | `/code-embed` | Compute embeddings for code graph nodes (direct tool call) |
 | `/code-search` | Search code semantically (after `/code-embed` completes) |
 | `/memory-search` | Search the BanyanCode memory store |
@@ -113,9 +113,9 @@ While the build runs, a progress widget appears in the bottom-right of the TUI:
 
 ```
 Codegraph build — Running
-█████████░░░░░░░░ 45% (45/100)
+████████████████░░░░░░░ 45% (45/100)
 Indexing: packages/core/src/banyancode/codegraph-indexer.ts
-Press /codegraph-cancel to cancel
+Press Ctrl+C to cancel
 ```
 
 When the build finishes, the widget shows the final result:
@@ -128,9 +128,7 @@ indexed=180 skipped=20 duration_ms=4250
 
 If the build fails, the widget shows the error message in red.
 
-Use `/codegraph-cancel` (or the `<C-c>` keybind) to cancel an in-flight build. Cancelling a build stops the file walk and transitions the state to "cancelled".
-
-Multiple builds cancel the previous one — if you run `/codegraph-build` while another build is running, the old build is cancelled and the new one starts.
+Cancelling a running build is currently available only through the HTTP `codegraphCancel` endpoint; there is no slash command for it yet. Multiple builds cancel the previous one — if you run `/codegraph-build` while another build is running, the old build is cancelled and the new one starts.
 
 This feature is gated on `BANYANCODE_ENABLE=1`.
 
