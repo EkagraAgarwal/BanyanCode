@@ -32,3 +32,11 @@ UPCOMING_CHANGELOG.md
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
+
+# BanyanCode runtime artifacts (project-local SQLite DB dirs)
+/.banyancode/
+/packages/*/.banyancode/
+
+# Throwaway debug scripts
+scratch-*.ts
+scratch-*.js
