@@ -33,6 +33,16 @@ const mockRepoLayer = Layer.succeed(Banyan.MemoryRepo, Banyan.MemoryRepo.of({
     const idx = mockMemoryEntries.findIndex((e) => e.id === id)
     if (idx >= 0) mockMemoryEntries.splice(idx, 1)
   }),
+  forgetByKey: (input: { key: string; scope: "global" | "session"; sessionID?: string }) =>
+    Effect.sync(() => {
+      const before = mockMemoryEntries.length
+      const filtered = mockMemoryEntries.filter(
+        (e) => !(e.key === input.key && e.scope === input.scope && (input.scope === "global" || e.sessionID === input.sessionID)),
+      )
+      mockMemoryEntries.length = 0
+      mockMemoryEntries.push(...filtered)
+      return before - filtered.length
+    }),
   search: (scope: "global" | "session", sessionID: string | undefined, key: string) =>
     Effect.sync(() =>
       mockMemoryEntries.filter(
@@ -51,6 +61,7 @@ const mockRepoLayer = Layer.succeed(Banyan.MemoryRepo, Banyan.MemoryRepo.of({
       mockMemoryEntries.push(...filtered)
       return before - filtered.length
     }),
+  update: () => Effect.die("update not expected in this test") as any,
 }))
 
 const mockEmbeddingProviderLayer = Layer.succeed(
@@ -339,6 +350,8 @@ describe("memory tools", () => {
         scope: "global",
         createdAt: now - 2000,
         expiresAt: now - 1000,
+        version: 1,
+        updatedAt: now - 2000,
       })
 
       mockMemoryEntries.push({
@@ -349,6 +362,8 @@ describe("memory tools", () => {
         scope: "global",
         createdAt: now,
         expiresAt: now + 10000,
+        version: 1,
+        updatedAt: now,
       })
 
       const repo = yield* Banyan.MemoryRepo

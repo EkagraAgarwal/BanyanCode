@@ -46,6 +46,10 @@ describe("MemoryRepo", () => {
           ...globalEntry,
           context: undefined,
           expiresAt: undefined,
+          agentID: undefined,
+          version: 1,
+          updatedAt: retrievedGlobal!.updatedAt,
+          namespace: undefined,
         })
 
         const retrievedSession = yield* repo.get("session-1")
@@ -53,6 +57,10 @@ describe("MemoryRepo", () => {
           ...sessionEntry,
           context: undefined,
           expiresAt: undefined,
+          agentID: undefined,
+          version: 1,
+          updatedAt: retrievedSession!.updatedAt,
+          namespace: undefined,
         })
 
         const globalList = yield* repo.list("global")

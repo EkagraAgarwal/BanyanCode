@@ -12,6 +12,10 @@ export const MemoryEntriesTable = sqliteTable(
     session_id: text(),
     created_at: integer().notNull(),
     expires_at: integer(),
+    agent_id: text(),
+    version: integer().notNull().default(1),
+    updated_at: integer().notNull(),
+    namespace: text(),
   },
   (table) => [
     index("memory_scope_key_idx").on(table.scope, table.key),

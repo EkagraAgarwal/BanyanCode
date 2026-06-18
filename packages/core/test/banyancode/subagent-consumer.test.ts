@@ -32,8 +32,10 @@ describe("SubagentConsumer", () => {
         get: () => Effect.succeed(undefined),
         list: () => Effect.succeed([]),
         forget: () => Effect.void,
+        forgetByKey: () => Effect.succeed(0),
         search: () => Effect.succeed([]),
         vacuum: () => Effect.succeed(0),
+        update: () => Effect.void as any,
       }),
     )
 

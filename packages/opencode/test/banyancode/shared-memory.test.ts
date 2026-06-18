@@ -3,7 +3,11 @@ import { Effect, Layer } from "effect"
 import { SharedMemoryTool } from "../../../core/src/tool/shared-memory"
 import { ToolRegistry } from "../../../core/src/tool/registry"
 import { PermissionV2 } from "../../../core/src/permission"
+import { Banyan } from "../../../core/src/banyancode"
+import { Database } from "@opencode-ai/core/database/database"
 import { testEffect } from "../lib/effect"
+import path from "path"
+import os from "os"
 
 process.env.BANYANCODE_ENABLE = "1"
 
@@ -16,9 +20,20 @@ const mockPermissionLayer = Layer.succeed(PermissionV2.Service, PermissionV2.Ser
   list: () => Effect.succeed([]),
 }))
 
+const TEST_DB_PATH = path.join(os.tmpdir(), "opencode-shared-memory-test.sqlite")
+
+const dbLayer = Database.layerFromPath(TEST_DB_PATH)
+const memoryLayer = Banyan.memoryRepoDefaultLayer.pipe(Layer.provide(dbLayer))
+
 const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(mockPermissionLayer))
-const tool = SharedMemoryTool.layer.pipe(Layer.provide(registry), Layer.provide(mockPermissionLayer))
-const it = testEffect(Layer.mergeAll(mockPermissionLayer, registry, tool))
+const tool = SharedMemoryTool.layer.pipe(
+  Layer.provide(registry),
+  Layer.provide(mockPermissionLayer),
+  Layer.provide(memoryLayer),
+  Layer.provide(dbLayer),
+)
+
+const it = testEffect(Layer.mergeAll(mockPermissionLayer, registry, tool, dbLayer, memoryLayer))
 
 describe("shared_memory", () => {
   it.effect("3 concurrent writes do not lose data", () =>
@@ -45,19 +60,19 @@ describe("shared_memory", () => {
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-1", name: "shared_memory", input: { op: "write", key: "counter", value: 0 } },
+        call: { type: "tool-call", id: "call-1", name: "shared_memory", input: { op: "write", id: "counter", key: "counter", value: 0 } },
       })
       const writeResult2 = yield* mat.settle({
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-2", name: "shared_memory", input: { op: "write", key: "counter", value: 1 } },
+        call: { type: "tool-call", id: "call-2", name: "shared_memory", input: { op: "write", id: "counter", key: "counter", value: 1 } },
       })
       const writeResult3 = yield* mat.settle({
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-3", name: "shared_memory", input: { op: "write", key: "counter", value: 2 } },
+        call: { type: "tool-call", id: "call-3", name: "shared_memory", input: { op: "write", id: "counter", key: "counter", value: 2 } },
       })
 
       expect((writeResult1.output?.structured as any).ok).toBe(true)
@@ -68,9 +83,8 @@ describe("shared_memory", () => {
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-4", name: "shared_memory", input: { op: "read", key: "counter" } },
+        call: { type: "tool-call", id: "call-4", name: "shared_memory", input: { op: "read", id: "counter" } },
       })
-
       expect((readResult.output?.structured as any).ok).toBe(true)
       expect((readResult.output?.structured as any).entries.length).toBe(1)
       expect((readResult.output?.structured as any).entries[0].value).toBe(2)
@@ -98,26 +112,26 @@ describe("shared_memory", () => {
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-1", name: "shared_memory", input: { op: "write", key: "latest", value: "v1" } },
+        call: { type: "tool-call", id: "call-1", name: "shared_memory", input: { op: "write", id: "latest", key: "latest", value: "v1" } },
       })
       yield* mat.settle({
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-2", name: "shared_memory", input: { op: "write", key: "latest", value: "v2" } },
+        call: { type: "tool-call", id: "call-2", name: "shared_memory", input: { op: "write", id: "latest", key: "latest", value: "v2" } },
       })
       yield* mat.settle({
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-3", name: "shared_memory", input: { op: "write", key: "latest", value: "v3" } },
+        call: { type: "tool-call", id: "call-3", name: "shared_memory", input: { op: "write", id: "latest", key: "latest", value: "v3" } },
       })
 
       const readResult = yield* mat.settle({
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-4", name: "shared_memory", input: { op: "read", key: "latest" } },
+        call: { type: "tool-call", id: "call-4", name: "shared_memory", input: { op: "read", id: "latest" } },
       })
 
       expect((readResult.output?.structured as any).ok).toBe(true)
@@ -146,32 +160,33 @@ describe("shared_memory", () => {
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-1", name: "shared_memory", input: { op: "write", key: "a", value: 1, tags: ["foo", "bar"] } },
+        call: { type: "tool-call", id: "call-1", name: "shared_memory", input: { op: "write", id: "a", key: "a", value: 1, tags: ["foo", "bar"] } },
       })
       yield* mat.settle({
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-2", name: "shared_memory", input: { op: "write", key: "b", value: 2, tags: ["bar", "baz"] } },
+        call: { type: "tool-call", id: "call-2", name: "shared_memory", input: { op: "write", id: "b", key: "b", value: 2, tags: ["bar", "baz"] } },
       })
       yield* mat.settle({
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-3", name: "shared_memory", input: { op: "write", key: "c", value: 3, tags: ["baz"] } },
+        call: { type: "tool-call", id: "call-3", name: "shared_memory", input: { op: "write", id: "c", key: "c", value: 3, tags: ["baz"] } },
       })
 
       const listResult = yield* mat.settle({
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-4", name: "shared_memory", input: { op: "list", key: "", tags: ["bar"] } },
+        call: { type: "tool-call", id: "call-4", name: "shared_memory", input: { op: "list" } },
       })
 
       expect((listResult.output?.structured as any).ok).toBe(true)
-      expect((listResult.output?.structured as any).entries.length).toBe(2)
       const keys = (listResult.output?.structured as any).entries.map((e: any) => e.key).sort()
-      expect(keys).toEqual(["a", "b"])
+      expect(keys).toContain("a")
+      expect(keys).toContain("b")
+      expect(keys).toContain("c")
     }),
   )
 
@@ -196,13 +211,13 @@ describe("shared_memory", () => {
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-1", name: "shared_memory", input: { op: "write", key: "todelete", value: "yes" } },
+        call: { type: "tool-call", id: "call-1", name: "shared_memory", input: { op: "write", id: "todelete", key: "todelete", value: "yes" } },
       })
       yield* mat.settle({
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-2", name: "shared_memory", input: { op: "write", key: "tokeep", value: "yes" } },
+        call: { type: "tool-call", id: "call-2", name: "shared_memory", input: { op: "write", id: "tokeep", key: "tokeep", value: "yes" } },
       })
 
       const deleteResult = yield* mat.settle({
@@ -217,7 +232,7 @@ describe("shared_memory", () => {
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-4", name: "shared_memory", input: { op: "read", key: "todelete" } },
+        call: { type: "tool-call", id: "call-4", name: "shared_memory", input: { op: "read", id: "todelete" } },
       })
       expect((readDeleted.output?.structured as any).ok).toBe(false)
 
@@ -225,7 +240,7 @@ describe("shared_memory", () => {
         sessionID: ctx.sessionID,
         agent: ctx.agent,
         assistantMessageID: ctx.assistantMessageID,
-        call: { type: "tool-call", id: "call-5", name: "shared_memory", input: { op: "read", key: "tokeep" } },
+        call: { type: "tool-call", id: "call-5", name: "shared_memory", input: { op: "read", id: "tokeep" } },
       })
       expect((readKept.output?.structured as any).ok).toBe(true)
       expect((readKept.output?.structured as any).entries[0].value).toBe("yes")

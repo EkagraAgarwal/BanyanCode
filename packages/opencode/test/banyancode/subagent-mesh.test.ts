@@ -4,9 +4,13 @@ import { SubagentMessageTool } from "../../../core/src/tool/subagent-message"
 import { SharedMemoryTool } from "../../../core/src/tool/shared-memory"
 import { ToolRegistry } from "../../../core/src/tool/registry"
 import { PermissionV2 } from "../../../core/src/permission"
+import { Banyan } from "../../../core/src/banyancode"
 import { SubagentBus } from "../../../core/src/banyancode/subagent-bus"
 import { SubagentMessagesRepo } from "../../../core/src/banyancode/subagent-messages-repo"
+import { Database } from "@opencode-ai/core/database/database"
 import { testEffect } from "../lib/effect"
+import path from "path"
+import os from "os"
 
 process.env.BANYANCODE_ENABLE = "1"
 
@@ -36,6 +40,10 @@ const mockBusLayer = Layer.succeed(SubagentBus.Service, SubagentBus.Service.of({
   peers: () => Effect.succeed([]),
 }))
 
+const TEST_DB_PATH = path.join(os.tmpdir(), "opencode-subagent-mesh-test.sqlite")
+const dbLayer = Database.layerFromPath(TEST_DB_PATH)
+const memoryLayer = Banyan.memoryRepoDefaultLayer.pipe(Layer.provide(dbLayer))
+
 const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(mockPermissionLayer))
 const toolLayer = Layer.mergeAll(
   SubagentMessageTool.layer,
@@ -45,6 +53,8 @@ const toolLayer = Layer.mergeAll(
   Layer.provide(mockPermissionLayer),
   Layer.provide(mockRepoLayer),
   Layer.provide(mockBusLayer),
+  Layer.provide(memoryLayer),
+  Layer.provide(dbLayer),
 )
 
 const it = testEffect(Layer.mergeAll(
@@ -52,6 +62,8 @@ const it = testEffect(Layer.mergeAll(
   registry,
   mockRepoLayer,
   mockBusLayer,
+  memoryLayer,
+  dbLayer,
   toolLayer,
 ))
 
