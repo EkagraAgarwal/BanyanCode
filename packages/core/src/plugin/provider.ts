@@ -18,6 +18,7 @@ import { KiloPlugin } from "./provider/kilo"
 import { LLMGatewayPlugin } from "./provider/llmgateway"
 import { MistralPlugin } from "./provider/mistral"
 import { NvidiaPlugin } from "./provider/nvidia"
+import { NvidiaEmbedTestPlugin } from "./provider/nvidia-embed"
 import { OpenAIPlugin } from "./provider/openai"
 import { SnowflakeCortexPlugin } from "./provider/snowflake-cortex"
 import { OpenAICompatiblePlugin } from "./provider/openai-compatible"
@@ -53,6 +54,7 @@ export const ProviderPlugins = [
   LLMGatewayPlugin,
   MistralPlugin,
   NvidiaPlugin,
+  NvidiaEmbedTestPlugin,
   OpencodePlugin,
   SnowflakeCortexPlugin,
   OpenAICompatiblePlugin,
