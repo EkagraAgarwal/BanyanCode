@@ -3,6 +3,7 @@ export * as CodeEmbedTools from "./code-embed"
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { Banyan } from "../banyancode"
+import { GraphMeta } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -49,6 +50,7 @@ export const OutputSearch = Schema.Struct({
   ),
   degraded: Schema.Boolean,
   totalCandidates: Schema.Number,
+  meta: Schema.optional(GraphMeta),
 })
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
@@ -199,6 +201,18 @@ export const locationLayer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
+              const metaRow = yield* repo.getMeta()
+              const meta = metaRow
+                ? {
+                    graphBuiltAt: metaRow.graphBuiltAt,
+                    graphVersion: metaRow.graphVersion,
+                    graphCoverage: metaRow.graphCoverage,
+                    totalFiles: metaRow.totalFiles,
+                    totalNodes: metaRow.totalNodes,
+                    totalEdges: metaRow.totalEdges,
+                  }
+                : undefined
+
               let nodes = yield* repo.listAllNodes()
 
               if (input.fileGlob) {
@@ -219,6 +233,7 @@ export const locationLayer = Layer.effectDiscard(
                   hits: keywordMatches.map((n) => ({ node: n, score: 0, source: "keyword" as const })),
                   degraded: true,
                   totalCandidates,
+                  meta,
                 }
               }
 
@@ -232,6 +247,7 @@ export const locationLayer = Layer.effectDiscard(
                   hits: keywordMatches.map((n) => ({ node: n, score: 0, source: "keyword" as const })),
                   degraded: true,
                   totalCandidates,
+                  meta,
                 }
               }
 
@@ -256,6 +272,7 @@ export const locationLayer = Layer.effectDiscard(
                   hits: semanticHits,
                   degraded: false,
                   totalCandidates,
+                  meta,
                 }
               }
 
@@ -265,6 +282,7 @@ export const locationLayer = Layer.effectDiscard(
                   hits: keywordMatches.map((n) => ({ node: n, score: 0, source: "keyword" as const })),
                   degraded: true,
                   totalCandidates,
+                  meta,
                 }
               }
 
@@ -272,6 +290,7 @@ export const locationLayer = Layer.effectDiscard(
                 hits: [],
                 degraded: false,
                 totalCandidates,
+                meta,
               }
             }).pipe(Effect.mapError((err) => {
               if (err instanceof ToolFailure) return err

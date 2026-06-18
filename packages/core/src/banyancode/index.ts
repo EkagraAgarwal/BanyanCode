@@ -2,6 +2,7 @@ export * as Banyan from "."
 
 export { MemoryEntriesTable } from "./memory.sql"
 export { CodegraphFilesTable, CodegraphNodesTable, CodegraphEdgesTable, CodegraphEmbeddingsTable } from "./codegraph.sql"
+export { CodegraphMetaTable } from "./codegraph-meta.sql"
 export { SubagentMessagesTable } from "./subagent-messages.sql"
 export { SubagentPlansTable } from "./subagent-plans.sql"
 export type {
@@ -9,9 +10,12 @@ export type {
   CodegraphFile,
   CodegraphNode,
   CodegraphEdge,
+  CodegraphMeta,
   SubagentMessage,
   PeerInfo,
 } from "./types"
+export { GraphMeta } from "./types"
+export { NotFoundError, StaleWriteError } from "./types"
 export { Service as MemoryRepo, layer as memoryRepoLayer, defaultLayer as memoryRepoDefaultLayer } from "./memory-repo"
 export { Service as CodegraphRepo, layer as codegraphRepoLayer, defaultLayer as codegraphRepoDefaultLayer } from "./codegraph-repo"
 export { Service as CodegraphIndexer, layer as codegraphIndexerLayer, defaultLayer as codegraphIndexerDefaultLayer } from "./codegraph-indexer"

@@ -1,3 +1,5 @@
+import { Schema } from "effect"
+
 export type MemoryEntry = {
   id: string
   key: string
@@ -8,7 +10,21 @@ export type MemoryEntry = {
   sessionID?: string
   createdAt: number
   expiresAt?: number
+  agentID?: string
+  version: number
+  updatedAt: number
+  namespace?: string
 }
+
+export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("NotFoundError", {
+  id: Schema.String,
+}) {}
+
+export class StaleWriteError extends Schema.TaggedErrorClass<StaleWriteError>()("StaleWriteError", {
+  id: Schema.String,
+  expectedVersion: Schema.Number,
+  currentVersion: Schema.Number,
+}) {}
 
 export type CodegraphFile = {
   id: string
@@ -64,3 +80,23 @@ export type PeerInfo = {
   status: "active" | "idle" | "disconnected"
   lastSeenAt: number
 }
+
+export type CodegraphMeta = {
+  id: string
+  graphBuiltAt: number
+  graphVersion: number
+  graphCoverage: number
+  totalFiles: number
+  totalNodes: number
+  totalEdges: number
+  schemaVersion: number
+}
+
+export const GraphMeta = Schema.Struct({
+  graphBuiltAt: Schema.Number,
+  graphVersion: Schema.Number,
+  graphCoverage: Schema.Number,
+  totalFiles: Schema.Number,
+  totalNodes: Schema.Number,
+  totalEdges: Schema.Number,
+})

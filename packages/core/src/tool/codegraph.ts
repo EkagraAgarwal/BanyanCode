@@ -3,6 +3,7 @@ export * as CodegraphTools from "./codegraph"
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { Banyan } from "../banyancode"
+import { GraphMeta } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -26,6 +27,7 @@ export const OutputBuild = Schema.Struct({
   indexed: Schema.Number,
   skipped: Schema.Number,
   duration_ms: Schema.Number,
+  meta: Schema.optional(GraphMeta),
 })
 
 export const InputQuery = Schema.Struct({
@@ -37,6 +39,7 @@ export const InputQuery = Schema.Struct({
 
 export const OutputQuery = Schema.Struct({
   nodes: Schema.Array(Schema.Unknown),
+  meta: Schema.optional(GraphMeta),
 })
 
 export const InputImpact = Schema.Struct({
@@ -49,6 +52,7 @@ export const InputImpact = Schema.Struct({
 export const OutputImpact = Schema.Struct({
   dependents: Schema.Array(Schema.Unknown),
   transitive: Schema.Array(Schema.Unknown),
+  meta: Schema.optional(GraphMeta),
 })
 
 export const InputDependents = Schema.Struct({
@@ -59,6 +63,7 @@ export const InputDependents = Schema.Struct({
 
 export const OutputDependents = Schema.Struct({
   dependents: Schema.Array(Schema.Unknown),
+  meta: Schema.optional(GraphMeta),
 })
 
 export const InputCallers = Schema.Struct({
@@ -69,6 +74,7 @@ export const InputCallers = Schema.Struct({
 
 export const OutputCallers = Schema.Struct({
   callers: Schema.Array(Schema.Unknown),
+  meta: Schema.optional(GraphMeta),
 })
 
 export const locationLayer = Layer.effectDiscard(
@@ -128,14 +134,25 @@ export const locationLayer = Layer.effectDiscard(
               }
 
               if (currentStatus.status === "completed" && currentStatus.result) {
+                const meta = yield* repo.getMeta()
                 return {
                   indexed: currentStatus.result.indexed,
                   skipped: currentStatus.result.skipped,
                   duration_ms: currentStatus.result.duration_ms,
+                  meta: meta
+                    ? {
+                        graphBuiltAt: meta.graphBuiltAt,
+                        graphVersion: meta.graphVersion,
+                        graphCoverage: meta.graphCoverage,
+                        totalFiles: meta.totalFiles,
+                        totalNodes: meta.totalNodes,
+                        totalEdges: meta.totalEdges,
+                      }
+                    : undefined,
                 }
               }
 
-              return { indexed: 0, skipped: 0, duration_ms: 0 }
+              return { indexed: 0, skipped: 0, duration_ms: 0, meta: undefined }
             }).pipe(
               Effect.mapError((err) => {
                 if (err instanceof ToolFailure) return err
@@ -185,7 +202,20 @@ export const locationLayer = Layer.effectDiscard(
                 nodes = yield* repo.listAllNodes()
               }
 
-              return { nodes: nodes.slice(0, limit) }
+              const meta = yield* repo.getMeta()
+              return {
+                nodes: nodes.slice(0, limit),
+                meta: meta
+                  ? {
+                      graphBuiltAt: meta.graphBuiltAt,
+                      graphVersion: meta.graphVersion,
+                      graphCoverage: meta.graphCoverage,
+                      totalFiles: meta.totalFiles,
+                      totalNodes: meta.totalNodes,
+                      totalEdges: meta.totalEdges,
+                    }
+                  : undefined,
+              }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_query failed` })))
           },
         }),
@@ -216,9 +246,20 @@ export const locationLayer = Layer.effectDiscard(
                 nodeID: input.nodeID,
                 function: input.function,
               })
+              const meta = yield* repo.getMeta()
               return {
                 dependents: result.dependents.slice(0, limit),
                 transitive: result.transitive.slice(0, limit),
+                meta: meta
+                  ? {
+                      graphBuiltAt: meta.graphBuiltAt,
+                      graphVersion: meta.graphVersion,
+                      graphCoverage: meta.graphCoverage,
+                      totalFiles: meta.totalFiles,
+                      totalNodes: meta.totalNodes,
+                      totalEdges: meta.totalEdges,
+                    }
+                  : undefined,
               }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_impact failed` })))
           },
@@ -247,7 +288,20 @@ export const locationLayer = Layer.effectDiscard(
               })
 
               const result = yield* analyzer.dependents({ nodeID: input.nodeID, function: input.function })
-              return { dependents: result.slice(0, limit) }
+              const meta = yield* repo.getMeta()
+              return {
+                dependents: result.slice(0, limit),
+                meta: meta
+                  ? {
+                      graphBuiltAt: meta.graphBuiltAt,
+                      graphVersion: meta.graphVersion,
+                      graphCoverage: meta.graphCoverage,
+                      totalFiles: meta.totalFiles,
+                      totalNodes: meta.totalNodes,
+                      totalEdges: meta.totalEdges,
+                    }
+                  : undefined,
+              }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_dependents failed` })))
           },
         }),
@@ -275,7 +329,20 @@ export const locationLayer = Layer.effectDiscard(
               })
 
               const result = yield* analyzer.callers({ nodeID: input.nodeID, function: input.function })
-              return { callers: result.slice(0, limit) }
+              const meta = yield* repo.getMeta()
+              return {
+                callers: result.slice(0, limit),
+                meta: meta
+                  ? {
+                      graphBuiltAt: meta.graphBuiltAt,
+                      graphVersion: meta.graphVersion,
+                      graphCoverage: meta.graphCoverage,
+                      totalFiles: meta.totalFiles,
+                      totalNodes: meta.totalNodes,
+                      totalEdges: meta.totalEdges,
+                    }
+                  : undefined,
+              }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_callers failed` })))
           },
         }),

@@ -4,7 +4,8 @@ import { eq } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { CodegraphEdgesTable, CodegraphEmbeddingsTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
-import type { CodegraphEdge, CodegraphFile, CodegraphNode } from "./types"
+import { CodegraphMetaTable } from "./codegraph-meta.sql"
+import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from "./types"
 
 export interface Interface {
   readonly putFile: (file: CodegraphFile) => Effect.Effect<void, never, never>
@@ -26,6 +27,15 @@ export interface Interface {
   readonly getEmbedding: (nodeID: string) => Effect.Effect<{ embedding: Uint8Array; model: string; dim: number } | undefined, never, never>
   readonly deleteFile: (id: string) => Effect.Effect<void, never, never>
   readonly clearAll: () => Effect.Effect<void, never, never>
+  readonly getMeta: () => Effect.Effect<CodegraphMeta | undefined, never, never>
+  readonly setMeta: (m: CodegraphMeta) => Effect.Effect<void, never, never>
+  readonly bumpVersion: (input: {
+    scannedFiles: number
+    indexedFiles: number
+    totalFiles: number
+    totalNodes: number
+    totalEdges: number
+  }) => Effect.Effect<{ graphVersion: number; coverage: number }, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Banyan/CodegraphRepo") {}
@@ -310,6 +320,79 @@ export const layer = Layer.effect(
       yield* db.delete(CodegraphFilesTable).run().pipe(Effect.orDie)
     })
 
+    const getMeta = Effect.fn("CodegraphRepo.getMeta")(function* () {
+      const row = yield* db
+        .select()
+        .from(CodegraphMetaTable)
+        .where(eq(CodegraphMetaTable.id, "singleton"))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return undefined
+      return {
+        id: row.id,
+        graphBuiltAt: row.graph_built_at,
+        graphVersion: row.graph_version,
+        graphCoverage: row.graph_coverage,
+        totalFiles: row.total_files,
+        totalNodes: row.total_nodes,
+        totalEdges: row.total_edges,
+        schemaVersion: row.schema_version,
+      }
+    })
+
+    const setMeta = Effect.fn("CodegraphRepo.setMeta")(function* (m: CodegraphMeta) {
+      yield* db
+        .insert(CodegraphMetaTable)
+        .values({
+          id: m.id,
+          graph_built_at: m.graphBuiltAt,
+          graph_version: m.graphVersion,
+          graph_coverage: m.graphCoverage,
+          total_files: m.totalFiles,
+          total_nodes: m.totalNodes,
+          total_edges: m.totalEdges,
+          schema_version: m.schemaVersion,
+        })
+        .onConflictDoUpdate({
+          target: CodegraphMetaTable.id,
+          set: {
+            graph_built_at: m.graphBuiltAt,
+            graph_version: m.graphVersion,
+            graph_coverage: m.graphCoverage,
+            total_files: m.totalFiles,
+            total_nodes: m.totalNodes,
+            total_edges: m.totalEdges,
+            schema_version: m.schemaVersion,
+          },
+        })
+        .run()
+        .pipe(Effect.orDie)
+    })
+
+    const bumpVersion = Effect.fn("CodegraphRepo.bumpVersion")(function* (input: {
+      scannedFiles: number
+      indexedFiles: number
+      totalFiles: number
+      totalNodes: number
+      totalEdges: number
+    }) {
+      const coverage = input.scannedFiles > 0 ? input.indexedFiles / input.scannedFiles : 0
+      const existing = yield* getMeta()
+      const nextVersion = (existing?.graphVersion ?? 0) + 1
+      const meta: CodegraphMeta = {
+        id: "singleton",
+        graphBuiltAt: Date.now(),
+        graphVersion: nextVersion,
+        graphCoverage: coverage,
+        totalFiles: input.totalFiles,
+        totalNodes: input.totalNodes,
+        totalEdges: input.totalEdges,
+        schemaVersion: 1,
+      }
+      yield* setMeta(meta)
+      return { graphVersion: nextVersion, coverage }
+    })
+
     return Service.of({
       putFile,
       getFile,
@@ -330,6 +413,9 @@ export const layer = Layer.effect(
       getEmbedding,
       deleteFile,
       clearAll,
+      getMeta,
+      setMeta,
+      bumpVersion,
     })
   }),
 )

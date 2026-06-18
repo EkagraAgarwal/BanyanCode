@@ -17,7 +17,7 @@ export interface Interface {
     root: string
     force?: boolean
     onProgress?: (info: { file: string; done: number; total: number }) => Effect.Effect<void>
-  }) => Effect.Effect<{ indexed: number; skipped: number }, CodegraphError, never>
+  }) => Effect.Effect<{ indexed: number; skipped: number; scannedFiles: number }, CodegraphError, never>
   readonly cancel: () => Effect.Effect<void, never, never>
 }
 
@@ -246,7 +246,7 @@ export const layer = Layer.effect(
         )
         yield* processFile
       }
-      return { indexed, skipped }
+      return { indexed, skipped, scannedFiles: indexed + skipped }
     })
 
     const cancel = Effect.fn("CodegraphIndexer.cancel")(function* () {

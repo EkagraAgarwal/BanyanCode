@@ -47,6 +47,9 @@ const makeMockRepoLayer = () =>
           mockCodegraphEntries.nodes = []
           mockCodegraphEntries.edges = []
         }),
+        getMeta: () => Effect.succeed(undefined),
+        setMeta: () => Effect.void,
+        bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1 }),
       })
     }),
   )

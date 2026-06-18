@@ -75,6 +75,9 @@ const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.o
     mockCodegraphEntries.edges = []
     mockCodegraphEntries.embeddings.clear()
   }),
+  getMeta: () => Effect.succeed(undefined),
+  setMeta: () => Effect.void,
+  bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1 }),
 }))
 
 const mockEmbeddingProviderNoModelLayer = Layer.succeed(

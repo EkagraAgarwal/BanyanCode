@@ -2,6 +2,7 @@ export * as CodegraphBuildService from "./codegraph-build-service"
 
 import { Cause, Context, Effect, Fiber, Layer, Option, Queue, Ref, Schema } from "effect"
 import { CodegraphIndexer } from "./codegraph-indexer"
+import { CodegraphRepo } from "./codegraph-repo"
 import { EventV2 } from "../event"
 
 export const State = Schema.Struct({
@@ -12,6 +13,8 @@ export const State = Schema.Struct({
   total: Schema.Number,
   currentFile: Schema.optional(Schema.String),
   startedAt: Schema.optional(Schema.Number),
+  graphVersion: Schema.optional(Schema.Number),
+  graphCoverage: Schema.optional(Schema.Number),
   result: Schema.optional(
     Schema.Struct({
       indexed: Schema.Number,
@@ -56,6 +59,7 @@ export const layer = Layer.effect(
 
     const indexer = yield* CodegraphIndexer.Service
     const eventBus = yield* EventV2.Service
+    const repo = yield* CodegraphRepo.Service
     const state = yield* Ref.make<State>({ status: "idle", done: 0, total: 0 })
     const inFlight = yield* Ref.make<Option.Option<Fiber.Fiber<void, CodegraphIndexer.CodegraphError>>>(Option.none())
     const events = yield* Queue.unbounded<{ type: "banyancode.codegraph.build"; properties: State }>().pipe(Effect.orDie)
@@ -92,6 +96,16 @@ export const layer = Layer.effect(
               yield* publish(next)
             }),
           })
+
+          // Only bump version on successful completion
+          const { graphVersion, coverage } = yield* repo.bumpVersion({
+            scannedFiles: result.scannedFiles,
+            indexedFiles: result.indexed,
+            totalFiles: result.indexed + result.skipped,
+            totalNodes: result.indexed + result.skipped,
+            totalEdges: 0,
+          })
+
           const doneState: State = {
             status: "completed",
             root: initial.root,
@@ -99,6 +113,8 @@ export const layer = Layer.effect(
             done: result.indexed + result.skipped,
             total: result.indexed + result.skipped,
             startedAt: initial.startedAt,
+            graphVersion,
+            graphCoverage: coverage,
             result: { indexed: result.indexed, skipped: result.skipped, duration_ms: Date.now() - startTime },
           }
           yield* Ref.set(state, doneState)
@@ -150,4 +166,4 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(CodegraphIndexer.defaultLayer))
+export const defaultLayer = layer.pipe(Layer.provide(CodegraphIndexer.defaultLayer), Layer.provide(CodegraphRepo.defaultLayer))

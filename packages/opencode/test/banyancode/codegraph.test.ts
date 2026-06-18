@@ -64,6 +64,9 @@ const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.o
     mockCodegraphEntries.nodes = []
     mockCodegraphEntries.edges = []
   }),
+  getMeta: () => Effect.succeed(undefined),
+  setMeta: () => Effect.void,
+  bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1 }),
 }))
 
 const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(mockPermissionLayer))
