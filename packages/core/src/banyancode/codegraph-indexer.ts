@@ -23,7 +23,24 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphIndexer") {}
 
-const DEFAULT_IGNORED = ["node_modules", "dist", "build", "coverage", ".next", ".cache", "target", "vendor"]
+const DEFAULT_IGNORED = [
+  "node_modules",
+  "dist",
+  "build",
+  "coverage",
+  ".next",
+  ".cache",
+  "target",
+  "vendor",
+  "out",
+  "temp",
+  ".sst",
+  ".turbo",
+  ".drizzle",
+  ".git",
+  ".opencode",
+  ".banyancode",
+]
 
 export const layer = Layer.effect(
   Service,
@@ -71,12 +88,22 @@ export const layer = Layer.effect(
       })
     }
 
-    const isIgnored = (patterns: string[], filePath: string): boolean => {
-      const relative = filePath.replace(/\\/g, "/")
+    const isIgnored = (patterns: string[], root: string, filePath: string): boolean => {
+      const relativePath = path.relative(root, filePath).replace(/\\/g, "/")
+      const segments = relativePath.split("/")
       for (const pattern of patterns) {
-        if (pattern === "") continue
-        const regex = globToRegex(pattern)
-        if (regex.test(relative)) return true
+        const trimmed = pattern.trim()
+        if (trimmed === "" || trimmed.startsWith("#")) continue
+        const cleanPattern = trimmed.replace(/^\/+|\/+$/g, "")
+        if (cleanPattern === "") continue
+
+        if (cleanPattern.includes("/")) {
+          if (relativePath === cleanPattern || relativePath.startsWith(cleanPattern + "/")) return true
+        } else {
+          if (segments.includes(cleanPattern)) return true
+          const regex = globToRegex(cleanPattern)
+          if (segments.some((seg) => regex.test(seg))) return true
+        }
       }
       return false
     }
@@ -102,7 +129,7 @@ export const layer = Layer.effect(
       const allFiles = yield* walkDirectory(input.root).pipe(Effect.orDie)
       const codeFiles = allFiles.filter((f) => {
         const ext = path.extname(f).toLowerCase()
-        return [".ts", ".tsx", ".js", ".jsx", ".py"].includes(ext) && !isIgnored(patterns, f)
+        return [".ts", ".tsx", ".js", ".jsx", ".py"].includes(ext) && !isIgnored(patterns, input.root, f)
       })
       let indexed = 0
       let skipped = 0
@@ -117,6 +144,18 @@ export const layer = Layer.effect(
         const processFile = Effect.gen(function* () {
           const content = yield* fs.readFileStringSafe(filePath)
           if (content === undefined) {
+            skipped++
+            return
+          }
+          // Safeguard: skip files > 500 KB or with lines longer than 5000 chars (potential compiled bundles or minified assets)
+          if (content.length > 500000) {
+            yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars)`)
+            skipped++
+            return
+          }
+          const hasTooLongLine = content.split("\n").some((line) => line.length > 5000)
+          if (hasTooLongLine) {
+            yield* Effect.logWarning(`Skipping minified/compiled file: ${relativePath}`)
             skipped++
             return
           }
