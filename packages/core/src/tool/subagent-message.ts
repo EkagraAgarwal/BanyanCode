@@ -20,7 +20,7 @@ export const Output = Schema.Struct({
   pending: Schema.Number,
 })
 
-const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE === "1"
+const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {

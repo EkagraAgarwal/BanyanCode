@@ -1,7 +1,7 @@
 import type { ParseResult, ParsedNode } from "./types"
 
-const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?function\s+(\w+)\s*\(/g
-const CLASS_REGEX = /(?:^|\n)(?:export\s+)?class\s+(\w+)/g
+const FUNCTION_REGEX = /(?:^|\n)(?:export\s+|pub\s+)?(?:function|fn|func)\s+(\w+)\s*\(/g
+const CLASS_REGEX = /(?:^|\n)(?:export\s+|pub\s+)?class\s+(\w+)/g
 
 export function parseGeneric(content: string, fileID: string): ParseResult {
   const nodes: ParsedNode[] = []

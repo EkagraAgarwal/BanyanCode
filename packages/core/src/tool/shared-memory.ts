@@ -21,7 +21,7 @@ export const Output = Schema.Struct({
 })
 
 const store = new Map<string, { value: unknown; tags: string[] }>()
-const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE === "1"
+const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {

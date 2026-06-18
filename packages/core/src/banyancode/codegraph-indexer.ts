@@ -129,7 +129,24 @@ export const layer = Layer.effect(
       const allFiles = yield* walkDirectory(input.root).pipe(Effect.orDie)
       const codeFiles = allFiles.filter((f) => {
         const ext = path.extname(f).toLowerCase()
-        return [".ts", ".tsx", ".js", ".jsx", ".py"].includes(ext) && !isIgnored(patterns, input.root, f)
+        const allowedExtensions = [
+          ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs",
+          ".py", ".pyw",
+          ".zig",
+          ".rs",
+          ".go",
+          ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh",
+          ".java", ".kt",
+          ".cs",
+          ".swift",
+          ".rb",
+          ".php",
+          ".sh", ".bat", ".ps1",
+          ".sql",
+          ".html", ".css",
+          ".md"
+        ]
+        return allowedExtensions.includes(ext) && !isIgnored(patterns, input.root, f)
       })
       let indexed = 0
       let skipped = 0
@@ -167,7 +184,38 @@ export const layer = Layer.effect(
           }
           const parser = getParser(ext)
           const result = parser.parse(content, filePath)
-          const language = ext === ".py" ? "python" : "typescript"
+          let language = "generic"
+          if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx" || ext === ".mts" || ext === ".cts" || ext === ".mjs" || ext === ".cjs") {
+            language = "typescript"
+          } else if (ext === ".py" || ext === ".pyw") {
+            language = "python"
+          } else if (ext === ".zig") {
+            language = "zig"
+          } else if (ext === ".rs") {
+            language = "rust"
+          } else if (ext === ".go") {
+            language = "go"
+          } else if (ext === ".c" || ext === ".cpp" || ext === ".cc" || ext === ".cxx" || ext === ".h" || ext === ".hpp" || ext === ".hh") {
+            language = "c_cpp"
+          } else if (ext === ".java" || ext === ".kt") {
+            language = "java"
+          } else if (ext === ".cs") {
+            language = "csharp"
+          } else if (ext === ".swift") {
+            language = "swift"
+          } else if (ext === ".rb") {
+            language = "ruby"
+          } else if (ext === ".php") {
+            language = "php"
+          } else if (ext === ".sh" || ext === ".bat" || ext === ".ps1") {
+            language = "shell"
+          } else if (ext === ".sql") {
+            language = "sql"
+          } else if (ext === ".html" || ext === ".css") {
+            language = "web"
+          } else if (ext === ".md") {
+            language = "markdown"
+          }
           const fileID = existing?.id ?? randomUUID()
           const indexedAt = Date.now()
           yield* repo.putFile({ id: fileID, path: filePath, contentHash, language, indexedAt })

@@ -1,8 +1,9 @@
 import { Config, ConfigProvider, Context, Effect, Layer } from "effect"
 
 const bool = (name: string) => Config.boolean(name).pipe(Config.withDefault(false))
+const boolTrue = (name: string) => Config.boolean(name).pipe(Config.withDefault(true))
 
-const banyancodeEnable = bool("BANYANCODE_ENABLE")
+const banyancodeEnable = boolTrue("BANYANCODE_ENABLE")
 
 export interface Info {
   readonly banyancodeEnable: boolean

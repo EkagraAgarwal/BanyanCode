@@ -7,7 +7,7 @@ import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
-const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE === "1"
+const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 export const name = "mesh_control"
 

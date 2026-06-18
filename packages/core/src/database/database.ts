@@ -41,7 +41,30 @@ export function layerFromPath(filename: string) {
   return layer.pipe(Layer.provide(sqliteLayer({ filename })))
 }
 
-function findBanyanProjectDir(startDir: string): string | undefined {
+function findProjectRoot(startDir: string): string | undefined {
+  let dir = startDir
+  const markers = [".git", "banyancode.json", "opencode.json", ".banyancode", ".opencode", "package.json", "Cargo.toml", "go.mod"]
+  while (true) {
+    for (const marker of markers) {
+      const candidate = join(dir, marker)
+      try {
+        if (fs.existsSync(candidate)) {
+          return dir
+        }
+      } catch {
+        // ignore
+      }
+    }
+    const parent = join(dir, "..")
+    if (parent === dir) {
+      break
+    }
+    dir = parent
+  }
+  return undefined
+}
+
+function findOrCreateBanyanProjectDir(startDir: string): string | undefined {
   let dir = startDir
   while (true) {
     const candidate = join(dir, ".banyancode")
@@ -59,7 +82,17 @@ function findBanyanProjectDir(startDir: string): string | undefined {
     }
     dir = parent
   }
-  return undefined
+
+  const root = findProjectRoot(startDir) ?? startDir
+  const targetDir = join(root, ".banyancode")
+  try {
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true })
+    }
+    return targetDir
+  } catch {
+    return undefined
+  }
 }
 
 export function path() {
@@ -68,7 +101,7 @@ export function path() {
     return join(Global.Path.data, Flag.OPENCODE_DB)
   }
 
-  const projectBanyanDir = findBanyanProjectDir(process.cwd())
+  const projectBanyanDir = findOrCreateBanyanProjectDir(process.cwd())
   if (projectBanyanDir) {
     if (
       ["latest", "beta", "prod"].includes(InstallationChannel) ||

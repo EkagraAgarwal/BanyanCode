@@ -80,7 +80,7 @@ export class MemoryQuotaError extends Schema.TaggedErrorClass<MemoryQuotaError>(
   message: Schema.String,
 }) {}
 
-const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE === "1"
+const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   let dot = 0

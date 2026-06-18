@@ -25,6 +25,7 @@ export interface Interface {
   readonly putEmbedding: (nodeID: string, embedding: Uint8Array, model: string, dim: number) => Effect.Effect<void, never, never>
   readonly getEmbedding: (nodeID: string) => Effect.Effect<{ embedding: Uint8Array; model: string; dim: number } | undefined, never, never>
   readonly deleteFile: (id: string) => Effect.Effect<void, never, never>
+  readonly clearAll: () => Effect.Effect<void, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Banyan/CodegraphRepo") {}
@@ -305,6 +306,10 @@ export const layer = Layer.effect(
       }))
     })
 
+    const clearAll = Effect.fn("CodegraphRepo.clearAll")(function* () {
+      yield* db.delete(CodegraphFilesTable).run().pipe(Effect.orDie)
+    })
+
     return Service.of({
       putFile,
       getFile,
@@ -324,6 +329,7 @@ export const layer = Layer.effect(
       putEmbedding,
       getEmbedding,
       deleteFile,
+      clearAll,
     })
   }),
 )
