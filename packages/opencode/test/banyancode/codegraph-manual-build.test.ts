@@ -47,8 +47,10 @@ export const constant${i} = ${i}`,
 }
 
 function makeTestLayer(dbPath: string) {
-  return Banyan.codegraphBuildServiceDefaultLayer.pipe(
-    Layer.provide(Database.layerFromPath(dbPath)),
+  const dbLayer = Database.layerFromPath(dbPath)
+  const repoLayer = Banyan.codegraphRepoDefaultLayer.pipe(Layer.provide(dbLayer))
+  const buildLayer = Banyan.codegraphBuildServiceDefaultLayer.pipe(Layer.provide(dbLayer))
+  return Layer.merge(repoLayer, buildLayer).pipe(
     Layer.provide(FSUtil.defaultLayer),
     Layer.provide(NodeFileSystem.layer),
     Layer.provide(EventV2.defaultLayer),
@@ -97,6 +99,49 @@ describe("Manual codegraph build - progress reporting", () => {
       expect(progressUpdates.length).toBeGreaterThan(0)
       const finalUpdate = progressUpdates[progressUpdates.length - 1]
       expect(finalUpdate.total).toBe(10)
+    } finally {
+      await cleanTmpdir(dir)
+    }
+  }, 60000)
+
+  test("clearAll removes all files, nodes, and edges", async () => {
+    const dir = await makeTmpdir()
+    try {
+      await makeFixtureCodebase(dir, 3)
+      const dbPath = path.join(dir, "test.sqlite")
+      const layer = makeTestLayer(dbPath)
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const buildSvc = yield* CodegraphBuildService.Service
+          yield* buildSvc.start({ root: dir, force: true })
+
+          // Wait for build to complete
+          yield* pollWithTimeout(
+            Effect.gen(function* () {
+              const s = yield* buildSvc.status()
+              if (s.status === "completed" || s.status === "failed" || s.status === "cancelled") return s
+              return undefined
+            }),
+            "build never completed",
+            "30 seconds",
+          )
+
+          const repo = yield* Banyan.CodegraphRepo
+          const filesBefore = yield* repo.listAllFiles()
+          const nodesBefore = yield* repo.listAllNodes()
+          expect(filesBefore.length).toBe(3)
+          expect(nodesBefore.length).toBeGreaterThan(0)
+
+          // Clear all!
+          yield* repo.clearAll()
+
+          const filesAfter = yield* repo.listAllFiles()
+          const nodesAfter = yield* repo.listAllNodes()
+          expect(filesAfter).toEqual([])
+          expect(nodesAfter).toEqual([])
+        }).pipe(Effect.provide(layer), Effect.scoped),
+      )
     } finally {
       await cleanTmpdir(dir)
     }

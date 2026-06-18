@@ -69,6 +69,12 @@ const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.o
     mockCodegraphEntries.files = mockCodegraphEntries.files.filter((f) => f.id !== id)
     mockCodegraphEntries.nodes = mockCodegraphEntries.nodes.filter((n) => n.fileID !== id)
   }),
+  clearAll: () => Effect.sync(() => {
+    mockCodegraphEntries.files = []
+    mockCodegraphEntries.nodes = []
+    mockCodegraphEntries.edges = []
+    mockCodegraphEntries.embeddings.clear()
+  }),
 }))
 
 const mockEmbeddingProviderNoModelLayer = Layer.succeed(

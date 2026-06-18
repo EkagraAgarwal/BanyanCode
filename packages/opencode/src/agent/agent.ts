@@ -9,12 +9,8 @@ import { Truncate } from "@/tool/truncate"
 import { Auth } from "../auth"
 import { ProviderTransform } from "@/provider/transform"
 
-import { readFileSync } from "fs"
-import { fileURLToPath } from "url"
-import { dirname, join } from "path"
-const __dirname_ = dirname(fileURLToPath(import.meta.url))
-const PROMPT_ORCHESTRATOR = readFileSync(join(__dirname_, "prompt", "orchestrator.txt"), "utf8")
-const PROMPT_RESEARCHER = readFileSync(join(__dirname_, "prompt", "researcher.txt"), "utf8")
+import PROMPT_ORCHESTRATOR from "./prompt/orchestrator.txt"
+import PROMPT_RESEARCHER from "./prompt/researcher.txt"
 
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"

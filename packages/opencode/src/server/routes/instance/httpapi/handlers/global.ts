@@ -13,7 +13,6 @@ import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput } from "../groups/global"
 import { applyEmbeddingModel } from "@/effect/banyancode-bootstrap"
-import { applyCodegraphBuildBridge } from "@/effect/banyancode-codegraph-bridge"
 import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 
@@ -150,13 +149,11 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     const startupHandler = Effect.fn("GlobalHttpApi.startup")(function* () {
-      yield* applyCodegraphBuildBridge
       yield* applySystemMonitorBridge
       return true
     })
 
     const applyEmbeddingModelHandler = Effect.fn("GlobalHttpApi.applyEmbeddingModel")(function* () {
-      yield* applyCodegraphBuildBridge
       yield* applySystemMonitorBridge
       yield* applyEmbeddingModel
       return true

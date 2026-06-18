@@ -42,6 +42,11 @@ const makeMockRepoLayer = () =>
           mockCodegraphEntries.files = mockCodegraphEntries.files.filter((f) => f.id !== id)
           mockCodegraphEntries.nodes = mockCodegraphEntries.nodes.filter((n) => n.fileID !== id)
         }),
+        clearAll: () => Effect.sync(() => {
+          mockCodegraphEntries.files = []
+          mockCodegraphEntries.nodes = []
+          mockCodegraphEntries.edges = []
+        }),
       })
     }),
   )

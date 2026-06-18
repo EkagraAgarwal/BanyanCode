@@ -2,6 +2,7 @@ import { Config, ConfigProvider, Context, Effect, Layer, Option } from "effect"
 import { ConfigService } from "@/effect/config-service"
 
 const bool = (name: string) => Config.boolean(name).pipe(Config.withDefault(false))
+const boolTrue = (name: string) => Config.boolean(name).pipe(Config.withDefault(true))
 const positiveInteger = (name: string) =>
   Config.number(name).pipe(
     Config.map((value) => (Number.isInteger(value) && value > 0 ? value : undefined)),
@@ -15,7 +16,7 @@ const enabledByExperimental = (name: string) =>
 
 export class Service extends ConfigService.Service<Service>()("@opencode/RuntimeFlags", {
   autoShare: bool("OPENCODE_AUTO_SHARE"),
-  banyancodeEnable: bool("BANYANCODE_ENABLE"),
+  banyancodeEnable: boolTrue("BANYANCODE_ENABLE"),
   banyancodeEmbeddingModel: Config.string("BANYANCODE_EMBEDDING_MODEL").pipe(
     Config.withDefault(""),
     Config.map((s) => (s === "" ? undefined : s)),

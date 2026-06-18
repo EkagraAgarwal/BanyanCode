@@ -69,6 +69,7 @@ export type Event =
   | EventTodoUpdated
   | EventLspUpdated
   | EventBanyancodeCodegraphBuild
+  | EventBanyancodeCodeembedBuild
   | EventBanyancodeMeshStatus
   | EventBanyancodeSystemUpdated
   | EventPermissionAsked
@@ -1402,6 +1403,20 @@ export type GlobalEvent = {
             indexed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
             skipped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
             duration_ms: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }
+          error?: string
+        }
+      }
+    | {
+        id: string
+        type: "banyancode.codeembed.build"
+        properties: {
+          status: "idle" | "running" | "completed" | "failed" | "cancelled"
+          done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          result?: {
+            embedded: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            skipped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           }
           error?: string
         }
@@ -5091,6 +5106,21 @@ export type EventBanyancodeCodegraphBuild = {
       indexed: number | "NaN" | "Infinity" | "-Infinity"
       skipped: number | "NaN" | "Infinity" | "-Infinity"
       duration_ms: number | "NaN" | "Infinity" | "-Infinity"
+    }
+    error?: string
+  }
+}
+
+export type EventBanyancodeCodeembedBuild = {
+  id: string
+  type: "banyancode.codeembed.build"
+  properties: {
+    status: "idle" | "running" | "completed" | "failed" | "cancelled"
+    done: number | "NaN" | "Infinity" | "-Infinity"
+    total: number | "NaN" | "Infinity" | "-Infinity"
+    result?: {
+      embedded: number | "NaN" | "Infinity" | "-Infinity"
+      skipped: number | "NaN" | "Infinity" | "-Infinity"
     }
     error?: string
   }

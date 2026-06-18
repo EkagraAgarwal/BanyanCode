@@ -59,6 +59,11 @@ const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.o
     mockCodegraphEntries.files = mockCodegraphEntries.files.filter((f) => f.id !== id)
     mockCodegraphEntries.nodes = mockCodegraphEntries.nodes.filter((n) => n.fileID !== id)
   }),
+  clearAll: () => Effect.sync(() => {
+    mockCodegraphEntries.files = []
+    mockCodegraphEntries.nodes = []
+    mockCodegraphEntries.edges = []
+  }),
 }))
 
 const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(mockPermissionLayer))
