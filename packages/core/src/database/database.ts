@@ -9,6 +9,7 @@ import { isAbsolute, join } from "path"
 import { DatabaseMigration } from "./migration"
 import { InstallationChannel } from "../installation/version"
 import { LayerNode } from "../effect/layer-node"
+import fs from "node:fs"
 
 const makeDatabase = EffectDrizzleSqlite.makeWithDefaults()
 type DatabaseShape = Effect.Success<typeof makeDatabase>
@@ -40,11 +41,44 @@ export function layerFromPath(filename: string) {
   return layer.pipe(Layer.provide(sqliteLayer({ filename })))
 }
 
+function findBanyanProjectDir(startDir: string): string | undefined {
+  let dir = startDir
+  while (true) {
+    const candidate = join(dir, ".banyancode")
+    try {
+      const stat = fs.statSync(candidate)
+      if (stat.isDirectory()) {
+        return candidate
+      }
+    } catch {
+      // ignore
+    }
+    const parent = join(dir, "..")
+    if (parent === dir) {
+      break
+    }
+    dir = parent
+  }
+  return undefined
+}
+
 export function path() {
   if (Flag.OPENCODE_DB) {
     if (Flag.OPENCODE_DB === ":memory:" || isAbsolute(Flag.OPENCODE_DB)) return Flag.OPENCODE_DB
     return join(Global.Path.data, Flag.OPENCODE_DB)
   }
+
+  const projectBanyanDir = findBanyanProjectDir(process.cwd())
+  if (projectBanyanDir) {
+    if (
+      ["latest", "beta", "prod"].includes(InstallationChannel) ||
+      process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" ||
+      process.env.OPENCODE_DISABLE_CHANNEL_DB === "true"
+    )
+      return join(projectBanyanDir, "banyancode.db")
+    return join(projectBanyanDir, `banyancode-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}.db`)
+  }
+
   if (
     ["latest", "beta", "prod"].includes(InstallationChannel) ||
     process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" ||
