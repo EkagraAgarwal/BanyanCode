@@ -45,6 +45,17 @@ export type CodegraphNode = {
   code?: string
 }
 
+export const CodegraphNodeSchema = Schema.Struct({
+  id: Schema.String,
+  fileID: Schema.String,
+  kind: Schema.Literals(["file", "function", "class", "method", "type", "variable"]),
+  name: Schema.String,
+  signature: Schema.optional(Schema.String),
+  startLine: Schema.Number,
+  endLine: Schema.Number,
+  code: Schema.optional(Schema.String),
+}).annotate({ identifier: "Banyan/CodegraphNode" })
+
 export type CodegraphEdge = {
   id: string
   fromNodeID: string
