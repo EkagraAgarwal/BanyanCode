@@ -320,4 +320,141 @@ describe("code_embed tools", () => {
       expect((embedResult.output?.structured as any).model).toBeNull()
     }),
   )
+
+  describe("code_search ranking and filtering", () => {
+    const seedThree = () => {
+      mockCodegraphEntries.nodes.length = 0
+      mockCodegraphEntries.files.length = 0
+      mockCodegraphEntries.embeddings.clear()
+
+      mockCodegraphEntries.files.push({ id: "src/auth.ts", path: "src/auth.ts", contentHash: "h1", language: "typescript", indexedAt: 1 })
+      mockCodegraphEntries.files.push({ id: "src/logger.ts", path: "src/logger.ts", contentHash: "h2", language: "typescript", indexedAt: 1 })
+      mockCodegraphEntries.nodes.push(
+        { id: "n1", fileID: "src/auth.ts", kind: "function", name: "loginUser", signature: "(u, p) => User", startLine: 1, endLine: 12, code: "loginUser body" },
+        { id: "n2", fileID: "src/auth.ts", kind: "function", name: "hashPassword", signature: "(p) => string", startLine: 13, endLine: 25, code: "hashPassword body" },
+        { id: "n3", fileID: "src/logger.ts", kind: "function", name: "logError", signature: "(e) => void", startLine: 1, endLine: 8, code: "logError body" },
+      )
+    }
+
+    const seedEmbeddings = () => {
+      mockCodegraphEntries.embeddings.set("n1", { embedding: new Uint8Array(new Float32Array([1, 0, 0]).buffer), model: "test-model", dim: 3 })
+      mockCodegraphEntries.embeddings.set("n2", { embedding: new Uint8Array(new Float32Array([0, 1, 0]).buffer), model: "test-model", dim: 3 })
+      mockCodegraphEntries.embeddings.set("n3", { embedding: new Uint8Array(new Float32Array([0, 0, 1]).buffer), model: "test-model", dim: 3 })
+    }
+
+    itWithModel.effect("semantic search ranks by cosine similarity, returns hit with score and source=semantic", () =>
+      Effect.gen(function* () {
+        seedThree()
+        seedEmbeddings()
+        const mat = yield* (yield* ToolRegistry.Service).materialize()
+        const ctx = makeCtx()
+        const result = yield* mat.settle({
+          sessionID: ctx.sessionID,
+          agent: ctx.agent,
+          assistantMessageID: ctx.assistantMessageID,
+          call: { type: "tool-call", id: "c-search-rank", name: "code_search", input: { query: "user authentication" } },
+        })
+        const out = result.output?.structured as any
+        expect(out.degraded).toBe(false)
+        expect(out.totalCandidates).toBe(3)
+        expect(out.hits.length).toBeGreaterThan(0)
+        expect(out.hits[0].source).toBe("semantic")
+        expect(out.hits[0].node.name).toBe("loginUser")
+        expect(out.hits[0].score).toBeGreaterThan(0.5)
+      }),
+    )
+
+    itWithModel.effect("fileGlob filter scopes candidates before ranking", () =>
+      Effect.gen(function* () {
+        seedThree()
+        seedEmbeddings()
+        const mat = yield* (yield* ToolRegistry.Service).materialize()
+        const ctx = makeCtx()
+        const result = yield* mat.settle({
+          sessionID: ctx.sessionID,
+          agent: ctx.agent,
+          assistantMessageID: ctx.assistantMessageID,
+          call: { type: "tool-call", id: "c-search-glob", name: "code_search", input: { query: "logError", fileGlob: "src/logger.ts" } },
+        })
+        const out = result.output?.structured as any
+        expect(out.totalCandidates).toBe(1)
+        expect(out.hits[0].node.name).toBe("logError")
+      }),
+    )
+
+    itWithModel.effect("minScore filters out weak semantic matches", () =>
+      Effect.gen(function* () {
+        seedThree()
+        seedEmbeddings()
+        const mat = yield* (yield* ToolRegistry.Service).materialize()
+        const ctx = makeCtx()
+        const result = yield* mat.settle({
+          sessionID: ctx.sessionID,
+          agent: ctx.agent,
+          assistantMessageID: ctx.assistantMessageID,
+          call: {
+            type: "tool-call",
+            id: "c-search-minscore",
+            name: "code_search",
+            input: { query: "x", minScore: 1.5 },
+          },
+        })
+        const out = result.output?.structured as any
+        expect(out.hits.length).toBe(0)
+      }),
+    )
+
+    itWithModel.effect("includeKeywordFallback=false: keyword hits are absent from results", () =>
+      Effect.gen(function* () {
+        mockCodegraphEntries.nodes.length = 0
+        mockCodegraphEntries.files.length = 0
+        mockCodegraphEntries.embeddings.clear()
+        mockCodegraphEntries.files.push({ id: "f1", path: "a.ts", contentHash: "h1", language: "typescript", indexedAt: 1 })
+        mockCodegraphEntries.nodes.push({
+          id: "n1",
+          fileID: "f1",
+          kind: "function",
+          name: "completelyUnrelatedFunction",
+          signature: "() => void",
+          startLine: 1,
+          endLine: 5,
+          code: "function completelyUnrelatedFunction() { return; }",
+        })
+        const mat = yield* (yield* ToolRegistry.Service).materialize()
+        const ctx = makeCtx()
+        const result = yield* mat.settle({
+          sessionID: ctx.sessionID,
+          agent: ctx.agent,
+          assistantMessageID: ctx.assistantMessageID,
+          call: {
+            type: "tool-call",
+            id: "c-search-nofallback",
+            name: "code_search",
+            input: { query: "totallyDifferentName", minScore: 0.99, includeKeywordFallback: false },
+          },
+        })
+        const out = result.output?.structured as any
+        const hasKeywordHit = out.hits.some((h: any) => h.source === "keyword")
+        expect(hasKeywordHit).toBe(false)
+      }),
+    )
+
+    itNoModel.effect("embedder failure falls back to keyword instead of failing the tool", () =>
+      Effect.gen(function* () {
+        seedThree()
+        const mat = yield* (yield* ToolRegistry.Service).materialize()
+        const ctx = makeCtx()
+        const result = yield* mat.settle({
+          sessionID: ctx.sessionID,
+          agent: ctx.agent,
+          assistantMessageID: ctx.assistantMessageID,
+          call: { type: "tool-call", id: "c-search-fail", name: "code_search", input: { query: "login" } },
+        })
+        const out = result.output?.structured as any
+        expect(out.degraded).toBe(true)
+        expect(out.hits[0].source).toBe("keyword")
+        expect(out.hits[0].node.name).toBe("loginUser")
+      }),
+    )
+  })
 })

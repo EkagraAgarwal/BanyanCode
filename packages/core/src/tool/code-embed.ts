@@ -10,6 +10,17 @@ import { Tools } from "./tools"
 export const name_embed_update = "code_embed_update"
 export const name_search = "code_search"
 
+const CodegraphNodeSchema = Schema.Struct({
+  id: Schema.String,
+  fileID: Schema.String,
+  kind: Schema.Literals(["file", "function", "class", "method", "type", "variable"]),
+  name: Schema.String,
+  signature: Schema.optional(Schema.String),
+  startLine: Schema.Number,
+  endLine: Schema.Number,
+  code: Schema.optional(Schema.String),
+})
+
 export const InputEmbedUpdate = Schema.Struct({
   file: Schema.String.pipe(Schema.optional),
 })
@@ -23,43 +34,74 @@ export const OutputEmbedUpdate = Schema.Struct({
 export const InputSearch = Schema.Struct({
   query: Schema.String,
   limit: Schema.Number.pipe(Schema.optional),
+  minScore: Schema.Number.pipe(Schema.optional),
   fileGlob: Schema.String.pipe(Schema.optional),
+  includeKeywordFallback: Schema.Boolean.pipe(Schema.optional),
 })
 
 export const OutputSearch = Schema.Struct({
   hits: Schema.Array(
     Schema.Struct({
-      node: Schema.Unknown,
+      node: CodegraphNodeSchema,
       score: Schema.Number,
+      source: Schema.Literals(["semantic", "keyword"]),
     }),
   ),
   degraded: Schema.Boolean,
+  totalCandidates: Schema.Number,
 })
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
+
+const DEFAULT_LIMIT = 10
+const DEFAULT_MIN_SCORE = 0.2
 
 function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   let dot = 0
   let normA = 0
   let normB = 0
-  for (let i = 0; i < a.length; i++) {
+  const len = Math.min(a.length, b.length)
+  for (let i = 0; i < len; i++) {
     dot += a[i] * b[i]
     normA += a[i] * a[i]
     normB += b[i] * b[i]
   }
+  if (normA === 0 || normB === 0) return 0
   return dot / (Math.sqrt(normA) * Math.sqrt(normB))
 }
 
-function keywordSearch(query: string, nodes: Banyan.CodegraphNode[]): Banyan.CodegraphNode[] {
+function decodeStoredEmbedding(raw: Uint8Array, dim: number): Float32Array {
+  const buffer = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)
+  return new Float32Array(buffer)
+}
+
+function keywordSearch(
+  query: string,
+  nodes: readonly Banyan.CodegraphNode[],
+  limit: number,
+): Banyan.CodegraphNode[] {
   const lowerQuery = query.toLowerCase()
-  return nodes
-    .filter((n) => {
+  const scored = nodes
+    .map((n) => {
       const nameMatch = n.name.toLowerCase().includes(lowerQuery)
       const sigMatch = n.signature?.toLowerCase().includes(lowerQuery) ?? false
       const codeMatch = n.code?.toLowerCase().includes(lowerQuery) ?? false
-      return nameMatch || sigMatch || codeMatch
+      const matched = nameMatch || sigMatch || codeMatch
+      const nameExact = n.name.toLowerCase() === lowerQuery
+      const score = nameExact ? 1 : matched ? 0.5 : 0
+      return { node: n, score }
     })
-    .slice(0, 10)
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score || a.node.name.localeCompare(b.node.name))
+  return scored.slice(0, limit).map((s) => s.node)
+}
+
+function globToRegex(glob: string): RegExp {
+  const escaped = glob
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".")
+  return new RegExp(`^${escaped}$`)
 }
 
 export const locationLayer = Layer.effectDiscard(
@@ -75,11 +117,16 @@ export const locationLayer = Layer.effectDiscard(
     yield* tools
       .register({
         [name_embed_update]: Tool.make({
-          description: "Compute or update embeddings for code graph nodes. Re-embeds only nodes whose content hash has changed.",
+          description:
+            "Compute or update embeddings for code graph nodes. Re-embeds only nodes whose content hash has changed. " +
+            "Requires /codegraph-build to have been run first, and an embedding model configured via banyancode_embedding_model.",
           input: InputEmbedUpdate,
           output: OutputEmbedUpdate,
           toModelOutput: ({ output }) => [
-            { type: "text", text: `embedded=${output.embedded} skipped=${output.skipped} model=${output.model ?? "none"}` },
+            {
+              type: "text",
+              text: `embedded=${output.embedded} skipped=${output.skipped} model=${output.model ?? "none"}`,
+            },
           ],
           execute: (input, context) => {
             return Effect.gen(function* () {
@@ -100,16 +147,18 @@ export const locationLayer = Layer.effectDiscard(
                   return yield* Effect.fail(new ToolFailure({ message: `File not found in codegraph: ${input.file}` }))
                 }
                 result = yield* embedder.embedFile(file.id)
-              } else {
-                result = yield* embedder.embedAll()
+                return {
+                  embedded: result.embedded,
+                  skipped: result.skipped,
+                  model: provider.model() ?? null,
+                }
               }
 
-              const model = input.file ? null : (result as { embedded: number; skipped: number; model: string | undefined }).model
-
+              result = yield* embedder.embedAll()
               return {
                 embedded: result.embedded,
                 skipped: result.skipped,
-                model: model ?? null,
+                model: result.model ?? null,
               }
             }).pipe(
               Effect.mapError((err) => {
@@ -121,13 +170,24 @@ export const locationLayer = Layer.effectDiscard(
         }),
         [name_search]: Tool.make({
           description:
-            "Search code graph nodes using semantic embedding search when available, falling back to keyword search. Returns degraded=true when embeddings are unavailable.",
+            "Primary search tool for the code graph. Uses semantic embeddings when available, with a keyword fallback. " +
+            "Pass fileGlob to scope results to a file pattern. Returns hits with score, kind, file, and line range so the " +
+            "caller can read the file or follow up with codegraph_callers / codegraph_impact. " +
+            "If the response is degraded=true, no embedding model is configured; install one via /embedding-model and " +
+            "run /code-embed for full semantic search.",
           input: InputSearch,
           output: OutputSearch,
           toModelOutput: ({ output }) => [
-            { type: "text", text: `found ${output.hits.length} hits (degraded=${output.degraded})` },
+            {
+              type: "text",
+              text: `found ${output.hits.length} hits (candidates=${output.totalCandidates} degraded=${output.degraded})`,
+            },
           ],
           execute: (input, context) => {
+            const limit = input.limit ?? DEFAULT_LIMIT
+            const minScore = input.minScore ?? DEFAULT_MIN_SCORE
+            const includeKeyword = input.includeKeywordFallback ?? true
+
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_search,
@@ -143,36 +203,35 @@ export const locationLayer = Layer.effectDiscard(
 
               if (input.fileGlob) {
                 const allFiles = yield* repo.listAllFiles()
-                const matchedFiles = allFiles.filter((f) => {
-                  const pattern = input.fileGlob!.replace(/\./g, "\\.").replace(/\*/g, ".*")
-                  return new RegExp(pattern).test(f.path)
-                })
-                const matchedFileIDs = new Set(matchedFiles.map((f) => f.id))
+                const re = globToRegex(input.fileGlob)
+                const matchedFileIDs = new Set(
+                  allFiles.filter((f) => re.test(f.path)).map((f) => f.id),
+                )
                 nodes = nodes.filter((n) => matchedFileIDs.has(n.fileID))
               }
 
+              const totalCandidates = nodes.length
               const model = provider.model()
 
               if (model === undefined) {
-                const keywordMatches = keywordSearch(input.query, nodes)
+                const keywordMatches = includeKeyword ? keywordSearch(input.query, nodes, limit) : []
                 return {
-                  hits: keywordMatches.map((n) => ({ node: n, score: 1 })),
+                  hits: keywordMatches.map((n) => ({ node: n, score: 0, source: "keyword" as const })),
                   degraded: true,
+                  totalCandidates,
                 }
               }
 
               const embedResult = yield* provider
                 .embed(input.query)
-                .pipe(
-                  Effect.mapError(() => null),
-                  Effect.catch(() => Effect.succeed(null)),
-                )
+                .pipe(Effect.catchCause(() => Effect.succeed(null as Float32Array[] | null)))
 
               if (!embedResult || embedResult.length === 0) {
-                const keywordMatches = keywordSearch(input.query, nodes)
+                const keywordMatches = includeKeyword ? keywordSearch(input.query, nodes, limit) : []
                 return {
-                  hits: keywordMatches.map((n) => ({ node: n, score: 1 })),
+                  hits: keywordMatches.map((n) => ({ node: n, score: 0, source: "keyword" as const })),
                   degraded: true,
+                  totalCandidates,
                 }
               }
 
@@ -181,22 +240,43 @@ export const locationLayer = Layer.effectDiscard(
               const scored = yield* Effect.forEach(nodes, (node) =>
                 Effect.map(repo.getEmbedding(node.id), (emb) => {
                   if (!emb) return { node, score: 0 }
-                  const nodeEmbedding = new Float32Array(new Uint8Array(emb.embedding).buffer)
+                  const nodeEmbedding = decodeStoredEmbedding(emb.embedding, emb.dim)
                   return { node, score: cosineSimilarity(queryEmbedding, nodeEmbedding) }
                 }),
               )
 
-              const limit = input.limit ?? 10
-              const topResults = scored
-                .filter((s) => s.score > 0)
+              const semanticHits = scored
+                .filter((s) => s.score >= minScore)
                 .sort((a, b) => b.score - a.score)
                 .slice(0, limit)
+                .map((s) => ({ node: s.node, score: s.score, source: "semantic" as const }))
+
+              if (semanticHits.length > 0) {
+                return {
+                  hits: semanticHits,
+                  degraded: false,
+                  totalCandidates,
+                }
+              }
+
+              if (includeKeyword) {
+                const keywordMatches = keywordSearch(input.query, nodes, limit)
+                return {
+                  hits: keywordMatches.map((n) => ({ node: n, score: 0, source: "keyword" as const })),
+                  degraded: true,
+                  totalCandidates,
+                }
+              }
 
               return {
-                hits: topResults.map((s) => ({ node: s.node, score: s.score })),
+                hits: [],
                 degraded: false,
+                totalCandidates,
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `code_search failed` })))
+            }).pipe(Effect.mapError((err) => {
+              if (err instanceof ToolFailure) return err
+              return new ToolFailure({ message: `code_search failed: ${err instanceof Error ? err.message : String(err)}` })
+            }))
           },
         }),
       })

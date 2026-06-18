@@ -8,6 +8,7 @@ import { MemoryTools } from "../tool/memory"
 import { SharedMemoryTool } from "../tool/shared-memory"
 import { SubagentMessageTool } from "../tool/subagent-message"
 import { SystemStatusTool } from "../tool/system-status"
+import { WebSearchFreeTool } from "../tool/websearch-free"
 import { defaultLayer as memoryRepoLayer } from "./memory-repo"
 import { defaultLayer as subagentBusLayer } from "./subagent-bus"
 import { defaultLayer as embeddingProviderLayer } from "./embedding-provider"
@@ -27,6 +28,7 @@ export const locationLayer = Layer.mergeAll(
   CodegraphTools.locationLayer,
   CodeEmbedTools.locationLayer,
   SystemStatusTool.layer,
+  WebSearchFreeTool.layer,
 ).pipe(
   Layer.provide(subagentBusLayer),
   Layer.provide(memoryRepoLayer),

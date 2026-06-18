@@ -32,6 +32,7 @@ export const InputQuery = Schema.Struct({
   file: Schema.String.pipe(Schema.optional),
   function: Schema.String.pipe(Schema.optional),
   kind: Schema.String.pipe(Schema.optional),
+  limit: Schema.Number.pipe(Schema.optional),
 })
 
 export const OutputQuery = Schema.Struct({
@@ -41,29 +42,33 @@ export const OutputQuery = Schema.Struct({
 export const InputImpact = Schema.Struct({
   nodeID: Schema.String.pipe(Schema.optional),
   function: Schema.String.pipe(Schema.optional),
+  maxDepth: Schema.Number.pipe(Schema.optional),
+  limit: Schema.Number.pipe(Schema.optional),
 })
 
 export const OutputImpact = Schema.Struct({
-  dependents: Schema.Array(Schema.String),
-  transitive: Schema.Array(Schema.String),
+  dependents: Schema.Array(Schema.Unknown),
+  transitive: Schema.Array(Schema.Unknown),
 })
 
 export const InputDependents = Schema.Struct({
   nodeID: Schema.String.pipe(Schema.optional),
   function: Schema.String.pipe(Schema.optional),
+  limit: Schema.Number.pipe(Schema.optional),
 })
 
 export const OutputDependents = Schema.Struct({
-  dependents: Schema.Array(Schema.String),
+  dependents: Schema.Array(Schema.Unknown),
 })
 
 export const InputCallers = Schema.Struct({
   nodeID: Schema.String.pipe(Schema.optional),
   function: Schema.String.pipe(Schema.optional),
+  limit: Schema.Number.pipe(Schema.optional),
 })
 
 export const OutputCallers = Schema.Struct({
-  callers: Schema.Array(Schema.String),
+  callers: Schema.Array(Schema.Unknown),
 })
 
 export const locationLayer = Layer.effectDiscard(
@@ -140,13 +145,18 @@ export const locationLayer = Layer.effectDiscard(
           },
         }),
         [name_query]: Tool.make({
-          description: "Query the code graph for nodes by file, function name, or kind",
+          description:
+            "Look up nodes in the code graph. Filter by function name, kind, or file path. " +
+            "Returns the matching CodegraphNode objects (with name, kind, signature, file path, line range, code snippet). " +
+            "Use this as the primary tool to find symbols when the codegraph is built. " +
+            "If the result is empty, the codegraph hasn't been built yet (run /codegraph-build) or the project has no such symbol.",
           input: InputQuery,
           output: OutputQuery,
           toModelOutput: ({ output }) => [
             { type: "text", text: `found ${output.nodes.length} nodes` },
           ],
           execute: (input, context) => {
+            const limit = input.limit ?? 50
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_query,
@@ -175,18 +185,22 @@ export const locationLayer = Layer.effectDiscard(
                 nodes = yield* repo.listAllNodes()
               }
 
-              return { nodes }
+              return { nodes: nodes.slice(0, limit) }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_query failed` })))
           },
         }),
         [name_impact]: Tool.make({
-          description: "Analyze the impact of a node - its dependents and transitive dependencies",
+          description:
+            "Find all nodes affected by a change to the given node. Returns the direct dependents " +
+            "(immediate callers) and the transitive closure (everything downstream). " +
+            "Use BEFORE making any edit to understand the blast radius. Returns full CodegraphNode objects.",
           input: InputImpact,
           output: OutputImpact,
           toModelOutput: ({ output }) => [
             { type: "text", text: `dependents=${output.dependents.length} transitive=${output.transitive.length}` },
           ],
           execute: (input, context) => {
+            const limit = input.limit ?? 100
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_impact,
@@ -198,19 +212,29 @@ export const locationLayer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
-              const result = yield* analyzer.impact({ nodeID: input.nodeID, function: input.function })
-              return { dependents: result.dependents.map((n) => n.id), transitive: result.transitive.map((n) => n.id) }
+              const result = yield* analyzer.impact({
+                nodeID: input.nodeID,
+                function: input.function,
+              })
+              return {
+                dependents: result.dependents.slice(0, limit),
+                transitive: result.transitive.slice(0, limit),
+              }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_impact failed` })))
           },
         }),
         [name_dependents]: Tool.make({
-          description: "Find nodes that depend on a given node",
+          description:
+            "Find nodes that depend on the given node (the reverse: who calls/imports this). " +
+            "Returns full CodegraphNode objects. Prefer codegraph_impact for blast-radius analysis " +
+            "(it includes transitive closure); use this when you only need the direct callers.",
           input: InputDependents,
           output: OutputDependents,
           toModelOutput: ({ output }) => [
             { type: "text", text: `${output.dependents.length} dependents` },
           ],
           execute: (input, context) => {
+            const limit = input.limit ?? 50
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_dependents,
@@ -223,18 +247,22 @@ export const locationLayer = Layer.effectDiscard(
               })
 
               const result = yield* analyzer.dependents({ nodeID: input.nodeID, function: input.function })
-              return { dependents: result.map((n) => n.id) }
+              return { dependents: result.slice(0, limit) }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_dependents failed` })))
           },
         }),
         [name_callers]: Tool.make({
-          description: "Find nodes that call a given function",
+          description:
+            "Find nodes that call the given function. Pass either nodeID (preferred) or function name. " +
+            "Returns full CodegraphNode objects with file path and line range so the caller can read or edit them. " +
+            "If the codegraph hasn't been built, the response will be empty - fall back to grep for the function name.",
           input: InputCallers,
           output: OutputCallers,
           toModelOutput: ({ output }) => [
             { type: "text", text: `${output.callers.length} callers` },
           ],
           execute: (input, context) => {
+            const limit = input.limit ?? 50
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_callers,
@@ -247,7 +275,7 @@ export const locationLayer = Layer.effectDiscard(
               })
 
               const result = yield* analyzer.callers({ nodeID: input.nodeID, function: input.function })
-              return { callers: result.map((n) => n.id) }
+              return { callers: result.slice(0, limit) }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_callers failed` })))
           },
         }),
