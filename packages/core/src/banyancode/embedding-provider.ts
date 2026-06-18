@@ -2,6 +2,7 @@ export * as EmbeddingProvider from "./embedding-provider"
 
 import { Config, ConfigProvider, Context, Effect, Layer, Ref, Schema } from "effect"
 import { PluginV2 } from "../plugin"
+import { BanyanConfigService } from "./banyan-config"
 
 export class EmbeddingError extends Schema.TaggedErrorClass<EmbeddingError>()("Banyan/EmbeddingError", {
   message: Schema.String,
@@ -15,17 +16,22 @@ export interface Interface {
 
 export class EmbeddingProviderService extends Context.Service<EmbeddingProviderService, Interface>()("@banyancode/EmbeddingProvider") {}
 
-const configLayer = ConfigProvider.layer(ConfigProvider.fromUnknown({}))
+export const configLayer = ConfigProvider.layer(ConfigProvider.fromUnknown({}))
 
-export const defaultLayer = Layer.effect(
+export const layer = Layer.effect(
   EmbeddingProviderService,
   Effect.gen(function* () {
     const plugin = yield* PluginV2.Service
-    const initialName = yield* Config.string("BANYANCODE_EMBEDDING_MODEL").pipe(
+    const configOpt = yield* Effect.serviceOption(BanyanConfigService.Service)
+    let initialName = yield* Config.string("BANYANCODE_EMBEDDING_MODEL").pipe(
       Config.withDefault(""),
       Effect.map((s) => (s === "" ? undefined : s)),
       Effect.orDie,
     )
+    if (!initialName && configOpt._tag === "Some") {
+      const config = yield* configOpt.value.get()
+      initialName = config.banyancode_embedding_model
+    }
     const modelRef = yield* Ref.make<string | undefined>(initialName)
 
     const embed = Effect.fn("EmbeddingProvider.embed")(function* (input: string | string[]) {
@@ -37,7 +43,7 @@ export const defaultLayer = Layer.effect(
       const texts = Array.isArray(input) ? input : [input]
 
       const result = yield* plugin
-        .trigger(
+         .trigger(
           "aisdk.embed",
           { model: modelName, input: texts },
           { embeddings: [] },
@@ -57,4 +63,9 @@ export const defaultLayer = Layer.effect(
       setModel,
     })
   }),
-).pipe(Layer.provide(configLayer))
+)
+
+export const defaultLayer = layer.pipe(
+  Layer.provide(configLayer),
+  Layer.provide(BanyanConfigService.defaultLayer),
+)

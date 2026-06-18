@@ -36,7 +36,7 @@ export const OutputSearch = Schema.Struct({
   degraded: Schema.Boolean,
 })
 
-const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE === "1"
+const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   let dot = 0
@@ -93,9 +93,16 @@ export const locationLayer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
-              const result = input.file
-                ? yield* embedder.embedFile(input.file)
-                : yield* embedder.embedAll()
+              let result
+              if (input.file) {
+                const file = yield* repo.getFileByPath(input.file)
+                if (!file) {
+                  return yield* Effect.fail(new ToolFailure({ message: `File not found in codegraph: ${input.file}` }))
+                }
+                result = yield* embedder.embedFile(file.id)
+              } else {
+                result = yield* embedder.embedAll()
+              }
 
               const model = input.file ? null : (result as { embedded: number; skipped: number; model: string | undefined }).model
 
@@ -104,7 +111,12 @@ export const locationLayer = Layer.effectDiscard(
                 skipped: result.skipped,
                 model: model ?? null,
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `code_embed_update failed` })), Effect.orDie)
+            }).pipe(
+              Effect.mapError((err) => {
+                if (err instanceof ToolFailure) return err
+                return new ToolFailure({ message: "code_embed_update failed" })
+              }),
+            )
           },
         }),
         [name_search]: Tool.make({

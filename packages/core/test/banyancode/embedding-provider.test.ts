@@ -1,8 +1,22 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
-import { EmbeddingProviderService, EmbeddingError } from "../../src/banyancode/embedding-provider"
-import { defaultLayer } from "../../src/banyancode/embedding-provider"
+import { EmbeddingProviderService, EmbeddingError, layer as baseLayer, configLayer } from "../../src/banyancode/embedding-provider"
 import { PluginV2 } from "../../src/plugin"
+import { BanyanConfigService } from "../../src/banyancode/banyan-config"
+
+const mockConfig = Layer.succeed(
+  BanyanConfigService.Service,
+  BanyanConfigService.Service.of({
+    get: () => Effect.succeed({} as any),
+    getGlobal: () => Effect.succeed({} as any),
+    update: () => Effect.succeed({} as any),
+  }),
+)
+
+const testLayerBase = baseLayer.pipe(
+  Layer.provide(configLayer),
+  Layer.provide(mockConfig),
+)
 
 describe("EmbeddingProvider", () => {
   test("embed without a model set returns EmbeddingError", async () => {
@@ -12,7 +26,7 @@ describe("EmbeddingProvider", () => {
       triggerFor: () => Effect.succeed({} as any),
       trigger: () => Effect.succeed({ embeddings: [[1, 2, 3]] } as any),
     })
-    const layer = defaultLayer.pipe(Layer.provide(mockPlugin))
+    const layer = testLayerBase.pipe(Layer.provide(mockPlugin))
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -44,7 +58,7 @@ describe("EmbeddingProvider", () => {
       }),
     )
 
-    const testLayer = defaultLayer.pipe(Layer.provide(captureLayer))
+    const testLayer = testLayerBase.pipe(Layer.provide(captureLayer))
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -63,7 +77,7 @@ describe("EmbeddingProvider", () => {
       triggerFor: () => Effect.succeed({} as any),
       trigger: () => Effect.succeed({ embeddings: [[1, 2, 3]] } as any),
     })
-    const layer = defaultLayer.pipe(Layer.provide(mockPlugin))
+    const layer = testLayerBase.pipe(Layer.provide(mockPlugin))
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -83,7 +97,7 @@ describe("EmbeddingProvider", () => {
       triggerFor: () => Effect.succeed({} as any),
       trigger: () => Effect.succeed({ embeddings: [[1, 2, 3]] } as any),
     })
-    const layer = defaultLayer.pipe(Layer.provide(mockPlugin))
+    const layer = testLayerBase.pipe(Layer.provide(mockPlugin))
 
     await Effect.runPromise(
       Effect.gen(function* () {
