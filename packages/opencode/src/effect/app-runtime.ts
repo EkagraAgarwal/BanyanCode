@@ -52,6 +52,9 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { EventV2 } from "@opencode-ai/core/event"
+import { PluginV2 } from "@opencode-ai/core/plugin"
+import { applyCodegraphBuildBridge } from "./banyancode-codegraph-bridge"
 
 export const AppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -78,6 +81,7 @@ export const AppLayer = Layer.mergeAll(
   BackgroundJob.defaultLayer,
   RuntimeFlags.defaultLayer,
   EventV2Bridge.defaultLayer,
+  EventV2.defaultLayer,
   Banyan.subagentBusDefaultLayer,
   Banyan.subagentPlansRepoDefaultLayer,
   SessionRunState.defaultLayer,
@@ -106,6 +110,14 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(Ripgrep.defaultLayer),
   Layer.provideMerge(InstanceLayer.layer),
   Layer.provideMerge(Observability.layer),
+  Layer.provideMerge(
+    Banyan.codegraphBuildServiceDefaultLayer.pipe(
+      Layer.provide(Banyan.codegraphEmbedServiceDefaultLayer),
+      Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+      Layer.provide(PluginV2.locationLayer),
+      Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
+    ),
+  ),
 )
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })
@@ -133,3 +145,5 @@ export const AppRuntime: Runtime = {
   },
   dispose: () => rt.dispose(),
 }
+
+AppRuntime.runFork(applyCodegraphBuildBridge as never)

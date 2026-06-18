@@ -42,7 +42,7 @@ export function DialogEmbeddingModel() {
           onSelect: async () => {
             const modelID = model.id
             const providerID = model.providerID
-            const fullModel = `${providerID}/${modelID}`
+            const fullModel = modelID.startsWith(`${providerID}/`) ? modelID : `${providerID}/${modelID}`
             await sdk.client.global.banyanConfig.update({
               banyanConfig: { banyancode_embedding_model: fullModel },
             })

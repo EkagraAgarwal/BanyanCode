@@ -9,6 +9,7 @@ import { MCP } from "../mcp"
 import { Skill } from "../skill"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { Database } from "@opencode-ai/core/database/database"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
@@ -62,6 +63,7 @@ export const Default = {
   INIT: "init",
   REVIEW: "review",
   CODEGRAPH_BUILD: "codegraph-build",
+  CODEGRAPH_REMOVE: "codegraph-remove",
   CODE_EMBED: "code-embed",
   YOLO: "yolo",
   REFRESH_MODELS: "refresh-models",
@@ -141,9 +143,25 @@ export const layer = Layer.effect(
             const args = parseArgs(input.arguments)
             const root = args.positional[0] ?? ctx.worktree
             const force = args.flags.force === true || args.flags.force === "true"
-            yield* buildServiceOpt.value.start({ root, force })
+            const dbPath = Database.path()
+            yield* buildServiceOpt.value.start({ root, force, dbPath })
           }).pipe(Effect.provide(Banyan.codegraphBuildServiceDefaultLayer)),
         hints: hints(PROMPT_CODEGRAPH_BUILD),
+      }
+      commands[Default.CODEGRAPH_REMOVE] = {
+        name: Default.CODEGRAPH_REMOVE,
+        description: "remove the current codegraph index",
+        source: "command",
+        get template() {
+          return "Remove the current codegraph index."
+        },
+        execute: () =>
+          Effect.gen(function* () {
+            const repoOpt = yield* Effect.serviceOption(Banyan.CodegraphRepo)
+            if (Option.isNone(repoOpt)) return
+            yield* repoOpt.value.clearAll()
+          }).pipe(Effect.provide(Banyan.codegraphRepoDefaultLayer)),
+        hints: [],
       }
       commands[Default.CODE_EMBED] = {
         name: Default.CODE_EMBED,
@@ -154,16 +172,12 @@ export const layer = Layer.effect(
         },
         execute: (input) =>
           Effect.gen(function* () {
-            const embedderOpt = yield* Effect.serviceOption(Banyan.CodegraphEmbedder)
-            if (Option.isNone(embedderOpt)) return
+            const serviceOpt = yield* Effect.serviceOption(Banyan.CodegraphEmbedService)
+            if (Option.isNone(serviceOpt)) return
             const args = parseArgs(input.arguments)
-            const emb = embedderOpt.value
-            if (args.flags.file) {
-              yield* emb.embedFile(args.flags.file as string).pipe(Effect.mapError(() => undefined as never))
-            } else {
-              yield* emb.embedAll().pipe(Effect.mapError(() => undefined as never))
-            }
-          }).pipe(Effect.provide(Banyan.codegraphEmbedderDefaultLayer)),
+            const file = args.flags.file as string | undefined
+            yield* serviceOpt.value.start({ file })
+          }).pipe(Effect.provide(Banyan.codegraphEmbedServiceDefaultLayer)),
         hints: hints(PROMPT_CODE_EMBED),
       }
       commands[Default.YOLO] = {
