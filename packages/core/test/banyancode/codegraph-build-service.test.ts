@@ -110,4 +110,30 @@ describe("CodegraphBuildService", () => {
       }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
+
+  test("successful build propagates dbPath to state", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const mockIndexer = makeMockIndexer({
+      indexResult: { indexed: 5, skipped: 2 },
+    })
+
+    const serviceLayer = layer.pipe(Layer.provide(mockIndexer), Layer.provide(EventV2.defaultLayer))
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* CodegraphBuildService.Service
+
+        yield* service.start({ root: "/test", force: false, dbPath: "/custom/path/to/db.sqlite" })
+
+        yield* Effect.sleep(100)
+
+        const state = yield* service.status()
+        expect(state.status).toBe("completed")
+        expect(state.dbPath).toBe("/custom/path/to/db.sqlite")
+      }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
 })

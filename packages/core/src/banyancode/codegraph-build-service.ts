@@ -7,6 +7,7 @@ import { EventV2 } from "../event"
 export const State = Schema.Struct({
   status: Schema.Literals(["idle", "running", "completed", "failed", "cancelled"]),
   root: Schema.optional(Schema.String),
+  dbPath: Schema.optional(Schema.String),
   done: Schema.Number,
   total: Schema.Number,
   currentFile: Schema.optional(Schema.String),
@@ -30,7 +31,7 @@ export const BuildEvent = EventV2.define({
 
 export interface Interface {
   readonly status: () => Effect.Effect<State, never, never>
-  readonly start: (input: { root: string; force?: boolean }) => Effect.Effect<void, never, never>
+  readonly start: (input: { root: string; force?: boolean; dbPath?: string }) => Effect.Effect<void, never, never>
   readonly cancel: () => Effect.Effect<void, never, never>
   readonly events: () => Queue.Dequeue<{ type: "banyancode.codegraph.build"; properties: State }>
 }
@@ -76,7 +77,7 @@ export const layer = Layer.effect(
         if (Option.isSome(currentFiber)) yield* Fiber.interrupt(currentFiber.value)
 
         yield* indexer.cancel()
-        const initial: State = { status: "running", root: input.root, done: 0, total: 0, startedAt: Date.now() }
+        const initial: State = { status: "running", root: input.root, dbPath: input.dbPath, done: 0, total: 0, startedAt: Date.now() }
         yield* Ref.set(state, initial)
         yield* publish(initial)
 
@@ -94,6 +95,7 @@ export const layer = Layer.effect(
           const doneState: State = {
             status: "completed",
             root: initial.root,
+            dbPath: initial.dbPath,
             done: result.indexed + result.skipped,
             total: result.indexed + result.skipped,
             startedAt: initial.startedAt,
