@@ -1,6 +1,7 @@
 export * as CodegraphIndexer from "./codegraph-indexer"
 
-import { Context, Effect, Layer, Ref, Schema } from "effect"
+import { Cause, Context, Effect, Layer, Ref, Schema } from "effect"
+import { randomUUID } from "node:crypto"
 import path from "path"
 import { FSUtil } from "../fs-util"
 import { CodegraphRepo } from "./codegraph-repo"
@@ -113,37 +114,50 @@ export const layer = Layer.effect(
         const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
         if (input.onProgress) yield* input.onProgress({ file: relativePath, done: i, total })
         const ext = path.extname(filePath).toLowerCase()
-        const content = yield* fs.readFileStringSafe(filePath).pipe(Effect.orDie)
-        if (content === undefined) continue
-        const contentHash = hashContent(content)
-        const existing = yield* repo.getFileByPath(filePath)
-        if (existing && existing.contentHash === contentHash && !input.force) {
-          skipped++
-          continue
-        }
-        const parser = getParser(ext)
-        const result = parser.parse(content, filePath)
-        const language = ext === ".py" ? "python" : "typescript"
-        const fileID = existing?.id ?? crypto.randomUUID()
-        const indexedAt = Date.now()
-        yield* repo.putFile({ id: fileID, path: filePath, contentHash, language, indexedAt })
-        for (const node of result.nodes) {
-          const fullNode: CodegraphNode = {
-            id: node.id,
-            fileID,
-            kind: node.kind,
-            name: node.name,
-            signature: node.signature,
-            startLine: node.startLine,
-            endLine: node.endLine,
-            code: node.code,
+        const processFile = Effect.gen(function* () {
+          const content = yield* fs.readFileStringSafe(filePath)
+          if (content === undefined) {
+            skipped++
+            return
           }
-          yield* repo.putNode(fullNode)
-        }
-        for (const edge of result.edges) {
-          yield* repo.putEdge({ id: edge.id, fromNodeID: edge.fromNodeID, toNodeID: edge.toNodeID, kind: edge.kind })
-        }
-        indexed++
+          const contentHash = hashContent(content)
+          const existing = yield* repo.getFileByPath(filePath)
+          if (existing && existing.contentHash === contentHash && !input.force) {
+            skipped++
+            return
+          }
+          const parser = getParser(ext)
+          const result = parser.parse(content, filePath)
+          const language = ext === ".py" ? "python" : "typescript"
+          const fileID = existing?.id ?? randomUUID()
+          const indexedAt = Date.now()
+          yield* repo.putFile({ id: fileID, path: filePath, contentHash, language, indexedAt })
+          for (const node of result.nodes) {
+            const fullNode: CodegraphNode = {
+              id: node.id,
+              fileID,
+              kind: node.kind,
+              name: node.name,
+              signature: node.signature,
+              startLine: node.startLine,
+              endLine: node.endLine,
+              code: node.code,
+            }
+            yield* repo.putNode(fullNode)
+          }
+          for (const edge of result.edges) {
+            yield* repo.putEdge({ id: edge.id, fromNodeID: edge.fromNodeID, toNodeID: edge.toNodeID, kind: edge.kind })
+          }
+          indexed++
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logWarning(`Failed to index file: ${relativePath}`, { cause: Cause.pretty(cause) })
+              skipped++
+            }),
+          ),
+        )
+        yield* processFile
       }
       return { indexed, skipped }
     })

@@ -35,6 +35,7 @@ export const layer = Layer.effect(
     const { db } = yield* Database.Service
 
     const putFile = Effect.fn("CodegraphRepo.putFile")(function* (file: CodegraphFile) {
+      yield* db.delete(CodegraphFilesTable).where(eq(CodegraphFilesTable.path, file.path)).run().pipe(Effect.orDie)
       yield* db
         .insert(CodegraphFilesTable)
         .values({
@@ -43,15 +44,6 @@ export const layer = Layer.effect(
           content_hash: file.contentHash,
           language: file.language,
           indexed_at: file.indexedAt,
-        })
-        .onConflictDoUpdate({
-          target: CodegraphFilesTable.id,
-          set: {
-            path: file.path,
-            content_hash: file.contentHash,
-            language: file.language,
-            indexed_at: file.indexedAt,
-          },
         })
         .run()
         .pipe(Effect.orDie)

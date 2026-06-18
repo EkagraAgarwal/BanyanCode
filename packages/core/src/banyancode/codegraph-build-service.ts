@@ -37,7 +37,7 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphBuildService") {}
 
-const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE === "1"
+const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 export const layer = Layer.effect(
   Service,
@@ -104,11 +104,16 @@ export const layer = Layer.effect(
         })
 
         const forkWork = work.pipe(
-          Effect.catchTag("Banyan/CodegraphError", (err) =>
+          Effect.catchCause((cause) =>
             Effect.gen(function* () {
-              const next: State = { ...initial, status: "failed", error: err.message }
-              yield* Ref.set(state, next)
-              yield* publish(next)
+              const current = yield* Ref.get(state)
+              if (current.status === "running") {
+                const err = Cause.squash(cause)
+                const errorMsg = err instanceof Error ? err.message : String(err)
+                const next: State = { ...initial, status: "failed", error: errorMsg }
+                yield* Ref.set(state, next)
+                yield* publish(next)
+              }
             }),
           ),
         )

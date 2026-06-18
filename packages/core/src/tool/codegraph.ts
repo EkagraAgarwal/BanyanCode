@@ -9,7 +9,7 @@ import { Tools } from "./tools"
 import { defaultLayer as codegraphAnalyzerLayer } from "../banyancode/codegraph-analyzer"
 import { defaultLayer as codegraphBuildServiceLayer } from "../banyancode/codegraph-build-service"
 
-const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE === "1"
+const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 export const name_build = "codegraph_build"
 export const name_query = "codegraph_query"
@@ -99,8 +99,44 @@ export const locationLayer = Layer.effectDiscard(
 
               const root = input.root ?? process.cwd()
               yield* buildService.start({ root, force: input.force ?? false })
+
+              let currentStatus = yield* buildService.status()
+              while (currentStatus.status === "running") {
+                yield* Effect.sleep("500 millis")
+                currentStatus = yield* buildService.status()
+              }
+
+              if (currentStatus.status === "failed") {
+                return yield* Effect.fail(
+                  new ToolFailure({
+                    message: `codegraph_build failed: ${currentStatus.error ?? "unknown error"}`,
+                  }),
+                )
+              }
+
+              if (currentStatus.status === "cancelled") {
+                return yield* Effect.fail(
+                  new ToolFailure({
+                    message: "codegraph_build was cancelled",
+                  }),
+                )
+              }
+
+              if (currentStatus.status === "completed" && currentStatus.result) {
+                return {
+                  indexed: currentStatus.result.indexed,
+                  skipped: currentStatus.result.skipped,
+                  duration_ms: currentStatus.result.duration_ms,
+                }
+              }
+
               return { indexed: 0, skipped: 0, duration_ms: 0 }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_build failed` })), Effect.orDie)
+            }).pipe(
+              Effect.mapError((err) => {
+                if (err instanceof ToolFailure) return err
+                return new ToolFailure({ message: "codegraph_build failed" })
+              }),
+            )
           },
         }),
         [name_query]: Tool.make({
