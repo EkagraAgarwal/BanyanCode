@@ -15,6 +15,8 @@ import PROMPT_RESEARCHER from "./prompt/researcher.txt"
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
+import PROMPT_CODER from "./prompt/coder.txt"
+import PROMPT_SCOUT from "./prompt/scout.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
 import { Permission } from "@/permission"
@@ -217,6 +219,70 @@ export const layer = Layer.effect(
             options: {},
             mode: "subagent",
             native: true,
+          },
+          coder: {
+            name: "coder",
+            description: `Focused executor agent. Makes targeted code changes using codegraph-first analysis. Single task, no delegation.`,
+            mode: "subagent",
+            native: true,
+            prompt: PROMPT_CODER,
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                edit: "allow",
+                write: "allow",
+                bash: "allow",
+                read: "allow",
+                grep: "allow",
+                glob: "allow",
+                list: "allow",
+                webfetch: "allow",
+                codegraph_query: "allow",
+                codegraph_callers: "allow",
+                codegraph_dependents: "allow",
+                codegraph_impact: "allow",
+                codegraph_build: "allow",
+                code_search: "allow",
+                code_embed_update: "allow",
+                todowrite: "allow",
+                question: "allow",
+                task: "deny",
+                subagent_message: "deny",
+                mesh_control: "deny",
+              }),
+              user,
+            ),
+            options: {},
+          },
+          scout: {
+            name: "scout",
+            description: `Fast reconnaissance agent. Single shot, return within 3 tool calls. Read-only exploration.`,
+            mode: "subagent",
+            native: true,
+            prompt: PROMPT_SCOUT,
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                read: "allow",
+                grep: "allow",
+                glob: "allow",
+                list: "allow",
+                webfetch: "allow",
+                codegraph_query: "allow",
+                codegraph_callers: "deny",
+                codegraph_dependents: "deny",
+                codegraph_impact: "deny",
+                codegraph_build: "deny",
+                code_search: "allow",
+                code_embed_update: "deny",
+                todowrite: "deny",
+                task: "deny",
+                subagent_message: "deny",
+                mesh_control: "deny",
+              }),
+              user,
+            ),
+            options: {},
           },
           compaction: {
             name: "compaction",
