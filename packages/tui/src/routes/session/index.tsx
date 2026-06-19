@@ -1164,8 +1164,32 @@ export function Session() {
           tui: tuiConfig,
         }}
       >
-        <box flexDirection="row" flexGrow={1} minHeight={0}>
-          <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
+        <box flexDirection="column" flexGrow={1} minHeight={0}>
+          <box flexShrink={0}>
+            <pluginRuntime.Slot name="app_top" session_id={route.sessionID} />
+          </box>
+          <box flexDirection="row" flexGrow={1} minHeight={0}>
+            <Show when={sidebarVisible()}>
+              <Switch>
+                <Match when={wide()}>
+                  <Sidebar sessionID={route.sessionID} />
+                </Match>
+                <Match when={!wide()}>
+                  <box
+                    position="absolute"
+                    top={0}
+                    left={0}
+                    right={0}
+                    bottom={0}
+                    alignItems="flex-end"
+                    backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
+                  >
+                    <Sidebar sessionID={route.sessionID} />
+                  </box>
+                </Match>
+              </Switch>
+            </Show>
+            <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
             <Show when={session()}>
               <scrollbox
                 ref={(r) => (scroll = r)}
@@ -1324,26 +1348,8 @@ export function Session() {
             <Toast />
             <CodegraphProgress />
           </box>
-          <Show when={sidebarVisible()}>
-            <Switch>
-              <Match when={wide()}>
-                <Sidebar sessionID={route.sessionID} />
-              </Match>
-              <Match when={!wide()}>
-                <box
-                  position="absolute"
-                  top={0}
-                  left={0}
-                  right={0}
-                  bottom={0}
-                  alignItems="flex-end"
-                  backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
-                >
-                  <Sidebar sessionID={route.sessionID} />
-                </box>
-              </Match>
-            </Switch>
-          </Show>
+            <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
+          </box>
         </box>
       </context.Provider>
     </PathFormatterProvider>
