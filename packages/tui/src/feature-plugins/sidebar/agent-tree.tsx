@@ -2,50 +2,119 @@ import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, For, Show, createSignal, onMount } from "solid-js"
 
+function toHex(color: { r: number; g: number; b: number; a?: number } | string): string {
+  if (typeof color === "string") return color
+  // RGBA can have values in 0-1 range (normalized) or 0-255 range
+  const toComponent = (v: number) => {
+    if (v <= 1) return Math.round(v * 255)
+    return Math.round(v)
+  }
+  const r = toComponent(color.r).toString(16).padStart(2, "0")
+  const g = toComponent(color.g).toString(16).padStart(2, "0")
+  const b = toComponent(color.b).toString(16).padStart(2, "0")
+  const a = color.a !== undefined ? toComponent(color.a).toString(16).padStart(2, "0") : ""
+  return `#${r}${g}${b}${a}`
+}
+
 const id = "internal:sidebar-agent-tree"
 
+type SessionInfo = {
+  id: string
+  parentID?: string
+  title: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+  }
+}
+
 function View(props: { api: TuiPluginApi; session_id: string }) {
+  const [sessions, setSessions] = createSignal<SessionInfo[]>([])
+  const [statusMap, setStatusMap] = createSignal<Record<string, { type: string }>>({})
   const [open, setOpen] = createSignal(true)
-  const [sessions, setSessions] = createSignal<{ id: string; parentID?: string; title: string }[]>([])
   const theme = () => props.api.theme.current
 
   onMount(async () => {
+    try {
+      const { useEvent } = await import("../../context/event")
+      const ev = useEvent()
+      ev.on("session.status" as any, (event: any) => {
+        setStatusMap((prev) => ({ ...prev, [event.properties.sessionID]: event.properties.status }))
+      })
+      ev.on("session.updated" as any, async () => {
+        const list = await props.api.client.session.list({})
+        setSessions(list.data ?? [])
+      })
+    } catch {
+      // SDK context not available (e.g., in test environment) - skip event subscription
+    }
+
     const list = await props.api.client.session.list({})
     setSessions(list.data ?? [])
+    // fetch status for each child session
+    const statuses: Record<string, { type: string }> = {}
+    for (const s of list.data ?? []) {
+      if (s.parentID === props.session_id) {
+        const st = await props.api.state.session.status(s.id)
+        if (st) statuses[s.id] = st as { type: string }
+      }
+    }
+    setStatusMap(statuses)
   })
 
   const children = createMemo(() => sessions().filter((s) => s.parentID === props.session_id))
 
-  const statusDot = (agent: string) => {
-    const child = children().find((c) => c.title.toLowerCase().includes(agent.toLowerCase()))
-    if (!child) return theme().textMuted
-    return theme().success
+  const activeCount = createMemo(() => children().length)
+
+  const statusText = (session: SessionInfo): string => {
+    if (session.summary && session.summary.files > 0) return "finished"
+    return ""
   }
 
   return (
     <Show when={children().length > 0}>
       <box>
         <box flexDirection="row" gap={1} onMouseDown={() => setOpen((x) => !x)}>
-          <text fg={theme().text}>{open() ? "▼" : "▶"}</text>
-          <text fg={theme().text}>
-            <b>Agents</b>
+          <text fg={toHex(theme().text)}>{open() ? "▼" : "▶"}</text>
+          <text fg={toHex(theme().text)}>
+            <b>AGENT TREE</b>
+          </text>
+          <text fg={toHex(theme().textMuted)}>
+            {" " + activeCount() + " active"}
           </text>
         </box>
         <Show when={open()}>
-          <box paddingLeft={2}>
+          <box paddingLeft={1}>
             <box flexDirection="row" gap={1}>
-              <text flexShrink={0} fg={theme().primary}>●</text>
-              <text fg={theme().text}>orchestrator <span style={{ fg: theme().textMuted }}>(you)</span></text>
+              <text flexShrink={0} fg={toHex(theme().textMuted)}>─</text>
+              <text flexShrink={0} fg={toHex(theme().primary)}>●</text>
+              <text fg={toHex(theme().text)}>orchestrator <span style={{ fg: toHex(theme().textMuted) }}>(you)</span></text>
             </box>
             <For each={children()}>
-              {(child) => (
-                <box flexDirection="row" gap={1}>
-                  <text flexShrink={0} fg={statusDot(child.title)}>├</text>
-                  <text fg={theme().text} wrapMode="word">
-                    {child.title}
-                  </text>
-                </box>
-              )}
+              {(child, index) => {
+                const isLast = () => index() === children().length - 1
+                const st = statusMap()[child.id]
+                const iconFg = !st || st.type === "idle" ? theme().textMuted : theme().primary
+                const iconChar = !st || st.type === "idle" ? "○" : "●"
+                const text = statusText(child)
+                const connector = () => isLast() ? "└─" : "├─"
+
+                return (
+                  <box flexDirection="row" gap={0}>
+                    <box flexDirection="row" gap={0} paddingLeft={1}>
+                      <text flexShrink={0} fg={toHex(theme().textMuted)}>{connector()}</text>
+                      <text flexShrink={0} fg={toHex(iconFg)}>
+                        {iconChar}
+                      </text>
+                      <text fg={toHex(theme().text)} wrapMode="word">{child.title}</text>
+                      <Show when={text}>
+                        <text fg={toHex(theme().textMuted)}> {text}</text>
+                      </Show>
+                    </box>
+                  </box>
+                )
+              }}
             </For>
           </box>
         </Show>
