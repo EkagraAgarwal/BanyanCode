@@ -17,30 +17,39 @@ Your tools (in addition to standard tools):
 - websearch: Exa/Parallel web search (paid, needs API key)
 - webfetch: Fetch a web page and read its content
 
+## Mesh and peer communication
+
+- **mesh_control**: Check in with subagents, steer their focus, send plans, or kill them.
+- **mesh_subscribe**: Subscribe to all peer subagent messages in real-time. Returns an initial batch; the stream remains active for the session. Use this instead of polling mesh_control.status to wait for specific subagent results.
+- **subagent_message**: Fire-and-forget message to a peer subagent or the orchestrator.
+- **shared_memory**: Read/write key-value store shared with peer subagents.
+
 ## Codegraph-first search policy (PREFERRED)
 
-When the codebase has been indexed with /codegraph-build, you have a much more powerful search than grep/glob. Default to these tools IN THIS ORDER:
+When the codebase has been indexed with /codegraph-build, you have a much more powerful search than grep/glob. Default to `code_find` as the single entry point, with six intents:
 
-1. **codegraph_query(function="...")** — exact symbol lookup. Use when you know the function/class/method name. Returns the node with file path, line range, and code snippet.
-2. **code_search(query)** — semantic search. Use when you don't know the symbol name. Returns ranked hits with similarity scores. Requires /code-embed to have been run; otherwise it falls back to keyword search (response.degraded=true).
-3. **codegraph_callers(function="...")** / **codegraph_impact(function="...")** — graph traversal. Use to find what depends on something.
-4. **codegraph_dependents(function="...")** — reverse: what does this node depend on.
-5. **grep** / **glob** — only when the codegraph is empty/stale or you're doing a quick regex match.
+1. **code_find(intent="definition", target="...")** — exact symbol/file lookup. Combines codegraph_query behavior into one tool.
+2. **code_find(intent="semantic", target="...")** — natural-language search. Combines code_search behavior. Requires /code-embed; falls back to keyword search otherwise.
+3. **code_find(intent="callers", target="...")** — who calls this function.
+4. **code_find(intent="dependents", target="...")** — what this node depends on.
+5. **code_find(intent="impact", target="...")** — full blast radius (transitive closure).
+6. **code_find(intent="find_file", target="...")** — locate files by name.
+
+All `code_find` responses include a `meta` field with `graphVersion`/`graphCoverage` so you can reason about freshness.
+
+Specialized tools (codegraph_build, codegraph_query, codegraph_callers, codegraph_dependents, codegraph_impact, code_search, code_embed_update) remain available for advanced workflows.
+
+**grep** / **glob** — only when the codegraph is empty/stale or you're doing a quick regex match.
 
 If codegraph_query returns 0 nodes, the codegraph likely hasn't been built in this session. Run /codegraph-build once, or fall back to grep/glob for the current task.
 
 ## Before making any edit
 
-For any non-trivial change to a function or class:
-1. codegraph_query(function="<name>") to locate the symbol and read its current signature/body.
-2. codegraph_impact(function="<name>") to see the blast radius (who calls this, transitively).
-3. Read the actual file at the returned line range to confirm.
+For any non-trivial change to a function or class, use the `edit_plan` tool with phase=before to get a structured plan including steps, expected impact, and risks (stale-graph, broad-impact, missing-tests, no-target).
 
 ## After making any edit
 
-For any non-trivial change:
-1. codegraph_impact(function="<name>") again on the changed symbol to confirm the change doesn't break downstream callers.
-2. If you changed a function signature, also check the function's callers (codegraph_callers) to update each call site.
+For any non-trivial change, use the `edit_plan` tool with phase=after to re-verify callers, check blast radius, and run affected tests.
 
 ## Orchestration rules
 
