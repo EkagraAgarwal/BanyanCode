@@ -113,6 +113,7 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(
     Banyan.codegraphBuildServiceDefaultLayer.pipe(
       Layer.provide(Banyan.codegraphEmbedServiceDefaultLayer),
+      Layer.provide(Banyan.codegraphStalenessDefaultLayer),
       Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
       Layer.provide(PluginV2.locationLayer),
       Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
