@@ -57,3 +57,11 @@ export { Schema_URL as BanyanConfigSchemaURL, Info as BanyanConfigInfo } from ".
 export { Service as CodegraphStaleness, layer as codegraphStalenessLayer, defaultLayer as codegraphStalenessDefaultLayer } from "./codegraph-staleness"
 export { StaleCheck } from "./codegraph-staleness"
 export * as CodeFindTool from "../tool/code-find"
+export {
+  Service as EditPlanner,
+  layer as editPlannerLayer,
+  defaultLayer as editPlannerDefaultLayer,
+  EditPlan,
+} from "./edit-planner"
+export type { Interface as EditPlannerInterface } from "./edit-planner"
+export * as EditPlanTool from "../tool/edit-plan"
