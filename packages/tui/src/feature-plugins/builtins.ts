@@ -14,6 +14,7 @@ import InspectorGraphExplorer from "./inspector/graph-explorer"
 import InspectorPendingActions from "./inspector/pending-actions"
 import SidebarCodegraphLayers from "./sidebar/codegraph-layers"
 import SidebarCodegraphOverview from "./sidebar/codegraph-overview"
+import SessionFooter from "./footer/session-footer"
 import HeaderBrand from "./header/brand"
 import HeaderStatusPills from "./header/status-pills"
 import HeaderKeybindingHints from "./header/keybinding-hints"
@@ -50,6 +51,7 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     InspectorPendingActions,
     SidebarFiles,
     SidebarFooter,
+    SessionFooter,
     HeaderBrand,
     HeaderStatusPills,
     HeaderKeybindingHints,

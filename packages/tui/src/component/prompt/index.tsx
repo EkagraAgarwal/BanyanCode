@@ -1739,6 +1739,8 @@ export function Prompt(props: PromptProps) {
                   <text fg={theme.text}>
                     {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
                   </text>
+                  <text fg={theme.textMuted}>·</text>
+                  <text fg={theme.textMuted}>/agents  /graph  /memory  /theme</text>
                 </Match>
                 <Match when={store.mode === "shell"}>
                   <text fg={theme.text}>

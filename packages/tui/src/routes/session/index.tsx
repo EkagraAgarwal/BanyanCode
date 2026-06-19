@@ -1368,6 +1368,9 @@ export function Session() {
           </box>
             <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
           </box>
+          <box flexShrink={0}>
+            <pluginRuntime.Slot name="session_footer" session_id={route.sessionID} />
+          </box>
         </box>
       </context.Provider>
     </PathFormatterProvider>
