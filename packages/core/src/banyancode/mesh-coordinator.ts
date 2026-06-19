@@ -32,6 +32,7 @@ export interface Interface {
   readonly status: (parentSessionID: SessionSchema.ID) => Effect.Effect<MeshStatus, never, never>
   readonly drain: (parentSessionID: SessionSchema.ID) => Effect.Effect<SubagentMessage[], never, never>
   readonly watch: (parentSessionID: SessionSchema.ID) => Effect.Effect<Stream.Stream<MeshStatus>, never, never>
+  readonly subscribe: (input: { parentSessionID: SessionSchema.ID; agentName?: string }) => Effect.Effect<Stream.Stream<SubagentMessage, never, never>, never, never>
   readonly checkin: (
     parentSessionID: SessionSchema.ID,
   ) => Effect.Effect<Array<{ agent: string; sessionID: string; lastSeenAt: number; lastCheckpoint?: { summary: string; todos: unknown } }>, never, never>
@@ -94,6 +95,18 @@ export const layer = Layer.effect(
       yield* events.publish(StatusUpdated, meshStatus)
       return Stream.make(meshStatus)
     })
+
+    const subscribe: Interface["subscribe"] = (input) =>
+      Effect.gen(function* () {
+        const queue = yield* bus.subscribe(input.parentSessionID)
+        const stream = Stream.fromQueue(queue)
+        if (input.agentName) {
+          return stream.pipe(
+            Stream.filter((m) => m.fromAgent === input.agentName || m.toAgent === input.agentName),
+          )
+        }
+        return stream
+      })
 
     const checkin = Effect.fn("MeshCoordinator.checkin")(function* (
       parentSessionID: SessionSchema.ID,
@@ -196,7 +209,7 @@ export const layer = Layer.effect(
       yield* bus.publish(message)
     })
 
-    return Service.of({ status, drain, watch, checkin, steer, kill, planFor })
+    return Service.of({ status, drain, watch, subscribe, checkin, steer, kill, planFor })
   }),
 )
 

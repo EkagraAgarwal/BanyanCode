@@ -65,3 +65,5 @@ export {
 } from "./edit-planner"
 export type { Interface as EditPlannerInterface } from "./edit-planner"
 export * as EditPlanTool from "../tool/edit-plan"
+export { locationLayer as meshSubscribeToolLocationLayer } from "../tool/mesh-subscribe"
+export * as MeshSubscribeTool from "../tool/mesh-subscribe"
