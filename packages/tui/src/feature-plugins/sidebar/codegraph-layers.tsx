@@ -1,6 +1,6 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createSignal } from "solid-js"
+import { createSignal, onCleanup } from "solid-js"
 import { useEvent } from "../../context/event"
 
 const id = "internal:sidebar-codegraph-layers"
@@ -43,10 +43,11 @@ function View(props: { api: TuiPluginApi }) {
   const [stale, setStale] = createSignal<StaleCheckPayload | null>(null)
 
   const ev = useEvent()
-  ev.on("banyancode.codegraph.staleness" as any, (event: any) => {
+  const unsubStaleness = ev.on("banyancode.codegraph.staleness" as any, (event: any) => {
     setStale(event.properties as StaleCheckPayload)
   })
-  ev.on("banyancode.codegraph.build" as any, (event: any) => {
+  onCleanup(unsubStaleness)
+  const unsubBuild = ev.on("banyancode.codegraph.build" as any, (event: any) => {
     const state = event.properties as { status: string; graphVersion?: number; graphCoverage?: number; startedAt?: number; result?: { indexed: number; skipped: number } }
     if (state.status === "completed") {
       setStale({
@@ -61,6 +62,7 @@ function View(props: { api: TuiPluginApi }) {
       })
     }
   })
+  onCleanup(unsubBuild)
 
   const isStaleGraph = () => {
     const s = stale()

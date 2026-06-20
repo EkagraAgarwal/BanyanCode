@@ -1,6 +1,6 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createMemo, createSignal, onMount } from "solid-js"
+import { createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { useEvent } from "../../context/event"
 
 export * as HeaderStatusPills from "./status-pills"
@@ -38,13 +38,14 @@ function View(props: { api: TuiPluginApi }) {
   const [agentCount, setAgentCount] = createSignal<number>(0)
 
   const ev = useEvent()
-  ev.on("banyancode.codegraph.staleness" as any, (event: any) => {
+  const unsub = ev.on("banyancode.codegraph.staleness" as any, (event: any) => {
     setStaleness({
       isStale: event.properties.isStale,
       reason: event.properties.reason,
       lastChecked: event.properties.lastChecked,
     })
   })
+  onCleanup(unsub)
 
   onMount(async () => {
     const list = await props.api.client.session.list({})

@@ -1,6 +1,6 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createSignal } from "solid-js"
+import { createSignal, onCleanup } from "solid-js"
 import { useEvent } from "../../context/event"
 
 const id = "internal:sidebar-system-status"
@@ -24,8 +24,9 @@ function formatBytes(bytes: number): string {
 
 function toHex(color: { r: number; g: number; b: number; a?: number } | string): string {
   if (typeof color === "string") return color
-  const a = color.a !== undefined ? Math.round(color.a * 255).toString(16).padStart(2, "0") : ""
-  return `#${color.r.toString(16).padStart(2, "0")}${color.g.toString(16).padStart(2, "0")}${color.b.toString(16).padStart(2, "0")}${a}`
+  const toComponent = (v: number) => (v <= 1 ? Math.round(v * 255) : Math.round(v))
+  const a = color.a !== undefined ? toComponent(color.a).toString(16).padStart(2, "0") : ""
+  return `#${toComponent(color.r).toString(16).padStart(2, "0")}${toComponent(color.g).toString(16).padStart(2, "0")}${toComponent(color.b).toString(16).padStart(2, "0")}${a}`
 }
 
 function ProgressBar(props: { percent: number; fg: string; width?: number }) {
@@ -44,9 +45,10 @@ function View(props: { api: TuiPluginApi }) {
   const [status, setStatus] = createSignal<SystemStatusPayload | null>(null)
 
   const ev = useEvent()
-  ev.on("banyancode.system.updated" as any, (event: any) => {
+  const unsub = ev.on("banyancode.system.updated" as any, (event: any) => {
     setStatus(event.properties as SystemStatusPayload)
   })
+  onCleanup(unsub)
 
   const memUsed = () => (status() ? formatBytes(status()!.memoryUsedBytes) : "—")
   const memTotal = () => (status() ? formatBytes(status()!.memoryTotalBytes) : "—")
