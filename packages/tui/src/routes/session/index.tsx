@@ -1366,7 +1366,9 @@ export function Session() {
             <Toast />
             <CodegraphProgress />
           </box>
-            <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
+            <box width="28%" minWidth={28} flexShrink={0}>
+              <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
+            </box>
           </box>
           <box flexShrink={0}>
             <pluginRuntime.Slot name="session_footer" session_id={route.sessionID} />

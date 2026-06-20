@@ -27,7 +27,8 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
     <Show when={session()}>
       <box
         backgroundColor={theme.backgroundPanel}
-        width={42}
+        width="30%"
+        minWidth={32}
         height="100%"
         paddingTop={1}
         paddingBottom={1}
