@@ -31,8 +31,9 @@ function SparklineBar(props: { filled: number }) {
 
 function toHex(color: { r: number; g: number; b: number; a?: number } | string): string {
   if (typeof color === "string") return color
-  const a = color.a !== undefined ? Math.round(color.a * 255).toString(16).padStart(2, "0") : ""
-  return `#${color.r.toString(16).padStart(2, "0")}${color.g.toString(16).padStart(2, "0")}${color.b.toString(16).padStart(2, "0")}${a}`
+  const toComponent = (v: number) => (v <= 1 ? Math.round(v * 255) : Math.round(v))
+  const a = color.a !== undefined ? toComponent(color.a).toString(16).padStart(2, "0") : ""
+  return `#${toComponent(color.r).toString(16).padStart(2, "0")}${toComponent(color.g).toString(16).padStart(2, "0")}${toComponent(color.b).toString(16).padStart(2, "0")}${a}`
 }
 
 function View(props: { api: TuiPluginApi }) {
@@ -44,6 +45,21 @@ function View(props: { api: TuiPluginApi }) {
   const ev = useEvent()
   ev.on("banyancode.codegraph.staleness" as any, (event: any) => {
     setStale(event.properties as StaleCheckPayload)
+  })
+  ev.on("banyancode.codegraph.build" as any, (event: any) => {
+    const state = event.properties as { status: string; graphVersion?: number; graphCoverage?: number; startedAt?: number; result?: { indexed: number; skipped: number } }
+    if (state.status === "completed") {
+      setStale({
+        isStale: false,
+        filesChanged: 0,
+        filesMissing: 0,
+        filesTotal: state.result ? state.result.indexed + state.result.skipped : 0,
+        lastChecked: Date.now(),
+        graphBuiltAt: state.startedAt,
+        graphVersion: state.graphVersion,
+        graphCoverage: state.graphCoverage,
+      })
+    }
   })
 
   const isStaleGraph = () => {
