@@ -1,6 +1,7 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, For, Show, createSignal, onMount } from "solid-js"
+import { useSync } from "../../context/sync"
 
 function toHex(color: { r: number; g: number; b: number; a?: number } | string): string {
   if (typeof color === "string") return color
@@ -30,10 +31,24 @@ type SessionInfo = {
 }
 
 function View(props: { api: TuiPluginApi; session_id: string }) {
+  const sync = useSync()
   const [sessions, setSessions] = createSignal<SessionInfo[]>([])
   const [statusMap, setStatusMap] = createSignal<Record<string, { type: string }>>({})
   const [open, setOpen] = createSignal(true)
   const theme = () => props.api.theme.current
+
+  const refreshSessionsAndStatuses = async () => {
+    const list = await props.api.client.session.list({})
+    setSessions(list.data ?? [])
+    const statuses: Record<string, { type: string }> = {}
+    for (const s of list.data ?? []) {
+      if (s.parentID === props.session_id) {
+        const st = await props.api.state.session.status(s.id)
+        if (st) statuses[s.id] = st as { type: string }
+      }
+    }
+    setStatusMap(statuses)
+  }
 
   onMount(async () => {
     try {
@@ -43,24 +58,13 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
         setStatusMap((prev) => ({ ...prev, [event.properties.sessionID]: event.properties.status }))
       })
       ev.on("session.updated" as any, async () => {
-        const list = await props.api.client.session.list({})
-        setSessions(list.data ?? [])
+        await refreshSessionsAndStatuses()
       })
     } catch {
       // SDK context not available (e.g., in test environment) - skip event subscription
     }
 
-    const list = await props.api.client.session.list({})
-    setSessions(list.data ?? [])
-    // fetch status for each child session
-    const statuses: Record<string, { type: string }> = {}
-    for (const s of list.data ?? []) {
-      if (s.parentID === props.session_id) {
-        const st = await props.api.state.session.status(s.id)
-        if (st) statuses[s.id] = st as { type: string }
-      }
-    }
-    setStatusMap(statuses)
+    await refreshSessionsAndStatuses()
   })
 
   const children = createMemo(() => sessions().filter((s) => s.parentID === props.session_id))
@@ -70,6 +74,20 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const statusText = (session: SessionInfo): string => {
     if (session.summary && session.summary.files > 0) return "finished"
     return ""
+  }
+
+  const toolsUsed = (sessionID: string) => {
+    const messages = sync.data.message[sessionID] ?? []
+    const toolNames = new Set<string>()
+    for (const msg of messages) {
+      const parts = sync.data.part[msg.id] ?? []
+      for (const part of parts) {
+        if (part.type === "tool" && part.tool) {
+          toolNames.add(part.tool)
+        }
+      }
+    }
+    return Array.from(toolNames)
   }
 
   return (
@@ -99,9 +117,10 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                 const iconChar = !st || st.type === "idle" ? "○" : "●"
                 const text = statusText(child)
                 const connector = () => isLast() ? "└─" : "├─"
+                const tools = () => toolsUsed(child.id)
 
                 return (
-                  <box flexDirection="row" gap={0}>
+                  <box gap={0}>
                     <box flexDirection="row" gap={0} paddingLeft={1}>
                       <text flexShrink={0} fg={toHex(theme().textMuted)}>{connector()}</text>
                       <text flexShrink={0} fg={toHex(iconFg)}>
@@ -112,6 +131,16 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                         <text fg={toHex(theme().textMuted)}> {text}</text>
                       </Show>
                     </box>
+                    <Show when={tools().length > 0}>
+                      <box flexDirection="row" gap={0} paddingLeft={1}>
+                        <text flexShrink={0} fg={toHex(theme().textMuted)}>
+                          {isLast() ? "   " : "│  "}
+                        </text>
+                        <text fg={toHex(theme().textMuted)}>
+                          {`└─ tools: ${tools().join(", ")}`}
+                        </text>
+                      </box>
+                    </Show>
                   </box>
                 )
               }}
