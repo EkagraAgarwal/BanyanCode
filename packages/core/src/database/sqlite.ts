@@ -1,7 +1,7 @@
 export * as Sqlite from "./sqlite"
 
 import { Context } from "effect"
-import type { drizzle } from "drizzle-orm/bun-sqlite"
+import type { drizzle } from "drizzle-orm/libsql"
 
 export type DrizzleClient = ReturnType<typeof drizzle>
 export class Native extends Context.Service<Native, unknown>()("@opencode-ai/core/database/SqliteNative") {}
