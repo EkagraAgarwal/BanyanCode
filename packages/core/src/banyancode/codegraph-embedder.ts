@@ -33,10 +33,10 @@ export const EmbedEvent = EventV2.define({
 export interface Interface {
   readonly embedAll: () => Effect.Effect<
     { embedded: number; skipped: number; model: string | undefined },
-    EmbeddingProvider.EmbeddingError
+    EmbeddingProvider.EmbeddingError | EmbeddingProvider.EmbeddingDimensionError
   >
   readonly embedFile: (fileID: string) => Effect.Effect<{ embedded: number; skipped: number }, EmbeddingProvider.EmbeddingError>
-  readonly embedNode: (node: CodegraphNode) => Effect.Effect<void, EmbeddingProvider.EmbeddingError>
+  readonly embedNode: (node: CodegraphNode) => Effect.Effect<void, EmbeddingProvider.EmbeddingError | EmbeddingProvider.EmbeddingDimensionError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphEmbedder") {}

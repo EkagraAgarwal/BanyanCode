@@ -44,7 +44,12 @@ export {
 } from "./subagent-plans-repo"
 export { Service as SubagentBus, layer as subagentBusLayer, defaultLayer as subagentBusDefaultLayer } from "./subagent-bus"
 export { Service as MeshCoordinator, layer as meshCoordinatorLayer, defaultLayer as meshCoordinatorDefaultLayer } from "./mesh-coordinator"
-export { defaultLayer as embeddingProviderDefaultLayer, EmbeddingProviderService } from "./embedding-provider"
+export {
+  defaultLayer as embeddingProviderDefaultLayer,
+  EmbeddingProviderService,
+  EmbeddingProbeError,
+  EmbeddingDimensionError,
+} from "./embedding-provider"
 export { Service as SystemMonitorService, defaultLayer as systemMonitorDefaultLayer } from "./system-monitor"
 export * as SystemMonitor from "./system-monitor"
 export {
