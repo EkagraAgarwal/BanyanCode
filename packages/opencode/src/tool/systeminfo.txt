@@ -1,0 +1,20 @@
+# systeminfo
+
+Get current system status for the local machine.
+
+Returns:
+- CPU usage percentage
+- Memory used / total (with human-readable sizes)
+- GPU usage percentage (if available)
+- VRAM used / total (if available)
+- Platform (windows/linux/darwin)
+
+Use this tool when:
+- You need to understand resource constraints before running heavy operations
+- The user asks about system performance or available resources
+- You need to make decisions about parallelism based on system capacity
+
+Examples:
+- "Check if we have enough memory to build this project"
+- "What's the current CPU usage?"
+- "Are we running on GPU?

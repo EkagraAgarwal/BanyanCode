@@ -190,6 +190,7 @@ export const layer = Layer.effect(
               defaults,
               Permission.fromConfig({
                 todowrite: "deny",
+                systeminfo: "allow",
               }),
               user,
             ),
@@ -352,6 +353,7 @@ export const layer = Layer.effect(
                 mesh_control: "allow",
                 todowrite: "allow",
                 question: "allow",
+                systeminfo: "allow",
               }),
               user,
             ),
