@@ -16,6 +16,7 @@ import { applyEmbeddingModel } from "@/effect/banyancode-bootstrap"
 import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
+import { GraphMeta } from "@opencode-ai/core/banyancode/types"
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -189,6 +190,37 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return true
     })
 
+    const codegraphNodesHandler = Effect.fn("GlobalHttpApi.codegraphNodes")(function* () {
+      const repo = yield* Banyan.CodegraphRepo
+      const [nodes, meta] = yield* Effect.all([repo.listAllNodes(), repo.getMeta()])
+      const graphMeta = meta
+        ? {
+            graphBuiltAt: meta.graphBuiltAt,
+            graphVersion: meta.graphVersion,
+            graphCoverage: meta.graphCoverage,
+            totalFiles: meta.totalFiles,
+            totalNodes: meta.totalNodes,
+            totalEdges: meta.totalEdges,
+          }
+        : undefined
+      return {
+        nodes,
+        meta: graphMeta,
+        total: nodes.length,
+      }
+    })
+
+    const codegraphEdgesHandler = Effect.fn("GlobalHttpApi.codegraphEdges")(function* (ctx: { query: { nodeID?: string } }) {
+      const repo = yield* Banyan.CodegraphRepo
+      const nodeID = ctx.query?.nodeID
+      if (!nodeID) {
+        return { edges: [], total: 0 }
+      }
+      const [outgoing, incoming] = yield* Effect.all([repo.edgesFrom(nodeID), repo.edgesTo(nodeID)])
+      const allEdges = [...outgoing, ...incoming]
+      return { edges: allEdges, total: allEdges.length }
+    })
+
     return handlers
       .handle("health", health)
       .handleRaw("event", event)
@@ -201,5 +233,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       .handle("getBanyanConfig", getBanyanConfigHandler)
       .handle("updateBanyanConfig", updateBanyanConfigHandler)
       .handle("codegraphCancel", codegraphCancelHandler)
+      .handle("codegraphNodes", codegraphNodesHandler)
+      .handle("codegraphEdges", codegraphEdgesHandler)
   }),
 )

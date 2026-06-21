@@ -8,6 +8,12 @@ import "@/server/event"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { described } from "./metadata"
+import { CodegraphNodeSchema } from "@opencode-ai/core/banyancode/types"
+import { GraphMeta } from "@opencode-ai/core/banyancode/types"
+
+const CodegraphEdgesQuery = Schema.Struct({
+  nodeID: Schema.optional(Schema.String),
+})
 
 const GlobalHealth = Schema.Struct({
   healthy: Schema.Literal(true),
@@ -75,6 +81,8 @@ export const GlobalPaths = {
   codegraphCancel: "/global/codegraph-cancel",
   startup: "/global/startup",
   banyanConfig: "/global/banyan-config",
+  codegraphNodes: "/global/codegraph-nodes",
+  codegraphEdges: "/global/codegraph-edges",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -173,6 +181,45 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.codegraph.cancel",
           summary: "Cancel codegraph build",
           description: "Cancel the in-flight codegraph build for the current instance.",
+        }),
+      ),
+      HttpApiEndpoint.get("codegraphNodes", GlobalPaths.codegraphNodes, {
+        success: described(
+          Schema.Struct({
+            nodes: Schema.Array(CodegraphNodeSchema),
+            meta: Schema.optional(GraphMeta),
+            total: Schema.Number,
+          }),
+          "Codegraph nodes list with meta",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.codegraph.nodes",
+          summary: "List codegraph nodes",
+          description: "Returns all indexed codegraph nodes with summary metadata.",
+        }),
+      ),
+      HttpApiEndpoint.get("codegraphEdges", GlobalPaths.codegraphEdges, {
+        query: CodegraphEdgesQuery,
+        success: described(
+          Schema.Struct({
+            edges: Schema.Array(
+              Schema.Struct({
+                id: Schema.String,
+                fromNodeID: Schema.String,
+                toNodeID: Schema.String,
+                kind: Schema.Literals(["imports", "calls", "extends", "references"]),
+              }),
+            ),
+            total: Schema.Number,
+          }),
+          "Codegraph edges for a node",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.codegraph.edges",
+          summary: "List codegraph edges",
+          description: "Returns edges originating from or targeting a given node ID.",
         }),
       ),
       HttpApiEndpoint.post("startup", GlobalPaths.startup, {
