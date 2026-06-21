@@ -24,7 +24,7 @@ function AsciiGraph(props: { tab: string; focusedLabel: string; tools: string[];
       <text fg={textMuted()}>{connector}</text>
       <text fg={color()}>●</text>
       <text fg={text()}> {name}</text>
-      {annotation && <text fg={textMuted()}> {annotation}</text>}
+      {annotation ? <text fg={textMuted()}> {annotation}</text> : ""}
     </box>
   )
 

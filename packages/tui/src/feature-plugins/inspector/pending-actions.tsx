@@ -58,7 +58,7 @@ function View(props: { api: TuiPluginApi }) {
     <box>
       <text fg={text()}>
         <b>PENDING ACTIONS</b>
-        {totalCount() > 0 && <text fg={primary()}> {totalCount()}</text>}
+        {totalCount() > 0 ? <text fg={primary()}> {totalCount()}</text> : ""}
       </text>
       {totalCount() === 0 ? (
         <text fg={textMuted()}>No pending actions</text>
