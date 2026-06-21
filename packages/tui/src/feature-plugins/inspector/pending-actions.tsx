@@ -6,12 +6,7 @@ import { useSync } from "../../context/sync"
 
 const id = "internal:inspector-pending-actions"
 
-function toHex(color: { r: number; g: number; b: number; a?: number } | string): string {
-  if (typeof color === "string") return color
-  const toComponent = (v: number) => (v <= 1 ? Math.round(v * 255) : Math.round(v))
-  const a = color.a !== undefined ? toComponent(color.a).toString(16).padStart(2, "0") : ""
-  return `#${toComponent(color.r).toString(16).padStart(2, "0")}${toComponent(color.g).toString(16).padStart(2, "0")}${toComponent(color.b).toString(16).padStart(2, "0")}${a}`
-}
+import { toHex } from "../../util/color"
 
 function View(props: { api: TuiPluginApi }) {
   const sync = useSync()

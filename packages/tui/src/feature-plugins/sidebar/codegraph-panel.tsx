@@ -3,6 +3,7 @@ import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createSignal, onCleanup } from "solid-js"
 import { useEvent } from "../../context/event"
+import { toHex } from "../../util/color"
 
 const id = "internal:sidebar-codegraph-panel"
 
@@ -31,14 +32,6 @@ function formatAge(ms: number): string {
   if (h < 24) return `${h}h ago`
   const d = Math.floor(h / 24)
   return `${d}d ago`
-}
-
-function toHex(color: { r: number; g: number; b: number; a?: number } | string | undefined | null): string {
-  if (!color) return ""
-  if (typeof color === "string") return color
-  const toComponent = (v: number) => (v <= 1 ? Math.round(v * 255) : Math.round(v))
-  const a = color.a !== undefined ? toComponent(color.a).toString(16).padStart(2, "0") : ""
-  return `#${toComponent(color.r).toString(16).padStart(2, "0")}${toComponent(color.g).toString(16).padStart(2, "0")}${toComponent(color.b).toString(16).padStart(2, "0")}${a}`
 }
 
 function View(props: { api: TuiPluginApi }) {
@@ -112,7 +105,7 @@ function View(props: { api: TuiPluginApi }) {
     <box>
       <text fg={toHex(theme().text)}>
         <b>CODEGRAPH LAYERS</b>
-        {isStaleGraph() && <text fg={toHex(theme().warning)}> (stale)</text>}
+        {isStaleGraph() ? <text fg={toHex(theme().warning)}> (stale)</text> : ""}
       </text>
 
       {!hasData() ? (

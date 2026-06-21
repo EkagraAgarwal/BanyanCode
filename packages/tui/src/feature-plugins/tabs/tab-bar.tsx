@@ -12,15 +12,7 @@ const TABS: { key: ActiveTab; label: string }[] = [
   { key: "settings", label: "SETTINGS" },
 ]
 
-function toHex(color: { r: number; g: number; b: number; a?: number } | string): string {
-  if (typeof color === "string") return color
-  const norm = (v: number) => {
-    const val = v <= 1 ? Math.round(v * 255) : Math.round(v)
-    return Math.max(0, Math.min(255, val)).toString(16).padStart(2, "0")
-  }
-  const a = color.a !== undefined ? norm(color.a) : ""
-  return `#${norm(color.r)}${norm(color.g)}${norm(color.b)}${a}`
-}
+import { toHex } from "../../util/color"
 
 function cycleTab(delta: 1 | -1) {
   const tabs = TABS.map((t) => t.key)

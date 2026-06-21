@@ -6,12 +6,7 @@ import { useSync } from "../../context/sync"
 
 const id = "internal:inspector-agent-details"
 
-function toHex(color: { r: number; g: number; b: number; a?: number } | string): string {
-  if (typeof color === "string") return color
-  const toComponent = (v: number) => (v <= 1 ? Math.round(v * 255) : Math.round(v))
-  const a = color.a !== undefined ? toComponent(color.a).toString(16).padStart(2, "0") : ""
-  return `#${toComponent(color.r).toString(16).padStart(2, "0")}${toComponent(color.g).toString(16).padStart(2, "0")}${toComponent(color.b).toString(16).padStart(2, "0")}${a}`
-}
+
 
 function formatTokens(tokens: { input: number; output: number; reasoning: number } | undefined): string {
   if (!tokens) return "—"
@@ -30,9 +25,9 @@ function formatElapsed(startMs: number): string {
 
 function StatusDot(props: { status: "running" | "idle" | "completed"; theme: any }) {
   const colors = {
-    running: toHex(props.theme.success),
-    idle: toHex(props.theme.warning),
-    completed: toHex(props.theme.textMuted),
+    running: props.theme.success,
+    idle: props.theme.warning,
+    completed: props.theme.textMuted,
   }
   return <text fg={colors[props.status]}>{props.status === "running" ? "●" : "○"}</text>
 }
@@ -107,32 +102,32 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
   return (
     <box>
       <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">
-        <text fg={toHex(theme().text)}>
+        <text fg={theme().text}>
           <b>{agentName()}</b>
         </text>
         <box flexDirection="row" gap={1}>
           <StatusDot status={statusType() as "running" | "idle" | "completed"} theme={theme()} />
-          <text fg={toHex(theme().primary)}>{statusType().toUpperCase()}</text>
+          <text fg={theme().primary}>{statusType().toUpperCase()}</text>
           <Show when={statusType() === "running"}>
-            <text fg={toHex(theme().textMuted)}>({elapsed()})</text>
+            <text fg={theme().textMuted}>({elapsed()})</text>
           </Show>
         </box>
       </box>
       <box flexDirection="row" gap={1}>
-        <text fg={toHex(theme().textMuted)}>Tools  </text>
-        <text fg={toHex(theme().text)}>{toolsUsed().length > 0 ? toolsUsed().join(", ") : "None"}</text>
+        <text fg={theme().textMuted}>Tools  </text>
+        <text fg={theme().text}>{toolsUsed().length > 0 ? toolsUsed().join(", ") : "None"}</text>
       </box>
       <box flexDirection="row" gap={1}>
-        <text fg={toHex(theme().textMuted)}>Tokens </text>
-        <text fg={toHex(theme().text)}>{formatTokens(tokens())}</text>
+        <text fg={theme().textMuted}>Tokens </text>
+        <text fg={theme().text}>{formatTokens(tokens())}</text>
       </box>
       <box flexDirection="row" gap={1}>
-        <text fg={toHex(theme().textMuted)}>Cost   </text>
-        <text fg={toHex(theme().text)}>{formatCost(cost())}</text>
+        <text fg={theme().textMuted}>Cost   </text>
+        <text fg={theme().text}>{formatCost(cost())}</text>
       </box>
       <box flexDirection="row" gap={1}>
-        <text fg={toHex(theme().textMuted)}>LastMsg</text>
-        <text fg={toHex(theme().text)}>{lastMessage()}</text>
+        <text fg={theme().textMuted}>LastMsg</text>
+        <text fg={theme().text}>{lastMessage()}</text>
       </box>
     </box>
   )

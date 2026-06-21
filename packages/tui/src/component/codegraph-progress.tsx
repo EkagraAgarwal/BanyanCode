@@ -136,7 +136,7 @@ export function CodegraphProgress() {
             Codegraph Indexing — {labelFor(build.state.status)}
           </text>
           <text fg={theme.text}>
-            {bar(build.state.done, build.state.total)} {build.state.done}/{build.state.total}
+            {`${bar(build.state.done, build.state.total)} ${build.state.done}/${build.state.total}`}
           </text>
           <Show when={build.state.status === "running" && build.state.currentFile}>
             {(file) => (
@@ -178,7 +178,7 @@ export function CodegraphProgress() {
             Code Embeddings — {labelFor(build.embedState.status)}
           </text>
           <text fg={theme.text}>
-            {bar(build.embedState.done, build.embedState.total)} {build.embedState.done}/{build.embedState.total}
+            {`${bar(build.embedState.done, build.embedState.total)} ${build.embedState.done}/${build.embedState.total}`}
           </text>
           <Show when={build.embedState.status === "completed" && build.embedState.result}>
             {(result) => (

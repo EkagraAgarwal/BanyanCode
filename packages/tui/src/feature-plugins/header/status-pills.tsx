@@ -2,6 +2,7 @@ import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { useEvent } from "../../context/event"
+import { toHex } from "../../util/color"
 
 export * as HeaderStatusPills from "./status-pills"
 
@@ -13,12 +14,7 @@ interface StalenessState {
   lastChecked: number
 }
 
-function toHex(color: { r: number; g: number; b: number; a?: number } | string): string {
-  if (typeof color === "string") return color
-  const toComponent = (v: number) => (v <= 1 ? Math.round(v * 255) : Math.round(v))
-  const a = color.a !== undefined ? toComponent(color.a).toString(16).padStart(2, "0") : ""
-  return `#${toComponent(color.r).toString(16).padStart(2, "0")}${toComponent(color.g).toString(16).padStart(2, "0")}${toComponent(color.b).toString(16).padStart(2, "0")}${a}`
-}
+
 
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts
@@ -75,27 +71,27 @@ function View(props: { api: TuiPluginApi }) {
   const mcpLabel = () => (mcpConnectedCount() > 0 ? `MCP: ${mcpFirstConnected()}` : "MCP: —")
   const lspLabel = () => (lspCount() > 0 ? `LSP: ${lspCount()} server${lspCount() !== 1 ? "s" : ""}` : "LSP: Disabled")
 
-  const dotColor = (ok: boolean) => (ok ? theme().success : theme().warning)
+  const dotColor = (ok: boolean) => toHex(ok ? theme().success : theme().warning)
 
   return (
     <box flexDirection="row" gap={2}>
       <box flexDirection="row" gap={0}>
-        <text fg={toHex(dotColor(agentCount() >= 0))}>●</text>
+        <text fg={dotColor(agentCount() >= 0)}>●</text>
         <text fg={toHex(theme().textMuted)}> {agentsLabel()}</text>
       </box>
       <text fg={toHex(theme().textMuted)}>·</text>
       <box flexDirection="row" gap={0}>
-        <text fg={toHex(dotColor(!staleness()?.isStale))}>●</text>
+        <text fg={dotColor(!staleness()?.isStale)}>●</text>
         <text fg={toHex(theme().textMuted)}> {graphLabel()}</text>
       </box>
       <text fg={toHex(theme().textMuted)}>·</text>
       <box flexDirection="row" gap={0}>
-        <text fg={toHex(dotColor(mcpConnectedCount() > 0))}>●</text>
+        <text fg={dotColor(mcpConnectedCount() > 0)}>●</text>
         <text fg={toHex(theme().textMuted)}> {mcpLabel()}</text>
       </box>
       <text fg={toHex(theme().textMuted)}>·</text>
       <box flexDirection="row" gap={0}>
-        <text fg={toHex(dotColor(lspCount() > 0))}>●</text>
+        <text fg={dotColor(lspCount() > 0)}>●</text>
         <text fg={toHex(theme().textMuted)}> {lspLabel()}</text>
       </box>
     </box>

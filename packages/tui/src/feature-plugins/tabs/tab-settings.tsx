@@ -8,11 +8,7 @@ import { useLocal } from "../../context/local"
 
 const id = "internal:tabs-tab-settings"
 
-function toHex(color: { r: number; g: number; b: number; a?: number } | string): string {
-  if (typeof color === "string") return color
-  const a = color.a !== undefined ? Math.round(color.a * 255).toString(16).padStart(2, "0") : ""
-  return `#${color.r.toString(16).padStart(2, "0")}${color.g.toString(16).padStart(2, "0")}${color.b.toString(16).padStart(2, "0")}${a}`
-}
+import { toHex } from "../../util/color"
 
 function SettingsRow(props: { label: string; value: string; onEdit: () => void; theme: () => TuiThemeCurrent }) {
   return (

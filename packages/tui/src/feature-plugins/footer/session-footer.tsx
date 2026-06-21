@@ -8,11 +8,6 @@ import { useRoute } from "../../context/route"
 
 const id = "internal:session-footer"
 
-function toHex(color: { r: number; g: number; b: number; a?: number } | string): string {
-  if (typeof color === "string") return color
-  const a = color.a !== undefined ? Math.round(color.a * 255).toString(16).padStart(2, "0") : ""
-  return `#${color.r.toString(16).padStart(2, "0")}${color.g.toString(16).padStart(2, "0")}${color.b.toString(16).padStart(2, "0")}${a}`
-}
 
 function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
@@ -47,20 +42,20 @@ function View(props: { api: TuiPluginApi }) {
       flexShrink={0}
       gap={2}
     >
-      <text fg={toHex(theme().textMuted)}>
+      <text fg={theme().textMuted}>
         BanyanCode {props.api.app.version}
         {branch() ? ` · ${branch()}` : ""}
       </text>
       <box flexGrow={1} />
-      <text fg={toHex(theme().textMuted)}>
+      <text fg={theme().textMuted}>
         {dir()}
       </text>
-      <text fg={toHex(theme().textMuted)}>·</text>
-      <text fg={toHex(theme().textMuted)}>enter send</text>
-      <text fg={toHex(theme().textMuted)}>·</text>
-      <text fg={toHex(theme().textMuted)}>shift+enter newline</text>
-      <text fg={toHex(theme().textMuted)}>·</text>
-      <text fg={toHex(theme().textMuted)}>/help</text>
+      <text fg={theme().textMuted}>·</text>
+      <text fg={theme().textMuted}>enter send</text>
+      <text fg={theme().textMuted}>·</text>
+      <text fg={theme().textMuted}>shift+enter newline</text>
+      <text fg={theme().textMuted}>·</text>
+      <text fg={theme().textMuted}>/help</text>
     </box>
   )
 }

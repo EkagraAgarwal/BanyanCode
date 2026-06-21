@@ -12,11 +12,7 @@ interface MemoryEntry {
   value: unknown
 }
 
-function toHex(color: { r: number; g: number; b: number; a?: number } | string): string {
-  if (typeof color === "string") return color
-  const a = color.a !== undefined ? Math.round(color.a * 255).toString(16).padStart(2, "0") : ""
-  return `#${color.r.toString(16).padStart(2, "0")}${color.g.toString(16).padStart(2, "0")}${color.b.toString(16).padStart(2, "0")}${a}`
-}
+import { toHex } from "../../util/color"
 
 function previewValue(value: unknown): string {
   if (typeof value === "string") return value.slice(0, 40)

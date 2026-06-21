@@ -2,20 +2,7 @@ import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, For, Show, createSignal, onMount } from "solid-js"
 import { useSync } from "../../context/sync"
-
-function toHex(color: { r: number; g: number; b: number; a?: number } | string): string {
-  if (typeof color === "string") return color
-  // RGBA can have values in 0-1 range (normalized) or 0-255 range
-  const toComponent = (v: number) => {
-    if (v <= 1) return Math.round(v * 255)
-    return Math.round(v)
-  }
-  const r = toComponent(color.r).toString(16).padStart(2, "0")
-  const g = toComponent(color.g).toString(16).padStart(2, "0")
-  const b = toComponent(color.b).toString(16).padStart(2, "0")
-  const a = color.a !== undefined ? toComponent(color.a).toString(16).padStart(2, "0") : ""
-  return `#${r}${g}${b}${a}`
-}
+import { toHex } from "../../util/color"
 
 const id = "internal:sidebar-agent-tree"
 
