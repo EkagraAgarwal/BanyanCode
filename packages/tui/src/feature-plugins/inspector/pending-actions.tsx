@@ -21,7 +21,7 @@ function View(props: { api: TuiPluginApi }) {
   const text = () => toHex(theme().text)
 
   // Sessions in "working" or "busy" state are considered in-flight.
-  const pending = createMemo(() => {
+  const pendingSessions = createMemo(() => {
     return sync.data.session.filter((s) => {
       const status = sync.data.session_status[s.id]
       if (!status) return false
@@ -29,31 +29,98 @@ function View(props: { api: TuiPluginApi }) {
     })
   })
 
+  // Pending permission requests.
+  const pendingPermissions = createMemo(() => {
+    const list: any[] = []
+    for (const sessionID of Object.keys(sync.data.permission)) {
+      const reqs = sync.data.permission[sessionID] ?? []
+      for (const req of reqs) {
+        list.push({ sessionID, req })
+      }
+    }
+    return list
+  })
+
+  // Pending questions.
+  const pendingQuestions = createMemo(() => {
+    const list: any[] = []
+    for (const sessionID of Object.keys(sync.data.question)) {
+      const reqs = sync.data.question[sessionID] ?? []
+      for (const req of reqs) {
+        list.push({ sessionID, req })
+      }
+    }
+    return list
+  })
+
+  const totalCount = createMemo(() => {
+    return pendingSessions().length + pendingPermissions().length + pendingQuestions().length
+  })
+
   return (
     <box>
       <text fg={text()}>
-        <b>PENDING ACTIONS</b>
+        <b>PENDING ACTIONS{totalCount() > 0 ? ` ${totalCount()}` : ""}</b>
       </text>
-      {pending().length === 0 ? (
+      {totalCount() === 0 ? (
         <text fg={textMuted()}>No pending actions</text>
       ) : (
-        pending().map((s) => (
-          <box flexDirection="column" gap={0}>
-            <box flexDirection="row" gap={1}>
-              <text fg={textMuted()}>•</text>
-              <text fg={text()}>{s.agent ?? "agent"}</text>
-              {s.title && (
-                <text fg={textMuted()}> ({s.title})</text>
-              )}
+        <box gap={1}>
+          {/* Active agent sessions */}
+          {pendingSessions().map((s) => (
+            <box flexDirection="column" gap={0}>
+              <box flexDirection="row" gap={1}>
+                <text fg={textMuted()}>•</text>
+                <text fg={text()}>{s.agent ?? "agent"}</text>
+                {s.title && (
+                  <text fg={textMuted()}> ({s.title})</text>
+                )}
+              </box>
+              <box flexDirection="row" gap={1} paddingLeft={3}>
+                <text fg={primary()}>[a]</text>
+                <text fg={textMuted()}> abort  </text>
+                <text fg={primary()}>[v]</text>
+                <text fg={textMuted()}> view  </text>
+                <text fg={primary()}>[t]</text>
+                <text fg={textMuted()}> timeline</text>
+              </box>
             </box>
-            <box flexDirection="row" gap={1} paddingLeft={3}>
-              <text fg={primary()}>[a]</text>
-              <text fg={textMuted()}> abort  </text>
-              <text fg={primary()}>[v]</text>
-              <text fg={textMuted()}> view</text>
+          ))}
+
+          {/* Pending permission requests */}
+          {pendingPermissions().map(({ sessionID, req }) => (
+            <box flexDirection="column" gap={0}>
+              <box flexDirection="row" gap={1}>
+                <text fg={toHex(theme().warning)}>•</text>
+                <text fg={text()}>Permission: {req.tool?.name ?? "unknown tool"}</text>
+              </box>
+              <box flexDirection="row" gap={1} paddingLeft={3}>
+                <text fg={primary()}>[y]</text>
+                <text fg={textMuted()}> approve  </text>
+                <text fg={primary()}>[n]</text>
+                <text fg={textMuted()}> deny  </text>
+                <text fg={primary()}>[v]</text>
+                <text fg={textMuted()}> view diff</text>
+              </box>
             </box>
-          </box>
-        ))
+          ))}
+
+          {/* Pending questions */}
+          {pendingQuestions().map(({ sessionID, req }) => (
+            <box flexDirection="column" gap={0}>
+              <box flexDirection="row" gap={1}>
+                <text fg={toHex(theme().info)}>•</text>
+                <text fg={text()}>Question: {req.text ? (req.text.length > 30 ? req.text.substring(0, 27) + "..." : req.text) : "agent query"}</text>
+              </box>
+              <box flexDirection="row" gap={1} paddingLeft={3}>
+                <text fg={primary()}>[enter]</text>
+                <text fg={textMuted()}> answer  </text>
+                <text fg={primary()}>[s]</text>
+                <text fg={textMuted()}> skip</text>
+              </box>
+            </box>
+          ))}
+        </box>
       )}
     </box>
   )
