@@ -27,10 +27,10 @@ const theme = {
 }
 
 describe("DiffViewerFileTree", () => {
-  test.skip("renders sorted hierarchical file rows", async () => {
-    const app = await testRender(
-      () =>
-        withTheme(() => (
+  test("renders sorted hierarchical file rows", async () => {
+    expect(
+      visibleLines(
+        await renderFrame(() => (
           <DiffViewerFileTree
             width={32}
             files={[
@@ -46,24 +46,15 @@ describe("DiffViewerFileTree", () => {
             focused={true}
           />
         )),
-      { width: 40, height: 20 },
-    )
-
-    try {
-      await renderOnceSettled(app)
-      const lines = visibleLines(app.captureCharFrame())
-
-      expect(lines).toEqual([
-        "▾ a",
-        "│  ├─ alpha.ts               ?",
-        "│  └─ zeta.ts                ?",
-        "├─ ▾ b",
-        "│  ├─ alpha.ts               ?",
-        "│  └─ file.ts                ?",
-      ])
-    } finally {
-      app.renderer.destroy()
-    }
+      ),
+    ).toEqual([
+      "▾ a",
+      "│  ├─ alpha.ts               ?",
+      "│  └─ zeta.ts                ?",
+      "├─ ▾ b",
+      "│  ├─ alpha.ts               ?",
+      "│  └─ file.ts                ?",
+    ])
   })
 
   test("keeps loading and error quiet while rendering an empty settled state", async () => {

@@ -1,7 +1,6 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo } from "solid-js"
-import { abbreviateHome } from "../../runtime"
 import { useTuiPaths } from "../../context/runtime"
 import { useData } from "../../context/data"
 import { useRoute } from "../../context/route"
@@ -23,7 +22,6 @@ function View(props: { api: TuiPluginApi }) {
     return props.api.state.path.directory || paths.cwd
   })
 
-  const dir = createMemo(() => abbreviateHome(directory(), paths.home))
   const branch = createMemo(() => {
     if (directory() === (props.api.state.path.directory || paths.cwd)) {
       return props.api.state.vcs?.branch
@@ -44,18 +42,12 @@ function View(props: { api: TuiPluginApi }) {
     >
       <text fg={theme().textMuted}>
         BanyanCode {props.api.app.version}
-        {branch() ? ` · ${branch()}` : ""}
+        {branch() ? ` · Git: ${branch()}` : ""}
       </text>
       <box flexGrow={1} />
-      <text fg={theme().textMuted}>
-        {dir()}
-      </text>
-      <text fg={theme().textMuted}>·</text>
       <text fg={theme().textMuted}>enter send</text>
       <text fg={theme().textMuted}>·</text>
       <text fg={theme().textMuted}>shift+enter newline</text>
-      <text fg={theme().textMuted}>·</text>
-      <text fg={theme().textMuted}>/help</text>
     </box>
   )
 }

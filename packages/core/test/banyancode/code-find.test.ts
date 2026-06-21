@@ -67,6 +67,8 @@ const mockCodegraphRepoLayer = Layer.succeed(
     edgesTo: () => Effect.succeed([]),
     putEmbedding: () => Effect.void,
     getEmbedding: () => Effect.succeed(undefined),
+    resetEmbeddingsTable: () => Effect.void,
+    searchByVector: () => Effect.succeed([]),
     deleteFile: () => Effect.void,
     clearAll: () => Effect.void,
     setMeta: () => Effect.void,
@@ -104,6 +106,8 @@ const mockEmbeddingProviderLayer = Layer.succeed(
     embed: () => Effect.succeed([new Float32Array([1, 0, 0])]),
     model: () => "test-embedding-model",
     setModel: () => Effect.void,
+    probe: () => Effect.succeed({ dim: 3, type: "F32" as const }),
+    detectAndSetModel: () => Effect.succeed({ dim: 3 }),
   }),
 )
 
@@ -249,6 +253,8 @@ describe("code_find", () => {
           embed: () => Effect.die("no model"),
           model: () => undefined,
           setModel: () => Effect.void,
+          probe: () => Effect.die("no model"),
+          detectAndSetModel: () => Effect.die("no model"),
         }),
       ),
     )

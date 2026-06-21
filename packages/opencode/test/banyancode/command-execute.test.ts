@@ -23,9 +23,9 @@ describe("command execute", () => {
     expect(Command.Default.REVIEW).toBe("review")
   })
 
-  test("Default has exactly 7 commands (init, review, codegraph-build, codegraph-remove, code-embed, yolo, refresh-models)", () => {
+  test("Default has exactly 8 commands (init, review, codegraph-build, codegraph-remove, code-embed, yolo, refresh-models, embedding-model-pick)", () => {
     const keys = Object.keys(Command.Default)
-    expect(keys).toHaveLength(7)
+    expect(keys).toHaveLength(8)
     expect(keys).toContain("INIT")
     expect(keys).toContain("REVIEW")
     expect(keys).toContain("CODEGRAPH_BUILD")
@@ -33,5 +33,6 @@ describe("command execute", () => {
     expect(keys).toContain("CODE_EMBED")
     expect(keys).toContain("YOLO")
     expect(keys).toContain("REFRESH_MODELS")
+    expect(keys).toContain("EMBEDDING_MODEL_PICK")
   })
 })

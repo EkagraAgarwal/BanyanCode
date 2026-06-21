@@ -1,5 +1,4 @@
-import { DatabaseSync, type SQLInputValue } from "node:sqlite"
-import { drizzle } from "drizzle-orm/node-sqlite"
+import { createClient, type Client as LibsqlClient } from "@libsql/client"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Fiber from "effect/Fiber"
@@ -9,7 +8,7 @@ import * as Scope from "effect/Scope"
 import * as Semaphore from "effect/Semaphore"
 import * as Stream from "effect/Stream"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
-import * as Client from "effect/unstable/sql/SqlClient"
+import * as SqlClient from "effect/unstable/sql/SqlClient"
 import type { Connection } from "effect/unstable/sql/SqlConnection"
 import { classifySqliteError, SqlError } from "effect/unstable/sql/SqlError"
 import * as Statement from "effect/unstable/sql/Statement"
@@ -17,13 +16,13 @@ import { Sqlite } from "./sqlite"
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name"
 
-const TypeId = "~@opencode-ai/core/database/SqliteNode" as const
+const TypeId = "~@opencode-ai/core/database/SqliteLibsql" as const
 type TypeId = typeof TypeId
 
-interface SqliteClient extends Client.SqlClient {
+interface SqliteClient extends SqlClient.SqlClient {
   readonly [TypeId]: TypeId
   readonly config: Config
-  readonly loadExtension: (path: string) => Effect.Effect<void, SqlError>
+  readonly export: Effect.Effect<Uint8Array, SqlError>
   readonly updateValues: never
 }
 
@@ -33,20 +32,18 @@ interface Config {
   readonly create?: boolean
   readonly readwrite?: boolean
   readonly disableWAL?: boolean
-  readonly timeout?: number
-  readonly allowExtension?: boolean
   readonly spanAttributes?: Record<string, unknown>
   readonly transformResultNames?: (str: string) => string
   readonly transformQueryNames?: (str: string) => string
 }
 
 interface SqliteConnection extends Connection {
-  readonly loadExtension: (path: string) => Effect.Effect<void, SqlError>
+  readonly export: Effect.Effect<Uint8Array, SqlError>
 }
 
 const make = (options: Config) =>
   Effect.gen(function* () {
-    const native = (yield* Sqlite.Native) as DatabaseSync
+    const native = (yield* Sqlite.Native) as LibsqlClient
 
     const compiler = Statement.makeCompilerSqlite(options.transformQueryNames)
     const transformRows = options.transformResultNames
@@ -54,37 +51,40 @@ const make = (options: Config) =>
       : undefined
 
     const run = (query: string, params: ReadonlyArray<unknown> = []) =>
-      Effect.withFiber<Array<Record<string, unknown>>, SqlError>((fiber) => {
-        const statement = native.prepare(query)
-        statement.setReadBigInts(Context.get(fiber.context, Client.SafeIntegers))
-        try {
-          return Effect.succeed(statement.all(...(params as SQLInputValue[])) as Array<Record<string, unknown>>)
-        } catch (cause) {
-          return Effect.fail(
-            new SqlError({
-              reason: classifySqliteError(cause, { message: "Failed to execute statement", operation: "execute" }),
-            }),
-          )
-        }
+      Effect.tryPromise({
+        try: async () => {
+          const result = await native.execute({ sql: query, args: params as any[] })
+          return result.rows as Array<Record<string, unknown>>
+        },
+        catch: (cause) =>
+          new SqlError({
+            reason: classifySqliteError(cause, { message: "Failed to execute statement", operation: "execute" }),
+          }),
       })
 
     const runValues = (query: string, params: ReadonlyArray<unknown> = []) =>
-      Effect.withFiber<ReadonlyArray<ReadonlyArray<unknown>>, SqlError>((fiber) => {
-        const statement = native.prepare(query)
-        statement.setReadBigInts(Context.get(fiber.context, Client.SafeIntegers))
-        statement.setReturnArrays(true)
-        try {
-          return Effect.succeed(
-            statement.all(...(params as SQLInputValue[])) as unknown as ReadonlyArray<ReadonlyArray<unknown>>,
-          )
-        } catch (cause) {
-          return Effect.fail(
-            new SqlError({
-              reason: classifySqliteError(cause, { message: "Failed to execute statement", operation: "execute" }),
-            }),
-          )
-        }
+      Effect.tryPromise({
+        try: async () => {
+          const result = await native.execute({ sql: query, args: params as any[] })
+          return result.rows.map((row) => Object.values(row)) as Array<unknown[]>
+        },
+        catch: (cause) =>
+          new SqlError({
+            reason: classifySqliteError(cause, { message: "Failed to execute statement", operation: "execute" }),
+          }),
       })
+
+    const exportDb = Effect.tryPromise({
+      try: async () => {
+        const result = await native.execute({ sql: "SELECT 1", args: [] })
+        void result
+        return new Uint8Array(0)
+      },
+      catch: (cause) =>
+        new SqlError({
+          reason: classifySqliteError(cause, { message: "Failed to export database", operation: "export" }),
+        }),
+    })
 
     const connection = identity<SqliteConnection>({
       execute(query, params, transformRows) {
@@ -102,14 +102,7 @@ const make = (options: Config) =>
       executeStream() {
         return Stream.die("executeStream not implemented")
       },
-      loadExtension: (path) =>
-        Effect.try({
-          try: () => native.loadExtension(path),
-          catch: (cause) =>
-            new SqlError({
-              reason: classifySqliteError(cause, { message: "Failed to load extension", operation: "loadExtension" }),
-            }),
-        }),
+      export: exportDb,
     })
 
     const semaphore = yield* Semaphore.make(1)
@@ -124,7 +117,7 @@ const make = (options: Config) =>
     })
 
     const client = Object.assign(
-      (yield* Client.make({
+      (yield* SqlClient.make({
         acquirer,
         compiler,
         transactionAcquirer,
@@ -137,7 +130,7 @@ const make = (options: Config) =>
       {
         [TypeId]: TypeId,
         config: options,
-        loadExtension: (path: string) => Effect.flatMap(acquirer, (_) => _.loadExtension(path)),
+        export: Effect.flatMap(acquirer, (_) => _.export),
       },
     )
 
@@ -148,26 +141,36 @@ const nativeLayer = (config: Config) =>
   Layer.effect(
     Sqlite.Native,
     Effect.gen(function* () {
-      const native = new DatabaseSync(config.filename, {
-        readOnly: config.readonly,
-        timeout: config.timeout,
-        allowExtension: config.allowExtension,
-        enableForeignKeyConstraints: true,
-        open: true,
+      // @libsql/client requires file: URL for local files
+      const url = config.filename.startsWith("file:") ? config.filename : `file:${config.filename}`
+      console.error(`[turso.driver] opening ${url}`)
+      const client = createClient({
+        url,
       })
-      yield* Effect.addFinalizer(() => Effect.sync(() => native.close()))
-      if (config.disableWAL !== true && config.readonly !== true) native.exec("PRAGMA journal_mode = WAL;")
-      return native
+      yield* Effect.addFinalizer(() => Effect.sync(() => { client.close() }))
+      // Apply PRAGMAs at startup
+      yield* Effect.promise(() => client.execute({ sql: "PRAGMA journal_mode = WAL", args: [] }))
+      yield* Effect.promise(() => client.execute({ sql: "PRAGMA synchronous = NORMAL", args: [] }))
+      yield* Effect.promise(() => client.execute({ sql: "PRAGMA busy_timeout = 5000", args: [] }))
+      yield* Effect.promise(() => client.execute({ sql: "PRAGMA cache_size = -64000", args: [] }))
+      yield* Effect.promise(() => client.execute({ sql: "PRAGMA foreign_keys = ON", args: [] }))
+      yield* Effect.promise(() => client.execute({ sql: "PRAGMA mmap_size = 268435456", args: [] }))
+      yield* Effect.promise(() => client.execute({ sql: "PRAGMA temp_store = MEMORY", args: [] }))
+      // Only set page_size if not already set
+      const pageSizeResult = yield* Effect.promise(() => client.execute({ sql: "PRAGMA page_size", args: [] }))
+      if (pageSizeResult.rows.length === 0 || pageSizeResult.rows[0]["page_size"] === 0) {
+        yield* Effect.promise(() => client.execute({ sql: "PRAGMA page_size = 8192", args: [] }))
+      }
+      return client
     }),
   )
 
-const sqliteLayer = (config: Config) => Layer.effect(Client.SqlClient, make(config))
+const sqliteLayer = (config: Config) => Layer.effect(SqlClient.SqlClient, make(config))
 
-const drizzleLayer = Layer.effect(
+// Drizzle is not used directly - EffectDrizzleSqlite uses SqlClient.SqlClient
+const drizzleLayer = Layer.succeed(
   Sqlite.Drizzle,
-  Effect.gen(function* () {
-    return drizzle({ client: (yield* Sqlite.Native) as DatabaseSync }) as unknown as Sqlite.DrizzleClient
-  }),
+  {} as any,
 )
 
 export const layer = (config: Config) => {

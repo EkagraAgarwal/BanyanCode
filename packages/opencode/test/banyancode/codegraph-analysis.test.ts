@@ -50,6 +50,8 @@ const makeMockRepoLayer = () =>
         getMeta: () => Effect.succeed(undefined),
         setMeta: () => Effect.void,
         bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1 }),
+        resetEmbeddingsTable: () => Effect.succeed(undefined),
+        searchByVector: () => Effect.succeed([]),
       })
     }),
   )
