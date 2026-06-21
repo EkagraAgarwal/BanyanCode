@@ -99,36 +99,39 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
 
   const elapsed = () => formatElapsed(startMs())
 
+  const gridRow = (label: string, value: () => string) => (
+    <box flexDirection="row" gap={1}>
+      <text fg={theme().textMuted}>{label}</text>
+      <text fg={theme().text}>{value()}</text>
+    </box>
+  )
+
   return (
     <box>
+      <text fg={theme().primary} marginBottom={1}>
+        <b>AGENT DETAILS</b>
+      </text>
       <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">
-        <text fg={theme().text}>
+        <text fg={theme().warning}>
           <b>{agentName()}</b>
         </text>
         <box flexDirection="row" gap={1}>
           <StatusDot status={statusType() as "running" | "idle" | "completed"} theme={theme()} />
-          <text fg={theme().primary}>{statusType().toUpperCase()}</text>
+          <text fg={theme().success}>{statusType().toUpperCase()}</text>
           <Show when={statusType() === "running"}>
             <text fg={theme().textMuted}>({elapsed()})</text>
           </Show>
         </box>
       </box>
-      <box flexDirection="row" gap={1}>
-        <text fg={theme().textMuted}>Tools  </text>
-        <text fg={theme().text}>{toolsUsed().length > 0 ? toolsUsed().join(", ") : "None"}</text>
-      </box>
-      <box flexDirection="row" gap={1}>
-        <text fg={theme().textMuted}>Tokens </text>
-        <text fg={theme().text}>{formatTokens(tokens())}</text>
-      </box>
-      <box flexDirection="row" gap={1}>
-        <text fg={theme().textMuted}>Cost   </text>
-        <text fg={theme().text}>{formatCost(cost())}</text>
-      </box>
-      <box flexDirection="row" gap={1}>
-        <text fg={theme().textMuted}>LastMsg</text>
-        <text fg={theme().text}>{lastMessage()}</text>
-      </box>
+      {gridRow("Task:", () => session()?.title ?? "—")}
+      {gridRow("Started:", () => new Date(startMs()).toLocaleTimeString("en-US", { hour12: false }))}
+      {gridRow("Model:", () => {
+        const m = session()?.model
+        return m?.id ? `${m.id.slice(0, 12)}..` : "—"
+      })}
+      {gridRow("Tools:", () => toolsUsed().length > 0 ? toolsUsed().slice(0, 3).join(", ") + (toolsUsed().length > 3 ? ` +${toolsUsed().length - 3}` : "") : "—")}
+      {gridRow("Memory:", () => formatTokens(tokens()))}
+      {gridRow("Last Msg:", lastMessage)}
     </box>
   )
 }

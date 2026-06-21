@@ -17,85 +17,48 @@ function AsciiGraph(props: { tab: string; focusedLabel: string; tools: string[];
   const textMuted = () => toHex(props.theme.textMuted)
   const success = () => toHex(props.theme.success)
   const text = () => toHex(props.theme.text)
+  const warning = () => toHex(props.theme.warning)
+
+  const nodeLine = (connector: string, color: () => string, name: string, annotation?: string) => (
+    <box flexDirection="row" gap={0}>
+      <text fg={textMuted()}>{connector}</text>
+      <text fg={color()}>●</text>
+      <text fg={text()}> {name}</text>
+      {annotation && <text fg={textMuted()}> {annotation}</text>}
+    </box>
+  )
 
   return (
     <box marginTop={1}>
       {/* Tab content */}
       <Show when={props.tab === "L0"}>
-        <box flexDirection="row" gap={0}>
-          <text fg={success()}>● </text>
-          <text fg={primary()}><b>{focused()}</b></text>
-          <text fg={textMuted()}> (focused)</text>
-        </box>
+        {nodeLine("", success, focused(), "(current)")}
       </Show>
 
       <Show when={props.tab === "L1"}>
         <box gap={0}>
-          <box flexDirection="row" gap={0}>
-            <text fg={success()}>● </text>
-            <text fg={primary()}><b>{focused()}</b></text>
-            <text fg={textMuted()}> (focused)</text>
-          </box>
-          <box flexDirection="row" gap={0}>
-            <text fg={textMuted()}>├── </text>
-            <text fg={text()}>● </text>
-            <text fg={text()}>{props.tools[1] ?? "auth.logout"}</text>
-          </box>
-          <box flexDirection="row" gap={0}>
-            <text fg={textMuted()}>└── </text>
-            <text fg={text()}>● </text>
-            <text fg={text()}>{props.tools[2] ?? "user.session"}</text>
-          </box>
+          {nodeLine("", success, focused(), "(current)")}
+          {nodeLine("├─ ", text, props.tools[1] ?? "auth.logout", ":12")}
+          {nodeLine("└─ ", text, props.tools[2] ?? "user.session", ":8")}
         </box>
       </Show>
 
       <Show when={props.tab === "L2"}>
         <box gap={0}>
-          <box flexDirection="row" gap={0}>
-            <text fg={success()}>● </text>
-            <text fg={primary()}><b>{focused()}</b></text>
-            <text fg={textMuted()}> (focused)</text>
-          </box>
-          <box flexDirection="row" gap={0}>
-            <text fg={textMuted()}>├── </text>
-            <text fg={text()}>● </text>
-            <text fg={text()}>{props.tools[1] ?? "auth.logout"}</text>
-          </box>
-          <box flexDirection="row" gap={0}>
-            <text fg={textMuted()}>│   └── </text>
-            <text fg={text()}>● </text>
-            <text fg={text()}>{props.tools[3] ?? "auth.callback"}</text>
-          </box>
-          <box flexDirection="row" gap={0}>
-            <text fg={textMuted()}>└── </text>
-            <text fg={text()}>● </text>
-            <text fg={text()}>{props.tools[2] ?? "user.session"}</text>
-          </box>
-          <box flexDirection="row" gap={0}>
-            <text fg={textMuted()}>    └── </text>
-            <text fg={text()}>● </text>
-            <text fg={text()}>db.query</text>
-          </box>
+          {nodeLine("", success, focused(), "(current)")}
+          {nodeLine("├─ ", text, props.tools[1] ?? "auth.logout", ":12")}
+          {nodeLine("│  └─ ", text, props.tools[3] ?? "auth.callback", ":24")}
+          {nodeLine("└─ ", text, props.tools[2] ?? "user.session", ":8")}
+          {nodeLine("   └─ ", warning, "db.query", ":45")}
         </box>
       </Show>
 
       <Show when={props.tab === "L3"}>
         <box gap={0}>
-          <box flexDirection="row" gap={0}>
-            <text fg={success()}>● </text>
-            <text fg={primary()}><b>{focused()}</b></text>
-            <text fg={textMuted()}> (focused)</text>
-          </box>
-          <box flexDirection="row" gap={0}>
-            <text fg={textMuted()}>├── </text>
-            <text fg={text()}>● </text>
-            <text fg={text()}>gateway.route</text>
-          </box>
-          <box flexDirection="row" gap={0}>
-            <text fg={textMuted()}>└── </text>
-            <text fg={text()}>● </text>
-            <text fg={text()}>api.handler</text>
-          </box>
+          {nodeLine("", success, focused(), "(current)")}
+          {nodeLine("├─ ", text, "gateway.route", ":5")}
+          {nodeLine("│  └─ ", text, "router.dispatch", ":18")}
+          {nodeLine("└─ ", text, "api.handler", ":31")}
         </box>
       </Show>
     </box>
@@ -138,20 +101,41 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
   })
 
   const tabs = [
-    { name: "L0", label: "L0 Symbol", description: "L0 Symbol" },
-    { name: "L1", label: "L1 Callers", description: "L1 Callers" },
-    { name: "L2", label: "L2 Impact", description: "L2 Impact" },
-    { name: "L3", label: "L3 Dependents", description: "L3 Dependents" },
+    { name: "L0", label: "L0", description: "Symbol" },
+    { name: "L1", label: "L1", description: "Callers" },
+    { name: "L2", label: "L2", description: "Impact" },
+    { name: "L3", label: "L3", description: "Dependents" },
   ]
 
   return (
     <box>
-      <text fg={toHex(theme().textMuted)} marginBottom={1}><b>GRAPH EXPLORER</b></text>
-      <tab_select
-        options={tabs}
-        onChange={(val: any) => setActiveLayer(val)}
-      />
+      <text fg={toHex(theme().text)} marginBottom={1}><b>GRAPH EXPLORER</b></text>
+      <box flexDirection="row" gap={1} marginBottom={1}>
+        {tabs.map((tab) => {
+          const isActive = () => activeLayer() === tab.name
+          return (
+            <box
+              onMouseDown={() => setActiveLayer(tab.name)}
+              paddingLeft={1}
+              paddingRight={1}
+              border={isActive() ? ["bottom"] : []}
+              borderColor={isActive() ? toHex(theme().primary) : toHex(theme().border)}
+            >
+              <text fg={isActive() ? toHex(theme().primary) : toHex(theme().textMuted)}>
+                {tab.label}
+              </text>
+            </box>
+          )
+        })}
+      </box>
       <AsciiGraph tab={activeLayer()} focusedLabel={focusedLabel()} tools={toolsUsed()} theme={theme()} />
+      <box flexDirection="row" gap={1} marginTop={1}>
+        <text fg={toHex(theme().textMuted)}>↑/↓ navigate</text>
+        <text fg={toHex(theme().textMuted)}>·</text>
+        <text fg={toHex(theme().textMuted)}>enter focus</text>
+        <text fg={toHex(theme().textMuted)}>·</text>
+        <text fg={toHex(theme().textMuted)}>b back</text>
+      </box>
     </box>
   )
 }

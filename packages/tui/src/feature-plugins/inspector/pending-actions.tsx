@@ -52,15 +52,18 @@ function View(props: { api: TuiPluginApi }) {
     return pendingSessions().length + pendingPermissions().length + pendingQuestions().length
   })
 
+  const countBadge = (n: number) => n > 0 ? `(${n})` : ""
+
   return (
     <box>
       <text fg={text()}>
-        <b>PENDING ACTIONS{totalCount() > 0 ? ` ${totalCount()}` : ""}</b>
+        <b>PENDING ACTIONS</b>
+        {totalCount() > 0 && <text fg={primary()}> {totalCount()}</text>}
       </text>
       {totalCount() === 0 ? (
         <text fg={textMuted()}>No pending actions</text>
       ) : (
-        <box gap={1}>
+        <box gap={1} marginTop={1}>
           {/* Active agent sessions */}
           {pendingSessions().map((s) => (
             <box flexDirection="column" gap={0}>
@@ -68,15 +71,15 @@ function View(props: { api: TuiPluginApi }) {
                 <text fg={textMuted()}>•</text>
                 <text fg={text()}>{s.agent ?? "agent"}</text>
                 {s.title && (
-                  <text fg={textMuted()}> ({s.title})</text>
+                  <text fg={textMuted()}> {s.title}</text>
                 )}
               </box>
               <box flexDirection="row" gap={1} paddingLeft={3}>
-                <text fg={primary()}>[a]</text>
+                <text fg={primary()}>a</text>
                 <text fg={textMuted()}> abort  </text>
-                <text fg={primary()}>[v]</text>
+                <text fg={primary()}>v</text>
                 <text fg={textMuted()}> view  </text>
-                <text fg={primary()}>[t]</text>
+                <text fg={primary()}>t</text>
                 <text fg={textMuted()}> timeline</text>
               </box>
             </box>
@@ -90,11 +93,11 @@ function View(props: { api: TuiPluginApi }) {
                 <text fg={text()}>Permission: {req.tool?.name ?? "unknown tool"}</text>
               </box>
               <box flexDirection="row" gap={1} paddingLeft={3}>
-                <text fg={primary()}>[y]</text>
+                <text fg={primary()}>y</text>
                 <text fg={textMuted()}> approve  </text>
-                <text fg={primary()}>[n]</text>
+                <text fg={primary()}>n</text>
                 <text fg={textMuted()}> deny  </text>
-                <text fg={primary()}>[v]</text>
+                <text fg={primary()}>v</text>
                 <text fg={textMuted()}> view diff</text>
               </box>
             </box>
@@ -108,9 +111,9 @@ function View(props: { api: TuiPluginApi }) {
                 <text fg={text()}>Question: {req.text ? (req.text.length > 30 ? req.text.substring(0, 27) + "..." : req.text) : "agent query"}</text>
               </box>
               <box flexDirection="row" gap={1} paddingLeft={3}>
-                <text fg={primary()}>[enter]</text>
+                <text fg={primary()}>enter</text>
                 <text fg={textMuted()}> answer  </text>
-                <text fg={primary()}>[s]</text>
+                <text fg={primary()}>s</text>
                 <text fg={textMuted()}> skip</text>
               </box>
             </box>
