@@ -47,6 +47,12 @@ function View(props: { api: TuiPluginApi }) {
   })
   onCleanup(unsub)
 
+  const unsubSession = ev.on("session.updated" as any, async () => {
+    const list = await props.api.client.session.list({})
+    setAgentCount((list.data?.length ?? 1) - 1)
+  })
+  onCleanup(unsubSession)
+
   onMount(async () => {
     const list = await props.api.client.session.list({})
     setAgentCount((list.data?.length ?? 1) - 1)
