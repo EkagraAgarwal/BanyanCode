@@ -71,6 +71,8 @@ const mockEmbeddingProviderLayer = Layer.succeed(
       Effect.fail(new EmbeddingProvider.EmbeddingError({ message: "no embedding model configured" })),
     model: () => undefined,
     setModel: () => Effect.void,
+    probe: () => Effect.succeed({ dim: 384, type: "F32" as const }),
+    detectAndSetModel: () => Effect.succeed({ dim: 384 }),
   }),
 )
 

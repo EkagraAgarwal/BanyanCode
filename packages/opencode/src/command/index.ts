@@ -67,6 +67,7 @@ export const Default = {
   CODE_EMBED: "code-embed",
   YOLO: "yolo",
   REFRESH_MODELS: "refresh-models",
+  EMBEDDING_MODEL_PICK: "embedding-model-pick",
 } as const
 
 export interface Interface {

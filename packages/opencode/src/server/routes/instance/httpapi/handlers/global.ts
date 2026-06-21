@@ -15,6 +15,7 @@ import { GlobalUpgradeInput } from "../groups/global"
 import { applyEmbeddingModel } from "@/effect/banyancode-bootstrap"
 import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { InvalidRequestError } from "../errors"
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -155,7 +156,18 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
 
     const applyEmbeddingModelHandler = Effect.fn("GlobalHttpApi.applyEmbeddingModel")(function* () {
       yield* applySystemMonitorBridge
-      yield* applyEmbeddingModel
+      yield* applyEmbeddingModel.pipe(
+        Effect.mapError((e: unknown) => {
+          const err = e as { _tag: string; message: string; expected?: number; actual?: number }
+          if (err._tag === "CodegraphSearchError" || err._tag === "EmbeddingProbeError") {
+            return new InvalidRequestError({ message: err.message })
+          }
+          if (err._tag === "EmbeddingDimensionError") {
+            return new InvalidRequestError({ message: `Embedding dimension mismatch: expected ${err.expected}, got ${err.actual}` })
+          }
+          return new InvalidRequestError({ message: err.message })
+        }),
+      )
       return true
     })
 

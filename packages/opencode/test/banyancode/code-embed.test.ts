@@ -78,6 +78,8 @@ const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.o
   getMeta: () => Effect.succeed(undefined),
   setMeta: () => Effect.void,
   bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1 }),
+  resetEmbeddingsTable: () => Effect.succeed(undefined),
+  searchByVector: () => Effect.succeed([]),
 }))
 
 const mockEmbeddingProviderNoModelLayer = Layer.succeed(
@@ -87,6 +89,8 @@ const mockEmbeddingProviderNoModelLayer = Layer.succeed(
       Effect.fail(new EmbeddingProvider.EmbeddingError({ message: "no embedding model configured" })),
     model: () => undefined,
     setModel: () => Effect.void,
+    probe: () => Effect.succeed({ dim: 384, type: "F32" as const }),
+    detectAndSetModel: () => Effect.succeed({ dim: 384 }),
   }),
 )
 
@@ -144,6 +148,8 @@ const mockProviderWithModelLayer = Layer.succeed(
       Effect.succeed([new Float32Array([1, 0, 0])]),
     model: () => "test-model",
     setModel: () => Effect.void,
+    probe: () => Effect.succeed({ dim: 3, type: "F32" as const }),
+    detectAndSetModel: () => Effect.succeed({ dim: 3 }),
   }),
 )
 
