@@ -2,8 +2,10 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { RGBA } from "@opentui/core"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createMemo } from "solid-js"
+import type { TabSelectProps } from "@opentui/solid"
+import { createMemo, createSignal, onCleanup, Show } from "solid-js"
 import { useSync } from "../../context/sync"
+import { useEvent } from "../../context/event"
 
 const id = "internal:inspector-graph-explorer"
 
@@ -14,90 +16,93 @@ function toHex(color: { r: number; g: number; b: number; a?: number } | string):
   return `#${toComponent(color.r).toString(16).padStart(2, "0")}${toComponent(color.g).toString(16).padStart(2, "0")}${toComponent(color.b).toString(16).padStart(2, "0")}${a}`
 }
 
-interface GraphNode {
-  id: string
-  label: string
-  focused: boolean
-}
-
-// Static layout for v1: 1 focused node + up to 3 one-hop neighbors in a tree shape.
-// The focused node is derived from the first user message's tool call name (placeholder:
-// "auth.login" if no symbol is found). Neighbors are also placeholders for now.
-function buildGraph(sessionID: string, messages: any[], parts: Record<string, any[]>): GraphNode[] {
-  // Try to find the first tool in a user message to use as the focused symbol.
-  let focusedLabel = "auth.login"
-  for (const msg of messages) {
-    if (msg.role !== "user") continue
-    const msgParts = parts[msg.id] ?? []
-    for (const part of msgParts) {
-      if (part.type === "tool" && (part as any).tool) {
-        focusedLabel = (part as any).tool
-        break
-      }
-    }
-    break
-  }
-
-  const focused: GraphNode = { id: "focused", label: focusedLabel, focused: true }
-  const neighbors: GraphNode[] = [
-    { id: "n1", label: "auth.logout", focused: false },
-    { id: "n2", label: "user.session", focused: false },
-  ]
-
-  return [focused, ...neighbors]
-}
-
-type ThemeColors = {
-  primary: RGBA
-  textMuted: RGBA
-  success: RGBA
-  text: RGBA
-}
-
-// Renders a minimal node-link diagram using ASCII art characters.
-// OpenTUI does not expose <line> or <shape> primitives in its component catalogue;
-// all available rendering primitives are box, text, input, select, textarea,
-// ascii_font, tab_select, scrollbox, code, diff, line_number, markdown, and text
-// span modifiers. Falling back to Unicode/ASCII art for the graph visualization.
-function AsciiGraph(props: { nodes: GraphNode[]; theme: ThemeColors }) {
-  const { nodes, theme } = props
-  const focused = nodes[0]
-  const neighbors = nodes.slice(1)
-
-  const fg = (c: RGBA) => toHex(c)
-  const primary = fg(theme.primary)
-  const textMuted = fg(theme.textMuted)
-  const success = fg(theme.success)
-  const text = fg(theme.text)
+function AsciiGraph(props: { tab: string; focusedLabel: string; tools: string[]; theme: any }) {
+  const focused = () => props.focusedLabel
+  const primary = () => toHex(props.theme.primary)
+  const textMuted = () => toHex(props.theme.textMuted)
+  const success = () => toHex(props.theme.success)
+  const text = () => toHex(props.theme.text)
 
   return (
-    <box>
-      <text fg={textMuted}>GRAPH EXPLORER</text>
-      {/* Focused node */}
-      <box flexDirection="row" gap={0}>
-        <text fg={success}>●</text>
-        <text fg={textMuted}>──</text>
-        <text fg={primary}>
-          <b>{focused.label}</b>
-        </text>
-        <text fg={textMuted}> (focused)</text>
-      </box>
-      {/* Vertical trunk */}
-      <box flexDirection="row" gap={0}>
-        <text fg={textMuted}>│</text>
-      </box>
-      {/* Neighbors */}
-      {neighbors.map((node, i) => (
+    <box marginTop={1}>
+      {/* Tab content */}
+      <Show when={props.tab === "L0"}>
         <box flexDirection="row" gap={0}>
-          <text fg={textMuted}>├</text>
-          <text fg={textMuted}>──</text>
-          <text fg={text}>●</text>
-          <text fg={textMuted}>──</text>
-          <text fg={text}>{node.label}</text>
+          <text fg={success()}>● </text>
+          <text fg={primary()}><b>{focused()}</b></text>
+          <text fg={textMuted()}> (focused)</text>
         </box>
-      ))}
-      {/* Navigation hint */}
-      <text fg={textMuted}>↑/↓ navigate  enter focus  b back</text>
+      </Show>
+
+      <Show when={props.tab === "L1"}>
+        <box gap={0}>
+          <box flexDirection="row" gap={0}>
+            <text fg={success()}>● </text>
+            <text fg={primary()}><b>{focused()}</b></text>
+            <text fg={textMuted()}> (focused)</text>
+          </box>
+          <box flexDirection="row" gap={0}>
+            <text fg={textMuted()}>├── </text>
+            <text fg={text()}>● </text>
+            <text fg={text()}>{props.tools[1] ?? "auth.logout"}</text>
+          </box>
+          <box flexDirection="row" gap={0}>
+            <text fg={textMuted()}>└── </text>
+            <text fg={text()}>● </text>
+            <text fg={text()}>{props.tools[2] ?? "user.session"}</text>
+          </box>
+        </box>
+      </Show>
+
+      <Show when={props.tab === "L2"}>
+        <box gap={0}>
+          <box flexDirection="row" gap={0}>
+            <text fg={success()}>● </text>
+            <text fg={primary()}><b>{focused()}</b></text>
+            <text fg={textMuted()}> (focused)</text>
+          </box>
+          <box flexDirection="row" gap={0}>
+            <text fg={textMuted()}>├── </text>
+            <text fg={text()}>● </text>
+            <text fg={text()}>{props.tools[1] ?? "auth.logout"}</text>
+          </box>
+          <box flexDirection="row" gap={0}>
+            <text fg={textMuted()}>│   └── </text>
+            <text fg={text()}>● </text>
+            <text fg={text()}>{props.tools[3] ?? "auth.callback"}</text>
+          </box>
+          <box flexDirection="row" gap={0}>
+            <text fg={textMuted()}>└── </text>
+            <text fg={text()}>● </text>
+            <text fg={text()}>{props.tools[2] ?? "user.session"}</text>
+          </box>
+          <box flexDirection="row" gap={0}>
+            <text fg={textMuted()}>    └── </text>
+            <text fg={text()}>● </text>
+            <text fg={text()}>db.query</text>
+          </box>
+        </box>
+      </Show>
+
+      <Show when={props.tab === "L3"}>
+        <box gap={0}>
+          <box flexDirection="row" gap={0}>
+            <text fg={success()}>● </text>
+            <text fg={primary()}><b>{focused()}</b></text>
+            <text fg={textMuted()}> (focused)</text>
+          </box>
+          <box flexDirection="row" gap={0}>
+            <text fg={textMuted()}>├── </text>
+            <text fg={text()}>● </text>
+            <text fg={text()}>gateway.route</text>
+          </box>
+          <box flexDirection="row" gap={0}>
+            <text fg={textMuted()}>└── </text>
+            <text fg={text()}>● </text>
+            <text fg={text()}>api.handler</text>
+          </box>
+        </box>
+      </Show>
     </box>
   )
 }
@@ -105,15 +110,53 @@ function AsciiGraph(props: { nodes: GraphNode[]; theme: ThemeColors }) {
 function View(props: { api: TuiPluginApi; sessionID: string }) {
   const sync = useSync()
   const theme = () => props.api.theme.current
+  const ev = useEvent()
 
-  const graphNodes = createMemo(() => {
-    const messages = sync.data.message[props.sessionID] ?? []
-    return buildGraph(props.sessionID, messages, sync.data.part)
+  const [activeLayer, setActiveLayer] = createSignal("L0")
+
+  const unsubStale = ev.on("banyancode.codegraph.staleness" as any, (event: any) => {
+    // handle event updates
   })
+  onCleanup(unsubStale)
+
+  const unsubBuild = ev.on("banyancode.codegraph.build" as any, (event: any) => {
+    // handle event updates
+  })
+  onCleanup(unsubBuild)
+
+  const toolsUsed = createMemo(() => {
+    const messages = sync.data.message[props.sessionID] ?? []
+    const toolNames = new Set<string>()
+    for (const msg of messages) {
+      const parts = sync.data.part[msg.id] ?? []
+      for (const part of parts) {
+        if (part.type === "tool" && (part as any).tool) {
+          toolNames.add((part as any).tool)
+        }
+      }
+    }
+    return Array.from(toolNames)
+  })
+
+  const focusedLabel = createMemo(() => {
+    return toolsUsed()[0] ?? "auth.login"
+  })
+
+  const tabs = [
+    { name: "L0", label: "L0 Symbol", description: "L0 Symbol" },
+    { name: "L1", label: "L1 Callers", description: "L1 Callers" },
+    { name: "L2", label: "L2 Impact", description: "L2 Impact" },
+    { name: "L3", label: "L3 Dependents", description: "L3 Dependents" },
+  ]
 
   return (
     <box>
-      <AsciiGraph nodes={graphNodes()} theme={theme()} />
+      <text fg={toHex(theme().textMuted)} marginBottom={1}><b>GRAPH EXPLORER</b></text>
+      <tab_select
+        options={tabs}
+        onChange={(val: any) => setActiveLayer(val)}
+      />
+      <AsciiGraph tab={activeLayer()} focusedLabel={focusedLabel()} tools={toolsUsed()} theme={theme()} />
     </box>
   )
 }
