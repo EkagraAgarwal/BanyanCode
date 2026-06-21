@@ -6,6 +6,10 @@ import { EmbeddingProvider } from "./embedding-provider"
 import type { CodegraphNode } from "./types"
 import { EventV2 } from "../event"
 
+export class EmbeddingDimensionError extends Schema.TaggedErrorClass<EmbeddingDimensionError>()("Banyan/EmbeddingDimensionError", {
+  message: Schema.String,
+}) {}
+
 export const EmbedState = Schema.Struct({
   status: Schema.Literals(["idle", "running", "completed", "failed", "cancelled"]),
   done: Schema.Number,
@@ -56,6 +60,7 @@ export const layer = Layer.effect(
       }
       const bytes = new Uint8Array(embedding.buffer)
       yield* repo.putEmbedding(node.id, bytes, model, embedding.length)
+      console.error(`[turso.vector] putEmbedding node_id=${node.id} dim=${embedding.length} model=${model} bytes=${bytes.byteLength}`)
     })
 
     const embedFile = Effect.fn("CodegraphEmbedder.embedFile")(function* (fileID: string) {
