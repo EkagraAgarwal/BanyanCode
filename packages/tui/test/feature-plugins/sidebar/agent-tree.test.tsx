@@ -11,6 +11,10 @@ import { ThemeProvider } from "../../../src/context/theme"
 import { KVProvider } from "../../../src/context/kv"
 import { TuiConfigProvider } from "../../../src/config"
 import { SDKProvider } from "../../../src/context/sdk"
+import { ExitProvider } from "../../../src/context/exit"
+import { ArgsProvider } from "../../../src/context/args"
+import { ProjectProvider } from "../../../src/context/project"
+import { SyncProvider } from "../../../src/context/sync"
 import { createEventSource, createFetch, directory, json } from "../../fixture/tui-sdk"
 
 function makeColor(r: number, g: number, b: number, a = 255) {
@@ -50,6 +54,7 @@ test("sidebar agent-tree sidebar_content slot renders without throwing", async (
   const [rendered, setRendered] = createSignal(false)
 
   const Harness = () => {
+    let slotFn: any = null
     const api: any = {
       ...createTuiPluginApi({}),
       theme: { current: stubTheme },
@@ -76,8 +81,9 @@ test("sidebar agent-tree sidebar_content slot renders without throwing", async (
     }
     api.slots = {
       register: (plugin: any) => {
-        if (!plugin?.slots?.sidebar_content) return () => {}
-        plugin.slots.sidebar_content(undefined as any, { session_id: "current-session" })
+        if (plugin?.slots?.sidebar_content) {
+          slotFn = plugin.slots.sidebar_content
+        }
         return () => {}
       },
     }
@@ -86,15 +92,25 @@ test("sidebar agent-tree sidebar_content slot renders without throwing", async (
     setRendered(true)
     return (
       <TestTuiContexts>
-        <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
-          <TuiConfigProvider config={config}>
+        <ExitProvider exit={console.error}>
+          <ArgsProvider>
             <KVProvider>
-              <ThemeProvider mode="dark">
-                <box flexDirection="row"><text>agent-tree rendered</text></box>
-              </ThemeProvider>
+              <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+                <ProjectProvider>
+                  <SyncProvider>
+                    <TuiConfigProvider config={config}>
+                      <ThemeProvider mode="dark">
+                        <box flexDirection="column">
+                          {slotFn ? slotFn(undefined as any, { session_id: "current-session" }) : null}
+                        </box>
+                      </ThemeProvider>
+                    </TuiConfigProvider>
+                  </SyncProvider>
+                </ProjectProvider>
+              </SDKProvider>
             </KVProvider>
-          </TuiConfigProvider>
-        </SDKProvider>
+          </ArgsProvider>
+        </ExitProvider>
       </TestTuiContexts>
     )
   }
