@@ -148,7 +148,7 @@ export function CodegraphProgress() {
           <Show when={build.state.status === "completed" && build.state.result}>
             {(result) => (
               <text fg={theme.success} marginTop={1}>
-                indexed={result().indexed} skipped={result().skipped} duration_ms={result().duration_ms}
+                {`✓ ${result().indexed} indexed, ${result().skipped} skipped (${result().duration_ms}ms)`}
               </text>
             )}
           </Show>
@@ -183,7 +183,7 @@ export function CodegraphProgress() {
           <Show when={build.embedState.status === "completed" && build.embedState.result}>
             {(result) => (
               <text fg={theme.success} marginTop={1}>
-                embedded={result().embedded} skipped={result().skipped}
+                {`✓ ${result().embedded} embedded, ${result().skipped} skipped`}
               </text>
             )}
           </Show>
