@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import { createSignal } from "solid-js"
-import SidebarCodegraphOverview from "../../../src/feature-plugins/sidebar/codegraph-overview"
+import SidebarCodegraphPanel from "../../../src/feature-plugins/sidebar/codegraph-panel"
 import { createTuiPluginApi } from "../../fixture/tui-plugin"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { TestTuiContexts } from "../../fixture/tui-environment"
@@ -20,9 +20,10 @@ const stubTheme = {
   success: { r: 100, g: 200, b: 100, a: 1 },
   error: { r: 200, g: 100, b: 100, a: 1 },
   warning: { r: 200, g: 200, b: 100, a: 1 },
+  info: { r: 100, g: 200, b: 200, a: 1 },
 }
 
-describe("sidebar codegraph-overview", () => {
+describe("sidebar codegraph-panel", () => {
   test("sidebar_content slot renders without throwing", async () => {
     const events = createEventSource()
     const calls = createFetch()
@@ -42,7 +43,7 @@ describe("sidebar codegraph-overview", () => {
           return () => {}
         },
       }
-      void SidebarCodegraphOverview.tui(api as any, undefined as any, { id: "test" } as any)
+      void SidebarCodegraphPanel.tui(api as any, undefined as any, { id: "test" } as any)
 
       queueMicrotask(() => {
         events.emit({
@@ -110,7 +111,7 @@ describe("sidebar codegraph-overview", () => {
           return () => {}
         },
       }
-      void SidebarCodegraphOverview.tui(api as any, undefined as any, { id: "test" } as any)
+      void SidebarCodegraphPanel.tui(api as any, undefined as any, { id: "test" } as any)
 
       return <box>{slotContent()}</box>
     }
@@ -138,3 +139,4 @@ describe("sidebar codegraph-overview", () => {
     }
   })
 })
+

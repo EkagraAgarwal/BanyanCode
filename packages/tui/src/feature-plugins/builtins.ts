@@ -7,13 +7,11 @@ import SidebarFooter from "./sidebar/footer"
 import SidebarLsp from "./sidebar/lsp"
 import SidebarMcp from "./sidebar/mcp"
 import SidebarAgentTree from "./sidebar/agent-tree"
-import SidebarSystemStatus from "./sidebar/system-status"
 import SidebarTodo from "./sidebar/todo"
 import InspectorAgentDetails from "./inspector/agent-details"
 import InspectorGraphExplorer from "./inspector/graph-explorer"
 import InspectorPendingActions from "./inspector/pending-actions"
-import SidebarCodegraphLayers from "./sidebar/codegraph-layers"
-import SidebarCodegraphOverview from "./sidebar/codegraph-overview"
+import SidebarCodegraphPanel from "./sidebar/codegraph-panel"
 import SessionFooter from "./footer/session-footer"
 import HeaderBrand from "./header/brand"
 import HeaderStatusPills from "./header/status-pills"
@@ -39,9 +37,7 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     HomeFooter,
     HomeTips,
     SidebarContext,
-    SidebarSystemStatus,
-    SidebarCodegraphLayers,
-    SidebarCodegraphOverview,
+    SidebarCodegraphPanel,
     SidebarMcp,
     SidebarAgentTree,
     SidebarLsp,
@@ -66,3 +62,4 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     TabSettings,
   ]
 }
+
