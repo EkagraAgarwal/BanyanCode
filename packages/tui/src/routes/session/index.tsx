@@ -1173,7 +1173,15 @@ export function Session() {
             <Show when={sidebarVisible()}>
               <Switch>
                 <Match when={wide()}>
-                  <Sidebar sessionID={route.sessionID} />
+                  <Sidebar
+                    sessionID={route.sessionID}
+                    onClose={() => {
+                      batch(() => {
+                        setSidebar(() => "hide")
+                        setSidebarOpen(false)
+                      })
+                    }}
+                  />
                 </Match>
                 <Match when={!wide()}>
                   <box
@@ -1185,7 +1193,15 @@ export function Session() {
                     alignItems="flex-end"
                     backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
                   >
-                    <Sidebar sessionID={route.sessionID} />
+                    <Sidebar
+                      sessionID={route.sessionID}
+                      onClose={() => {
+                        batch(() => {
+                          setSidebar(() => "hide")
+                          setSidebarOpen(false)
+                        })
+                      }}
+                    />
                   </box>
                 </Match>
               </Switch>

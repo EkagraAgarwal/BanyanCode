@@ -9,7 +9,7 @@ import { usePluginRuntime } from "../../plugin/runtime"
 import { getScrollAcceleration } from "../../util/scroll"
 import { WorkspaceLabel } from "../../component/workspace-label"
 
-export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
+export function Sidebar(props: { sessionID: string; overlay?: boolean; onClose?: () => void }) {
   const pluginRuntime = usePluginRuntime()
   const project = useProject()
   const sync = useSync()
@@ -36,6 +36,16 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
         paddingRight={2}
         position={props.overlay ? "absolute" : "relative"}
       >
+        <box flexDirection="row" justifyContent="space-between" width="100%" marginBottom={1}>
+          <text fg={theme.primary}>
+            <b>BANYANTREE</b>
+          </text>
+          <Show when={props.onClose}>
+            <text fg={theme.textMuted} onMouseDown={props.onClose}>
+              ✕
+            </text>
+          </Show>
+        </box>
         <scrollbox
           flexGrow={1}
           scrollAcceleration={scrollAcceleration()}
