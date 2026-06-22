@@ -1,5 +1,4 @@
 import {
-  batch,
   createContext,
   createEffect,
   createMemo,
@@ -123,6 +122,7 @@ const sessionBindingCommands = [
   "session.undo",
   "session.redo",
   "session.sidebar.toggle",
+  "session.inspector.toggle",
   "session.toggle.conceal",
   "session.toggle.timestamps",
   "session.toggle.thinking",
@@ -249,7 +249,8 @@ export function Session() {
   })
 
   const dimensions = useTerminalDimensions()
-  const [sidebar, setSidebar] = kv.signal<"auto" | "hide">("sidebar", "auto")
+  const [leftCollapsed, setLeftCollapsed] = kv.signal("left_sidebar_collapsed", false)
+  const [rightCollapsed, setRightCollapsed] = kv.signal("right_sidebar_collapsed", false)
   const [leftSidebarWidth, setLeftSidebarWidth] = kv.signal("left_sidebar_width", 30)
   const [rightSidebarWidth, setRightSidebarWidth] = kv.signal("right_sidebar_width", 28)
   const [sidebarOpen, setSidebarOpen] = createSignal(false)
@@ -268,11 +269,26 @@ export function Session() {
   const wide = createMemo(() => dimensions().width > 120)
   const sidebarVisible = createMemo(() => {
     if (session()?.parentID) return false
-    if (wide()) return true
+    if (wide()) return !leftCollapsed()
     return sidebarOpen()
   })
+  // The left rail consumes layout width only when docked (wide mode); the narrow
+  // sidebar is an absolute overlay that doesn't reserve space.
+  const leftDocked = createMemo(() => sidebarVisible() && wide())
+  const inspectorVisible = createMemo(() => !rightCollapsed())
   const showTimestamps = createMemo(() => timestamps() === "show")
-  const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? 42 : 0) - 4)
+  // Derive the real center width from the actual sidebar percentages plus the
+  // separators (1 col each) and the center column's horizontal padding (2 + 2).
+  const contentWidth = createMemo(() => {
+    const total = dimensions().width
+    const leftWidth = leftDocked()
+      ? Math.round((leftSidebarWidth() / 100) * total) + 1
+      : wide() && !session()?.parentID
+        ? 1
+        : 0
+    const rightWidth = inspectorVisible() ? Math.round((rightSidebarWidth() / 100) * total) + 1 : 1
+    return Math.max(20, total - leftWidth - rightWidth - 4)
+  })
   const providers = createMemo(() => Model.index(sync.data.provider))
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
@@ -321,7 +337,7 @@ export function Session() {
   })
 
   let lastSwitch: string | undefined = undefined
-  event.on("message.part.updated", (evt) => {
+  onCleanup(event.on("message.part.updated", (evt) => {
     const part = evt.properties.part
     if (part.type !== "tool") return
     if (part.sessionID !== route.sessionID) return
@@ -335,7 +351,7 @@ export function Session() {
       local.agent.set("plan")
       lastSwitch = part.id
     }
-  })
+  }))
 
   let seeded = false
   let scroll: ScrollBoxRenderable
@@ -351,7 +367,7 @@ export function Session() {
   const dialog = useDialog()
   const renderer = useRenderer()
 
-  event.on("session.status", (evt) => {
+  onCleanup(event.on("session.status", (evt) => {
     if (evt.properties.sessionID !== route.sessionID) return
     if (evt.properties.status.type !== "retry") return
     if (!evt.properties.status.action) return
@@ -369,7 +385,7 @@ export function Session() {
       if (dontShowAgain) kv.set(keys.dontShow, true)
       kv.set(keys.lastSeenAt, Date.now())
     })
-  })
+  }))
 
   // Helper: Find next visible message boundary in direction
   const findNextVisibleMessage = (direction: "next" | "prev"): string | null => {
@@ -671,13 +687,18 @@ export function Session() {
       title: sidebarVisible() ? "Hide sidebar" : "Show sidebar",
       value: "session.sidebar.toggle",
       category: "Session",
-      enabled: !wide(),
       run: () => {
-        batch(() => {
-          const isVisible = sidebarVisible()
-          setSidebar(() => (isVisible ? "hide" : "auto"))
-          setSidebarOpen(!isVisible)
-        })
+        if (wide()) setLeftCollapsed((prev) => !prev)
+        else setSidebarOpen((prev) => !prev)
+        dialog.clear()
+      },
+    },
+    {
+      title: inspectorVisible() ? "Hide inspector" : "Show inspector",
+      value: "session.inspector.toggle",
+      category: "Session",
+      run: () => {
+        setRightCollapsed((prev) => !prev)
         dialog.clear()
       },
     },
@@ -1193,25 +1214,23 @@ export function Session() {
                   >
                     <Sidebar
                       sessionID={route.sessionID}
-                      onClose={() => {
-                        batch(() => {
-                          setSidebar(() => "hide")
-                          setSidebarOpen(false)
-                        })
-                      }}
+                      onClose={() => setSidebarOpen(false)}
                     />
                   </box>
                 </Match>
               </Switch>
             </Show>
-            <Show when={sidebarVisible()}>
+            <Show when={leftDocked()}>
               <ResizableSeparator
                 onResize={(newWidthPct) => {
-                  const clamped = Math.max(15, Math.min(50, newWidthPct))
+                  const clamped = Math.max(15, Math.min(45, newWidthPct))
                   setLeftSidebarWidth(() => clamped)
                 }}
                 initialWidthPct={leftSidebarWidth}
               />
+            </Show>
+            <Show when={wide() && leftCollapsed() && !session()?.parentID}>
+              <CollapsedRail side="left" onExpand={() => setLeftCollapsed(() => false)} />
             </Show>
             <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
             <Show when={session()}>
@@ -1334,19 +1353,29 @@ export function Session() {
                   </scrollbox>
                 </Match>
                 <Match when={activeTab() === "sessions"}>
-                  <pluginRuntime.Slot name="session_tab_sessions" />
+                  <box flexGrow={1} minHeight={0} flexDirection="column">
+                    <pluginRuntime.Slot name="session_tab_sessions" />
+                  </box>
                 </Match>
                 <Match when={activeTab() === "graph"}>
-                  <pluginRuntime.Slot name="session_tab_graph" />
+                  <box flexGrow={1} minHeight={0} flexDirection="column">
+                    <pluginRuntime.Slot name="session_tab_graph" />
+                  </box>
                 </Match>
                 <Match when={activeTab() === "memory"}>
-                  <pluginRuntime.Slot name="session_tab_memory" />
+                  <box flexGrow={1} minHeight={0} flexDirection="column">
+                    <pluginRuntime.Slot name="session_tab_memory" />
+                  </box>
                 </Match>
                 <Match when={activeTab() === "agents"}>
-                  <pluginRuntime.Slot name="session_tab_agents" />
+                  <box flexGrow={1} minHeight={0} flexDirection="column">
+                    <pluginRuntime.Slot name="session_tab_agents" />
+                  </box>
                 </Match>
                 <Match when={activeTab() === "settings"}>
-                  <pluginRuntime.Slot name="session_tab_settings" />
+                  <box flexGrow={1} minHeight={0} flexDirection="column">
+                    <pluginRuntime.Slot name="session_tab_settings" />
+                  </box>
                 </Match>
               </Switch>
               <box flexShrink={0}>
@@ -1392,16 +1421,22 @@ export function Session() {
             <Toast />
             <CodegraphProgress />
           </box>
-            <ResizableSeparator
-              onResize={(newWidthPct) => {
-                const clamped = Math.max(15, Math.min(50, newWidthPct))
-                setRightSidebarWidth(() => clamped)
-              }}
-              initialWidthPct={rightSidebarWidth}
-            />
-            <box width={`${rightSidebarWidth()}%`} minWidth={28} flexShrink={0}>
-              <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
-            </box>
+            <Show
+              when={inspectorVisible()}
+              fallback={<CollapsedRail side="right" onExpand={() => setRightCollapsed(() => false)} />}
+            >
+              <ResizableSeparator
+                invert
+                onResize={(newWidthPct) => {
+                  const clamped = Math.max(15, Math.min(45, newWidthPct))
+                  setRightSidebarWidth(() => clamped)
+                }}
+                initialWidthPct={rightSidebarWidth}
+              />
+              <box width={`${rightSidebarWidth()}%`} flexShrink={0}>
+                <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
+              </box>
+            </Show>
           </box>
           <box flexShrink={0}>
             <pluginRuntime.Slot name="session_footer" session_id={route.sessionID} />
@@ -1409,6 +1444,26 @@ export function Session() {
         </box>
       </context.Provider>
     </PathFormatterProvider>
+  )
+}
+
+function CollapsedRail(props: { side: "left" | "right"; onExpand: () => void }) {
+  const { theme } = useTheme()
+  const [hover, setHover] = createSignal(false)
+  return (
+    <box
+      width={1}
+      flexShrink={0}
+      height="100%"
+      alignItems="center"
+      justifyContent="center"
+      backgroundColor={hover() ? theme.primary : theme.border}
+      onMouseDown={props.onExpand}
+      onMouseOver={() => setHover(true)}
+      onMouseOut={() => setHover(false)}
+    >
+      <text fg={hover() ? theme.background : theme.textMuted}>{props.side === "left" ? "›" : "‹"}</text>
+    </box>
   )
 }
 

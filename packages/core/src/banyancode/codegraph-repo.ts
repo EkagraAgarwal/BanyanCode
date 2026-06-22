@@ -31,7 +31,11 @@ export interface Interface {
   readonly edgesTo: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly putEmbedding: (nodeID: string, embedding: Uint8Array, model: string, dim: number) => Effect.Effect<void, never, never>
   readonly getEmbedding: (nodeID: string) => Effect.Effect<{ embedding: Uint8Array; model: string; dim: number } | undefined, never, never>
-  readonly resetEmbeddingsTable: (dim: number, model: string) => Effect.Effect<void, CodegraphSearchError, never>
+  readonly resetEmbeddingsTable: (
+    dim: number,
+    model: string,
+    options?: { force?: boolean },
+  ) => Effect.Effect<void, CodegraphSearchError, never>
   readonly searchByVector: (
     queryVec: Float32Array,
     options?: { limit?: number; model?: string }

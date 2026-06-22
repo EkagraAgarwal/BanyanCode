@@ -1,6 +1,6 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createMemo, For, Show, createSignal, onMount } from "solid-js"
+import { createMemo, For, Show, createSignal, onMount, onCleanup } from "solid-js"
 import { useSync } from "../../context/sync"
 import { toHex } from "../../util/color"
 
@@ -37,16 +37,19 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     setStatusMap(statuses)
   }
 
+  let unsubs: Array<() => void> = []
+  onCleanup(() => unsubs.forEach((u) => u()))
+
   onMount(async () => {
     try {
       const { useEvent } = await import("../../context/event")
       const ev = useEvent()
-      ev.on("session.status" as any, (event: any) => {
+      unsubs.push(ev.on("session.status" as any, (event: any) => {
         setStatusMap((prev) => ({ ...prev, [event.properties.sessionID]: event.properties.status }))
-      })
-      ev.on("session.updated" as any, async () => {
+      }))
+      unsubs.push(ev.on("session.updated" as any, async () => {
         await refreshSessionsAndStatuses()
-      })
+      }))
     } catch {
       // SDK context not available (e.g., in test environment) - skip event subscription
     }
