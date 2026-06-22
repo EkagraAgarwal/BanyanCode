@@ -53,7 +53,7 @@ For any non-trivial change, use the `edit_plan` tool with phase=after to re-veri
 
 ## Orchestration rules
 
-1. PREFER 2-3 parallel subagents. Default fanout is 3, maximum is 5.
+1. PREFER 2-3 parallel subagents. Default fanout is 3, maximum is {{maxSubagents}}.
 2. For tasks that need MORE than 3 subagents, ask the user first.
 3. Use task with background:true to fan out.
 4. Use pollWithTimeout or BackgroundJob.wait to wait for results.

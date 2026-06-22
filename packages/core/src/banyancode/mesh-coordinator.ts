@@ -5,6 +5,8 @@ import { EventV2 } from "../event"
 import { SessionSchema } from "../session/schema"
 import { SubagentBus } from "./subagent-bus"
 import { SubagentPlans } from "./subagent-plans-repo"
+import { MaxSubagents } from "./max-subagents"
+import { DEFAULT_MAX_SUBAGENTS } from "../v1/config/banyan-config"
 import type { PeerInfo, SubagentMessage } from "./types"
 
 export const MeshStatus = Schema.Struct({
@@ -48,6 +50,9 @@ export interface Interface {
     targetAgent: string
     plan: { title: string; steps: Array<{ content: string; status: "pending" | "in_progress" | "completed" | "cancelled" }>; exitCriteria: string }
   }) => Effect.Effect<void, never, never>
+  readonly tryReserveSubagentSlot: (
+    parentSessionID: SessionSchema.ID,
+  ) => Effect.Effect<{ ok: true; killed: string | null } | { ok: false; error: string }, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/MeshCoordinator") {}
@@ -209,11 +214,40 @@ export const layer = Layer.effect(
       yield* bus.publish(message)
     })
 
-    return Service.of({ status, drain, watch, subscribe, checkin, steer, kill, planFor })
+    const tryReserveSubagentSlot = Effect.fn("MeshCoordinator.tryReserveSubagentSlot")(function* (
+      parentSessionID: SessionSchema.ID,
+    ) {
+      const maxSvc = yield* Effect.serviceOption(MaxSubagents.Service)
+      const max = maxSvc._tag === "Some" ? yield* maxSvc.value.current() : DEFAULT_MAX_SUBAGENTS
+
+      const checkins = yield* checkin(parentSessionID)
+      if (checkins.length < max) return { ok: true, killed: null } as const
+
+      // At limit: find oldest ended subagent (idle/disconnected > 60s ago)
+      const endedOldest = checkins
+        .filter((c) => {
+          // Consider "ended" if not seen in over 60 seconds
+          return c.lastSeenAt && Date.now() - c.lastSeenAt > 60_000
+        })
+        .sort((a, b) => a.lastSeenAt - b.lastSeenAt)[0]
+
+      if (endedOldest) {
+        yield* kill({ parentSessionID, targetAgent: endedOldest.agent, reason: "evicted-by-new-spawn" })
+        return { ok: true, killed: endedOldest.agent } as const
+      }
+
+      return {
+        ok: false,
+        error: `Max ${max} subagents reached. No idle agents to evict.`,
+      } as const
+    })
+
+    return Service.of({ status, drain, watch, subscribe, checkin, steer, kill, planFor, tryReserveSubagentSlot })
   }),
 )
 
 export const defaultLayer = layer.pipe(
   Layer.provide(SubagentBus.defaultLayer),
   Layer.provide(SubagentPlans.defaultLayer),
+  Layer.provide(MaxSubagents.defaultLayer),
 )
