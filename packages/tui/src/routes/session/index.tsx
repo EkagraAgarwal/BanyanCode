@@ -60,6 +60,7 @@ import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
 import { Toast, useToast } from "../../ui/toast"
 import { CodegraphProgress } from "../../component/codegraph-progress"
+import { ResizableSeparator } from "../../component/resizable-separator"
 import { useKV } from "../../context/kv.tsx"
 import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
@@ -249,6 +250,8 @@ export function Session() {
 
   const dimensions = useTerminalDimensions()
   const [sidebar, setSidebar] = kv.signal<"auto" | "hide">("sidebar", "auto")
+  const [leftSidebarWidth, setLeftSidebarWidth] = kv.signal("left_sidebar_width", 30)
+  const [rightSidebarWidth, setRightSidebarWidth] = kv.signal("right_sidebar_width", 28)
   const [sidebarOpen, setSidebarOpen] = createSignal(false)
   const [conceal, setConceal] = createSignal(true)
   const thinking = useThinkingMode()
@@ -1175,6 +1178,7 @@ export function Session() {
                 <Match when={wide()}>
                   <Sidebar
                     sessionID={route.sessionID}
+                    width={`${leftSidebarWidth()}%`}
                   />
                 </Match>
                 <Match when={!wide()}>
@@ -1199,6 +1203,15 @@ export function Session() {
                   </box>
                 </Match>
               </Switch>
+            </Show>
+            <Show when={sidebarVisible()}>
+              <ResizableSeparator
+                onResize={(newWidthPct) => {
+                  const clamped = Math.max(15, Math.min(50, newWidthPct))
+                  setLeftSidebarWidth(() => clamped)
+                }}
+                initialWidthPct={leftSidebarWidth}
+              />
             </Show>
             <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
             <Show when={session()}>
@@ -1379,7 +1392,14 @@ export function Session() {
             <Toast />
             <CodegraphProgress />
           </box>
-            <box width="28%" minWidth={28} flexShrink={0}>
+            <ResizableSeparator
+              onResize={(newWidthPct) => {
+                const clamped = Math.max(15, Math.min(50, newWidthPct))
+                setRightSidebarWidth(() => clamped)
+              }}
+              initialWidthPct={rightSidebarWidth}
+            />
+            <box width={`${rightSidebarWidth()}%`} minWidth={28} flexShrink={0}>
               <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
             </box>
           </box>

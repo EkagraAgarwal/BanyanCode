@@ -9,7 +9,7 @@ import { usePluginRuntime } from "../../plugin/runtime"
 import { getScrollAcceleration } from "../../util/scroll"
 import { WorkspaceLabel } from "../../component/workspace-label"
 
-export function Sidebar(props: { sessionID: string; overlay?: boolean; onClose?: () => void }) {
+export function Sidebar(props: { sessionID: string; overlay?: boolean; onClose?: () => void; width?: number | "auto" | `${number}%` }) {
   const pluginRuntime = usePluginRuntime()
   const project = useProject()
   const sync = useSync()
@@ -27,7 +27,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean; onClose?:
     <Show when={session()}>
       <box
         backgroundColor={theme.backgroundPanel}
-        width="30%"
+        width={props.width ?? "30%"}
         minWidth={32}
         height="100%"
         paddingTop={1}
