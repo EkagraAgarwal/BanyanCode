@@ -14,7 +14,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { BanyanAgentSaveInput, GlobalUpgradeInput } from "../groups/global"
+import { BanyanAgentSaveInput, BanyanConfigUpdateInput, GlobalUpgradeInput } from "../groups/global"
 import { applyEmbeddingModel } from "@/effect/banyancode-bootstrap"
 import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
@@ -180,9 +180,13 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return yield* svc.get()
     })
 
-    const updateBanyanConfigHandler = Effect.fn("GlobalHttpApi.updateBanyanConfig")(function* ({ payload }) {
+    const updateBanyanConfigHandler = Effect.fn("GlobalHttpApi.updateBanyanConfig")(function* ({
+      payload,
+    }: {
+      payload: typeof BanyanConfigUpdateInput.Type
+    }) {
       const svc = yield* Banyan.BanyanConfigService
-      return yield* svc.update(payload)
+      return yield* svc.update(payload.config, payload.scope)
     })
 
     const codegraphCancelHandler = Effect.fn("GlobalHttpApi.codegraphCancel")(function* () {
@@ -230,32 +234,59 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     }) {
       const fs = yield* FSUtil.Service
 
-      const dir = path.join(Global.Path.banyan.data, "agent")
+      const dir = path.join(Global.Path.banyan.config, "agent")
       yield* fs.ensureDir(dir).pipe(
         Effect.mapError((e) => new InvalidRequestError({ message: String(e) })),
       )
 
-      const filePath = path.join(dir, `${ctx.payload.name}.md`)
-      const frontmatter = [
-        "---",
-        `name: ${ctx.payload.name}`,
-        `description: ${ctx.payload.description ?? ""}`,
-        "mode: subagent",
-        ctx.payload.model ? `model: ${JSON.stringify(ctx.payload.model)}` : null,
-        `tools: [${(ctx.payload.tools ?? []).join(", ")}]`,
-        `enabled: ${ctx.payload.enabled ?? true}`,
-        "---",
-        "",
-        `# ${ctx.payload.name}`,
-        "",
-        ctx.payload.description ?? "Custom subagent",
-      ]
-        .filter(Boolean)
-        .join("\n")
+      const safeName = ctx.payload.name.replace(/[^a-zA-Z0-9._-]/g, "")
+      if (safeName !== ctx.payload.name || safeName.length === 0) {
+        return yield* Effect.fail(
+          new InvalidRequestError({
+            message: "Invalid agent name. Allowed: letters, digits, '.', '_', '-'.",
+          }),
+        )
+      }
+      const filePath = path.join(dir, `${safeName}.md`)
+      const resolvedFile = path.resolve(filePath)
+      const resolvedDir = path.resolve(dir)
+      if (!resolvedFile.startsWith(resolvedDir + path.sep) && resolvedFile !== resolvedDir) {
+        return yield* Effect.fail(
+          new InvalidRequestError({ message: "Resolved path escapes the agent directory." }),
+        )
+      }
 
-      yield* fs.writeFileString(filePath, frontmatter).pipe(
+      const escapeYamlScalar = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`
+      const frontmatter: (string | null)[] = [
+        "---",
+        `name: ${escapeYamlScalar(safeName)}`,
+        `description: ${escapeYamlScalar(ctx.payload.description ?? "")}`,
+        `mode: ${escapeYamlScalar(ctx.payload.mode ?? "subagent")}`,
+        ctx.payload.hidden !== undefined ? `hidden: ${ctx.payload.hidden}` : null,
+        ctx.payload.model ? `model: ${JSON.stringify(ctx.payload.model)}` : null,
+        `permission: [${(ctx.payload.permission ?? []).map(escapeYamlScalar).join(", ")}]`,
+        "---",
+        "",
+      ]
+      const body: string[] = ctx.payload.prompt
+        ? [ctx.payload.prompt]
+        : [`# ${safeName}`, "", ctx.payload.description ?? ""]
+
+      const content = [...frontmatter, ...body].filter(Boolean).join("\n")
+
+      yield* fs.writeFileString(filePath, content).pipe(
         Effect.mapError((e) => new InvalidRequestError({ message: String(e) })),
       )
+
+      // Emit a config.updated event so the TUI refreshes the agents list immediately.
+      GlobalBus.emit("event", {
+        directory: "global",
+        payload: {
+          type: "banyancode.config.updated" as any,
+          properties: { scope: "global" },
+        },
+      })
+
       return { ok: true as const, filePath }
     })
 

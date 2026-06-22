@@ -60,17 +60,31 @@ export const GlobalUpgradeInput = Schema.Struct({
   target: Schema.optional(Schema.String),
 })
 
+export const BanyanConfigUpdateInput = Schema.Struct({
+  config: BanyanConfig.Info,
+  scope: Schema.optional(Schema.Literals(["global", "project"])),
+})
+
 export const BanyanAgentSaveInput = Schema.Struct({
-  name: Schema.String,
-  description: Schema.optional(Schema.String),
+  name: Schema.String.check(
+    Schema.isPattern(/^[a-zA-Z0-9._-]+$/, {
+      identifier: "BanyanAgentName",
+      description: "Agent name (letters, digits, '.', '_', '-' only; no path separators or whitespace)",
+    }),
+    Schema.isMinLength(1),
+    Schema.isMaxLength(64),
+  ),
+  description: Schema.optional(Schema.String.check(Schema.isMaxLength(280))),
+  mode: Schema.optional(Schema.Literals(["primary", "subagent", "all"])),
+  hidden: Schema.optional(Schema.Boolean),
   model: Schema.optional(
     Schema.Struct({
-      providerID: Schema.String,
-      modelID: Schema.String,
+      providerID: Schema.String.check(Schema.isMaxLength(128)),
+      modelID: Schema.String.check(Schema.isMaxLength(128)),
     }),
   ),
-  tools: Schema.optional(Schema.Array(Schema.String)),
-  enabled: Schema.optional(Schema.Boolean),
+  permission: Schema.optional(Schema.Array(Schema.String.check(Schema.isMaxLength(128)))),
+  prompt: Schema.optional(Schema.String.check(Schema.isMaxLength(50_000))),
 })
 
 export const BanyanAgentSaveResult = Schema.Struct({
@@ -184,7 +198,7 @@ export const GlobalApi = HttpApi.make("global").add(
         }),
       ),
       HttpApiEndpoint.patch("updateBanyanConfig", GlobalPaths.banyanConfig, {
-        payload: BanyanConfig.Info,
+        payload: BanyanConfigUpdateInput,
         success: described(BanyanConfig.Info, "BanyanConfig updated"),
       }).annotateMerge(
         OpenApi.annotations({
@@ -258,7 +272,7 @@ export const GlobalApi = HttpApi.make("global").add(
         OpenApi.annotations({
           identifier: "global.banyanAgent.save",
           summary: "Save custom agent",
-          description: "Save a custom subagent definition to .banyancode/agent/<name>.md.",
+          description: "Save or update an agent definition to ~/.config/banyancode/agent/<name>.md.",
         }),
       ),
     )
