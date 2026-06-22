@@ -1,17 +1,21 @@
 export * as SubagentConsumer from "./subagent-consumer"
 
-import { Context, Effect, Layer, Queue } from "effect"
+import { Context, Effect, Layer, Queue, Scope } from "effect"
 import { SubagentBus } from "./subagent-bus"
 import { MemoryRepo } from "./memory-repo"
+import { SubagentMessagesRepo } from "./subagent-messages-repo"
 import type { PlanDefinition, SubagentMessage } from "./types"
 import type { SessionSchema } from "../session/schema"
 
 export interface Interface {
-  readonly start: (input: {
-    sessionID: SessionSchema.ID
-    agent: string
-    plan?: PlanDefinition
-  }) => Effect.Effect<void, never, never>
+  readonly start: (
+    input: {
+      sessionID: SessionSchema.ID
+      agent: string
+      plan?: PlanDefinition
+    },
+    scope: Scope.Scope,
+  ) => Effect.Effect<void, never, Scope.Scope>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/SubagentConsumer") {}
@@ -21,6 +25,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const bus = yield* SubagentBus.Service
     const memory = yield* MemoryRepo.Service
+    const messages = yield* SubagentMessagesRepo.Service
 
     const loop = (input: { sessionID: SessionSchema.ID; agent: string; plan?: PlanDefinition }, queue: Queue.Dequeue<SubagentMessage>) =>
       Effect.gen(function* () {
@@ -43,6 +48,7 @@ export const layer = Layer.effect(
               break
             }
             case "kill": {
+              yield* messages.markDelivered(msg.id, Date.now())
               return
             }
             case "checkpoint":
@@ -52,13 +58,22 @@ export const layer = Layer.effect(
             case "request":
               break
           }
+          yield* messages.markDelivered(msg.id, Date.now())
         }
       })
 
-    const start: Interface["start"] = (input) => Effect.void
+    const start: Interface["start"] = (input, scope) =>
+      Effect.gen(function* () {
+        const queue = yield* bus.subscribe(input.sessionID)
+        yield* Effect.forkIn(loop(input, queue), scope)
+      })
 
     return Service.of({ start })
   }),
 )
 
-export const defaultLayer = layer
+export const defaultLayer = layer.pipe(
+  Layer.provide(SubagentBus.defaultLayer),
+  Layer.provide(MemoryRepo.defaultLayer),
+  Layer.provide(SubagentMessagesRepo.defaultLayer),
+)
