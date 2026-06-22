@@ -6,9 +6,9 @@ This document describes how BanyanCode is structured on disk, how the runtime la
 
 BanyanCode is a CLI/TUI-only fork of [OpenCode](https://github.com/anomalyco/opencode) that adds four capabilities:
 
-1. **Orchestrator + subagent mesh** — a primary `orchestrator` agent decomposes complex tasks and fans out to specialized subagents in parallel.
-2. **Cross-session memory** — a persistent key-value store with optional embeddings.
-3. **2-phase codebase utility** — a tree-sitter code graph (`/codegraph-build`) plus an embeddings layer (`/code-embed`) for semantic search.
+1. **Orchestrator + subagent mesh** — a primary `orchestrator` agent decomposes complex tasks and fans out to specialized subagents in parallel, with a user-configurable hard limit.
+2. **Cross-session memory** — a persistent key-value store with optional embeddings and JSONB indexable payloads.
+3. **2-phase codebase utility** — a tree-sitter code graph (`/codegraph-build`) plus a native vector search layer (`/code-embed`) backed by Turso/libSQL vector functions.
 4. **Researcher agent with free web search** — a `researcher` subagent backed by DuckDuckGo (no API key required).
 
 Desktop, web, app, and Storybook packages are explicitly out of scope. BanyanCode is a sequence of additions to OpenCode, not a rewrite.
@@ -20,8 +20,8 @@ The repo is a Bun workspace with these packages (under `packages/`):
 | Package | Purpose | BanyanCode role |
 |---------|---------|-----------------|
 | `core` | Effect services, database, plugins, tool framework, BanyanCode service layer | Hosts the BanyanCode service namespace |
-| `opencode` | CLI binary, command shell, HTTP API, project bootstrap, agent registry | Hosts BanyanCode slash commands and agents |
-| `tui` | Solid.js terminal UI | Hosts BanyanCode widgets (progress, dialog, sidebar) |
+| `opencode` | CLI binary, command shell, HTTP API, project bootstrap, agent registry | Hosts BanyanCode slash commands, agents, and HTTP endpoints |
+| `tui` | Solid.js terminal UI with OpenTUI primitives | Hosts BanyanCode widgets, tabs, dialogs |
 | `sdk` | Generated JS client SDK (`@opencode-ai/sdk`) | Auto-includes BanyanCode HTTP endpoints |
 | `llm` | AI SDK provider adapters and HTTP recorder | Unchanged for BanyanCode |
 | `effect-drizzle-sqlite`, `effect-sqlite-node` | Generic SQLite bindings | Unchanged |
@@ -55,8 +55,9 @@ When BanyanCode is enabled and the user runs from a project directory, BanyanCod
 
 ```
 <project>/.banyancode/
-├── banyancode.db        # SQLite: memory, codegraph, subagent data
-└── ignore               # codegraph ignore patterns, one per line
+├── banyancode.db        # libSQL/Turso: memory, codegraph, subagent data, embeddings
+├── ignore               # codegraph ignore patterns, one per line
+└── agent/               # custom subagent definitions (.md with frontmatter)
 ```
 
 Resolution rules (`packages/core/src/database/database.ts:67`):
@@ -68,6 +69,42 @@ DB filename suffixes by installation channel:
 - `latest` / `beta` / `prod` → plain `banyancode.db`
 - Anything else → `banyancode-<channel>.db` (set `OPENCODE_DISABLE_CHANNEL_DB=1` to override)
 
+## Storage: Turso/libSQL (V2)
+
+As of V2 (branch `banyancode-v2-turso`), BanyanCode uses **Turso/libSQL** via `@libsql/client` instead of `bun:sqlite` / `node:sqlite`. The driver adapter lives at `packages/core/src/database/sqlite.libsql.ts`.
+
+What this gives us:
+- **Native vector search**: `F32_BLOB(N)` column type, `vector_distance_cos` / `vector_distance_l2` functions, `vector_top_k(idx, vec, k)` table-valued function.
+- **DiskANN ANN algorithm**: `libsql_vector_idx(column)` partial indexes for sub-millisecond KNN at 10K+ nodes.
+- **Multiple vector types**: FLOAT64/F32/F16/F8/FLOATB16/FLOAT1BIT (we use F32 by default).
+- **FTS5 full-text search**: virtual tables with BM25 ranking for symbol-name search in codegraph.
+- **JSONB type**: indexable JSON paths for memory entries.
+- **STRICT tables** + user-defined types.
+- **MVCC concurrent writes** (Turso 0.5+, beta — not enabled by default yet).
+
+The TUI sidebar shows L0/L1/L2/L3 layer counts driven by the `banyancode.codegraph.layers` event. The native `vector_top_k('codegraph_embedding_vec_idx', ...)` query is what backs `/codegraph-search` and the Graph tab's Obsidian-style force-directed view.
+
+Schema (`packages/core/src/banyancode/codegraph.sql.ts`):
+```ts
+export const f32Blob = customType<{ data: Uint8Array; ... }>({
+  dataType() { return `F32_BLOB(${PLACEHOLDER_DIM})` },
+  ...
+})
+```
+
+The dim is templated at migration time from `BanyanConfig.banyancode_embedding_dim`. When the user changes model via `/embedding-model`, the picker calls `CodegraphRepo.resetEmbeddingsTable(dim, model)` which drops and recreates the table with the new dim.
+
+Debug logs (stderr):
+```
+[turso.driver] opening file:.banyancode/banyancode.db
+[turso.schema] codegraph_embeddings F32_BLOB(1536) configured (placeholder dim)
+[turso.schema] memory_entries with jsonb columns configured
+[turso.vector] putEmbedding node_id=abc dim=1536 model=text-embedding-3-small bytes=6144
+[turso.vector] searchTopK query_dim=1536 k=10 -> 10 rows in 1.2ms
+[turso.picker] probe endpoint=openai/text-embedding-3-small -> dim=1536
+[turso.picker] resetTable dim=1536 model=text-embedding-3-small
+```
+
 ## BanyanCode service layer (`packages/core/src/banyancode/`)
 
 Every BanyanCode service follows the same pattern: a `Context.Service` class, a `layer` builder, and a `defaultLayer` that wires the service's dependencies. All services are gated by `BANYANCODE_ENABLE` (default off) so disabling BanyanCode is a no-op.
@@ -75,17 +112,18 @@ Every BanyanCode service follows the same pattern: a `Context.Service` class, a 
 | Service | Purpose | Key deps |
 |---------|---------|----------|
 | `BanyanConfigService` | Read/write `banyancode.json` from `~/.config/banyancode/` | `FSUtil` |
-| `CodegraphRepo` | Drizzle CRUD over `codegraph_*` tables | `Database` |
-| `MemoryRepo` | Drizzle CRUD over `memory_entries` | `Database` |
+| `CodegraphRepo` | Drizzle CRUD over `codegraph_*` tables; native vector search via `searchByVector` (libSQL `vector_top_k`) | `Database` |
+| `MemoryRepo` | Drizzle CRUD over `memory_entries` (JSONB value/tags) | `Database` |
 | `SubagentMessagesRepo`, `SubagentPlansRepo` | Mesh persistence | `Database` |
 | `CodegraphIndexer` | Walk a directory, parse files, extract nodes/edges via tree-sitter | `CodegraphRepo`, `FSUtil` |
 | `CodegraphBuildService` | Persistent build state, fork/cancel, publish `banyancode.codegraph.build` events | `CodegraphIndexer`, `EventV2` |
 | `CodegraphEmbedder` | Walk nodes, call embedding provider, write `codegraph_embeddings` | `CodegraphRepo`, `EmbeddingProvider` |
-| `CodegraphEmbedService` | Persistent embed state, fork/cancel, publish `banyancode.codeembed.build` events (mirrors the build service) | `CodegraphEmbedder`, `EventV2` |
-| `CodegraphAnalyzer` | BFS impact/dependents/callers over the graph edges | `CodegraphRepo` |
-| `EmbeddingProviderService` | Holds the active model, fires `plugin.trigger("aisdk.embed", ...)` | `BanyanConfigService`, `PluginV2` |
-| `SubagentBus`, `MeshCoordinator` | Fire-and-persist peer messaging + fan-out coordination | `SubagentMessagesRepo`, `SubagentPlans` |
-| `SystemMonitorService` | CPU/memory/platform health reads | `AppProcess` |
+| `CodegraphEmbedService` | Persistent embed state, fork/cancel, publish `banyancode.codeembed.build` events | `CodegraphEmbedder`, `EventV2` |
+| `CodegraphAnalyzer` | BFS impact/dependents/callers over the graph edges; computes L0/L1/L2/L3 layers | `CodegraphRepo` |
+| `EmbeddingProviderService` | Holds the active model, fires `plugin.trigger("aisdk.embed", ...)`, **probes** the endpoint to detect dim at runtime, calls `resetEmbeddingsTable` on model switch | `BanyanConfigService`, `PluginV2`, `CodegraphRepo` |
+| `MaxSubagentsService` | Reads `banyancode_max_subagents` config (default 5, max 20), validates, provides to orchestrator prompt + hard runtime limit | `BanyanConfigService` |
+| `SubagentBus`, `MeshCoordinator` | Fire-and-persist peer messaging + fan-out coordination. Hard cap on parallel subagents via `tryReserveSubagentSlot`: evicts oldest ended agent, otherwise refuses | `SubagentMessagesRepo`, `SubagentPlans`, `MaxSubagentsService` |
+| `SystemMonitorService` | CPU/memory/platform/GPU health reads; publishes `banyancode.system.updated` every 1s | `AppProcess` |
 
 Service exports live in `packages/core/src/banyancode/index.ts` in two flavors:
 - Named (`CodegraphBuildService`, `codegraphBuildServiceDefaultLayer`) for direct imports inside `core`.
@@ -110,6 +148,8 @@ Service exports live in `packages/core/src/banyancode/index.ts` in two flavors:
           → publish EmbedEvent { status: "running", done, total }
       → publish EmbedEvent { status: "completed", result }
 ```
+
+**Model switching** (V2): The `/embedding-model` picker probes the endpoint with a 1-char input to detect the model's dim at runtime. After probe, it persists `banyancode_embedding_model` and `banyancode_embedding_dim` to BanyanConfig, then calls `CodegraphRepo.resetEmbeddingsTable(dim, model)` to drop the old `F32_BLOB` column and recreate with the new dim. No coexistence — old-model embeddings are gone.
 
 Two ways to swap providers:
 1. **`aisdk.embed` handler in a plugin** (the production path). Every provider in `packages/core/src/plugin/provider/` can add a handler that returns embeddings for its models.
@@ -138,13 +178,28 @@ Supported languages and their parsers live in `packages/core/src/banyancode/lang
 
 The resolved DB path is computed by `Database.path()` and passed into `BuildService.start({ dbPath })`. The build service publishes the path in every `banyancode.codegraph.build` event so the TUI's progress widget can show "Index → /abs/path/to/banyancode.db".
 
+## L0/L1/L2/L3 layers (codegraph)
+
+The sidebar codegraph panel and the Graph tab both use these layer definitions:
+
+- **L0 Symbol (Current)** — the focused node, fixed at center in the graph view
+- **L1 Callers (Direct)** — nodes with edges pointing TO the L0 node (incoming `calls`/`references`)
+- **L2 Impact (Transitive)** — full blast radius: all reachable upstream + downstream nodes
+- **L3 Dependents (Reverse)** — nodes reachable FROM L0 in the reverse direction
+
+Computed by `CodegraphAnalyzer` via BFS over `codegraph_edges`.
+
 ## Orchestrator + mesh
 
 - `orchestrator` agent is registered by `packages/opencode/src/agent/agent.ts` when `BANYANCODE_ENABLE=1`.
+- The orchestrator prompt is templated: `{{maxSubagents}}` is rendered from `BanyanConfig.banyancode_max_subagents` (default `5`, capped at `20`) at agent-load time.
 - It decomposes a prompt into a plan, then `MeshCoordinator` issues bounded parallel `Effect.forkIn(scope)` calls to subagents.
-- Hard limits: `MAX_PARALLEL_SUBAGENTS=3` default, `MAX_PARALLEL_SUBAGENTS_HARD=5` enforced by the orchestrator prompt and `MeshCoordinator`.
+- Hard cap: `MeshCoordinator.tryReserveSubagentSlot` enforces the limit. At cap:
+  1. Find the oldest subagent that has **already ended its task** (idle > 60s).
+  2. If found, evict it via `kill({ reason: "evicted-by-new-spawn" })` and proceed.
+  3. If no evictable subagent, refuse spawn and surface `Max ${n} subagents reached. No idle agents to evict.` to the orchestrator.
 - Subagents talk back via `SubagentBus` (a fire-and-persist log in SQLite). Cross-agent outputs flow through shared memory.
-- Phase 12/13 (subagent subscribe tool, separate message-bodies table) are explicitly deferred.
+- The max is also a **soft prompt hint**: the orchestrator's prompt says "PREFER 2-3 parallel subagents. Default fanout is 3, maximum is N" where N is the configured value.
 
 ## Provider plugin system
 
@@ -157,20 +212,39 @@ The resolved DB path is computed by `Database.path()` and passed into `BuildServ
 
 ## TUI integration
 
-The TUI (`packages/tui/`) subscribes to BanyanCode events via `event.subscribe` at `packages/tui/src/app.tsx:1117-1125`:
+The TUI (`packages/tui/`) is a Solid.js app using OpenTUI primitives. It exposes a slot-based plugin system (`packages/tui/src/feature-plugins/builtins.ts`).
 
-```ts
-event.subscribe((evt, { workspace }) => {
-  if (workspace !== project.workspace.current()) return
-  if (evt.type === "banyancode.codegraph.build") build.set(evt.properties)
-  else if (evt.type === "banyancode.codeembed.build") build.setEmbed(evt.properties)
-})
-```
+### Tab structure (V3)
 
-Components:
-- `component/codegraph-progress.tsx` — corner widget showing build and embed state, current file, error message on failure, resolved DB path during a build.
-- `component/dialog-embedding-model.tsx` — model picker, writes `banyancode_embedding_model` via `sdk.client.global.banyanConfig.update`.
-- `feature-plugins/sidebar/` — sidebar widgets (codegraph progress lives here).
+The session route renders 5 tabs via the `ActiveTab` union (`packages/tui/src/feature-plugins/tabs/state.tsx`):
+
+- **CHAT** — main conversation view (default)
+- **SESSIONS** — tree view of root sessions + subsessions. Each row is **inline-editable**: click the title to edit, Enter to save, Escape to cancel. Uses `sdk.client.session.update({ sessionID, title })`.
+- **AGENTS** — registry of built-in agents (`orchestrator`, `coder`, `explore`, `researcher`, `scout`, `general`) plus custom agents from `.banyancode/agent/*.md`. **+ Add** button opens `DialogAgentConfig` wizard.
+- **GRAPH** — Obsidian-style force-directed view of the codegraph. L0/L1/L2/L3 toggle, click a node to focus it, d3-force layout via `packages/tui/src/util/graph-layout.ts`. Falls back to flat list if >50 nodes.
+- **MEMORY** — cross-session memory entries
+- **SETTINGS** — accordion sections: Model & Provider, Orchestration (max_subagents, YOLO, web search), Embeddings, Endpoints, Telegram, Custom Subagents. Saves to BanyanConfig via `sdk.client.global.banyanConfig.update`.
+
+### Reusable UI primitives (`packages/tui/src/ui/`)
+
+- `accordion.tsx` — collapsible sections with header/expand chevron
+- `toggle-switch.tsx` — boolean toggle with `[● ON]` / `[○ OFF]` indicator
+- `number-input.tsx` — click-to-edit with bounds clamping (used for max_subagents)
+- `dialog-select.tsx` — single-select picker
+- `dialog-multi-select.tsx` — **grouped + searchable** multi-select with category headers, used for tool selection
+
+### Sidebar widgets (`packages/tui/src/feature-plugins/sidebar/`)
+
+- `agent-tree.tsx` — orchestrator + subagent tree with L-bracket connectors
+- `codegraph-panel.tsx` — L0/L1/L2/L3 layer counts, codegraph overview (version, built at, coverage, nodes/edges), explanation of what each layer means
+- `system-status.tsx` — CPU/memory/GPU/VRAM bars with color-coded warnings (green < 60%, yellow < 85%, red > 85%), subscribed to `banyancode.system.updated`
+- `files.tsx`, `mcp.tsx`, `lsp.tsx`, `todo.tsx` — other context widgets
+
+### Inspector widgets (`packages/tui/src/feature-plugins/inspector/`)
+
+- `agent-details.tsx` — current agent: status, task, model, tools, memory, last message
+- `graph-explorer.tsx` — L0/L1/L2/L3 toggle with focused-node detail
+- `pending-actions.tsx` — pending sessions/permissions/questions with keybindings
 
 ## HTTP API
 
@@ -178,8 +252,13 @@ Endpoints added by BanyanCode (`packages/opencode/src/server/routes/instance/htt
 - `GET /global/banyan-config` — read `BanyanConfig.Info`
 - `POST /global/banyan-config` — partial update
 - `POST /global/embedding-model/apply` — read config + call `EmbeddingProvider.setModel`
-- `POST /global/codegraph-cancel` — interrupt a running build (no slash command for cancel yet)
-- The TUI listens on `event` SSE for `banyancode.codegraph.build` and `banyancode.codeembed.build`.
+- `POST /global/codegraph-cancel` — interrupt a running build
+- `GET /global/codegraph-nodes` — list all indexed nodes + summary meta
+- `GET /global/codegraph-edges` — edges for a node (query: `nodeID`)
+- `POST /global/banyan-agent/save` — write a custom subagent definition to `.banyancode/agent/<name>.md`
+- Inherited from OpenCode V2: `PATCH /session/{id}` — update session metadata (used for inline title edit)
+
+The TUI listens on `event` SSE for `banyancode.codegraph.build`, `banyancode.codeembed.build`, and `banyancode.system.updated`.
 
 ## Slash commands
 
@@ -189,10 +268,11 @@ Server-side commands in `packages/opencode/src/command/index.ts`:
 - `/code-embed [--file <path>]` — runs in background; `CodegraphEmbedService.start` forks.
 - `/yolo` — toggles `banyancode_yolo_mode` (skips permission prompts).
 - `/init`, `/review`, `/refresh-models` — inherited from OpenCode.
+- `/embedding-model` — opens model picker dialog (V2 probing flow).
 
 Dialog commands (TUI command palette, not slash commands):
-- `/embedding-model` — opens `DialogEmbeddingModel`.
 - `/agent-model` — opens the agent model picker.
+- `/embedding-model` (slash variant) — picker for the codegraph embedding model.
 
 ## Tests
 
@@ -222,10 +302,10 @@ BanyanCode-specific test files:
 Detailed design docs live in `specs/banyancode/`:
 - `overview.md` — high-level pitch and reuse map
 - `orchestrator.md` — orchestrator prompt + agent layout
-- `subagent-mesh.md` — wire format, capacity, failure modes, deferred Phase 12/13
+- `subagent-mesh.md` — wire format, capacity, failure modes, eviction policy
 - `memory.md` — memory tables, embedding flow, vacuum
 - `codegraph.md` — code graph pipeline + embedding flow
-- `storage.md` — Drizzle schemas and migrations
+- `storage.md` — Drizzle schemas and migrations (libSQL)
 - `types.md` — shared types
 - `websearch-free.md` — DuckDuckGo HTML scraping
 
@@ -234,8 +314,13 @@ User-facing docs (rendered to the docs site) live in `packages/docs/src/content/
 ## Coding conventions for BanyanCode work
 
 In addition to the root `AGENTS.md` style guide:
-- BanyanCode-specific keys (`banyancode_embedding_model`, `banyancode_yolo_mode`, future telegram/runtime keys) live in `BanyanConfig.Info`. Never in `ConfigV1.Info`.
+- BanyanCode-specific keys (`banyancode_embedding_model`, `banyancode_yolo_mode`, `banyancode_max_subagents`, future telegram/runtime keys) live in `BanyanConfig.Info`. Never in `ConfigV1.Info`.
 - Consumers read via `Banyan.BanyanConfigService` or `Effect.serviceOption(Banyan.BanyanConfigService)`.
 - Do NOT add BanyanCode service deps to `BanyanTools.locationLayer` (`packages/core/src/banyancode/tools-layer.ts`). Provide them at the consumer level instead — see `packages/opencode/src/effect/app-runtime.ts` for the canonical wiring.
 - New BanyanCode services should follow the `Service / layer / defaultLayer` triple with a gated no-op path when `BANYANCODE_ENABLE=0`.
 - Service reference pattern: `packages/core/src/banyancode/index.ts` exports each service both as a named constant and via `export * as Banyan from "."` for consumer namespace imports.
+
+## Changelog
+
+- **V2** (`banyancode-v2-turso`): migrated storage from `bun:sqlite` / `node:sqlite` to `@libsql/client`; added native vector search, FTS5 symbol search, JSONB memory; replaced in-memory cosine scan with `vector_top_k` DiskANN index; added probing-based `/embedding-model` picker; UI refined to match design mockup.
+- **V3** (`banyancode-v3-fixes`, current): split Sessions from Agents tab with inline-editable titles; Obsidian-style force-directed Graph tab via `d3-force`; agent config dialog with file-based subagent definitions; complete Settings tab with all BanyanConfig sections; `banyancode_max_subagents` plumbed into orchestrator prompt template + `MeshCoordinator` hard limit with oldest-ended eviction; `systeminfo` tool for agents + sidebar status widget; fixed silent `tab-graph.tsx` "No nodes indexed" bug; removed fake layer counts in `codegraph-panel.tsx`.

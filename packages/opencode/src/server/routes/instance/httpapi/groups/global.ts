@@ -8,6 +8,12 @@ import "@/server/event"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { described } from "./metadata"
+import { CodegraphNodeSchema } from "@opencode-ai/core/banyancode/types"
+import { GraphMeta } from "@opencode-ai/core/banyancode/types"
+
+const CodegraphEdgesQuery = Schema.Struct({
+  nodeID: Schema.optional(Schema.String),
+})
 
 const GlobalHealth = Schema.Struct({
   healthy: Schema.Literal(true),
@@ -54,6 +60,24 @@ export const GlobalUpgradeInput = Schema.Struct({
   target: Schema.optional(Schema.String),
 })
 
+export const BanyanAgentSaveInput = Schema.Struct({
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+  model: Schema.optional(
+    Schema.Struct({
+      providerID: Schema.String,
+      modelID: Schema.String,
+    }),
+  ),
+  tools: Schema.optional(Schema.Array(Schema.String)),
+  enabled: Schema.optional(Schema.Boolean),
+})
+
+export const BanyanAgentSaveResult = Schema.Struct({
+  ok: Schema.Literal(true),
+  filePath: Schema.String,
+})
+
 const GlobalUpgradeResult = Schema.Union([
   Schema.Struct({
     success: Schema.Literal(true),
@@ -75,6 +99,9 @@ export const GlobalPaths = {
   codegraphCancel: "/global/codegraph-cancel",
   startup: "/global/startup",
   banyanConfig: "/global/banyan-config",
+  codegraphNodes: "/global/codegraph-nodes",
+  codegraphEdges: "/global/codegraph-edges",
+  banyanAgentSave: "/global/banyan-agent/save",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -175,6 +202,45 @@ export const GlobalApi = HttpApi.make("global").add(
           description: "Cancel the in-flight codegraph build for the current instance.",
         }),
       ),
+      HttpApiEndpoint.get("codegraphNodes", GlobalPaths.codegraphNodes, {
+        success: described(
+          Schema.Struct({
+            nodes: Schema.Array(CodegraphNodeSchema),
+            meta: Schema.optional(GraphMeta),
+            total: Schema.Number,
+          }),
+          "Codegraph nodes list with meta",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.codegraph.nodes",
+          summary: "List codegraph nodes",
+          description: "Returns all indexed codegraph nodes with summary metadata.",
+        }),
+      ),
+      HttpApiEndpoint.get("codegraphEdges", GlobalPaths.codegraphEdges, {
+        query: CodegraphEdgesQuery,
+        success: described(
+          Schema.Struct({
+            edges: Schema.Array(
+              Schema.Struct({
+                id: Schema.String,
+                fromNodeID: Schema.String,
+                toNodeID: Schema.String,
+                kind: Schema.Literals(["imports", "calls", "extends", "references"]),
+              }),
+            ),
+            total: Schema.Number,
+          }),
+          "Codegraph edges for a node",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.codegraph.edges",
+          summary: "List codegraph edges",
+          description: "Returns edges originating from or targeting a given node ID.",
+        }),
+      ),
       HttpApiEndpoint.post("startup", GlobalPaths.startup, {
         success: described(Schema.Boolean, "Startup complete"),
       }).annotateMerge(
@@ -182,6 +248,17 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.startup",
           summary: "Startup bridges",
           description: "Initialize all BanyanCode bridges on TUI startup.",
+        }),
+      ),
+      HttpApiEndpoint.post("banyanAgentSave", GlobalPaths.banyanAgentSave, {
+        payload: BanyanAgentSaveInput,
+        success: described(BanyanAgentSaveResult, "Agent saved"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.banyanAgent.save",
+          summary: "Save custom agent",
+          description: "Save a custom subagent definition to .banyancode/agent/<name>.md.",
         }),
       ),
     )

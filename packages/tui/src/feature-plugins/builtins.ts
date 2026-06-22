@@ -12,6 +12,7 @@ import InspectorAgentDetails from "./inspector/agent-details"
 import InspectorGraphExplorer from "./inspector/graph-explorer"
 import InspectorPendingActions from "./inspector/pending-actions"
 import SidebarCodegraphPanel from "./sidebar/codegraph-panel"
+import SidebarSystemStatus from "./sidebar/system-status"
 import SessionFooter from "./footer/session-footer"
 import HeaderBrand from "./header/brand"
 import HeaderStatusPills from "./header/status-pills"
@@ -38,6 +39,7 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     HomeTips,
     SidebarContext,
     SidebarCodegraphPanel,
+    SidebarSystemStatus,
     SidebarMcp,
     SidebarAgentTree,
     SidebarLsp,

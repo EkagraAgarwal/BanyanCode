@@ -36,6 +36,12 @@ import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Reference } from "@opencode-ai/core/reference"
 import { Location } from "@opencode-ai/core/location"
+import { Banyan } from "@opencode-ai/core/banyancode"
+import { DEFAULT_MAX_SUBAGENTS } from "@opencode-ai/core/v1/config/banyan-config"
+
+function renderTemplate(template: string, vars: Record<string, string>): string {
+  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? `{{${key}}}`)
+}
 
 export const Info = Schema.Struct({
   name: Schema.String,
@@ -140,6 +146,15 @@ export const layer = Layer.effect(
 
         const user = Permission.fromConfig(cfg.permission ?? {})
 
+        // Render orchestrator prompt with maxSubagents from BanyanConfig
+        const banyanConfigOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+        const maxSubagents = banyanConfigOpt._tag === "Some"
+          ? ((yield* banyanConfigOpt.value.get()).banyancode_max_subagents ?? DEFAULT_MAX_SUBAGENTS)
+          : DEFAULT_MAX_SUBAGENTS
+        const renderedOrchestratorPrompt = renderTemplate(PROMPT_ORCHESTRATOR, {
+          maxSubagents: String(maxSubagents),
+        })
+
         const agents: Record<string, Info> = {
           build: {
             name: "build",
@@ -190,6 +205,7 @@ export const layer = Layer.effect(
               defaults,
               Permission.fromConfig({
                 todowrite: "deny",
+                systeminfo: "allow",
               }),
               user,
             ),
@@ -335,7 +351,7 @@ export const layer = Layer.effect(
             description: "Decomposes complex tasks, fans out to parallel subagents, coordinates via shared memory and peer messages.",
             mode: "primary",
             native: true,
-            prompt: PROMPT_ORCHESTRATOR,
+            prompt: renderedOrchestratorPrompt,
             permission: Permission.merge(
               defaults,
               Permission.fromConfig({
@@ -352,6 +368,7 @@ export const layer = Layer.effect(
                 mesh_control: "allow",
                 todowrite: "allow",
                 question: "allow",
+                systeminfo: "allow",
               }),
               user,
             ),
@@ -564,6 +581,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Config.defaultLayer),
   Layer.provide(Skill.defaultLayer),
   Layer.provide(LocationServiceMap.layer),
+  Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
 )
 
 const locationServiceMapNode = LayerNode.make(LocationServiceMap.layer, [])

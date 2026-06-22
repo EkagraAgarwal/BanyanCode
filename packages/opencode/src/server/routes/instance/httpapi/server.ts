@@ -258,6 +258,7 @@ export function createRoutes(
       FetchHttpClient.layer,
       HttpServer.layerServices,
       Banyan.banyanConfigServiceDefaultLayer,
+      Banyan.codegraphRepoDefaultLayer,
     ]),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provideMerge(Ripgrep.defaultLayer),

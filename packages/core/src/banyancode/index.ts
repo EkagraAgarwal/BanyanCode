@@ -58,6 +58,8 @@ export {
   defaultLayer as subagentConsumerDefaultLayer,
 } from "./subagent-consumer"
 export { Service as BanyanConfigService, layer as banyanConfigServiceLayer, defaultLayer as banyanConfigServiceDefaultLayer } from "./banyan-config"
+export { Service as MaxSubagentsService, layer as maxSubagentsLayer, defaultLayer as maxSubagentsDefaultLayer } from "./max-subagents"
+export * as MaxSubagents from "./max-subagents"
 export { Schema_URL as BanyanConfigSchemaURL, Info as BanyanConfigInfo } from "../v1/config/banyan-config"
 export { Service as CodegraphStaleness, layer as codegraphStalenessLayer, defaultLayer as codegraphStalenessDefaultLayer } from "./codegraph-staleness"
 export { StaleCheck } from "./codegraph-staleness"

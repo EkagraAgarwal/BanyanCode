@@ -3,9 +3,8 @@ import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { RGBA } from "@opentui/core"
 import type { BuiltinTuiPlugin } from "../builtins"
 import type { TabSelectProps } from "@opentui/solid"
-import { createMemo, createSignal, onCleanup, Show } from "solid-js"
+import { createMemo, createSignal, Show } from "solid-js"
 import { useSync } from "../../context/sync"
-import { useEvent } from "../../context/event"
 
 const id = "internal:inspector-graph-explorer"
 
@@ -68,19 +67,8 @@ function AsciiGraph(props: { tab: string; focusedLabel: string; tools: string[];
 function View(props: { api: TuiPluginApi; sessionID: string }) {
   const sync = useSync()
   const theme = () => props.api.theme.current
-  const ev = useEvent()
 
   const [activeLayer, setActiveLayer] = createSignal("L0")
-
-  const unsubStale = ev.on("banyancode.codegraph.staleness" as any, (event: any) => {
-    // handle event updates
-  })
-  onCleanup(unsubStale)
-
-  const unsubBuild = ev.on("banyancode.codegraph.build" as any, (event: any) => {
-    // handle event updates
-  })
-  onCleanup(unsubBuild)
 
   const toolsUsed = createMemo(() => {
     const messages = sync.data.message[props.sessionID] ?? []
