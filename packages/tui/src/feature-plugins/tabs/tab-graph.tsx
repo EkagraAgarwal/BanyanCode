@@ -6,6 +6,7 @@ import { useTheme } from "../../context/theme"
 import { toHex } from "../../util/color"
 import { computeLayout, type LayoutNode, type LayoutEdge } from "../../util/graph-layout"
 import { useEvent } from "../../context/event"
+import { useTerminalDimensions } from "@opentui/solid"
 
 const id = "internal:tabs-tab-graph"
 
@@ -93,9 +94,21 @@ function View(props: { api: TuiPluginApi }) {
     }
   })
 
+  const dimensions = useTerminalDimensions()
+
+  // Compute usable graph area: clamp width to 40-160 chars, use available height
+  const graphDimensions = createMemo(() => {
+    const rawW = dimensions().width
+    const rawH = dimensions().height
+    // Clamp width to prevent over-spreading or under-population
+    const W = Math.max(40, Math.min(160, rawW - 4))
+    const H = Math.max(10, rawH - 20) // Leave room for header and padding
+    return { W, H }
+  })
+
   const positioned = createMemo(() => {
     const { nodes, edges } = layout()
-    const W = 80, H = 24
+    const { W, H } = graphDimensions()
     const pos = computeLayout(nodes, edges, W, H, focusedId() ?? undefined)
     return pos
   })
@@ -134,7 +147,7 @@ function View(props: { api: TuiPluginApi }) {
             <text fg={toHex(theme.textMuted)}>No nodes indexed</text>
           }>
             {/* Render nodes at computed positions */}
-            <box position="relative" width={80} height={24} marginTop={1}>
+            <box position="relative" width={graphDimensions().W} height={graphDimensions().H} marginTop={1}>
               <For each={positioned()}>
                 {(node) => {
                   const x = Math.round(node.x ?? 0)

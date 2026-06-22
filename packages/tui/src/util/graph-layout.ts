@@ -22,6 +22,14 @@ export function computeLayout(
 ): LayoutNode[] {
   if (nodes.length === 0) return []
 
+  // Scale force parameters with viewport area to prevent crowding or over-spreading
+  // Baseline area is 80x24 = 1920
+  const baselineArea = 80 * 24
+  const currentArea = width * height
+  const areaRatio = currentArea / baselineArea
+  // Use square-root scaling to avoid extreme values while still scaling appropriately
+  const scale = Math.sqrt(areaRatio)
+
   const clonedNodes = nodes.map((n) => ({ ...n }))
   const clonedEdges = edges.map((e) => ({ ...e }))
 
@@ -47,12 +55,13 @@ export function computeLayout(
     }
   }
 
-  // Run simulation with tuned parameters for a terminal grid (80x24 characters)
+  // Run simulation with tuned parameters for a terminal grid
+  // Scale forces with viewport area to prevent crowding (small screens) or over-spreading (large screens)
   const sim = forceSimulation(clonedNodes)
-    .force("charge", forceManyBody().strength(-12))
-    .force("link", forceLink(clonedEdges).id((d: any) => d.id).distance(6))
+    .force("charge", forceManyBody().strength(-12 * scale))
+    .force("link", forceLink(clonedEdges).id((d: any) => d.id).distance(6 * scale))
     .force("center", forceCenter(cx, cy))
-    .force("collide", forceCollide(2.5))
+    .force("collide", forceCollide(2.5 * scale))
     .force("x", forceX(cx).strength(0.4))
     .force("y", forceY(cy).strength(0.4))
     .stop()
