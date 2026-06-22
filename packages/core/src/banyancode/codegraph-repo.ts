@@ -305,32 +305,34 @@ export const layer = Layer.effect(
       }
     })
 
-    const resetEmbeddingsTable = (dim: number, model: string): Effect.Effect<void, CodegraphSearchError, never> => {
+    const clearEmbeddingsForModel = Effect.fn("CodegraphRepo.clearEmbeddingsForModel")(function* (model: string) {
+      yield* db
+        .delete(CodegraphEmbeddingsTable)
+        .where(eq(CodegraphEmbeddingsTable.model, model))
+        .run()
+        .pipe(Effect.orDie)
+    })
+
+    const resetEmbeddingsTable = (
+      dim: number,
+      model: string,
+      options?: { force?: boolean },
+    ): Effect.Effect<void, CodegraphSearchError, never> => {
       if (!Number.isInteger(dim) || dim <= 0 || dim > 65536) {
-        return Effect.fail(new CodegraphSearchError(`Invalid embedding dim: ${dim}. Must be a positive integer <= 65536.`))
+        return Effect.fail(
+          new CodegraphSearchError(`Invalid embedding dim: ${dim}. Must be a positive integer <= 65536.`),
+        )
       }
       return Effect.gen(function* () {
-        // Drop existing table and recreate with new dimension
-        yield* db.run(sql`DROP TABLE IF EXISTS codegraph_embeddings`).pipe(Effect.orDie)
-        yield* db
-          .run(sql`
-            CREATE TABLE codegraph_embeddings (
-              node_id TEXT PRIMARY KEY REFERENCES codegraph_nodes(id) ON DELETE CASCADE,
-              embedding F32_BLOB(${sql.raw(String(dim))}) NOT NULL,
-              model TEXT NOT NULL,
-              dim INTEGER NOT NULL,
-              created_at INTEGER NOT NULL DEFAULT (unixepoch())
-            )
-          `)
-          .pipe(Effect.orDie)
-        yield* db
-          .run(sql`CREATE INDEX codegraph_embedding_vec_idx ON codegraph_embeddings(libsql_vector_idx(embedding))`)
-          .pipe(Effect.orDie)
-        yield* db
-          .run(sql`CREATE INDEX codegraph_embedding_model_idx ON codegraph_embeddings(model)`)
-          .pipe(Effect.orDie)
+        // Preserve embeddings across model switches: only delete rows for the new model
+        // (which shouldn't exist yet) instead of dropping the entire table. Callers that
+        // need a clean slate can pass { force: true }.
+        yield* clearEmbeddingsForModel(model)
+        if (options?.force === true) {
+          yield* db.delete(CodegraphEmbeddingsTable).run().pipe(Effect.orDie)
+        }
         if (process.env.BANYANCODE_DEBUG === "1") {
-          console.error(`[turso.vector] resetEmbeddingsTable dim=${dim} model=${model}`)
+          console.error(`[turso.vector] resetEmbeddingsTable dim=${dim} model=${model} force=${options?.force === true}`)
         }
       })
     }

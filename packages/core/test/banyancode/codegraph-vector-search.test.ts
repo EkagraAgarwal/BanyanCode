@@ -7,7 +7,7 @@ import { tmpdir } from "../fixture/tmpdir"
 import path from "path"
 
 describe("CodegraphRepo vector search", () => {
-  test("resetEmbeddingsTable recreates with new dim", async () => {
+  test("resetEmbeddingsTable preserves embeddings for the OLD model", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.db")
     const dbLayer = Database.layerFromPath(dbPath)
@@ -20,10 +20,6 @@ describe("CodegraphRepo vector search", () => {
 
         const repo = yield* CodegraphRepo.Service
 
-        // Reset to dim=384 first (fresh migration creates 1536)
-        yield* repo.resetEmbeddingsTable(384, "test-model-384")
-
-        // Create a file and node first
         yield* repo.putFile({
           id: "file-1",
           path: "/test/file.ts",
@@ -42,34 +38,62 @@ describe("CodegraphRepo vector search", () => {
           code: "function testFunc() {}",
         })
 
-        // Insert 384-dim embedding
-        const embedding384 = new Uint8Array(384 * 4)
-        for (let i = 0; i < embedding384.length; i++) {
-          embedding384[i] = Math.random() * 255
+        const embedding = new Uint8Array(1536 * 4)
+        for (let i = 0; i < embedding.length; i++) {
+          embedding[i] = Math.random() * 255
         }
-        yield* repo.putEmbedding("node-1", embedding384, "test-model-384", 384)
+        yield* repo.putEmbedding("node-1", embedding, "old-model", 1536)
 
-        // Verify it exists
-        const stored = yield* repo.getEmbedding("node-1")
-        expect(stored?.dim).toBe(384)
+        const before = yield* repo.getEmbedding("node-1")
+        expect(before?.model).toBe("old-model")
 
-        // Reset to dim=1536
-        yield* repo.resetEmbeddingsTable(1536, "test-model-1536")
+        yield* repo.resetEmbeddingsTable(1536, "new-model")
 
-        // Old embedding should be gone
-        const afterReset = yield* repo.getEmbedding("node-1")
-        expect(afterReset).toBeUndefined()
+        const after = yield* repo.getEmbedding("node-1")
+        expect(after?.model).toBe("old-model")
+        expect(after?.dim).toBe(1536)
+      }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
 
-        // Insert 1536-dim embedding
-        const embedding1536 = new Uint8Array(1536 * 4)
-        for (let i = 0; i < embedding1536.length; i++) {
-          embedding1536[i] = Math.random() * 255
-        }
-        yield* repo.putEmbedding("node-1", embedding1536, "test-model-1536", 1536)
+  test("resetEmbeddingsTable with { force: true } clears ALL embeddings", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+    const repoLayer = CodegraphRepo.layer
 
-        // Verify new embedding
-        const newStored = yield* repo.getEmbedding("node-1")
-        expect(newStored?.dim).toBe(1536)
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+
+        const repo = yield* CodegraphRepo.Service
+
+        yield* repo.putFile({
+          id: "file-1",
+          path: "/test/file.ts",
+          contentHash: "abc",
+          language: "typescript",
+          indexedAt: Date.now(),
+        })
+        yield* repo.putNode({
+          id: "node-1",
+          fileID: "file-1",
+          kind: "function",
+          name: "testFunc",
+          signature: "testFunc()",
+          startLine: 1,
+          endLine: 10,
+          code: "function testFunc() {}",
+        })
+
+        const embedding = new Uint8Array(1536 * 4)
+        yield* repo.putEmbedding("node-1", embedding, "old-model", 1536)
+
+        yield* repo.resetEmbeddingsTable(1536, "new-model", { force: true })
+
+        const after = yield* repo.getEmbedding("node-1")
+        expect(after).toBeUndefined()
       }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
@@ -87,10 +111,6 @@ describe("CodegraphRepo vector search", () => {
 
         const repo = yield* CodegraphRepo.Service
 
-        // Reset to dim=384 (fresh migration creates 1536)
-        yield* repo.resetEmbeddingsTable(384, "test-model")
-
-        // Create file and node
         yield* repo.putFile({
           id: "file-1",
           path: "/test/file.ts",
@@ -109,12 +129,10 @@ describe("CodegraphRepo vector search", () => {
           code: "function testFunc() {}",
         })
 
-        // Insert 384-dim embedding
-        const embedding384 = new Uint8Array(384 * 4)
-        yield* repo.putEmbedding("node-1", embedding384, "test-model", 384)
+        const embedding = new Uint8Array(1536 * 4)
+        yield* repo.putEmbedding("node-1", embedding, "test-model", 1536)
 
-        // Try to search with 1536-dim query - should fail with CodegraphSearchError
-        const wrongDimQuery = new Float32Array(1536)
+        const wrongDimQuery = new Float32Array(768)
         const exit = yield* repo.searchByVector(wrongDimQuery, { limit: 5 }).pipe(Effect.exit)
 
         expect(exit._tag).toBe("Failure")
@@ -139,7 +157,6 @@ describe("CodegraphRepo vector search", () => {
 
         const repo = yield* CodegraphRepo.Service
 
-        // Try invalid dims - these should all fail
         const invalidDims = [0, -1, 100000, 70000, 0.5, NaN]
 
         for (const invalidDim of invalidDims) {
