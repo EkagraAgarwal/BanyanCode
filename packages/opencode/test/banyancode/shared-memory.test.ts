@@ -20,8 +20,8 @@ const mockPermissionLayer = Layer.succeed(PermissionV2.Service, PermissionV2.Ser
   list: () => Effect.succeed([]),
 }))
 
-const TEST_DB_PATH = path.join(os.tmpdir(), "opencode-shared-memory-test.sqlite")
-
+// Use a unique random path so test re-runs don't collide on the `account` table.
+const TEST_DB_PATH = path.join(os.tmpdir(), `opencode-shared-memory-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`)
 const dbLayer = Database.layerFromPath(TEST_DB_PATH)
 const memoryLayer = Banyan.memoryRepoDefaultLayer.pipe(Layer.provide(dbLayer))
 

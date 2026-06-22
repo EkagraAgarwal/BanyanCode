@@ -5,6 +5,7 @@ import { Banyan } from "@opencode-ai/core/banyancode"
 import { CodegraphEmbedService } from "@opencode-ai/core/banyancode/codegraph-embed-service"
 import { EmbeddingError } from "@opencode-ai/core/banyancode/embedding-provider"
 import { PluginV2 } from "@opencode-ai/core/plugin"
+import { Database } from "@opencode-ai/core/database/database"
 import { tmpdir } from "../fixture/tmpdir"
 
 process.env.BANYANCODE_ENABLE = "1"
@@ -63,28 +64,34 @@ const stubPlugin = Layer.succeed(
   }),
 )
 
-function buildLayer(mock: Layer.Layer<Banyan.CodegraphEmbedder, never, never>) {
+function buildLayer(mock: Layer.Layer<Banyan.CodegraphEmbedder, never, never>, dbLayer: Layer.Layer<Database.Service>) {
+  // Build EventV2 layer with our dbLayer so it doesn't use the global Database.
+  const eventLayer = EventV2.layer.pipe(Layer.provide(dbLayer))
   return CodegraphEmbedService.layer.pipe(
     Layer.provide(mock),
     Layer.provide(stubPlugin),
-    Layer.provide(EventV2.defaultLayer),
+    Layer.provide(dbLayer),
+    Layer.provide(eventLayer),
   )
 }
 
 describe("CodegraphEmbedService", () => {
   test("starts in idle state", async () => {
+    await using tmp = await tmpdir()
+    const dbLayer = Database.layerFromPath(`${tmp.path}/test.sqlite`)
     const mock = makeMockEmbedder({})
     await Effect.runPromise(
       Effect.gen(function* () {
         const svc = yield* CodegraphEmbedService.Service
         const state = yield* svc.status()
         expect(state.status).toBe("idle")
-      }).pipe(Effect.provide(buildLayer(mock))),
+      }).pipe(Effect.provide(buildLayer(mock, dbLayer))),
     )
   })
 
   test("start() forks work, transitions to completed, and persists state", async () => {
-    await tmpdir()
+    await using tmp = await tmpdir()
+    const dbLayer = Database.layerFromPath(`${tmp.path}/test.sqlite`)
     const mock = makeMockEmbedder({ allResult: { embedded: 5, skipped: 2, model: "test-model" } })
 
     await Effect.runPromise(
@@ -98,12 +105,13 @@ describe("CodegraphEmbedService", () => {
         }
         expect(state.result?.embedded).toBe(5)
         expect(state.result?.skipped).toBe(2)
-      }).pipe(Effect.provide(buildLayer(mock)), Effect.scoped),
+      }).pipe(Effect.provide(buildLayer(mock, dbLayer)), Effect.scoped),
     )
   })
 
   test("start({ file }) uses embedFile", async () => {
-    await tmpdir()
+    await using tmp = await tmpdir()
+    const dbLayer = Database.layerFromPath(`${tmp.path}/test.sqlite`)
     let calledWith: string | undefined
     const mock = Layer.succeed(
       Banyan.CodegraphEmbedder,
@@ -129,12 +137,13 @@ describe("CodegraphEmbedService", () => {
           throw new Error(`expected completed, got ${state.status}: ${state.error}`)
         }
         expect(state.result?.embedded).toBe(3)
-      }).pipe(Effect.provide(buildLayer(mock)), Effect.scoped),
+      }).pipe(Effect.provide(buildLayer(mock, dbLayer)), Effect.scoped),
     )
   })
 
   test("start() failure transitions to failed state with error message", async () => {
-    await tmpdir()
+    await using tmp = await tmpdir()
+    const dbLayer = Database.layerFromPath(`${tmp.path}/test.sqlite`)
     const mock = makeMockEmbedder({ allError: new Error("model not configured") })
 
     await Effect.runPromise(
@@ -145,7 +154,7 @@ describe("CodegraphEmbedService", () => {
         const state = yield* svc.status()
         expect(state.status).toBe("failed")
         expect(state.error).toContain("model not configured")
-      }).pipe(Effect.provide(buildLayer(mock)), Effect.scoped),
+      }).pipe(Effect.provide(buildLayer(mock, dbLayer)), Effect.scoped),
     )
   })
 })

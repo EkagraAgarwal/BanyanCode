@@ -34,6 +34,7 @@ test("header status-pills app_top slot renders without throwing", async () => {
       theme: { current: stubTheme },
       state: {
         session: { get: () => undefined },
+        session_status: {},
         path: { directory: "/test/workspace" },
         mcp: () => [{ name: "test-mcp", status: "connected" }],
         lsp: () => [],

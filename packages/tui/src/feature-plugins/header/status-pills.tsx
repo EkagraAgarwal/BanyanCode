@@ -31,7 +31,7 @@ function timeAgo(ts: number): string {
 function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
   const [staleness, setStaleness] = createSignal<StalenessState | null>(null)
-  const [agentCount, setAgentCount] = createSignal<number>(0)
+  const [activeSessionCount, setActiveSessionCount] = createSignal<number>(0)
 
   const ev = useEvent()
   const unsub = ev.on("banyancode.codegraph.staleness" as any, (event: any) => {
@@ -43,15 +43,26 @@ function View(props: { api: TuiPluginApi }) {
   })
   onCleanup(unsub)
 
-  const unsubSession = ev.on("session.updated" as any, async () => {
-    const list = await props.api.client.session.list({})
-    setAgentCount((list.data?.length ?? 1) - 1)
-  })
+  const unsubSession = ev.on("session.updated" as any, () => refreshSessionCount())
   onCleanup(unsubSession)
 
-  onMount(async () => {
-    const list = await props.api.client.session.list({})
-    setAgentCount((list.data?.length ?? 1) - 1)
+  const refreshSessionCount = async () => {
+    try {
+      const list = await props.api.client.session.list({})
+      const sessions = list.data ?? []
+      const statuses = (props.api.state as any).session_status ?? {}
+      const active = sessions.filter((s: any) => {
+        const status = statuses[s.id]
+        return status?.type === "busy" || status?.type === "retry"
+      }).length
+      setActiveSessionCount(active)
+    } catch {
+      setActiveSessionCount(0)
+    }
+  }
+
+  onMount(() => {
+    refreshSessionCount()
   })
 
   const mcpList = createMemo(() => props.api.state.mcp())
@@ -62,12 +73,12 @@ function View(props: { api: TuiPluginApi }) {
 
   const graphLabel = () => {
     const s = staleness()
-    if (!s) return "Graph: ..."
+    if (!s) return "Graph: not built"
     if (s.isStale) return `Graph: ${s.reason ?? "stale"}`
     return `Graph: Fresh (${timeAgo(s.lastChecked)})`
   }
 
-  const agentsLabel = () => `${agentCount()} agent${agentCount() !== 1 ? "s" : ""} active`
+  const agentsLabel = () => `${activeSessionCount()} active`
   const mcpLabel = () => (mcpConnectedCount() > 0 ? `MCP: ${mcpFirstConnected()}` : "MCP: —")
   const lspLabel = () => (lspCount() > 0 ? `LSP: ${lspCount()} server${lspCount() !== 1 ? "s" : ""}` : "LSP: Disabled")
 
@@ -76,7 +87,7 @@ function View(props: { api: TuiPluginApi }) {
   return (
     <box flexDirection="row" gap={2}>
       <box flexDirection="row" gap={0}>
-        <text fg={dotColor(agentCount() > 0)}>●</text>
+        <text fg={dotColor(activeSessionCount() > 0)}>●</text>
         <text fg={toHex(theme().textMuted)}> {agentsLabel()}</text>
       </box>
       <text fg={toHex(theme().textMuted)}>|</text>

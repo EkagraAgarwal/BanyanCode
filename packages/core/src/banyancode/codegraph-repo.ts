@@ -314,7 +314,9 @@ export const layer = Layer.effect(
         yield* db
           .run(sql`CREATE INDEX codegraph_embedding_model_idx ON codegraph_embeddings(model)`)
           .pipe(Effect.orDie)
-        console.error(`[turso.vector] resetEmbeddingsTable dim=${dim} model=${model}`)
+        if (process.env.BANYANCODE_DEBUG === "1") {
+          console.error(`[turso.vector] resetEmbeddingsTable dim=${dim} model=${model}`)
+        }
       })
     }
 

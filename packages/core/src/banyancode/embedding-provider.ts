@@ -57,7 +57,9 @@ export const layer = Layer.effect(
         .pipe(
           Effect.timeout(5000),
           Effect.mapError((e) => {
-            console.error(`[turso.picker] probe failed endpoint=${modelName} error=${String(e)}`)
+            if (process.env.BANYANCODE_DEBUG === "1") {
+              console.error(`[turso.picker] probe failed endpoint=${modelName} error=${String(e)}`)
+            }
             return new EmbeddingProbeError({ endpoint: modelName, status: 0, message: String(e) })
           }),
         )
@@ -66,7 +68,9 @@ export const layer = Layer.effect(
         return yield* new EmbeddingProbeError({ endpoint: modelName, status: 0, message: "No embedding returned" })
       }
       const dim = embeddings[0].length
-      console.error(`[turso.picker] probe endpoint=${modelName} model=${modelName} -> dim=${dim}`)
+      if (process.env.BANYANCODE_DEBUG === "1") {
+        console.error(`[turso.picker] probe endpoint=${modelName} model=${modelName} -> dim=${dim}`)
+      }
       return { dim, type: "F32" as const }
     })
 
@@ -77,7 +81,9 @@ export const layer = Layer.effect(
       }
       const repo = yield* CodegraphRepo.Service
       yield* repo.resetEmbeddingsTable(dim, modelName)
-      console.error(`[turso.picker] resetTable dim=${dim} model=${modelName}`)
+      if (process.env.BANYANCODE_DEBUG === "1") {
+        console.error(`[turso.picker] resetTable dim=${dim} model=${modelName}`)
+      }
       return { dim }
     })
 
@@ -119,7 +125,9 @@ export const layer = Layer.effect(
         yield* configOpt.value.update({ banyancode_embedding_model: name, banyancode_embedding_dim: dim })
       }
       yield* repo.resetEmbeddingsTable(dim, name)
-      console.error(`[turso.picker] resetTable dim=${dim} model=${name}`)
+      if (process.env.BANYANCODE_DEBUG === "1") {
+        console.error(`[turso.picker] resetTable dim=${dim} model=${name}`)
+      }
       yield* Ref.set(modelRef, name)
     })
 

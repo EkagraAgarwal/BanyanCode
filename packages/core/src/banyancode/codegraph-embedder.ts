@@ -60,7 +60,9 @@ export const layer = Layer.effect(
       }
       const bytes = new Uint8Array(embedding.buffer)
       yield* repo.putEmbedding(node.id, bytes, model, embedding.length)
-      console.error(`[turso.vector] putEmbedding node_id=${node.id} dim=${embedding.length} model=${model} bytes=${bytes.byteLength}`)
+      if (process.env.BANYANCODE_DEBUG === "1") {
+        console.error(`[turso.vector] putEmbedding node_id=${node.id} dim=${embedding.length} model=${model} bytes=${bytes.byteLength}`)
+      }
     })
 
     const embedFile = Effect.fn("CodegraphEmbedder.embedFile")(function* (fileID: string) {

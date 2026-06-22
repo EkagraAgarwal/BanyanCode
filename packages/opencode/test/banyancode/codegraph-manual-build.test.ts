@@ -10,28 +10,14 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { EventV2 } from "@opencode-ai/core/event"
 import { NodeFileSystem } from "@effect/platform-node"
 import { pollWithTimeout } from "../lib/effect"
+import { tmpdir } from "../fixture/tmpdir"
 
 process.env.BANYANCODE_ENABLE = "1"
 
 async function makeTmpdir(): Promise<string> {
-  const dir = path.join(os.tmpdir(), "opencode-build-" + Math.random().toString(36).slice(2))
-  await fs.mkdir(dir, { recursive: true })
-  return dir
-}
-
-async function cleanTmpdir(dir: string): Promise<void> {
-  for (let i = 0; i < 5; i++) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true })
-      return
-    } catch (e: any) {
-      if (e.code === "EBUSY" && i < 4) {
-        await new Promise((r) => setTimeout(r, 200))
-        continue
-      }
-      throw e
-    }
-  }
+  await using tmp = await tmpdir()
+  await fs.mkdir(tmp.path, { recursive: true })
+  return tmp.path
 }
 
 async function makeFixtureCodebase(dir: string, fileCount: number): Promise<void> {
@@ -59,92 +45,86 @@ function makeTestLayer(dbPath: string) {
 
 describe("Manual codegraph build - progress reporting", () => {
   test("build reports progress during indexing", async () => {
-    const dir = await makeTmpdir()
-    try {
-      await makeFixtureCodebase(dir, 10)
-      const dbPath = path.join(dir, "test.sqlite")
-      const layer = makeTestLayer(dbPath)
+    await using tmp = await tmpdir()
+    const dir = tmp.path
+    await makeFixtureCodebase(dir, 10)
+    const dbPath = path.join(dir, "test.sqlite")
+    const layer = makeTestLayer(dbPath)
 
-      const progressUpdates: any[] = []
-      const result = await Effect.runPromise(
-        Effect.gen(function* () {
-          const buildSvc = yield* CodegraphBuildService.Service
-          yield* buildSvc.start({ root: dir, force: true })
+    const progressUpdates: any[] = []
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const buildSvc = yield* CodegraphBuildService.Service
+        yield* buildSvc.start({ root: dir, force: true })
 
-          const state = yield* pollWithTimeout(
-            Effect.gen(function* () {
-              const s = yield* buildSvc.status()
-              if (s.status === "running") {
-                progressUpdates.push({
-                  done: s.done,
-                  total: s.total,
-                  currentFile: s.currentFile,
-                })
-              }
-              if (s.status === "completed" || s.status === "failed" || s.status === "cancelled") return s
-              return undefined
-            }),
-            "build never completed",
-            "30 seconds",
-          )
-          return state
-        }).pipe(Effect.provide(layer), Effect.scoped),
-      )
+        const state = yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const s = yield* buildSvc.status()
+            if (s.status === "running") {
+              progressUpdates.push({
+                done: s.done,
+                total: s.total,
+                currentFile: s.currentFile,
+              })
+            }
+            if (s.status === "completed" || s.status === "failed" || s.status === "cancelled") return s
+            return undefined
+          }),
+          "build never completed",
+          "30 seconds",
+        )
+        return state
+      }).pipe(Effect.provide(layer), Effect.scoped),
+    )
 
-      expect(result.status).toBe("completed")
-      expect((result as any).result?.indexed).toBeGreaterThan(0)
-      console.log(`\nReceived ${progressUpdates.length} progress updates`)
-      console.log("First 3:", JSON.stringify(progressUpdates.slice(0, 3), null, 2))
-      console.log("Last 3:", JSON.stringify(progressUpdates.slice(-3), null, 2))
-      expect(progressUpdates.length).toBeGreaterThan(0)
-      const finalUpdate = progressUpdates[progressUpdates.length - 1]
-      expect(finalUpdate.total).toBe(10)
-    } finally {
-      await cleanTmpdir(dir)
-    }
+    expect(result.status).toBe("completed")
+    expect((result as any).result?.indexed).toBeGreaterThan(0)
+    console.log(`\nReceived ${progressUpdates.length} progress updates`)
+    console.log("First 3:", JSON.stringify(progressUpdates.slice(0, 3), null, 2))
+    console.log("Last 3:", JSON.stringify(progressUpdates.slice(-3), null, 2))
+    expect(progressUpdates.length).toBeGreaterThan(0)
+    const finalUpdate = progressUpdates[progressUpdates.length - 1]
+    expect(finalUpdate.total).toBe(10)
   }, 60000)
 
   test("clearAll removes all files, nodes, and edges", async () => {
-    const dir = await makeTmpdir()
-    try {
-      await makeFixtureCodebase(dir, 3)
-      const dbPath = path.join(dir, "test.sqlite")
-      const layer = makeTestLayer(dbPath)
+    await using tmp = await tmpdir()
+    const dir = tmp.path
+    await makeFixtureCodebase(dir, 3)
+    const dbPath = path.join(dir, "test.sqlite")
+    const layer = makeTestLayer(dbPath)
 
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const buildSvc = yield* CodegraphBuildService.Service
-          yield* buildSvc.start({ root: dir, force: true })
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const buildSvc = yield* CodegraphBuildService.Service
+        yield* buildSvc.start({ root: dir, force: true })
 
-          // Wait for build to complete
-          yield* pollWithTimeout(
-            Effect.gen(function* () {
-              const s = yield* buildSvc.status()
-              if (s.status === "completed" || s.status === "failed" || s.status === "cancelled") return s
-              return undefined
-            }),
-            "build never completed",
-            "30 seconds",
-          )
+        // Wait for build to complete
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const s = yield* buildSvc.status()
+            if (s.status === "completed" || s.status === "failed" || s.status === "cancelled") return s
+            return undefined
+          }),
+          "build never completed",
+          "30 seconds",
+        )
 
-          const repo = yield* Banyan.CodegraphRepo
-          const filesBefore = yield* repo.listAllFiles()
-          const nodesBefore = yield* repo.listAllNodes()
-          expect(filesBefore.length).toBe(3)
-          expect(nodesBefore.length).toBeGreaterThan(0)
+        const repo = yield* Banyan.CodegraphRepo
+        const filesBefore = yield* repo.listAllFiles()
+        const nodesBefore = yield* repo.listAllNodes()
+        expect(filesBefore.length).toBe(3)
+        expect(nodesBefore.length).toBeGreaterThan(0)
 
-          // Clear all!
-          yield* repo.clearAll()
+        // Clear all!
+        yield* repo.clearAll()
 
-          const filesAfter = yield* repo.listAllFiles()
-          const nodesAfter = yield* repo.listAllNodes()
-          expect(filesAfter).toEqual([])
-          expect(nodesAfter).toEqual([])
-        }).pipe(Effect.provide(layer), Effect.scoped),
-      )
-    } finally {
-      await cleanTmpdir(dir)
-    }
+        const filesAfter = yield* repo.listAllFiles()
+        const nodesAfter = yield* repo.listAllNodes()
+        expect(filesAfter).toEqual([])
+        expect(nodesAfter).toEqual([])
+      }).pipe(Effect.provide(layer), Effect.scoped),
+    )
   }, 60000)
 })
 
