@@ -148,11 +148,6 @@ export const layer = Layer.effect(
         }
 
         yield* Ref.set(cache, { cached: { value, at: now }, gpu, gpuAt: now })
-        if (process.env.BANYANCODE_DEBUG === "1") {
-          const memGB = (value.memoryUsedBytes / 1024 / 1024 / 1024).toFixed(1)
-          const totalGB = (value.memoryTotalBytes / 1024 / 1024 / 1024).toFixed(1)
-          console.error(`[turso.system] status sampled cpu=${value.cpuPercent.toFixed(0)}% mem=${memGB}/${totalGB}gb platform=${value.platform}`)
-        }
         return value
       })
 
