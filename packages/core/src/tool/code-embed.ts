@@ -58,7 +58,7 @@ const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 const DEFAULT_LIMIT = 10
 const DEFAULT_MIN_SCORE = 0.2
 
-function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   let dot = 0
   let normA = 0
   let normB = 0
@@ -72,12 +72,12 @@ function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB))
 }
 
-function decodeStoredEmbedding(raw: Uint8Array, dim: number): Float32Array {
+export function decodeStoredEmbedding(raw: Uint8Array, dim: number): Float32Array {
   const buffer = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength)
   return new Float32Array(buffer)
 }
 
-function keywordSearch(
+export function keywordSearch(
   query: string,
   nodes: readonly Banyan.CodegraphNode[],
   limit: number,
@@ -149,10 +149,11 @@ export const locationLayer = Layer.effectDiscard(
                   return yield* Effect.fail(new ToolFailure({ message: `File not found in codegraph: ${input.file}` }))
                 }
                 result = yield* embedder.embedFile(file.id)
+                const model = yield* provider.model()
                 return {
                   embedded: result.embedded,
                   skipped: result.skipped,
-                  model: provider.model() ?? null,
+                  model: model ?? null,
                 }
               }
 
@@ -225,7 +226,7 @@ export const locationLayer = Layer.effectDiscard(
               }
 
               const totalCandidates = nodes.length
-              const model = provider.model()
+              const model = yield* provider.model()
 
               if (model === undefined) {
                 const keywordMatches = includeKeyword ? keywordSearch(input.query, nodes, limit) : []

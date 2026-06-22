@@ -69,7 +69,7 @@ const mockEmbeddingProviderLayer = Layer.succeed(
   Banyan.EmbeddingProviderService.of({
     embed: (input: string | string[]) =>
       Effect.fail(new EmbeddingProvider.EmbeddingError({ message: "no embedding model configured" })),
-    model: () => undefined,
+    model: () => Effect.succeed(undefined),
     setModel: () => Effect.void,
     probe: () => Effect.succeed({ dim: 384, type: "F32" as const }),
     detectAndSetModel: () => Effect.succeed({ dim: 384 }),

@@ -76,7 +76,7 @@ describe("embedding-model-picker", () => {
         const svc = yield* EmbeddingProvider.EmbeddingProviderService
         yield* svc.setModel("openai/text-embedding-3-small")
         yield* svc.setModel(undefined)
-        const model = svc.model()
+        const model = yield* svc.model()
         expect(model).toBeUndefined()
       }).pipe(Effect.provide(provider)),
     )

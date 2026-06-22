@@ -57,7 +57,7 @@ export const layer = Layer.effect(
       if (!embedding) {
         return yield* new EmbeddingProvider.EmbeddingError({ message: "Empty embedding result" })
       }
-      const model = provider.model()
+      const model = yield* provider.model()
       if (model === undefined) {
         return yield* new EmbeddingProvider.EmbeddingError({ message: "BANYANCODE_EMBEDDING_MODEL is not set" })
       }
@@ -69,7 +69,7 @@ export const layer = Layer.effect(
     })
 
     const embedFile = Effect.fn("CodegraphEmbedder.embedFile")(function* (fileID: string) {
-      const model = provider.model()
+      const model = yield* provider.model()
       const nodes = yield* repo.listNodesByFile(fileID)
       const total = nodes.length
 
@@ -134,7 +134,7 @@ export const layer = Layer.effect(
     const embedAll = Effect.fn("CodegraphEmbedder.embedAll")(function* () {
       const allNodes = yield* repo.listAllNodes()
       const total = allNodes.length
-      const model = provider.model()
+      const model = yield* provider.model()
 
       if (model === undefined) {
         const err = new EmbeddingProvider.EmbeddingError({ message: "BANYANCODE_EMBEDDING_MODEL is not configured. Please select an embedding model in settings." })

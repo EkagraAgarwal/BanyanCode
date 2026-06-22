@@ -105,7 +105,7 @@ const mockEmbeddingProviderLayer = Layer.succeed(
   EmbeddingProvider.EmbeddingProviderService,
   EmbeddingProvider.EmbeddingProviderService.of({
     embed: () => Effect.succeed([new Float32Array([1, 0, 0])]),
-    model: () => "test-embedding-model",
+    model: () => Effect.succeed("test-embedding-model"),
     setModel: () => Effect.void,
     probe: () => Effect.succeed({ dim: 3, type: "F32" as const }),
     detectAndSetModel: () => Effect.succeed({ dim: 3 }),
@@ -183,7 +183,7 @@ describe("code_find", () => {
       Effect.gen(function* () {
         const provider = yield* EmbeddingProvider.EmbeddingProviderService
         const repo = yield* CodegraphRepo.Service
-        const model = provider.model()
+        const model = yield* provider.model()
         expect(model).toBe("test-embedding-model")
 
         // Simulate the semantic intent logic
@@ -252,7 +252,7 @@ describe("code_find", () => {
         EmbeddingProvider.EmbeddingProviderService,
         EmbeddingProvider.EmbeddingProviderService.of({
           embed: () => Effect.die("no model"),
-          model: () => undefined,
+          model: () => Effect.succeed(undefined),
           setModel: () => Effect.void,
           probe: () => Effect.die("no model"),
           detectAndSetModel: () => Effect.die("no model"),
@@ -266,7 +266,7 @@ describe("code_find", () => {
         const repo = yield* CodegraphRepo.Service
 
         const query = "login"
-        const model = provider.model()
+        const model = yield* provider.model()
         expect(model).toBeUndefined()
 
         // Keyword fallback path

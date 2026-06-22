@@ -314,7 +314,7 @@ export const locationLayer = Layer.effectDiscard(
               const scope = (input.scope ?? "global") as "global" | "session"
               const allEntries = yield* repo.list(scope, input.sessionID)
 
-              const model = provider.model()
+              const model = yield* provider.model()
 
               if (model === undefined) {
                 const keywordMatches = keywordSearch(input.query, allEntries)

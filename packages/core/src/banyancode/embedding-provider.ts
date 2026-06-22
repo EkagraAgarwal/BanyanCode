@@ -4,6 +4,7 @@ import { Config, ConfigProvider, Context, Effect, Layer, Ref, Schema } from "eff
 import { PluginV2 } from "../plugin"
 import { BanyanConfigService } from "./banyan-config"
 import { CodegraphRepo } from "./codegraph-repo"
+import { ProviderLookupService } from "./provider-lookup"
 
 export class EmbeddingError extends Schema.TaggedErrorClass<EmbeddingError>()("Banyan/EmbeddingError", {
   message: Schema.String,
@@ -23,7 +24,7 @@ export class EmbeddingDimensionError extends Schema.TaggedErrorClass<EmbeddingDi
 
 export interface Interface {
   readonly embed: (input: string | string[]) => Effect.Effect<Float32Array[], EmbeddingError | EmbeddingDimensionError>
-  readonly model: () => string | undefined
+  readonly model: () => Effect.Effect<string | undefined, never, never>
   readonly setModel: (name: string | undefined) => Effect.Effect<void, EmbeddingError | EmbeddingDimensionError | EmbeddingProbeError | CodegraphRepo.CodegraphSearchError, CodegraphRepo.Service>
   readonly probe: (model: string) => Effect.Effect<{ dim: number; type: "F32" | "F16" | "F8" | "F1BIT" }, EmbeddingProbeError, never>
   readonly detectAndSetModel: (
@@ -52,8 +53,19 @@ export const layer = Layer.effect(
     const modelRef = yield* Ref.make<string | undefined>(initialName)
 
     const probe = Effect.fn("EmbeddingProvider.probe")(function* (modelName: string) {
+      // Look up provider options if ProviderLookup is available (opencode layer)
+      let options: { baseURL: string; apiKey?: string; headers?: Record<string, string> } | undefined
+      const lookupOpt = yield* Effect.serviceOption(ProviderLookupService)
+      if (lookupOpt._tag === "Some") {
+        const slash = modelName.indexOf("/")
+        if (slash > 0) {
+          const providerID = modelName.slice(0, slash)
+          options = yield* lookupOpt.value.getProviderOptions(providerID)
+        }
+      }
+
       const result = yield* plugin
-        .trigger("aisdk.embed", { model: modelName, input: ["x"] }, { embeddings: [[1 as number]] })
+        .trigger("aisdk.embed", { model: modelName, input: ["x"], options }, { embeddings: [[1 as number]] })
         .pipe(
           Effect.timeout(5000),
           Effect.mapError((e) => {
@@ -95,8 +107,19 @@ export const layer = Layer.effect(
 
       const texts = Array.isArray(input) ? input : [input]
 
+      // Look up provider options if ProviderLookup is available (opencode layer)
+      let options: { baseURL: string; apiKey?: string; headers?: Record<string, string> } | undefined
+      const lookupOpt = yield* Effect.serviceOption(ProviderLookupService)
+      if (lookupOpt._tag === "Some") {
+        const slash = modelName.indexOf("/")
+        if (slash > 0) {
+          const providerID = modelName.slice(0, slash)
+          options = yield* lookupOpt.value.getProviderOptions(providerID)
+        }
+      }
+
       const result = yield* plugin
-        .trigger("aisdk.embed", { model: modelName, input: texts }, { embeddings: [] as number[][] })
+        .trigger("aisdk.embed", { model: modelName, input: texts, options }, { embeddings: [] as number[][] })
         .pipe(Effect.mapError((e) => new EmbeddingError({ message: String(e) })))
 
       const vectors = result.embeddings.map((e: number[]) => new Float32Array(e))
@@ -138,7 +161,7 @@ export const layer = Layer.effect(
 
     return EmbeddingProviderService.of({
       embed,
-      model: () => Effect.runSync(Ref.get(modelRef)),
+      model: () => Ref.get(modelRef),
       setModel,
       probe,
       detectAndSetModel,

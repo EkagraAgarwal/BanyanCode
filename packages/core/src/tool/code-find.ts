@@ -8,6 +8,7 @@ import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { defaultLayer as codegraphAnalyzerLayer } from "../banyancode/codegraph-analyzer"
+import { cosineSimilarity, decodeStoredEmbedding, keywordSearch } from "./code-embed"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
@@ -104,38 +105,58 @@ export const locationLayer = Layer.effectDiscard(
               }
               case "semantic": {
                 const query = input.target ?? ""
-                const model = provider.model()
+                const minScore = input.minScore ?? 0.2
+                const includeKeyword = input.includeKeywordFallback !== false
+                const model = yield* provider.model()
                 const nodes = yield* repo.listAllNodes()
-                const targetWords = query.toLowerCase().split(/\s+/)
 
-                // Try semantic first if model available
-                let hits: Array<{ node: Banyan.CodegraphNode; score: number; source: "semantic" | "keyword" }> = []
+                type Hit = { node: Banyan.CodegraphNode; score: number; source: "semantic" | "keyword" }
+                let hits: Hit[] = []
+
                 if (model) {
-                  const embedResult = yield* provider.embed(query).pipe(
-                    Effect.catchCause(() => Effect.succeed(null as Float32Array[] | null)),
-                  )
-                  if (embedResult !== null) {
-                    // pseudo-ranking: rank by name similarity (real impl lives in code-embed.ts)
-                    const scored = nodes.map((node) => ({
-                      node,
-                      score: targetWords.filter((w) => node.name.toLowerCase().includes(w)).length / targetWords.length,
-                    }))
-                    hits = scored
-                      .filter((s) => s.score >= (input.minScore ?? 0))
+                  const embedResult = yield* provider
+                    .embed(query)
+                    .pipe(Effect.catchCause(() => Effect.succeed(null as Float32Array[] | null)))
+
+                  if (embedResult && embedResult.length > 0) {
+                    const queryEmbedding = embedResult[0]
+
+                    const scored = yield* Effect.forEach(nodes, (node) =>
+                      Effect.map(repo.getEmbedding(node.id), (emb) => {
+                        if (!emb) return { node, score: 0 }
+                        const nodeEmbedding = decodeStoredEmbedding(emb.embedding, emb.dim)
+                        return { node, score: cosineSimilarity(queryEmbedding, nodeEmbedding) }
+                      }),
+                    )
+
+                    const semanticHits = scored
+                      .filter((s) => s.score >= minScore)
                       .sort((a, b) => b.score - a.score)
                       .slice(0, limit)
                       .map((s) => ({ node: s.node, score: s.score, source: "semantic" as const }))
-                  } else if (input.includeKeywordFallback !== false) {
-                    hits = nodes
-                      .filter((n) => targetWords.some((w) => n.name.toLowerCase().includes(w)))
-                      .slice(0, limit)
-                      .map((node) => ({ node, score: 0, source: "keyword" as const }))
+
+                    if (semanticHits.length > 0) {
+                      hits = semanticHits
+                    } else if (includeKeyword) {
+                      hits = keywordSearch(query, nodes, limit).map((node) => ({
+                        node,
+                        score: 0,
+                        source: "keyword" as const,
+                      }))
+                    }
+                  } else if (includeKeyword) {
+                    hits = keywordSearch(query, nodes, limit).map((node) => ({
+                      node,
+                      score: 0,
+                      source: "keyword" as const,
+                    }))
                   }
-                } else if (input.includeKeywordFallback !== false) {
-                  hits = nodes
-                    .filter((n) => targetWords.some((w) => n.name.toLowerCase().includes(w)))
-                    .slice(0, limit)
-                    .map((node) => ({ node, score: 0, source: "keyword" as const }))
+                } else if (includeKeyword) {
+                  hits = keywordSearch(query, nodes, limit).map((node) => ({
+                    node,
+                    score: 0,
+                    source: "keyword" as const,
+                  }))
                 }
                 return { matches: [], files: [], hits, meta, intent: input.intent, dispatchedTo: "code_search" }
               }
