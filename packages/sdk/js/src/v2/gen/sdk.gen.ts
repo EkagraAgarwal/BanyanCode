@@ -79,12 +79,18 @@ import type {
   FindTextResponses,
   FormatterStatusErrors,
   FormatterStatusResponses,
+  GlobalBanyanAgentSaveErrors,
+  GlobalBanyanAgentSaveResponses,
   GlobalBanyanConfigGetErrors,
   GlobalBanyanConfigGetResponses,
   GlobalBanyanConfigUpdateErrors,
   GlobalBanyanConfigUpdateResponses,
   GlobalCodegraphCancelErrors,
   GlobalCodegraphCancelResponses,
+  GlobalCodegraphEdgesErrors,
+  GlobalCodegraphEdgesResponses,
+  GlobalCodegraphNodesErrors,
+  GlobalCodegraphNodesResponses,
   GlobalConfigGetErrors,
   GlobalConfigGetResponses,
   GlobalConfigUpdateErrors,
@@ -1382,6 +1388,92 @@ export class Codegraph extends HeyApiClient {
       ThrowOnError
     >({ url: "/global/codegraph-cancel", ...options })
   }
+
+  /**
+   * List codegraph nodes
+   *
+   * Returns all indexed codegraph nodes with summary metadata.
+   */
+  public nodes<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      GlobalCodegraphNodesResponses,
+      GlobalCodegraphNodesErrors,
+      ThrowOnError
+    >({ url: "/global/codegraph-nodes", ...options })
+  }
+
+  /**
+   * List codegraph edges
+   *
+   * Returns edges originating from or targeting a given node ID.
+   */
+  public edges<ThrowOnError extends boolean = false>(
+    parameters?: {
+      nodeID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "nodeID" }] }])
+    return (options?.client ?? this.client).get<
+      GlobalCodegraphEdgesResponses,
+      GlobalCodegraphEdgesErrors,
+      ThrowOnError
+    >({
+      url: "/global/codegraph-edges",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class BanyanAgent extends HeyApiClient {
+  /**
+   * Save custom agent
+   *
+   * Save a custom subagent definition to .banyancode/agent/<name>.md.
+   */
+  public save<ThrowOnError extends boolean = false>(
+    parameters?: {
+      name?: string
+      description?: string
+      model?: {
+        providerID: string
+        modelID: string
+      }
+      tools?: Array<string>
+      enabled?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "name" },
+            { in: "body", key: "description" },
+            { in: "body", key: "model" },
+            { in: "body", key: "tools" },
+            { in: "body", key: "enabled" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      GlobalBanyanAgentSaveResponses,
+      GlobalBanyanAgentSaveErrors,
+      ThrowOnError
+    >({
+      url: "/global/banyan-agent/save",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
 }
 
 export class Global extends HeyApiClient {
@@ -1475,6 +1567,11 @@ export class Global extends HeyApiClient {
   private _codegraph?: Codegraph
   get codegraph(): Codegraph {
     return (this._codegraph ??= new Codegraph({ client: this.client }))
+  }
+
+  private _banyanAgent?: BanyanAgent
+  get banyanAgent(): BanyanAgent {
+    return (this._banyanAgent ??= new BanyanAgent({ client: this.client }))
   }
 }
 

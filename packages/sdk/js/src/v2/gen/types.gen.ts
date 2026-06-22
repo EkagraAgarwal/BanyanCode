@@ -1395,10 +1395,13 @@ export type GlobalEvent = {
         properties: {
           status: "idle" | "running" | "completed" | "failed" | "cancelled"
           root?: string
+          dbPath?: string
           done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           currentFile?: string
           startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          graphVersion?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          graphCoverage?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           result?: {
             indexed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
             skipped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -1414,6 +1417,7 @@ export type GlobalEvent = {
           status: "idle" | "running" | "completed" | "failed" | "cancelled"
           done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           result?: {
             embedded: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
             skipped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -2124,12 +2128,44 @@ export type Config = {
 export type BanyanConfig = {
   $schema?: string
   banyancode_embedding_model?: string
+  banyancode_embedding_dim?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_embedding_type?: "F32" | "F16" | "F8" | "F1BIT"
+  banyancode_openai_compatible_endpoints?: Array<{
+    name: string
+    base_url: string
+    api_key?: string
+    models?: Array<string>
+  }>
   banyancode_yolo_mode?: boolean
   banyancode_disable_websearch?: boolean
   banyancode_telegram_enabled?: boolean
   banyancode_telegram_bot_token?: string
   banyancode_telegram_webhook_secret?: string
   banyancode_telegram_default_session?: string
+  banyancode_max_subagents?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_subagents?: Array<{
+    name: string
+    description?: string
+    model?: {
+      providerID: string
+      modelID: string
+    }
+    tools?: Array<string>
+    mode: "subagent" | "primary"
+    enabled?: boolean
+    filePath: string
+  }>
+}
+
+export type BanyanCodegraphNode = {
+  id: string
+  fileID: string
+  kind: "file" | "function" | "class" | "method" | "type" | "variable"
+  name: string
+  signature?: string
+  startLine: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  endLine: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  code?: string
 }
 
 export type Model = {
@@ -5098,10 +5134,13 @@ export type EventBanyancodeCodegraphBuild = {
   properties: {
     status: "idle" | "running" | "completed" | "failed" | "cancelled"
     root?: string
+    dbPath?: string
     done: number | "NaN" | "Infinity" | "-Infinity"
     total: number | "NaN" | "Infinity" | "-Infinity"
     currentFile?: string
     startedAt?: number | "NaN" | "Infinity" | "-Infinity"
+    graphVersion?: number | "NaN" | "Infinity" | "-Infinity"
+    graphCoverage?: number | "NaN" | "Infinity" | "-Infinity"
     result?: {
       indexed: number | "NaN" | "Infinity" | "-Infinity"
       skipped: number | "NaN" | "Infinity" | "-Infinity"
@@ -5118,6 +5157,7 @@ export type EventBanyancodeCodeembedBuild = {
     status: "idle" | "running" | "completed" | "failed" | "cancelled"
     done: number | "NaN" | "Infinity" | "-Infinity"
     total: number | "NaN" | "Infinity" | "-Infinity"
+    startedAt?: number | "NaN" | "Infinity" | "-Infinity"
     result?: {
       embedded: number | "NaN" | "Infinity" | "-Infinity"
       skipped: number | "NaN" | "Infinity" | "-Infinity"
@@ -5778,6 +5818,77 @@ export type GlobalCodegraphCancelResponses = {
 
 export type GlobalCodegraphCancelResponse = GlobalCodegraphCancelResponses[keyof GlobalCodegraphCancelResponses]
 
+export type GlobalCodegraphNodesData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/codegraph-nodes"
+}
+
+export type GlobalCodegraphNodesErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalCodegraphNodesError = GlobalCodegraphNodesErrors[keyof GlobalCodegraphNodesErrors]
+
+export type GlobalCodegraphNodesResponses = {
+  /**
+   * Codegraph nodes list with meta
+   */
+  200: {
+    nodes: Array<BanyanCodegraphNode>
+    meta?: {
+      graphBuiltAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      graphVersion: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      graphCoverage: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalFiles: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalNodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalEdges: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type GlobalCodegraphNodesResponse = GlobalCodegraphNodesResponses[keyof GlobalCodegraphNodesResponses]
+
+export type GlobalCodegraphEdgesData = {
+  body?: never
+  path?: never
+  query?: {
+    nodeID?: string
+  }
+  url: "/global/codegraph-edges"
+}
+
+export type GlobalCodegraphEdgesErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalCodegraphEdgesError = GlobalCodegraphEdgesErrors[keyof GlobalCodegraphEdgesErrors]
+
+export type GlobalCodegraphEdgesResponses = {
+  /**
+   * Codegraph edges for a node
+   */
+  200: {
+    edges: Array<{
+      id: string
+      fromNodeID: string
+      toNodeID: string
+      kind: "imports" | "calls" | "extends" | "references"
+    }>
+    total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type GlobalCodegraphEdgesResponse = GlobalCodegraphEdgesResponses[keyof GlobalCodegraphEdgesResponses]
+
 export type GlobalStartupData = {
   body?: never
   path?: never
@@ -5802,6 +5913,43 @@ export type GlobalStartupResponses = {
 }
 
 export type GlobalStartupResponse = GlobalStartupResponses[keyof GlobalStartupResponses]
+
+export type GlobalBanyanAgentSaveData = {
+  body?: {
+    name: string
+    description?: string
+    model?: {
+      providerID: string
+      modelID: string
+    }
+    tools?: Array<string>
+    enabled?: boolean
+  }
+  path?: never
+  query?: never
+  url: "/global/banyan-agent/save"
+}
+
+export type GlobalBanyanAgentSaveErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalBanyanAgentSaveError = GlobalBanyanAgentSaveErrors[keyof GlobalBanyanAgentSaveErrors]
+
+export type GlobalBanyanAgentSaveResponses = {
+  /**
+   * Agent saved
+   */
+  200: {
+    ok: true
+    filePath: string
+  }
+}
+
+export type GlobalBanyanAgentSaveResponse = GlobalBanyanAgentSaveResponses[keyof GlobalBanyanAgentSaveResponses]
 
 export type EventSubscribeData = {
   body?: never

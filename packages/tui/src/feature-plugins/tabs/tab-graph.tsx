@@ -5,6 +5,7 @@ import { createResource, createMemo, createSignal, For, Show } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { toHex } from "../../util/color"
 import { computeLayout, type LayoutNode, type LayoutEdge } from "../../util/graph-layout"
+import { useEvent } from "../../context/event"
 
 const id = "internal:tabs-tab-graph"
 
@@ -18,7 +19,15 @@ interface GraphNode {
 
 interface GraphData {
   nodes: GraphNode[]
-  meta?: { totalNodes: number; totalEdges: number; graphVersion: number; graphBuiltAt: number }
+  edges: LayoutEdge[]
+  meta?: {
+    totalNodes: number
+    totalEdges: number
+    graphVersion: number
+    graphBuiltAt: number
+    graphCoverage?: number
+    totalFiles?: number
+  }
 }
 
 const COLORS = {
@@ -32,9 +41,28 @@ const COLORS = {
 
 function View(props: { api: TuiPluginApi }) {
   const { theme } = useTheme()
-  const [data] = createResource<GraphData>(async () => {
-    const result = await (props.api.client as any).global?.codegraphNodes?.({})
-    return result?.data as GraphData
+  const [buildEpoch, setBuildEpoch] = createSignal(0)
+  const ev = useEvent()
+
+  ev.on("banyancode.codegraph.build", (evt) => {
+    if (evt.properties?.status === "completed") {
+      setBuildEpoch((p) => p + 1)
+    }
+  })
+
+  const [data] = createResource<GraphData, number>(buildEpoch, async () => {
+    const [nodesResult, edgesResult] = await Promise.all([
+      props.api.client.global.codegraph.nodes(),
+      props.api.client.global.codegraph.edges({}),
+    ])
+    return {
+      nodes: nodesResult.data!.nodes,
+      meta: nodesResult.data!.meta,
+      edges: edgesResult.data!.edges.map(e => ({
+        source: e.fromNodeID,
+        target: e.toNodeID,
+      })),
+    } as GraphData
   })
 
   const [focusedId, setFocusedId] = createSignal<string | null>(null)
@@ -48,10 +76,10 @@ function View(props: { api: TuiPluginApi }) {
     const subset = d.nodes.slice(0, 50)
     const subsetIds = new Set(subset.map((n) => n.id))
 
-    // Filter edges to within subset
-    const edges: LayoutEdge[] = []
-    const ids = new Set<string>()
-    subset.forEach((n) => ids.add(n.id))
+    // Filter edges to within subset and clone to prevent d3-force mutation
+    const edges = d.edges
+      .filter((e) => subsetIds.has(e.source as string) && subsetIds.has(e.target as string))
+      .map((e) => ({ source: e.source as string, target: e.target as string }))
 
     return {
       nodes: subset.map((n) => ({
@@ -77,13 +105,10 @@ function View(props: { api: TuiPluginApi }) {
       <box flexDirection="column" paddingTop={1}>
         {/* Header with meta */}
         <Show when={data()?.meta}>
-          <text fg={toHex(theme.text)}>
-            <b>Codegraph</b>
-            {" "}
-            <text fg={toHex(theme.textMuted)}>
-              v{data()!.meta!.graphVersion} · {data()!.meta!.totalNodes} nodes · {data()!.meta!.totalEdges} edges
-            </text>
-          </text>
+          <box flexDirection="row" gap={1}>
+            <text fg={toHex(theme.text)}><b>Codegraph</b></text>
+            <text fg={toHex(theme.textMuted)}>{`v${data()!.meta!.graphVersion} · ${data()!.meta!.totalNodes} nodes · ${data()!.meta!.totalEdges} edges`}</text>
+          </box>
         </Show>
 
         {/* Layer selector */}
@@ -94,7 +119,7 @@ function View(props: { api: TuiPluginApi }) {
                 fg={layer() === l ? toHex(theme.primary) : toHex(theme.textMuted)}
                 onMouseUp={() => setLayer(l)}
               >
-                [{layer() === l ? "● " : "○ "}{l}]
+                {`[${layer() === l ? "● " : "○ "}${l}]`}
               </text>
             )}
           </For>
@@ -125,7 +150,7 @@ function View(props: { api: TuiPluginApi }) {
                       border={isFocused() ? ["bottom"] : []}
                       borderColor={isFocused() ? toHex(theme.primary) : undefined}
                     >
-                      <text fg={toHex(theme[colorKey])}>● {truncate(node.name, 14)}</text>
+                      <text fg={toHex(theme[colorKey])}>{`● ${truncate(node.name, 14)}`}</text>
                     </box>
                   )
                 }}
@@ -139,11 +164,15 @@ function View(props: { api: TuiPluginApi }) {
           {(_) => {
             const node = positioned().find((n) => n.id === focusedId())
             return (
-              <box flexDirection="column" marginTop={1} paddingLeft={1}>
-                <text fg={toHex(theme.text)}><b>{node?.name}</b></text>
-                <text fg={toHex(theme.textMuted)}>{node?.kind}</text>
-                <text fg={toHex(theme.textMuted)}>{node?.file}:{node?.line}</text>
-              </box>
+              <Show when={node}>
+                {(n) => (
+                  <box flexDirection="column" marginTop={1} paddingLeft={1}>
+                    <text fg={toHex(theme.text)}><b>{n().name}</b></text>
+                    <text fg={toHex(theme.textMuted)}>{n().kind}</text>
+                    <text fg={toHex(theme.textMuted)}>{`${n().file ?? ""}:${n().line ?? ""}`}</text>
+                  </box>
+                )}
+              </Show>
             )
           }}
         </Show>

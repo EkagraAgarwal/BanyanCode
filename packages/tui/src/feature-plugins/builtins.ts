@@ -26,6 +26,7 @@ import TabGraph from "./tabs/tab-graph"
 import TabMemory from "./tabs/tab-memory"
 import TabAgents from "./tabs/tab-agents"
 import TabSettings from "./tabs/tab-settings"
+import TabSessions from "./tabs/tab-sessions"
 
 export type BuiltinTuiPlugin = Omit<TuiPluginModule, "id"> & {
   id: string
@@ -61,6 +62,7 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     TabGraph,
     TabMemory,
     TabAgents,
+    TabSessions,
     TabSettings,
   ]
 }

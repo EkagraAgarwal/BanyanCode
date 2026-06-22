@@ -25,6 +25,7 @@ export interface Interface {
   readonly queryNodes: (input: { function?: string; kind?: string }) => Effect.Effect<CodegraphNode[], never, never>
   readonly putEdge: (edge: CodegraphEdge) => Effect.Effect<void, never, never>
   readonly getEdge: (id: string) => Effect.Effect<CodegraphEdge | undefined, never, never>
+  readonly listAllEdges: () => Effect.Effect<CodegraphEdge[], never, never>
   readonly listEdgesByNode: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesFrom: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesTo: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
@@ -232,6 +233,20 @@ export const layer = Layer.effect(
         toNodeID: row.to_node_id,
         kind: row.kind as CodegraphEdge["kind"],
       }
+    })
+
+    const listAllEdges = Effect.fn("CodegraphRepo.listAllEdges")(function* () {
+      const rows = yield* db
+        .select()
+        .from(CodegraphEdgesTable)
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        fromNodeID: row.from_node_id,
+        toNodeID: row.to_node_id,
+        kind: row.kind as CodegraphEdge["kind"],
+      }))
     })
 
     const listEdgesByNode = Effect.fn("CodegraphRepo.listEdgesByNode")(function* (nodeID: string) {
@@ -456,14 +471,16 @@ export const layer = Layer.effect(
       const coverage = input.scannedFiles > 0 ? input.indexedFiles / input.scannedFiles : 0
       const existing = yield* getMeta()
       const nextVersion = (existing?.graphVersion ?? 0) + 1
+      const allNodes = yield* listAllNodes()
+      const allEdges = yield* listAllEdges()
       const meta: CodegraphMeta = {
         id: "singleton",
         graphBuiltAt: Date.now(),
         graphVersion: nextVersion,
         graphCoverage: coverage,
         totalFiles: input.totalFiles,
-        totalNodes: input.totalNodes,
-        totalEdges: input.totalEdges,
+        totalNodes: allNodes.length,
+        totalEdges: allEdges.length,
         schemaVersion: 1,
       }
       yield* setMeta(meta)
@@ -483,6 +500,7 @@ export const layer = Layer.effect(
       queryNodes,
       putEdge,
       getEdge,
+      listAllEdges,
       listEdgesByNode,
       edgesFrom,
       edgesTo,

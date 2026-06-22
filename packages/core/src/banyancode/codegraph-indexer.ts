@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto"
 import path from "path"
 import { FSUtil } from "../fs-util"
 import { CodegraphRepo } from "./codegraph-repo"
-import type { CodegraphNode } from "./types"
+import type { CodegraphEdge, CodegraphNode } from "./types"
 import { getParser } from "./langs/registry"
 
 export class CodegraphError extends Schema.TaggedErrorClass<CodegraphError>()("Banyan/CodegraphError", {
@@ -246,6 +246,58 @@ export const layer = Layer.effect(
         )
         yield* processFile
       }
+
+      const isCancelled = yield* Ref.get(cancelled)
+      if (!isCancelled) {
+        const allNodes = yield* repo.listAllNodes()
+        const nodeMap = new Map<string, CodegraphNode[]>()
+        for (const node of allNodes) {
+          const list = nodeMap.get(node.name) ?? []
+          list.push(node)
+          nodeMap.set(node.name, list)
+        }
+
+        const newEdges: { fromNodeID: string; toNodeID: string; kind: "imports" | "calls" | "extends" | "references" }[] = []
+
+        for (const nodeA of allNodes) {
+          if (!nodeA.code) continue
+
+          const wordsWithDots = new Set(nodeA.code.split(/[^a-zA-Z0-9_.]+/))
+          const words = new Set(nodeA.code.split(/[^a-zA-Z0-9_]+/))
+
+          for (const [name, targets] of nodeMap.entries()) {
+            const hasRef = name.includes(".") ? wordsWithDots.has(name) : words.has(name)
+            if (!hasRef) continue
+
+            for (const nodeB of targets) {
+              if (nodeB.id === nodeA.id) continue
+
+              let kind: "calls" | "extends" | "references" = "references"
+              if (nodeA.kind === "class" && new RegExp(`class\\s+\\w+\\s+(?:extends|implements)\\s+${escapeRegex(name)}\\b`).test(nodeA.code)) {
+                kind = "extends"
+              } else if (new RegExp(`\\b${escapeRegex(name)}\\s*\\(`).test(nodeA.code)) {
+                kind = "calls"
+              }
+
+              newEdges.push({
+                fromNodeID: nodeA.id,
+                toNodeID: nodeB.id,
+                kind,
+              })
+            }
+          }
+        }
+
+        for (const edge of newEdges) {
+          yield* repo.putEdge({
+            id: `${edge.fromNodeID}->${edge.toNodeID}:${edge.kind}`,
+            fromNodeID: edge.fromNodeID,
+            toNodeID: edge.toNodeID,
+            kind: edge.kind,
+          })
+        }
+      }
+
       return { indexed, skipped, scannedFiles: indexed + skipped }
     })
 
@@ -269,6 +321,10 @@ function globToRegex(pattern: string): RegExp {
     regexStr = regexStr + "$"
   }
   return new RegExp(regexStr)
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")
 }
 
 export const defaultLayer = layer.pipe(Layer.provide(CodegraphRepo.defaultLayer))

@@ -5,14 +5,50 @@ const IMPORT_REGEX = /^import\s+(?:\{[^}]*\}|\w+|\*\s+as\s+\w+)\s+from\s+(["'])(
 const CLASS_REGEX = /(?:^|\n)class\s+(\w+)(?:\s*\(\s*(\w+)\s*\))?/g
 const DEF_REGEX = /(?:^|\n)def\s+(\w+)\s*\(/g
 
+function getPythonNodeBody(content: string, matchIndex: number, matchText: string): { code: string; endLine: number } {
+  const startLine = content.substring(0, matchIndex).split("\n").length
+  const lines = content.substring(matchIndex).split("\n")
+  
+  const declLine = lines[0]
+  const indentMatch = declLine.match(/^(\s*)/)
+  const declIndent = indentMatch ? indentMatch[1].length : 0
+  
+  let endIdx = 1
+  let blockIndent: number | null = null
+  
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i]
+    const trimmed = line.trim()
+    if (trimmed === "" || trimmed.startsWith("#")) {
+      endIdx = i + 1
+      continue
+    }
+    const lineIndent = line.match(/^(\s*)/)?.[1].length ?? 0
+    if (blockIndent === null) {
+      if (lineIndent > declIndent) {
+        blockIndent = lineIndent
+        endIdx = i + 1
+      } else {
+        break
+      }
+    } else {
+      if (lineIndent >= blockIndent || lineIndent > declIndent) {
+        endIdx = i + 1
+      } else {
+        break
+      }
+    }
+  }
+  const codeLines = lines.slice(0, endIdx)
+  const code = codeLines.join("\n")
+  const endLine = startLine + codeLines.length - 1
+  return { code, endLine }
+}
+
 export function parsePython(content: string, fileID: string): ParseResult {
   const nodes: ParsedNode[] = []
   const edges: ParsedEdge[] = []
   const imports: string[] = []
-
-  const addNode = (kind: ParsedNode["kind"], name: string, startLine: number, endLine: number) => {
-    nodes.push({ id: `${fileID}:${kind}:${name}:${startLine}`, kind, name, startLine, endLine })
-  }
 
   for (const match of content.matchAll(FROM_IMPORT_REGEX)) {
     imports.push(match[2])
@@ -25,15 +61,15 @@ export function parsePython(content: string, fileID: string): ParseResult {
   for (const match of content.matchAll(CLASS_REGEX)) {
     const name = match[1]
     const startLine = content.substring(0, match.index).split("\n").length
-    const endLine = startLine + match[0].split("\n").length
-    addNode("class", name, startLine, endLine)
+    const { code, endLine } = getPythonNodeBody(content, match.index, match[0])
+    nodes.push({ id: `${fileID}:class:${name}:${startLine}`, kind: "class", name, startLine, endLine, code })
   }
 
   for (const match of content.matchAll(DEF_REGEX)) {
     const name = match[1]
     const startLine = content.substring(0, match.index).split("\n").length
-    const endLine = startLine + match[0].split("\n").length
-    addNode("function", name, startLine, endLine)
+    const { code, endLine } = getPythonNodeBody(content, match.index, match[0])
+    nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, code })
   }
 
   return { nodes, edges, imports }

@@ -265,9 +265,8 @@ export function Session() {
   const wide = createMemo(() => dimensions().width > 120)
   const sidebarVisible = createMemo(() => {
     if (session()?.parentID) return false
-    if (sidebarOpen()) return true
-    if (sidebar() === "auto" && wide()) return true
-    return false
+    if (wide()) return true
+    return sidebarOpen()
   })
   const showTimestamps = createMemo(() => timestamps() === "show")
   const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? 42 : 0) - 4)
@@ -669,6 +668,7 @@ export function Session() {
       title: sidebarVisible() ? "Hide sidebar" : "Show sidebar",
       value: "session.sidebar.toggle",
       category: "Session",
+      enabled: !wide(),
       run: () => {
         batch(() => {
           const isVisible = sidebarVisible()
@@ -1175,12 +1175,6 @@ export function Session() {
                 <Match when={wide()}>
                   <Sidebar
                     sessionID={route.sessionID}
-                    onClose={() => {
-                      batch(() => {
-                        setSidebar(() => "hide")
-                        setSidebarOpen(false)
-                      })
-                    }}
                   />
                 </Match>
                 <Match when={!wide()}>

@@ -217,7 +217,8 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       const repo = yield* Banyan.CodegraphRepo
       const nodeID = ctx.query?.nodeID
       if (!nodeID) {
-        return { edges: [], total: 0 }
+        const allEdges = yield* repo.listAllEdges()
+        return { edges: allEdges, total: allEdges.length }
       }
       const [outgoing, incoming] = yield* Effect.all([repo.edgesFrom(nodeID), repo.edgesTo(nodeID)])
       const allEdges = [...outgoing, ...incoming]

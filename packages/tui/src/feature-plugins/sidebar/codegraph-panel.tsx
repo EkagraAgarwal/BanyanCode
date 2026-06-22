@@ -1,8 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createSignal, onMount } from "solid-js"
+import { createSignal, onMount, createResource } from "solid-js"
 import { toHex } from "../../util/color"
+import { useEvent } from "../../context/event"
 
 const id = "internal:sidebar-codegraph-panel"
 
@@ -33,23 +34,27 @@ function formatAge(ms: number): string {
 function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
 
-  const [meta, setMeta] = createSignal<CodegraphMeta | null>(null)
-  const [loaded, setLoaded] = createSignal(false)
+  const [buildEpoch, setBuildEpoch] = createSignal(0)
+  const ev = useEvent()
 
-  onMount(async () => {
-    if (!props.api.client) {
-      setLoaded(true)
-      return
-    }
-    try {
-      const result = await (props.api.client as any).global.codegraphNodes()
-      if (result.data?.meta) {
-        setMeta(result.data.meta as CodegraphMeta)
-      }
-    } finally {
-      setLoaded(true)
+  ev.on("banyancode.codegraph.build", (evt) => {
+    if (evt.properties?.status === "completed") {
+      setBuildEpoch((p) => p + 1)
     }
   })
+
+  const [meta] = createResource(buildEpoch, async () => {
+    if (!props.api.client) return null
+    try {
+      const result = await props.api.client.global.codegraph.nodes()
+      return (result.data?.meta as CodegraphMeta) ?? null
+    } catch (e) {
+      console.error(e)
+      return null
+    }
+  })
+
+  const loaded = () => meta() !== undefined
 
   const coveragePercent = () => {
     const m = meta()
@@ -79,7 +84,7 @@ function View(props: { api: TuiPluginApi }) {
     return toHex(theme().info)
   }
 
-  const hasMeta = () => meta() !== null
+  const hasMeta = () => meta() !== null && meta() !== undefined
 
   return (
     <box>
