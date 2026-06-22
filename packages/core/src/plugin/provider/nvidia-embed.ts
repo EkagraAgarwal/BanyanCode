@@ -4,8 +4,6 @@ import { PluginV2 } from "../../plugin"
 const NIM_DEFAULT_BASE = "https://integrate.api.nvidia.com/v1"
 const NIM_PROVIDER_PREFIX = "nvidia/"
 
-const isEnabled = () => process.env.BANYANCODE_NVIDIA_TEST === "1"
-
 const callNimEmbeddings = async (
   baseURL: string,
   apiKey: string,
@@ -34,18 +32,17 @@ const callNimEmbeddings = async (
   return json.data.map((d) => d.embedding)
 }
 
-export const NvidiaEmbedTestPlugin = PluginV2.define({
-  id: PluginV2.ID.make("nvidia-embed-test"),
+export const NvidiaEmbedPlugin = PluginV2.define({
+  id: PluginV2.ID.make("nvidia-embed"),
   effect: Effect.gen(function* () {
     return {
       "aisdk.embed": Effect.fn(function* (evt) {
-        if (!isEnabled()) return
         if (evt.embeddings.length > 0) return
         if (!evt.model.startsWith(NIM_PROVIDER_PREFIX)) return
 
         const apiKey = process.env.NVIDIA_API_KEY
         if (!apiKey) {
-          yield* Effect.logWarning("[nvidia-embed-test] NVIDIA_API_KEY is not set; skipping")
+          yield* Effect.logWarning("[nvidia-embed] NVIDIA_API_KEY is not set; skipping")
           return
         }
 
