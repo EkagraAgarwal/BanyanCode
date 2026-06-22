@@ -54,6 +54,9 @@ export const layer = Layer.effect(
       const text = node.code ?? `${node.name}${node.signature ? " " + node.signature : ""}`
       const embeddings = yield* provider.embed(text)
       const embedding = embeddings[0]
+      if (!embedding) {
+        return yield* new EmbeddingProvider.EmbeddingError({ message: "Empty embedding result" })
+      }
       const model = provider.model()
       if (model === undefined) {
         return yield* new EmbeddingProvider.EmbeddingError({ message: "BANYANCODE_EMBEDDING_MODEL is not set" })
@@ -90,6 +93,13 @@ export const layer = Layer.effect(
           } else {
             const success = yield* embedNode(node).pipe(
               Effect.as(true),
+              Effect.tapError((err) =>
+                Effect.sync(() => {
+                  if (process.env.BANYANCODE_DEBUG === "1") {
+                    console.error(`[codegraph-embedder] embedNode failed for node ${node.id}:`, err)
+                  }
+                }),
+              ),
               Effect.catchCause(() => Effect.succeed(false)),
             )
             if (success) {
@@ -153,6 +163,13 @@ export const layer = Layer.effect(
             } else {
               const success = yield* embedNode(node).pipe(
                 Effect.as(true),
+                Effect.tapError((err) =>
+                  Effect.sync(() => {
+                    if (process.env.BANYANCODE_DEBUG === "1") {
+                      console.error(`[codegraph-embedder] embedNode failed for node ${node.id}:`, err)
+                    }
+                  }),
+                ),
                 Effect.catchCause(() => Effect.succeed(false)),
               )
               if (success) {

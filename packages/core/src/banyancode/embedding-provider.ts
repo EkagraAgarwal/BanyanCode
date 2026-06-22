@@ -103,12 +103,17 @@ export const layer = Layer.effect(
       if (configOpt._tag === "Some") {
         const config = yield* configOpt.value.get()
         const expectedDim = config.banyancode_embedding_dim
-        if (expectedDim && vectors[0]?.length !== expectedDim) {
+        const actualDim = vectors[0]?.length
+        if (expectedDim && actualDim && actualDim !== expectedDim) {
           return yield* new EmbeddingDimensionError({
             expected: expectedDim,
-            actual: vectors[0].length,
+            actual: actualDim,
             model: modelName,
           })
+        }
+        // If no expectedDim is configured, persist the actual dim so future checks work
+        if (!expectedDim && actualDim) {
+          yield* configOpt.value.update({ banyancode_embedding_dim: actualDim })
         }
       }
       return vectors
