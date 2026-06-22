@@ -1,160 +1,159 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createResource, For, Show } from "solid-js"
+import { createResource, createMemo, createSignal, For, Show } from "solid-js"
+import { useTheme } from "../../context/theme"
 import { toHex } from "../../util/color"
+import { computeLayout, type LayoutNode, type LayoutEdge } from "../../util/graph-layout"
 
 const id = "internal:tabs-tab-graph"
 
 interface GraphNode {
   id: string
-  fileID: string
-  kind: "file" | "function" | "class" | "method" | "type" | "variable"
   name: string
-  signature?: string
-  startLine: number
-  endLine: number
-  code?: string
+  kind: string
+  file?: string
+  line?: number
 }
 
-interface GraphMeta {
-  graphBuiltAt: number
-  graphVersion: number
-  graphCoverage: number
-  totalFiles: number
-  totalNodes: number
-  totalEdges: number
-}
-
-interface CodegraphNodesResult {
+interface GraphData {
   nodes: GraphNode[]
-  meta?: GraphMeta
-  total: number
+  meta?: { totalNodes: number; totalEdges: number; graphVersion: number; graphBuiltAt: number }
 }
 
-function formatAge(ms: number): string {
-  const s = Math.floor(ms / 1000)
-  if (s < 60) return `${s}s ago`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.floor(h / 24)
-  return `${d}d ago`
-}
-
-function NodeRow(props: { node: GraphNode; theme: any }) {
-  return (
-    <box flexDirection="row" gap={1} marginTop={1}>
-      <text fg={toHex(props.theme.primary)} wrapMode="word" width={22}>
-        {props.node.name}
-      </text>
-      <text fg={toHex(props.theme.textMuted)} wrapMode="word" width={10}>
-        {props.node.kind}
-      </text>
-      <text fg={toHex(props.theme.textMuted)}>
-        {props.node.startLine !== undefined ? `:${props.node.startLine}` : ""}
-      </text>
-      <Show when={props.node.signature}>
-        <text fg={toHex(props.theme.textMuted)} wrapMode="word">
-          {" "}
-          {props.node.signature}
-        </text>
-      </Show>
-    </box>
-  )
-}
-
-function MetaHeader(props: { meta: GraphMeta; theme: any }) {
-  const m = props.meta
-  const builtAt = m.graphBuiltAt ? new Date(m.graphBuiltAt).toLocaleString("en-US", { hour12: false }) : "—"
-  const coverage = Math.round(m.graphCoverage * 100)
-  return (
-    <box marginBottom={1}>
-      <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">
-        <text fg={toHex(props.theme.text)}>
-          <b>Codegraph Nodes</b>
-        </text>
-        <text fg={toHex(props.theme.textMuted)}>v{m.graphVersion} · {builtAt}</text>
-      </box>
-      <text fg={toHex(props.theme.textMuted)}>
-        Coverage {coverage}% · {m.totalNodes.toLocaleString()} nodes · {m.totalEdges.toLocaleString()} edges
-      </text>
-      <text fg={toHex(props.theme.borderSubtle)}>────────────────────────────────</text>
-    </box>
-  )
-}
+const COLORS = {
+  file: "info",
+  function: "success",
+  class: "primary",
+  method: "info",
+  type: "warning",
+  variable: "textMuted",
+} as const
 
 function View(props: { api: TuiPluginApi }) {
-  const theme = () => props.api.theme.current
-
-  const [result] = createResource<CodegraphNodesResult, Error>(async () => {
-    const data = await (props.api.client as any).global.codegraphNodes()
-    return data.data as CodegraphNodesResult
+  const { theme } = useTheme()
+  const [data] = createResource<GraphData>(async () => {
+    const result = await (props.api.client as any).global?.codegraphNodes?.({})
+    return result?.data as GraphData
   })
 
-  const groupedNodes = () => {
-    const nodes = result()?.nodes ?? []
-    const groups: Record<string, GraphNode[]> = {}
-    for (const node of nodes) {
-      if (!groups[node.kind]) groups[node.kind] = []
-      groups[node.kind].push(node)
+  const [focusedId, setFocusedId] = createSignal<string | null>(null)
+  const [layer, setLayer] = createSignal<"L0" | "L1" | "L2" | "L3">("L0")
+
+  const layout = createMemo(() => {
+    const d = data()
+    if (!d) return { nodes: [] as LayoutNode[], edges: [] as LayoutEdge[] }
+
+    // Limit to ~50 nodes for performance
+    const subset = d.nodes.slice(0, 50)
+    const subsetIds = new Set(subset.map((n) => n.id))
+
+    // Filter edges to within subset
+    const edges: LayoutEdge[] = []
+    const ids = new Set<string>()
+    subset.forEach((n) => ids.add(n.id))
+
+    return {
+      nodes: subset.map((n) => ({
+        id: n.id,
+        name: n.name,
+        kind: n.kind,
+        file: n.file,
+        line: n.line,
+      })),
+      edges,
     }
-    return groups
-  }
+  })
 
-  const kindLabel: Record<string, string> = {
-    function: "Functions",
-    class: "Classes",
-    method: "Methods",
-    type: "Types",
-    variable: "Variables",
-    file: "Files",
-  }
-
-  const kindOrder = ["function", "class", "method", "type", "variable", "file"]
+  const positioned = createMemo(() => {
+    const { nodes, edges } = layout()
+    const W = 80, H = 24
+    const pos = computeLayout(nodes, edges, W, H, focusedId() ?? undefined)
+    return pos
+  })
 
   return (
     <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
-      <box flexDirection="column" paddingTop={1} paddingLeft={1}>
-        <Show when={result.loading}>
-          <text fg={toHex(theme().textMuted)}>Loading...</text>
+      <box flexDirection="column" paddingTop={1}>
+        {/* Header with meta */}
+        <Show when={data()?.meta}>
+          <text fg={toHex(theme.text)}>
+            <b>Codegraph</b>
+            {" "}
+            <text fg={toHex(theme.textMuted)}>
+              v{data()!.meta!.graphVersion} · {data()!.meta!.totalNodes} nodes · {data()!.meta!.totalEdges} edges
+            </text>
+          </text>
         </Show>
 
-        <Show when={result.error}>
-          <text fg={toHex(theme().error)}>Failed to load codegraph</text>
+        {/* Layer selector */}
+        <box flexDirection="row" gap={1} marginTop={1}>
+          <For each={["L0", "L1", "L2", "L3"] as const}>
+            {(l) => (
+              <text
+                fg={layer() === l ? toHex(theme.primary) : toHex(theme.textMuted)}
+                onMouseUp={() => setLayer(l)}
+              >
+                [{layer() === l ? "● " : "○ "}{l}]
+              </text>
+            )}
+          </For>
+        </box>
+
+        {/* Force-directed graph */}
+        <Show
+          when={data()}
+          fallback={<text fg={toHex(theme.textMuted)}>Loading graph...</text>}
+        >
+          <Show when={positioned().length > 0} fallback={
+            <text fg={toHex(theme.textMuted)}>No nodes indexed</text>
+          }>
+            {/* Render nodes at computed positions */}
+            <box position="relative" width={80} height={24} marginTop={1}>
+              <For each={positioned()}>
+                {(node) => {
+                  const x = Math.round(node.x ?? 0)
+                  const y = Math.round(node.y ?? 0)
+                  const isFocused = () => focusedId() === node.id
+                  const colorKey = COLORS[node.kind as keyof typeof COLORS] ?? "text"
+                  return (
+                    <box
+                      position="absolute"
+                      left={x}
+                      top={y}
+                      onMouseUp={() => setFocusedId(node.id)}
+                      border={isFocused() ? ["bottom"] : []}
+                      borderColor={isFocused() ? toHex(theme.primary) : undefined}
+                    >
+                      <text fg={toHex(theme[colorKey])}>● {truncate(node.name, 14)}</text>
+                    </box>
+                  )
+                }}
+              </For>
+            </box>
+          </Show>
         </Show>
 
-        <Show when={result() && !result.loading}>
-          <Show when={result()!.meta}>
-            <MetaHeader meta={result()!.meta!} theme={theme()} />
-          </Show>
-
-          <Show when={result()!.nodes.length === 0}>
-            <text fg={toHex(theme().textMuted)}>No nodes indexed. Build the codegraph first.</text>
-          </Show>
-
-          <Show when={result()!.nodes.length > 0}>
-            <For each={kindOrder}>
-              {(kind) => {
-                const nodes = () => groupedNodes()[kind] ?? []
-                return (
-                  <Show when={nodes().length > 0}>
-                    <text fg={toHex(theme().text)} marginTop={1}>
-                      <b>{kindLabel[kind] ?? kind} ({nodes().length})</b>
-                    </text>
-                    <For each={nodes()}>
-                      {(node) => <NodeRow node={node} theme={theme()} />}
-                    </For>
-                  </Show>
-                )
-              }}
-            </For>
-          </Show>
+        {/* Focused node detail */}
+        <Show when={focusedId()}>
+          {(_) => {
+            const node = positioned().find((n) => n.id === focusedId())
+            return (
+              <box flexDirection="column" marginTop={1} paddingLeft={1}>
+                <text fg={toHex(theme.text)}><b>{node?.name}</b></text>
+                <text fg={toHex(theme.textMuted)}>{node?.kind}</text>
+                <text fg={toHex(theme.textMuted)}>{node?.file}:{node?.line}</text>
+              </box>
+            )
+          }}
         </Show>
       </box>
     </scrollbox>
   )
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s
 }
 
 const tui: TuiPlugin = async (api) => {
