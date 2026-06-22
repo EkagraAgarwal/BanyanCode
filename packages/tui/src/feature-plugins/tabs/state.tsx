@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js"
 
-export type ActiveTab = "chat" | "graph" | "memory" | "agents" | "settings"
+export type ActiveTab = "chat" | "sessions" | "agents" | "graph" | "memory" | "settings"
 const [activeTab, setActiveTab] = createSignal<ActiveTab>("chat")
 export { activeTab, setActiveTab }

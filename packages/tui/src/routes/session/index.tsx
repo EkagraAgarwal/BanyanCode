@@ -1326,6 +1326,9 @@ export function Session() {
                     </For>
                   </scrollbox>
                 </Match>
+                <Match when={activeTab() === "sessions"}>
+                  <pluginRuntime.Slot name="session_tab_sessions" />
+                </Match>
                 <Match when={activeTab() === "graph"}>
                   <pluginRuntime.Slot name="session_tab_graph" />
                 </Match>

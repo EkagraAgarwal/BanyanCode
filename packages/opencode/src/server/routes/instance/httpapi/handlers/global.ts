@@ -2,16 +2,19 @@ import { Config } from "@/config/config"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@opencode-ai/core/event"
+import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Global } from "@opencode-ai/core/global"
 import { Installation } from "@/installation"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { Effect, Option, Queue, Schema } from "effect"
+import path from "path"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { GlobalUpgradeInput } from "../groups/global"
+import { BanyanAgentSaveInput, GlobalUpgradeInput } from "../groups/global"
 import { applyEmbeddingModel } from "@/effect/banyancode-bootstrap"
 import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
@@ -221,6 +224,40 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return { edges: allEdges, total: allEdges.length }
     })
 
+    const banyanAgentSaveHandler = Effect.fn("GlobalHttpApi.banyanAgentSave")(function* (ctx: {
+      payload: typeof BanyanAgentSaveInput.Type
+    }) {
+      const fs = yield* FSUtil.Service
+
+      const dir = path.join(Global.Path.banyan.data, "agent")
+      yield* fs.ensureDir(dir).pipe(
+        Effect.mapError((e) => new InvalidRequestError({ message: String(e) })),
+      )
+
+      const filePath = path.join(dir, `${ctx.payload.name}.md`)
+      const frontmatter = [
+        "---",
+        `name: ${ctx.payload.name}`,
+        `description: ${ctx.payload.description ?? ""}`,
+        "mode: subagent",
+        ctx.payload.model ? `model: ${JSON.stringify(ctx.payload.model)}` : null,
+        `tools: [${(ctx.payload.tools ?? []).join(", ")}]`,
+        `enabled: ${ctx.payload.enabled ?? true}`,
+        "---",
+        "",
+        `# ${ctx.payload.name}`,
+        "",
+        ctx.payload.description ?? "Custom subagent",
+      ]
+        .filter(Boolean)
+        .join("\n")
+
+      yield* fs.writeFileString(filePath, frontmatter).pipe(
+        Effect.mapError((e) => new InvalidRequestError({ message: String(e) })),
+      )
+      return { ok: true as const, filePath }
+    })
+
     return handlers
       .handle("health", health)
       .handleRaw("event", event)
@@ -235,5 +272,6 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       .handle("codegraphCancel", codegraphCancelHandler)
       .handle("codegraphNodes", codegraphNodesHandler)
       .handle("codegraphEdges", codegraphEdgesHandler)
+      .handle("banyanAgentSave", banyanAgentSaveHandler)
   }),
 )

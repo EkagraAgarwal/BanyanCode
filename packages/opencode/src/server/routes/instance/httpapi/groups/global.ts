@@ -60,6 +60,24 @@ export const GlobalUpgradeInput = Schema.Struct({
   target: Schema.optional(Schema.String),
 })
 
+export const BanyanAgentSaveInput = Schema.Struct({
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+  model: Schema.optional(
+    Schema.Struct({
+      providerID: Schema.String,
+      modelID: Schema.String,
+    }),
+  ),
+  tools: Schema.optional(Schema.Array(Schema.String)),
+  enabled: Schema.optional(Schema.Boolean),
+})
+
+export const BanyanAgentSaveResult = Schema.Struct({
+  ok: Schema.Literal(true),
+  filePath: Schema.String,
+})
+
 const GlobalUpgradeResult = Schema.Union([
   Schema.Struct({
     success: Schema.Literal(true),
@@ -83,6 +101,7 @@ export const GlobalPaths = {
   banyanConfig: "/global/banyan-config",
   codegraphNodes: "/global/codegraph-nodes",
   codegraphEdges: "/global/codegraph-edges",
+  banyanAgentSave: "/global/banyan-agent/save",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -229,6 +248,17 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.startup",
           summary: "Startup bridges",
           description: "Initialize all BanyanCode bridges on TUI startup.",
+        }),
+      ),
+      HttpApiEndpoint.post("banyanAgentSave", GlobalPaths.banyanAgentSave, {
+        payload: BanyanAgentSaveInput,
+        success: described(BanyanAgentSaveResult, "Agent saved"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.banyanAgent.save",
+          summary: "Save custom agent",
+          description: "Save a custom subagent definition to .banyancode/agent/<name>.md.",
         }),
       ),
     )
