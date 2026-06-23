@@ -98,8 +98,8 @@ const mockEmbeddingProviderNoModelLayer = Layer.succeed(
 )
 
 const mockCodegraphEmbedderLayer = Layer.succeed(Banyan.CodegraphEmbedder, Banyan.CodegraphEmbedder.of({
-  embedAll: () => Effect.succeed({ embedded: 0, skipped: 0, model: undefined }),
-  embedFile: (fileID: string) => Effect.succeed({ embedded: 0, skipped: 0, model: undefined }),
+  embedAll: () => Effect.succeed({ embedded: 0, skipped: 0, total: 0, model: undefined }),
+  embedFile: (fileID: string) => Effect.succeed({ embedded: 0, skipped: 0, total: 0, model: undefined }),
   embedNode: (node) => Effect.void,
 }))
 
