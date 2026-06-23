@@ -1,0 +1,14 @@
+diff --git a/index.js b/index.js
+index e83f544..b98a081 100644
+--- a/index.js
++++ b/index.js
+@@ -460,6 +460,9 @@ function _insertNode(parent, node, anchor) {
+       throw new Error(`Orphan text error: "${node.toChunks().map((c) => c.text).join("")}" must have a <text> as a parent: ${parent.id} above ${node.id}`);
+     }
+   }
++  if (parent instanceof TextRenderable && node instanceof TextRenderable) {
++    throw new Error(`Cannot nest <text> inside <text>: a <text> element renders a block of text and must be the direct child of a <box>, not another <text>. Use <span> (or <b>/<i>/<u>) for inline styling inside <text>. Parent: ${parent.id}, child: ${node.id}`);
++  }
+   if (!(parent instanceof BaseRenderable)) {
+     console.error("[INSERT]", "Tried to mount a non base renderable");
+     throw new Error("Tried to mount a non base renderable");
