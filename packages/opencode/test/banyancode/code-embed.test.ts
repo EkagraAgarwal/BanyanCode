@@ -94,14 +94,12 @@ const mockEmbeddingProviderNoModelLayer = Layer.succeed(
       Effect.fail(new EmbeddingProvider.EmbeddingError({ message: "no embedding model configured" })),
     model: () => Effect.succeed(undefined),
     setModel: () => Effect.void,
-    probe: () => Effect.succeed({ dim: 384, type: "F32" as const }),
-    detectAndSetModel: () => Effect.succeed({ dim: 384 }),
   }),
 )
 
 const mockCodegraphEmbedderLayer = Layer.succeed(Banyan.CodegraphEmbedder, Banyan.CodegraphEmbedder.of({
   embedAll: () => Effect.succeed({ embedded: 0, skipped: 0, model: undefined }),
-  embedFile: (fileID: string) => Effect.succeed({ embedded: 0, skipped: 0 }),
+  embedFile: (fileID: string) => Effect.succeed({ embedded: 0, skipped: 0, model: undefined }),
   embedNode: (node) => Effect.void,
 }))
 
@@ -153,8 +151,6 @@ const mockProviderWithModelLayer = Layer.succeed(
       Effect.succeed([new Float32Array([1, 0, 0])]),
     model: () => Effect.succeed("test-model"),
     setModel: () => Effect.void,
-    probe: () => Effect.succeed({ dim: 3, type: "F32" as const }),
-    detectAndSetModel: () => Effect.succeed({ dim: 3 }),
   }),
 )
 
