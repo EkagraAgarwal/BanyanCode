@@ -1,5 +1,6 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
+import { For } from "solid-js"
 import { activeTab, setActiveTab, type ActiveTab } from "./state"
 
 const id = "internal:tabs-tab-bar"
@@ -56,7 +57,7 @@ function View(props: { api: TuiPluginApi }) {
 
   return (
     <box flexDirection="row" flexShrink={0} gap={0}>
-      {TABS.map((tab) => {
+      <For each={TABS}>{(tab) => {
         const isActive = () => activeTab() === tab.key
         return (
           <box
@@ -71,7 +72,7 @@ function View(props: { api: TuiPluginApi }) {
             </text>
           </box>
         )
-      })}
+      }}</For>
     </box>
   )
 }

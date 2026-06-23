@@ -154,7 +154,7 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
     <box>
       <text fg={toHex(theme().text)} marginBottom={1}><b>GRAPH EXPLORER</b></text>
       <box flexDirection="row" gap={1} marginBottom={1}>
-        {tabs.map((tab) => {
+        <For each={tabs}>{(tab) => {
           const isActive = () => activeLayer() === tab.name
           return (
             <box
@@ -167,7 +167,7 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
               <text fg={isActive() ? toHex(theme().primary) : toHex(theme().textMuted)}>{tab.label}</text>
             </box>
           )
-        })}
+        }}</For>
       </box>
 
       <Show
