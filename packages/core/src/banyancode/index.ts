@@ -47,9 +47,9 @@ export { Service as MeshCoordinator, layer as meshCoordinatorLayer, defaultLayer
 export {
   defaultLayer as embeddingProviderDefaultLayer,
   EmbeddingProviderService,
-  EmbeddingProbeError,
-  EmbeddingDimensionError,
 } from "./embedding-provider"
+export { ProviderLookupService, layer as providerLookupLayer, defaultLayer as providerLookupDefaultLayer } from "./provider-lookup"
+export type { ProviderOptions, Interface as ProviderLookupInterface } from "./provider-lookup"
 export { Service as SystemMonitorService, defaultLayer as systemMonitorDefaultLayer } from "./system-monitor"
 export * as SystemMonitor from "./system-monitor"
 export {

@@ -162,13 +162,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       yield* applySystemMonitorBridge
       yield* applyEmbeddingModel.pipe(
         Effect.mapError((e: unknown) => {
-          const err = e as { _tag: string; message: string; expected?: number; actual?: number }
-          if (err._tag === "CodegraphSearchError" || err._tag === "EmbeddingProbeError") {
-            return new InvalidRequestError({ message: err.message })
-          }
-          if (err._tag === "EmbeddingDimensionError") {
-            return new InvalidRequestError({ message: `Embedding dimension mismatch: expected ${err.expected}, got ${err.actual}` })
-          }
+          const err = e as { _tag: string; message: string }
           return new InvalidRequestError({ message: err.message })
         }),
       )

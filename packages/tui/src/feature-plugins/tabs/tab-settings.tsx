@@ -235,8 +235,6 @@ function View(props: { api: TuiPluginApi }) {
   const disableWebsearch = () => cfg().banyancode_disable_websearch ?? false
 
   const embeddingModel = () => cfg().banyancode_embedding_model ?? "—"
-  const embeddingDim = () => cfg().banyancode_embedding_dim
-  const embeddingType = () => cfg().banyancode_embedding_type ?? "F32"
 
   const telegramEnabled = () => cfg().banyancode_telegram_enabled ?? false
   const telegramBotToken = () => cfg().banyancode_telegram_bot_token ?? ""
@@ -322,16 +320,6 @@ function View(props: { api: TuiPluginApi }) {
                   <SettingRow
                     label="Embedding Model"
                     value={embeddingModel()}
-                    theme={theme()}
-                  />
-                  <SettingRow
-                    label="Dimension"
-                    value={embeddingDim() != null ? String(embeddingDim()) : "—"}
-                    theme={theme()}
-                  />
-                  <SettingRow
-                    label="Type"
-                    value={embeddingType()}
                     theme={theme()}
                   />
                   <box marginTop={1}>
