@@ -23,6 +23,10 @@ export interface Interface {
   readonly listNodesByFile: (fileID: string) => Effect.Effect<CodegraphNode[], never, never>
   readonly listAllNodes: () => Effect.Effect<CodegraphNode[], never, never>
   readonly queryNodes: (input: { function?: string; kind?: string }) => Effect.Effect<CodegraphNode[], never, never>
+  readonly searchNodes: (input: { name?: string; kind?: string; limit?: number }) => Effect.Effect<CodegraphNode[], never, never>
+  readonly countNodes: () => Effect.Effect<number, never, never>
+  readonly countEdges: () => Effect.Effect<number, never, never>
+  readonly countFiles: () => Effect.Effect<number, never, never>
   readonly putEdge: (edge: CodegraphEdge) => Effect.Effect<void, never, never>
   readonly getEdge: (id: string) => Effect.Effect<CodegraphEdge | undefined, never, never>
   readonly listAllEdges: () => Effect.Effect<CodegraphEdge[], never, never>
@@ -395,6 +399,61 @@ export const layer = Layer.effect(
       })
     })
 
+    const searchNodes = Effect.fn("CodegraphRepo.searchNodes")(function* (input: {
+      name?: string
+      kind?: string
+      limit?: number
+    }) {
+      const limit = input.limit ?? 1000
+      const conditions = []
+      if (input.name) {
+        conditions.push(sql`${CodegraphNodesTable.name} LIKE ${"%" + input.name + "%"}`)
+      }
+      if (input.kind) {
+        conditions.push(sql`${CodegraphNodesTable.kind} = ${input.kind}`)
+      }
+      const whereClause = conditions.length > 0 ? sql`WHERE ${sql.join(conditions, sql` AND `)}` : sql``
+      const rows = yield* db
+        .all<typeof CodegraphNodesTable.$inferSelect>(sql`
+          SELECT * FROM codegraph_nodes
+          ${whereClause}
+          ORDER BY codegraph_nodes.name
+          LIMIT ${limit}
+        `)
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        fileID: row.file_id,
+        kind: row.kind as CodegraphNode["kind"],
+        name: row.name,
+        signature: row.signature ?? undefined,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        code: row.code ?? undefined,
+      }))
+    })
+
+    const countNodes = Effect.fn("CodegraphRepo.countNodes")(function* () {
+      const row = yield* db
+        .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_nodes`)
+        .pipe(Effect.orDie)
+      return row?.c ?? 0
+    })
+
+    const countEdges = Effect.fn("CodegraphRepo.countEdges")(function* () {
+      const row = yield* db
+        .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_edges`)
+        .pipe(Effect.orDie)
+      return row?.c ?? 0
+    })
+
+    const countFiles = Effect.fn("CodegraphRepo.countFiles")(function* () {
+      const row = yield* db
+        .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_files`)
+        .pipe(Effect.orDie)
+      return row?.c ?? 0
+    })
+
     const edgesFrom = Effect.fn("CodegraphRepo.edgesFrom")(function* (nodeID: string) {
       return yield* listEdgesByNode(nodeID)
     })
@@ -477,16 +536,16 @@ export const layer = Layer.effect(
       const coverage = input.scannedFiles > 0 ? input.indexedFiles / input.scannedFiles : 0
       const existing = yield* getMeta()
       const nextVersion = (existing?.graphVersion ?? 0) + 1
-      const allNodes = yield* listAllNodes()
-      const allEdges = yield* listAllEdges()
+      const totalNodes = yield* countNodes()
+      const totalEdges = yield* countEdges()
       const meta: CodegraphMeta = {
         id: "singleton",
         graphBuiltAt: Date.now(),
         graphVersion: nextVersion,
         graphCoverage: coverage,
         totalFiles: input.totalFiles,
-        totalNodes: allNodes.length,
-        totalEdges: allEdges.length,
+        totalNodes,
+        totalEdges,
         schemaVersion: 1,
       }
       yield* setMeta(meta)
@@ -504,6 +563,10 @@ export const layer = Layer.effect(
       listNodesByFile,
       listAllNodes,
       queryNodes,
+      searchNodes,
+      countNodes,
+      countEdges,
+      countFiles,
       putEdge,
       getEdge,
       listAllEdges,
