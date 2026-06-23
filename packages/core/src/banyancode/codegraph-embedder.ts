@@ -6,10 +6,6 @@ import { EmbeddingProvider } from "./embedding-provider"
 import type { CodegraphNode } from "./types"
 import { EventV2 } from "../event"
 
-export class EmbeddingDimensionError extends Schema.TaggedErrorClass<EmbeddingDimensionError>()("Banyan/EmbeddingDimensionError", {
-  message: Schema.String,
-}) {}
-
 export const EmbedState = Schema.Struct({
   status: Schema.Literals(["idle", "running", "completed", "failed", "cancelled"]),
   done: Schema.Number,
@@ -33,10 +29,13 @@ export const EmbedEvent = EventV2.define({
 export interface Interface {
   readonly embedAll: () => Effect.Effect<
     { embedded: number; skipped: number; model: string | undefined },
-    EmbeddingProvider.EmbeddingError | EmbeddingProvider.EmbeddingDimensionError
+    EmbeddingProvider.EmbeddingError
   >
-  readonly embedFile: (fileID: string) => Effect.Effect<{ embedded: number; skipped: number }, EmbeddingProvider.EmbeddingError>
-  readonly embedNode: (node: CodegraphNode) => Effect.Effect<void, EmbeddingProvider.EmbeddingError | EmbeddingProvider.EmbeddingDimensionError>
+  readonly embedFile: (fileID: string) => Effect.Effect<
+    { embedded: number; skipped: number; model: string | undefined },
+    EmbeddingProvider.EmbeddingError
+  >
+  readonly embedNode: (node: CodegraphNode) => Effect.Effect<void, EmbeddingProvider.EmbeddingError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphEmbedder") {}
@@ -116,7 +115,7 @@ export const layer = Layer.effect(
           result: { embedded, skipped },
         }
         yield* publish(doneState)
-        return { embedded, skipped }
+        return { embedded, skipped, model }
       })
 
       return yield* run.pipe(

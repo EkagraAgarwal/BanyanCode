@@ -81,10 +81,11 @@ export const layer = Layer.effect(
           const result = input.file
             ? yield* embedder.embedFile(input.file)
             : yield* embedder.embedAll()
+          const processed = result.embedded + result.skipped
           const doneState: State = {
             status: "completed",
-            done: result.embedded + result.skipped,
-            total: result.embedded + result.skipped,
+            done: processed,
+            total: processed,
             startedAt: initial.startedAt,
             result: { embedded: result.embedded, skipped: result.skipped },
           }

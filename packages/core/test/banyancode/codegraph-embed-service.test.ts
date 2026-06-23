@@ -22,7 +22,11 @@ const makeMockEmbedder = (options: {
     skipped: 0,
     model: "test-model",
   }
-  const fileSuccess: { embedded: number; skipped: number } = options.fileResult ?? { embedded: 0, skipped: 0 }
+  const fileSuccess: { embedded: number; skipped: number; model: string | undefined } = {
+    embedded: options.fileResult?.embedded ?? 0,
+    skipped: options.fileResult?.skipped ?? 0,
+    model: "test-model",
+  }
 
   const mkError = (msg: string) => new EmbeddingError({ message: msg })
 
@@ -37,7 +41,11 @@ const makeMockEmbedder = (options: {
         return allSuccess
       })
 
-  const embedFile: Effect.Effect<{ embedded: number; skipped: number }, EmbeddingError, never> = options.fileError
+  const embedFile: Effect.Effect<
+    { embedded: number; skipped: number; model: string | undefined },
+    EmbeddingError,
+    never
+  > = options.fileError
     ? Effect.fail(mkError(options.fileError.message))
     : Effect.gen(function* () {
         if (options.delayMs) yield* Effect.sleep(options.delayMs)
@@ -120,7 +128,7 @@ describe("CodegraphEmbedService", () => {
         embedFile: (fileID: string) =>
           Effect.gen(function* () {
             calledWith = fileID
-            return { embedded: 3, skipped: 1 }
+            return { embedded: 3, skipped: 1, model: "test-model" }
           }),
         embedNode: () => Effect.void,
       }),
