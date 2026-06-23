@@ -168,9 +168,15 @@ function View(props: { api: TuiPluginApi }) {
           Loading...
         </text>
       ) : !hasMeta() ? (
-        <text fg={toHex(theme().textMuted)} marginTop={1}>
-          Graph: not built
-        </text>
+        <box flexDirection="column" paddingLeft={2} paddingTop={2} gap={1}>
+          <box flexDirection="row" gap={2} alignItems="center">
+            <text fg={toHex(theme().textMuted)}>∅</text>
+            <text fg={toHex(theme().text)}>Codegraph not built</text>
+          </box>
+          <box paddingLeft={4}>
+            <text fg={toHex(theme().textMuted)}>Build the code graph with <b>/codegraph-build</b> to see layer counts and metrics.</text>
+          </box>
+        </box>
       ) : (
         <>
           <text fg={toHex(theme().textMuted)} marginTop={1}>

@@ -162,6 +162,7 @@ export function Prompt(props: PromptProps) {
   const keymap = useOpencodeKeymap()
   const agentShortcut = useCommandShortcut("agent.cycle")
   const paletteShortcut = useCommandShortcut("command.palette.show")
+  const tabShortcut = useCommandShortcut("tabs.next")
   const renderer = useRenderer()
   const exit = useExit()
   const dimensions = useTerminalDimensions()
@@ -1741,6 +1742,8 @@ export function Prompt(props: PromptProps) {
                   </text>
                   <text fg={theme.textMuted}>·</text>
                   <text fg={theme.textMuted}>/agents  /graph  /memory  /theme</text>
+                  <text fg={theme.textMuted}>·</text>
+                  <text fg={theme.text}>{tabShortcut()} <span style={{ fg: theme.textMuted }}>Tab</span></text>
                 </Match>
                 <Match when={store.mode === "shell"}>
                   <text fg={theme.text}>

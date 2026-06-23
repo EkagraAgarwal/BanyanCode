@@ -172,7 +172,33 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
 
       <Show
         when={rows().length > 0}
-        fallback={<text fg={toHex(theme().textMuted)}>{data.loading ? "Loading graph..." : "Graph not built"}</text>}
+        fallback={
+          data.loading ? (
+            <box flexDirection="column" paddingLeft={2} paddingTop={2} gap={1}>
+              <box flexDirection="row" gap={2} alignItems="center">
+                <text fg={toHex(theme().primary)}>◌</text>
+                <text fg={toHex(theme().textMuted)}>Loading graph…</text>
+              </box>
+            </box>
+          ) : graph().nodes.length === 0 ? (
+            <box flexDirection="column" paddingLeft={2} paddingTop={2} gap={1}>
+              <box flexDirection="row" gap={2} alignItems="center">
+                <text fg={toHex(theme().textMuted)}>∅</text>
+                <text fg={toHex(theme().text)}>Graph not built</text>
+              </box>
+            </box>
+          ) : (
+            <box flexDirection="column" paddingLeft={2} paddingTop={2} gap={1}>
+              <box flexDirection="row" gap={2} alignItems="center">
+                <text fg={toHex(theme().textMuted)}>∅</text>
+                <text fg={toHex(theme().text)}>No symbol selected for this layer</text>
+              </box>
+              <box paddingLeft={4}>
+                <text fg={toHex(theme().textMuted)}>Click a node in the graph tab to focus it.</text>
+              </box>
+            </box>
+          )
+        }
       >
         <box marginTop={1} gap={0}>
           <For each={rows()}>

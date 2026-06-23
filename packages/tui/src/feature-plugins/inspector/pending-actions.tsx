@@ -61,7 +61,15 @@ function View(props: { api: TuiPluginApi }) {
         {totalCount() > 0 ? <text fg={primary()}> {totalCount()}</text> : ""}
       </text>
       {totalCount() === 0 ? (
-        <text fg={textMuted()}>No pending actions</text>
+        <box flexDirection="column" paddingLeft={2} paddingTop={2} gap={1}>
+          <box flexDirection="row" gap={2} alignItems="center">
+            <text fg={textMuted()}>∅</text>
+            <text fg={text()}>All caught up</text>
+          </box>
+          <box paddingLeft={4}>
+            <text fg={textMuted()}>Pending questions and permission requests will appear here.</text>
+          </box>
+        </box>
       ) : (
         <box gap={1} marginTop={1}>
           {/* Active agent sessions */}
