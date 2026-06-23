@@ -40,3 +40,12 @@ tsconfig.tsbuildinfo
 # Throwaway debug scripts
 scratch-*.ts
 scratch-*.js
+scripts/embed-test/
+**/scripts/embed-test/
+scripts/embed-*.ts
+**/scripts/embed-*.ts
+scripts/embed-*.js
+**/scripts/embed-*.js
+scripts/nvidia-embed-test*
+*.embed-key
+**/nvidia-embed-test*
