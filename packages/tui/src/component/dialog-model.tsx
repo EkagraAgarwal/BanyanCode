@@ -1,4 +1,4 @@
-import { createMemo, createSignal } from "solid-js"
+import { createMemo, createSignal, createResource } from "solid-js"
 import { useLocal } from "../context/local"
 import { map, pipe, filter, sortBy, take } from "remeda"
 import { DialogSelect } from "../ui/dialog-select"
@@ -8,21 +8,88 @@ import { DialogVariant } from "./dialog-variant"
 import * as fuzzysort from "fuzzysort"
 import { useConnected } from "./use-connected"
 import { useData } from "../context/data"
+import { useSDK } from "../context/sdk"
 
-export function DialogModel(props: { providerID?: string }) {
+export interface ModelPickerProps {
+  mode?: "model" | "embedding"
+  providerID?: string
+  current?: { providerID: string; modelID: string }
+  title?: string
+  onSelect: (providerID: string, modelID: string) => void
+}
+
+export function ModelPicker(props: ModelPickerProps) {
   const local = useLocal()
   const data = useData()
   const dialog = useDialog()
+  const sdk = useSDK()
   const [query, setQuery] = createSignal("")
 
+  const mode = createMemo(() => props.mode ?? "model")
   const connected = useConnected()
   const providers = createDialogProviderOptions()
+
+  const [banyanConfig] = createResource(async () => {
+    if (mode() !== "embedding") return undefined
+    try {
+      const res = await sdk.client.global.banyanConfig.get()
+      return res.data
+    } catch {
+      return undefined
+    }
+  })
 
   const showExtra = createMemo(() => connected() && !props.providerID)
 
   const options = createMemo(() => {
     const needle = query().trim()
-    const showSections = showExtra() && needle.length === 0
+
+    if (mode() === "embedding") {
+      // Each entry is the model identifier NIM / OpenAI / Cohere actually
+      // accepts as the `model` field on the /embeddings request. For NVIDIA
+      // NIM this is the full namespaced form (e.g. "nvidia/llama-nemotron-
+      // embed-1b-v2"); for OpenAI and Cohere it's the bare model name and
+      // the embedding-provider prepends providerID/. dim is shown in the
+      // picker so the user sees what they're committing to before the
+      // embedding table is recreated at a different F32_BLOB(N).
+      const builtInList = [
+        { providerID: "openai", modelID: "text-embedding-3-small", name: "Text Embedding 3 Small", dim: 1536, category: "OpenAI" },
+        { providerID: "openai", modelID: "text-embedding-3-large", name: "Text Embedding 3 Large", dim: 3072, category: "OpenAI" },
+        { providerID: "openai", modelID: "text-embedding-ada-002", name: "Text Embedding Ada 002", dim: 1536, category: "OpenAI" },
+        { providerID: "nvidia", modelID: "nvidia/llama-nemotron-embed-1b-v2", name: "Llama Nemotron Embed 1B v2", dim: 2048, category: "NVIDIA" },
+        { providerID: "nvidia", modelID: "nvidia/nv-embedqa-e5-v5", name: "NV EmbedQA E5 v5", dim: 1024, category: "NVIDIA" },
+        { providerID: "nvidia", modelID: "baai/bge-m3", name: "BGE-M3", dim: 1024, category: "NVIDIA" },
+        { providerID: "cohere", modelID: "embed-english-v3.0", name: "Embed English v3.0", dim: 1024, category: "Cohere" }
+      ]
+
+      const customEndpoints = banyanConfig()?.banyancode_openai_compatible_endpoints ?? []
+      const customList = customEndpoints.flatMap((endpoint) => {
+        const models = endpoint.models ?? []
+        return models.map((modelName) => ({
+          providerID: endpoint.name,
+          modelID: modelName,
+          name: modelName,
+          category: `Custom: ${endpoint.name}`
+        }))
+      })
+
+      const allEmbeds = [...builtInList, ...customList].map((model) => ({
+        value: { providerID: model.providerID, modelID: model.modelID },
+        title: model.name,
+        category: model.category,
+        footer: "dim" in model && typeof model.dim === "number" ? `${model.dim}d` : undefined,
+        onSelect() {
+          props.onSelect(model.providerID, model.modelID)
+        }
+      }))
+
+      if (needle) {
+        return fuzzysort.go(needle, allEmbeds, { keys: ["title", "category"] }).map((x) => x.obj)
+      }
+      return allEmbeds
+    }
+    // Favorites/recents are chat-model shortcuts; only surface them in model mode.
+    const showSections = mode() === "model" && showExtra() && needle.length === 0
     const favorites = connected() ? local.model.favorite() : []
     const recents = local.model.recent()
 
@@ -45,7 +112,7 @@ export function DialogModel(props: { providerID?: string }) {
             disabled: provider.id === "opencode" && model.id.includes("-nano"),
             footer: model.cost[0]?.input === 0 && provider.id === "opencode" ? "Free" : undefined,
             onSelect: () => {
-              onSelect(provider.id, model.id)
+              props.onSelect(provider.id, model.id)
             },
           },
         ]
@@ -73,16 +140,18 @@ export function DialogModel(props: { providerID?: string }) {
         value: { providerID: model.providerID, modelID: model.id },
         title: model.name,
         releaseDate: model.time.released,
-        description: favorites.some((item) => item.providerID === model.providerID && item.modelID === model.id)
-          ? "(Favorite)"
-          : undefined,
+        description:
+          mode() === "model" &&
+          favorites.some((item) => item.providerID === model.providerID && item.modelID === model.id)
+            ? "(Favorite)"
+            : undefined,
         category: connected()
           ? data.location.provider.list()?.find((provider) => provider.id === model.providerID)?.name
           : undefined,
         disabled: !model.enabled || (model.providerID === "opencode" && model.id.includes("-nano")),
         footer: model.cost[0]?.input === 0 && model.providerID === "opencode" ? "Free" : undefined,
         onSelect() {
-          onSelect(model.providerID, model.id)
+          props.onSelect(model.providerID, model.id)
         },
       })),
       filter((option) => {
@@ -126,10 +195,44 @@ export function DialogModel(props: { providerID?: string }) {
   )
 
   const title = createMemo(() => {
+    if (props.title) return props.title
     const value = provider()
     if (!value) return "Select model"
     return value.name
   })
+
+  return (
+    <DialogSelect<ReturnType<typeof options>[number]["value"]>
+      options={options()}
+      actions={[
+        {
+          command: "model.dialog.provider",
+          title: connected() ? "Connect provider" : "View all providers",
+          onTrigger() {
+            dialog.replace(() => <DialogProvider />)
+          },
+        },
+        {
+          command: "model.dialog.favorite",
+          title: "Favorite",
+          hidden: mode() !== "model" || !connected(),
+          onTrigger: (option) => {
+            local.model.toggleFavorite(option.value as { providerID: string; modelID: string })
+          },
+        },
+      ]}
+      onFilter={setQuery}
+      flat={true}
+      skipFilter={true}
+      title={title()}
+      current={props.current}
+    />
+  )
+}
+
+export function DialogModel(props: { providerID?: string }) {
+  const local = useLocal()
+  const dialog = useDialog()
 
   function onSelect(providerID: string, modelID: string) {
     local.model.set({ providerID, modelID }, { recent: true })
@@ -146,33 +249,7 @@ export function DialogModel(props: { providerID?: string }) {
     dialog.clear()
   }
 
-  return (
-    <DialogSelect<ReturnType<typeof options>[number]["value"]>
-      options={options()}
-      actions={[
-        {
-          command: "model.dialog.provider",
-          title: connected() ? "Connect provider" : "View all providers",
-          onTrigger() {
-            dialog.replace(() => <DialogProvider />)
-          },
-        },
-        {
-          command: "model.dialog.favorite",
-          title: "Favorite",
-          hidden: !connected(),
-          onTrigger: (option) => {
-            local.model.toggleFavorite(option.value as { providerID: string; modelID: string })
-          },
-        },
-      ]}
-      onFilter={setQuery}
-      flat={true}
-      skipFilter={true}
-      title={title()}
-      current={local.model.current()}
-    />
-  )
+  return <ModelPicker providerID={props.providerID} current={local.model.current()} onSelect={onSelect} />
 }
 
 export function sortModelOptions<T extends { footer?: string; releaseDate: string | number; title: string }>(

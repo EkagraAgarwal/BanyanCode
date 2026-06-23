@@ -67,6 +67,22 @@ export const layer = Layer.effect(
       }
     })
 
+    // Probe the active model with a tiny input to discover its output dim,
+    // then make sure the embeddings table is sized to match. We can't know
+    // the dim from the model name alone (different families return 1024 /
+    // 1536 / 2048 / 3072 floats), so a single one-token embed call is the
+    // cheapest way to learn it. If the dim matches what's already on disk we
+    // leave existing embeddings in place (the repo only wipes rows for the
+    // NEW model, of which there should be none on first run).
+    const ensureTable = Effect.fn("CodegraphEmbedder.ensureTable")(function* () {
+      const probe = yield* provider.embed("dim probe")
+      const dim = probe[0]?.length ?? 0
+      if (dim === 0) return
+      const model = yield* provider.model()
+      if (model === undefined) return
+      yield* repo.resetEmbeddingsTable(dim, model, { force: false }).pipe(Effect.ignore)
+    })
+
     const embedFile = Effect.fn("CodegraphEmbedder.embedFile")(function* (fileID: string) {
       const model = yield* provider.model()
       const nodes = yield* repo.listNodesByFile(fileID)
@@ -82,9 +98,11 @@ export const layer = Layer.effect(
       yield* publish(initial)
 
       const run = Effect.gen(function* () {
+        yield* ensureTable()
         let embedded = 0
         let skipped = 0
         let processed = 0
+        let lastError: string | undefined
         for (const node of nodes) {
           const existing = yield* repo.getEmbedding(node.id)
           if (existing) {
@@ -92,14 +110,16 @@ export const layer = Layer.effect(
           } else {
             const success = yield* embedNode(node).pipe(
               Effect.as(true),
-              Effect.tapError((err) =>
+              Effect.catchCause((cause) =>
                 Effect.sync(() => {
+                  const err = Cause.squash(cause)
+                  lastError = err instanceof Error ? err.message : String(err)
                   if (process.env.BANYANCODE_DEBUG === "1") {
                     console.error(`[codegraph-embedder] embedNode failed for node ${node.id}:`, err)
                   }
-                }),
+                  return false
+                })
               ),
-              Effect.catchCause(() => Effect.succeed(false)),
             )
             if (success) {
               embedded++
@@ -107,6 +127,13 @@ export const layer = Layer.effect(
           }
           processed++
           yield* publish({ status: "running", done: processed, total })
+        }
+        if (total > 0 && embedded === 0 && skipped === 0) {
+          const err = new EmbeddingProvider.EmbeddingError({
+            message: lastError ?? "All embedding attempts failed for this file. Check provider configuration or API keys.",
+          })
+          yield* publish({ status: "failed", done: processed, total, error: err.message })
+          return yield* Effect.fail(err)
         }
         const doneState: EmbedState = {
           status: "completed",
@@ -145,6 +172,7 @@ export const layer = Layer.effect(
       yield* publish(initial)
 
       const run = Effect.gen(function* () {
+        yield* ensureTable()
         const byFile = new Map<string, CodegraphNode[]>()
         for (const node of allNodes) {
           const list = byFile.get(node.fileID) ?? []
@@ -154,6 +182,7 @@ export const layer = Layer.effect(
         let embedded = 0
         let skipped = 0
         let processed = 0
+        let lastError: string | undefined
         for (const [_fileID, nodes] of byFile) {
           for (const node of nodes) {
             const existing = yield* repo.getEmbedding(node.id)
@@ -162,14 +191,16 @@ export const layer = Layer.effect(
             } else {
               const success = yield* embedNode(node).pipe(
                 Effect.as(true),
-                Effect.tapError((err) =>
+                Effect.catchCause((cause) =>
                   Effect.sync(() => {
+                    const err = Cause.squash(cause)
+                    lastError = err instanceof Error ? err.message : String(err)
                     if (process.env.BANYANCODE_DEBUG === "1") {
                       console.error(`[codegraph-embedder] embedNode failed for node ${node.id}:`, err)
                     }
-                  }),
+                    return false
+                  })
                 ),
-                Effect.catchCause(() => Effect.succeed(false)),
               )
               if (success) {
                 embedded++
@@ -178,6 +209,13 @@ export const layer = Layer.effect(
             processed++
             yield* publish({ status: "running", done: processed, total })
           }
+        }
+        if (total > 0 && embedded === 0 && skipped === 0) {
+          const err = new EmbeddingProvider.EmbeddingError({
+            message: lastError ?? "All embedding attempts failed. Check provider configuration or API keys.",
+          })
+          yield* publish({ status: "failed", done: processed, total, error: err.message })
+          return yield* Effect.fail(err)
         }
         const doneState: EmbedState = {
           status: "completed",

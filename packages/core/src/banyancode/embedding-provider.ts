@@ -25,14 +25,17 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const plugin = yield* PluginV2.Service
     const configOpt = yield* Effect.serviceOption(BanyanConfigService.Service)
-    let initialName = yield* Config.string("BANYANCODE_EMBEDDING_MODEL").pipe(
-      Config.withDefault(""),
-      Effect.map((s) => (s === "" ? undefined : s)),
-      Effect.orDie,
-    )
-    if (!initialName && configOpt._tag === "Some") {
+    let initialName: string | undefined
+    if (configOpt._tag === "Some") {
       const config = yield* configOpt.value.get()
       initialName = config.banyancode_embedding_model
+    }
+    if (!initialName) {
+      initialName = yield* Config.string("BANYANCODE_EMBEDDING_MODEL").pipe(
+        Config.withDefault(""),
+        Effect.map((s) => (s === "" ? undefined : s)),
+        Effect.orDie,
+      )
     }
     const modelRef = yield* Ref.make<string | undefined>(initialName)
 
@@ -66,6 +69,10 @@ export const layer = Layer.effect(
       const result = yield* plugin
         .trigger("aisdk.embed", { model: modelName, input: texts, options }, { embeddings: [] as number[][] })
         .pipe(Effect.mapError((e) => new EmbeddingError({ message: String(e) })))
+
+      if (result.error) {
+        return yield* Effect.fail(new EmbeddingError({ message: result.error }))
+      }
 
       return result.embeddings.map((e: number[]) => new Float32Array(e))
     })
