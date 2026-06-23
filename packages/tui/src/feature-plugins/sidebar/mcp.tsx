@@ -18,12 +18,12 @@ function View(props: { api: TuiPluginApi }) {
   )
 
   const dot = (status: string) => {
-    if (status === "connected") return theme().success
-    if (status === "failed") return theme().error
-    if (status === "disabled") return theme().textMuted
-    if (status === "needs_auth") return theme().warning
-    if (status === "needs_client_registration") return theme().error
-    return theme().textMuted
+    if (status === "connected") return { glyph: "●", color: theme().success }
+    if (status === "failed") return { glyph: "✗", color: theme().error }
+    if (status === "disabled") return { glyph: "○", color: theme().textMuted }
+    if (status === "needs_auth") return { glyph: "◐", color: theme().warning }
+    if (status === "needs_client_registration") return { glyph: "✗", color: theme().error }
+    return { glyph: "○", color: theme().textMuted }
   }
 
   return (
@@ -50,10 +50,10 @@ function View(props: { api: TuiPluginApi }) {
                 <text
                   flexShrink={0}
                   style={{
-                    fg: dot(item.status),
+                    fg: dot(item.status).color,
                   }}
                 >
-                  •
+                  {dot(item.status).glyph}
                 </text>
                 <text fg={theme().text} wrapMode="word">
                   {item.name}{" "}

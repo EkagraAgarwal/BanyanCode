@@ -33,7 +33,7 @@ function View(props: { api: TuiPluginApi }) {
                   fg: item.status === "connected" ? theme().success : theme().error,
                 }}
               >
-                •
+                {item.status === "connected" ? "●" : "✗"}
               </text>
               <text fg={theme().textMuted}>
                 {item.id} {item.root}
