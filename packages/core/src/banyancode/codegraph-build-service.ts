@@ -102,8 +102,6 @@ export const layer = Layer.effect(
             scannedFiles: result.scannedFiles,
             indexedFiles: result.indexed,
             totalFiles: result.indexed + result.skipped,
-            totalNodes: result.indexed + result.skipped,
-            totalEdges: 0,
           })
 
           const doneState: State = {

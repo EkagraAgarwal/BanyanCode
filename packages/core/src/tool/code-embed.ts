@@ -51,6 +51,7 @@ export const OutputSearch = Schema.Struct({
   degraded: Schema.Boolean,
   totalCandidates: Schema.Number,
   meta: Schema.optional(GraphMeta),
+  notice: Schema.optional(Schema.String),
 })
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
@@ -213,6 +214,21 @@ export const locationLayer = Layer.effectDiscard(
                     totalEdges: metaRow.totalEdges,
                   }
                 : undefined
+
+              // If the graph has never been built the user is searching an
+              // empty database — return a clear "not built" hint rather than
+              // silently producing zero hits and forcing the user to guess
+              // why their query matched nothing.
+              if (!metaRow || (metaRow.totalNodes ?? 0) === 0) {
+                return {
+                  hits: [],
+                  degraded: true,
+                  totalCandidates: 0,
+                  meta: undefined,
+                  notice:
+                    "No code graph is built yet. Run /codegraph-build (and then /code-embed) before searching.",
+                }
+              }
 
               let nodes = yield* repo.listAllNodes()
 

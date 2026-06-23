@@ -3,7 +3,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { EffectBridge } from "@/effect/bridge"
 import type { InstanceContext } from "@/project/instance-context"
 import { SessionID, MessageID } from "@/session/schema"
-import { Effect, Layer, Context, Schema, Option } from "effect"
+import { Effect, Layer, Context, Schema, Option, Queue, Fiber } from "effect"
 import { Config } from "@/config/config"
 import { MCP } from "../mcp"
 import { Skill } from "../skill"
@@ -145,6 +145,24 @@ export const layer = Layer.effect(
             const force = args.flags.force === true || args.flags.force === "true"
             const dbPath = Database.path()
             yield* buildServiceOpt.value.start({ root, force, dbPath })
+            // Wait for the build to reach a terminal state so the user
+            // gets feedback (success summary or error) instead of a silent
+            // return. The service forks the work into a background fiber
+            // and pushes status updates onto an internal queue; consume
+            // that queue until status leaves "running".
+            const svc = buildServiceOpt.value
+            const queue = svc.events()
+            const buildFiber = yield* Effect.forkScoped(
+              Effect.gen(function* () {
+                while (true) {
+                  yield* Queue.take(queue)
+                  const status = yield* svc.status()
+                  if (status.status !== "running") return status
+                }
+              }),
+            )
+            const finalStatus = yield* Fiber.join(buildFiber)
+            return finalStatus
           }).pipe(Effect.provide(Banyan.codegraphBuildServiceDefaultLayer)),
         hints: hints(PROMPT_CODEGRAPH_BUILD),
       }
@@ -177,6 +195,22 @@ export const layer = Layer.effect(
             const args = parseArgs(input.arguments)
             const file = args.flags.file as string | undefined
             yield* serviceOpt.value.start({ file })
+            // Same as /codegraph-build: wait for the embed to reach a
+            // terminal state so the user gets feedback rather than an
+            // empty return while the work runs in the background.
+            const svc = serviceOpt.value
+            const queue = svc.events()
+            const embedFiber = yield* Effect.forkScoped(
+              Effect.gen(function* () {
+                while (true) {
+                  yield* Queue.take(queue)
+                  const status = yield* svc.status()
+                  if (status.status !== "running") return status
+                }
+              }),
+            )
+            const finalStatus = yield* Fiber.join(embedFiber)
+            return finalStatus
           }).pipe(Effect.provide(Banyan.codegraphEmbedServiceDefaultLayer)),
         hints: hints(PROMPT_CODE_EMBED),
       }

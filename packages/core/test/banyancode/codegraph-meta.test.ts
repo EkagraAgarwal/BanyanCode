@@ -38,8 +38,6 @@ describe("codegraph-meta", () => {
           scannedFiles: 10,
           indexedFiles: 8,
           totalFiles: 10,
-          totalNodes: 20,
-          totalEdges: 30,
         })
 
         expect(result.graphVersion).toBe(6)
@@ -80,8 +78,6 @@ describe("codegraph-meta", () => {
           scannedFiles: 10,
           indexedFiles: 5,
           totalFiles: 10,
-          totalNodes: 5,
-          totalEdges: 0,
         })
         expect(result1.coverage).toBe(0.5)
 
@@ -90,8 +86,6 @@ describe("codegraph-meta", () => {
           scannedFiles: 4,
           indexedFiles: 4,
           totalFiles: 4,
-          totalNodes: 4,
-          totalEdges: 0,
         })
         expect(result2.coverage).toBe(1.0)
 
@@ -100,8 +94,6 @@ describe("codegraph-meta", () => {
           scannedFiles: 0,
           indexedFiles: 0,
           totalFiles: 0,
-          totalNodes: 0,
-          totalEdges: 0,
         })
         expect(result3.coverage).toBe(0)
       }).pipe(Effect.provide(repoLayer), Effect.scoped),

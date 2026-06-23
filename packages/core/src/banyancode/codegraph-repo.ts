@@ -1,6 +1,6 @@
 export * as CodegraphRepo from "./codegraph-repo"
 
-import { eq, sql } from "drizzle-orm"
+import { eq, sql, or } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { CodegraphEdgesTable, CodegraphEmbeddingsTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
@@ -21,7 +21,7 @@ export interface Interface {
   readonly getNode: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
   readonly nodeByID: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
   readonly listNodesByFile: (fileID: string) => Effect.Effect<CodegraphNode[], never, never>
-  readonly listAllNodes: () => Effect.Effect<CodegraphNode[], never, never>
+  readonly listAllNodes: (options?: { limit?: number; offset?: number }) => Effect.Effect<CodegraphNode[], never, never>
   readonly queryNodes: (input: { function?: string; kind?: string }) => Effect.Effect<CodegraphNode[], never, never>
   readonly searchNodes: (input: { name?: string; kind?: string; limit?: number }) => Effect.Effect<CodegraphNode[], never, never>
   readonly countNodes: () => Effect.Effect<number, never, never>
@@ -29,7 +29,7 @@ export interface Interface {
   readonly countFiles: () => Effect.Effect<number, never, never>
   readonly putEdge: (edge: CodegraphEdge) => Effect.Effect<void, never, never>
   readonly getEdge: (id: string) => Effect.Effect<CodegraphEdge | undefined, never, never>
-  readonly listAllEdges: () => Effect.Effect<CodegraphEdge[], never, never>
+  readonly listAllEdges: (options?: { limit?: number; offset?: number }) => Effect.Effect<CodegraphEdge[], never, never>
   readonly listEdgesByNode: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesFrom: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesTo: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
@@ -52,8 +52,6 @@ export interface Interface {
     scannedFiles: number
     indexedFiles: number
     totalFiles: number
-    totalNodes: number
-    totalEdges: number
   }) => Effect.Effect<{ graphVersion: number; coverage: number }, never, never>
 }
 
@@ -192,8 +190,20 @@ export const layer = Layer.effect(
       }))
     })
 
-    const listAllNodes = Effect.fn("CodegraphRepo.listAllNodes")(function* () {
-      const rows = yield* db.select().from(CodegraphNodesTable).all().pipe(Effect.orDie)
+    const listAllNodes = Effect.fn("CodegraphRepo.listAllNodes")(function* (options?: { limit?: number; offset?: number }) {
+      let limitSql = sql``
+      if (options?.limit !== undefined) {
+        limitSql = sql` LIMIT ${options.limit}`
+        if (options?.offset !== undefined) {
+          limitSql = sql`${limitSql} OFFSET ${options.offset}`
+        }
+      }
+      const rows = yield* db
+        .all<typeof CodegraphNodesTable.$inferSelect>(sql`
+          SELECT * FROM codegraph_nodes
+          ${limitSql}
+        `)
+        .pipe(Effect.orDie)
       return rows.map((row) => ({
         id: row.id,
         fileID: row.file_id,
@@ -243,11 +253,19 @@ export const layer = Layer.effect(
       }
     })
 
-    const listAllEdges = Effect.fn("CodegraphRepo.listAllEdges")(function* () {
+    const listAllEdges = Effect.fn("CodegraphRepo.listAllEdges")(function* (options?: { limit?: number; offset?: number }) {
+      let limitSql = sql``
+      if (options?.limit !== undefined) {
+        limitSql = sql` LIMIT ${options.limit}`
+        if (options?.offset !== undefined) {
+          limitSql = sql`${limitSql} OFFSET ${options.offset}`
+        }
+      }
       const rows = yield* db
-        .select()
-        .from(CodegraphEdgesTable)
-        .all()
+        .all<typeof CodegraphEdgesTable.$inferSelect>(sql`
+          SELECT * FROM codegraph_edges
+          ${limitSql}
+        `)
         .pipe(Effect.orDie)
       return rows.map((row) => ({
         id: row.id,
@@ -332,13 +350,37 @@ export const layer = Layer.effect(
         )
       }
       return Effect.gen(function* () {
-        // Preserve embeddings across model switches: only delete rows for the new model
-        // (which shouldn't exist yet) instead of dropping the entire table. Callers that
-        // need a clean slate can pass { force: true }.
-        yield* clearEmbeddingsForModel(model)
-        if (options?.force === true) {
-          yield* db.delete(CodegraphEmbeddingsTable).run().pipe(Effect.orDie)
+        const schemaRow = yield* db
+          .get<{ sql: string }>(sql`SELECT sql FROM sqlite_schema WHERE type='table' AND name='codegraph_embeddings'`)
+          .pipe(Effect.orDie)
+
+        let currentDim = 1536
+        if (schemaRow?.sql) {
+          const match = schemaRow.sql.match(/F32_BLOB\((\d+)\)/i)
+          if (match && match[1]) {
+            currentDim = parseInt(match[1], 10)
+          }
         }
+
+        if (currentDim !== dim || options?.force === true) {
+          yield* db.run(sql`DROP INDEX IF EXISTS codegraph_embedding_model_idx`).pipe(Effect.orDie)
+          yield* db.run(sql`DROP INDEX IF EXISTS codegraph_embedding_vec_idx`).pipe(Effect.orDie)
+          yield* db.run(sql`DROP TABLE IF EXISTS codegraph_embeddings`).pipe(Effect.orDie)
+          yield* db.run(sql`
+            CREATE TABLE \`codegraph_embeddings\` (
+              \`node_id\` TEXT PRIMARY KEY REFERENCES \`codegraph_nodes\`(\`id\`) ON DELETE CASCADE,
+              \`embedding\` F32_BLOB(${sql.raw(String(dim))}) NOT NULL,
+              \`model\` TEXT NOT NULL,
+              \`dim\` INTEGER NOT NULL,
+              \`created_at\` INTEGER NOT NULL DEFAULT (unixepoch())
+            )
+          `).pipe(Effect.orDie)
+          yield* db.run(sql`CREATE INDEX \`codegraph_embedding_model_idx\` ON \`codegraph_embeddings\` (\`model\`)`).pipe(Effect.orDie)
+          yield* db.run(sql`CREATE INDEX \`codegraph_embedding_vec_idx\` ON \`codegraph_embeddings\` (libsql_vector_idx(\`embedding\`))`).pipe(Effect.orDie)
+        } else {
+          yield* clearEmbeddingsForModel(model)
+        }
+
         if (process.env.BANYANCODE_DEBUG === "1") {
           console.error(`[turso.vector] resetEmbeddingsTable dim=${dim} model=${model} force=${options?.force === true}`)
         }
@@ -391,12 +433,33 @@ export const layer = Layer.effect(
     })
 
     const queryNodes = Effect.fn("CodegraphRepo.queryNodes")(function* (input: { function?: string; kind?: string }) {
-      const allNodes = yield* listAllNodes()
-      return allNodes.filter((n) => {
-        if (input.function && n.name === input.function) return true
-        if (input.kind && n.kind === input.kind) return true
-        return false
-      })
+      const conditions = []
+      if (input.function) {
+        conditions.push(eq(CodegraphNodesTable.name, input.function))
+      }
+      if (input.kind) {
+        conditions.push(eq(CodegraphNodesTable.kind, input.kind))
+      }
+      if (conditions.length === 0) {
+        return []
+      }
+      const whereClause = conditions.length === 1 ? conditions[0] : or(...conditions)
+      const rows = yield* db
+        .select()
+        .from(CodegraphNodesTable)
+        .where(whereClause)
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        fileID: row.file_id,
+        kind: row.kind as CodegraphNode["kind"],
+        name: row.name,
+        signature: row.signature ?? undefined,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        code: row.code ?? undefined,
+      }))
     })
 
     const searchNodes = Effect.fn("CodegraphRepo.searchNodes")(function* (input: {
@@ -475,6 +538,10 @@ export const layer = Layer.effect(
 
     const clearAll = Effect.fn("CodegraphRepo.clearAll")(function* () {
       yield* db.delete(CodegraphFilesTable).run().pipe(Effect.orDie)
+      yield* db.delete(CodegraphNodesTable).run().pipe(Effect.orDie)
+      yield* db.delete(CodegraphEdgesTable).run().pipe(Effect.orDie)
+      yield* db.delete(CodegraphEmbeddingsTable).run().pipe(Effect.orDie)
+      yield* db.delete(CodegraphMetaTable).run().pipe(Effect.orDie)
     })
 
     const getMeta = Effect.fn("CodegraphRepo.getMeta")(function* () {
@@ -526,13 +593,11 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
     })
 
-    const bumpVersion = Effect.fn("CodegraphRepo.bumpVersion")(function* (input: {
-      scannedFiles: number
-      indexedFiles: number
-      totalFiles: number
-      totalNodes: number
-      totalEdges: number
-    }) {
+const bumpVersion = Effect.fn("CodegraphRepo.bumpVersion")(function* (input: {
+        scannedFiles: number
+        indexedFiles: number
+        totalFiles: number
+      }) {
       const coverage = input.scannedFiles > 0 ? input.indexedFiles / input.scannedFiles : 0
       const existing = yield* getMeta()
       const nextVersion = (existing?.graphVersion ?? 0) + 1
