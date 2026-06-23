@@ -11,27 +11,29 @@ import { tmpdir } from "../fixture/tmpdir"
 process.env.BANYANCODE_ENABLE = "1"
 
 const makeMockEmbedder = (options: {
-  allResult?: { embedded: number; skipped: number; model: string | undefined }
+  allResult?: { embedded: number; skipped: number; total: number; model?: string }
   allError?: Error
-  fileResult?: { embedded: number; skipped: number }
+  fileResult?: { embedded: number; skipped: number; total: number; model?: string }
   fileError?: Error
   delayMs?: number
 }) => {
-  const allSuccess: { embedded: number; skipped: number; model: string | undefined } = options.allResult ?? {
-    embedded: 0,
-    skipped: 0,
-    model: "test-model",
+  const allSuccess: { embedded: number; skipped: number; total: number; model: string | undefined } = {
+    embedded: options.allResult?.embedded ?? 0,
+    skipped: options.allResult?.skipped ?? 0,
+    total: options.allResult?.total ?? 0,
+    model: options.allResult?.model ?? "test-model",
   }
-  const fileSuccess: { embedded: number; skipped: number; model: string | undefined } = {
+  const fileSuccess: { embedded: number; skipped: number; total: number; model: string | undefined } = {
     embedded: options.fileResult?.embedded ?? 0,
     skipped: options.fileResult?.skipped ?? 0,
-    model: "test-model",
+    total: options.fileResult?.total ?? 0,
+    model: options.fileResult?.model ?? "test-model",
   }
 
   const mkError = (msg: string) => new EmbeddingError({ message: msg })
 
   const embedAll: Effect.Effect<
-    { embedded: number; skipped: number; model: string | undefined },
+    { embedded: number; skipped: number; total: number; model: string | undefined },
     EmbeddingError,
     never
   > = options.allError
@@ -42,7 +44,7 @@ const makeMockEmbedder = (options: {
       })
 
   const embedFile: Effect.Effect<
-    { embedded: number; skipped: number; model: string | undefined },
+    { embedded: number; skipped: number; total: number; model: string | undefined },
     EmbeddingError,
     never
   > = options.fileError
@@ -100,7 +102,7 @@ describe("CodegraphEmbedService", () => {
   test("start() forks work, transitions to completed, and persists state", async () => {
     await using tmp = await tmpdir()
     const dbLayer = Database.layerFromPath(`${tmp.path}/test.sqlite`)
-    const mock = makeMockEmbedder({ allResult: { embedded: 5, skipped: 2, model: "test-model" } })
+    const mock = makeMockEmbedder({ allResult: { embedded: 5, skipped: 2, total: 7, model: "test-model" } })
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -113,6 +115,32 @@ describe("CodegraphEmbedService", () => {
         }
         expect(state.result?.embedded).toBe(5)
         expect(state.result?.skipped).toBe(2)
+        expect(state.done).toBe(7)
+        expect(state.total).toBe(7)
+      }).pipe(Effect.provide(buildLayer(mock, dbLayer)), Effect.scoped),
+    )
+  })
+
+  test("completed state uses the real graph total even when every embed fails", async () => {
+    await using tmp = await tmpdir()
+    const dbLayer = Database.layerFromPath(`${tmp.path}/test.sqlite`)
+    // No embedded or skipped, but the graph has 12 nodes — done/total should still
+    // reflect the real count so the TUI doesn't show '0/0' (the pre-fix bug).
+    const mock = makeMockEmbedder({ allResult: { embedded: 0, skipped: 0, total: 12, model: "test-model" } })
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* CodegraphEmbedService.Service
+        yield* svc.start({})
+        yield* Effect.sleep(50)
+        const state = yield* svc.status()
+        if (state.status !== "completed") {
+          throw new Error(`expected completed, got ${state.status}: ${state.error}`)
+        }
+        expect(state.done).toBe(12)
+        expect(state.total).toBe(12)
+        expect(state.result?.embedded).toBe(0)
+        expect(state.result?.skipped).toBe(0)
       }).pipe(Effect.provide(buildLayer(mock, dbLayer)), Effect.scoped),
     )
   })
@@ -124,11 +152,12 @@ describe("CodegraphEmbedService", () => {
     const mock = Layer.succeed(
       Banyan.CodegraphEmbedder,
       Banyan.CodegraphEmbedder.of({
-        embedAll: () => Effect.succeed({ embedded: 0, skipped: 0, model: "test-model" }),
+        embedAll: () =>
+          Effect.succeed({ embedded: 0, skipped: 0, total: 0, model: "test-model" }),
         embedFile: (fileID: string) =>
           Effect.gen(function* () {
             calledWith = fileID
-            return { embedded: 3, skipped: 1, model: "test-model" }
+            return { embedded: 3, skipped: 1, total: 4, model: "test-model" }
           }),
         embedNode: () => Effect.void,
       }),

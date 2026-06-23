@@ -28,11 +28,11 @@ export const EmbedEvent = EventV2.define({
 
 export interface Interface {
   readonly embedAll: () => Effect.Effect<
-    { embedded: number; skipped: number; model: string | undefined },
+    { embedded: number; skipped: number; total: number; model: string | undefined },
     EmbeddingProvider.EmbeddingError
   >
   readonly embedFile: (fileID: string) => Effect.Effect<
-    { embedded: number; skipped: number; model: string | undefined },
+    { embedded: number; skipped: number; total: number; model: string | undefined },
     EmbeddingProvider.EmbeddingError
   >
   readonly embedNode: (node: CodegraphNode) => Effect.Effect<void, EmbeddingProvider.EmbeddingError>
@@ -115,7 +115,7 @@ export const layer = Layer.effect(
           result: { embedded, skipped },
         }
         yield* publish(doneState)
-        return { embedded, skipped, model }
+        return { embedded, skipped, total, model }
       })
 
       return yield* run.pipe(
@@ -186,7 +186,7 @@ export const layer = Layer.effect(
           result: { embedded, skipped },
         }
         yield* publish(doneState)
-        return { embedded, skipped, model }
+        return { embedded, skipped, total, model }
       })
 
       return yield* run.pipe(
