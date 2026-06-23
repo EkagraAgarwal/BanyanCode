@@ -739,6 +739,7 @@ export function Autocomplete(props: {
               paddingRight={1}
               backgroundColor={index === store.selected ? theme.primary : undefined}
               flexDirection="row"
+              gap={2}
               onMouseMove={() => {
                 setStore("input", "mouse")
               }}
@@ -756,7 +757,12 @@ export function Autocomplete(props: {
                 {option().display}
               </text>
               <Show when={option().description}>
-                <text fg={index === store.selected ? selectedForeground(theme) : theme.textMuted} wrapMode="none">
+                <text
+                  fg={index === store.selected ? selectedForeground(theme) : theme.textMuted}
+                  wrapMode="none"
+                  flexGrow={1}
+                  overflow="hidden"
+                >
                   {option().description}
                 </text>
               </Show>

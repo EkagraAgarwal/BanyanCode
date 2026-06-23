@@ -45,7 +45,7 @@ export function Dialog(
       paddingTop={dimensions().height / 4}
       left={0}
       top={0}
-      backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
+      backgroundColor={theme.background}
     >
       <box
         onMouseUp={(e: { stopPropagation(): void }) => {
