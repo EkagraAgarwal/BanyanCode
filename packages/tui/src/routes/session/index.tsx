@@ -1292,14 +1292,18 @@ export function Session() {
                                       <box marginTop={1}>
                                         <For each={revert()!.diffFiles}>
                                           {(file) => (
-                                            <text fg={theme.text}>
+                                            <text fg={theme.text} wrapMode="none" truncate>
                                               {file.filename}
-                                              <Show when={file.additions > 0}>
+                                              {file.additions > 0 ? (
                                                 <span style={{ fg: theme.diffAdded }}> +{file.additions}</span>
-                                              </Show>
-                                              <Show when={file.deletions > 0}>
+                                              ) : (
+                                                ""
+                                              )}
+                                              {file.deletions > 0 ? (
                                                 <span style={{ fg: theme.diffRemoved }}> -{file.deletions}</span>
-                                              </Show>
+                                              ) : (
+                                                ""
+                                              )}
                                             </text>
                                           )}
                                         </For>
@@ -1612,19 +1616,21 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           <text fg={theme.text}>
             {childShortcut()}
             <span style={{ fg: theme.textMuted }}> view subagents</span>
-            <Show
-              when={props.parts.some(
-                (x) =>
-                  x.type === "tool" &&
-                  x.tool === "task" &&
-                  x.state.status === "running" &&
-                  x.state.metadata?.background !== true,
-              )}
-            >
-              <span style={{ fg: theme.textMuted }}> · </span>
-              {backgroundShortcut()}
-              <span style={{ fg: theme.textMuted }}> background</span>
-            </Show>
+            {props.parts.some(
+              (x) =>
+                x.type === "tool" &&
+                x.tool === "task" &&
+                x.state.status === "running" &&
+                x.state.metadata?.background !== true,
+            ) ? (
+              <>
+                <span style={{ fg: theme.textMuted }}> · </span>
+                {backgroundShortcut()}
+                <span style={{ fg: theme.textMuted }}> background</span>
+              </>
+            ) : (
+              ""
+            )}
           </text>
         </box>
       </Show>
@@ -1658,12 +1664,16 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
               </span>{" "}
               <span style={{ fg: theme.text }}>{Locale.titlecase(props.message.mode)}</span>
               <span style={{ fg: theme.textMuted }}> · {model()}</span>
-              <Show when={duration()}>
+              {duration() ? (
                 <span style={{ fg: theme.textMuted }}> · {Locale.duration(duration())}</span>
-              </Show>
-              <Show when={props.message.error?.name === "MessageAbortedError"}>
+              ) : (
+                ""
+              )}
+              {props.message.error?.name === "MessageAbortedError" ? (
                 <span style={{ fg: theme.textMuted }}> · interrupted</span>
-              </Show>
+              ) : (
+                ""
+              )}
             </text>
           </box>
         </Match>
@@ -1759,22 +1769,18 @@ function ReasoningHeader(props: {
       </Match>
       <Match when={true}>
         <text fg={fg()} wrapMode="none">
-          <Show when={props.toggleable}>
-            <span>{props.open ? "- " : "+ "}</span>
-          </Show>
+          {props.toggleable ? <span>{props.open ? "- " : "+ "}</span> : ""}
           <span>Thought</span>
-          <Show when={props.title || props.duration}>
-            <span>: </span>
-          </Show>
-          <Show when={props.title}>
-            <span>{props.title}</span>
-          </Show>
-          <Show when={props.duration}>
+          {props.title || props.duration ? <span>: </span> : ""}
+          {props.title ? <span>{props.title}</span> : ""}
+          {props.duration ? (
             <span>
               {props.title ? " · " : ""}
               {props.duration}
             </span>
-          </Show>
+          ) : (
+            ""
+          )}
         </text>
       </Match>
     </Switch>

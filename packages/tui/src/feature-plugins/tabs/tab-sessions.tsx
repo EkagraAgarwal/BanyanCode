@@ -221,7 +221,12 @@ function EditableTitle(props: { controller: RowControllerProps; session: Session
         onInput={(v: string) => c().onEditTitle(v)}
         onSubmit={() => c().onSaveEdit(props.session)}
         flexGrow={1}
-        ref={(r: { focus(): void } | undefined) => setTimeout(() => r?.focus(), 1)}
+        ref={(r: { focus(): void } | undefined) => {
+          // Only auto-focus the first time the input mounts. Subsequent
+          // re-renders must not steal focus — the user may have tabbed
+          // elsewhere to abort the rename.
+          if (r) setTimeout(() => r.focus(), 1)
+        }}
       />
       <text fg={toHex(c().theme.success)}>[⏎ save]</text>
       <text fg={toHex(c().theme.textMuted)} onMouseDown={() => c().onCancelEdit()}>[esc cancel]</text>

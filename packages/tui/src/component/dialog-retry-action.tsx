@@ -1,6 +1,6 @@
 import { RGBA, TextAttributes } from "@opentui/core"
 import open from "open"
-import { createSignal } from "solid-js"
+import { createSignal, Show } from "solid-js"
 import { selectedForeground, useTheme } from "../context/theme"
 import { useDialog, type DialogContext } from "../ui/dialog"
 import { Link } from "../ui/link"
@@ -78,11 +78,11 @@ export function DialogRetryAction(props: DialogRetryActionProps) {
 
   return (
     <box>
-      {showGoTreatment() ? (
+      <Show when={showGoTreatment()}>
         <box position="absolute" top={-PAD_TOP_OUTER} left={0} right={0} bottom={0} zIndex={0}>
           <BgPulse />
         </box>
-      ) : null}
+      </Show>
       <box zIndex={1} paddingLeft={PAD_X} paddingRight={PAD_X} paddingBottom={1} gap={1}>
         <box flexDirection="row" justifyContent="space-between">
           <text attributes={TextAttributes.BOLD} fg={theme.text} bg={textBg()}>

@@ -100,8 +100,8 @@ export function DialogWorkspaceFileChanges(props: {
               <box flexDirection="row" gap={1} minWidth={7} flexShrink={0} justifyContent="flex-end">
                 <text>
                   {" "}
-                  {item.additions ? <span style={{ fg: theme.diffAdded }}>+{item.additions}</span> : null}
-                  {item.deletions ? <span style={{ fg: theme.diffRemoved }}> -{item.deletions}</span> : null}
+                  {item.additions ? <span style={{ fg: theme.diffAdded }}>+{item.additions}</span> : ""}
+                  {item.deletions ? <span style={{ fg: theme.diffRemoved }}> -{item.deletions}</span> : ""}
                 </text>
               </box>
             </box>
