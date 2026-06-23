@@ -1,201 +1,76 @@
-> **BanyanCode fork.** This repository is a fork of [OpenCode](https://github.com/anomalyco/opencode). BanyanCode adds: (1) an **orchestrator + subagent mesh** for parallel multi-agent workflows, (2) **cross-session memory** with optional embeddings, (3) a **2-phase codebase utility** (polyglot code graph via tree-sitter, then embeddings for semantic search), and (4) a **researcher agent** with free web search via DuckDuckGo. BanyanCode is TUI/CLI only - the desktop, web, app, and Storybook packages are explicitly out of scope. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for repo layout, runtime layers, and BanyanCode service architecture; per-feature design lives in `specs/banyancode/`.
+# BanyanCode
 
-- To regenerate the JavaScript SDK, run `./packages/sdk/js/script/build.ts`.
-- The default branch in this repo is `dev`.
-- Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
+This repository is a fork of [OpenCode](https://github.com/anomalyco/opencode). BanyanCode adds: (1) an **orchestrator + subagent mesh** for parallel multi-agent workflows, (2) **cross-session memory** with optional embeddings and JSONB payloads, (3) a **2-phase codebase utility** (tree-sitter code graph + Turso/libSQL vector search), and (4) a **researcher agent** with free web search via DuckDuckGo. BanyanCode is TUI/CLI only — `desktop`, `web`, `app`, `storybook` packages are explicitly out of scope.
 
-## Branch Names
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for repo layout, runtime layers, and the BanyanCode service architecture. Per-feature design lives in `specs/banyancode/`. Current implementation plan lives in [`plan.md`](plan.md).
 
-Use a short branch name of at most three words, separated by hyphens. Do not use slashes or type prefixes such as `feat/` or `fix/`.
+## Branch, commit, and PR conventions
 
-Examples: `session-recovery`, `fix-scroll-state`, `regenerate-sdk`.
+- Default branch is `dev`; use `dev` or `origin/dev` for diffs. Local `main` ref may not exist.
+- Branch names: ≤ three words, hyphen-separated, no type prefixes (`feat/`, `fix/`). Examples: `session-recovery`, `fix-scroll-state`, `regenerate-sdk`.
+- Commits and PR titles: `type(scope): summary`. Valid types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`. Useful scopes: `core`, `opencode`, `tui`, `sdk`, `plugin`.
+- One logical change per commit. Run `bun typecheck` and the relevant `bun test` between commits.
+- Regenerate the JS SDK after any HTTP route or schema change: `./packages/sdk/js/script/build.ts`.
 
-## Commits and PR Titles
+## Style guide
 
-Use conventional commit-style messages and PR titles: `type(scope): summary`.
+- Keep things in one function unless composable or reusable. Don't extract single-use helpers preemptively.
+- Inline values that are only used once.
+- Prefer `const` over `let`. Use ternaries or early returns instead of reassignment.
+- Avoid `else`; prefer early returns.
+- Avoid `try`/`catch` where possible; let errors propagate.
+- Avoid the `any` type. Rely on type inference; declare types only for exports or clarity.
+- Prefer functional array methods (`flatMap`, `filter`, `map`) over `for` loops; use type guards on `filter` to keep downstream inference.
+- Avoid unnecessary destructuring; use dot notation to preserve context.
+- Never alias imports (`import { foo as bar }`) and never use star imports.
+- Use Bun APIs where possible (`Bun.file()`).
+- In `src/config`, follow the self-export pattern (`export * as ConfigAgent from "./agent"`) when adding a config module.
+- Drizzle: use `snake_case` field names so column names don't need redefinition.
+- Comments only for non-obvious constraints or surprising behavior.
 
-Valid types are `feat`, `fix`, `docs`, `chore`, `refactor`, and `test`. Scopes are optional; use the affected package or area when helpful, e.g. `core`, `opencode`, `tui`, `app`, `desktop`, `sdk`, or `plugin`.
+## Testing and type checking
 
-Examples: `fix(tui): simplify thinking toggle styling`, `docs: update contributing guide`, `chore(sdk): regenerate types`.
+- Tests cannot run from repo root (guard: `do-not-run-tests-from-root`). Run from package directories, e.g. `packages/opencode` or `packages/core`.
+- Avoid mocks. Test actual implementation. Use `tmpdir()` + `Database.layerFromPath(tmpDbPath)` for any BanyanCode repo test that hits a real DB.
+- Always run `bun typecheck` from a package directory; never `tsc` directly.
 
-## Style Guide
+## BanyanCode product identity
 
-### General Principles
-
-- Keep things in one function unless composable or reusable
-- Do not extract single-use helpers preemptively. Inline the logic at the call site unless the helper is reused, hides a genuinely complex boundary, or has a clear independent name that improves the caller.
-- Avoid `try`/`catch` where possible
-- Avoid using the `any` type
-- Use Bun APIs when possible, like `Bun.file()`
-- Rely on type inference when possible; avoid explicit type annotations or interfaces unless necessary for exports or clarity
-- Prefer functional array methods (flatMap, filter, map) over for loops; use type guards on filter to maintain type inference downstream
-- In `src/config`, follow the existing self-export pattern at the top of the file (for example `export * as ConfigAgent from "./agent"`) when adding a new config module.
-
-Reduce total variable count by inlining when a value is only used once.
-
-```ts
-// Good
-const journal = await Bun.file(path.join(dir, "journal.json")).json()
-
-// Bad
-const journalPath = path.join(dir, "journal.json")
-const journal = await Bun.file(journalPath).json()
-```
-
-### Destructuring
-
-Avoid unnecessary destructuring. Use dot notation to preserve context.
-
-```ts
-// Good
-obj.a
-obj.b
-
-// Bad
-const { a, b } = obj
-```
-
-### Imports
-
-- Never alias imports. Do not use `import { foo as bar } from "..."` or renamed imports like `resolve as pathResolve`.
-- Never use star imports. Do not use `import * as Foo from "..."` or `import type * as Foo from "..."`.
-- If a namespace-style value is needed, import the module's own exported namespace by name, for example `import { Project } from "@opencode-ai/core/project"`, then reference `Project.ID`.
-- Prefer dynamic imports for heavy modules that are only needed in selected code paths, especially in startup-sensitive entrypoints. Destructure dynamic import bindings near the top of the narrowest scope that needs them so they read like normal imports. Avoid inline chains such as `await import("./module").then((mod) => mod.value())` or `(await import("./module")).value()`. Keep branch-specific imports inside the branch that needs them to preserve lazy loading.
-
-### Variables
-
-Prefer `const` over `let`. Use ternaries or early returns instead of reassignment.
-
-```ts
-// Good
-const foo = condition ? 1 : 2
-
-// Bad
-let foo
-if (condition) foo = 1
-else foo = 2
-```
-
-### Control Flow
-
-Avoid `else` statements. Prefer early returns.
-
-```ts
-// Good
-function foo() {
-  if (condition) return 1
-  return 2
-}
-
-// Bad
-function foo() {
-  if (condition) return 1
-  else return 2
-}
-```
-
-### Complex Logic
-
-When a function has several validation branches or supporting details, make the main function read as the happy path and move supporting details into small helpers below it.
-
-```ts
-// Good
-export function loadThing(input: unknown) {
-  const config = requireConfig(input)
-  const metadata = readMetadata(input)
-  return createThing({ config, metadata })
-}
-
-function requireConfig(input: unknown) {
-  ...
-}
-```
-
-- Keep helpers close to the code they support, below the main export when that improves readability.
-- Do not over-abstract simple expressions into many single-use helpers; extract only when it names a real concept like `requireConfig` or `readMetadata`.
-- Do not return `Effect` from helpers unless they actually perform effectful work. Synchronous parsing, validation, and option building should stay synchronous.
-- Prefer Effect schema helpers such as `Schema.UnknownFromJsonString` and `Schema.decodeUnknownOption` over manual `JSON.parse` wrapped in `Effect.try` when parsing untrusted JSON strings.
-- Add comments for non-obvious constraints and surprising behavior, not for obvious assignments or control flow.
-
-### Schema Definitions (Drizzle)
-
-Use snake_case for field names so column names don't need to be redefined as strings.
-
-```ts
-// Good
-const table = sqliteTable("session", {
-  id: text().primaryKey(),
-  project_id: text().notNull(),
-  created_at: integer().notNull(),
-})
-
-// Bad
-const table = sqliteTable("session", {
-  id: text("id").primaryKey(),
-  projectID: text("project_id").notNull(),
-  createdAt: integer("created_at").notNull(),
-})
-```
-
-## Testing
-
-- Avoid mocks as much as possible
-- Test actual implementation, do not duplicate logic into tests
-- Tests cannot run from repo root (guard: `do-not-run-tests-from-root`); run from package dirs like `packages/opencode`.
-
-## Type Checking
-
-- Always run `bun typecheck` from package directories (e.g., `packages/opencode`), never `tsc` directly.
-
-## BanyanCode Product Identity
-
-BanyanCode is its own product, NOT a plugin or config of OpenCode. It has separate file locations, a separate config schema, and separate env vars. Both products can be installed side by side without interference.
+BanyanCode is its own product, NOT a plugin or config of OpenCode. Both install side by side and never read or write each other's files.
 
 | Concern | OpenCode | BanyanCode |
-|---------|----------|------------|
-| Per-project config file | `./opencode.json` | `./banyancode.json` |
+|---|---|---|
+| Per-project config | `./opencode.json` | `./banyancode.json` |
 | Per-project dir | `./.opencode/` | `./.banyancode/` |
 | Global config | `~/.config/opencode/` | `~/.config/banyancode/` |
 | Data dir | `~/.local/share/opencode/` | `~/.local/share/banyancode/` |
-| Cache dir | `~/.cache/opencode/` | `~/.cache/banyancode/` |
-| State dir | `~/.local/state/opencode/` | `~/.local/state/banyancode/` |
-| Temp dir | `/tmp/opencode/` | `/tmp/banyancode/` |
-| DB | `opencode.db` | `banyancode.db` |
+| DB filename | `opencode.db` | `banyancode.db` |
 | Env var prefix | `OPENCODE_*` | `BANYANCODE_*` |
 | Config schema | `ConfigV1.Info` | `BanyanConfig.Info` |
 | Service namespace | (n/a) | `Banyan.X.Service` |
 
-Both load in parallel — OpenCode keeps using `.opencode/`, BanyanCode only reads/writes `.banyancode/`. The two products do NOT share config files, env vars, or service instances.
+BanyanCode-specific keys (`banyancode_embedding_model`, `banyancode_yolo_mode`, `banyancode_max_subagents`, future telegram/runtime keys) live in `BanyanConfig.Info` (`packages/core/src/v1/config/banyan-config.ts`). They were removed from `ConfigV1.Info`. Consumers MUST use `Banyan.BanyanConfigService` — `Config.Service.getGlobal().banyancode_*` will fail typecheck.
 
-## BanyanCode vs OpenCode config key separation
-
-BanyanCode-specific keys (`banyancode_embedding_model`, `banyancode_yolo_mode`, future telegram/runtime keys) live in `BanyanConfig.Info` (`packages/core/src/v1/config/banyan-config.ts`). They were REMOVED from `ConfigV1.Info`. Consumers MUST use `Banyan.BanyanConfigService` for these keys — `Config.Service.getGlobal().banyancode_*` will fail typecheck.
-
-## Sub-directories that mirror in both products
-
-For each sub-directory loader in `packages/opencode/src/config/`, the config loader iterates BOTH `.opencode/` and `.banyancode/` directories. So `.opencode/agents/foo.md` AND `.banyancode/agents/foo.md` are both discovered and merged. The sub-dir naming convention is the same: `agent/`, `agents/`, `command/`, `commands/`, `skill/`, `skills/`, `plugin/`, `plugins/`, `plans/`, plus `tui.json`.
-
-## Migration lessons (from the .banyancode migration)
-
-When adding a new product identity to a fork:
-1. Use a feature branch (e.g. `banyancode-identity`), not the main branch
-2. One logical change per commit — typecheck + tests after each
-3. Move consumers ONE AT A TIME to the new schema, then DELETE the old key — never do both in the same commit
-4. Add a new SDK endpoint as `as any` cast in the consumer, then regenerate the SDK and remove the cast as a separate commit
-5. Test fixtures need DB/tmpdir setup in the SAME commit as any data-path change, not later
+For each sub-directory loader in `packages/opencode/src/config/`, the loader iterates BOTH `.opencode/` and `.banyancode/`. So `.opencode/agents/foo.md` AND `.banyancode/agents/foo.md` are both discovered and merged. Convention: `agent/`, `agents/`, `command/`, `commands/`, `skill/`, `skills/`, `plugin/`, `plugins/`, `plans/`, plus `tui.json`.
 
 ## Parallel subagent work
 
-When dispatching multiple subagents in parallel, expect git index.lock races and commit content races (one subagent's `git add` can pick up files meant for another). Pattern: have ONE lead agent do the commits, each subagent reports the files they edited but doesn't commit. The lead runs `git add <specific files>` and commits each change separately.
+When dispatching multiple `@coder` subagents in parallel, expect git index.lock races and commit content races (one subagent's `git add` can pick up files meant for another). Pattern:
+- The lead agent does all commits.
+- Each subagent returns a list of files modified, never commits.
+- Lead runs `git add <specific files>` and commits each change separately.
+- Run `bun typecheck` and `bun test` between phases.
 
-## V2 Session Core
+## Hard-won lessons (update this section as we learn more)
 
-- Keep durable prompt admission separate from model execution. `SessionV2.prompt(...)` admits one durable `session_input` row before scheduling advisory `SessionExecution.wake(sessionID)` unless `resume: false` requests admit-only behavior. The serialized runner promotes admitted inputs into visible user messages at safe boundaries.
-- Reusing a Session ID adopts the existing Session. Reusing a prompt message ID reconciles an exact retry only when Session, prompt, and delivery mode match; conflicting reuse fails. Historical projected prompts lazily synthesize promoted inbox records during exact retry.
-- Keep `SessionExecution` process-global and Session-ID based. Its local implementation owns the process-local Session coordinator and discovers placement through `SessionStore` plus `LocationServiceMap.get(session.location)` only when a drain starts; no layer should take a Session ID. V2 interruption targets the active process-local ownership chain for that Session; idle or missing interruption is a no-op.
-- Keep `SessionRunner`, model resolution, tool registry, permissions, and filesystem Location-scoped. Omitted `Location.workspaceID` means implicit-local placement; explicit workspace identity remains reserved for future placement semantics.
-- Preserve one explicit `llm.stream(request)` call per provider turn and reload projected history before durable continuation. Do not bridge through legacy `SessionPrompt.loop(...)` or delegate orchestration to an in-memory tool loop.
-- Keep local Session drains process-local until clustering is implemented. `SessionRunCoordinator` joins explicit same-Session resumes, coalesces prompt wakeups, and allows different Sessions to run concurrently. Advisory wakes drain eligible durable inbox rows only; post-crash activity recovery requires a separate explicit design before it may retry provider work.
-- Keep delivery vocabulary explicit. Prompts steer by default and coalesce into the active activity at the next safe provider-turn boundary. Explicit `queue` inputs open FIFO future activities one at a time after the active activity settles.
-- Keep EventV2 replay owner claims separate from clustered Session execution ownership.
-- Keep the System Context algebra, registry, and built-ins in `src/system-context`; keep Context Source producers with their observed domains, and keep Session History selection plus Context Epoch persistence Session-owned.
+**Path traversal in HTTP schemas is the default — always validate.** Any string that ends up in `path.join` (filenames, slugs, identifiers written to disk) MUST be `Schema.isPattern` constrained at the schema boundary AND escape-validated in the handler. Defense-in-depth: strip disallowed chars AND verify the resolved absolute path is still inside the resolved parent directory. Reference: `BanyanAgentSaveInput.name` validation in `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:68` + `handlers/global.ts:242`.
+
+**Schema migrations are dangerous — preserve data across destructive refactors.** The `resetEmbeddingsTable` migration originally did `DROP TABLE codegraph_embeddings` then recreated with the new `F32_BLOB(dim)`. Every model switch wiped the user's accumulated embeddings. Fixed by `clearEmbeddingsForModel(model)` which only removes rows for the model being switched TO (none should exist yet), preserving embeddings under the old model. Default to non-destructive migrations; reserve `{ force: true }` for explicit "wipe everything" calls.
+
+**`Effect.runSync` from a non-Fiber runtime throws `FiberFailure`.** Any service method that reads from `Ref` / `Queue` / `Stream` MUST be `Effect.Effect<A, E, R>`, never a sync accessor that internally does `Effect.runSync(...)`. If callers legitimately need sync, do `Effect.runSync` at the call site, not in the service impl. Reference: `EmbeddingProvider.model` in `packages/core/src/banyancode/embedding-provider.ts`.
+
+**Subscription leaks come from `bus.on(...)` inside component bodies.** Every `useEvent().on(type, handler)` or `event.on(type, handler)` inside a Solid component body MUST be paired with `onCleanup(unsub)`. Otherwise listeners accumulate across remounts and the bus fires the handler N times for N visits. The two correct patterns are `const unsub = ev.on(...); onCleanup(unsub)` and inline `onCleanup(event.on(...))`.
+
+**Hot-path collections need explicit bounds.** A `Queue.unbounded` polled by an event loop grows without limit if no consumer is attached. Use `Queue.bounded(N)` where N is the max acceptable back-pressure window. Per-call `Effect.runForkWith(context)` spawns fibers with no scope; replace with `Stream.fromQueue(sharedQueue)` (throttled if needed) instead of one fiber per consumer.
+
+**Count and stream, don't `SELECT *` + `.length`.** `bumpVersion` originally loaded every node and every edge into JS just to call `.length`. Use `SELECT COUNT(*)` for cardinality and stream with cursors for bulk iteration. 10K-node codegraphs blew up RSS on every indexer cycle before this was fixed.
