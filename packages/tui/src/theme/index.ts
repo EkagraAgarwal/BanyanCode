@@ -48,6 +48,7 @@ export type Theme = {
   readonly backgroundPanel: RGBA
   readonly backgroundElement: RGBA
   readonly backgroundMenu: RGBA
+  readonly overlay: RGBA
   readonly border: RGBA
   readonly borderActive: RGBA
   readonly borderSubtle: RGBA
@@ -120,9 +121,10 @@ type ColorValue = HexColor | RefName | Variant | RGBA
 export type ThemeJson = {
   $schema?: string
   defs?: Record<string, HexColor | RefName>
-  theme: Omit<Record<ThemeColor, ColorValue>, "selectedListItemText" | "backgroundMenu"> & {
+  theme: Omit<Record<ThemeColor, ColorValue>, "selectedListItemText" | "backgroundMenu" | "overlay"> & {
     selectedListItemText?: ColorValue
     backgroundMenu?: ColorValue
+    overlay?: ColorValue
     thinkingOpacity?: number
   }
 }
@@ -265,7 +267,7 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light") {
 
   const resolved = Object.fromEntries(
     Object.entries(theme.theme)
-      .filter(([key]) => key !== "selectedListItemText" && key !== "backgroundMenu" && key !== "thinkingOpacity")
+      .filter(([key]) => key !== "selectedListItemText" && key !== "backgroundMenu" && key !== "overlay" && key !== "thinkingOpacity")
       .map(([key, value]) => {
         return [key, resolveColor(value as ColorValue)]
       }),
@@ -286,6 +288,13 @@ export function resolveTheme(theme: ThemeJson, mode: "dark" | "light") {
     resolved.backgroundMenu = resolveColor(theme.theme.backgroundMenu)
   } else {
     resolved.backgroundMenu = resolved.backgroundElement
+  }
+
+  // Handle overlay - optional with fallback to ~27% black for modal backdrops
+  if (theme.theme.overlay !== undefined) {
+    resolved.overlay = resolveColor(theme.theme.overlay)
+  } else {
+    resolved.overlay = RGBA.fromInts(0, 0, 0, 70)
   }
 
   // Handle thinkingOpacity - optional with default of 0.6
@@ -418,6 +427,7 @@ export function generateSystem(colors: TerminalColors, mode: "dark" | "light"): 
       backgroundPanel: grays[2],
       backgroundElement: grays[3],
       backgroundMenu: grays[3],
+      overlay: RGBA.fromInts(0, 0, 0, 70),
 
       // Border colors
       borderSubtle: grays[6],
