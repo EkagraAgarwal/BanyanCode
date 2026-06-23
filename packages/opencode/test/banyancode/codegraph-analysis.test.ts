@@ -53,6 +53,10 @@ const makeMockRepoLayer = () =>
         bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1 }),
         resetEmbeddingsTable: () => Effect.succeed(undefined),
         searchByVector: () => Effect.succeed([]),
+        searchNodes: () => Effect.succeed([]),
+        countNodes: () => Effect.succeed(0),
+        countEdges: () => Effect.succeed(0),
+        countFiles: () => Effect.succeed(0),
       })
     }),
   )
