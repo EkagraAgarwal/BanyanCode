@@ -59,7 +59,6 @@ import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
 import { Toast, useToast } from "../../ui/toast"
 import { CodegraphProgress } from "../../component/codegraph-progress"
-import { ResizableSeparator } from "../../component/resizable-separator"
 import { useKV } from "../../context/kv.tsx"
 import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
@@ -1220,21 +1219,13 @@ export function Session() {
                 </Match>
               </Switch>
             </Show>
-            <Show when={leftDocked()}>
-              <ResizableSeparator
-                onResize={(newWidthPct) => {
-                  const clamped = Math.max(15, Math.min(45, newWidthPct))
-                  setLeftSidebarWidth(() => clamped)
-                }}
-                initialWidthPct={leftSidebarWidth}
-              />
-            </Show>
             <Show when={wide() && leftCollapsed() && !session()?.parentID}>
               <CollapsedRail side="left" onExpand={() => setLeftCollapsed(() => false)} />
             </Show>
             <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
             <Show when={session()}>
               <pluginRuntime.Slot name="session_main_tabs" />
+              <box zIndex={1} flexGrow={1} minHeight={0} flexDirection="column">
               <Switch>
                 <Match when={activeTab() === "chat"}>
                   <scrollbox
@@ -1378,7 +1369,8 @@ export function Session() {
                   </box>
                 </Match>
               </Switch>
-              <box flexShrink={0}>
+              </box>
+              <box flexShrink={0} zIndex={1000}>
                 <Show when={permissions().length > 0}>
                   <PermissionPrompt
                     request={permissions()[0]}
@@ -1425,14 +1417,6 @@ export function Session() {
               when={inspectorVisible()}
               fallback={<CollapsedRail side="right" onExpand={() => setRightCollapsed(() => false)} />}
             >
-              <ResizableSeparator
-                invert
-                onResize={(newWidthPct) => {
-                  const clamped = Math.max(15, Math.min(45, newWidthPct))
-                  setRightSidebarWidth(() => clamped)
-                }}
-                initialWidthPct={rightSidebarWidth}
-              />
               <box width={`${rightSidebarWidth()}%`} flexShrink={0}>
                 <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
               </box>

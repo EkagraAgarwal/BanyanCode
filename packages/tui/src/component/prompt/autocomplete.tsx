@@ -714,7 +714,7 @@ export function Autocomplete(props: {
       top={position().y - height()}
       left={position().x}
       width={position().width}
-      zIndex={100}
+      zIndex={1500}
       backgroundColor={theme.backgroundMenu}
       {...SplitBorder}
       borderColor={theme.border}
@@ -738,7 +738,7 @@ export function Autocomplete(props: {
             <box
               paddingLeft={1}
               paddingRight={1}
-              backgroundColor={index === store.selected ? theme.primary : undefined}
+              backgroundColor={index === store.selected ? theme.primary : theme.backgroundMenu}
               flexDirection="row"
               gap={2}
               onMouseMove={() => {
