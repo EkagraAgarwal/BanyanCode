@@ -69,7 +69,10 @@ function View(props: { api: TuiPluginApi }) {
       </text>
 
       {!status() ? (
-        <text fg={toHex(theme().textMuted)} marginTop={1}>Waiting for data...</text>
+        <box flexDirection="row" gap={2} marginTop={1} alignItems="center">
+          <text fg={toHex(theme().primary)}>◌</text>
+          <text fg={toHex(theme().textMuted)}>Waiting for system data…</text>
+        </box>
       ) : (
         <>
           <box marginTop={1} gap={0}>

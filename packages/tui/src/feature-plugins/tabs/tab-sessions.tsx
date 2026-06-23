@@ -1,8 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createSignal, createResource, createMemo, For, Show } from "solid-js"
+import { createSignal, createResource, createMemo, onCleanup, For, Show } from "solid-js"
+import { useKeyboard } from "@opentui/solid"
 import { useToast } from "../../ui/toast"
+import { useEvent } from "../../context/event"
 import { toHex } from "../../util/color"
 
 const id = "internal:tab-sessions"
@@ -19,9 +21,10 @@ interface SessionItem {
 function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
   const toast = useToast()
+  const event = useEvent()
   const [refreshTrigger, setRefreshTrigger] = createSignal(0)
 
-  const [sessions] = createResource<SessionItem[]>(async () => {
+  const [sessions] = createResource<SessionItem[], number>(refreshTrigger, async () => {
     try {
       const result = await props.api.client.session.list({})
       return (result.data ?? []) as SessionItem[]
@@ -30,8 +33,12 @@ function View(props: { api: TuiPluginApi }) {
     }
   })
 
+  // Renames (and any other session mutation) emit session.updated; refetch so the new title shows immediately.
+  onCleanup(event.on("session.updated", () => setRefreshTrigger((n) => n + 1)))
+
   const [editingId, setEditingId] = createSignal<string | null>(null)
   const [editingTitle, setEditingTitle] = createSignal("")
+  const [selectedId, setSelectedId] = createSignal<string | null>(null)
 
   const rootSessions = createMemo(() =>
     (sessions() ?? []).filter((s) => !s.parentID).sort((a, b) =>
@@ -83,26 +90,51 @@ function View(props: { api: TuiPluginApi }) {
     cancelEdit()
   }
 
+  useKeyboard((evt) => {
+    if (editingId() !== null) {
+      if (evt.name === "escape") cancelEdit()
+      return
+    }
+    if (evt.name !== "e") return
+    const target = selectedId() ?? rootSessions()[0]?.id
+    const match = (sessions() ?? []).find((s) => s.id === target)
+    if (match) startEdit(match)
+  })
+
   return (
     <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
       <box flexDirection="column" paddingTop={1} gap={1}>
         <text fg={toHex(theme().text)}><b>Sessions</b></text>
-        <Show when={sessions() !== undefined} fallback={<text fg={toHex(theme().textMuted)}>Loading...</text>}>
+        <Show when={sessions() !== undefined} fallback={
+          <text fg={toHex(theme().textMuted)} paddingLeft={2} paddingTop={2}>Loading…</text>
+        }>
           <Show
             when={rootSessions().length > 0}
-            fallback={<text fg={toHex(theme().textMuted)}>No sessions yet. Start one from the chat tab.</text>}
+            fallback={
+              <box flexDirection="column" paddingLeft={2} paddingTop={2} gap={1}>
+                <box flexDirection="row" gap={2} alignItems="center">
+                  <text fg={toHex(theme().textMuted)}>∅</text>
+                  <text fg={toHex(theme().text)}>No sessions yet</text>
+                </box>
+                <box paddingLeft={4}>
+                  <text fg={toHex(theme().textMuted)}>Start a session from the chat tab with <b>/new</b>.</text>
+                </box>
+              </box>
+            }
           >
             <For each={rootSessions()}>
               {(session) => <SessionRow
                 session={session}
                 children={children(session.id)}
                 theme={theme()}
-                isEditing={editingId() === session.id}
+                editingId={editingId()}
                 editTitle={editingTitle()}
+                selectedId={selectedId()}
+                onSelect={setSelectedId}
                 onEditTitle={setEditingTitle}
-                onStartEdit={() => startEdit(session)}
+                onStartEdit={startEdit}
                 onCancelEdit={cancelEdit}
-                onSaveEdit={() => saveEdit(session)}
+                onSaveEdit={saveEdit}
                 timeAgo={timeAgo}
               />}
             </For>
@@ -113,61 +145,87 @@ function View(props: { api: TuiPluginApi }) {
   )
 }
 
-function SessionRow(props: {
-  session: SessionItem
-  children: SessionItem[]
+interface RowControllerProps {
   theme: any
-  isEditing: boolean
+  editingId: string | null
   editTitle: string
+  selectedId: string | null
+  onSelect: (id: string) => void
   onEditTitle: (v: string) => void
-  onStartEdit: () => void
+  onStartEdit: (s: SessionItem) => void
   onCancelEdit: () => void
-  onSaveEdit: () => void
+  onSaveEdit: (s: SessionItem) => void
   timeAgo: (ts?: number) => string
-}) {
+}
+
+function SessionRow(props: RowControllerProps & { session: SessionItem; children: SessionItem[] }) {
   return (
     <box flexDirection="column">
-      <box flexDirection="row" gap={1} alignItems="center">
+      <box
+        flexDirection="row"
+        gap={1}
+        alignItems="center"
+        onMouseDown={() => props.onSelect(props.session.id)}
+      >
         <text fg={toHex(props.theme.success)}>●</text>
-        <Show
-          when={props.isEditing}
-          fallback={
-            <box flexDirection="row" gap={1} flexGrow={1}>
-              <text fg={toHex(props.theme.text)} flexGrow={1}>
-                {props.session.title || "(untitled)"}
-              </text>
-              <text fg={toHex(props.theme.textMuted)}>{props.timeAgo(props.session.time?.updated)}</text>
-              <text fg={toHex(props.theme.primary)}>[e rename]</text>
-            </box>
-          }
-        >
-          <input
-            value={props.editTitle}
-            onInput={(v: string) => props.onEditTitle(v)}
-            onSubmit={() => props.onSaveEdit()}
-            flexGrow={1}
-          />
-          <text fg={toHex(props.theme.success)}>[⏎ save]</text>
-          <text fg={toHex(props.theme.textMuted)}>[esc cancel]</text>
-        </Show>
+        <EditableTitle controller={props} session={props.session} />
       </box>
       <Show when={props.children.length > 0}>
         <box flexDirection="column" paddingLeft={3} marginTop={1}>
           <For each={props.children}>
             {(child) => (
-              <box flexDirection="row" gap={1}>
+              <box
+                flexDirection="row"
+                gap={1}
+                alignItems="center"
+                onMouseDown={() => props.onSelect(child.id)}
+              >
                 <text fg={toHex(props.theme.textMuted)}>└─</text>
                 <text fg={toHex(props.theme.text)}>↳</text>
                 <text fg={toHex(props.theme.textMuted)}>{child.agent ?? "subagent"}</text>
                 <text fg={toHex(props.theme.textMuted)}>·</text>
-                <text fg={toHex(props.theme.text)}>{child.title || "(no title)"}</text>
-                <text fg={toHex(props.theme.textMuted)}>{props.timeAgo(child.time?.updated)}</text>
+                <EditableTitle controller={props} session={child} />
               </box>
             )}
           </For>
         </box>
       </Show>
     </box>
+  )
+}
+
+function EditableTitle(props: { controller: RowControllerProps; session: SessionItem }) {
+  const c = () => props.controller
+  const isEditing = () => c().editingId === props.session.id
+  const isSelected = () => c().selectedId === props.session.id
+  return (
+    <Show
+      when={isEditing()}
+      fallback={
+        <box
+          flexDirection="row"
+          gap={1}
+          flexGrow={1}
+          onMouseDown={() => c().onStartEdit(props.session)}
+        >
+          <text fg={toHex(c().theme.text)} flexGrow={1}>
+            {props.session.title || "(untitled)"}
+          </text>
+          <text fg={toHex(c().theme.textMuted)}>{c().timeAgo(props.session.time?.updated)}</text>
+          <text fg={toHex(isSelected() ? c().theme.primary : c().theme.textMuted)}>[e rename]</text>
+        </box>
+      }
+    >
+      <input
+        value={c().editTitle}
+        onInput={(v: string) => c().onEditTitle(v)}
+        onSubmit={() => c().onSaveEdit(props.session)}
+        flexGrow={1}
+        ref={(r: { focus(): void } | undefined) => setTimeout(() => r?.focus(), 1)}
+      />
+      <text fg={toHex(c().theme.success)}>[⏎ save]</text>
+      <text fg={toHex(c().theme.textMuted)} onMouseDown={() => c().onCancelEdit()}>[esc cancel]</text>
+    </Show>
   )
 }
 

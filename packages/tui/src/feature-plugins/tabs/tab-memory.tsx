@@ -46,23 +46,36 @@ function View(props: { api: TuiPluginApi }) {
           <b>Memory</b>
         </text>
         {loading() ? (
-          <text fg={toHex(theme().textMuted)}>Loading...</text>
+          <box flexDirection="column" paddingLeft={2} paddingTop={2} gap={1}>
+            <box flexDirection="row" gap={2} alignItems="center">
+              <text fg={toHex(theme().primary)}>◌</text>
+              <text fg={toHex(theme().textMuted)}>Loading memory…</text>
+            </box>
+          </box>
         ) : entries().length === 0 ? (
-          <text fg={toHex(theme().textMuted)}>No memory entries.</text>
+          <box flexDirection="column" paddingLeft={2} paddingTop={2} gap={1}>
+            <box flexDirection="row" gap={2} alignItems="center">
+              <text fg={toHex(theme().textMuted)}>∅</text>
+              <text fg={toHex(theme().text)}>No memory entries</text>
+            </box>
+            <box paddingLeft={4}>
+              <text fg={toHex(theme().textMuted)}>Memory is populated as agents work; it persists across sessions.</text>
+            </box>
+          </box>
         ) : (
           <For each={entries()}>
             {(entry) => (
               <box flexDirection="row" gap={2} marginTop={1}>
-                <text fg={toHex(theme().primary)} wrapMode="word" width={20}>
+                <text fg={toHex(theme().primary)} flexGrow={3} flexBasis={0} flexShrink={1} truncate>
                   {entry.key}
                 </text>
-                <text fg={toHex(theme().textMuted)} width={8}>
+                <text fg={toHex(theme().textMuted)} flexGrow={1} flexBasis={0} flexShrink={1} truncate>
                   v{entry.version}
                 </text>
-                <text fg={toHex(theme().textMuted)} width={10} truncate>
+                <text fg={toHex(theme().textMuted)} flexGrow={2} flexBasis={0} flexShrink={1} truncate>
                   {entry.agentID ?? "—"}
                 </text>
-                <text fg={toHex(theme().text)} truncate>
+                <text fg={toHex(theme().text)} flexGrow={5} flexBasis={0} flexShrink={1} truncate>
                   {previewValue(entry.value)}
                 </text>
               </box>

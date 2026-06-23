@@ -250,10 +250,23 @@ function View(props: { api: TuiPluginApi }) {
 
         <Show
           when={data()}
-          fallback={<text fg={toHex(theme.textMuted)}>Loading graph...</text>}
+          fallback={
+            <box flexDirection="row" gap={2} paddingTop={2} alignItems="center">
+              <text fg={toHex(theme.primary)}>◌</text>
+              <text fg={toHex(theme.textMuted)}>Loading graph…</text>
+            </box>
+          }
         >
           <Show when={visible().nodes.length > 0} fallback={
-            <text fg={toHex(theme.textMuted)} marginTop={1}>No nodes for this layer</text>
+            <box flexDirection="column" gap={1} paddingTop={2}>
+              <box flexDirection="row" gap={2} alignItems="center">
+                <text fg={toHex(theme.textMuted)}>∅</text>
+                <text fg={toHex(theme.text)}>No nodes for this layer</text>
+              </box>
+              <box paddingLeft={4}>
+                <text fg={toHex(theme.textMuted)}>Try a different layer, or rebuild with <b>/codegraph-build</b>.</text>
+              </box>
+            </box>
           }>
             {/* Flat-list fallback for large neighborhoods */}
             <Show when={visible().nodes.length > MAX_GRAPH_NODES}>
