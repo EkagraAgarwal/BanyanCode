@@ -42,6 +42,7 @@ function themeCurrent(): HostPluginApi["theme"]["current"] {
     backgroundPanel: h,
     backgroundElement: i,
     backgroundMenu: i,
+    overlay: h,
     border: j,
     borderActive: c,
     borderSubtle: i,

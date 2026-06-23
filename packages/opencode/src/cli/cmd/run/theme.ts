@@ -78,9 +78,10 @@ type Variant = {
 type ColorValue = HexColor | RefName | Variant | RGBA | number
 type ThemeJson = {
   defs?: Record<string, HexColor | RefName>
-  theme: Omit<Record<ThemeColor, ColorValue>, "selectedListItemText" | "backgroundMenu"> & {
+  theme: Omit<Record<ThemeColor, ColorValue>, "selectedListItemText" | "backgroundMenu" | "overlay"> & {
     selectedListItemText?: ColorValue
     backgroundMenu?: ColorValue
+    overlay?: ColorValue
     thinkingOpacity?: number
   }
 }
@@ -309,7 +310,10 @@ export function resolveTheme(theme: ThemeJson, pick: "dark" | "light"): TuiTheme
 
   const resolved = Object.fromEntries(
     Object.entries(theme.theme)
-      .filter(([key]) => key !== "selectedListItemText" && key !== "backgroundMenu" && key !== "thinkingOpacity")
+      .filter(
+        ([key]) =>
+          key !== "selectedListItemText" && key !== "backgroundMenu" && key !== "overlay" && key !== "thinkingOpacity",
+      )
       .map(([key, value]) => [key, resolveColor(value as ColorValue)]),
   ) as Partial<Record<ThemeColor, RGBA>>
 
@@ -321,6 +325,7 @@ export function resolveTheme(theme: ThemeJson, pick: "dark" | "light"): TuiTheme
         : resolveColor(theme.theme.selectedListItemText),
     backgroundMenu:
       theme.theme.backgroundMenu === undefined ? resolved.backgroundElement! : resolveColor(theme.theme.backgroundMenu),
+    overlay: theme.theme.overlay === undefined ? RGBA.fromInts(0, 0, 0, 70) : resolveColor(theme.theme.overlay),
     thinkingOpacity: theme.theme.thinkingOpacity ?? 0.6,
   }
 }
@@ -423,6 +428,7 @@ export function generateSystem(colors: TerminalColors, pick: "dark" | "light"): 
       backgroundPanel: grays[2],
       backgroundElement: grays[3],
       backgroundMenu: grays[3],
+      overlay: RGBA.fromInts(0, 0, 0, 70),
       borderSubtle: grays[6],
       border: grays[7],
       borderActive: grays[8],
