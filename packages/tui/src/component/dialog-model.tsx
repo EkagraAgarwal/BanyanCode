@@ -45,22 +45,7 @@ export function ModelPicker(props: ModelPickerProps) {
     const needle = query().trim()
 
     if (mode() === "embedding") {
-      // Each entry is the model identifier NIM / OpenAI / Cohere actually
-      // accepts as the `model` field on the /embeddings request. For NVIDIA
-      // NIM this is the full namespaced form (e.g. "nvidia/llama-nemotron-
-      // embed-1b-v2"); for OpenAI and Cohere it's the bare model name and
-      // the embedding-provider prepends providerID/. dim is shown in the
-      // picker so the user sees what they're committing to before the
-      // embedding table is recreated at a different F32_BLOB(N).
-      const builtInList = [
-        { providerID: "openai", modelID: "text-embedding-3-small", name: "Text Embedding 3 Small", dim: 1536, category: "OpenAI" },
-        { providerID: "openai", modelID: "text-embedding-3-large", name: "Text Embedding 3 Large", dim: 3072, category: "OpenAI" },
-        { providerID: "openai", modelID: "text-embedding-ada-002", name: "Text Embedding Ada 002", dim: 1536, category: "OpenAI" },
-        { providerID: "nvidia", modelID: "nvidia/llama-nemotron-embed-1b-v2", name: "Llama Nemotron Embed 1B v2", dim: 2048, category: "NVIDIA" },
-        { providerID: "nvidia", modelID: "nvidia/nv-embedqa-e5-v5", name: "NV EmbedQA E5 v5", dim: 1024, category: "NVIDIA" },
-        { providerID: "nvidia", modelID: "baai/bge-m3", name: "BGE-M3", dim: 1024, category: "NVIDIA" },
-        { providerID: "cohere", modelID: "embed-english-v3.0", name: "Embed English v3.0", dim: 1024, category: "Cohere" }
-      ]
+      const builtInList = BUILT_IN_EMBEDDING_MODELS
 
       const customEndpoints = banyanConfig()?.banyancode_openai_compatible_endpoints ?? []
       const customList = customEndpoints.flatMap((endpoint) => {
@@ -251,6 +236,31 @@ export function DialogModel(props: { providerID?: string }) {
 
   return <ModelPicker providerID={props.providerID} current={local.model.current()} onSelect={onSelect} />
 }
+
+// Each entry is the model identifier NIM / OpenAI / Cohere actually accepts
+// as the `model` field on the /embeddings request. For NVIDIA NIM this is the
+// full namespaced form (e.g. "nvidia/llama-nemotron-embed-1b-v2"); for OpenAI
+// and Cohere it's the bare model name and the embedding-provider prepends
+// providerID/. dim is shown in the picker so the user sees what they're
+// committing to before the embedding table is recreated at a different
+// F32_BLOB(N).
+export interface BuiltInEmbeddingModel {
+  readonly providerID: string
+  readonly modelID: string
+  readonly name: string
+  readonly dim: number
+  readonly category: string
+}
+
+export const BUILT_IN_EMBEDDING_MODELS: readonly BuiltInEmbeddingModel[] = [
+  { providerID: "openai", modelID: "text-embedding-3-small", name: "Text Embedding 3 Small", dim: 1536, category: "OpenAI" },
+  { providerID: "openai", modelID: "text-embedding-3-large", name: "Text Embedding 3 Large", dim: 3072, category: "OpenAI" },
+  { providerID: "openai", modelID: "text-embedding-ada-002", name: "Text Embedding Ada 002", dim: 1536, category: "OpenAI" },
+  { providerID: "nvidia", modelID: "nvidia/llama-nemotron-embed-1b-v2", name: "Llama Nemotron Embed 1B v2", dim: 2048, category: "NVIDIA" },
+  { providerID: "nvidia", modelID: "nvidia/nv-embedqa-e5-v5", name: "NV EmbedQA E5 v5", dim: 1024, category: "NVIDIA" },
+  { providerID: "nvidia", modelID: "baai/bge-m3", name: "BGE-M3", dim: 1024, category: "NVIDIA" },
+  { providerID: "cohere", modelID: "embed-english-v3.0", name: "Embed English v3.0", dim: 1024, category: "Cohere" },
+]
 
 export function sortModelOptions<T extends { footer?: string; releaseDate: string | number; title: string }>(
   options: T[],
