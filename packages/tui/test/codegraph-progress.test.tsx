@@ -10,13 +10,11 @@ import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 describe("CodegraphProgress", () => {
   test("renders without crashing on numeric state updates", async () => {
     let setBuildState: any
-    let setEmbedState: any
-    
+
     function TestComponent() {
       console.log("TestComponent evaluated")
       const build = useCodegraphBuild()
       setBuildState = build.set
-      setEmbedState = build.setEmbed
       return <CodegraphProgress />
     }
 
@@ -39,7 +37,7 @@ describe("CodegraphProgress", () => {
     }
 
     const app = await testRender(() => <Harness />)
-    
+
     try {
       // Wait for components to mount and initialize functions
       for (let i = 0; i < 50 && !setBuildState; i++) {
@@ -53,14 +51,10 @@ describe("CodegraphProgress", () => {
 
       // Test running
       setBuildState({ status: "running", done: 5, total: 10 })
-      
+
       // Force render cycle
       await app.renderOnce()
 
-      // Test embed running
-      setEmbedState({ status: "running", done: 10, total: 20 })
-      await app.renderOnce()
-      
       expect(true).toBe(true)
     } finally {
       app.renderer.destroy()

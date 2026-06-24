@@ -57,7 +57,7 @@ import { PromptStashProvider } from "./component/prompt/stash"
 import { DialogAlert } from "./ui/dialog-alert"
 import { DialogConfirm } from "./ui/dialog-confirm"
 import { ToastProvider, useToast } from "./ui/toast"
-import { CodegraphBuildProvider, useCodegraphBuild, CodegraphProgress, type CodegraphBuildState, type CodeEmbedState } from "./component/codegraph-progress"
+import { CodegraphBuildProvider, useCodegraphBuild, CodegraphProgress, type CodegraphBuildState } from "./component/codegraph-progress"
 import { isDefaultTitle } from "./util/session"
 import { KVProvider, useKV } from "./context/kv"
 import * as Model from "./util/model"
@@ -839,25 +839,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         },
       },
       {
-        name: "codegraph.embed",
-        title: "Compute code embeddings",
-        category: "BanyanCode",
-        slashName: "code-embed",
-        run: () => {
-          if (route.data.type !== "session") {
-            toast.show({ message: "Start a session first to compute embeddings", variant: "warning" })
-            dialog.clear()
-            return
-          }
-          void sdk.client.session.command({
-            sessionID: route.data.sessionID,
-            command: "code-embed",
-            arguments: "",
-          })
-          dialog.clear()
-        },
-      },
-      {
         name: "codegraph.remove",
         title: "Remove code graph index",
         category: "BanyanCode",
@@ -1109,8 +1090,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (workspace !== project.workspace.current()) return
     if ((evt.type as string) === "banyancode.codegraph.build") {
       build.set(evt.properties as CodegraphBuildState)
-    } else if ((evt.type as string) === "banyancode.codeembed.build") {
-      build.setEmbed(evt.properties as CodeEmbedState)
     }
   })
 

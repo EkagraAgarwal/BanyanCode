@@ -16,28 +16,15 @@ export type CodegraphBuildState = {
   error?: string
 }
 
-export type CodeEmbedState = {
-  status: "idle" | "running" | "completed" | "failed" | "cancelled"
-  done: number
-  total: number
-  result?: { embedded: number; skipped: number }
-  error?: string
-}
-
 function init() {
   const [store, setStore] = createStore({
     state: { status: "idle", done: 0, total: 0 } as CodegraphBuildState,
-    embedState: { status: "idle", done: 0, total: 0 } as CodeEmbedState,
   })
   return {
     get state() {
       return store.state
     },
-    get embedState() {
-      return store.embedState
-    },
     set: (s: CodegraphBuildState) => setStore("state", s),
-    setEmbed: (s: CodeEmbedState) => setStore("embedState", s),
   }
 }
 
@@ -68,21 +55,12 @@ function labelFor(status: CodegraphBuildState["status"]): string {
   return { idle: "Idle", running: "Running", completed: "Completed", failed: "Failed", cancelled: "Cancelled" }[status]
 }
 
-function borderColorForSingle(status: CodegraphBuildState["status"]): "info" | "success" | "warning" | "error" {
+function borderColorFor(status: CodegraphBuildState["status"]): "info" | "success" | "warning" | "error" {
   if (status === "running") return "info"
   if (status === "completed") return "success"
   if (status === "failed") return "error"
   if (status === "cancelled") return "warning"
   return "info"
-}
-
-function borderColorFor(status: CodegraphBuildState["status"], embedStatus: CodeEmbedState["status"]): "info" | "success" | "warning" | "error" {
-  if (status === "failed" || embedStatus === "failed") return "error"
-  if (status === "running" || embedStatus === "running") return "info"
-  if (status === "cancelled" || embedStatus === "cancelled") return "warning"
-  if (status === "completed" && embedStatus === "completed") return "success"
-  if (status !== "idle") return borderColorForSingle(status)
-  return borderColorForSingle(embedStatus)
 }
 
 export function CodegraphProgress() {
@@ -100,18 +78,8 @@ export function CodegraphProgress() {
     }
   })
 
-  createEffect(() => {
-    const embedStatus = build.embedState.status
-    if (embedStatus === "completed" || embedStatus === "cancelled") {
-      const timer = setTimeout(() => {
-        build.setEmbed({ status: "idle", done: 0, total: 0 })
-      }, 5000)
-      onCleanup(() => clearTimeout(timer))
-    }
-  })
-
   const isVisible = createMemo(() => {
-    return build.state.status !== "idle" || build.embedState.status !== "idle"
+    return build.state.status !== "idle"
   })
 
   return (
@@ -127,7 +95,7 @@ export function CodegraphProgress() {
         paddingTop={1}
         paddingBottom={1}
         backgroundColor={theme.backgroundPanel}
-        borderColor={theme[borderColorFor(build.state.status, build.embedState.status)]}
+        borderColor={theme[borderColorFor(build.state.status)]}
         border={["left", "right"]}
         customBorderChars={SplitBorder.customBorderChars}
       >
@@ -170,29 +138,6 @@ export function CodegraphProgress() {
             <text fg={theme.textMuted} marginTop={1}>
               Press Ctrl+C to cancel
             </text>
-          </Show>
-        </Show>
-
-        <Show when={build.embedState.status !== "idle"}>
-          <text attributes={TextAttributes.BOLD} marginTop={build.state.status !== "idle" ? 1 : 0} marginBottom={1} fg={theme.text}>
-            Code Embeddings — {labelFor(build.embedState.status)}
-          </text>
-          <text fg={theme.text}>
-            {`${bar(build.embedState.done, build.embedState.total)} ${build.embedState.done}/${build.embedState.total}`}
-          </text>
-          <Show when={build.embedState.status === "completed" && build.embedState.result}>
-            {(result) => (
-              <text fg={theme.success} marginTop={1}>
-                {`✓ ${result().embedded} embedded, ${result().skipped} skipped`}
-              </text>
-            )}
-          </Show>
-          <Show when={build.embedState.status === "failed" && build.embedState.error}>
-            {(err) => (
-              <text fg={theme.error} marginTop={1} wrapMode="word" width="100%">
-                {err()}
-              </text>
-            )}
           </Show>
         </Show>
       </box>
