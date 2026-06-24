@@ -22,6 +22,7 @@ const mockCodegraphRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.Codegr
   countEdges: () => Effect.succeed(0) as any,
   countFiles: () => Effect.succeed(0) as any,
   putEdge: () => Effect.void as any,
+    putEdges: () => Effect.void as any,
   getEdge: () => Effect.succeed(undefined) as any,
   listAllEdges: () => Effect.succeed([]) as any,
   listEdgesByNode: () => Effect.succeed([]) as any,

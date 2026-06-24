@@ -56,6 +56,7 @@ const mockRepoLayer = Layer.succeed(Banyan.CodegraphRepo, Banyan.CodegraphRepo.o
     })
   ),
   putEdge: (edge) => Effect.sync(() => mockCodegraphEntries.edges.push(edge)),
+      putEdges: (edges) => Effect.sync(() => mockCodegraphEntries.edges.push(...edges)),
   getEdge: (id: string) => Effect.sync(() => mockCodegraphEntries.edges.find((e) => e.id === id)),
   listAllEdges: () => Effect.sync(() => mockCodegraphEntries.edges),
   listEdgesByNode: (nodeID: string) => Effect.sync(() => mockCodegraphEntries.edges.filter((e) => e.fromNodeID === nodeID)),
