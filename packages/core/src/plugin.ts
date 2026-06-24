@@ -57,9 +57,15 @@ type HookSpec = {
     input: {
       model: string
       input: string[]
+      options?: {
+        baseURL: string
+        apiKey?: string
+        headers?: Record<string, string>
+      }
     }
     output: {
       embeddings: number[][]
+      error?: string
     }
   }
 }

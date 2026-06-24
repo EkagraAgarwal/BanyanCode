@@ -54,6 +54,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { EventV2 } from "@opencode-ai/core/event"
 import { PluginV2 } from "@opencode-ai/core/plugin"
+import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { applyCodegraphBuildBridge } from "./banyancode-codegraph-bridge"
 import { applyCodegraphEmbedBridge } from "./banyancode-embed-bridge"
 import { providerLookupLayer } from "../banyancode/provider-lookup"
@@ -120,6 +121,7 @@ export const AppLayer = Layer.mergeAll(
       Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
       Layer.provide(Banyan.editPlannerDefaultLayer),
       Layer.provide(providerLookupLayer),
+      Layer.provide(LocationServiceMap.layer),
       Layer.provide(PluginV2.locationLayer),
       Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
     ),

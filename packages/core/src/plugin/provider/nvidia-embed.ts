@@ -67,8 +67,8 @@ export const NvidiaEmbedPlugin = PluginV2.define({
         }).pipe(Effect.exit)
 
         if (result._tag === "Failure") {
-          const cause = result.cause as unknown
-          evt.error = typeof cause === "string" ? cause : JSON.stringify(cause)
+          const squashed = Cause.squash(result.cause as Cause.Cause<string>)
+          evt.error = squashed instanceof Error ? squashed.message : String(squashed)
           return
         }
 

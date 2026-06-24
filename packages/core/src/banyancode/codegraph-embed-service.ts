@@ -2,6 +2,7 @@ export * as CodegraphEmbedService from "./codegraph-embed-service"
 
 import { Cause, Context, Effect, Fiber, Layer, Option, Queue, Ref, Schema } from "effect"
 import { CodegraphEmbedder } from "./codegraph-embedder"
+import { PluginBoot } from "../plugin/boot"
 import { EventV2 } from "../event"
 
 export const State = Schema.Struct({
@@ -51,7 +52,6 @@ export const layer = Layer.effect(
     }
 
     const embedder = yield* CodegraphEmbedder.Service
-    const eventBus = yield* EventV2.Service
     const state = yield* Ref.make<State>({ status: "idle", done: 0, total: 0 })
     const inFlight = yield* Ref.make<Option.Option<Fiber.Fiber<void, never>>>(Option.none())
     const events = yield* Queue.unbounded<{ type: "banyancode.codeembed.build"; properties: State }>().pipe(Effect.orDie)
@@ -59,19 +59,19 @@ export const layer = Layer.effect(
     const publish = (s: State) =>
       Queue.offer(events, { type: "banyancode.codeembed.build", properties: s }).pipe(Effect.orDie)
 
-    yield* Effect.forkScoped(
-      Effect.forever(
-        Effect.gen(function* () {
-          const event = yield* Queue.take(events)
-          yield* eventBus.publish(EmbedEvent, event.properties)
-        }),
-      ),
-    )
+    // The events queue is drained by the embed bridge in
+    // packages/opencode/src/effect/banyancode-embed-bridge.ts, which republishes
+    // through EventV2Bridge (and therefore stamps the instance/workspace
+    // location). Don't add a second consumer here — that would race the bridge
+    // and half the events would be lost.
 
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
         const currentFiber = yield* Ref.get(inFlight)
         if (Option.isSome(currentFiber)) yield* Fiber.interrupt(currentFiber.value)
+
+        const bootOpt = yield* Effect.serviceOption(PluginBoot.Service)
+        if (Option.isSome(bootOpt)) yield* bootOpt.value.wait()
 
         const initial: State = { status: "running", done: 0, total: 0, startedAt: Date.now() }
         yield* Ref.set(state, initial)
@@ -132,4 +132,6 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(CodegraphEmbedder.defaultLayer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(CodegraphEmbedder.defaultLayer),
+)

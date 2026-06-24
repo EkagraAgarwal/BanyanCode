@@ -5,6 +5,7 @@ import { Banyan } from "@opencode-ai/core/banyancode"
 import { CodegraphEmbedService } from "@opencode-ai/core/banyancode/codegraph-embed-service"
 import { EmbeddingError } from "@opencode-ai/core/banyancode/embedding-provider"
 import { PluginV2 } from "@opencode-ai/core/plugin"
+import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Database } from "@opencode-ai/core/database/database"
 import { tmpdir } from "../fixture/tmpdir"
 
@@ -74,12 +75,18 @@ const stubPlugin = Layer.succeed(
   }),
 )
 
+const stubBoot = Layer.succeed(
+  PluginBoot.Service,
+  PluginBoot.Service.of({ wait: () => Effect.void }),
+)
+
 function buildLayer(mock: Layer.Layer<Banyan.CodegraphEmbedder, never, never>, dbLayer: Layer.Layer<Database.Service>) {
   // Build EventV2 layer with our dbLayer so it doesn't use the global Database.
   const eventLayer = EventV2.layer.pipe(Layer.provide(dbLayer))
   return CodegraphEmbedService.layer.pipe(
     Layer.provide(mock),
     Layer.provide(stubPlugin),
+    Layer.provide(stubBoot),
     Layer.provide(dbLayer),
     Layer.provide(eventLayer),
   )
