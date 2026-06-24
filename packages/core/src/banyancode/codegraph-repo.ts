@@ -28,6 +28,7 @@ export interface Interface {
   readonly countEdges: () => Effect.Effect<number, never, never>
   readonly countFiles: () => Effect.Effect<number, never, never>
   readonly putEdge: (edge: CodegraphEdge) => Effect.Effect<void, never, never>
+  readonly putEdges: (edges: CodegraphEdge[]) => Effect.Effect<void, never, never>
   readonly getEdge: (id: string) => Effect.Effect<CodegraphEdge | undefined, never, never>
   readonly listAllEdges: (options?: { limit?: number; offset?: number }) => Effect.Effect<CodegraphEdge[], never, never>
   readonly listEdgesByNode: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
@@ -216,25 +217,55 @@ export const layer = Layer.effect(
       }))
     })
 
-    const putEdge = Effect.fn("CodegraphRepo.putEdge")(function* (edge: CodegraphEdge) {
-      yield* db
-        .insert(CodegraphEdgesTable)
-        .values({
-          id: edge.id,
-          from_node_id: edge.fromNodeID,
-          to_node_id: edge.toNodeID,
-          kind: edge.kind,
-        })
-        .onConflictDoUpdate({
-          target: CodegraphEdgesTable.id,
-          set: {
+const putEdge = Effect.fn("CodegraphRepo.putEdge")(function* (edge: CodegraphEdge) {
+        yield* db
+          .insert(CodegraphEdgesTable)
+          .values({
+            id: edge.id,
             from_node_id: edge.fromNodeID,
             to_node_id: edge.toNodeID,
             kind: edge.kind,
-          },
-        })
-        .run()
-        .pipe(Effect.orDie)
+          })
+          .onConflictDoUpdate({
+            target: CodegraphEdgesTable.id,
+            set: {
+              from_node_id: edge.fromNodeID,
+              to_node_id: edge.toNodeID,
+              kind: edge.kind,
+            },
+          })
+          .run()
+          .pipe(Effect.orDie)
+      })
+
+    const putEdges = Effect.fn("CodegraphRepo.putEdges")(function* (edges: CodegraphEdge[]) {
+      if (edges.length === 0) return
+      // Chunk to keep the SQL statement size sane (SQLite has a 999-variable
+      // limit per statement and we bind 4 columns per row).
+      const CHUNK = 200
+      for (let i = 0; i < edges.length; i += CHUNK) {
+        const slice = edges.slice(i, i + CHUNK)
+        yield* db
+          .insert(CodegraphEdgesTable)
+          .values(
+            slice.map((edge) => ({
+              id: edge.id,
+              from_node_id: edge.fromNodeID,
+              to_node_id: edge.toNodeID,
+              kind: edge.kind,
+            })),
+          )
+          .onConflictDoUpdate({
+            target: CodegraphEdgesTable.id,
+            set: {
+              from_node_id: sql`excluded.from_node_id`,
+              to_node_id: sql`excluded.to_node_id`,
+              kind: sql`excluded.kind`,
+            },
+          })
+          .run()
+          .pipe(Effect.orDie)
+      }
     })
 
     const getEdge = Effect.fn("CodegraphRepo.getEdge")(function* (id: string) {
@@ -633,6 +664,7 @@ const bumpVersion = Effect.fn("CodegraphRepo.bumpVersion")(function* (input: {
       countEdges,
       countFiles,
       putEdge,
+      putEdges,
       getEdge,
       listAllEdges,
       listEdgesByNode,

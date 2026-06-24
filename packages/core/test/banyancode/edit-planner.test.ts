@@ -45,6 +45,7 @@ const makeMockRepo = (options: {
       putNode: () => Effect.void,
       getNode: () => Effect.succeed(undefined),
       putEdge: () => Effect.void,
+        putEdges: () => Effect.void,
       getEdge: () => Effect.succeed(undefined),
       listAllEdges: () => Effect.succeed([]),
       listEdgesByNode: () => Effect.succeed([]),

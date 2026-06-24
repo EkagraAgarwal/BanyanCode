@@ -6,7 +6,7 @@ import path from "path"
 import { FSUtil } from "../fs-util"
 import { CodegraphRepo } from "./codegraph-repo"
 import type { CodegraphEdge, CodegraphNode } from "./types"
-import { getParser } from "./langs/registry"
+import { ensureParsers, parseSource } from "./langs/registry"
 
 export class CodegraphError extends Schema.TaggedErrorClass<CodegraphError>()("Banyan/CodegraphError", {
   message: Schema.String,
@@ -125,6 +125,7 @@ export const layer = Layer.effect(
       onProgress?: (info: { file: string; done: number; total: number }) => Effect.Effect<void>
     }) {
       yield* Ref.set(cancelled, false)
+      yield* Effect.promise(() => ensureParsers())
       const patterns = yield* loadIgnorePatterns(input.root)
       const allFiles = yield* walkDirectory(input.root).pipe(Effect.orDie)
       const codeFiles = allFiles.filter((f) => {
@@ -152,12 +153,13 @@ export const layer = Layer.effect(
       let skipped = 0
       const total = codeFiles.length
       for (let i = 0; i < codeFiles.length; i++) {
-        const isCancelled = yield* Ref.get(cancelled)
-        if (isCancelled) break
-        const filePath = codeFiles[i]
-        const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
-        if (input.onProgress) yield* input.onProgress({ file: relativePath, done: i, total })
-        const ext = path.extname(filePath).toLowerCase()
+const isCancelled = yield* Ref.get(cancelled)
+      if (isCancelled) break
+      const filePath = codeFiles[i]
+      const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
+      if (input.onProgress) yield* input.onProgress({ file: relativePath, done: i, total })
+      const ext = path.extname(filePath).toLowerCase()
+      const indexStartedAt = Date.now()
         const processFile = Effect.gen(function* () {
           const content = yield* fs.readFileStringSafe(filePath)
           if (content === undefined) {
@@ -182,8 +184,7 @@ export const layer = Layer.effect(
             skipped++
             return
           }
-          const parser = getParser(ext)
-          const result = parser.parse(content, filePath)
+          const result = parseSource(ext, content, filePath)
           let language = "generic"
           if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx" || ext === ".mts" || ext === ".cts" || ext === ".mjs" || ext === ".cjs") {
             language = "typescript"
@@ -249,7 +250,9 @@ export const layer = Layer.effect(
 
       const isCancelled = yield* Ref.get(cancelled)
       if (!isCancelled) {
+        if (input.onProgress) yield* input.onProgress({ file: "__finalize__:loading nodes", done: total, total })
         const allNodes = yield* repo.listAllNodes()
+        if (input.onProgress) yield* input.onProgress({ file: "__finalize__:loading nodes", done: total, total: total + allNodes.length })
         const nodeMap = new Map<string, CodegraphNode[]>()
         for (const node of allNodes) {
           const list = nodeMap.get(node.name) ?? []
@@ -258,6 +261,8 @@ export const layer = Layer.effect(
         }
 
         const newEdges: { fromNodeID: string; toNodeID: string; kind: "imports" | "calls" | "extends" | "references" }[] = []
+        const totalEdgesTarget = total + allNodes.length
+        let edgesProcessed = 0
 
         for (const nodeA of allNodes) {
           if (!nodeA.code) continue
@@ -286,15 +291,22 @@ export const layer = Layer.effect(
               })
             }
           }
+          edgesProcessed++
+          if (input.onProgress && edgesProcessed % 200 === 0) {
+            yield* input.onProgress({ file: "__finalize__:building edges", done: total + edgesProcessed, total: totalEdgesTarget })
+          }
         }
+        if (input.onProgress) yield* input.onProgress({ file: "__finalize__:building edges", done: totalEdgesTarget, total: totalEdgesTarget })
 
-        for (const edge of newEdges) {
-          yield* repo.putEdge({
-            id: `${edge.fromNodeID}->${edge.toNodeID}:${edge.kind}`,
-            fromNodeID: edge.fromNodeID,
-            toNodeID: edge.toNodeID,
-            kind: edge.kind,
-          })
+        if (newEdges.length > 0) {
+          yield* repo.putEdges(
+            newEdges.map((edge) => ({
+              id: `${edge.fromNodeID}->${edge.toNodeID}:${edge.kind}`,
+              fromNodeID: edge.fromNodeID,
+              toNodeID: edge.toNodeID,
+              kind: edge.kind,
+            })),
+          )
         }
       }
 

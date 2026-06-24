@@ -32,6 +32,7 @@ const mockRepo = Layer.succeed(
     countEdges: () => Effect.succeed(0),
     countFiles: () => Effect.succeed(0),
     putEdge: () => Effect.void,
+      putEdges: () => Effect.void,
     getEdge: () => Effect.succeed(undefined),
     listAllEdges: () => Effect.succeed([]),
     listEdgesByNode: () => Effect.succeed([]),
