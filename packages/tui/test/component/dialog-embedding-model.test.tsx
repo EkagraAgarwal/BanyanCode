@@ -12,14 +12,28 @@ describe("DialogEmbeddingModel", () => {
     test("setting embedding model constructs correct full model string", () => {
       const providerID = "openai"
       const modelID = "text-embedding-3-small"
-      const fullModel = `${providerID}/${modelID}`
+      const fullModel = modelID.includes("/") ? modelID : `${providerID}/${modelID}`
       expect(fullModel).toBe("openai/text-embedding-3-small")
+    })
+
+    test("namespaced modelID is used as-is, no double-prefix", () => {
+      const providerID = "nvidia"
+      const modelID = "nvidia/llama-nemotron-embed-1b-v2"
+      const fullModel = modelID.includes("/") ? modelID : `${providerID}/${modelID}`
+      expect(fullModel).toBe("nvidia/llama-nemotron-embed-1b-v2")
+    })
+
+    test("bge-m3 modelID uses provider-family namespace, not nvidia/ prefix", () => {
+      const providerID = "nvidia"
+      const modelID = "baai/bge-m3"
+      const fullModel = modelID.includes("/") ? modelID : `${providerID}/${modelID}`
+      expect(fullModel).toBe("baai/bge-m3")
     })
 
     test("banyanConfig.update payload structure for embedding model", () => {
       const providerID = "openai"
       const modelID = "text-embedding-3-small"
-      const fullModel = `${providerID}/${modelID}`
+      const fullModel = modelID.includes("/") ? modelID : `${providerID}/${modelID}`
 
       const payload = {
         config: { banyancode_embedding_model: fullModel },
@@ -34,18 +48,16 @@ describe("DialogEmbeddingModel", () => {
 
     test("multiple model selections produce correct payloads", () => {
       const models = [
-        { providerID: "openai", modelID: "text-embedding-3-small" },
-        { providerID: "cohere", modelID: "embed-english-v3.0" },
-        { providerID: "nvidia", modelID: "nvidia/llama-nemotron-embed-1b-v2" },
+        { providerID: "openai", modelID: "text-embedding-3-small", expected: "openai/text-embedding-3-small" },
+        { providerID: "cohere", modelID: "embed-english-v3.0", expected: "cohere/embed-english-v3.0" },
+        { providerID: "nvidia", modelID: "nvidia/llama-nemotron-embed-1b-v2", expected: "nvidia/llama-nemotron-embed-1b-v2" },
+        { providerID: "nvidia", modelID: "nvidia/nv-embedqa-e5-v5", expected: "nvidia/nv-embedqa-e5-v5" },
+        { providerID: "nvidia", modelID: "baai/bge-m3", expected: "baai/bge-m3" },
       ]
 
       for (const model of models) {
-        const fullModel = `${model.providerID}/${model.modelID}`
-        const payload = {
-          config: { banyancode_embedding_model: fullModel },
-          scope: "global" as const,
-        }
-        expect(payload.config.banyancode_embedding_model).toBe(fullModel)
+        const fullModel = model.modelID.includes("/") ? model.modelID : `${model.providerID}/${model.modelID}`
+        expect(fullModel).toBe(model.expected)
       }
     })
   })
