@@ -71,7 +71,9 @@ export const layer = Layer.effect(
         if (Option.isSome(currentFiber)) yield* Fiber.interrupt(currentFiber.value)
 
         const bootOpt = yield* Effect.serviceOption(PluginBoot.Service)
-        if (Option.isSome(bootOpt)) yield* bootOpt.value.wait()
+        if (Option.isSome(bootOpt)) {
+          yield* (bootOpt.value.wait() as Effect.Effect<void, never, never>)
+        }
 
         const initial: State = { status: "running", done: 0, total: 0, startedAt: Date.now() }
         yield* Ref.set(state, initial)
