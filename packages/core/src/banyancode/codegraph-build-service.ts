@@ -1,6 +1,6 @@
 export * as CodegraphBuildService from "./codegraph-build-service"
 
-import { Cause, Context, Effect, Fiber, Layer, Option, Queue, Ref, Schema } from "effect"
+import { Cause, Context, Effect, Fiber, Layer, Queue, Ref, Schema } from "effect"
 import { CodegraphIndexer } from "./codegraph-indexer"
 import { CodegraphRepo } from "./codegraph-repo"
 import { EventV2 } from "../event"
@@ -48,7 +48,8 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     if (!banyancodeEnabled()) {
       const state = yield* Ref.make<State>({ status: "idle", done: 0, total: 0 })
-      const events = yield* Queue.unbounded<{ type: "banyancode.codegraph.build"; properties: State }>().pipe(Effect.orDie)
+      const events = yield* Queue.bounded<{ type: "banyancode.codegraph.build"; properties: State }>(64).pipe(Effect.orDie)
+      yield* Effect.addFinalizer(() => Queue.shutdown(events))
       return Service.of({
         status: () => Ref.get(state),
         start: () => Effect.void,
@@ -61,8 +62,9 @@ export const layer = Layer.effect(
     const eventBus = yield* EventV2.Service
     const repo = yield* CodegraphRepo.Service
     const state = yield* Ref.make<State>({ status: "idle", done: 0, total: 0 })
-    const inFlight = yield* Ref.make<Option.Option<Fiber.Fiber<void, CodegraphIndexer.CodegraphError>>>(Option.none())
-    const events = yield* Queue.unbounded<{ type: "banyancode.codegraph.build"; properties: State }>().pipe(Effect.orDie)
+    const inFlight = yield* Ref.make<Fiber.Fiber<void, CodegraphIndexer.CodegraphError> | undefined>(undefined)
+    const events = yield* Queue.bounded<{ type: "banyancode.codegraph.build"; properties: State }>(64).pipe(Effect.orDie)
+    yield* Effect.addFinalizer(() => Queue.shutdown(events))
 
     const publish = (s: State) => Queue.offer(events, { type: "banyancode.codegraph.build", properties: s }).pipe(Effect.orDie)
 
@@ -78,7 +80,7 @@ export const layer = Layer.effect(
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
         const currentFiber = yield* Ref.get(inFlight)
-        if (Option.isSome(currentFiber)) yield* Fiber.interrupt(currentFiber.value)
+        if (currentFiber) yield* Fiber.interrupt(currentFiber)
 
         yield* indexer.cancel()
         const initial: State = { status: "running", root: input.root, dbPath: input.dbPath, done: 0, total: 0, startedAt: Date.now() }
@@ -136,19 +138,19 @@ export const layer = Layer.effect(
           ),
         )
 
-        // Use runFork to execute the work in the background
-        const context = yield* Effect.context()
-        const runFork = Effect.runForkWith(context)
-        const fiber = runFork(forkWork)
-        yield* Ref.set(inFlight, Option.some(fiber))
-      })
+        // Use forkScoped to execute the work in the background
+        const fiber = yield* Effect.forkScoped(forkWork)
+        // Ensure fiber is interrupted when scope exits
+        ;(yield* Effect.addFinalizer(() => Fiber.interrupt(fiber))) as unknown as void
+        yield* Ref.set(inFlight, fiber)
+      }) as unknown as Effect.Effect<void, never, never>
 
     const cancel: Interface["cancel"] = () =>
       Effect.gen(function* () {
         const fiber = yield* Ref.get(inFlight)
-        if (Option.isSome(fiber)) {
-          yield* Fiber.interrupt(fiber.value)
-          yield* Ref.set(inFlight, Option.none())
+        if (fiber) {
+          yield* Fiber.interrupt(fiber)
+          yield* Ref.set(inFlight, undefined)
           const current = yield* Ref.get(state)
           if (current.status === "running") {
             const next: State = { ...current, status: "cancelled" }

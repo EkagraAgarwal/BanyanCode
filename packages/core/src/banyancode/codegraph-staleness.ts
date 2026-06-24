@@ -117,7 +117,7 @@ export const layer = Layer.effect(
       Stream.unwrap(
         Effect.gen(function* () {
           const intervalMs = input.intervalMs ?? 5 * 60 * 1000
-          const q = yield* Queue.unbounded<typeof StaleCheck.Type>().pipe(Effect.orDie)
+          const q = yield* Queue.bounded<typeof StaleCheck.Type>(10).pipe(Effect.orDie)
           const tick = () =>
             Effect.gen(function* () {
               const result = yield* checkStale({ root: input.root })

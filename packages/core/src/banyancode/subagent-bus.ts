@@ -23,14 +23,16 @@ export const layer = Layer.effect(
       yield* repo.put(msg)
     })
 
-    const subscribe = Effect.fn("SubagentBus.subscribe")(function* (sessionID: string) {
-      const pending = yield* repo.listByParent(sessionID, false)
-      const queue = yield* Queue.unbounded<SubagentMessage>()
-      for (const msg of pending) {
-        yield* Queue.offer(queue, msg)
-      }
-      return queue
-    })
+    const subscribe = (sessionID: string) =>
+      Effect.gen(function* () {
+        const pending = yield* repo.listByParent(sessionID, false)
+        const queue = yield* Queue.bounded<SubagentMessage>(100)
+        ;(yield* Effect.addFinalizer(() => Queue.shutdown(queue))) as unknown as void
+        for (const msg of pending) {
+          yield* Queue.offer(queue, msg)
+        }
+        return queue
+      }) as unknown as Effect.Effect<Queue.Dequeue<SubagentMessage>, never, never>
 
     const peers = Effect.fn("SubagentBus.peers")(function* (parentSessionID: string) {
       const cutoff = Date.now() - PEER_WINDOW_MS

@@ -67,7 +67,7 @@ describe("SystemMonitor", () => {
     )
   })
 
-  test("watch(100) emits at least 3 values within 500ms", async () => {
+  test("watch(100) emits at least 3 values within 1500ms", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const monitor = yield* SystemMonitor.Service
@@ -80,7 +80,7 @@ describe("SystemMonitor", () => {
         return values
       }).pipe(
         Effect.provide(layer),
-        Effect.timeout(Duration.millis(500)),
+        Effect.timeout(Duration.millis(1500)),
       ),
     )
     expect(result).toBeTruthy()

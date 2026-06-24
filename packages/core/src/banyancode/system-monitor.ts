@@ -157,27 +157,24 @@ export const layer = Layer.effect(
         yield* Queue.offer(q, s)
       })
 
-    const queue = yield* Queue.unbounded<SystemStatus>()
+    const queue = yield* Queue.bounded<SystemStatus>(60)
     yield* Effect.forkScoped(
-      Effect.forever(tick(queue)).pipe(
-        Effect.schedule(Schedule.spaced(Duration.seconds(1))),
-      ),
+      Effect.forever(tick(queue)).pipe(Effect.schedule(Schedule.spaced(Duration.millis(100)))),
     )
 
     const events = (): Effect.Effect<Queue.Dequeue<SystemStatus>, never, never> => Effect.succeed(queue)
 
     const watch: Interface["watch"] = (intervalMs = 1000) =>
-      Effect.gen(function* () {
-        const q = yield* Queue.unbounded<SystemStatus>()
-        const context = yield* Effect.context()
-        const runFork = Effect.runForkWith(context)
-        runFork(
-          Effect.forever(tick(q)).pipe(
-            Effect.schedule(Schedule.spaced(Duration.millis(intervalMs))),
-          ),
-        )
-        return Stream.fromQueue(q)
-      })
+      Effect.succeed(
+        Stream.fromQueue(queue).pipe(
+          Stream.throttle({
+            cost: () => 1,
+            units: 1,
+            duration: Duration.millis(intervalMs),
+            strategy: "shape",
+          }),
+        ),
+      )
 
     return Service.of({ status, watch, events })
   }),
