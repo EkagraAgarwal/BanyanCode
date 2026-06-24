@@ -7,6 +7,10 @@ import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from ".
 import { CodegraphMetaTable } from "./codegraph-meta.sql"
 import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from "./types"
 
+// Upper bound on nodes per DB insert batch. If a batched putNodes method is added,
+// chunk the input into groups of this size to avoid overwhelming the SQLite connection.
+export const MAX_NODES_PER_INSERT = 1000
+
 export interface Interface {
   readonly putFile: (file: CodegraphFile) => Effect.Effect<void, never, never>
   readonly getFile: (id: string) => Effect.Effect<CodegraphFile | undefined, never, never>

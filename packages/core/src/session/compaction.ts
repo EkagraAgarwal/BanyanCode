@@ -78,6 +78,72 @@ type Input = {
 
 const estimate = (value: unknown) => Token.estimate(JSON.stringify(value))
 
+// Structural estimator: walks an LLMRequest without serializing the
+// whole tree. Only the tools (small JSON schemas) are stringified; the
+// system prompts and message history (which can be many MB in long
+// sessions) are summed by string length. This runs on every LLM turn
+// (compactIfNeeded), so it must be O(n) over message count and never
+// allocate a giant string. Falls back to JSON.stringify on the whole
+// input if the shape is unexpected, so a future schema change is safe.
+const estimateRequest = (request: unknown) => {
+  if (request == null || typeof request !== "object") return Token.estimate(JSON.stringify(request))
+  const r = request as Record<string, unknown>
+  let chars = 256
+  if (Array.isArray(r.system)) {
+    for (const part of r.system) {
+      if (part != null && typeof part === "object" && "text" in part) {
+        const text = (part as { text?: unknown }).text
+        chars += (typeof text === "string" ? text.length : 0) + 32
+      } else {
+        chars += 16
+      }
+    }
+  }
+  if (Array.isArray(r.messages)) {
+    for (const msg of r.messages) {
+      if (msg == null || typeof msg !== "object") {
+        chars += 16
+        continue
+      }
+      const m = msg as Record<string, unknown>
+      chars += (typeof m.role === "string" ? m.role.length : 0) + 16
+      const content = m.content
+      if (typeof content === "string") {
+        chars += content.length + 8
+      } else if (Array.isArray(content)) {
+        for (const part of content) chars += estimatePart(part)
+      } else if (content != null) {
+        chars += JSON.stringify(content).length
+      }
+    }
+  }
+  if (Array.isArray(r.tools)) {
+    for (const tool of r.tools) {
+      chars += JSON.stringify(tool).length + 16
+    }
+  }
+  return Token.estimate(String(chars))
+}
+
+const estimatePart = (part: unknown) => {
+  if (part == null || typeof part !== "object") return 16
+  const obj = part as Record<string, unknown>
+  if (obj.type === "text" && typeof obj.text === "string") return obj.text.length + 24
+  if (obj.type === "reasoning" && typeof obj.text === "string") return obj.text.length + 24
+  if (obj.type === "tool-call") {
+    const input = obj.input
+    const inputLen = typeof input === "string" ? input.length : input == null ? 0 : JSON.stringify(input).length
+    const name = typeof obj.name === "string" ? obj.name.length : 0
+    return inputLen + name + 48
+  }
+  if (obj.type === "tool-result") {
+    const result = obj.result
+    const resultLen = typeof result === "string" ? result.length : result == null ? 0 : JSON.stringify(result).length
+    return resultLen + 48
+  }
+  return JSON.stringify(part).length + 16
+}
+
 const truncate = (value: string) =>
   value.length <= TOOL_OUTPUT_MAX_CHARS ? value : `${value.slice(0, TOOL_OUTPUT_MAX_CHARS)}\n[truncated]`
 
@@ -233,7 +299,7 @@ export const make = (dependencies: Dependencies) => {
     if (context === undefined || context <= 0) return false
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
     if (
-      estimate({ system: input.request.system, messages: input.request.messages, tools: input.request.tools }) <=
+      estimateRequest(input.request) <=
       context - Math.max(output, config.buffer)
     )
       return false

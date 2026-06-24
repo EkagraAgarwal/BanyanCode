@@ -16,6 +16,7 @@ export interface Interface {
   readonly index: (input: {
     root: string
     force?: boolean
+    maxFileSizeBytes?: number
     onProgress?: (info: { file: string; done: number; total: number }) => Effect.Effect<void>
   }) => Effect.Effect<{ indexed: number; skipped: number; scannedFiles: number }, CodegraphError, never>
   readonly cancel: () => Effect.Effect<void, never, never>
@@ -49,23 +50,33 @@ export const layer = Layer.effect(
     const repo = yield* CodegraphRepo.Service
     const cancelled = yield* Ref.make(false)
 
-    const walkDirectory = (dir: string): Effect.Effect<string[]> => {
+    const walkDirectory = (dir: string, maxFileSizeBytes: number, root: string): Effect.Effect<{ files: string[]; skippedBySize: number }> => {
       return Effect.gen(function* () {
         const entries = yield* fs.readDirectoryEntries(dir).pipe(Effect.orDie)
         const files: string[] = []
+        let skippedBySize = 0
         for (const entry of entries) {
           if (entry.type !== "directory") continue
           const entryName = path.basename(entry.name)
           if (DEFAULT_IGNORED.includes(entryName)) continue
           const fullPath = path.join(dir, entryName)
-          const subFiles = yield* walkDirectory(fullPath)
-          files.push(...subFiles)
+          const subResult = yield* walkDirectory(fullPath, maxFileSizeBytes, root)
+          files.push(...subResult.files)
+          skippedBySize += subResult.skippedBySize
         }
-        const dirFiles = entries
-          .filter((e) => e.type === "file")
-          .map((e) => path.join(dir, e.name))
-        files.push(...dirFiles)
-        return files
+        for (const entry of entries) {
+          if (entry.type !== "file") continue
+          const fullPath = path.join(dir, entry.name)
+          // Skip files larger than maxFileSizeBytes before even reading them
+          const stats = yield* fs.stat(fullPath).pipe(Effect.orDie)
+          if (stats.size > maxFileSizeBytes) {
+            yield* Effect.logWarning(`Skipping file exceeding size limit: ${path.relative(root, fullPath).replace(/\\/g, "/")} (${stats.size} bytes)`)
+            skippedBySize++
+            continue
+          }
+          files.push(fullPath)
+        }
+        return { files, skippedBySize }
       })
     }
 
@@ -122,11 +133,15 @@ export const layer = Layer.effect(
     const index = Effect.fn("CodegraphIndexer.index")(function* (input: {
       root: string
       force?: boolean
+      maxFileSizeBytes?: number
       onProgress?: (info: { file: string; done: number; total: number }) => Effect.Effect<void>
     }) {
       yield* Ref.set(cancelled, false)
+      const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
       const patterns = yield* loadIgnorePatterns(input.root)
-      const allFiles = yield* walkDirectory(input.root).pipe(Effect.orDie)
+      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root).pipe(Effect.orDie)
+      const allFiles = walkResult.files
+      let skipped = walkResult.skippedBySize
       const codeFiles = allFiles.filter((f) => {
         const ext = path.extname(f).toLowerCase()
         const allowedExtensions = [
@@ -149,7 +164,6 @@ export const layer = Layer.effect(
         return allowedExtensions.includes(ext) && !isIgnored(patterns, input.root, f)
       })
       let indexed = 0
-      let skipped = 0
       const total = codeFiles.length
       for (let i = 0; i < codeFiles.length; i++) {
         const isCancelled = yield* Ref.get(cancelled)
@@ -164,9 +178,9 @@ export const layer = Layer.effect(
             skipped++
             return
           }
-          // Safeguard: skip files > 500 KB or with lines longer than 5000 chars (potential compiled bundles or minified assets)
-          if (content.length > 500000) {
-            yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars)`)
+          // Safeguard: skip files exceeding maxFileSizeBytes or with lines longer than 5000 chars (potential compiled bundles or minified assets)
+          if (content.length > maxFileSizeBytes) {
+            yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars, limit: ${maxFileSizeBytes})`)
             skipped++
             return
           }

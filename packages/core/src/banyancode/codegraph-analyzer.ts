@@ -68,7 +68,8 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const visited = new Set<string>()
         const queue: Array<{ id: string; depth: number }> = [{ id: input.nodeID, depth: 0 }]
-        const maxDepth = input.maxDepth ?? 50
+        // 8 is enough for typical transitive impact; the UI truncates larger sets anyway.
+        const maxDepth = input.maxDepth ?? 8
         const result: CodegraphNode[] = []
 
         while (queue.length > 0) {
