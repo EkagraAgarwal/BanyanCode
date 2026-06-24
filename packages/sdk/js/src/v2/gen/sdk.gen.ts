@@ -1353,11 +1353,22 @@ export class BanyanConfig extends HeyApiClient {
    */
   public update<ThrowOnError extends boolean = false>(
     parameters?: {
-      banyanConfig?: BanyanConfig2
+      config?: BanyanConfig2
+      scope?: "global" | "project"
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ key: "banyanConfig", map: "body" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "config" },
+            { in: "body", key: "scope" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).patch<
       GlobalBanyanConfigUpdateResponses,
       GlobalBanyanConfigUpdateErrors,
@@ -1430,18 +1441,20 @@ export class BanyanAgent extends HeyApiClient {
   /**
    * Save custom agent
    *
-   * Save a custom subagent definition to .banyancode/agent/<name>.md.
+   * Save or update an agent definition to ~/.config/banyancode/agent/<name>.md.
    */
   public save<ThrowOnError extends boolean = false>(
     parameters?: {
       name?: string
       description?: string
+      mode?: "primary" | "subagent" | "all"
+      hidden?: boolean
       model?: {
         providerID: string
         modelID: string
       }
-      tools?: Array<string>
-      enabled?: boolean
+      permission?: Array<string>
+      prompt?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1452,9 +1465,11 @@ export class BanyanAgent extends HeyApiClient {
           args: [
             { in: "body", key: "name" },
             { in: "body", key: "description" },
+            { in: "body", key: "mode" },
+            { in: "body", key: "hidden" },
             { in: "body", key: "model" },
-            { in: "body", key: "tools" },
-            { in: "body", key: "enabled" },
+            { in: "body", key: "permission" },
+            { in: "body", key: "prompt" },
           ],
         },
       ],

@@ -1426,7 +1426,6 @@ export function Session() {
               fallback={<CollapsedRail side="right" onExpand={() => setRightCollapsed(() => false)} />}
             >
               <ResizableSeparator
-                invert
                 onResize={(newWidthPct) => {
                   const clamped = Math.max(15, Math.min(45, newWidthPct))
                   setRightSidebarWidth(() => clamped)

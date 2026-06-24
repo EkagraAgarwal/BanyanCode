@@ -78,3 +78,109 @@ export function computeLayout(
 
   return clonedNodes
 }
+
+const EDGE_CHARS = {
+  empty: " ",
+  horiz: "─",
+  vert: "│",
+  cross: "┼",
+  tl: "┌",
+  tr: "┐",
+  bl: "└",
+  br: "┘",
+  tUp: "┴",
+  tDown: "┬",
+  tLeft: "┤",
+  tRight: "├",
+}
+
+type EdgeChar = keyof typeof EDGE_CHARS
+
+const MERGE: Partial<Record<`${EdgeChar}|${EdgeChar}`, EdgeChar>> = {
+  "horiz|horiz": "horiz",
+  "vert|vert": "vert",
+  "horiz|vert": "cross",
+  "vert|horiz": "cross",
+  "tRight|horiz": "tRight",
+  "tLeft|horiz": "tLeft",
+  "tUp|vert": "tUp",
+  "tDown|vert": "tDown",
+  "tRight|vert": "cross",
+  "tLeft|vert": "cross",
+  "horiz|tRight": "tRight",
+  "horiz|tLeft": "tLeft",
+  "vert|tUp": "tUp",
+  "vert|tDown": "tDown",
+  "vert|tRight": "cross",
+  "vert|tLeft": "cross",
+}
+
+const mergeChar = (a: EdgeChar, b: EdgeChar): EdgeChar =>
+  MERGE[`${a}|${b}`] ?? MERGE[`${b}|${a}`] ?? "cross"
+
+const charForSegment = (dx: number, dy: number, prev: { x: number; y: number } | undefined, next: { x: number; y: number } | undefined): EdgeChar => {
+  if (prev && next) {
+    if (prev.y === next.y) return "horiz"
+    if (prev.x === next.x) return "vert"
+    if ((prev.x < next.x) === (prev.y < next.y)) return "bl"
+    return "br"
+  }
+  if (dx === 0) return "vert"
+  if (dy === 0) return "horiz"
+  if (dx > 0 && dy > 0) return "bl"
+  if (dx > 0 && dy < 0) return "tl"
+  if (dx < 0 && dy > 0) return "br"
+  return "tr"
+}
+
+export function renderEdgeCanvas(
+  nodes: LayoutNode[],
+  edges: LayoutEdge[],
+  width: number,
+  height: number,
+): string[] {
+  if (width <= 0 || height <= 0) return []
+  const canvas: EdgeChar[][] = Array.from({ length: height }, () =>
+    Array.from({ length: width }, () => "empty" as EdgeChar),
+  )
+
+  const positions = new Map<string, { x: number; y: number }>()
+  for (const n of nodes) {
+    if (n.x === undefined || n.y === undefined) continue
+    const x = Math.round(n.x)
+    const y = Math.round(n.y)
+    if (x < 0 || x >= width || y < 0 || y >= height) continue
+    positions.set(n.id, { x, y })
+  }
+
+  const plot = (x: number, y: number, ch: EdgeChar) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return
+    const cur = canvas[y]![x]!
+    if (cur === "empty") {
+      canvas[y]![x] = ch
+    } else if (cur !== ch) {
+      canvas[y]![x] = mergeChar(cur, ch)
+    }
+  }
+
+  for (const e of edges) {
+    const a = positions.get(e.source)
+    const b = positions.get(e.target)
+    if (!a || !b) continue
+    let { x: x0, y: y0 } = a
+    const { x: x1, y: y1 } = b
+    const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0))
+    if (steps === 0) continue
+    const sx = (x1 - x0) / steps
+    const sy = (y1 - y0) / steps
+    let prev: { x: number; y: number } | undefined
+    for (let i = 1; i <= steps; i++) {
+      const next = { x: Math.round(x0 + sx * i), y: Math.round(y0 + sy * i) }
+      const segChar = charForSegment(sx, sy, prev, i < steps ? next : undefined)
+      plot(next.x, next.y, segChar)
+      prev = next
+    }
+  }
+
+  return canvas.map((row) => row.map((ch) => EDGE_CHARS[ch]).join(""))
+}

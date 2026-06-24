@@ -2128,8 +2128,6 @@ export type Config = {
 export type BanyanConfig = {
   $schema?: string
   banyancode_embedding_model?: string
-  banyancode_embedding_dim?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  banyancode_embedding_type?: "F32" | "F16" | "F8" | "F1BIT"
   banyancode_openai_compatible_endpoints?: Array<{
     name: string
     base_url: string
@@ -5768,7 +5766,10 @@ export type GlobalBanyanConfigGetResponses = {
 export type GlobalBanyanConfigGetResponse = GlobalBanyanConfigGetResponses[keyof GlobalBanyanConfigGetResponses]
 
 export type GlobalBanyanConfigUpdateData = {
-  body?: BanyanConfig
+  body?: {
+    config: BanyanConfig
+    scope?: "global" | "project"
+  }
   path?: never
   query?: never
   url: "/global/banyan-config"
@@ -5916,14 +5917,19 @@ export type GlobalStartupResponse = GlobalStartupResponses[keyof GlobalStartupRe
 
 export type GlobalBanyanAgentSaveData = {
   body?: {
+    /**
+     * Agent name (letters, digits, '.', '_', '-' only; no path separators or whitespace)
+     */
     name: string
     description?: string
+    mode?: "primary" | "subagent" | "all"
+    hidden?: boolean
     model?: {
       providerID: string
       modelID: string
     }
-    tools?: Array<string>
-    enabled?: boolean
+    permission?: Array<string>
+    prompt?: string
   }
   path?: never
   query?: never

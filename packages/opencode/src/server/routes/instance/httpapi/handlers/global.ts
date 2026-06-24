@@ -180,7 +180,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       payload: typeof BanyanConfigUpdateInput.Type
     }) {
       const svc = yield* Banyan.BanyanConfigService
-      return yield* svc.update(payload.config, payload.scope)
+      return yield* svc.update(payload.config)
     })
 
     const codegraphCancelHandler = Effect.fn("GlobalHttpApi.codegraphCancel")(function* () {
