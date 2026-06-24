@@ -22,6 +22,7 @@ const mockRepo = Layer.succeed(
     getFile: () => Effect.succeed(undefined),
     getFileByPath: () => Effect.succeed(undefined),
     putNode: () => Effect.void,
+      putNodes: () => Effect.void,
     getNode: () => Effect.succeed(undefined),
     nodeByID: () => Effect.succeed(undefined),
     listNodesByFile: () => Effect.succeed([]),

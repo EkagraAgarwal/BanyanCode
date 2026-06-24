@@ -43,6 +43,7 @@ const makeMockRepo = (options: {
       putFile: () => Effect.void,
       getFile: () => Effect.succeed(undefined),
       putNode: () => Effect.void,
+        putNodes: () => Effect.void,
       getNode: () => Effect.succeed(undefined),
       putEdge: () => Effect.void,
         putEdges: () => Effect.void,

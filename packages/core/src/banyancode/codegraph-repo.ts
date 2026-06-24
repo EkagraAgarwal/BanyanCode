@@ -18,6 +18,7 @@ export interface Interface {
   readonly getFileByPath: (path: string) => Effect.Effect<CodegraphFile | undefined, never, never>
   readonly listAllFiles: () => Effect.Effect<CodegraphFile[], never, never>
   readonly putNode: (node: CodegraphNode) => Effect.Effect<void, never, never>
+  readonly putNodes: (nodes: CodegraphNode[]) => Effect.Effect<void, never, never>
   readonly getNode: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
   readonly nodeByID: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
   readonly listNodesByFile: (fileID: string) => Effect.Effect<CodegraphNode[], never, never>
@@ -261,6 +262,42 @@ const putEdge = Effect.fn("CodegraphRepo.putEdge")(function* (edge: CodegraphEdg
               from_node_id: sql`excluded.from_node_id`,
               to_node_id: sql`excluded.to_node_id`,
               kind: sql`excluded.kind`,
+            },
+          })
+          .run()
+          .pipe(Effect.orDie)
+      }
+    })
+
+    const putNodes = Effect.fn("CodegraphRepo.putNodes")(function* (nodes: CodegraphNode[]) {
+      if (nodes.length === 0) return
+      const CHUNK = 200
+      for (let i = 0; i < nodes.length; i += CHUNK) {
+        const slice = nodes.slice(i, i + CHUNK)
+        yield* db
+          .insert(CodegraphNodesTable)
+          .values(
+            slice.map((node) => ({
+              id: node.id,
+              file_id: node.fileID,
+              kind: node.kind,
+              name: node.name,
+              signature: node.signature,
+              start_line: node.startLine,
+              end_line: node.endLine,
+              code: node.code,
+            })),
+          )
+          .onConflictDoUpdate({
+            target: CodegraphNodesTable.id,
+            set: {
+              file_id: sql`excluded.file_id`,
+              kind: sql`excluded.kind`,
+              name: sql`excluded.name`,
+              signature: sql`excluded.signature`,
+              start_line: sql`excluded.start_line`,
+              end_line: sql`excluded.end_line`,
+              code: sql`excluded.code`,
             },
           })
           .run()
@@ -653,10 +690,11 @@ const bumpVersion = Effect.fn("CodegraphRepo.bumpVersion")(function* (input: {
       getFile,
       getFileByPath,
       listAllFiles,
-      putNode,
-      getNode,
-      nodeByID,
-      listNodesByFile,
+putNode,
+        putNodes,
+        getNode,
+        nodeByID,
+        listNodesByFile,
       listAllNodes,
       queryNodes,
       searchNodes,

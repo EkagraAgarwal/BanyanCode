@@ -152,14 +152,14 @@ export const layer = Layer.effect(
       let indexed = 0
       let skipped = 0
       const total = codeFiles.length
-      for (let i = 0; i < codeFiles.length; i++) {
-const isCancelled = yield* Ref.get(cancelled)
-      if (isCancelled) break
-      const filePath = codeFiles[i]
-      const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
-      if (input.onProgress) yield* input.onProgress({ file: relativePath, done: i, total })
-      const ext = path.extname(filePath).toLowerCase()
-      const indexStartedAt = Date.now()
+for (let i = 0; i < codeFiles.length; i++) {
+        const isCancelled = yield* Ref.get(cancelled)
+        if (isCancelled) break
+        const filePath = codeFiles[i]
+        const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
+        if (input.onProgress) yield* input.onProgress({ file: relativePath, done: i, total })
+        const ext = path.extname(filePath).toLowerCase()
+        const indexStartedAt = Date.now()
         const processFile = Effect.gen(function* () {
           const content = yield* fs.readFileStringSafe(filePath)
           if (content === undefined) {
@@ -185,6 +185,11 @@ const isCancelled = yield* Ref.get(cancelled)
             return
           }
           const result = parseSource(ext, content, filePath)
+          // Emit a half-step progress after parsing completes. parseSource on
+          // large TypeScript / Python files is the slowest part of the loop
+          // and the bar otherwise freezes for many seconds while the AST is
+          // being built. The half-step also exposes "stuck" parses early.
+          if (input.onProgress) yield* input.onProgress({ file: relativePath, done: i + 0.5, total })
           let language = "generic"
           if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx" || ext === ".mts" || ext === ".cts" || ext === ".mjs" || ext === ".cjs") {
             language = "typescript"
@@ -220,27 +225,47 @@ const isCancelled = yield* Ref.get(cancelled)
           const fileID = existing?.id ?? randomUUID()
           const indexedAt = Date.now()
           yield* repo.putFile({ id: fileID, path: filePath, contentHash, language, indexedAt })
-          for (const node of result.nodes) {
-            const fullNode: CodegraphNode = {
-              id: node.id,
-              fileID,
-              kind: node.kind,
-              name: node.name,
-              signature: node.signature,
-              startLine: node.startLine,
-              endLine: node.endLine,
-              code: node.code,
-            }
-            yield* repo.putNode(fullNode)
+          if (result.nodes.length > 0) {
+            yield* repo.putNodes(
+              result.nodes.map((node) => ({
+                id: node.id,
+                fileID,
+                kind: node.kind,
+                name: node.name,
+                signature: node.signature,
+                startLine: node.startLine,
+                endLine: node.endLine,
+                code: node.code,
+              })),
+            )
           }
-          for (const edge of result.edges) {
-            yield* repo.putEdge({ id: edge.id, fromNodeID: edge.fromNodeID, toNodeID: edge.toNodeID, kind: edge.kind })
+          if (result.edges.length > 0) {
+            yield* repo.putEdges(
+              result.edges.map((edge) => ({
+                id: edge.id,
+                fromNodeID: edge.fromNodeID,
+                toNodeID: edge.toNodeID,
+                kind: edge.kind,
+              })),
+            )
           }
           indexed++
         }).pipe(
+          // Per-file timeout prevents a single misbehaving parse (e.g. a huge
+          // .d.ts file) from blocking the entire build. Skipped files are
+          // logged so the user can investigate manually.
+          Effect.timeout("30 seconds" as any),
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
-              yield* Effect.logWarning(`Failed to index file: ${relativePath}`, { cause: Cause.pretty(cause) })
+              const err = Cause.squash(cause)
+              const reason = err instanceof Error ? err.message : String(err)
+              const tooSlow = /timeout|timed out|TimeoutError/i.test(reason)
+              yield* Effect.logWarning(
+                tooSlow
+                  ? `Skipping file after 30s timeout (likely pathological parse): ${relativePath}`
+                  : `Failed to index file: ${relativePath}`,
+                { cause: Cause.pretty(cause) },
+              )
               skipped++
             }),
           ),
