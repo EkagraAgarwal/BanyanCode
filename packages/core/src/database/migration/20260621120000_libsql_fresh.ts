@@ -2,12 +2,7 @@ import { Effect } from "effect"
 import type { DatabaseMigration } from "../migration"
 
 // Fresh libsql-native schema — all tables in one migration.
-// FTS5 triggers, JSONB columns, and F32_BLOB embeddings are all native to libsql.
-//
-// NOTE: codegraph_embeddings uses F32_BLOB(1536) as a placeholder dimension.
-// At runtime, EmbeddingProviderService.setModel() calls resetTable() to drop and
-// recreate the table with the correct dim for the chosen model before any
-// embeddings are written.
+// FTS5 triggers and JSONB columns are native to libsql.
 export default {
   id: "20260621120000_libsql_fresh",
   up(tx) {
@@ -347,18 +342,6 @@ export default {
         )`)
       yield* tx.run(`CREATE INDEX \`codegraph_edge_from_idx\` ON \`codegraph_edges\` (\`from_node_id\`)`)
       yield* tx.run(`CREATE INDEX \`codegraph_edge_to_idx\` ON \`codegraph_edges\` (\`to_node_id\`)`)
-
-      // ── codegraph_embeddings (F32_BLOB placeholder dim 1536) ───────────────
-      yield* tx.run(`
-        CREATE TABLE \`codegraph_embeddings\` (
-          \`node_id\` text PRIMARY KEY REFERENCES \`codegraph_nodes\`(\`id\`) ON DELETE CASCADE,
-          \`embedding\` F32_BLOB(1536) NOT NULL,
-          \`model\` text NOT NULL,
-          \`dim\` integer NOT NULL,
-          \`created_at\` integer NOT NULL DEFAULT (unixepoch())
-        )`)
-      yield* tx.run(`CREATE INDEX \`codegraph_embedding_model_idx\` ON \`codegraph_embeddings\` (\`model\`)`)
-      yield* tx.run(`CREATE INDEX codegraph_embedding_vec_idx ON codegraph_embeddings (libsql_vector_idx(embedding))`)
 
       // ── subagent_plans ──────────────────────────────────────────────────────
       yield* tx.run(`

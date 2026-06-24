@@ -53,20 +53,6 @@ type HookSpec = {
       sdk?: any
     }
   }
-  "aisdk.embed": {
-    input: {
-      model: string
-      input: string[]
-      options?: {
-        baseURL?: string
-        apiKey?: string
-        headers?: Record<string, string>
-      }
-    }
-    output: {
-      embeddings: number[][]
-    }
-  }
 }
 
 export type Hooks = {

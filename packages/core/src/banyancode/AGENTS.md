@@ -34,4 +34,4 @@ Do NOT add BanyanCode service deps to `BanyanTools.locationLayer` (`packages/cor
 - `export { Service as X, layer as xLayer, defaultLayer as xDefaultLayer } from "./x"` — for explicit imports
 - `export * as X from "./x"` — for namespace access via `Banyan.X.Service`
 
-Consumers in `packages/opencode` use the namespace form: `Banyan.EmbeddingProviderService`, `Banyan.CodegraphBuildService`, etc. Direct imports (`import { X } from "@opencode-ai/core/banyancode/x"`) are used in core to avoid the namespace import.
+Consumers in `packages/opencode` use the namespace form: `Banyan.CodegraphBuildService`, `Banyan.CodegraphRepo`, `Banyan.SubagentBus`, `Banyan.BanyanConfigService`, etc. Direct imports (`import { X } from "@opencode-ai/core/banyancode/x"`) are used in core to avoid the namespace import.

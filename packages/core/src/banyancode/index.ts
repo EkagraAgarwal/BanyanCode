@@ -1,7 +1,7 @@
 export * as Banyan from "."
 
 export { MemoryEntriesTable } from "./memory.sql"
-export { CodegraphFilesTable, CodegraphNodesTable, CodegraphEdgesTable, CodegraphEmbeddingsTable } from "./codegraph.sql"
+export { CodegraphFilesTable, CodegraphNodesTable, CodegraphEdgesTable } from "./codegraph.sql"
 export { CodegraphMetaTable } from "./codegraph-meta.sql"
 export { SubagentMessagesTable } from "./subagent-messages.sql"
 export { SubagentPlansTable } from "./subagent-plans.sql"
@@ -25,12 +25,6 @@ export {
   defaultLayer as codegraphBuildServiceDefaultLayer,
 } from "./codegraph-build-service"
 export { Service as CodegraphAnalyzer, layer as codegraphAnalyzerLayer, defaultLayer as codegraphAnalyzerDefaultLayer } from "./codegraph-analyzer"
-export { Service as CodegraphEmbedder, layer as codegraphEmbedderLayer, defaultLayer as codegraphEmbedderDefaultLayer } from "./codegraph-embedder"
-export {
-  Service as CodegraphEmbedService,
-  layer as codegraphEmbedServiceLayer,
-  defaultLayer as codegraphEmbedServiceDefaultLayer,
-} from "./codegraph-embed-service"
 export {
   Service as SubagentMessagesRepo,
   layer as subagentMessagesRepoLayer,
@@ -44,12 +38,6 @@ export {
 } from "./subagent-plans-repo"
 export { Service as SubagentBus, layer as subagentBusLayer, defaultLayer as subagentBusDefaultLayer } from "./subagent-bus"
 export { Service as MeshCoordinator, layer as meshCoordinatorLayer, defaultLayer as meshCoordinatorDefaultLayer } from "./mesh-coordinator"
-export {
-  defaultLayer as embeddingProviderDefaultLayer,
-  EmbeddingProviderService,
-} from "./embedding-provider"
-export { ProviderLookupService, layer as providerLookupLayer, defaultLayer as providerLookupDefaultLayer } from "./provider-lookup"
-export type { ProviderOptions, Interface as ProviderLookupInterface } from "./provider-lookup"
 export { Service as SystemMonitorService, defaultLayer as systemMonitorDefaultLayer } from "./system-monitor"
 export * as SystemMonitor from "./system-monitor"
 export {
