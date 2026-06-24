@@ -69,7 +69,6 @@ export type Event =
   | EventTodoUpdated
   | EventLspUpdated
   | EventBanyancodeCodegraphBuild
-  | EventBanyancodeCodeembedBuild
   | EventBanyancodeMeshStatus
   | EventBanyancodeSystemUpdated
   | EventPermissionAsked
@@ -1412,21 +1411,6 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "banyancode.codeembed.build"
-        properties: {
-          status: "idle" | "running" | "completed" | "failed" | "cancelled"
-          done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          result?: {
-            embedded: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            skipped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          }
-          error?: string
-        }
-      }
-    | {
-        id: string
         type: "banyancode.mesh.status"
         properties: {
           parentSessionID: string
@@ -2127,7 +2111,6 @@ export type Config = {
 
 export type BanyanConfig = {
   $schema?: string
-  banyancode_embedding_model?: string
   banyancode_openai_compatible_endpoints?: Array<{
     name: string
     base_url: string
@@ -5148,22 +5131,6 @@ export type EventBanyancodeCodegraphBuild = {
   }
 }
 
-export type EventBanyancodeCodeembedBuild = {
-  id: string
-  type: "banyancode.codeembed.build"
-  properties: {
-    status: "idle" | "running" | "completed" | "failed" | "cancelled"
-    done: number | "NaN" | "Infinity" | "-Infinity"
-    total: number | "NaN" | "Infinity" | "-Infinity"
-    startedAt?: number | "NaN" | "Infinity" | "-Infinity"
-    result?: {
-      embedded: number | "NaN" | "Infinity" | "-Infinity"
-      skipped: number | "NaN" | "Infinity" | "-Infinity"
-    }
-    error?: string
-  }
-}
-
 export type EventBanyancodeMeshStatus = {
   id: string
   type: "banyancode.mesh.status"
@@ -5713,32 +5680,6 @@ export type GlobalUpgradeResponses = {
 }
 
 export type GlobalUpgradeResponse = GlobalUpgradeResponses[keyof GlobalUpgradeResponses]
-
-export type GlobalEmbeddingModelApplyData = {
-  body?: never
-  path?: never
-  query?: never
-  url: "/global/embedding-model"
-}
-
-export type GlobalEmbeddingModelApplyErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type GlobalEmbeddingModelApplyError = GlobalEmbeddingModelApplyErrors[keyof GlobalEmbeddingModelApplyErrors]
-
-export type GlobalEmbeddingModelApplyResponses = {
-  /**
-   * Embedding model applied
-   */
-  200: boolean
-}
-
-export type GlobalEmbeddingModelApplyResponse =
-  GlobalEmbeddingModelApplyResponses[keyof GlobalEmbeddingModelApplyResponses]
 
 export type GlobalBanyanConfigGetData = {
   body?: never

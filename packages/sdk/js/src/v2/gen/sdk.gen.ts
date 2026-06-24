@@ -97,8 +97,6 @@ import type {
   GlobalConfigUpdateResponses,
   GlobalDisposeErrors,
   GlobalDisposeResponses,
-  GlobalEmbeddingModelApplyErrors,
-  GlobalEmbeddingModelApplyResponses,
   GlobalEventErrors,
   GlobalEventResponses,
   GlobalHealthErrors,
@@ -1310,28 +1308,6 @@ export class Config extends HeyApiClient {
   }
 }
 
-export class Model extends HeyApiClient {
-  /**
-   * Apply embedding model
-   *
-   * Apply the embedding model from config to the EmbeddingProviderService.
-   */
-  public apply<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
-    return (options?.client ?? this.client).post<
-      GlobalEmbeddingModelApplyResponses,
-      GlobalEmbeddingModelApplyErrors,
-      ThrowOnError
-    >({ url: "/global/embedding-model", ...options })
-  }
-}
-
-export class Embedding extends HeyApiClient {
-  private _model?: Model
-  get model(): Model {
-    return (this._model ??= new Model({ client: this.client }))
-  }
-}
-
 export class BanyanConfig extends HeyApiClient {
   /**
    * Get BanyanCode config
@@ -1567,11 +1543,6 @@ export class Global extends HeyApiClient {
   private _config?: Config
   get config(): Config {
     return (this._config ??= new Config({ client: this.client }))
-  }
-
-  private _embedding?: Embedding
-  get embedding(): Embedding {
-    return (this._embedding ??= new Embedding({ client: this.client }))
   }
 
   private _banyanConfig?: BanyanConfig
@@ -5716,7 +5687,7 @@ export class Session3 extends HeyApiClient {
   }
 }
 
-export class Model2 extends HeyApiClient {
+export class Model extends HeyApiClient {
   /**
    * List models
    *
@@ -6142,9 +6113,9 @@ export class V2 extends HeyApiClient {
     return (this._session ??= new Session3({ client: this.client }))
   }
 
-  private _model?: Model2
-  get model(): Model2 {
-    return (this._model ??= new Model2({ client: this.client }))
+  private _model?: Model
+  get model(): Model {
+    return (this._model ??= new Model({ client: this.client }))
   }
 
   private _provider?: Provider2
