@@ -2,14 +2,16 @@ import { Cause, Effect } from "effect"
 import { PluginV2 } from "../../plugin"
 
 const NIM_DEFAULT_BASE = "https://integrate.api.nvidia.com/v1"
-// NIM expects the full model identifier in the request body, including the
-// "nvidia/" namespace prefix that the catalog uses. Do NOT strip it.
-const NIM_PROVIDER_PREFIX = "nvidia/"
+// NIM proxies models under multiple families. The two we currently surface in
+// the picker are "nvidia/..." (NVIDIA's own catalog) and "baai/..." (BAAI
+// general-embedding models). Extend this set as new families are added.
+const NIM_MODEL_PREFIXES = ["nvidia/", "baai/"] as const
 
 const callNimEmbeddings = async (
   baseURL: string,
   apiKey: string,
-  // The full model identifier as NIM knows it, e.g. "nvidia/llama-nemotron-embed-1b-v2".
+  // The full model identifier as NIM knows it, e.g. "nvidia/llama-nemotron-embed-1b-v2"
+  // or "baai/bge-m3". NIM expects the family-prefixed form.
   modelIdentifier: string,
   inputs: string[],
 ): Promise<number[][]> => {
@@ -47,7 +49,7 @@ export const NvidiaEmbedPlugin = PluginV2.define({
     return {
       "aisdk.embed": Effect.fn(function* (evt) {
         if (evt.embeddings.length > 0) return
-        if (!evt.model.startsWith(NIM_PROVIDER_PREFIX)) return
+        if (!NIM_MODEL_PREFIXES.some((prefix) => evt.model.startsWith(prefix))) return
 
         const apiKey = process.env.NVIDIA_API_KEY
         if (!apiKey) {
