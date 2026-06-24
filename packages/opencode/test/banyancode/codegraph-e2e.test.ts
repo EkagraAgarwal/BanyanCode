@@ -72,19 +72,6 @@ describe("BanyanConfigService - reads banyancode.json from disk", () => {
     expect(config).toEqual({})
   })
 
-  test("get() reads banyancode_embedding_model from disk", async () => {
-    await writeConfig({ banyancode_embedding_model: "openai/text-embedding-3-small" })
-    const dbPath = makeTmpDbPath()
-    const layer = buildLayer(dbPath)
-    const config = await Effect.runPromise(
-      Effect.gen(function* () {
-        const svc = yield* Banyan.BanyanConfigService
-        return yield* svc.get()
-      }).pipe(Effect.provide(layer)),
-    )
-    expect(config.banyancode_embedding_model).toBe("openai/text-embedding-3-small")
-  })
-
   test("get() reads banyancode_yolo_mode from disk", async () => {
     await writeConfig({ banyancode_yolo_mode: true })
     const dbPath = makeTmpDbPath()
@@ -100,7 +87,6 @@ describe("BanyanConfigService - reads banyancode.json from disk", () => {
 
   test("get() reads multiple keys at once", async () => {
     await writeConfig({
-      banyancode_embedding_model: "voyage-code-3",
       banyancode_yolo_mode: false,
       banyancode_disable_websearch: true,
     })
@@ -112,7 +98,6 @@ describe("BanyanConfigService - reads banyancode.json from disk", () => {
         return yield* svc.get()
       }).pipe(Effect.provide(layer)),
     )
-    expect(config.banyancode_embedding_model).toBe("voyage-code-3")
     expect(config.banyancode_yolo_mode).toBe(false)
     expect(config.banyancode_disable_websearch).toBe(true)
   })
@@ -134,21 +119,21 @@ describe("BanyanConfigService - reads banyancode.json from disk", () => {
 
 describe("BanyanConfigService - writes to disk", () => {
   test("update() merges with existing config on disk", async () => {
-    await writeConfig({ banyancode_embedding_model: "openai/text-embedding-3-small" })
+    await writeConfig({ banyancode_yolo_mode: false })
     const dbPath = makeTmpDbPath()
     const layer = buildLayer(dbPath)
     const updated = await Effect.runPromise(
       Effect.gen(function* () {
         const svc = yield* Banyan.BanyanConfigService
-        return yield* svc.update({ banyancode_yolo_mode: true })
+        return yield* svc.update({ banyancode_disable_websearch: true })
       }).pipe(Effect.provide(layer)),
     )
-    expect(updated.banyancode_embedding_model).toBe("openai/text-embedding-3-small")
-    expect(updated.banyancode_yolo_mode).toBe(true)
+    expect(updated.banyancode_yolo_mode).toBe(false)
+    expect(updated.banyancode_disable_websearch).toBe(true)
 
     const onDisk = JSON.parse(await Bun.file(CONFIG_PATH).text())
-    expect(onDisk.banyancode_embedding_model).toBe("openai/text-embedding-3-small")
-    expect(onDisk.banyancode_yolo_mode).toBe(true)
+    expect(onDisk.banyancode_yolo_mode).toBe(false)
+    expect(onDisk.banyancode_disable_websearch).toBe(true)
   })
 
   test("update() creates file when none exists", async () => {
@@ -158,17 +143,17 @@ describe("BanyanConfigService - writes to disk", () => {
       Effect.gen(function* () {
         const svc = yield* Banyan.BanyanConfigService
         return yield* svc.update({
-          banyancode_embedding_model: "voyage-code-3",
           banyancode_yolo_mode: true,
+          banyancode_disable_websearch: true,
         })
       }).pipe(Effect.provide(layer)),
     )
-    expect(updated.banyancode_embedding_model).toBe("voyage-code-3")
     expect(updated.banyancode_yolo_mode).toBe(true)
+    expect(updated.banyancode_disable_websearch).toBe(true)
 
     const onDisk = JSON.parse(await Bun.file(CONFIG_PATH).text())
-    expect(onDisk.banyancode_embedding_model).toBe("voyage-code-3")
     expect(onDisk.banyancode_yolo_mode).toBe(true)
+    expect(onDisk.banyancode_disable_websearch).toBe(true)
   })
 
   test("update() returns the new merged config", async () => {
@@ -178,12 +163,10 @@ describe("BanyanConfigService - writes to disk", () => {
       Effect.gen(function* () {
         const svc = yield* Banyan.BanyanConfigService
         return yield* svc.update({
-          banyancode_embedding_model: "voyage-code-3",
           banyancode_yolo_mode: true,
         })
       }).pipe(Effect.provide(layer)),
     )
-    expect(updated.banyancode_embedding_model).toBe("voyage-code-3")
     expect(updated.banyancode_yolo_mode).toBe(true)
   })
 })

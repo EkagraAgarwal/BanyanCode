@@ -4,7 +4,6 @@ import { Banyan } from "../../src/banyancode"
 import { PermissionV2 } from "../../src/permission"
 import { CodegraphRepo } from "../../src/banyancode/codegraph-repo"
 import { CodegraphAnalyzer } from "../../src/banyancode/codegraph-analyzer"
-import { EmbeddingProvider } from "../../src/banyancode/embedding-provider"
 
 // Set BANYANCODE_ENABLE for all tests
 process.env.BANYANCODE_ENABLE = "1"
@@ -70,10 +69,6 @@ const mockCodegraphRepoLayer = Layer.succeed(
     listEdgesByNode: () => Effect.succeed([]),
     edgesFrom: () => Effect.succeed([]),
     edgesTo: () => Effect.succeed([]),
-    putEmbedding: () => Effect.void,
-    getEmbedding: () => Effect.succeed(undefined),
-    resetEmbeddingsTable: () => Effect.void,
-    searchByVector: () => Effect.succeed([]),
     deleteFile: () => Effect.void,
     clearAll: () => Effect.void,
     setMeta: () => Effect.void,
@@ -104,22 +99,11 @@ const mockCodegraphAnalyzerLayer = Layer.succeed(
   }),
 )
 
-// --- Mock EmbeddingProviderService ---
-const mockEmbeddingProviderLayer = Layer.succeed(
-  EmbeddingProvider.EmbeddingProviderService,
-  EmbeddingProvider.EmbeddingProviderService.of({
-    embed: () => Effect.succeed([new Float32Array([1, 0, 0])]),
-    model: () => Effect.succeed("test-embedding-model"),
-    setModel: () => Effect.void,
-  }),
-)
-
 // Combined layer for all mocked services
 const mockServicesLayer = Layer.mergeAll(
   mockPermissionLayer,
   mockCodegraphRepoLayer,
   mockCodegraphAnalyzerLayer,
-  mockEmbeddingProviderLayer,
 )
 
 describe("code_find", () => {
@@ -180,37 +164,6 @@ describe("code_find", () => {
     )
   })
 
-  test("semantic intent returns hits when model is available", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const provider = yield* EmbeddingProvider.EmbeddingProviderService
-        const repo = yield* CodegraphRepo.Service
-        const model = yield* provider.model()
-        expect(model).toBe("test-embedding-model")
-
-        // Simulate the semantic intent logic
-        const query = "login"
-        const nodes = yield* repo.listAllNodes()
-        const targetWords = query.toLowerCase().split(/\s+/)
-        const hits = nodes
-          .map((n) => ({
-            node: n,
-            score: targetWords.filter((w) => n.name.toLowerCase().includes(w)).length / targetWords.length,
-            source: "semantic" as const,
-          }))
-          .filter((h) => h.score > 0)
-          .sort((a, b) => b.score - a.score)
-
-        expect(hits.length).toBe(1)
-        expect(hits[0]?.node.name).toBe("login")
-        expect(hits[0]?.source).toBe("semantic")
-      }).pipe(
-        Effect.provide(mockServicesLayer),
-        Effect.scoped,
-      ),
-    )
-  })
-
   test("find_file intent returns matching files", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -244,46 +197,4 @@ describe("code_find", () => {
     )
   })
 
-  test("semantic intent falls back to keyword when no model", async () => {
-    // Re-run with no embedding model
-    const noModelLayer = Layer.mergeAll(
-      mockPermissionLayer,
-      mockCodegraphRepoLayer,
-      mockCodegraphAnalyzerLayer,
-      Layer.succeed(
-        EmbeddingProvider.EmbeddingProviderService,
-        EmbeddingProvider.EmbeddingProviderService.of({
-          embed: () => Effect.die("no model"),
-          model: () => Effect.succeed(undefined),
-          setModel: () => Effect.void,
-        }),
-      ),
-    )
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const provider = yield* EmbeddingProvider.EmbeddingProviderService
-        const repo = yield* CodegraphRepo.Service
-
-        const query = "login"
-        const model = yield* provider.model()
-        expect(model).toBeUndefined()
-
-        // Keyword fallback path
-        const nodes = yield* repo.listAllNodes()
-        const targetWords = query.toLowerCase().split(/\s+/)
-        const hits = nodes
-          .filter((n) => targetWords.some((w) => n.name.toLowerCase().includes(w)))
-          .slice(0, 50)
-          .map((node) => ({ node, score: 0, source: "keyword" as const }))
-
-        expect(hits.length).toBe(1)
-        expect(hits[0]?.node.name).toBe("login")
-        expect(hits[0]?.source).toBe("keyword")
-      }).pipe(
-        Effect.provide(noModelLayer),
-        Effect.scoped,
-      ),
-    )
-  })
 })

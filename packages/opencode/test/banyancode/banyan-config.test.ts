@@ -7,8 +7,8 @@ import { TestConfig } from "../fixture/config"
 describe("BanyanConfig", () => {
   test("banyanConfig() returns the loaded BanyanConfig via service", async () => {
     const mockBanyanConfig = {
-      banyancode_embedding_model: "openai/text-embedding-3-small",
       banyancode_yolo_mode: true,
+      banyancode_disable_websearch: true,
     }
 
     const mockBanyanLayer = Layer.succeed(
@@ -25,8 +25,8 @@ describe("BanyanConfig", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const banyanConfig = yield* Banyan.BanyanConfigService.use((svc) => svc.get())
-        expect(banyanConfig.banyancode_embedding_model).toBe("openai/text-embedding-3-small")
         expect(banyanConfig.banyancode_yolo_mode).toBe(true)
+        expect(banyanConfig.banyancode_disable_websearch).toBe(true)
       }).pipe(Effect.provide(testLayer)),
     )
   })
@@ -51,11 +51,11 @@ describe("BanyanConfig", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const svc = yield* Banyan.BanyanConfigService
-        yield* svc.update({ banyancode_embedding_model: "openai/text-embedding-3-small" })
+        yield* svc.update({ banyancode_yolo_mode: true })
       }).pipe(Effect.provide(testLayer)),
     )
 
-    expect(updatedConfig).toEqual({ banyancode_embedding_model: "openai/text-embedding-3-small" })
+    expect(updatedConfig).toEqual({ banyancode_yolo_mode: true })
   })
 
   test("after update, get returns the new value", async () => {
@@ -78,9 +78,9 @@ describe("BanyanConfig", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const svc = yield* Banyan.BanyanConfigService
-        yield* svc.update({ banyancode_embedding_model: "openai/text-embedding-3-small" })
+        yield* svc.update({ banyancode_yolo_mode: true })
         const result = yield* svc.get()
-        expect(result.banyancode_embedding_model).toBe("openai/text-embedding-3-small")
+        expect(result.banyancode_yolo_mode).toBe(true)
       }).pipe(Effect.provide(testLayer)),
     )
   })
@@ -119,7 +119,7 @@ describe("BanyanConfig", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const svc = yield* Banyan.BanyanConfigService
-        yield* svc.update({ banyancode_embedding_model: "x" })
+        yield* svc.update({ banyancode_yolo_mode: true })
       }).pipe(Effect.provide(testLayer)),
     )
 
