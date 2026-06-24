@@ -1,15 +1,15 @@
 ---
 title: BanyanCode Memory
-description: Cross-session memory with optional embeddings
+description: Cross-session memory with JSONB payloads
 ---
 
 # BanyanCode Memory
 
-BanyanCode includes a cross-session memory system that persists key-value data across sessions, with optional embeddings for semantic search.
+BanyanCode includes a cross-session memory system that persists key-value data across sessions, with JSONB indexable payloads for keyword search.
 
 ## Overview
 
-The memory system stores data in a durable SQLite-backed store. It supports session-scoped and global-scoped storage, with optional vector embeddings for semantic search when `BANYANCODE_EMBEDDING_MODEL` is configured.
+The memory system stores data in a durable SQLite-backed store. It supports session-scoped and global-scoped storage, with keyword search across key/value/context fields.
 
 ## Quotas
 
@@ -56,21 +56,13 @@ await memory_store({
 })
 ```
 
-### Semantic search with memory_search
+### Search with memory_search
 
 ```typescript
-// With embeddings configured (BANYANCODE_EMBEDDING_MODEL set)
-const results = await memory_search({
-  query: "user authentication settings",
-  scope: "global",
-  limit: 10
-})
-
-// Without embeddings (degraded mode - keyword matching only)
+// Keyword search across key/value/context fields
 const results = await memory_search({
   query: "authentication",
   scope: "global",
-  degraded: true,
   limit: 10
 })
 ```
@@ -95,16 +87,6 @@ The memory system does not auto-expire entries. Use `memory_forget` to remove st
 Each value is limited to 64KB. If you need to store larger data, consider splitting it across multiple keys or using external storage.
 
 The maximum total storage is 100MB. Monitor usage with `memory_list` and clean up stale entries with `memory_forget`.
-
-### Search returns keyword matches only
-
-This indicates that `BANYANCODE_EMBEDDING_MODEL` is not set. The memory system falls back to keyword matching when embeddings are not available.
-
-Set `BANYANCODE_EMBEDDING_MODEL` in your environment to enable semantic search:
-
-```bash
-BANYANCODE_EMBEDDING_MODEL=your-model-name
-```
 
 ### Memory persists across sessions
 

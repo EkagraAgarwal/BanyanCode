@@ -1,17 +1,15 @@
 ---
 title: BanyanCode Code Graph
-description: Polyglot code graph with tree-sitter and embeddings
+description: Polyglot code graph with tree-sitter
 ---
 
 # BanyanCode Code Graph
 
-BanyanCode includes a 2-phase codebase utility that builds a polyglot code graph using tree-sitter, then optionally computes embeddings over the same nodes for semantic search.
+BanyanCode includes a codebase utility that builds a polyglot code graph using tree-sitter.
 
 ## Overview
 
 **Phase 1** (`codegraph_build`) parses the codebase using tree-sitter to build a graph of functions, classes, imports, and relationships. This works across multiple languages.
-
-**Phase 2** (`/code-embed`) computes embeddings over the graph nodes when `BANYANCODE_EMBEDDING_MODEL` is configured, enabling semantic search over the codebase.
 
 ## Ignore rules
 
@@ -70,25 +68,6 @@ const impact = await codegraph_impact({
 })
 ```
 
-### Computing embeddings with /code-embed
-
-`/code-embed` walks the codegraph nodes and computes embeddings for each. It accepts an optional `--file <path>` to embed only one file. It does **not** answer search queries itself.
-
-```
-/code-embed                 # embed every node
-/code-embed --file src/foo.ts  # embed only one file
-```
-
-While the embed runs, the same floating TUI widget that shows `/codegraph-build` progress shows embed progress. If `BANYANCODE_EMBEDDING_MODEL` is unset the widget transitions to a red `failed` state with the message "BANYANCODE_EMBEDDING_MODEL is not configured".
-
-### Semantic search
-
-After `/code-embed` finishes, semantic search uses the `code_search` tool (exposed as the `/code-search` slash command):
-
-```
-/code-search How does the memory store work?
-```
-
 ## Troubleshooting
 
 ### Index fails
@@ -100,5 +79,4 @@ After `/code-embed` finishes, semantic search uses the `code_search` tool (expos
 ### Search returns no results
 
 - Verify `codegraph_build` has been run successfully
-- If using semantic search, ensure `BANYANCODE_EMBEDDING_MODEL` is configured
 - Try a more specific query or use `codegraph_query` for exact matches

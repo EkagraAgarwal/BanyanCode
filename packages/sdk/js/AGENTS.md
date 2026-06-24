@@ -23,7 +23,7 @@ sdk.client.global.banyanConfig.get()
 sdk.client.global.banyanConfig.update({ banyanConfig: { ... } })
 ```
 
-**Payload key wrapping:** the payload is wrapped in a key matching the endpoint name (e.g. `banyanConfig: { banyancode_embedding_model: "..." }`), NOT a top-level `config: { ... }` object. Check `packages/sdk/js/src/v2/gen/types.gen.ts` for the exact payload shape.
+**Payload key wrapping:** the payload is wrapped in a key matching the endpoint name (e.g. `banyanConfig: { banyancode_yolo_mode: true }`), NOT a top-level `config: { ... }` object. Check `packages/sdk/js/src/v2/gen/types.gen.ts` for the exact payload shape.
 
 ## When SDK regen is required
 

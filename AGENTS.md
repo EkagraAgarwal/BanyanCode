@@ -1,6 +1,6 @@
 # BanyanCode
 
-This repository is a fork of [OpenCode](https://github.com/anomalyco/opencode). BanyanCode adds: (1) an **orchestrator + subagent mesh** for parallel multi-agent workflows, (2) **cross-session memory** with optional embeddings and JSONB payloads, (3) a **2-phase codebase utility** (tree-sitter code graph + Turso/libSQL vector search), and (4) a **researcher agent** with free web search via DuckDuckGo. BanyanCode is TUI/CLI only — `desktop`, `web`, `app`, `storybook` packages are explicitly out of scope.
+This repository is a fork of [OpenCode](https://github.com/anomalyco/opencode). BanyanCode adds: (1) an **orchestrator + subagent mesh** for parallel multi-agent workflows, (2) **cross-session memory** with JSONB payloads, (3) a **tree-sitter code graph** utility, and (4) a **researcher agent** with free web search via DuckDuckGo. BanyanCode is TUI/CLI only — `desktop`, `web`, `app`, `storybook` packages are explicitly out of scope.
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for repo layout, runtime layers, and the BanyanCode service architecture. Per-feature design lives in `specs/banyancode/`. Current implementation plan lives in [`plan.md`](plan.md).
 
@@ -49,7 +49,7 @@ BanyanCode is its own product, NOT a plugin or config of OpenCode. Both install 
 | Config schema | `ConfigV1.Info` | `BanyanConfig.Info` |
 | Service namespace | (n/a) | `Banyan.X.Service` |
 
-BanyanCode-specific keys (`banyancode_embedding_model`, `banyancode_yolo_mode`, `banyancode_max_subagents`, future telegram/runtime keys) live in `BanyanConfig.Info` (`packages/core/src/v1/config/banyan-config.ts`). They were removed from `ConfigV1.Info`. Consumers MUST use `Banyan.BanyanConfigService` — `Config.Service.getGlobal().banyancode_*` will fail typecheck.
+BanyanCode-specific keys (`banyancode_yolo_mode`, `banyancode_max_subagents`, `banyancode_telegram_*`, future runtime keys) live in `BanyanConfig.Info` (`packages/core/src/v1/config/banyan-config.ts`). They were removed from `ConfigV1.Info`. Consumers MUST use `Banyan.BanyanConfigService` — `Config.Service.getGlobal().banyancode_*` will fail typecheck.
 
 For each sub-directory loader in `packages/opencode/src/config/`, the loader iterates BOTH `.opencode/` and `.banyancode/`. So `.opencode/agents/foo.md` AND `.banyancode/agents/foo.md` are both discovered and merged. Convention: `agent/`, `agents/`, `command/`, `commands/`, `skill/`, `skills/`, `plugin/`, `plugins/`, `plans/`, plus `tui.json`.
 
@@ -65,9 +65,9 @@ When dispatching multiple `@coder` subagents in parallel, expect git index.lock 
 
 **Path traversal in HTTP schemas is the default — always validate.** Any string that ends up in `path.join` (filenames, slugs, identifiers written to disk) MUST be `Schema.isPattern` constrained at the schema boundary AND escape-validated in the handler. Defense-in-depth: strip disallowed chars AND verify the resolved absolute path is still inside the resolved parent directory. Reference: `BanyanAgentSaveInput.name` validation in `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:68` + `handlers/global.ts:242`.
 
-**Schema migrations are dangerous — preserve data across destructive refactors.** The `resetEmbeddingsTable` migration originally did `DROP TABLE codegraph_embeddings` then recreated with the new `F32_BLOB(dim)`. Every model switch wiped the user's accumulated embeddings. Fixed by `clearEmbeddingsForModel(model)` which only removes rows for the model being switched TO (none should exist yet), preserving embeddings under the old model. Default to non-destructive migrations; reserve `{ force: true }` for explicit "wipe everything" calls.
+**Schema migrations are dangerous — preserve data across destructive refactors.** Default to non-destructive migrations; reserve `{ force: true }` for explicit "wipe everything" calls.
 
-**`Effect.runSync` from a non-Fiber runtime throws `FiberFailure`.** Any service method that reads from `Ref` / `Queue` / `Stream` MUST be `Effect.Effect<A, E, R>`, never a sync accessor that internally does `Effect.runSync(...)`. If callers legitimately need sync, do `Effect.runSync` at the call site, not in the service impl. Reference: `EmbeddingProvider.model` in `packages/core/src/banyancode/embedding-provider.ts`.
+**`Effect.runSync` from a non-Fiber runtime throws `FiberFailure`.** Any service method that reads from `Ref` / `Queue` / `Stream` MUST be `Effect.Effect<A, E, R>`, never a sync accessor that internally does `Effect.runSync(...)`. If callers legitimately need sync, do `Effect.runSync` at the call site, not in the service impl.
 
 **Subscription leaks come from `bus.on(...)` inside component bodies.** Every `useEvent().on(type, handler)` or `event.on(type, handler)` inside a Solid component body MUST be paired with `onCleanup(unsub)`. Otherwise listeners accumulate across remounts and the bus fires the handler N times for N visits. The two correct patterns are `const unsub = ev.on(...); onCleanup(unsub)` and inline `onCleanup(event.on(...))`.
 

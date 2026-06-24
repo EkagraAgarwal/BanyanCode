@@ -132,7 +132,7 @@ Plain async code should pass explicit context or stay inside an Effect fiber; do
 
 ## BanyanConfig consumers (read pattern)
 
-BanyanCode-specific config keys (`banyancode_embedding_model`, `banyancode_yolo_mode`, future telegram/runtime keys) live in `BanyanConfig.Info`, NOT `ConfigV1.Info`. Consumers MUST read via `Banyan.BanyanConfigService`, never `Config.Service.getGlobal().banyancode_*` (those keys are removed and any consumer still reading them will fail typecheck).
+BanyanCode-specific config keys (`banyancode_yolo_mode`, `banyancode_max_subagents`, `banyancode_telegram_*`, future runtime keys) live in `BanyanConfig.Info`, NOT `ConfigV1.Info`. Consumers MUST read via `Banyan.BanyanConfigService`, never `Config.Service.getGlobal().banyancode_*` (those keys are removed and any consumer still reading them will fail typecheck).
 
 When the service is not guaranteed to be in scope (e.g. permission layer that runs in many contexts), use `Effect.serviceOption`:
 ```ts

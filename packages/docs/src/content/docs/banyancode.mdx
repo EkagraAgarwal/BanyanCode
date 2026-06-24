@@ -5,13 +5,13 @@ description: Overview of BanyanCode features
 
 # BanyanCode
 
-BanyanCode is a CLI/TUI-only fork of [OpenCode](https://github.com/anomalyco/opencode) that adds a parallel subagent mesh, cross-session memory, a code graph + embeddings utility, and a researcher agent with free web search. It is designed for developers who want orchestrated multi-agent workflows with persistent memory across sessions.
+BanyanCode is a CLI/TUI-only fork of [OpenCode](https://github.com/anomalyco/opencode) that adds a parallel subagent mesh, cross-session memory, a code graph utility, and a researcher agent with free web search. It is designed for developers who want orchestrated multi-agent workflows with persistent memory across sessions.
 
 ## What BanyanCode adds over OpenCode
 
 - **Orchestrator + subagent mesh.** A primary `orchestrator` agent decomposes complex tasks, fans out to specialized subagents in parallel, and coordinates them via peer messaging and shared memory.
-- **Cross-session memory.** A persistent key-value store with optional embeddings for semantic search, exposed as tools and a skill.
-- **2-phase codebase utility.** Phase 1 builds a polyglot code graph using tree-sitter. Phase 2 computes embeddings over the same nodes for semantic search. `/codegraph-build` runs in the background; a floating TUI widget shows progress, current file, and lets you cancel. See [banyancode-config](./banyancode-config.mdx#background-codegraph-build).
+- **Cross-session memory.** A persistent key-value store with JSONB indexable payloads, exposed as tools and a skill.
+- **Codebase utility.** Builds a polyglot code graph using tree-sitter. `/codegraph-build` runs in the background; a floating TUI widget shows progress, current file, and lets you cancel. See [banyancode-config](./banyancode-config.mdx#background-codegraph-build).
 - **Researcher agent with free web search.** A `researcher` subagent that uses DuckDuckGo-backed `websearch_free` by default.
 
 ## Quick start
@@ -28,12 +28,12 @@ BanyanCode features are opt-in. Set `BANYANCODE_ENABLE=1` in your environment to
 | Feature | Description | Documentation |
 |---------|-------------|---------------|
 | Orchestrator + subagent mesh | Decomposes tasks, fans out to subagents, coordinates via messaging | [banyancode-orchestrator](./banyancode-orchestrator.mdx) |
-| Cross-session memory | Persistent key-value store with optional embeddings | [banyancode-memory](./banyancode-memory.mdx) |
-| Code graph + embeddings | Polyglot code graph via tree-sitter, semantic search via embeddings | [banyancode-codegraph](./banyancode-codegraph.mdx) |
+| Cross-session memory | Persistent key-value store with JSONB payloads | [banyancode-memory](./banyancode-memory.mdx) |
+| Code graph | Polyglot code graph via tree-sitter | [banyancode-codegraph](./banyancode-codegraph.mdx) |
 | Subagent mesh | Peer messaging, shared memory, fire-and-persist coordination | [banyancode-mesh](./banyancode-mesh.mdx) |
 | System monitor | Health checks for orchestrator and users | [banyancode-system-monitor](./banyancode-system-monitor.mdx) |
 | Free web search | DuckDuckGo-backed search without API keys | [banyancode-websearch](./banyancode-websearch.mdx) |
-| TUI model picker | Pick per-agent and embedding models from the TUI | [banyancode-config](./banyancode-config.mdx) |
+| TUI model picker | Pick per-agent models from the TUI | [banyancode-config](./banyancode-config.mdx) |
 
 ## When to use the orchestrator vs build/plan
 

@@ -15,13 +15,7 @@ Resolve the four Critical findings. These are correctness/security bugs; the res
 - `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts` — tighten `BanyanAgentSaveInput.name` with `Schema.pattern(/^[a-zA-Z0-9._-]+$/)` and bound `description` length.
 - `packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts` — escape frontmatter fields, validate name matches the pattern in the handler as a defense-in-depth, return `InvalidRequestError` on failure.
 
-### 1.2 `Effect.runSync` in sync-typed service method
-**File:** `packages/core/src/banyancode/embedding-provider.ts`
-- Change `Interface.model` from `() => string | undefined` to `() => Effect.Effect<string | undefined, never, never>`.
-- Update implementation to just return `Ref.get(modelRef)`.
-- Update every consumer to wrap with `Effect.runSync` (or use in Effect.gen).
-
-### 1.3 System-monitor unbounded queue + per-`watch` fiber leak
+### 1.2 System-monitor unbounded queue + per-`watch` fiber leak
 **File:** `packages/core/src/banyancode/system-monitor.ts`
 - Replace `Queue.unbounded` with `Queue.bounded<SystemStatus>(60)` for the shared poll.
 - Hoist polling to a single `Effect.forkIn(work, yield* Effect.scope)` inside the layer.
@@ -34,8 +28,7 @@ Resolve the four Critical findings. These are correctness/security bugs; the res
 - `packages/core/src/banyancode/subagent-messages-repo.ts` — add the `markDelivered` SQL.
 - `packages/core/src/banyancode/subagent-consumer.ts` — wire `start` to `loop(input, queue)` via `Effect.forkIn`.
 
-### 1.5 Tests for Phase 1
-- `packages/core/test/banyancode/embedding-provider.test.ts` — drop the skipped probe-timeout test; add a test that `model()` returns the configured value without throwing.
+### 1.4 Tests for Phase 1
 - `packages/core/test/banyancode/system-monitor.test.ts` — assert the polling fiber is interruptible (use `Effect.scoped` + interrupt) and the queue is bounded.
 - `packages/core/test/banyancode/subagent-consumer.test.ts` — replace the trivial single-assertion test with a full loop test: publish `plan` message, assert memory receives it; publish `kill`, assert loop exits.
 - `packages/core/test/banyancode/subagent-messages-repo.test.ts` — add `markDelivered` round-trip test.
@@ -68,17 +61,9 @@ onCleanup(unsub)
 - `packages/core/src/event.ts` — convert `listeners`/`projectors`/`syncHandlers` to `Set`; projector registry gets `Effect.addFinalizer` removal.
 - `packages/core/src/session/run-coordinator.ts` — add `Effect.addFinalizer` on entry to clear `active` and `interruptSeq`.
 
-### 2.3 `resetEmbeddingsTable` data loss
-**File:** `packages/core/src/banyancode/codegraph-repo.ts`
-- Replace the `DROP TABLE` with model-column strategy: store every embedding in one table with `model TEXT` discriminator; use partial vector indexes per model when dim differs.
-- Only `DROP` if forced via explicit parameter.
-- Add a `clearEmbeddingsForModel(model)` for callers who want a clean slate.
-
-### 2.4 Tests for Phase 2
+### 2.3 Tests for Phase 2
 - New `packages/tui/test/feature-plugins/tabs/tab-graph-cleanup.test.tsx` — mount the tab, unmount, fire event, assert handler is not invoked.
 - `packages/core/test/effect/keyed-mutex.test.ts` (NEW) — assert map size returns to 0 after `Scope` closes.
-- `packages/core/test/banyancode/codegraph-repo.test.ts` (NEW) — assert that switching models preserves embeddings for the old model.
-
 **Verify:** typecheck + full test suite.
 
 ---
@@ -93,11 +78,7 @@ onCleanup(unsub)
 - Update `bumpVersion` to use `COUNT(*)`.
 - Update `banyan-config.ts` HTTP `/global/codegraph-nodes` and `/global/codegraph-edges` to accept `limit`/`cursor` query params and return `{ items, total, nextCursor }`.
 
-### 3.2 Batch embedder + indexer
-**File:** `packages/core/src/banyancode/codegraph-embedder.ts`
-- Accumulate up to `BATCH_SIZE=100` texts and call `provider.embed(texts)` once per batch.
-- Parallelize `getEmbedding` pre-checks with `Effect.forEach({ concurrency: 8 })`.
-
+### 3.2 Batch indexer
 **File:** `packages/core/src/banyancode/codegraph-indexer.ts`
 - Buffer nodes + edges in memory, flush via Drizzle `insert(...).values([...batch])` with `onConflictDoUpdate`.
 - Use one transaction per file (or batch of N files) instead of N inserts.
@@ -116,7 +97,6 @@ onCleanup(unsub)
 
 ### 3.6 Tests for Phase 3
 - `packages/core/test/banyancode/codegraph-pagination.test.ts` (NEW) — seed 5000 nodes, stream with limit 100, assert correct cursor progression.
-- `packages/core/test/banyancode/codegraph-batching.test.ts` (NEW) — spy on `provider.embed`, assert batch size ≤ 100.
 - `packages/core/test/banyancode/codegraph-layers-endpoint.test.ts` (NEW) — fixture graph, assert layer counts.
 
 **Verify:** typecheck + full test suite. (Optional: `bun run bench:test` from `packages/opencode` for a perf before/after.)
@@ -195,8 +175,7 @@ onCleanup(unsub)
 ### 5.6 Add perf docs
 - `perf/tui-render.md` — render frame cost at 80×24, 120×40, 200×60.
 - `perf/memory.md` — RSS after warmup, GC pauses for long sessions.
-- `perf/codegraph-build.md` — files/sec, MB/sec, dim detection cost.
-- `perf/embedding.md` — `embedAll` throughput, `searchByVector` p99 latency.
+- `perf/codegraph-build.md` — files/sec, MB/sec.
 
 ### 5.7 Tests for Phase 5
 - Update stale tests after SDK regen to use typed methods.

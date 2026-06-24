@@ -24,27 +24,11 @@ OpenCode's paths (`.opencode/`, `~/.config/opencode/`, etc.) are unchanged and l
 
 ## Why separate from OpenCode?
 
-BanyanCode is built on top of OpenCode but is its own product. Sharing config files caused a real problem: BanyanCode would write its own keys (like `banyancode_embedding_model`) into `opencode.json`, and OpenCode would error out because it didn't recognize the keys.
+BanyanCode is built on top of OpenCode but is its own product. Sharing config files caused a real problem: BanyanCode would write its own keys (like `banyancode_yolo_mode`) into `opencode.json`, and OpenCode would error out because it didn't recognize the keys.
 
 The fix: BanyanCode has its own file locations, its own config schema, and its own env vars. Both products can be installed and run side by side without conflict.
 
 ## Top-level keys in banyancode.json
-
-### `banyancode_embedding_model`
-
-The embedding model used by `memory_search` and `code_search` for semantic search.
-
-Type: `string` (provider/model format, e.g., `"openai/text-embedding-3-small"`)
-
-Default: `undefined` — when unset, embedding-based search falls back to keyword matching and returns `degraded: true`.
-
-```json
-{
-  "banyancode_embedding_model": "openai/text-embedding-3-small"
-}
-```
-
-You can change this at runtime via the TUI: `/embedding-model`. The change takes effect immediately without restarting the process.
 
 ### `agent.<name>.model`
 
@@ -75,14 +59,6 @@ BANYANCODE_ENABLE=1
 
 Without this, the existing OpenCode experience is unchanged.
 
-### `BANYANCODE_EMBEDDING_MODEL`
-
-Initial value for the embedding model at process boot. If `banyancode_embedding_model` is also set in `banyancode.json`, the config value wins.
-
-```bash
-BANYANCODE_EMBEDDING_MODEL=openai/text-embedding-3-small
-```
-
 ### `BANYANCODE_DISABLE_WEBSEARCH`
 
 Disables the `websearch_free` tool even when BanyanCode is enabled. Useful for environments that block outbound HTTP to DuckDuckGo.
@@ -96,13 +72,10 @@ BANYANCODE_DISABLE_WEBSEARCH=1
 | Command | Description |
 |---------|-------------|
 | `/agent-model` | Open the dialog to pick the model for a BanyanCode agent (orchestrator, researcher, explore, general) |
-| `/embedding-model` | Open the dialog to pick the embedding model and apply live |
 | `/model` | Pick the model for the current agent (OpenCode default) |
 | `/models` | Same as `/model` |
 | `/codegraph-build` | Build the code graph index — runs in background; a progress widget shows in the TUI |
 | `/codegraph-remove` | Delete the current codegraph index from the project-local database |
-| `/code-embed` | Compute embeddings for code graph nodes (direct tool call) |
-| `/code-search` | Search code semantically (after `/code-embed` completes) |
 | `/memory-search` | Search the BanyanCode memory store |
 
 ## Background codegraph build
