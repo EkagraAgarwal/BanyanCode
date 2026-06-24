@@ -15,7 +15,6 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import { BanyanAgentSaveInput, BanyanConfigUpdateInput, GlobalUpgradeInput } from "../groups/global"
-import { applyEmbeddingModel } from "@/effect/banyancode-bootstrap"
 import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
@@ -158,17 +157,6 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return true
     })
 
-    const applyEmbeddingModelHandler = Effect.fn("GlobalHttpApi.applyEmbeddingModel")(function* () {
-      yield* applySystemMonitorBridge
-      yield* applyEmbeddingModel.pipe(
-        Effect.mapError((e: unknown) => {
-          const err = e as { _tag: string; message: string }
-          return new InvalidRequestError({ message: err.message })
-        }),
-      )
-      return true
-    })
-
     const getBanyanConfigHandler = Effect.fn("GlobalHttpApi.getBanyanConfig")(function* () {
       const svc = yield* Banyan.BanyanConfigService
       return yield* svc.get()
@@ -292,7 +280,6 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       .handle("dispose", dispose)
       .handleRaw("upgrade", upgradeRaw)
       .handle("startup", startupHandler)
-      .handle("applyEmbeddingModel", applyEmbeddingModelHandler)
       .handle("getBanyanConfig", getBanyanConfigHandler)
       .handle("updateBanyanConfig", updateBanyanConfigHandler)
       .handle("codegraphCancel", codegraphCancelHandler)

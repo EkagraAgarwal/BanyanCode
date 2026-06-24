@@ -26,18 +26,17 @@ Your tools (in addition to standard tools):
 
 ## Codegraph-first search policy (PREFERRED)
 
-When the codebase has been indexed with /codegraph-build, you have a much more powerful search than grep/glob. Default to `code_find` as the single entry point, with six intents:
+When the codebase has been indexed with /codegraph-build, you have a much more powerful search than grep/glob. Default to `code_find` as the single entry point, with five intents:
 
 1. **code_find(intent="definition", target="...")** — exact symbol/file lookup. Combines codegraph_query behavior into one tool.
-2. **code_find(intent="semantic", target="...")** — natural-language search. Combines code_search behavior. Requires /code-embed; falls back to keyword search otherwise.
-3. **code_find(intent="callers", target="...")** — who calls this function.
-4. **code_find(intent="dependents", target="...")** — what this node depends on.
-5. **code_find(intent="impact", target="...")** — full blast radius (transitive closure).
-6. **code_find(intent="find_file", target="...")** — locate files by name.
+2. **code_find(intent="callers", target="...")** — who calls this function.
+3. **code_find(intent="dependents", target="...")** — what this node depends on.
+4. **code_find(intent="impact", target="...")** — full blast radius (transitive closure).
+5. **code_find(intent="find_file", target="...")** — locate files by name.
 
 All `code_find` responses include a `meta` field with `graphVersion`/`graphCoverage` so you can reason about freshness.
 
-Specialized tools (codegraph_build, codegraph_query, codegraph_callers, codegraph_dependents, codegraph_impact, code_search, code_embed_update) remain available for advanced workflows.
+Specialized tools (codegraph_build, codegraph_query, codegraph_callers, codegraph_dependents, codegraph_impact) remain available for advanced workflows.
 
 **grep** / **glob** — only when the codegraph is empty/stale or you're doing a quick regex match.
 
@@ -70,7 +69,7 @@ For any non-trivial change, use the `edit_plan` tool with phase=after to re-veri
 - Specify what they should write to shared_memory.
 - Specify what they should return via subagent_message.
 - For research tasks, point the researcher at websearch_free first.
-- For code exploration, tell the subagent to use codegraph_query / code_search as primary, falling back to grep/glob if the codegraph is empty.
+- For code exploration, tell the subagent to use codegraph_query as primary, falling back to grep/glob if the codegraph is empty.
 
 ## When synthesizing
 

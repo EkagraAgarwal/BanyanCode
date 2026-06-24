@@ -113,7 +113,6 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(Observability.layer),
   Layer.provideMerge(
     Banyan.codegraphBuildServiceDefaultLayer.pipe(
-      Layer.provide(Banyan.codegraphEmbedServiceDefaultLayer),
       Layer.provide(Banyan.codegraphStalenessDefaultLayer),
       Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
       Layer.provide(Banyan.editPlannerDefaultLayer),

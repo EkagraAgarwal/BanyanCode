@@ -109,7 +109,6 @@ export const GlobalPaths = {
   config: "/global/config",
   dispose: "/global/dispose",
   upgrade: "/global/upgrade",
-  embeddingModel: "/global/embedding-model",
   codegraphCancel: "/global/codegraph-cancel",
   startup: "/global/startup",
   banyanConfig: "/global/banyan-config",
@@ -177,15 +176,6 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.upgrade",
           summary: "Upgrade opencode",
           description: "Upgrade opencode to the specified version or latest if not specified.",
-        }),
-      ),
-      HttpApiEndpoint.post("applyEmbeddingModel", GlobalPaths.embeddingModel, {
-        success: described(Schema.Boolean, "Embedding model applied"),
-      }).annotateMerge(
-        OpenApi.annotations({
-          identifier: "global.embedding.model.apply",
-          summary: "Apply embedding model",
-          description: "Apply the embedding model from config to the EmbeddingProviderService.",
         }),
       ),
       HttpApiEndpoint.get("getBanyanConfig", GlobalPaths.banyanConfig, {

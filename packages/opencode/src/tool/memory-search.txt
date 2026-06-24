@@ -1,7 +1,4 @@
-- Search memory entries using semantic embedding similarity when BANYANCODE_EMBEDDING_MODEL is configured, otherwise falls back to keyword search
+- Search memory entries using keyword matching against key, value string, and context fields
 - Required: 'query' (search string)
 - Optional: 'limit' (max results, default 10), 'scope' ('global' or 'session', defaults to 'global'), 'sessionID' (required when scope is 'session')
-- Returns: 'entries' (array of matching entries), 'degraded' (true if embeddings were unavailable and keyword search was used instead)
-- Embedding search: computes cosine similarity between query embedding and entry embeddings, returns top matches
-- Keyword search: matches against key, value string, and context fields
-- Set BANYANCODE_EMBEDDING_MODEL environment variable to enable embedding search (e.g., 'text-embedding-3-small')
+- Returns: 'entries' (array of matching entries)
