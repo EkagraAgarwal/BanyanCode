@@ -55,6 +55,8 @@ import { Banyan } from "@opencode-ai/core/banyancode"
 import { EventV2 } from "@opencode-ai/core/event"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 import { applyCodegraphBuildBridge } from "./banyancode-codegraph-bridge"
+import { applyCodegraphEmbedBridge } from "./banyancode-embed-bridge"
+import { providerLookupLayer } from "../banyancode/provider-lookup"
 
 export const AppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -117,6 +119,7 @@ export const AppLayer = Layer.mergeAll(
       Layer.provide(Banyan.codegraphStalenessDefaultLayer),
       Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
       Layer.provide(Banyan.editPlannerDefaultLayer),
+      Layer.provide(providerLookupLayer),
       Layer.provide(PluginV2.locationLayer),
       Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
     ),
@@ -150,3 +153,4 @@ export const AppRuntime: Runtime = {
 }
 
 AppRuntime.runFork(applyCodegraphBuildBridge as never)
+AppRuntime.runFork(applyCodegraphEmbedBridge as never)
