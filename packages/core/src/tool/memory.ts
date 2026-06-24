@@ -82,18 +82,6 @@ export class MemoryQuotaError extends Schema.TaggedErrorClass<MemoryQuotaError>(
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
-function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  let dot = 0
-  let normA = 0
-  let normB = 0
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i]
-    normA += a[i] * a[i]
-    normB += b[i] * b[i]
-  }
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB))
-}
-
 function keywordSearch(query: string, entries: Banyan.MemoryEntry[]): Banyan.MemoryEntry[] {
   const lowerQuery = query.toLowerCase()
   return entries
@@ -114,7 +102,6 @@ export const locationLayer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const permission = yield* PermissionV2.Service
     const repo = yield* Banyan.MemoryRepo
-    const provider = yield* Banyan.EmbeddingProviderService
 
     yield* tools
       .register({
@@ -293,11 +280,11 @@ export const locationLayer = Layer.effectDiscard(
         }),
         [name_search]: Tool.make({
           description:
-            "Search memory entries using semantic embedding search when available, falling back to keyword search. Returns degraded=true when embeddings are unavailable.",
+            "Search memory entries using keyword search across keys, values, and context.",
           input: InputSearch,
           output: OutputSearch,
           toModelOutput: ({ output }) => [
-            { type: "text", text: `found ${output.entries.length} entries (degraded=${output.degraded})` },
+            { type: "text", text: `found ${output.entries.length} entries` },
           ],
           execute: (input) => {
             return Effect.gen(function* () {
@@ -314,40 +301,8 @@ export const locationLayer = Layer.effectDiscard(
               const scope = (input.scope ?? "global") as "global" | "session"
               const allEntries = yield* repo.list(scope, input.sessionID)
 
-              const model = yield* provider.model()
-
-              if (model === undefined) {
-                const keywordMatches = keywordSearch(input.query, allEntries)
-                return { entries: keywordMatches, degraded: true }
-              }
-
-              const embedResult = yield* provider
-                .embed(input.query)
-                .pipe(
-                  Effect.mapError(() => null),
-                  Effect.catch(() => Effect.succeed(null)),
-                )
-
-              if (!embedResult || embedResult.length === 0) {
-                return { entries: [], degraded: false }
-              }
-
-              const queryEmbedding = embedResult[0]
-
-              const scored = allEntries.map((entry) => {
-                const entryEmbedding = (entry as any)._embedding as Float32Array | undefined
-                if (!entryEmbedding) return { entry, score: 0 }
-                return { entry, score: cosineSimilarity(queryEmbedding, entryEmbedding) }
-              })
-
-              const limit = input.limit ?? 10
-              const topResults = scored
-                .filter((s) => s.score > 0)
-                .sort((a, b) => b.score - a.score)
-                .slice(0, limit)
-                .map((s) => s.entry)
-
-              return { entries: topResults, degraded: false }
+              const keywordMatches = keywordSearch(input.query, allEntries)
+              return { entries: keywordMatches, degraded: false }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `memory_search failed` })))
           },
         }),
