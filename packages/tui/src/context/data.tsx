@@ -21,7 +21,7 @@ import type {
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
-import { createSignal, onMount } from "solid-js"
+import { createSignal, onCleanup, onMount } from "solid-js"
 
 type LocationData = {
   agent?: AgentV2Info[]
@@ -119,7 +119,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       },
     }
 
-    event.subscribe((event) => {
+    onCleanup(event.subscribe((event) => {
       switch (event.type) {
         case "session.next.agent.switched":
           message.update(event.properties.sessionID, (draft) => {
@@ -422,7 +422,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           void result.location.reference.refresh()
           break
       }
-    })
+    }))
 
     const result = {
       session: {

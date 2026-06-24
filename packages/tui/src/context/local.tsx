@@ -1,6 +1,6 @@
 import { createStore } from "solid-js/store"
 import { createSimpleContext } from "./helper"
-import { batch, createEffect, createMemo } from "solid-js"
+import { batch, createEffect, createMemo, onCleanup } from "solid-js"
 import { useSync } from "./sync"
 import { useEvent } from "./event"
 import path from "path"
@@ -439,6 +439,54 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
     const model = createModel()
 
+    function createEmbeddingModel() {
+      const [embeddingModelStore, setEmbeddingModelStore] = createStore<{
+        ready: boolean
+        providerID: string | undefined
+        modelID: string | undefined
+      }>({
+        ready: false,
+        providerID: undefined,
+        modelID: undefined,
+      })
+
+      const filePath = path.join(paths.state, "embedding-model.json")
+
+      readJson<{ providerID: string; modelID: string }>(filePath)
+        .then((x) => {
+          if (!x || typeof x !== "object") return
+          const value = x as Record<string, unknown>
+          if (typeof value.providerID === "string" && typeof value.modelID === "string") {
+            setEmbeddingModelStore({ providerID: value.providerID, modelID: value.modelID })
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          setEmbeddingModelStore("ready", true)
+        })
+
+      return {
+        current() {
+          return embeddingModelStore.providerID !== undefined && embeddingModelStore.modelID !== undefined
+            ? { providerID: embeddingModelStore.providerID, modelID: embeddingModelStore.modelID }
+            : undefined
+        },
+        set(input: { providerID: string; modelID: string }) {
+          setEmbeddingModelStore({ providerID: input.providerID, modelID: input.modelID })
+          void writeJsonAtomic(filePath, {
+            providerID: input.providerID,
+            modelID: input.modelID,
+          })
+        },
+        value() {
+          const current = this.current()
+          return current ? `${current.providerID}/${current.modelID}` : undefined
+        },
+      }
+    }
+
+    const embeddingModel = createEmbeddingModel()
+
     function createSession() {
       const [sessionStore, setSessionStore] = createStore<{
         ready: boolean
@@ -499,9 +547,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         })
       }
 
-      event.on("session.deleted", (evt) => {
+      onCleanup(event.on("session.deleted", (evt) => {
         prune(evt.properties.info.id)
-      })
+      }))
 
       return {
         get ready() {
@@ -565,6 +613,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
     const result = {
       model,
+      embeddingModel,
       agent,
       mcp,
       session,
