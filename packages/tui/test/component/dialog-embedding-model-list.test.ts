@@ -56,5 +56,26 @@ describe("BUILT_IN_EMBEDDING_MODELS", () => {
     expect(byID.get("text-embedding-3-large")?.dim).toBe(3072)
     expect(byID.get("nvidia/llama-nemotron-embed-1b-v2")?.dim).toBe(2048)
     expect(byID.get("nvidia/nv-embedqa-e5-v5")?.dim).toBe(1024)
+    expect(byID.get("nvidia/nv-embed-v1")?.dim).toBe(4096)
+    expect(byID.get("nvidia/nv-embedcode-7b-v1")?.dim).toBe(4096)
+    expect(byID.get("nvidia/llama-nemotron-embed-vl-1b-v2")?.dim).toBe(2048)
+    expect(byID.get("baai/bge-m3")?.dim).toBe(1024)
+    expect(byID.get("embed-english-v3.0")?.dim).toBe(1024)
+    expect(byID.get("embed-multilingual-v3.0")?.dim).toBe(1024)
+  })
+
+  test("every entry is reachable by a registered embed plugin", () => {
+    // OpenAI / Cohere: handled by packages/core/src/plugin/provider/openai-embed.ts
+    // (SUPPORTED_PROVIDERS includes "openai" and "cohere").
+    // NIM entries: handled by packages/core/src/plugin/provider/nvidia-embed.ts
+    // (NIM_MODEL_PREFIXES = ["nvidia/", "baai/"]).
+    const reachableByPlugin = (model: BuiltInEmbeddingModel) => {
+      if (model.providerID === "openai" || model.providerID === "cohere") return true
+      if (model.modelID.startsWith("nvidia/") || model.modelID.startsWith("baai/")) return true
+      return false
+    }
+    for (const model of BUILT_IN_EMBEDDING_MODELS) {
+      expect(reachableByPlugin(model)).toBe(true)
+    }
   })
 })

@@ -253,13 +253,25 @@ export interface BuiltInEmbeddingModel {
 }
 
 export const BUILT_IN_EMBEDDING_MODELS: readonly BuiltInEmbeddingModel[] = [
+  // OpenAI — bare model name; the embed plugin prepends providerID/.
   { providerID: "openai", modelID: "text-embedding-3-small", name: "Text Embedding 3 Small", dim: 1536, category: "OpenAI" },
   { providerID: "openai", modelID: "text-embedding-3-large", name: "Text Embedding 3 Large", dim: 3072, category: "OpenAI" },
   { providerID: "openai", modelID: "text-embedding-ada-002", name: "Text Embedding Ada 002", dim: 1536, category: "OpenAI" },
+
+  // NVIDIA NIM — namespaced model identifier as NIM expects on the wire.
+  // Verified live against https://integrate.api.nvidia.com/v1/embeddings.
   { providerID: "nvidia", modelID: "nvidia/llama-nemotron-embed-1b-v2", name: "Llama Nemotron Embed 1B v2", dim: 2048, category: "NVIDIA" },
   { providerID: "nvidia", modelID: "nvidia/nv-embedqa-e5-v5", name: "NV EmbedQA E5 v5", dim: 1024, category: "NVIDIA" },
-  { providerID: "nvidia", modelID: "baai/bge-m3", name: "BGE-M3", dim: 1024, category: "NVIDIA" },
+  { providerID: "nvidia", modelID: "nvidia/nv-embed-v1", name: "NV Embed v1 (Mistral)", dim: 4096, category: "NVIDIA" },
+  { providerID: "nvidia", modelID: "nvidia/nv-embedcode-7b-v1", name: "NV EmbedCode 7B v1", dim: 4096, category: "NVIDIA" },
+  { providerID: "nvidia", modelID: "nvidia/llama-nemotron-embed-vl-1b-v2", name: "Llama Nemotron Embed VL 1B v2", dim: 2048, category: "NVIDIA" },
+
+  // BAAI — proxied by NIM under the baai/ namespace.
+  { providerID: "nvidia", modelID: "baai/bge-m3", name: "BGE-M3 (Multilingual)", dim: 1024, category: "NVIDIA" },
+
+  // Cohere — bare model name; routed via openai-embed with the cohere provider.
   { providerID: "cohere", modelID: "embed-english-v3.0", name: "Embed English v3.0", dim: 1024, category: "Cohere" },
+  { providerID: "cohere", modelID: "embed-multilingual-v3.0", name: "Embed Multilingual v3.0", dim: 1024, category: "Cohere" },
 ]
 
 export function sortModelOptions<T extends { footer?: string; releaseDate: string | number; title: string }>(
