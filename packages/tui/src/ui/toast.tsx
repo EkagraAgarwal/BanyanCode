@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
-import { createContext, useContext, type ParentProps, Show } from "solid-js"
-import { createStore } from "solid-js/store"
+import { createContext, useContext, type ParentProps, Show, For, onCleanup } from "solid-js"
+import { createStore, produce } from "solid-js/store"
 import { useTheme } from "../context/theme"
 import { useTerminalDimensions } from "@opentui/solid"
 import { SplitBorder } from "./border"
@@ -13,73 +13,121 @@ export type ToastOptions = {
 }
 type ToastInput = Omit<ToastOptions, "duration"> & { duration?: number }
 
+export type ToastEntry = ToastOptions & { id: number }
+
+const MAX_TOASTS = 3
+
 export function Toast() {
   const toast = useToast()
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
 
   return (
-    <Show when={toast.currentToast}>
-      {(current) => (
-        <box
-          position="absolute"
-          justifyContent="center"
-          alignItems="flex-start"
-          top={2}
-          right={2}
-          maxWidth={Math.min(60, dimensions().width - 6)}
-          paddingLeft={2}
-          paddingRight={2}
-          paddingTop={1}
-          paddingBottom={1}
-          backgroundColor={theme.backgroundPanel}
-          borderColor={theme[current().variant]}
-          border={["left", "right"]}
-          customBorderChars={SplitBorder.customBorderChars}
-        >
-          <Show when={current().title}>
-            <text attributes={TextAttributes.BOLD} marginBottom={1} fg={theme.text}>
-              {current().title}
-            </text>
-          </Show>
-          <text fg={theme.text} wrapMode="word" width="100%">
-            {current().message}
-          </text>
-        </box>
-      )}
+    <Show when={toast.toasts.length > 0}>
+      <box
+        position="absolute"
+        justifyContent="flex-end"
+        alignItems="flex-start"
+        top={2}
+        right={2}
+        flexDirection="column"
+        gap={1}
+      >
+        <For each={toast.toasts}>
+          {(entry) => <ToastItem entry={entry} theme={theme} maxWidth={Math.min(60, dimensions().width - 6)} />}
+        </For>
+      </box>
     </Show>
   )
 }
 
-function init() {
-  const [store, setStore] = createStore({
-    currentToast: null as ToastOptions | null,
-  })
+function ToastItem(props: { entry: ToastEntry; theme: ReturnType<typeof useTheme>["theme"]; maxWidth: number }) {
+  const toast = useToast()
+  const theme = () => props.theme
+  const entry = props.entry
 
-  let timeoutHandle: NodeJS.Timeout | null = null
+  let progress = 1
+  let startTime = Date.now()
+  let rafId: number | null = null
+
+  const tick = () => {
+    const elapsed = Date.now() - startTime
+    progress = Math.max(0, 1 - elapsed / entry.duration)
+    rafId = requestAnimationFrame(tick)
+  }
+  rafId = requestAnimationFrame(tick)
+  onCleanup(() => { if (rafId !== null) cancelAnimationFrame(rafId) })
+
+  return (
+    <box
+      position="relative"
+      width={props.maxWidth}
+      paddingLeft={2}
+      paddingRight={2}
+      paddingTop={1}
+      paddingBottom={1}
+      backgroundColor={theme().backgroundPanel}
+      borderColor={theme()[entry.variant]}
+      border={["left", "right", "top", "bottom"]}
+      customBorderChars={SplitBorder.customBorderChars}
+      onMouseUp={() => toast.dismiss(entry.id)}
+    >
+      <Show when={entry.title}>
+        <text attributes={TextAttributes.BOLD} marginBottom={1} fg={theme().text}>
+          {entry.title}
+        </text>
+      </Show>
+      <text fg={theme().text} wrapMode="word" width="100%">
+        {entry.message}
+      </text>
+      <box
+        position="absolute"
+        bottom={0}
+        left={0}
+        height={1}
+        width={`${Math.round(progress * 100)}%`}
+        backgroundColor={theme()[entry.variant]}
+      />
+    </box>
+  )
+}
+
+let nextId = 0
+
+function init() {
+  const [store, setStore] = createStore<{ toasts: ToastEntry[] }>({
+    toasts: [],
+  })
 
   const toast = {
     show(options: ToastInput) {
       const toastOptions = { ...options, duration: options.duration ?? 5000 }
-      setStore("currentToast", toastOptions)
-      if (timeoutHandle) clearTimeout(timeoutHandle)
-      timeoutHandle = setTimeout(() => {
-        setStore("currentToast", null)
-      }, toastOptions.duration).unref()
+      setStore(
+        produce((s) => {
+          const entry: ToastEntry = { ...toastOptions, id: nextId++ }
+          s.toasts.unshift(entry)
+          if (s.toasts.length > MAX_TOASTS) {
+            s.toasts = s.toasts.slice(0, MAX_TOASTS)
+          }
+        }),
+      )
     },
-    error: (err: any) => {
+    error(err: any) {
       if (err instanceof Error)
-        return toast.show({
+        return this.show({
           variant: "error",
           message: err.message,
         })
-      toast.show({
+      this.show({
         variant: "error",
         message: "An unknown error has occurred",
       })
     },
-    get currentToast(): ToastOptions | null {
-      return store.currentToast
+    get toasts(): ToastEntry[] {
+      return store.toasts
+    },
+    dismiss(id: number) {
+      setStore("toasts", (t) => t.filter((x) => x.id !== id))
     },
   }
   return toast

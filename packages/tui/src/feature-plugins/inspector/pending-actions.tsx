@@ -58,7 +58,7 @@ function View(props: { api: TuiPluginApi }) {
     <box>
       <text fg={text()}>
         <b>PENDING ACTIONS</b>
-        {totalCount() > 0 ? <text fg={primary()}> {totalCount()}</text> : ""}
+        {totalCount() > 0 ? <span style={{ fg: primary() }}> {totalCount()}</span> : ""}
       </text>
       {totalCount() === 0 ? (
         <box flexDirection="column" paddingLeft={2} paddingTop={2} gap={1}>

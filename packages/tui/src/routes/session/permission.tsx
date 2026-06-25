@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { createStore } from "solid-js/store"
 import { dirname } from "node:path"
-import { createMemo, For, Match, Show, Switch } from "solid-js"
+import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js"
 import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { useTheme, selectedForeground } from "../../context/theme"
@@ -26,6 +26,7 @@ function EditBody(props: { request: PermissionRequest }) {
   const syntax = themeState.syntax
   const config = useTuiConfig()
   const dimensions = useTerminalDimensions()
+  const pathFormatter = usePathFormatter()
 
   const filepath = createMemo(() => {
     const value = props.request.metadata?.filepath
@@ -34,6 +35,14 @@ function EditBody(props: { request: PermissionRequest }) {
   const diff = createMemo(() => {
     const value = props.request.metadata?.diff
     return typeof value === "string" ? value : ""
+  })
+
+  const [collapsed, setCollapsed] = createSignal(true)
+
+  const previewLines = createMemo(() => {
+    const d = diff()
+    if (!d) return []
+    return d.split("\n").slice(0, 3)
   })
 
   const view = createMemo(() => {
@@ -48,36 +57,59 @@ function EditBody(props: { request: PermissionRequest }) {
   return (
     <box flexDirection="column" gap={1}>
       <Show when={diff()}>
-        <scrollbox
-          height="100%"
-          scrollAcceleration={scrollAcceleration()}
-          verticalScrollbarOptions={{
-            trackOptions: {
-              backgroundColor: theme.background,
-              foregroundColor: theme.borderActive,
-            },
-          }}
+        <box
+          flexDirection="column"
+          gap={1}
+          onMouseUp={() => setCollapsed((c) => !c)}
         >
-          <diff
-            diff={diff()}
-            view={view()}
-            filetype={ft()}
-            syntaxStyle={syntax()}
-            showLineNumbers={true}
-            width="100%"
-            wrapMode="word"
-            fg={theme.text}
-            addedBg={theme.diffAddedBg}
-            removedBg={theme.diffRemovedBg}
-            contextBg={theme.diffContextBg}
-            addedSignColor={theme.diffHighlightAdded}
-            removedSignColor={theme.diffHighlightRemoved}
-            lineNumberFg={theme.diffLineNumber}
-            lineNumberBg={theme.diffContextBg}
-            addedLineNumberBg={theme.diffAddedLineNumberBg}
-            removedLineNumberBg={theme.diffRemovedLineNumberBg}
-          />
-        </scrollbox>
+          <box flexDirection="row" gap={1} paddingLeft={1}>
+            <text fg={theme.textMuted}>{collapsed() ? "▶" : "▼"}</text>
+            <text fg={theme.textMuted}>Preview ({previewLines().length} of {diff().split("\n").length} lines)</text>
+          </box>
+          <Show when={collapsed()}>
+            <box paddingLeft={2} gap={0}>
+              <For each={previewLines()}>
+                {(line) => (
+                  <text fg={theme.textMuted} wrapMode="word" width="100%">
+                    {line}
+                  </text>
+                )}
+              </For>
+            </box>
+          </Show>
+        </box>
+        <Show when={!collapsed()}>
+          <scrollbox
+            height="100%"
+            scrollAcceleration={scrollAcceleration()}
+            verticalScrollbarOptions={{
+              trackOptions: {
+                backgroundColor: theme.background,
+                foregroundColor: theme.borderActive,
+              },
+            }}
+          >
+            <diff
+              diff={diff()}
+              view={view()}
+              filetype={ft()}
+              syntaxStyle={syntax()}
+              showLineNumbers={true}
+              width="100%"
+              wrapMode="word"
+              fg={theme.text}
+              addedBg={theme.diffAddedBg}
+              removedBg={theme.diffRemovedBg}
+              contextBg={theme.diffContextBg}
+              addedSignColor={theme.diffHighlightAdded}
+              removedSignColor={theme.diffHighlightRemoved}
+              lineNumberFg={theme.diffLineNumber}
+              lineNumberBg={theme.diffContextBg}
+              addedLineNumberBg={theme.diffAddedLineNumberBg}
+              removedLineNumberBg={theme.diffRemovedLineNumberBg}
+            />
+          </scrollbox>
+        </Show>
       </Show>
       <Show when={!diff()}>
         <box paddingLeft={1}>
@@ -544,6 +576,9 @@ function Prompt<const T extends Record<string, string>>(props: {
   const narrow = createMemo(() => dimensions().width < 80)
   const fullscreenHint = useCommandShortcut("permission.prompt.fullscreen")
 
+  const [focused, setFocused] = createSignal<string | null>(null)
+  const [pressed, setPressed] = createSignal<string | number | null>(null)
+
   useBindings(() => ({
     mode: OPENCODE_BASE_MODE,
     commands: [
@@ -682,14 +717,32 @@ function Prompt<const T extends Record<string, string>>(props: {
               <box
                 paddingLeft={1}
                 paddingRight={1}
-                backgroundColor={option === store.selected ? theme.warning : theme.backgroundMenu}
+                backgroundColor={
+                  pressed() === option
+                    ? theme.primary
+                    : option === store.selected
+                      ? theme.warning
+                      : theme.backgroundMenu
+                }
+                border={focused() === option ? ["left", "right"] : []}
+                borderColor={theme.primary}
                 onMouseOver={() => setStore("selected", option)}
+                onMouseDown={() => setPressed(option as string | number)}
                 onMouseUp={() => {
                   setStore("selected", option)
+                  setPressed(null)
                   props.onSelect(option)
                 }}
               >
-                <text fg={option === store.selected ? selectedForeground(theme, theme.warning) : theme.textMuted}>
+                <text
+                  fg={
+                    pressed() === option
+                      ? selectedForeground(theme, theme.primary)
+                      : option === store.selected
+                        ? selectedForeground(theme, theme.warning)
+                        : theme.textMuted
+                  }
+                >
                   {props.options[option]}
                 </text>
               </box>
