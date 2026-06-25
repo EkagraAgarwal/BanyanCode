@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { useEvent } from "./event"
 import type {
   AgentV2Info,

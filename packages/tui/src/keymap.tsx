@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { InputRenderable, TextareaRenderable, type CliRenderer, type KeyEvent, type Renderable } from "@opentui/core"
 import {
   registerBackspacePopsPendingSequence,

@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { createContext, useContext, type ParentProps, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTheme } from "../context/theme"

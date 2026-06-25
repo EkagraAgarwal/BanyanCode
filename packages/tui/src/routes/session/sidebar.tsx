@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
 import { createMemo, Show } from "solid-js"

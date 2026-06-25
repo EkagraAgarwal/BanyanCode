@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { batch } from "solid-js"
 import type { Path, Workspace } from "@opencode-ai/sdk/v2"
 import { createStore, reconcile } from "solid-js/store"

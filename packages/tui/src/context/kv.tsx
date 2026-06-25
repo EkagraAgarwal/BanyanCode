@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { createSignal, type Setter } from "solid-js"
 import { createStore, unwrap } from "solid-js/store"
 import { createSimpleContext } from "./helper"

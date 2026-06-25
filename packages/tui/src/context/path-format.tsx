@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import path from "path"
 import { createContext, useContext, type ParentProps } from "solid-js"
 import { abbreviateHome } from "../runtime"

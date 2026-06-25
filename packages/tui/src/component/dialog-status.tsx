@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core"
 import { fileURLToPath } from "bun"
 import { useTheme } from "../context/theme"

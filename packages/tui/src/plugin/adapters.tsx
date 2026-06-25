@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import type { TuiDialogSelectOption, TuiPluginApi, TuiSlotProps } from "@opencode-ai/plugin/tui"
 import type { TuiConfig } from "../config"
 import type { useEvent } from "../context/event"

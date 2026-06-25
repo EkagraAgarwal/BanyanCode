@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import type {
   Message,
   Agent,

@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { createStore } from "solid-js/store"
 import { dirname } from "node:path"
 import { createMemo, For, Match, Show, Switch } from "solid-js"

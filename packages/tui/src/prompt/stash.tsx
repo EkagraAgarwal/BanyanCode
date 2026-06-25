@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import path from "path"
 import { onMount } from "solid-js"
 import { createStore, produce, unwrap } from "solid-js/store"

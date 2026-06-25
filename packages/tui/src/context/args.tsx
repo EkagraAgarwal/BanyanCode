@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { createSimpleContext } from "./helper"
 
 export interface Args {

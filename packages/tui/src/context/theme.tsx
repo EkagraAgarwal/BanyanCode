@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { CliRenderEvents, SyntaxStyle, type TerminalColors } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
 import {

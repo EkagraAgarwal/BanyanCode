@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createSignal, For, onMount } from "solid-js"

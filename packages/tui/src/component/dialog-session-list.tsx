@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { useDialog } from "../ui/dialog"
 import { DialogSelect } from "../ui/dialog-select"
 import { useRoute } from "../context/route"

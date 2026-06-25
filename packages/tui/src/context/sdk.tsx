@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import type { GlobalEvent } from "@opencode-ai/sdk/v2"
 import { Flag } from "@opencode-ai/core/flag/flag"

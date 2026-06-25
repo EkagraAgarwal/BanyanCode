@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { createSignal } from "solid-js"
 import { useTheme } from "../context/theme"
 import { useTerminalDimensions } from "@opentui/solid"

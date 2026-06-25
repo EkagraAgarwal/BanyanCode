@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { Prompt, type PromptRef } from "../component/prompt"
 import { createEffect, createMemo, createSignal, onMount } from "solid-js"
 import { Logo } from "../component/logo"

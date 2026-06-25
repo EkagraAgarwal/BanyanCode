@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { createMemo, createSignal, For, Show } from "solid-js"
 import { TextAttributes } from "@opentui/core"
 import { useSync } from "../context/sync"

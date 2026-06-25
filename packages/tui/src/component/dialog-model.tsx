@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { createMemo, createSignal } from "solid-js"
 import { useLocal } from "../context/local"
 import { map, pipe, filter, sortBy, take } from "remeda"

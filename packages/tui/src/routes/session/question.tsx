@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { createStore } from "solid-js/store"
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { useRenderer } from "@opentui/solid"

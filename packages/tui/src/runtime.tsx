@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import path from "path"
 
 export function abbreviateHome(input: string, home: string) {

@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { useTheme } from "../context/theme"
 
 export function PluginRouteMissing(props: { id: string; onHome: () => void }) {

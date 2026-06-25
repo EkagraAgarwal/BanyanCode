@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { createMemo } from "solid-js"
 import { useData } from "../context/data"
 

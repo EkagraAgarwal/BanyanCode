@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js"
 import { useTheme } from "../context/theme"
 import { Spinner } from "./spinner"

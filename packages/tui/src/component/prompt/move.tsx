@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import path from "path"
 import { useTuiPaths } from "../../context/runtime"

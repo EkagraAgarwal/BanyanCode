@@ -1,3 +1,4 @@
+/** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core"
 import { createStore } from "solid-js/store"
 import { For } from "solid-js"
