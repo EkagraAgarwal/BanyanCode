@@ -1,6 +1,6 @@
 export * as CodegraphIndexer from "./codegraph-indexer"
 
-import { Cause, Context, Effect, Layer, Ref, Schema } from "effect"
+import { Cause, Context, Duration, Effect, Layer, Ref, Schema } from "effect"
 import { randomUUID } from "node:crypto"
 import path from "path"
 import { FSUtil } from "../fs-util"
@@ -68,7 +68,18 @@ export const layer = Layer.effect(
           if (entry.type !== "file") continue
           const fullPath = path.join(dir, entry.name)
           // Skip files larger than maxFileSizeBytes before even reading them
-          const stats = yield* fs.stat(fullPath).pipe(Effect.orDie)
+          const stats = yield* Effect.catchTags(
+            fs.stat(fullPath).pipe(Effect.timeout(Duration.seconds(5))),
+            {
+              TimeoutError: () => Effect.succeed(undefined),
+              PlatformError: () => Effect.succeed(undefined),
+            },
+          )
+          if (stats === undefined) {
+            yield* Effect.logWarning(`Skipping file (stat timeout): ${path.relative(root, fullPath).replace(/\\/g, "/")}`)
+            skippedBySize++
+            continue
+          }
           if (stats.size > maxFileSizeBytes) {
             yield* Effect.logWarning(`Skipping file exceeding size limit: ${path.relative(root, fullPath).replace(/\\/g, "/")} (${stats.size} bytes)`)
             skippedBySize++
@@ -139,7 +150,12 @@ export const layer = Layer.effect(
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
       const patterns = yield* loadIgnorePatterns(input.root)
-      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root).pipe(Effect.orDie)
+      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root).pipe(
+        Effect.timeout(Duration.seconds(60)),
+        Effect.catch(() =>
+          Effect.succeed({ files: [] as string[], skippedBySize: 0 } as const),
+        ),
+      )
       const allFiles = walkResult.files
       let skipped = walkResult.skippedBySize
       const codeFiles = allFiles.filter((f) => {
