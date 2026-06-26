@@ -41,6 +41,7 @@ describe("MeshCoordinator", () => {
         return SubagentBus.Service.of({
           publish: () => Effect.void,
           subscribe: () => Effect.succeed(q),
+          markDelivered: () => Effect.void,
           peers: () => Effect.succeed(mockPeers),
         })
       }),
@@ -90,6 +91,7 @@ describe("MeshCoordinator", () => {
         return SubagentBus.Service.of({
           publish: (msg: any) => Effect.sync(() => { publishedMessage = msg }),
           subscribe: () => Effect.succeed(q),
+          markDelivered: () => Effect.void,
           peers: () => Effect.succeed([]),
         })
       }),
@@ -144,6 +146,7 @@ describe("MeshCoordinator", () => {
         return SubagentBus.Service.of({
           publish: (msg: any) => Effect.sync(() => { publishedMessage = msg }),
           subscribe: () => Effect.succeed(q),
+          markDelivered: () => Effect.void,
           peers: () => Effect.succeed([]),
         })
       }),
@@ -198,6 +201,7 @@ describe("MeshCoordinator", () => {
         return SubagentBus.Service.of({
           publish: (msg: any) => Effect.sync(() => { publishedMessage = msg }),
           subscribe: () => Effect.succeed(q),
+          markDelivered: () => Effect.void,
           peers: () => Effect.succeed([]),
         })
       }),
@@ -263,6 +267,7 @@ describe("MeshCoordinator", () => {
         return SubagentBus.Service.of({
           publish: () => Effect.void,
           subscribe: () => Effect.succeed(q),
+          markDelivered: () => Effect.void,
           peers: () => Effect.succeed([]),
         })
       }),

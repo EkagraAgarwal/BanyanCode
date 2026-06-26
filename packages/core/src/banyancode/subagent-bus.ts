@@ -7,6 +7,7 @@ import type { PeerInfo, SubagentMessage } from "./types"
 export interface Interface {
   readonly publish: (msg: SubagentMessage) => Effect.Effect<void>
   readonly subscribe: (sessionID: string) => Effect.Effect<Queue.Dequeue<SubagentMessage>>
+  readonly markDelivered: (id: string, deliveredAt: number) => Effect.Effect<void>
   readonly peers: (parentSessionID: string) => Effect.Effect<PeerInfo[]>
 }
 
@@ -32,6 +33,10 @@ export const layer = Layer.effect(
       return queue
     })
 
+    const markDelivered = Effect.fn("SubagentBus.markDelivered")(function* (id: string, deliveredAt: number) {
+      yield* repo.markDelivered(id, deliveredAt)
+    })
+
     const peers = Effect.fn("SubagentBus.peers")(function* (parentSessionID: string) {
       const cutoff = Date.now() - PEER_WINDOW_MS
       const messages = yield* repo.listByParent(parentSessionID, true)
@@ -52,7 +57,7 @@ export const layer = Layer.effect(
       return Array.from(seen.values())
     })
 
-    return Service.of({ publish, subscribe, peers })
+    return Service.of({ publish, subscribe, markDelivered, peers })
   }),
 )
 

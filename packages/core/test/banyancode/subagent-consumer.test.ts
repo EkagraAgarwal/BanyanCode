@@ -20,6 +20,7 @@ const buildServiceLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>, 
     SubagentBus.Service.of({
       publish: () => Effect.void,
       subscribe: () => Effect.succeed(queue),
+      markDelivered: () => Effect.void,
       peers: () => Effect.succeed([]),
     }),
   )

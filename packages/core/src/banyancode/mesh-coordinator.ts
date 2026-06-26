@@ -92,6 +92,8 @@ export const layer = Layer.effect(
         drained.push(item.value)
         item = yield* Queue.poll(queue)
       }
+      const now = Date.now()
+      yield* Effect.forEach(drained, (m) => bus.markDelivered(m.id, now), { discard: true })
       return drained
     })
 
@@ -124,6 +126,8 @@ export const layer = Layer.effect(
         allMessages.push(item.value)
         item = yield* Queue.poll(queue)
       }
+      const now = Date.now()
+      yield* Effect.forEach(allMessages, (m) => bus.markDelivered(m.id, now), { discard: true })
 
       const checkpointBySession = new Map<string, SubagentMessage>()
       for (const msg of allMessages) {

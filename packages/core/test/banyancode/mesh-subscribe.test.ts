@@ -25,6 +25,7 @@ describe("MeshCoordinator.subscribe", () => {
         return SubagentBus.Service.of({
           publish: () => Effect.void,
           subscribe: () => Effect.succeed(mockQueue),
+          markDelivered: () => Effect.void,
           peers: () => Effect.succeed([]),
         })
       }),
@@ -95,6 +96,7 @@ describe("MeshCoordinator.subscribe", () => {
         return SubagentBus.Service.of({
           publish: () => Effect.void,
           subscribe: () => Effect.succeed(mockQueue),
+          markDelivered: () => Effect.void,
           peers: () => Effect.succeed([]),
         })
       }),

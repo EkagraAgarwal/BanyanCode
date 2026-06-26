@@ -24,6 +24,7 @@ const mockRepoLayer = Layer.succeed(SubagentMessagesRepo.Service, SubagentMessag
 const mockBusLayer = Layer.succeed(SubagentBus.Service, SubagentBus.Service.of({
   publish: (msg) => Effect.sync(() => mockMessages.push(msg)),
   subscribe: () => Queue.unbounded<any>(),
+  markDelivered: () => Effect.void,
   peers: () => Effect.succeed([]),
 }))
 
