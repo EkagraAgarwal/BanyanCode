@@ -38,7 +38,6 @@ import { DataProvider } from "./context/data"
 import { LocalProvider, useLocal } from "./context/local"
 import { DialogModel } from "./component/dialog-model"
 import { DialogAgentModel } from "./component/dialog-agent-model"
-import { DialogEmbeddingModel } from "./component/dialog-embedding-model"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
 import { DialogStatus } from "./component/dialog-status"
@@ -58,7 +57,7 @@ import { PromptStashProvider } from "./component/prompt/stash"
 import { DialogAlert } from "./ui/dialog-alert"
 import { DialogConfirm } from "./ui/dialog-confirm"
 import { ToastProvider, useToast } from "./ui/toast"
-import { CodegraphBuildProvider, useCodegraphBuild, CodegraphProgress, type CodegraphBuildState, type CodeEmbedState } from "./component/codegraph-progress"
+import { CodegraphBuildProvider, useCodegraphBuild, CodegraphProgress, type CodegraphBuildState } from "./component/codegraph-progress"
 import { isDefaultTitle } from "./util/session"
 import { KVProvider, useKV } from "./context/kv"
 import * as Model from "./util/model"
@@ -86,6 +85,7 @@ import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat } from "./util/error"
+import { startTelemetry, logEvent, logError } from "./util/telemetry"
 
 const appGlobalBindingCommands = [
   "session.list",
@@ -227,6 +227,13 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         Effect.sync(() => process.on("SIGHUP", onSighup)),
         () => Effect.sync(() => process.off("SIGHUP", onSighup)),
       )
+      const unhandledRejection = (reason: unknown) => {
+        console.error("[unhandledRejection]", reason)
+      }
+      yield* Effect.acquireRelease(
+        Effect.sync(() => process.on("unhandledRejection", unhandledRejection)),
+        () => Effect.sync(() => process.off("unhandledRejection", unhandledRejection)),
+      )
       renderer.once("destroy", () => Deferred.doneUnsafe(shutdown, Effect.void))
       const pluginRuntime = createPluginRuntime()
 
@@ -246,7 +253,10 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
               }}
             >
               <EpilogueProvider set={(value) => (exit.epilogue = value)}>
-                <ErrorBoundary fallback={(error, reset) => <ErrorComponent error={error} reset={reset} mode={mode} />}>
+                <ErrorBoundary fallback={(error, reset) => {
+                  logError("app.error", error)
+                  return <ErrorComponent error={error} reset={reset} mode={mode} />
+                }}>
                   <TuiPathsProvider
                     value={{
                       cwd: process.cwd(),
@@ -396,6 +406,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     }),
   )
   const [ready, setReady] = createSignal(false)
+  console.log("[banyancode] startup", {
+    pid: process.pid,
+    bunVersion: Bun.version,
+    platform: process.platform,
+    arch: process.arch,
+    memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
+    cwd: process.cwd(),
+    configPath: Global.Path.config,
+  })
   props.pluginHost
     .start({
       api,
@@ -468,6 +487,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
   const args = useArgs()
   onMount(() => {
+    startTelemetry(5000)
     batch(() => {
       if (args.agent) local.agent.set(args.agent)
       if (args.model) {
@@ -490,6 +510,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     sdk.client.global.startup({}).catch((err: unknown) => {
       toast.error(err)
     })
+    logEvent("app.start", { agent: args.agent, model: args.model, sessionID: args.sessionID })
   })
 
   let continued = false
@@ -705,15 +726,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         },
       },
       {
-        name: "embedding.model",
-        title: "Pick embedding model for memory and code search",
-        category: "Agent",
-        slashName: "embedding-model",
-        run: () => {
-          dialog.replace(() => <DialogEmbeddingModel />)
-        },
-      },
-      {
         name: "agent.cycle",
         title: "Agent cycle",
         category: "Agent",
@@ -843,25 +855,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           void sdk.client.session.command({
             sessionID: route.data.sessionID,
             command: "codegraph-build",
-            arguments: "",
-          })
-          dialog.clear()
-        },
-      },
-      {
-        name: "codegraph.embed",
-        title: "Compute code embeddings",
-        category: "BanyanCode",
-        slashName: "code-embed",
-        run: () => {
-          if (route.data.type !== "session") {
-            toast.show({ message: "Start a session first to compute embeddings", variant: "warning" })
-            dialog.clear()
-            return
-          }
-          void sdk.client.session.command({
-            sessionID: route.data.sessionID,
-            command: "code-embed",
             arguments: "",
           })
           dialog.clear()
@@ -1068,65 +1061,76 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     bindings: tuiConfig.keybinds.gather("app_exit", ["app.exit"]),
   }))
 
-  event.on("tui.command.execute", (evt, { workspace }) => {
-    if (workspace !== project.workspace.current()) return
-    keymap.dispatchCommand(evt.properties.command)
-  })
+  onCleanup(
+    event.on("tui.command.execute", (evt, { workspace }) => {
+      if (workspace !== project.workspace.current()) return
+      keymap.dispatchCommand(evt.properties.command)
+    }),
+  )
 
-  event.on("tui.toast.show", (evt, { workspace }) => {
-    if (workspace !== project.workspace.current()) return
-    toast.show({
-      title: evt.properties.title,
-      message: evt.properties.message,
-      variant: evt.properties.variant,
-      duration: evt.properties.duration,
-    })
-  })
-
-  event.on("tui.session.select", (evt, { workspace }) => {
-    if (workspace !== project.workspace.current()) return
-    route.navigate({
-      type: "session",
-      sessionID: evt.properties.sessionID,
-    })
-  })
-
-  event.on("session.deleted", (evt) => {
-    if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
-      route.navigate({ type: "home" })
+  onCleanup(
+    event.on("tui.toast.show", (evt, { workspace }) => {
+      if (workspace !== project.workspace.current()) return
       toast.show({
-        variant: "info",
-        message: "The current session was deleted",
+        title: evt.properties.title,
+        message: evt.properties.message,
+        variant: evt.properties.variant,
+        duration: evt.properties.duration,
       })
-    }
-  })
+    }),
+  )
 
-  event.on("session.error", (evt, { workspace }) => {
-    if (workspace !== project.workspace.current()) return
-    const error = evt.properties.error
-    if (error && typeof error === "object" && error.name === "MessageAbortedError") return
-    const message = errorMessage(error)
+  onCleanup(
+    event.on("tui.session.select", (evt, { workspace }) => {
+      if (workspace !== project.workspace.current()) return
+      route.navigate({
+        type: "session",
+        sessionID: evt.properties.sessionID,
+      })
+    }),
+  )
 
-    toast.show({
-      variant: "error",
-      message,
-      duration: 5000,
-    })
-  })
+  onCleanup(
+    event.on("session.deleted", (evt) => {
+      if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
+        route.navigate({ type: "home" })
+        toast.show({
+          variant: "info",
+          message: "The current session was deleted",
+        })
+      }
+    }),
+  )
+
+  onCleanup(
+    event.on("session.error", (evt, { workspace }) => {
+      if (workspace !== project.workspace.current()) return
+      const error = evt.properties.error
+      if (error && typeof error === "object" && error.name === "MessageAbortedError") return
+      const message = errorMessage(error)
+
+      toast.show({
+        variant: "error",
+        message,
+        duration: 5000,
+      })
+    }),
+  )
 
   const build = useCodegraphBuild()
-  event.subscribe((evt, { workspace }) => {
-    if (workspace !== project.workspace.current()) return
-    if ((evt.type as string) === "banyancode.codegraph.build") {
-      build.set(evt.properties as CodegraphBuildState)
-    } else if ((evt.type as string) === "banyancode.codeembed.build") {
-      build.setEmbed(evt.properties as CodeEmbedState)
-    }
-  })
+  onCleanup(
+    event.subscribe((evt, { workspace }) => {
+      if (workspace !== project.workspace.current()) return
+      if ((evt.type as string) === "banyancode.codegraph.build") {
+        build.set(evt.properties as CodegraphBuildState)
+      }
+    }),
+  )
 
-  event.on("installation.update-available", async (evt) => {
-    console.log("installation.update-available", evt)
-    const version = evt.properties.version
+  onCleanup(
+    event.on("installation.update-available", async (evt) => {
+      console.log("installation.update-available", evt)
+      const version = evt.properties.version
 
     const skipped = kv.get("skipped_version")
     if (skipped && !isVersionGreater(version, skipped)) return
@@ -1170,7 +1174,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     )
 
     void exit()
-  })
+  }))
 
   const plugin = createMemo(() => {
     if (!ready()) return

@@ -56,6 +56,7 @@ import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
+import { logEvent, logError } from "../../util/telemetry"
 
 export type PromptProps = {
   sessionID?: string
@@ -231,18 +232,20 @@ export function Prompt(props: PromptProps) {
   let promptPartTypeId = 0
   const event = useEvent()
 
-  event.on("tui.prompt.append", (evt, { workspace }) => {
-    if (workspace !== project.workspace.current()) return
-    if (!input || input.isDestroyed) return
-    input.insertText(evt.properties.text)
-    setTimeout(() => {
-      // setTimeout is a workaround and needs to be addressed properly
+  onCleanup(
+    event.on("tui.prompt.append", (evt, { workspace }) => {
+      if (workspace !== project.workspace.current()) return
       if (!input || input.isDestroyed) return
-      input.getLayoutNode().markDirty()
-      input.gotoBufferEnd()
-      renderer.requestRender()
-    }, 0)
-  })
+      input.insertText(evt.properties.text)
+      setTimeout(() => {
+        // setTimeout is a workaround and needs to be addressed properly
+        if (!input || input.isDestroyed) return
+        input.getLayoutNode().markDirty()
+        input.gotoBufferEnd()
+        renderer.requestRender()
+      }, 0)
+    }),
+  )
 
   createEffect(() => {
     if (!input || input.isDestroyed) return
@@ -1175,6 +1178,11 @@ export function Prompt(props: PromptProps) {
       })
     } else {
       move.startSubmit()
+      const startTime = Date.now()
+      logEvent("prompt.submit", { sessionID, agent: agent.name, model: selectedModel.modelID })
+      const timeoutTimer = setTimeout(() => {
+        logEvent("prompt.timeout", { elapsedMs: Date.now() - startTime })
+      }, 10000)
       sdk.client.session
         .prompt({
           sessionID,
@@ -1191,7 +1199,36 @@ export function Prompt(props: PromptProps) {
             ...nonTextParts,
           ],
         })
-        .catch(() => {})
+        .then(() => {
+          clearTimeout(timeoutTimer)
+          logEvent("prompt.success", { durationMs: Date.now() - startTime })
+        })
+        .catch((err) => {
+          clearTimeout(timeoutTimer)
+          logError("prompt.failed", err, { durationMs: Date.now() - startTime })
+          console.error("[prompt] session.prompt failed:", err)
+          const message = err instanceof Error ? err.message : String(err)
+          if (
+            message.includes("NoProviders") ||
+            message.includes("no provider") ||
+            message.includes("Provider not found")
+          ) {
+            toast.show({
+              message:
+                "No LLM provider configured. Run `opencode auth login` or add provider config to ~/.config/opencode/config.json. See README for setup.",
+              variant: "error",
+              duration: 30000,
+            })
+          } else if (message.includes("Model not found:")) {
+            toast.show({
+              message: `${message}. Check your model name in the model picker or config.`,
+              variant: "error",
+              duration: 10000,
+            })
+          } else {
+            toast.show({ message: `Failed to send message: ${message}`, variant: "error" })
+          }
+        })
       if (editorParts.length > 0) editor.markSelectionSent()
     }
     history.append({
@@ -1743,7 +1780,7 @@ export function Prompt(props: PromptProps) {
                   <text fg={theme.textMuted}>·</text>
                   <text fg={theme.textMuted}>/agents  /graph  /memory  /theme</text>
                   <text fg={theme.textMuted}>·</text>
-                  <text fg={theme.text}>{tabShortcut()} <span style={{ fg: theme.textMuted }}>Tab</span></text>
+                  <text fg={theme.text}>{tabShortcut()} <span style={{ fg: theme.textMuted }}>tab</span></text>
                 </Match>
                 <Match when={store.mode === "shell"}>
                   <text fg={theme.text}>
