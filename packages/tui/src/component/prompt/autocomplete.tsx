@@ -700,9 +700,12 @@ export function Autocomplete(props: {
 
   const height = createMemo(() => {
     const count = options().length || 1
-    if (!store.visible) return Math.min(10, count)
+    if (!store.visible) return Math.min(15, count)
     positionTick()
-    return Math.min(10, count, Math.max(1, props.anchor().y))
+    const dims = dimensions()
+    // Dropdown renders above the cursor (top = anchor.y - height), so cap by space above
+    const spaceAbove = Math.max(0, props.anchor().y - 2)
+    return Math.min(15, count, spaceAbove)
   })
 
   let scroll: ScrollBoxRenderable
@@ -715,7 +718,7 @@ export function Autocomplete(props: {
       top={position().y - height()}
       left={position().x}
       width={position().width}
-      zIndex={100}
+      zIndex={1000}
       backgroundColor={theme.backgroundMenu}
       {...SplitBorder}
       borderColor={theme.border}
@@ -739,7 +742,7 @@ export function Autocomplete(props: {
             <box
               paddingLeft={1}
               paddingRight={1}
-              backgroundColor={index === store.selected ? theme.primary : undefined}
+              backgroundColor={index === store.selected ? theme.primary : theme.backgroundMenu}
               flexDirection="row"
               gap={2}
               onMouseMove={() => {
