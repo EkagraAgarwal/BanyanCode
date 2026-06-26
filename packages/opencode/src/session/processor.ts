@@ -950,6 +950,12 @@ export const layer = Layer.effect(
           }
         }
         ctx.assistantMessage.error = error
+        // Mark the message terminal so runLoop's break check triggers on the
+        // next iteration. Without finish="error", a permanent failure
+        // (e.g. invalid model, auth failure) keeps runLoop re-entering and
+        // allocating a fresh assistant message + fiber per pass — the OOM
+        // pattern seen when an unrecognised model is configured.
+        ctx.assistantMessage.finish = "error"
         yield* events.publish(Session.Event.Error, {
           sessionID: ctx.assistantMessage.sessionID,
           error: ctx.assistantMessage.error,
