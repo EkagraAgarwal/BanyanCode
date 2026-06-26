@@ -3,7 +3,7 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import type { NamedError } from "@opencode-ai/core/util/error"
 import { APICallError } from "ai"
 import { setTimeout as sleep } from "node:timers/promises"
-import { Effect, Layer, Schedule, Schema } from "effect"
+import { Effect, Exit, Layer, Schedule, Schema } from "effect"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { SessionRetry } from "../../src/session/retry"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -343,6 +343,43 @@ describe("session.retry.retryable", () => {
       "Usage limit reached. It will reset in 15 minutes. To continue using this model now, enable usage from your available balance",
     )
   })
+})
+
+describe("session.retry.policy cap", () => {
+  it.instance("stops retrying after RETRY_MAX_ATTEMPTS even when error remains retryable", () =>
+    Effect.gen(function* () {
+      // Drives the schedule with the same retryable error until it stops.
+      // Without the bound the policy would loop indefinitely on a sustained
+      // outage, allocating a fresh fiber + status entry per attempt.
+      const sessionID = SessionID.make("session-retry-cap-test")
+      const error = apiError({ "retry-after-ms": "0" })
+      const status = yield* SessionStatus.Service
+
+      const attempts: number[] = []
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: (info) =>
+            Effect.sync(() => {
+              attempts.push(info.attempt)
+              return status.set(sessionID, {
+                type: "retry",
+                attempt: info.attempt,
+                message: info.message,
+                next: info.next,
+              })
+            }),
+        }),
+      )
+
+      for (let index = 0; index < SessionRetry.RETRY_MAX_ATTEMPTS + 3; index += 1) {
+        const exit = yield* step(error).pipe(Effect.exit)
+        if (Exit.isFailure(exit)) return
+      }
+      throw new Error("expected the schedule to terminate")
+    }),
+  )
 })
 
 describe("session.message-v2.fromError", () => {

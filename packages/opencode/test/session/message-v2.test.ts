@@ -4,6 +4,7 @@ import { APICallError } from "ai"
 import { MessageV2 } from "../../src/session/message-v2"
 import { ProviderTransform } from "@/provider/transform"
 import type { Provider } from "@/provider/provider"
+import { Provider as ProviderSvc } from "@/provider/provider"
 
 import { SessionID, MessageID, PartID } from "../../src/session/schema"
 import { Question } from "../../src/question"
@@ -1550,6 +1551,26 @@ describe("session.message-v2.fromError", () => {
     const result = MessageV2.fromError(zlibError, { providerID, aborted: true })
 
     expect(result.name).toBe("MessageAbortedError")
+  })
+
+  test("surfaces ModelNotFoundError as AuthError so retry policy halts", () => {
+    // A configured-but-unrecognised model must surface as a permanent failure
+    // that the retry policy treats as non-retryable. Previously this fell
+    // through to NamedError.Unknown, which runLoop couldn't distinguish from
+    // a transient error and let the loop re-iterate, leaking memory.
+    const error = new ProviderSvc.ModelNotFoundError({
+      providerID: ProviderV2.ID.make("minimax-coding-plan"),
+      modelID: ModelV2.ID.make("MiniMax-M2.7"),
+      suggestions: ["minimax-coding-plan/MiniMax-M3"],
+    })
+
+    const result = MessageV2.fromError(error, { providerID })
+
+    expect(result.name).toBe("ProviderAuthError")
+    if (result.name !== "ProviderAuthError") throw new Error("expected ProviderAuthError")
+    expect(result.data.message).toContain("Model not found")
+    expect(result.data.message).toContain("minimax-coding-plan/MiniMax-M2.7")
+    expect(result.data.providerID).toBe("minimax-coding-plan")
   })
 })
 
