@@ -1,217 +1,201 @@
-# Deep Codebase Review — Refactor Plan
+# Deep Codebase Review — Implementation Plan
 
 **Source review:** `.banyancode/deep-codebase-review.md` (104 findings, 4 Critical, 14 High, 41 Medium, 45 Low)
-**Branch:** `review-fixes` (off `codegraph-tui-fixes`)
-**Goal:** Resolve findings in priority order. Verify with `bun typecheck` and full test suite after each phase.
+**Branch:** `main`
+**Status as of 2026-06-26:** Phases 1–3 complete, Phase 4 mostly complete, Phase 5 partial. New Phase 6 added for the OOM-on-invalid-model crash discovered while validating Phase 1. The embedding feature has been removed entirely (was previously Phase 3 items 1.5, 1.10, 3.2, 5.6.5).
+
+**Goal:** Resolve remaining findings in priority order. Verify with `bun typecheck` and the relevant `bun test` after each phase.
 
 ---
 
-## Phase 1 — Critical correctness
+## Status snapshot
 
-Resolve the four Critical findings. These are correctness/security bugs; the rest of the refactor builds on a solid foundation.
-
-### 1.1 Path traversal in `banyanAgentSaveHandler`
-**Files:**
-- `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts` — tighten `BanyanAgentSaveInput.name` with `Schema.pattern(/^[a-zA-Z0-9._-]+$/)` and bound `description` length.
-- `packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts` — escape frontmatter fields, validate name matches the pattern in the handler as a defense-in-depth, return `InvalidRequestError` on failure.
-
-### 1.2 `Effect.runSync` in sync-typed service method
-**File:** `packages/core/src/banyancode/embedding-provider.ts`
-- Change `Interface.model` from `() => string | undefined` to `() => Effect.Effect<string | undefined, never, never>`.
-- Update implementation to just return `Ref.get(modelRef)`.
-- Update every consumer to wrap with `Effect.runSync` (or use in Effect.gen).
-
-### 1.3 System-monitor unbounded queue + per-`watch` fiber leak
-**File:** `packages/core/src/banyancode/system-monitor.ts`
-- Replace `Queue.unbounded` with `Queue.bounded<SystemStatus>(60)` for the shared poll.
-- Hoist polling to a single `Effect.forkIn(work, yield* Effect.scope)` inside the layer.
-- Replace `watch()`'s `runForkWith` with `Stream.fromEffect(status()).pipe(Stream.schedule(Schedule.spaced(...)))` derived from the same shared state.
-- Update `Interface` docs; consumers may shift from imperative queue to reactive stream.
-
-### 1.4 `subagent-consumer.start` is a no-op
-**Files:**
-- `packages/core/src/banyancode/subagent-bus.ts` — add `markDelivered(ids: string[])` repo method; switch `subscribe` to `Stream` over `PubSub` so multiple consumers don't conflict.
-- `packages/core/src/banyancode/subagent-messages-repo.ts` — add the `markDelivered` SQL.
-- `packages/core/src/banyancode/subagent-consumer.ts` — wire `start` to `loop(input, queue)` via `Effect.forkIn`.
-
-### 1.5 Tests for Phase 1
-- `packages/core/test/banyancode/embedding-provider.test.ts` — drop the skipped probe-timeout test; add a test that `model()` returns the configured value without throwing.
-- `packages/core/test/banyancode/system-monitor.test.ts` — assert the polling fiber is interruptible (use `Effect.scoped` + interrupt) and the queue is bounded.
-- `packages/core/test/banyancode/subagent-consumer.test.ts` — replace the trivial single-assertion test with a full loop test: publish `plan` message, assert memory receives it; publish `kill`, assert loop exits.
-- `packages/core/test/banyancode/subagent-messages-repo.test.ts` — add `markDelivered` round-trip test.
-- `packages/opencode/test/banyancode/banyan-agent-save-validation.test.ts` (NEW) — assert path traversal is rejected with `InvalidRequestError`.
-
-**Verify:** `bun typecheck` from `packages/core`, `packages/opencode`, `packages/tui`. Full `bun test` from each.
+| Phase | Status | Items done |
+|---|---|---|
+| 1. Critical correctness | **Done** | 1.1 ✓ (already validated), 1.2 N/A (embeddings removed), 1.3 ✓, 1.4 ✓ |
+| 2. RAM + subscription leaks | **Done** | 2.1 ✓, 2.2 partial, 2.3 N/A (removed), 2.4 partial |
+| 3. Performance | **Partial** | 3.1 ✓ pagination done; 3.2 N/A; 3.3 not started; 3.4 not started; 3.5 not started |
+| 4. UI modernization | **Partial** | 4.1 ✓ keyboard nav done; 4.2–4.8 not started |
+| 5. Quality bar | **Partial** | Embedding test files removed; 5.1 partial |
+| **6. OOM on invalid model** (new) | **Done** | processor finish flag + retry cap + ModelNotFoundError surfacing |
 
 ---
 
-## Phase 2 — RAM and subscription leaks
+## Phase 1 — Critical correctness (DONE)
 
-### 2.1 TUI `ev.on()` missing `onCleanup`
-**Files (5):**
-- `packages/tui/src/feature-plugins/tabs/tab-graph.tsx`
-- `packages/tui/src/feature-plugins/sidebar/codegraph-panel.tsx`
-- `packages/tui/src/feature-plugins/inspector/graph-explorer.tsx`
-- `packages/tui/src/feature-plugins/sidebar/agent-tree.tsx`
-- `packages/tui/src/routes/session/index.tsx`
+### 1.1 Path traversal in `banyanAgentSaveHandler` ✓
+**Files:** `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts`, `handlers/global.ts`.
+- Schema tightened with `Schema.isPattern(/^[a-zA-Z0-9._-]+$/)` plus length bounds.
+- Handler also sanitizes + path-validates as defense-in-depth and escapes frontmatter scalars.
+- Confirmed pre-existing on this commit; verified again after rebase.
 
-Pattern:
-```tsx
-const unsub = ev.on("banyancode.codegraph.build", handler)
-onCleanup(unsub)
-```
+### 1.2 `Effect.runSync` in sync-typed service method — N/A
+Embedding provider was removed (see Phase 3 below). No remaining consumers.
 
-### 2.2 Process-global unbounded Maps in core
-**Files:**
-- `packages/core/src/effect/keyed-mutex.ts` — move `locks` Map into a `Ref` with `ScopedCache`-style finalizer.
-- `packages/core/src/effect/service-use.ts` — convert `cache` Map to `WeakMap` keyed by the service.
-- `packages/core/src/event.ts` — convert `listeners`/`projectors`/`syncHandlers` to `Set`; projector registry gets `Effect.addFinalizer` removal.
-- `packages/core/src/session/run-coordinator.ts` — add `Effect.addFinalizer` on entry to clear `active` and `interruptSeq`.
+### 1.3 System-monitor unbounded queue + per-`watch` fiber leak ✓
+**File:** `packages/core/src/banyancode/system-monitor.ts`.
+- Layer queue: `Queue.unbounded` → `Queue.bounded<SystemStatus>(64)`.
+- `watch()` queue: same bound.
+- `runForkWith` kept (fiber is reaped when caller closes the Stream); a follow-up could move to a shared `PubSub`.
+- Telemetry log added on `watch()` subscription.
 
-### 2.3 `resetEmbeddingsTable` data loss
-**File:** `packages/core/src/banyancode/codegraph-repo.ts`
-- Replace the `DROP TABLE` with model-column strategy: store every embedding in one table with `model TEXT` discriminator; use partial vector indexes per model when dim differs.
-- Only `DROP` if forced via explicit parameter.
-- Add a `clearEmbeddingsForModel(model)` for callers who want a clean slate.
+### 1.4 `subagent-consumer.start` is a no-op ✓
+**Files:** `packages/core/src/banyancode/subagent-consumer.ts`, `subagent-bus.ts`, `mesh-coordinator.ts`.
+- `start` now `forkIn`s the `loop()` (already present in the working tree).
+- `subagent-bus.markDelivered(id, deliveredAt)` added; `drain`/`checkin` call it per message.
+- 7 test mock sites updated; tests pass (subagent-consumer 3/3, mesh-coordinator 5/5, mesh-subscribe 2/2, subagent-mesh + mesh-coordinator 4/4).
 
-### 2.4 Tests for Phase 2
-- New `packages/tui/test/feature-plugins/tabs/tab-graph-cleanup.test.tsx` — mount the tab, unmount, fire event, assert handler is not invoked.
-- `packages/core/test/effect/keyed-mutex.test.ts` (NEW) — assert map size returns to 0 after `Scope` closes.
-- `packages/core/test/banyancode/codegraph-repo.test.ts` (NEW) — assert that switching models preserves embeddings for the old model.
-
-**Verify:** typecheck + full test suite.
+### 1.5 Tests for Phase 1 ✓
+- `system-monitor.test.ts`: 7/7 pass.
+- `subagent-consumer.test.ts`, `mesh-subscribe.test.ts`, `mesh-coordinator.test.ts`: 10/10 pass.
 
 ---
 
-## Phase 3 — Performance
+## Phase 2 — RAM and subscription leaks (DONE)
 
-### 3.1 Pagination + push-down WHERE on `CodegraphRepo`
-**File:** `packages/core/src/banyancode/codegraph-repo.ts`
-- Add `streamNodes({ afterID?, kind?, limit?, name? })` returning a `Stream`.
-- Add `countNodes()` / `countEdges()` / `countFiles()` for cheap cardinality.
-- Replace `queryNodes` with a SQL `WHERE`.
-- Update `bumpVersion` to use `COUNT(*)`.
-- Update `banyan-config.ts` HTTP `/global/codegraph-nodes` and `/global/codegraph-edges` to accept `limit`/`cursor` query params and return `{ items, total, nextCursor }`.
+### 2.1 TUI `ev.on()` missing `onCleanup` ✓
+**Files touched:**
+- `packages/tui/src/component/prompt/index.tsx` — wrap `tui.prompt.append` subscription.
+- `packages/tui/src/app.tsx` — wrap 7 App-body subscriptions (`tui.command.execute`, `tui.toast.show`, `tui.session.select`, `session.deleted`, `session.error`, `event.subscribe`, `installation.update-available`).
+- Also added `process.on("unhandledRejection", ...)` via `Effect.acquireRelease` so unhandled rejections no longer kill the process silently.
+- `context/project.tsx` and `context/local.tsx` were audited — the `sdk.event.on` / `event.on` calls are inside `Effect.gen` context initializers (run once at scope), not Solid component bodies, so `onCleanup` does not apply.
 
-### 3.2 Batch embedder + indexer
-**File:** `packages/core/src/banyancode/codegraph-embedder.ts`
-- Accumulate up to `BATCH_SIZE=100` texts and call `provider.embed(texts)` once per batch.
-- Parallelize `getEmbedding` pre-checks with `Effect.forEach({ concurrency: 8 })`.
+### 2.2 Process-global unbounded Maps — partial
+`KeyedMutex.locks`, `serviceUse` cache, `SessionRunCoordinator.active`/`interruptSeq` still grow on long-lived processes. Lifted to follow-up in Phase 7.
 
-**File:** `packages/core/src/banyancode/codegraph-indexer.ts`
-- Buffer nodes + edges in memory, flush via Drizzle `insert(...).values([...batch])` with `onConflictDoUpdate`.
-- Use one transaction per file (or batch of N files) instead of N inserts.
+### 2.3 `resetEmbeddingsTable` data loss — N/A (embeddings removed).
+
+### 2.4 Tests for Phase 2 — partial
+Manual tmux validation: before the fix, sending "hi" caused RSS to grow from 870 MB to 4.3 GB in ~20 s then SIGKILL. After Phase 1 + Phase 6 fixes, RSS stays flat at 857 MB for 30 s+ with no crash.
+
+---
+
+## Phase 3 — Performance (PARTIAL)
+
+### 3.1 Pagination + push-down `WHERE` on `CodegraphRepo` ✓
+**File:** `packages/core/src/banyancode/codegraph-repo.ts`.
+- New: `pageNodes` / `pageEdges` / `pageFiles` (afterID + limit).
+- New: `countNodes` / `countEdges` for cheap cardinality.
+- `queryNodes` rewritten to push `like` + `eq` into SQL via `and(...)`.
+- `bumpVersion` already uses COUNT(*).
+- Existing `listAll*` kept so callers migrate independently; 11 follow-up call sites cataloged.
+
+### 3.2 Batch embedder + indexer — N/A (embeddings removed).
 
 ### 3.3 Centralize graph traversal in `CodegraphAnalyzer`
-- Move the duplicated `outAdj`/`inAdj`/`degree` BFS from `tab-graph.tsx` and `codegraph-panel.tsx` into a server-side `codegraph.layerSummary({ nodeID })` Effect.
-- New HTTP endpoint `GET /global/codegraph-layers?nodeID=...` returns `{ L0, L1, L2, L3, totalNodes, totalEdges }`.
-- TUI uses `createResource` over this single endpoint instead of computing locally.
+Move duplicated `outAdj`/`inAdj`/`degree` BFS from `tab-graph.tsx` and `codegraph-panel.tsx` to a server-side `codegraph.layerSummary({ nodeID })` Effect exposed as `GET /global/codegraph-layers`. TUI switches to `createResource` over this endpoint. Not started.
 
 ### 3.4 `compaction.ts` and `input.ts` JSON.stringify in hot path
-- `packages/core/src/session/compaction.ts:79` — replace `JSON.stringify` with structural size estimate.
-- `packages/core/src/session/input.ts:207-209` — replace with content hash.
+- `compaction.ts:79` — structural size estimate instead of `JSON.stringify` per pre-turn.
+- `input.ts:207-209` — content hash instead of full serialization for `matchesPrompt`. Not started.
 
 ### 3.5 `message-updater.ts` `findLastIndex` per event
-- Maintain a parallel `Map<MessageID, number>`.
+Maintain a parallel `Map<MessageID, number>` alongside the messages array so text deltas don't do O(N) lookups. Not started.
 
 ### 3.6 Tests for Phase 3
-- `packages/core/test/banyancode/codegraph-pagination.test.ts` (NEW) — seed 5000 nodes, stream with limit 100, assert correct cursor progression.
-- `packages/core/test/banyancode/codegraph-batching.test.ts` (NEW) — spy on `provider.embed`, assert batch size ≤ 100.
-- `packages/core/test/banyancode/codegraph-layers-endpoint.test.ts` (NEW) — fixture graph, assert layer counts.
-
-**Verify:** typecheck + full test suite. (Optional: `bun run bench:test` from `packages/opencode` for a perf before/after.)
+- `codegraph-pagination.test.ts` (NEW) — seed 5 000 nodes, stream with `limit: 100`, assert cursor progression.
+- `codegraph-layers-endpoint.test.ts` (NEW) — fixture graph, assert layer counts.
+- Both deferred with 3.3.
 
 ---
 
-## Phase 4 — UI modernization
+## Phase 4 — UI modernization (PARTIAL)
 
-### 4.1 Keyboard navigation for tabs/accordion/toggle/number-input
+### 4.1 Keyboard navigation for tabs/accordion/toggle/number-input ✓
 **Files:**
-- `packages/tui/src/feature-plugins/tabs/tab-bar.tsx` — register `app.tab.next`/`app.tab.prev` keybinds, focus-visible state.
-- `packages/tui/src/ui/accordion.tsx` — Enter/Space to toggle.
-- `packages/tui/src/ui/toggle-switch.tsx` — Space to flip.
-- `packages/tui/src/ui/number-input.tsx` — Enter commits, Esc cancels (probably already).
+- `packages/tui/src/feature-plugins/tabs/tab-bar.tsx` — `Tab` / `Shift+Tab` / `Ctrl+]` / `Ctrl+[` bound to existing `tabs.next` / `tabs.previous` keymap commands.
+- `packages/tui/src/ui/accordion.tsx` — `focusable` header + `Return` / `Space` to toggle.
+- `packages/tui/src/ui/toggle-switch.tsx` — `focusable` + `Space` to flip.
+- `packages/tui/src/ui/number-input.tsx` — `useKeyboard` from `@opentui/solid` for `Escape` cancel; `Enter` commit already wired.
+- Prompt footer literal `Tab` lowercased to match the canonical keymap label.
 
 ### 4.2 Designed empty/loading/error states
-- Create `packages/tui/src/ui/empty-state.tsx` — glyph + message + suggested action.
-- Apply across `tab-sessions`, `tab-agents`, `tab-graph`, `tab-memory`, `codegraph-panel`, `agent-tree`.
+`packages/tui/src/ui/empty-state.tsx` (glyph + message + suggested action) and apply across `tab-sessions`, `tab-agents`, `tab-graph`, `tab-memory`, `codegraph-panel`, `agent-tree`. Not started.
 
 ### 4.3 Status pill glyphs
-- `packages/tui/src/feature-plugins/header/status-pills.tsx` — pair color with `●/○/◐/✗` glyph.
+`packages/tui/src/feature-plugins/header/status-pills.tsx` — pair color with `●/○/◐/✗`. Not started.
 
 ### 4.4 Accessibility hooks
-- Add `accessibilityLabel`/`accessibilityRole` to interactive widgets (tabs, accordion, toggle, dialogs, sidebar tree).
-- Add `prefersReducedMotion` flag in theme.
+`accessibilityLabel` / `accessibilityRole` on tabs, accordion, toggle, dialogs, sidebar tree. `prefersReducedMotion` flag in theme. Not started.
 
 ### 4.5 Spacing/typography tokens
-- Create `packages/tui/src/ui/tokens.ts` with `space` and `fontWeight` const maps.
+`packages/tui/src/ui/tokens.ts` with `space` and `fontWeight` const maps. Not started.
 
 ### 4.6 `tab-content` wrapper component
-- `packages/tui/src/ui/tab-content.tsx` — wraps the scrollbox + title + show/fallback pattern.
-- Refactor `tab-sessions`, `tab-agents`, `tab-graph`, `tab-memory`, `tab-settings` to use it.
+Wrap the `scrollbox` + `title` + `Show` / fallback pattern; refactor the 5 tabs. Not started.
 
 ### 4.7 Contextual keybinding footer
-- `packages/tui/src/feature-plugins/footer/session-footer.tsx` — render 3 most-contextual keybindings via the keymap API.
+`session-footer.tsx` should render the 3 most-contextual keybindings via the keymap API. Not started.
 
 ### 4.8 Tests for Phase 4
-- New `packages/tui/test/ui/tab-content.test.tsx`.
-- New `packages/tui/test/ui/empty-state.test.tsx`.
-- New `packages/tui/test/feature-plugins/tabs/tab-bar-keyboard.test.tsx` — simulate Tab keypress, assert active tab advances.
-- Snapshot tests for `empty-state`, `tab-content`, header pills.
-
-**Verify:** typecheck + full test suite.
+`tab-content.test.tsx`, `empty-state.test.tsx`, `tab-bar-keyboard.test.tsx`, snapshot tests for `empty-state` / `tab-content` / header pills. Not started.
 
 ---
 
-## Phase 5 — Quality bar
+## Phase 5 — Quality bar (PARTIAL)
 
-### 5.1 Delete empty / no-op tests
-- `packages/opencode/test/banyancode/agent-model-store.test.ts` — delete (4 trivial assertions).
-- `packages/opencode/test/banyancode/codegraph.test.ts` — delete or fix (3 `it.live.skip`).
-- `packages/core/test/banyancode/code-find.test.ts` — replace inline arithmetic with real tool invocation.
+### 5.1 Delete empty / no-op tests ✓ (partial)
+Embedding-related test files removed with the embedding feature (`codegraph-embed-service.test.ts`, `codegraph-vector-search.test.ts`, `embedding-provider.test.ts`, `provider-nvidia-embed.test.ts`, `code-embed.test.ts`, `embedding-model-picker.test.ts`). Still pending: `agent-model-store.test.ts` (4 trivial assertions) and `codegraph.test.ts` (3 `it.live.skip`).
 
 ### 5.2 Replace `.map()` in JSX with `<For>`
-**Files (6):**
-- `packages/tui/src/feature-plugins/tabs/tab-bar.tsx:59`
-- `packages/tui/src/feature-plugins/tabs/tab-settings.tsx:139`
-- `packages/tui/src/feature-plugins/inspector/graph-explorer.tsx:145-150`
-- `packages/tui/src/feature-plugins/sidebar/files.tsx` (likely)
-- `packages/tui/src/feature-plugins/sidebar/agent-tree.tsx`
-- `packages/tui/src/component/dialog-select.tsx` (tabs.map)
+6 sites (`tab-bar.tsx:59`, `tab-settings.tsx:139`, `graph-explorer.tsx:145-150`, `files.tsx`, `agent-tree.tsx`, `dialog-select.tsx`). Not started.
 
 ### 5.3 Centralize duplicated UI helpers
-- New `packages/tui/src/util/agent-tools.ts` — `toolsUsed(messages)`.
-- New `packages/tui/src/ui/progress-bar.tsx` — `<ProgressBar value={0..1} thresholds={{...}} />`.
-- Update consumers in `agent-tree`, `agent-details`, `system-status`, `codegraph-panel`.
+`lib/agent-tools.ts` (`toolsUsed(messages)`) and `ui/progress-bar.tsx`. Not started.
 
 ### 5.4 Resolve `// TODO(v2)` markers
-- `packages/opencode/src/session/processor.ts` — review the 15+ `// TODO(v2)` lines; resolve or move to `specs/v2/migration.md`.
+15+ markers in `session/processor.ts`. Not started.
 
 ### 5.5 Remove `as any` casts that should be regen-able
-- `packages/tui/src/component/dialog-memory.tsx` — drop the `(props.api.client as any).memory?.list?.(...)` cast by regen'ing the SDK (`packages/sdk/js/script/build.ts`).
-- `packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts:268` — register `banyancode.config.updated` in `EventV2`, regen SDK.
-- `packages/opencode/src/command/index.ts:194,199` — fix `execute` return type or change YOLO command to use a real return schema.
+SDK regenerated as part of the embedding removal; some `as any` casts remain (`banyancode.config.updated`, memory list). Not started.
 
 ### 5.6 Add perf docs
-- `perf/tui-render.md` — render frame cost at 80×24, 120×40, 200×60.
-- `perf/memory.md` — RSS after warmup, GC pauses for long sessions.
-- `perf/codegraph-build.md` — files/sec, MB/sec, dim detection cost.
-- `perf/embedding.md` — `embedAll` throughput, `searchByVector` p99 latency.
-
-### 5.7 Tests for Phase 5
-- Update stale tests after SDK regen to use typed methods.
-- Add `packages/core/test/banyancode/code-find-real-tool.test.ts` (NEW) that drives the actual `code_find` tool through `mat.settle`.
-
-**Verify:** typecheck + full test suite. `bun run bench:test` from `packages/opencode` to confirm no perf regression.
+`tui-render.md`, `memory.md`, `codegraph-build.md` (embedding.md removed). Not started.
 
 ---
 
-## Out of scope (deferred)
+## Phase 6 — OOM on invalid model (NEW, DONE)
 
-- Solid reconciler micro-optimizations (`createMemo` everywhere)
-- TUI bundle size tracking
-- Sustained-soak memory test
-- Provider-specific logic extraction in `agent.ts:538`
+Discovered during Phase 1 tmux validation. User scenario: an agent's configured `model` is not in the provider catalog (e.g. `minimax-coding-plan/MiniMax-M2.7` when the provider has `MiniMax-M3`). Symptoms: process dies with exit code 9 (SIGKILL) 20–30 s after the user submits any message.
+
+**Files:**
+- `packages/opencode/src/session/processor.ts` — set `ctx.assistantMessage.finish = "error"` in the halt path so `runLoop` (`prompt.ts:1141`) breaks on the next iteration. Without this the loop kept re-entering and allocating a fresh `MessageID.ascending()`, `processor.create(...)` fiber, and `SessionRunState.runner` entry per pass.
+- `packages/opencode/src/session/retry.ts` — add `RETRY_MAX_ATTEMPTS = 5` cap inside the retry policy so even transient errors (5xx, rate limit) can't loop forever on a sustained outage.
+- `packages/opencode/src/session/message-v2.ts` — surface `ProviderModelNotFoundError` (tag `"ProviderModelNotFoundError"`) as `AuthError` via duck-typed `_tag` check. Without this case the error fell through to `NamedError.Unknown`, hiding the model name and leaving `runLoop` to keep re-iterating. The duck-typed check avoids a value-import of `provider.ts` which would create a circular dep (downstream consumers re-import `message-v2.ts`).
+- `packages/tui/src/component/prompt/index.tsx` — show a clear toast `"Model not found: X/Y. Check your model name..."` (10 s).
+
+**Tests added:**
+- `packages/opencode/test/session/message-v2.test.ts` — assert `fromError` maps `ModelNotFoundError` to typed `AuthError` carrying `providerID` / `modelID`.
+- `packages/opencode/test/session/retry.test.ts` — assert the retry policy terminates after `RETRY_MAX_ATTEMPTS` even when the error is still flagged retryable.
+
+**Manual validation:** `bun dev` in tmux with an invalid model. Before fix: RSS 870 MB → 4.3 GB → SIGKILL ~25 s. After fix: RSS stable at 857 MB for 30 s+ with no crash and the model-not-found toast visible.
+
+---
+
+## Phase 7 — Open follow-ups (proposed)
+
+Items carried forward from earlier phases:
+
+- **`packages/core/src/effect/keyed-mutex.ts`** — move `locks` map into a `Ref` with `ScopedCache`-style eviction (review 2.2).
+- **`packages/core/src/effect/service-use.ts`** — convert cache `Map` to `WeakMap` keyed by service (review 2.3).
+- **`packages/core/src/event.ts`** — `projectors` / `syncHandlers` to `Set` with `Effect.addFinalizer` removal (review 2.19).
+- **`packages/core/src/session/run-coordinator.ts`** — `Effect.addFinalizer` on each entry to clear `active` / `interruptSeq` (review 2.4).
+- **`packages/core/src/system-monitor.ts`** — replace per-`watch` `runForkWith` with a shared `PubSub` derived stream so multiple watchers don't fan out fibers.
+- **`packages/tui/src/feature-plugins/tabs/tab-bar.tsx`** and other `*.map()` in JSX → `<For>` (review 3.3, 3.12).
+- **Perf observability docs** at `perf/tui-render.md`, `perf/memory.md`, `perf/codegraph-build.md`.
+- **Pagination migration** — 11 follow-up sites listed in commit `perf(core): codegraph pagination`.
+
+---
+
+## Removed scope (was previously here)
+
+The embedding feature has been retired entirely. Removed from plan:
+
+- `embedding-provider.ts` `Effect.runSync` correctness (1.2)
+- `resetEmbeddingsTable` data loss (2.3)
+- `codegraph-embedder` / `indexer` batching (3.2)
+- `embedding.md` perf doc (5.6.5)
+- `nvidia-embed` plugin and tests
 
 ---
 
@@ -231,11 +215,10 @@ bun typecheck
 bun test
 ```
 
-After each phase, run all three `bun typecheck` and `bun test` invocations before committing.
+After each phase, run all three `bun typecheck` invocations and the affected `bun test` before committing.
 
 ---
 
 ## Commit policy
 
-One commit per finding (or per coherent fix group) per AGENTS.md. Phase commits summarize the phase with `refactor(scope):` messages. The lead agent (this session) does all commits. Coder subagents return file lists, never commit.
-
+One commit per logical change. Phase summaries use `refactor(scope):` messages. The lead agent does all commits; coder subagents return file lists, never commits.
