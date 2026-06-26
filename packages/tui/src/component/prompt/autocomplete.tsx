@@ -84,7 +84,6 @@ export function Autocomplete(props: {
   promptPartTypeId: () => number
 }) {
   const editor = useEditorContext()
-  const renderer = useRenderer()
   const sdk = useSDK()
   const sync = useSync()
   const data = useData()
@@ -131,10 +130,13 @@ export function Autocomplete(props: {
     dimensions()
     positionTick()
     const anchor = props.anchor()
+    const parent = anchor.parent
+    const parentX = parent?.x ?? 0
+    const parentY = parent?.y ?? 0
 
     return {
-      x: anchor.screenX,
-      y: anchor.screenY,
+      x: anchor.x - parentX,
+      y: anchor.y - parentY,
       width: anchor.width,
     }
   })
@@ -711,80 +713,69 @@ export function Autocomplete(props: {
 
   return (
     <Show when={store.visible !== false}>
-      <Portal
-        mount={renderer.root}
-        ref={(container) => {
-          const c = container as Renderable | undefined
-          if (!c || c.position === "absolute") return
-          c.position = "absolute"
-          c.top = 0
-          c.left = 0
-        }}
+      <box
+        position="absolute"
+        top={position().y - height()}
+        left={position().x}
+        width={position().width}
+        zIndex={1000}
+        backgroundColor={theme.backgroundMenu}
+        {...SplitBorder}
+        borderColor={theme.border}
       >
-        <box
-          position="absolute"
-          top={position().y - height()}
-          left={position().x}
-          width={position().width}
-          zIndex={2900}
+        <scrollbox
+          ref={(r: ScrollBoxRenderable) => (scroll = r)}
           backgroundColor={theme.backgroundMenu}
-          {...SplitBorder}
-          borderColor={theme.border}
+          height={height()}
+          scrollbarOptions={{ visible: false }}
+          scrollAcceleration={scrollAcceleration()}
         >
-          <scrollbox
-            ref={(r: ScrollBoxRenderable) => (scroll = r)}
-            backgroundColor={theme.backgroundMenu}
-            height={height()}
-            scrollbarOptions={{ visible: false }}
-            scrollAcceleration={scrollAcceleration()}
+          <Index
+            each={options()}
+            fallback={
+              <box paddingLeft={1} paddingRight={1}>
+                <text fg={theme.textMuted}>No matching items</text>
+              </box>
+            }
           >
-            <Index
-              each={options()}
-              fallback={
-                <box paddingLeft={1} paddingRight={1}>
-                  <text fg={theme.textMuted}>No matching items</text>
-                </box>
-              }
-            >
-              {(option, index) => (
-                <box
-                  paddingLeft={1}
-                  paddingRight={1}
-                  backgroundColor={index === store.selected ? theme.primary : theme.backgroundMenu}
-                  flexDirection="row"
-                  gap={2}
-                  onMouseMove={() => {
-                    setStore("input", "mouse")
-                  }}
-                  onMouseOver={() => {
-                    if (store.input !== "mouse") return
-                    moveTo(index)
-                  }}
-                  onMouseDown={() => {
-                    setStore("input", "mouse")
-                    moveTo(index)
-                  }}
-                  onMouseUp={() => select()}
-                >
-                  <text fg={index === store.selected ? selectedForeground(theme) : theme.text} flexShrink={0}>
-                    {option().display}
+            {(option, index) => (
+              <box
+                paddingLeft={1}
+                paddingRight={1}
+                backgroundColor={index === store.selected ? theme.primary : theme.backgroundMenu}
+                flexDirection="row"
+                gap={2}
+                onMouseMove={() => {
+                  setStore("input", "mouse")
+                }}
+                onMouseOver={() => {
+                  if (store.input !== "mouse") return
+                  moveTo(index)
+                }}
+                onMouseDown={() => {
+                  setStore("input", "mouse")
+                  moveTo(index)
+                }}
+                onMouseUp={() => select()}
+              >
+                <text fg={index === store.selected ? selectedForeground(theme) : theme.text} flexShrink={0}>
+                  {option().display}
+                </text>
+                <Show when={option().description}>
+                  <text
+                    fg={index === store.selected ? selectedForeground(theme) : theme.textMuted}
+                    wrapMode="none"
+                    flexGrow={1}
+                    overflow="hidden"
+                  >
+                    {option().description}
                   </text>
-                  <Show when={option().description}>
-                    <text
-                      fg={index === store.selected ? selectedForeground(theme) : theme.textMuted}
-                      wrapMode="none"
-                      flexGrow={1}
-                      overflow="hidden"
-                    >
-                      {option().description}
-                    </text>
-                  </Show>
-                </box>
-              )}
-            </Index>
-          </scrollbox>
-        </box>
-      </Portal>
+                </Show>
+              </box>
+            )}
+          </Index>
+        </scrollbox>
+      </box>
     </Show>
   )
 }
