@@ -38,8 +38,6 @@ export {
 } from "./subagent-plans-repo"
 export { Service as SubagentBus, layer as subagentBusLayer, defaultLayer as subagentBusDefaultLayer } from "./subagent-bus"
 export { Service as MeshCoordinator, layer as meshCoordinatorLayer, defaultLayer as meshCoordinatorDefaultLayer } from "./mesh-coordinator"
-export { ProviderLookupService, layer as providerLookupLayer, defaultLayer as providerLookupDefaultLayer } from "./provider-lookup"
-export type { ProviderOptions, Interface as ProviderLookupInterface } from "./provider-lookup"
 export { Service as SystemMonitorService, defaultLayer as systemMonitorDefaultLayer } from "./system-monitor"
 export * as SystemMonitor from "./system-monitor"
 export {
