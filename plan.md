@@ -21,16 +21,16 @@ Four non-atomic read-modify-write patterns were silently losing data under concu
 
 Regression tests added (88 banyancode tests pass, typecheck clean).
 
-## Phase 2 — Silent health & config failures
+## Phase 2 — Silent health & config failures ✅ SHIPPED (`1f5a637` + test fixup `9d6e881` on `fix-silent-health`)
 
 | # | File | Issue | Fix |
 |---|---|---|---|
-| 2.1 | `packages/server/src/handlers/health.ts:6` | Returns `healthy: true` without DB ping | Add `db.select(sql\`1\`).get()` probe with short timeout |
-| 2.2 | `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:123-131` + `handlers/global.ts:81-83` | `/global/health` static `{ healthy: true }` | Same DB probe pattern |
-| 2.3 | `packages/core/src/banyancode/banyan-config.ts:24-45` | `Effect.catch(() => Effect.succeed({}))` swallows ALL parse errors | Distinguish `NotFound` (silent OK) from `ParseError` (log warning + surface) |
-| 2.4 | `packages/core/src/v1/config/banyan-config.ts:17-53` | `banyancode_max_subagents` no min/max | Add `Schema.isGreaterThanOrEqualTo(1)` + upper bound |
+| 2.1 | `packages/server/src/handlers/health.ts:6` | Returns `healthy: true` without DB ping | `db.run(sql\`SELECT 1\`)` probe with 2s timeout via `Effect.catchCause` |
+| 2.2 | `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:123-131` + `handlers/global.ts:81-83` | `/global/health` static `{ healthy: true }` | Same DB probe pattern; schema split into `GlobalHealthSuccess` + `GlobalHealthFailure` union |
+| 2.3 | `packages/core/src/banyancode/banyan-config.ts:24-45` | `Effect.catch(() => Effect.succeed({}))` swallows ALL parse errors | `Effect.tapError(Effect.logWarning) + Effect.orElseSucceed` — distinguishes file-not-found from parse-error |
+| 2.4 | `packages/core/src/v1/config/banyan-config.ts:17-53` | `banyancode_max_subagents` no min/max | `Schema.Number.check(isGreaterThanOrEqualTo(1), isLessThanOrEqualTo(MAX_SUBAGENTS_LIMIT=20))` |
 
-**Branch:** `fix-silent-health`
+Added `test: bun test` script to `packages/server/package.json`. Regression tests: 2 health tests in server, 2 in opencode, 2 schema-bounds tests in core. Typecheck clean.
 
 ## Phase 3 — Crash safety ✅ SHIPPED (`cfc2ada` on `fix-crash-safety`)
 
@@ -60,20 +60,20 @@ Rule: every `.catch(() => {})` MUST either log via `Effect.logError` or have a c
 
 **Branch:** `fix-swallowed-errors`
 
-## Phase 5 — Resource & subscription leaks
+## Phase 5 — Resource & subscription leaks ✅ SHIPPED (`1e351dd` on `fix-subscriber-leaks`)
 
 | # | File | Issue | Fix |
 |---|---|---|---|
-| 5.1 | `packages/tui/src/app.tsx:1043-1097` | 6× `event.on()` without `onCleanup` in root component | Wrap each with `onCleanup(event.on(...))` |
+| 5.1 | `packages/tui/src/app.tsx:1043-1097` | 6× `event.on()` without `onCleanup` in root component | Wrapped each with `onCleanup(event.on(...))` |
 | 5.2 | `packages/tui/src/context/sync.tsx:163` | `event.subscribe()` in provider init | `onCleanup(event.subscribe(...))` |
 | 5.3 | `packages/tui/src/context/data.tsx:123` | Same | Same |
 | 5.4 | `packages/tui/src/context/project.tsx:72` | `sdk.event.on()` without cleanup | Same |
-| 5.5 | `packages/tui/src/context/local.tsx:503` | `session.deleted` listener without cleanup | Same; `init` returns cleanup fn |
-| 5.6 | `packages/opencode/src/cli/heap.ts:39-42` | `setInterval` with no `stop()` | Add `export function stop()` calling `clearInterval` |
-| 5.7 | `packages/tui/src/feature-plugins/system/notifications.ts:30-86` | Sets grow if reply events are missed | Add removal handlers on `*.replied`/`*.rejected` |
-| 5.8 | `packages/core/src/filesystem/watcher.ts:86` | `Effect.runForkWith(context)` per FS event | Replace with `Stream.fromQueue(bounded)` |
+| 5.5 | `packages/tui/src/context/local.tsx:503` | `session.deleted` listener without cleanup | `init` returns cleanup fn |
+| 5.6 | `packages/opencode/src/cli/heap.ts:39-42` | `setInterval` with no `stop()` | Added `export function stop()` calling `clearInterval` |
+| 5.7 | `packages/tui/src/feature-plugins/system/notifications.ts:30-86` | Sets grow if reply events are missed | **Deferred** — plugin tracks via `scope.track()` so leaks already prevented; per-event Set growth bounded by session lifetime |
+| 5.8 | `packages/core/src/filesystem/watcher.ts:86` | `Effect.runForkWith(context)` per FS event | `Queue.bounded(1024) + Effect.runFork(Queue.offer) + Effect.forkScoped(Stream.fromQueue)` |
 
-**Branch:** `fix-subscriber-leaks`
+New `tui/test/subscription-cleanup.test.ts` (2 cases). 201 TUI tests pass, 84 core tests pass, typecheck clean.
 
 ## Phase 6 — Type safety & schema hardening
 
@@ -115,17 +115,17 @@ Rule: every `.catch(() => {})` MUST either log via `Effect.logError` or have a c
 
 **Branch:** `fix-graceful-shutdown`
 
-## Phase 9 — Database polish
+## Phase 9 — Database polish ✅ SHIPPED (`49b6953` on `db-polish`)
 
 | # | File | Issue | Fix |
 |---|---|---|---|
-| 9.1 | `packages/core/src/banyancode/memory.sql.ts:18` | No index on `created_at` | Add `index("memory_created_idx").on(table.created_at)` |
-| 9.2 | `packages/core/src/banyancode/subagent-messages-repo.ts:81` | Pending filter on parent only, secondary check in memory | Consider partial index `where delivered_at IS NULL` |
-| 9.3 | `packages/core/src/banyancode/memory.sql.ts:5` | `value` JSONB has no schema validation | Add versioned payload wrapper (`{ _v: 1, data: T }`) |
-| 9.4 | `packages/core/src/banyancode/memory-repo.ts:55-69` | `mapRowToEntry` doesn't validate JSONB | Defensive parse + log on corrupt row |
-| 9.5 | Empty migrations `20260601010001`, `20260603040000`, `20260604172448` | No-op placeholders | Fill in or delete with release note |
+| 9.1 | `packages/core/src/banyancode/memory.sql.ts:18` | No index on `created_at` | Added `index("memory_created_idx").on(table.created_at)` + migration `20260626000001` for existing DBs |
+| 9.2 | `packages/core/src/banyancode/subagent-messages-repo.ts:81` | Pending filter on parent only | Added partial index `WHERE delivered_at IS NULL` via migration `20260626000002` |
+| 9.3 | `packages/core/src/banyancode/memory.sql.ts:5` | `value` JSONB has no schema validation | Versioned payload wrapper `{ _v: 1, data: T }` in new `memory-payload.ts` |
+| 9.4 | `packages/core/src/banyancode/memory-repo.ts:55-69` | `mapRowToEntry` doesn't validate JSONB | Defensive `unwrapMemoryValue` accepts both versioned and legacy shapes, logs warning on corruption |
+| 9.5 | Empty migrations `20260601010001`, `20260603040000`, `20260604172448` | No-op placeholders | All three deleted (never applied, no journal entries, no intent in history) |
 
-**Branch:** `db-polish`
+New `memory-payload.test.ts` (5 cases). 89 banyancode tests pass, typecheck clean.
 
 ---
 
