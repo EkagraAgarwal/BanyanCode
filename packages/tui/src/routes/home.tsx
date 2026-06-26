@@ -88,7 +88,7 @@ export function Home() {
         </box>
         <box width="100%" maxWidth={promptMaxWidth()} paddingTop={1} flexShrink={0}>
           <text fg={theme.textMuted}>
-            Codegraph: Type /codegraph-build to index your code, or /code-embed to compute embeddings.
+            Codegraph: Type /codegraph-build to index your code.
           </text>
         </box>
         <pluginRuntime.Slot name="home_bottom" />

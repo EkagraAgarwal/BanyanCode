@@ -3,23 +3,19 @@ import { Schema } from "effect"
 import { BanyanConfig } from "../../src/v1/config/banyan-config"
 
 describe("BanyanConfig", () => {
-  test("validates banyancode_embedding_model and banyancode_yolo_mode", () => {
+  test("validates banyancode_yolo_mode", () => {
     const input = {
-      banyancode_embedding_model: "openai/text-embedding-3-small",
       banyancode_yolo_mode: true,
     }
     const result = Schema.decodeSync(BanyanConfig.Info)(input)
-    expect(result.banyancode_embedding_model).toBe("openai/text-embedding-3-small")
     expect(result.banyancode_yolo_mode).toBe(true)
   })
 
   test("accepts unknown keys without throwing", () => {
     const input = {
-      banyancode_embedding_model: "openai/text-embedding-3-small",
       unknown_key: "value",
     }
-    const result = Schema.decodeSync(BanyanConfig.Info)(input)
-    expect(result.banyancode_embedding_model).toBe("openai/text-embedding-3-small")
+    expect(() => Schema.decodeUnknownSync(BanyanConfig.Info)(input)).not.toThrow()
   })
 
   test("accepts $schema field", () => {

@@ -14,7 +14,6 @@ import { ModelsDev } from "@opencode-ai/core/models-dev"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_CODEGRAPH_BUILD from "./template/codegraph-build.txt"
-import PROMPT_CODE_EMBED from "./template/code-embed.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -64,7 +63,6 @@ export const Default = {
   REVIEW: "review",
   CODEGRAPH_BUILD: "codegraph-build",
   CODEGRAPH_REMOVE: "codegraph-remove",
-  CODE_EMBED: "code-embed",
   YOLO: "yolo",
   REFRESH_MODELS: "refresh-models",
 } as const
@@ -162,23 +160,6 @@ export const layer = Layer.effect(
             yield* repoOpt.value.clearAll()
           }).pipe(Effect.provide(Banyan.codegraphRepoDefaultLayer)),
         hints: [],
-      }
-      commands[Default.CODE_EMBED] = {
-        name: Default.CODE_EMBED,
-        description: "compute embeddings for code graph and search code semantically",
-        source: "command",
-        get template() {
-          return PROMPT_CODE_EMBED
-        },
-        execute: (input) =>
-          Effect.gen(function* () {
-            const serviceOpt = yield* Effect.serviceOption(Banyan.CodegraphEmbedService)
-            if (Option.isNone(serviceOpt)) return
-            const args = parseArgs(input.arguments)
-            const file = args.flags.file as string | undefined
-            yield* serviceOpt.value.start({ file })
-          }).pipe(Effect.provide(Banyan.codegraphEmbedServiceDefaultLayer)),
-        hints: hints(PROMPT_CODE_EMBED),
       }
       commands[Default.YOLO] = {
         name: Default.YOLO,

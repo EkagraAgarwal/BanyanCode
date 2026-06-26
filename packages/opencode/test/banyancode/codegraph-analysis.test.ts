@@ -37,8 +37,6 @@ const makeMockRepoLayer = () =>
         listEdgesByNode: (nodeID: string) => Effect.sync(() => mockCodegraphEntries.edges.filter((e) => e.fromNodeID === nodeID)),
         edgesFrom: (nodeID: string) => Effect.sync(() => mockCodegraphEntries.edges.filter((e) => e.fromNodeID === nodeID)),
         edgesTo: (nodeID: string) => Effect.sync(() => mockCodegraphEntries.edges.filter((e) => e.toNodeID === nodeID)),
-        putEmbedding: () => Effect.void,
-        getEmbedding: () => Effect.succeed(undefined),
         deleteFile: (id: string) => Effect.sync(() => {
           mockCodegraphEntries.files = mockCodegraphEntries.files.filter((f) => f.id !== id)
           mockCodegraphEntries.nodes = mockCodegraphEntries.nodes.filter((n) => n.fileID !== id)
@@ -51,8 +49,6 @@ const makeMockRepoLayer = () =>
         getMeta: () => Effect.succeed(undefined),
         setMeta: () => Effect.void,
         bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1 }),
-        resetEmbeddingsTable: () => Effect.succeed(undefined),
-        searchByVector: () => Effect.succeed([]),
         searchNodes: () => Effect.succeed([]),
         countNodes: () => Effect.succeed(0),
         countEdges: () => Effect.succeed(0),

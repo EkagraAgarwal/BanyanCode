@@ -49,7 +49,7 @@ BanyanCode is its own product, NOT a plugin or config of OpenCode. Both install 
 | Config schema | `ConfigV1.Info` | `BanyanConfig.Info` |
 | Service namespace | (n/a) | `Banyan.X.Service` |
 
-BanyanCode-specific keys (`banyancode_embedding_model`, `banyancode_yolo_mode`, `banyancode_max_subagents`, future telegram/runtime keys) live in `BanyanConfig.Info` (`packages/core/src/v1/config/banyan-config.ts`). They were removed from `ConfigV1.Info`. Consumers MUST use `Banyan.BanyanConfigService` — `Config.Service.getGlobal().banyancode_*` will fail typecheck.
+BanyanCode-specific keys (`banyancode_yolo_mode`, `banyancode_max_subagents`, future telegram/runtime keys) live in `BanyanConfig.Info` (`packages/core/src/v1/config/banyan-config.ts`). They were removed from `ConfigV1.Info`. Consumers MUST use `Banyan.BanyanConfigService` — `Config.Service.getGlobal().banyancode_*` will fail typecheck.
 
 For each sub-directory loader in `packages/opencode/src/config/`, the loader iterates BOTH `.opencode/` and `.banyancode/`. So `.opencode/agents/foo.md` AND `.banyancode/agents/foo.md` are both discovered and merged. Convention: `agent/`, `agents/`, `command/`, `commands/`, `skill/`, `skills/`, `plugin/`, `plugins/`, `plans/`, plus `tui.json`.
 

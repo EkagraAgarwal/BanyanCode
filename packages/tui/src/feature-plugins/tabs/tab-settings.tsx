@@ -8,7 +8,6 @@ import { toHex } from "../../util/color"
 import { Accordion } from "../../ui/accordion"
 import { ToggleSwitch } from "../../ui/toggle-switch"
 import { NumberInput } from "../../ui/number-input"
-import { DialogEmbeddingModel } from "../../component/dialog-embedding-model"
 import { DialogModel } from "../../component/dialog-model"
 import { useLocal } from "../../context/local"
 import { useSync } from "../../context/sync"
@@ -115,7 +114,6 @@ type EndpointEntry = {
 }
 
 function EndpointsSection(props: { api: TuiPluginApi; config: () => Record<string, any>; theme: () => any; update: (patch: Record<string, any>) => Promise<void> }) {
-  const dialog = useDialog()
   const endpoints = () => (props.config().banyancode_openai_compatible_endpoints ?? []) as EndpointEntry[]
 
   async function saveEndpoints(updated: EndpointEntry[]) {
@@ -125,10 +123,6 @@ function EndpointsSection(props: { api: TuiPluginApi; config: () => Record<strin
   async function removeEndpoint(idx: number) {
     const updated = endpoints().filter((_, i) => i !== idx)
     await saveEndpoints(updated)
-  }
-
-  function openEmbeddingPicker() {
-    dialog.replace(() => <DialogEmbeddingModel />)
   }
 
   return (
@@ -149,13 +143,6 @@ function EndpointsSection(props: { api: TuiPluginApi; config: () => Record<strin
           </text>
         </box>
       )}</For>
-      <box marginTop={1}>
-        <LinkText
-          text="[open /embedding-model picker to add endpoints]"
-          theme={props.theme()}
-          onClick={openEmbeddingPicker}
-        />
-      </box>
     </>
   )
 }
@@ -188,11 +175,6 @@ function View(props: { api: TuiPluginApi }) {
       void loadConfig()
     }),
   )
-  onCleanup(
-    ev.on("embedding.model.applied" as any, () => {
-      void loadConfig()
-    }),
-  )
 
   // Live values sourced from reactive stores
   const currentModel = () => local.model.current()
@@ -202,7 +184,7 @@ function View(props: { api: TuiPluginApi }) {
     const s = chosenScope ?? scope()
     try {
       await props.api.client.global.banyanConfig.update({
-        config: patch,
+        banyanConfig: patch,
         scope: s,
       })
       await loadConfig()
@@ -210,10 +192,6 @@ function View(props: { api: TuiPluginApi }) {
     } catch (e) {
       toast.show({ message: `Save failed: ${String(e)}`, variant: "error" })
     }
-  }
-
-  const openEmbeddingPicker = () => {
-    dialog.replace(() => <DialogEmbeddingModel />)
   }
 
   const openModelPicker = () => {
@@ -233,8 +211,6 @@ function View(props: { api: TuiPluginApi }) {
   const maxSubagents = () => cfg().banyancode_max_subagents ?? 5
   const yoloMode = () => cfg().banyancode_yolo_mode ?? false
   const disableWebsearch = () => cfg().banyancode_disable_websearch ?? false
-
-  const embeddingModel = () => cfg().banyancode_embedding_model ?? "—"
 
   const telegramEnabled = () => cfg().banyancode_telegram_enabled ?? false
   const telegramBotToken = () => cfg().banyancode_telegram_bot_token ?? ""
@@ -307,26 +283,6 @@ function View(props: { api: TuiPluginApi }) {
                       value={disableWebsearch()}
                       onChange={(v) => update({ banyancode_disable_websearch: v })}
                       label="Disable Web Search"
-                    />
-                  </box>
-                </>
-              ),
-            },
-            {
-              id: "embeddings",
-              title: "Embeddings",
-              content: () => (
-                <>
-                  <SettingRow
-                    label="Embedding Model"
-                    value={embeddingModel()}
-                    theme={theme()}
-                  />
-                  <box marginTop={1}>
-                    <LinkText
-                      text="[change embedding model]"
-                      theme={theme()}
-                      onClick={openEmbeddingPicker}
                     />
                   </box>
                 </>

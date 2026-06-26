@@ -4,7 +4,6 @@ import { MemoryTools } from "../../../core/src/tool/memory"
 import { ToolRegistry } from "../../../core/src/tool/registry"
 import { PermissionV2 } from "../../../core/src/permission"
 import { Banyan } from "../../../core/src/banyancode"
-import { EmbeddingProvider } from "../../../core/src/banyancode/embedding-provider"
 import { testEffect } from "../lib/effect"
 
 process.env.BANYANCODE_ENABLE = "1"
@@ -64,16 +63,6 @@ const mockRepoLayer = Layer.succeed(Banyan.MemoryRepo, Banyan.MemoryRepo.of({
   update: () => Effect.die("update not expected in this test") as any,
 }))
 
-const mockEmbeddingProviderLayer = Layer.succeed(
-  Banyan.EmbeddingProviderService,
-  Banyan.EmbeddingProviderService.of({
-    embed: (input: string | string[]) =>
-      Effect.fail(new EmbeddingProvider.EmbeddingError({ message: "no embedding model configured" })),
-    model: () => Effect.succeed(undefined),
-    setModel: () => Effect.void,
-  }),
-)
-
 const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(mockPermissionLayer))
 const toolLayer = Layer.mergeAll(
   MemoryTools.locationLayer,
@@ -81,14 +70,12 @@ const toolLayer = Layer.mergeAll(
   Layer.provide(registry),
   Layer.provide(mockPermissionLayer),
   Layer.provide(mockRepoLayer),
-  Layer.provide(mockEmbeddingProviderLayer),
 )
 
 const it = testEffect(Layer.mergeAll(
   mockPermissionLayer,
   registry,
   mockRepoLayer,
-  mockEmbeddingProviderLayer,
   toolLayer,
 ))
 
@@ -272,7 +259,7 @@ describe("memory tools", () => {
     }),
   )
 
-  it.effect("memory_search with no embedding model returns degraded=true and keyword matches", () =>
+  it.effect("memory_search uses keyword matching and returns degraded=true", () =>
     Effect.gen(function* () {
       mockMemoryEntries.length = 0
       const reg = yield* ToolRegistry.Service

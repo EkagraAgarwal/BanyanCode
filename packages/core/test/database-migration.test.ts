@@ -72,9 +72,6 @@ describe("DatabaseMigration", () => {
         expect(
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'codegraph_nodes'`),
         ).toEqual({ name: "codegraph_nodes" })
-        expect(
-          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'codegraph_embeddings'`),
-        ).toEqual({ name: "codegraph_embeddings" })
 
         // Verify FTS5 virtual table exists
         expect(
@@ -97,12 +94,10 @@ describe("DatabaseMigration", () => {
               'session_input_session_admitted_seq_idx',
               'session_input_session_promoted_seq_idx',
               'session_message_session_seq_idx',
-              'session_message_session_time_created_id_idx',
-              'codegraph_embedding_model_idx'
+              'session_message_session_time_created_id_idx'
             ) ORDER BY name`,
           ),
         ).toEqual([
-          { name: "codegraph_embedding_model_idx" },
           { name: "event_aggregate_seq_idx" },
           { name: "event_aggregate_type_seq_idx" },
           { name: "session_input_session_admitted_seq_idx" },

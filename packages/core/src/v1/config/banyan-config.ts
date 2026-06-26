@@ -16,7 +16,6 @@ export const MAX_SUBAGENTS_LIMIT = 20
 
 export const Info = Schema.Struct({
   $schema: Schema.optional(Schema.String),
-  banyancode_embedding_model: Schema.optional(Schema.String),
   banyancode_openai_compatible_endpoints: Schema.optional(Schema.Array(OpenAICompatibleEndpoint)),
   banyancode_yolo_mode: Schema.optional(Schema.Boolean),
   banyancode_disable_websearch: Schema.optional(Schema.Boolean),

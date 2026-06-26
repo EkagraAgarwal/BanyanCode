@@ -51,7 +51,6 @@ describe("codegraph-bridge", () => {
       RuntimeFlags.Service,
       RuntimeFlags.Service.of({
         banyancodeEnable: true,
-        banyancodeEmbeddingModel: undefined,
       } as any),
     )
 
@@ -81,7 +80,6 @@ describe("codegraph-bridge", () => {
       RuntimeFlags.Service,
       RuntimeFlags.Service.of({
         banyancodeEnable: false,
-        banyancodeEmbeddingModel: undefined,
       } as any),
     )
 
@@ -105,7 +103,6 @@ describe("codegraph-bridge", () => {
       RuntimeFlags.Service,
       RuntimeFlags.Service.of({
         banyancodeEnable: true,
-        banyancodeEmbeddingModel: undefined,
       } as any),
     )
 
