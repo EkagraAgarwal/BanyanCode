@@ -1,9 +1,9 @@
 export * as CodegraphRepo from "./codegraph-repo"
 
-import { eq, sql } from "drizzle-orm"
+import { and, count, eq, gt, like, sql } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
-import { CodegraphEdgesTable, CodegraphEmbeddingsTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
+import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
 import { CodegraphMetaTable } from "./codegraph-meta.sql"
 import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from "./types"
 
@@ -17,11 +17,13 @@ export interface Interface {
   readonly getFile: (id: string) => Effect.Effect<CodegraphFile | undefined, never, never>
   readonly getFileByPath: (path: string) => Effect.Effect<CodegraphFile | undefined, never, never>
   readonly listAllFiles: () => Effect.Effect<CodegraphFile[], never, never>
+  readonly pageFiles?: (input?: { afterID?: string; limit?: number }) => Effect.Effect<CodegraphFile[], never, never>
   readonly putNode: (node: CodegraphNode) => Effect.Effect<void, never, never>
   readonly getNode: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
   readonly nodeByID: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
   readonly listNodesByFile: (fileID: string) => Effect.Effect<CodegraphNode[], never, never>
   readonly listAllNodes: () => Effect.Effect<CodegraphNode[], never, never>
+  readonly pageNodes?: (input?: { afterID?: string; limit?: number }) => Effect.Effect<CodegraphNode[], never, never>
   readonly queryNodes: (input: { function?: string; kind?: string }) => Effect.Effect<CodegraphNode[], never, never>
   readonly searchNodes: (input: { name?: string; kind?: string; limit?: number }) => Effect.Effect<CodegraphNode[], never, never>
   readonly countNodes: () => Effect.Effect<number, never, never>
@@ -30,20 +32,10 @@ export interface Interface {
   readonly putEdge: (edge: CodegraphEdge) => Effect.Effect<void, never, never>
   readonly getEdge: (id: string) => Effect.Effect<CodegraphEdge | undefined, never, never>
   readonly listAllEdges: () => Effect.Effect<CodegraphEdge[], never, never>
+  readonly pageEdges?: (input?: { afterID?: string; limit?: number }) => Effect.Effect<CodegraphEdge[], never, never>
   readonly listEdgesByNode: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesFrom: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesTo: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
-  readonly putEmbedding: (nodeID: string, embedding: Uint8Array, model: string, dim: number) => Effect.Effect<void, never, never>
-  readonly getEmbedding: (nodeID: string) => Effect.Effect<{ embedding: Uint8Array; model: string; dim: number } | undefined, never, never>
-  readonly resetEmbeddingsTable: (
-    dim: number,
-    model: string,
-    options?: { force?: boolean },
-  ) => Effect.Effect<void, CodegraphSearchError, never>
-  readonly searchByVector: (
-    queryVec: Float32Array,
-    options?: { limit?: number; model?: string }
-  ) => Effect.Effect<Array<{ nodeId: string; distance: number }>, CodegraphSearchError, never>
   readonly deleteFile: (id: string) => Effect.Effect<void, never, never>
   readonly clearAll: () => Effect.Effect<void, never, never>
   readonly getMeta: () => Effect.Effect<CodegraphMeta | undefined, never, never>
@@ -115,6 +107,25 @@ export const layer = Layer.effect(
 
     const listAllFiles = Effect.fn("CodegraphRepo.listAllFiles")(function* () {
       const rows = yield* db.select().from(CodegraphFilesTable).all().pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        path: row.path,
+        contentHash: row.content_hash,
+        language: row.language,
+        indexedAt: row.indexed_at,
+      }))
+    })
+
+    const pageFiles = Effect.fn("CodegraphRepo.pageFiles")(function* (input: { afterID?: string; limit?: number } = {}) {
+      const { afterID, limit = 100 } = input
+      const rows = yield* db
+        .select()
+        .from(CodegraphFilesTable)
+        .where(afterID ? gt(CodegraphFilesTable.id, afterID) : undefined)
+        .orderBy(CodegraphFilesTable.id)
+        .limit(limit)
+        .all()
+        .pipe(Effect.orDie)
       return rows.map((row) => ({
         id: row.id,
         path: row.path,
@@ -206,6 +217,28 @@ export const layer = Layer.effect(
       }))
     })
 
+    const pageNodes = Effect.fn("CodegraphRepo.pageNodes")(function* (input: { afterID?: string; limit?: number } = {}) {
+      const { afterID, limit = 100 } = input
+      const rows = yield* db
+        .select()
+        .from(CodegraphNodesTable)
+        .where(afterID ? gt(CodegraphNodesTable.id, afterID) : undefined)
+        .orderBy(CodegraphNodesTable.id)
+        .limit(limit)
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        fileID: row.file_id,
+        kind: row.kind as CodegraphNode["kind"],
+        name: row.name,
+        signature: row.signature ?? undefined,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        code: row.code ?? undefined,
+      }))
+    })
+
     const putEdge = Effect.fn("CodegraphRepo.putEdge")(function* (edge: CodegraphEdge) {
       yield* db
         .insert(CodegraphEdgesTable)
@@ -257,6 +290,24 @@ export const layer = Layer.effect(
       }))
     })
 
+    const pageEdges = Effect.fn("CodegraphRepo.pageEdges")(function* (input: { afterID?: string; limit?: number } = {}) {
+      const { afterID, limit = 100 } = input
+      const rows = yield* db
+        .select()
+        .from(CodegraphEdgesTable)
+        .where(afterID ? gt(CodegraphEdgesTable.id, afterID) : undefined)
+        .orderBy(CodegraphEdgesTable.id)
+        .limit(limit)
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        fromNodeID: row.from_node_id,
+        toNodeID: row.to_node_id,
+        kind: row.kind as CodegraphEdge["kind"],
+      }))
+    })
+
     const listEdgesByNode = Effect.fn("CodegraphRepo.listEdgesByNode")(function* (nodeID: string) {
       const rows = yield* db
         .select()
@@ -272,116 +323,6 @@ export const layer = Layer.effect(
       }))
     })
 
-    const putEmbedding = Effect.fn("CodegraphRepo.putEmbedding")(function* (
-      nodeID: string,
-      embedding: Uint8Array,
-      model: string,
-      dim: number,
-    ) {
-      yield* db
-        .insert(CodegraphEmbeddingsTable)
-        .values({
-          node_id: nodeID,
-          embedding,
-          model,
-          dim,
-        })
-        .onConflictDoUpdate({
-          target: CodegraphEmbeddingsTable.node_id,
-          set: {
-            embedding,
-            model,
-            dim,
-          },
-        })
-        .run()
-        .pipe(Effect.orDie)
-    })
-
-    const getEmbedding = Effect.fn("CodegraphRepo.getEmbedding")(function* (nodeID: string) {
-      const row = yield* db
-        .select()
-        .from(CodegraphEmbeddingsTable)
-        .where(eq(CodegraphEmbeddingsTable.node_id, nodeID))
-        .get()
-        .pipe(Effect.orDie)
-      if (!row) return undefined
-      return {
-        embedding: row.embedding as Uint8Array,
-        model: row.model,
-        dim: row.dim,
-      }
-    })
-
-    const clearEmbeddingsForModel = Effect.fn("CodegraphRepo.clearEmbeddingsForModel")(function* (model: string) {
-      yield* db
-        .delete(CodegraphEmbeddingsTable)
-        .where(eq(CodegraphEmbeddingsTable.model, model))
-        .run()
-        .pipe(Effect.orDie)
-    })
-
-    const resetEmbeddingsTable = (
-      dim: number,
-      model: string,
-      options?: { force?: boolean },
-    ): Effect.Effect<void, CodegraphSearchError, never> => {
-      if (!Number.isInteger(dim) || dim <= 0 || dim > 65536) {
-        return Effect.fail(
-          new CodegraphSearchError(`Invalid embedding dim: ${dim}. Must be a positive integer <= 65536.`),
-        )
-      }
-      return Effect.gen(function* () {
-        // Preserve embeddings across model switches: only delete rows for the new model
-        // (which shouldn't exist yet) instead of dropping the entire table. Callers that
-        // need a clean slate can pass { force: true }.
-        yield* clearEmbeddingsForModel(model)
-        if (options?.force === true) {
-          yield* db.delete(CodegraphEmbeddingsTable).run().pipe(Effect.orDie)
-        }
-        if (process.env.BANYANCODE_DEBUG === "1") {
-          console.error(`[turso.vector] resetEmbeddingsTable dim=${dim} model=${model} force=${options?.force === true}`)
-        }
-      })
-    }
-
-    const searchByVector = (
-      queryVec: Float32Array,
-      options?: { limit?: number; model?: string },
-    ): Effect.Effect<Array<{ nodeId: string; distance: number }>, CodegraphSearchError, never> => {
-      const limit = options?.limit ?? 10
-      const model = options?.model
-
-      return Effect.gen(function* () {
-        // Validate dim matches existing column
-        const firstRow = yield* db
-          .select({ dim: CodegraphEmbeddingsTable.dim })
-          .from(CodegraphEmbeddingsTable)
-          .limit(1)
-          .get()
-          .pipe(Effect.orDie)
-
-        if (firstRow && queryVec.length !== firstRow.dim) {
-          return yield* Effect.fail(
-            new CodegraphSearchError(`Query vector dim (${queryVec.length}) does not match column dim (${firstRow.dim})`),
-          )
-        }
-
-        const queryJson = JSON.stringify(Array.from(queryVec))
-        const rows = yield* db
-          .all<{ node_id: string; distance: number }>(sql`
-            SELECT v.node_id, vector_distance_cos(e.embedding, vector32(${sql.raw(queryJson)})) AS distance
-            FROM vector_top_k('codegraph_embedding_vec_idx', vector32(${sql.raw(queryJson)}), ${limit}) v
-            JOIN codegraph_embeddings e ON e.node_id = v.node_id
-            ${model ? sql`WHERE e.model = ${model}` : sql``}
-            ORDER BY distance ASC
-          `)
-          .pipe(Effect.orDie)
-
-        return rows.map((r) => ({ nodeId: r.node_id, distance: r.distance }))
-      })
-    }
-
     const deleteFile = Effect.fn("CodegraphRepo.deleteFile")(function* (id: string) {
       yield* db.delete(CodegraphFilesTable).where(eq(CodegraphFilesTable.id, id)).run().pipe(Effect.orDie)
     })
@@ -391,12 +332,29 @@ export const layer = Layer.effect(
     })
 
     const queryNodes = Effect.fn("CodegraphRepo.queryNodes")(function* (input: { function?: string; kind?: string }) {
-      const allNodes = yield* listAllNodes()
-      return allNodes.filter((n) => {
-        if (input.function && n.name === input.function) return true
-        if (input.kind && n.kind === input.kind) return true
-        return false
-      })
+      const conditions = []
+      if (input.function) {
+        conditions.push(like(CodegraphNodesTable.name, `%${input.function}%`))
+      }
+      if (input.kind) {
+        conditions.push(eq(CodegraphNodesTable.kind, input.kind))
+      }
+      const rows = yield* db
+        .select()
+        .from(CodegraphNodesTable)
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        fileID: row.file_id,
+        kind: row.kind as CodegraphNode["kind"],
+        name: row.name,
+        signature: row.signature ?? undefined,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        code: row.code ?? undefined,
+      }))
     })
 
     const searchNodes = Effect.fn("CodegraphRepo.searchNodes")(function* (input: {
@@ -557,11 +515,13 @@ export const layer = Layer.effect(
       getFile,
       getFileByPath,
       listAllFiles,
+      pageFiles,
       putNode,
       getNode,
       nodeByID,
       listNodesByFile,
       listAllNodes,
+      pageNodes,
       queryNodes,
       searchNodes,
       countNodes,
@@ -570,13 +530,10 @@ export const layer = Layer.effect(
       putEdge,
       getEdge,
       listAllEdges,
+      pageEdges,
       listEdgesByNode,
       edgesFrom,
       edgesTo,
-      putEmbedding,
-      getEmbedding,
-      resetEmbeddingsTable,
-      searchByVector,
       deleteFile,
       clearAll,
       getMeta,
