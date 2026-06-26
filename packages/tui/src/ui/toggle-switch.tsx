@@ -10,7 +10,17 @@ export function ToggleSwitch(props: {
 }) {
   const on = () => props.value
   return (
-    <box flexDirection="row" gap={1} onMouseUp={() => props.onChange(!on())}>
+    <box
+      flexDirection="row"
+      gap={1}
+      focusable
+      onMouseUp={() => props.onChange(!on())}
+      onKeyDown={(e: { name: string; preventDefault(): void }) => {
+        if (e.name !== "space") return
+        e.preventDefault()
+        props.onChange(!on())
+      }}
+    >
       <text fg={on() ? toHex(props.theme.success) : toHex(props.theme.textMuted)}>
         {on() ? "[● ON]" : "[○ OFF]"}
       </text>

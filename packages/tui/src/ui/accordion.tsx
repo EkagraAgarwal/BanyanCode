@@ -25,7 +25,13 @@ export function Accordion(props: {
               <box
                 flexDirection="row"
                 gap={1}
+                focusable
                 onMouseUp={() => setOpen(isOpen() ? null : section.id)}
+                onKeyDown={(e: { name: string; preventDefault(): void }) => {
+                  if (e.name !== "return" && e.name !== "space") return
+                  e.preventDefault()
+                  setOpen(isOpen() ? null : section.id)
+                }}
               >
                 <text fg={toHex(props.theme.primary)}>{isOpen() ? "▼" : "▶"}</text>
                 <text fg={toHex(props.theme.text)}><b>{section.title}</b></text>

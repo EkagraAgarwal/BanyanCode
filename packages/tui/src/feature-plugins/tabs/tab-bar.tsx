@@ -50,6 +50,8 @@ function View(props: { api: TuiPluginApi }) {
       },
     ],
     bindings: [
+      { key: "tab", command: "tabs.next" },
+      { key: "shift+tab", command: "tabs.previous" },
       { key: "ctrl+]", command: "tabs.next" },
       { key: "ctrl+[", command: "tabs.previous" },
     ],

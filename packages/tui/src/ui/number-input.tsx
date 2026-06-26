@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { createSignal, Show } from "solid-js"
+import { useKeyboard } from "@opentui/solid"
 import { toHex } from "../util/color"
 
 export function NumberInput(props: {
@@ -24,6 +25,15 @@ export function NumberInput(props: {
     }
     setEditing(false)
   }
+
+  const cancel = () => setEditing(false)
+
+  useKeyboard((evt) => {
+    if (!editing()) return
+    if (evt.name !== "escape") return
+    evt.preventDefault()
+    cancel()
+  })
 
   return (
     <box flexDirection="row" gap={1}>
