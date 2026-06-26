@@ -8,6 +8,7 @@ import type {
   ModelV2Info,
   PermissionSavedInfo,
   PermissionV2Request,
+  Provider,
   ProviderV2Info,
   QuestionV2Request,
   ReferenceInfo,
@@ -29,6 +30,7 @@ type LocationData = {
   command?: CommandV2Info[]
   model?: ModelV2Info[]
   provider?: ProviderV2Info[]
+  providerConfig?: Provider[]
   reference?: ReferenceInfo[]
   skill?: SkillV2Info[]
 }
@@ -524,6 +526,19 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             setStore("location", key, "provider", result.data.data)
           },
         },
+        providerConfig: {
+          list(location?: LocationRef) {
+            return store.location[locationKey(location ?? defaultLocation())]?.providerConfig
+          },
+          async refresh(ref?: LocationRef) {
+            const result = await sdk.client.config.providers(
+              { directory: ref?.directory, workspace: ref?.workspaceID },
+              { throwOnError: true },
+            )
+            const key = locationKey(ref ?? defaultLocation())
+            setStore("location", key, "providerConfig", result.data.providers)
+          },
+        },
         reference: {
           list(location?: LocationRef) {
             return store.location[locationKey(location ?? defaultLocation())]?.reference
@@ -553,6 +568,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         result.location.agent.refresh(),
         result.location.model.refresh(),
         result.location.provider.refresh(),
+        result.location.providerConfig.refresh(),
         result.location.reference.refresh(),
         result.location.command.refresh(),
         result.location.skill.refresh(),

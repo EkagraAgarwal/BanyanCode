@@ -60,6 +60,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const route = useRoute()
     const paths = useTuiPaths()
     const providers = createMemo(() => data.location.provider.list() ?? [])
+    const providerConfig = createMemo(() => data.location.providerConfig.list() ?? [])
     const models = createMemo(() => data.location.model.list() ?? [])
 
     function isModelValid(model: { providerID: string; modelID: string }) {
@@ -410,7 +411,15 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             const m = currentModel()
             if (!m) return []
             const info = models().find((item) => item.providerID === m.providerID && item.id === m.modelID)
-            return info?.variants.map((variant) => variant.id) ?? []
+            if (info?.variants?.length) return info.variants.map((variant) => variant.id)
+            // Fallback: synthesize from provider-synthesized model info.
+            // The /config/providers endpoint applies ProviderTransform.variants(),
+            // which knows hardcoded patterns (minimax-m3 → thinking,
+            // deepseek-r1 → thinking, etc.).
+            const provider = providerConfig().find((item) => item.id === m.providerID)
+            const providerModel = provider?.models[m.modelID]
+            if (!providerModel?.variants) return []
+            return Object.keys(providerModel.variants)
           },
           set(value: string | undefined) {
             const m = currentModel()
