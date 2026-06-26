@@ -157,18 +157,21 @@ export const layer = Layer.effect(
         yield* Queue.offer(q, s)
       })
 
-    const queue = yield* Queue.unbounded<SystemStatus>()
+    const queue = yield* Queue.bounded<SystemStatus>(64)
     yield* Effect.forkScoped(
       Effect.forever(tick(queue)).pipe(
         Effect.schedule(Schedule.spaced(Duration.seconds(1))),
       ),
     )
 
-    const events = (): Effect.Effect<Queue.Dequeue<SystemStatus>, never, never> => Effect.succeed(queue)
+    const events: Interface["events"] = () => Effect.succeed(queue)
 
+    // watch() creates its own bounded queue and fiber per call
+    // intervalMs controls the polling rate for this specific watcher
     const watch: Interface["watch"] = (intervalMs = 1000) =>
       Effect.gen(function* () {
-        const q = yield* Queue.unbounded<SystemStatus>()
+        const q = yield* Queue.bounded<SystemStatus>(64)
+        console.error(`[system-monitor] watch() subscribed (intervalMs: ${intervalMs})`)
         const context = yield* Effect.context()
         const runFork = Effect.runForkWith(context)
         runFork(
