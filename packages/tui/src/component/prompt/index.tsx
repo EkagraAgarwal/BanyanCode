@@ -1006,7 +1006,7 @@ export function Prompt(props: PromptProps) {
       if (args === "") {
         const current = local.model.variant.current() ? local.model.variant.current() : "default"
         toast.show({
-          message: `Current variant: ${current}. Available variants: ${list.join(", ") || "none"}`,
+          message: `Current variant: ${current}\nAvailable variants: ${list.length ? list.join(", ") : "none"}`,
           variant: "info",
         })
       } else {
