@@ -6,6 +6,7 @@ import { useKeyboard } from "@opentui/solid"
 import { useToast } from "../../ui/toast"
 import { useEvent } from "../../context/event"
 import { toHex } from "../../util/color"
+import { TextAttributes } from "@opentui/core"
 
 const id = "internal:tab-sessions"
 
@@ -212,7 +213,17 @@ function EditableTitle(props: { controller: RowControllerProps; session: Session
             {props.session.title || "(untitled)"}
           </text>
           <text fg={toHex(c().theme.textMuted)}>{c().timeAgo(props.session.time?.updated)}</text>
-          <text fg={toHex(isSelected() ? c().theme.primary : c().theme.textMuted)}>[e rename]</text>
+          <text fg={toHex(c().theme.textMuted)}>
+            <span
+              style={{
+                fg: toHex(isSelected() ? c().theme.primary : c().theme.warning),
+                attributes: TextAttributes.BOLD,
+              }}
+            >
+              e
+            </span>
+            {" "}rename
+          </text>
         </box>
       }
     >
