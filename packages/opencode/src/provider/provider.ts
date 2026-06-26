@@ -1,4 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { existsSync } from "fs"
 import os from "os"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import fuzzysort from "fuzzysort"
@@ -1906,7 +1907,21 @@ export const layer = Layer.effect(
       }
 
       const provider = Object.values(s.providers).find((p) => !cfg.provider || Object.keys(cfg.provider).includes(p.id))
-      if (!provider) return yield* new NoProvidersError()
+      if (!provider) {
+        const opencodeConfigPath = path.join(Global.Path.config, "config.json")
+        const banyanConfigPath = path.join(Global.Path.banyan.config, "config.json")
+        yield* Effect.logError("[provider] No LLM provider found", {
+          configuredProviders: Object.keys(s.providers),
+          requestedProviders: Object.keys(cfg.provider ?? {}),
+          configPaths: {
+            opencode: opencodeConfigPath,
+            opencodeExists: existsSync(opencodeConfigPath),
+            banyan: banyanConfigPath,
+            banyanExists: existsSync(banyanConfigPath),
+          },
+        })
+        return yield* new NoProvidersError()
+      }
       const [model] = sort(Object.values(provider.models))
       if (!model) return yield* new NoModelsError({ providerID: provider.id })
       return {

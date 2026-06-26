@@ -275,83 +275,88 @@ const live: Layer.Layer<
       })
       // Default runtime path: AI SDK owns provider execution and tool dispatch;
       // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
-      return {
-        type: "ai-sdk" as const,
-        result: streamText({
-          onError(error) {
-            bridge.fork(
-              Effect.logError("stream error", {
-                providerID: input.model.providerID,
-                modelID: input.model.id,
-                "session.id": input.sessionID,
-                small: (input.small ?? false).toString(),
-                agent: input.agent.name,
-                mode: input.agent.mode,
-                error,
-              }),
-            )
-          },
-          // Copilot returns the authoritative billed amount only in provider-specific response fields.
-          includeRawChunks: input.model.providerID.includes("github-copilot"),
-          async experimental_repairToolCall(failed) {
-            const lower = failed.toolCall.toolName.toLowerCase()
-            if (lower !== failed.toolCall.toolName && prepared.tools[lower]) {
-              return {
-                ...failed.toolCall,
-                toolName: lower,
-              }
-            }
+      const streamStart = Date.now()
+      const result = streamText({
+        onError(error) {
+          bridge.fork(
+            Effect.logError("stream error", {
+              providerID: input.model.providerID,
+              modelID: input.model.id,
+              "session.id": input.sessionID,
+              small: (input.small ?? false).toString(),
+              agent: input.agent.name,
+              mode: input.agent.mode,
+              error,
+            }),
+          )
+        },
+        // Copilot returns the authoritative billed amount only in provider-specific response fields.
+        includeRawChunks: input.model.providerID.includes("github-copilot"),
+        async experimental_repairToolCall(failed) {
+          const lower = failed.toolCall.toolName.toLowerCase()
+          if (lower !== failed.toolCall.toolName && prepared.tools[lower]) {
             return {
               ...failed.toolCall,
-              input: JSON.stringify({
-                tool: failed.toolCall.toolName,
-                error: failed.error.message,
-              }),
-              toolName: "invalid",
+              toolName: lower,
             }
-          },
-          temperature: prepared.params.temperature,
-          topP: prepared.params.topP,
-          topK: prepared.params.topK,
-          providerOptions: ProviderTransform.providerOptions(input.model, prepared.params.options),
-          activeTools: Object.keys(prepared.tools).filter((x) => x !== "invalid"),
-          tools: prepared.tools,
-          toolChoice: input.toolChoice,
-          maxOutputTokens: prepared.params.maxOutputTokens,
-          abortSignal: input.abort,
-          headers: prepared.headers,
-          maxRetries: input.retries ?? 0,
-          messages: prepared.messages,
-          model: wrapLanguageModel({
-            model: language,
-            middleware: [
-              {
-                specificationVersion: "v3" as const,
-                async transformParams(args) {
-                  if (args.type === "stream") {
-                    // @ts-expect-error
-                    args.params.prompt = ProviderTransform.message(
-                      args.params.prompt,
-                      input.model,
-                      prepared.messageTransformOptions,
-                    )
-                  }
-                  return args.params
-                },
+          }
+          return {
+            ...failed.toolCall,
+            input: JSON.stringify({
+              tool: failed.toolCall.toolName,
+              error: failed.error.message,
+            }),
+            toolName: "invalid",
+          }
+        },
+        temperature: prepared.params.temperature,
+        topP: prepared.params.topP,
+        topK: prepared.params.topK,
+        providerOptions: ProviderTransform.providerOptions(input.model, prepared.params.options),
+        activeTools: Object.keys(prepared.tools).filter((x) => x !== "invalid"),
+        tools: prepared.tools,
+        toolChoice: input.toolChoice,
+        maxOutputTokens: prepared.params.maxOutputTokens,
+        abortSignal: input.abort,
+        headers: prepared.headers,
+        maxRetries: input.retries ?? 0,
+        messages: prepared.messages,
+        model: wrapLanguageModel({
+          model: language,
+          middleware: [
+            {
+              specificationVersion: "v3" as const,
+              async transformParams(args) {
+                if (args.type === "stream") {
+                  // @ts-expect-error
+                  args.params.prompt = ProviderTransform.message(
+                    args.params.prompt,
+                    input.model,
+                    prepared.messageTransformOptions,
+                  )
+                }
+                return args.params
               },
-            ],
-          }),
-          experimental_telemetry: {
-            isEnabled: cfg.experimental?.openTelemetry,
-            functionId: "session.llm",
-            tracer: telemetryTracer,
-            metadata: {
-              userId: cfg.username ?? "unknown",
-              sessionId: input.sessionID,
             },
-          },
+          ],
         }),
-      }
+        experimental_telemetry: {
+          isEnabled: cfg.experimental?.openTelemetry,
+          functionId: "session.llm",
+          tracer: telemetryTracer,
+          metadata: {
+            userId: cfg.username ?? "unknown",
+            sessionId: input.sessionID,
+          },
+        },
+      })
+      yield* Effect.logInfo(`[llm] streamText started in ${Date.now() - streamStart}ms`, {
+        providerID: input.model.providerID,
+        modelID: input.model.id,
+        "session.id": input.sessionID,
+        small: (input.small ?? false).toString(),
+      })
+      return { type: "ai-sdk" as const, result }
     })
 
     const stream: Interface["stream"] = (input) =>
