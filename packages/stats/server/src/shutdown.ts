@@ -13,5 +13,12 @@ export function registerShutdownSignalHandlers() {
 }
 
 function markShuttingDown() {
+  if (shuttingDown) return
   shuttingDown = true
+  console.log("SIGTERM/SIGINT received. Stop accepting new requests (/ready returning 503)...")
+
+  setTimeout(() => {
+    console.log("Draining active queues and exiting...")
+    process.exit(0)
+  }, 5000)
 }

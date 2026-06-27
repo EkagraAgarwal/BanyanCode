@@ -140,8 +140,12 @@ export const layer = Layer.effect(
 
         // Use forkScoped to execute the work in the background
         const fiber = yield* Effect.forkScoped(forkWork)
-        // Ensure fiber is interrupted when scope exits
-        ;(yield* Effect.addFinalizer(() => Fiber.interrupt(fiber))) as unknown as void
+        ;(yield* Effect.addFinalizer(() =>
+          Fiber.interrupt(fiber).pipe(
+            Effect.timeout("2 seconds"),
+            Effect.ignore,
+          ),
+        )) as unknown as void
         yield* Ref.set(inFlight, fiber)
       }) as unknown as Effect.Effect<void, never, never>
 
@@ -149,7 +153,10 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const fiber = yield* Ref.get(inFlight)
         if (fiber) {
-          yield* Fiber.interrupt(fiber)
+          yield* Fiber.interrupt(fiber).pipe(
+            Effect.timeout("2 seconds"),
+            Effect.ignore,
+          )
           yield* Ref.set(inFlight, undefined)
           const current = yield* Ref.get(state)
           if (current.status === "running") {
