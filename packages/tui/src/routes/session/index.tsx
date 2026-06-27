@@ -840,7 +840,6 @@ export function Session() {
                 flexGrow={1}
                 scrollAcceleration={scrollAcceleration()}
               >
-                <box height={1} />
                 <For each={rows}>
                   {(row) => (
                     <SessionRowView
