@@ -12,6 +12,7 @@ import { WebSocketTracker } from "./routes/instance/httpapi/websocket-tracker"
 import { PublicApi } from "./routes/instance/httpapi/public"
 import type { CorsOptions } from "./cors"
 import { lazy } from "@/util/lazy"
+import { InstanceStore } from "@/project/instance-store"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -172,7 +173,12 @@ function setupMdns(opts: ListenOptions, port: number, scope: Scope.Scope) {
 function makeStop(state: ListenerState, unpublishMdns: Effect.Effect<void>) {
   return Effect.gen(function* () {
     const forceCloseOnce = yield* Effect.cached(forceClose(state).pipe(Effect.ignore))
-    const closeScopeOnce = yield* Effect.cached(Scope.close(state.scope, Exit.void).pipe(Effect.ignore))
+    const closeScopeOnce = yield* Effect.cached(
+      Scope.close(state.scope, Exit.void).pipe(
+        Effect.timeout("5 seconds"),
+        Effect.ignore,
+      ),
+    )
 
     return (close?: boolean) =>
       Effect.gen(function* () {
@@ -184,7 +190,16 @@ function makeStop(state: ListenerState, unpublishMdns: Effect.Effect<void>) {
 }
 
 function forceClose(state: ListenerState) {
-  return Effect.all([state.http.closeAll, state.websockets.closeAll], { concurrency: "unbounded", discard: true })
+  return Effect.gen(function* () {
+    yield* Effect.all([state.http.closeAll, state.websockets.closeAll], { concurrency: "unbounded", discard: true })
+    const storeResult = yield* Effect.serviceOption(InstanceStore.Service)
+    if (storeResult._tag === "Some") {
+      yield* storeResult.value.disposeAll().pipe(
+        Effect.timeout("5 seconds"),
+        Effect.catchCause(() => Effect.void),
+      )
+    }
+  })
 }
 
 function serverLayer(opts: { port: number; hostname: string }) {

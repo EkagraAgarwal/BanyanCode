@@ -158,6 +158,7 @@ export const layer = Layer.effect(
       })
 
     const queue = yield* Queue.bounded<SystemStatus>(60)
+    yield* Effect.addFinalizer(() => Queue.shutdown(queue))
     yield* Effect.forkScoped(
       Effect.forever(tick(queue)).pipe(Effect.schedule(Schedule.spaced(Duration.millis(100)))),
     )

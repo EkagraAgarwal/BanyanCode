@@ -384,6 +384,10 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
   const runLocalEffect = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.runPromise(effect.pipe(Effect.provideService(InstanceRef, ctx)))
   yield* Effect.promise(async () => {
+    const log = (message: string, data?: Record<string, any>) =>
+      runLocalEffect(Effect.logInfo(message, data))
+    const errorLog = (message: string, data?: Record<string, any>) =>
+      runLocalEffect(Effect.logError(message, data))
     const isMock = args.token || args.event
 
     const context = isMock ? (JSON.parse(args.event!) as Context) : github.context
@@ -514,7 +518,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
         await runLocalEffect(sessionShare.share(session.id))
         return session.id.slice(-8)
       })()
-      console.log("opencode session", session.id)
+      await log("opencode session", { sessionId: session.id })
 
       // Handle event types:
       // REPO_EVENTS (schedule, workflow_dispatch): no issue/PR context, output to logs/PR only
@@ -523,7 +527,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
       if (isRepoEvent) {
         // Repo event - no issue/PR context, output goes to logs
         if (isWorkflowDispatchEvent && actor) {
-          console.log(`Triggered by: ${actor}`)
+          await log("Triggered by", { actor })
         }
         const branchPrefix = isWorkflowDispatchEvent ? "dispatch" : "schedule"
         const branch = await checkoutNewBranch(branchPrefix)
@@ -532,8 +536,8 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
         const { dirty, uncommittedChanges, switched } = await branchIsDirty(head, branch)
         if (switched) {
           // Agent switched branches (likely created its own branch/PR)
-          console.log("Agent managed its own branch, skipping infrastructure push/PR")
-          console.log("Response:", response)
+          await log("Agent managed its own branch, skipping infrastructure push/PR")
+          await log("Response", { response })
         } else if (dirty) {
           const summary = await summarize(response)
           // workflow_dispatch has an actor for co-author attribution, schedule does not
@@ -546,12 +550,12 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
             `${response}\n\nTriggered by ${triggerType}${footer({ image: true })}`,
           )
           if (pr) {
-            console.log(`Created PR #${pr}`)
+            await log("Created PR", { pr })
           } else {
-            console.log("Skipped PR creation (no new commits)")
+            await log("Skipped PR creation (no new commits)")
           }
         } else {
-          console.log("Response:", response)
+          await log("Response", { response })
         }
       } else if (
         ["pull_request", "pull_request_review_comment"].includes(context.eventName) ||
@@ -566,7 +570,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
           const response = await chat(`${userPrompt}\n\n${dataPrompt}`, promptFiles)
           const { dirty, uncommittedChanges, switched } = await branchIsDirty(head, prData.headRefName)
           if (switched) {
-            console.log("Agent managed its own branch, skipping infrastructure push")
+            await log("Agent managed its own branch, skipping infrastructure push")
           }
           if (dirty && !switched) {
             const summary = await summarize(response)
@@ -584,7 +588,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
           const response = await chat(`${userPrompt}\n\n${dataPrompt}`, promptFiles)
           const { dirty, uncommittedChanges, switched } = await branchIsDirty(head, forkBranch)
           if (switched) {
-            console.log("Agent managed its own branch, skipping infrastructure push")
+            await log("Agent managed its own branch, skipping infrastructure push")
           }
           if (dirty && !switched) {
             const summary = await summarize(response)
@@ -1014,7 +1018,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
       // Do not change git config when running locally
       if (isMock) return
 
-      console.log("Configuring git...")
+      await log("Configuring git...")
       const config = "http.https://github.com/.extraheader"
       // actions/checkout@v6 no longer stores credentials in .git/config,
       // so this may not exist - use nothrow() to handle gracefully
@@ -1038,14 +1042,14 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
     }
 
     async function checkoutNewBranch(type: "issue" | "schedule" | "dispatch") {
-      console.log("Checking out new branch...")
+      await log("Checking out new branch...")
       const branch = generateBranchName(type)
       await gitRun(["checkout", "-b", branch])
       return branch
     }
 
     async function checkoutLocalBranch(pr: GitHubPullRequest) {
-      console.log("Checking out local branch...")
+      await log("Checking out local branch...")
 
       const branch = pr.headRefName
       const depth = Math.max(pr.commits.totalCount, 20)
@@ -1055,7 +1059,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
     }
 
     async function checkoutForkBranch(pr: GitHubPullRequest) {
-      console.log("Checking out fork branch...")
+      await log("Checking out fork branch...")
 
       const remoteBranch = pr.headRefName
       const localBranch = generateBranchName("pr")
@@ -1082,7 +1086,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
     }
 
     async function pushToNewBranch(summary: string, branch: string, commit: boolean, isSchedule: boolean) {
-      console.log("Pushing to new branch...")
+      await log("Pushing to new branch...")
       if (commit) {
         await gitRun(["add", "."])
         if (isSchedule) {
@@ -1095,7 +1099,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
     }
 
     async function pushToLocalBranch(summary: string, commit: boolean) {
-      console.log("Pushing to local branch...")
+      await log("Pushing to local branch...")
       if (commit) {
         await gitRun(["add", "."])
         await commitChanges(summary, actor)
@@ -1104,7 +1108,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
     }
 
     async function pushToForkBranch(summary: string, pr: GitHubPullRequest, commit: boolean) {
-      console.log("Pushing to fork branch...")
+      await log("Pushing to fork branch...")
 
       const remoteBranch = pr.headRefName
 
@@ -1116,12 +1120,12 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
     }
 
     async function branchIsDirty(originalHead: string, expectedBranch: string) {
-      console.log("Checking if branch is dirty...")
+      await log("Checking if branch is dirty...")
       // Detect if the agent switched branches during chat (e.g. created
       // its own branch, committed, and possibly pushed/created a PR).
       const current = await gitText(["rev-parse", "--abbrev-ref", "HEAD"])
       if (current !== expectedBranch) {
-        console.log(`Branch changed during chat: expected ${expectedBranch}, now on ${current}`)
+        await log(`Branch changed during chat: expected ${expectedBranch}, now on ${current}`)
         return { dirty: true, uncommittedChanges: false, switched: true }
       }
 
@@ -1144,7 +1148,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
     async function hasNewCommits(base: string, head: string) {
       const result = await gitStatus(["rev-list", "--count", `${base}..${head}`])
       if (result.exitCode !== 0) {
-        console.log(`rev-list failed, fetching origin/${base}...`)
+        await log(`rev-list failed, fetching origin/${base}...`)
         await gitStatus(["fetch", "origin", base, "--depth=1"])
         const retry = await gitStatus(["rev-list", "--count", `origin/${base}..${head}`])
         if (retry.exitCode !== 0) return true // assume dirty if we can't tell
@@ -1155,7 +1159,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
 
     async function assertPermissions() {
       // Only called for non-schedule events, so actor is defined
-      console.log(`Asserting permissions for user ${actor}...`)
+      await log(`Asserting permissions for user ${actor}...`)
 
       let permission
       try {
@@ -1166,9 +1170,9 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
         })
 
         permission = response.data.permission
-        console.log(`  permission: ${permission}`)
+        await log(`  permission: ${permission}`)
       } catch (error) {
-        console.error(`Failed to check permissions: ${error}`)
+        await errorLog(`Failed to check permissions: ${error}`)
         throw new Error(`Failed to check permissions for user ${actor}: ${error}`, { cause: error })
       }
 
@@ -1177,7 +1181,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
 
     async function addReaction(commentType?: "issue" | "pr_review") {
       // Only called for non-schedule events, so triggerCommentId is defined
-      console.log("Adding reaction...")
+      await log("Adding reaction...")
       if (triggerCommentId) {
         if (commentType === "pr_review") {
           return await octoRest.rest.reactions.createForPullRequestReviewComment({
@@ -1204,7 +1208,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
 
     async function removeReaction(commentType?: "issue" | "pr_review") {
       // Only called for non-schedule events, so triggerCommentId is defined
-      console.log("Removing reaction...")
+      await log("Removing reaction...")
       if (triggerCommentId) {
         if (commentType === "pr_review") {
           const reactions = await octoRest.rest.reactions.listForPullRequestReviewComment({
@@ -1263,7 +1267,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
 
     async function createComment(body: string) {
       // Only called for non-schedule events, so issueId is defined
-      console.log("Creating comment...")
+      await log("Creating comment...")
       return await octoRest.rest.issues.createComment({
         owner,
         repo,
@@ -1273,7 +1277,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
     }
 
     async function createPR(base: string, branch: string, title: string, body: string): Promise<number | null> {
-      console.log("Creating pull request...")
+      await log("Creating pull request...")
 
       // Check if an open PR already exists for this head→base combination
       // This handles the case where the agent created a PR via gh pr create during its run
@@ -1289,19 +1293,19 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
         )
 
         if (existing.data.length > 0) {
-          console.log(`PR #${existing.data[0].number} already exists for branch ${branch}`)
+          await log(`PR #${existing.data[0].number} already exists for branch ${branch}`)
           return existing.data[0].number
         }
       } catch (e) {
         // If the check fails, proceed to create - we'll get a clear error if a PR already exists
-        console.log(`Failed to check for existing PR: ${e}`)
+        await log(`Failed to check for existing PR: ${e}`)
       }
 
       // Verify there are commits between base and head before creating the PR.
       // In shallow clones, the branch can appear dirty but share the same
       // commit as the base, causing a 422 from GitHub.
       if (!(await hasNewCommits(base, branch))) {
-        console.log(`No commits between ${base} and ${branch}, skipping PR creation`)
+        await log(`No commits between ${base} and ${branch}, skipping PR creation`)
         return null
       }
 
@@ -1322,7 +1326,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
         // This can happen when the branch was pushed but has no new commits
         // relative to the base (e.g. shallow clone edge cases).
         if (e instanceof Error && e.message.includes("No commits between")) {
-          console.log(`GitHub rejected PR: ${e.message}`)
+          await log(`GitHub rejected PR: ${e.message}`)
           return null
         }
         throw e
@@ -1334,7 +1338,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
         return await fn()
       } catch (e) {
         if (retries > 0) {
-          console.log(`Retrying after ${delayMs}ms...`)
+          await log(`Retrying after ${delayMs}ms...`)
           await sleep(delayMs)
           return withRetry(fn, retries - 1, delayMs)
         }
@@ -1361,7 +1365,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
     }
 
     async function fetchIssue() {
-      console.log("Fetching prompt data for issue...")
+      await log("Fetching prompt data for issue...")
       const issueResult = await octoGraph<IssueQueryResponse>(
         `
 query($owner: String!, $repo: String!, $number: Int!) {
@@ -1432,7 +1436,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
     }
 
     async function fetchPR() {
-      console.log("Fetching prompt data for PR...")
+      await log("Fetching prompt data for PR...")
       const prResult = await octoGraph<PullRequestQueryResponse>(
         `
 query($owner: String!, $repo: String!, $number: Int!) {

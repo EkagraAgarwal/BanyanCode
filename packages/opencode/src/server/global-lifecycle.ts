@@ -26,3 +26,31 @@ export const disposeAllInstancesAndEmitGlobalDisposed = Effect.fn("Server.dispos
 )
 
 export * as GlobalLifecycle from "./global-lifecycle"
+
+import { AppRuntime } from "@/effect/app-runtime"
+
+let shuttingDown = false
+const handleShutdown = () => {
+  if (shuttingDown) return
+  shuttingDown = true
+
+  AppRuntime.runPromise(
+    Effect.gen(function* () {
+      yield* Effect.logInfo("Graceful shutdown initiated...")
+      yield* disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true })
+    }).pipe(
+      Effect.catchCause(() => Effect.void),
+      Effect.ensuring(Effect.promise(() => AppRuntime.dispose()))
+    )
+  ).then(
+    () => {
+      process.exit(0)
+    },
+    () => {
+      process.exit(1)
+    }
+  )
+}
+
+process.on("SIGTERM", handleShutdown)
+process.on("SIGINT", handleShutdown)
