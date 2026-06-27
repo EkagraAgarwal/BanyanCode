@@ -75,7 +75,7 @@ Rule: every `.catch(() => {})` MUST either log via `Effect.logError` or have a c
 
 New `tui/test/subscription-cleanup.test.ts` (2 cases). 201 TUI tests pass, 84 core tests pass, typecheck clean.
 
-## Phase 6 — Type safety & schema hardening
+## Phase 6 — Type safety & schema hardening ✅ SHIPPED (`9b2fcd6` on `fix-type-safety`)
 
 | # | File | Issue | Fix |
 |---|---|---|---|
@@ -103,7 +103,7 @@ New `tui/test/subscription-cleanup.test.ts` (2 cases). 201 TUI tests pass, 84 co
 
 **Branch:** `test-real-services`
 
-## Phase 8 — Observability & graceful shutdown
+## Phase 8 — Observability & graceful shutdown ✅ SHIPPED (`2ee6836` on `fix-graceful-shutdown`)
 
 | # | File | Issue | Fix |
 |---|---|---|---|
