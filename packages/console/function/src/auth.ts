@@ -24,13 +24,13 @@ type Env = {
 
 export const subjects = createSubjects({
   account: z.object({
-    accountID: z.string(),
-    email: z.string(),
+    accountID: z.string().min(1),
+    email: z.string().min(1),
     newAccount: z.boolean().optional(),
   }),
   user: z.object({
-    userID: z.string(),
-    workspaceID: z.string(),
+    userID: z.string().min(1),
+    workspaceID: z.string().min(1),
   }),
 })
 

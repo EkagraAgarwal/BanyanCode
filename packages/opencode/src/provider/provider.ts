@@ -1728,7 +1728,11 @@ export const layer = Layer.effect(
         const importSpec = installedPath.startsWith("file://") ? installedPath : pathToFileURL(installedPath).href
         const mod = await import(importSpec)
 
-        const fn = mod[Object.keys(mod).find((key) => key.startsWith("create"))!]
+        const createKey = Object.keys(mod).find((key) => key.startsWith("create"))
+        if (!createKey) {
+          throw new Error(`Module ${importSpec} does not export any function starting with 'create'`)
+        }
+        const fn = mod[createKey]
         const loaded = fn({
           name: model.providerID,
           ...options,

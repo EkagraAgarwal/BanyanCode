@@ -8,7 +8,7 @@ export const SubagentPlansTable = sqliteTable(
     agent: text().notNull(),
     session_id: text().notNull(),
     title: text().notNull(),
-    steps: text({ mode: "json" }).notNull(),
+    steps: text({ mode: "json" }).$type<Array<{ content: string; status: "pending" | "in_progress" | "completed" | "cancelled" }>>().notNull(),
     exit_criteria: text().notNull(),
     status: text().notNull(),
     created_at: integer().notNull(),

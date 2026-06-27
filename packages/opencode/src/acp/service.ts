@@ -795,7 +795,7 @@ function selectDefaultModel(snapshot: Directory.Snapshot) {
   if (snapshot.defaultModel) return snapshot.defaultModel
   const model = snapshot.modelOptions[0]
   if (model) return { providerID: model.providerID, modelID: model.modelID }
-  return { providerID: "unknown" as ProviderV2.ID, modelID: "unknown" as ModelV2.ID }
+  return { providerID: ProviderV2.ID.make("unknown"), modelID: ModelV2.ID.make("unknown") }
 }
 
 function detectSlashCommand(parts: ReturnType<typeof promptContentToParts>) {
@@ -983,7 +983,7 @@ function restoreFromMessages(messages: readonly MessageInfo[]) {
   )
   if (user?.model?.providerID && user.model.modelID) {
     return {
-      model: { providerID: user.model.providerID as ProviderV2.ID, modelID: user.model.modelID as ModelV2.ID },
+      model: { providerID: ProviderV2.ID.make(user.model.providerID), modelID: ModelV2.ID.make(user.model.modelID) },
       variant: user.model.variant,
       modeId: user.agent,
     }
@@ -992,7 +992,7 @@ function restoreFromMessages(messages: readonly MessageInfo[]) {
   const assistant = messages.findLast((message) => message.providerID && message.modelID)
   if (assistant?.providerID && assistant.modelID) {
     return {
-      model: { providerID: assistant.providerID as ProviderV2.ID, modelID: assistant.modelID as ModelV2.ID },
+      model: { providerID: ProviderV2.ID.make(assistant.providerID), modelID: ModelV2.ID.make(assistant.modelID) },
       variant: assistant.variant,
       modeId: assistant.mode ?? assistant.agent,
     }

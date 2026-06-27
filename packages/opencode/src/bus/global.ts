@@ -1,11 +1,11 @@
 import { EventEmitter } from "events"
 import { Identifier } from "@/id/id"
 
-export type GlobalEvent = {
+export type GlobalEvent<T = any> = {
   directory?: string
   project?: string
   workspace?: string
-  payload: any
+  payload: T
 }
 
 class GlobalBusEmitter extends EventEmitter<{
@@ -13,7 +13,7 @@ class GlobalBusEmitter extends EventEmitter<{
 }> {
   override emit(eventName: "event", event: GlobalEvent): boolean {
     if (event.payload && typeof event.payload === "object" && !("id" in event.payload)) {
-      event.payload.id = event.payload.syncEvent?.id ?? Identifier.create("evt", "ascending")
+      (event.payload as any).id = (event.payload as any).syncEvent?.id ?? Identifier.create("evt", "ascending")
     }
     return super.emit(eventName, event)
   }

@@ -14,7 +14,12 @@ import { described } from "./metadata"
 
 export const FileQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
-  path: Schema.String,
+  path: Schema.String.check(
+    Schema.isPattern(/^[a-zA-Z0-9._/-]+$/, {
+      identifier: "FilePathPattern",
+      description: "Relative file path",
+    }),
+  ),
 })
 
 export const FindTextQuery = Schema.Struct({

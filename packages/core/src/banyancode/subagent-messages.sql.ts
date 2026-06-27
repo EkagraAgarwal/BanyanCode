@@ -10,7 +10,7 @@ export const SubagentMessagesTable = sqliteTable(
     to_session: text(),
     to_agent: text(),
     kind: text().notNull(),
-    payload: text({ mode: "json" }).notNull(),
+    payload: text({ mode: "json" }).$type<unknown>().notNull(),
     created_at: integer().notNull(),
     delivered_at: integer(),
   },

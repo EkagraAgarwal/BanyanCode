@@ -1,4 +1,4 @@
-import { ProviderHelper, CommonRequest, CommonResponse, CommonChunk } from "./provider"
+import { ProviderHelper, CommonRequest, CommonResponse, CommonChunk, CommonContentPart } from "./provider"
 
 type Usage = {
   input_tokens?: number
@@ -63,24 +63,36 @@ export const openaiHelper: ProviderHelper = ({ workspaceID }) => ({
 export function fromOpenaiRequest(body: any): CommonRequest {
   if (!body || typeof body !== "object") return body
 
-  const toImg = (p: any) => {
+  interface OpenaiImagePart {
+    type?: string
+    image_url?: { url: string }
+    source?: {
+      type?: string
+      url?: string
+      media_type?: string
+      data?: string
+    }
+  }
+
+  const toImg = (p: any): CommonContentPart | undefined => {
     if (!p || typeof p !== "object") return undefined
-    if ((p as any).type === "image_url" && (p as any).image_url)
-      return { type: "image_url", image_url: (p as any).image_url }
-    if ((p as any).type === "input_image" && (p as any).image_url)
-      return { type: "image_url", image_url: (p as any).image_url }
-    const s = (p as any).source
+    const img = p as OpenaiImagePart
+    if (img.type === "image_url" && img.image_url)
+      return { type: "image_url", image_url: img.image_url }
+    if (img.type === "input_image" && img.image_url)
+      return { type: "image_url", image_url: img.image_url }
+    const s = img.source
     if (!s || typeof s !== "object") return undefined
-    if ((s as any).type === "url" && typeof (s as any).url === "string")
-      return { type: "image_url", image_url: { url: (s as any).url } }
+    if (s.type === "url" && typeof s.url === "string")
+      return { type: "image_url", image_url: { url: s.url } }
     if (
-      (s as any).type === "base64" &&
-      typeof (s as any).media_type === "string" &&
-      typeof (s as any).data === "string"
+      s.type === "base64" &&
+      typeof s.media_type === "string" &&
+      typeof s.data === "string"
     )
       return {
         type: "image_url",
-        image_url: { url: `data:${(s as any).media_type};base64,${(s as any).data}` },
+        image_url: { url: `data:${s.media_type};base64,${s.data}` },
       }
     return undefined
   }

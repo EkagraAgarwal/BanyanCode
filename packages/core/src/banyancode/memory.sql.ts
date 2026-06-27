@@ -9,7 +9,7 @@ export const MemoryEntriesTable = sqliteTable(
     key: text().notNull(),
     // value: jsonb — declared in migration as jsonb NOT NULL
     // Drizzle stores jsonb as TEXT at the driver level (same as text mode:"json")
-    value: text({ mode: "json" }).notNull(),
+    value: text({ mode: "json" }).$type<unknown>().notNull(),
     context: text(),
     // tags: jsonb — declared in migration as jsonb NOT NULL DEFAULT '[]'
     tags: text({ mode: "json" }).$type<string[]>().notNull(),
