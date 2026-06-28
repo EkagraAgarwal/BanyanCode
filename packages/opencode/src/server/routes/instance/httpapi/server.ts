@@ -257,9 +257,16 @@ export function createRoutes(
       FSUtil.defaultLayer,
       FetchHttpClient.layer,
       HttpServer.layerServices,
-      Banyan.banyanConfigServiceDefaultLayer,
-      Banyan.codegraphRepoDefaultLayer,
     ]),
+    Layer.provideMerge(
+      Banyan.codegraphBuildServiceDefaultLayer.pipe(
+        Layer.provide(Banyan.codegraphStalenessDefaultLayer),
+        Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+        Layer.provide(Banyan.editPlannerDefaultLayer),
+        Layer.provide(Banyan.codegraphAnalyzerDefaultLayer),
+        Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
+      ),
+    ),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provideMerge(Ripgrep.defaultLayer),
     Layer.provide(InstanceLayer.layer),
