@@ -143,7 +143,7 @@ export const layer = Layer.effect(
             const force = args.flags.force === true || args.flags.force === "true"
             const dbPath = Database.path()
             yield* buildServiceOpt.value.start({ root, force, dbPath })
-          }).pipe(Effect.provide(Banyan.codegraphBuildServiceDefaultLayer)),
+          }),
         hints: hints(PROMPT_CODEGRAPH_BUILD),
       }
       commands[Default.CODEGRAPH_REMOVE] = {

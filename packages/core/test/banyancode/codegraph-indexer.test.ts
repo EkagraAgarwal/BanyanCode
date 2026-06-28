@@ -102,4 +102,45 @@ describe("CodegraphIndexer", () => {
     expect(result.indexed).toBe(1)
     expect(result.skipped).toBe(0)
   })
+
+  test("re-indexing stale file prunes old nodes and edges", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const codeFilePath = path.join(tmp.path, "file.ts")
+    await fs.writeFile(codeFilePath, "function foo() { return 42 }\n")
+
+    const serviceLayer = CodegraphIndexer.layer.pipe(
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(codegraphRepoDefaultLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* CodegraphIndexer.Service
+        const repo = yield* CodegraphRepo.Service
+
+        // First index
+        yield* indexer.index({ root: tmp.path })
+        expect(yield* repo.countNodes()).toBe(1)
+
+        // Modify file.ts: change function foo to class Bar (creates a different node ID/name)
+        yield* Effect.promise(() => fs.writeFile(codeFilePath, "class Bar { method() {} }\n"))
+
+        // Second index (content hash changed, so it will re-index)
+        yield* indexer.index({ root: tmp.path })
+
+        // The old function node (foo) should be gone, only the class node (Bar) should exist!
+        expect(yield* repo.countNodes()).toBe(1)
+        const nodes = yield* repo.listAllNodes()
+        expect(nodes[0].name).toBe("Bar")
+      }).pipe(
+        Effect.provide(serviceLayer),
+        Effect.provide(codegraphRepoDefaultLayer),
+        Effect.provide(dbLayer),
+        Effect.scoped,
+      ),
+    )
+  })
 })

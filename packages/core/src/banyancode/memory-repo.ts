@@ -103,7 +103,6 @@ export const layer = Layer.effect(
             tags: input.tags ?? [],
             scope: input.scope,
             session_id: input.sessionID,
-            created_at: now,
             expires_at: input.expiresAt,
             agent_id: input.agentID,
             version: sql`${MemoryEntriesTable.version} + 1`,

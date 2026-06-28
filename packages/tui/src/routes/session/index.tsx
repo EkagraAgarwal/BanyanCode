@@ -1233,7 +1233,7 @@ export function Session() {
             <Show when={wide() && leftCollapsed() && !session()?.parentID}>
               <CollapsedRail side="left" onExpand={() => setLeftCollapsed(() => false)} />
             </Show>
-            <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
+            <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1} zIndex={1000}>
             <Show when={session()}>
               <pluginRuntime.Slot name="session_main_tabs" />
               <Switch>

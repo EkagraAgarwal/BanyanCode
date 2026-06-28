@@ -1,6 +1,6 @@
 export * as CodegraphRepo from "./codegraph-repo"
 
-import { eq, inArray, sql } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
@@ -279,13 +279,19 @@ export const layer = Layer.effect(
 
     const nodesByIDs = Effect.fn("CodegraphRepo.nodesByIDs")(function* (ids: string[]) {
       if (ids.length === 0) return []
-      const rows = yield* db
-        .select()
-        .from(CodegraphNodesTable)
-        .where(inArray(CodegraphNodesTable.id, ids))
-        .all()
-        .pipe(Effect.orDie)
-      return rows.map((row) => ({
+      const chunkSize = 900
+      const allRows = []
+      for (let i = 0; i < ids.length; i += chunkSize) {
+        const chunk = ids.slice(i, i + chunkSize)
+        const rows = yield* db
+          .select()
+          .from(CodegraphNodesTable)
+          .where(inArray(CodegraphNodesTable.id, chunk))
+          .all()
+          .pipe(Effect.orDie)
+        allRows.push(...rows)
+      }
+      return allRows.map((row) => ({
         id: row.id,
         fileID: row.file_id,
         kind: row.kind as CodegraphNode["kind"],
@@ -300,18 +306,17 @@ export const layer = Layer.effect(
     const queryNodes = Effect.fn("CodegraphRepo.queryNodes")(function* (input: { function?: string; kind?: string }) {
       const conditions = []
       if (input.function) {
-        conditions.push(sql`${CodegraphNodesTable.name} = ${input.function}`)
+        conditions.push(eq(CodegraphNodesTable.name, input.function))
       }
       if (input.kind) {
-        conditions.push(sql`${CodegraphNodesTable.kind} = ${input.kind}`)
+        conditions.push(eq(CodegraphNodesTable.kind, input.kind))
       }
       if (conditions.length === 0) return []
-      const whereClause = sql`WHERE ${sql.join(conditions, sql` OR `)}`
       const rows = yield* db
-        .all<typeof CodegraphNodesTable.$inferSelect>(sql`
-          SELECT * FROM codegraph_nodes
-          ${whereClause}
-        `)
+        .select()
+        .from(CodegraphNodesTable)
+        .where(and(...conditions))
+        .all()
         .pipe(Effect.orDie)
       return rows.map((row) => ({
         id: row.id,

@@ -31,8 +31,8 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const nodeID = input.nodeID ?? (input.function ? (yield* repo.queryNodes({ function: input.function }))[0]?.id : undefined)
         if (!nodeID) return []
-        const edges = yield* repo.edgesFrom(nodeID)
-        const dependentIDs = [...new Set(edges.map((e) => e.toNodeID))]
+        const edges = yield* repo.edgesTo(nodeID)
+        const dependentIDs = [...new Set(edges.map((e) => e.fromNodeID))]
         return yield* repo.nodesByIDs(dependentIDs)
       })
 

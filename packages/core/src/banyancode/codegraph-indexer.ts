@@ -240,6 +240,9 @@ export const layer = Layer.effect(
               language = "markdown"
             }
 
+            if (existing) {
+              yield* repo.deleteFile(existing.id)
+            }
             const fileID = existing?.id ?? randomUUID()
             const indexedAt = Date.now()
             yield* repo.putFile({ id: fileID, path: filePath, contentHash, language, indexedAt })

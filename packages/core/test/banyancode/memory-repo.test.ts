@@ -158,4 +158,43 @@ describe("MemoryRepo", () => {
       }).pipe(Effect.provide(memoryLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
+
+  test("put preserves original created_at timestamp on conflict", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "conflict.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+    const memoryLayer = Banyan.memoryRepoLayer
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+
+        const repo = yield* Banyan.MemoryRepo
+
+        const originalCreatedAt = Date.now() - 5000
+        const entry = {
+          id: "conflict-id",
+          key: "key",
+          value: { foo: "bar" },
+          tags: [] as string[],
+          scope: "global" as const,
+          createdAt: originalCreatedAt,
+        }
+        yield* repo.put(entry)
+
+        // Put again to trigger conflict
+        yield* repo.put({
+          ...entry,
+          value: { foo: "updated" },
+          createdAt: Date.now(), // new timestamp passed but should be ignored on conflict
+        })
+
+        const retrieved = yield* repo.get("conflict-id")
+        expect(retrieved?.value).toEqual({ foo: "updated" })
+        expect(retrieved?.createdAt).toBe(originalCreatedAt)
+        expect(retrieved?.version).toBe(2)
+      }).pipe(Effect.provide(memoryLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
 })

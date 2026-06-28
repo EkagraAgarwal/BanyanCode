@@ -237,4 +237,116 @@ describe("CodegraphRepo pagination and counts", () => {
       }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
+
+  test("nodesByIDs handles empty input, nonexistent IDs, and large chunked input (>1000 IDs)", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+    const repoLayer = CodegraphRepo.layer
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        // 1. Empty input
+        expect(yield* repo.nodesByIDs([])).toEqual([])
+
+        // 2. Nonexistent IDs
+        expect(yield* repo.nodesByIDs(["nonexistent-id"])).toEqual([])
+
+        // 3. Large input (>1000 IDs to test chunking)
+        // Seed 1200 files & nodes
+        yield* repo.putFile({
+          id: "bulk-file-id",
+          path: "/test/bulk.ts",
+          contentHash: "bulk-hash",
+          language: "typescript",
+          indexedAt: Date.now(),
+        })
+
+        const allIDs = []
+        for (let i = 0; i < 1200; i++) {
+          const id = `node-bulk-${i}`
+          allIDs.push(id)
+          yield* repo.putNode({
+            id,
+            fileID: "bulk-file-id",
+            kind: "function",
+            name: `funcBulk${i}`,
+            signature: `funcBulk${i}()`,
+            startLine: 1,
+            endLine: 2,
+            code: `function funcBulk${i}() {}`,
+          })
+        }
+
+        const nodes = yield* repo.nodesByIDs(allIDs)
+        expect(nodes.length).toBe(1200)
+        expect(nodes.map((n) => n.id).sort()).toEqual([...allIDs].sort())
+      }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("queryNodes joins multiple filter criteria with AND", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+    const repoLayer = CodegraphRepo.layer
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        yield* repo.putFile({
+          id: "file-q",
+          path: "/test/q.ts",
+          contentHash: "q-hash",
+          language: "typescript",
+          indexedAt: Date.now(),
+        })
+
+        // Insert node with function kind and name "testFunc"
+        yield* repo.putNode({
+          id: "node-func",
+          fileID: "file-q",
+          kind: "function",
+          name: "testFunc",
+          signature: "testFunc()",
+          startLine: 1,
+          endLine: 2,
+          code: "function testFunc() {}",
+        })
+
+        // Insert node with class kind and name "testFunc" (same name, different kind)
+        yield* repo.putNode({
+          id: "node-class",
+          fileID: "file-q",
+          kind: "class",
+          name: "testFunc",
+          signature: "class testFunc",
+          startLine: 4,
+          endLine: 5,
+          code: "class testFunc {}",
+        })
+
+        // Query with both criteria matching only the function
+        const matchFunc = yield* repo.queryNodes({ function: "testFunc", kind: "function" })
+        expect(matchFunc.length).toBe(1)
+        expect(matchFunc[0].id).toBe("node-func")
+
+        // Query with both criteria matching only the class
+        const matchClass = yield* repo.queryNodes({ function: "testFunc", kind: "class" })
+        expect(matchClass.length).toBe(1)
+        expect(matchClass[0].id).toBe("node-class")
+
+        // Query with criteria that don't match any single node (AND logic should return empty)
+        const noMatch = yield* repo.queryNodes({ function: "nonexistent", kind: "function" })
+        expect(noMatch.length).toBe(0)
+      }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
 })
