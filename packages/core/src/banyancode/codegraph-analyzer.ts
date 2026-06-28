@@ -24,12 +24,7 @@ export const layer = Layer.effect(
         if (!nodeID) return []
         const edges = yield* repo.edgesTo(nodeID)
         const callerIDs = [...new Set(edges.filter((e) => e.kind === "calls" || e.kind === "references").map((e) => e.fromNodeID))]
-        const result: CodegraphNode[] = []
-        for (const id of callerIDs) {
-          const node = yield* repo.nodeByID(id)
-          if (node) result.push(node)
-        }
-        return result
+        return yield* repo.nodesByIDs(callerIDs)
       })
 
     const dependents = (input: { nodeID?: string; function?: string }): Effect.Effect<CodegraphNode[]> =>
@@ -38,12 +33,7 @@ export const layer = Layer.effect(
         if (!nodeID) return []
         const edges = yield* repo.edgesFrom(nodeID)
         const dependentIDs = [...new Set(edges.map((e) => e.toNodeID))]
-        const result: CodegraphNode[] = []
-        for (const id of dependentIDs) {
-          const node = yield* repo.nodeByID(id)
-          if (node) result.push(node)
-        }
-        return result
+        return yield* repo.nodesByIDs(dependentIDs)
       })
 
     const impact = (input: { nodeID?: string; function?: string }): Effect.Effect<{ dependents: CodegraphNode[]; transitive: CodegraphNode[] }> =>
@@ -81,13 +71,17 @@ export const layer = Layer.effect(
             ? yield* repo.edgesTo(current.id)
             : yield* repo.edgesFrom(current.id)
 
+          const nextIDs: string[] = []
           for (const edge of edges) {
             const nextID = input.direction === "upstream" ? edge.fromNodeID : edge.toNodeID
             if (!visited.has(nextID)) {
               queue.push({ id: nextID, depth: current.depth + 1 })
-              const node = yield* repo.nodeByID(nextID)
-              if (node) result.push(node)
+              nextIDs.push(nextID)
             }
+          }
+          if (nextIDs.length > 0) {
+            const nodes = yield* repo.nodesByIDs(nextIDs)
+            result.push(...nodes)
           }
         }
 

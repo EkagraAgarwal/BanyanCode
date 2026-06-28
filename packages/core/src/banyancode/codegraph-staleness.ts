@@ -58,24 +58,33 @@ export const layer = Layer.effect(
           return result
         }
 
-        let filesChanged = 0
-        let filesMissing = 0
-        let maxIndexedAt = 0
+        const filesChangedRef = yield* Ref.make(0)
+        const filesMissingRef = yield* Ref.make(0)
+        const maxIndexedAtRef = yield* Ref.make(0)
 
-        for (const file of files) {
-          if (file.indexedAt > maxIndexedAt) maxIndexedAt = file.indexedAt
-          const statResult = yield* fs.stat(file.path).pipe(
-            Effect.catch(() => Effect.succeed(undefined)),
-          )
-          if (statResult === undefined) {
-            filesMissing++
-            continue
-          }
-          const mtimeMs = Option.getOrElse(statResult.mtime, () => new Date(0)).getTime()
-          if (mtimeMs > file.indexedAt) {
-            filesChanged++
-          }
-        }
+        yield* Effect.forEach(
+          files,
+          (file) =>
+            Effect.gen(function* () {
+              yield* Ref.update(maxIndexedAtRef, (max) => Math.max(max, file.indexedAt))
+              const statResult = yield* fs.stat(file.path).pipe(
+                Effect.catch(() => Effect.succeed(undefined)),
+              )
+              if (statResult === undefined) {
+                yield* Ref.update(filesMissingRef, (n) => n + 1)
+                return
+              }
+              const mtimeMs = Option.getOrElse(statResult.mtime, () => new Date(0)).getTime()
+              if (mtimeMs > file.indexedAt) {
+                yield* Ref.update(filesChangedRef, (n) => n + 1)
+              }
+            }),
+          { concurrency: 16, discard: true }
+        )
+
+        const filesChanged = yield* Ref.get(filesChangedRef)
+        const filesMissing = yield* Ref.get(filesMissingRef)
+        const maxIndexedAt = yield* Ref.get(maxIndexedAtRef)
 
         const now = Date.now()
         const ageMs = maxIndexedAt > 0 ? now - maxIndexedAt : Infinity

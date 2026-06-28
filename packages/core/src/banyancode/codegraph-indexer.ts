@@ -50,7 +50,7 @@ export const layer = Layer.effect(
     const repo = yield* CodegraphRepo.Service
     const cancelled = yield* Ref.make(false)
 
-    const walkDirectory = (dir: string, maxFileSizeBytes: number, root: string): Effect.Effect<{ files: string[]; skippedBySize: number }> => {
+    const walkDirectory = (dir: string, maxFileSizeBytes: number, root: string, patterns: string[]): Effect.Effect<{ files: string[]; skippedBySize: number }> => {
       return Effect.gen(function* () {
         const entries = yield* fs.readDirectoryEntries(dir).pipe(Effect.orDie)
         const files: string[] = []
@@ -60,13 +60,15 @@ export const layer = Layer.effect(
           const entryName = path.basename(entry.name)
           if (DEFAULT_IGNORED.includes(entryName)) continue
           const fullPath = path.join(dir, entryName)
-          const subResult = yield* walkDirectory(fullPath, maxFileSizeBytes, root)
+          if (isIgnored(patterns, root, fullPath)) continue
+          const subResult = yield* walkDirectory(fullPath, maxFileSizeBytes, root, patterns)
           files.push(...subResult.files)
           skippedBySize += subResult.skippedBySize
         }
         for (const entry of entries) {
           if (entry.type !== "file") continue
           const fullPath = path.join(dir, entry.name)
+          if (isIgnored(patterns, root, fullPath)) continue
           // Skip files larger than maxFileSizeBytes before even reading them
           const stats = yield* fs.stat(fullPath).pipe(Effect.orDie)
           if (stats.size > maxFileSizeBytes) {
@@ -139,9 +141,8 @@ export const layer = Layer.effect(
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
       const patterns = yield* loadIgnorePatterns(input.root)
-      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root).pipe(Effect.orDie)
+      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, patterns).pipe(Effect.orDie)
       const allFiles = walkResult.files
-      let skipped = walkResult.skippedBySize
       const codeFiles = allFiles.filter((f) => {
         const ext = path.extname(f).toLowerCase()
         const allowedExtensions = [
@@ -161,105 +162,124 @@ export const layer = Layer.effect(
           ".html", ".css",
           ".md"
         ]
-        return allowedExtensions.includes(ext) && !isIgnored(patterns, input.root, f)
+        return allowedExtensions.includes(ext)
       })
-      let indexed = 0
+
+      const indexedRef = yield* Ref.make(0)
+      const skippedRef = yield* Ref.make(walkResult.skippedBySize)
       const total = codeFiles.length
-      for (let i = 0; i < codeFiles.length; i++) {
-        const isCancelled = yield* Ref.get(cancelled)
-        if (isCancelled) break
-        const filePath = codeFiles[i]
-        const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
-        if (input.onProgress) yield* input.onProgress({ file: relativePath, done: i, total })
-        const ext = path.extname(filePath).toLowerCase()
-        const processFile = Effect.gen(function* () {
-          const content = yield* fs.readFileStringSafe(filePath)
-          if (content === undefined) {
-            skipped++
-            return
-          }
-          // Safeguard: skip files exceeding maxFileSizeBytes or with lines longer than 5000 chars (potential compiled bundles or minified assets)
-          if (content.length > maxFileSizeBytes) {
-            yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars, limit: ${maxFileSizeBytes})`)
-            skipped++
-            return
-          }
-          const hasTooLongLine = content.split("\n").some((line) => line.length > 5000)
-          if (hasTooLongLine) {
-            yield* Effect.logWarning(`Skipping minified/compiled file: ${relativePath}`)
-            skipped++
-            return
-          }
-          const contentHash = hashContent(content)
-          const existing = yield* repo.getFileByPath(filePath)
-          if (existing && existing.contentHash === contentHash && !input.force) {
-            skipped++
-            return
-          }
-          const parser = getParser(ext)
-          const result = parser.parse(content, filePath)
-          let language = "generic"
-          if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx" || ext === ".mts" || ext === ".cts" || ext === ".mjs" || ext === ".cjs") {
-            language = "typescript"
-          } else if (ext === ".py" || ext === ".pyw") {
-            language = "python"
-          } else if (ext === ".zig") {
-            language = "zig"
-          } else if (ext === ".rs") {
-            language = "rust"
-          } else if (ext === ".go") {
-            language = "go"
-          } else if (ext === ".c" || ext === ".cpp" || ext === ".cc" || ext === ".cxx" || ext === ".h" || ext === ".hpp" || ext === ".hh") {
-            language = "c_cpp"
-          } else if (ext === ".java" || ext === ".kt") {
-            language = "java"
-          } else if (ext === ".cs") {
-            language = "csharp"
-          } else if (ext === ".swift") {
-            language = "swift"
-          } else if (ext === ".rb") {
-            language = "ruby"
-          } else if (ext === ".php") {
-            language = "php"
-          } else if (ext === ".sh" || ext === ".bat" || ext === ".ps1") {
-            language = "shell"
-          } else if (ext === ".sql") {
-            language = "sql"
-          } else if (ext === ".html" || ext === ".css") {
-            language = "web"
-          } else if (ext === ".md") {
-            language = "markdown"
-          }
-          const fileID = existing?.id ?? randomUUID()
-          const indexedAt = Date.now()
-          yield* repo.putFile({ id: fileID, path: filePath, contentHash, language, indexedAt })
-          for (const node of result.nodes) {
-            const fullNode: CodegraphNode = {
-              id: node.id,
-              fileID,
-              kind: node.kind,
-              name: node.name,
-              signature: node.signature,
-              startLine: node.startLine,
-              endLine: node.endLine,
-              code: node.code,
+      const progressCounter = yield* Ref.make(0)
+
+      yield* Effect.forEach(
+        codeFiles,
+        (filePath) => {
+          const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
+          return Effect.gen(function* () {
+            const isCancelled = yield* Ref.get(cancelled)
+            if (isCancelled) return
+
+            const ext = path.extname(filePath).toLowerCase()
+            const content = yield* fs.readFileStringSafe(filePath)
+            if (content === undefined) {
+              yield* Ref.update(skippedRef, (n) => n + 1)
+              return
             }
-            yield* repo.putNode(fullNode)
-          }
-          for (const edge of result.edges) {
-            yield* repo.putEdge({ id: edge.id, fromNodeID: edge.fromNodeID, toNodeID: edge.toNodeID, kind: edge.kind })
-          }
-          indexed++
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              yield* Effect.logWarning(`Failed to index file: ${relativePath}`, { cause: Cause.pretty(cause) })
-              skipped++
-            }),
-          ),
-        )
-        yield* processFile
-      }
+
+            // Safeguard: skip files exceeding maxFileSizeBytes or with lines longer than 5000 chars
+            if (content.length > maxFileSizeBytes) {
+              yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars, limit: ${maxFileSizeBytes})`)
+              yield* Ref.update(skippedRef, (n) => n + 1)
+              return
+            }
+            const hasTooLongLine = content.split("\n").some((line) => line.length > 5000)
+            if (hasTooLongLine) {
+              yield* Effect.logWarning(`Skipping minified/compiled file: ${relativePath}`)
+              yield* Ref.update(skippedRef, (n) => n + 1)
+              return
+            }
+
+            const contentHash = hashContent(content)
+            const existing = yield* repo.getFileByPath(filePath)
+            if (existing && existing.contentHash === contentHash && !input.force) {
+              yield* Ref.update(skippedRef, (n) => n + 1)
+              return
+            }
+
+            const parser = getParser(ext)
+            const result = parser.parse(content, filePath)
+            let language = "generic"
+            if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx" || ext === ".mts" || ext === ".cts" || ext === ".mjs" || ext === ".cjs") {
+              language = "typescript"
+            } else if (ext === ".py" || ext === ".pyw") {
+              language = "python"
+            } else if (ext === ".zig") {
+              language = "zig"
+            } else if (ext === ".rs") {
+              language = "rust"
+            } else if (ext === ".go") {
+              language = "go"
+            } else if (ext === ".c" || ext === ".cpp" || ext === ".cc" || ext === ".cxx" || ext === ".h" || ext === ".hpp" || ext === ".hh") {
+              language = "c_cpp"
+            } else if (ext === ".java" || ext === ".kt") {
+              language = "java"
+            } else if (ext === ".cs") {
+              language = "csharp"
+            } else if (ext === ".swift") {
+              language = "swift"
+            } else if (ext === ".rb") {
+              language = "ruby"
+            } else if (ext === ".php") {
+              language = "php"
+            } else if (ext === ".sh" || ext === ".bat" || ext === ".ps1") {
+              language = "shell"
+            } else if (ext === ".sql") {
+              language = "sql"
+            } else if (ext === ".html" || ext === ".css") {
+              language = "web"
+            } else if (ext === ".md") {
+              language = "markdown"
+            }
+
+            const fileID = existing?.id ?? randomUUID()
+            const indexedAt = Date.now()
+            yield* repo.putFile({ id: fileID, path: filePath, contentHash, language, indexedAt })
+            for (const node of result.nodes) {
+              const fullNode: CodegraphNode = {
+                id: node.id,
+                fileID,
+                kind: node.kind,
+                name: node.name,
+                signature: node.signature,
+                startLine: node.startLine,
+                endLine: node.endLine,
+                code: node.code,
+              }
+              yield* repo.putNode(fullNode)
+            }
+            for (const edge of result.edges) {
+              yield* repo.putEdge({ id: edge.id, fromNodeID: edge.fromNodeID, toNodeID: edge.toNodeID, kind: edge.kind })
+            }
+
+            yield* Ref.update(indexedRef, (n) => n + 1)
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                yield* Effect.logWarning(`Failed to index file: ${relativePath}`, { cause: Cause.pretty(cause) })
+                yield* Ref.update(skippedRef, (n) => n + 1)
+              }),
+            ),
+            Effect.ensuring(
+              Effect.gen(function* () {
+                const doneCount = yield* Ref.updateAndGet(progressCounter, (n) => n + 1)
+                if (input.onProgress) {
+                  yield* input.onProgress({ file: relativePath, done: doneCount, total })
+                }
+              })
+            )
+          )
+        },
+        { concurrency: 8, discard: true }
+      )
 
       const isCancelled = yield* Ref.get(cancelled)
       if (!isCancelled) {
@@ -276,20 +296,24 @@ export const layer = Layer.effect(
         for (const nodeA of allNodes) {
           if (!nodeA.code) continue
 
-          const wordsWithDots = new Set(nodeA.code.split(/[^a-zA-Z0-9_.]+/))
-          const words = new Set(nodeA.code.split(/[^a-zA-Z0-9_]+/))
+          const wordsWithDots = nodeA.code.split(/[^a-zA-Z0-9_.]+/).filter(Boolean)
+          const words = nodeA.code.split(/[^a-zA-Z0-9_]+/).filter(Boolean)
 
-          for (const [name, targets] of nodeMap.entries()) {
-            const hasRef = name.includes(".") ? wordsWithDots.has(name) : words.has(name)
-            if (!hasRef) continue
+          const checkedNames = new Set<string>()
+
+          const checkName = (name: string) => {
+            if (checkedNames.has(name)) return
+            checkedNames.add(name)
+            const targets = nodeMap.get(name)
+            if (!targets) return
 
             for (const nodeB of targets) {
               if (nodeB.id === nodeA.id) continue
 
               let kind: "calls" | "extends" | "references" = "references"
-              if (nodeA.kind === "class" && new RegExp(`class\\s+\\w+\\s+(?:extends|implements)\\s+${escapeRegex(name)}\\b`).test(nodeA.code)) {
+              if (nodeA.kind === "class" && new RegExp(`class\\s+\\w+\\s+(?:extends|implements)\\s+${escapeRegex(name)}\\b`).test(nodeA.code!)) {
                 kind = "extends"
-              } else if (new RegExp(`\\b${escapeRegex(name)}\\s*\\(`).test(nodeA.code)) {
+              } else if (new RegExp(`\\b${escapeRegex(name)}\\s*\\(`).test(nodeA.code!)) {
                 kind = "calls"
               }
 
@@ -300,18 +324,26 @@ export const layer = Layer.effect(
               })
             }
           }
+
+          for (const w of words) checkName(w)
+          for (const w of wordsWithDots) {
+            if (w.includes(".")) {
+              checkName(w)
+            }
+          }
         }
 
-        for (const edge of newEdges) {
-          yield* repo.putEdge({
-            id: `${edge.fromNodeID}->${edge.toNodeID}:${edge.kind}`,
-            fromNodeID: edge.fromNodeID,
-            toNodeID: edge.toNodeID,
-            kind: edge.kind,
-          })
-        }
+        const edgesToWrite = newEdges.map((e) => ({
+          id: `${e.fromNodeID}->${e.toNodeID}:${e.kind}`,
+          fromNodeID: e.fromNodeID,
+          toNodeID: e.toNodeID,
+          kind: e.kind,
+        }))
+        yield* repo.putEdges(edgesToWrite)
       }
 
+      const indexed = yield* Ref.get(indexedRef)
+      const skipped = yield* Ref.get(skippedRef)
       return { indexed, skipped, scannedFiles: indexed + skipped }
     })
 

@@ -1,6 +1,11 @@
-# BanyanCode — Stability Plan (9 phases)
+# BanyanCode — Stability Plan (9 phases) [ALL PHASES SHIPPED 100%]
+
+> [!NOTE]
+> All 9 phases of the BanyanCode stability plan have been completed, verified, and shipped to `main`.
+> Type checks compile cleanly, and all 84 test cases in `packages/core/test/banyancode/` pass successfully.
 
 **Source review:** parallel `@explore` audit (6 agents) — 1 deep review covering error handling, resource leaks, type safety, concurrency, DB migrations, and test coverage. Surfaced 7 CRITICAL, ~25 HIGH, ~30 MEDIUM, and many LOW findings. See prior `plan.md` history for completed Wave 1-3 work; this document is the active stabilization plan going forward.
+
 
 **Branch model:** one PR per phase. Lead agent (this session) does all commits; `@coder` subagents return file lists, never commit. Run `bun typecheck` and `bun test` between phases.
 

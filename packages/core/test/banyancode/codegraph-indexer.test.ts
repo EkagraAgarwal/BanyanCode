@@ -68,4 +68,38 @@ describe("CodegraphIndexer", () => {
     expect(result.indexed).toBe(0)
     expect(result.skipped).toBeGreaterThanOrEqual(1)
   })
+  test("prunes ignored directories during walkDirectory", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    // Create a normal directory with a code file
+    const srcDir = path.join(tmp.path, "src")
+    await fs.mkdir(srcDir, { recursive: true })
+    await fs.writeFile(path.join(srcDir, "index.ts"), "function main() {}")
+
+    // Create a directory that should be ignored, and put a code file inside
+    const ignoredDir = path.join(tmp.path, "node_modules")
+    await fs.mkdir(ignoredDir, { recursive: true })
+    await fs.writeFile(path.join(ignoredDir, "dep.ts"), "function parse() {}")
+
+    // Create .gitignore ignoring node_modules
+    await fs.writeFile(path.join(tmp.path, ".gitignore"), "node_modules/\n")
+
+    const serviceLayer = CodegraphIndexer.layer.pipe(
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(codegraphRepoDefaultLayer),
+    )
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* CodegraphIndexer.Service
+        return yield* indexer.index({ root: tmp.path })
+      }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+
+    // index.ts is indexed, dep.ts is pruned and not indexed nor count as skipped
+    expect(result.indexed).toBe(1)
+    expect(result.skipped).toBe(0)
+  })
 })

@@ -185,54 +185,61 @@ export const layer = Layer.effect(
     })
 
     const update: Interface["update"] = (input) => {
-      return Effect.gen(function* () {
-        const now = Date.now()
+      return db.transaction((tx) =>
+        Effect.gen(function* () {
+          const now = Date.now()
 
-        // First, get the current row to check its version
-        const currentRow = yield* db
-          .select()
-          .from(MemoryEntriesTable)
-          .where(eq(MemoryEntriesTable.id, input.id))
-          .get()
-          .pipe(Effect.orDie)
+          // First, get the current row to check its version
+          const currentRow = yield* tx
+            .select()
+            .from(MemoryEntriesTable)
+            .where(eq(MemoryEntriesTable.id, input.id))
+            .get()
+            .pipe(Effect.orDie)
 
-        if (!currentRow) {
-          return yield* Effect.fail(new NotFoundError({ id: input.id }))
-        }
+          if (!currentRow) {
+            return yield* Effect.fail(new NotFoundError({ id: input.id }))
+          }
 
-        if (currentRow.version !== input.expectedVersion) {
-          return yield* Effect.fail(new StaleWriteError({
-            id: input.id,
-            expectedVersion: input.expectedVersion,
-            currentVersion: currentRow.version,
-          }))
-        }
+          if (currentRow.version !== input.expectedVersion) {
+            return yield* Effect.fail(new StaleWriteError({
+              id: input.id,
+              expectedVersion: input.expectedVersion,
+              currentVersion: currentRow.version,
+            }))
+          }
 
-        // Perform the update
-        yield* db
-          .update(MemoryEntriesTable)
-          .set({
-            value: input.value ?? currentRow.value,
-            context: input.context ?? currentRow.context,
-            tags: input.tags ?? currentRow.tags,
-            version: currentRow.version + 1,
-            updated_at: now,
-            agent_id: input.agentID ?? currentRow.agent_id,
-          })
-          .where(and(eq(MemoryEntriesTable.id, input.id), eq(MemoryEntriesTable.version, input.expectedVersion)))
-          .run()
-          .pipe(Effect.orDie)
+          // Perform the update
+          yield* tx
+            .update(MemoryEntriesTable)
+            .set({
+              value: input.value ?? currentRow.value,
+              context: input.context ?? currentRow.context,
+              tags: input.tags ?? currentRow.tags,
+              version: currentRow.version + 1,
+              updated_at: now,
+              agent_id: input.agentID ?? currentRow.agent_id,
+            })
+            .where(and(eq(MemoryEntriesTable.id, input.id), eq(MemoryEntriesTable.version, input.expectedVersion)))
+            .run()
+            .pipe(Effect.orDie)
 
-        // Fetch and return the updated row
-        const updatedRow = yield* db
-          .select()
-          .from(MemoryEntriesTable)
-          .where(eq(MemoryEntriesTable.id, input.id))
-          .get()
-          .pipe(Effect.orDie)
+          // Fetch and return the updated row
+          const updatedRow = yield* tx
+            .select()
+            .from(MemoryEntriesTable)
+            .where(eq(MemoryEntriesTable.id, input.id))
+            .get()
+            .pipe(Effect.orDie)
 
-        return mapRowToEntry(updatedRow!)
-      })
+          return mapRowToEntry(updatedRow!)
+        })
+      ).pipe(
+        Effect.catchIf(
+          (err): err is any => (err as any)._tag === "SqlError",
+          (err) => Effect.die(err)
+        )
+      )
     }
 
     const vacuum = Effect.fn("MemoryRepo.vacuum")(function* () {

@@ -1,6 +1,6 @@
 export * as CodegraphRepo from "./codegraph-repo"
 
-import { eq, sql } from "drizzle-orm"
+import { eq, inArray, sql } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
@@ -19,6 +19,7 @@ export interface Interface {
   readonly putNode: (node: CodegraphNode) => Effect.Effect<void, never, never>
   readonly getNode: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
   readonly nodeByID: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
+  readonly nodesByIDs: (ids: string[]) => Effect.Effect<CodegraphNode[], never, never>
   readonly listNodesByFile: (fileID: string) => Effect.Effect<CodegraphNode[], never, never>
   readonly listAllNodes: () => Effect.Effect<CodegraphNode[], never, never>
   readonly queryNodes: (input: { function?: string; kind?: string }) => Effect.Effect<CodegraphNode[], never, never>
@@ -27,6 +28,7 @@ export interface Interface {
   readonly countEdges: () => Effect.Effect<number, never, never>
   readonly countFiles: () => Effect.Effect<number, never, never>
   readonly putEdge: (edge: CodegraphEdge) => Effect.Effect<void, never, never>
+  readonly putEdges: (edges: CodegraphEdge[]) => Effect.Effect<void, never, never>
   readonly getEdge: (id: string) => Effect.Effect<CodegraphEdge | undefined, never, never>
   readonly listAllEdges: () => Effect.Effect<CodegraphEdge[], never, never>
   readonly listEdgesByNode: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
@@ -53,7 +55,6 @@ export const layer = Layer.effect(
     const { db } = yield* Database.Service
 
     const putFile = Effect.fn("CodegraphRepo.putFile")(function* (file: CodegraphFile) {
-      yield* db.delete(CodegraphFilesTable).where(eq(CodegraphFilesTable.path, file.path)).run().pipe(Effect.orDie)
       yield* db
         .insert(CodegraphFilesTable)
         .values({
@@ -62,6 +63,14 @@ export const layer = Layer.effect(
           content_hash: file.contentHash,
           language: file.language,
           indexed_at: file.indexedAt,
+        })
+        .onConflictDoUpdate({
+          target: CodegraphFilesTable.path,
+          set: {
+            content_hash: file.contentHash,
+            language: file.language,
+            indexed_at: file.indexedAt,
+          },
         })
         .run()
         .pipe(Effect.orDie)
@@ -268,13 +277,52 @@ export const layer = Layer.effect(
       return yield* getNode(id)
     })
 
+    const nodesByIDs = Effect.fn("CodegraphRepo.nodesByIDs")(function* (ids: string[]) {
+      if (ids.length === 0) return []
+      const rows = yield* db
+        .select()
+        .from(CodegraphNodesTable)
+        .where(inArray(CodegraphNodesTable.id, ids))
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        fileID: row.file_id,
+        kind: row.kind as CodegraphNode["kind"],
+        name: row.name,
+        signature: row.signature ?? undefined,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        code: row.code ?? undefined,
+      }))
+    })
+
     const queryNodes = Effect.fn("CodegraphRepo.queryNodes")(function* (input: { function?: string; kind?: string }) {
-      const allNodes = yield* listAllNodes()
-      return allNodes.filter((n) => {
-        if (input.function && n.name === input.function) return true
-        if (input.kind && n.kind === input.kind) return true
-        return false
-      })
+      const conditions = []
+      if (input.function) {
+        conditions.push(sql`${CodegraphNodesTable.name} = ${input.function}`)
+      }
+      if (input.kind) {
+        conditions.push(sql`${CodegraphNodesTable.kind} = ${input.kind}`)
+      }
+      if (conditions.length === 0) return []
+      const whereClause = sql`WHERE ${sql.join(conditions, sql` OR `)}`
+      const rows = yield* db
+        .all<typeof CodegraphNodesTable.$inferSelect>(sql`
+          SELECT * FROM codegraph_nodes
+          ${whereClause}
+        `)
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        fileID: row.file_id,
+        kind: row.kind as CodegraphNode["kind"],
+        name: row.name,
+        signature: row.signature ?? undefined,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        code: row.code ?? undefined,
+      }))
     })
 
     const searchNodes = Effect.fn("CodegraphRepo.searchNodes")(function* (input: {
@@ -404,6 +452,34 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
     })
 
+    const putEdges = Effect.fn("CodegraphRepo.putEdges")(function* (edges: CodegraphEdge[]) {
+      if (edges.length === 0) return
+      yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          for (const edge of edges) {
+            yield* tx
+              .insert(CodegraphEdgesTable)
+              .values({
+                id: edge.id,
+                from_node_id: edge.fromNodeID,
+                to_node_id: edge.toNodeID,
+                kind: edge.kind,
+              })
+              .onConflictDoUpdate({
+                target: CodegraphEdgesTable.id,
+                set: {
+                  from_node_id: edge.fromNodeID,
+                  to_node_id: edge.toNodeID,
+                  kind: edge.kind,
+                },
+              })
+              .run()
+              .pipe(Effect.orDie)
+          }
+        })
+      ).pipe(Effect.orDie)
+    })
+
     const bumpVersion = Effect.fn("CodegraphRepo.bumpVersion")(function* (input: {
       scannedFiles: number
       indexedFiles: number
@@ -411,23 +487,68 @@ export const layer = Layer.effect(
       totalNodes: number
       totalEdges: number
     }) {
-      const coverage = input.scannedFiles > 0 ? input.indexedFiles / input.scannedFiles : 0
-      const existing = yield* getMeta()
-      const nextVersion = (existing?.graphVersion ?? 0) + 1
-      const totalNodes = yield* countNodes()
-      const totalEdges = yield* countEdges()
-      const meta: CodegraphMeta = {
-        id: "singleton",
-        graphBuiltAt: Date.now(),
-        graphVersion: nextVersion,
-        graphCoverage: coverage,
-        totalFiles: input.totalFiles,
-        totalNodes,
-        totalEdges,
-        schemaVersion: 1,
-      }
-      yield* setMeta(meta)
-      return { graphVersion: nextVersion, coverage }
+      return yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          const coverage = input.scannedFiles > 0 ? input.indexedFiles / input.scannedFiles : 0
+          const row = yield* tx
+            .select()
+            .from(CodegraphMetaTable)
+            .where(eq(CodegraphMetaTable.id, "singleton"))
+            .get()
+            .pipe(Effect.orDie)
+          const nextVersion = (row?.graph_version ?? 0) + 1
+          
+          const nodeRow = yield* tx
+            .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_nodes`)
+            .pipe(Effect.orDie)
+          const totalNodes = nodeRow?.c ?? 0
+
+          const edgeRow = yield* tx
+            .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_edges`)
+            .pipe(Effect.orDie)
+          const totalEdges = edgeRow?.c ?? 0
+
+          const meta: CodegraphMeta = {
+            id: "singleton",
+            graphBuiltAt: Date.now(),
+            graphVersion: nextVersion,
+            graphCoverage: coverage,
+            totalFiles: input.totalFiles,
+            totalNodes,
+            totalEdges,
+            schemaVersion: 1,
+          }
+
+          yield* tx
+            .insert(CodegraphMetaTable)
+            .values({
+              id: meta.id,
+              graph_built_at: meta.graphBuiltAt,
+              graph_version: meta.graphVersion,
+              graph_coverage: meta.graphCoverage,
+              total_files: meta.totalFiles,
+              total_nodes: meta.totalNodes,
+              total_edges: meta.totalEdges,
+              schema_version: meta.schemaVersion,
+            })
+            .onConflictDoUpdate({
+              target: CodegraphMetaTable.id,
+              set: {
+                graph_built_at: meta.graphBuiltAt,
+                graph_version: meta.graphVersion,
+                graph_coverage: meta.graphCoverage,
+                total_files: meta.totalFiles,
+                total_nodes: meta.totalNodes,
+                total_edges: meta.totalEdges,
+                schema_version: meta.schemaVersion,
+              },
+            })
+            .run()
+            .pipe(Effect.orDie)
+
+          return { graphVersion: nextVersion, coverage }
+        })
+      ).pipe(Effect.orDie)
     })
 
     return Service.of({
@@ -438,6 +559,7 @@ export const layer = Layer.effect(
       putNode,
       getNode,
       nodeByID,
+      nodesByIDs,
       listNodesByFile,
       listAllNodes,
       queryNodes,
@@ -446,6 +568,7 @@ export const layer = Layer.effect(
       countEdges,
       countFiles,
       putEdge,
+      putEdges,
       getEdge,
       listAllEdges,
       listEdgesByNode,
