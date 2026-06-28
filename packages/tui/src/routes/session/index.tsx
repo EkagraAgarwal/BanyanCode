@@ -1232,7 +1232,7 @@ function RevertMessage(props: {
           </box>
         </Show>
         <text fg={theme.textMuted}>
-          <text fg={theme.text}>{redoKey()}</text> or /redo to restore
+          <span style={{ fg: theme.text }}>{redoKey()}</span> or /redo to restore
         </text>
       </box>
     </box>
