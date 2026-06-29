@@ -101,6 +101,7 @@ export const layer = Layer.effectDiscard(
     const jobs = yield* BackgroundJob.Service
     const locations = yield* LocationServiceMap.Service
     const scope = yield* Scope.Scope
+    const fsUtil = yield* FSUtil.Service
 
     const injectWhenDone = Effect.fn("ShellTool.injectWhenDone")(function* (
       sessionID: SessionSchema.ID,
@@ -160,7 +161,6 @@ export const layer = Layer.effectDiscard(
                 )
               return yield* Effect.gen(function* () {
                 const mutation = yield* LocationMutation.Service
-                const fs = yield* FSUtil.Service
                 const shell = yield* Shell.Service
                 const permission = yield* PermissionV2.Service
                 const source = {
@@ -190,7 +190,7 @@ export const layer = Layer.effectDiscard(
                   source,
                 })
 
-                if ((yield* fs.stat(target.canonical)).type !== "Directory")
+                if ((yield* fsUtil.stat(target.canonical)).type !== "Directory")
                   return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.canonical}`))
 
                 const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
@@ -273,5 +273,5 @@ export const layer = Layer.effectDiscard(
 export const node = makeGlobalNode({
   name: "shell-tool",
   layer,
-  deps: [ApplicationTools.node, SessionV2.node, BackgroundJob.node, LocationServiceMap.node],
+  deps: [ApplicationTools.node, SessionV2.node, BackgroundJob.node, LocationServiceMap.node, FSUtil.node],
 })
