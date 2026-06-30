@@ -135,6 +135,10 @@ The build service exposes a bounded `events()` queue (`Queue.bounded(64)`) that 
 
 The build service layer MUST NOT add an internal drain on the same queue. Effect `Queue` is single-consumer; a second drain will race the bridge and roughly half of the progress events will be lost. The TUI's `banyancode.codegraph.build` subscription is the most visible casualty — without every event, the progress widget stays at `0/0 Running` even though the indexer is happily writing nodes to the DB. Regression test: `packages/opencode/test/banyancode/codegraph-manual-build.test.ts`.
 
+## HTTP route — `POST /global/codegraph-build`
+
+The build is exposed as a global HTTP route (`POST /global/codegraph-build`) so it works from any route, not only when the user has an active session. The TUI command palette (`app.tsx`) and the prompt-input slash handler (`component/prompt/index.tsx`) both call this endpoint directly via `sdk.client.global.codegraph.build({...})`. The handler resolves `root` from `InstanceState.context.worktree` if not provided, and runs the kickoff inside `AppRuntime.runFork(...)` so the forked build fiber outlives the HTTP request. The build service's `start()` uses `Effect.forkDetach(forkWork)` so the work runs in the runtime's global scope (never closed) — this avoids `Effect.forkScoped`'s "Scope not in context" failure that silently killed earlier attempts. Reference: `packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts:174-189` and `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:106-118`.
+
 ## Acceptance criteria (from the master plan)
 
 - `codegraph_build` over the BanyanCode repo itself indexes 100% of `.ts`/`.tsx` files with no errors.

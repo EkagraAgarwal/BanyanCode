@@ -146,6 +146,24 @@ Manual verification: rebuilt the full `D:\OpenCode` workspace into `.banyancode/
 
 ---
 
+## Phase 11 — `/codegraph-build` works from any route ✅ SHIPPED (`957aaf1` on `main`)
+
+`/codegraph-build` previously only fired through `session.command`, which required an active session. From the home route, the user saw "Start a session first to build the code graph" (and from any non-session route, the toast just never fired). The build was also dying silently because `Effect.forkScoped` requires Scope in the fiber's context — fibers spawned by `ManagedRuntime.runFork` don't have it.
+
+| # | File | Issue | Fix |
+|---|---|---|---|
+| 11.1 | `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts`, `handlers/global.ts` | No global endpoint to start a build without an active session | Added `POST /global/codegraph-build` (`CodegraphBuildInput` schema: optional `root`, `force`, `dbPath`). Handler resolves `root` from `InstanceState.context.worktree` if not provided, calls `Banyan.CodegraphBuildService.start(...)` inside `AppRuntime.runFork(...)` so the kickoff runs in the app scope, returns `{ started, root, dbPath }` |
+| 11.2 | `packages/opencode/src/effect/banyancode-codegraph-bridge.ts` | Bridge used `Effect.forkIn(work, yield* Effect.scope)` which silently threw `Service not found: effect/Scope` | Replaced with `Effect.forkDetach(work)` |
+| 11.3 | `packages/core/src/banyancode/codegraph-build-service.ts` | `start()` used `Effect.forkScoped(forkWork)` — same Scope-in-context problem | Replaced with `Effect.forkDetach(forkWork)` so the build runs in the runtime's global scope and survives the originating request |
+| 11.4 | `packages/tui/src/app.tsx`, `packages/tui/src/component/prompt/index.tsx` | Command palette and prompt slash handler routed `/codegraph-build` through `session.command`, which requires a session | Both now call `sdk.client.global.codegraph.build({...})` directly. Removed the "Start a session first" guard |
+| 11.5 | `packages/sdk/js/src/v2/gen/sdk.gen.ts`, `types.gen.ts` | New SDK method for the new endpoint | Regenerated via `bun script/build.ts` |
+
+Regression tests: existing `codegraph-build-service.test.ts` (6 cases) and `codegraph-manual-build.test.ts` events-queue test (1 case) both pass.
+
+End-to-end verification: typed `/codegraph-build` from the TUI on the home route. Progress bar updated from `0/0` to `3039/3039` and stopped. DB meta: `graphVersion=1, graphCoverage=0.9724, totalFiles=3046, totalNodes=6454, totalEdges=136477`. Cancel via `/codegraph-cancel` interrupts the in-flight build and shows the cancelled toast.
+
+---
+
 ## Test commands
 
 ```bash
