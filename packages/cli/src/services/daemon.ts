@@ -36,10 +36,11 @@ const ServiceConfig = Schema.Struct({
   hostname: Schema.optional(Schema.String),
   port: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(65_535))),
   password: Schema.optional(Schema.String),
+  autostart: Schema.optional(Schema.Boolean),
 })
 export type ServiceConfig = typeof ServiceConfig.Type
 
-const serviceConfigKeys = ["hostname", "port", "password"] as const
+const serviceConfigKeys = ["hostname", "port", "password", "autostart"] as const
 type ServiceConfigKey = (typeof serviceConfigKeys)[number]
 
 function serviceConfigKey(key: string): ServiceConfigKey {
@@ -102,6 +103,10 @@ export const layer = Layer.effect(
         case "password": {
           return yield* password()
         }
+        case "autostart": {
+          const autostart = (yield* config()).autostart
+          return autostart === undefined ? "" : String(autostart)
+        }
       }
     })
 
@@ -122,6 +127,11 @@ export const layer = Layer.effect(
         case "password": {
           yield* stop()
           yield* password(value)
+          return
+        }
+        case "autostart": {
+          if (value !== "true" && value !== "false") throw new Error("Autostart must be true or false")
+          yield* writeConfig({ ...(yield* config()), autostart: value === "true" })
           return
         }
       }
@@ -147,6 +157,11 @@ export const layer = Layer.effect(
           yield* writeConfig(next)
           return
         }
+        case "autostart": {
+          const { autostart: _autostart, ...next } = yield* config()
+          yield* writeConfig(next)
+          return
+        }
       }
     })
 
@@ -164,6 +179,16 @@ export const layer = Layer.effect(
       const response = yield* Effect.tryPromise(() => client.v2.health.get({ signal: AbortSignal.timeout(2_000) }))
       if (response.data?.healthy === true) return info
       return yield* Effect.fail(new Error("Registered server is not healthy"))
+    })
+
+    const remoteTransport = Effect.fn("cli.daemon.remoteTransport")(function* (input: ServiceConfig) {
+      const url = serviceURL(input)
+      const headers = ServerAuth.headers({ password: input.password })
+      const response = yield* Effect.tryPromise(() =>
+        createOpencodeClient({ baseUrl: url, headers }).v2.health.get({ signal: AbortSignal.timeout(2_000) }),
+      )
+      if (response.data?.healthy === true) return { url, headers }
+      return yield* Effect.fail(new Error(`Server is not healthy: ${url}`))
     })
 
     const compatible = Effect.fnUntraced(function* () {
@@ -230,6 +255,8 @@ export const layer = Layer.effect(
     })
 
     const transport = Effect.fn("cli.daemon.transport")(function* () {
+      const current = yield* config()
+      if (current.autostart === false) return yield* remoteTransport(current)
       return { url: yield* start(), headers: ServerAuth.headers({ password: yield* password() }) }
     })
 
@@ -285,5 +312,12 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer
+
+function serviceURL(config: ServiceConfig) {
+  const hostname = config.hostname ?? "127.0.0.1"
+  const result = new URL(`http://${hostname.includes(":") && !hostname.startsWith("[") ? `[${hostname}]` : hostname}`)
+  result.port = String(config.port ?? 4096)
+  return result.toString()
+}
 
 export * as Daemon from "./daemon"
