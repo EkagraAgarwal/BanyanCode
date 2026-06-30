@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Fiber, Layer, Queue } from "effect"
 import * as path from "path"
 import * as os from "os"
 import * as fs from "fs/promises"
@@ -125,6 +125,62 @@ describe("Manual codegraph build - progress reporting", () => {
         expect(nodesAfter).toEqual([])
       }).pipe(Effect.provide(layer), Effect.scoped),
     )
+  }, 60000)
+
+  test("events queue receives every progress event (no double-consumer race)", async () => {
+    await using tmp = await tmpdir()
+    const dir = tmp.path
+    await makeFixtureCodebase(dir, 10)
+    const dbPath = path.join(dir, "test.sqlite")
+    const layer = makeTestLayer(dbPath)
+
+    const received: { done: number; total: number; status: string }[] = []
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const buildSvc = yield* CodegraphBuildService.Service
+        const queue = buildSvc.events()
+
+        const drain = yield* Effect.forkScoped(
+          Effect.forever(
+            Effect.gen(function* () {
+              const event = yield* Queue.take(queue)
+              received.push({
+                done: (event.properties as any).done,
+                total: (event.properties as any).total,
+                status: (event.properties as any).status,
+              })
+              if ((event.properties as any).status === "completed") return
+            }),
+          ),
+        )
+
+        yield* buildSvc.start({ root: dir, force: true })
+
+        const state = yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const s = yield* buildSvc.status()
+            if (s.status === "completed" || s.status === "failed" || s.status === "cancelled") return s
+            return undefined
+          }),
+          "build never completed",
+          "30 seconds",
+        )
+
+        yield* Effect.sleep("50 millis")
+        yield* Fiber.interrupt(drain)
+        return state
+      }).pipe(Effect.provide(layer), Effect.scoped),
+    )
+
+    expect(result.status).toBe("completed")
+    const runningEvents = received.filter((e) => e.status === "running")
+    const completedEvent = received.find((e) => e.status === "completed")
+    expect(received.length).toBeGreaterThan(2)
+    expect(runningEvents.length).toBeGreaterThan(0)
+    const lastRunning = runningEvents[runningEvents.length - 1]
+    expect(lastRunning.total).toBe(10)
+    expect(lastRunning.done).toBe(10)
+    expect(completedEvent).toBeDefined()
   }, 60000)
 })
 

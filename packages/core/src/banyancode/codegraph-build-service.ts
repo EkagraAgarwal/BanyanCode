@@ -59,7 +59,6 @@ export const layer = Layer.effect(
     }
 
     const indexer = yield* CodegraphIndexer.Service
-    const eventBus = yield* EventV2.Service
     const repo = yield* CodegraphRepo.Service
     const state = yield* Ref.make<State>({ status: "idle", done: 0, total: 0 })
     const inFlight = yield* Ref.make<Fiber.Fiber<void, CodegraphIndexer.CodegraphError> | undefined>(undefined)
@@ -68,14 +67,12 @@ export const layer = Layer.effect(
 
     const publish = (s: State) => Queue.offer(events, { type: "banyancode.codegraph.build", properties: s }).pipe(Effect.orDie)
 
-    yield* Effect.forkScoped(
-      Effect.forever(
-        Effect.gen(function* () {
-          const event = yield* Queue.take(events)
-          yield* eventBus.publish(BuildEvent, event.properties)
-        }),
-      ),
-    )
+    // The events queue is drained by the build bridge in
+    // packages/opencode/src/effect/banyancode-codegraph-bridge.ts, which
+    // republishes through EventV2Bridge (and therefore stamps the
+    // instance/workspace location). Do not add a second consumer here — that
+    // would race the bridge and the TUI would lose roughly half of the
+    // progress events, leaving the progress widget stuck at 0/0.
 
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
