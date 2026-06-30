@@ -18,5 +18,8 @@ export const applyCodegraphBuildBridge = Effect.gen(function* () {
     }
   })
 
-  yield* Effect.forkIn(work, yield* Effect.scope)
+  // Detach from the caller scope so the drain fiber survives the bridge's
+  // calling context. Same reason as codegraph-build-service.start(): forkIn
+  // would require Scope in context, which is not available here.
+  yield* Effect.forkDetach(work)
 })

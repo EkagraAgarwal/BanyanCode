@@ -67,6 +67,7 @@ import type {
   FileListResponses,
   FilePartInput,
   FilePartSource,
+  FilePathPattern,
   FileReadErrors,
   FileReadResponses,
   FileStatusErrors,
@@ -85,6 +86,8 @@ import type {
   GlobalBanyanConfigGetResponses,
   GlobalBanyanConfigUpdateErrors,
   GlobalBanyanConfigUpdateResponses,
+  GlobalCodegraphBuildErrors,
+  GlobalCodegraphBuildResponses,
   GlobalCodegraphCancelErrors,
   GlobalCodegraphCancelResponses,
   GlobalCodegraphEdgesErrors,
@@ -1377,6 +1380,47 @@ export class Codegraph extends HeyApiClient {
   }
 
   /**
+   * Build code graph index
+   *
+   * Kick off a codegraph build for the given root (defaults to the current workspace). Runs in the background; progress is published via the banyancode.codegraph.build event.
+   */
+  public build<ThrowOnError extends boolean = false>(
+    parameters?: {
+      root?: string
+      force?: boolean
+      dbPath?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "root" },
+            { in: "body", key: "force" },
+            { in: "body", key: "dbPath" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      GlobalCodegraphBuildResponses,
+      GlobalCodegraphBuildErrors,
+      ThrowOnError
+    >({
+      url: "/global/codegraph-build",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * List codegraph nodes
    *
    * Returns all indexed codegraph nodes with summary metadata.
@@ -2015,7 +2059,7 @@ export class File extends HeyApiClient {
     parameters: {
       directory?: string
       workspace?: string
-      path: string
+      path: FilePathPattern
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2047,7 +2091,7 @@ export class File extends HeyApiClient {
     parameters: {
       directory?: string
       workspace?: string
-      path: string
+      path: FilePathPattern
     },
     options?: Options<never, ThrowOnError>,
   ) {

@@ -826,16 +826,25 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "BanyanCode",
         slashName: "codegraph-build",
         run: () => {
-          if (route.data.type !== "session") {
-            toast.show({ message: "Start a session first to build the code graph", variant: "warning" })
-            dialog.clear()
-            return
-          }
-          void sdk.client.session.command({
-            sessionID: route.data.sessionID,
-            command: "codegraph-build",
-            arguments: "",
-          })
+          const worktree = route.data.type === "session" ? undefined : project.data.instance.path.worktree
+          void sdk.client.global.codegraph
+            .build({ root: worktree, force: false })
+            .then((res) => {
+              if (res.data?.started) {
+                toast.show({ message: `Building code graph for ${res.data.root ?? "workspace"}`, variant: "info" })
+              } else {
+                toast.show({
+                  message: res.data?.reason ?? "Could not start codegraph build",
+                  variant: "error",
+                })
+              }
+            })
+            .catch((err) =>
+              toast.show({
+                message: `Codegraph build failed: ${err instanceof Error ? err.message : String(err)}`,
+                variant: "error",
+              }),
+            )
           dialog.clear()
         },
       },

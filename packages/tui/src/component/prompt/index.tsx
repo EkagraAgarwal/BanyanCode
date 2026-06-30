@@ -1157,23 +1157,53 @@ export function Prompt(props: PromptProps) {
       inputText.startsWith("/") &&
       sync.data.command.some((x) => x.name === inputText.split("\n")[0].split(" ")[0].slice(1))
     ) {
-      move.startSubmit()
-      // Parse command from first line, preserve multi-line content in arguments
       const firstLineEnd = inputText.indexOf("\n")
       const firstLine = firstLineEnd === -1 ? inputText : inputText.slice(0, firstLineEnd)
-      const [command, ...firstLineArgs] = firstLine.split(" ")
-      const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
-      const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
+      const [command] = firstLine.split(" ")
 
-      void sdk.client.session.command({
-        sessionID,
-        command: command.slice(1),
-        arguments: args,
-        agent: agent.name,
-        model: `${selectedModel.providerID}/${selectedModel.modelID}`,
-        variant,
-        parts: nonTextParts.filter((x) => x.type === "file"),
-      })
+      if (command === "/codegraph-build") {
+        void sdk.client.global.codegraph
+          .build({ root: project.data.instance.path.worktree, force: false })
+          .then((res) => {
+            if (res.data?.started) {
+              toast.show({ message: `Building code graph for ${res.data.root ?? "workspace"}`, variant: "info" })
+            } else {
+              toast.show({
+                message: res.data?.reason ?? "Could not start codegraph build",
+                variant: "error",
+              })
+            }
+          })
+          .catch((err) =>
+            toast.show({
+              message: `Codegraph build failed: ${err instanceof Error ? err.message : String(err)}`,
+              variant: "error",
+            }),
+          )
+      } else if (command === "/codegraph-cancel") {
+        void sdk.client.global.codegraph.cancel({}).catch(() => {})
+        toast.show({ message: "Codegraph build cancelled", variant: "info" })
+      } else if (command === "/codegraph-remove") {
+        void sdk.client.session.command({
+          sessionID,
+          command: "codegraph-remove",
+          arguments: "",
+        })
+        toast.show({ message: "Removing code graph index...", variant: "info" })
+      } else {
+        move.startSubmit()
+        const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
+        const args = firstLine.split(" ").slice(1).join(" ") + (restOfInput ? "\n" + restOfInput : "")
+        void sdk.client.session.command({
+          sessionID,
+          command: command.slice(1),
+          arguments: args,
+          agent: agent.name,
+          model: `${selectedModel.providerID}/${selectedModel.modelID}`,
+          variant,
+          parts: nonTextParts.filter((x) => x.type === "file"),
+        })
+      }
     } else {
       move.startSubmit()
       sdk.client.session

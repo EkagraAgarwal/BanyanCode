@@ -1,4 +1,7 @@
 import { Config } from "@/config/config"
+import { Database } from "@opencode-ai/core/database/database"
+import { AppRuntime } from "@/effect/app-runtime"
+import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -7,14 +10,14 @@ import { Global } from "@opencode-ai/core/global"
 import { Installation } from "@/installation"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
-import { Effect, Option, Queue, Schema } from "effect"
+import { Cause, Effect, Option, Queue, Schema } from "effect"
 import path from "path"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { BanyanAgentSaveInput, BanyanConfigUpdateInput, GlobalUpgradeInput } from "../groups/global"
+import { BanyanAgentSaveInput, BanyanConfigUpdateInput, CodegraphBuildInput, GlobalUpgradeInput } from "../groups/global"
 import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
@@ -179,6 +182,31 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return true
     })
 
+const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function* (ctx: {
+      payload: typeof CodegraphBuildInput.Type
+    }) {
+      const root = ctx.payload.root ?? (yield* InstanceState.context).worktree
+      const dbPath = ctx.payload.dbPath ?? Database.path()
+      const force = ctx.payload.force ?? false
+
+      // Run the kickoff in the app runtime so the build service's forked
+      // fiber outlives this HTTP request. Without this, `Effect.forkScoped`
+      // forks into the request scope and is interrupted as soon as we
+      // return — the build would never run to completion.
+      const fiber = AppRuntime.runFork(
+        Effect.gen(function* () {
+          const buildServiceOpt = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
+          if (Option.isNone(buildServiceOpt)) return
+          yield* buildServiceOpt.value.start({ root, force, dbPath })
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("codegraph-build kickoff failed", { cause: Cause.pretty(cause) }),
+          ),
+        ),
+      )
+      return { started: !!fiber, root, dbPath }
+    })
+
     const codegraphNodesHandler = Effect.fn("GlobalHttpApi.codegraphNodes")(function* () {
       const repo = yield* Banyan.CodegraphRepo
       const [nodes, meta] = yield* Effect.all([repo.listAllNodes(), repo.getMeta()])
@@ -283,6 +311,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       .handle("getBanyanConfig", getBanyanConfigHandler)
       .handle("updateBanyanConfig", updateBanyanConfigHandler)
       .handle("codegraphCancel", codegraphCancelHandler)
+      .handle("codegraphBuild", codegraphBuildHandler)
       .handle("codegraphNodes", codegraphNodesHandler)
       .handle("codegraphEdges", codegraphEdgesHandler)
       .handle("banyanAgentSave", banyanAgentSaveHandler)

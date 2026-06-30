@@ -135,14 +135,11 @@ export const layer = Layer.effect(
           ),
         )
 
-        // Use forkScoped to execute the work in the background
-        const fiber = yield* Effect.forkScoped(forkWork)
-        ;(yield* Effect.addFinalizer(() =>
-          Fiber.interrupt(fiber).pipe(
-            Effect.timeout("2 seconds"),
-            Effect.ignore,
-          ),
-        )) as unknown as void
+        // Fork into the runtime's global scope (not the request scope). The fork
+        // must outlive the originating request because the build runs for
+        // minutes, but an HTTP handler completes in milliseconds. `cancel()`
+        // interrupts the fiber directly, not by closing any scope.
+        const fiber = yield* Effect.forkDetach(forkWork)
         yield* Ref.set(inFlight, fiber)
       }) as unknown as Effect.Effect<void, never, never>
 

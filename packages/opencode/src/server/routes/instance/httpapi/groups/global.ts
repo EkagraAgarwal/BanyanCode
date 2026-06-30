@@ -92,6 +92,19 @@ export const BanyanAgentSaveResult = Schema.Struct({
   filePath: Schema.String,
 })
 
+export const CodegraphBuildInput = Schema.Struct({
+  root: Schema.optional(Schema.String),
+  force: Schema.optional(Schema.Boolean),
+  dbPath: Schema.optional(Schema.String),
+})
+
+export const CodegraphBuildResult = Schema.Struct({
+  started: Schema.Boolean,
+  root: Schema.optional(Schema.String),
+  dbPath: Schema.optional(Schema.String),
+  reason: Schema.optional(Schema.String),
+})
+
 const GlobalUpgradeResult = Schema.Union([
   Schema.Struct({
     success: Schema.Literal(true),
@@ -110,6 +123,7 @@ export const GlobalPaths = {
   dispose: "/global/dispose",
   upgrade: "/global/upgrade",
   codegraphCancel: "/global/codegraph-cancel",
+  codegraphBuild: "/global/codegraph-build",
   startup: "/global/startup",
   banyanConfig: "/global/banyan-config",
   codegraphNodes: "/global/codegraph-nodes",
@@ -204,6 +218,17 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.codegraph.cancel",
           summary: "Cancel codegraph build",
           description: "Cancel the in-flight codegraph build for the current instance.",
+        }),
+      ),
+      HttpApiEndpoint.post("codegraphBuild", GlobalPaths.codegraphBuild, {
+        payload: CodegraphBuildInput,
+        success: described(CodegraphBuildResult, "Codegraph build kickoff result"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.codegraph.build",
+          summary: "Build code graph index",
+          description:
+            "Kick off a codegraph build for the given root (defaults to the current workspace). Runs in the background; progress is published via the banyancode.codegraph.build event.",
         }),
       ),
       HttpApiEndpoint.get("codegraphNodes", GlobalPaths.codegraphNodes, {

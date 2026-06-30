@@ -2379,6 +2379,8 @@ export type Symbol = {
   }
 }
 
+export type FilePathPattern = string
+
 export type FileNode = {
   name: string
   path: string
@@ -5760,6 +5762,40 @@ export type GlobalCodegraphCancelResponses = {
 
 export type GlobalCodegraphCancelResponse = GlobalCodegraphCancelResponses[keyof GlobalCodegraphCancelResponses]
 
+export type GlobalCodegraphBuildData = {
+  body?: {
+    root?: string
+    force?: boolean
+    dbPath?: string
+  }
+  path?: never
+  query?: never
+  url: "/global/codegraph-build"
+}
+
+export type GlobalCodegraphBuildErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalCodegraphBuildError = GlobalCodegraphBuildErrors[keyof GlobalCodegraphBuildErrors]
+
+export type GlobalCodegraphBuildResponses = {
+  /**
+   * Codegraph build kickoff result
+   */
+  200: {
+    started: boolean
+    root?: string
+    dbPath?: string
+    reason?: string
+  }
+}
+
+export type GlobalCodegraphBuildResponse = GlobalCodegraphBuildResponses[keyof GlobalCodegraphBuildResponses]
+
 export type GlobalCodegraphNodesData = {
   body?: never
   path?: never
@@ -6483,7 +6519,7 @@ export type FileListData = {
   query: {
     directory?: string
     workspace?: string
-    path: string
+    path: FilePathPattern
   }
   url: "/file"
 }
@@ -6512,7 +6548,7 @@ export type FileReadData = {
   query: {
     directory?: string
     workspace?: string
-    path: string
+    path: FilePathPattern
   }
   url: "/file/content"
 }
