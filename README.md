@@ -88,14 +88,12 @@ The TUI follows modern TUI design patterns (Charm, Ink, OpenTUI reference):
 - **Tabs** are `Tab` / `Shift+Tab` navigable (keybinds surfaced in the prompt footer).
 - **Solid `<For>` everywhere** for keyed iteration; `.map()` in JSX is forbidden.
 
-## Plan and design
+## Design docs
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — repo layout, runtime layers, BanyanCode service architecture, V2/V3 changelog.
 - [`specs/banyancode/`](specs/banyancode/) — per-feature design (storage, orchestrator, subagent mesh, memory, code graph, free web search).
 - [`specs/banyancode/overview.md`](specs/banyancode/overview.md) — one-paragraph pitch and reuse map.
 - [`packages/docs/src/content/docs/banyancode.mdx`](packages/docs/src/content/docs/banyancode.mdx) — user-facing feature overview.
-- [`plan.md`](plan.md) — current implementation plan with todos.
-- [`.banyancode/deep-codebase-review.md`](.banyancode/deep-codebase-review.md) — code review with 100+ findings, the source of the active refactor phases.
 
 ## Contributing and feedback
 

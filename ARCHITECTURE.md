@@ -269,7 +269,7 @@ Detailed design docs live in `specs/banyancode/`:
 
 User-facing docs (rendered to the docs site) live in `packages/docs/src/content/docs/banyancode*.mdx`.
 
-The full deep-review refactor that produced the V3.1 round lives at `.banyancode/deep-codebase-review.md` (100+ findings) and `plan.md` (active phases).
+The deep-review notes that produced the V3.1 round live at `.banyancode/deep-codebase-review.md` (historical reference, 100+ findings).
 
 ## Coding conventions for BanyanCode work
 
