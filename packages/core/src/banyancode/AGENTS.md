@@ -35,3 +35,14 @@ Do NOT add BanyanCode service deps to `BanyanTools.locationLayer` (`packages/cor
 - `export * as X from "./x"` — for namespace access via `Banyan.X.Service`
 
 Consumers in `packages/opencode` use the namespace form: `Banyan.CodegraphBuildService`, `Banyan.CodegraphRepo`, `Banyan.SubagentBus`, `Banyan.BanyanConfigService`, etc. Direct imports (`import { X } from "@opencode-ai/core/banyancode/x"`) are used in core to avoid the namespace import.
+
+## Service events queue ownership
+
+A service that exposes an `events(): Queue.Dequeue<...>` method is telling consumers "drain this yourself; do not rely on me to publish to a shared bus." That contract is broken if the service layer ALSO forks an internal drain on the same queue. Effect `Queue` is single-consumer — the second drain will race the first and roughly half the events will be lost.
+
+`CodegraphBuildService` is the canonical example: the bridge in `packages/opencode/src/effect/banyancode-codegraph-bridge.ts` is the sole consumer (it republishes through `EventV2Bridge` to stamp instance/workspace location). The layer MUST NOT add its own `Effect.forkScoped(Effect.forever(Queue.take(events) → ...))` worker — that's a regression we have hit twice (`ecfb2eb` on `review-fixes` lost in `e40b3ad`, then re-fixed in `32f307a` on main).
+
+When adding a new service with an `events()` queue:
+- Pick the one consumer that can correctly transform / stamp / filter the events.
+- Document who owns the queue at the top of the layer.
+- Add a regression test that drains the queue the same way the owner does and asserts every event arrives.

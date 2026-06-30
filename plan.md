@@ -132,6 +132,18 @@ New `tui/test/subscription-cleanup.test.ts` (2 cases). 201 TUI tests pass, 84 co
 
 New `memory-payload.test.ts` (5 cases). 89 banyancode tests pass, typecheck clean.
 
+## Phase 10 — Codegraph build progress events ✅ SHIPPED (`32f307a` on `main`)
+
+The `/codegraph-build` TUI progress widget was stuck at `0/0 Running` even though the indexer was running and writing to the DB. Root cause: a duplicate drain on the `CodegraphBuildService.events()` `Queue`. The layer forked an internal `Effect.forever(Queue.take(events) → eventBus.publish(...))` worker at the same time as the bridge in `packages/opencode/src/effect/banyancode-codegraph-bridge.ts` was draining the same queue. Effect `Queue` is single-consumer, so the two fibers raced and the TUI lost roughly half of the progress events — most critically the first non-zero `total` event.
+
+| # | File | Issue | Fix |
+|---|---|---|---|
+| 10.1 | `packages/core/src/banyancode/codegraph-build-service.ts:71-78` | Internal `Effect.forkScoped(Effect.forever(...))` drained the same queue as the bridge | Removed the internal drain; added a comment explaining the bridge is the sole consumer. Re-applies the fix from `ecfb2eb` on `review-fixes` (which was lost when `e40b3ad` rewrote the layer for `Queue.bounded(64)`) |
+
+Regression test: `packages/opencode/test/banyancode/codegraph-manual-build.test.ts` now drains the `events()` queue the same way the bridge does and asserts every progress event arrives (final `running` event has `done: 10, total: 10`). The test fails on the unfixed code and passes after the fix.
+
+Manual verification: rebuilt the full `D:\OpenCode` workspace into `.banyancode/banyancode-local.db` — 3,039 files, 3,034 indexed, 13 skipped, 45.9s, `graphCoverage=0.9957`. Progress bar updates correctly from `0/0` to `3039/3039`.
+
 ---
 
 ## Test commands

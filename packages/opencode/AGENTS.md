@@ -130,6 +130,17 @@ Use `EffectBridge` for native or external callbacks (`@parcel/watcher`, `node-pt
 
 Plain async code should pass explicit context or stay inside an Effect fiber; do not add ambient instance context shims.
 
+## Service events queues → EventV2Bridge
+
+A core service that exposes an `events(): Queue.Dequeue<...>` method is meant to be drained by exactly one bridge in `packages/opencode/src/effect/` (e.g. `banyancode-codegraph-bridge.ts`, `banyancode-system-bridge.ts`). The bridge's job is to consume the queue, stamp the instance/workspace `Location`, and publish via `EventV2Bridge` so the TUI (and any other `EventV2` listener) sees correctly-attributed events.
+
+Rule: do NOT add a second consumer of the same queue. Effect `Queue` is single-consumer — a second drain (in the core layer OR in a competing bridge) will race the first and roughly half of the events will be lost. The most visible symptom is the TUI's `banyancode.codegraph.build` progress widget stuck at `0/0 Running` even though the indexer is happily writing nodes.
+
+When wiring a new core service that needs to reach the TUI:
+1. Expose `events(): Queue.Dequeue<{ type, properties }>` on the service.
+2. Write the bridge (`packages/opencode/src/effect/<name>-bridge.ts`) and call it from `packages/opencode/src/effect/app-runtime.ts` after `EventV2Bridge.defaultLayer` is provided.
+3. Add a regression test that drains the queue the same way the bridge does and asserts every event arrives.
+
 ## BanyanConfig consumers (read pattern)
 
 BanyanCode-specific config keys (`banyancode_yolo_mode`, `banyancode_max_subagents`, `banyancode_telegram_*`, future runtime keys) live in `BanyanConfig.Info`, NOT `ConfigV1.Info`. Consumers MUST read via `Banyan.BanyanConfigService`, never `Config.Service.getGlobal().banyancode_*` (those keys are removed and any consumer still reading them will fail typecheck).

@@ -129,6 +129,12 @@ If `file` is unset, embeds all nodes. If a file is set, embeds only the nodes in
 
 Both commands are registered in `packages/opencode/src/command/index.ts` and the templates live in `packages/opencode/src/command/template/codegraph-build.txt` and `code-embed.txt`.
 
+## Event ownership — `banyancode.codegraph.build`
+
+The build service exposes a bounded `events()` queue (`Queue.bounded(64)`) that downstream consumers drain. The bridge in `packages/opencode/src/effect/banyancode-codegraph-bridge.ts` is the **sole** owner of that queue: it pulls every event and republishes through `EventV2Bridge` (which stamps the instance/workspace location so the TUI can filter by workspace).
+
+The build service layer MUST NOT add an internal drain on the same queue. Effect `Queue` is single-consumer; a second drain will race the bridge and roughly half of the progress events will be lost. The TUI's `banyancode.codegraph.build` subscription is the most visible casualty — without every event, the progress widget stays at `0/0 Running` even though the indexer is happily writing nodes to the DB. Regression test: `packages/opencode/test/banyancode/codegraph-manual-build.test.ts`.
+
 ## Acceptance criteria (from the master plan)
 
 - `codegraph_build` over the BanyanCode repo itself indexes 100% of `.ts`/`.tsx` files with no errors.
