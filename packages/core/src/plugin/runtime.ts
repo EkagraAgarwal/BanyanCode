@@ -110,8 +110,13 @@ export const providerLayer = providerLayerWithCell(defaultCell)
 
 export const node = makeGlobalNode({ service: Service, layer, deps: [] })
 
-export const providerNode = makeGlobalNode({
-  name: "plugin-runtime-provider",
-  layer: providerLayer,
-  deps: [node, SessionV2.node, Job.node, LocationServiceMap.node],
-})
+// Raw layer replacements are compiled without dependencies, so cell-scoped
+// provider replacements must go through this node to keep their deps wired.
+export const providerNodeWithCell = (cell: Cell) =>
+  makeGlobalNode({
+    name: "plugin-runtime-provider",
+    layer: providerLayerWithCell(cell),
+    deps: [node, SessionV2.node, Job.node, LocationServiceMap.node],
+  })
+
+export const providerNode = providerNodeWithCell(defaultCell)
