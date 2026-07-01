@@ -1691,13 +1691,13 @@ export function Prompt(props: PromptProps) {
                   <Match when={liveWorkStatusVisible() || statusItems().length > 0}>
                     <text fg={theme.textMuted} wrapMode="none">
                       <Show when={subagentStatusLabel()}>
-                        {(label) => <span style={{ fg: theme.accent }}>{label()}</span>}
+                        {(label) => <span style={{ fg: theme.textMuted }}>{label()}</span>}
                       </Show>
                       <Show when={subagentStatusLabel() && shellStatusLabel()}>
                         <span style={{ fg: theme.textMuted }}> · </span>
                       </Show>
                       <Show when={shellStatusLabel()}>
-                        {(label) => <span style={{ fg: theme.secondary }}>{label()}</span>}
+                        {(label) => <span style={{ fg: theme.textMuted }}>{label()}</span>}
                       </Show>
                       <Show when={liveWorkStatusVisible() && statusItems().length > 0}>
                         <span style={{ fg: theme.textMuted }}> · </span>
