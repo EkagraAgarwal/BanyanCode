@@ -1253,7 +1253,11 @@ function SessionNoticeMessageV2(props: { message: SessionMessage }) {
     if (props.message.type === "system" || props.message.type === "synthetic") return props.message.text
     return ""
   }
-  return <text fg={theme.textMuted}>{text()}</text>
+  return (
+    <box paddingLeft={3}>
+      <text fg={theme.textMuted}>{text()}</text>
+    </box>
+  )
 }
 
 function SessionSkillMessage(props: { message: Extract<SessionMessage, { type: "skill" }> }) {
