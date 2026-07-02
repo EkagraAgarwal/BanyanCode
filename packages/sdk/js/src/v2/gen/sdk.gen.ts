@@ -191,6 +191,32 @@ import type {
   QuestionReplyErrors,
   QuestionReplyResponses,
   QuestionV2Reply,
+  RepositoryIntelEstimateImpactErrors,
+  RepositoryIntelEstimateImpactResponses,
+  RepositoryIntelFindAsyncErrors,
+  RepositoryIntelFindAsyncResponses,
+  RepositoryIntelFindEntrypointsErrors,
+  RepositoryIntelFindEntrypointsResponses,
+  RepositoryIntelFindHttpRoutesErrors,
+  RepositoryIntelFindHttpRoutesResponses,
+  RepositoryIntelFindImplementationsErrors,
+  RepositoryIntelFindImplementationsResponses,
+  RepositoryIntelFindOverridesErrors,
+  RepositoryIntelFindOverridesResponses,
+  RepositoryIntelFindRecursiveErrors,
+  RepositoryIntelFindRecursiveResponses,
+  RepositoryIntelFindRelatedErrors,
+  RepositoryIntelFindRelatedResponses,
+  RepositoryIntelFindSubsystemErrors,
+  RepositoryIntelFindSubsystemResponses,
+  RepositoryIntelFindSymbolErrors,
+  RepositoryIntelFindSymbolResponses,
+  RepositoryIntelFindTestsErrors,
+  RepositoryIntelFindTestsResponses,
+  RepositoryIntelSearchErrors,
+  RepositoryIntelSearchResponses,
+  RepositoryIntelTraceExecutionErrors,
+  RepositoryIntelTraceExecutionResponses,
   SessionAbortErrors,
   SessionAbortResponses,
   SessionChildrenErrors,
@@ -1602,6 +1628,479 @@ export class Global extends HeyApiClient {
   private _banyanAgent?: BanyanAgent
   get banyanAgent(): BanyanAgent {
     return (this._banyanAgent ??= new BanyanAgent({ client: this.client }))
+  }
+}
+
+export class RepositoryIntel extends HeyApiClient {
+  /**
+   * Find symbol
+   */
+  public findSymbol<ThrowOnError extends boolean = false>(
+    parameters?: {
+      name?: string
+      kind?: string
+      file?: string
+      exact?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "name" },
+            { in: "body", key: "kind" },
+            { in: "body", key: "file" },
+            { in: "body", key: "exact" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RepositoryIntelFindSymbolResponses,
+      RepositoryIntelFindSymbolErrors,
+      ThrowOnError
+    >({
+      url: "/global/repo/find-symbol",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Find subsystem
+   */
+  public findSubsystem<ThrowOnError extends boolean = false>(
+    parameters?: {
+      query?: string
+      maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "query" },
+            { in: "body", key: "maxDepth" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RepositoryIntelFindSubsystemResponses,
+      RepositoryIntelFindSubsystemErrors,
+      ThrowOnError
+    >({
+      url: "/global/repo/find-subsystem",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Find entrypoints
+   */
+  public findEntrypoints<ThrowOnError extends boolean = false>(
+    parameters?: {
+      feature?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "feature" }] }])
+    return (options?.client ?? this.client).post<
+      RepositoryIntelFindEntrypointsResponses,
+      RepositoryIntelFindEntrypointsErrors,
+      ThrowOnError
+    >({
+      url: "/global/repo/find-entrypoints",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Find tests
+   */
+  public findTests<ThrowOnError extends boolean = false>(
+    parameters?: {
+      symbol?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "symbol" }] }])
+    return (options?.client ?? this.client).post<
+      RepositoryIntelFindTestsResponses,
+      RepositoryIntelFindTestsErrors,
+      ThrowOnError
+    >({
+      url: "/global/repo/find-tests",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Find related
+   */
+  public findRelated<ThrowOnError extends boolean = false>(
+    parameters?: {
+      nodeID?: string
+      depth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "nodeID" },
+            { in: "body", key: "depth" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RepositoryIntelFindRelatedResponses,
+      RepositoryIntelFindRelatedErrors,
+      ThrowOnError
+    >({
+      url: "/global/repo/find-related",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Estimate impact
+   */
+  public estimateImpact<ThrowOnError extends boolean = false>(
+    parameters?: {
+      paths?: Array<string>
+      maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "paths" },
+            { in: "body", key: "maxDepth" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RepositoryIntelEstimateImpactResponses,
+      RepositoryIntelEstimateImpactErrors,
+      ThrowOnError
+    >({
+      url: "/global/repo/estimate-impact",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Trace execution
+   */
+  public traceExecution<ThrowOnError extends boolean = false>(
+    parameters?: {
+      from?: string
+      maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "from" },
+            { in: "body", key: "maxDepth" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RepositoryIntelTraceExecutionResponses,
+      RepositoryIntelTraceExecutionErrors,
+      ThrowOnError
+    >({
+      url: "/global/repo/trace-execution",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Codegraph search
+   */
+  public search<ThrowOnError extends boolean = false>(
+    parameters?: {
+      query?: string
+      modes?: Array<"exact" | "prefix" | "fuzzy" | "structural" | "graph" | "subsystem" | "tests">
+      limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "query" },
+            { in: "body", key: "modes" },
+            { in: "body", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RepositoryIntelSearchResponses,
+      RepositoryIntelSearchErrors,
+      ThrowOnError
+    >({
+      url: "/global/codegraph/search",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Find implementations
+   */
+  public findImplementations<ThrowOnError extends boolean = false>(
+    parameters?: {
+      interfaceName?: string
+      file?: string
+      language?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "interfaceName" },
+            { in: "body", key: "file" },
+            { in: "body", key: "language" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RepositoryIntelFindImplementationsResponses,
+      RepositoryIntelFindImplementationsErrors,
+      ThrowOnError
+    >({
+      url: "/global/codegraph/find-implementations",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Find overrides
+   */
+  public findOverrides<ThrowOnError extends boolean = false>(
+    parameters?: {
+      methodName?: string
+      baseClass?: string
+      file?: string
+      language?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "methodName" },
+            { in: "body", key: "baseClass" },
+            { in: "body", key: "file" },
+            { in: "body", key: "language" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RepositoryIntelFindOverridesResponses,
+      RepositoryIntelFindOverridesErrors,
+      ThrowOnError
+    >({
+      url: "/global/codegraph/find-overrides",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Find recursive functions
+   */
+  public findRecursive<ThrowOnError extends boolean = false>(
+    parameters?: {
+      file?: string
+      language?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "file" },
+            { in: "body", key: "language" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RepositoryIntelFindRecursiveResponses,
+      RepositoryIntelFindRecursiveErrors,
+      ThrowOnError
+    >({
+      url: "/global/codegraph/find-recursive",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Find async functions
+   */
+  public findAsync<ThrowOnError extends boolean = false>(
+    parameters?: {
+      file?: string
+      language?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "file" },
+            { in: "body", key: "language" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RepositoryIntelFindAsyncResponses,
+      RepositoryIntelFindAsyncErrors,
+      ThrowOnError
+    >({
+      url: "/global/codegraph/find-async",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Find HTTP routes
+   */
+  public findHttpRoutes<ThrowOnError extends boolean = false>(
+    parameters?: {
+      file?: string
+      language?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "file" },
+            { in: "body", key: "language" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      RepositoryIntelFindHttpRoutesResponses,
+      RepositoryIntelFindHttpRoutesErrors,
+      ThrowOnError
+    >({
+      url: "/global/codegraph/find-http-routes",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 }
 
@@ -6229,6 +6728,11 @@ export class OpencodeClient extends HeyApiClient {
   private _global?: Global
   get global(): Global {
     return (this._global ??= new Global({ client: this.client }))
+  }
+
+  private _repositoryIntel?: RepositoryIntel
+  get repositoryIntel(): RepositoryIntel {
+    return (this._repositoryIntel ??= new RepositoryIntel({ client: this.client }))
   }
 
   private _event?: Event

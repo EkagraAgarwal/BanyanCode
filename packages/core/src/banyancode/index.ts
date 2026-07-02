@@ -26,6 +26,18 @@ export {
 } from "./codegraph-build-service"
 export { Service as CodegraphAnalyzer, layer as codegraphAnalyzerLayer, defaultLayer as codegraphAnalyzerDefaultLayer } from "./codegraph-analyzer"
 export {
+  Service as RepositoryIntelligence,
+  layer as repositoryIntelligenceLayer,
+  defaultLayer as repositoryIntelligenceDefaultLayer,
+} from "./repository-intelligence"
+export { Service as Search, layer as searchLayer, defaultLayer as searchDefaultLayer } from "./search"
+export {
+  Service as StructuralQueries,
+  layer as structuralQueriesLayer,
+  defaultLayer as structuralQueriesDefaultLayer,
+} from "./structural-queries"
+export * as Ranking from "./ranking"
+export {
   Service as SubagentMessagesRepo,
   layer as subagentMessagesRepoLayer,
   defaultLayer as subagentMessagesRepoDefaultLayer,

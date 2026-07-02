@@ -1,6 +1,17 @@
 export interface ParsedNode {
   id: string
-  kind: "function" | "class" | "method" | "type" | "variable"
+  kind:
+    | "function"
+    | "class"
+    | "method"
+    | "type"
+    | "variable"
+    | "test"
+    | "route"
+    | "config"
+    | "build"
+    | "package"
+    | "generated"
   name: string
   signature?: string
   startLine: number
@@ -12,7 +23,16 @@ export interface ParsedEdge {
   id: string
   fromNodeID: string
   toNodeID: string
-  kind: "imports" | "calls" | "extends" | "references"
+  kind:
+    | "imports"
+    | "calls"
+    | "extends"
+    | "references"
+    | "tested_by"
+    | "configured_by"
+    | "built_by"
+    | "mounts"
+    | "generated_from"
 }
 
 export interface ParseResult {
