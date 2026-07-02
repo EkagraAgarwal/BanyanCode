@@ -1,11 +1,12 @@
 export * as CodegraphIndexer from "./codegraph-indexer"
 
-import { Cause, Context, Effect, Layer, Ref, Schema } from "effect"
+import { Cause, Context, Effect, Layer, Queue, Ref, Schema } from "effect"
 import { randomUUID } from "node:crypto"
 import path from "path"
 import { FSUtil } from "../fs-util"
 import { CodegraphRepo } from "./codegraph-repo"
-import type { CodegraphEdge, CodegraphNode, CodegraphNodeKind } from "./types"
+import { Database } from "../database/database"
+import type { CodegraphEdge, CodegraphFile, CodegraphNode, CodegraphNodeKind } from "./types"
 import { getParser } from "./langs/registry"
 
 export class CodegraphError extends Schema.TaggedErrorClass<CodegraphError>()("Banyan/CodegraphError", {
@@ -48,6 +49,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
     const repo = yield* CodegraphRepo.Service
+    const database = yield* Database.Service
     const cancelled = yield* Ref.make(false)
 
     const walkDirectory = (dir: string, maxFileSizeBytes: number, root: string, patterns: string[]): Effect.Effect<{ files: string[]; skippedBySize: number }> => {
@@ -202,136 +204,185 @@ export const layer = Layer.effect(
       const total = codeFiles.length
       const progressCounter = yield* Ref.make(0)
 
-      yield* Effect.forEach(
-        codeFiles,
-        (filePath) => {
-          const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
-          return Effect.gen(function* () {
-            const isCancelled = yield* Ref.get(cancelled)
-            if (isCancelled) return
+      // Channel-based pipeline: 8 parse fibers run in parallel and offer parsed
+// file data into a bounded queue; a single writer fiber drains the queue
+// and commits each file as one transaction. The queue length is bounded
+// so memory stays flat even with thousands of files. Replacing the previous
+// concurrency:8 + per-file N-statement-write pattern removed the ~15
+// individual auto-committed writes per file (which was the primary cause
+// of the 1+ GB WAL during real-workspace builds).
+type ParsedFile = {
+  readonly file: CodegraphFile
+  readonly nodes: CodegraphNode[]
+  readonly edges: CodegraphEdge[]
+  readonly relativePath: string
+  readonly skipped: boolean
+  readonly previousFileID?: string
+}
+const parsedQueue = yield* Queue.bounded<ParsedFile>(128)
 
-            const ext = path.extname(filePath).toLowerCase()
-            const content = yield* fs.readFileStringSafe(filePath)
-            if (content === undefined) {
-              yield* Ref.update(skippedRef, (n) => n + 1)
-              return
-            }
+const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
+  const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
+  return Effect.gen(function* () {
+    if (yield* Ref.get(cancelled)) return
 
-            // Safeguard: skip files exceeding maxFileSizeBytes or with lines longer than 5000 chars
-            if (content.length > maxFileSizeBytes) {
-              yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars, limit: ${maxFileSizeBytes})`)
-              yield* Ref.update(skippedRef, (n) => n + 1)
-              return
-            }
-            const hasTooLongLine = content.split("\n").some((line) => line.length > 5000)
-            if (hasTooLongLine) {
-              yield* Effect.logWarning(`Skipping minified/compiled file: ${relativePath}`)
-              yield* Ref.update(skippedRef, (n) => n + 1)
-              return
-            }
+    const ext = path.extname(filePath).toLowerCase()
+    const content = yield* fs.readFileStringSafe(filePath)
+    if (content === undefined) {
+      yield* Ref.update(skippedRef, (n) => n + 1)
+      yield* Queue.offer(parsedQueue, { file: { id: "", path: filePath, contentHash: "", language: "", indexedAt: 0 }, nodes: [], edges: [], relativePath, skipped: true })
+      return
+    }
 
-            const contentHash = hashContent(content)
-            const existing = yield* repo.getFileByPath(filePath)
-            if (existing && existing.contentHash === contentHash && !input.force) {
-              yield* Ref.update(skippedRef, (n) => n + 1)
-              return
-            }
+    if (content.length > maxFileSizeBytes) {
+      yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars, limit: ${maxFileSizeBytes})`)
+      yield* Ref.update(skippedRef, (n) => n + 1)
+      yield* Queue.offer(parsedQueue, { file: { id: "", path: filePath, contentHash: "", language: "", indexedAt: 0 }, nodes: [], edges: [], relativePath, skipped: true })
+      return
+    }
+    if (content.split("\n").some((line) => line.length > 5000)) {
+      yield* Effect.logWarning(`Skipping minified/compiled file: ${relativePath}`)
+      yield* Ref.update(skippedRef, (n) => n + 1)
+      yield* Queue.offer(parsedQueue, { file: { id: "", path: filePath, contentHash: "", language: "", indexedAt: 0 }, nodes: [], edges: [], relativePath, skipped: true })
+      return
+    }
 
-            const parser = getParser(ext)
-            const result = isArtifactPath(filePath)
-              ? { nodes: [], edges: [] }
-              : parser.parse(content, filePath)
-            let language = "generic"
-            if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx" || ext === ".mts" || ext === ".cts" || ext === ".mjs" || ext === ".cjs") {
-              language = "typescript"
-            } else if (ext === ".py" || ext === ".pyw") {
-              language = "python"
-            } else if (ext === ".zig") {
-              language = "zig"
-            } else if (ext === ".rs") {
-              language = "rust"
-            } else if (ext === ".go") {
-              language = "go"
-            } else if (ext === ".c" || ext === ".cpp" || ext === ".cc" || ext === ".cxx" || ext === ".h" || ext === ".hpp" || ext === ".hh") {
-              language = "c_cpp"
-            } else if (ext === ".java" || ext === ".kt") {
-              language = "java"
-            } else if (ext === ".cs") {
-              language = "csharp"
-            } else if (ext === ".swift") {
-              language = "swift"
-            } else if (ext === ".rb") {
-              language = "ruby"
-            } else if (ext === ".php") {
-              language = "php"
-            } else if (ext === ".sh" || ext === ".bat" || ext === ".ps1") {
-              language = "shell"
-            } else if (ext === ".sql") {
-              language = "sql"
-            } else if (ext === ".html" || ext === ".css") {
-              language = "web"
-            } else if (ext === ".md") {
-              language = "markdown"
-            }
+    const contentHash = hashContent(content)
+    const existing = yield* repo.getFileByPath(filePath)
+    if (existing && existing.contentHash === contentHash && !input.force) {
+      yield* Ref.update(skippedRef, (n) => n + 1)
+      yield* Queue.offer(parsedQueue, { file: { id: "", path: filePath, contentHash: "", language: "", indexedAt: 0 }, nodes: [], edges: [], relativePath, skipped: true })
+      return
+    }
 
-            if (existing) {
-              yield* repo.deleteFile(existing.id)
-            }
-            const fileID = existing?.id ?? randomUUID()
-            const indexedAt = Date.now()
-            yield* repo.putFile({ id: fileID, path: filePath, contentHash, language, indexedAt })
-            for (const node of result.nodes) {
-              const fullNode: CodegraphNode = {
-                id: node.id,
-                fileID,
-                kind: node.kind,
-                name: node.name,
-                signature: node.signature,
-                startLine: node.startLine,
-                endLine: node.endLine,
-                code: node.code,
-              }
-              yield* repo.putNode(fullNode)
-            }
-            for (const edge of result.edges) {
-              yield* repo.putEdge({ id: edge.id, fromNodeID: edge.fromNodeID, toNodeID: edge.toNodeID, kind: edge.kind })
-            }
+    const parser = getParser(ext)
+    const result = isArtifactPath(filePath)
+      ? { nodes: [], edges: [] }
+      : parser.parse(content, filePath)
+    let language = "generic"
+    if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx" || ext === ".mts" || ext === ".cts" || ext === ".mjs" || ext === ".cjs") language = "typescript"
+    else if (ext === ".py" || ext === ".pyw") language = "python"
+    else if (ext === ".zig") language = "zig"
+    else if (ext === ".rs") language = "rust"
+    else if (ext === ".go") language = "go"
+    else if (ext === ".c" || ext === ".cpp" || ext === ".cc" || ext === ".cxx" || ext === ".h" || ext === ".hpp" || ext === ".hh") language = "c_cpp"
+    else if (ext === ".java" || ext === ".kt") language = "java"
+    else if (ext === ".cs") language = "csharp"
+    else if (ext === ".swift") language = "swift"
+    else if (ext === ".rb") language = "ruby"
+    else if (ext === ".php") language = "php"
+    else if (ext === ".sh" || ext === ".bat" || ext === ".ps1") language = "shell"
+    else if (ext === ".sql") language = "sql"
+    else if (ext === ".html" || ext === ".css") language = "web"
+    else if (ext === ".md") language = "markdown"
 
-            const fileKind = classifyFileKind(filePath, content)
-            if (fileKind) {
-              const lineCount = content.split("\n").length
-              yield* repo.putNode({
-                id: `${fileID}:artifact:${fileKind}`,
-                fileID,
-                kind: fileKind,
-                name: artifactFileName(filePath, fileKind),
-                signature: relativePath,
-                startLine: 1,
-                endLine: lineCount,
-                code: content,
-              })
-            }
+    const fileID = existing?.id ?? randomUUID()
+    const indexedAt = Date.now()
+    const file: CodegraphFile = { id: fileID, path: filePath, contentHash, language, indexedAt }
+    const nodes: CodegraphNode[] = result.nodes.map((n) => ({
+      id: n.id,
+      fileID,
+      kind: n.kind,
+      name: n.name,
+      signature: n.signature,
+      startLine: n.startLine,
+      endLine: n.endLine,
+      code: n.code,
+    }))
+    const edges: CodegraphEdge[] = result.edges.map((e) => ({
+      id: e.id,
+      fromNodeID: e.fromNodeID,
+      toNodeID: e.toNodeID,
+      kind: e.kind,
+    }))
 
-            yield* Ref.update(indexedRef, (n) => n + 1)
-          }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.gen(function* () {
-                yield* Effect.logWarning(`Failed to index file: ${relativePath}`, { cause: Cause.pretty(cause) })
-                yield* Ref.update(skippedRef, (n) => n + 1)
-              }),
-            ),
-            Effect.ensuring(
-              Effect.gen(function* () {
-                const doneCount = yield* Ref.updateAndGet(progressCounter, (n) => n + 1)
-                if (input.onProgress) {
-                  yield* input.onProgress({ file: relativePath, done: doneCount, total })
-                }
-              })
-            )
-          )
-        },
-        { concurrency: 8, discard: true }
-      )
+    const fileKind = classifyFileKind(filePath, content)
+    if (fileKind) {
+      const lineCount = content.split("\n").length
+      nodes.push({
+        id: `${fileID}:artifact:${fileKind}`,
+        fileID,
+        kind: fileKind,
+        name: artifactFileName(filePath, fileKind),
+        signature: relativePath,
+        startLine: 1,
+        endLine: lineCount,
+        code: content,
+      })
+    }
+
+    yield* Queue.offer(parsedQueue, {
+      file,
+      nodes,
+      edges,
+      relativePath,
+      skipped: false,
+      previousFileID: existing?.id,
+    })
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.gen(function* () {
+        yield* Effect.logWarning(`Failed to index file: ${relativePath}`, { cause: Cause.pretty(cause) })
+        yield* Ref.update(skippedRef, (n) => n + 1)
+      }),
+    ),
+    Effect.ensuring(
+      Effect.gen(function* () {
+        const doneCount = yield* Ref.updateAndGet(progressCounter, (n) => n + 1)
+        if (input.onProgress) {
+          yield* input.onProgress({ file: relativePath, done: doneCount, total })
+        }
+      }),
+    ),
+  )
+}
+
+// Producer/consumer pipeline. Producers (parseFiber) run concurrently and
+// offer parsed file data into a bounded queue. The consumer drains the
+// queue serially via Queue.take + a counter, exiting once `codeFiles.length`
+// items have been observed. Bounded queue gives us natural backpressure:
+// slow producers wait when the consumer is busy; slow consumer causes
+// producers to block on Queue.offer, which throttles their concurrency.
+const CHECKPOINT_EVERY = 200
+const writesSinceCheckpoint = yield* Ref.make(0)
+
+yield* Effect.forEach(codeFiles, parseFiber, { concurrency: 8, discard: true })
+
+// After all parse fibers return, the queue may still hold items. Drain
+// them all synchronously here (we know exactly how many to expect: one
+// per codeFiles entry, since every parseFiber calls Queue.offer exactly
+// once before returning).
+let processed = 0
+const totalExpected = codeFiles.length
+while (processed < totalExpected) {
+  const parsed = yield* Queue.take(parsedQueue)
+  processed++
+  if (parsed.skipped) continue
+  yield* repo.writeFileGraph({
+    file: parsed.file,
+    nodes: parsed.nodes,
+    edges: parsed.edges,
+    ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.gen(function* () {
+        yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
+          cause: Cause.pretty(cause),
+        })
+        yield* Ref.update(skippedRef, (n) => n + 1)
+      }),
+    ),
+  )
+  yield* Ref.update(indexedRef, (n) => n + 1)
+  if (processed % CHECKPOINT_EVERY === 0) {
+    yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
+  }
+}
+// Shut down the queue to release any resources (now safe: we've drained
+// every item we expect).
+yield* Queue.shutdown(parsedQueue)
+// Final checkpoint regardless of how many files we processed.
+yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
 
       const isCancelled = yield* Ref.get(cancelled)
       if (!isCancelled) {
@@ -540,4 +591,7 @@ function escapeRegex(s: string): string {
   return s.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")
 }
 
+// Note: CodegraphRepo.defaultLayer already provides Database.defaultLayer,
+// so we don't provide it again here. Tests that need a custom DB path should
+// build the layer as `CodegraphIndexer.layer.pipe(Layer.provide(FSUtil.defaultLayer), Layer.provide(Database.layerFromPath(...)))`.
 export const defaultLayer = layer.pipe(Layer.provide(CodegraphRepo.defaultLayer))

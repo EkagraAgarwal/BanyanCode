@@ -1169,8 +1169,11 @@ export function Prompt(props: PromptProps) {
             if (res.data?.started) {
               toast.show({ message: `Building code graph for ${res.data.root ?? "workspace"}`, variant: "info" })
             } else {
+              const reason = res.data?.reason ?? (res as { error?: { message?: string } }).error?.message
               toast.show({
-                message: res.data?.reason ?? "Could not start codegraph build (no response from server)",
+                message: reason
+                  ? `Could not start codegraph build: ${reason}`
+                  : "Could not start codegraph build (no response from server; the server may be busy or unresponsive)",
                 variant: "error",
               })
             }
