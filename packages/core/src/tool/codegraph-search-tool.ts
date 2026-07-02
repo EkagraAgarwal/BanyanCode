@@ -3,6 +3,7 @@ export * as CodegraphSearchTool from "./codegraph-search-tool"
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { Banyan } from "../banyancode"
+import { traced } from "../observability/trace"
 import { CodegraphNodeSchema } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
@@ -102,66 +103,73 @@ export const locationLayer = Layer.effectDiscard(
         execute: (input, context) => {
           const limit = input.limit ?? 50
           const modes = input.modes ?? ["fuzzy"]
-          return Effect.gen(function* () {
-            yield* permission.assert({
-              action: name,
-              resources: ["*"],
-              save: ["*"],
-              metadata: input,
-              sessionID: context.sessionID,
-              agent: context.agent,
-              source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-            })
+          return traced(
+            process.cwd(),
+            context.sessionID,
+            name,
+            input,
+            (output) => `results=${output.results.length}`,
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name,
+                resources: ["*"],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
 
-            const lists: SearchResult[][] = []
+              const lists: SearchResult[][] = []
 
-            for (const mode of modes) {
-              if (mode === "exact") {
-                lists.push(yield* search.searchExact(input.query))
-              }
-              if (mode === "prefix") {
-                lists.push(yield* search.searchPrefix(input.query))
-              }
-              if (mode === "fuzzy") {
-                lists.push(yield* search.search(input.query, { modes: fuzzyModes, limit }))
-              }
-              if (mode === "structural") {
-                const q = input.query.toLowerCase()
-                let nodes: Banyan.CodegraphNode[] = []
-                if (q.includes("route") || q.includes("endpoint")) {
-                  nodes = yield* structural.findHTTPRoutes({})
-                } else if (q.includes("async")) {
-                  nodes = yield* structural.findAsyncFunctions({})
-                } else if (q.includes("recursive")) {
-                  nodes = yield* structural.findRecursiveFunctions({})
-                } else if (q.includes("implement") || q.includes("extends")) {
-                  const name = input.query.split(/\s+/).pop() ?? input.query
-                  nodes = yield* structural.findImplementations({ interfaceName: name })
-                } else if (q.includes("override") || q.includes("method")) {
-                  const name = input.query.split(/\s+/).pop() ?? input.query
-                  nodes = yield* structural.findOverrides({ methodName: name })
+              for (const mode of modes) {
+                if (mode === "exact") {
+                  lists.push(yield* search.searchExact(input.query))
                 }
-                lists.push(nodes.map((node) => ({ node, score: 1, signals: {} })))
-              }
-              if (mode === "graph") {
-                const symbols = yield* intel.findSymbol({ name: input.query })
-                if (symbols[0]) {
-                  const related = yield* intel.findRelated({ nodeID: symbols[0].id, depth: 2 })
-                  lists.push(related.map((node) => ({ node, score: 1, signals: { graph: 1 } })))
+                if (mode === "prefix") {
+                  lists.push(yield* search.searchPrefix(input.query))
+                }
+                if (mode === "fuzzy") {
+                  lists.push(yield* search.search(input.query, { modes: fuzzyModes, limit }))
+                }
+                if (mode === "structural") {
+                  const q = input.query.toLowerCase()
+                  let nodes: Banyan.CodegraphNode[] = []
+                  if (q.includes("route") || q.includes("endpoint")) {
+                    nodes = yield* structural.findHTTPRoutes({})
+                  } else if (q.includes("async")) {
+                    nodes = yield* structural.findAsyncFunctions({})
+                  } else if (q.includes("recursive")) {
+                    nodes = yield* structural.findRecursiveFunctions({})
+                  } else if (q.includes("implement") || q.includes("extends")) {
+                    const name = input.query.split(/\s+/).pop() ?? input.query
+                    nodes = yield* structural.findImplementations({ interfaceName: name })
+                  } else if (q.includes("override") || q.includes("method")) {
+                    const name = input.query.split(/\s+/).pop() ?? input.query
+                    nodes = yield* structural.findOverrides({ methodName: name })
+                  }
+                  lists.push(nodes.map((node) => ({ node, score: 1, signals: {} })))
+                }
+                if (mode === "graph") {
+                  const symbols = yield* intel.findSymbol({ name: input.query })
+                  if (symbols[0]) {
+                    const related = yield* intel.findRelated({ nodeID: symbols[0].id, depth: 2 })
+                    lists.push(related.map((node) => ({ node, score: 1, signals: { graph: 1 } })))
+                  }
+                }
+                if (mode === "subsystem") {
+                  const { entry, related } = yield* intel.findSubsystem({ query: input.query })
+                  lists.push([{ node: entry, score: 2, signals: {} }, ...related.map((node) => ({ node, score: 1, signals: {} }))])
+                }
+                if (mode === "tests") {
+                  const nodes = yield* intel.findTests({ symbol: input.query })
+                  lists.push(nodes.map((node) => ({ node, score: 1, signals: {} })))
                 }
               }
-              if (mode === "subsystem") {
-                const { entry, related } = yield* intel.findSubsystem({ query: input.query })
-                lists.push([{ node: entry, score: 2, signals: {} }, ...related.map((node) => ({ node, score: 1, signals: {} }))])
-              }
-              if (mode === "tests") {
-                const nodes = yield* intel.findTests({ symbol: input.query })
-                lists.push(nodes.map((node) => ({ node, score: 1, signals: {} })))
-              }
-            }
 
-            return { results: mergeResults(lists, limit) }
-          }).pipe(Effect.mapError(() => new ToolFailure({ message: "codegraph_search failed" })))
+              return { results: mergeResults(lists, limit) }
+            }),
+          ).pipe(Effect.mapError(() => new ToolFailure({ message: "codegraph_search failed" })))
         },
       }),
     })

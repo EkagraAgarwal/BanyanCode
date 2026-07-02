@@ -3,6 +3,7 @@ export * as RepositoryIntelTool from "./repository-intel-tool"
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { Banyan } from "../banyancode"
+import { traced } from "../observability/trace"
 import { CodegraphNodeSchema } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
@@ -84,7 +85,7 @@ export const locationLayer = Layer.effectDiscard(
         output: OutputNodes,
         toModelOutput: ({ output }) => [{ type: "text", text: `found ${output.nodes.length} symbols` }],
         execute: (input, context) =>
-          Effect.gen(function* () {
+          traced(process.cwd(), context.sessionID, name_find_symbol, input, (output) => `nodes=${output.nodes.length}`, Effect.gen(function* () {
             yield* permission.assert({
               action: name_find_symbol,
               resources: ["*"],
@@ -101,7 +102,7 @@ export const locationLayer = Layer.effectDiscard(
               exact: input.exact,
             })
             return { nodes }
-          }).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_find_symbol failed" }))),
+          })).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_find_symbol failed" }))),
       }),
       [name_find_subsystem]: Tool.make({
         description: "Find a subsystem entry point and related nodes within a depth-bounded neighborhood.",
@@ -111,18 +112,25 @@ export const locationLayer = Layer.effectDiscard(
           { type: "text", text: `entry=${output.entry.name} related=${output.related.length}` },
         ],
         execute: (input, context) =>
-          Effect.gen(function* () {
-            yield* permission.assert({
-              action: name_find_subsystem,
-              resources: ["*"],
-              save: ["*"],
-              metadata: input,
-              sessionID: context.sessionID,
-              agent: context.agent,
-              source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-            })
-            return yield* intel.findSubsystem({ query: input.query, maxDepth: input.maxDepth })
-          }).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_find_subsystem failed" }))),
+          traced(
+            process.cwd(),
+            context.sessionID,
+            name_find_subsystem,
+            input,
+            (output) => `related=${output.related.length}`,
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name_find_subsystem,
+                resources: ["*"],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+              return yield* intel.findSubsystem({ query: input.query, maxDepth: input.maxDepth })
+            }),
+          ).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_find_subsystem failed" }))),
       }),
       [name_find_entrypoints]: Tool.make({
         description: "Find entrypoint functions and classes for a feature by matching file paths.",
@@ -130,7 +138,7 @@ export const locationLayer = Layer.effectDiscard(
         output: OutputNodes,
         toModelOutput: ({ output }) => [{ type: "text", text: `found ${output.nodes.length} entrypoints` }],
         execute: (input, context) =>
-          Effect.gen(function* () {
+          traced(process.cwd(), context.sessionID, name_find_entrypoints, input, (output) => `nodes=${output.nodes.length}`, Effect.gen(function* () {
             yield* permission.assert({
               action: name_find_entrypoints,
               resources: ["*"],
@@ -142,7 +150,7 @@ export const locationLayer = Layer.effectDiscard(
             })
             const nodes = yield* intel.findEntrypoints({ feature: input.feature })
             return { nodes }
-          }).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_find_entrypoints failed" }))),
+          })).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_find_entrypoints failed" }))),
       }),
       [name_find_tests]: Tool.make({
         description: "Find test nodes that reference the given symbol.",
@@ -150,7 +158,7 @@ export const locationLayer = Layer.effectDiscard(
         output: OutputNodes,
         toModelOutput: ({ output }) => [{ type: "text", text: `found ${output.nodes.length} tests` }],
         execute: (input, context) =>
-          Effect.gen(function* () {
+          traced(process.cwd(), context.sessionID, name_find_tests, input, (output) => `nodes=${output.nodes.length}`, Effect.gen(function* () {
             yield* permission.assert({
               action: name_find_tests,
               resources: ["*"],
@@ -162,7 +170,7 @@ export const locationLayer = Layer.effectDiscard(
             })
             const nodes = yield* intel.findTests({ symbol: input.symbol })
             return { nodes }
-          }).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_find_tests failed" }))),
+          })).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_find_tests failed" }))),
       }),
       [name_find_related]: Tool.make({
         description: "Find nodes related to a given node ID via graph edges within a depth limit.",
@@ -170,7 +178,7 @@ export const locationLayer = Layer.effectDiscard(
         output: OutputNodes,
         toModelOutput: ({ output }) => [{ type: "text", text: `found ${output.nodes.length} related nodes` }],
         execute: (input, context) =>
-          Effect.gen(function* () {
+          traced(process.cwd(), context.sessionID, name_find_related, input, (output) => `nodes=${output.nodes.length}`, Effect.gen(function* () {
             yield* permission.assert({
               action: name_find_related,
               resources: ["*"],
@@ -182,7 +190,7 @@ export const locationLayer = Layer.effectDiscard(
             })
             const nodes = yield* intel.findRelated({ nodeID: input.nodeID, depth: input.depth })
             return { nodes }
-          }).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_find_related failed" }))),
+          })).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_find_related failed" }))),
       }),
       [name_estimate_impact]: Tool.make({
         description: "Estimate blast radius for changes to the given file paths.",
@@ -195,18 +203,25 @@ export const locationLayer = Layer.effectDiscard(
           },
         ],
         execute: (input, context) =>
-          Effect.gen(function* () {
-            yield* permission.assert({
-              action: name_estimate_impact,
-              resources: ["*"],
-              save: ["*"],
-              metadata: input,
-              sessionID: context.sessionID,
-              agent: context.agent,
-              source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-            })
-            return yield* intel.estimateImpact({ paths: [...input.paths], maxDepth: input.maxDepth })
-          }).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_estimate_impact failed" }))),
+          traced(
+            process.cwd(),
+            context.sessionID,
+            name_estimate_impact,
+            input,
+            (output) => `blastRadius=${output.blastRadius}`,
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name_estimate_impact,
+                resources: ["*"],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+              return yield* intel.estimateImpact({ paths: [...input.paths], maxDepth: input.maxDepth })
+            }),
+          ).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_estimate_impact failed" }))),
       }),
       [name_trace_execution]: Tool.make({
         description: "Trace forward execution flow from a node via calls and imports edges.",
@@ -214,7 +229,7 @@ export const locationLayer = Layer.effectDiscard(
         output: OutputNodes,
         toModelOutput: ({ output }) => [{ type: "text", text: `trace ${output.nodes.length} nodes` }],
         execute: (input, context) =>
-          Effect.gen(function* () {
+          traced(process.cwd(), context.sessionID, name_trace_execution, input, (output) => `nodes=${output.nodes.length}`, Effect.gen(function* () {
             yield* permission.assert({
               action: name_trace_execution,
               resources: ["*"],
@@ -226,7 +241,7 @@ export const locationLayer = Layer.effectDiscard(
             })
             const nodes = yield* intel.traceExecution({ from: input.from, maxDepth: input.maxDepth })
             return { nodes }
-          }).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_trace_execution failed" }))),
+          })).pipe(Effect.mapError(() => new ToolFailure({ message: "repo_trace_execution failed" }))),
       }),
     })
   }),
