@@ -915,3 +915,122 @@ test("projects live context updates with their message ID", async () => {
     app.renderer.destroy()
   }
 })
+
+function sessionInfo(id: string, parentID: string | undefined) {
+  return {
+    id,
+    parentID,
+    projectID: "proj_test",
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 0, updated: 0 },
+    title: id,
+    location: { directory },
+  }
+}
+
+// Mounts a DataProvider whose `/api/session/:id` responses are driven by the
+// given parent map (sessionID -> parentID). Roots omit the entry. Reused across
+// the family-index tests below.
+async function mountData(parents: Record<string, string>) {
+  const calls = createFetch((url) => {
+    const match = url.pathname.match(/^\/api\/session\/([^/]+)$/)
+    if (match && match[1] !== "active") return json({ data: sessionInfo(match[1], parents[match[1]]) })
+  })
+  let data!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+  function Probe() {
+    data = useData()
+    onMount(ready)
+    return <box />
+  }
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <SDKProvider client={createClient(calls.fetch)} api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  ))
+  await mounted
+  return { data, app }
+}
+
+test("groups an orphan child under its missing parent until the root arrives", async () => {
+  const { data, app } = await mountData({ child: "root" })
+  try {
+    await data.session.refresh("child")
+    // Parent info is absent, so the missing parent is the furthest-known ancestor.
+    expect(data.session.root("child")).toBe("root")
+    expect(data.session.family("child")).toEqual(["child"])
+    expect(data.session.family("root")).toEqual(["child"])
+
+    await data.session.refresh("root")
+    expect(data.session.root("root")).toBe("root")
+    // The tentative root entry folds into the now-known root's family.
+    expect(data.session.family("child")).toEqual(["child", "root"])
+    expect(data.session.family("root")).toEqual(["child", "root"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("indexes arbitrarily deep nesting under a single root", async () => {
+  const { data, app } = await mountData({ grandchild: "child", child: "root" })
+  try {
+    await data.session.refresh("grandchild")
+    expect(data.session.root("grandchild")).toBe("child")
+    expect(data.session.family("grandchild")).toEqual(["grandchild"])
+
+    await data.session.refresh("child")
+    // grandchild's tentative family (keyed by the missing "child") merges up
+    // toward the still-missing "root".
+    expect(data.session.root("child")).toBe("root")
+    expect(data.session.family("grandchild")).toEqual(["grandchild", "child"])
+
+    await data.session.refresh("root")
+    expect(data.session.root("grandchild")).toBe("root")
+    expect(data.session.root("child")).toBe("root")
+    expect(data.session.family("root")).toEqual(["grandchild", "child", "root"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("re-registering an existing session is idempotent", async () => {
+  const { data, app } = await mountData({ grandchild: "child", child: "root" })
+  try {
+    await data.session.refresh("grandchild")
+    await data.session.refresh("child")
+    await data.session.refresh("root")
+    const before = data.session.family("root")
+    expect(before).toEqual(["grandchild", "child", "root"])
+
+    await data.session.refresh("child")
+    await data.session.refresh("root")
+    await data.session.refresh("grandchild")
+    expect(data.session.family("root")).toEqual(before)
+    expect(data.session.family("root")).toHaveLength(3)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("stops at the last non-repeating ancestor on a parent cycle", async () => {
+  const { data, app } = await mountData({ x: "y", y: "x" })
+  try {
+    await data.session.refresh("x")
+    await data.session.refresh("y")
+    // Does not hang; walking up from "y" stops before re-entering "x".
+    expect(data.session.root("y")).toBe("x")
+    expect(data.session.family("y")).toEqual(["x", "y"])
+  } finally {
+    app.renderer.destroy()
+  }
+})

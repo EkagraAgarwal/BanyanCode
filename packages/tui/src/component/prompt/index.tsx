@@ -160,13 +160,12 @@ export function Prompt(props: PromptProps) {
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
-  const activeSubagents = createMemo(
-    () =>
-      data.session
-        .list()
-        .filter((session) => session.parentID === props.sessionID && data.session.status(session.id) === "running")
-        .length,
-  )
+  const activeSubagents = createMemo(() => {
+    if (!props.sessionID) return 0
+    return data.session.family(props.sessionID).filter(
+      (id) => id !== props.sessionID && data.session.status(id) === "running",
+    ).length
+  })
   const runningShells = createMemo(
     () => data.shell.list(currentLocation()).filter((shell) => shell.metadata.sessionID === props.sessionID).length,
   )

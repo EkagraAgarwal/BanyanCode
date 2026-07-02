@@ -172,16 +172,7 @@ export function Session() {
   const messages = sessionMessages
   const descendantSessionIDs = createMemo(() => {
     if (session()?.parentID) return []
-    const sessions = data.session.list()
-    const childrenByParent = sessions.reduce((acc, item) => {
-      if (!item.parentID) return acc
-      acc.set(item.parentID, [...(acc.get(item.parentID) ?? []), item.id])
-      return acc
-    }, new Map<string, string[]>())
-    function collect(sessionID: string): string[] {
-      return (childrenByParent.get(sessionID) ?? []).flatMap((id) => [id, ...collect(id)])
-    }
-    return collect(route.sessionID)
+    return data.session.family(route.sessionID).filter((id) => id !== route.sessionID)
   })
   const permissions = createMemo(() => {
     if (session()?.parentID) return []

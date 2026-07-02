@@ -44,6 +44,10 @@ type LocationData = {
 type Data = {
   session: {
     info: Record<string, SessionV2Info>
+    // Family index keyed by a family's root (or furthest-known-ancestor when the
+    // true root is not yet loaded). The value is a flat deduplicated list of every
+    // session ID in that family, including the key itself once its info arrives.
+    family: Record<string, string[]>
     status: Record<string, DataSessionStatus>
     message: Record<string, SessionMessage[]>
     permission: Record<string, PermissionV2Request[]>
@@ -77,6 +81,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const [store, setStore] = createStore<Data>({
       session: {
         info: {},
+        family: {},
         status: {},
         message: {},
         permission: {},
@@ -147,6 +152,46 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       const created = new Map<string, number>()
       messageIndex.set(sessionID, created)
       return created
+    }
+
+    // Walk parentID upward through loaded session info to the family root. When a
+    // parent's info is missing, that missing ID is the furthest-known ancestor and
+    // is returned so orphan subtrees group under it until the parent arrives. A
+    // seen set guards against parent cycles, stopping at the last non-repeating
+    // ancestor.
+    function resolveRoot(sessionID: string) {
+      let current = sessionID
+      let parentID = store.session.info[sessionID]?.parentID
+      const seen = new Set([sessionID])
+      while (parentID) {
+        if (seen.has(parentID)) break
+        seen.add(parentID)
+        current = parentID
+        parentID = store.session.info[parentID]?.parentID
+      }
+      return current
+    }
+
+    // Register one session into the family index. Idempotent: refreshing an
+    // existing session never duplicates its ID. When a tentative family keyed by
+    // sessionID exists (descendants arrived while sessionID's own info was
+    // absent) but sessionID turns out to have a parent, fold the orphan subtree
+    // into the resolved root's family and drop the tentative entry.
+    function registerSession(sessionID: string) {
+      const info = store.session.info[sessionID]
+      if (!info) return
+      const rootID = resolveRoot(sessionID)
+      setStore("session", "family", produce((draft) => {
+        if (sessionID !== rootID && draft[sessionID]) {
+          const members = draft[rootID] ??= []
+          for (const id of draft[sessionID]) {
+            if (!members.includes(id)) members.push(id)
+          }
+          delete draft[sessionID]
+        }
+        const family = draft[rootID] ??= []
+        if (!family.includes(sessionID)) family.push(sessionID)
+      }))
     }
 
     function handleEvent(event: V2Event) {
@@ -599,11 +644,18 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         get(sessionID: string) {
           return store.session.info[sessionID]
         },
+        root(sessionID: string) {
+          return resolveRoot(sessionID)
+        },
+        family(sessionID: string) {
+          return store.session.family[resolveRoot(sessionID)] ?? []
+        },
         status(sessionID: string) {
           return store.session.status[sessionID] ?? "idle"
         },
         async refresh(sessionID: string) {
           setStore("session", "info", sessionID, mutable(await sdk.api.session.get({ sessionID })))
+          registerSession(sessionID)
         },
         message: {
           ids(sessionID: string) {
@@ -795,15 +847,16 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             directory: defaultLocation().directory,
             workspace: defaultLocation().workspaceID,
           })
-          .then((response) =>
+          .then((response) => {
             setStore(
               "session",
               "info",
               produce((draft) => {
                 for (const session of response.data) draft[session.id] = mutable(session)
               }),
-            ),
-          ),
+            )
+            for (const session of response.data) registerSession(session.id)
+          }),
         sdk.api.session
           .active()
           .then((active) =>
