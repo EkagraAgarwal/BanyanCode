@@ -24,6 +24,7 @@ import { WorkspaceApi } from "./groups/workspace"
 import { Api } from "@opencode-ai/server/api"
 // GlobalEventSchema snapshots the registry after event-producing groups register their variants.
 import { GlobalApi } from "./groups/global"
+import { RepositoryIntelApi } from "./groups/repository-intel"
 import { Authorization } from "./middleware/authorization"
 import { SchemaErrorMiddleware } from "./middleware/schema-error"
 
@@ -45,6 +46,7 @@ export const RootHttpApi = HttpApi.make("opencode-root")
   .addHttpApi(ControlApi)
   .addHttpApi(ControlPlaneApi)
   .addHttpApi(GlobalApi)
+  .addHttpApi(RepositoryIntelApi)
   .middleware(SchemaErrorMiddleware)
   .middleware(Authorization)
 

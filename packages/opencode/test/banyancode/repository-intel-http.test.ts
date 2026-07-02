@@ -1,30 +1,29 @@
-import { NodeHttpServer } from "@effect/platform-node"
-import { describe, expect } from "bun:test"
-import { Context, Effect, Layer, Option } from "effect"
-import { HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
+import { describe, expect, test } from "bun:test"
+import { Effect, Layer } from "effect"
+import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { Auth } from "../../src/auth"
-import { Config } from "../../src/config/config"
-import { Installation } from "../../src/installation"
-import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
-import { ServerAuth } from "../../src/server/auth"
+import { NodeHttpServer } from "@effect/platform-node"
+import { Context, Option } from "effect"
 import { RootHttpApi } from "../../src/server/routes/instance/httpapi/api"
-import { GlobalPaths } from "../../src/server/routes/instance/httpapi/groups/global"
+import { RepositoryIntelPaths } from "../../src/server/routes/instance/httpapi/groups/repository-intel"
 import { controlHandlers } from "../../src/server/routes/instance/httpapi/handlers/control"
 import { controlPlaneHandlers } from "../../src/server/routes/instance/httpapi/handlers/control-plane"
 import { globalHandlers } from "../../src/server/routes/instance/httpapi/handlers/global"
 import { repositoryIntelHandlers } from "../../src/server/routes/instance/httpapi/handlers/repository-intel"
 import { authorizationLayer } from "../../src/server/routes/instance/httpapi/middleware/authorization"
 import { schemaErrorLayer } from "../../src/server/routes/instance/httpapi/middleware/schema-error"
-import { repositoryIntelServiceMocks } from "./repository-intel-mocks"
+import { repositoryIntelServiceMocks } from "../server/repository-intel-mocks"
+import { Auth } from "../../src/auth"
+import { Config } from "../../src/config/config"
+import { Installation } from "../../src/installation"
+import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
+import { ServerAuth } from "../../src/server/auth"
 import { testEffect } from "../lib/effect"
 
 const apiLayer = HttpRouter.serve(
   HttpApiBuilder.layer(RootHttpApi).pipe(
     Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers, repositoryIntelHandlers]),
     Layer.provide([authorizationLayer, schemaErrorLayer]),
-    // Raw HttpApi routes expose an opaque handler context at the request boundary.
-    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
     HttpRouter.provideRequest(Layer.succeedContext(Context.empty() as Context.Context<unknown>)),
   ),
   { disableListenLog: true, disableLogger: true },
@@ -43,27 +42,31 @@ const apiLayer = HttpRouter.serve(
   Layer.provide(ServerAuth.Config.layer({ password: Option.none(), username: "opencode" })),
   Layer.provide(repositoryIntelServiceMocks),
 )
+
 const it = testEffect(apiLayer)
 
-describe("global HttpApi", () => {
-  it.live("upgrades to latest when the request body is omitted", () =>
+describe("repository-intel HttpApi", () => {
+  it.live("findSubsystem returns entry and related", () =>
     Effect.gen(function* () {
-      const response = yield* HttpClient.post(GlobalPaths.upgrade)
-
+      const response = yield* HttpClientRequest.post(RepositoryIntelPaths.findSubsystem).pipe(
+        HttpClientRequest.bodyJson({ query: "CodegraphRepo" }),
+        Effect.flatMap(HttpClient.execute),
+      )
       expect(response.status).toBe(200)
-      expect(yield* response.json).toEqual({ success: true, version: "9.9.9" })
+      const body = (yield* response.json) as { entry: { name: string }; related: unknown[] }
+      expect(body.entry.name).toBe("empty")
+      expect(Array.isArray(body.related)).toBe(true)
     }),
   )
 
-  it.live("rejects malformed upgrade payloads", () =>
+  it.live("search returns results array", () =>
     Effect.gen(function* () {
-      const response = yield* HttpClientRequest.post(GlobalPaths.upgrade).pipe(
-        HttpClientRequest.setBody(HttpBody.text("{", "application/json")),
-        HttpClient.execute,
+      const response = yield* HttpClientRequest.post(RepositoryIntelPaths.search).pipe(
+        HttpClientRequest.bodyJson({ query: "build", modes: ["fuzzy"] }),
+        Effect.flatMap(HttpClient.execute),
       )
-
-      expect(response.status).toBe(400)
-      expect(yield* response.json).toEqual({ success: false, error: "Invalid request body" })
+      expect(response.status).toBe(200)
+      expect(Array.isArray(yield* response.json)).toBe(true)
     }),
   )
 })
