@@ -3,6 +3,9 @@ export * as BanyanTools from "./tools-layer"
 import { Layer } from "effect"
 import { CodegraphTools } from "../tool/codegraph"
 import { CodeFindTool } from "../tool/code-find"
+import { CodegraphSearchTool } from "../tool/codegraph-search-tool"
+import { RepositoryIntelTool } from "../tool/repository-intel-tool"
+import { StructuralQueriesTool } from "../tool/structural-queries-tool"
 import { EditPlanTool } from "../tool/edit-plan"
 import { MeshControlTool } from "../tool/mesh-control"
 import { MeshSubscribeTool } from "../tool/mesh-subscribe"
@@ -29,6 +32,9 @@ export const locationLayer = Layer.mergeAll(
   MemoryTools.locationLayer,
   CodegraphTools.locationLayer,
   CodeFindTool.locationLayer,
+  RepositoryIntelTool.locationLayer,
+  CodegraphSearchTool.locationLayer,
+  StructuralQueriesTool.locationLayer,
   EditPlanTool.locationLayer,
   SystemStatusTool.layer,
   WebSearchFreeTool.layer,

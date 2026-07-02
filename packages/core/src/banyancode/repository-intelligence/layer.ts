@@ -34,7 +34,7 @@ export const layer = Layer.effect(
       kind?: CodegraphNode["kind"]
       file?: string
       exact?: boolean
-    }): Effect.Effect<CodegraphNode[], never, CodegraphRepo.Service> =>
+    }): Effect.Effect<CodegraphNode[], never, never> =>
       Effect.gen(function* () {
         let fileID: string | undefined
         if (input.file) {
@@ -64,7 +64,7 @@ export const layer = Layer.effect(
     const findSubsystem = (input: {
       query: string
       maxDepth?: number
-    }): Effect.Effect<{ entry: CodegraphNode; related: CodegraphNode[] }, never, CodegraphRepo.Service> =>
+    }): Effect.Effect<{ entry: CodegraphNode; related: CodegraphNode[] }, never, never> =>
       Effect.gen(function* () {
         const candidates = yield* repo.searchNodes({ name: input.query, limit: 20 })
         const sorted = candidates.slice().sort((a, b) => kindRank(a.kind) - kindRank(b.kind))
@@ -98,7 +98,7 @@ export const layer = Layer.effect(
         return { entry, related }
       })
 
-    const walkSubsystem = (nodeID: string, maxDepth: number): Effect.Effect<CodegraphNode[], never, CodegraphRepo.Service> =>
+    const walkSubsystem = (nodeID: string, maxDepth: number): Effect.Effect<CodegraphNode[], never, never> =>
       Effect.gen(function* () {
         const visited = new Set<string>([nodeID])
         const result: CodegraphNode[] = []
@@ -137,7 +137,7 @@ export const layer = Layer.effect(
     // ------------------------------------------------------------------
     const findEntrypoints = (input: {
       feature: string
-    }): Effect.Effect<CodegraphNode[], never, CodegraphRepo.Service> =>
+    }): Effect.Effect<CodegraphNode[], never, never> =>
       Effect.gen(function* () {
         const allFiles = yield* repo.listAllFiles()
         const featureLower = input.feature.toLowerCase()
@@ -160,7 +160,7 @@ export const layer = Layer.effect(
     // ------------------------------------------------------------------
     const findTests = (input: {
       symbol: string
-    }): Effect.Effect<CodegraphNode[], never, CodegraphRepo.Service> =>
+    }): Effect.Effect<CodegraphNode[], never, never> =>
       Effect.gen(function* () {
         const allFiles = yield* repo.listAllFiles()
         const allNodes = yield* repo.listAllNodes()
@@ -200,7 +200,7 @@ export const layer = Layer.effect(
     const findRelated = (input: {
       nodeID: string
       depth?: number
-    }): Effect.Effect<CodegraphNode[], never, CodegraphRepo.Service> =>
+    }): Effect.Effect<CodegraphNode[], never, never> =>
       Effect.gen(function* () {
         const maxDepth = input.depth ?? 2
         const visited = new Set<string>([input.nodeID])
@@ -245,7 +245,7 @@ export const layer = Layer.effect(
       direct: CodegraphNode[]
       transitive: CodegraphNode[]
       blastRadius: number
-    }, never, CodegraphRepo.Service> =>
+    }, never, never> =>
       Effect.gen(function* () {
         const maxDepth = input.maxDepth ?? 2
 
@@ -295,7 +295,7 @@ export const layer = Layer.effect(
     const traceExecution = (input: {
       from: string
       maxDepth?: number
-    }): Effect.Effect<CodegraphNode[], never, CodegraphRepo.Service> =>
+    }): Effect.Effect<CodegraphNode[], never, never> =>
       Effect.gen(function* () {
         const maxDepth = input.maxDepth ?? 4
         const visited = new Set<string>([input.from])
