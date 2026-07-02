@@ -5774,6 +5774,35 @@ export type GlobalCodegraphCancelResponses = {
 
 export type GlobalCodegraphCancelResponse = GlobalCodegraphCancelResponses[keyof GlobalCodegraphCancelResponses]
 
+export type GlobalCodegraphForceKillData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/codegraph-force-kill"
+}
+
+export type GlobalCodegraphForceKillErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalCodegraphForceKillError = GlobalCodegraphForceKillErrors[keyof GlobalCodegraphForceKillErrors]
+
+export type GlobalCodegraphForceKillResponses = {
+  /**
+   * Result of the force-kill attempt
+   */
+  200: {
+    ok: boolean
+    message: string
+  }
+}
+
+export type GlobalCodegraphForceKillResponse =
+  GlobalCodegraphForceKillResponses[keyof GlobalCodegraphForceKillResponses]
+
 export type GlobalCodegraphBuildData = {
   body?: {
     root?: string

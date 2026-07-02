@@ -401,20 +401,39 @@ export const layer = Layer.effect(
         const generatedNodes = allNodes.filter((n) => n.kind === "generated")
 
         for (const testNode of testNodes) {
+          if (yield* Ref.get(cancelled)) {
+            yield* Effect.logWarning("codegraph: cancelled during tested_by")
+            break
+          }
           const testFile = fileByID.get(testNode.fileID)
           if (!testFile || !testNode.code) continue
-          for (const node of allNodes) {
-            if (node.fileID === testNode.fileID) continue
-            if (node.kind === "test") continue
-            const nodeFile = fileByID.get(node.fileID)
-            if (!nodeFile) continue
-            if (/\.(test|spec)\./i.test(nodeFile.path)) continue
-            if (!testNode.code.includes(node.name)) continue
-            crossEdges.push({ fromNodeID: node.id, toNodeID: testNode.id, kind: "tested_by" })
+          // Tokenize the test file's source once into a unique identifier set,
+          // then for each identifier look it up in the name -> nodes index
+          // instead of substring-scanning the full test code for every
+          // production node. 3,067-file workspaces were taking >5 min here.
+          const referenced = new Set<string>()
+          for (const m of testNode.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
+            referenced.add(m[0])
+          }
+          for (const name of referenced) {
+            const candidates = nodeMap.get(name)
+            if (!candidates) continue
+            for (const node of candidates) {
+              if (node.fileID === testNode.fileID) continue
+              if (node.kind === "test") continue
+              const nodeFile = fileByID.get(node.fileID)
+              if (!nodeFile) continue
+              if (/\.(test|spec)\./i.test(nodeFile.path.toLowerCase())) continue
+              crossEdges.push({ fromNodeID: node.id, toNodeID: testNode.id, kind: "tested_by" })
+            }
           }
         }
 
         for (const pkg of packageNodes) {
+          if (yield* Ref.get(cancelled)) {
+            yield* Effect.logWarning("codegraph: cancelled during configured_by")
+            break
+          }
           const pkgFile = fileByID.get(pkg.fileID)
           if (!pkgFile) continue
           const pkgDir = fileDir(pkgFile.path)
@@ -439,29 +458,38 @@ export const layer = Layer.effect(
           if (docker) crossEdges.push({ fromNodeID: pkg.id, toNodeID: docker.id, kind: "built_by" })
         }
 
-        const routeHandlerRegex = /app\.(?:get|post|put|delete|patch|all|use)\s*\([^,]+,\s*(\w+)\s*\)/g
-        for (const routeNode of routeNodes) {
-          if (!routeNode.code) continue
-          for (const match of routeNode.code.matchAll(routeHandlerRegex)) {
-            const handlerName = match[1]
-            const handlers = nodeMap.get(handlerName)
-            const handler = handlers?.find((n) => n.fileID === routeNode.fileID)
-            if (handler) crossEdges.push({ fromNodeID: routeNode.id, toNodeID: handler.id, kind: "mounts" })
+        if (yield* Ref.get(cancelled)) {
+          yield* Effect.logWarning("codegraph: cancelled before mounts")
+          // Fall through; the putEdges call below will simply write what we have so far.
+        } else {
+          const routeHandlerRegex = /app\.(?:get|post|put|delete|patch|all|use)\s*\([^,]+,\s*(\w+)\s*\)/g
+          for (const routeNode of routeNodes) {
+            if (!routeNode.code) continue
+            for (const match of routeNode.code.matchAll(routeHandlerRegex)) {
+              const handlerName = match[1]
+              const handlers = nodeMap.get(handlerName)
+              const handler = handlers?.find((n) => n.fileID === routeNode.fileID)
+              if (handler) crossEdges.push({ fromNodeID: routeNode.id, toNodeID: handler.id, kind: "mounts" })
+            }
           }
-        }
 
-        for (const gen of generatedNodes) {
-          const genFile = fileByID.get(gen.fileID)
-          if (!genFile) continue
-          const genDir = fileDir(genFile.path)
-          const genBase = path.basename(genFile.path).replace(/\.generated(\.[^.]+)$/i, "$1")
-          const sourceFile = allFiles.find(
-            (f) => fileDir(f.path) === genDir && path.basename(f.path) === genBase,
-          )
-          if (!sourceFile) continue
-          const sourceNodes = nodesByFileID.get(sourceFile.id)
-          const sourceNode = sourceNodes?.find((n) => n.kind !== "generated") ?? sourceNodes?.[0]
-          if (sourceNode) crossEdges.push({ fromNodeID: gen.id, toNodeID: sourceNode.id, kind: "generated_from" })
+          for (const gen of generatedNodes) {
+            if (yield* Ref.get(cancelled)) {
+              yield* Effect.logWarning("codegraph: cancelled during generated_from")
+              break
+            }
+            const genFile = fileByID.get(gen.fileID)
+            if (!genFile) continue
+            const genDir = fileDir(genFile.path)
+            const genBase = path.basename(genFile.path).replace(/\.generated(\.[^.]+)$/i, "$1")
+            const sourceFile = allFiles.find(
+              (f) => fileDir(f.path) === genDir && path.basename(f.path) === genBase,
+            )
+            if (!sourceFile) continue
+            const sourceNodes = nodesByFileID.get(sourceFile.id)
+            const sourceNode = sourceNodes?.find((n) => n.kind !== "generated") ?? sourceNodes?.[0]
+            if (sourceNode) crossEdges.push({ fromNodeID: gen.id, toNodeID: sourceNode.id, kind: "generated_from" })
+          }
         }
 
         const edgesToWrite = [

@@ -92,6 +92,8 @@ import type {
   GlobalCodegraphCancelResponses,
   GlobalCodegraphEdgesErrors,
   GlobalCodegraphEdgesResponses,
+  GlobalCodegraphForceKillErrors,
+  GlobalCodegraphForceKillResponses,
   GlobalCodegraphNodesErrors,
   GlobalCodegraphNodesResponses,
   GlobalConfigGetErrors,
@@ -1403,6 +1405,19 @@ export class Codegraph extends HeyApiClient {
       GlobalCodegraphCancelErrors,
       ThrowOnError
     >({ url: "/global/codegraph-cancel", ...options })
+  }
+
+  /**
+   * Force-kill the opencode server hosting a wedged codegraph build
+   *
+   * Last-resort escape hatch for a hung codegraph build. First tries a normal Fiber.interrupt, then on Windows spawns an elevated `taskkill /F /PID <pid> /T` against the opencode server process. Kills the whole bun process — the user will need to restart the TUI.
+   */
+  public forceKill<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<
+      GlobalCodegraphForceKillResponses,
+      GlobalCodegraphForceKillErrors,
+      ThrowOnError
+    >({ url: "/global/codegraph-force-kill", ...options })
   }
 
   /**

@@ -36,6 +36,7 @@ export interface Interface {
   readonly status: () => Effect.Effect<State, never, never>
   readonly start: (input: { root: string; force?: boolean; dbPath?: string }) => Effect.Effect<void, never, never>
   readonly cancel: () => Effect.Effect<void, never, never>
+  readonly forceKill: () => Effect.Effect<{ ok: boolean; message: string }, never, never>
   readonly events: () => Queue.Dequeue<{ type: "banyancode.codegraph.build"; properties: State }>
 }
 
@@ -54,6 +55,7 @@ export const layer = Layer.effect(
         status: () => Ref.get(state),
         start: () => Effect.void,
         cancel: () => Effect.void,
+        forceKill: () => Effect.succeed({ ok: true, message: "force-kill: banyancode disabled" }),
         events: () => events,
       })
     }
@@ -162,10 +164,68 @@ export const layer = Layer.effect(
         yield* indexer.cancel()
       })
 
+    const forceKill: Interface["forceKill"] = () =>
+      Effect.gen(function* () {
+        const fiber = yield* Ref.get(inFlight)
+        // First try a normal cancel via Fiber.interrupt — works most of the time.
+        if (fiber) {
+          yield* Fiber.interrupt(fiber).pipe(
+            Effect.timeout("2 seconds"),
+            Effect.ignore,
+          )
+          yield* Ref.set(inFlight, undefined)
+        }
+        yield* indexer.cancel()
+        const current = yield* Ref.get(state)
+        if (current.status === "running") {
+          const next: State = { ...current, status: "cancelled", error: "force-killed" }
+          yield* Ref.set(state, next)
+          yield* publish(next)
+        }
+
+        // If the indexer fiber was wedged in a CPU-bound loop without yield
+        // points, the normal cancel couldn't unstick it. Last-resort escape
+        // hatch on Windows: spawn an elevated `taskkill /F` against the
+        // opencode server PID. Kills the whole bun process — user will have
+        // to restart. UAC prompt is shown.
+        if (process.platform !== "win32") {
+          return { ok: true, message: "force-kill: not on Windows, interrupt alone is enough" }
+        }
+        if (process.pid <= 0) {
+          return { ok: false, message: "force-kill: invalid process.pid" }
+        }
+        const psScript =
+          `$ErrorActionPreference='Stop'; ` +
+          `try { ` +
+          `  Start-Process -FilePath 'taskkill.exe' -ArgumentList '/F','/PID','${process.pid}','/T' -Verb RunAs -WindowStyle Hidden -Wait -PassThru | Out-Null; ` +
+          `  exit 0 ` +
+          `} catch { ` +
+          `  Write-Host "FORCE_KILL_FAILED: $($_.Exception.Message)"; exit 1 ` +
+          `}`
+        return yield* Effect.tryPromise({
+          try: () =>
+            new Promise<{ ok: boolean; message: string }>((resolve) => {
+              const child = Bun.spawn(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", psScript], {
+                stdout: "pipe",
+                stderr: "pipe",
+              })
+              child.exited.then((code) => {
+                if (code === 0) resolve({ ok: true, message: "taskkill /F dispatched (UAC prompt shown)" })
+                else resolve({ ok: false, message: "taskkill /F failed (user denied UAC or taskkill not available)" })
+              })
+            }),
+          catch: (err) => ({ ok: false, message: `force-kill spawn failed: ${err instanceof Error ? err.message : String(err)}` }),
+        }).pipe(
+          Effect.catchCause(() =>
+            Effect.succeed({ ok: false, message: "force-kill: unexpected error in spawn path" } as const),
+          ),
+        )
+      })
+
     const status: Interface["status"] = () => Ref.get(state)
     const eventsDequeue: Interface["events"] = () => events
 
-    return Service.of({ status, start, cancel, events: eventsDequeue })
+    return Service.of({ status, start, cancel, forceKill, events: eventsDequeue })
   }),
 )
 

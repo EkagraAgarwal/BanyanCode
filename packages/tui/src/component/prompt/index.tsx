@@ -1170,7 +1170,7 @@ export function Prompt(props: PromptProps) {
               toast.show({ message: `Building code graph for ${res.data.root ?? "workspace"}`, variant: "info" })
             } else {
               toast.show({
-                message: res.data?.reason ?? "Could not start codegraph build",
+                message: res.data?.reason ?? "Could not start codegraph build (no response from server)",
                 variant: "error",
               })
             }
@@ -1184,6 +1184,18 @@ export function Prompt(props: PromptProps) {
       } else if (command === "/codegraph-cancel") {
         void sdk.client.global.codegraph.cancel({}).catch(() => {})
         toast.show({ message: "Codegraph build cancelled", variant: "info" })
+      } else if (command === "/codegraph-force-kill") {
+        void sdk.client.global.codegraph.forceKill({}).then((res) => {
+          toast.show({
+            message: res.data?.message ?? (res.data?.ok ? "Force-killed" : "Force-kill failed"),
+            variant: res.data?.ok ? "info" : "error",
+          })
+        }).catch((err) =>
+          toast.show({
+            message: `Codegraph force-kill failed: ${err instanceof Error ? err.message : String(err)}`,
+            variant: "error",
+          }),
+        )
       } else if (command === "/codegraph-remove") {
         void sdk.client.session.command({
           sessionID,

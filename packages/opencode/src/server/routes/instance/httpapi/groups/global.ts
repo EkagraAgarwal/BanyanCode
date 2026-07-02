@@ -123,6 +123,7 @@ export const GlobalPaths = {
   dispose: "/global/dispose",
   upgrade: "/global/upgrade",
   codegraphCancel: "/global/codegraph-cancel",
+  codegraphForceKill: "/global/codegraph-force-kill",
   codegraphBuild: "/global/codegraph-build",
   startup: "/global/startup",
   banyanConfig: "/global/banyan-config",
@@ -218,6 +219,22 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.codegraph.cancel",
           summary: "Cancel codegraph build",
           description: "Cancel the in-flight codegraph build for the current instance.",
+        }),
+      ),
+      HttpApiEndpoint.post("codegraphForceKill", GlobalPaths.codegraphForceKill, {
+        success: described(
+          Schema.Struct({
+            ok: Schema.Boolean,
+            message: Schema.String,
+          }),
+          "Result of the force-kill attempt",
+        ),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.codegraph.forceKill",
+          summary: "Force-kill the opencode server hosting a wedged codegraph build",
+          description:
+            "Last-resort escape hatch for a hung codegraph build. First tries a normal Fiber.interrupt, then on Windows spawns an elevated `taskkill /F /PID <pid> /T` against the opencode server process. Kills the whole bun process — the user will need to restart the TUI.",
         }),
       ),
       HttpApiEndpoint.post("codegraphBuild", GlobalPaths.codegraphBuild, {
