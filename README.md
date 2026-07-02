@@ -10,6 +10,7 @@ The TUI/CLI experience stays close to OpenCode; BanyanCode is a sequence of addi
 2. **Cross-session memory.** A persistent key-value store with **indexable JSONB payloads**, exposed as tools (`memory_store`, `memory_recall`, `memory_list`, `memory_forget`, `memory_search`) and a `memory` skill.
 3. **Codebase utility.** `/codegraph-build` builds a polyglot code graph using tree-sitter. Storage is **Turso/libSQL**.
 4. **Researcher agent with free web search.** A `researcher` subagent that uses a DuckDuckGo-backed `websearch_free` tool by default, with the existing Exa/Parallel `websearch` as an opt-in fallback.
+5. **Repository intelligence (Wave 1).** A graph-first retrieval stack on top of the codegraph: `RepositoryIntelligence` (find symbol / subsystem / entrypoints / tests / related / impact / execution trace), hybrid `Search` (exact, prefix, BM25, fuzzy, camelCase, snake_case, qualified), and `StructuralQueries` (implementations, overrides, recursive, async, HTTP routes). Exposed to the LLM as 13 `repo_*` + `codegraph_*` tools, served over `/global/repo/*` and `/global/codegraph/*` HTTP routes, and visible in the TUI as the **Codegraph Intel** sidebar panel. Every tool call is recorded as a paired JSONL `tool.call` event in `.banyancode/trace/<sessionID>.jsonl`. See [`specs/banyancode/repository-intelligence.md`](specs/banyancode/repository-intelligence.md) for the design.
 
 ## How BanyanCode is layered on OpenCode
 
@@ -18,8 +19,8 @@ BanyanCode keeps the entire OpenCode architecture and adds services alongside it
 | OpenCode layer | BanyanCode addition |
 |----------------|---------------------|
 | Agent registry (`packages/opencode/src/agent/`) | `orchestrator`, `researcher`, `scout`, `coder`, `explore`, `general` agents registered under the `BANYANCODE_ENABLE=1` feature gate |
-| Command shell (`packages/opencode/src/command/`) | `/codegraph-build`, `/codegraph-remove`, `/yolo` slash commands |
-| Tool registry (`packages/core/src/tool/`) | `memory_*`, `websearch_free`, `codegraph_*`, `code_*`, `system_*`, `mesh_*`, `systeminfo` tools |
+| Command shell (`packages/opencode/src/command/`) | `/codegraph-build`, `/codegraph-remove`, `/yolo` slash commands; Wave 1 adds `/repo-find-subsystem`, `/repo-find-tests`, `/codegraph-search`, `/codegraph-find-routes`, `/codegraph-find-async`, `/codegraph-find-overrides`, `/codegraph-find-recursive`, `/codegraph-find-implementations`, `/codegraph-trace-execution` |
+| Tool registry (`packages/core/src/tool/`) | `memory_*`, `websearch_free`, `codegraph_*`, `code_*`, `system_*`, `mesh_*`, `systeminfo` tools; Wave 1 adds 7 `repo_*` tools and 5 `codegraph_find_*` / `codegraph_search` tools (13 in total) |
 | Provider plugin system (`packages/core/src/plugin/provider/`) | All upstream provider plugins kept |
 | Storage (`packages/core/src/database/`) | Turso/libSQL via `@libsql/client`. Project-local `.banyancode/banyancode.db` with 5+ tables (memory, codegraph, subagent messages, subagent plans) and a single fresh-schema migration |
 | Event bus (`packages/core/src/event/`) | 2 new event types (`banyancode.codegraph.build`, `banyancode.system.updated`) the TUI subscribes to |
@@ -79,6 +80,15 @@ To add a custom subagent:
 
 **System info.** A `systeminfo` tool is registered for `orchestrator` and `general` agents to query CPU/memory/GPU/VRAM/platform at runtime. A TUI sidebar widget (`packages/tui/src/feature-plugins/sidebar/system-status.tsx`) subscribes to `banyancode.system.updated` (published every 1s) and renders bars with color-coded warnings.
 
+**Wave 1 — Repository intelligence.** Three new services sit on top of the codegraph:
+- `RepositoryIntelligence` — 7 high-level retrieval APIs (`findSymbol`, `findSubsystem`, `findEntrypoints`, `findTests`, `findRelated`, `estimateImpact`, `traceExecution`). The BFS in `walkSubsystem`/`findRelated`/`traceExecution` is depth-bounded (`current.depth < maxDepth`); `findTests` walks `edgesFrom(testNode)` to follow the `test → symbol` direction. All functions return ranked `CodegraphNode[]`.
+- `Search` — hybrid lexical/structural search with modes: exact, prefix, BM25 (with a startsWith+shorter-name tie-break), fuzzy (Levenshtein), camelCase, snake_case, qualified. Multi-mode calls merge + dedup + rank.
+- `StructuralQueries` — tree-sitter-driven structural patterns: `findImplementations`, `findOverrides`, `findRecursiveFunctions`, `findAsyncFunctions`, `findHTTPRoutes`. The TS regex parser (`packages/core/src/banyancode/langs/typescript.ts`) captures `async function`, arrow-function consts, and class methods so these queries have nodes to match.
+
+The indexer was extended in Wave 1 to emit 6 new file-level node kinds (`test`, `route`, `config`, `build`, `package`, `generated`) with full file `code` carried in the node, plus 5 new edge kinds (`tested_by`, `configured_by`, `built_by`, `mounts`, `generated_from`). File-level nodes are what `findHTTPRoutes` scans for `app.METHOD(path, handler)` registrations.
+
+Every wave-1 tool call is wrapped in `traced(worktree, sessionID, tool, input, summary, effect)` from `packages/core/src/observability/trace.ts`. Two JSONL lines are appended per call to `.banyancode/trace/<sessionID>.jsonl` — one `phase:"start"` and one `phase:"end"` with `ms` duration. The trace file is the input for the evaluation harness planned in Wave 7 of the roadmap.
+
 ## TUI UX
 
 The TUI follows modern TUI design patterns (Charm, Ink, OpenTUI reference):
@@ -87,6 +97,7 @@ The TUI follows modern TUI design patterns (Charm, Ink, OpenTUI reference):
 - **Status pills** carry both glyph and color (Charm-style 4-color status palette: `success`/`warning`/`error`/`info`).
 - **Tabs** are `Tab` / `Shift+Tab` navigable (keybinds surfaced in the prompt footer).
 - **Solid `<For>` everywhere** for keyed iteration; `.map()` in JSX is forbidden.
+- **Codegraph Intel sidebar panel** (Wave 1): keeps the last 8 repository-intelligence, search, and routes queries in a recent-queries strip so the user can see what the LLM has been asking. Populated by the wave-1 slash commands listed above; clickable results route back through the same HTTP endpoints.
 
 ## Design docs
 
