@@ -27,6 +27,7 @@ import { McpGroup } from "./groups/mcp.js"
 import { CredentialGroup } from "./groups/credential.js"
 import { ProjectGroup } from "./groups/project.js"
 import { ProjectCopyGroup } from "./groups/project-copy.js"
+import { VcsGroup } from "./groups/vcs.js"
 
 type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
   | HttpApiGroup.AddMiddleware<typeof LocationGroup, LocationId>
@@ -46,6 +47,7 @@ type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
   | HttpApiGroup.AddMiddleware<typeof ShellGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof ReferenceGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof ProjectCopyGroup, LocationId>
+  | HttpApiGroup.AddMiddleware<typeof VcsGroup, LocationId>
 
 type SessionGroups<SessionLocationId extends HttpApiMiddleware.AnyId, SessionLocationService> =
   | ReturnType<typeof makeSessionGroup<SessionLocationId, SessionLocationService>>
@@ -162,6 +164,7 @@ const makeApiFromGroup = <
     .add(makeQuestionGroup(locationMiddleware, sessionLocationMiddleware))
     .add(ReferenceGroup.middleware(locationMiddleware))
     .add(ProjectCopyGroup.middleware(locationMiddleware))
+    .add(VcsGroup.middleware(locationMiddleware))
     .annotateMerge(
       OpenApi.annotations({
         title: "opencode HttpApi",

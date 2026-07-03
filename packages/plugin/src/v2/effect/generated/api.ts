@@ -833,6 +833,25 @@ export interface ProjectCopyApi<E = never> {
   readonly refresh: ProjectCopyRefreshOperation<E>
 }
 
+type Endpoint24_0Request = Parameters<RawClient["server.vcs"]["vcs.status"]>[0]
+export type Endpoint24_0Input = { readonly location?: Endpoint24_0Request["query"]["location"] }
+export type Endpoint24_0Output = EffectValue<ReturnType<RawClient["server.vcs"]["vcs.status"]>>
+export type VcsStatusOperation<E = never> = (input?: Endpoint24_0Input) => Effect.Effect<Endpoint24_0Output, E>
+
+type Endpoint24_1Request = Parameters<RawClient["server.vcs"]["vcs.diff"]>[0]
+export type Endpoint24_1Input = {
+  readonly location?: Endpoint24_1Request["query"]["location"]
+  readonly mode: Endpoint24_1Request["query"]["mode"]
+  readonly context?: Endpoint24_1Request["query"]["context"]
+}
+export type Endpoint24_1Output = EffectValue<ReturnType<RawClient["server.vcs"]["vcs.diff"]>>
+export type VcsDiffOperation<E = never> = (input: Endpoint24_1Input) => Effect.Effect<Endpoint24_1Output, E>
+
+export interface VcsApi<E = never> {
+  readonly status: VcsStatusOperation<E>
+  readonly diff: VcsDiffOperation<E>
+}
+
 export interface AppApi<E = never> {
   readonly health: HealthApi<E>
   readonly location: LocationApi<E>
@@ -858,4 +877,5 @@ export interface AppApi<E = never> {
   readonly question: QuestionApi<E>
   readonly reference: ReferenceApi<E>
   readonly projectCopy: ProjectCopyApi<E>
+  readonly vcs: VcsApi<E>
 }
