@@ -149,6 +149,22 @@ describe("ModelsDev Service", () => {
     }),
   )
 
+  it.effect("allows models.dev entries without temperature metadata", () =>
+    Effect.sync(() => {
+      const result = Schema.decodeUnknownSync(ModelsDev.Model)({
+        id: "no-temperature-model",
+        name: "No Temperature Model",
+        release_date: "2026-01-01",
+        attachment: false,
+        reasoning: false,
+        tool_call: true,
+        limit: { context: 128000, output: 8192 },
+      })
+
+      expect(result.temperature).toBeUndefined()
+    }),
+  )
+
   it.live("get() returns providers from disk when cache file exists", () =>
     Effect.gen(function* () {
       yield* writeCache(fixture)
