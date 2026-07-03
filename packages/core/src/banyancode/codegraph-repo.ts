@@ -10,6 +10,7 @@ import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from 
 // Upper bound on nodes per DB insert batch. If a batched putNodes method is added,
 // chunk the input into groups of this size to avoid overwhelming the SQLite connection.
 export const MAX_NODES_PER_INSERT = 1000
+const MAX_EDGES_PER_INSERT = 1000
 
 export interface Interface {
   readonly putFile: (file: CodegraphFile) => Effect.Effect<void, never, never>
@@ -476,27 +477,30 @@ export const layer = Layer.effect(
       if (edges.length === 0) return
       yield* db.transaction((tx) =>
         Effect.gen(function* () {
-          for (const edge of edges) {
+          for (let i = 0; i < edges.length; i += MAX_EDGES_PER_INSERT) {
+            const batch = edges.slice(i, i + MAX_EDGES_PER_INSERT)
             yield* tx
               .insert(CodegraphEdgesTable)
-              .values({
-                id: edge.id,
-                from_node_id: edge.fromNodeID,
-                to_node_id: edge.toNodeID,
-                kind: edge.kind,
-              })
+              .values(
+                batch.map((e) => ({
+                  id: e.id,
+                  from_node_id: e.fromNodeID,
+                  to_node_id: e.toNodeID,
+                  kind: e.kind,
+                })),
+              )
               .onConflictDoUpdate({
                 target: CodegraphEdgesTable.id,
                 set: {
-                  from_node_id: edge.fromNodeID,
-                  to_node_id: edge.toNodeID,
-                  kind: edge.kind,
+                  from_node_id: batch[0].fromNodeID,
+                  to_node_id: batch[0].toNodeID,
+                  kind: batch[0].kind,
                 },
               })
               .run()
               .pipe(Effect.orDie)
           }
-        })
+        }),
       ).pipe(Effect.orDie)
     })
 

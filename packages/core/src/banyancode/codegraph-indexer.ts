@@ -204,13 +204,8 @@ export const layer = Layer.effect(
       const total = codeFiles.length
       const progressCounter = yield* Ref.make(0)
 
-      // Channel-based pipeline: 8 parse fibers run in parallel and offer parsed
-// file data into a bounded queue; a single writer fiber drains the queue
-// and commits each file as one transaction. The queue length is bounded
-// so memory stays flat even with thousands of files. Replacing the previous
-// concurrency:8 + per-file N-statement-write pattern removed the ~15
-// individual auto-committed writes per file (which was the primary cause
-// of the 1+ GB WAL during real-workspace builds).
+      // Producer-consumer pipeline: parse fibers offer into a bounded queue;
+      // a concurrent consumer drains and writes so the queue cannot deadlock.
 type ParsedFile = {
   readonly file: CodegraphFile
   readonly nodes: CodegraphNode[]
@@ -220,30 +215,40 @@ type ParsedFile = {
   readonly previousFileID?: string
 }
 const parsedQueue = yield* Queue.bounded<ParsedFile>(128)
+const skippedParsed = (relativePath: string): ParsedFile => ({
+  file: { id: "", path: "", contentHash: "", language: "", indexedAt: 0 },
+  nodes: [],
+  edges: [],
+  relativePath,
+  skipped: true,
+})
 
 const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
   const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
   return Effect.gen(function* () {
-    if (yield* Ref.get(cancelled)) return
+    if (yield* Ref.get(cancelled)) {
+      yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
+      return
+    }
 
     const ext = path.extname(filePath).toLowerCase()
     const content = yield* fs.readFileStringSafe(filePath)
     if (content === undefined) {
       yield* Ref.update(skippedRef, (n) => n + 1)
-      yield* Queue.offer(parsedQueue, { file: { id: "", path: filePath, contentHash: "", language: "", indexedAt: 0 }, nodes: [], edges: [], relativePath, skipped: true })
+      yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       return
     }
 
     if (content.length > maxFileSizeBytes) {
       yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars, limit: ${maxFileSizeBytes})`)
       yield* Ref.update(skippedRef, (n) => n + 1)
-      yield* Queue.offer(parsedQueue, { file: { id: "", path: filePath, contentHash: "", language: "", indexedAt: 0 }, nodes: [], edges: [], relativePath, skipped: true })
+      yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       return
     }
     if (content.split("\n").some((line) => line.length > 5000)) {
       yield* Effect.logWarning(`Skipping minified/compiled file: ${relativePath}`)
       yield* Ref.update(skippedRef, (n) => n + 1)
-      yield* Queue.offer(parsedQueue, { file: { id: "", path: filePath, contentHash: "", language: "", indexedAt: 0 }, nodes: [], edges: [], relativePath, skipped: true })
+      yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       return
     }
 
@@ -251,7 +256,7 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
     const existing = yield* repo.getFileByPath(filePath)
     if (existing && existing.contentHash === contentHash && !input.force) {
       yield* Ref.update(skippedRef, (n) => n + 1)
-      yield* Queue.offer(parsedQueue, { file: { id: "", path: filePath, contentHash: "", language: "", indexedAt: 0 }, nodes: [], edges: [], relativePath, skipped: true })
+      yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       return
     }
 
@@ -324,6 +329,7 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
       Effect.gen(function* () {
         yield* Effect.logWarning(`Failed to index file: ${relativePath}`, { cause: Cause.pretty(cause) })
         yield* Ref.update(skippedRef, (n) => n + 1)
+        yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       }),
     ),
     Effect.ensuring(
@@ -337,51 +343,48 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
   )
 }
 
-// Producer/consumer pipeline. Producers (parseFiber) run concurrently and
-// offer parsed file data into a bounded queue. The consumer drains the
-// queue serially via Queue.take + a counter, exiting once `codeFiles.length`
-// items have been observed. Bounded queue gives us natural backpressure:
-// slow producers wait when the consumer is busy; slow consumer causes
-// producers to block on Queue.offer, which throttles their concurrency.
+// Producer/consumer pipeline. Producers offer into a bounded queue; the
+// consumer drains it concurrently so a full queue cannot deadlock producers
+// (queue capacity is 128; workspaces often exceed that).
 const CHECKPOINT_EVERY = 200
-const writesSinceCheckpoint = yield* Ref.make(0)
-
-yield* Effect.forEach(codeFiles, parseFiber, { concurrency: 8, discard: true })
-
-// After all parse fibers return, the queue may still hold items. Drain
-// them all synchronously here (we know exactly how many to expect: one
-// per codeFiles entry, since every parseFiber calls Queue.offer exactly
-// once before returning).
-let processed = 0
 const totalExpected = codeFiles.length
-while (processed < totalExpected) {
-  const parsed = yield* Queue.take(parsedQueue)
-  processed++
-  if (parsed.skipped) continue
-  yield* repo.writeFileGraph({
-    file: parsed.file,
-    nodes: parsed.nodes,
-    edges: parsed.edges,
-    ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
-  }).pipe(
-    Effect.catchCause((cause) =>
-      Effect.gen(function* () {
-        yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
-          cause: Cause.pretty(cause),
-        })
-        yield* Ref.update(skippedRef, (n) => n + 1)
-      }),
-    ),
-  )
-  yield* Ref.update(indexedRef, (n) => n + 1)
-  if (processed % CHECKPOINT_EVERY === 0) {
-    yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
+
+const drainParsedQueue = Effect.gen(function* () {
+  let processed = 0
+  while (processed < totalExpected) {
+    const parsed = yield* Queue.take(parsedQueue)
+    processed++
+    if (parsed.skipped) continue
+    yield* repo.writeFileGraph({
+      file: parsed.file,
+      nodes: parsed.nodes,
+      edges: parsed.edges,
+      ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
+            cause: Cause.pretty(cause),
+          })
+          yield* Ref.update(skippedRef, (n) => n + 1)
+        }),
+      ),
+    )
+    yield* Ref.update(indexedRef, (n) => n + 1)
+    if (processed % CHECKPOINT_EVERY === 0) {
+      yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
+    }
   }
-}
-// Shut down the queue to release any resources (now safe: we've drained
-// every item we expect).
+})
+
+yield* Effect.all(
+  [
+    Effect.forEach(codeFiles, parseFiber, { concurrency: 8, discard: true }),
+    drainParsedQueue,
+  ],
+  { concurrency: 2, discard: true },
+)
 yield* Queue.shutdown(parsedQueue)
-// Final checkpoint regardless of how many files we processed.
 yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
 
       const isCancelled = yield* Ref.get(cancelled)
@@ -404,43 +407,52 @@ yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
 
         const referenceEdges: { fromNodeID: string; toNodeID: string; kind: "imports" | "calls" | "extends" | "references" }[] = []
         const crossEdges: { fromNodeID: string; toNodeID: string; kind: CodegraphEdge["kind"] }[] = []
+        const referenceEdgeKeys = new Set<string>()
 
         for (const nodeA of allNodes) {
-          if (!nodeA.code) continue
+          if (
+            !nodeA.code ||
+            nodeA.kind === "test" ||
+            nodeA.kind === "route" ||
+            nodeA.kind === "config" ||
+            nodeA.kind === "build" ||
+            nodeA.kind === "package" ||
+            nodeA.kind === "generated" ||
+            nodeA.kind === "file"
+          ) {
+            continue
+          }
 
-          const wordsWithDots = nodeA.code.split(/[^a-zA-Z0-9_.]+/).filter(Boolean)
-          const words = nodeA.code.split(/[^a-zA-Z0-9_]+/).filter(Boolean)
+          const identifiers = new Set<string>()
+          for (const m of nodeA.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
+            if (m[0].length >= 3 && nodeMap.has(m[0])) identifiers.add(m[0])
+          }
+          for (const m of nodeA.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_.]+\b/g)) {
+            if (m[0].includes(".") && nodeMap.has(m[0])) identifiers.add(m[0])
+          }
 
-          const checkedNames = new Set<string>()
-
-          const checkName = (name: string) => {
-            if (checkedNames.has(name)) return
-            checkedNames.add(name)
+          for (const name of identifiers) {
             const targets = nodeMap.get(name)
-            if (!targets) return
+            if (!targets) continue
 
             for (const nodeB of targets) {
               if (nodeB.id === nodeA.id) continue
 
-              let kind: "calls" | "extends" | "references" = "references"
-              if (nodeA.kind === "class" && new RegExp(`class\\s+\\w+\\s+(?:extends|implements)\\s+${escapeRegex(name)}\\b`).test(nodeA.code!)) {
-                kind = "extends"
-              } else if (new RegExp(`\\b${escapeRegex(name)}\\s*\\(`).test(nodeA.code!)) {
-                kind = "calls"
-              }
+              const kind =
+                nodeA.kind === "class" && nodeA.code.includes(`extends ${name}`)
+                  ? ("extends" as const)
+                  : nodeA.code.includes(`${name}(`)
+                    ? ("calls" as const)
+                    : ("references" as const)
 
+              const key = `${nodeA.id}->${nodeB.id}:${kind}`
+              if (referenceEdgeKeys.has(key)) continue
+              referenceEdgeKeys.add(key)
               referenceEdges.push({
                 fromNodeID: nodeA.id,
                 toNodeID: nodeB.id,
                 kind,
               })
-            }
-          }
-
-          for (const w of words) checkName(w)
-          for (const w of wordsWithDots) {
-            if (w.includes(".")) {
-              checkName(w)
             }
           }
         }
@@ -585,10 +597,6 @@ function globToRegex(pattern: string): RegExp {
     regexStr = regexStr + "$"
   }
   return new RegExp(regexStr)
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")
 }
 
 // Note: CodegraphRepo.defaultLayer already provides Database.defaultLayer,
