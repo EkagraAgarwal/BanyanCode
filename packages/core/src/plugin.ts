@@ -48,7 +48,7 @@ const layer = Layer.effect(
     let host: Parameters<PluginDefinition["effect"]>[0]
 
     const add = Effect.fn("Plugin.add")(function* (id: ID, effect: PluginDefinition["effect"]) {
-      if (loading.has(id)) return yield* Effect.die(`Plugin load cycle detected for ${id}`)
+      if (loading.has(id)) return yield* Effect.die(new Error(`Plugin load cycle detected for ${id}`))
 
       yield* locks.withLock(id)(
         Effect.sync(() => {
@@ -90,7 +90,7 @@ const layer = Layer.effect(
     })
 
     const remove = Effect.fn("Plugin.remove")(function* (id: ID) {
-      if (loading.has(id)) return yield* Effect.die(`Cannot remove plugin ${id} while it is loading`)
+      if (loading.has(id)) return yield* Effect.die(new Error(`Cannot remove plugin ${id} while it is loading`))
 
       yield* locks.withLock(id)(
         State.batch(
