@@ -1,5 +1,25 @@
 # V2 Schema Changelog
 
+## 2026-07-03: Require Durable Envelope On Durable Events
+
+- Make the wire `durable` envelope required on durable event definitions.
+- Remove the `durable` envelope field from live-only event definitions.
+
+Compatibility:
+
+- No stored event row, database, or runtime publish behavior change; runtime already attaches the envelope only after durable commit/replay.
+- Generated clients now model the existing invariant: durable events carry `durable`, live-only events do not.
+
+## 2026-07-03: Declare Event Durability At Definition Level
+
+- Add explicit `Event.durable(...)` and `Event.ephemeral(...)` definition constructors.
+- Preserve the existing durable and live-only event classifications while deriving durable inventories from definition metadata instead of hand-maintained lists.
+
+Compatibility:
+
+- No wire payload, stored event row, database, or behavior change.
+- Generated clients were regenerated from the unchanged public event schemas.
+
 ## 2026-07-02: Rename Session Log Replay Marker
 
 - Rename the replay boundary marker from `log.caught_up` / `EventLog.CaughtUp` to `log.synced` / `EventLog.Synced`.
