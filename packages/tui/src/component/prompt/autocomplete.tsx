@@ -700,9 +700,10 @@ export function Autocomplete(props: {
 
   const height = createMemo(() => {
     const count = options().length || 1
-    if (!store.visible) return Math.min(10, count)
+    if (!store.visible) return Math.min(20, count)
     positionTick()
-    return Math.min(10, count, Math.max(1, props.anchor().y))
+    const maxAvailable = Math.max(1, props.anchor().y - 1)
+    return Math.min(count, maxAvailable)
   })
 
   let scroll: ScrollBoxRenderable
@@ -715,7 +716,7 @@ export function Autocomplete(props: {
       top={position().y - height()}
       left={position().x}
       width={position().width}
-      zIndex={100}
+      zIndex={4000}
       backgroundColor={theme.backgroundMenu}
       {...SplitBorder}
       borderColor={theme.border}
@@ -726,12 +727,13 @@ export function Autocomplete(props: {
         height={height()}
         scrollbarOptions={{ visible: false }}
         scrollAcceleration={scrollAcceleration()}
+        zIndex={4000}
       >
         <Index
           each={options()}
           fallback={
-            <box paddingLeft={1} paddingRight={1}>
-              <text fg={theme.textMuted}>No matching items</text>
+            <box paddingLeft={1} paddingRight={1} zIndex={4000}>
+              <text fg={theme.textMuted} zIndex={4000}>No matching items</text>
             </box>
           }
         >
@@ -742,6 +744,7 @@ export function Autocomplete(props: {
               backgroundColor={index === store.selected ? theme.primary : undefined}
               flexDirection="row"
               gap={2}
+              zIndex={4000}
               onMouseMove={() => {
                 setStore("input", "mouse")
               }}
@@ -755,7 +758,7 @@ export function Autocomplete(props: {
               }}
               onMouseUp={() => select()}
             >
-              <text fg={index === store.selected ? selectedForeground(theme) : theme.text} flexShrink={0}>
+              <text fg={index === store.selected ? selectedForeground(theme) : theme.text} flexShrink={0} zIndex={4000}>
                 {option().display}
               </text>
               <Show when={option().description}>
@@ -764,6 +767,7 @@ export function Autocomplete(props: {
                   wrapMode="none"
                   flexGrow={1}
                   overflow="hidden"
+                  zIndex={4000}
                 >
                   {option().description}
                 </text>
