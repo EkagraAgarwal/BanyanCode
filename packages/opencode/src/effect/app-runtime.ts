@@ -1,4 +1,5 @@
 import { Layer, ManagedRuntime, Effect } from "effect"
+import { FetchHttpClient } from "effect/unstable/http"
 import { attach } from "./run-service"
 import * as Observability from "@opencode-ai/core/observability"
 
@@ -20,6 +21,7 @@ import { Skill } from "@/skill"
 import { Discovery } from "@/skill/discovery"
 import { Question } from "@/question"
 import { Permission } from "@/permission"
+import { PermissionBridge } from "./permission-bridge"
 import { Todo } from "@/session/todo"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
@@ -109,6 +111,7 @@ export const AppLayer = Layer.mergeAll(
   SessionShare.defaultLayer,
 ).pipe(
   Layer.provideMerge(Ripgrep.defaultLayer),
+  Layer.provideMerge(FetchHttpClient.layer),
   Layer.provideMerge(InstanceLayer.layer),
   Layer.provideMerge(Observability.layer),
   Layer.provideMerge(
@@ -120,6 +123,13 @@ export const AppLayer = Layer.mergeAll(
       Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
     ),
   ),
+  Layer.provideMerge(
+    Banyan.repositoryIntelligenceDefaultLayer.pipe(
+      Layer.provide(Banyan.codegraphRepoDefaultLayer),
+      Layer.provide(Database.defaultLayer),
+    ),
+  ),
+  Layer.provideMerge(PermissionBridge.layer.pipe(Layer.provide(Permission.defaultLayer))),
 )
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })

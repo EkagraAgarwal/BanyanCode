@@ -1,0 +1,567 @@
+import { ToolFailure } from "@opencode-ai/llm"
+import { Effect, Layer, Schema } from "effect"
+import { Banyan } from "../banyancode"
+import { traced } from "../observability/trace"
+import {
+  CodegraphNodeSchema,
+  type ArchitecturalSlice as ArchitecturalSliceT,
+  type RepositoryContext as RepositoryContextT,
+} from "../banyancode/types"
+import { PermissionV2 } from "../permission"
+import { Tool } from "./tool"
+import { Tools } from "./tools"
+import { defaultLayer as repositoryIntelligenceLayer } from "../banyancode/repository-intelligence"
+
+const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
+
+export const name_query = "repository_query"
+export const name_slice = "repository_slice"
+export const name_explain = "repository_explain"
+export const name_impact = "repository_impact"
+export const name_trace = "repository_trace"
+export const name_tests = "repository_tests"
+export const name_symbols = "repository_symbols"
+export const name_relationships = "repository_relationships"
+export const name_ownership = "repository_ownership"
+
+const CodegraphNodeSchemaArray = Schema.Array(CodegraphNodeSchema)
+const CodegraphEdgeSchema = Schema.Struct({
+  id: Schema.String,
+  fromNodeID: Schema.String,
+  toNodeID: Schema.String,
+  kind: Schema.Literals([
+    "imports",
+    "calls",
+    "extends",
+    "references",
+    "tested_by",
+    "configured_by",
+    "built_by",
+    "mounts",
+    "generated_from",
+  ]),
+})
+const CodegraphEdgeSchemaArray = Schema.Array(CodegraphEdgeSchema)
+
+const CodegraphFileSchema = Schema.Struct({
+  id: Schema.String,
+  path: Schema.String,
+  contentHash: Schema.String,
+  language: Schema.String,
+  indexedAt: Schema.Number,
+})
+
+const WorkspaceContextSchema = Schema.Struct({
+  worktree: Schema.String,
+  focusDirs: Schema.Array(Schema.String),
+})
+
+const RankingSchema = Schema.Struct({
+  score: Schema.Number,
+  signals: Schema.Struct({
+    exact: Schema.Number,
+    symbol: Schema.Number,
+    graph: Schema.Number,
+    git: Schema.Number,
+    workspace: Schema.Number,
+  }),
+  workspace: Schema.optional(WorkspaceContextSchema),
+})
+
+const ArchitecturalSliceSchema = Schema.Struct({
+  summary: Schema.String,
+  entrypoints: CodegraphNodeSchemaArray,
+  importantSymbols: CodegraphNodeSchemaArray,
+  relatedTests: CodegraphNodeSchemaArray,
+  relatedDocs: Schema.Array(CodegraphFileSchema),
+  configs: Schema.Array(CodegraphFileSchema),
+  routes: CodegraphNodeSchemaArray,
+  dependencies: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      version: Schema.optional(Schema.String),
+    }),
+  ),
+})
+
+const RepositoryContextSchema = Schema.Struct({
+  query: Schema.String,
+  symbols: CodegraphNodeSchemaArray,
+  files: Schema.Array(CodegraphFileSchema),
+  graph: Schema.Struct({
+    nodes: CodegraphNodeSchemaArray,
+    edges: CodegraphEdgeSchemaArray,
+  }),
+  tests: CodegraphNodeSchemaArray,
+  docs: Schema.Array(CodegraphFileSchema),
+  configs: Schema.Array(CodegraphFileSchema),
+  git: Schema.Struct({
+    recentCommits: Schema.Array(
+      Schema.Struct({
+        sha: Schema.String,
+        subject: Schema.String,
+        ts: Schema.Number,
+      }),
+    ),
+    ownership: Schema.Array(
+      Schema.Struct({
+        path: Schema.String,
+        count: Schema.Number,
+      }),
+    ),
+  }),
+  workspace: Schema.optional(WorkspaceContextSchema),
+  ranking: RankingSchema,
+})
+
+const OwnershipResultSchema = Schema.Struct({
+  owner: Schema.optional(Schema.String),
+  count: Schema.Number,
+})
+
+const QueryInput = Schema.Struct({
+  query: Schema.String,
+  limit: Schema.optional(Schema.Number),
+  workspace: Schema.optional(WorkspaceContextSchema),
+})
+
+const ExplainInput = Schema.Struct({
+  symbol: Schema.String,
+  workspace: Schema.optional(WorkspaceContextSchema),
+})
+
+const ImpactInput = Schema.Struct({
+  path: Schema.String,
+  workspace: Schema.optional(WorkspaceContextSchema),
+})
+
+const TraceInput = Schema.Struct({
+  symbol: Schema.String,
+  depth: Schema.optional(Schema.Number),
+  workspace: Schema.optional(WorkspaceContextSchema),
+})
+
+const TestsInput = Schema.Struct({
+  symbol: Schema.String,
+})
+
+const SymbolsInput = Schema.Struct({
+  query: Schema.String,
+  limit: Schema.optional(Schema.Number),
+})
+
+const RelationshipsInput = Schema.Struct({
+  nodeID: Schema.String,
+  depth: Schema.optional(Schema.Number),
+})
+
+const OwnershipInput = Schema.Struct({
+  path: Schema.String,
+})
+
+const QueryOutput = RepositoryContextSchema
+const SliceOutput = ArchitecturalSliceSchema
+const ExplainOutput = ArchitecturalSliceSchema
+const ImpactOutput = ArchitecturalSliceSchema
+const TraceOutput = ArchitecturalSliceSchema
+const TestsOutput = Schema.Struct({ tests: CodegraphNodeSchemaArray })
+const SymbolsOutput = Schema.Struct({ symbols: CodegraphNodeSchemaArray })
+const RelationshipsOutput = Schema.Struct({ nodes: CodegraphNodeSchemaArray })
+const OwnershipOutput = OwnershipResultSchema
+
+type WorkspaceInput = { workspace?: { worktree: string; focusDirs: readonly string[] } } | undefined
+
+const workspaceFromInput = (input: WorkspaceInput) => {
+  if (!input?.workspace) return undefined
+  return { worktree: input.workspace.worktree, focusDirs: [...input.workspace.focusDirs] }
+}
+
+const ownershipRecordToArray = (
+  ownership: ReadonlyMap<string, number> | undefined,
+): Array<{ path: string; count: number }> => {
+  if (!ownership) return []
+  const out: Array<{ path: string; count: number }> = []
+  for (const [path, count] of ownership) out.push({ path, count })
+  return out
+}
+
+const contextToOutput = (ctx: RepositoryContextT) => ({
+  query: ctx.query,
+  symbols: [...ctx.symbols],
+  files: [...ctx.files],
+  graph: {
+    nodes: [...ctx.graph.nodes],
+    edges: [...ctx.graph.edges],
+  },
+  tests: [...ctx.tests],
+  docs: [...ctx.docs],
+  configs: [...ctx.configs],
+  git: {
+    recentCommits: [...ctx.git.recentCommits],
+    ownership: ownershipRecordToArray(ctx.git.ownership as unknown as ReadonlyMap<string, number>),
+  },
+  workspace: ctx.workspace
+    ? { worktree: ctx.workspace.worktree, focusDirs: [...ctx.workspace.focusDirs] }
+    : undefined,
+  ranking: {
+    score: ctx.ranking.score,
+    signals: {
+      exact: ctx.ranking.signals.exact,
+      symbol: ctx.ranking.signals.symbol,
+      graph: ctx.ranking.signals.graph,
+      git: ctx.ranking.signals.git,
+      workspace: ctx.ranking.signals.workspace,
+    },
+    ...(ctx.ranking.workspace
+      ? {
+          workspace: {
+            worktree: ctx.ranking.workspace.worktree,
+            focusDirs: [...ctx.ranking.workspace.focusDirs],
+          },
+        }
+      : {}),
+  },
+})
+
+const sliceToOutput = (slc: ArchitecturalSliceT) => ({
+  summary: slc.summary,
+  entrypoints: [...slc.entrypoints],
+  importantSymbols: [...slc.importantSymbols],
+  relatedTests: [...slc.relatedTests],
+  relatedDocs: [...slc.relatedDocs],
+  configs: [...slc.configs],
+  routes: [...slc.routes],
+  dependencies: slc.dependencies.map((d: { name: string; version?: string }) => ({
+    name: d.name,
+    ...(d.version ? { version: d.version } : {}),
+  })),
+})
+
+export const InputQuery = QueryInput
+export const InputSlice = QueryInput
+export const InputExplain = ExplainInput
+export const InputImpact = ImpactInput
+export const InputTrace = TraceInput
+export const InputTests = TestsInput
+export const InputSymbols = SymbolsInput
+export const InputRelationships = RelationshipsInput
+export const InputOwnership = OwnershipInput
+
+export const OutputQuery = QueryOutput
+export const OutputSlice = SliceOutput
+export const OutputExplain = ExplainOutput
+export const OutputImpact = ImpactOutput
+export const OutputTrace = TraceOutput
+export const OutputTests = TestsOutput
+export const OutputSymbols = SymbolsOutput
+export const OutputRelationships = RelationshipsOutput
+export const OutputOwnership = OwnershipOutput
+
+export const locationLayer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    if (!banyancodeEnabled()) return
+
+    const tools = yield* Tools.Service
+    const permission = yield* PermissionV2.Service
+    const intel = yield* Banyan.RepositoryIntelligence
+
+    yield* tools.register({
+      [name_query]: Tool.make({
+        description: "Run a unified repository query: returns matched symbols, related tests, docs, configs, and recent commits as a single repository context.",
+        input: InputQuery,
+        output: OutputQuery,
+        toModelOutput: ({ output }) => [
+          {
+            type: "text",
+            text: `symbols=${output.symbols.length} tests=${output.tests.length} docs=${output.docs.length} configs=${output.configs.length} nodes=${output.graph.nodes.length} edges=${output.graph.edges.length}`,
+          },
+        ],
+        execute: (input, context) =>
+          traced(
+            process.cwd(),
+            context.sessionID,
+            name_query,
+            input,
+            (output) =>
+              `symbols=${output.symbols.length} tests=${output.tests.length} docs=${output.docs.length}`,
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name_query,
+                resources: [input.query],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+
+              const ws = workspaceFromInput(input)
+              const ctx = yield* intel.query({
+                query: input.query,
+                ...(input.limit ? { limit: input.limit } : {}),
+                ...(ws ? { workspace: ws } : {}),
+              })
+              return contextToOutput(ctx)
+            }),
+          ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_query failed" }))),
+      }),
+      [name_slice]: Tool.make({
+        description: "Compose an ArchitecturalSlice from a repository query result. First calls repository_query, then groups entrypoints, important symbols, related tests, docs, and configs.",
+        input: InputSlice,
+        output: OutputSlice,
+        toModelOutput: ({ output }) => [
+          {
+            type: "text",
+            text: `${output.summary} entrypoints=${output.entrypoints.length} symbols=${output.importantSymbols.length} tests=${output.relatedTests.length} docs=${output.relatedDocs.length} configs=${output.configs.length} routes=${output.routes.length}`,
+          },
+        ],
+        execute: (input, context) =>
+          traced(
+            process.cwd(),
+            context.sessionID,
+            name_slice,
+            input,
+            (output) =>
+              `entrypoints=${output.entrypoints.length} symbols=${output.importantSymbols.length} tests=${output.relatedTests.length}`,
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name_slice,
+                resources: [input.query],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+
+              const ctx = yield* intel.query({ query: input.query, ...(input.limit ? { limit: input.limit } : {}) })
+              const slc = yield* intel.slice(ctx)
+              return sliceToOutput(slc)
+            }),
+          ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_slice failed" }))),
+      }),
+      [name_explain]: Tool.make({
+        description: "Explain a symbol by name. Returns an ArchitecturalSlice describing the symbol's entrypoints, related tests, docs, and configs.",
+        input: InputExplain,
+        output: OutputExplain,
+        toModelOutput: ({ output }) => [{ type: "text", text: output.summary }],
+        execute: (input, context) =>
+          traced(
+            process.cwd(),
+            context.sessionID,
+            name_explain,
+            input,
+            (output) => `entrypoints=${output.entrypoints.length} symbols=${output.importantSymbols.length}`,
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name_explain,
+                resources: [input.symbol],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+
+              const ws = workspaceFromInput(input)
+              const slc = yield* intel.explain({
+                symbol: input.symbol,
+                ...(ws ? { workspace: ws } : {}),
+              })
+              return sliceToOutput(slc)
+            }),
+          ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_explain failed" }))),
+      }),
+      [name_impact]: Tool.make({
+        description: "Analyze the impact of changing a file by path. Returns an ArchitecturalSlice with expanded important symbols for direct dependents.",
+        input: InputImpact,
+        output: OutputImpact,
+        toModelOutput: ({ output }) => [{ type: "text", text: output.summary }],
+        execute: (input, context) =>
+          traced(
+            process.cwd(),
+            context.sessionID,
+            name_impact,
+            input,
+            (output) =>
+              `symbols=${output.importantSymbols.length} entrypoints=${output.entrypoints.length} tests=${output.relatedTests.length}`,
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name_impact,
+                resources: [input.path],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+
+              const ws = workspaceFromInput(input)
+              const slc = yield* intel.impact({
+                path: input.path,
+                ...(ws ? { workspace: ws } : {}),
+              })
+              return sliceToOutput(slc)
+            }),
+          ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_impact failed" }))),
+      }),
+      [name_trace]: Tool.make({
+        description: "Trace a symbol through the code graph to its downstream dependents. Returns an ArchitecturalSlice with the symbol's downstream entrypoints.",
+        input: InputTrace,
+        output: OutputTrace,
+        toModelOutput: ({ output }) => [{ type: "text", text: output.summary }],
+        execute: (input, context) =>
+          traced(
+            process.cwd(),
+            context.sessionID,
+            name_trace,
+            input,
+            (output) => `entrypoints=${output.entrypoints.length}`,
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name_trace,
+                resources: [input.symbol],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+
+              const ws = workspaceFromInput(input)
+              const slc = yield* intel.trace({
+                symbol: input.symbol,
+                ...(input.depth !== undefined ? { depth: input.depth } : {}),
+                ...(ws ? { workspace: ws } : {}),
+              })
+              return sliceToOutput(slc)
+            }),
+          ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_trace failed" }))),
+      }),
+      [name_tests]: Tool.make({
+        description: "Find tests that reference a given symbol by name.",
+        input: InputTests,
+        output: OutputTests,
+        toModelOutput: ({ output }) => [{ type: "text", text: `tests=${output.tests.length}` }],
+        execute: (input, context) =>
+          traced(
+            process.cwd(),
+            context.sessionID,
+            name_tests,
+            input,
+            (output) => `tests=${output.tests.length}`,
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name_tests,
+                resources: [input.symbol],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+
+              const tests = yield* intel.tests({ symbol: input.symbol })
+              return { tests: [...tests] }
+            }),
+          ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_tests failed" }))),
+      }),
+      [name_symbols]: Tool.make({
+        description: "Look up symbols by name (exact then prefix match) across the code graph.",
+        input: InputSymbols,
+        output: OutputSymbols,
+        toModelOutput: ({ output }) => [{ type: "text", text: `symbols=${output.symbols.length}` }],
+        execute: (input, context) =>
+          traced(
+            process.cwd(),
+            context.sessionID,
+            name_symbols,
+            input,
+            (output) => `symbols=${output.symbols.length}`,
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name_symbols,
+                resources: [input.query],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+
+              const symbols = yield* intel.symbols({
+                query: input.query,
+                ...(input.limit ? { limit: input.limit } : {}),
+              })
+              return { symbols: [...symbols] }
+            }),
+          ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_symbols failed" }))),
+      }),
+      [name_relationships]: Tool.make({
+        description: "Walk the code graph from a node to its neighbors up to the given depth. Returns the related nodes (excludes the anchor).",
+        input: InputRelationships,
+        output: OutputRelationships,
+        toModelOutput: ({ output }) => [{ type: "text", text: `nodes=${output.nodes.length}` }],
+        execute: (input, context) =>
+          traced(
+            process.cwd(),
+            context.sessionID,
+            name_relationships,
+            input,
+            (output) => `nodes=${output.nodes.length}`,
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name_relationships,
+                resources: [input.nodeID],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+
+              const nodes = yield* intel.relationships({
+                nodeID: input.nodeID,
+                ...(input.depth !== undefined ? { depth: input.depth } : {}),
+              })
+              return { nodes: [...nodes] }
+            }),
+          ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_relationships failed" }))),
+      }),
+      [name_ownership]: Tool.make({
+        description: "Find the most active author for a file by path, using git shortlog over recent commits.",
+        input: InputOwnership,
+        output: OutputOwnership,
+        toModelOutput: ({ output }) => [
+          { type: "text", text: `owner=${output.owner ?? "unknown"} count=${output.count}` },
+        ],
+        execute: (input, context) =>
+          traced(
+            process.cwd(),
+            context.sessionID,
+            name_ownership,
+            input,
+            (output) => `owner=${output.owner ?? "unknown"} count=${output.count}`,
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name_ownership,
+                resources: [input.path],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+
+              const owner = yield* intel.findOwner({ path: input.path })
+              const out: { owner?: string; count: number } =
+                owner.owner !== undefined ? { owner: owner.owner, count: owner.count } : { count: owner.count }
+              return out
+            }),
+          ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_ownership failed" }))),
+      }),
+    })
+  }),
+).pipe(Layer.provide(repositoryIntelligenceLayer))
+
+export * as RepositoryWave2 from "./repository-wave2"
