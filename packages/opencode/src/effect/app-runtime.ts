@@ -1,5 +1,7 @@
 import { Layer, ManagedRuntime, Effect } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
+import { AppProcess } from "@opencode-ai/core/process"
+import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { attach } from "./run-service"
 import * as Observability from "@opencode-ai/core/observability"
 
@@ -57,6 +59,7 @@ import { Banyan } from "@opencode-ai/core/banyancode"
 import { EventV2 } from "@opencode-ai/core/event"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 import { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
+import * as AiSdkTransportModule from "./transport-ai-sdk"
 import { applyCodegraphBuildBridge } from "./banyancode-codegraph-bridge"
 
 export const AppLayer = Layer.mergeAll(
@@ -147,7 +150,30 @@ export const AppLayer = Layer.mergeAll(
       Layer.provide(FSUtil.defaultLayer),
     ),
   ),
-  Layer.provideMerge(PermissionBridge.layer.pipe(Layer.provide(Permission.defaultLayer))),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      Banyan.codegraphAnalyzerDefaultLayer,
+      Banyan.searchDefaultLayer,
+      Banyan.structuralQueriesDefaultLayer,
+      Banyan.gitDefaultLayer,
+      Banyan.systemMonitorDefaultLayer,
+    ).pipe(
+      Layer.provide(AppProcess.defaultLayer as Layer.Layer<unknown, unknown, never>),
+      Layer.provide(
+        CrossSpawnSpawner.defaultLayer as Layer.Layer<unknown, unknown, never>,
+      ),
+      Layer.provide(Banyan.codegraphRepoDefaultLayer),
+      Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+      Layer.provide(Database.defaultLayer),
+    ) as unknown as Layer.Layer<never, never, never>,
+  ),
+  Layer.provideMerge(
+    AiSdkTransportModule.layer as unknown as Layer.Layer<never, never, never>,
+  ),
+  Layer.provideMerge(
+    PermissionBridge.layer
+      .pipe(Layer.provide(Permission.defaultLayer)) as unknown as Layer.Layer<never, never, never>,
+  ),
 )
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })

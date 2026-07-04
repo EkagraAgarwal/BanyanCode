@@ -20,9 +20,9 @@ import { PartID } from "./schema"
 import { EffectBridge } from "@/effect/bridge"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
-import { ToolRegistry as CoreToolRegistry } from "@opencode-ai/core/tool/registry"
-import { AgentV2 } from "@opencode-ai/core/agent"
-import { materializeToAITools } from "@/effect/transport-v2"
+import * as AiSdkTransportModule from "@/effect/transport-ai-sdk"
+import { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
+import type { ToolMaterializationContext } from "@/effect/tool-transport"
 
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
@@ -117,24 +117,37 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     })
   }
 
-  const v2Option = yield* Effect.serviceOption(CoreToolRegistry.Service)
-  if (Option.isSome(v2Option)) {
-    const v2Tools = yield* materializeToAITools({
-      catalog: v2Option.value,
-      ctx: {
-        sessionID: input.session.id,
-        messageID: input.processor.message.id,
-        agentID: AgentV2.ID.make(input.agent.name),
-        model: input.model,
-        messages: input.messages,
-        run,
-        pluginTrigger: (event, payload, out) =>
-          plugin.trigger(event, payload as never, out as never),
-        completeToolCall: (callID, output) =>
-          input.processor.completeToolCall(callID, output as never),
-      },
+  const transportOption = yield* Effect.serviceOption(AiSdkTransportModule.Service)
+  const catalogOption = yield* Effect.serviceOption(ToolCatalog.Service)
+  if (Option.isSome(transportOption) && Option.isSome(catalogOption)) {
+    type CatalogInterface = ToolCatalog.Service["Service"]
+    type Materialization = ReadonlyArray<{ id: string; tool: AITool }>
+    type TransportBuildTools = (
+      catalog: CatalogInterface,
+      ctx: ToolMaterializationContext,
+    ) => Effect.Effect<Materialization, never, never>
+    const transport: { buildTools: TransportBuildTools } = transportOption.value as never
+    const catalog: CatalogInterface = catalogOption.value
+    const materializations: Materialization = yield* (
+      transport.buildTools as (
+        c: CatalogInterface,
+        x: ToolMaterializationContext,
+      ) => Effect.Effect<Materialization, never, never>
+    )(catalog, {
+      sessionID: input.session.id,
+      assistantMessageID: input.processor.message.id,
+      agent: input.agent.name,
+      model: input.model,
+      messages: input.messages,
+      workspace: undefined,
+      permissions: Permission.merge(input.agent.permission, input.session.permission ?? []) as never,
+      run,
+      pluginTrigger: (event: "tool.execute.before" | "tool.execute.after", payload: unknown, out: unknown) =>
+        plugin.trigger(event, payload as never, out as never),
+      completeToolCall: (callID: string, output: unknown) =>
+        input.processor.completeToolCall(callID, output as never),
     })
-    for (const [id, v2Tool] of Object.entries(v2Tools)) {
+    for (const { id, tool: v2Tool } of materializations) {
       if (tools[id]) continue
       tools[id] = v2Tool
     }
