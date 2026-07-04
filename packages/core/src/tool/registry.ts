@@ -21,6 +21,12 @@ export type ExecuteInput = {
 
 export interface Interface {
   readonly materialize: (permissions?: PermissionV2.Ruleset) => Effect.Effect<Materialization>
+  /**
+   * Snapshot of all currently-registered tool entries (location-local + process-scoped
+   * application). The map is keyed by tool name and orders nothing; use
+   * `materialize(...).definitions` for an LLM-facing, permission-filtered projection.
+   */
+  readonly list: () => ReadonlyMap<string, AnyTool>
   /** Internal registration capability exposed publicly only through Tools.Service. */
   readonly register: (tools: Readonly<Record<string, AnyTool>>) => Effect.Effect<void, RegistrationError, Scope.Scope>
 }
@@ -102,6 +108,15 @@ const registryLayer = Layer.effect(
           }),
         )
       }),
+      list: () => {
+        const snapshot = new Map<string, AnyTool>()
+        for (const [name, entry] of applications.entries()) snapshot.set(name, entry.tool)
+        for (const [name, entries] of local) {
+          const last = entries.at(-1)?.registration.tool
+          if (last !== undefined) snapshot.set(name, last)
+        }
+        return snapshot
+      },
       materialize: Effect.fn("ToolRegistry.materialize")(function* (permissions = []) {
         const registrations = new Map(applications.entries())
         for (const [name, entries] of local) {

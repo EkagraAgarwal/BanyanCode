@@ -288,4 +288,23 @@ describe("ApplicationTools", () => {
       expect(applicationContexts).toEqual([])
     }),
   )
+
+  it.effect("list() exposes both Location and application registrations under their final overlay", () =>
+    Effect.gen(function* () {
+      const applications = yield* ApplicationTools.Service
+      const registry = yield* ToolRegistry.Service
+      const scope = yield* Scope.make()
+      yield* applications.register({ application_only: contextual([]) })
+      yield* registry.register({ location_only: contextual([]) }).pipe(Scope.provide(scope))
+      yield* registry.register({ shared: contextual([]) })
+      yield* applications.register({ shared: contextual([]) })
+
+      const list = registry.list()
+      expect([...list.keys()].toSorted()).toEqual(["application_only", "location_only", "shared"])
+
+      yield* Scope.close(scope, Exit.void)
+      const afterScope = registry.list()
+      expect([...afterScope.keys()].toSorted()).toEqual(["application_only", "shared"])
+    }),
+  )
 })
