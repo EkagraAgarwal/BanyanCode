@@ -1,5 +1,7 @@
 import { Effect, Option } from "effect"
+import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
+import { ToolRegistry as OpencodeToolRegistry } from "@/tool/registry"
 import { effectCmd, fail } from "../effect-cmd"
 import { UI } from "../ui"
 
@@ -45,6 +47,8 @@ export const ToolsCommand = effectCmd({
       describe: "filter to a single category (e.g. Repository, Memory, Primitive)",
     }),
   handler: Effect.fn("Cli.tools")(function* (args: { category?: string }) {
+    const v1 = yield* OpencodeToolRegistry.Service
+    yield* v1.ids()
     const option = yield* Effect.serviceOption(ToolCatalog.Service)
     if (Option.isNone(option)) {
       return yield* fail(
