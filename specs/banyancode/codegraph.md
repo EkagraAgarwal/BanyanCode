@@ -7,11 +7,11 @@ A polyglot code graph that captures files, nodes (functions/classes/types), and 
 ## Mental model
 
 ```
-                  /codegraph-build
+  /codegraph-build  |  opencode codegraph build  |  POST /global/codegraph-build
                           │
                           ▼
                   ┌──────────────┐
-                  │   indexer    │  tree-sitter / regex
+                  │   indexer    │  tree-sitter / regex (8-way parse, batched writes)
                   └──────┬───────┘
                          │ upsert
               ┌──────────┼──────────┐
@@ -40,29 +40,24 @@ First-class (tree-sitter):
 Fallback (regex import detection):
 - All other languages. Detects top-level `import` / `from` / `require` patterns. Lower accuracy.
 
-The `registry.ts` maps file extension to parser. When the parser throws, the indexer falls back to regex.
+`packages/core/src/banyancode/langs/registry.ts` maps file extension to parser. When the parser throws, the indexer falls back to regex.
 
 ## Indexer
 
-`packages/core/src/codegraph/indexer.ts`:
-
-```ts
-export class CodegraphIndexer extends Context.Service<CodegraphIndexer, {
-  readonly index: (input: { root: string; force?: boolean; onProgress?: (info: { file: string; done: number; total: number }) => void }) => Effect.Effect<{ indexed: number; skipped: number }, CodegraphError>
-  readonly cancel: () => Effect.Effect<void>
-}>()("@banyancode/CodegraphIndexer") {}
-```
+`packages/core/src/banyancode/codegraph-indexer.ts` — `Banyan.CodegraphIndexer.Service`.
 
 Behavior:
 
-- Walks `root` recursively, skipping `.git`, `node_modules`, `dist`, `build`, `.sst`, `.opencode/`.
+- Walks `root` recursively, skipping `.git`, `node_modules`, `dist`, `build`, `.sst`, `.opencode/`, `.banyancode/`, plus patterns from `.gitignore` and `.banyancode/ignore`.
 - For each file: compute SHA-256 hash. If the hash matches `codegraph_files.hash` and `force` is not set, skip.
-- For first-class languages: parse with tree-sitter, walk the AST, emit `codegraph_nodes` (file, function, class, method, type, variable) and `codegraph_edges` (imports, calls, extends, implements, uses, references).
+- For first-class languages: parse with tree-sitter, walk the AST, emit `codegraph_nodes` (file, function, class, method, type, variable, plus Wave 1 file-level kinds: `test`, `route`, `config`, `build`, `package`, `generated`) and `codegraph_edges` (imports, calls, extends, implements, uses, references, plus Wave 1 kinds: `tested_by`, `configured_by`, `built_by`, `mounts`, `generated_from`).
 - For other languages: regex `^import\s+...`, `^from\s+...`, `require\(...\)` etc. Emit `codegraph_nodes` (file) and `codegraph_edges` (imports) only.
 - `text_excerpt` per node: first 512 characters of the source for the node's body. Used as the embedding input.
-- `onProgress` is called every 50 files. The TUI renders it.
+- `onProgress` fires after each file. The TUI, CLI, and HTTP bridge all consume `banyancode.codegraph.build` events.
 
-Cancellation: an internal `Ref<boolean>` flipped by `cancel()`. The walker checks it after every file.
+**Pipeline.** Eight parse fibers offer parsed file graphs into `Queue.bounded(128)`. A single consumer drains the queue and calls `writeFileGraph` per file. Producers and the consumer run concurrently (`Effect.all` with `concurrency: 2`) so the queue cannot deadlock when full. Post-walk reference edges are deduped and skip artifact node kinds. `putEdges` batches inserts in groups of 1000 inside one transaction per batch.
+
+Cancellation: `CodegraphBuildService.cancel()` flips an internal flag; the walker checks it after every file. `forceKill()` interrupts the build fiber and, on Windows, falls back to `taskkill` when interrupt alone is insufficient.
 
 ## Tools
 
@@ -123,11 +118,26 @@ If `file` is unset, embeds all nodes. If a file is set, embeds only the nodes in
 
 ## Slash commands
 
-`/codegraph-build` → `codegraph_build` with `force: true`. Run from a clean state.
+| Command | Effect |
+|---------|--------|
+| `/codegraph-build` | Kick off build via `POST /global/codegraph-build` (`force: true` by default in template) |
+| `/codegraph-cancel` | Cancel in-flight build |
+| `/codegraph-remove` | Drop the current index from SQLite |
+| `/code-embed` | `code_embed_update` with no `file` — embed everything |
 
-`/code-embed` → `code_embed_update` with no `file`. Embed everything.
+Wave 1 repository-intelligence slash commands (`/codegraph-search`, `/codegraph-find-routes`, etc.) are registered alongside these in `packages/opencode/src/command/index.ts`.
 
-Both commands are registered in `packages/opencode/src/command/index.ts` and the templates live in `packages/opencode/src/command/template/codegraph-build.txt` and `code-embed.txt`.
+## CLI — `opencode codegraph`
+
+`packages/opencode/src/cli/cmd/codegraph.ts` — works with `BANYANCODE_ENABLE=1`, no TUI session required:
+
+| Subcommand | Description |
+|------------|-------------|
+| `build [--root PATH] [--force] [--watch] [--timeout N]` | Start a build; streams progress in TTY |
+| `status` | Print current build state |
+| `cancel` | Cancel in-flight build |
+| `force-kill` | Interrupt stuck build (Windows: `taskkill` fallback) |
+| `path` | Print resolved `banyancode.db` path |
 
 ## Event ownership — `banyancode.codegraph.build`
 
@@ -135,11 +145,20 @@ The build service exposes a bounded `events()` queue (`Queue.bounded(64)`) that 
 
 The build service layer MUST NOT add an internal drain on the same queue. Effect `Queue` is single-consumer; a second drain will race the bridge and roughly half of the progress events will be lost. The TUI's `banyancode.codegraph.build` subscription is the most visible casualty — without every event, the progress widget stays at `0/0 Running` even though the indexer is happily writing nodes to the DB. Regression test: `packages/opencode/test/banyancode/codegraph-manual-build.test.ts`.
 
-## HTTP route — `POST /global/codegraph-build`
+## HTTP routes (global)
 
-The build is exposed as a global HTTP route (`POST /global/codegraph-build`) so it works from any route, not only when the user has an active session. The TUI command palette (`app.tsx`) and the prompt-input slash handler (`component/prompt/index.tsx`) both call this endpoint directly via `sdk.client.global.codegraph.build({...})`. The handler resolves `root` from `InstanceState.context.worktree` if not provided, and runs the kickoff inside `AppRuntime.runFork(...)` so the forked build fiber outlives the HTTP request. The build service's `start()` uses `Effect.forkDetach(forkWork)` so the work runs in the runtime's global scope (never closed) — this avoids `Effect.forkScoped`'s "Scope not in context" failure that silently killed earlier attempts. Reference: `packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts:174-189` and `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:106-118`.
+BanyanCode workspace-level codegraph commands live on `/global/*`, not `/session/{id}/*`, so they work without an active chat session.
 
-## Acceptance criteria (from the master plan)
+| Route | Purpose |
+|-------|---------|
+| `POST /global/codegraph-build` | Start build |
+| `POST /global/codegraph-cancel` | Cancel in-flight build |
+| `POST /global/codegraph-force-kill` | Force-kill stuck build |
+| `POST /global/codegraph-remove` | Remove index |
+
+The TUI command palette and prompt slash handler call these via `sdk.client.global.codegraph.*`. The build handler resolves `root` from `InstanceState.context.worktree` when omitted and runs kickoff inside `AppRuntime.runFork(...)` so the build fiber outlives the HTTP request. `CodegraphBuildService.start()` uses `Effect.forkDetach` (not `forkScoped`) so work runs in the runtime global scope. Reference: `packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts` and `groups/global.ts`.
+
+## Acceptance criteria
 
 - `codegraph_build` over the BanyanCode repo itself indexes 100% of `.ts`/`.tsx` files with no errors.
 - `codegraph_callers({ function: "SessionV2.prompt" })` returns the test file, the orchestrator prompt, and the task tool call site.

@@ -66,6 +66,19 @@ To add a custom subagent:
 2. Fill the wizard: name → description → model (optional) → tools (grouped multi-select) → review.
 3. Saves to `.banyancode/agent/<name>.md` with frontmatter (`name`, `description`, `mode: subagent`, `model`, `tools`).
 
+### Codegraph CLI
+
+With `BANYANCODE_ENABLE=1`, build and inspect the index from the shell (no TUI required):
+
+```bash
+opencode codegraph build --force          # index cwd, stream progress
+opencode codegraph build --root ./packages/core --force
+opencode codegraph status                 # current build state
+opencode codegraph cancel                 # cancel in-flight build
+opencode codegraph force-kill             # interrupt stuck build (Windows: taskkill fallback)
+opencode codegraph path                   # print .banyancode/banyancode.db path
+```
+
 ## Architecture (one paragraph each)
 
 **Storage (Turso/libSQL).** BanyanCode uses `@libsql/client` to talk to a local file DB (`<project>/.banyancode/banyancode.db`). libSQL is a drop-in SQLite fork with FTS5 for full-text search and a `jsonb` type for indexable JSON paths. The driver adapter lives at `packages/core/src/database/sqlite.libsql.ts` and works on both Bun and Node.
@@ -74,7 +87,7 @@ To add a custom subagent:
 
 **Memory.** A Drizzle table (`memory_entries`) keyed by `id` and scoped to `global` or `session`. `value` and `tags` are stored as `jsonb` (Turso user-defined type). `memory_search` runs BM25 keyword match. `update` uses optimistic concurrency (`UPDATE ... WHERE version = expected`) to avoid lost writes. `vacuum` enforces a TTL and entry-count cap.
 
-**Code graph.** `CodegraphBuildService` walks `<root>`, skips `.banyancode/` itself and patterns from `.banyancode/ignore` and `.gitignore`, parses with tree-sitter (TS/JS/Python) or regex fallback (everything else), and writes `codegraph_files`, `codegraph_nodes`, `codegraph_edges` to SQLite. The Obsidian-style Graph tab renders nodes with `d3-force` layout, layered by L0/L1/L2/L3 (focused / direct callers / transitive impact / reverse dependents). Pagination: `listAllNodes/Edges/Files` and `bumpVersion` use `countNodes/Edges/Files` (`SELECT COUNT(*)`) plus `searchNodes({ name?, kind?, limit })` with push-down `LIKE`/`=` filters — 50K-node codegraphs stay snappy.
+**Code graph.** `CodegraphBuildService` walks `<root>`, skips `.banyancode/` itself and patterns from `.banyancode/ignore` and `.gitignore`, parses with tree-sitter (TS/JS/Python/Go/Rust) or regex fallback (everything else), and writes `codegraph_files`, `codegraph_nodes`, `codegraph_edges` to SQLite. Parsing runs with 8 concurrent fibers feeding a bounded producer-consumer queue; edge inserts are batched (1000 per transaction). A full workspace index (~3K files) completes in ~30s on a typical dev machine. Build from the TUI (`/codegraph-build`), HTTP (`POST /global/codegraph-build`), or CLI (`opencode codegraph build --force`). Cancel with `/codegraph-cancel`, `opencode codegraph cancel`, or force-kill a stuck build with `opencode codegraph force-kill`. The Obsidian-style Graph tab renders nodes with `d3-force` layout, layered by L0/L1/L2/L3 (focused / direct callers / transitive impact / reverse dependents). Pagination: `listAllNodes/Edges/Files` and `bumpVersion` use `countNodes/Edges/Files` (`SELECT COUNT(*)`) plus `searchNodes({ name?, kind?, limit })` with push-down `LIKE`/`=` filters — 50K-node codegraphs stay snappy.
 
 **Researcher + free websearch.** The `researcher` subagent prefers `websearch_free` (DuckDuckGo HTML scraping, no API key). `websearch` (Exa/Parallel) is opt-in via the `banyancode_disable_websearch` flag. Tool dispatch routes through the existing OpenCode tool registry.
 

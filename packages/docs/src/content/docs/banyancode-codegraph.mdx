@@ -5,78 +5,58 @@ description: Polyglot code graph with tree-sitter
 
 # BanyanCode Code Graph
 
-BanyanCode includes a codebase utility that builds a polyglot code graph using tree-sitter.
-
-## Overview
-
-**Phase 1** (`codegraph_build`) parses the codebase using tree-sitter to build a graph of functions, classes, imports, and relationships. This works across multiple languages.
+BanyanCode builds a polyglot code graph using tree-sitter (TypeScript, JavaScript, Python, Go, Rust) with regex fallback for other languages. The graph captures files, symbols, imports, calls, and Wave 1 structural edges (tests, routes, config mounts, etc.).
 
 ## Ignore rules
 
-The code graph respects the following ignore patterns:
+The indexer skips:
 
-- Default patterns: `node_modules`, `.git`, `dist`, `build`, `coverage`
+- Default patterns: `node_modules`, `.git`, `dist`, `build`, `.sst`, `.opencode/`, `.banyancode/`
 - `.gitignore` patterns from the project root
 - `.banyancode/ignore` patterns (if present)
 
-## Usage
+## Building the code graph
 
-### Building the code graph
+### TUI
 
-```typescript
-// Build over BanyanCode itself
-await codegraph_build({
-  root: "/path/to/BanyanCode",
-  incremental: true
-})
+Run `/codegraph-build` from the prompt. A floating progress widget shows the current file and lets you cancel. The resolved DB path is shown in the widget.
+
+### CLI
+
+With `BANYANCODE_ENABLE=1`:
+
+```bash
+opencode codegraph build --force
+opencode codegraph build --root ./packages/core --force
+opencode codegraph status
+opencode codegraph cancel
+opencode codegraph force-kill   # if cancel does not unblock a stuck build
+opencode codegraph path         # print .banyancode/banyancode.db location
 ```
 
-### Querying the code graph
+### Agent tools
 
-```typescript
-// Find a function definition
-const results = await codegraph_query({
-  query: { function: "memory_store" },
-  root: "/path/to/BanyanCode"
-})
-```
+Agents can call `codegraph_build`, `codegraph_query`, `codegraph_callers`, `codegraph_dependents`, and `codegraph_impact`. Wave 1 also adds `codegraph_search`, structural `codegraph_find_*`, and seven `repo_*` tools — see the [BanyanCode overview](./banyancode.mdx).
 
-### Finding callers
+## Querying
 
-```typescript
-const callers = await codegraph_callers({
-  function: "memory_store",
-  root: "/path/to/BanyanCode"
-})
-```
-
-### Finding dependents
-
-```typescript
-const dependents = await codegraph_dependents({
-  node: "src/memory/index.ts",
-  root: "/path/to/BanyanCode"
-})
-```
-
-### Impact analysis
-
-```typescript
-const impact = await codegraph_impact({
-  node: "src/memory/index.ts",
-  root: "/path/to/BanyanCode"
-})
-```
+Use slash commands such as `/codegraph-search` and `/repo-find-subsystem`, or ask the agent to call the `codegraph_*` / `repo_*` tools directly. The **Codegraph Intel** sidebar panel keeps the last 8 queries visible during a session.
 
 ## Troubleshooting
 
+### Build hangs or stalls
+
+- Check `opencode codegraph status` — if stuck at the same count, run `opencode codegraph cancel` then `opencode codegraph force-kill`.
+- Ensure only one build runs at a time; a second `build` call is rejected while status is `running`.
+- Verify `BANYANCODE_ENABLE=1` is set.
+
 ### Index fails
 
-- Check that the root path exists and is accessible
-- Verify ignore rules in `.banyancode/ignore` are not excluding necessary files
-- Ensure sufficient disk space for the graph storage
+- Check that the root path exists and is readable.
+- Verify `.banyancode/ignore` is not excluding necessary files.
+- Ensure sufficient disk space for `banyancode.db`.
 
 ### Search returns no results
 
-- Verify `codegraph_build` has been run successfully
-- Try a more specific query or use `codegraph_query` for exact matches
+- Run `opencode codegraph build --force` (or `/codegraph-build`) first.
+- Try a more specific query or use `codegraph_query` for exact symbol matches.
