@@ -1,0 +1,8 @@
+Look up symbols by name across the code graph.
+
+Usage: /repository-symbols <query> [--limit <n>]
+
+Returns matching CodegraphNode objects with their file, line range, and signature. Use this when searching for a definition without traversing the graph.
+
+- <query>: a function, class, method, or variable name (required)
+- --limit: maximum number of symbols to return (optional, default 50)

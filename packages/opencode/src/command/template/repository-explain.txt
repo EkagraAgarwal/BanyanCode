@@ -1,0 +1,9 @@
+Explain a symbol by name.
+
+Usage: /repository-explain <symbol>
+
+Looks up the symbol in the code graph and returns an ArchitecturalSlice describing its entrypoints, related tests, docs, and configs. Use this when introducing a new contributor, before editing an unfamiliar symbol, or when summarising a feature area.
+
+- <symbol>: a function, class, method, type, variable, or known identifier (required)
+
+If the symbol is not found, the codegraph may not have been built. Run /codegraph-build and try again.

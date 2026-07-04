@@ -1,0 +1,7 @@
+Find tests that reference a given symbol.
+
+Usage: /repository-tests <symbol>
+
+Returns the list of test nodes that call or reference the symbol. Use this before editing a symbol to confirm the test coverage in place.
+
+- <symbol>: a function, class, method, or known identifier (required)

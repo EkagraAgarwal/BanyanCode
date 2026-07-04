@@ -1,0 +1,9 @@
+Analyze the impact of changing a file by path.
+
+Usage: /repository-impact <path>
+
+Returns an ArchitecturalSlice with the file's dependents expanded into important symbols. Use this before refactoring a shared module to identify all callers.
+
+- <path>: a repository-relative path to a file (required)
+
+If the file is not found, the codegraph may not have been built. Run /codegraph-build and try again.

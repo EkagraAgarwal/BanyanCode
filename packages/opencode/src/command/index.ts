@@ -14,6 +14,15 @@ import { ModelsDev } from "@opencode-ai/core/models-dev"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_CODEGRAPH_BUILD from "./template/codegraph-build.txt"
+import PROMPT_REPOSITORY_QUERY from "./template/repository-query.txt"
+import PROMPT_REPOSITORY_EXPLAIN from "./template/repository-explain.txt"
+import PROMPT_REPOSITORY_TRACE from "./template/repository-trace.txt"
+import PROMPT_REPOSITORY_IMPACT from "./template/repository-impact.txt"
+import PROMPT_REPOSITORY_TESTS from "./template/repository-tests.txt"
+import PROMPT_REPOSITORY_SYMBOLS from "./template/repository-symbols.txt"
+import PROMPT_REPOSITORY_RELATIONSHIPS from "./template/repository-relationships.txt"
+import PROMPT_REPOSITORY_OWNERSHIP from "./template/repository-ownership.txt"
+import PROMPT_WEBSEARCH_FREE from "./template/websearch-free.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -63,6 +72,15 @@ export const Default = {
   REVIEW: "review",
   CODEGRAPH_BUILD: "codegraph-build",
   CODEGRAPH_REMOVE: "codegraph-remove",
+  REPOSITORY_QUERY: "repository-query",
+  REPOSITORY_EXPLAIN: "repository-explain",
+  REPOSITORY_TRACE: "repository-trace",
+  REPOSITORY_IMPACT: "repository-impact",
+  REPOSITORY_TESTS: "repository-tests",
+  REPOSITORY_SYMBOLS: "repository-symbols",
+  REPOSITORY_RELATIONSHIPS: "repository-relationships",
+  REPOSITORY_OWNERSHIP: "repository-ownership",
+  WEBSEARCH_FREE: "websearch-free",
   YOLO: "yolo",
   REFRESH_MODELS: "refresh-models",
 } as const
@@ -160,6 +178,87 @@ export const layer = Layer.effect(
             yield* repoOpt.value.clearAll()
           }).pipe(Effect.provide(Banyan.codegraphRepoDefaultLayer)),
         hints: [],
+      }
+      commands[Default.REPOSITORY_QUERY] = {
+        name: Default.REPOSITORY_QUERY,
+        description: "run a unified repository query (symbols, tests, docs, configs)",
+        source: "command",
+        get template() {
+          return PROMPT_REPOSITORY_QUERY
+        },
+        hints: hints(PROMPT_REPOSITORY_QUERY),
+      }
+      commands[Default.REPOSITORY_EXPLAIN] = {
+        name: Default.REPOSITORY_EXPLAIN,
+        description: "explain a symbol by name (entrypoints, tests, docs, configs)",
+        source: "command",
+        get template() {
+          return PROMPT_REPOSITORY_EXPLAIN
+        },
+        hints: hints(PROMPT_REPOSITORY_EXPLAIN),
+      }
+      commands[Default.REPOSITORY_TRACE] = {
+        name: Default.REPOSITORY_TRACE,
+        description: "trace a symbol through the code graph to its downstream dependents",
+        source: "command",
+        get template() {
+          return PROMPT_REPOSITORY_TRACE
+        },
+        hints: hints(PROMPT_REPOSITORY_TRACE),
+      }
+      commands[Default.REPOSITORY_IMPACT] = {
+        name: Default.REPOSITORY_IMPACT,
+        description: "analyze the impact of changing a file by path",
+        source: "command",
+        get template() {
+          return PROMPT_REPOSITORY_IMPACT
+        },
+        hints: hints(PROMPT_REPOSITORY_IMPACT),
+      }
+      commands[Default.REPOSITORY_TESTS] = {
+        name: Default.REPOSITORY_TESTS,
+        description: "find tests that reference a given symbol",
+        source: "command",
+        get template() {
+          return PROMPT_REPOSITORY_TESTS
+        },
+        hints: hints(PROMPT_REPOSITORY_TESTS),
+      }
+      commands[Default.REPOSITORY_SYMBOLS] = {
+        name: Default.REPOSITORY_SYMBOLS,
+        description: "look up symbols by name across the code graph",
+        source: "command",
+        get template() {
+          return PROMPT_REPOSITORY_SYMBOLS
+        },
+        hints: hints(PROMPT_REPOSITORY_SYMBOLS),
+      }
+      commands[Default.REPOSITORY_RELATIONSHIPS] = {
+        name: Default.REPOSITORY_RELATIONSHIPS,
+        description: "walk the code graph from a node to its related nodes",
+        source: "command",
+        get template() {
+          return PROMPT_REPOSITORY_RELATIONSHIPS
+        },
+        hints: hints(PROMPT_REPOSITORY_RELATIONSHIPS),
+      }
+      commands[Default.REPOSITORY_OWNERSHIP] = {
+        name: Default.REPOSITORY_OWNERSHIP,
+        description: "find the most active author for a file by path",
+        source: "command",
+        get template() {
+          return PROMPT_REPOSITORY_OWNERSHIP
+        },
+        hints: hints(PROMPT_REPOSITORY_OWNERSHIP),
+      }
+      commands[Default.WEBSEARCH_FREE] = {
+        name: Default.WEBSEARCH_FREE,
+        description: "search the web using DuckDuckGo HTML",
+        source: "command",
+        get template() {
+          return PROMPT_WEBSEARCH_FREE
+        },
+        hints: hints(PROMPT_WEBSEARCH_FREE),
       }
       commands[Default.YOLO] = {
         name: Default.YOLO,

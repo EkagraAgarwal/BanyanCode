@@ -1,0 +1,10 @@
+Run a unified repository query.
+
+Usage: /repository-query <query> [--limit <n>]
+
+The query returns matched symbols, related tests, docs, configs, and the surrounding code graph as a single repository context. Use this before writing a plan that spans multiple symbols.
+
+- <query>: a function name, file path, or free-form feature phrase (required)
+- --limit: maximum number of recent commits to include (optional, default 10)
+
+If the codegraph has not been built yet, run /codegraph-build first.

@@ -1,0 +1,10 @@
+Trace a symbol through the code graph to its downstream dependents.
+
+Usage: /repository-trace <symbol> [--depth <n>]
+
+Walks the code graph from the symbol up to the given depth and returns the entrypoints it leads to. Use this before refactoring to understand blast radius.
+
+- <symbol>: a function, class, method, or known identifier (required)
+- --depth: maximum walk depth (optional, default 2)
+
+If the symbol is not found, the codegraph may not have been built. Run /codegraph-build and try again.

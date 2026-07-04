@@ -1,0 +1,7 @@
+Find the most active author for a file by path.
+
+Usage: /repository-ownership <path>
+
+Returns the author with the most recent commits to the file plus their commit count. Use this when triaging who to ask before refactoring a hot file.
+
+- <path>: a repository-relative path to a file (required)

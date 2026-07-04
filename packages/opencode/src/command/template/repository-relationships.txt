@@ -1,0 +1,8 @@
+Walk the code graph from a node to its related nodes.
+
+Usage: /repository-relationships <nodeID> [--depth <n>]
+
+Returns the related nodes up to the given graph depth (excludes the anchor). Use this when you already have a CodegraphNode id and want to inspect its neighbourhood.
+
+- <nodeID>: a CodegraphNode id (required)
+- --depth: maximum walk depth (optional, default 2)

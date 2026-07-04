@@ -1,0 +1,9 @@
+Search the web using DuckDuckGo HTML.
+
+Usage: /websearch-free <query>
+
+Useful for current information beyond the model's knowledge cutoff. Returns a list of search results with title, URL, and snippet.
+
+- <query>: free-form search query (required)
+
+Each session is rate-limited to keep requests polite. If the search is slow, try a more specific query.
