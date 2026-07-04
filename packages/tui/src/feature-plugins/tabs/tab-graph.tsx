@@ -78,10 +78,13 @@ function View(props: { api: TuiPluginApi }) {
       props.api.client.global.codegraph.nodes(),
       props.api.client.global.codegraph.edges({}),
     ])
+    const nodes = nodesResult.data?.nodes ?? []
+    const meta = nodesResult.data?.meta
+    const rawEdges = edgesResult.data?.edges ?? []
     return {
-      nodes: nodesResult.data!.nodes,
-      meta: nodesResult.data!.meta,
-      edges: edgesResult.data!.edges.map((e) => ({
+      nodes,
+      meta,
+      edges: rawEdges.map((e) => ({
         source: e.fromNodeID,
         target: e.toNodeID,
         kind: e.kind,

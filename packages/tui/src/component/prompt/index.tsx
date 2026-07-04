@@ -36,7 +36,8 @@ import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
-import { type AutocompleteRef, Autocomplete } from "./autocomplete"
+import { type AutocompleteRef } from "./autocomplete"
+import { AutocompleteProvider } from "../../context/autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { AssistantMessage, FilePart, UserMessage } from "@opencode-ai/sdk/v2"
 import { Locale } from "../../util/locale"
@@ -1535,7 +1536,26 @@ export function Prompt(props: PromptProps) {
   const moveLabelWidth = createMemo(() => Math.max(12, Math.min(44, dimensions().width - 48)))
 
   return (
-    <>
+    <AutocompleteProvider
+      anchor={() => anchor}
+      input={() => input}
+      setPrompt={(cb) => {
+        setStore("prompt", produce(cb))
+      }}
+      setExtmark={(partIndex, extmarkId) => {
+        setStore("extmarkToPartIndex", (map: Map<number, number>) => {
+          const newMap = new Map(map)
+          newMap.set(extmarkId, partIndex)
+          return newMap
+        })
+      }}
+      value={store.prompt.input}
+      fileStyleId={fileStyleId}
+      agentStyleId={agentStyleId}
+      promptPartTypeId={() => promptPartTypeId}
+      sessionID={props.sessionID}
+      setAuto={(r) => setAuto(() => r)}
+    >
       <box ref={(r: BoxRenderable) => (anchor = r)} visible={props.visible !== false} width="100%">
         <box
           width="100%"
@@ -1869,28 +1889,6 @@ export function Prompt(props: PromptProps) {
           </Show>
         </box>
       </box>
-      <Autocomplete
-        sessionID={props.sessionID}
-        ref={(r) => {
-          setAuto(() => r)
-        }}
-        anchor={() => anchor}
-        input={() => input}
-        setPrompt={(cb) => {
-          setStore("prompt", produce(cb))
-        }}
-        setExtmark={(partIndex, extmarkId) => {
-          setStore("extmarkToPartIndex", (map: Map<number, number>) => {
-            const newMap = new Map(map)
-            newMap.set(extmarkId, partIndex)
-            return newMap
-          })
-        }}
-        value={store.prompt.input}
-        fileStyleId={fileStyleId}
-        agentStyleId={agentStyleId}
-        promptPartTypeId={() => promptPartTypeId}
-      />
-    </>
+    </AutocompleteProvider>
   )
 }

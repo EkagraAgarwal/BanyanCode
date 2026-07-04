@@ -2,6 +2,14 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/layer-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { CodegraphTools } from "@opencode-ai/core/tool/codegraph"
+import { CodeFindTool } from "@opencode-ai/core/tool/code-find"
+import { CodegraphSearchTool } from "@opencode-ai/core/tool/codegraph-search-tool"
+import { RepositoryIntelTool } from "@opencode-ai/core/tool/repository-intel-tool"
+import { StructuralQueriesTool } from "@opencode-ai/core/tool/structural-queries-tool"
+import { EditPlanTool } from "@opencode-ai/core/tool/edit-plan"
+import { ToolRegistry as CoreToolRegistry } from "@opencode-ai/core/tool/registry"
+import { PermissionV2 } from "@opencode-ai/core/permission"
 import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
@@ -318,6 +326,32 @@ export const layer = Layer.effect(
 
     return Service.of({ ids, all, named, tools })
   }),
+)
+
+// `banyanToolLayers` aggregates every BanyanCode Tool `locationLayer`
+// (one per `Tools.Service.register({...})` factory) along with the BanyanCode
+// service `defaultLayer`s each one transitively needs. The locationLayer
+// factories also consume `Tools.Service` and `PermissionV2.Service` from CORE,
+// which the opencode `ToolRegistry` already brings into scope via
+// `CoreToolRegistry.defaultLayer` + `PermissionV2.layer`. Consumers should
+// wire this into the registry's `node` export (not `defaultLayer`, since
+// `defaultLayer` is shared with non-BanyanCode test setups).
+const banyanToolLayers = Layer.mergeAll(
+  CodegraphTools.locationLayer,
+  CodeFindTool.locationLayer,
+  CodegraphSearchTool.locationLayer,
+  RepositoryIntelTool.locationLayer,
+  StructuralQueriesTool.locationLayer,
+  EditPlanTool.locationLayer,
+).pipe(
+  Layer.provide(Banyan.codegraphBuildServiceDefaultLayer),
+  Layer.provide(Banyan.codegraphAnalyzerDefaultLayer),
+  Layer.provide(Banyan.editPlannerDefaultLayer),
+  Layer.provide(Banyan.repositoryIntelligenceDefaultLayer),
+  Layer.provide(Banyan.structuralQueriesDefaultLayer),
+  Layer.provide(Banyan.searchDefaultLayer),
+  Layer.provide(CoreToolRegistry.defaultLayer),
+  Layer.provide(PermissionV2.layer),
 )
 
 export const defaultLayer = Layer.suspend(() =>
