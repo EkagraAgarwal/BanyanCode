@@ -46,23 +46,23 @@ const apiLayer = HttpRouter.serve(
 const it = testEffect(apiLayer)
 
 describe("repository-intel HttpApi", () => {
-  it.live("findSubsystem returns entry and related", () =>
+  it.live("query returns slice + context", () =>
     Effect.gen(function* () {
-      const response = yield* HttpClientRequest.post(RepositoryIntelPaths.findSubsystem).pipe(
+      const response = yield* HttpClientRequest.post(RepositoryIntelPaths.query).pipe(
         HttpClientRequest.bodyJson({ query: "CodegraphRepo" }),
         Effect.flatMap(HttpClient.execute),
       )
       expect(response.status).toBe(200)
-      const body = (yield* response.json) as { entry: { name: string }; related: unknown[] }
-      expect(body.entry.name).toBe("empty")
-      expect(Array.isArray(body.related)).toBe(true)
+      const body = (yield* response.json) as { slice: { summary: string }; context: { query: string } }
+      expect(body.context.query).toBe("CodegraphRepo")
+      expect(typeof body.slice.summary).toBe("string")
     }),
   )
 
-  it.live("search returns results array", () =>
+  it.live("tests returns array of test nodes", () =>
     Effect.gen(function* () {
-      const response = yield* HttpClientRequest.post(RepositoryIntelPaths.search).pipe(
-        HttpClientRequest.bodyJson({ query: "build", modes: ["fuzzy"] }),
+      const response = yield* HttpClientRequest.post(RepositoryIntelPaths.tests).pipe(
+        HttpClientRequest.bodyJson({ symbol: "build" }),
         Effect.flatMap(HttpClient.execute),
       )
       expect(response.status).toBe(200)

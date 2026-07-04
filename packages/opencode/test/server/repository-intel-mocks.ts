@@ -1,27 +1,52 @@
 import { Effect, Layer } from "effect"
 import { Banyan } from "@opencode-ai/core/banyancode"
-import type { CodegraphNode } from "@opencode-ai/core/banyancode/types"
+import type {
+  ArchitecturalSlice,
+  CodegraphNode,
+  RepositoryContext,
+  WorkspaceContext,
+} from "@opencode-ai/core/banyancode/types"
 
-const emptyNode: CodegraphNode = {
-  id: "empty",
-  fileID: "empty",
-  kind: "function",
-  name: "empty",
-  startLine: 0,
-  endLine: 0,
+const emptySlice: ArchitecturalSlice = {
+  summary: "empty",
+  entrypoints: [],
+  importantSymbols: [],
+  relatedTests: [],
+  relatedDocs: [],
+  configs: [],
+  routes: [],
+  dependencies: [],
 }
+
+const emptyContext = (query: string, workspace?: WorkspaceContext): RepositoryContext => ({
+  query,
+  symbols: [],
+  files: [],
+  graph: { nodes: [], edges: [] },
+  tests: [],
+  docs: [],
+  configs: [],
+  git: { recentCommits: [], ownership: new Map<string, number>() },
+  workspace,
+  ranking: {
+    score: 0,
+    signals: { exact: 0, symbol: 0, graph: 0, git: 0, workspace: 0 },
+  },
+})
 
 export const repositoryIntelServiceMocks = Layer.mergeAll(
   Layer.succeed(
     Banyan.RepositoryIntelligence,
     Banyan.RepositoryIntelligence.of({
-      findSymbol: () => Effect.succeed([]),
-      findSubsystem: () => Effect.succeed({ entry: emptyNode, related: [] }),
-      findEntrypoints: () => Effect.succeed([]),
-      findTests: () => Effect.succeed([]),
-      findRelated: () => Effect.succeed([]),
-      estimateImpact: () => Effect.succeed({ direct: [], transitive: [], blastRadius: 0 }),
-      traceExecution: () => Effect.succeed([]),
+      query: ({ query, workspace }) => Effect.succeed(emptyContext(query, workspace)),
+      slice: (_ctx) => Effect.succeed(emptySlice),
+      explain: () => Effect.succeed(emptySlice),
+      impact: () => Effect.succeed(emptySlice),
+      trace: () => Effect.succeed(emptySlice),
+      tests: () => Effect.succeed([] as readonly CodegraphNode[]),
+      symbols: () => Effect.succeed([] as readonly CodegraphNode[]),
+      relationships: () => Effect.succeed([] as readonly CodegraphNode[]),
+      findOwner: () => Effect.succeed({ owner: undefined, count: 0 }),
     }),
   ),
   Layer.succeed(
@@ -45,6 +70,9 @@ export const repositoryIntelServiceMocks = Layer.mergeAll(
       findRecursiveFunctions: () => Effect.succeed([]),
       findAsyncFunctions: () => Effect.succeed([]),
       findHTTPRoutes: () => Effect.succeed([]),
+      findInterfaces: () => Effect.succeed([]),
+      findExports: () => Effect.succeed([]),
+      findImports: () => Effect.succeed([]),
     }),
   ),
 )

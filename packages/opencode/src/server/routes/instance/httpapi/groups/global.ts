@@ -10,6 +10,7 @@ import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, Op
 import { described } from "./metadata"
 import { CodegraphNodeSchema } from "@opencode-ai/core/banyancode/types"
 import { GraphMeta } from "@opencode-ai/core/banyancode/types"
+import * as WebSearchFreeTool from "@opencode-ai/core/tool/websearch-free"
 
 const CodegraphEdgesQuery = Schema.Struct({
   nodeID: Schema.optional(Schema.String),
@@ -105,6 +106,9 @@ export const CodegraphBuildResult = Schema.Struct({
   reason: Schema.optional(Schema.String),
 })
 
+export const WebSearchFreeInput = WebSearchFreeTool.Input
+export const WebSearchFreeResult = WebSearchFreeTool.Output
+
 const GlobalUpgradeResult = Schema.Union([
   Schema.Struct({
     success: Schema.Literal(true),
@@ -130,6 +134,7 @@ export const GlobalPaths = {
   codegraphNodes: "/global/codegraph-nodes",
   codegraphEdges: "/global/codegraph-edges",
   banyanAgentSave: "/global/banyan-agent/save",
+  websearchFree: "/global/websearch-free",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -315,6 +320,18 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.banyanAgent.save",
           summary: "Save custom agent",
           description: "Save or update an agent definition to ~/.config/banyancode/agent/<name>.md.",
+        }),
+      ),
+      HttpApiEndpoint.post("websearchFree", GlobalPaths.websearchFree, {
+        payload: WebSearchFreeInput,
+        success: described(WebSearchFreeResult, "DuckDuckGo search results"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.websearchFree",
+          summary: "DuckDuckGo web search",
+          description:
+            "Run a free web search using DuckDuckGo HTML. Honors BANYANCODE_DISABLE_WEBSEARCH=1 to disable the tool entirely.",
         }),
       ),
     )

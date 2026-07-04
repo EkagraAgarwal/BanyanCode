@@ -10,18 +10,24 @@ import { Global } from "@opencode-ai/core/global"
 import { Installation } from "@/installation"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
-import { Cause, Effect, Option, Queue, Schema } from "effect"
+import { Cause, Duration, Effect, Option, Queue, Schema } from "effect"
 import path from "path"
 import * as Stream from "effect/Stream"
+import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { BanyanAgentSaveInput, BanyanConfigUpdateInput, CodegraphBuildInput, GlobalUpgradeInput } from "../groups/global"
+import { BanyanAgentSaveInput, BanyanConfigUpdateInput, CodegraphBuildInput, GlobalUpgradeInput, WebSearchFreeInput } from "../groups/global"
 import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
 import { GraphMeta } from "@opencode-ai/core/banyancode/types"
+import { PermissionV2 } from "@opencode-ai/core/permission"
+import * as WebSearchFreeTool from "@opencode-ai/core/tool/websearch-free"
+import { parse as parseWebSearchFree } from "@opencode-ai/core/tool/websearch-free/parse"
+
+const websearchFreeDisabled = () => process.env.BANYANCODE_DISABLE_WEBSEARCH === "1"
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -314,6 +320,88 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       return { ok: true as const, filePath }
     })
 
+    const websearchFreeHandler = Effect.fn("GlobalHttpApi.websearchFree")(function* (ctx: {
+      payload: typeof WebSearchFreeInput.Type
+    }) {
+      if (websearchFreeDisabled()) {
+        return yield* Effect.fail(
+          new InvalidRequestError({ message: "websearch_free is disabled (BANYANCODE_DISABLE_WEBSEARCH=1)" }),
+        )
+      }
+
+      const http = yield* HttpClient.HttpClient
+      const permission = yield* PermissionV2.Service
+
+      const query = ctx.payload.query
+      const numResults = ctx.payload.numResults ?? 8
+      const region = ctx.payload.region
+      const time = ctx.payload.time
+
+      yield* permission.assert({
+        action: "websearch_free",
+        resources: [query],
+        save: ["*"],
+        metadata: ctx.payload as unknown as Record<string, unknown>,
+        sessionID: "global" as unknown as typeof ctx.payload.query as never,
+        agent: undefined,
+        source: undefined,
+      }).pipe(
+        Effect.mapError((error) => new InvalidRequestError({ message: error.message })),
+      )
+
+      const url = new URL(WebSearchFreeTool.DDG_URL)
+      url.searchParams.set("q", query)
+      if (region !== undefined) url.searchParams.set("kl", region)
+      else url.searchParams.set("kl", "wt-wt")
+      if (time !== undefined) url.searchParams.set("df", time)
+
+      const request = HttpClientRequest.get(url.toString()).pipe(HttpClientRequest.accept("text/html"))
+
+      const body = yield* HttpClient.filterStatusOk(http)
+        .execute(request)
+        .pipe(
+          Effect.flatMap((res) => res.text),
+          Effect.tapError((error) => Effect.logError("websearch_free http error", { error })),
+          Effect.mapError((error) =>
+            error instanceof InvalidRequestError
+              ? error
+              : new InvalidRequestError({ message: error.message }),
+          ),
+        )
+        .pipe(
+          Effect.timeoutOrElse({
+            duration: Duration.seconds(25),
+            orElse: () => Effect.fail(new InvalidRequestError({ message: "websearch_free request timed out" })),
+          }),
+        )
+
+      if (Buffer.byteLength(body, "utf8") > WebSearchFreeTool.MAX_RESPONSE_BYTES) {
+        return yield* Effect.fail(
+          new InvalidRequestError({
+            message: `websearch_free response exceeded ${WebSearchFreeTool.MAX_RESPONSE_BYTES} bytes`,
+          }),
+        )
+      }
+
+      const parsed = parseWebSearchFree(body)
+      const limited = parsed.slice(0, Math.min(numResults, WebSearchFreeTool.MAX_NUM_RESULTS))
+
+      if (limited.length === 0) {
+        return {
+          provider: "duckduckgo" as const,
+          text: "No search results found. Please try a different query.",
+          results: [],
+        } satisfies typeof WebSearchFreeTool.Output.Type
+      }
+
+      const text = limited.map((r) => `${r.title}\n${r.url}\n${r.snippet}`).join("\n\n")
+      return {
+        provider: "duckduckgo" as const,
+        text,
+        results: limited.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet })),
+      } satisfies typeof WebSearchFreeTool.Output.Type
+    })
+
     return handlers
       .handle("health", health)
       .handleRaw("event", event)
@@ -330,5 +418,6 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       .handle("codegraphNodes", codegraphNodesHandler)
       .handle("codegraphEdges", codegraphEdgesHandler)
       .handle("banyanAgentSave", banyanAgentSaveHandler)
+      .handle("websearchFree", websearchFreeHandler)
   }),
 )

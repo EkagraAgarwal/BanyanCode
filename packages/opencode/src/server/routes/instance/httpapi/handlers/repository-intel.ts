@@ -1,183 +1,108 @@
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Banyan } from "@opencode-ai/core/banyancode"
-import type { SearchMode, SearchResult } from "@opencode-ai/core/banyancode/search/search"
 import { RootHttpApi } from "../api"
-
-const fuzzyModes: SearchMode[] = ["BM25", "Fuzzy", "Prefix", "CamelCase", "snake_case", "Qualified"]
-
-const mergeSearchResults = (lists: SearchResult[][], limit: number) => {
-  const merged = new Map<string, SearchResult>()
-  for (const list of lists) {
-    for (const r of list) {
-      const existing = merged.get(r.node.id)
-      if (!existing) {
-        merged.set(r.node.id, { ...r, signals: { ...r.signals } })
-        continue
-      }
-      merged.set(r.node.id, {
-        node: existing.node,
-        score: existing.score + r.score,
-        signals: { ...existing.signals, ...r.signals },
-      })
-    }
-  }
-  return Array.from(merged.values())
-    .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.node.name.length - b.node.name.length))
-    .slice(0, limit)
-}
+import {
+  ExplainInput,
+  ImpactInput,
+  OwnershipInput,
+  QueryInput,
+  RelationshipsInput,
+  SymbolsInput,
+  TestsInput,
+  TraceInput,
+  type RepositoryResponse,
+} from "../groups/repository-intel"
 
 export const repositoryIntelHandlers = HttpApiBuilder.group(RootHttpApi, "repository-intel", (handlers) =>
   Effect.gen(function* () {
     const intel = yield* Banyan.RepositoryIntelligence
-    const search = yield* Banyan.Search
-    const structural = yield* Banyan.StructuralQueries
 
-    const findSymbolHandler = Effect.fn("RepositoryIntel.findSymbol")(function* (ctx: {
-      payload: { name: string; kind?: string; file?: string; exact?: boolean }
+    const queryHandler = Effect.fn("RepositoryIntel.query")(function* (ctx: {
+      payload: typeof QueryInput.Type
     }) {
-      return yield* intel.findSymbol({
-        name: ctx.payload.name,
-        kind: ctx.payload.kind as Banyan.CodegraphNode["kind"] | undefined,
-        file: ctx.payload.file,
-        exact: ctx.payload.exact,
+      const ctx_eff = yield* intel.query({
+        query: ctx.payload.query,
+        limit: ctx.payload.limit,
+        workspace: ctx.payload.workspace,
+      })
+      const slice = yield* intel.slice(ctx_eff)
+      return { slice, context: ctx_eff } satisfies RepositoryResponse
+    })
+
+    const explainHandler = Effect.fn("RepositoryIntel.explain")(function* (ctx: {
+      payload: typeof ExplainInput.Type
+    }) {
+      return yield* intel.explain({
+        symbol: ctx.payload.symbol,
+        workspace: ctx.payload.workspace,
       })
     })
 
-    const findSubsystemHandler = Effect.fn("RepositoryIntel.findSubsystem")(function* (ctx: {
-      payload: { query: string; maxDepth?: number }
+    const impactHandler = Effect.fn("RepositoryIntel.impact")(function* (ctx: {
+      payload: typeof ImpactInput.Type
     }) {
-      return yield* intel.findSubsystem(ctx.payload)
+      return yield* intel.impact({
+        path: ctx.payload.path,
+        workspace: ctx.payload.workspace,
+      })
     })
 
-    const findEntrypointsHandler = Effect.fn("RepositoryIntel.findEntrypoints")(function* (ctx: {
-      payload: { feature: string }
+    const traceHandler = Effect.fn("RepositoryIntel.trace")(function* (ctx: {
+      payload: typeof TraceInput.Type
     }) {
-      return yield* intel.findEntrypoints(ctx.payload)
+      return yield* intel.trace({
+        symbol: ctx.payload.symbol,
+        depth: ctx.payload.depth,
+        workspace: ctx.payload.workspace,
+      })
     })
 
-    const findTestsHandler = Effect.fn("RepositoryIntel.findTests")(function* (ctx: {
-      payload: { symbol: string }
+    const testsHandler = Effect.fn("RepositoryIntel.tests")(function* (ctx: {
+      payload: typeof TestsInput.Type
     }) {
-      return yield* intel.findTests(ctx.payload)
+      return yield* intel.tests({ symbol: ctx.payload.symbol })
     })
 
-    const findRelatedHandler = Effect.fn("RepositoryIntel.findRelated")(function* (ctx: {
-      payload: { nodeID: string; depth?: number }
+    const symbolsHandler = Effect.fn("RepositoryIntel.symbols")(function* (ctx: {
+      payload: typeof SymbolsInput.Type
     }) {
-      return yield* intel.findRelated(ctx.payload)
+      return yield* intel.symbols({
+        query: ctx.payload.query,
+        limit: ctx.payload.limit,
+      })
     })
 
-    const estimateImpactHandler = Effect.fn("RepositoryIntel.estimateImpact")(function* (ctx: {
-      payload: { readonly paths: readonly string[]; maxDepth?: number }
+    const relationshipsHandler = Effect.fn("RepositoryIntel.relationships")(function* (ctx: {
+      payload: typeof RelationshipsInput.Type
     }) {
-      return yield* intel.estimateImpact({ paths: [...ctx.payload.paths], maxDepth: ctx.payload.maxDepth })
+      return yield* intel.relationships({
+        nodeID: ctx.payload.nodeID,
+        depth: ctx.payload.depth,
+      })
     })
 
-    const traceExecutionHandler = Effect.fn("RepositoryIntel.traceExecution")(function* (ctx: {
-      payload: { from: string; maxDepth?: number }
+    const ownershipHandler = Effect.fn("RepositoryIntel.ownership")(function* (ctx: {
+      payload: typeof OwnershipInput.Type
     }) {
-      return yield* intel.traceExecution(ctx.payload)
+      return yield* intel.findOwner({ path: ctx.payload.path })
     })
 
-    const searchHandler = Effect.fn("RepositoryIntel.search")(function* (ctx: {
-      payload: {
-        query: string
-        modes?: ReadonlyArray<"exact" | "prefix" | "fuzzy" | "structural" | "graph" | "subsystem" | "tests">
-        limit?: number
-      }
+    const architecturalSliceHandler = Effect.fn("RepositoryIntel.architecturalSlice")(function* (ctx: {
+      query: { focus: string }
     }) {
-      const limit = ctx.payload.limit ?? 50
-      const modes = ctx.payload.modes ? [...ctx.payload.modes] : ["fuzzy"]
-      const lists: SearchResult[][] = []
-
-      for (const mode of modes) {
-        if (mode === "exact") lists.push(yield* search.searchExact(ctx.payload.query))
-        if (mode === "prefix") lists.push(yield* search.searchPrefix(ctx.payload.query))
-        if (mode === "fuzzy") lists.push(yield* search.search(ctx.payload.query, { modes: fuzzyModes, limit }))
-        if (mode === "structural") {
-          const q = ctx.payload.query.toLowerCase()
-          let nodes: Banyan.CodegraphNode[] = []
-          if (q.includes("route") || q.includes("endpoint")) nodes = yield* structural.findHTTPRoutes({})
-          else if (q.includes("async")) nodes = yield* structural.findAsyncFunctions({})
-          else if (q.includes("recursive")) nodes = yield* structural.findRecursiveFunctions({})
-          else if (q.includes("implement") || q.includes("extends")) {
-            nodes = yield* structural.findImplementations({
-              interfaceName: ctx.payload.query.split(/\s+/).pop() ?? ctx.payload.query,
-            })
-          } else if (q.includes("override") || q.includes("method")) {
-            nodes = yield* structural.findOverrides({
-              methodName: ctx.payload.query.split(/\s+/).pop() ?? ctx.payload.query,
-            })
-          }
-          lists.push(nodes.map((node) => ({ node, score: 1, signals: {} })))
-        }
-        if (mode === "graph") {
-          const symbols = yield* intel.findSymbol({ name: ctx.payload.query })
-          if (symbols[0]) {
-            const related = yield* intel.findRelated({ nodeID: symbols[0].id, depth: 2 })
-            lists.push(related.map((node) => ({ node, score: 1, signals: { graph: 1 } })))
-          }
-        }
-        if (mode === "subsystem") {
-          const { entry, related } = yield* intel.findSubsystem({ query: ctx.payload.query })
-          lists.push([
-            { node: entry, score: 2, signals: {} },
-            ...related.map((node) => ({ node, score: 1, signals: {} })),
-          ])
-        }
-        if (mode === "tests") {
-          const nodes = yield* intel.findTests({ symbol: ctx.payload.query })
-          lists.push(nodes.map((node) => ({ node, score: 1, signals: {} })))
-        }
-      }
-
-      return mergeSearchResults(lists, limit)
-    })
-
-    const findImplementationsHandler = Effect.fn("RepositoryIntel.findImplementations")(function* (ctx: {
-      payload: { interfaceName: string; file?: string; language?: string }
-    }) {
-      return yield* structural.findImplementations(ctx.payload)
-    })
-
-    const findOverridesHandler = Effect.fn("RepositoryIntel.findOverrides")(function* (ctx: {
-      payload: { methodName: string; baseClass?: string; file?: string; language?: string }
-    }) {
-      return yield* structural.findOverrides(ctx.payload)
-    })
-
-    const findRecursiveHandler = Effect.fn("RepositoryIntel.findRecursive")(function* (ctx: {
-      payload: { file?: string; language?: string }
-    }) {
-      return yield* structural.findRecursiveFunctions(ctx.payload)
-    })
-
-    const findAsyncHandler = Effect.fn("RepositoryIntel.findAsync")(function* (ctx: {
-      payload: { file?: string; language?: string }
-    }) {
-      return yield* structural.findAsyncFunctions(ctx.payload)
-    })
-
-    const findHttpRoutesHandler = Effect.fn("RepositoryIntel.findHttpRoutes")(function* (ctx: {
-      payload: { file?: string; language?: string }
-    }) {
-      return yield* structural.findHTTPRoutes(ctx.payload)
+      return yield* intel.explain({ symbol: ctx.query.focus })
     })
 
     return handlers
-      .handle("findSymbol", findSymbolHandler)
-      .handle("findSubsystem", findSubsystemHandler)
-      .handle("findEntrypoints", findEntrypointsHandler)
-      .handle("findTests", findTestsHandler)
-      .handle("findRelated", findRelatedHandler)
-      .handle("estimateImpact", estimateImpactHandler)
-      .handle("traceExecution", traceExecutionHandler)
-      .handle("search", searchHandler)
-      .handle("findImplementations", findImplementationsHandler)
-      .handle("findOverrides", findOverridesHandler)
-      .handle("findRecursive", findRecursiveHandler)
-      .handle("findAsync", findAsyncHandler)
-      .handle("findHttpRoutes", findHttpRoutesHandler)
+      .handle("query", queryHandler)
+      .handle("explain", explainHandler)
+      .handle("impact", impactHandler)
+      .handle("trace", traceHandler)
+      .handle("tests", testsHandler)
+      .handle("symbols", symbolsHandler)
+      .handle("relationships", relationshipsHandler)
+      .handle("ownership", ownershipHandler)
+      .handle("architecturalSlice", architecturalSliceHandler)
   }),
 )
