@@ -29,6 +29,7 @@ import { DbCommand } from "./cli/cmd/db"
 import { CodegraphCommand } from "./cli/cmd/codegraph"
 import { RepositoryCommand } from "./cli/cmd/repository"
 import { WebsearchFreeCommand } from "./cli/cmd/websearch-free"
+import { ToolsCommand } from "./cli/cmd/tools"
 import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
@@ -107,6 +108,7 @@ const cli = yargs(args)
   .command(CodegraphCommand)
   .command(RepositoryCommand)
   .command(WebsearchFreeCommand)
+  .command(ToolsCommand)
   .fail((msg, err) => {
     if (
       msg?.startsWith("Unknown argument") ||

@@ -56,6 +56,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { EventV2 } from "@opencode-ai/core/event"
 import { PluginV2 } from "@opencode-ai/core/plugin"
+import { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
 import { applyCodegraphBuildBridge } from "./banyancode-codegraph-bridge"
 
 export const AppLayer = Layer.mergeAll(
@@ -129,6 +130,13 @@ export const AppLayer = Layer.mergeAll(
       Layer.provide(Database.defaultLayer),
     ),
   ),
+  Layer.provideMerge(
+    Banyan.toolRegistryDefaultLayer.pipe(
+      Layer.provide(Permission.defaultLayer),
+      Layer.provide(Database.defaultLayer),
+      Layer.provide(FSUtil.defaultLayer),
+    ),
+  ),
   Layer.provideMerge(PermissionBridge.layer.pipe(Layer.provide(Permission.defaultLayer))),
 )
 
@@ -163,3 +171,34 @@ export const AppRuntime: Runtime = {
 }
 
 AppRuntime.runFork(applyCodegraphBuildBridge as never)
+
+/**
+ * Assert the canonical tool pipeline is consistent: every registered tool
+ * materializes when the catalog is required. Run once per opencode process at
+ * startup; logs and dies on drift so a misconfiguration surfaces immediately
+ * rather than at first tool call.
+ */
+AppRuntime.runFork(
+  Effect.gen(function* () {
+    const catalogOption = yield* Effect.serviceOption(ToolCatalog.Service)
+    if (catalogOption._tag === "None") return
+    const catalog = catalogOption.value
+    const registered = (yield* catalog.list()).size
+    const materialized = (yield* catalog.materialize()).definitions.length
+    const drift = registered - materialized
+    yield* Effect.logInfo("─".repeat(40))
+    yield* Effect.logInfo("Building Tool Catalog...")
+    yield* Effect.logInfo(`  registered:  ${registered}`)
+    yield* Effect.logInfo(`  materialized: ${materialized}`)
+    yield* Effect.logInfo(`  visible:     ${materialized}`)
+    if (drift !== 0) {
+      yield* Effect.die(
+        new Error(
+          `Tool catalog drift: ${registered} registered but ${materialized} materialized. ` +
+            `The canonical ToolCatalog pipeline is broken; refusing to start the LLM session.`,
+        ),
+      )
+    }
+    yield* Effect.logInfo("─".repeat(40))
+  }) as never,
+)

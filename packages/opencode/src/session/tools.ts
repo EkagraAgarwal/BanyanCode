@@ -6,13 +6,13 @@ import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
-import { ToolRegistry } from "@/tool/registry"
+import { ToolRegistry as OpencodeToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
 
 import { Plugin } from "@/plugin"
 import type { TaskPromptOps } from "@/tool/task"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
 import { SessionProcessor } from "./processor"
@@ -20,6 +20,9 @@ import { PartID } from "./schema"
 import { EffectBridge } from "@/effect/bridge"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { ToolRegistry as CoreToolRegistry } from "@opencode-ai/core/tool/registry"
+import { AgentV2 } from "@opencode-ai/core/agent"
+import { materializeToAITools } from "@/effect/transport-v2"
 
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
@@ -34,7 +37,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const run = yield* EffectBridge.make()
   const plugin = yield* Plugin.Service
   const permission = yield* Permission.Service
-  const registry = yield* ToolRegistry.Service
+  const registry = yield* OpencodeToolRegistry.Service
   const mcp = yield* MCP.Service
   const truncate = yield* Truncate.Service
 
@@ -112,6 +115,29 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         )
       },
     })
+  }
+
+  const v2Option = yield* Effect.serviceOption(CoreToolRegistry.Service)
+  if (Option.isSome(v2Option)) {
+    const v2Tools = yield* materializeToAITools({
+      catalog: v2Option.value,
+      ctx: {
+        sessionID: input.session.id,
+        messageID: input.processor.message.id,
+        agentID: AgentV2.ID.make(input.agent.name),
+        model: input.model,
+        messages: input.messages,
+        run,
+        pluginTrigger: (event, payload, out) =>
+          plugin.trigger(event, payload as never, out as never),
+        completeToolCall: (callID, output) =>
+          input.processor.completeToolCall(callID, output as never),
+      },
+    })
+    for (const [id, v2Tool] of Object.entries(v2Tools)) {
+      if (tools[id]) continue
+      tools[id] = v2Tool
+    }
   }
 
   for (const [key, item] of Object.entries(yield* mcp.tools())) {
