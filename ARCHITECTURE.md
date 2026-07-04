@@ -10,6 +10,7 @@ BanyanCode is a CLI/TUI-only fork of [OpenCode](https://github.com/anomalyco/ope
 2. **Cross-session memory** — a persistent key-value store with JSONB indexable payloads.
 3. **Codebase utility** — a tree-sitter code graph (`/codegraph-build`) backed by Turso/libSQL.
 4. **Researcher agent with free web search** — a `researcher` subagent backed by DuckDuckGo (no API key required).
+5. **Repository intelligence (Wave 1 + Wave 2)** — a graph-first retrieval stack on top of the codegraph. Wave 1 shipped the 7-method `RepositoryIntelligence` (`findSymbol`, `findSubsystem`, ...), hybrid `Search`, and `StructuralQueries`. Wave 2 reshaped it into a stable 9-method public surface (`query`, `slice`, `explain`, `impact`, `trace`, `tests`, `symbols`, `relationships`, `ownership`) returning a typed `ArchitecturalSlice` (`{ summary, entrypoints, importantSymbols, relatedTests, relatedDocs, configs, routes, dependencies }`). See [`plan.md`](plan.md) for the Wave-2 shipped snapshot.
 
 Desktop, web, app, and Storybook packages are explicitly out of scope. BanyanCode is a sequence of additions to OpenCode, not a rewrite.
 
@@ -97,12 +98,16 @@ Every BanyanCode service follows the same pattern: a `Context.Service` class, a 
 | `CodegraphRepo` | Drizzle CRUD over `codegraph_*` tables; pagination via `searchNodes({ name?, kind?, limit })`; cheap cardinality via `countNodes/Edges/Files` | `Database` |
 | `MemoryRepo` | Drizzle CRUD over `memory_entries` (JSONB value/tags), optimistic-concurrency `update` | `Database` |
 | `SubagentMessagesRepo`, `SubagentPlansRepo` | Mesh persistence (with `markDelivered` for consume tracking) | `Database` |
-| `CodegraphIndexer` | Walk a directory, parse files, extract nodes/edges via tree-sitter | `CodegraphRepo`, `FSUtil` |
+| `CodegraphIndexer` | Walk a directory, parse files, extract nodes/edges via tree-sitter. Wave 2 classifier adds `ci/docker/env/doc` file kinds + Markdown + Dockerfile parsers | `CodegraphRepo`, `FSUtil` |
 | `CodegraphBuildService` | Persistent build state, fork/cancel, publish `banyancode.codegraph.build` events | `CodegraphIndexer`, `EventV2` |
 | `CodegraphAnalyzer` | BFS impact/dependents/callers over the graph edges; computes L0/L1/L2/L3 layers | `CodegraphRepo` |
 | `MaxSubagentsService` | Reads `banyancode_max_subagents` config (default 5, max 20), validates, provides to orchestrator prompt + hard runtime limit | `BanyanConfigService` |
 | `SubagentBus`, `MeshCoordinator`, `SubagentConsumer` | Fire-and-persist peer messaging + fan-out coordination; consumer forks a per-session message loop that calls `markDelivered` after each message. Hard cap via `tryReserveSubagentSlot` | `SubagentMessagesRepo`, `SubagentPlans`, `MaxSubagentsService` |
 | `SystemMonitorService` | CPU/memory/platform/GPU health reads; publishes `banyancode.system.updated` every 1s. Bounded queue (size 60), no per-`watch()` fiber leak | `AppProcess` |
+| `RepositoryIntelligence` (Wave 2) | 9-method public surface: `query`, `slice`, `explain`, `impact`, `trace`, `tests`, `symbols`, `relationships`, `ownership`. All slice-returning methods emit the stable `ArchitecturalSlice` shape. Workspace context propagated via optional `workspace?: WorkspaceContext`. Internal helpers (`findSymbol`, `findSubsystem`, `findEntrypoints`, `findTests`, `findRelated`) stay in the layer | `CodegraphRepo`, `Git` |
+| `Search` (Wave 2) | Hybrid lexical/structural search. Modes: `exact`, `prefix`, `BM25`, `Fuzzy`, `CamelCase`, `snake_case`, `Qualified`, `Graph`. Public `searchAuto(query, opts)` cascade (Exact→Qualified→Prefix→Graph→BM25→Fuzzy) with a `mode: "manual"` SDK escape | `CodegraphRepo` |
+| `StructuralQueries` (Wave 2) | Tree-sitter structural queries. Wave-1: `findImplementations`, `findOverrides`, `findRecursiveFunctions`, `findAsyncFunctions`, `findHTTPRoutes`. Wave 2 adds `findInterfaces`, `findExports`, `findImports` | `CodegraphRepo` |
+| `Git` (Wave 2) | `Banyan.$` wrappers over the bundled git binary. Powers `intel.findOwner` and `intel.query.git.recentCommits` | none |
 
 Service exports live in `packages/core/src/banyancode/index.ts` in two flavors:
 - Named (`CodegraphBuildService`, `codegraphBuildServiceDefaultLayer`) for direct imports inside `core`.
@@ -209,14 +214,35 @@ All `useEvent().on(type, handler)` and `event.on(type, handler)` calls inside co
 ## HTTP API
 
 Endpoints added by BanyanCode (`packages/opencode/src/server/routes/instance/httpapi/`):
+
+**Config + workspace state**
 - `GET /global/banyan-config` — read `BanyanConfig.Info`
 - `POST /global/banyan-config` — partial update
+
+**Codegraph build lifecycle**
+- `POST /global/codegraph-build` — start a background build
 - `POST /global/codegraph-cancel` — interrupt a running build
-- `GET /global/codegraph-nodes` — list all indexed nodes + summary meta
-- `GET /global/codegraph-edges` — edges for a node (query: `nodeID`)
+- `POST /global/codegraph-force-kill` — force-kill a stuck build (Windows: `taskkill` fallback)
+- `POST /global/codegraph-remove` — clear the index
+
+**Wave 2 — repository intelligence (under `/global/repository/*`)**
+- `POST /global/repository/query` — unified repository context
+- `POST /global/repository/slice` — ArchitecturalSlice from a context
+- `POST /global/repository/explain` — slice for a symbol name
+- `POST /global/repository/impact` — slice expanded with the file's dependents
+- `POST /global/repository/trace` — downstream entrypoints for a symbol
+- `POST /global/repository/tests` — test nodes referencing a symbol
+- `POST /global/repository/symbols` — exact-then-prefix symbol lookup
+- `POST /global/repository/relationships` — BFS from a codegraph nodeID
+- `POST /global/repository/ownership` — most active git author for a path
+
+**Free web search (Wave 2)**
+- `POST /global/websearch-free` — DuckDuckGo HTML scrape, no API key. Gated by `BANYANCODE_DISABLE_WEBSEARCH=1`
+
+**Agent authoring**
 - `POST /global/banyan-agent/save` — write a custom subagent definition to `.banyancode/agent/<name>.md`
 
-All handler payloads use `Schema.isPattern` / `isMaxLength` validation for path-traversal safety. The `name` field on `BanyanAgentSaveInput` is constrained to `^[a-zA-Z0-9._-]+$` and the handler does a second defense-in-depth check (strip disallowed chars + verify the resolved path is inside the agent directory).
+All paths use `Schema.isPattern` / `isMaxLength` validation for path-traversal safety. The `name` field on `BanyanAgentSaveInput` is constrained to `^[a-zA-Z0-9._-]+$` and the handler does a second defense-in-depth check (strip disallowed chars + verify the resolved path is inside the agent directory). The 9 wave-2 endpoints reuse the same schema-validation pattern.
 
 Inherited from OpenCode V2: `PATCH /session/{id}` — update session metadata (used for inline title edit).
 
@@ -225,13 +251,55 @@ The TUI listens on `event` SSE for `banyancode.codegraph.build` and `banyancode.
 ## Slash commands
 
 Server-side commands in `packages/opencode/src/command/index.ts`:
+
+**Wave 0 / Wave 1**
 - `/codegraph-build [root] [--force]` — runs in background; `CodegraphBuildService.start` forks.
 - `/codegraph-remove` — clears all rows from `codegraph_*` tables (deletes the index).
 - `/yolo` — toggles `banyancode_yolo_mode` (skips permission prompts).
-- `/init`, `/review`, `/refresh-models` — inherited from OpenCode.
+
+**Wave 2 — repository intelligence**
+- `/repository-query <query> [--limit N]` — uniform `RepositoryContext`
+- `/repository-explain <symbol>` — ArchitecturalSlice for a symbol
+- `/repository-trace <symbol> [--depth N]` — downstream entrypoints
+- `/repository-impact <path>` — dependents of a file
+- `/repository-tests <symbol>` — tests referencing a symbol
+- `/repository-symbols <query> [--limit N]` — exact/prefix symbol lookup
+- `/repository-relationships <nodeID> [--depth N]` — BFS from a nodeID
+- `/repository-ownership <path>` — most active git author for a file
+
+**Wave 2 — free web search**
+- `/websearch-free <query>` — DuckDuckGo HTML scrape
+
+**Inherited**
+- `/init`, `/review`, `/refresh-models` — from upstream OpenCode.
 
 Dialog commands (TUI command palette, not slash commands):
 - `/agent-model` — opens the agent model picker.
+
+## CLI subcommands
+
+`opencode` (TUI/CLI binary) gains two wave-2 top-level groups, registered in `packages/opencode/src/index.ts`:
+
+**`opencode codegraph ...`** (`packages/opencode/src/cli/cmd/codegraph.ts`)
+- `build [--root PATH] [--force] [--watch] [--timeout N]` — start a build; streams progress in TTY
+- `status` — current build state
+- `cancel` — cancel in-flight build
+- `force-kill` — interrupt stuck build (Windows: `taskkill` fallback)
+- `path` — print resolved `banyancode.db` path
+- `trace --session <id> [--limit N]` — tail `.banyancode/trace/<sessionID>.jsonl` (Wave 2)
+
+**`opencode repository ...`** (`packages/opencode/src/cli/cmd/repository.ts`, Wave 2)
+- `query <query> [--limit N]` — unified repository context
+- `explain <symbol>` — ArchitecturalSlice for a symbol
+- `trace <symbol> [--depth N]` — downstream entrypoints
+- `impact <path>` — dependents of a file
+- `tests <symbol>` — tests referencing a symbol
+- `relationships <nodeID> [--depth N]` — BFS from a nodeID
+- `ownership <path>` — most active git author
+
+**`opencode websearch-free <query> [--num N]`** (`packages/opencode/src/cli/cmd/websearch-free.ts`, Wave 2) — DuckDuckGo HTML scrape.
+
+The `repository` group is `instance: false` so it works whether or not the user has an active session; it re-provides `Banyan.repositoryIntelligenceDefaultLayer` for its own DB access (no app-layer add of an external service needed). The `websearch-free` group is also `instance: false` and is gated by `BANYANCODE_DISABLE_WEBSEARCH=1` or `BanyanConfig.banyancode_disable_websearch`.
 
 ## Tests
 
@@ -289,3 +357,12 @@ In addition to the root `AGENTS.md` style guide:
   - **Correctness**: `SubagentConsumer.start` actually forks the message loop and calls `markDelivered` on every consumed message; `SystemMonitor` queue is bounded to 60 entries and `watch()` no longer spawns per-call unmanaged fibers.
   - **Performance**: `CodegraphRepo` gained `countNodes/Edges/Files` (`SELECT COUNT(*)`) so `bumpVersion` no longer materializes every node+edge into JS; `searchNodes({ name?, kind?, limit })` pushes `LIKE`/`=` filters to SQL with a default `LIMIT 1000`.
   - **TUI quality**: every `ev.on()`/`event.on()` inside a component body is paired with `onCleanup(unsub)`; `.map()` in JSX is replaced with Solid `<For>` for keyed iteration; every "No X" / "Loading…" surface renders the same `EmptyState` shape (glyph + title + suggested next action); modal dialogs use `theme.background` as backdrop (fully opaque) instead of `RGBA.fromInts(0, 0, 0, 150)`.
+- **Wave 1** (`graph-extra`): shipped the first repository-intelligence surface — 7-method `RepositoryIntelligence` (`findSymbol`, `findSubsystem`, `findEntrypoints`, `findTests`, `findRelated`, `estimateImpact`, `traceExecution`); hybrid `Search` (exact, prefix, BM25, fuzzy, camelCase, snake_case, qualified); `StructuralQueries` (implementations, overrides, recursive, async, HTTP routes); 6 new file-level codegraph node kinds (`test`, `route`, `config`, `build`, `package`, `generated`) + 5 new edge kinds. LLM tool surface: 13 `repo_*` + `codegraph_*` tools, all wrapped in `traced(...)` against `.banyancode/trace/<sessionID>.jsonl`. Commits: `0962825`, `a39b85e`, `78030e4`, `8a9ceeb`, `1f64078`, `a002810`.
+- **Wave 2** (`main`): repository intelligence v2. Reshaped `RepositoryIntelligence` from 7 to a stable **9-method public surface** (`query`, `slice`, `explain`, `impact`, `trace`, `tests`, `symbols`, `relationships`, `ownership`). New canonical return type `ArchitecturalSlice` (`{ summary, entrypoints, importantSymbols, relatedTests, relatedDocs, configs, routes, dependencies }`) emitted by all slice-returning methods. `Search` gained `searchAuto(query, opts)` cascade + `mode: "manual"` SDK escape. `StructuralQueries` added `findInterfaces`, `findExports`, `findImports`. Codegraph `CodegraphNodeKind` extended with `ci | docker | env | doc`; new parsers in `langs/{markdown,docker}.ts`. Shared types in `packages/core/src/banyancode/types.ts`: `ArchitecturalSlice`, `RepositoryContext`, `WorkspaceContext`, `Ranking`, `Diagnostic`. New `Banyan.Git` service (`packages/core/src/banyancode/repository-intelligence/git-service.ts`) wrapping `Banyan.$` over the bundled git binary.
+  - **HTTP**: 9 new endpoints under `/global/repository/*` (mounted on `RootHttpApi`, instance-independent) plus `POST /global/websearch-free` for DuckDuckGo. Handlers rewritten in `packages/opencode/src/server/routes/instance/httpapi/{groups,handlers}/repository-intel.ts` to call the 9-method surface.
+  - **Tools**: 9 new `repository_*` tool wrappers in `packages/core/src/tool/repository-wave2.ts` (`repository_query`, `repository_slice`, `repository_explain`, `repository_impact`, `repository_trace`, `repository_tests`, `repository_symbols`, `repository_relationships`, `repository_ownership`), each passes through `PermissionV2.assert(...)` and `traced(...)`, returns the schema-validated output, and is registered via `banyanToolLayers` in `packages/opencode/src/tool/registry.ts`.
+  - **Slash commands**: 9 new entries (`/repository-query`, `/repository-explain`, `/repository-trace`, `/repository-impact`, `/repository-tests`, `/repository-symbols`, `/repository-relationships`, `/repository-ownership`) plus `/websearch-free`. Templates in `packages/opencode/src/command/template/`.
+  - **CLI**: 2 new top-level commands — `opencode repository {query,explain,trace,impact,tests,relationships,ownership}` and `opencode websearch-free <query>`. Both are `instance: false` so they work whether or not the user has an active chat session. Wired into `packages/opencode/src/index.ts` and registered in `AppRuntime` via `Layer.provideMerge(Banyan.repositoryIntelligenceDefaultLayer.pipe(...))`.
+  - **Permissions**: `PermissionV2.Service` now implemented as a thin bridge over `Permission.Service` in `packages/opencode/src/effect/permission-bridge.ts`; mounted via `Layer.provideMerge(PermissionBridge.layer.pipe(Layer.provide(Permission.defaultLayer)))` so core services can stay Effect-native without depending on the v1 schema. 3/3 tests pass.
+  - **Trace**: `TraceEvent` gained optional `cache?: CacheLayer<...>` and `workspace?: WorkspaceContext` slots. Trace file is bounded to **7 days OR 10,000 events**, whichever first; oldest lines dropped from `.banyancode/trace/<sessionID>.jsonl`. CLI subcommand `opencode codegraph trace --session <id> [--limit N]` tails the file. The `intel-trace-panel.tsx` TUI sidebar widget is authored but not registered — left as a Wave-4 task.
+  - **Commits**: `771800e` (core surface), `d5cd170` (trace instrumentation), `fd8f899` (HTTP routes + permission bridge), `f85e85a` (9 `repository_*` tool wrappers), `ec055e0` (slash commands + CLI). All five on `main` and pushed to `origin/main`. Test status: 163/163 banyancode core tests pass; 9/9 opencode-banyancode tests pass (`repository-intel-http` ×2, `trace` ×4, `permission-bridge` ×3); pre-push `bun turbo typecheck` passes for all 29 packages. The next-wave outline (cache layer, semantic code search, evaluator harness, intel-trace panel registration) is tracked in [`plan.md`](plan.md).

@@ -10,7 +10,7 @@ The TUI/CLI experience stays close to OpenCode; BanyanCode is a sequence of addi
 2. **Cross-session memory.** A persistent key-value store with **indexable JSONB payloads**, exposed as tools (`memory_store`, `memory_recall`, `memory_list`, `memory_forget`, `memory_search`) and a `memory` skill.
 3. **Codebase utility.** `/codegraph-build` builds a polyglot code graph using tree-sitter. Storage is **Turso/libSQL**.
 4. **Researcher agent with free web search.** A `researcher` subagent that uses a DuckDuckGo-backed `websearch_free` tool by default, with the existing Exa/Parallel `websearch` as an opt-in fallback.
-5. **Repository intelligence (Wave 1).** A graph-first retrieval stack on top of the codegraph: `RepositoryIntelligence` (find symbol / subsystem / entrypoints / tests / related / impact / execution trace), hybrid `Search` (exact, prefix, BM25, fuzzy, camelCase, snake_case, qualified), and `StructuralQueries` (implementations, overrides, recursive, async, HTTP routes). Exposed to the LLM as 13 `repo_*` + `codegraph_*` tools, served over `/global/repo/*` and `/global/codegraph/*` HTTP routes, and visible in the TUI as the **Codegraph Intel** sidebar panel. Every tool call is recorded as a paired JSONL `tool.call` event in `.banyancode/trace/<sessionID>.jsonl`. See [`specs/banyancode/repository-intelligence.md`](specs/banyancode/repository-intelligence.md) for the design.
+5. **Repository intelligence (Wave 1 + Wave 2).** A graph-first retrieval stack on top of the codegraph. Wave 1 landed the 7-method `RepositoryIntelligence` (`findSymbol`, `findSubsystem`, `findEntrypoints`, `findTests`, `findRelated`, `estimateImpact`, `traceExecution`) plus hybrid `Search` (exact, prefix, BM25, fuzzy, camelCase, snake_case, qualified) and `StructuralQueries` (implementations, overrides, recursive, async, HTTP routes). Wave 2 reshaped it to a stable **9-method public surface** (`query`, `slice`, `explain`, `impact`, `trace`, `tests`, `symbols`, `relationships`, `ownership`) returning a typed `ArchitecturalSlice` (`{ summary, entrypoints, importantSymbols, relatedTests, relatedDocs, configs, routes, dependencies }`). The LLM sees 9 `repository_*` tool wrappers, every call is trace-recorded as paired JSONL events in `.banyancode/trace/<sessionID>.jsonl` with a 7-day / 10k-event rolling cap. Served over `/global/repository/*` HTTP routes, `/global/websearch-free`, and the new `opencode repository {query,explain,impact,trace,tests,relationships,ownership}` CLI subcommands. See [`ARCHITECTURE.md`](ARCHITECTURE.md) and the Wave 2 entry in [`plan.md`](plan.md).
 
 ## How BanyanCode is layered on OpenCode
 
@@ -19,13 +19,15 @@ BanyanCode keeps the entire OpenCode architecture and adds services alongside it
 | OpenCode layer | BanyanCode addition |
 |----------------|---------------------|
 | Agent registry (`packages/opencode/src/agent/`) | `orchestrator`, `researcher`, `scout`, `coder`, `explore`, `general` agents registered under the `BANYANCODE_ENABLE=1` feature gate |
-| Command shell (`packages/opencode/src/command/`) | `/codegraph-build`, `/codegraph-remove`, `/yolo` slash commands; Wave 1 adds `/repo-find-subsystem`, `/repo-find-tests`, `/codegraph-search`, `/codegraph-find-routes`, `/codegraph-find-async`, `/codegraph-find-overrides`, `/codegraph-find-recursive`, `/codegraph-find-implementations`, `/codegraph-trace-execution` |
-| Tool registry (`packages/core/src/tool/`) | `memory_*`, `websearch_free`, `codegraph_*`, `code_*`, `system_*`, `mesh_*`, `systeminfo` tools; Wave 1 adds 7 `repo_*` tools and 5 `codegraph_find_*` / `codegraph_search` tools (13 in total) |
+| Command shell (`packages/opencode/src/command/`) | `/codegraph-build`, `/codegraph-remove`, `/yolo` slash commands; Wave 1 adds `/repo-find-subsystem`, `/repo-find-tests`, `/codegraph-search`, `/codegraph-find-routes`, `/codegraph-find-async`, `/codegraph-find-overrides`, `/codegraph-find-recursive`, `/codegraph-find-implementations`, `/codegraph-trace-execution`; Wave 2 adds `/repository-query`, `/repository-explain`, `/repository-trace`, `/repository-impact`, `/repository-tests`, `/repository-symbols`, `/repository-relationships`, `/repository-ownership`, `/websearch-free` |
+| Tool registry (`packages/core/src/tool/`) | `memory_*`, `websearch_free`, `codegraph_*`, `code_*`, `system_*`, `mesh_*`, `systeminfo` tools; Wave 1 adds 7 `repo_*` tools and 5 `codegraph_find_*` / `codegraph_search` tools (13 in total); Wave 2 adds 9 `repository_*` tool wrappers (`repository_query`, `repository_slice`, `repository_explain`, `repository_impact`, `repository_trace`, `repository_tests`, `repository_symbols`, `repository_relationships`, `repository_ownership`) |
+| CLI (`packages/opencode/src/cli/`) | Wave 1 adds `opencode codegraph {build,status,cancel,force-kill,path,trace}`; Wave 2 adds `opencode repository {query,explain,impact,trace,tests,relationships,ownership}` and `opencode websearch-free <query>` |
 | Provider plugin system (`packages/core/src/plugin/provider/`) | All upstream provider plugins kept |
 | Storage (`packages/core/src/database/`) | Turso/libSQL via `@libsql/client`. Project-local `.banyancode/banyancode.db` with 5+ tables (memory, codegraph, subagent messages, subagent plans) and a single fresh-schema migration |
 | Event bus (`packages/core/src/event/`) | 2 new event types (`banyancode.codegraph.build`, `banyancode.system.updated`) the TUI subscribes to |
 | TUI (`packages/tui/`) | 6 tabs (Chat, Sessions, Agents, Graph, Memory, Settings), Obsidian-style force-directed Graph view, agent config wizard, full settings accordion |
 | Config schema (`packages/core/src/v1/config/`) | Separate `BanyanConfig.Info` schema — never mixed with OpenCode's `ConfigV1.Info` |
+| Permissions (`packages/opencode/src/effect/permission-bridge.ts`) | Wave 2 adds a `PermissionV2.Service` bridge over the opencode `Permission.Service` so core consumers can stay Effect-native without leaking v1 types |
 
 The feature gate (`BANYANCODE_ENABLE`) keeps the additions opt-in. With the gate off, BanyanCode is a no-op and the OpenCode experience is unchanged.
 
@@ -77,6 +79,21 @@ opencode codegraph status                 # current build state
 opencode codegraph cancel                 # cancel in-flight build
 opencode codegraph force-kill             # interrupt stuck build (Windows: taskkill fallback)
 opencode codegraph path                   # print .banyancode/banyancode.db path
+opencode codegraph trace --session <id>   # tail the .banyancode/trace/<id>.jsonl file
+```
+
+### Repository intelligence CLI (Wave 2)
+
+```bash
+opencode repository query <query>                 # unified repository context
+opencode repository explain <symbol>              # ArchitecturalSlice for a symbol
+opencode repository trace <symbol> [--depth N]    # downstream entrypoints
+opencode repository impact <path>                 # dependents of a file
+opencode repository tests <symbol>                # tests referencing a symbol
+opencode repository relationships <nodeID>         # BFS from a node
+opencode repository ownership <path>              # most active git author
+
+opencode websearch-free <query>                   # DuckDuckGo HTML; gated by BANYANCODE_DISABLE_WEBSEARCH
 ```
 
 ## Architecture (one paragraph each)
@@ -102,6 +119,20 @@ The indexer was extended in Wave 1 to emit 6 new file-level node kinds (`test`, 
 
 Every wave-1 tool call is wrapped in `traced(worktree, sessionID, tool, input, summary, effect)` from `packages/core/src/observability/trace.ts`. Two JSONL lines are appended per call to `.banyancode/trace/<sessionID>.jsonl` — one `phase:"start"` and one `phase:"end"` with `ms` duration. The trace file is the input for the evaluation harness planned in Wave 7 of the roadmap.
 
+**Wave 2 — Repository intelligence v2.** The three Wave-1 services were reshaped into a single stable public surface:
+- `RepositoryIntelligence` is now 9 methods (`query`, `slice`, `explain`, `impact`, `trace`, `tests`, `symbols`, `relationships`, `ownership`). The complex Wave-1 helpers (`findSymbol`, `findSubsystem`, ...) became private layer internals so the public surface stays coherent.
+- All four "slice-returning" methods (`explain`, `impact`, `trace`, `slice`) return the new `ArchitecturalSlice` shape — `{ summary, entrypoints, importantSymbols, relatedTests, relatedDocs, configs, routes, dependencies }`. `summary` and the four populated arrays are always present; the optional arrays default to `[]`. This shape is the wire format the LLM sees in tool output and the SDK consumer sees in `RepositoryContext`.
+- `Search` gains `searchAuto(query, opts)` for a public Exact→Qualified→Prefix→Graph→BM25→Fuzzy cascade, plus a `mode: "manual"` escape hatch for SDK/CLI callers who want to override the cascade.
+- `StructuralQueries` adds `findInterfaces`, `findExports`, `findImports` (3 new methods; the existing 5 Wave-1 methods are unchanged).
+- The codegraph indexer's classifier now distinguishes `ci | docker | env | doc` file kinds so markdown and Dockerfile content contributes to slices via `relatedDocs`. Parsers in `packages/core/src/banyancode/langs/{markdown,docker}.ts`.
+- 9 new HTTP endpoints under `/global/repository/*` (mounted on `RootHttpApi`, not session-scoped, so they work without an active session); handlers rewritten to call the new 9-method service surface.
+- 9 new LLM tool wrappers in `packages/core/src/tool/repository-wave2.ts`: every call passes through `traced(...)` and `PermissionV2.assert(...)` and returns the schema-validated `ArchitecturalSlice`/`RepositoryContext`/`CodegraphNode[]`/`owner` shape.
+- 9 new slash commands + templates, and 2 new top-level CLI groups (`opencode repository ...`, `opencode websearch-free <query>`).
+- `PermissionV2.Service` is implemented on top of opencode's `Permission.Service` (`packages/opencode/src/effect/permission-bridge.ts`), so core services can request permissions without depending on the v1 schema.
+- `TraceEvent` got optional `cache?: CacheLayer<...>` and `workspace?: WorkspaceContext` slots, plus a 7-day / 10k-event rolling cap on the JSONL file. The CLI subcommand `opencode codegraph trace --session <id>` tails the trace file.
+
+See [`plan.md`](plan.md) for the Wave 3+ outline (caching layer, semantic code search, evaluator harness).
+
 ## TUI UX
 
 The TUI follows modern TUI design patterns (Charm, Ink, OpenTUI reference):
@@ -114,8 +145,9 @@ The TUI follows modern TUI design patterns (Charm, Ink, OpenTUI reference):
 
 ## Design docs
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — repo layout, runtime layers, BanyanCode service architecture, V2/V3 changelog.
-- [`specs/banyancode/`](specs/banyancode/) — per-feature design (storage, orchestrator, subagent mesh, memory, code graph, free web search).
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — repo layout, runtime layers, BanyanCode service architecture, V2/V3/Wave-1/Wave-2 changelog.
+- [`plan.md`](plan.md) — Wave-2 shipped snapshot and the Wave-3+ outline.
+- [`specs/banyancode/`](specs/banyancode/) — per-feature design (storage, orchestrator, subagent mesh, memory, code graph, free web search, types).
 - [`specs/banyancode/overview.md`](specs/banyancode/overview.md) — one-paragraph pitch and reuse map.
 - [`packages/docs/src/content/docs/banyancode.mdx`](packages/docs/src/content/docs/banyancode.mdx) — user-facing feature overview.
 
