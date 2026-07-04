@@ -235,6 +235,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "session.model.selected":
           if (store.session.info[event.data.sessionID])
             setStore("session", "info", event.data.sessionID, "model", event.data.model)
+          if (!store.session.message[event.data.sessionID]) break
           message.update(event.data.sessionID, (draft, index) => {
             message.append(draft, index, {
               id: messageIDFromEvent(event.id),
@@ -243,6 +244,16 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               time: { created: event.created },
             })
           })
+          void sdk.api.session
+            .message({ sessionID: event.data.sessionID, messageID: messageIDFromEvent(event.id) })
+            .then((item) => {
+              message.update(event.data.sessionID, (draft, index) => {
+                const position = index.get(item.id)
+                if (position === undefined) return message.append(draft, index, mutable(item))
+                draft[position] = mutable(item)
+              })
+            })
+            .catch((error) => console.error("Failed to load projected model switch message", error))
           break
         case "session.renamed":
           if (store.session.info[event.data.sessionID])

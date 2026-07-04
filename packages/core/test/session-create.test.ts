@@ -562,9 +562,9 @@ describe("SessionV2.create", () => {
       yield* session.switchModel({ sessionID: created.id, model })
 
       expect(yield* session.get(created.id)).toMatchObject({ model })
-      expect(
-        Array.from(yield* logEvents(session, created.id, true).pipe(Stream.take(1), Stream.runCollect)),
-      ).toMatchObject([{ type: "session.model.selected", data: { model } }])
+      const events = Array.from(yield* logEvents(session, created.id, true).pipe(Stream.take(1), Stream.runCollect))
+      expect(events).toMatchObject([{ type: "session.model.selected" }])
+      expect(events[0]?.data).toEqual({ sessionID: created.id, model })
     }),
   )
 

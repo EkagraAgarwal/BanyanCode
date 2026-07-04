@@ -928,6 +928,7 @@ export type SessionContextOutput = {
         readonly time: { readonly created: number }
         readonly type: "model-switched"
         readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
+        readonly previous?: { readonly id: string; readonly providerID: string; readonly variant?: string }
       }
     | {
         readonly id: string
@@ -1621,6 +1622,7 @@ export type SessionMessageOutput = {
         readonly time: { readonly created: number }
         readonly type: "model-switched"
         readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
+        readonly previous?: { readonly id: string; readonly providerID: string; readonly variant?: string }
       }
     | {
         readonly id: string
@@ -1820,6 +1822,7 @@ export type MessageListOutput = {
         readonly time: { readonly created: number }
         readonly type: "model-switched"
         readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
+        readonly previous?: { readonly id: string; readonly providerID: string; readonly variant?: string }
       }
     | {
         readonly id: string

@@ -1231,7 +1231,8 @@ function SessionSwitchMessageV2(props: { message: SessionMessage }) {
   const { theme } = useTheme()
   const text = () => {
     if (props.message.type === "agent-switched") return `Switched agent to ${props.message.agent}`
-    if (props.message.type === "model-switched") return switchLabel(props.message.model, ctx.models())
+    if (props.message.type === "model-switched")
+      return switchLabel(props.message.model, ctx.models(), props.message.previous)
     return ""
   }
   return <text fg={theme.textMuted}>{text()}</text>

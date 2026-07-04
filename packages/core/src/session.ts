@@ -540,7 +540,8 @@ const layer = Layer.effect(
             const started = yield* Effect.gen(function* () {
               const shell = yield* Shell.Service
               return yield* shell.create({ command: input.command, cwd: session.location.directory })
-            }).pipe(Effect.provide(locations.get(session.location)))
+            })
+              .pipe(Effect.provide(locations.get(session.location)))
             yield* events.publish(
               SessionEvent.Shell.Started,
               {
@@ -563,8 +564,7 @@ const layer = Layer.effect(
                     .pipe(Effect.catchTag("Shell.NotFoundError", () => Effect.succeed(missingShellOutput())))
                 : missingShellOutput()
               return { shell: terminal.info, output }
-            })
-              .pipe(Effect.provide(locations.get(session.location)))
+            }).pipe(Effect.provide(locations.get(session.location)))
             yield* events.publish(SessionEvent.Shell.Ended, {
               sessionID: input.sessionID,
               shell: completed.shell,

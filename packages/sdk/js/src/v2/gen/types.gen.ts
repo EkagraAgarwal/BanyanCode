@@ -4310,6 +4310,7 @@ export type SessionMessageModelSelected = {
   }
   type: "model-switched"
   model: ModelRef
+  previous?: ModelRef
 }
 
 export type SessionMessageUser = {
@@ -7985,6 +7986,7 @@ export type SessionMessageModelSelected2 = {
   }
   type: "model-switched"
   model: ModelRef2
+  previous?: ModelRef2
 }
 
 export type SessionMessageUser2 = {
