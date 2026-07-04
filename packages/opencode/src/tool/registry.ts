@@ -330,11 +330,12 @@ export const layer = Layer.effect(
 
 // `banyanToolLayers` aggregates every BanyanCode Tool `locationLayer`
 // (one per `Tools.Service.register({...})` factory) along with the BanyanCode
-// service `defaultLayer`s each one transitively needs. The locationLayer
-// factories also consume `Tools.Service` and `PermissionV2.Service` from CORE,
-// which the opencode `ToolRegistry` already brings into scope via
-// `CoreToolRegistry.defaultLayer` + `PermissionV2.layer`. Consumers should
-// wire this into the registry's `node` export (not `defaultLayer`, since
+// service `defaultLayer`s each one transitively needs. Tools consume
+// `Tools.Service` (CORE) at registration time and `PermissionV2.Service`
+// (CORE) at execution time. We provide `Tools.Service` via
+// `CoreToolRegistry.defaultLayer` here; `PermissionV2.Service` must be
+// provided by the consumer's app layer at execution time. Consumers should
+// wire this into the registry's `node` export (NOT `defaultLayer`, since
 // `defaultLayer` is shared with non-BanyanCode test setups).
 const banyanToolLayers = Layer.mergeAll(
   CodegraphTools.locationLayer,
@@ -351,7 +352,6 @@ const banyanToolLayers = Layer.mergeAll(
   Layer.provide(Banyan.structuralQueriesDefaultLayer),
   Layer.provide(Banyan.searchDefaultLayer),
   Layer.provide(CoreToolRegistry.defaultLayer),
-  Layer.provide(PermissionV2.layer),
 )
 
 export const defaultLayer = Layer.suspend(() =>
@@ -454,7 +454,29 @@ function isJsonSchemaObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-export const node = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer)), [
+const banyanToolsNode = LayerNode.make(banyanToolLayers, [
+  Config.node,
+  Plugin.node,
+  Question.node,
+  Todo.node,
+  Agent.node,
+  Skill.node,
+  Session.node,
+  BackgroundJob.node,
+  Provider.node,
+  LSP.node,
+  Instruction.node,
+  FSUtil.node,
+  EventV2Bridge.node,
+  httpClient,
+  CrossSpawnSpawner.node,
+  Format.node,
+  Truncate.node,
+  RuntimeFlags.node,
+  Database.node,
+] as never)
+
+const coreRegistryNode = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer)), [
   Config.node,
   Plugin.node,
   Question.node,
@@ -475,5 +497,7 @@ export const node = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer
   RuntimeFlags.node,
   Database.node,
 ])
+
+export const node = LayerNode.group([coreRegistryNode, banyanToolsNode])
 
 export * as ToolRegistry from "./registry"
