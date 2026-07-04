@@ -1,4 +1,4 @@
-import { Effect, Layer, ManagedRuntime } from "effect"
+import { Layer, ManagedRuntime } from "effect"
 import { attach } from "./run-service"
 import * as Observability from "@opencode-ai/core/observability"
 
@@ -140,15 +140,7 @@ export const AppRuntime: Runtime = {
     return rt.runPromiseExit(wrap(effect), options)
   },
   runFork(effect) {
-    // Detach the work from any request scope so it survives request teardown.
-    // The outer fiber runs `Effect.forkDetach(wrap(effect))` which spawns a
-    // detached worker and yields immediately; the detached fiber lives on
-    // independently. The Fiber we return here is the short-lived coordinator.
-    return rt.runFork(
-      Effect.gen(function* () {
-        yield* Effect.forkDetach(wrap(effect))
-      }) as never,
-    )
+    return rt.runFork(wrap(effect))
   },
   runCallback(effect) {
     return rt.runCallback(wrap(effect))

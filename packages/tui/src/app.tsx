@@ -27,7 +27,6 @@ import {
 import { TuiPathsProvider, TuiStartupProvider, TuiTerminalEnvironmentProvider, useTuiStartup } from "./context/runtime"
 import { DialogProvider, useDialog } from "./ui/dialog"
 import { DialogProvider as DialogProviderList } from "./component/dialog-provider"
-import { Autocomplete, useAutocomplete } from "./context/autocomplete"
 import { ErrorComponent } from "./component/error-component"
 import { PluginRouteMissing } from "./component/plugin-route-missing"
 import { ProjectProvider, useProject } from "./context/project"
@@ -353,12 +352,6 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
     if (exit.epilogue) process.stdout.write(exit.epilogue + "\n")
   })
 })
-
-function AutocompleteOverlay() {
-  const ctx = useAutocomplete()
-  if (!ctx) return null
-  return <Autocomplete {...ctx.getProps()} />
-}
 
 function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPluginHost }) {
   const startup = useTuiStartup()
@@ -1211,7 +1204,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       <Show when={!startup.skipInitialLoading}>
         <StartupLoading ready={ready} />
       </Show>
-      <AutocompleteOverlay />
     </box>
   )
 }
