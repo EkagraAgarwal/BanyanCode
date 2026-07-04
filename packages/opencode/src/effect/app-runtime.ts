@@ -1,4 +1,4 @@
-import { Layer, ManagedRuntime } from "effect"
+import { Layer, ManagedRuntime, Effect } from "effect"
 import { attach } from "./run-service"
 import * as Observability from "@opencode-ai/core/observability"
 
@@ -140,7 +140,11 @@ export const AppRuntime: Runtime = {
     return rt.runPromiseExit(wrap(effect), options)
   },
   runFork(effect) {
-    return rt.runFork(wrap(effect))
+    return rt.runFork(
+      Effect.gen(function* () {
+        yield* Effect.forkDetach(wrap(effect))
+      }) as never,
+    )
   },
   runCallback(effect) {
     return rt.runCallback(wrap(effect))

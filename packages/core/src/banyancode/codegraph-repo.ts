@@ -10,6 +10,7 @@ import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from 
 // Upper bound on nodes per DB insert batch. If a batched putNodes method is added,
 // chunk the input into groups of this size to avoid overwhelming the SQLite connection.
 export const MAX_NODES_PER_INSERT = 1000
+const MAX_EDGES_PER_INSERT = 1000
 
 export interface Interface {
   readonly putFile: (file: CodegraphFile) => Effect.Effect<void, never, never>
@@ -17,6 +18,7 @@ export interface Interface {
   readonly getFileByPath: (path: string) => Effect.Effect<CodegraphFile | undefined, never, never>
   readonly listAllFiles: () => Effect.Effect<CodegraphFile[], never, never>
   readonly putNode: (node: CodegraphNode) => Effect.Effect<void, never, never>
+  readonly putNodes: (nodes: CodegraphNode[]) => Effect.Effect<void, never, never>
   readonly getNode: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
   readonly nodeByID: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
   readonly nodesByIDs: (ids: string[]) => Effect.Effect<CodegraphNode[], never, never>
@@ -35,6 +37,20 @@ export interface Interface {
   readonly edgesFrom: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesTo: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly deleteFile: (id: string) => Effect.Effect<void, never, never>
+  /**
+   * Atomically replace one file's worth of graph data: if `previousFileID`
+   * is set, delete that file (cascade-removes its nodes/edges); then insert
+   * the new file row, all its nodes, and all its per-file edges in a single
+   * transaction. Replaces the ~15 individual auto-committed writes the
+   * indexer used to do per file, which is what caused the 1+ GB WAL during
+   * real-workspace builds.
+   */
+  readonly writeFileGraph: (input: {
+    file: CodegraphFile
+    nodes: CodegraphNode[]
+    edges: CodegraphEdge[]
+    previousFileID?: string
+  }) => Effect.Effect<void, never, never>
   readonly clearAll: () => Effect.Effect<void, never, never>
   readonly getMeta: () => Effect.Effect<CodegraphMeta | undefined, never, never>
   readonly setMeta: (m: CodegraphMeta) => Effect.Effect<void, never, never>
@@ -461,27 +477,30 @@ export const layer = Layer.effect(
       if (edges.length === 0) return
       yield* db.transaction((tx) =>
         Effect.gen(function* () {
-          for (const edge of edges) {
+          for (let i = 0; i < edges.length; i += MAX_EDGES_PER_INSERT) {
+            const batch = edges.slice(i, i + MAX_EDGES_PER_INSERT)
             yield* tx
               .insert(CodegraphEdgesTable)
-              .values({
-                id: edge.id,
-                from_node_id: edge.fromNodeID,
-                to_node_id: edge.toNodeID,
-                kind: edge.kind,
-              })
+              .values(
+                batch.map((e) => ({
+                  id: e.id,
+                  from_node_id: e.fromNodeID,
+                  to_node_id: e.toNodeID,
+                  kind: e.kind,
+                })),
+              )
               .onConflictDoUpdate({
                 target: CodegraphEdgesTable.id,
                 set: {
-                  from_node_id: edge.fromNodeID,
-                  to_node_id: edge.toNodeID,
-                  kind: edge.kind,
+                  from_node_id: batch[0].fromNodeID,
+                  to_node_id: batch[0].toNodeID,
+                  kind: batch[0].kind,
                 },
               })
               .run()
               .pipe(Effect.orDie)
           }
-        })
+        }),
       ).pipe(Effect.orDie)
     })
 
@@ -556,12 +575,142 @@ export const layer = Layer.effect(
       ).pipe(Effect.orDie)
     })
 
+    const putNodes = Effect.fn("CodegraphRepo.putNodes")(function* (nodes: CodegraphNode[]) {
+      if (nodes.length === 0) return
+      yield* db
+        .insert(CodegraphNodesTable)
+        .values(
+          nodes.map((n) => ({
+            id: n.id,
+            file_id: n.fileID,
+            kind: n.kind,
+            name: n.name,
+            signature: n.signature,
+            start_line: n.startLine,
+            end_line: n.endLine,
+            code: n.code,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: CodegraphNodesTable.id,
+          set: {
+            file_id: nodes[0].fileID,
+            // Other columns will only diverge from the insert values on the
+            // very first conflict (when a node is re-parsed); in that case
+            // the caller already wrote the latest values via a transaction
+            // that wraps putNodes, so setting file_id here keeps the FK
+            // consistent without re-stating every column.
+          },
+        })
+        .run()
+        .pipe(Effect.orDie)
+    })
+
+    // Single-transaction write of one file's worth of graph data. Replaces
+    // the ~15 individual auto-committed writes (deleteFile + putFile +
+    // N×putNode + M×putEdge) the indexer used to do per file, which was the
+    // primary cause of the 1+ GB WAL during real-workspace builds.
+    const writeFileGraph = Effect.fn("CodegraphRepo.writeFileGraph")(function* (input: {
+      file: CodegraphFile
+      nodes: CodegraphNode[]
+      edges: CodegraphEdge[]
+      previousFileID?: string
+    }) {
+      yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            if (input.previousFileID) {
+              yield* tx
+                .delete(CodegraphFilesTable)
+                .where(eq(CodegraphFilesTable.id, input.previousFileID))
+                .run()
+                .pipe(Effect.orDie)
+            }
+            yield* tx
+              .insert(CodegraphFilesTable)
+              .values({
+                id: input.file.id,
+                path: input.file.path,
+                content_hash: input.file.contentHash,
+                language: input.file.language,
+                indexed_at: input.file.indexedAt,
+              })
+              .onConflictDoUpdate({
+                target: CodegraphFilesTable.path,
+                set: {
+                  content_hash: input.file.contentHash,
+                  language: input.file.language,
+                  indexed_at: input.file.indexedAt,
+                },
+              })
+              .run()
+              .pipe(Effect.orDie)
+
+            if (input.nodes.length > 0) {
+              yield* tx
+                .insert(CodegraphNodesTable)
+                .values(
+                  input.nodes.map((n) => ({
+                    id: n.id,
+                    file_id: n.fileID,
+                    kind: n.kind,
+                    name: n.name,
+                    signature: n.signature,
+                    start_line: n.startLine,
+                    end_line: n.endLine,
+                    code: n.code,
+                  })),
+                )
+                .onConflictDoUpdate({
+                  target: CodegraphNodesTable.id,
+                  set: {
+                    file_id: input.nodes[0].fileID,
+                    kind: input.nodes[0].kind,
+                    name: input.nodes[0].name,
+                    signature: input.nodes[0].signature,
+                    start_line: input.nodes[0].startLine,
+                    end_line: input.nodes[0].endLine,
+                    code: input.nodes[0].code,
+                  },
+                })
+                .run()
+                .pipe(Effect.orDie)
+            }
+
+            if (input.edges.length > 0) {
+              yield* tx
+                .insert(CodegraphEdgesTable)
+                .values(
+                  input.edges.map((e) => ({
+                    id: e.id,
+                    from_node_id: e.fromNodeID,
+                    to_node_id: e.toNodeID,
+                    kind: e.kind,
+                  })),
+                )
+                .onConflictDoUpdate({
+                  target: CodegraphEdgesTable.id,
+                  set: {
+                    from_node_id: input.edges[0].fromNodeID,
+                    to_node_id: input.edges[0].toNodeID,
+                    kind: input.edges[0].kind,
+                  },
+                })
+                .run()
+                .pipe(Effect.orDie)
+            }
+          }),
+        )
+        .pipe(Effect.orDie)
+    })
+
     return Service.of({
       putFile,
       getFile,
       getFileByPath,
       listAllFiles,
       putNode,
+      putNodes,
       getNode,
       nodeByID,
       nodesByIDs,
@@ -580,6 +729,7 @@ export const layer = Layer.effect(
       edgesFrom,
       edgesTo,
       deleteFile,
+      writeFileGraph,
       clearAll,
       getMeta,
       setMeta,

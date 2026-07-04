@@ -2141,7 +2141,19 @@ export type BanyanConfig = {
 export type BanyanCodegraphNode = {
   id: string
   fileID: string
-  kind: "file" | "function" | "class" | "method" | "type" | "variable"
+  kind:
+    | "file"
+    | "function"
+    | "class"
+    | "method"
+    | "type"
+    | "variable"
+    | "test"
+    | "route"
+    | "config"
+    | "build"
+    | "package"
+    | "generated"
   name: string
   signature?: string
   startLine: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -5762,6 +5774,35 @@ export type GlobalCodegraphCancelResponses = {
 
 export type GlobalCodegraphCancelResponse = GlobalCodegraphCancelResponses[keyof GlobalCodegraphCancelResponses]
 
+export type GlobalCodegraphForceKillData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/codegraph-force-kill"
+}
+
+export type GlobalCodegraphForceKillErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalCodegraphForceKillError = GlobalCodegraphForceKillErrors[keyof GlobalCodegraphForceKillErrors]
+
+export type GlobalCodegraphForceKillResponses = {
+  /**
+   * Result of the force-kill attempt
+   */
+  200: {
+    ok: boolean
+    message: string
+  }
+}
+
+export type GlobalCodegraphForceKillResponse =
+  GlobalCodegraphForceKillResponses[keyof GlobalCodegraphForceKillResponses]
+
 export type GlobalCodegraphBuildData = {
   body?: {
     root?: string
@@ -5859,7 +5900,16 @@ export type GlobalCodegraphEdgesResponses = {
       id: string
       fromNodeID: string
       toNodeID: string
-      kind: "imports" | "calls" | "extends" | "references"
+      kind:
+        | "imports"
+        | "calls"
+        | "extends"
+        | "references"
+        | "tested_by"
+        | "configured_by"
+        | "built_by"
+        | "mounts"
+        | "generated_from"
     }>
     total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   }
@@ -5933,6 +5983,416 @@ export type GlobalBanyanAgentSaveResponses = {
 }
 
 export type GlobalBanyanAgentSaveResponse = GlobalBanyanAgentSaveResponses[keyof GlobalBanyanAgentSaveResponses]
+
+export type RepositoryIntelFindSymbolData = {
+  body?: {
+    name: string
+    kind?: string
+    file?: string
+    exact?: boolean
+  }
+  path?: never
+  query?: never
+  url: "/global/repo/find-symbol"
+}
+
+export type RepositoryIntelFindSymbolErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelFindSymbolError = RepositoryIntelFindSymbolErrors[keyof RepositoryIntelFindSymbolErrors]
+
+export type RepositoryIntelFindSymbolResponses = {
+  /**
+   * Matching symbols
+   */
+  200: Array<BanyanCodegraphNode>
+}
+
+export type RepositoryIntelFindSymbolResponse =
+  RepositoryIntelFindSymbolResponses[keyof RepositoryIntelFindSymbolResponses]
+
+export type RepositoryIntelFindSubsystemData = {
+  body?: {
+    query: string
+    maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path?: never
+  query?: never
+  url: "/global/repo/find-subsystem"
+}
+
+export type RepositoryIntelFindSubsystemErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelFindSubsystemError =
+  RepositoryIntelFindSubsystemErrors[keyof RepositoryIntelFindSubsystemErrors]
+
+export type RepositoryIntelFindSubsystemResponses = {
+  /**
+   * Subsystem entry and related nodes
+   */
+  200: {
+    entry: BanyanCodegraphNode
+    related: Array<BanyanCodegraphNode>
+  }
+}
+
+export type RepositoryIntelFindSubsystemResponse =
+  RepositoryIntelFindSubsystemResponses[keyof RepositoryIntelFindSubsystemResponses]
+
+export type RepositoryIntelFindEntrypointsData = {
+  body?: {
+    feature: string
+  }
+  path?: never
+  query?: never
+  url: "/global/repo/find-entrypoints"
+}
+
+export type RepositoryIntelFindEntrypointsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelFindEntrypointsError =
+  RepositoryIntelFindEntrypointsErrors[keyof RepositoryIntelFindEntrypointsErrors]
+
+export type RepositoryIntelFindEntrypointsResponses = {
+  /**
+   * Feature entrypoints
+   */
+  200: Array<BanyanCodegraphNode>
+}
+
+export type RepositoryIntelFindEntrypointsResponse =
+  RepositoryIntelFindEntrypointsResponses[keyof RepositoryIntelFindEntrypointsResponses]
+
+export type RepositoryIntelFindTestsData = {
+  body?: {
+    symbol: string
+  }
+  path?: never
+  query?: never
+  url: "/global/repo/find-tests"
+}
+
+export type RepositoryIntelFindTestsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelFindTestsError = RepositoryIntelFindTestsErrors[keyof RepositoryIntelFindTestsErrors]
+
+export type RepositoryIntelFindTestsResponses = {
+  /**
+   * Tests for symbol
+   */
+  200: Array<BanyanCodegraphNode>
+}
+
+export type RepositoryIntelFindTestsResponse =
+  RepositoryIntelFindTestsResponses[keyof RepositoryIntelFindTestsResponses]
+
+export type RepositoryIntelFindRelatedData = {
+  body?: {
+    nodeID: string
+    depth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path?: never
+  query?: never
+  url: "/global/repo/find-related"
+}
+
+export type RepositoryIntelFindRelatedErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelFindRelatedError = RepositoryIntelFindRelatedErrors[keyof RepositoryIntelFindRelatedErrors]
+
+export type RepositoryIntelFindRelatedResponses = {
+  /**
+   * Related nodes
+   */
+  200: Array<BanyanCodegraphNode>
+}
+
+export type RepositoryIntelFindRelatedResponse =
+  RepositoryIntelFindRelatedResponses[keyof RepositoryIntelFindRelatedResponses]
+
+export type RepositoryIntelEstimateImpactData = {
+  body?: {
+    paths: Array<string>
+    maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path?: never
+  query?: never
+  url: "/global/repo/estimate-impact"
+}
+
+export type RepositoryIntelEstimateImpactErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelEstimateImpactError =
+  RepositoryIntelEstimateImpactErrors[keyof RepositoryIntelEstimateImpactErrors]
+
+export type RepositoryIntelEstimateImpactResponses = {
+  /**
+   * Impact estimate
+   */
+  200: {
+    direct: Array<BanyanCodegraphNode>
+    transitive: Array<BanyanCodegraphNode>
+    blastRadius: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type RepositoryIntelEstimateImpactResponse =
+  RepositoryIntelEstimateImpactResponses[keyof RepositoryIntelEstimateImpactResponses]
+
+export type RepositoryIntelTraceExecutionData = {
+  body?: {
+    from: string
+    maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path?: never
+  query?: never
+  url: "/global/repo/trace-execution"
+}
+
+export type RepositoryIntelTraceExecutionErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelTraceExecutionError =
+  RepositoryIntelTraceExecutionErrors[keyof RepositoryIntelTraceExecutionErrors]
+
+export type RepositoryIntelTraceExecutionResponses = {
+  /**
+   * Execution trace
+   */
+  200: Array<BanyanCodegraphNode>
+}
+
+export type RepositoryIntelTraceExecutionResponse =
+  RepositoryIntelTraceExecutionResponses[keyof RepositoryIntelTraceExecutionResponses]
+
+export type RepositoryIntelSearchData = {
+  body?: {
+    query: string
+    modes?: Array<"exact" | "prefix" | "fuzzy" | "structural" | "graph" | "subsystem" | "tests">
+    limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path?: never
+  query?: never
+  url: "/global/codegraph/search"
+}
+
+export type RepositoryIntelSearchErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelSearchError = RepositoryIntelSearchErrors[keyof RepositoryIntelSearchErrors]
+
+export type RepositoryIntelSearchResponses = {
+  /**
+   * Search results
+   */
+  200: Array<{
+    node: BanyanCodegraphNode
+    score: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    signals: {
+      exact?: boolean
+      prefix?: boolean
+      camelCase?: boolean
+      snake_case?: boolean
+      bm25?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      fuzzy?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      qualified?: boolean
+      graph?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      git?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      workspace?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  }>
+}
+
+export type RepositoryIntelSearchResponse = RepositoryIntelSearchResponses[keyof RepositoryIntelSearchResponses]
+
+export type RepositoryIntelFindImplementationsData = {
+  body?: {
+    interfaceName: string
+    file?: string
+    language?: string
+  }
+  path?: never
+  query?: never
+  url: "/global/codegraph/find-implementations"
+}
+
+export type RepositoryIntelFindImplementationsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelFindImplementationsError =
+  RepositoryIntelFindImplementationsErrors[keyof RepositoryIntelFindImplementationsErrors]
+
+export type RepositoryIntelFindImplementationsResponses = {
+  /**
+   * Implementations
+   */
+  200: Array<BanyanCodegraphNode>
+}
+
+export type RepositoryIntelFindImplementationsResponse =
+  RepositoryIntelFindImplementationsResponses[keyof RepositoryIntelFindImplementationsResponses]
+
+export type RepositoryIntelFindOverridesData = {
+  body?: {
+    methodName: string
+    baseClass?: string
+    file?: string
+    language?: string
+  }
+  path?: never
+  query?: never
+  url: "/global/codegraph/find-overrides"
+}
+
+export type RepositoryIntelFindOverridesErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelFindOverridesError =
+  RepositoryIntelFindOverridesErrors[keyof RepositoryIntelFindOverridesErrors]
+
+export type RepositoryIntelFindOverridesResponses = {
+  /**
+   * Method overrides
+   */
+  200: Array<BanyanCodegraphNode>
+}
+
+export type RepositoryIntelFindOverridesResponse =
+  RepositoryIntelFindOverridesResponses[keyof RepositoryIntelFindOverridesResponses]
+
+export type RepositoryIntelFindRecursiveData = {
+  body?: {
+    file?: string
+    language?: string
+  }
+  path?: never
+  query?: never
+  url: "/global/codegraph/find-recursive"
+}
+
+export type RepositoryIntelFindRecursiveErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelFindRecursiveError =
+  RepositoryIntelFindRecursiveErrors[keyof RepositoryIntelFindRecursiveErrors]
+
+export type RepositoryIntelFindRecursiveResponses = {
+  /**
+   * Recursive functions
+   */
+  200: Array<BanyanCodegraphNode>
+}
+
+export type RepositoryIntelFindRecursiveResponse =
+  RepositoryIntelFindRecursiveResponses[keyof RepositoryIntelFindRecursiveResponses]
+
+export type RepositoryIntelFindAsyncData = {
+  body?: {
+    file?: string
+    language?: string
+  }
+  path?: never
+  query?: never
+  url: "/global/codegraph/find-async"
+}
+
+export type RepositoryIntelFindAsyncErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelFindAsyncError = RepositoryIntelFindAsyncErrors[keyof RepositoryIntelFindAsyncErrors]
+
+export type RepositoryIntelFindAsyncResponses = {
+  /**
+   * Async functions
+   */
+  200: Array<BanyanCodegraphNode>
+}
+
+export type RepositoryIntelFindAsyncResponse =
+  RepositoryIntelFindAsyncResponses[keyof RepositoryIntelFindAsyncResponses]
+
+export type RepositoryIntelFindHttpRoutesData = {
+  body?: {
+    file?: string
+    language?: string
+  }
+  path?: never
+  query?: never
+  url: "/global/codegraph/find-http-routes"
+}
+
+export type RepositoryIntelFindHttpRoutesErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelFindHttpRoutesError =
+  RepositoryIntelFindHttpRoutesErrors[keyof RepositoryIntelFindHttpRoutesErrors]
+
+export type RepositoryIntelFindHttpRoutesResponses = {
+  /**
+   * HTTP routes
+   */
+  200: Array<BanyanCodegraphNode>
+}
+
+export type RepositoryIntelFindHttpRoutesResponse =
+  RepositoryIntelFindHttpRoutesResponses[keyof RepositoryIntelFindHttpRoutesResponses]
 
 export type EventSubscribeData = {
   body?: never

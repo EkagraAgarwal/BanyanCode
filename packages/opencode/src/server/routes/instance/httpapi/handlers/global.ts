@@ -182,6 +182,14 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return true
     })
 
+    const codegraphForceKillHandler = Effect.fn("GlobalHttpApi.codegraphForceKill")(function* () {
+      const buildService = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
+      if (Option.isNone(buildService)) {
+        return { ok: false, message: "CodegraphBuildService not available" }
+      }
+      return yield* buildService.value.forceKill()
+    })
+
 const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function* (ctx: {
       payload: typeof CodegraphBuildInput.Type
     }) {
@@ -189,22 +197,28 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       const dbPath = ctx.payload.dbPath ?? Database.path()
       const force = ctx.payload.force ?? false
 
-      // Run the kickoff in the app runtime so the build service's forked
-      // fiber outlives this HTTP request. Without this, `Effect.forkScoped`
-      // forks into the request scope and is interrupted as soon as we
-      // return — the build would never run to completion.
-      const fiber = AppRuntime.runFork(
+      // The build kicks off inside an `AppRuntime.runFork` so the work fiber
+      // outlives this HTTP request. The returned fiber always resolves (it
+      // catches its own errors), so we surface `started: true` once the
+      // kickoff has been scheduled — not after the build itself completes
+      // (which would block the request for minutes).
+      AppRuntime.runFork(
         Effect.gen(function* () {
           const buildServiceOpt = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
-          if (Option.isNone(buildServiceOpt)) return
-          yield* buildServiceOpt.value.start({ root, force, dbPath })
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logError("codegraph-build kickoff failed", { cause: Cause.pretty(cause) }),
-          ),
-        ),
+          if (Option.isNone(buildServiceOpt)) {
+            yield* Effect.logWarning(
+              "codegraph-build: CodegraphBuildService not in app runtime; check BANYANCODE_ENABLE",
+            )
+            return
+          }
+          yield* buildServiceOpt.value.start({ root, force, dbPath }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logError("codegraph-build: start() failed", { cause: Cause.pretty(cause) }),
+            ),
+          )
+        }),
       )
-      return { started: !!fiber, root, dbPath }
+      return { started: true, root, dbPath }
     })
 
     const codegraphNodesHandler = Effect.fn("GlobalHttpApi.codegraphNodes")(function* () {
@@ -311,6 +325,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       .handle("getBanyanConfig", getBanyanConfigHandler)
       .handle("updateBanyanConfig", updateBanyanConfigHandler)
       .handle("codegraphCancel", codegraphCancelHandler)
+      .handle("codegraphForceKill", codegraphForceKillHandler)
       .handle("codegraphBuild", codegraphBuildHandler)
       .handle("codegraphNodes", codegraphNodesHandler)
       .handle("codegraphEdges", codegraphEdgesHandler)

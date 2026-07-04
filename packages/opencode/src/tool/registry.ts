@@ -2,6 +2,14 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/layer-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { CodegraphTools } from "@opencode-ai/core/tool/codegraph"
+import { CodeFindTool } from "@opencode-ai/core/tool/code-find"
+import { CodegraphSearchTool } from "@opencode-ai/core/tool/codegraph-search-tool"
+import { RepositoryIntelTool } from "@opencode-ai/core/tool/repository-intel-tool"
+import { StructuralQueriesTool } from "@opencode-ai/core/tool/structural-queries-tool"
+import { EditPlanTool } from "@opencode-ai/core/tool/edit-plan"
+import { Tools } from "@opencode-ai/core/tool/tools"
+import { PermissionV2 } from "@opencode-ai/core/permission"
 import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
@@ -34,7 +42,7 @@ import { SysteminfoTool } from "./systeminfo"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
-import { Effect, Layer, Context } from "effect"
+import { Effect, Layer, Context, Option } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -117,7 +125,7 @@ export const layer = Layer.effect(
         function fromPlugin(id: string, def: ToolDefinition): Tool.Def {
           // Plugin tools still expose Zod args publicly; keep that compatibility
           // boxed at the registry boundary and give the LLM the original JSON Schema.
-          // Normalize missing args to `{}` once — pre-1.14.49 the code was
+          // Normalize missing args to `{}` once ΓÇö pre-1.14.49 the code was
           // `z.object(def.args)` and Zod silently tolerated undefined (#27451, #27630).
           const args = def.args ?? {}
           const entries = Object.entries(args)
@@ -217,6 +225,8 @@ export const layer = Layer.effect(
           plan: Tool.init(plan),
           systeminfo: Tool.init(systeminfo),
         })
+
+        if (process.env.BANYANCODE_ENABLE !== "0") yield* Layer.build(withBanyanDeps).pipe(Effect.orDie)
 
         return {
           custom,
@@ -320,6 +330,82 @@ export const layer = Layer.effect(
   }),
 )
 
+// `baseBanyanToolLayers` aggregates every BanyanCode Tool `locationLayer`
+// (one per `Tools.Service.register({...})` factory). Each location layer
+// requires `Tools.Service` (CORE) at registration time and
+// `PermissionV2.Service` (CORE) at execution time, plus per-tool BanyanCode
+// services (e.g. `Banyan.CodegraphAnalyzer`, `Banyan.Search`,
+// `Banyan.RepositoryIntelligence`, `Banyan.StructuralQueries`). The
+// previous attempts to wire this through `ToolRegistry.defaultLayer` and
+// through a dedicated `LayerNode` either leaked the core deps into R or
+// required `as never` casts that bypassed the dependency check, so we
+// mount it inline from `ToolRegistry.state` (see the `if (env !== "0")`
+// branch below) using `withBanyanDeps` and `Layer.build`. That keeps the
+// registrations on the workspace lifetime scope and avoids touching
+// `ToolRegistry.defaultLayer` or its consumer's app layer.
+const baseBanyanToolLayers = Layer.mergeAll(
+  CodegraphTools.locationLayer,
+  CodeFindTool.locationLayer,
+  CodegraphSearchTool.locationLayer,
+  RepositoryIntelTool.locationLayer,
+  StructuralQueriesTool.locationLayer,
+  EditPlanTool.locationLayer,
+)
+
+// `withBanyanDeps` wraps `baseBanyanToolLayers` in a `Layer.unwrap` that,
+// at runtime, looks up each optional dependency via `Effect.serviceOption`
+// and feeds it to a `Layer.succeed(...)` so the merged deps layer has R =
+// `never`. We then `Layer.provide(baseBanyanToolLayers, depsLayer)` so
+// every tool gets `Tools.Service`, `PermissionV2.Service`, and the
+// per-tool BanyanCode services it captured. The resulting layer's R is
+// empty (the only inputs are the `Layer.succeed` outputs we already
+// provide, plus the omitted `Banyan.codegraphBuildServiceDefaultLayer` —
+// which we provide via its own `Layer.succeed`/`Layer.provide` step so
+// `Layer.build` doesn't need any services in scope). If either of the
+// mandatory pair (`Tools.Service` / `PermissionV2.Service`) is missing
+// (e.g. in test contexts) we return `Layer.empty` so the registration
+// is a graceful no-op rather than failing at build time.
+const withBanyanDeps = Layer.unwrap(
+  Effect.gen(function* () {
+    const tools = yield* Effect.serviceOption(Tools.Service)
+    const permission = yield* Effect.serviceOption(PermissionV2.Service)
+    if (Option.isNone(tools) || Option.isNone(permission)) return Layer.empty
+    const codegraphBuildService = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
+    const codegraphRepo = yield* Effect.serviceOption(Banyan.CodegraphRepo)
+    const analyzer = yield* Effect.serviceOption(Banyan.CodegraphAnalyzer)
+    const search = yield* Effect.serviceOption(Banyan.Search)
+    const intel = yield* Effect.serviceOption(Banyan.RepositoryIntelligence)
+    const structural = yield* Effect.serviceOption(Banyan.StructuralQueries)
+    const editPlanner = yield* Effect.serviceOption(Banyan.EditPlanner)
+    const depsLayer = Layer.mergeAll(
+      Layer.succeed(Tools.Service, tools.value),
+      Layer.succeed(PermissionV2.Service, permission.value),
+      ...(Option.isSome(codegraphBuildService)
+        ? [Layer.succeed(Banyan.CodegraphBuildService, codegraphBuildService.value)]
+        : [Layer.empty as unknown as Layer.Layer<never, never, never>]),
+      ...(Option.isSome(codegraphRepo) ? [Layer.succeed(Banyan.CodegraphRepo, codegraphRepo.value)] : [
+        Layer.empty as unknown as Layer.Layer<never, never, never>,
+      ]),
+      ...(Option.isSome(analyzer) ? [Layer.succeed(Banyan.CodegraphAnalyzer, analyzer.value)] : [
+        Layer.empty as unknown as Layer.Layer<never, never, never>,
+      ]),
+      ...(Option.isSome(search) ? [Layer.succeed(Banyan.Search, search.value)] : [
+        Layer.empty as unknown as Layer.Layer<never, never, never>,
+      ]),
+      ...(Option.isSome(intel) ? [Layer.succeed(Banyan.RepositoryIntelligence, intel.value)] : [
+        Layer.empty as unknown as Layer.Layer<never, never, never>,
+      ]),
+      ...(Option.isSome(structural) ? [Layer.succeed(Banyan.StructuralQueries, structural.value)] : [
+        Layer.empty as unknown as Layer.Layer<never, never, never>,
+      ]),
+      ...(Option.isSome(editPlanner) ? [Layer.succeed(Banyan.EditPlanner, editPlanner.value)] : [
+        Layer.empty as unknown as Layer.Layer<never, never, never>,
+      ]),
+    ) as unknown as Layer.Layer<never, never, never>
+    return baseBanyanToolLayers.pipe(Layer.provide(depsLayer)) as unknown as Layer.Layer<never, never, never>
+  }),
+)
+
 export const defaultLayer = Layer.suspend(() =>
   layer
     .pipe(
@@ -420,7 +506,7 @@ function isJsonSchemaObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-export const node = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer)), [
+const coreRegistryNode = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer)), [
   Config.node,
   Plugin.node,
   Question.node,
@@ -441,5 +527,7 @@ export const node = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer
   RuntimeFlags.node,
   Database.node,
 ])
+
+export const node = coreRegistryNode
 
 export * as ToolRegistry from "./registry"

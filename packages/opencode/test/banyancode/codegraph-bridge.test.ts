@@ -17,6 +17,7 @@ const makeMockBuildService = async (events: Array<BuildQueueEvent>) => {
       status: () => Effect.succeed({ status: "completed", done: 0, total: 0 } as State),
       start: () => Effect.void,
       cancel: () => Effect.void,
+      forceKill: () => Effect.succeed({ ok: true, message: "mock-force-kill" }),
       events: () => queue,
     }),
   )

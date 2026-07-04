@@ -47,6 +47,7 @@ import { useDialog } from "../../ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
 import { DialogAlert } from "../../ui/dialog-alert"
 import { useToast } from "../../ui/toast"
+import { pushIntelResult } from "../../feature-plugins/sidebar/codegraph-intel-panel"
 import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
@@ -1168,8 +1169,11 @@ export function Prompt(props: PromptProps) {
             if (res.data?.started) {
               toast.show({ message: `Building code graph for ${res.data.root ?? "workspace"}`, variant: "info" })
             } else {
+              const reason = res.data?.reason ?? (res as { error?: { message?: string } }).error?.message
               toast.show({
-                message: res.data?.reason ?? "Could not start codegraph build",
+                message: reason
+                  ? `Could not start codegraph build: ${reason}`
+                  : "Could not start codegraph build (no response from server; the server may be busy or unresponsive)",
                 variant: "error",
               })
             }
@@ -1183,6 +1187,18 @@ export function Prompt(props: PromptProps) {
       } else if (command === "/codegraph-cancel") {
         void sdk.client.global.codegraph.cancel({}).catch(() => {})
         toast.show({ message: "Codegraph build cancelled", variant: "info" })
+      } else if (command === "/codegraph-force-kill") {
+        void sdk.client.global.codegraph.forceKill({}).then((res) => {
+          toast.show({
+            message: res.data?.message ?? (res.data?.ok ? "Force-killed" : "Force-kill failed"),
+            variant: res.data?.ok ? "info" : "error",
+          })
+        }).catch((err) =>
+          toast.show({
+            message: `Codegraph force-kill failed: ${err instanceof Error ? err.message : String(err)}`,
+            variant: "error",
+          }),
+        )
       } else if (command === "/codegraph-remove") {
         void sdk.client.session.command({
           sessionID,
@@ -1190,6 +1206,73 @@ export function Prompt(props: PromptProps) {
           arguments: "",
         })
         toast.show({ message: "Removing code graph index...", variant: "info" })
+      } else if (command === "/repo-find-subsystem") {
+        const query = firstLine.split(" ").slice(1).join(" ").trim()
+        if (!query) {
+          toast.show({ message: "Usage: /repo-find-subsystem <query>", variant: "error" })
+        } else {
+          void sdk
+            .fetch(`${sdk.url}/global/repo/find-subsystem`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ query }),
+            })
+            .then((res) => res.json())
+            .then((data: { entry?: { name?: string }; related?: unknown[] }) => {
+              const summary = `entry=${data.entry?.name ?? "?"} related=${data.related?.length ?? 0}`
+              pushIntelResult({ id: String(Date.now()), kind: "subsystem", query, summary })
+              toast.show({ message: summary, variant: "info" })
+            })
+            .catch((err) =>
+              toast.show({
+                message: `Repo intel failed: ${err instanceof Error ? err.message : String(err)}`,
+                variant: "error",
+              }),
+            )
+        }
+      } else if (command === "/codegraph-search") {
+        const query = firstLine.split(" ").slice(1).join(" ").trim()
+        if (!query) {
+          toast.show({ message: "Usage: /codegraph-search <query>", variant: "error" })
+        } else {
+          void sdk
+            .fetch(`${sdk.url}/global/codegraph/search`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ query, modes: ["fuzzy"] }),
+            })
+            .then((res) => res.json())
+            .then((data: Array<{ node?: { name?: string } }>) => {
+              const summary = `${data.length} hits${data[0]?.node?.name ? `; top=${data[0].node.name}` : ""}`
+              pushIntelResult({ id: String(Date.now()), kind: "search", query, summary })
+              toast.show({ message: summary, variant: "info" })
+            })
+            .catch((err) =>
+              toast.show({
+                message: `Search failed: ${err instanceof Error ? err.message : String(err)}`,
+                variant: "error",
+              }),
+            )
+        }
+      } else if (command === "/codegraph-find-routes") {
+        void sdk
+          .fetch(`${sdk.url}/global/codegraph/find-http-routes`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          })
+          .then((res) => res.json())
+          .then((data: Array<{ name?: string }>) => {
+            const summary = `${data.length} routes${data[0]?.name ? `; first=${data[0].name}` : ""}`
+            pushIntelResult({ id: String(Date.now()), kind: "routes", query: "http-routes", summary })
+            toast.show({ message: summary, variant: "info" })
+          })
+          .catch((err) =>
+            toast.show({
+              message: `Route search failed: ${err instanceof Error ? err.message : String(err)}`,
+              variant: "error",
+            }),
+          )
       } else {
         move.startSubmit()
         const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)

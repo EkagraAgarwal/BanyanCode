@@ -34,10 +34,35 @@ export type CodegraphFile = {
   indexedAt: number
 }
 
+export type CodegraphNodeKind =
+  | "file"
+  | "function"
+  | "class"
+  | "method"
+  | "type"
+  | "variable"
+  | "test"
+  | "route"
+  | "config"
+  | "build"
+  | "package"
+  | "generated"
+
+export type CodegraphEdgeKind =
+  | "imports"
+  | "calls"
+  | "extends"
+  | "references"
+  | "tested_by"
+  | "configured_by"
+  | "built_by"
+  | "mounts"
+  | "generated_from"
+
 export type CodegraphNode = {
   id: string
   fileID: string
-  kind: "file" | "function" | "class" | "method" | "type" | "variable"
+  kind: CodegraphNodeKind
   name: string
   signature?: string
   startLine: number
@@ -48,7 +73,20 @@ export type CodegraphNode = {
 export const CodegraphNodeSchema = Schema.Struct({
   id: Schema.String,
   fileID: Schema.String,
-  kind: Schema.Literals(["file", "function", "class", "method", "type", "variable"]),
+  kind: Schema.Literals([
+    "file",
+    "function",
+    "class",
+    "method",
+    "type",
+    "variable",
+    "test",
+    "route",
+    "config",
+    "build",
+    "package",
+    "generated",
+  ]),
   name: Schema.String,
   signature: Schema.optional(Schema.String),
   startLine: Schema.Number,
@@ -60,7 +98,7 @@ export type CodegraphEdge = {
   id: string
   fromNodeID: string
   toNodeID: string
-  kind: "imports" | "calls" | "extends" | "references"
+  kind: CodegraphEdgeKind
 }
 
 export type SubagentMessage = {
