@@ -115,23 +115,33 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(FetchHttpClient.layer),
   Layer.provideMerge(InstanceLayer.layer),
   Layer.provideMerge(Observability.layer),
+  Layer.provideMerge(Banyan.codegraphRepoDefaultLayer),
+  Layer.provideMerge(Banyan.codegraphStalenessDefaultLayer),
+  Layer.provideMerge(Banyan.editPlannerDefaultLayer),
+  Layer.provideMerge(Banyan.codegraphAnalyzerDefaultLayer),
+  Layer.provideMerge(Banyan.searchDefaultLayer),
+  Layer.provideMerge(Banyan.structuralQueriesDefaultLayer),
   Layer.provideMerge(
     Banyan.codegraphBuildServiceDefaultLayer.pipe(
-      Layer.provide(Banyan.codegraphStalenessDefaultLayer),
       Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
-      Layer.provide(Banyan.editPlannerDefaultLayer),
       Layer.provide(PluginV2.locationLayer),
       Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
     ),
   ),
   Layer.provideMerge(
     Banyan.repositoryIntelligenceDefaultLayer.pipe(
-      Layer.provide(Banyan.codegraphRepoDefaultLayer),
       Layer.provide(Database.defaultLayer),
     ),
   ),
   Layer.provideMerge(
     Banyan.toolRegistryDefaultLayer.pipe(
+      Layer.provide(Permission.defaultLayer),
+      Layer.provide(Database.defaultLayer),
+      Layer.provide(FSUtil.defaultLayer),
+    ),
+  ),
+  Layer.provideMerge(
+    Banyan.toolCatalogDefaultLayer.pipe(
       Layer.provide(Permission.defaultLayer),
       Layer.provide(Database.defaultLayer),
       Layer.provide(FSUtil.defaultLayer),

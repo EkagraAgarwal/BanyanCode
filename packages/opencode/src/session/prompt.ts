@@ -1344,7 +1344,19 @@ export const layer = Layer.effect(
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
-            })
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.gen(function* () {
+                  const error = Cause.squash(cause)
+                  handle.message.error = new SessionV1.APIError({
+                    message: error instanceof Error ? error.message : String(error),
+                    isRetryable: false,
+                  }).toObject()
+                  yield* sessions.updateMessage(handle.message)
+                  return "break" as const
+                })
+              )
+            )
 
             if (structured !== undefined) {
               handle.message.structured = structured
