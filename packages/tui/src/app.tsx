@@ -356,6 +356,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
 
 function AutocompleteOverlay() {
   const ctx = useAutocomplete()
+  if (!ctx) return null
   return <Autocomplete {...ctx.getProps()} />
 }
 

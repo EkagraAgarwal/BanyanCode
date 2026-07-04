@@ -29,10 +29,8 @@ export type AutocompleteContextValue = {
 
 const AutocompleteCtx = createContext<AutocompleteContextValue>()
 
-export function useAutocomplete(): AutocompleteContextValue {
-  const value = useContext(AutocompleteCtx)
-  if (!value) throw new Error("Autocomplete context must be used within a context provider")
-  return value
+export function useAutocomplete(): AutocompleteContextValue | null {
+  return useContext(AutocompleteCtx) ?? null
 }
 
 export function AutocompleteProvider(
