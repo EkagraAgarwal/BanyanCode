@@ -39,7 +39,6 @@ const ORDER: Category[] = ["Primitive", "Repository", "Codegraph", "Search", "Me
 export const ToolsCommand = effectCmd({
   command: "tools",
   describe: "print the canonical tool catalog: registered / materialized / visible to the LLM",
-  instance: false,
   builder: (yargs) =>
     yargs.option("category", {
       type: "string",
