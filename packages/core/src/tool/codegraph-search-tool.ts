@@ -151,18 +151,26 @@ export const locationLayer = Layer.effectDiscard(
                   lists.push(nodes.map((node) => ({ node, score: 1, signals: {} })))
                 }
                 if (mode === "graph") {
-                  const symbols = yield* intel.findSymbol({ name: input.query })
+                  const symbols = yield* intel.symbols({ query: input.query })
                   if (symbols[0]) {
-                    const related = yield* intel.findRelated({ nodeID: symbols[0].id, depth: 2 })
+                    const related = yield* intel.relationships({ nodeID: symbols[0].id, depth: 2 })
                     lists.push(related.map((node) => ({ node, score: 1, signals: { graph: 1 } })))
                   }
                 }
                 if (mode === "subsystem") {
-                  const { entry, related } = yield* intel.findSubsystem({ query: input.query })
-                  lists.push([{ node: entry, score: 2, signals: {} }, ...related.map((node) => ({ node, score: 1, signals: {} }))])
+                  const ctx = yield* intel.query({ query: input.query })
+                  const entry = ctx.symbols[0]
+                  if (entry) {
+                    lists.push([
+                      { node: entry, score: 2, signals: {} },
+                      ...ctx.graph.nodes
+                        .filter((n) => n.id !== entry.id)
+                        .map((node) => ({ node, score: 1, signals: {} })),
+                    ])
+                  }
                 }
                 if (mode === "tests") {
-                  const nodes = yield* intel.findTests({ symbol: input.query })
+                  const nodes = yield* intel.tests({ symbol: input.query })
                   lists.push(nodes.map((node) => ({ node, score: 1, signals: {} })))
                 }
               }

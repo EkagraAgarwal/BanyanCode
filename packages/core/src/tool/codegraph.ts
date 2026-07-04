@@ -3,6 +3,7 @@ export * as CodegraphTools from "./codegraph"
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { Banyan } from "../banyancode"
+import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
@@ -97,63 +98,70 @@ export const locationLayer = Layer.effectDiscard(
             { type: "text", text: `indexed=${output.indexed} skipped=${output.skipped} duration_ms=${output.duration_ms}` },
           ],
           execute: (input, context) => {
-            return Effect.gen(function* () {
-              yield* permission.assert({
-                action: name_build,
-                resources: [input.root ?? "*"],
-                save: ["*"],
-                metadata: input,
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-              })
+            return traced(
+              process.cwd(),
+              context.sessionID,
+              name_build,
+              input,
+              (output) => `indexed=${output.indexed} skipped=${output.skipped} duration_ms=${output.duration_ms}`,
+              Effect.gen(function* () {
+                yield* permission.assert({
+                  action: name_build,
+                  resources: [input.root ?? "*"],
+                  save: ["*"],
+                  metadata: input,
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+                })
 
-              const root = input.root ?? process.cwd()
-              yield* buildService.start({ root, force: input.force ?? false })
+                const root = input.root ?? process.cwd()
+                yield* buildService.start({ root, force: input.force ?? false })
 
-              let currentStatus = yield* buildService.status()
-              while (currentStatus.status === "running") {
-                yield* Effect.sleep("500 millis")
-                currentStatus = yield* buildService.status()
-              }
-
-              if (currentStatus.status === "failed") {
-                return yield* Effect.fail(
-                  new ToolFailure({
-                    message: `codegraph_build failed: ${currentStatus.error ?? "unknown error"}`,
-                  }),
-                )
-              }
-
-              if (currentStatus.status === "cancelled") {
-                return yield* Effect.fail(
-                  new ToolFailure({
-                    message: "codegraph_build was cancelled",
-                  }),
-                )
-              }
-
-              if (currentStatus.status === "completed" && currentStatus.result) {
-                const meta = yield* repo.getMeta()
-                return {
-                  indexed: currentStatus.result.indexed,
-                  skipped: currentStatus.result.skipped,
-                  duration_ms: currentStatus.result.duration_ms,
-                  meta: meta
-                    ? {
-                        graphBuiltAt: meta.graphBuiltAt,
-                        graphVersion: meta.graphVersion,
-                        graphCoverage: meta.graphCoverage,
-                        totalFiles: meta.totalFiles,
-                        totalNodes: meta.totalNodes,
-                        totalEdges: meta.totalEdges,
-                      }
-                    : undefined,
+                let currentStatus = yield* buildService.status()
+                while (currentStatus.status === "running") {
+                  yield* Effect.sleep("500 millis")
+                  currentStatus = yield* buildService.status()
                 }
-              }
 
-              return { indexed: 0, skipped: 0, duration_ms: 0, meta: undefined }
-            }).pipe(
+                if (currentStatus.status === "failed") {
+                  return yield* Effect.fail(
+                    new ToolFailure({
+                      message: `codegraph_build failed: ${currentStatus.error ?? "unknown error"}`,
+                    }),
+                  )
+                }
+
+                if (currentStatus.status === "cancelled") {
+                  return yield* Effect.fail(
+                    new ToolFailure({
+                      message: "codegraph_build was cancelled",
+                    }),
+                  )
+                }
+
+                if (currentStatus.status === "completed" && currentStatus.result) {
+                  const meta = yield* repo.getMeta()
+                  return {
+                    indexed: currentStatus.result.indexed,
+                    skipped: currentStatus.result.skipped,
+                    duration_ms: currentStatus.result.duration_ms,
+                    meta: meta
+                      ? {
+                          graphBuiltAt: meta.graphBuiltAt,
+                          graphVersion: meta.graphVersion,
+                          graphCoverage: meta.graphCoverage,
+                          totalFiles: meta.totalFiles,
+                          totalNodes: meta.totalNodes,
+                          totalEdges: meta.totalEdges,
+                        }
+                      : undefined,
+                  }
+                }
+
+                return { indexed: 0, skipped: 0, duration_ms: 0, meta: undefined }
+              }),
+            ).pipe(
               Effect.mapError((err) => {
                 if (err instanceof ToolFailure) return err
                 return new ToolFailure({ message: "codegraph_build failed" })
@@ -174,49 +182,56 @@ export const locationLayer = Layer.effectDiscard(
           ],
           execute: (input, context) => {
             const limit = input.limit ?? 50
-            return Effect.gen(function* () {
-              yield* permission.assert({
-                action: name_query,
-                resources: ["*"],
-                save: ["*"],
-                metadata: input,
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-              })
+            return traced(
+              process.cwd(),
+              context.sessionID,
+              name_query,
+              input,
+              (output) => `nodes=${output.nodes.length}`,
+              Effect.gen(function* () {
+                yield* permission.assert({
+                  action: name_query,
+                  resources: ["*"],
+                  save: ["*"],
+                  metadata: input,
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+                })
 
-              let nodes: Banyan.CodegraphNode[] = []
+                let nodes: Banyan.CodegraphNode[] = []
 
-              if (input.function) {
-                const allNodes = yield* repo.listAllNodes()
-                nodes = allNodes.filter((n) => n.name === input.function)
-              } else if (input.kind) {
-                const allNodes = yield* repo.listAllNodes()
-                nodes = allNodes.filter((n) => n.kind === input.kind)
-              } else if (input.file) {
-                const file = yield* repo.getFileByPath(input.file)
-                if (file) {
-                  nodes = yield* repo.listNodesByFile(file.id)
+                if (input.function) {
+                  const allNodes = yield* repo.listAllNodes()
+                  nodes = allNodes.filter((n) => n.name === input.function)
+                } else if (input.kind) {
+                  const allNodes = yield* repo.listAllNodes()
+                  nodes = allNodes.filter((n) => n.kind === input.kind)
+                } else if (input.file) {
+                  const file = yield* repo.getFileByPath(input.file)
+                  if (file) {
+                    nodes = yield* repo.listNodesByFile(file.id)
+                  }
+                } else {
+                  nodes = yield* repo.listAllNodes()
                 }
-              } else {
-                nodes = yield* repo.listAllNodes()
-              }
 
-              const meta = yield* repo.getMeta()
-              return {
-                nodes: nodes.slice(0, limit),
-                meta: meta
-                  ? {
-                      graphBuiltAt: meta.graphBuiltAt,
-                      graphVersion: meta.graphVersion,
-                      graphCoverage: meta.graphCoverage,
-                      totalFiles: meta.totalFiles,
-                      totalNodes: meta.totalNodes,
-                      totalEdges: meta.totalEdges,
-                    }
-                  : undefined,
-              }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_query failed` })))
+                const meta = yield* repo.getMeta()
+                return {
+                  nodes: nodes.slice(0, limit),
+                  meta: meta
+                    ? {
+                        graphBuiltAt: meta.graphBuiltAt,
+                        graphVersion: meta.graphVersion,
+                        graphCoverage: meta.graphCoverage,
+                        totalFiles: meta.totalFiles,
+                        totalNodes: meta.totalNodes,
+                        totalEdges: meta.totalEdges,
+                      }
+                    : undefined,
+                }
+              }),
+            ).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_query failed` })))
           },
         }),
         [name_impact]: Tool.make({
@@ -231,37 +246,44 @@ export const locationLayer = Layer.effectDiscard(
           ],
           execute: (input, context) => {
             const limit = input.limit ?? 100
-            return Effect.gen(function* () {
-              yield* permission.assert({
-                action: name_impact,
-                resources: ["*"],
-                save: ["*"],
-                metadata: input,
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-              })
+            return traced(
+              process.cwd(),
+              context.sessionID,
+              name_impact,
+              input,
+              (output) => `dependents=${output.dependents.length} transitive=${output.transitive.length}`,
+              Effect.gen(function* () {
+                yield* permission.assert({
+                  action: name_impact,
+                  resources: ["*"],
+                  save: ["*"],
+                  metadata: input,
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+                })
 
-              const result = yield* analyzer.impact({
-                nodeID: input.nodeID,
-                function: input.function,
-              })
-              const meta = yield* repo.getMeta()
-              return {
-                dependents: result.dependents.slice(0, limit),
-                transitive: result.transitive.slice(0, limit),
-                meta: meta
-                  ? {
-                      graphBuiltAt: meta.graphBuiltAt,
-                      graphVersion: meta.graphVersion,
-                      graphCoverage: meta.graphCoverage,
-                      totalFiles: meta.totalFiles,
-                      totalNodes: meta.totalNodes,
-                      totalEdges: meta.totalEdges,
-                    }
-                  : undefined,
-              }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_impact failed` })))
+                const result = yield* analyzer.impact({
+                  nodeID: input.nodeID,
+                  function: input.function,
+                })
+                const meta = yield* repo.getMeta()
+                return {
+                  dependents: result.dependents.slice(0, limit),
+                  transitive: result.transitive.slice(0, limit),
+                  meta: meta
+                    ? {
+                        graphBuiltAt: meta.graphBuiltAt,
+                        graphVersion: meta.graphVersion,
+                        graphCoverage: meta.graphCoverage,
+                        totalFiles: meta.totalFiles,
+                        totalNodes: meta.totalNodes,
+                        totalEdges: meta.totalEdges,
+                      }
+                    : undefined,
+                }
+              }),
+            ).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_impact failed` })))
           },
         }),
         [name_dependents]: Tool.make({
@@ -276,33 +298,40 @@ export const locationLayer = Layer.effectDiscard(
           ],
           execute: (input, context) => {
             const limit = input.limit ?? 50
-            return Effect.gen(function* () {
-              yield* permission.assert({
-                action: name_dependents,
-                resources: ["*"],
-                save: ["*"],
-                metadata: input,
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-              })
+            return traced(
+              process.cwd(),
+              context.sessionID,
+              name_dependents,
+              input,
+              (output) => `dependents=${output.dependents.length}`,
+              Effect.gen(function* () {
+                yield* permission.assert({
+                  action: name_dependents,
+                  resources: ["*"],
+                  save: ["*"],
+                  metadata: input,
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+                })
 
-              const result = yield* analyzer.dependents({ nodeID: input.nodeID, function: input.function })
-              const meta = yield* repo.getMeta()
-              return {
-                dependents: result.slice(0, limit),
-                meta: meta
-                  ? {
-                      graphBuiltAt: meta.graphBuiltAt,
-                      graphVersion: meta.graphVersion,
-                      graphCoverage: meta.graphCoverage,
-                      totalFiles: meta.totalFiles,
-                      totalNodes: meta.totalNodes,
-                      totalEdges: meta.totalEdges,
-                    }
-                  : undefined,
-              }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_dependents failed` })))
+                const result = yield* analyzer.dependents({ nodeID: input.nodeID, function: input.function })
+                const meta = yield* repo.getMeta()
+                return {
+                  dependents: result.slice(0, limit),
+                  meta: meta
+                    ? {
+                        graphBuiltAt: meta.graphBuiltAt,
+                        graphVersion: meta.graphVersion,
+                        graphCoverage: meta.graphCoverage,
+                        totalFiles: meta.totalFiles,
+                        totalNodes: meta.totalNodes,
+                        totalEdges: meta.totalEdges,
+                      }
+                    : undefined,
+                }
+              }),
+            ).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_dependents failed` })))
           },
         }),
         [name_callers]: Tool.make({
@@ -317,33 +346,40 @@ export const locationLayer = Layer.effectDiscard(
           ],
           execute: (input, context) => {
             const limit = input.limit ?? 50
-            return Effect.gen(function* () {
-              yield* permission.assert({
-                action: name_callers,
-                resources: ["*"],
-                save: ["*"],
-                metadata: input,
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-              })
+            return traced(
+              process.cwd(),
+              context.sessionID,
+              name_callers,
+              input,
+              (output) => `callers=${output.callers.length}`,
+              Effect.gen(function* () {
+                yield* permission.assert({
+                  action: name_callers,
+                  resources: ["*"],
+                  save: ["*"],
+                  metadata: input,
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+                })
 
-              const result = yield* analyzer.callers({ nodeID: input.nodeID, function: input.function })
-              const meta = yield* repo.getMeta()
-              return {
-                callers: result.slice(0, limit),
-                meta: meta
-                  ? {
-                      graphBuiltAt: meta.graphBuiltAt,
-                      graphVersion: meta.graphVersion,
-                      graphCoverage: meta.graphCoverage,
-                      totalFiles: meta.totalFiles,
-                      totalNodes: meta.totalNodes,
-                      totalEdges: meta.totalEdges,
-                    }
-                  : undefined,
-              }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_callers failed` })))
+                const result = yield* analyzer.callers({ nodeID: input.nodeID, function: input.function })
+                const meta = yield* repo.getMeta()
+                return {
+                  callers: result.slice(0, limit),
+                  meta: meta
+                    ? {
+                        graphBuiltAt: meta.graphBuiltAt,
+                        graphVersion: meta.graphVersion,
+                        graphCoverage: meta.graphCoverage,
+                        totalFiles: meta.totalFiles,
+                        totalNodes: meta.totalNodes,
+                        totalEdges: meta.totalEdges,
+                      }
+                    : undefined,
+                }
+              }),
+            ).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_callers failed` })))
           },
         }),
       })

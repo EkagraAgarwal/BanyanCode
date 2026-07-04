@@ -3,6 +3,7 @@ export * as CodeFindTool from "./code-find"
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { Banyan } from "../banyancode"
+import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
@@ -54,59 +55,66 @@ export const locationLayer = Layer.effectDiscard(
         ],
         execute: (input, context) => {
           const limit = input.limit ?? 50
-          return Effect.gen(function* () {
-            yield* permission.assert({
-              action: name,
-              resources: [input.target ?? "*"],
-              save: ["*"],
-              metadata: input,
-              sessionID: context.sessionID,
-              agent: context.agent,
-              source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-            })
+          return traced(
+            process.cwd(),
+            context.sessionID,
+            name,
+            input,
+            (output) => `intent=${output.intent} dispatched=${output.dispatchedTo ?? "n/a"} matches=${output.matches.length} files=${output.files.length}`,
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name,
+                resources: [input.target ?? "*"],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
 
-            const metaRow = yield* repo.getMeta()
-            const meta = metaRow
-              ? {
-                  graphBuiltAt: metaRow.graphBuiltAt,
-                  graphVersion: metaRow.graphVersion,
-                  graphCoverage: metaRow.graphCoverage,
-                  totalFiles: metaRow.totalFiles,
-                  totalNodes: metaRow.totalNodes,
-                  totalEdges: metaRow.totalEdges,
+              const metaRow = yield* repo.getMeta()
+              const meta = metaRow
+                ? {
+                    graphBuiltAt: metaRow.graphBuiltAt,
+                    graphVersion: metaRow.graphVersion,
+                    graphCoverage: metaRow.graphCoverage,
+                    totalFiles: metaRow.totalFiles,
+                    totalNodes: metaRow.totalNodes,
+                    totalEdges: metaRow.totalEdges,
+                  }
+                : undefined
+
+              switch (input.intent) {
+                case "definition": {
+                  const target = input.target ?? ""
+                  const allNodes = yield* repo.listAllNodes()
+                  const matches = allNodes.filter((n) => n.name === target || n.code?.includes(target)).slice(0, limit)
+                  return { matches, files: [], meta, intent: input.intent, dispatchedTo: "codegraph_query" }
                 }
-              : undefined
-
-            switch (input.intent) {
-              case "definition": {
-                const target = input.target ?? ""
-                const allNodes = yield* repo.listAllNodes()
-                const matches = allNodes.filter((n) => n.name === target || n.code?.includes(target)).slice(0, limit)
-                return { matches, files: [], meta, intent: input.intent, dispatchedTo: "codegraph_query" }
+                case "callers": {
+                  const result = yield* analyzer.callers({ function: input.target })
+                  return { matches: result, files: [], meta, intent: input.intent, dispatchedTo: "codegraph_callers" }
+                }
+                case "dependents": {
+                  const result = yield* analyzer.dependents({ function: input.target })
+                  return { matches: result, files: [], meta, intent: input.intent, dispatchedTo: "codegraph_dependents" }
+                }
+                case "impact": {
+                  const result = yield* analyzer.impact({ function: input.target })
+                  return { matches: result.dependents.slice(0, limit), files: [], meta, intent: input.intent, dispatchedTo: "codegraph_impact" }
+                }
+                case "find_file": {
+                  const target = input.target ?? ""
+                  const allFiles = yield* repo.listAllFiles()
+                  const files = allFiles
+                    .filter((f) => f.path.includes(target))
+                    .slice(0, limit)
+                    .map((f) => ({ path: f.path }))
+                  return { matches: [], files, meta, intent: input.intent, dispatchedTo: "glob" }
+                }
               }
-              case "callers": {
-                const result = yield* analyzer.callers({ function: input.target })
-                return { matches: result, files: [], meta, intent: input.intent, dispatchedTo: "codegraph_callers" }
-              }
-              case "dependents": {
-                const result = yield* analyzer.dependents({ function: input.target })
-                return { matches: result, files: [], meta, intent: input.intent, dispatchedTo: "codegraph_dependents" }
-              }
-              case "impact": {
-                const result = yield* analyzer.impact({ function: input.target })
-                return { matches: result.dependents.slice(0, limit), files: [], meta, intent: input.intent, dispatchedTo: "codegraph_impact" }
-              }
-              case "find_file": {
-                const target = input.target ?? ""
-                const allFiles = yield* repo.listAllFiles()
-                const files = allFiles
-                  .filter((f) => f.path.includes(target))
-                  .slice(0, limit)
-                  .map((f) => ({ path: f.path }))
-                return { matches: [], files, meta, intent: input.intent, dispatchedTo: "glob" }
-              }
-            }
-          }).pipe(Effect.mapError((err) => {
+            }),
+          ).pipe(Effect.mapError((err) => {
             if (err instanceof ToolFailure) return err
             return new ToolFailure({ message: `code_find failed for intent=${input.intent}` })
           }))

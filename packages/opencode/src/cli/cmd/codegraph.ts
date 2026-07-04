@@ -1,9 +1,13 @@
 import type { Argv } from "yargs"
 import path from "path"
+import { createHash } from "crypto"
+import { existsSync } from "fs"
 import { Duration, Effect, Option, Stream } from "effect"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { State, type Interface as CodegraphBuildServiceInterface } from "@opencode-ai/core/banyancode/codegraph-build-service"
 import { Database } from "@opencode-ai/core/database/database"
+import { Global } from "@opencode-ai/core/global"
+import { readTrace, type TraceEvent } from "@opencode-ai/core/observability/trace"
 import { effectCmd, fail } from "../effect-cmd"
 import { UI } from "../ui"
 
@@ -226,6 +230,122 @@ const PathCommand = effectCmd({
   }),
 })
 
+const TRACE_COLUMN_TS = 15
+const TRACE_COLUMN_TOOL = 28
+const TRACE_COLUMN_INPUT = 30
+const TRACE_COLUMN_RESULT = 30
+const TRACE_COLUMN_MS = 6
+
+const truncate = (value: string, width: number) =>
+  value.length <= width ? value.padEnd(width) : value.slice(0, Math.max(0, width - 1)) + "…"
+
+const summarizeInput = (input: unknown): string => {
+  if (input === undefined || input === null) return ""
+  if (typeof input === "string") return input
+  try {
+    return JSON.stringify(input)
+  } catch {
+    return String(input)
+  }
+}
+
+const findTraceFile = (worktree: string, sessionID: string): string | undefined => {
+  const candidates = [
+    path.join(worktree, ".banyancode", "trace", `${sessionID}.jsonl`),
+    path.join(
+      Global.Path.banyan.data,
+      "trace",
+      createHash("sha256").update(worktree).digest("hex").slice(0, 16),
+      `${sessionID}.jsonl`,
+    ),
+  ]
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
+  return candidates[0]
+}
+
+const printTraceRow = (event: TraceEvent) => {
+  const inputText = event.phase === "start" ? summarizeInput(event.input) : ""
+  const resultText = event.phase === "end" ? (event.resultSummary ?? "") : ""
+  const msText = event.phase === "end" && typeof event.ms === "number" ? String(event.ms) : ""
+  const tsText = String(event.ts)
+  const toolText = event.tool
+  UI.println(
+    UI.Style.TEXT_DIM + truncate(tsText, TRACE_COLUMN_TS) + UI.Style.TEXT_NORMAL,
+    UI.Style.TEXT_INFO_BOLD + truncate(toolText, TRACE_COLUMN_TOOL) + UI.Style.TEXT_NORMAL,
+    UI.Style.TEXT_NORMAL + truncate(inputText, TRACE_COLUMN_INPUT) + UI.Style.TEXT_NORMAL,
+    truncate(resultText, TRACE_COLUMN_RESULT),
+    UI.Style.TEXT_DIM + truncate(msText, TRACE_COLUMN_MS) + UI.Style.TEXT_NORMAL,
+  )
+}
+
+const printTraceHeader = () => {
+  const header = [
+    "TIME",
+    "TOOL",
+    "INPUT-SUMMARY",
+    "RESULT-SUMMARY",
+    "MS",
+  ]
+  UI.println(
+    UI.Style.TEXT_DIM +
+      [
+        truncate(header[0], TRACE_COLUMN_TS),
+        truncate(header[1], TRACE_COLUMN_TOOL),
+        truncate(header[2], TRACE_COLUMN_INPUT),
+        truncate(header[3], TRACE_COLUMN_RESULT),
+        truncate(header[4], TRACE_COLUMN_MS),
+      ].join(" ") +
+      UI.Style.TEXT_NORMAL,
+  )
+}
+
+const TraceCommand = effectCmd({
+  command: "trace",
+  describe: "print recent tool-call traces for a session",
+  instance: false,
+  builder: (yargs: Argv) =>
+    yargs
+      .option("session", {
+        type: "string",
+        demandOption: true,
+        describe: "session id whose trace file should be read",
+      })
+      .option("limit", {
+        type: "number",
+        default: 50,
+        describe: "number of most-recent events to print (default: 50)",
+      })
+      .option("worktree", {
+        type: "string",
+        describe: "project worktree to locate the trace file (defaults to current directory)",
+      }),
+  handler: Effect.fn("Cli.codegraph.trace")(function* (args: {
+    session: string
+    limit: number
+    worktree?: string
+  }) {
+    const worktree = path.resolve(args.worktree ?? process.cwd())
+    const file = findTraceFile(worktree, args.session)
+    if (!file || !existsSync(file)) {
+      UI.println(`no traces for session ${args.session}`)
+      return
+    }
+    const events = yield* Effect.promise(() => readTrace(worktree, args.session))
+    const tail = events.slice(-Math.max(1, args.limit))
+    UI.println(UI.Style.TEXT_HIGHLIGHT + `Trace for session ${args.session}` + UI.Style.TEXT_NORMAL)
+    UI.println(dim(`  file:   ${file}`))
+    UI.println(dim(`  events: ${events.length} (showing last ${tail.length})`))
+    UI.println("")
+    printTraceHeader()
+    for (let i = tail.length - 1; i >= 0; i--) {
+      const event = tail[i]
+      if (event) printTraceRow(event)
+    }
+  }),
+})
+
 export const CodegraphCommand = effectCmd({
   command: "codegraph",
   describe: "build and inspect the banyancode codegraph",
@@ -237,6 +357,7 @@ export const CodegraphCommand = effectCmd({
       .command(CancelCommand)
       .command(ForceKillCommand)
       .command(PathCommand)
+      .command(TraceCommand)
       .demandCommand(),
   handler: Effect.fn("Cli.codegraph")(function* () {}),
 })

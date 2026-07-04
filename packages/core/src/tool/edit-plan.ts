@@ -3,6 +3,7 @@ export * as EditPlanTool from "./edit-plan"
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { Banyan } from "../banyancode"
+import { traced } from "../observability/trace"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -48,32 +49,39 @@ export const locationLayer = Layer.effectDiscard(
             },
           ],
           execute: (input, context) => {
-            return Effect.gen(function* () {
-              yield* permission.assert({
-                action: name,
-                resources: [input.targetSymbol],
-                save: ["*"],
-                metadata: input,
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-              })
-              const plan =
-                input.phase === "before"
-                  ? yield* planner.planBeforeEdit({
-                      targetSymbol: input.targetSymbol,
-                      changeKind: input.changeKind ?? "modify",
-                      filePath: input.filePath,
-                      root: input.root,
-                    })
-                  : yield* planner.planAfterEdit({
-                      targetSymbol: input.targetSymbol,
-                      filePath: input.filePath,
-                      root: input.root,
-                      diff: input.diff,
-                    })
-              return { plan }
-            }).pipe(
+            return traced(
+              process.cwd(),
+              context.sessionID,
+              name,
+              input,
+              (output) => `steps=${output.plan.steps.length} direct=${output.plan.expectedImpact.directDependents} transitive=${output.plan.expectedImpact.transitiveDependents} risks=${output.plan.risks.length}`,
+              Effect.gen(function* () {
+                yield* permission.assert({
+                  action: name,
+                  resources: [input.targetSymbol],
+                  save: ["*"],
+                  metadata: input,
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+                })
+                const plan =
+                  input.phase === "before"
+                    ? yield* planner.planBeforeEdit({
+                        targetSymbol: input.targetSymbol,
+                        changeKind: input.changeKind ?? "modify",
+                        filePath: input.filePath,
+                        root: input.root,
+                      })
+                    : yield* planner.planAfterEdit({
+                        targetSymbol: input.targetSymbol,
+                        filePath: input.filePath,
+                        root: input.root,
+                        diff: input.diff,
+                      })
+                return { plan }
+              }),
+            ).pipe(
               Effect.mapError((err) => {
                 if (err instanceof ToolFailure) return err
                 return new ToolFailure({ message: `edit_plan failed` })
