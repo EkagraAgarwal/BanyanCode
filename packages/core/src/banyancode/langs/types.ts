@@ -12,6 +12,10 @@ export interface ParsedNode {
     | "build"
     | "package"
     | "generated"
+    | "ci"
+    | "docker"
+    | "env"
+    | "doc"
   name: string
   signature?: string
   startLine: number

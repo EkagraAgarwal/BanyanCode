@@ -4,7 +4,12 @@ import path from "path"
 import { Database } from "@opencode-ai/core/database/database"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import { CodegraphRepo } from "@opencode-ai/core/banyancode/codegraph-repo"
-import { Search, defaultLayer as SearchLayer } from "../../src/banyancode/search/index"
+import {
+  Search,
+  auto as searchAuto,
+  manual as searchManual,
+  defaultLayer as SearchLayer,
+} from "../../src/banyancode/search/index"
 import { tmpdir } from "../fixture/tmpdir"
 
 const seedFixture = () =>
@@ -308,6 +313,71 @@ describe("Search service", () => {
         expect(results2.length).toBe(1)
         expect(results2[0]?.node.name).toBe("buildService")
         expect(results2[0]?.signals.qualified).toBe(true)
+      }).pipe(Effect.provide(SearchLayer), Effect.provide(CodegraphRepo.defaultLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("searchAuto cascade locks ordering: exact match outranks fuzzy for known input", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        yield* seedFixture()
+        const results = yield* searchAuto("buildService")
+        expect(results.length).toBeGreaterThan(0)
+        expect(results[0]?.node.name).toBe("buildService")
+        expect(results[0]?.signals.exact).toBe(true)
+        const exactResult = results.find((r) => r.node.name === "buildService")!
+        const fuzzyOnly = results.filter((r) => r.signals.fuzzy !== undefined && !r.signals.exact)
+        for (const f of fuzzyOnly) {
+          expect(exactResult.score).toBeGreaterThan(f.score)
+        }
+        const exactIdx = results.findIndex((r) => r.signals.exact)
+        const fuzzyOnlyIdx = results.findIndex((r) => r.signals.fuzzy !== undefined && !r.signals.exact)
+        if (exactIdx >= 0 && fuzzyOnlyIdx >= 0) {
+          expect(exactIdx).toBeLessThan(fuzzyOnlyIdx)
+        }
+      }).pipe(Effect.provide(SearchLayer), Effect.provide(CodegraphRepo.defaultLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("search with mode: 'auto' cascades through all modes", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        yield* seedFixture()
+        const search = yield* Search.Service
+        const explicit = yield* search.search("buildService", { mode: "auto" })
+        const implicit = yield* search.search("buildService")
+        expect(explicit.map((r) => r.node.id)).toEqual(implicit.map((r) => r.node.id))
+      }).pipe(Effect.provide(SearchLayer), Effect.provide(CodegraphRepo.defaultLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("search with mode: 'manual' runs only the selected mode", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        yield* seedFixture()
+        const results = yield* searchManual("buildService", "Exact")
+        expect(results.length).toBeGreaterThan(0)
+        for (const r of results) {
+          expect(r.signals.exact).toBe(true)
+        }
       }).pipe(Effect.provide(SearchLayer), Effect.provide(CodegraphRepo.defaultLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })

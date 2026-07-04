@@ -26,7 +26,6 @@ async function main() {
 
   const dbLayer = Database.layerFromPath(dbPath)
 
-  // Build the codegraph for the banyancode source directory
   console.log(`\nIndexing: ${INDEX_ROOT}`)
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -44,99 +43,58 @@ async function main() {
 
   console.log("Indexing complete.\n")
 
-  // Run each function
   await Effect.runPromise(
     Effect.gen(function* () {
       const ri = yield* RepositoryIntelligence.Service
       const repo = yield* CodegraphRepo.Service
 
-      // --- findSymbol ---
-      console.log("=== findSymbol ===")
-      const sym1 = yield* ri.findSymbol({ name: "findSymbol" })
-      console.log(`findSymbol({ name: "findSymbol" }) => ${sym1.length} results`)
+      console.log("=== symbols ===")
+      const sym1 = yield* ri.symbols({ query: "findSymbol" })
+      console.log(`symbols({ query: "findSymbol" }) => ${sym1.length} results`)
       for (const n of sym1.slice(0, 3)) {
         console.log(`  - ${n.kind}: ${n.name} (fileID: ${n.fileID})`)
       }
 
-      const sym2 = yield* ri.findSymbol({ name: "findSymbol", kind: "function", exact: true })
-      console.log(`findSymbol({ name: "findSymbol", kind: "function", exact: true }) => ${sym2.length} results`)
+      console.log("\n=== query ===")
+      const ctx = yield* ri.query({ query: "CodegraphRepo" })
+      console.log(`query({ query: "CodegraphRepo" }) => ${ctx.symbols.length} symbols, ${ctx.graph.edges.length} edges`)
 
-      const sym3 = yield* ri.findSymbol({ name: "Service", kind: "class" })
-      console.log(`findSymbol({ name: "Service", kind: "class" }) => ${sym3.length} results`)
-      for (const n of sym3.slice(0, 3)) {
-        console.log(`  - ${n.kind}: ${n.name}`)
-      }
+      console.log("\n=== tests ===")
+      const tests1 = yield* ri.tests({ symbol: "putNode" })
+      console.log(`tests({ symbol: "putNode" }) => ${tests1.length} test nodes`)
 
-      // --- findSubsystem ---
-      console.log("\n=== findSubsystem ===")
-      const subsystem = yield* ri.findSubsystem({ query: "CodegraphRepo" })
-      console.log(`findSubsystem({ query: "CodegraphRepo" }) => entry: ${subsystem.entry.kind}:${subsystem.entry.name}, related: ${subsystem.related.length} nodes`)
-      for (const n of subsystem.related.slice(0, 5)) {
-        console.log(`  - ${n.kind}: ${n.name}`)
-      }
-
-      // --- findEntrypoints ---
-      console.log("\n=== findEntrypoints ===")
-      const entries1 = yield* ri.findEntrypoints({ feature: "codegraph" })
-      console.log(`findEntrypoints({ feature: "codegraph" }) => ${entries1.length} entrypoints`)
-      for (const n of entries1.slice(0, 5)) {
-        console.log(`  - ${n.kind}: ${n.name}`)
-      }
-
-      const entries2 = yield* ri.findEntrypoints({ feature: "memory" })
-      console.log(`findEntrypoints({ feature: "memory" }) => ${entries2.length} entrypoints`)
-      for (const n of entries2.slice(0, 3)) {
-        console.log(`  - ${n.kind}: ${n.name}`)
-      }
-
-      // --- findTests ---
-      console.log("\n=== findTests ===")
-      const tests1 = yield* ri.findTests({ symbol: "putNode" })
-      console.log(`findTests({ symbol: "putNode" }) => ${tests1.length} test nodes`)
-      for (const n of tests1.slice(0, 3)) {
-        console.log(`  - ${n.kind}: ${n.name}`)
-      }
-
-      const tests2 = yield* ri.findTests({ symbol: "findSymbol" })
-      console.log(`findTests({ symbol: "findSymbol" }) => ${tests2.length} test nodes`)
-
-      // --- findRelated ---
-      console.log("\n=== findRelated ===")
+      console.log("\n=== relationships ===")
       const symNode = (yield* repo.searchNodes({ name: "findSymbol" }))[0]
       if (symNode) {
-        const related = yield* ri.findRelated({ nodeID: symNode.id, depth: 1 })
-        console.log(`findRelated({ nodeID: "${symNode.id}", depth: 1 }) => ${related.length} related nodes`)
+        const related = yield* ri.relationships({ nodeID: symNode.id, depth: 1 })
+        console.log(`relationships({ nodeID: "${symNode.id}", depth: 1 }) => ${related.length} related nodes`)
         for (const n of related.slice(0, 5)) {
           console.log(`  - ${n.kind}: ${n.name}`)
         }
       }
 
-      // --- estimateImpact ---
-      console.log("\n=== estimateImpact ===")
+      console.log("\n=== impact ===")
       const allFiles = yield* repo.listAllFiles()
       if (allFiles.length > 0) {
         const samplePath = allFiles[0].path
-        const impact = yield* ri.estimateImpact({ paths: [samplePath], maxDepth: 2 })
-        console.log(`estimateImpact({ paths: ["${samplePath}"], maxDepth: 2 })`)
-        console.log(`  direct: ${impact.direct.length} nodes`)
-        console.log(`  transitive: ${impact.transitive.length} nodes`)
-        console.log(`  blastRadius: ${(impact.blastRadius * 100).toFixed(2)}%`)
+        const slc = yield* ri.impact({ path: samplePath })
+        console.log(`impact({ path: "${samplePath}" }) => summary: ${slc.summary}`)
+        console.log(`  importantSymbols: ${slc.importantSymbols.length}`)
       }
 
-      // --- traceExecution ---
-      console.log("\n=== traceExecution ===")
+      console.log("\n=== trace ===")
       const allNodes = yield* repo.listAllNodes()
       const fnNodes = allNodes.filter((n) => n.kind === "function" && n.name.length > 3)
       if (fnNodes.length > 0) {
         const target = fnNodes[0]
-        const trace = yield* ri.traceExecution({ from: target.id, maxDepth: 2 })
-        console.log(`traceExecution({ from: "${target.name}", maxDepth: 2 }) => ${trace.length} nodes in trace`)
-        for (const n of trace.slice(0, 5)) {
-          console.log(`  - ${n.kind}: ${n.name}`)
-        }
+        const slc = yield* ri.trace({ symbol: target.name, depth: 2 })
+        console.log(`trace({ symbol: "${target.name}", depth: 2 }) => summary: ${slc.summary}`)
       }
 
-      // Summary stats
+      console.log("\n=== findOwner ===")
+      const owner = yield* ri.findOwner({ path: "packages/core/src/banyancode" })
+      console.log(`findOwner => ${JSON.stringify(owner)}`)
+
       console.log("\n=== Graph Stats ===")
       const nodeCount = yield* repo.countNodes()
       const edgeCount = yield* repo.countEdges()
@@ -144,7 +102,7 @@ async function main() {
       console.log(`Total: ${nodeCount} nodes, ${edgeCount} edges, ${fileCount} files`)
     }).pipe(
       Effect.provide(repositoryIntelligenceDefaultLayer),
-      Effect.provide(CodegraphRepo.defaultLayer),
+      Effect.provide(codegraphRepoDefaultLayer),
       Effect.provide(dbLayer),
       Effect.scoped,
     ),

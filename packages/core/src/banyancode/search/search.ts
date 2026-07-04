@@ -6,7 +6,17 @@ import type { CodegraphNode } from "../types"
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-export type SearchMode = "BM25" | "Fuzzy" | "Prefix" | "CamelCase" | "snake_case" | "Exact" | "Qualified"
+export type SearchMode =
+  | "BM25"
+  | "Fuzzy"
+  | "Prefix"
+  | "CamelCase"
+  | "snake_case"
+  | "Exact"
+  | "Qualified"
+  | "Graph"
+
+export type SearchModeOrAuto = SearchMode | "auto" | "manual"
 
 export interface SearchSignal {
   exact?: boolean
@@ -28,10 +38,21 @@ export interface SearchResult {
 }
 
 export interface SearchOptions {
+  mode?: SearchModeOrAuto
+  manualMode?: SearchMode
   modes?: SearchMode[]
   limit?: number
   maxFuzzyDistance?: number
 }
+
+export const CASCADE_ORDER: readonly SearchMode[] = [
+  "Exact",
+  "Qualified",
+  "Prefix",
+  "Graph",
+  "BM25",
+  "Fuzzy",
+] as const
 
 // ─── Score Weights ───────────────────────────────────────────────────────────
 
@@ -212,6 +233,10 @@ function modeFuzzy(query: string, nodes: CodegraphNode[], maxDistance = 2): Sear
     }))
 }
 
+function modeGraph(_query: string, _nodes: CodegraphNode[]): SearchResult[] {
+  return []
+}
+
 // ─── Graph Signal (stubbed) ──────────────────────────────────────────────────
 
 function graphSignal(_nodeID: string, _edges: Map<string, { callers: number; callees: number }>): number {
@@ -263,6 +288,21 @@ function mergeAndRank(results: SearchResult[], limit: number): SearchResult[] {
     .slice(0, limit)
 }
 
+// ─── Mode Resolution ────────────────────────────────────────────────────────
+
+function resolveModes(opts: SearchOptions | undefined): readonly SearchMode[] {
+  if (opts?.mode === "manual") {
+    return opts.manualMode ? [opts.manualMode] : []
+  }
+  if (opts?.mode && opts.mode !== "auto") {
+    return [opts.mode]
+  }
+  if (opts?.modes && opts.modes.length > 0) {
+    return opts.modes
+  }
+  return CASCADE_ORDER
+}
+
 // ─── Service Factory ─────────────────────────────────────────────────────────
 
 export function makeService(repo: CodegraphRepo.Interface): Interface {
@@ -310,7 +350,7 @@ export function makeService(repo: CodegraphRepo.Interface): Interface {
 
   const search = (query: string, options?: SearchOptions): Effect.Effect<SearchResult[], never, never> =>
     Effect.gen(function* () {
-      const modes = options?.modes ?? ["BM25", "Fuzzy", "Prefix", "CamelCase"]
+      const modes = resolveModes(options)
       const limit = options?.limit ?? 50
       const maxFuzzy = options?.maxFuzzyDistance ?? 2
 
@@ -354,6 +394,9 @@ export function makeService(repo: CodegraphRepo.Interface): Interface {
             break
           case "Fuzzy":
             results = modeFuzzy(query, allNodes, maxFuzzy)
+            break
+          case "Graph":
+            results = modeGraph(query, allNodes)
             break
         }
 

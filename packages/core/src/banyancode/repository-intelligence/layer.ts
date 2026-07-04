@@ -2,7 +2,15 @@ import { Effect, Layer } from "effect"
 import { CodegraphRepo } from "../codegraph-repo"
 import { Service } from "./service"
 import type { Interface } from "./service"
-import type { CodegraphNode } from "../types"
+import type {
+  ArchitecturalSlice,
+  CodegraphEdge,
+  CodegraphFile,
+  CodegraphNode,
+  RepositoryContext,
+  WorkspaceContext,
+} from "../types"
+import { Service as Git, defaultLayer as gitDefaultLayer } from "./git-service"
 
 export type { Interface }
 export { Service }
@@ -16,19 +24,28 @@ const KIND_PRIORITY: CodegraphNode["kind"][] = [
   "file",
 ]
 
+const DOC_PATH_PATTERNS = [/\.md$/i, /^readme/i, /^changelog/i, /^contributing/i, /\/docs?\//i, /^design/i]
+const CONFIG_PATH_PATTERNS = [/package\.json$/i, /tsconfig.*\.json$/i, /pyproject\.toml$/i, /cargo\.toml$/i, /go\.mod$/i, /pnpm-workspace\.yaml$/i, /bun\.fig\.toml$/i]
+
 function kindRank(kind: CodegraphNode["kind"]): number {
   const idx = KIND_PRIORITY.indexOf(kind)
   return idx === -1 ? Infinity : idx
+}
+
+function isDocPath(path: string): boolean {
+  return DOC_PATH_PATTERNS.some((p) => p.test(path))
+}
+
+function isConfigPath(path: string): boolean {
+  return CONFIG_PATH_PATTERNS.some((p) => p.test(path))
 }
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const repo = yield* CodegraphRepo.Service
+    const git = yield* Git
 
-    // ------------------------------------------------------------------
-    // findSymbol
-    // ------------------------------------------------------------------
     const findSymbol = (input: {
       name: string
       kind?: CodegraphNode["kind"]
@@ -58,9 +75,6 @@ export const layer = Layer.effect(
         return prefixFiltered
       })
 
-    // ------------------------------------------------------------------
-    // findSubsystem
-    // ------------------------------------------------------------------
     const findSubsystem = (input: {
       query: string
       maxDepth?: number
@@ -132,9 +146,6 @@ export const layer = Layer.effect(
         return result
       })
 
-    // ------------------------------------------------------------------
-    // findEntrypoints
-    // ------------------------------------------------------------------
     const findEntrypoints = (input: {
       feature: string
     }): Effect.Effect<CodegraphNode[], never, never> =>
@@ -155,9 +166,6 @@ export const layer = Layer.effect(
         return entrypoints
       })
 
-    // ------------------------------------------------------------------
-    // findTests
-    // ------------------------------------------------------------------
     const findTests = (input: {
       symbol: string
     }): Effect.Effect<CodegraphNode[], never, never> =>
@@ -180,7 +188,7 @@ export const layer = Layer.effect(
         if (symbolMatches.length === 0) return []
 
         const exactMatch = symbolMatches.find((n) => n.name === input.symbol)
-        const symbolID = (exactMatch ?? symbolMatches[0]).id
+        const symbolID = (exactMatch ?? symbolMatches[0])!.id
 
         const relevantTests: CodegraphNode[] = []
         for (const node of testNodes) {
@@ -194,9 +202,6 @@ export const layer = Layer.effect(
         return relevantTests
       })
 
-    // ------------------------------------------------------------------
-    // findRelated
-    // ------------------------------------------------------------------
     const findRelated = (input: {
       nodeID: string
       depth?: number
@@ -235,108 +240,212 @@ export const layer = Layer.effect(
         return result
       })
 
-    // ------------------------------------------------------------------
-    // estimateImpact
-    // ------------------------------------------------------------------
-    const estimateImpact = (input: {
-      paths: string[]
-      maxDepth?: number
-    }): Effect.Effect<{
-      direct: CodegraphNode[]
-      transitive: CodegraphNode[]
-      blastRadius: number
-    }, never, never> =>
+    const query = (input: {
+      query: string
+      limit?: number
+      workspace?: WorkspaceContext
+    }): Effect.Effect<RepositoryContext, never, never> =>
       Effect.gen(function* () {
-        const maxDepth = input.maxDepth ?? 2
-
         const allFiles = yield* repo.listAllFiles()
         const allNodes = yield* repo.listAllNodes()
-        const pathToFileID = new Map(allFiles.map((f) => [f.path, f.id]))
-        const targetFileIDs = new Set(input.paths.map((p) => pathToFileID.get(p)).filter(Boolean) as string[])
 
-        const direct = allNodes.filter((n) => targetFileIDs.has(n.fileID))
-        if (direct.length === 0) return { direct: [], transitive: [], blastRadius: 0 }
+        const symbolMatches = yield* findSymbol({ name: input.query })
+        const fileByPath = yield* repo.getFileByPath(input.query)
+        const fileMatches: CodegraphNode[] = fileByPath
+          ? allNodes.filter((n) => n.fileID === fileByPath.id)
+          : []
 
-        const visited = new Set<string>(direct.map((n) => n.id))
-        const transitive: CodegraphNode[] = []
-        const queue: Array<{ id: string; depth: number }> = direct.map((n) => ({ id: n.id, depth: 0 }))
-
-        while (queue.length > 0) {
-          const current = queue.shift()!
-          if (current.depth > maxDepth) continue
-
-          const incoming = yield* repo.edgesTo(current.id)
-          const nextIDs: string[] = []
-          for (const edge of incoming) {
-            if (!visited.has(edge.fromNodeID)) {
-              visited.add(edge.fromNodeID)
-              nextIDs.push(edge.fromNodeID)
-            }
+        const seen = new Set<string>()
+        const symbols: CodegraphNode[] = []
+        for (const n of [...symbolMatches, ...fileMatches]) {
+          if (!seen.has(n.id)) {
+            seen.add(n.id)
+            symbols.push(n)
           }
+        }
 
-          if (nextIDs.length > 0) {
-            const nodes = yield* repo.nodesByIDs(nextIDs)
-            transitive.push(...nodes)
-            for (const id of nextIDs) {
-              queue.push({ id, depth: current.depth + 1 })
+        const tests: CodegraphNode[] = symbols.length > 0 ? yield* findTests({ symbol: input.query }) : []
+
+        const relatedNodes: CodegraphNode[] = []
+        for (const sym of symbols) {
+          const related = yield* findRelated({ nodeID: sym.id, depth: 1 })
+          for (const r of related) {
+            if (!seen.has(r.id)) {
+              seen.add(r.id)
+              relatedNodes.push(r)
             }
           }
         }
 
-        const totalNodes = yield* repo.countNodes()
-        const blastRadius = totalNodes > 0 ? transitive.length / totalNodes : 0
+        const graphNodeIDs = new Set<string>([...seen])
+        const graphEdges: CodegraphEdge[] = []
+        for (const sym of [...symbols, ...relatedNodes]) {
+          const outgoing = yield* repo.edgesFrom(sym.id)
+          const incoming = yield* repo.edgesTo(sym.id)
+          for (const edge of outgoing) {
+            graphEdges.push(edge)
+            graphNodeIDs.add(edge.toNodeID)
+          }
+          for (const edge of incoming) {
+            graphEdges.push(edge)
+            graphNodeIDs.add(edge.fromNodeID)
+          }
+        }
+        const graphNodesList = graphNodeIDs.size > 0 ? yield* repo.nodesByIDs([...graphNodeIDs]) : []
 
-        return { direct, transitive, blastRadius }
+        const docs = allFiles.filter((f) => isDocPath(f.path))
+        const configs = allFiles.filter((f) => isConfigPath(f.path))
+
+        const recentCommits = yield* git.recentCommits({ limit: input.limit ?? 10 })
+        const ownership = new Map<string, number>()
+
+        return {
+          query: input.query,
+          symbols,
+          files: allFiles,
+          graph: { nodes: graphNodesList, edges: graphEdges },
+          tests,
+          docs,
+          configs,
+          git: { recentCommits, ownership },
+          workspace: input.workspace,
+          ranking: {
+            score: 0,
+            signals: { exact: 0, symbol: 0, graph: 0, git: 0, workspace: 0 },
+          },
+        } satisfies RepositoryContext
       })
 
-    // ------------------------------------------------------------------
-    // traceExecution
-    // ------------------------------------------------------------------
-    const traceExecution = (input: {
-      from: string
-      maxDepth?: number
-    }): Effect.Effect<CodegraphNode[], never, never> =>
+    const slice = (ctx: RepositoryContext): Effect.Effect<ArchitecturalSlice, never, never> =>
       Effect.gen(function* () {
-        const maxDepth = input.maxDepth ?? 4
-        const visited = new Set<string>([input.from])
-        const result: CodegraphNode[] = []
-        const queue: Array<{ id: string; depth: number }> = [{ id: input.from, depth: 0 }]
+        const entrypoints = ctx.symbols.filter(
+          (n) => n.kind === "function" || n.kind === "class" || n.kind === "route" || n.kind === "method",
+        )
+        const importantSymbols = ctx.symbols.filter(
+          (n) => n.kind !== "variable" && n.kind !== "type" && n.kind !== "file" && n.kind !== "generated",
+        )
+        const routes = ctx.symbols.filter((n) => n.kind === "route")
+        const symbolNames = new Set(ctx.symbols.map((s) => s.name))
+        const relatedTests = ctx.tests.filter((t) => {
+          if (symbolNames.has(t.name)) return true
+          return ctx.symbols.length > 0
+        })
 
-        while (queue.length > 0) {
-          const current = queue.shift()!
-          if (current.depth >= maxDepth) continue
+        const summaryParts: string[] = []
+        summaryParts.push(`Query "${ctx.query}"`)
+        if (ctx.symbols.length > 0) summaryParts.push(`${ctx.symbols.length} symbols`)
+        if (ctx.tests.length > 0) summaryParts.push(`${ctx.tests.length} tests`)
+        if (ctx.docs.length > 0) summaryParts.push(`${ctx.docs.length} docs`)
+        if (ctx.configs.length > 0) summaryParts.push(`${ctx.configs.length} configs`)
+        if (ctx.graph.edges.length > 0) summaryParts.push(`${ctx.graph.edges.length} edges`)
+        const summary = summaryParts.join(" — ")
 
-          const outgoing = yield* repo.edgesFrom(current.id)
-          const nextIDs: string[] = []
-          for (const edge of outgoing) {
-            if ((edge.kind === "calls" || edge.kind === "imports") && !visited.has(edge.toNodeID)) {
-              visited.add(edge.toNodeID)
-              nextIDs.push(edge.toNodeID)
+        return {
+          summary,
+          entrypoints,
+          importantSymbols,
+          relatedTests: ctx.tests,
+          relatedDocs: ctx.docs,
+          configs: ctx.configs,
+          routes,
+          dependencies: [] as readonly { name: string; version?: string }[],
+        } satisfies ArchitecturalSlice
+      })
+
+    const explain = (input: {
+      symbol: string
+      workspace?: WorkspaceContext
+    }): Effect.Effect<ArchitecturalSlice, never, never> =>
+      Effect.gen(function* () {
+        const ctx = yield* query({ query: input.symbol, workspace: input.workspace })
+        return yield* slice(ctx)
+      })
+
+    const impact = (input: {
+      path: string
+      workspace?: WorkspaceContext
+    }): Effect.Effect<ArchitecturalSlice, never, never> =>
+      Effect.gen(function* () {
+        const ctx = yield* query({ query: input.path, workspace: input.workspace })
+        const slc = yield* slice(ctx)
+        const file = yield* repo.getFileByPath(input.path)
+        if (file) {
+          const dependents = yield* findEntrypoints({ feature: file.path.split("/").pop() ?? file.path })
+          const seen = new Set(slc.importantSymbols.map((n) => n.id))
+          const expanded = [...slc.importantSymbols]
+          for (const dep of dependents) {
+            if (!seen.has(dep.id)) {
+              seen.add(dep.id)
+              expanded.push(dep)
             }
           }
-
-          if (nextIDs.length > 0) {
-            const nodes = yield* repo.nodesByIDs(nextIDs)
-            result.push(...nodes)
-            for (const id of nextIDs) {
-              queue.push({ id, depth: current.depth + 1 })
-            }
-          }
+          return { ...slc, importantSymbols: expanded }
         }
+        return slc
+      })
 
-        return result
+    const trace = (input: {
+      symbol: string
+      depth?: number
+      workspace?: WorkspaceContext
+    }): Effect.Effect<ArchitecturalSlice, never, never> =>
+      Effect.gen(function* () {
+        const ctx = yield* query({ query: input.symbol, workspace: input.workspace })
+        const slc = yield* slice(ctx)
+        const symbolMatches = yield* findSymbol({ name: input.symbol })
+        if (symbolMatches.length > 0) {
+          const anchor = symbolMatches[0]!
+          const downstream = yield* findRelated({ nodeID: anchor.id, depth: input.depth ?? 2 })
+          const seen = new Set([...slc.entrypoints, ...slc.importantSymbols].map((n) => n.id))
+          const expanded = [...slc.entrypoints]
+          for (const dep of downstream) {
+            if (dep.kind === "function" || dep.kind === "class" || dep.kind === "method") {
+              if (!seen.has(dep.id)) {
+                seen.add(dep.id)
+                expanded.push(dep)
+              }
+            }
+          }
+          return { ...slc, entrypoints: expanded }
+        }
+        return slc
+      })
+
+    const tests = (input: { symbol: string }): Effect.Effect<readonly CodegraphNode[], never, never> =>
+      Effect.gen(function* () {
+        return yield* findTests(input)
+      })
+
+    const symbols = (input: { query: string; limit?: number }): Effect.Effect<readonly CodegraphNode[], never, never> =>
+      Effect.gen(function* () {
+        return yield* findSymbol({ name: input.query })
+      })
+
+    const relationships = (input: {
+      nodeID: string
+      depth?: number
+    }): Effect.Effect<readonly CodegraphNode[], never, never> =>
+      Effect.gen(function* () {
+        return yield* findRelated(input)
+      })
+
+    const findOwner = (input: { path: string }): Effect.Effect<{ owner?: string; count: number }, never, never> =>
+      Effect.gen(function* () {
+        return yield* git.owners(input)
       })
 
     return Service.of({
-      findSymbol,
-      findSubsystem,
-      findEntrypoints,
-      findTests,
-      findRelated,
-      estimateImpact,
-      traceExecution,
+      query,
+      slice,
+      explain,
+      impact,
+      trace,
+      tests,
+      symbols,
+      relationships,
+      findOwner,
     })
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(CodegraphRepo.defaultLayer))
+export const defaultLayer = layer.pipe(Layer.provide(gitDefaultLayer), Layer.provide(CodegraphRepo.defaultLayer))

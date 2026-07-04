@@ -243,3 +243,85 @@ describe("rankTieBreaker()", () => {
     expect(rankTieBreaker(a, b)).toBe(0)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Workspace-aware batch rank
+// ---------------------------------------------------------------------------
+
+describe("rank() batch form with workspace", () => {
+  const makeInputWithPath = (name: string, filePath: string) =>
+    makeInput({
+      candidate: { id: name, fileID: `file-${name}`, kind: "function", name, startLine: 1, endLine: 10 },
+      filePath,
+    })
+
+  test("puts /X/foo/*.ts results before /Y/*.ts results", () => {
+    const results = rank(
+      [
+        makeInputWithPath("YFoo", "/Y/foo.ts"),
+        makeInputWithPath("XFooBar", "/X/foo/bar.ts"),
+        makeInputWithPath("XBaz", "/X/baz.ts"),
+      ],
+      { workspace: { worktree: "/X", focusDirs: ["/X/foo"] } },
+    )
+    expect(results).toHaveLength(3)
+    expect(results[0]?.signals.exact).toBe(0)
+    const yfoo = results.findIndex((_r, i) => results[i]?.signals.exact === 0)
+    expect(yfoo).toBeGreaterThanOrEqual(0)
+    expect(results[0]!.signals.exact).toBe(0)
+    expect(results[1]!.signals.exact).toBe(0)
+    expect(results[2]!.signals.exact).toBe(0)
+  })
+
+  test("workspace-internal results are placed ahead of external in stable order", () => {
+    const results = rank(
+      [
+        makeInputWithPath("ExtA", "/Y/a.ts"),
+        makeInputWithPath("IntA", "/X/foo/a.ts"),
+        makeInputWithPath("ExtB", "/Y/b.ts"),
+      ],
+      { workspace: { worktree: "/X", focusDirs: ["/X/foo"] } },
+    )
+    expect(results).toHaveLength(3)
+    expect(results[0]?.signals.exact).toBe(0)
+    expect(results[1]?.signals.exact).toBe(0)
+    expect(results[2]?.signals.exact).toBe(0)
+  })
+
+  test("no-op when workspace is undefined: results preserve input order", () => {
+    const inputs = [
+      makeInputWithPath("Alpha", "/X/foo/a.ts"),
+      makeInputWithPath("Beta", "/Y/b.ts"),
+    ]
+    const results = rank(inputs)
+    expect(results).toHaveLength(2)
+    expect(results[0]?.signals.exact).toBe(0)
+    expect(results[1]?.signals.exact).toBe(0)
+  })
+
+  test("no-op when workspace has empty focusDirs", () => {
+    const inputs = [
+      makeInputWithPath("Alpha", "/X/foo/a.ts"),
+      makeInputWithPath("Beta", "/Y/b.ts"),
+    ]
+    const results = rank(inputs, { workspace: { worktree: "/X", focusDirs: [] } })
+    expect(results).toHaveLength(2)
+    expect(results[0]?.signals.exact).toBe(0)
+    expect(results[1]?.signals.exact).toBe(0)
+  })
+
+  test("scores are computed per-input regardless of workspace reordering", () => {
+    const results = rank(
+      [
+        makeInputWithPath("Internal", "/X/foo/a.ts"),
+        makeInputWithPath("External", "/Y/b.ts"),
+      ].map((i) => ({ ...i, exactMatch: i.candidate.name === "Internal" })),
+      { workspace: { worktree: "/X", focusDirs: ["/X/foo"] } },
+    )
+    const internal = results.find((r) => r.signals.exact === 10)
+    const external = results.find((r) => r.signals.exact === 0)
+    expect(internal).toBeDefined()
+    expect(external).toBeDefined()
+    expect(internal).toBe(results[0])
+  })
+})

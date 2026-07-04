@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import type { CodegraphNode } from "../types"
+import { readFile } from "node:fs/promises"
+import type { CodegraphFile, CodegraphNode } from "../types"
 import { CodegraphRepo } from "../codegraph-repo"
 
 export class StructuralQueryError extends Schema.TaggedErrorClass<StructuralQueryError>()(
@@ -35,12 +36,30 @@ export interface FindHTTPRoutesInput {
   readonly language?: string
 }
 
+export interface FindInterfacesInput {
+  readonly file?: string
+  readonly language?: string
+}
+
+export interface FindExportsInput {
+  readonly file?: string
+  readonly language?: string
+}
+
+export interface FindImportsInput {
+  readonly file?: string
+  readonly language?: string
+}
+
 export interface Interface {
   readonly findImplementations: (input: FindImplementationsInput) => Effect.Effect<CodegraphNode[], never, never>
   readonly findOverrides: (input: FindOverridesInput) => Effect.Effect<CodegraphNode[], never, never>
   readonly findRecursiveFunctions: (input: FindRecursiveFunctionsInput) => Effect.Effect<CodegraphNode[], never, never>
   readonly findAsyncFunctions: (input: FindAsyncFunctionsInput) => Effect.Effect<CodegraphNode[], never, never>
   readonly findHTTPRoutes: (input: FindHTTPRoutesInput) => Effect.Effect<CodegraphNode[], never, never>
+  readonly findInterfaces: (input: FindInterfacesInput) => Effect.Effect<CodegraphNode[], never, never>
+  readonly findExports: (input: FindExportsInput) => Effect.Effect<CodegraphNode[], never, never>
+  readonly findImports: (input: FindImportsInput) => Effect.Effect<CodegraphNode[], never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/StructuralQueries") {}
@@ -72,10 +91,26 @@ const GO_FUNC_REGEX = /(?:^|\n)func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(/g
 // Java patterns
 const JAVA_METHOD_REGEX = /(?:public|private|protected)?\s*(?:static)?\s*(?:void|int|String|boolean|\w+)\s+(\w+)\s*\([^)]*\)\s*(?:throws\s+\w+)?\{/g
 
+const INTERFACE_DECL_REGEX = /^[ \t]*interface\s+(\w+)(?:\s+extends\s+\w+(?:\s*,\s*\w+)*)?\s*\{/gm
+const EXPORT_DECL_REGEX =
+  /^[ \t]*export\s+(?:(?:async\s+)?function\s+(\w+)|const\s+(\w+)\s*=|class\s+(\w+)|interface\s+(\w+)|type\s+(\w+)\s*=|default\s+(\w+)|\{([^}]+)\})/gm
+const IMPORT_DECL_REGEX =
+  /^[ \t]*import\s+(?:type\s+)?(?:(\w+)|\{([^}]+)\}|\*\s+as\s+(\w+))(?:\s*,\s*\{([^}]+)\})?\s+from\s+["']([^"']+)["']/gm
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const repo = yield* CodegraphRepo.Service
+
+    const resolveFiles = (fileID: string | undefined): Effect.Effect<CodegraphFile[], never, never> =>
+      Effect.gen(function* () {
+        if (!fileID) return yield* repo.listAllFiles()
+        const file = yield* repo.getFile(fileID)
+        return file ? [file] : []
+      })
+
+    const readFileContent = (path: string): Effect.Effect<string | undefined, never, never> =>
+      Effect.tryPromise(() => readFile(path, "utf-8")).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
 
     const findImplementations: Interface["findImplementations"] = (input) =>
       Effect.gen(function* () {
@@ -399,12 +434,180 @@ export const layer = Layer.effect(
         return results
       })
 
+    const findInterfaces: Interface["findInterfaces"] = (input) =>
+      Effect.gen(function* () {
+        const lang = input.language ?? "typescript"
+
+        if (lang !== "typescript" && lang !== "js" && lang !== "javascript") {
+          yield* Effect.logDebug(`findInterfaces: ${lang} not implemented, returning []`)
+          return []
+        }
+
+        const files = yield* resolveFiles(input.file)
+        if (files.length === 0) return []
+
+        const results: CodegraphNode[] = []
+        for (const file of files) {
+          const content = yield* readFileContent(file.path)
+          if (!content) continue
+
+          INTERFACE_DECL_REGEX.lastIndex = 0
+          let match: RegExpExecArray | null
+          while ((match = INTERFACE_DECL_REGEX.exec(content)) !== null) {
+            const name = match[1]!
+            const startIndex = match.index
+            const startLine = lineFromIndex(content, startIndex)
+            const bodyEnd = findBodyEnd(content, match.index + match[0].length - 1)
+            if (bodyEnd === undefined) continue
+            const code = content.substring(startIndex, bodyEnd)
+            const endLine = startLine + code.split("\n").length - 1
+
+            results.push({
+              id: `${file.id}:interface:${name}:${startLine}`,
+              fileID: file.id,
+              kind: "type",
+              name,
+              signature: `interface ${name}`,
+              startLine,
+              endLine,
+              code,
+            })
+          }
+        }
+
+        return results
+      })
+
+    const findExports: Interface["findExports"] = (input) =>
+      Effect.gen(function* () {
+        const lang = input.language ?? "typescript"
+
+        if (lang !== "typescript" && lang !== "js" && lang !== "javascript") {
+          yield* Effect.logDebug(`findExports: ${lang} not implemented, returning []`)
+          return []
+        }
+
+        const files = yield* resolveFiles(input.file)
+        if (files.length === 0) return []
+
+        const results: CodegraphNode[] = []
+        for (const file of files) {
+          const content = yield* readFileContent(file.path)
+          if (!content) continue
+
+          EXPORT_DECL_REGEX.lastIndex = 0
+          let match: RegExpExecArray | null
+          while ((match = EXPORT_DECL_REGEX.exec(content)) !== null) {
+            const startIndex = match.index
+            const startLine = lineFromIndex(content, startIndex)
+            const lineEnd = content.indexOf("\n", startIndex)
+            const endOffset = lineEnd === -1 ? content.length : lineEnd
+            const code = content.substring(startIndex, endOffset).trimEnd()
+            const endLine = startLine + code.split("\n").length - 1
+
+            const fnName = match[1]
+            const constName = match[2]
+            const className = match[3]
+            const interfaceName = match[4]
+            const typeName = match[5]
+            const defaultName = match[6]
+            const namedList = match[7]
+
+            if (namedList) {
+              const names = namedList.split(",").map((s) => s.trim()).filter(Boolean)
+              for (const name of names) {
+                results.push({
+                  id: `${file.id}:export:${name}:${startLine}:${results.length}`,
+                  fileID: file.id,
+                  kind: "function",
+                  name,
+                  signature: `export { ${name} }`,
+                  startLine,
+                  endLine,
+                  code,
+                })
+              }
+              continue
+            }
+
+            const name = fnName ?? constName ?? className ?? interfaceName ?? typeName ?? defaultName
+            if (!name) continue
+
+            const kind: CodegraphNode["kind"] = className
+              ? "class"
+              : interfaceName || typeName
+                ? "type"
+                : "function"
+
+            results.push({
+              id: `${file.id}:export:${name}:${startLine}:${results.length}`,
+              fileID: file.id,
+              kind,
+              name,
+              signature: `export ${name}`,
+              startLine,
+              endLine,
+              code,
+            })
+          }
+        }
+
+        return results
+      })
+
+    const findImports: Interface["findImports"] = (input) =>
+      Effect.gen(function* () {
+        const lang = input.language ?? "typescript"
+
+        if (lang !== "typescript" && lang !== "js" && lang !== "javascript") {
+          yield* Effect.logDebug(`findImports: ${lang} not implemented, returning []`)
+          return []
+        }
+
+        const files = yield* resolveFiles(input.file)
+        if (files.length === 0) return []
+
+        const results: CodegraphNode[] = []
+        for (const file of files) {
+          const content = yield* readFileContent(file.path)
+          if (!content) continue
+
+          IMPORT_DECL_REGEX.lastIndex = 0
+          let match: RegExpExecArray | null
+          while ((match = IMPORT_DECL_REGEX.exec(content)) !== null) {
+            const startIndex = match.index
+            const startLine = lineFromIndex(content, startIndex)
+            const lineEnd = content.indexOf("\n", startIndex)
+            const endOffset = lineEnd === -1 ? content.length : lineEnd
+            const code = content.substring(startIndex, endOffset).trimEnd()
+            const endLine = startLine + code.split("\n").length - 1
+
+            const source = match[5]!
+            results.push({
+              id: `${file.id}:import:${source}:${startLine}:${results.length}`,
+              fileID: file.id,
+              kind: "type",
+              name: source,
+              signature: code,
+              startLine,
+              endLine,
+              code,
+            })
+          }
+        }
+
+        return results
+      })
+
     return Service.of({
       findImplementations,
       findOverrides,
       findRecursiveFunctions,
       findAsyncFunctions,
       findHTTPRoutes,
+      findInterfaces,
+      findExports,
+      findImports,
     })
   }),
 )
@@ -425,6 +628,25 @@ function extractBlockBody(code: string, startBrace: number): string | null {
     return code.substring(startBrace, i)
   }
   return null
+}
+
+function lineFromIndex(content: string, index: number): number {
+  let line = 1
+  for (let i = 0; i < index && i < content.length; i++) {
+    if (content[i] === "\n") line++
+  }
+  return line
+}
+
+function findBodyEnd(content: string, openBraceIndex: number): number | undefined {
+  let count = 1
+  let i = openBraceIndex + 1
+  while (i < content.length && count > 0) {
+    if (content[i] === "{") count++
+    else if (content[i] === "}") count--
+    i++
+  }
+  return count === 0 ? i : undefined
 }
 
 export const defaultLayer = layer.pipe(Layer.provide(CodegraphRepo.defaultLayer))

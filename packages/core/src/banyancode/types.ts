@@ -47,6 +47,10 @@ export type CodegraphNodeKind =
   | "build"
   | "package"
   | "generated"
+  | "ci"
+  | "docker"
+  | "env"
+  | "doc"
 
 export type CodegraphEdgeKind =
   | "imports"
@@ -86,6 +90,10 @@ export const CodegraphNodeSchema = Schema.Struct({
     "build",
     "package",
     "generated",
+    "ci",
+    "docker",
+    "env",
+    "doc",
   ]),
   name: Schema.String,
   signature: Schema.optional(Schema.String),
@@ -121,6 +129,53 @@ export type PlanDefinition = {
     status: "pending" | "in_progress" | "completed" | "cancelled"
   }>
   exitCriteria: string
+}
+
+export interface WorkspaceContext {
+  readonly worktree: string
+  readonly focusDirs: readonly string[]
+}
+
+export interface Diagnostic {}
+
+export interface Ranking {
+  readonly score: number
+  readonly signals: {
+    readonly exact: number
+    readonly symbol: number
+    readonly graph: number
+    readonly git: number
+    readonly workspace: number
+  }
+  readonly workspace?: WorkspaceContext
+}
+
+export interface ArchitecturalSlice {
+  readonly summary: string
+  readonly entrypoints: readonly CodegraphNode[]
+  readonly importantSymbols: readonly CodegraphNode[]
+  readonly relatedTests: readonly CodegraphNode[]
+  readonly relatedDocs: readonly CodegraphFile[]
+  readonly configs: readonly CodegraphFile[]
+  readonly routes: readonly CodegraphNode[]
+  readonly dependencies: readonly { name: string; version?: string }[]
+}
+
+export interface RepositoryContext {
+  readonly query: string
+  readonly symbols: readonly CodegraphNode[]
+  readonly files: readonly CodegraphFile[]
+  readonly graph: { readonly nodes: readonly CodegraphNode[]; readonly edges: readonly CodegraphEdge[] }
+  readonly tests: readonly CodegraphNode[]
+  readonly docs: readonly CodegraphFile[]
+  readonly configs: readonly CodegraphFile[]
+  readonly git: {
+    readonly recentCommits: readonly { sha: string; subject: string; ts: number }[]
+    readonly ownership: ReadonlyMap<string, number>
+  }
+  readonly workspace?: WorkspaceContext
+  readonly diagnostics?: readonly Diagnostic[]
+  readonly ranking: Ranking
 }
 
 export type PeerInfo = {

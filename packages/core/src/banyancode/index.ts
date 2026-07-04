@@ -14,6 +14,7 @@ export type {
   SubagentMessage,
   PeerInfo,
 } from "./types"
+export { CodegraphNodeSchema } from "./types"
 export { GraphMeta } from "./types"
 export { NotFoundError, StaleWriteError } from "./types"
 export { Service as MemoryRepo, layer as memoryRepoLayer, defaultLayer as memoryRepoDefaultLayer } from "./memory-repo"
@@ -30,6 +31,7 @@ export {
   layer as repositoryIntelligenceLayer,
   defaultLayer as repositoryIntelligenceDefaultLayer,
 } from "./repository-intelligence"
+export { Service as Git, layer as gitLayer, defaultLayer as gitDefaultLayer } from "./repository-intelligence/git-service"
 export { Service as Search, layer as searchLayer, defaultLayer as searchDefaultLayer } from "./search"
 export {
   Service as StructuralQueries,

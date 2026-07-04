@@ -30,7 +30,7 @@
  * - **workspace**: workspace proximity + failing tests contribution
  */
 
-import type { CodegraphNode } from "../types"
+import type { CodegraphNode, WorkspaceContext } from "../types"
 
 // ---------------------------------------------------------------------------
 // Input / Output types
@@ -39,6 +39,7 @@ import type { CodegraphNode } from "../types"
 export type RankingInput = {
   candidate: CodegraphNode
   query: string
+  filePath?: string
   // Pre-computed lexical features (caller fills these in)
   exactMatch: boolean
   prefixMatch: boolean
@@ -98,7 +99,32 @@ function fuzzyWeight(distance: number): number {
  * @param input - fully-populated RankingInput
  * @returns RankingResult with score and per-bucket signal breakdown
  */
-export function rank(input: RankingInput): RankingResult {
+export function rank(input: RankingInput): RankingResult
+/**
+ * Score a batch of candidates and optionally promote workspace-internal
+ * results ahead of workspace-external results. When `opts.workspace` is
+ * provided, results whose `filePath` falls inside any `focusDirs` entry
+ * (or the worktree root) are sorted earlier. The sort is stable: the
+ * relative order of results within each group is preserved.
+ *
+ * When `opts.workspace` is undefined the call is a no-op — results are
+ * returned in their input order, only with per-result scoring applied.
+ */
+export function rank(
+  inputs: readonly RankingInput[],
+  opts?: { workspace?: WorkspaceContext }
+): readonly RankingResult[]
+export function rank(
+  inputOrInputs: RankingInput | readonly RankingInput[],
+  opts?: { workspace?: WorkspaceContext }
+): RankingResult | readonly RankingResult[] {
+  if (Array.isArray(inputOrInputs)) {
+    return rankBatch(inputOrInputs, opts)
+  }
+  return rankSingle(inputOrInputs as RankingInput)
+}
+
+function rankSingle(input: RankingInput): RankingResult {
   const {
     candidate,
     exactMatch,
@@ -142,6 +168,33 @@ export function rank(input: RankingInput): RankingResult {
     score,
     signals: { exact, symbol, graph, git, workspace },
   }
+}
+
+function rankBatch(
+  inputs: readonly RankingInput[],
+  opts?: { workspace?: WorkspaceContext }
+): readonly RankingResult[] {
+  const scored = inputs.map((i) => rankSingle(i))
+  if (!opts?.workspace) return scored
+
+  const { focusDirs } = opts.workspace
+  if (focusDirs.length === 0) return scored
+
+  const internal: RankingResult[] = []
+  const external: RankingResult[] = []
+  inputs.forEach((input, idx) => {
+    if (isInWorkspace(input.filePath, focusDirs)) {
+      internal.push(scored[idx]!)
+    } else {
+      external.push(scored[idx]!)
+    }
+  })
+  return [...internal, ...external]
+}
+
+function isInWorkspace(filePath: string | undefined, focusDirs: readonly string[]): boolean {
+  if (!filePath) return false
+  return focusDirs.some((d) => filePath === d || filePath.startsWith(d + "/"))
 }
 
 /**

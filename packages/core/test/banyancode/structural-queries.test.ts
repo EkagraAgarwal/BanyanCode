@@ -614,4 +614,214 @@ class ProductRepository extends Repository {
       expect(results.routes).toEqual([])
     })
   })
+
+  describe("findInterfaces", () => {
+    test("finds interface declarations in TypeScript", async () => {
+      await using tmp = await tmpdir()
+      const dbPath = path.join(tmp.path, "test.sqlite")
+      const dbLayer = Database.layerFromPath(dbPath)
+
+      const ifaceFile = path.join(tmp.path, "interfaces.ts")
+      await fs.writeFile(
+        ifaceFile,
+        `
+interface User {
+  id: string
+  name: string
+}
+
+interface Product {
+  sku: string
+  price: number
+}
+
+interface Order extends BaseEntity {
+  items: string[]
+}
+
+class UserService {
+  getUser() { return null }
+}
+`,
+      )
+
+      const indexerLayer = CodegraphIndexer.layer.pipe(
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(codegraphRepoDefaultLayer),
+      )
+
+      const queriesLayer = structuralQueriesLayer.pipe(
+        Layer.provide(codegraphRepoDefaultLayer),
+      )
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const indexer = yield* CodegraphIndexer.Service
+          yield* indexer.index({ root: tmp.path, force: true })
+        }).pipe(Effect.provide(indexerLayer), Effect.provide(dbLayer), Effect.scoped),
+      )
+
+      const fileId = await Effect.runPromise(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          const file = yield* repo.getFileByPath(ifaceFile)
+          return file?.id
+        }).pipe(Effect.provide(codegraphRepoDefaultLayer), Effect.provide(dbLayer), Effect.scoped),
+      )
+
+      expect(fileId).toBeDefined()
+
+      const interfaces = await Effect.runPromise(
+        Effect.gen(function* () {
+          const queries = yield* StructuralQueries
+          return yield* queries.findInterfaces({ file: fileId! })
+        }).pipe(Effect.provide(queriesLayer), Effect.provide(dbLayer), Effect.scoped),
+      )
+
+      const names = interfaces.map((n) => n.name)
+      expect(names).toContain("User")
+      expect(names).toContain("Product")
+      expect(names).toContain("Order")
+      expect(names).not.toContain("UserService")
+    })
+  })
+
+  describe("findExports", () => {
+    test("finds export declarations in TypeScript", async () => {
+      await using tmp = await tmpdir()
+      const dbPath = path.join(tmp.path, "test.sqlite")
+      const dbLayer = Database.layerFromPath(dbPath)
+
+      const exportFile = path.join(tmp.path, "exports.ts")
+      await fs.writeFile(
+        exportFile,
+        `
+const foo = 1
+const bar = 2
+
+export class UserController {
+  getUser() {}
+}
+
+export function createUser() {}
+
+export const helper = () => null
+
+export type UserID = string
+
+export interface Config {
+  debug: boolean
+}
+
+export { foo, bar }
+
+export default UserController
+`,
+      )
+
+      const indexerLayer = CodegraphIndexer.layer.pipe(
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(codegraphRepoDefaultLayer),
+      )
+
+      const queriesLayer = structuralQueriesLayer.pipe(
+        Layer.provide(codegraphRepoDefaultLayer),
+      )
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const indexer = yield* CodegraphIndexer.Service
+          yield* indexer.index({ root: tmp.path, force: true })
+        }).pipe(Effect.provide(indexerLayer), Effect.provide(dbLayer), Effect.scoped),
+      )
+
+      const fileId = await Effect.runPromise(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          const file = yield* repo.getFileByPath(exportFile)
+          return file?.id
+        }).pipe(Effect.provide(codegraphRepoDefaultLayer), Effect.provide(dbLayer), Effect.scoped),
+      )
+
+      expect(fileId).toBeDefined()
+
+      const exports = await Effect.runPromise(
+        Effect.gen(function* () {
+          const queries = yield* StructuralQueries
+          return yield* queries.findExports({ file: fileId! })
+        }).pipe(Effect.provide(queriesLayer), Effect.provide(dbLayer), Effect.scoped),
+      )
+
+      const names = exports.map((n) => n.name)
+      expect(names).toContain("UserController")
+      expect(names).toContain("createUser")
+      expect(names).toContain("helper")
+      expect(names).toContain("UserID")
+      expect(names).toContain("Config")
+      expect(names).toContain("foo")
+      expect(names).toContain("bar")
+    })
+  })
+
+  describe("findImports", () => {
+    test("finds import declarations in TypeScript", async () => {
+      await using tmp = await tmpdir()
+      const dbPath = path.join(tmp.path, "test.sqlite")
+      const dbLayer = Database.layerFromPath(dbPath)
+
+      const importFile = path.join(tmp.path, "imports.ts")
+      await fs.writeFile(
+        importFile,
+        `
+import express from "express"
+import { foo, bar } from "./lib"
+import type { Config } from "./config"
+import * as utils from "./utils"
+import defaultExport, { namedExport } from "./module"
+
+const x = 1
+`,
+      )
+
+      const indexerLayer = CodegraphIndexer.layer.pipe(
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(codegraphRepoDefaultLayer),
+      )
+
+      const queriesLayer = structuralQueriesLayer.pipe(
+        Layer.provide(codegraphRepoDefaultLayer),
+      )
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const indexer = yield* CodegraphIndexer.Service
+          yield* indexer.index({ root: tmp.path, force: true })
+        }).pipe(Effect.provide(indexerLayer), Effect.provide(dbLayer), Effect.scoped),
+      )
+
+      const fileId = await Effect.runPromise(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          const file = yield* repo.getFileByPath(importFile)
+          return file?.id
+        }).pipe(Effect.provide(codegraphRepoDefaultLayer), Effect.provide(dbLayer), Effect.scoped),
+      )
+
+      expect(fileId).toBeDefined()
+
+      const imports = await Effect.runPromise(
+        Effect.gen(function* () {
+          const queries = yield* StructuralQueries
+          return yield* queries.findImports({ file: fileId! })
+        }).pipe(Effect.provide(queriesLayer), Effect.provide(dbLayer), Effect.scoped),
+      )
+
+      const sources = imports.map((n) => n.name)
+      expect(sources).toContain("express")
+      expect(sources).toContain("./lib")
+      expect(sources).toContain("./config")
+      expect(sources).toContain("./utils")
+      expect(sources).toContain("./module")
+    })
+  })
 })

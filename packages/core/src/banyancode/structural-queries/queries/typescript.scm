@@ -69,3 +69,50 @@
 ; We capture function names and their call sites
 (call_expression
   function: (identifier) @called_fn) @call.site
+
+; Interface declaration
+(interface_declaration
+  name: (type_identifier) @interface.name
+  body: (interface_body) @interface.body) @interface.declaration
+
+; Import statement
+(import_statement
+  source: (string) @import.source) @import.statement
+
+; Named import specifiers
+(import_specifier
+  name: (identifier) @imported.name) @imported.specifier
+
+; Namespace import
+(namespace_import
+  name: (identifier) @namespace.name) @namespace.import
+
+; Export statement (named exports)
+(export_statement
+  (export_clause
+    (export_specifier
+      name: (identifier) @exported.name) @exported.specifier)) @export.named
+
+; Default export
+(export_statement
+  value: (identifier) @default.name) @export.default
+
+; Exported function declaration
+(function_declaration
+  (export)
+  name: (identifier) @exported.fn.name) @exported.function
+
+; Exported class declaration
+(class_declaration
+  (export)
+  name: (type_identifier) @exported.class.name) @exported.class
+
+; Exported interface declaration
+(interface_declaration
+  (export)
+  name: (type_identifier) @exported.iface.name) @exported.interface
+
+; Exported type alias
+(type_alias_declaration
+  (export)
+  name: (type_identifier) @exported.type.name) @exported.type

@@ -11,12 +11,12 @@ import { CodegraphRepo, defaultLayer as codegraphRepoDefaultLayer } from "../../
 process.env.BANYANCODE_ENABLE = "1"
 
 describe("CodegraphIndexer extra kinds", () => {
-  test("indexes all new kinds: test, route, config, build, package, generated", async () => {
+  test("indexes all kinds: test, route, config, docker, generated", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.sqlite")
     const dbLayer = Database.layerFromPath(dbPath)
 
-    // Create a fixture with one of each new kind
+    // Create a fixture with one of each kind
     await fs.writeFile(
       path.join(tmp.path, "app.test.ts"),
       `describe("Auth", () => {
@@ -52,13 +52,11 @@ export const value = 42`,
         const nodes = yield* repo.listAllNodes()
         const kinds = nodes.map((n) => n.kind)
 
-        // At least one node of each new kind
         expect(kinds.filter((k) => k === "test").length).toBeGreaterThanOrEqual(1)
         expect(kinds.filter((k) => k === "route").length).toBeGreaterThanOrEqual(1)
-        expect(kinds.filter((k) => k === "package").length).toBe(1)
-        expect(kinds.filter((k) => k === "config").length).toBe(1)
-        expect(kinds.filter((k) => k === "build").length).toBe(1)
-        expect(kinds.filter((k) => k === "generated").length).toBe(1)
+        expect(kinds.filter((k) => k === "config").length).toBeGreaterThanOrEqual(2)
+        expect(kinds.filter((k) => k === "docker").length).toBeGreaterThanOrEqual(1)
+        expect(kinds.filter((k) => k === "generated").length).toBeGreaterThanOrEqual(1)
       }).pipe(
         Effect.provide(serviceLayer),
         Effect.provide(codegraphRepoDefaultLayer),
@@ -234,6 +232,70 @@ export const foo = 1`,
         const edges = yield* repo.listAllEdges()
         const generatedFromEdges = edges.filter((e) => e.kind === "generated_from")
         expect(generatedFromEdges.length).toBeGreaterThanOrEqual(1)
+      }).pipe(
+        Effect.provide(serviceLayer),
+        Effect.provide(codegraphRepoDefaultLayer),
+        Effect.provide(dbLayer),
+        Effect.scoped,
+      ),
+    )
+  })
+
+  test("WS-D new kinds: doc, docker, ci, env, config classify the right files", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await fs.writeFile(path.join(tmp.path, "README.md"), "# Title\n\nIntro paragraph.\n")
+    await fs.writeFile(path.join(tmp.path, "CHANGELOG.md"), "## v0.1.0\n- Initial release\n")
+    await fs.writeFile(
+      path.join(tmp.path, "Dockerfile"),
+      "FROM node:20\nRUN npm ci\nCMD [\"node\", \"index.js\"]\n",
+    )
+    await fs.mkdir(path.join(tmp.path, ".github", "workflows"), { recursive: true })
+    await fs.writeFile(
+      path.join(tmp.path, ".github", "workflows", "ci.yml"),
+      "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
+    )
+    await fs.writeFile(path.join(tmp.path, "package.json"), JSON.stringify({ name: "demo", version: "0.1.0" }))
+    await fs.writeFile(path.join(tmp.path, ".env.example"), "FOO=bar\n")
+    await fs.writeFile(path.join(tmp.path, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true } }))
+    await fs.writeFile(
+      path.join(tmp.path, "compose.yml"),
+      "services:\n  web:\n    image: nginx\n",
+    )
+
+    const serviceLayer = CodegraphIndexer.layer.pipe(
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(codegraphRepoDefaultLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* CodegraphIndexer.Service
+        const repo = yield* CodegraphRepo.Service
+
+        yield* indexer.index({ root: tmp.path })
+
+        const nodes = yield* repo.listAllNodes()
+        const files = yield* repo.listAllFiles()
+        const fileByPath = new Map(files.map((f) => [f.path.replace(/\\/g, "/"), f]))
+
+        const nodesFor = (relPath: string) => {
+          const file = fileByPath.get(path.join(tmp.path, relPath).replace(/\\/g, "/"))
+          if (!file) return []
+          return nodes.filter((n) => n.fileID === file.id)
+        }
+
+        expect(nodesFor("README.md").some((n) => n.kind === "doc")).toBe(true)
+        expect(nodesFor("CHANGELOG.md").some((n) => n.kind === "doc")).toBe(true)
+        expect(nodesFor("Dockerfile").some((n) => n.kind === "docker")).toBe(true)
+        expect(nodesFor("Dockerfile").filter((n) => n.kind === "docker").length).toBeGreaterThanOrEqual(2)
+        expect(nodesFor("compose.yml").some((n) => n.kind === "docker")).toBe(true)
+        expect(nodesFor(".github/workflows/ci.yml").some((n) => n.kind === "ci")).toBe(true)
+        expect(nodesFor(".env.example").some((n) => n.kind === "env")).toBe(true)
+        expect(nodesFor("package.json").some((n) => n.kind === "config")).toBe(true)
+        expect(nodesFor("tsconfig.json").some((n) => n.kind === "config")).toBe(true)
       }).pipe(
         Effect.provide(serviceLayer),
         Effect.provide(codegraphRepoDefaultLayer),
