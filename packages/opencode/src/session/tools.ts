@@ -119,6 +119,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
 
   const transportOption = yield* Effect.serviceOption(AiSdkTransportModule.Service)
   const catalogOption = yield* Effect.serviceOption(ToolCatalog.Service)
+  if (Option.isNone(transportOption) || Option.isNone(catalogOption)) {
+    yield* Effect.logWarning("SessionTools.resolve: ToolCatalog or AiSdkTransport services not in layer; V2 catalog tools will be missing").pipe(
+      Effect.annotateLogs({
+        "session.id": input.session.id,
+        agent: input.agent.name,
+        hasTransport: Option.isSome(transportOption),
+        hasCatalog: Option.isSome(catalogOption),
+      }),
+    )
+  }
   if (Option.isSome(transportOption) && Option.isSome(catalogOption)) {
     type CatalogInterface = ToolCatalog.Service["Service"]
     type Materialization = ReadonlyArray<{ id: string; tool: AITool }>

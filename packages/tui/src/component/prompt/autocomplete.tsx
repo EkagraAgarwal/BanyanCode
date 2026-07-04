@@ -16,6 +16,7 @@ import { useTuiPaths } from "../../context/runtime"
 import { useTuiConfig } from "../../config"
 import { useTheme, selectedForeground } from "../../context/theme"
 import { SplitBorder } from "../../ui/border"
+import { useDialog } from "../../ui/dialog"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Locale } from "../../util/locale"
 import type { PromptInfo } from "../../prompt/history"
@@ -101,6 +102,8 @@ export function Autocomplete(props: {
     visible: false as AutocompleteRef["visible"],
     input: "keyboard" as "keyboard" | "mouse",
   })
+  const dialog = useDialog()
+  const isDialogActive = createMemo(() => dialog.stack.length > 0)
 
   const [positionTick, setPositionTick] = createSignal(0)
 
@@ -130,13 +133,10 @@ export function Autocomplete(props: {
     dimensions()
     positionTick()
     const anchor = props.anchor()
-    const parent = anchor.parent
-    const parentX = parent?.x ?? 0
-    const parentY = parent?.y ?? 0
 
     return {
-      x: anchor.x - parentX,
-      y: anchor.y - parentY,
+      x: anchor.screenX,
+      y: anchor.screenY,
       width: anchor.width,
     }
   })
@@ -497,7 +497,7 @@ export function Autocomplete(props: {
           "description",
           (obj) => obj.aliases?.join(" ") ?? "",
         ],
-        limit: 10,
+        limit: 50,
         scoreFn: (objResults) => {
           const displayResult = objResults[0]
           let score = objResults.score
@@ -510,7 +510,7 @@ export function Autocomplete(props: {
       })
       .map((arr) => arr.obj)
 
-    return [...fuzziedNonFiles, ...fileOptions].slice(0, 10)
+    return [...fuzziedNonFiles, ...fileOptions].slice(0, 50)
   })
 
   createEffect(() => {
@@ -569,7 +569,7 @@ export function Autocomplete(props: {
 
   useBindings(() => ({
     target: props.input,
-    enabled: () => Boolean(store.visible),
+    enabled: () => Boolean(store.visible) && !isDialogActive(),
     commands: [
       {
         name: "prompt.autocomplete.prev",
@@ -702,16 +702,17 @@ export function Autocomplete(props: {
     const count = options().length || 1
     if (!store.visible) return Math.min(20, count)
     positionTick()
-    const maxAvailable = Math.max(1, props.anchor().y - 1)
+    const maxAvailable = Math.max(1, props.anchor().screenY - 1)
     return Math.min(count, maxAvailable)
   })
 
   let scroll: ScrollBoxRenderable
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
+  const isVisible = createMemo(() => store.visible !== false && !isDialogActive())
 
   return (
     <box
-      visible={store.visible !== false}
+      visible={isVisible()}
       position="absolute"
       top={position().y - height()}
       left={position().x}

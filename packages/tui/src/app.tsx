@@ -27,6 +27,7 @@ import {
 import { TuiPathsProvider, TuiStartupProvider, TuiTerminalEnvironmentProvider, useTuiStartup } from "./context/runtime"
 import { DialogProvider, useDialog } from "./ui/dialog"
 import { DialogProvider as DialogProviderList } from "./component/dialog-provider"
+import { Autocomplete, AutocompleteProvider, useAutocomplete } from "./context/autocomplete"
 import { ErrorComponent } from "./component/error-component"
 import { PluginRouteMissing } from "./component/plugin-route-missing"
 import { ProjectProvider, useProject } from "./context/project"
@@ -304,7 +305,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                   <LocalProvider>
                                                     <PromptStashProvider>
                                                       <DialogProvider>
-                                                        <FrecencyProvider>
+                                                        <AutocompleteProvider>
+                                                          <FrecencyProvider>
                                                           <PromptHistoryProvider>
                                                             <PromptRefProvider>
                                                               <EditorContextProvider>
@@ -316,7 +318,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                             </PromptRefProvider>
                                                           </PromptHistoryProvider>
                                                         </FrecencyProvider>
-                                                      </DialogProvider>
+                                                      </AutocompleteProvider>
+                                                    </DialogProvider>
                                                     </PromptStashProvider>
                                                   </LocalProvider>
                                                 </ThemeProvider>
@@ -352,6 +355,15 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
     if (exit.epilogue) process.stdout.write(exit.epilogue + "\n")
   })
 })
+
+function AutocompleteOverlay() {
+  const ctx = useAutocomplete()
+  return (
+    <Show when={ctx.getProps()}>
+      {(props) => <Autocomplete {...props()} />}
+    </Show>
+  )
+}
 
 function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPluginHost }) {
   const startup = useTuiStartup()
@@ -1204,6 +1216,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       <Show when={!startup.skipInitialLoading}>
         <StartupLoading ready={ready} />
       </Show>
+      <AutocompleteOverlay />
     </box>
   )
 }

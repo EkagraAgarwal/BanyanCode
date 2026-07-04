@@ -61,6 +61,7 @@ import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import * as AiSdkTransportModule from "@/effect/transport-ai-sdk"
 import { Api } from "@opencode-ai/server/api"
 import { PublicApi } from "./public"
 import {
@@ -274,6 +275,23 @@ export function createRoutes(
         Banyan.searchDefaultLayer,
         Banyan.structuralQueriesDefaultLayer,
       ).pipe(Layer.provide(Banyan.codegraphRepoDefaultLayer), Layer.provide(Database.defaultLayer)),
+    ),
+    Layer.provideMerge(
+      Banyan.toolRegistryDefaultLayer.pipe(
+        Layer.provide(Permission.defaultLayer),
+        Layer.provide(Database.defaultLayer),
+        Layer.provide(FSUtil.defaultLayer),
+      ),
+    ),
+    Layer.provideMerge(
+      Banyan.toolCatalogDefaultLayer.pipe(
+        Layer.provide(Permission.defaultLayer),
+        Layer.provide(Database.defaultLayer),
+        Layer.provide(FSUtil.defaultLayer),
+      ),
+    ),
+    Layer.provideMerge(
+      AiSdkTransportModule.layer as unknown as Layer.Layer<never, never, never>,
     ),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provideMerge(Ripgrep.defaultLayer),

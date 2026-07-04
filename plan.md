@@ -1,142 +1,153 @@
-# BanyanCode Implementation Plan
+# BanyanCode Tool Transport Abstraction — Wave 2.5
 
-> **Convention reminder.** `AGENTS.md` says "Active work is tracked via issues and PRs — there is no separate implementation plan doc." This file exists because it was explicitly requested. It is the Wave 2 shipped snapshot and the Wave 3+ outline. It is not a substitute for issues/PRs.
+> Source-doc status: locked. Edits below track architectural decisions, not "implementation history." Once the tool infra is verified end-to-end visible + executable, this doc marks `core/src/tool/*` as frozen and engineering effort shifts to `RepositoryIntelligence`, `ArchitecturalSlice`, ranking, and benchmarks.
 
-## Status (as of Wave 2)
-
-| Wave | Theme | Status | Commits |
-|------|-------|--------|---------|
-| 1 | Repository Intelligence v1 (graph-first retrieval, hybrid search, structural queries, trace instrumentation) | **Shipped** | `0962825`, `a39b85e`, `78030e4`, `8a9ceeb`, `1f64078`, `a002810` |
-| 2 | Repository Intelligence v2 (9-method public surface, ArchitecturalSlice shape, 9 HTTP endpoints, 9 tool wrappers, 9 slash commands, CLI subcommands, DuckDuckGo free web search wiring, trace rolling cap, PermissionV2 bridge) | **Shipped** | `771800e`, `d5cd170`, `fd8f899`, `f85e85a`, `ec055e0` |
-| 3 | Cache layer interfaces + semantic code search (embeddings over codegraph nodes) | Not started | — |
-| 4 | TUI intel-trace panel registration + recent-queries strip on the home screen | Not started | — |
-
-## Wave 2 — what shipped
-
-### 1. Repository Intelligence v2 service shape
-
-`packages/core/src/banyancode/repository-intelligence/service.ts` now exposes 9 methods:
-
-| Method | Purpose |
-|--------|---------|
-| `query({ query, limit?, workspace? })` | Single unified repository context (symbols + tests + docs + configs + graph + recent commits) |
-| `slice(ctx)` | Compose an `ArchitecturalSlice` from a `RepositoryContext` |
-| `explain({ symbol, workspace? })` | ArchitecturalSlice for a symbol |
-| `impact({ path, workspace? })` | Direct dependents expanded into `importantSymbols` |
-| `trace({ symbol, depth?, workspace? })` | Downstream entrypoints via graph walk |
-| `tests({ symbol })` | Test nodes that reference a symbol |
-| `symbols({ query, limit? })` | Exact-then-prefix symbol lookup |
-| `relationships({ nodeID, depth? })` | BFS up to depth N from a node |
-| `findOwner({ path })` | Most active git author for a file |
-
-`ArchitecturalSlice` is the canonical return shape — `{ summary, entrypoints, importantSymbols, relatedTests, relatedDocs, configs, routes, dependencies }`. Stable across waves; downstream consumers can pattern-match it.
-
-`Search` gained a public `searchAuto(query, opts)` cascade (Exact → Qualified → Prefix → Graph → BM25 → Fuzzy) plus a `mode: "manual"` escape hatch for SDK/CLI users who want to override the cascade.
-
-`StructuralQueries` now exposes `findInterfaces`, `findExports`, `findImports` in addition to the Wave 1 set.
-
-`CodegraphNodeKind` extended with `ci | docker | env | doc` so markdown / Dockerfile / `.env` / config-style files emit meaningful file-kind nodes. New parsers: `langs/markdown.ts`, `langs/docker.ts`.
-
-### 2. New HTTP surface (9 endpoints)
-
-`packages/opencode/src/server/routes/instance/httpapi/groups/repository-intel.ts`:
+## Target architecture
 
 ```
-POST /global/repository/query
-POST /global/repository/slice
-POST /global/repository/explain
-POST /global/repository/impact
-POST /global/repository/trace
-POST /global/repository/tests
-POST /global/repository/symbols
-POST /global/repository/relationships
-POST /global/repository/ownership
+                           ToolCatalog.Service (canonical)
+                                       │
+                            materialize(permissions?) → {definitions, settle}
+                                       │
+              ┌──────────────────┬──────┴─────────┬───────────────────┐
+              │                  │                │                   │
+   V1 legacy (s.builtin)   AiSdkTransport   McpTransport      future...
+   (transport-v1 inside    .buildTools()    .buildTools()
+    opencode registry)         │                │
+              │               ▼                ▼
+              ▼           AI SDK tool({})   MCP Tool
+        opencode V1           │
+        Tool.Def              ▼
+              │          Model
+              ▼
+          Model
 ```
 
-Plus `/global/websearch-free` (DuckDuckGo HTML, gated by `BANYANCODE_DISABLE_WEBSEARCH`).
+Invariants:
 
-All paths use `Schema.isPattern`-constrained inputs and resolve to `Global.Path.*` — no path traversal surface.
+1. **`ToolCatalog.materialize()`** is the only path through which new tools reach the LLM.
+2. **`AiSdkTransport.buildTools(catalog, ctx)`** is one peer transport. Future transports (MCP, CLI, REST, plugin-runtime, REST) are peers; each contributes one entry in a `Transport[]` loop in `SessionTools.resolve`.
+3. **`s.builtin`** is an implementation detail of the V1 legacy transport. V2 banyan tools do NOT get merged into `s.builtin`. They flow exclusively through `AiSdkTransport`.
+4. **No edits to `core/src/tool/*`** in this PR. The canonical pipeline stays untouched. Integration fixes are entirely inside `packages/opencode/`.
+5. **Every materialized tool must be executable.** Banyan services that tool wrappers `yield*` must be present in AppLayer before the tool is materialized. Visible AND executable, or visibly degraded with a meaningful message via `Effect.serviceOption`.
+6. **Future transports** (MCP, CLI, REST, plugins) compose into `SessionTools.resolve` via the transport loop.
 
-### 3. Nine `repository_*` tool wrappers
+## File changes
 
-`packages/core/src/tool/repository-wave2.ts` exposes 9 canonical tools the LLM can invoke:
+```
+packages/opencode/src/effect/transport-v2.ts              → DELETE (renamed)
+packages/opencode/src/effect/transport-ai-sdk.ts           → NEW (renamed + restructured)
+packages/opencode/src/effect/tool-transport.ts             → NEW (peer interface + types)
+packages/opencode/src/session/tools.ts                     → REFACTOR SessionTools.resolve to be a transport loop
+packages/opencode/src/effect/app-runtime.ts                → add AiSdkTransport + missing Banyan services
+packages/opencode/test/effect/transport-ai-sdk.test.ts    → NEW (unit + smoke)
+packages/opencode/test/effect/tool-catalog.test.ts         → extend (smoke invocation per visible tool)
+specs/banyancode/tool-capability-declarations.md            → NEW (Wave 3 design doc)
+```
 
-- `repository_query`, `repository_slice`, `repository_explain`, `repository_impact`, `repository_trace`, `repository_tests`, `repository_symbols`, `repository_relationships`, `repository_ownership`
+No edits to `core/`.
 
-Each tool:
-1. Calls `PermissionV2.assert(...)` with the tool name as the action.
-2. Wraps the inner Effect in `traced(...)` so every call lands in `.banyancode/trace/<sessionID>.jsonl`.
-3. Returns a `Schema.Struct`-validated output (ArchitecturalSlice / RepositoryContext / node list / ownership record).
+## Public types
 
-Mounted via `banyanToolLayers` in `packages/opencode/src/tool/registry.ts`.
+```ts
+// packages/opencode/src/effect/tool-transport.ts
 
-### 4. Slash commands and CLI subcommands
+export interface ToolMaterializationContext {
+  readonly sessionID: string
+  readonly assistantMessageID: string
+  readonly agent: string
+  readonly model: Parameters<typeof ProviderTransform.schema>[0]
+  readonly messages: SessionV1.WithParts[]
+  readonly workspace: WorkspaceV2.ID | undefined
+  readonly permissions: PermissionV2.Ruleset
+  readonly run: EffectBridge.Shape
+  readonly pluginTrigger: (
+    event: "tool.execute.before" | "tool.execute.after",
+    payload: unknown,
+    out: unknown,
+  ) => Effect.Effect<void, unknown, never>
+}
 
-Slash commands (Wave 2):
-- `/repository-query`, `/repository-explain`, `/repository-trace`, `/repository-impact`
-- `/repository-tests`, `/repository-symbols`, `/repository-relationships`
-- `/repository-ownership`, `/websearch-free`
+export interface ToolMaterialization<T> {
+  readonly id: string
+  readonly tool: T
+}
 
-Templates in `packages/opencode/src/command/template/repository-*.txt`. Registry in `packages/opencode/src/command/index.ts`.
+export interface ToolTransport<T> {
+  readonly buildTools: (
+    catalog: ToolCatalog.Service,
+    context: ToolMaterializationContext,
+  ) => Effect.Effect<readonly ToolMaterialization<T>[], never, never>
+}
+```
 
-CLI (new top-level commands, registered in `packages/opencode/src/index.ts`):
-- `opencode repository { query | explain | trace | impact | tests | relationships | ownership }`
-- `opencode websearch-free <query>`
+```ts
+// packages/opencode/src/effect/transport-ai-sdk.ts (renamed from transport-v2.ts)
 
-The `repository` group is `instance: false` so it works whether or not the user has an active session. It re-provides `Banyan.repositoryIntelligenceDefaultLayer` for its own DB access.
+export class AiSdkTransport extends Context.Service<AiSdkTransport, ToolTransport<AITool>>()(
+  "@opencode/AiSdkToolTransport",
+) {}
 
-### 5. PermissionV2 bridge
+export const layer: Layer.Layer<AiSdkTransport, never, ToolCatalog.Service>
+```
 
-`packages/opencode/src/effect/permission-bridge.ts` implements `BanyanPermissionV2.Service` (the core-side abstract permission service) on top of opencode's `Permission.Service`. The CLI AppRuntime mounts it via `Layer.provideMerge(PermissionBridge.layer.pipe(Layer.provide(Permission.defaultLayer)))`.
+## SessionTools.resolve (refactored)
 
-Tested by `test/effect/permission-bridge.test.ts` — 3/3 pass.
+The loop is the seed: every transport contributes; first-write-wins on collision.
 
-### 6. Trace rolling cap
+```ts
+// packages/opencode/src/session/tools.ts (refactored)
 
-`packages/core/src/observability/trace.ts`:
-- `cache?: CacheLayer<...>` and `workspace?: WorkspaceContext` slots added to `TraceEvent`.
-- 7-day OR 10k-event rolling cap whichever first; oldest lines dropped from `.banyancode/trace/<sessionID>.jsonl`.
+export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {...}) {
+  const tools: Record<string, AITool> = {}
+  const ctx: ToolMaterializationContext = {
+    sessionID: input.session.id,
+    assistantMessageID: input.processor.message.id,
+    agent: input.agent.name,
+    model: input.model,
+    messages: input.messages,
+    workspace: undefined,
+    permissions: /* agent + session rules */,
+    run,
+    pluginTrigger: (event, payload, out) =>
+      plugin.trigger(event, payload as never, out as never),
+  }
 
-CLI subcommand: `opencode codegraph trace --session <id> [--limit 50]` (added in Wave 2).
+  for (const transport of yield* resolveTransports()) {
+    for (const { id, tool } of yield* transport.buildTools(toolCatalog, ctx)) {
+      if (tools[id]) continue
+      tools[id] = tool
+    }
+  }
 
-### 7. TUI side-panel
+  return tools
+})
+```
 
-`packages/tui/src/feature-plugins/sidebar/intel-trace-panel.tsx` is the Wave-2 trace panel. Currently authored but **not registered** in `packages/tui/src/feature-plugins/sidebar/builtins.ts` — left as a Wave 4 task (see below).
+MCP is folded into its own `McpTransport: ToolTransport<MCPTool>` in a follow-up.
 
-## Wave 3 — TODO outline
+## Missing Banyan services in this PR (added to AppLayer)
 
-### Caching layer
+Per the "visible AND executable" invariant:
 
-Each wave-2 service (`RepositoryIntelligence`, `Search`, `StructuralQueries`) already declares a `cache?: CacheLayer<...>` slot. Wave 3 will:
-- Land a generic `CacheLayer<K, V>` in `packages/core/src/observability/cache.ts` with TTL + LRU eviction.
-- Wire it into the most expensive read paths (`query`, `symbol`, `searchAuto`, `findHTTPRoutes`).
-- Re-run the perf micro-benchmarks from `packages/core/script/test-repo-intel.ts`.
+| Service | Wrappers depending on it | Action |
+|---|---|---|
+| `Banyan.SystemMonitorService` | (read by `systeminfo` via `serviceOption`) | add |
+| `Banyan.CodegraphAnalyzer` | `codegraph_impact/dependents/callers` | add |
+| `Banyan.Search` | `codegraph_search` | add |
+| `Banyan.StructuralQueries` | `code_find`, `codegraph_search` | add |
+| `Banyan.Git` | `repo_findOwner` (in `findOwner`) | add |
 
-### Semantic code search
+Existing (verified present): `codegraphBuildService`, `repositoryIntelligence`, `editPlanner`, `codegraphRepo`, `toolRegistryDefaultLayer`, `toolCatalogDefaultLayer`.
 
-Phase 2 of the codegraph pipeline (`/code-embed`):
-- Embed every `CodegraphNode.text_excerpt` (first 512 chars of source for the node's body) using the AI SDK.
-- New `code_search({ query, limit, fileGlob })` tool that does cosine similarity + BM25 hybrid scoring.
-- `BanyanConfig.banyancode_embedding_model` config drives provider/model selection.
+## Regression tests
 
-### SDK regen
+1. **`AiSdkTransport.buildTools(catalog, ctx)` returns one entry per `materialize().definitions` entry.** IDs match exactly.
+2. **Smoke invocation per visible tool.** Every `AiSdkTransport.buildTools` entry's `execute` is called with schema-valid dummy input. Errors must be `PermissionDenied`, `UnknownTool`, or genuine execution failure — NOT `Effect.serviceOption` returning None, NOT an unhandled defect.
+3. **`SessionTools.resolve` end-to-end.** Mock minimal provider. Resolved `tools` object contains every V1 primitive and every banyan V2 tool by name with non-empty `description`.
+4. **Drift check.** `ToolCatalog.list().size === ToolCatalog.materialize().definitions.length`.
+5. **Transport loop shape.** Loop iterates the registered transports in defined order.
 
-`./packages/sdk/js/script/build.ts` to regenerate `@opencode-ai/sdk` against the new HTTP routes. Today's SDK was generated against the Wave 1 surface; consumers who depend on `repository.*` will get typed access after this regen.
+## Status log
 
-## Wave 4 — TODO outline
-
-### TUI intel-trace panel registration
-
-- Add `intel-trace-panel.tsx` to `packages/tui/src/feature-plugins/sidebar/builtins.ts` next to `codegraph-intel-panel`.
-- Add a recent-queries strip to the home screen (the prompt area) that lists the last 8 intel/trace events.
-
-### Evaluator harness (research-report.md follow-up)
-
-- Trace files (`.banyancode/trace/<sessionID>.jsonl`) become the input for an offline evaluator that scores repository-intelligence answer quality.
-- Hook into `packages/opencode/src/effect/observability/trace.ts` as a sibling exporter.
-
-## References
-
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — repo layout, runtime layers, BanyanCode service architecture, V2/V3 changelog (Wave 2 entry to be appended in the same change).
-- [`specs/banyancode/`](specs/banyancode/) — per-feature design (storage, orchestrator, subagent mesh, memory, code graph, free web search, types).
-- [`specs/banyancode/research-report.md`](specs/banyancode/research-report.md) — the research-report design and the evaluator hooks.
+- 2026-07-04: Plan locked. Starting build.
