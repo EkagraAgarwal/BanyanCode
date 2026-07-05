@@ -12,6 +12,7 @@ import { defaultLayer as searchLayer } from "../banyancode/search"
 import { defaultLayer as repositoryIntelligenceLayer } from "../banyancode/repository-intelligence"
 import { defaultLayer as structuralQueriesLayer } from "../banyancode/structural-queries"
 import type { SearchMode, SearchResult } from "../banyancode/search/search"
+import { formatCodegraphSearchResults } from "./codegraph-format"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
@@ -99,7 +100,9 @@ export const locationLayer = Layer.effectDiscard(
           "Search the code graph with intent modes: exact, prefix, fuzzy, structural, graph, subsystem, tests.",
         input: Input,
         output: Output,
-        toModelOutput: ({ output }) => [{ type: "text", text: `${output.results.length} results` }],
+        toModelOutput: ({ output }) => [
+          { type: "text", text: formatCodegraphSearchResults(output.results) },
+        ],
         execute: (input, context) => {
           const limit = input.limit ?? 50
           const modes = input.modes ?? ["fuzzy"]

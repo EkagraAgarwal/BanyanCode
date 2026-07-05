@@ -11,6 +11,12 @@ import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { defaultLayer as repositoryIntelligenceLayer } from "../banyancode/repository-intelligence"
+import {
+  formatArchitecturalSlice,
+  formatNodesList,
+  formatOwnership,
+  formatRepositoryContext,
+} from "./repository-format"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
@@ -151,12 +157,14 @@ const SymbolsInput = Schema.Struct({
 })
 
 const RelationshipsInput = Schema.Struct({
-  nodeID: Schema.String,
+  nodeID: Schema.optional(Schema.String),
+  path: Schema.optional(Schema.String),
   depth: Schema.optional(Schema.Number),
 })
 
 const OwnershipInput = Schema.Struct({
   path: Schema.String,
+  workspace: Schema.optional(WorkspaceContextSchema),
 })
 
 const QueryOutput = RepositoryContextSchema
@@ -271,10 +279,7 @@ export const locationLayer = Layer.effectDiscard(
         input: InputQuery,
         output: OutputQuery,
         toModelOutput: ({ output }) => [
-          {
-            type: "text",
-            text: `symbols=${output.symbols.length} tests=${output.tests.length} docs=${output.docs.length} configs=${output.configs.length} nodes=${output.graph.nodes.length} edges=${output.graph.edges.length}`,
-          },
+          { type: "text", text: formatRepositoryContext(output) },
         ],
         execute: (input, context) =>
           traced(
@@ -309,12 +314,7 @@ export const locationLayer = Layer.effectDiscard(
         description: "Compose an ArchitecturalSlice from a repository query result. First calls repository_query, then groups entrypoints, important symbols, related tests, docs, and configs.",
         input: InputSlice,
         output: OutputSlice,
-        toModelOutput: ({ output }) => [
-          {
-            type: "text",
-            text: `${output.summary} entrypoints=${output.entrypoints.length} symbols=${output.importantSymbols.length} tests=${output.relatedTests.length} docs=${output.relatedDocs.length} configs=${output.configs.length} routes=${output.routes.length}`,
-          },
-        ],
+        toModelOutput: ({ output }) => [{ type: "text", text: formatArchitecturalSlice(output) }],
         execute: (input, context) =>
           traced(
             process.cwd(),
@@ -344,7 +344,7 @@ export const locationLayer = Layer.effectDiscard(
         description: "Explain a symbol by name. Returns an ArchitecturalSlice describing the symbol's entrypoints, related tests, docs, and configs.",
         input: InputExplain,
         output: OutputExplain,
-        toModelOutput: ({ output }) => [{ type: "text", text: output.summary }],
+        toModelOutput: ({ output }) => [{ type: "text", text: formatArchitecturalSlice(output) }],
         execute: (input, context) =>
           traced(
             process.cwd(),
@@ -376,7 +376,7 @@ export const locationLayer = Layer.effectDiscard(
         description: "Analyze the impact of changing a file by path. Returns an ArchitecturalSlice with expanded important symbols for direct dependents.",
         input: InputImpact,
         output: OutputImpact,
-        toModelOutput: ({ output }) => [{ type: "text", text: output.summary }],
+        toModelOutput: ({ output }) => [{ type: "text", text: formatArchitecturalSlice(output) }],
         execute: (input, context) =>
           traced(
             process.cwd(),
@@ -409,7 +409,7 @@ export const locationLayer = Layer.effectDiscard(
         description: "Trace a symbol through the code graph to its downstream dependents. Returns an ArchitecturalSlice with the symbol's downstream entrypoints.",
         input: InputTrace,
         output: OutputTrace,
-        toModelOutput: ({ output }) => [{ type: "text", text: output.summary }],
+        toModelOutput: ({ output }) => [{ type: "text", text: formatArchitecturalSlice(output) }],
         execute: (input, context) =>
           traced(
             process.cwd(),
@@ -442,7 +442,7 @@ export const locationLayer = Layer.effectDiscard(
         description: "Find tests that reference a given symbol by name.",
         input: InputTests,
         output: OutputTests,
-        toModelOutput: ({ output }) => [{ type: "text", text: `tests=${output.tests.length}` }],
+        toModelOutput: ({ output }) => [{ type: "text", text: formatNodesList(output.tests, "Tests") }],
         execute: (input, context) =>
           traced(
             process.cwd(),
@@ -470,7 +470,7 @@ export const locationLayer = Layer.effectDiscard(
         description: "Look up symbols by name (exact then prefix match) across the code graph.",
         input: InputSymbols,
         output: OutputSymbols,
-        toModelOutput: ({ output }) => [{ type: "text", text: `symbols=${output.symbols.length}` }],
+        toModelOutput: ({ output }) => [{ type: "text", text: formatNodesList(output.symbols, "Symbols") }],
         execute: (input, context) =>
           traced(
             process.cwd(),
@@ -498,10 +498,14 @@ export const locationLayer = Layer.effectDiscard(
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_symbols failed" }))),
       }),
       [name_relationships]: Tool.make({
-        description: "Walk the code graph from a node to its neighbors up to the given depth. Returns the related nodes (excludes the anchor).",
+        description:
+          "Walk the code graph to the related nodes of an anchor. " +
+          "nodeID is an exact codegraph node identifier — typically `{absFilePath}:function:{name}:{line}` (or :class:, :method:, :variable:, etc.); get one with codegraph_search or repository_symbols. " +
+          "If you don't have an exact nodeID, pass path instead (file path relative to the workspace) and the tool will resolve all nodes belonging to that file and aggregate their relationships. " +
+          "depth defaults to 1; pass a higher value for transitive neighbors. Returns the related nodes (excludes the anchor).",
         input: InputRelationships,
         output: OutputRelationships,
-        toModelOutput: ({ output }) => [{ type: "text", text: `nodes=${output.nodes.length}` }],
+        toModelOutput: ({ output }) => [{ type: "text", text: formatNodesList(output.nodes, "Related nodes") }],
         execute: (input, context) =>
           traced(
             process.cwd(),
@@ -510,9 +514,12 @@ export const locationLayer = Layer.effectDiscard(
             input,
             (output) => `nodes=${output.nodes.length}`,
             Effect.gen(function* () {
+              if (!input.nodeID && !input.path) {
+                return { nodes: [] as Banyan.CodegraphNode[] }
+              }
               yield* permission.assert({
                 action: name_relationships,
-                resources: [input.nodeID],
+                resources: [input.nodeID ?? input.path ?? ""],
                 save: ["*"],
                 metadata: input,
                 sessionID: context.sessionID,
@@ -521,7 +528,8 @@ export const locationLayer = Layer.effectDiscard(
               })
 
               const nodes = yield* intel.relationships({
-                nodeID: input.nodeID,
+                ...(input.nodeID ? { nodeID: input.nodeID } : {}),
+                ...(input.path ? { path: input.path } : {}),
                 ...(input.depth !== undefined ? { depth: input.depth } : {}),
               })
               return { nodes: [...nodes] }
@@ -532,9 +540,7 @@ export const locationLayer = Layer.effectDiscard(
         description: "Find the most active author for a file by path, using git shortlog over recent commits.",
         input: InputOwnership,
         output: OutputOwnership,
-        toModelOutput: ({ output }) => [
-          { type: "text", text: `owner=${output.owner ?? "unknown"} count=${output.count}` },
-        ],
+        toModelOutput: ({ output }) => [{ type: "text", text: formatOwnership(output.owner, output.count) }],
         execute: (input, context) =>
           traced(
             process.cwd(),
@@ -553,7 +559,10 @@ export const locationLayer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
-              const owner = yield* intel.findOwner({ path: input.path })
+              const owner = yield* intel.findOwner({
+                path: input.path,
+                ...(input.workspace?.worktree ? { cwd: input.workspace.worktree } : {}),
+              })
               const out: { owner?: string; count: number } =
                 owner.owner !== undefined ? { owner: owner.owner, count: owner.count } : { count: owner.count }
               return out

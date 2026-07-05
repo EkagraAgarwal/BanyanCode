@@ -9,6 +9,7 @@ import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { defaultLayer as structuralQueriesLayer } from "../banyancode/structural-queries"
+import { formatNodes } from "./codegraph-format"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
@@ -32,14 +33,18 @@ export const locationLayer = Layer.effectDiscard(
 
     yield* tools.register({
       [name_find_implementations]: Tool.make({
-        description: "Find classes that implement or extend the given interface or base class name.",
+        description:
+          "Find classes that implement or extend the given interface or base class name. " +
+          "Optional inputs MUST be omitted entirely when not needed; passing null is rejected.",
         input: Schema.Struct({
           interfaceName: Schema.String,
           file: Schema.optional(Schema.String),
           language: Schema.optional(Schema.String),
         }),
         output: OutputNodes,
-        toModelOutput: ({ output }) => [{ type: "text", text: `${output.nodes.length} implementations` }],
+        toModelOutput: ({ output }) => [
+          { type: "text", text: formatNodes(output.nodes, "Implementations") },
+        ],
         execute: (input, context) =>
           traced(process.cwd(), context.sessionID, name_find_implementations, input, (output) => `nodes=${output.nodes.length}`, Effect.gen(function* () {
             yield* permission.assert({
@@ -56,7 +61,9 @@ export const locationLayer = Layer.effectDiscard(
           })).pipe(Effect.mapError(() => new ToolFailure({ message: "codegraph_find_implementations failed" }))),
       }),
       [name_find_overrides]: Tool.make({
-        description: "Find method overrides with the given method name.",
+        description:
+          "Find method overrides with the given method name. " +
+          "Optional inputs MUST be omitted entirely when not needed; passing null is rejected.",
         input: Schema.Struct({
           methodName: Schema.String,
           baseClass: Schema.optional(Schema.String),
@@ -64,7 +71,9 @@ export const locationLayer = Layer.effectDiscard(
           language: Schema.optional(Schema.String),
         }),
         output: OutputNodes,
-        toModelOutput: ({ output }) => [{ type: "text", text: `${output.nodes.length} overrides` }],
+        toModelOutput: ({ output }) => [
+          { type: "text", text: formatNodes(output.nodes, "Overrides") },
+        ],
         execute: (input, context) =>
           traced(process.cwd(), context.sessionID, name_find_overrides, input, (output) => `nodes=${output.nodes.length}`, Effect.gen(function* () {
             yield* permission.assert({
@@ -87,7 +96,9 @@ export const locationLayer = Layer.effectDiscard(
           language: Schema.optional(Schema.String),
         }),
         output: OutputNodes,
-        toModelOutput: ({ output }) => [{ type: "text", text: `${output.nodes.length} recursive functions` }],
+        toModelOutput: ({ output }) => [
+          { type: "text", text: formatNodes(output.nodes, "Recursive functions") },
+        ],
         execute: (input, context) =>
           traced(process.cwd(), context.sessionID, name_find_recursive, input, (output) => `nodes=${output.nodes.length}`, Effect.gen(function* () {
             yield* permission.assert({
@@ -110,7 +121,9 @@ export const locationLayer = Layer.effectDiscard(
           language: Schema.optional(Schema.String),
         }),
         output: OutputNodes,
-        toModelOutput: ({ output }) => [{ type: "text", text: `${output.nodes.length} async functions` }],
+        toModelOutput: ({ output }) => [
+          { type: "text", text: formatNodes(output.nodes, "Async functions") },
+        ],
         execute: (input, context) =>
           traced(process.cwd(), context.sessionID, name_find_async, input, (output) => `nodes=${output.nodes.length}`, Effect.gen(function* () {
             yield* permission.assert({
@@ -133,7 +146,9 @@ export const locationLayer = Layer.effectDiscard(
           language: Schema.optional(Schema.String),
         }),
         output: OutputNodes,
-        toModelOutput: ({ output }) => [{ type: "text", text: `${output.nodes.length} routes` }],
+        toModelOutput: ({ output }) => [
+          { type: "text", text: formatNodes(output.nodes, "HTTP routes") },
+        ],
         execute: (input, context) =>
           traced(process.cwd(), context.sessionID, name_find_http_routes, input, (output) => `nodes=${output.nodes.length}`, Effect.gen(function* () {
             yield* permission.assert({

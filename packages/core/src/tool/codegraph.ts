@@ -11,6 +11,7 @@ import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { defaultLayer as codegraphAnalyzerLayer } from "../banyancode/codegraph-analyzer"
 import { defaultLayer as codegraphBuildServiceLayer } from "../banyancode/codegraph-build-service"
+import { formatNodes } from "./codegraph-format"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
@@ -219,11 +220,12 @@ export const locationLayer = Layer.effectDiscard(
             "Look up nodes in the code graph. Filter by function name, kind, or file path. " +
             "Returns the matching CodegraphNode objects (with name, kind, signature, file path, line range, code snippet). " +
             "Use this as the primary tool to find symbols when the codegraph is built. " +
-            "If the result is empty, the codegraph hasn't been built yet (run /codegraph-build) or the project has no such symbol.",
+            "If the result is empty, the codegraph hasn't been built yet (run /codegraph-build) or the project has no such symbol. " +
+            "Optional inputs (file, function, kind, limit) MUST be omitted entirely when not needed; passing null is rejected.",
           input: InputQuery,
           output: OutputQuery,
           toModelOutput: ({ output }) => [
-            { type: "text", text: `found ${output.nodes.length} nodes` },
+            { type: "text", text: formatNodes(output.nodes, "Query results") },
           ],
           execute: (input, context) => {
             const limit = input.limit ?? 50
@@ -283,11 +285,16 @@ export const locationLayer = Layer.effectDiscard(
           description:
             "Find all nodes affected by a change to the given node. Returns the direct dependents " +
             "(immediate callers) and the transitive closure (everything downstream). " +
-            "Use BEFORE making any edit to understand the blast radius. Returns full CodegraphNode objects.",
+            "Use BEFORE making any edit to understand the blast radius. Returns full CodegraphNode objects. " +
+            "Pass nodeID (preferred - get it from codegraph_search/codegraph_query) or function name. " +
+            "Optional inputs MUST be omitted entirely when not needed; passing null is rejected.",
           input: InputImpact,
           output: OutputImpact,
           toModelOutput: ({ output }) => [
-            { type: "text", text: `dependents=${output.dependents.length} transitive=${output.transitive.length}` },
+            {
+              type: "text",
+              text: `${formatNodes(output.dependents, "Direct dependents")}\n${formatNodes(output.transitive, "Transitive dependents")}`,
+            },
           ],
           execute: (input, context) => {
             const limit = input.limit ?? 100
@@ -335,11 +342,12 @@ export const locationLayer = Layer.effectDiscard(
           description:
             "Find nodes that depend on the given node (the reverse: who calls/imports this). " +
             "Returns full CodegraphNode objects. Prefer codegraph_impact for blast-radius analysis " +
-            "(it includes transitive closure); use this when you only need the direct callers.",
+            "(it includes transitive closure); use this when you only need the direct callers. " +
+            "Pass nodeID (preferred) or function name. Optional inputs MUST be omitted entirely when not needed; passing null is rejected.",
           input: InputDependents,
           output: OutputDependents,
           toModelOutput: ({ output }) => [
-            { type: "text", text: `${output.dependents.length} dependents` },
+            { type: "text", text: formatNodes(output.dependents, "Dependents") },
           ],
           execute: (input, context) => {
             const limit = input.limit ?? 50
@@ -383,11 +391,12 @@ export const locationLayer = Layer.effectDiscard(
           description:
             "Find nodes that call the given function. Pass either nodeID (preferred) or function name. " +
             "Returns full CodegraphNode objects with file path and line range so the caller can read or edit them. " +
-            "If the codegraph hasn't been built, the response will be empty - fall back to grep for the function name.",
+            "If the codegraph hasn't been built, the response will be empty - fall back to grep for the function name. " +
+            "Optional inputs MUST be omitted entirely when not needed; passing null is rejected.",
           input: InputCallers,
           output: OutputCallers,
           toModelOutput: ({ output }) => [
-            { type: "text", text: `${output.callers.length} callers` },
+            { type: "text", text: formatNodes(output.callers, "Callers") },
           ],
           execute: (input, context) => {
             const limit = input.limit ?? 50

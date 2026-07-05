@@ -9,8 +9,12 @@ export interface Interface {
   readonly trace: (input: { symbol: string; depth?: number; workspace?: WorkspaceContext }) => Effect.Effect<ArchitecturalSlice, never, never>
   readonly tests: (input: { symbol: string }) => Effect.Effect<readonly CodegraphNode[], never, never>
   readonly symbols: (input: { query: string; limit?: number }) => Effect.Effect<readonly CodegraphNode[], never, never>
-  readonly relationships: (input: { nodeID: string; depth?: number }) => Effect.Effect<readonly CodegraphNode[], never, never>
-  readonly findOwner: (input: { path: string }) => Effect.Effect<{ owner?: string; count: number }, never, never>
+  readonly relationships: (input: {
+    nodeID?: string
+    path?: string
+    depth?: number
+  }) => Effect.Effect<readonly CodegraphNode[], never, never>
+  readonly findOwner: (input: { path: string; cwd?: string }) => Effect.Effect<{ owner?: string; count: number }, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/RepositoryIntelligence") {}
