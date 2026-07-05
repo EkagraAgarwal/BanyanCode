@@ -382,6 +382,7 @@ const withBanyanDeps = Layer.unwrap(
     const intel = yield* Effect.serviceOption(Banyan.RepositoryIntelligence)
     const structural = yield* Effect.serviceOption(Banyan.StructuralQueries)
     const editPlanner = yield* Effect.serviceOption(Banyan.EditPlanner)
+    const telemetry = yield* Effect.serviceOption(Banyan.ToolTelemetry)
     const worktreeAccessor: () => Effect.Effect<string | undefined> = () =>
       Effect.gen(function* () {
         const inst = yield* InstanceRef
@@ -410,6 +411,9 @@ const withBanyanDeps = Layer.unwrap(
         Layer.empty as unknown as Layer.Layer<never, never, never>,
       ]),
       ...(Option.isSome(editPlanner) ? [Layer.succeed(Banyan.EditPlanner, editPlanner.value)] : [
+        Layer.empty as unknown as Layer.Layer<never, never, never>,
+      ]),
+      ...(Option.isSome(telemetry) ? [Layer.succeed(Banyan.ToolTelemetry, telemetry.value)] : [
         Layer.empty as unknown as Layer.Layer<never, never, never>,
       ]),
     ) as unknown as Layer.Layer<never, never, never>

@@ -26,6 +26,18 @@ export {
   defaultLayer as codegraphBuildServiceDefaultLayer,
 } from "./codegraph-build-service"
 export { WorktreeContext } from "./worktree-context"
+export {
+  Service as ToolTelemetry,
+  layer as toolTelemetryLayer,
+  defaultLayer as toolTelemetryDefaultLayer,
+} from "./tool-telemetry"
+export type {
+  ToolRuntimeEvent,
+  ToolRuntimeEventKind,
+  ToolLintWarning,
+  ToolQualityReport,
+  Interface as ToolTelemetryInterface,
+} from "./tool-telemetry"
 export { Service as CodegraphAnalyzer, layer as codegraphAnalyzerLayer, defaultLayer as codegraphAnalyzerDefaultLayer } from "./codegraph-analyzer"
 export {
   Service as RepositoryIntelligence,

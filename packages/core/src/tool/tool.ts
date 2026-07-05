@@ -3,6 +3,7 @@ export * as Tool from "./tool"
 import { ToolDefinition, ToolFailure, ToolOutput, type ToolCall } from "@opencode-ai/llm"
 import { Effect, JsonSchema, Schema } from "effect"
 import type { AgentV2 } from "../agent"
+import { Banyan } from "../banyancode"
 import type { SessionMessage } from "../session/message"
 import type { SessionSchema } from "../session/schema"
 
@@ -11,6 +12,7 @@ export interface Context {
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
   readonly toolCallID: string
+  readonly modelID?: string
 }
 
 export type SchemaType<A> = Schema.Codec<A, any, never, never>
@@ -92,37 +94,153 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
       return definition
     },
     settle: (call, context) =>
-      Schema.decodeUnknownEffect(config.input)(normalizeNulls(call.input) as Record<string, unknown>).pipe(
-        Effect.mapError((error) => new ToolFailure({ message: `Invalid tool input: ${error.message}` })),
-        Effect.flatMap((input) =>
-          config.execute(input, context).pipe(
-            Effect.flatMap((output) =>
-              Schema.encodeEffect(config.output)(output).pipe(
-                Effect.mapError(
-                  (error) =>
-                    new ToolFailure({
-                      message: `Tool returned an invalid value for its output schema: ${error.message}`,
-                    }),
-                ),
+      Effect.gen(function* () {
+        const telemetryOpt = yield* Effect.serviceOption(Banyan.ToolTelemetry)
+        const toolID = call.name
+        const sessionID = context.sessionID
+        const agent = context.agent
+        const toolCallID = context.toolCallID
+        const modelID = context.modelID ?? "unknown"
+        const startedAt = Date.now()
+        const rawInput = call.input
+        const normalized = normalizeNulls(rawInput)
+
+        const record = (event: Banyan.ToolRuntimeEvent) =>
+          telemetryOpt._tag === "Some"
+            ? telemetryOpt.value.recordEvent(event)
+            : Effect.void
+
+        yield* record({
+          kind: "raw",
+          toolID,
+          sessionID,
+          agent,
+          modelID,
+          toolCallID,
+          rawInput,
+          repairs: [],
+          warnings: [],
+          startedAt,
+        })
+        yield* record({
+          kind: "normalized",
+          toolID,
+          sessionID,
+          agent,
+          modelID,
+          toolCallID,
+          rawInput,
+          normalizedInput: normalized,
+          repairs: [],
+          warnings: [],
+          startedAt,
+        })
+
+        const decoded = yield* Schema.decodeUnknownEffect(config.input)(
+          normalized as Record<string, unknown>,
+        ).pipe(
+          Effect.tap((validated) =>
+            record({
+              kind: "validated",
+              toolID,
+              sessionID,
+              agent,
+              modelID,
+              toolCallID,
+              rawInput,
+              normalizedInput: normalized,
+              validatedInput: validated,
+              repairs: [],
+              warnings: [],
+              startedAt,
+            }),
+          ),
+          Effect.tapError((decodeError) =>
+            record({
+              kind: "failed",
+              toolID,
+              sessionID,
+              agent,
+              modelID,
+              toolCallID,
+              rawInput,
+              normalizedInput: normalized,
+              repairs: [],
+              warnings: [],
+              startedAt,
+              finishedAt: Date.now(),
+              latencyMs: Date.now() - startedAt,
+              success: false,
+              errorMessage: `Invalid tool input: ${decodeError.message}`,
+            }),
+          ),
+          Effect.mapError((error) => new ToolFailure({ message: `Invalid tool input: ${error.message}` })),
+        )
+
+        return yield* config.execute(decoded, context).pipe(
+          Effect.flatMap((output) =>
+            Schema.encodeEffect(config.output)(output).pipe(
+              Effect.mapError(
+                (error) =>
+                  new ToolFailure({
+                    message: `Tool returned an invalid value for its output schema: ${error.message}`,
+                  }),
               ),
             ),
-            Effect.map((output) => ({
-              structured: output,
-              content:
-                config.toModelOutput?.({ input, output }).map((part) =>
-                  part.type === "text"
-                    ? { type: "text" as const, text: part.text }
-                    : {
-                        type: "file" as const,
-                        uri: `data:${part.mime};base64,${part.data}`,
-                        mime: part.mime,
-                        name: part.name,
-                      },
-                ) ?? (typeof output === "string" ? [{ type: "text" as const, text: output }] : []),
-            })),
           ),
-        ),
-      ),
+          Effect.tap(() =>
+            record({
+              kind: "executed",
+              toolID,
+              sessionID,
+              agent,
+              modelID,
+              toolCallID,
+              validatedInput: decoded,
+              repairs: [],
+              warnings: [],
+              startedAt,
+              finishedAt: Date.now(),
+              latencyMs: Date.now() - startedAt,
+              success: true,
+            }),
+          ),
+          Effect.tapError((error) =>
+            record({
+              kind: "failed",
+              toolID,
+              sessionID,
+              agent,
+              modelID,
+              toolCallID,
+              rawInput,
+              normalizedInput: normalized,
+              validatedInput: decoded,
+              repairs: [],
+              warnings: [],
+              startedAt,
+              finishedAt: Date.now(),
+              latencyMs: Date.now() - startedAt,
+              success: false,
+              errorMessage: error.message,
+            }),
+          ),
+          Effect.map((output) => ({
+            structured: output,
+            content:
+              config.toModelOutput?.({ input: decoded, output }).map((part) =>
+                part.type === "text"
+                  ? { type: "text" as const, text: part.text }
+                  : {
+                      type: "file" as const,
+                      uri: `data:${part.mime};base64,${part.data}`,
+                      mime: part.mime,
+                      name: part.name,
+                    },
+              ) ?? (typeof output === "string" ? [{ type: "text" as const, text: output }] : []),
+          })),
+        )
+      }),
   })
   return tool
 }
