@@ -355,7 +355,11 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       else url.searchParams.set("kl", "wt-wt")
       if (time !== undefined) url.searchParams.set("df", time)
 
-      const request = HttpClientRequest.get(url.toString()).pipe(HttpClientRequest.accept("text/html"))
+      const request = HttpClientRequest.get(url.toString()).pipe(
+        HttpClientRequest.setHeader("User-Agent", WebSearchFreeTool.USER_AGENT),
+        HttpClientRequest.accept("text/html"),
+        HttpClientRequest.setHeader("Accept-Language", "en-US,en;q=0.9"),
+      )
 
       const body = yield* HttpClient.filterStatusOk(http)
         .execute(request)

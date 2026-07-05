@@ -10,10 +10,14 @@ import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
+export { parse as parseWebSearchFree } from "./websearch-free/parse"
+
 export const name = "websearch_free"
 export const MAX_NUM_RESULTS = 20
 export const MAX_RESPONSE_BYTES = 256 * 1024
 export const DDG_URL = "https://html.duckduckgo.com/html/"
+export const USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
 
 export const description = `Search the web using DuckDuckGo HTML. Use this for current information beyond knowledge cutoff.
 
@@ -82,11 +86,9 @@ export const layer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
-              const userAgent =
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
               const url = buildUrl(input.query, input.numResults, input.region, input.time)
               const request = HttpClientRequest.get(url).pipe(
-                HttpClientRequest.setHeader("User-Agent", userAgent),
+                HttpClientRequest.setHeader("User-Agent", USER_AGENT),
                 HttpClientRequest.setHeader("Accept", "text/html"),
                 HttpClientRequest.setHeader("Accept-Language", "en-US,en;q=0.9"),
               )

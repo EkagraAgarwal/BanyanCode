@@ -12,17 +12,23 @@ const DDG_HTML_FIXTURE = `
 <head><title>DuckDuckGo</title></head>
 <body>
 <div class="results">
-  <div class="result">
-    <a class="result__a" href="https://example.com/first">First Result Title</a>
-    <p class="result__snippet">This is the first result snippet with some details about the search result.</p>
+  <div class="result results_links results_links_deep web-result">
+    <div class="links">
+      <a rel="nofollow" class="result__a" href="https://example.com/first">First Result Title</a>
+      <a class="result__snippet" href="https://example.com/first">This is the first result snippet with some details about the search result.</a>
+    </div>
   </div>
-  <div class="result">
-    <a class="result__a" href="https://example.com/second">Second Result Title</a>
-    <p class="result__snippet">This is the second result snippet with different information.</p>
+  <div class="result results_links results_links_deep web-result">
+    <div class="links">
+      <a rel="nofollow" class="result__a" href="https://example.com/second">Second Result Title</a>
+      <a class="result__snippet" href="https://example.com/second">This is the second result snippet with different information.</a>
+    </div>
   </div>
-  <div class="result">
-    <a class="result__a" href="https://example.com/third">Third Result Title</a>
-    <p class="result__snippet">The third result snippet contains more content here.</p>
+  <div class="result results_links results_links_deep web-result">
+    <div class="links">
+      <a rel="nofollow" class="result__a" href="https://example.com/third">Third Result Title</a>
+      <a class="result__snippet" href="https://example.com/third">The third result snippet contains more content here.</a>
+    </div>
   </div>
 </div>
 </body>
@@ -58,12 +64,28 @@ describe("websearch-free", () => {
         const htmlWithEntities = `
           <div class="result">
             <a class="result__a" href="https://example.com/test">Test &amp; More</a>
-            <p class="result__snippet">Here is a &quot;quoted&quot; piece of text with &lt;special&gt; chars.</p>
+            <a class="result__snippet" href="https://example.com/test">Here is a &quot;quoted&quot; piece of text with &lt;special&gt; chars.</a>
           </div>
         `
         const results = parse(htmlWithEntities)
         expect(results.length).toBe(1)
         expect(results[0].snippet).toBe('Here is a "quoted" piece of text with <special> chars.')
+      }),
+    )
+
+    it.effect("unwraps DuckDuckGo /l/?uddg= redirect to the real target URL", () =>
+      Effect.gen(function* () {
+        const realUrl = "https://target.example.com/path?q=1&r=2"
+        const wrappedUrl = `//duckduckgo.com/l/?uddg=${encodeURIComponent(realUrl)}&kl=wt-wt`
+        const html = `
+          <div class="result">
+            <a rel="nofollow" class="result__a" href="${wrappedUrl}">Wrapped Title</a>
+            <a class="result__snippet" href="${wrappedUrl}">Wrapped snippet text.</a>
+          </div>
+        `
+        const results = parse(html)
+        expect(results.length).toBe(1)
+        expect(results[0].url).toBe(realUrl)
       }),
     )
 
