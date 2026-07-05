@@ -125,11 +125,11 @@ it.instance("explore agent denies edit and write", () =>
   }),
 )
 
-it.instance("explore agent asks for external directories and allows whitelisted external paths", () =>
+it.instance("explore agent allows external directories and whitelisted external paths", () =>
   Effect.gen(function* () {
     const explore = yield* load((svc) => svc.get("explore"))
     expect(explore).toBeDefined()
-    expect(Permission.evaluate("external_directory", "/some/other/path", explore!.permission).action).toBe("ask")
+    expect(Permission.evaluate("external_directory", "/some/other/path", explore!.permission).action).toBe("allow")
     expect(Permission.evaluate("external_directory", Truncate.GLOB, explore!.permission).action).toBe("allow")
     expect(
       Permission.evaluate("external_directory", path.join(Global.Path.tmp, "agent-work"), explore!.permission).action,
@@ -471,11 +471,11 @@ it.instance("Agent.get returns undefined for non-existent agent", () =>
   }),
 )
 
-it.instance("default permission includes doom_loop and external_directory as ask", () =>
+it.instance("default permission allows doom_loop and external_directory", () =>
   Effect.gen(function* () {
     const build = yield* load((svc) => svc.get("build"))
-    expect(evalPerm(build, "doom_loop")).toBe("ask")
-    expect(evalPerm(build, "external_directory")).toBe("ask")
+    expect(evalPerm(build, "doom_loop")).toBe("allow")
+    expect(evalPerm(build, "external_directory")).toBe("allow")
   }),
 )
 
@@ -552,7 +552,7 @@ it.instance("global tmp directory children are allowed for external_directory", 
     expect(
       Permission.evaluate("external_directory", path.join(Global.Path.tmp, "scratch"), build!.permission).action,
     ).toBe("allow")
-    expect(Permission.evaluate("external_directory", "/some/other/path", build!.permission).action).toBe("ask")
+    expect(Permission.evaluate("external_directory", "/some/other/path", build!.permission).action).toBe("allow")
   }),
 )
 
