@@ -10,6 +10,7 @@ import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { defaultLayer as structuralQueriesLayer } from "../banyancode/structural-queries"
 import { formatNodes } from "./codegraph-format"
+import { optionalString } from "./tool-schema"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
@@ -38,8 +39,8 @@ export const locationLayer = Layer.effectDiscard(
           "Optional inputs MUST be omitted entirely when not needed; passing null is rejected.",
         input: Schema.Struct({
           interfaceName: Schema.String,
-          file: Schema.optional(Schema.String),
-          language: Schema.optional(Schema.String),
+          file: optionalString,
+          language: optionalString,
         }),
         output: OutputNodes,
         toModelOutput: ({ output }) => [
@@ -66,9 +67,9 @@ export const locationLayer = Layer.effectDiscard(
           "Optional inputs MUST be omitted entirely when not needed; passing null is rejected.",
         input: Schema.Struct({
           methodName: Schema.String,
-          baseClass: Schema.optional(Schema.String),
-          file: Schema.optional(Schema.String),
-          language: Schema.optional(Schema.String),
+          baseClass: optionalString,
+          file: optionalString,
+          language: optionalString,
         }),
         output: OutputNodes,
         toModelOutput: ({ output }) => [
@@ -92,8 +93,8 @@ export const locationLayer = Layer.effectDiscard(
       [name_find_recursive]: Tool.make({
         description: "Find recursive functions in the indexed codebase.",
         input: Schema.Struct({
-          file: Schema.optional(Schema.String),
-          language: Schema.optional(Schema.String),
+          file: optionalString,
+          language: optionalString,
         }),
         output: OutputNodes,
         toModelOutput: ({ output }) => [
@@ -117,8 +118,8 @@ export const locationLayer = Layer.effectDiscard(
       [name_find_async]: Tool.make({
         description: "Find async functions in the indexed codebase.",
         input: Schema.Struct({
-          file: Schema.optional(Schema.String),
-          language: Schema.optional(Schema.String),
+          file: optionalString,
+          language: optionalString,
         }),
         output: OutputNodes,
         toModelOutput: ({ output }) => [
@@ -142,8 +143,8 @@ export const locationLayer = Layer.effectDiscard(
       [name_find_http_routes]: Tool.make({
         description: "Find HTTP route registrations (Express/Fastify style) in the indexed codebase.",
         input: Schema.Struct({
-          file: Schema.optional(Schema.String),
-          language: Schema.optional(Schema.String),
+          file: optionalString,
+          language: optionalString,
         }),
         output: OutputNodes,
         toModelOutput: ({ output }) => [

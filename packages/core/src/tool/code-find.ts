@@ -9,6 +9,8 @@ import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { defaultLayer as codegraphAnalyzerLayer } from "../banyancode/codegraph-analyzer"
+import { formatNodes } from "./codegraph-format"
+import { optionalBoolean, optionalNumber, optionalString } from "./tool-schema"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
@@ -16,10 +18,10 @@ export const name = "code_find"
 
 export const Input = Schema.Struct({
   intent: Schema.Literals(["definition", "callers", "dependents", "impact", "find_file"]),
-  target: Schema.optional(Schema.String),
-  minScore: Schema.optional(Schema.Number),
-  includeKeywordFallback: Schema.optional(Schema.Boolean),
-  limit: Schema.optional(Schema.Number),
+  target: optionalString,
+  minScore: optionalNumber,
+  includeKeywordFallback: optionalBoolean,
+  limit: optionalNumber,
 })
 
 export const Output = Schema.Struct({
@@ -50,9 +52,14 @@ export const locationLayer = Layer.effectDiscard(
           "reason about graph freshness.",
         input: Input,
         output: Output,
-        toModelOutput: ({ output }) => [
-          { type: "text", text: `intent=${output.intent} dispatched=${output.dispatchedTo ?? "n/a"} matches=${output.matches.length} files=${output.files.length}` },
-        ],
+        toModelOutput: ({ output }) => {
+          const header = `intent=${output.intent} dispatched=${output.dispatchedTo ?? "n/a"} matches=${output.matches.length} files=${output.files.length}`
+          const matchesBlock = output.matches.length > 0 ? formatNodes(output.matches, "Matches") : "Matches: none."
+          const filesBlock = output.files.length > 0
+            ? `Files (${output.files.length}):\n${output.files.map((f) => `  ${f.path}`).join("\n")}`
+            : "Files: none."
+          return [{ type: "text", text: `${header}\n\n${matchesBlock}\n\n${filesBlock}` }]
+        },
         execute: (input, context) => {
           const limit = input.limit ?? 50
           return traced(

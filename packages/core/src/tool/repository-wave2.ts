@@ -17,6 +17,7 @@ import {
   formatOwnership,
   formatRepositoryContext,
 } from "./repository-format"
+import { optionalNumber, optionalString } from "./tool-schema"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
@@ -127,7 +128,7 @@ const OwnershipResultSchema = Schema.Struct({
 
 const QueryInput = Schema.Struct({
   query: Schema.String,
-  limit: Schema.optional(Schema.Number),
+  limit: optionalNumber,
   workspace: Schema.optional(WorkspaceContextSchema),
 })
 
@@ -143,7 +144,7 @@ const ImpactInput = Schema.Struct({
 
 const TraceInput = Schema.Struct({
   symbol: Schema.String,
-  depth: Schema.optional(Schema.Number),
+  depth: optionalNumber,
   workspace: Schema.optional(WorkspaceContextSchema),
 })
 
@@ -153,13 +154,13 @@ const TestsInput = Schema.Struct({
 
 const SymbolsInput = Schema.Struct({
   query: Schema.String,
-  limit: Schema.optional(Schema.Number),
+  limit: optionalNumber,
 })
 
 const RelationshipsInput = Schema.Struct({
-  nodeID: Schema.optional(Schema.String),
-  path: Schema.optional(Schema.String),
-  depth: Schema.optional(Schema.Number),
+  nodeID: optionalString,
+  path: optionalString,
+  depth: optionalNumber,
 })
 
 const OwnershipInput = Schema.Struct({

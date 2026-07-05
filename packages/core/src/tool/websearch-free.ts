@@ -50,6 +50,11 @@ export const Output = Schema.Struct({
   ),
 })
 
+const formatResults = (
+  results: ReadonlyArray<{ title: string; url: string; snippet: string }>,
+): string =>
+  results.length === 0 ? "No search results found. Please try a different query." : results.map((r) => `${r.title}\n${r.url}\n${r.snippet}`).join("\n\n")
+
 const buildUrl = (query: string, numResults?: number, region?: string, time?: string) => {
   const url = new URL(DDG_URL)
   url.searchParams.set("q", query)
@@ -109,18 +114,7 @@ export const layer = Layer.effectDiscard(
 
               const parsedResults = parse(body)
               const limitedResults = parsedResults.slice(0, input.numResults ?? 8)
-
-              if (limitedResults.length === 0) {
-                return {
-                  provider: "duckduckgo" as const,
-                  text: "No search results found. Please try a different query.",
-                  results: [],
-                }
-              }
-
-              const text = limitedResults
-                .map((r) => `${r.title}\n${r.url}\n${r.snippet}`)
-                .join("\n\n")
+              const text = formatResults(limitedResults)
 
               return {
                 provider: "duckduckgo" as const,

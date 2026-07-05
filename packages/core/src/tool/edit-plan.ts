@@ -7,6 +7,7 @@ import { traced } from "../observability/trace"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { optionalString } from "./tool-schema"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
@@ -16,9 +17,9 @@ export const Input = Schema.Struct({
   phase: Schema.Literals(["before", "after"]),
   targetSymbol: Schema.String,
   changeKind: Schema.optional(Schema.Literals(["rename", "modify", "delete", "add"])),
-  filePath: Schema.optional(Schema.String),
-  diff: Schema.optional(Schema.String),
-  root: Schema.optional(Schema.String),
+  filePath: optionalString,
+  diff: optionalString,
+  root: optionalString,
 })
 
 export const Output = Schema.Struct({

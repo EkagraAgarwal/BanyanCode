@@ -59,6 +59,20 @@ type Runtime = {
 
 const runtimes = new WeakMap<AnyTool, Runtime>()
 
+const normalizeNulls = (input: unknown): unknown => {
+  if (input === null) return undefined
+  if (Array.isArray(input)) return input.map(normalizeNulls)
+  if (input && typeof input === "object") {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(input)) {
+      const normalized = normalizeNulls(v)
+      if (normalized !== undefined) out[k] = normalized
+    }
+    return out
+  }
+  return input
+}
+
 export function make<Input extends SchemaType<any>, Output extends SchemaType<any>>(
   config: Config<Input, Output>,
 ): Definition<Input, Output> {
@@ -78,7 +92,7 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
       return definition
     },
     settle: (call, context) =>
-      Schema.decodeUnknownEffect(config.input)(call.input).pipe(
+      Schema.decodeUnknownEffect(config.input)(normalizeNulls(call.input) as Record<string, unknown>).pipe(
         Effect.mapError((error) => new ToolFailure({ message: `Invalid tool input: ${error.message}` })),
         Effect.flatMap((input) =>
           config.execute(input, context).pipe(

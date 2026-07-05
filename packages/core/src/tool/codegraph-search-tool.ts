@@ -13,6 +13,7 @@ import { defaultLayer as repositoryIntelligenceLayer } from "../banyancode/repos
 import { defaultLayer as structuralQueriesLayer } from "../banyancode/structural-queries"
 import type { SearchMode, SearchResult } from "../banyancode/search/search"
 import { formatCodegraphSearchResults } from "./codegraph-format"
+import { optionalBoolean, optionalNumber } from "./tool-schema"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
@@ -23,20 +24,20 @@ const SearchIntent = Schema.Literals(["exact", "prefix", "fuzzy", "structural", 
 export const Input = Schema.Struct({
   query: Schema.String,
   modes: Schema.optional(Schema.Array(SearchIntent)),
-  limit: Schema.optional(Schema.Number),
+  limit: optionalNumber,
 })
 
 const SearchSignalSchema = Schema.Struct({
-  exact: Schema.optional(Schema.Boolean),
-  prefix: Schema.optional(Schema.Boolean),
-  camelCase: Schema.optional(Schema.Boolean),
-  snake_case: Schema.optional(Schema.Boolean),
-  bm25: Schema.optional(Schema.Number),
-  fuzzy: Schema.optional(Schema.Number),
-  qualified: Schema.optional(Schema.Boolean),
-  graph: Schema.optional(Schema.Number),
-  git: Schema.optional(Schema.Number),
-  workspace: Schema.optional(Schema.Number),
+  exact: optionalBoolean,
+  prefix: optionalBoolean,
+  camelCase: optionalBoolean,
+  snake_case: optionalBoolean,
+  bm25: optionalNumber,
+  fuzzy: optionalNumber,
+  qualified: optionalBoolean,
+  graph: optionalNumber,
+  git: optionalNumber,
+  workspace: optionalNumber,
 })
 
 const SearchResultSchema = Schema.Struct({

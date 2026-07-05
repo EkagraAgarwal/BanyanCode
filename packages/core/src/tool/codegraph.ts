@@ -12,6 +12,7 @@ import { Tools } from "./tools"
 import { defaultLayer as codegraphAnalyzerLayer } from "../banyancode/codegraph-analyzer"
 import { defaultLayer as codegraphBuildServiceLayer } from "../banyancode/codegraph-build-service"
 import { formatNodes } from "./codegraph-format"
+import { optionalBoolean, optionalNumber, optionalString } from "./tool-schema"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
@@ -22,8 +23,8 @@ export const name_dependents = "codegraph_dependents"
 export const name_callers = "codegraph_callers"
 
 export const InputBuild = Schema.Struct({
-  root: Schema.String.pipe(Schema.optional),
-  force: Schema.Boolean.pipe(Schema.optional),
+  root: optionalString,
+  force: optionalBoolean,
 })
 
 export const OutputBuild = Schema.Struct({
@@ -43,10 +44,10 @@ export const OutputBuild = Schema.Struct({
 })
 
 export const InputQuery = Schema.Struct({
-  file: Schema.String.pipe(Schema.optional),
-  function: Schema.String.pipe(Schema.optional),
-  kind: Schema.String.pipe(Schema.optional),
-  limit: Schema.Number.pipe(Schema.optional),
+  file: optionalString,
+  function: optionalString,
+  kind: optionalString,
+  limit: optionalNumber,
 })
 
 export const OutputQuery = Schema.Struct({
@@ -55,10 +56,10 @@ export const OutputQuery = Schema.Struct({
 })
 
 export const InputImpact = Schema.Struct({
-  nodeID: Schema.String.pipe(Schema.optional),
-  function: Schema.String.pipe(Schema.optional),
-  maxDepth: Schema.Number.pipe(Schema.optional),
-  limit: Schema.Number.pipe(Schema.optional),
+  nodeID: optionalString,
+  function: optionalString,
+  maxDepth: optionalNumber,
+  limit: optionalNumber,
 })
 
 export const OutputImpact = Schema.Struct({
@@ -68,9 +69,9 @@ export const OutputImpact = Schema.Struct({
 })
 
 export const InputDependents = Schema.Struct({
-  nodeID: Schema.String.pipe(Schema.optional),
-  function: Schema.String.pipe(Schema.optional),
-  limit: Schema.Number.pipe(Schema.optional),
+  nodeID: optionalString,
+  function: optionalString,
+  limit: optionalNumber,
 })
 
 export const OutputDependents = Schema.Struct({
@@ -79,9 +80,9 @@ export const OutputDependents = Schema.Struct({
 })
 
 export const InputCallers = Schema.Struct({
-  nodeID: Schema.String.pipe(Schema.optional),
-  function: Schema.String.pipe(Schema.optional),
-  limit: Schema.Number.pipe(Schema.optional),
+  nodeID: optionalString,
+  function: optionalString,
+  limit: optionalNumber,
 })
 
 export const OutputCallers = Schema.Struct({
