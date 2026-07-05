@@ -949,13 +949,14 @@ export const layer = Layer.effect(
             })
           }
         }
-        ctx.assistantMessage.error = error
-        yield* events.publish(Session.Event.Error, {
-          sessionID: ctx.assistantMessage.sessionID,
-          error: ctx.assistantMessage.error,
+ctx.assistantMessage.error = error
+          ctx.assistantMessage.finish = "error"
+          yield* events.publish(Session.Event.Error, {
+            sessionID: ctx.assistantMessage.sessionID,
+            error: ctx.assistantMessage.error,
+          })
+          yield* status.set(ctx.sessionID, { type: "idle" })
         })
-        yield* status.set(ctx.sessionID, { type: "idle" })
-      })
 
       const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
         yield* Effect.logInfo("process", {

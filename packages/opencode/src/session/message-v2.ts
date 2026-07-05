@@ -625,6 +625,21 @@ export function fromError(
       ).toObject()
     case OutputLengthError.isInstance(e):
       return e
+    case e instanceof Error &&
+      ((e as { _tag?: string })._tag === "ModelNotFoundError" ||
+        (e as { _tag?: string })._tag === "ProviderModelNotFoundError"):
+      // Surface as AuthError so the TUI's "model not found" toast matches and
+      // the error is treated as a permanent (non-retryable) failure. Without
+      // this case the error falls through to NamedError.Unknown, which masks
+      // the cause and lets runLoop keep re-iterating (the OOM path).
+      const modelErr = e as unknown as { providerID: string; modelID: string }
+      return new AuthError(
+        {
+          providerID: modelErr.providerID ?? ctx.providerID,
+          message: `Model not found: ${modelErr.providerID ?? ctx.providerID}/${modelErr.modelID}`,
+        },
+        { cause: e },
+      ).toObject()
     case LoadAPIKeyError.isInstance(e):
       return new AuthError(
         {
