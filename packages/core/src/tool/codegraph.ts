@@ -2,6 +2,7 @@ export * as CodegraphTools from "./codegraph"
 
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
+import path from "node:path"
 import { Banyan } from "../banyancode"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
@@ -103,9 +104,16 @@ export const locationLayer = Layer.effectDiscard(
           description: "Build the code graph index for a codebase",
           input: InputBuild,
           output: OutputBuild,
-          toModelOutput: ({ output }) => [
-            { type: "text", text: `indexed=${output.indexed} skipped=${output.skipped} symbols=${output.symbolsIndexed} duration_ms=${output.duration_ms}` },
-          ],
+          toModelOutput: ({ output }) => {
+            const skippedCached = output.skippedByReason?.cached ?? 0
+            const total = (output.meta?.totalFiles ?? 0) + (output.skipped ?? 0)
+            return [
+              {
+                type: "text",
+                text: `indexed=${output.indexed} skipped=${output.skipped} (cached=${skippedCached}) total=${total} files symbols=${output.symbolsIndexed} duration_ms=${output.duration_ms}`,
+              },
+            ]
+          },
           execute: (input, context) => {
             return traced(
               process.cwd(),
@@ -126,7 +134,17 @@ export const locationLayer = Layer.effectDiscard(
 
                 const worktreeAccessor = yield* Banyan.WorktreeContext
                 const worktreeOpt = yield* worktreeAccessor()
-                const root = input.root ?? worktreeOpt ?? process.cwd()
+                // Resolve to absolute path so a relative `input.root` (e.g. "." or "src")
+                // anchors to the workspace rather than the server process's CWD.
+                const candidateRoot = input.root ?? worktreeOpt
+                const root = candidateRoot
+                  ? path.resolve(candidateRoot)
+                  : path.resolve(process.cwd())
+                if (!candidateRoot) {
+                  yield* Effect.logWarning(
+                    "codegraph_build: WorktreeContext returned no value; falling back to process.cwd()",
+                  )
+                }
                 yield* buildService.start({ root, force: input.force ?? false })
 
                 let currentStatus = yield* buildService.status()
