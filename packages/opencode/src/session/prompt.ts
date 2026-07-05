@@ -1191,7 +1191,37 @@ export const layer = Layer.effect(
               history: msgs,
             }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-          const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
+          const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                const err = Cause.squash(cause)
+                const ag = yield* agents.get(lastUser.agent)
+                if (ag) {
+                  const msg: SessionV1.Assistant = {
+                    id: MessageID.ascending(),
+                    parentID: lastUser.id,
+                    role: "assistant",
+                    mode: ag.name,
+                    agent: ag.name,
+                    variant: lastUser.model.variant,
+                    path: { cwd: ctx.directory, root: ctx.worktree },
+                    cost: 0,
+                    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                    modelID: lastUser.model.modelID,
+                    providerID: lastUser.model.providerID,
+                    time: { created: Date.now(), completed: Date.now() },
+                    sessionID,
+                    error: MessageV2.fromError(err, { providerID: lastUser.model.providerID }),
+                    finish: "error",
+                  }
+                  yield* sessions.updateMessage(msg)
+                }
+                yield* status.set(sessionID, { type: "idle" })
+                return undefined as unknown as Provider.Model
+              }),
+            ),
+          )
+          if (!model) break
           const task = tasks.pop()
 
           if (task?.type === "subtask") {
