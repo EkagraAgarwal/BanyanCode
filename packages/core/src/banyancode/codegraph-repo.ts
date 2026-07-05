@@ -12,6 +12,14 @@ import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from 
 export const MAX_NODES_PER_INSERT = 1000
 const MAX_EDGES_PER_INSERT = 1000
 
+const safeSize = (path: string): number => {
+  try {
+    return Bun.file(path).size ?? 0
+  } catch {
+    return 0
+  }
+}
+
 export interface Interface {
   readonly putFile: (file: CodegraphFile) => Effect.Effect<void, never, never>
   readonly getFile: (id: string) => Effect.Effect<CodegraphFile | undefined, never, never>
@@ -51,7 +59,9 @@ export interface Interface {
     edges: CodegraphEdge[]
     previousFileID?: string
   }) => Effect.Effect<void, never, never>
-  readonly clearAll: (input?: { dropFile?: boolean }) => Effect.Effect<void, never, never>
+  readonly clearAll: (
+    input?: { dropFile?: boolean },
+  ) => Effect.Effect<{ sizeBefore: number; sizeAfter: number }, never, never>
   readonly getMeta: () => Effect.Effect<CodegraphMeta | undefined, never, never>
   readonly setMeta: (m: CodegraphMeta) => Effect.Effect<void, never, never>
   readonly bumpVersion: (input: {
@@ -421,6 +431,9 @@ export const layer = Layer.effect(
     })
 
     const clearAll = Effect.fn("CodegraphRepo.clearAll")(function* (input?: { dropFile?: boolean }) {
+      const filePath = Database.path()
+      const sizeBefore = filePath !== ":memory:" ? safeSize(filePath) : 0
+
       yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
@@ -437,11 +450,20 @@ export const layer = Layer.effect(
       // pre-delete size until the next VACUUM or full checkpoint.
       yield* db.run(sql`PRAGMA wal_checkpoint(TRUNCATE)`).pipe(Effect.orDie)
 
+      // VACUUM rewrites the main DB file from scratch, releasing every page
+      // freed by the row deletes. Without it, the file size barely changes
+      // even though the rows are gone. VACUUM cannot run inside a
+      // transaction, so this happens after the row-delete transaction above.
+      if (filePath !== ":memory:") {
+        yield* db.run(sql`VACUUM`).pipe(Effect.orDie)
+      }
+
+      const sizeAfter = filePath !== ":memory:" ? safeSize(filePath) : 0
+
       // Default `dropFile` to false: the shared `banyancode.db` also holds
       // sessions/memory/projects, so wiping the file would wipe unrelated
       // state. Callers that explicitly want file removal pass dropFile: true.
       if (input?.dropFile ?? false) {
-        const filePath = Database.path()
         if (filePath !== ":memory:") {
           // SQLite holds the DB file open via the live connection. On Windows
           // the unlink fails with EBUSY while that handle is alive; on POSIX
@@ -460,6 +482,8 @@ export const layer = Layer.effect(
           }).pipe(Effect.orDie)
         }
       }
+
+      return { sizeBefore, sizeAfter }
     })
 
     const getMeta = Effect.fn("CodegraphRepo.getMeta")(function* () {
