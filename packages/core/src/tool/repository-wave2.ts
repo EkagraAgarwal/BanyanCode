@@ -76,6 +76,11 @@ const RankingSchema = Schema.Struct({
 })
 
 const ArchitecturalSliceSchema = Schema.Struct({
+  status: Schema.optional(Schema.Literals(["success", "partial", "failed"])),
+  reason: Schema.optional(Schema.String),
+  recoveryHint: Schema.optional(Schema.String),
+  fallbackUsed: Schema.optional(Schema.Boolean),
+  degraded: Schema.optional(Schema.Boolean),
   summary: Schema.String,
   entrypoints: CodegraphNodeSchemaArray,
   importantSymbols: CodegraphNodeSchemaArray,
@@ -92,6 +97,11 @@ const ArchitecturalSliceSchema = Schema.Struct({
 })
 
 const RepositoryContextSchema = Schema.Struct({
+  status: Schema.optional(Schema.Literals(["success", "partial", "failed"])),
+  reason: Schema.optional(Schema.String),
+  recoveryHint: Schema.optional(Schema.String),
+  fallbackUsed: Schema.optional(Schema.Boolean),
+  degraded: Schema.optional(Schema.Boolean),
   query: Schema.String,
   symbols: CodegraphNodeSchemaArray,
   files: Schema.Array(CodegraphFileSchema),
@@ -194,7 +204,20 @@ const ownershipRecordToArray = (
   return out
 }
 
-const contextToOutput = (ctx: RepositoryContextT) => ({
+const contextToOutput = (
+  ctx: RepositoryContextT & {
+    status?: "success" | "partial" | "failed"
+    reason?: string
+    recoveryHint?: string
+    fallbackUsed?: boolean
+    degraded?: boolean
+  },
+) => ({
+  status: ctx.status,
+  reason: ctx.reason,
+  recoveryHint: ctx.recoveryHint,
+  fallbackUsed: ctx.fallbackUsed,
+  degraded: ctx.degraded,
   query: ctx.query,
   symbols: [...ctx.symbols],
   files: [...ctx.files],
@@ -232,7 +255,20 @@ const contextToOutput = (ctx: RepositoryContextT) => ({
   },
 })
 
-const sliceToOutput = (slc: ArchitecturalSliceT) => ({
+const sliceToOutput = (
+  slc: ArchitecturalSliceT & {
+    status?: "success" | "partial" | "failed"
+    reason?: string
+    recoveryHint?: string
+    fallbackUsed?: boolean
+    degraded?: boolean
+  },
+) => ({
+  status: slc.status,
+  reason: slc.reason,
+  recoveryHint: slc.recoveryHint,
+  fallbackUsed: slc.fallbackUsed,
+  degraded: slc.degraded,
   summary: slc.summary,
   entrypoints: [...slc.entrypoints],
   importantSymbols: [...slc.importantSymbols],

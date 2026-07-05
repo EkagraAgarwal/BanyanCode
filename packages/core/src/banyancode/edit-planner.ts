@@ -135,7 +135,14 @@ export const layer = Layer.effect(
         }
 
         const allNodes = yield* repo.listAllNodes()
-        const target = allNodes.find((n) => n.name === input.targetSymbol)
+        let target = allNodes.find((n) => n.name === input.targetSymbol)
+        if (!target && input.targetSymbol.includes(".")) {
+          const parts = input.targetSymbol.split(".")
+          const methodName = parts.pop()!
+          const parentName = parts.join(".")
+          const parentFiles = new Set(allNodes.filter((n) => n.name === parentName).map((n) => n.fileID))
+          target = allNodes.find((n) => n.name === methodName && parentFiles.has(n.fileID))
+        }
         const graphMeta = yield* repo.getMeta()
 
         if (!target) {
@@ -155,7 +162,7 @@ export const layer = Layer.effect(
           }
         }
 
-        const impact = yield* analyzer.impact({ function: input.targetSymbol })
+        const impact = yield* analyzer.impact({ nodeID: target.id, function: target.name })
         const dependentPaths = impact.dependents.map((d: CodegraphNode) => d.fileID)
         const allFiles = yield* repo.listAllFiles()
         const filePathMap = new Map(allFiles.map((f) => [f.id, f.path]))
@@ -196,9 +203,16 @@ export const layer = Layer.effect(
     const planAfterEdit: Interface["planAfterEdit"] = (input) =>
       Effect.gen(function* () {
         const allNodes = yield* repo.listAllNodes()
-        const target = allNodes.find((n) => n.name === input.targetSymbol)
+        let target = allNodes.find((n) => n.name === input.targetSymbol)
+        if (!target && input.targetSymbol.includes(".")) {
+          const parts = input.targetSymbol.split(".")
+          const methodName = parts.pop()!
+          const parentName = parts.join(".")
+          const parentFiles = new Set(allNodes.filter((n) => n.name === parentName).map((n) => n.fileID))
+          target = allNodes.find((n) => n.name === methodName && parentFiles.has(n.fileID))
+        }
         const graphMeta = yield* repo.getMeta()
-        const callers = target ? yield* analyzer.callers({ function: input.targetSymbol }) : []
+        const callers = target ? yield* analyzer.callers({ nodeID: target.id, function: target.name }) : []
         const dependentPaths = callers.map((d: CodegraphNode) => d.fileID)
         const allFiles = yield* repo.listAllFiles()
         const filePathMap = new Map(allFiles.map((f) => [f.id, f.path]))

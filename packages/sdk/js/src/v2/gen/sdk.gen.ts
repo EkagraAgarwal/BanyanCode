@@ -16,6 +16,14 @@ import type {
   AuthSetErrors,
   AuthSetResponses,
   BanyanConfig as BanyanConfig2,
+  BanyanExplainInput,
+  BanyanImpactInput,
+  BanyanOwnershipInput,
+  BanyanQueryInput,
+  BanyanRelationshipsInput,
+  BanyanSymbolsInput,
+  BanyanTestsInput,
+  BanyanTraceInput,
   CommandListErrors,
   CommandListResponses,
   Config as Config3,
@@ -110,6 +118,8 @@ import type {
   GlobalStartupResponses,
   GlobalUpgradeErrors,
   GlobalUpgradeResponses,
+  GlobalWebsearchFreeErrors,
+  GlobalWebsearchFreeResponses,
   InstanceDisposeErrors,
   InstanceDisposeResponses,
   LocationRef,
@@ -193,32 +203,24 @@ import type {
   QuestionReplyErrors,
   QuestionReplyResponses,
   QuestionV2Reply,
-  RepositoryIntelEstimateImpactErrors,
-  RepositoryIntelEstimateImpactResponses,
-  RepositoryIntelFindAsyncErrors,
-  RepositoryIntelFindAsyncResponses,
-  RepositoryIntelFindEntrypointsErrors,
-  RepositoryIntelFindEntrypointsResponses,
-  RepositoryIntelFindHttpRoutesErrors,
-  RepositoryIntelFindHttpRoutesResponses,
-  RepositoryIntelFindImplementationsErrors,
-  RepositoryIntelFindImplementationsResponses,
-  RepositoryIntelFindOverridesErrors,
-  RepositoryIntelFindOverridesResponses,
-  RepositoryIntelFindRecursiveErrors,
-  RepositoryIntelFindRecursiveResponses,
-  RepositoryIntelFindRelatedErrors,
-  RepositoryIntelFindRelatedResponses,
-  RepositoryIntelFindSubsystemErrors,
-  RepositoryIntelFindSubsystemResponses,
-  RepositoryIntelFindSymbolErrors,
-  RepositoryIntelFindSymbolResponses,
-  RepositoryIntelFindTestsErrors,
-  RepositoryIntelFindTestsResponses,
-  RepositoryIntelSearchErrors,
-  RepositoryIntelSearchResponses,
-  RepositoryIntelTraceExecutionErrors,
-  RepositoryIntelTraceExecutionResponses,
+  RepositoryIntelArchitecturalSliceErrors,
+  RepositoryIntelArchitecturalSliceResponses,
+  RepositoryIntelExplainErrors,
+  RepositoryIntelExplainResponses,
+  RepositoryIntelImpactErrors,
+  RepositoryIntelImpactResponses,
+  RepositoryIntelOwnershipErrors,
+  RepositoryIntelOwnershipResponses,
+  RepositoryIntelQueryErrors,
+  RepositoryIntelQueryResponses,
+  RepositoryIntelRelationshipsErrors,
+  RepositoryIntelRelationshipsResponses,
+  RepositoryIntelSymbolsErrors,
+  RepositoryIntelSymbolsResponses,
+  RepositoryIntelTestsErrors,
+  RepositoryIntelTestsResponses,
+  RepositoryIntelTraceErrors,
+  RepositoryIntelTraceResponses,
   SessionAbortErrors,
   SessionAbortResponses,
   SessionChildrenErrors,
@@ -1625,6 +1627,47 @@ export class Global extends HeyApiClient {
     })
   }
 
+  /**
+   * DuckDuckGo web search
+   *
+   * Run a free web search using DuckDuckGo HTML. Honors BANYANCODE_DISABLE_WEBSEARCH=1 to disable the tool entirely.
+   */
+  public websearchFree<ThrowOnError extends boolean = false>(
+    parameters?: {
+      query?: string
+      numResults?: number
+      region?: "wt-wt" | "us-en" | "uk-en" | "in-en"
+      time?: "d" | "w" | "m" | "y"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "query" },
+            { in: "body", key: "numResults" },
+            { in: "body", key: "region" },
+            { in: "body", key: "time" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<GlobalWebsearchFreeResponses, GlobalWebsearchFreeErrors, ThrowOnError>(
+      {
+        url: "/global/websearch-free",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
   private _config?: Config
   get config(): Config {
     return (this._config ??= new Config({ client: this.client }))
@@ -1648,36 +1691,23 @@ export class Global extends HeyApiClient {
 
 export class RepositoryIntel extends HeyApiClient {
   /**
-   * Find symbol
+   * Repository query
+   *
+   * Wave-2 unified repository query: returns both the raw RepositoryContext and the projected ArchitecturalSlice for a free-text query.
    */
-  public findSymbol<ThrowOnError extends boolean = false>(
+  public query<ThrowOnError extends boolean = false>(
     parameters?: {
-      name?: string
-      kind?: string
-      file?: string
-      exact?: boolean
+      banyanQueryInput?: BanyanQueryInput
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "body", key: "name" },
-            { in: "body", key: "kind" },
-            { in: "body", key: "file" },
-            { in: "body", key: "exact" },
-          ],
-        },
-      ],
-    )
+    const params = buildClientParams([parameters], [{ args: [{ key: "banyanQueryInput", map: "body" }] }])
     return (options?.client ?? this.client).post<
-      RepositoryIntelFindSymbolResponses,
-      RepositoryIntelFindSymbolErrors,
+      RepositoryIntelQueryResponses,
+      RepositoryIntelQueryErrors,
       ThrowOnError
     >({
-      url: "/global/repo/find-symbol",
+      url: "/global/repository/query",
       ...options,
       ...params,
       headers: {
@@ -1689,121 +1719,23 @@ export class RepositoryIntel extends HeyApiClient {
   }
 
   /**
-   * Find subsystem
+   * Explain symbol
+   *
+   * Returns the ArchitecturalSlice describing how the given symbol works.
    */
-  public findSubsystem<ThrowOnError extends boolean = false>(
+  public explain<ThrowOnError extends boolean = false>(
     parameters?: {
-      query?: string
-      maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      banyanExplainInput?: BanyanExplainInput
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "body", key: "query" },
-            { in: "body", key: "maxDepth" },
-          ],
-        },
-      ],
-    )
+    const params = buildClientParams([parameters], [{ args: [{ key: "banyanExplainInput", map: "body" }] }])
     return (options?.client ?? this.client).post<
-      RepositoryIntelFindSubsystemResponses,
-      RepositoryIntelFindSubsystemErrors,
+      RepositoryIntelExplainResponses,
+      RepositoryIntelExplainErrors,
       ThrowOnError
     >({
-      url: "/global/repo/find-subsystem",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Find entrypoints
-   */
-  public findEntrypoints<ThrowOnError extends boolean = false>(
-    parameters?: {
-      feature?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "feature" }] }])
-    return (options?.client ?? this.client).post<
-      RepositoryIntelFindEntrypointsResponses,
-      RepositoryIntelFindEntrypointsErrors,
-      ThrowOnError
-    >({
-      url: "/global/repo/find-entrypoints",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Find tests
-   */
-  public findTests<ThrowOnError extends boolean = false>(
-    parameters?: {
-      symbol?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "symbol" }] }])
-    return (options?.client ?? this.client).post<
-      RepositoryIntelFindTestsResponses,
-      RepositoryIntelFindTestsErrors,
-      ThrowOnError
-    >({
-      url: "/global/repo/find-tests",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Find related
-   */
-  public findRelated<ThrowOnError extends boolean = false>(
-    parameters?: {
-      nodeID?: string
-      depth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "body", key: "nodeID" },
-            { in: "body", key: "depth" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      RepositoryIntelFindRelatedResponses,
-      RepositoryIntelFindRelatedErrors,
-      ThrowOnError
-    >({
-      url: "/global/repo/find-related",
+      url: "/global/repository/explain",
       ...options,
       ...params,
       headers: {
@@ -1816,31 +1748,22 @@ export class RepositoryIntel extends HeyApiClient {
 
   /**
    * Estimate impact
+   *
+   * Returns the ArchitecturalSlice describing the impact of editing the given path.
    */
-  public estimateImpact<ThrowOnError extends boolean = false>(
+  public impact<ThrowOnError extends boolean = false>(
     parameters?: {
-      paths?: Array<string>
-      maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      banyanImpactInput?: BanyanImpactInput
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "body", key: "paths" },
-            { in: "body", key: "maxDepth" },
-          ],
-        },
-      ],
-    )
+    const params = buildClientParams([parameters], [{ args: [{ key: "banyanImpactInput", map: "body" }] }])
     return (options?.client ?? this.client).post<
-      RepositoryIntelEstimateImpactResponses,
-      RepositoryIntelEstimateImpactErrors,
+      RepositoryIntelImpactResponses,
+      RepositoryIntelImpactErrors,
       ThrowOnError
     >({
-      url: "/global/repo/estimate-impact",
+      url: "/global/repository/impact",
       ...options,
       ...params,
       headers: {
@@ -1853,31 +1776,22 @@ export class RepositoryIntel extends HeyApiClient {
 
   /**
    * Trace execution
+   *
+   * Returns the ArchitecturalSlice tracing execution from a given symbol.
    */
-  public traceExecution<ThrowOnError extends boolean = false>(
+  public trace<ThrowOnError extends boolean = false>(
     parameters?: {
-      from?: string
-      maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      banyanTraceInput?: BanyanTraceInput
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "body", key: "from" },
-            { in: "body", key: "maxDepth" },
-          ],
-        },
-      ],
-    )
+    const params = buildClientParams([parameters], [{ args: [{ key: "banyanTraceInput", map: "body" }] }])
     return (options?.client ?? this.client).post<
-      RepositoryIntelTraceExecutionResponses,
-      RepositoryIntelTraceExecutionErrors,
+      RepositoryIntelTraceResponses,
+      RepositoryIntelTraceErrors,
       ThrowOnError
     >({
-      url: "/global/repo/trace-execution",
+      url: "/global/repository/trace",
       ...options,
       ...params,
       headers: {
@@ -1889,34 +1803,23 @@ export class RepositoryIntel extends HeyApiClient {
   }
 
   /**
-   * Codegraph search
+   * Find tests
+   *
+   * Returns the test nodes covering the given symbol.
    */
-  public search<ThrowOnError extends boolean = false>(
+  public tests<ThrowOnError extends boolean = false>(
     parameters?: {
-      query?: string
-      modes?: Array<"exact" | "prefix" | "fuzzy" | "structural" | "graph" | "subsystem" | "tests">
-      limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      banyanTestsInput?: BanyanTestsInput
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "body", key: "query" },
-            { in: "body", key: "modes" },
-            { in: "body", key: "limit" },
-          ],
-        },
-      ],
-    )
+    const params = buildClientParams([parameters], [{ args: [{ key: "banyanTestsInput", map: "body" }] }])
     return (options?.client ?? this.client).post<
-      RepositoryIntelSearchResponses,
-      RepositoryIntelSearchErrors,
+      RepositoryIntelTestsResponses,
+      RepositoryIntelTestsErrors,
       ThrowOnError
     >({
-      url: "/global/codegraph/search",
+      url: "/global/repository/tests",
       ...options,
       ...params,
       headers: {
@@ -1928,34 +1831,23 @@ export class RepositoryIntel extends HeyApiClient {
   }
 
   /**
-   * Find implementations
+   * Search symbols
+   *
+   * Returns codegraph nodes matching the free-text query.
    */
-  public findImplementations<ThrowOnError extends boolean = false>(
+  public symbols<ThrowOnError extends boolean = false>(
     parameters?: {
-      interfaceName?: string
-      file?: string
-      language?: string
+      banyanSymbolsInput?: BanyanSymbolsInput
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "body", key: "interfaceName" },
-            { in: "body", key: "file" },
-            { in: "body", key: "language" },
-          ],
-        },
-      ],
-    )
+    const params = buildClientParams([parameters], [{ args: [{ key: "banyanSymbolsInput", map: "body" }] }])
     return (options?.client ?? this.client).post<
-      RepositoryIntelFindImplementationsResponses,
-      RepositoryIntelFindImplementationsErrors,
+      RepositoryIntelSymbolsResponses,
+      RepositoryIntelSymbolsErrors,
       ThrowOnError
     >({
-      url: "/global/codegraph/find-implementations",
+      url: "/global/repository/symbols",
       ...options,
       ...params,
       headers: {
@@ -1967,36 +1859,23 @@ export class RepositoryIntel extends HeyApiClient {
   }
 
   /**
-   * Find overrides
+   * Node relationships
+   *
+   * Returns nodes related to the given nodeID up to the requested depth.
    */
-  public findOverrides<ThrowOnError extends boolean = false>(
+  public relationships<ThrowOnError extends boolean = false>(
     parameters?: {
-      methodName?: string
-      baseClass?: string
-      file?: string
-      language?: string
+      banyanRelationshipsInput?: BanyanRelationshipsInput
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "body", key: "methodName" },
-            { in: "body", key: "baseClass" },
-            { in: "body", key: "file" },
-            { in: "body", key: "language" },
-          ],
-        },
-      ],
-    )
+    const params = buildClientParams([parameters], [{ args: [{ key: "banyanRelationshipsInput", map: "body" }] }])
     return (options?.client ?? this.client).post<
-      RepositoryIntelFindOverridesResponses,
-      RepositoryIntelFindOverridesErrors,
+      RepositoryIntelRelationshipsResponses,
+      RepositoryIntelRelationshipsErrors,
       ThrowOnError
     >({
-      url: "/global/codegraph/find-overrides",
+      url: "/global/repository/relationships",
       ...options,
       ...params,
       headers: {
@@ -2008,32 +1887,23 @@ export class RepositoryIntel extends HeyApiClient {
   }
 
   /**
-   * Find recursive functions
+   * File ownership
+   *
+   * Returns the primary owner for the given path plus commit count.
    */
-  public findRecursive<ThrowOnError extends boolean = false>(
+  public ownership<ThrowOnError extends boolean = false>(
     parameters?: {
-      file?: string
-      language?: string
+      banyanOwnershipInput?: BanyanOwnershipInput
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "body", key: "file" },
-            { in: "body", key: "language" },
-          ],
-        },
-      ],
-    )
+    const params = buildClientParams([parameters], [{ args: [{ key: "banyanOwnershipInput", map: "body" }] }])
     return (options?.client ?? this.client).post<
-      RepositoryIntelFindRecursiveResponses,
-      RepositoryIntelFindRecursiveErrors,
+      RepositoryIntelOwnershipResponses,
+      RepositoryIntelOwnershipErrors,
       ThrowOnError
     >({
-      url: "/global/codegraph/find-recursive",
+      url: "/global/repository/ownership",
       ...options,
       ...params,
       headers: {
@@ -2045,76 +1915,25 @@ export class RepositoryIntel extends HeyApiClient {
   }
 
   /**
-   * Find async functions
+   * Architectural slice
+   *
+   * Returns an ArchitecturalSlice explaining the symbol named by ?focus=...
    */
-  public findAsync<ThrowOnError extends boolean = false>(
-    parameters?: {
-      file?: string
-      language?: string
+  public architecturalSlice<ThrowOnError extends boolean = false>(
+    parameters: {
+      focus: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "body", key: "file" },
-            { in: "body", key: "language" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      RepositoryIntelFindAsyncResponses,
-      RepositoryIntelFindAsyncErrors,
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "focus" }] }])
+    return (options?.client ?? this.client).get<
+      RepositoryIntelArchitecturalSliceResponses,
+      RepositoryIntelArchitecturalSliceErrors,
       ThrowOnError
     >({
-      url: "/global/codegraph/find-async",
+      url: "/global/repository/architectural-slice",
       ...options,
       ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Find HTTP routes
-   */
-  public findHttpRoutes<ThrowOnError extends boolean = false>(
-    parameters?: {
-      file?: string
-      language?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "body", key: "file" },
-            { in: "body", key: "language" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      RepositoryIntelFindHttpRoutesResponses,
-      RepositoryIntelFindHttpRoutesErrors,
-      ThrowOnError
-    >({
-      url: "/global/codegraph/find-http-routes",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
     })
   }
 }

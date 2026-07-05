@@ -10,7 +10,7 @@ The TUI/CLI experience stays close to OpenCode; BanyanCode is a sequence of addi
 2. **Cross-session memory.** A persistent key-value store with **indexable JSONB payloads**, exposed as tools (`memory_store`, `memory_recall`, `memory_list`, `memory_forget`, `memory_search`) and a `memory` skill.
 3. **Codebase utility.** `/codegraph-build` builds a polyglot code graph using tree-sitter. Storage is **Turso/libSQL**.
 4. **Researcher agent with free web search.** A `researcher` subagent that uses a DuckDuckGo-backed `websearch_free` tool by default, with the existing Exa/Parallel `websearch` as an opt-in fallback.
-5. **Repository intelligence (Wave 1 + Wave 2).** A graph-first retrieval stack on top of the codegraph. Wave 1 landed the 7-method `RepositoryIntelligence` (`findSymbol`, `findSubsystem`, `findEntrypoints`, `findTests`, `findRelated`, `estimateImpact`, `traceExecution`) plus hybrid `Search` (exact, prefix, BM25, fuzzy, camelCase, snake_case, qualified) and `StructuralQueries` (implementations, overrides, recursive, async, HTTP routes). Wave 2 reshaped it to a stable **9-method public surface** (`query`, `slice`, `explain`, `impact`, `trace`, `tests`, `symbols`, `relationships`, `ownership`) returning a typed `ArchitecturalSlice` (`{ summary, entrypoints, importantSymbols, relatedTests, relatedDocs, configs, routes, dependencies }`). The LLM sees 9 `repository_*` tool wrappers, every call is trace-recorded as paired JSONL events in `.banyancode/trace/<sessionID>.jsonl` with a 7-day / 10k-event rolling cap. Served over `/global/repository/*` HTTP routes, `/global/websearch-free`, and the new `opencode repository {query,explain,impact,trace,tests,relationships,ownership}` CLI subcommands. See [`ARCHITECTURE.md`](ARCHITECTURE.md) and the Wave 2 entry in [`plan.md`](plan.md).
+5. **Repository intelligence (Wave 1 + Wave 2).** A graph-first retrieval stack on top of the codegraph. Wave 1 landed the 7-method `RepositoryIntelligence` (`findSymbol`, `findSubsystem`, `findEntrypoints`, `findTests`, `findRelated`, `estimateImpact`, `traceExecution`) plus hybrid `Search` (exact, prefix, BM25, fuzzy, camelCase, snake_case, qualified) and `StructuralQueries` (implementations, overrides, recursive, async, HTTP routes). Wave 2 reshaped it to a stable **9-method public surface** (`query`, `slice`, `explain`, `impact`, `trace`, `tests`, `symbols`, `relationships`, `ownership`) returning a typed `ArchitecturalSlice` (`{ summary, entrypoints, importantSymbols, relatedTests, relatedDocs, configs, routes, dependencies }`). The LLM sees 9 `repository_*` tool wrappers, every call is trace-recorded as paired JSONL events in `.banyancode/trace/<sessionID>.jsonl` with a 7-day / 10k-event rolling cap. Served over `/global/repository/*` HTTP routes, `/global/websearch-free`, and the new `opencode repository {query,explain,impact,trace,tests,relationships,ownership}` CLI subcommands. See [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## How BanyanCode is layered on OpenCode
 
@@ -131,7 +131,7 @@ Every wave-1 tool call is wrapped in `traced(worktree, sessionID, tool, input, s
 - `PermissionV2.Service` is implemented on top of opencode's `Permission.Service` (`packages/opencode/src/effect/permission-bridge.ts`), so core services can request permissions without depending on the v1 schema.
 - `TraceEvent` got optional `cache?: CacheLayer<...>` and `workspace?: WorkspaceContext` slots, plus a 7-day / 10k-event rolling cap on the JSONL file. The CLI subcommand `opencode codegraph trace --session <id>` tails the trace file.
 
-See [`plan.md`](plan.md) for the Wave 3+ outline (caching layer, semantic code search, evaluator harness).
+
 
 ## TUI UX
 
@@ -146,7 +146,7 @@ The TUI follows modern TUI design patterns (Charm, Ink, OpenTUI reference):
 ## Design docs
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — repo layout, runtime layers, BanyanCode service architecture, V2/V3/Wave-1/Wave-2 changelog.
-- [`plan.md`](plan.md) — Wave-2 shipped snapshot and the Wave-3+ outline.
+
 - [`specs/banyancode/`](specs/banyancode/) — per-feature design (storage, orchestrator, subagent mesh, memory, code graph, free web search, types).
 - [`specs/banyancode/overview.md`](specs/banyancode/overview.md) — one-paragraph pitch and reuse map.
 - [`packages/docs/src/content/docs/banyancode.mdx`](packages/docs/src/content/docs/banyancode.mdx) — user-facing feature overview.

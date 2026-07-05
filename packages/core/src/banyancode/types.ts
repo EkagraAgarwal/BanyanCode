@@ -151,6 +151,11 @@ export interface Ranking {
 }
 
 export interface ArchitecturalSlice {
+  readonly status?: "success" | "partial" | "failed"
+  readonly reason?: string
+  readonly recoveryHint?: string
+  readonly fallbackUsed?: boolean
+  readonly degraded?: boolean
   readonly summary: string
   readonly entrypoints: readonly CodegraphNode[]
   readonly importantSymbols: readonly CodegraphNode[]
@@ -162,6 +167,11 @@ export interface ArchitecturalSlice {
 }
 
 export interface RepositoryContext {
+  readonly status?: "success" | "partial" | "failed"
+  readonly reason?: string
+  readonly recoveryHint?: string
+  readonly fallbackUsed?: boolean
+  readonly degraded?: boolean
   readonly query: string
   readonly symbols: readonly CodegraphNode[]
   readonly files: readonly CodegraphFile[]

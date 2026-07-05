@@ -41,6 +41,10 @@ export type ToolRuntimeEvent = {
   readonly success?: boolean
   readonly errorMessage?: string
   readonly nextToolID?: string
+  readonly outputSize?: number
+  readonly fallbackUsed?: boolean
+  readonly degraded?: boolean
+  readonly retryNeeded?: boolean
 }
 
 export type AliasCount = readonly { readonly from: string; readonly to: string; readonly count: number }[]

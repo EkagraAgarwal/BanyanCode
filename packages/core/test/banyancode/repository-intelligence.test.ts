@@ -249,4 +249,48 @@ describe("RepositoryIntelligence", () => {
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
+
+  test("query with dot-notation parses Class.method correctly", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        yield* seedFixture()
+        const ri = yield* RepositoryIntelligence.Service
+
+        const results = yield* ri.symbols({ query: "MathUtil.add" })
+        expect(results.length).toBeGreaterThan(0)
+        expect(results[0].name).toBe("add")
+        expect(results[0].fileID).toBe("file-1")
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("query for unknown symbol returns degraded status with empty docs and configs", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        yield* seedFixture()
+        const ri = yield* RepositoryIntelligence.Service
+
+        const ctx = yield* ri.query({ query: "NonExistentClass.method" })
+        expect(ctx.status).toBe("failed")
+        expect(ctx.degraded).toBe(true)
+        expect(ctx.docs).toEqual([])
+        expect(ctx.configs).toEqual([])
+        expect(ctx.files).toEqual([])
+        expect(ctx.reason).toContain("No matching symbols found")
+        expect(ctx.recoveryHint).toBeDefined()
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
 })

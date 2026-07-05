@@ -221,6 +221,7 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
           startedAt,
         })
 
+        const retryNeeded = repairs.length > 0
         return yield* config.execute(decoded, context).pipe(
           Effect.flatMap((output) =>
             Schema.encodeEffect(config.output)(output).pipe(
@@ -232,8 +233,12 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
               ),
             ),
           ),
-          Effect.tap(() =>
-            record({
+          Effect.tap((output) => {
+            const outputStr = JSON.stringify(output)
+            const outputSize = outputStr.length
+            const fallbackUsed = (output && typeof output === "object" && "fallbackUsed" in output) ? !!(output as any).fallbackUsed : undefined
+            const degraded = (output && typeof output === "object" && "degraded" in output) ? !!(output as any).degraded : undefined
+            return record({
               kind: "executed",
               toolID,
               sessionID,
@@ -249,8 +254,12 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
               finishedAt: Date.now(),
               latencyMs: Date.now() - startedAt,
               success: true,
-            }),
-          ),
+              outputSize,
+              fallbackUsed,
+              degraded,
+              retryNeeded,
+            })
+          }),
           Effect.tapError((error) =>
             record({
               kind: "failed",
@@ -269,6 +278,7 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
               latencyMs: Date.now() - startedAt,
               success: false,
               errorMessage: error.message,
+              retryNeeded,
             }),
           ),
           Effect.map((output) => ({

@@ -63,14 +63,14 @@ export type Event =
   | EventPtyUpdated
   | EventPtyExited
   | EventPtyDeleted
+  | EventBanyancodeCodegraphBuild
+  | EventBanyancodeMeshStatus
+  | EventBanyancodeSystemUpdated
   | EventQuestionV2Asked
   | EventQuestionV2Replied
   | EventQuestionV2Rejected
   | EventTodoUpdated
   | EventLspUpdated
-  | EventBanyancodeCodegraphBuild
-  | EventBanyancodeMeshStatus
-  | EventBanyancodeSystemUpdated
   | EventPermissionAsked
   | EventPermissionReplied
   | EventTuiPromptAppend2
@@ -79,13 +79,13 @@ export type Event =
   | EventTuiSessionSelect2
   | EventMcpToolsChanged
   | EventMcpBrowserOpenFailed
+  | EventQuestionAsked
+  | EventQuestionReplied
+  | EventQuestionRejected
   | EventCommandExecuted
   | EventProjectDirectoriesUpdated
   | EventProjectUpdated
   | EventVcsBranchUpdated
-  | EventQuestionAsked
-  | EventQuestionReplied
-  | EventQuestionRejected
   | EventSessionStatus
   | EventSessionIdle
   | EventSessionCompacted
@@ -1345,6 +1345,71 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "banyancode.codegraph.build"
+        properties: {
+          status: "idle" | "running" | "completed" | "failed" | "cancelled"
+          root?: string
+          dbPath?: string
+          done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          currentFile?: string
+          startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          lastProgressAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          lastCompletedFile?: string
+          lastCompletedPath?: string
+          currentlyParsing?: string
+          graphVersion?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          graphCoverage?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          result?: {
+            indexed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            skipped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            duration_ms: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            symbolsIndexed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            skippedByReason: {
+              gitignored: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              banyanignored: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              artifact: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              tooLarge: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              cached: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              parseFailure: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            }
+          }
+          error?: string
+        }
+      }
+    | {
+        id: string
+        type: "banyancode.mesh.status"
+        properties: {
+          parentSessionID: string
+          peers: Array<{
+            sessionID: string
+            agent: string
+            status: "active" | "idle" | "disconnected"
+            lastSeenAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }>
+          pendingMessages: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          recentActivity: Array<{
+            from: string
+            at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }>
+        }
+      }
+    | {
+        id: string
+        type: "banyancode.system.updated"
+        properties: {
+          cpuPercent: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          memoryUsedBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          memoryTotalBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          gpuPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          vramUsedBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          gpuTotalBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          platform: "windows" | "linux" | "darwin"
+        }
+      }
+    | {
+        id: string
         type: "question.v2.asked"
         properties: {
           id: string
@@ -1386,58 +1451,6 @@ export type GlobalEvent = {
         type: "lsp.updated"
         properties: {
           [key: string]: unknown
-        }
-      }
-    | {
-        id: string
-        type: "banyancode.codegraph.build"
-        properties: {
-          status: "idle" | "running" | "completed" | "failed" | "cancelled"
-          root?: string
-          dbPath?: string
-          done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          currentFile?: string
-          startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          graphVersion?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          graphCoverage?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          result?: {
-            indexed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            skipped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            duration_ms: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          }
-          error?: string
-        }
-      }
-    | {
-        id: string
-        type: "banyancode.mesh.status"
-        properties: {
-          parentSessionID: string
-          peers: Array<{
-            sessionID: string
-            agent: string
-            status: "active" | "idle" | "disconnected"
-            lastSeenAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          }>
-          pendingMessages: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          recentActivity: Array<{
-            from: string
-            at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          }>
-        }
-      }
-    | {
-        id: string
-        type: "banyancode.system.updated"
-        properties: {
-          cpuPercent: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          memoryUsedBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          memoryTotalBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          gpuPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          vramUsedBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          gpuTotalBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          platform: "windows" | "linux" | "darwin"
         }
       }
     | {
@@ -1535,6 +1548,36 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "question.asked"
+        properties: {
+          id: string
+          sessionID: string
+          /**
+           * Questions to ask
+           */
+          questions: Array<QuestionInfo>
+          tool?: QuestionTool
+        }
+      }
+    | {
+        id: string
+        type: "question.replied"
+        properties: {
+          sessionID: string
+          requestID: string
+          answers: Array<QuestionAnswer>
+        }
+      }
+    | {
+        id: string
+        type: "question.rejected"
+        properties: {
+          sessionID: string
+          requestID: string
+        }
+      }
+    | {
+        id: string
         type: "command.executed"
         properties: {
           name: string
@@ -1582,36 +1625,6 @@ export type GlobalEvent = {
         type: "vcs.branch.updated"
         properties: {
           branch?: string
-        }
-      }
-    | {
-        id: string
-        type: "question.asked"
-        properties: {
-          id: string
-          sessionID: string
-          /**
-           * Questions to ask
-           */
-          questions: Array<QuestionInfo>
-          tool?: QuestionTool
-        }
-      }
-    | {
-        id: string
-        type: "question.replied"
-        properties: {
-          sessionID: string
-          requestID: string
-          answers: Array<QuestionAnswer>
-        }
-      }
-    | {
-        id: string
-        type: "question.rejected"
-        properties: {
-          sessionID: string
-          requestID: string
         }
       }
     | {
@@ -2154,11 +2167,148 @@ export type BanyanCodegraphNode = {
     | "build"
     | "package"
     | "generated"
+    | "ci"
+    | "docker"
+    | "env"
+    | "doc"
   name: string
   signature?: string
   startLine: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   endLine: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   code?: string
+}
+
+export type BanyanWorkspaceContext = {
+  worktree: string
+  focusDirs: Array<string>
+}
+
+export type BanyanQueryInput = {
+  query: string
+  limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  workspace?: BanyanWorkspaceContext
+}
+
+export type BanyanCodegraphFile = {
+  id: string
+  path: string
+  contentHash: string
+  language: string
+  indexedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type BanyanArchitecturalSlice = {
+  summary: string
+  entrypoints: Array<BanyanCodegraphNode>
+  importantSymbols: Array<BanyanCodegraphNode>
+  relatedTests: Array<BanyanCodegraphNode>
+  relatedDocs: Array<BanyanCodegraphFile>
+  configs: Array<BanyanCodegraphFile>
+  routes: Array<BanyanCodegraphNode>
+  dependencies: Array<{
+    name: string
+    version?: string
+  }>
+}
+
+export type BanyanCodegraphEdge = {
+  id: string
+  fromNodeID: string
+  toNodeID: string
+  kind:
+    | "imports"
+    | "calls"
+    | "extends"
+    | "references"
+    | "tested_by"
+    | "configured_by"
+    | "built_by"
+    | "mounts"
+    | "generated_from"
+}
+
+export type BanyanGitContext = {
+  recentCommits: Array<{
+    sha: string
+    subject: string
+    ts: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }>
+  ownership: Array<[string, number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"]>
+}
+
+export type BanyanRankingSignals = {
+  exact: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  symbol: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  graph: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  git: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  workspace: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type BanyanRanking = {
+  score: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  signals: BanyanRankingSignals
+  workspace?: BanyanWorkspaceContext
+}
+
+export type BanyanRepositoryContext = {
+  query: string
+  symbols: Array<BanyanCodegraphNode>
+  files: Array<BanyanCodegraphFile>
+  graph: {
+    nodes: Array<BanyanCodegraphNode>
+    edges: Array<BanyanCodegraphEdge>
+  }
+  tests: Array<BanyanCodegraphNode>
+  docs: Array<BanyanCodegraphFile>
+  configs: Array<BanyanCodegraphFile>
+  git: BanyanGitContext
+  workspace?: BanyanWorkspaceContext
+  diagnostics?: Array<unknown>
+  ranking: BanyanRanking
+}
+
+export type BanyanRepositoryResponse = {
+  slice: BanyanArchitecturalSlice
+  context: BanyanRepositoryContext
+}
+
+export type BanyanExplainInput = {
+  symbol: string
+  workspace?: BanyanWorkspaceContext
+}
+
+export type BanyanImpactInput = {
+  path: string
+  workspace?: BanyanWorkspaceContext
+}
+
+export type BanyanTraceInput = {
+  symbol: string
+  depth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  workspace?: BanyanWorkspaceContext
+}
+
+export type BanyanTestsInput = {
+  symbol: string
+}
+
+export type BanyanSymbolsInput = {
+  query: string
+  limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type BanyanRelationshipsInput = {
+  nodeID: string
+  depth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type BanyanOwnershipInput = {
+  path: string
+}
+
+export type BanyanOwnershipResult = {
+  user?: string
+  count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type Model = {
@@ -5073,6 +5223,74 @@ export type EventPtyDeleted = {
   }
 }
 
+export type EventBanyancodeCodegraphBuild = {
+  id: string
+  type: "banyancode.codegraph.build"
+  properties: {
+    status: "idle" | "running" | "completed" | "failed" | "cancelled"
+    root?: string
+    dbPath?: string
+    done: number | "NaN" | "Infinity" | "-Infinity"
+    total: number | "NaN" | "Infinity" | "-Infinity"
+    currentFile?: string
+    startedAt?: number | "NaN" | "Infinity" | "-Infinity"
+    lastProgressAt?: number | "NaN" | "Infinity" | "-Infinity"
+    lastCompletedFile?: string
+    lastCompletedPath?: string
+    currentlyParsing?: string
+    graphVersion?: number | "NaN" | "Infinity" | "-Infinity"
+    graphCoverage?: number | "NaN" | "Infinity" | "-Infinity"
+    result?: {
+      indexed: number | "NaN" | "Infinity" | "-Infinity"
+      skipped: number | "NaN" | "Infinity" | "-Infinity"
+      duration_ms: number | "NaN" | "Infinity" | "-Infinity"
+      symbolsIndexed: number | "NaN" | "Infinity" | "-Infinity"
+      skippedByReason: {
+        gitignored: number | "NaN" | "Infinity" | "-Infinity"
+        banyanignored: number | "NaN" | "Infinity" | "-Infinity"
+        artifact: number | "NaN" | "Infinity" | "-Infinity"
+        tooLarge: number | "NaN" | "Infinity" | "-Infinity"
+        cached: number | "NaN" | "Infinity" | "-Infinity"
+        parseFailure: number | "NaN" | "Infinity" | "-Infinity"
+      }
+    }
+    error?: string
+  }
+}
+
+export type EventBanyancodeMeshStatus = {
+  id: string
+  type: "banyancode.mesh.status"
+  properties: {
+    parentSessionID: string
+    peers: Array<{
+      sessionID: string
+      agent: string
+      status: "active" | "idle" | "disconnected"
+      lastSeenAt: number | "NaN" | "Infinity" | "-Infinity"
+    }>
+    pendingMessages: number | "NaN" | "Infinity" | "-Infinity"
+    recentActivity: Array<{
+      from: string
+      at: number | "NaN" | "Infinity" | "-Infinity"
+    }>
+  }
+}
+
+export type EventBanyancodeSystemUpdated = {
+  id: string
+  type: "banyancode.system.updated"
+  properties: {
+    cpuPercent: number | "NaN" | "Infinity" | "-Infinity"
+    memoryUsedBytes: number | "NaN" | "Infinity" | "-Infinity"
+    memoryTotalBytes: number | "NaN" | "Infinity" | "-Infinity"
+    gpuPercent?: number | "NaN" | "Infinity" | "-Infinity"
+    vramUsedBytes?: number | "NaN" | "Infinity" | "-Infinity"
+    gpuTotalBytes?: number | "NaN" | "Infinity" | "-Infinity"
+    platform: "windows" | "linux" | "darwin"
+  }
+}
+
 export type EventQuestionV2Asked = {
   id: string
   type: "question.v2.asked"
@@ -5123,61 +5341,6 @@ export type EventLspUpdated = {
   }
 }
 
-export type EventBanyancodeCodegraphBuild = {
-  id: string
-  type: "banyancode.codegraph.build"
-  properties: {
-    status: "idle" | "running" | "completed" | "failed" | "cancelled"
-    root?: string
-    dbPath?: string
-    done: number | "NaN" | "Infinity" | "-Infinity"
-    total: number | "NaN" | "Infinity" | "-Infinity"
-    currentFile?: string
-    startedAt?: number | "NaN" | "Infinity" | "-Infinity"
-    graphVersion?: number | "NaN" | "Infinity" | "-Infinity"
-    graphCoverage?: number | "NaN" | "Infinity" | "-Infinity"
-    result?: {
-      indexed: number | "NaN" | "Infinity" | "-Infinity"
-      skipped: number | "NaN" | "Infinity" | "-Infinity"
-      duration_ms: number | "NaN" | "Infinity" | "-Infinity"
-    }
-    error?: string
-  }
-}
-
-export type EventBanyancodeMeshStatus = {
-  id: string
-  type: "banyancode.mesh.status"
-  properties: {
-    parentSessionID: string
-    peers: Array<{
-      sessionID: string
-      agent: string
-      status: "active" | "idle" | "disconnected"
-      lastSeenAt: number | "NaN" | "Infinity" | "-Infinity"
-    }>
-    pendingMessages: number | "NaN" | "Infinity" | "-Infinity"
-    recentActivity: Array<{
-      from: string
-      at: number | "NaN" | "Infinity" | "-Infinity"
-    }>
-  }
-}
-
-export type EventBanyancodeSystemUpdated = {
-  id: string
-  type: "banyancode.system.updated"
-  properties: {
-    cpuPercent: number | "NaN" | "Infinity" | "-Infinity"
-    memoryUsedBytes: number | "NaN" | "Infinity" | "-Infinity"
-    memoryTotalBytes: number | "NaN" | "Infinity" | "-Infinity"
-    gpuPercent?: number | "NaN" | "Infinity" | "-Infinity"
-    vramUsedBytes?: number | "NaN" | "Infinity" | "-Infinity"
-    gpuTotalBytes?: number | "NaN" | "Infinity" | "-Infinity"
-    platform: "windows" | "linux" | "darwin"
-  }
-}
-
 export type EventPermissionAsked = {
   id: string
   type: "permission.asked"
@@ -5221,6 +5384,39 @@ export type EventMcpBrowserOpenFailed = {
   properties: {
     mcpName: string
     url: string
+  }
+}
+
+export type EventQuestionAsked = {
+  id: string
+  type: "question.asked"
+  properties: {
+    id: string
+    sessionID: string
+    /**
+     * Questions to ask
+     */
+    questions: Array<QuestionInfo>
+    tool?: QuestionTool
+  }
+}
+
+export type EventQuestionReplied = {
+  id: string
+  type: "question.replied"
+  properties: {
+    sessionID: string
+    requestID: string
+    answers: Array<QuestionAnswer>
+  }
+}
+
+export type EventQuestionRejected = {
+  id: string
+  type: "question.rejected"
+  properties: {
+    sessionID: string
+    requestID: string
   }
 }
 
@@ -5276,39 +5472,6 @@ export type EventVcsBranchUpdated = {
   type: "vcs.branch.updated"
   properties: {
     branch?: string
-  }
-}
-
-export type EventQuestionAsked = {
-  id: string
-  type: "question.asked"
-  properties: {
-    id: string
-    sessionID: string
-    /**
-     * Questions to ask
-     */
-    questions: Array<QuestionInfo>
-    tool?: QuestionTool
-  }
-}
-
-export type EventQuestionReplied = {
-  id: string
-  type: "question.replied"
-  properties: {
-    sessionID: string
-    requestID: string
-    answers: Array<QuestionAnswer>
-  }
-}
-
-export type EventQuestionRejected = {
-  id: string
-  type: "question.rejected"
-  properties: {
-    sessionID: string
-    requestID: string
   }
 }
 
@@ -5984,415 +6147,278 @@ export type GlobalBanyanAgentSaveResponses = {
 
 export type GlobalBanyanAgentSaveResponse = GlobalBanyanAgentSaveResponses[keyof GlobalBanyanAgentSaveResponses]
 
-export type RepositoryIntelFindSymbolData = {
+export type GlobalWebsearchFreeData = {
   body?: {
-    name: string
-    kind?: string
-    file?: string
-    exact?: boolean
-  }
-  path?: never
-  query?: never
-  url: "/global/repo/find-symbol"
-}
-
-export type RepositoryIntelFindSymbolErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type RepositoryIntelFindSymbolError = RepositoryIntelFindSymbolErrors[keyof RepositoryIntelFindSymbolErrors]
-
-export type RepositoryIntelFindSymbolResponses = {
-  /**
-   * Matching symbols
-   */
-  200: Array<BanyanCodegraphNode>
-}
-
-export type RepositoryIntelFindSymbolResponse =
-  RepositoryIntelFindSymbolResponses[keyof RepositoryIntelFindSymbolResponses]
-
-export type RepositoryIntelFindSubsystemData = {
-  body?: {
+    /**
+     * Websearch query
+     */
     query: string
-    maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    numResults?: number
+    region?: "wt-wt" | "us-en" | "uk-en" | "in-en"
+    time?: "d" | "w" | "m" | "y"
   }
   path?: never
   query?: never
-  url: "/global/repo/find-subsystem"
+  url: "/global/websearch-free"
 }
 
-export type RepositoryIntelFindSubsystemErrors = {
+export type GlobalWebsearchFreeErrors = {
   /**
-   * Bad request
+   * BadRequest | InvalidRequestError
    */
-  400: BadRequestError
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
 }
 
-export type RepositoryIntelFindSubsystemError =
-  RepositoryIntelFindSubsystemErrors[keyof RepositoryIntelFindSubsystemErrors]
+export type GlobalWebsearchFreeError = GlobalWebsearchFreeErrors[keyof GlobalWebsearchFreeErrors]
 
-export type RepositoryIntelFindSubsystemResponses = {
+export type GlobalWebsearchFreeResponses = {
   /**
-   * Subsystem entry and related nodes
+   * DuckDuckGo search results
    */
   200: {
-    entry: BanyanCodegraphNode
-    related: Array<BanyanCodegraphNode>
+    provider: "duckduckgo"
+    text: string
+    results: Array<{
+      title: string
+      url: string
+      snippet: string
+    }>
   }
 }
 
-export type RepositoryIntelFindSubsystemResponse =
-  RepositoryIntelFindSubsystemResponses[keyof RepositoryIntelFindSubsystemResponses]
+export type GlobalWebsearchFreeResponse = GlobalWebsearchFreeResponses[keyof GlobalWebsearchFreeResponses]
 
-export type RepositoryIntelFindEntrypointsData = {
-  body?: {
-    feature: string
-  }
+export type RepositoryIntelQueryData = {
+  body?: BanyanQueryInput
   path?: never
   query?: never
-  url: "/global/repo/find-entrypoints"
+  url: "/global/repository/query"
 }
 
-export type RepositoryIntelFindEntrypointsErrors = {
+export type RepositoryIntelQueryErrors = {
   /**
    * Bad request
    */
   400: BadRequestError
 }
 
-export type RepositoryIntelFindEntrypointsError =
-  RepositoryIntelFindEntrypointsErrors[keyof RepositoryIntelFindEntrypointsErrors]
+export type RepositoryIntelQueryError = RepositoryIntelQueryErrors[keyof RepositoryIntelQueryErrors]
 
-export type RepositoryIntelFindEntrypointsResponses = {
+export type RepositoryIntelQueryResponses = {
   /**
-   * Feature entrypoints
+   * Repository context and slice for query
    */
-  200: Array<BanyanCodegraphNode>
+  200: BanyanRepositoryResponse
 }
 
-export type RepositoryIntelFindEntrypointsResponse =
-  RepositoryIntelFindEntrypointsResponses[keyof RepositoryIntelFindEntrypointsResponses]
+export type RepositoryIntelQueryResponse = RepositoryIntelQueryResponses[keyof RepositoryIntelQueryResponses]
 
-export type RepositoryIntelFindTestsData = {
-  body?: {
-    symbol: string
-  }
+export type RepositoryIntelExplainData = {
+  body?: BanyanExplainInput
   path?: never
   query?: never
-  url: "/global/repo/find-tests"
+  url: "/global/repository/explain"
 }
 
-export type RepositoryIntelFindTestsErrors = {
+export type RepositoryIntelExplainErrors = {
   /**
    * Bad request
    */
   400: BadRequestError
 }
 
-export type RepositoryIntelFindTestsError = RepositoryIntelFindTestsErrors[keyof RepositoryIntelFindTestsErrors]
+export type RepositoryIntelExplainError = RepositoryIntelExplainErrors[keyof RepositoryIntelExplainErrors]
 
-export type RepositoryIntelFindTestsResponses = {
+export type RepositoryIntelExplainResponses = {
+  /**
+   * Architectural slice for symbol
+   */
+  200: BanyanArchitecturalSlice
+}
+
+export type RepositoryIntelExplainResponse = RepositoryIntelExplainResponses[keyof RepositoryIntelExplainResponses]
+
+export type RepositoryIntelImpactData = {
+  body?: BanyanImpactInput
+  path?: never
+  query?: never
+  url: "/global/repository/impact"
+}
+
+export type RepositoryIntelImpactErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelImpactError = RepositoryIntelImpactErrors[keyof RepositoryIntelImpactErrors]
+
+export type RepositoryIntelImpactResponses = {
+  /**
+   * Architectural slice for impact
+   */
+  200: BanyanArchitecturalSlice
+}
+
+export type RepositoryIntelImpactResponse = RepositoryIntelImpactResponses[keyof RepositoryIntelImpactResponses]
+
+export type RepositoryIntelTraceData = {
+  body?: BanyanTraceInput
+  path?: never
+  query?: never
+  url: "/global/repository/trace"
+}
+
+export type RepositoryIntelTraceErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelTraceError = RepositoryIntelTraceErrors[keyof RepositoryIntelTraceErrors]
+
+export type RepositoryIntelTraceResponses = {
+  /**
+   * Architectural slice for trace
+   */
+  200: BanyanArchitecturalSlice
+}
+
+export type RepositoryIntelTraceResponse = RepositoryIntelTraceResponses[keyof RepositoryIntelTraceResponses]
+
+export type RepositoryIntelTestsData = {
+  body?: BanyanTestsInput
+  path?: never
+  query?: never
+  url: "/global/repository/tests"
+}
+
+export type RepositoryIntelTestsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelTestsError = RepositoryIntelTestsErrors[keyof RepositoryIntelTestsErrors]
+
+export type RepositoryIntelTestsResponses = {
   /**
    * Tests for symbol
    */
   200: Array<BanyanCodegraphNode>
 }
 
-export type RepositoryIntelFindTestsResponse =
-  RepositoryIntelFindTestsResponses[keyof RepositoryIntelFindTestsResponses]
+export type RepositoryIntelTestsResponse = RepositoryIntelTestsResponses[keyof RepositoryIntelTestsResponses]
 
-export type RepositoryIntelFindRelatedData = {
-  body?: {
-    nodeID: string
-    depth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  }
+export type RepositoryIntelSymbolsData = {
+  body?: BanyanSymbolsInput
   path?: never
   query?: never
-  url: "/global/repo/find-related"
+  url: "/global/repository/symbols"
 }
 
-export type RepositoryIntelFindRelatedErrors = {
+export type RepositoryIntelSymbolsErrors = {
   /**
    * Bad request
    */
   400: BadRequestError
 }
 
-export type RepositoryIntelFindRelatedError = RepositoryIntelFindRelatedErrors[keyof RepositoryIntelFindRelatedErrors]
+export type RepositoryIntelSymbolsError = RepositoryIntelSymbolsErrors[keyof RepositoryIntelSymbolsErrors]
 
-export type RepositoryIntelFindRelatedResponses = {
+export type RepositoryIntelSymbolsResponses = {
+  /**
+   * Matching symbols
+   */
+  200: Array<BanyanCodegraphNode>
+}
+
+export type RepositoryIntelSymbolsResponse = RepositoryIntelSymbolsResponses[keyof RepositoryIntelSymbolsResponses]
+
+export type RepositoryIntelRelationshipsData = {
+  body?: BanyanRelationshipsInput
+  path?: never
+  query?: never
+  url: "/global/repository/relationships"
+}
+
+export type RepositoryIntelRelationshipsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type RepositoryIntelRelationshipsError =
+  RepositoryIntelRelationshipsErrors[keyof RepositoryIntelRelationshipsErrors]
+
+export type RepositoryIntelRelationshipsResponses = {
   /**
    * Related nodes
    */
   200: Array<BanyanCodegraphNode>
 }
 
-export type RepositoryIntelFindRelatedResponse =
-  RepositoryIntelFindRelatedResponses[keyof RepositoryIntelFindRelatedResponses]
+export type RepositoryIntelRelationshipsResponse =
+  RepositoryIntelRelationshipsResponses[keyof RepositoryIntelRelationshipsResponses]
 
-export type RepositoryIntelEstimateImpactData = {
-  body?: {
-    paths: Array<string>
-    maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  }
+export type RepositoryIntelOwnershipData = {
+  body?: BanyanOwnershipInput
   path?: never
   query?: never
-  url: "/global/repo/estimate-impact"
+  url: "/global/repository/ownership"
 }
 
-export type RepositoryIntelEstimateImpactErrors = {
+export type RepositoryIntelOwnershipErrors = {
   /**
    * Bad request
    */
   400: BadRequestError
 }
 
-export type RepositoryIntelEstimateImpactError =
-  RepositoryIntelEstimateImpactErrors[keyof RepositoryIntelEstimateImpactErrors]
+export type RepositoryIntelOwnershipError = RepositoryIntelOwnershipErrors[keyof RepositoryIntelOwnershipErrors]
 
-export type RepositoryIntelEstimateImpactResponses = {
+export type RepositoryIntelOwnershipResponses = {
   /**
-   * Impact estimate
+   * File ownership
    */
-  200: {
-    direct: Array<BanyanCodegraphNode>
-    transitive: Array<BanyanCodegraphNode>
-    blastRadius: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  }
+  200: BanyanOwnershipResult
 }
 
-export type RepositoryIntelEstimateImpactResponse =
-  RepositoryIntelEstimateImpactResponses[keyof RepositoryIntelEstimateImpactResponses]
+export type RepositoryIntelOwnershipResponse =
+  RepositoryIntelOwnershipResponses[keyof RepositoryIntelOwnershipResponses]
 
-export type RepositoryIntelTraceExecutionData = {
-  body?: {
-    from: string
-    maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  }
+export type RepositoryIntelArchitecturalSliceData = {
+  body?: never
   path?: never
-  query?: never
-  url: "/global/repo/trace-execution"
+  query: {
+    focus: string
+  }
+  url: "/global/repository/architectural-slice"
 }
 
-export type RepositoryIntelTraceExecutionErrors = {
+export type RepositoryIntelArchitecturalSliceErrors = {
   /**
    * Bad request
    */
   400: BadRequestError
 }
 
-export type RepositoryIntelTraceExecutionError =
-  RepositoryIntelTraceExecutionErrors[keyof RepositoryIntelTraceExecutionErrors]
+export type RepositoryIntelArchitecturalSliceError =
+  RepositoryIntelArchitecturalSliceErrors[keyof RepositoryIntelArchitecturalSliceErrors]
 
-export type RepositoryIntelTraceExecutionResponses = {
+export type RepositoryIntelArchitecturalSliceResponses = {
   /**
-   * Execution trace
+   * Architectural slice for focus
    */
-  200: Array<BanyanCodegraphNode>
+  200: BanyanArchitecturalSlice
 }
 
-export type RepositoryIntelTraceExecutionResponse =
-  RepositoryIntelTraceExecutionResponses[keyof RepositoryIntelTraceExecutionResponses]
-
-export type RepositoryIntelSearchData = {
-  body?: {
-    query: string
-    modes?: Array<"exact" | "prefix" | "fuzzy" | "structural" | "graph" | "subsystem" | "tests">
-    limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  }
-  path?: never
-  query?: never
-  url: "/global/codegraph/search"
-}
-
-export type RepositoryIntelSearchErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type RepositoryIntelSearchError = RepositoryIntelSearchErrors[keyof RepositoryIntelSearchErrors]
-
-export type RepositoryIntelSearchResponses = {
-  /**
-   * Search results
-   */
-  200: Array<{
-    node: BanyanCodegraphNode
-    score: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    signals: {
-      exact?: boolean
-      prefix?: boolean
-      camelCase?: boolean
-      snake_case?: boolean
-      bm25?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      fuzzy?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      qualified?: boolean
-      graph?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      git?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      workspace?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    }
-  }>
-}
-
-export type RepositoryIntelSearchResponse = RepositoryIntelSearchResponses[keyof RepositoryIntelSearchResponses]
-
-export type RepositoryIntelFindImplementationsData = {
-  body?: {
-    interfaceName: string
-    file?: string
-    language?: string
-  }
-  path?: never
-  query?: never
-  url: "/global/codegraph/find-implementations"
-}
-
-export type RepositoryIntelFindImplementationsErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type RepositoryIntelFindImplementationsError =
-  RepositoryIntelFindImplementationsErrors[keyof RepositoryIntelFindImplementationsErrors]
-
-export type RepositoryIntelFindImplementationsResponses = {
-  /**
-   * Implementations
-   */
-  200: Array<BanyanCodegraphNode>
-}
-
-export type RepositoryIntelFindImplementationsResponse =
-  RepositoryIntelFindImplementationsResponses[keyof RepositoryIntelFindImplementationsResponses]
-
-export type RepositoryIntelFindOverridesData = {
-  body?: {
-    methodName: string
-    baseClass?: string
-    file?: string
-    language?: string
-  }
-  path?: never
-  query?: never
-  url: "/global/codegraph/find-overrides"
-}
-
-export type RepositoryIntelFindOverridesErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type RepositoryIntelFindOverridesError =
-  RepositoryIntelFindOverridesErrors[keyof RepositoryIntelFindOverridesErrors]
-
-export type RepositoryIntelFindOverridesResponses = {
-  /**
-   * Method overrides
-   */
-  200: Array<BanyanCodegraphNode>
-}
-
-export type RepositoryIntelFindOverridesResponse =
-  RepositoryIntelFindOverridesResponses[keyof RepositoryIntelFindOverridesResponses]
-
-export type RepositoryIntelFindRecursiveData = {
-  body?: {
-    file?: string
-    language?: string
-  }
-  path?: never
-  query?: never
-  url: "/global/codegraph/find-recursive"
-}
-
-export type RepositoryIntelFindRecursiveErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type RepositoryIntelFindRecursiveError =
-  RepositoryIntelFindRecursiveErrors[keyof RepositoryIntelFindRecursiveErrors]
-
-export type RepositoryIntelFindRecursiveResponses = {
-  /**
-   * Recursive functions
-   */
-  200: Array<BanyanCodegraphNode>
-}
-
-export type RepositoryIntelFindRecursiveResponse =
-  RepositoryIntelFindRecursiveResponses[keyof RepositoryIntelFindRecursiveResponses]
-
-export type RepositoryIntelFindAsyncData = {
-  body?: {
-    file?: string
-    language?: string
-  }
-  path?: never
-  query?: never
-  url: "/global/codegraph/find-async"
-}
-
-export type RepositoryIntelFindAsyncErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type RepositoryIntelFindAsyncError = RepositoryIntelFindAsyncErrors[keyof RepositoryIntelFindAsyncErrors]
-
-export type RepositoryIntelFindAsyncResponses = {
-  /**
-   * Async functions
-   */
-  200: Array<BanyanCodegraphNode>
-}
-
-export type RepositoryIntelFindAsyncResponse =
-  RepositoryIntelFindAsyncResponses[keyof RepositoryIntelFindAsyncResponses]
-
-export type RepositoryIntelFindHttpRoutesData = {
-  body?: {
-    file?: string
-    language?: string
-  }
-  path?: never
-  query?: never
-  url: "/global/codegraph/find-http-routes"
-}
-
-export type RepositoryIntelFindHttpRoutesErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type RepositoryIntelFindHttpRoutesError =
-  RepositoryIntelFindHttpRoutesErrors[keyof RepositoryIntelFindHttpRoutesErrors]
-
-export type RepositoryIntelFindHttpRoutesResponses = {
-  /**
-   * HTTP routes
-   */
-  200: Array<BanyanCodegraphNode>
-}
-
-export type RepositoryIntelFindHttpRoutesResponse =
-  RepositoryIntelFindHttpRoutesResponses[keyof RepositoryIntelFindHttpRoutesResponses]
+export type RepositoryIntelArchitecturalSliceResponse =
+  RepositoryIntelArchitecturalSliceResponses[keyof RepositoryIntelArchitecturalSliceResponses]
 
 export type EventSubscribeData = {
   body?: never

@@ -5,6 +5,11 @@ const MAX_ITEMS_PER_OUTPUT = 25
 type OwnershipEntry = { path: string; count: number }
 
 export type FormatRepositoryContext = {
+  status?: "success" | "partial" | "failed"
+  reason?: string
+  recoveryHint?: string
+  fallbackUsed?: boolean
+  degraded?: boolean
   query: string
   symbols: readonly CodegraphNode[]
   files: readonly CodegraphFile[]
@@ -47,8 +52,25 @@ const renderFilesBlock = (files: readonly CodegraphFile[], header: string): stri
   return `${header} (${files.length}):\n${lines.join("\n")}${tail}`
 }
 
-export const formatArchitecturalSlice = (slice: ArchitecturalSlice): string =>
-  [
+export type FormatArchitecturalSlice = ArchitecturalSlice & {
+  status?: "success" | "partial" | "failed"
+  reason?: string
+  recoveryHint?: string
+  fallbackUsed?: boolean
+  degraded?: boolean
+}
+
+export const formatArchitecturalSlice = (slice: FormatArchitecturalSlice): string => {
+  const statusLines: string[] = []
+  if (slice.status) {
+    statusLines.push(`Status: ${slice.status.toUpperCase()}`)
+    if (slice.reason) statusLines.push(`Reason: ${slice.reason}`)
+    if (slice.recoveryHint) statusLines.push(`Recovery Hint: ${slice.recoveryHint}`)
+    if (slice.fallbackUsed) statusLines.push(`Fallback Used: true`)
+  }
+
+  return [
+    ...(statusLines.length > 0 ? [statusLines.join("\n")] : []),
     truncate(slice.summary, 600),
     renderNodesBlock(slice.entrypoints, "Entrypoints"),
     renderNodesBlock(slice.importantSymbols, "Important symbols"),
@@ -65,6 +87,7 @@ export const formatArchitecturalSlice = (slice: ArchitecturalSlice): string =>
             .join(", ")
     }`,
   ].join("\n\n")
+}
 
 export const formatRepositoryContext = (ctx: FormatRepositoryContext): string => {
   const ownershipEntries: OwnershipEntry[] =
@@ -83,7 +106,16 @@ export const formatRepositoryContext = (ctx: FormatRepositoryContext): string =>
     ownershipLines.push(`Ownership (${ownershipEntries.length}):\n${lines.join("\n")}${tail}`)
   }
 
+  const statusLines: string[] = []
+  if (ctx.status) {
+    statusLines.push(`Status: ${ctx.status.toUpperCase()}`)
+    if (ctx.reason) statusLines.push(`Reason: ${ctx.reason}`)
+    if (ctx.recoveryHint) statusLines.push(`Recovery Hint: ${ctx.recoveryHint}`)
+    if (ctx.fallbackUsed) statusLines.push(`Fallback Used: true`)
+  }
+
   return [
+    ...(statusLines.length > 0 ? [statusLines.join("\n")] : []),
     `Repository query: ${ctx.query}`,
     renderNodesBlock(ctx.symbols, "Symbols"),
     renderFilesBlock(ctx.files, "Files"),

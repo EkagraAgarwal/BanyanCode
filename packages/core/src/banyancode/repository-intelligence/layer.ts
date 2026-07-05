@@ -60,17 +60,52 @@ export const layer = Layer.effect(
           if (!fileID) return []
         }
 
+        // Try exact name search first
         const results = yield* repo.searchNodes({ name: input.name, kind: input.kind })
-        const filtered = fileID ? results.filter((n) => n.fileID === fileID) : results
+        let filtered = fileID ? results.filter((n) => n.fileID === fileID) : results
+
+        let searchName = input.name
+        let parentName: string | undefined
+
+        // If no matches and the name contains a dot, fallback to class/method resolution
+        if (filtered.length === 0 && input.name.includes(".")) {
+          const parts = input.name.split(".")
+          searchName = parts.pop()!
+          parentName = parts.join(".")
+
+          const splitResults = yield* repo.searchNodes({ name: searchName, kind: input.kind })
+          let splitFiltered = fileID ? splitResults.filter((n) => n.fileID === fileID) : splitResults
+
+          const allNodes = yield* repo.listAllNodes()
+          const validFileIDs = new Set<string>()
+          for (const node of allNodes) {
+            if (node.name === parentName) {
+              validFileIDs.add(node.fileID)
+            }
+          }
+          splitFiltered = splitFiltered.filter((n) => validFileIDs.has(n.fileID))
+          if (splitFiltered.length > 0) {
+            filtered = splitFiltered
+          }
+        }
 
         if (input.exact) return filtered
 
-        const exactMatch = filtered.find((n) => n.name === input.name)
+        const exactMatch = filtered.find((n) => n.name === searchName || n.name === input.name)
         if (exactMatch) return filtered
 
         const all = yield* repo.listAllNodes()
-        const prefixResults = all.filter((n) => n.name.startsWith(input.name))
-        const prefixFiltered = fileID ? prefixResults.filter((n) => n.fileID === fileID) : prefixResults
+        const prefixResults = all.filter((n) => n.name.startsWith(searchName) || n.name.startsWith(input.name))
+        let prefixFiltered = fileID ? prefixResults.filter((n) => n.fileID === fileID) : prefixResults
+        if (parentName) {
+          const validFileIDs = new Set<string>()
+          for (const node of all) {
+            if (node.name === parentName) {
+              validFileIDs.add(node.fileID)
+            }
+          }
+          prefixFiltered = prefixFiltered.filter((n) => validFileIDs.has(n.fileID))
+        }
         if (input.kind) return prefixFiltered.filter((n) => n.kind === input.kind)
         return prefixFiltered
       })
@@ -184,10 +219,21 @@ export const layer = Layer.effect(
         const testNodes = allNodes.filter((n) => testFileIDs.has(n.fileID))
         if (testNodes.length === 0) return []
 
-        const symbolMatches = yield* repo.searchNodes({ name: input.symbol })
-        if (symbolMatches.length === 0) return []
+        const symbolMatches = yield* findSymbol({ name: input.symbol })
+        if (symbolMatches.length === 0) {
+          const relevantTests: CodegraphNode[] = []
+          const lowerSymbol = input.symbol.toLowerCase()
+          const symbolPart = input.symbol.includes(".") ? input.symbol.split(".").pop()!.toLowerCase() : lowerSymbol
+          for (const node of testNodes) {
+            if (node.name.toLowerCase().includes(symbolPart) || node.code?.toLowerCase().includes(symbolPart)) {
+              relevantTests.push(node)
+            }
+          }
+          return relevantTests
+        }
 
-        const exactMatch = symbolMatches.find((n) => n.name === input.symbol)
+        const searchName = input.symbol.includes(".") ? input.symbol.split(".").pop()! : input.symbol
+        const exactMatch = symbolMatches.find((n) => n.name === searchName)
         const symbolID = (exactMatch ?? symbolMatches[0])!.id
 
         const relevantTests: CodegraphNode[] = []
@@ -197,6 +243,16 @@ export const layer = Layer.effect(
             (e) => e.toNodeID === symbolID && (e.kind === "calls" || e.kind === "references"),
           )
           if (references.length > 0) relevantTests.push(node)
+        }
+
+        if (relevantTests.length === 0) {
+          const lowerSymbol = input.symbol.toLowerCase()
+          const symbolPart = input.symbol.includes(".") ? input.symbol.split(".").pop()!.toLowerCase() : lowerSymbol
+          for (const node of testNodes) {
+            if (node.name.toLowerCase().includes(symbolPart) || node.code?.toLowerCase().includes(symbolPart)) {
+              relevantTests.push(node)
+            }
+          }
         }
 
         return relevantTests
@@ -293,8 +349,10 @@ export const layer = Layer.effect(
         }
         const graphNodesList = graphNodeIDs.size > 0 ? yield* repo.nodesByIDs([...graphNodeIDs]) : []
 
-        const docs = allFiles.filter((f) => isDocPath(f.path))
-        const configs = allFiles.filter((f) => isConfigPath(f.path))
+        const isDegraded = symbols.length === 0
+        const docs = isDegraded ? [] : allFiles.filter((f) => isDocPath(f.path))
+        const configs = isDegraded ? [] : allFiles.filter((f) => isConfigPath(f.path))
+        const files = isDegraded ? [] : allFiles
 
         const recentCommits = yield* git.recentCommits({
           limit: input.limit ?? 10,
@@ -303,9 +361,14 @@ export const layer = Layer.effect(
         const ownership = new Map<string, number>()
 
         return {
+          status: isDegraded ? "failed" : "success",
+          reason: isDegraded ? `No matching symbols found for query "${input.query}"` : undefined,
+          recoveryHint: isDegraded ? `Use code_find with intent='definition' to search for symbols, or check your query text.` : undefined,
+          degraded: isDegraded,
+          fallbackUsed: isDegraded,
           query: input.query,
           symbols,
-          files: allFiles,
+          files,
           graph: { nodes: graphNodesList, edges: graphEdges },
           tests,
           docs,
@@ -344,6 +407,11 @@ export const layer = Layer.effect(
         const summary = summaryParts.join(" — ")
 
         return {
+          status: ctx.status,
+          reason: ctx.reason,
+          recoveryHint: ctx.recoveryHint,
+          degraded: ctx.degraded,
+          fallbackUsed: ctx.fallbackUsed,
           summary,
           entrypoints,
           importantSymbols,

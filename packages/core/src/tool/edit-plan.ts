@@ -51,12 +51,21 @@ export const locationLayer = Layer.effectDiscard(
           contract: { visibility: "public" },
           input: Input,
           output: Output,
-          toModelOutput: ({ output }) => [
-            {
-              type: "text",
-              text: `steps=${output.plan.steps.length} direct=${output.plan.expectedImpact.directDependents} transitive=${output.plan.expectedImpact.transitiveDependents} risks=${output.plan.risks.length}`,
-            },
-          ],
+          toModelOutput: ({ output }) => {
+            const stepsBlock = output.plan.steps.map((s, i) => `${i + 1}. [${s.tool}] ${s.rationale} (args: ${JSON.stringify(s.args)})`).join("\n")
+            const impactBlock = `Direct Dependents: ${output.plan.expectedImpact.directDependents}\nTransitive Dependents: ${output.plan.expectedImpact.transitiveDependents}\nAffected Tests to Run: ${output.plan.expectedImpact.testsToRun.length > 0 ? output.plan.expectedImpact.testsToRun.join(", ") : "none"}`
+            const risksBlock = output.plan.risks.length > 0 
+              ? output.plan.risks.map((r) => `- [${r.severity.toUpperCase()}] ${r.kind}: ${r.message}`).join("\n")
+              : "none."
+            
+            const text = [
+              `**Steps to Execute:**\n${stepsBlock || "none."}`,
+              `**Expected Impact:**\n${impactBlock}`,
+              `**Risks Identified:**\n${risksBlock}`
+            ].join("\n\n")
+
+            return [{ type: "text", text }]
+          },
           execute: (input, context) => {
             return traced(
               process.cwd(),
