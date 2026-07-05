@@ -35,8 +35,8 @@ export const layer = Layer.effect(
     const state = State.create<Data, Editor>({
       initial: () => ({ entries: new Map() }),
       editor: (draft) => ({
-        set: (name, tool) => {
-          draft.entries.set(name, tool)
+        set: (name, entry) => {
+          draft.entries.set(name, entry as never)
         },
       }),
     })

@@ -44,12 +44,21 @@ export const locationLayer = Layer.effectDiscard(
     yield* tools.register({
       [name]: Tool.make({
         description:
-          "Single entry point for code navigation. Use one of five intents: " +
-          "definition (exact symbol/file lookup), callers (who calls this), " +
-          "dependents (what this calls/imports), impact (full blast radius), " +
-          "find_file (locate files). " +
-          "Returns a meta field with graphVersion/graphCoverage so you can " +
-          "reason about graph freshness.",
+          "Use when:\n" +
+          "  top-level symbol locator across the codebase — routes to the right tool\n" +
+          "  based on the `intent` you pass.\n" +
+          "Examples\n" +
+          "  - \"Find `ToolCatalog`\"\n" +
+          "  - \"Where is `SessionTools.resolve`?\"\n" +
+          "  - \"Open `ConfigLoader`\"\n" +
+          "Returns\n" +
+          "  { matches: CodegraphNode[], files: CodegraphFile[], intent: string }\n" +
+          "Avoid when\n" +
+          "  you have a nodeID — use codegraph_query or repository_query directly.\n" +
+          "After this, often: codegraph_callers, codegraph_impact — to traverse from\n" +
+          "  the resolved node.\n" +
+          "Before this: codegraph_build (if not built).",
+        contract: { visibility: "public" },
         input: Input,
         output: Output,
         toModelOutput: ({ output }) => {

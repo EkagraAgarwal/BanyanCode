@@ -19,11 +19,16 @@ export const DDG_URL = "https://html.duckduckgo.com/html/"
 export const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
 
-export const description = `Search the web using DuckDuckGo HTML. Use this for current information beyond knowledge cutoff.
-
-This is a free local web search tool backed by DuckDuckGo. It does not require an API key.
-
-Optional controls support result count (max ${MAX_NUM_RESULTS}), region, and time range.`
+export const description =
+  "Use when:\n" +
+  "  free web search via DuckDuckGo (no API key, no quota).\n" +
+  "Examples\n" +
+  '  - "Latest GLM model benchmarks"\n' +
+  '  - "What is the latest Node LTS?"\n' +
+  "Returns\n" +
+  "  { provider: \"duckduckgo\", text: string, results: [{ title, url, snippet }] }\n" +
+  "Avoid when\n" +
+  "  code-related questions — prefer repository_query / code_find."
 
 export const Input = Schema.Struct({
   query: Schema.String.annotate({ description: "Websearch query" }),
@@ -76,6 +81,7 @@ export const layer = Layer.effectDiscard(
       .register({
         [name]: Tool.make({
           description,
+          contract: { visibility: "public" },
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [{ type: "text", text: output.text }],

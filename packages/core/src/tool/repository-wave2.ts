@@ -276,7 +276,24 @@ export const locationLayer = Layer.effectDiscard(
 
     yield* tools.register({
       [name_query]: Tool.make({
-        description: "Run a unified repository query: returns matched symbols, related tests, docs, configs, and recent commits as a single repository context.",
+        description:
+          "Use when:\n" +
+          "  semantic repository search — top-level entry point for repository questions.\n" +
+          "Examples\n" +
+          "  - \"What does auth look like?\"\n" +
+          "  - \"Find files about plugin loading\"\n" +
+          "  - \"Effect.gen\"\n" +
+          "Returns\n" +
+          "  { symbols, files, tests, docs, configs,\n" +
+          "    graph: { nodes, edges },\n" +
+          "    git: { recentCommits, ownership },\n" +
+          "    ranking: { score, signals } }\n" +
+          "Avoid when\n" +
+          "  you already have a nodeID — use repository_trace or repository_impact.\n" +
+          "After this, often: repository_symbols, repository_trace, repository_impact,\n" +
+          "  codegraph_query — to drill in.\n" +
+          "Before this: codegraph_build (if not built).",
+        contract: { visibility: "public" },
         input: InputQuery,
         output: OutputQuery,
         toModelOutput: ({ output }) => [
@@ -312,7 +329,19 @@ export const locationLayer = Layer.effectDiscard(
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_query failed" }))),
       }),
       [name_slice]: Tool.make({
-        description: "Compose an ArchitecturalSlice from a repository query result. First calls repository_query, then groups entrypoints, important symbols, related tests, docs, and configs.",
+        description:
+          "Use when:\n" +
+          "  composing an ArchitecturalSlice directly from a query (advanced — usually\n" +
+          "  repository_explain already returns one).\n" +
+          "Examples\n" +
+          "  - \"Slice for `Effect.gen`\"\n" +
+          "Returns\n" +
+          "  ArchitecturalSlice { summary, entrypoints, importantSymbols, relatedTests,\n" +
+          "    relatedDocs, configs, routes, dependencies }\n" +
+          "Avoid when\n" +
+          "  repository_explain already returns one — prefer that.\n" +
+          "Visibility: advanced (eventually retire; absorbed into repository_explain).",
+        contract: { visibility: "advanced" },
         input: InputSlice,
         output: OutputSlice,
         toModelOutput: ({ output }) => [{ type: "text", text: formatArchitecturalSlice(output) }],
@@ -342,7 +371,20 @@ export const locationLayer = Layer.effectDiscard(
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_slice failed" }))),
       }),
       [name_explain]: Tool.make({
-        description: "Explain a symbol by name. Returns an ArchitecturalSlice describing the symbol's entrypoints, related tests, docs, and configs.",
+        description:
+          "Use when:\n" +
+          "  explaining what a symbol does in the codebase.\n" +
+          "Examples\n" +
+          "  - \"Explain `ToolCatalog`\"\n" +
+          "  - \"Explain `MemoryRepo.update`\"\n" +
+          "Returns\n" +
+          "  ArchitecturalSlice { summary, entrypoints, importantSymbols, relatedTests,\n" +
+          "    relatedDocs, configs, routes, dependencies }\n" +
+          "Avoid when\n" +
+          "  you want raw callers — use codegraph_callers.\n" +
+          "After this, often: repository_trace — to follow downstream links.\n" +
+          "Before this: repository_query (if symbol ambiguous).",
+        contract: { visibility: "public" },
         input: InputExplain,
         output: OutputExplain,
         toModelOutput: ({ output }) => [{ type: "text", text: formatArchitecturalSlice(output) }],
@@ -374,7 +416,19 @@ export const locationLayer = Layer.effectDiscard(
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_explain failed" }))),
       }),
       [name_impact]: Tool.make({
-        description: "Analyze the impact of changing a file by path. Returns an ArchitecturalSlice with expanded important symbols for direct dependents.",
+        description:
+          "Use when:\n" +
+          "  what breaks if I edit a file by path (architectural blast radius).\n" +
+          "Examples\n" +
+          "  - \"Impact of editing `codegraph-build-service.ts`\"\n" +
+          "Returns\n" +
+          "  ArchitecturalSlice with affected symbols, files, tests, docs, configs.\n" +
+          "Avoid when\n" +
+          "  code-level impact — use codegraph_impact.\n" +
+          "Visibility: advanced (use sparingly).\n" +
+          "After this, often: edit_plan — to plan the change.\n" +
+          "Before this: codegraph_build (if not built).",
+        contract: { visibility: "advanced" },
         input: InputImpact,
         output: OutputImpact,
         toModelOutput: ({ output }) => [{ type: "text", text: formatArchitecturalSlice(output) }],
@@ -407,7 +461,20 @@ export const locationLayer = Layer.effectDiscard(
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_impact failed" }))),
       }),
       [name_trace]: Tool.make({
-        description: "Trace a symbol through the code graph to its downstream dependents. Returns an ArchitecturalSlice with the symbol's downstream entrypoints.",
+        description:
+          "Use when:\n" +
+          "  following imports / calls of a symbol through the repository.\n" +
+          "Examples\n" +
+          "  - \"Trace `Effect.gen`\"\n" +
+          "  - \"Where is `SessionTools.resolve` called from?\"\n" +
+          "Returns\n" +
+          "  ArchitecturalSlice.\n" +
+          "Avoid when\n" +
+          "  you need an exact nodeID — repository_trace accepts a symbol name and\n" +
+          "  resolves it internally.\n" +
+          "After this, often: repository_impact — for the inverse direction.\n" +
+          "Before this: codegraph_build (if not built).",
+        contract: { visibility: "public" },
         input: InputTrace,
         output: OutputTrace,
         toModelOutput: ({ output }) => [{ type: "text", text: formatArchitecturalSlice(output) }],
@@ -440,7 +507,19 @@ export const locationLayer = Layer.effectDiscard(
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_trace failed" }))),
       }),
       [name_tests]: Tool.make({
-        description: "Find tests that reference a given symbol by name.",
+        description:
+          "Use when:\n" +
+          "  finding tests that reference a symbol.\n" +
+          "Examples\n" +
+          "  - \"Tests for `parse`\"\n" +
+          "  - \"Tests for `MemoryRepo.update`\"\n" +
+          "Returns\n" +
+          "  { tests: CodegraphNode[] }\n" +
+          "Avoid when\n" +
+          "  you want the architectural slice — use repository_explain.\n" +
+          "After this, often: read — to inspect a specific test.\n" +
+          "Before this: codegraph_build (if not built).",
+        contract: { visibility: "public" },
         input: InputTests,
         output: OutputTests,
         toModelOutput: ({ output }) => [{ type: "text", text: formatNodesList(output.tests, "Tests") }],
@@ -468,7 +547,18 @@ export const locationLayer = Layer.effectDiscard(
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_tests failed" }))),
       }),
       [name_symbols]: Tool.make({
-        description: "Look up symbols by name (exact then prefix match) across the code graph.",
+        description:
+          "Use when:\n" +
+          "  enumerating symbols matching a prefix / name (graph-level lookup).\n" +
+          "Examples\n" +
+          "  - \"Symbols starting with `Database`\"\n" +
+          "  - \"Symbol `Service`\"\n" +
+          "Returns\n" +
+          "  { symbols: CodegraphNode[] }\n" +
+          "Avoid when\n" +
+          "  semantic repository question — use repository_query first.\n" +
+          "Visibility: internal.",
+        contract: { visibility: "internal" },
         input: InputSymbols,
         output: OutputSymbols,
         toModelOutput: ({ output }) => [{ type: "text", text: formatNodesList(output.symbols, "Symbols") }],
@@ -500,10 +590,16 @@ export const locationLayer = Layer.effectDiscard(
       }),
       [name_relationships]: Tool.make({
         description:
-          "Walk the code graph to the related nodes of an anchor. " +
-          "nodeID is an exact codegraph node identifier — typically `{absFilePath}:function:{name}:{line}` (or :class:, :method:, :variable:, etc.); get one with codegraph_search or repository_symbols. " +
-          "If you don't have an exact nodeID, pass path instead (file path relative to the workspace) and the tool will resolve all nodes belonging to that file and aggregate their relationships. " +
-          "depth defaults to 1; pass a higher value for transitive neighbors. Returns the related nodes (excludes the anchor).",
+          "Use when:\n" +
+          "  walking the code graph to neighbors of an anchor node (graph-level).\n" +
+          "Examples\n" +
+          "  - \"Neighbors of `MemoryRepo`\"\n" +
+          "Returns\n" +
+          "  { nodes: CodegraphNode[] }\n" +
+          "Avoid when\n" +
+          "  semantic repository question — use repository_query first.\n" +
+          "Visibility: internal.",
+        contract: { visibility: "internal" },
         input: InputRelationships,
         output: OutputRelationships,
         toModelOutput: ({ output }) => [{ type: "text", text: formatNodesList(output.nodes, "Related nodes") }],
@@ -538,7 +634,17 @@ export const locationLayer = Layer.effectDiscard(
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_relationships failed" }))),
       }),
       [name_ownership]: Tool.make({
-        description: "Find the most active author for a file by path, using git shortlog over recent commits.",
+        description:
+          "Use when:\n" +
+          "  git blame / most-active author for a file.\n" +
+          "Examples\n" +
+          "  - \"Who owns `codegraph-build-service.ts`?\"\n" +
+          "Returns\n" +
+          "  { owner?, count }\n" +
+          "Avoid when\n" +
+          "  general code questions — use repository_query.\n" +
+          "Visibility: internal.",
+        contract: { visibility: "internal" },
         input: InputOwnership,
         output: OutputOwnership,
         toModelOutput: ({ output }) => [{ type: "text", text: formatOwnership(output.owner, output.count) }],

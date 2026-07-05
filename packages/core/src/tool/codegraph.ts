@@ -103,7 +103,23 @@ export const locationLayer = Layer.effectDiscard(
     yield* tools
       .register({
         [name_build]: Tool.make({
-          description: "Build the code graph index for a codebase",
+          description:
+            "Use when:\n" +
+            "  building the code graph from scratch, refreshing a stale index, or the user\n" +
+            "  explicitly says 'build' / 'rebuild' / 'index'.\n" +
+            "Examples\n" +
+            '  - "Build the code graph"\n' +
+            '  - "Rebuild the index after editing many files"\n' +
+            '  - "Index this codebase"\n' +
+            "Returns\n" +
+            "  { indexed, skipped, skippedByReason: { gitignored, banyanignored, artifact,\n" +
+            "    tooLarge, cached, parseFailure }, symbolsIndexed, duration_ms, total,\n" +
+            "    graphVersion, graphCoverage, totalNodes, totalEdges }\n" +
+            "Avoid when\n" +
+            "  the index is fresh — query first via codegraph_query or repository_query.\n" +
+            "After this, often: codegraph_query or repository_query — to read the graph.\n" +
+            "Before this: none — this is a top-level operation.",
+          contract: { visibility: "public" },
           input: InputBuild,
           output: OutputBuild,
           toModelOutput: ({ output }) => {
@@ -218,11 +234,23 @@ export const locationLayer = Layer.effectDiscard(
         }),
         [name_query]: Tool.make({
           description:
-            "Look up nodes in the code graph. Filter by function name, kind, or file path. " +
-            "Returns the matching CodegraphNode objects (with name, kind, signature, file path, line range, code snippet). " +
-            "Use this as the primary tool to find symbols when the codegraph is built. " +
-            "If the result is empty, the codegraph hasn't been built yet (run /codegraph-build) or the project has no such symbol. " +
-            "Optional inputs (file, function, kind, limit) MUST be omitted entirely when not needed; passing null is rejected.",
+            "Use when:\n" +
+            "  looking up symbol(s) by name, file, or kind in the code graph (graph-level\n" +
+            "  lookup; not user-facing semantic search).\n" +
+            "Examples\n" +
+            "  - \"Where is `ToolCatalog` defined?\"\n" +
+            "  - \"List all `function` nodes in `src/`\"\n" +
+            "  - \"Find all symbols named `parse`\"\n" +
+            "Returns\n" +
+            "  { nodes: CodegraphNode[], meta: { graphBuiltAt, graphVersion, graphCoverage,\n" +
+            "    totalNodes, totalEdges } }\n" +
+            "Avoid when\n" +
+            "  the user gave an exact file path — use read; or for semantic repository\n" +
+            "  questions — prefer repository_query.\n" +
+            "After this, often: codegraph_callers, codegraph_dependents, codegraph_impact,\n" +
+            "  repository_trace, repository_impact — to traverse the graph.\n" +
+            "Before this: codegraph_build (if not built), repository_query (if unsure).",
+          contract: { visibility: "internal" },
           input: InputQuery,
           output: OutputQuery,
           toModelOutput: ({ output }) => [
@@ -284,11 +312,18 @@ export const locationLayer = Layer.effectDiscard(
         }),
         [name_impact]: Tool.make({
           description:
-            "Find all nodes affected by a change to the given node. Returns the direct dependents " +
-            "(immediate callers) and the transitive closure (everything downstream). " +
-            "Use BEFORE making any edit to understand the blast radius. Returns full CodegraphNode objects. " +
-            "Pass nodeID (preferred - get it from codegraph_search/codegraph_query) or function name. " +
-            "Optional inputs MUST be omitted entirely when not needed; passing null is rejected.",
+            "Use when:\n" +
+            "  full blast-radius analysis — direct AND transitive dependents of a node.\n" +
+            "Examples\n" +
+            "  - \"What breaks if I change `MemoryRepo`?\"\n" +
+            "Returns\n" +
+            "  { dependents: CodegraphNode[], transitive: CodegraphNode[], meta: { ... } }\n" +
+            "Avoid when\n" +
+            "  you only need direct callers/dependents — codegraph_callers or\n" +
+            "  codegraph_dependents is cheaper.\n" +
+            "After this, often: repository_impact, edit_plan — to plan an edit.\n" +
+            "Before this: codegraph_query (to find nodeID), codegraph_build (if not built).",
+          contract: { visibility: "advanced" },
           input: InputImpact,
           output: OutputImpact,
           toModelOutput: ({ output }) => [
@@ -341,10 +376,18 @@ export const locationLayer = Layer.effectDiscard(
         }),
         [name_dependents]: Tool.make({
           description:
-            "Find nodes that depend on the given node (the reverse: who calls/imports this). " +
-            "Returns full CodegraphNode objects. Prefer codegraph_impact for blast-radius analysis " +
-            "(it includes transitive closure); use this when you only need the direct callers. " +
-            "Pass nodeID (preferred) or function name. Optional inputs MUST be omitted entirely when not needed; passing null is rejected.",
+            "Use when:\n" +
+            "  finding direct dependents (who calls/imports a given node) — graph-level.\n" +
+            "Examples\n" +
+            "  - \"What depends on `Repository`?\"\n" +
+            "  - \"Who imports `SessionProcessor`?\"\n" +
+            "Returns\n" +
+            "  { dependents: CodegraphNode[], meta: { ... } }\n" +
+            "Avoid when\n" +
+            "  you want transitive blast radius — use codegraph_impact.\n" +
+            "After this, often: codegraph_impact — for transitive reach.\n" +
+            "Before this: codegraph_query (to find nodeID).",
+          contract: { visibility: "internal" },
           input: InputDependents,
           output: OutputDependents,
           toModelOutput: ({ output }) => [
@@ -390,10 +433,18 @@ export const locationLayer = Layer.effectDiscard(
         }),
         [name_callers]: Tool.make({
           description:
-            "Find nodes that call the given function. Pass either nodeID (preferred) or function name. " +
-            "Returns full CodegraphNode objects with file path and line range so the caller can read or edit them. " +
-            "If the codegraph hasn't been built, the response will be empty - fall back to grep for the function name. " +
-            "Optional inputs MUST be omitted entirely when not needed; passing null is rejected.",
+            "Use when:\n" +
+            "  finding what calls a function (graph-level reverse lookup).\n" +
+            "Examples\n" +
+            "  - \"Who calls `parse()`?\"\n" +
+            "  - \"What invokes `execute()`?\"\n" +
+            "Returns\n" +
+            "  { callers: CodegraphNode[], meta: { ... } }\n" +
+            "Avoid when\n" +
+            "  you want transitive dependents — use codegraph_impact.\n" +
+            "After this, often: repository_impact, edit_plan — to plan around the callers.\n" +
+            "Before this: codegraph_query (to find nodeID).",
+          contract: { visibility: "internal" },
           input: InputCallers,
           output: OutputCallers,
           toModelOutput: ({ output }) => [

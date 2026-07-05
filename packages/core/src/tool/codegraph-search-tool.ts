@@ -98,7 +98,18 @@ export const locationLayer = Layer.effectDiscard(
     yield* tools.register({
       [name]: Tool.make({
         description:
-          "Search the code graph with intent modes: exact, prefix, fuzzy, structural, graph, subsystem, tests.",
+          "Use when:\n" +
+          "  scored fuzzy / BM25 / structural search across the code graph.\n" +
+          "Examples\n" +
+          "  - \"Search for `Effect.gen`\"\n" +
+          "  - \"Find all references to `database`\"\n" +
+          "Returns\n" +
+          "  { results: [{ node, score, signals }] }\n" +
+          "Avoid when\n" +
+          "  exact symbol lookup — codegraph_query is faster.\n" +
+          "After this, often: codegraph_callers, codegraph_impact — to traverse from a hit.\n" +
+          "Before this: codegraph_build (if not built).",
+        contract: { visibility: "internal" },
         input: Input,
         output: Output,
         toModelOutput: ({ output }) => [

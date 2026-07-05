@@ -35,8 +35,18 @@ export const locationLayer = Layer.effectDiscard(
     yield* tools.register({
       [name_find_implementations]: Tool.make({
         description:
-          "Find classes that implement or extend the given interface or base class name. " +
-          "Optional inputs MUST be omitted entirely when not needed; passing null is rejected.",
+          "Use when:\n" +
+          "  structural queries — find classes that implement or extend an interface/base.\n" +
+          "Examples\n" +
+          "  - \"Find implementations of `Repository`\"\n" +
+          "  - \"Classes that extend `BaseService`\"\n" +
+          "Returns\n" +
+          "  { nodes: CodegraphNode[] }\n" +
+          "Avoid when\n" +
+          "  you want callers/dependents/impact — those are different tools.\n" +
+          "After this, often: repository_explain — to read the most-used implementation.\n" +
+          "Before this: codegraph_build (if not built).",
+        contract: { visibility: "internal" },
         input: Schema.Struct({
           interfaceName: Schema.String,
           file: optionalString,
@@ -63,8 +73,17 @@ export const locationLayer = Layer.effectDiscard(
       }),
       [name_find_overrides]: Tool.make({
         description:
-          "Find method overrides with the given method name. " +
-          "Optional inputs MUST be omitted entirely when not needed; passing null is rejected.",
+          "Use when:\n" +
+          "  structural queries — find method overrides by name across subclasses.\n" +
+          "Examples\n" +
+          "  - \"Find all `parse()` overrides\"\n" +
+          "Returns\n" +
+          "  { nodes: CodegraphNode[] }\n" +
+          "Avoid when\n" +
+          "  you want callers/dependents/impact — those are different tools.\n" +
+          "After this, often: repository_explain — to compare override behavior.\n" +
+          "Before this: codegraph_build (if not built).",
+        contract: { visibility: "internal" },
         input: Schema.Struct({
           methodName: Schema.String,
           baseClass: optionalString,
@@ -91,7 +110,17 @@ export const locationLayer = Layer.effectDiscard(
           })).pipe(Effect.mapError(() => new ToolFailure({ message: "codegraph_find_overrides failed" }))),
       }),
       [name_find_recursive]: Tool.make({
-        description: "Find recursive functions in the indexed codebase.",
+        description:
+          "Use when:\n" +
+          "  structural queries — find recursive functions in the indexed codebase.\n" +
+          "Examples\n" +
+          "  - \"List all recursive functions\"\n" +
+          "Returns\n" +
+          "  { nodes: CodegraphNode[] }\n" +
+          "Avoid when\n" +
+          "  you want callers/dependents/impact — those are different tools.\n" +
+          "Use repository_query instead — the harness delegates this query when needed.",
+        contract: { visibility: "internal" },
         input: Schema.Struct({
           file: optionalString,
           language: optionalString,
@@ -116,7 +145,17 @@ export const locationLayer = Layer.effectDiscard(
           })).pipe(Effect.mapError(() => new ToolFailure({ message: "codegraph_find_recursive failed" }))),
       }),
       [name_find_async]: Tool.make({
-        description: "Find async functions in the indexed codebase.",
+        description:
+          "Use when:\n" +
+          "  structural queries — find `async` functions in the indexed codebase.\n" +
+          "Examples\n" +
+          "  - \"List all `async function` declarations\"\n" +
+          "Returns\n" +
+          "  { nodes: CodegraphNode[] }\n" +
+          "Avoid when\n" +
+          "  you want callers/dependents/impact — those are different tools.\n" +
+          "Use repository_query instead — the harness delegates this query when needed.",
+        contract: { visibility: "internal" },
         input: Schema.Struct({
           file: optionalString,
           language: optionalString,
@@ -141,7 +180,18 @@ export const locationLayer = Layer.effectDiscard(
           })).pipe(Effect.mapError(() => new ToolFailure({ message: "codegraph_find_async failed" }))),
       }),
       [name_find_http_routes]: Tool.make({
-        description: "Find HTTP route registrations (Express/Fastify style) in the indexed codebase.",
+        description:
+          "Use when:\n" +
+          "  structural queries — find HTTP route registrations (Express/Fastify style).\n" +
+          "Examples\n" +
+          "  - \"List all HTTP routes\"\n" +
+          "  - \"Find POST /api routes in `src/server/`\"\n" +
+          "Returns\n" +
+          "  { nodes: CodegraphNode[] }\n" +
+          "Avoid when\n" +
+          "  you want callers/dependents/impact — those are different tools.\n" +
+          "Use repository_query instead — the harness delegates this query when needed.",
+        contract: { visibility: "internal" },
         input: Schema.Struct({
           file: optionalString,
           language: optionalString,

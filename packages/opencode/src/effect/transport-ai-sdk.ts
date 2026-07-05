@@ -1,9 +1,12 @@
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions } from "ai"
 import { Context, Effect, Layer } from "effect"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
+import type { ResolvedContract } from "@opencode-ai/core/tool/tool"
 import { ToolOutput, ToolContent, type ToolDefinition } from "@opencode-ai/llm"
+import { ModelV2 } from "@opencode-ai/core/model"
 import { PartID } from "@/session/schema"
 import { ProviderTransform } from "@/provider/transform"
+import { isStrongModel } from "@/tool/registry"
 import type { AiSdkToolMaterialization, ToolMaterializationContext, ToolTransport } from "./tool-transport"
 
 export const AiSdkTransportId = Symbol.for("@opencode/AiSdkToolTransport")
@@ -145,8 +148,17 @@ export const buildTools = Effect.fn("AiSdkTransport.buildTools")(function* (inpu
   ctx: ToolMaterializationContext
 }) {
   const materialization = yield* input.catalog.materialize(input.ctx.permissions)
+  const listed = input.catalog.list()
+  const contractsByName = new Map<string, ResolvedContract>()
+  for (const [name, tool] of listed) {
+    contractsByName.set(name, tool.contract)
+  }
+  const modelID = ModelV2.ID.make(input.ctx.model.api.id)
   const out: AiSdkToolMaterialization[] = []
   for (const definition of materialization.definitions) {
+    const visibility = contractsByName.get(definition.name)?.visibility ?? "public"
+    if (visibility === "internal") continue
+    if (visibility === "advanced" && !isStrongModel(modelID)) continue
     out.push({ id: definition.name, tool: definitionToAITool(definition, input.ctx, materialization) })
   }
   return out

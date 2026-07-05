@@ -70,6 +70,25 @@ export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false
   return providerID === ProviderV2.ID.opencode || flags.exa || flags.parallel
 }
 
+export function isStrongModel(modelID: ModelV2.ID): boolean {
+  const id = modelID.toLowerCase()
+  if (id.includes("claude-opus")) return true
+  if (id.includes("claude-sonnet")) return true
+  if (id.includes("gpt-5")) return true
+  if (id.includes("o1")) return true
+  if (id.includes("o3")) return true
+  if (id.startsWith("claude-3-5")) return true
+  if (id.startsWith("claude-3-7")) return true
+  return false
+}
+
+function isLlmVisible(tool: Tool.Def, modelID: ModelV2.ID): boolean {
+  const visibility = tool.contract?.visibility ?? "public"
+  if (visibility === "internal") return false
+  if (visibility === "advanced" && !isStrongModel(modelID)) return false
+  return true
+}
+
 type TaskDef = Tool.InferDef<typeof TaskTool>
 type ReadDef = Tool.InferDef<typeof ReadTool>
 
@@ -293,7 +312,7 @@ export const layer = Layer.effect(
         if (tool.id === ApplyPatchTool.id) return usePatch
         if (tool.id === EditTool.id || tool.id === WriteTool.id) return !usePatch
 
-        return true
+        return isLlmVisible(tool, input.modelID)
       })
 
       return yield* Effect.forEach(

@@ -7,6 +7,35 @@ import { Banyan } from "../banyancode"
 import type { SessionMessage } from "../session/message"
 import type { SessionSchema } from "../session/schema"
 
+export type Visibility = "public" | "advanced" | "internal"
+
+export type ToolContract = {
+  readonly visibility?: Visibility
+  readonly acceptsNull?: boolean
+  readonly acceptsAliases?: Record<string, readonly string[]>
+  readonly defaultValues?: Record<string, unknown>
+  readonly repairPolicy?: "one-pass" | "strict" | "never"
+  readonly acceptsPreviousSymbol?: boolean
+}
+
+export type ResolvedContract = {
+  readonly visibility: Visibility
+  readonly acceptsNull: boolean
+  readonly acceptsAliases: Record<string, readonly string[]>
+  readonly defaultValues: Record<string, unknown>
+  readonly repairPolicy: "one-pass" | "strict" | "never"
+  readonly acceptsPreviousSymbol: boolean
+}
+
+export const resolveContract = (contract: ToolContract | undefined): ResolvedContract => ({
+  visibility: contract?.visibility ?? "public",
+  acceptsNull: contract?.acceptsNull ?? true,
+  acceptsAliases: contract?.acceptsAliases ?? {},
+  defaultValues: contract?.defaultValues ?? {},
+  repairPolicy: contract?.repairPolicy ?? "one-pass",
+  acceptsPreviousSymbol: contract?.acceptsPreviousSymbol ?? false,
+})
+
 export interface Context {
   readonly sessionID: SessionSchema.ID
   readonly agent: AgentV2.ID
@@ -24,6 +53,7 @@ export interface Definition<Input extends SchemaType<any>, Output extends Schema
     readonly _Input: Input
     readonly _Output: Output
   }
+  readonly contract: ResolvedContract
 }
 
 export type AnyTool = Definition<any, any>
@@ -51,10 +81,12 @@ type Config<Input extends SchemaType<any>, Output extends SchemaType<any>> = {
     readonly input: Schema.Schema.Type<Input>
     readonly output: Output["Encoded"]
   }) => ReadonlyArray<Content>
+  readonly contract?: ToolContract
 }
 
 type Runtime = {
   readonly permission?: string
+  readonly contract: ResolvedContract
   readonly definition: (name: string) => ToolDefinition
   readonly settle: (call: ToolCall, context: Context) => Effect.Effect<ToolOutput, ToolFailure>
 }
@@ -78,9 +110,18 @@ const normalizeNulls = (input: unknown): unknown => {
 export function make<Input extends SchemaType<any>, Output extends SchemaType<any>>(
   config: Config<Input, Output>,
 ): Definition<Input, Output> {
-  const tool = Object.freeze({}) as Definition<Input, Output>
+  const resolvedContract = resolveContract(config.contract)
+  const tool = {} as Definition<Input, Output>
+  Object.defineProperty(tool, "contract", {
+    value: resolvedContract,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  })
+  Object.freeze(tool)
   const definitions = new Map<string, ToolDefinition>()
   runtimes.set(tool, {
+    contract: resolvedContract,
     definition: (name) => {
       const cached = definitions.get(name)
       if (cached) return cached
@@ -254,7 +295,14 @@ export const withPermission = <Input extends SchemaType<any>, Output extends Sch
   tool: Definition<Input, Output>,
   permission: string,
 ) => {
-  const decorated = Object.freeze({}) as Definition<Input, Output>
+  const decorated = {} as Definition<Input, Output>
+  Object.defineProperty(decorated, "contract", {
+    value: runtimeOf(tool).contract,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  })
+  Object.freeze(decorated)
   runtimes.set(decorated, { ...runtimeOf(tool), permission })
   return decorated
 }
@@ -262,6 +310,7 @@ export const withPermission = <Input extends SchemaType<any>, Output extends Sch
 export const permission = (tool: AnyTool, name: string) => runtimeOf(tool).permission ?? name
 export const definition = (name: string, tool: AnyTool) => runtimeOf(tool).definition(name)
 export const settle = (tool: AnyTool, call: ToolCall, context: Context) => runtimeOf(tool).settle(call, context)
+export const contractOf = (tool: AnyTool): ResolvedContract => runtimeOf(tool).contract
 
 function runtimeOf(tool: AnyTool) {
   const runtime = runtimes.get(tool)

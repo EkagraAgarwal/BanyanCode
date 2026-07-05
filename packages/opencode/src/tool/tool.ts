@@ -7,6 +7,7 @@ import type { Permission } from "../permission"
 import type { SessionID, MessageID } from "../session/schema"
 import * as Truncate from "./truncate"
 import { Agent } from "@/agent/agent"
+import type { ResolvedContract } from "@opencode-ai/core/tool/tool"
 
 interface Metadata {
   [key: string]: any
@@ -60,6 +61,7 @@ export interface Def<
   description: string
   parameters: Parameters
   jsonSchema?: JSONSchema7
+  contract?: ResolvedContract
   execute(args: Schema.Schema.Type<Parameters>, ctx: Context): Effect.Effect<ExecuteResult<M>>
   formatValidationError?(error: unknown): string
 }

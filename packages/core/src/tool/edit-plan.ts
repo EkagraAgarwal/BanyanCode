@@ -37,10 +37,18 @@ export const locationLayer = Layer.effectDiscard(
       .register({
         [name]: Tool.make({
           description:
-            "Get a structured plan for editing a symbol. Use phase=before " +
-            "to assess impact before editing; use phase=after to verify " +
-            "callers and tests after editing. Returns steps, expected impact, " +
-            "and risks (stale-graph, broad-impact, missing-tests, no-target, external-caller).",
+            "Use when:\n" +
+            "  planning an edit before applying it (before) or verifying after-edit\n" +
+            "  impact (after).\n" +
+            "Examples\n" +
+            "  - \"Plan changing `parse` to `safeParse` in `codegraph-indexer.ts`\"\n" +
+            "Returns\n" +
+            "  { plan: { steps, expectedImpact, risks } }\n" +
+            "Avoid when\n" +
+            "  you already know exactly what to change — apply directly with edit.\n" +
+            "After this, often: edit (with permission) — to apply the steps.\n" +
+            "Before this: codegraph_build (if not built), repository_impact (to size blast).",
+          contract: { visibility: "public" },
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [
