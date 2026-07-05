@@ -296,7 +296,10 @@ export const layer = Layer.effect(
         const docs = allFiles.filter((f) => isDocPath(f.path))
         const configs = allFiles.filter((f) => isConfigPath(f.path))
 
-        const recentCommits = yield* git.recentCommits({ limit: input.limit ?? 10 })
+        const recentCommits = yield* git.recentCommits({
+          limit: input.limit ?? 10,
+          ...(input.workspace?.worktree ? { cwd: input.workspace.worktree } : {}),
+        })
         const ownership = new Map<string, number>()
 
         return {
@@ -422,14 +425,36 @@ export const layer = Layer.effect(
       })
 
     const relationships = (input: {
-      nodeID: string
+      nodeID?: string
+      path?: string
       depth?: number
     }): Effect.Effect<readonly CodegraphNode[], never, never> =>
       Effect.gen(function* () {
-        return yield* findRelated(input)
+        if (input.path && !input.nodeID) {
+          // Resolve the file by path, then aggregate relationships across every
+          // node belonging to that file. This is the path-based fallback for
+          // tools that don't have an exact codegraph nodeID handy.
+          const file = yield* repo.getFileByPath(input.path)
+          if (!file) return []
+          const fileNodes = yield* repo.listNodesByFile(file.id)
+          const seen = new Set<string>()
+          const result: CodegraphNode[] = []
+          for (const anchor of fileNodes) {
+            const related = yield* findRelated({ nodeID: anchor.id, depth: input.depth ?? 1 })
+            for (const n of related) {
+              if (!seen.has(n.id)) {
+                seen.add(n.id)
+                result.push(n)
+              }
+            }
+          }
+          return result
+        }
+        if (!input.nodeID) return []
+        return yield* findRelated({ nodeID: input.nodeID, depth: input.depth })
       })
 
-    const findOwner = (input: { path: string }): Effect.Effect<{ owner?: string; count: number }, never, never> =>
+    const findOwner = (input: { path: string; cwd?: string }): Effect.Effect<{ owner?: string; count: number }, never, never> =>
       Effect.gen(function* () {
         return yield* git.owners(input)
       })
