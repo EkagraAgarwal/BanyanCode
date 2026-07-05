@@ -28,6 +28,15 @@ export const OutputBuild = Schema.Struct({
   indexed: Schema.Number,
   skipped: Schema.Number,
   duration_ms: Schema.Number,
+  symbolsIndexed: Schema.Number,
+  skippedByReason: Schema.Struct({
+    gitignored: Schema.Number,
+    banyanignored: Schema.Number,
+    artifact: Schema.Number,
+    tooLarge: Schema.Number,
+    cached: Schema.Number,
+    parseFailure: Schema.Number,
+  }),
   meta: Schema.optional(GraphMeta),
 })
 
@@ -95,7 +104,7 @@ export const locationLayer = Layer.effectDiscard(
           input: InputBuild,
           output: OutputBuild,
           toModelOutput: ({ output }) => [
-            { type: "text", text: `indexed=${output.indexed} skipped=${output.skipped} duration_ms=${output.duration_ms}` },
+            { type: "text", text: `indexed=${output.indexed} skipped=${output.skipped} symbols=${output.symbolsIndexed} duration_ms=${output.duration_ms}` },
           ],
           execute: (input, context) => {
             return traced(
@@ -103,7 +112,7 @@ export const locationLayer = Layer.effectDiscard(
               context.sessionID,
               name_build,
               input,
-              (output) => `indexed=${output.indexed} skipped=${output.skipped} duration_ms=${output.duration_ms}`,
+              (output) => `indexed=${output.indexed} skipped=${output.skipped} symbols=${output.symbolsIndexed} duration_ms=${output.duration_ms}`,
               Effect.gen(function* () {
                 yield* permission.assert({
                   action: name_build,
@@ -115,7 +124,8 @@ export const locationLayer = Layer.effectDiscard(
                   source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
                 })
 
-                const root = input.root ?? process.cwd()
+                const worktree = yield* Banyan.WorktreeContext
+                const root = input.root ?? worktree ?? process.cwd()
                 yield* buildService.start({ root, force: input.force ?? false })
 
                 let currentStatus = yield* buildService.status()
@@ -146,6 +156,8 @@ export const locationLayer = Layer.effectDiscard(
                     indexed: currentStatus.result.indexed,
                     skipped: currentStatus.result.skipped,
                     duration_ms: currentStatus.result.duration_ms,
+                    symbolsIndexed: currentStatus.result.symbolsIndexed,
+                    skippedByReason: currentStatus.result.skippedByReason,
                     meta: meta
                       ? {
                           graphBuiltAt: meta.graphBuiltAt,
@@ -159,7 +171,21 @@ export const locationLayer = Layer.effectDiscard(
                   }
                 }
 
-                return { indexed: 0, skipped: 0, duration_ms: 0, meta: undefined }
+                return {
+                  indexed: 0,
+                  skipped: 0,
+                  duration_ms: 0,
+                  symbolsIndexed: 0,
+                  skippedByReason: {
+                    gitignored: 0,
+                    banyanignored: 0,
+                    artifact: 0,
+                    tooLarge: 0,
+                    cached: 0,
+                    parseFailure: 0,
+                  },
+                  meta: undefined,
+                }
               }),
             ).pipe(
               Effect.mapError((err) => {

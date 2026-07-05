@@ -20,6 +20,15 @@ export const State = Schema.Struct({
       indexed: Schema.Number,
       skipped: Schema.Number,
       duration_ms: Schema.Number,
+      symbolsIndexed: Schema.Number,
+      skippedByReason: Schema.Struct({
+        gitignored: Schema.Number,
+        banyanignored: Schema.Number,
+        artifact: Schema.Number,
+        tooLarge: Schema.Number,
+        cached: Schema.Number,
+        parseFailure: Schema.Number,
+      }),
     }),
   ),
   error: Schema.optional(Schema.String),
@@ -116,7 +125,13 @@ export const layer = Layer.effect(
             startedAt: initial.startedAt,
             graphVersion,
             graphCoverage: coverage,
-            result: { indexed: result.indexed, skipped: result.skipped, duration_ms: Date.now() - startTime },
+            result: {
+              indexed: result.indexed,
+              skipped: result.skipped,
+              duration_ms: Date.now() - startTime,
+              symbolsIndexed: result.symbolsIndexed,
+              skippedByReason: result.skippedByReason,
+            },
           }
           yield* Ref.set(state, doneState)
           yield* publish(doneState)

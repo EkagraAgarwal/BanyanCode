@@ -25,6 +25,7 @@ export {
   layer as codegraphBuildServiceLayer,
   defaultLayer as codegraphBuildServiceDefaultLayer,
 } from "./codegraph-build-service"
+export { WorktreeContext } from "./worktree-context"
 export { Service as CodegraphAnalyzer, layer as codegraphAnalyzerLayer, defaultLayer as codegraphAnalyzerDefaultLayer } from "./codegraph-analyzer"
 export {
   Service as RepositoryIntelligence,

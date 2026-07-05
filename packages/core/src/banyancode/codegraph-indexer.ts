@@ -19,7 +19,24 @@ export interface Interface {
     force?: boolean
     maxFileSizeBytes?: number
     onProgress?: (info: { file: string; done: number; total: number }) => Effect.Effect<void>
-  }) => Effect.Effect<{ indexed: number; skipped: number; scannedFiles: number }, CodegraphError, never>
+  }) => Effect.Effect<
+    {
+      indexed: number
+      skipped: number
+      scannedFiles: number
+      symbolsIndexed: number
+      skippedByReason: {
+        gitignored: number
+        banyanignored: number
+        artifact: number
+        tooLarge: number
+        cached: number
+        parseFailure: number
+      }
+    },
+    CodegraphError,
+    never
+  >
   readonly cancel: () => Effect.Effect<void, never, never>
 }
 
@@ -52,25 +69,36 @@ export const layer = Layer.effect(
     const database = yield* Database.Service
     const cancelled = yield* Ref.make(false)
 
-    const walkDirectory = (dir: string, maxFileSizeBytes: number, root: string, patterns: string[]): Effect.Effect<{ files: string[]; skippedBySize: number }> => {
+    const walkDirectory = (dir: string, maxFileSizeBytes: number, root: string, patterns: string[]): Effect.Effect<{ files: string[]; skippedBySize: number; skippedByIgnore: number }> => {
       return Effect.gen(function* () {
         const entries = yield* fs.readDirectoryEntries(dir).pipe(Effect.orDie)
         const files: string[] = []
         let skippedBySize = 0
+        let skippedByIgnore = 0
         for (const entry of entries) {
           if (entry.type !== "directory") continue
           const entryName = path.basename(entry.name)
-          if (DEFAULT_IGNORED.includes(entryName)) continue
+          if (DEFAULT_IGNORED.includes(entryName)) {
+            skippedByIgnore++
+            continue
+          }
           const fullPath = path.join(dir, entryName)
-          if (isIgnored(patterns, root, fullPath)) continue
+          if (isIgnored(patterns, root, fullPath)) {
+            skippedByIgnore++
+            continue
+          }
           const subResult = yield* walkDirectory(fullPath, maxFileSizeBytes, root, patterns)
           files.push(...subResult.files)
           skippedBySize += subResult.skippedBySize
+          skippedByIgnore += subResult.skippedByIgnore
         }
         for (const entry of entries) {
           if (entry.type !== "file") continue
           const fullPath = path.join(dir, entry.name)
-          if (isIgnored(patterns, root, fullPath)) continue
+          if (isIgnored(patterns, root, fullPath)) {
+            skippedByIgnore++
+            continue
+          }
           // Skip files larger than maxFileSizeBytes before even reading them
           const stats = yield* fs.stat(fullPath).pipe(Effect.orDie)
           if (stats.size > maxFileSizeBytes) {
@@ -80,7 +108,7 @@ export const layer = Layer.effect(
           }
           files.push(fullPath)
         }
-        return { files, skippedBySize }
+        return { files, skippedBySize, skippedByIgnore }
       })
     }
 
@@ -244,8 +272,22 @@ export const layer = Layer.effect(
 
       const indexedRef = yield* Ref.make(0)
       const skippedRef = yield* Ref.make(walkResult.skippedBySize)
+      const symbolsIndexedRef = yield* Ref.make(0)
+      const skippedIgnoredRef = yield* Ref.make(walkResult.skippedByIgnore)
+      const skippedTooLargeParseRef = yield* Ref.make(0)
+      const skippedMinifiedRef = yield* Ref.make(0)
+      const skippedReadErrorRef = yield* Ref.make(0)
+      const skippedCachedRef = yield* Ref.make(0)
+      const skippedParseFailureRef = yield* Ref.make(0)
       const total = codeFiles.length
       const progressCounter = yield* Ref.make(0)
+
+      // Emit a pre-parse progress event so subscribers see total file count
+      // before parsing begins. Empty `file` is a sentinel for "walk complete";
+      // the TUI ignores progress while currentFile === "".
+      if (input.onProgress) {
+        yield* input.onProgress({ file: "", done: 0, total })
+      }
 
       // Producer-consumer pipeline: parse fibers offer into a bounded queue;
       // a concurrent consumer drains and writes so the queue cannot deadlock.
@@ -278,6 +320,7 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
     const content = yield* fs.readFileStringSafe(filePath)
     if (content === undefined) {
       yield* Ref.update(skippedRef, (n) => n + 1)
+      yield* Ref.update(skippedReadErrorRef, (n) => n + 1)
       yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       return
     }
@@ -285,12 +328,14 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
     if (content.length > maxFileSizeBytes) {
       yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars, limit: ${maxFileSizeBytes})`)
       yield* Ref.update(skippedRef, (n) => n + 1)
+      yield* Ref.update(skippedTooLargeParseRef, (n) => n + 1)
       yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       return
     }
     if (content.split("\n").some((line) => line.length > 5000)) {
       yield* Effect.logWarning(`Skipping minified/compiled file: ${relativePath}`)
       yield* Ref.update(skippedRef, (n) => n + 1)
+      yield* Ref.update(skippedMinifiedRef, (n) => n + 1)
       yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       return
     }
@@ -299,6 +344,7 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
     const existing = yield* repo.getFileByPath(filePath)
     if (existing && existing.contentHash === contentHash && !input.force) {
       yield* Ref.update(skippedRef, (n) => n + 1)
+      yield* Ref.update(skippedCachedRef, (n) => n + 1)
       yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       return
     }
@@ -374,6 +420,7 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
       Effect.gen(function* () {
         yield* Effect.logWarning(`Failed to index file: ${relativePath}`, { cause: Cause.pretty(cause) })
         yield* Ref.update(skippedRef, (n) => n + 1)
+        yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
         yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       }),
     ),
@@ -412,10 +459,12 @@ const drainParsedQueue = Effect.gen(function* () {
             cause: Cause.pretty(cause),
           })
           yield* Ref.update(skippedRef, (n) => n + 1)
+          yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
         }),
       ),
     )
     yield* Ref.update(indexedRef, (n) => n + 1)
+    yield* Ref.update(symbolsIndexedRef, (n) => n + parsed.nodes.length)
     if (processed % CHECKPOINT_EVERY === 0) {
       yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
     }
@@ -636,7 +685,28 @@ yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
 
       const indexed = yield* Ref.get(indexedRef)
       const skipped = yield* Ref.get(skippedRef)
-      return { indexed, skipped, scannedFiles: indexed + skipped }
+      const symbolsIndexed = yield* Ref.get(symbolsIndexedRef)
+      const skippedIgnored = yield* Ref.get(skippedIgnoredRef)
+      const skippedTooLargeParse = yield* Ref.get(skippedTooLargeParseRef)
+      const skippedMinified = yield* Ref.get(skippedMinifiedRef)
+      const skippedReadError = yield* Ref.get(skippedReadErrorRef)
+      const skippedCached = yield* Ref.get(skippedCachedRef)
+      const skippedParseFailure = yield* Ref.get(skippedParseFailureRef)
+      const skippedBySize = skipped - skippedIgnored - skippedTooLargeParse - skippedMinified - skippedReadError - skippedCached - skippedParseFailure
+      return {
+        indexed,
+        skipped,
+        scannedFiles: indexed + skipped,
+        symbolsIndexed,
+        skippedByReason: {
+          gitignored: skippedIgnored,
+          banyanignored: 0,
+          artifact: 0,
+          tooLarge: skippedBySize + skippedTooLargeParse + skippedMinified,
+          cached: skippedCached,
+          parseFailure: skippedParseFailure + skippedReadError,
+        },
+      }
     })
 
     const cancel = Effect.fn("CodegraphIndexer.cancel")(function* () {

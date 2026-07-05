@@ -50,6 +50,7 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
+import { InstanceRef } from "@/effect/instance-ref"
 import { EffectBridge } from "@/effect/bridge"
 import { Question } from "../question"
 import { Todo } from "../session/todo"
@@ -381,9 +382,11 @@ const withBanyanDeps = Layer.unwrap(
     const intel = yield* Effect.serviceOption(Banyan.RepositoryIntelligence)
     const structural = yield* Effect.serviceOption(Banyan.StructuralQueries)
     const editPlanner = yield* Effect.serviceOption(Banyan.EditPlanner)
+    const worktreeFromInstance = (yield* InstanceRef)?.worktree
     const depsLayer = Layer.mergeAll(
       Layer.succeed(Tools.Service, tools.value),
       Layer.succeed(PermissionV2.Service, permission.value),
+      Layer.succeed(Banyan.WorktreeContext, worktreeFromInstance),
       ...(Option.isSome(codegraphBuildService)
         ? [Layer.succeed(Banyan.CodegraphBuildService, codegraphBuildService.value)]
         : [Layer.empty as unknown as Layer.Layer<never, never, never>]),

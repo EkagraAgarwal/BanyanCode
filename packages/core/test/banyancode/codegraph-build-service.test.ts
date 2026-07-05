@@ -12,7 +12,20 @@ import { CodegraphRepo, defaultLayer as codegraphRepoDefaultLayer } from "../../
 process.env.BANYANCODE_ENABLE = "1"
 
 const makeMockIndexer = (options: {
-  indexResult?: { indexed: number; skipped: number; scannedFiles: number }
+  indexResult?: {
+    indexed: number
+    skipped: number
+    scannedFiles: number
+    symbolsIndexed?: number
+    skippedByReason?: {
+      gitignored: number
+      banyanignored: number
+      artifact: number
+      tooLarge: number
+      cached: number
+      parseFailure: number
+    }
+  }
   indexError?: CodegraphIndexer.CodegraphError
   progressUpdates?: { file: string; done: number; total: number }[]
 }) => {
@@ -25,8 +38,35 @@ const makeMockIndexer = (options: {
             if (input.onProgress) yield* input.onProgress(update)
           }
           if (options.indexError) return yield* Effect.fail(options.indexError)
-          if (options.indexResult) return options.indexResult
-          return { indexed: 0, skipped: 0, scannedFiles: 0 }
+          if (options.indexResult) {
+            const emptyReasons = {
+              gitignored: 0,
+              banyanignored: 0,
+              artifact: 0,
+              tooLarge: 0,
+              cached: 0,
+              parseFailure: 0,
+            }
+            return {
+              ...options.indexResult,
+              symbolsIndexed: options.indexResult.symbolsIndexed ?? 0,
+              skippedByReason: options.indexResult.skippedByReason ?? emptyReasons,
+            }
+          }
+          return {
+            indexed: 0,
+            skipped: 0,
+            scannedFiles: 0,
+            symbolsIndexed: 0,
+            skippedByReason: {
+              gitignored: 0,
+              banyanignored: 0,
+              artifact: 0,
+              tooLarge: 0,
+              cached: 0,
+              parseFailure: 0,
+            },
+          }
         })
       },
       cancel: () => Effect.void,
