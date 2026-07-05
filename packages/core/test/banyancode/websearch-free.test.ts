@@ -99,4 +99,52 @@ describe("websearch-free parse", () => {
     expect(parse("")).toEqual([])
     expect(parse("<html></html>")).toEqual([])
   })
+
+  test("parses real DDG HTML with rel=nofollow as the first attribute", () => {
+    // Live DuckDuckGo HTML uses <a rel="nofollow" class="result__a" href="...">
+    // (i.e. class is NOT the first attribute). The parser must still extract.
+    const liveHtml = `<div class="result results_links results_links_deep web-result">
+  <div class="links">
+    <a rel="nofollow" class="result__a" href="https://example.com/live1">Live DDG Title One</a>
+    <a class="result__snippet" href="https://example.com/live1">Snippet one with <b>bold</b> match.</a>
+  </div>
+</div>
+<div class="result results_links results_links_deep web-result">
+  <div class="links">
+    <a rel="nofollow" class="result__a" href="https://example.com/live2">Live DDG Title Two</a>
+    <a class="result__snippet" href="https://example.com/live2">Snippet two describing the second result.</a>
+  </div>
+</div>`
+    const results = parse(liveHtml)
+    expect(results.length).toBe(2)
+    expect(results[0].url).toBe("https://example.com/live1")
+    expect(results[0].title).toBe("Live DDG Title One")
+    expect(results[0].snippet).toBe("Snippet one with bold match.")
+  })
+
+  test("unwraps DuckDuckGo /l/?uddg= redirect to the real target URL", () => {
+    // Live DDG wraps outbound links through //duckduckgo.com/l/?uddg=<encoded real url>
+    const realUrl = "https://target.example.com/path?q=1&r=2"
+    const wrappedUrl = `//duckduckgo.com/l/?uddg=${encodeURIComponent(realUrl)}&kl=wt-wt`
+    const html = `<div class="result">
+  <a rel="nofollow" class="result__a" href="${wrappedUrl}">Wrapped Result</a>
+  <a class="result__snippet" href="${wrappedUrl}">Snippet for wrapped result.</a>
+</div>`
+    const results = parse(html)
+    expect(results.length).toBe(1)
+    expect(results[0].url).toBe(realUrl)
+    expect(results[0].title).toBe("Wrapped Result")
+  })
+
+  test("strips inner <b> tags from snippet text without dropping the snippet", () => {
+    // Live DDG wraps query-matched words in <b>; the parser must strip tags
+    // rather than refusing to extract a snippet that contains inner markup.
+    const html = `<div class="result">
+  <a class="result__a" href="https://example.com/x">Title</a>
+  <a class="result__snippet">Snippet with <b>matched</b> query <i>term</i> inside.</a>
+</div>`
+    const results = parse(html)
+    expect(results.length).toBe(1)
+    expect(results[0].snippet).toBe("Snippet with matched query term inside.")
+  })
 })
