@@ -6,6 +6,7 @@ import type { AgentV2 } from "../agent"
 import { Banyan } from "../banyancode"
 import type { SessionMessage } from "../session/message"
 import type { SessionSchema } from "../session/schema"
+import { runOnce, type RepairRecord, type LintRecord } from "./tool-runtime"
 
 export type Visibility = "public" | "advanced" | "internal"
 
@@ -93,20 +94,6 @@ type Runtime = {
 
 const runtimes = new WeakMap<AnyTool, Runtime>()
 
-const normalizeNulls = (input: unknown): unknown => {
-  if (input === null) return undefined
-  if (Array.isArray(input)) return input.map(normalizeNulls)
-  if (input && typeof input === "object") {
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(input)) {
-      const normalized = normalizeNulls(v)
-      if (normalized !== undefined) out[k] = normalized
-    }
-    return out
-  }
-  return input
-}
-
 export function make<Input extends SchemaType<any>, Output extends SchemaType<any>>(
   config: Config<Input, Output>,
 ): Definition<Input, Output> {
@@ -144,7 +131,10 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
         const modelID = context.modelID ?? "unknown"
         const startedAt = Date.now()
         const rawInput = call.input
-        const normalized = normalizeNulls(rawInput)
+        const contract = config.contract ?? {}
+        const runtimeResult = runOnce(rawInput, contract, config.input as Schema.Top)
+        const repairs: readonly string[] = runtimeResult.repairs
+        const warnings: readonly LintRecord[] = runtimeResult.warnings
 
         const record = (event: Banyan.ToolRuntimeEvent) =>
           telemetryOpt._tag === "Some"
@@ -163,6 +153,46 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
           warnings: [],
           startedAt,
         })
+
+        if (runtimeResult.input === undefined) {
+          yield* record({
+            kind: "normalized",
+            toolID,
+            sessionID,
+            agent,
+            modelID,
+            toolCallID,
+            rawInput,
+            normalizedInput: runtimeResult.normalized,
+            repairs,
+            warnings,
+            startedAt,
+          })
+          yield* record({
+            kind: "failed",
+            toolID,
+            sessionID,
+            agent,
+            modelID,
+            toolCallID,
+            rawInput,
+            repairs,
+            warnings,
+            startedAt,
+            finishedAt: Date.now(),
+            latencyMs: Date.now() - startedAt,
+            success: false,
+            errorMessage: runtimeResult.error ?? `Invalid tool input: runtime failed`,
+          })
+          return yield* Effect.fail(
+            new ToolFailure({
+              message: runtimeResult.error ?? `Invalid tool input: runtime failed`,
+            }),
+          )
+        }
+
+        const decoded = runtimeResult.input as Schema.Schema.Type<Input>
+
         yield* record({
           kind: "normalized",
           toolID,
@@ -171,52 +201,25 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
           modelID,
           toolCallID,
           rawInput,
-          normalizedInput: normalized,
-          repairs: [],
-          warnings: [],
+          normalizedInput: runtimeResult.normalized,
+          repairs,
+          warnings,
           startedAt,
         })
-
-        const decoded = yield* Schema.decodeUnknownEffect(config.input)(
-          normalized as Record<string, unknown>,
-        ).pipe(
-          Effect.tap((validated) =>
-            record({
-              kind: "validated",
-              toolID,
-              sessionID,
-              agent,
-              modelID,
-              toolCallID,
-              rawInput,
-              normalizedInput: normalized,
-              validatedInput: validated,
-              repairs: [],
-              warnings: [],
-              startedAt,
-            }),
-          ),
-          Effect.tapError((decodeError) =>
-            record({
-              kind: "failed",
-              toolID,
-              sessionID,
-              agent,
-              modelID,
-              toolCallID,
-              rawInput,
-              normalizedInput: normalized,
-              repairs: [],
-              warnings: [],
-              startedAt,
-              finishedAt: Date.now(),
-              latencyMs: Date.now() - startedAt,
-              success: false,
-              errorMessage: `Invalid tool input: ${decodeError.message}`,
-            }),
-          ),
-          Effect.mapError((error) => new ToolFailure({ message: `Invalid tool input: ${error.message}` })),
-        )
+        yield* record({
+          kind: "validated",
+          toolID,
+          sessionID,
+          agent,
+          modelID,
+          toolCallID,
+          rawInput,
+          normalizedInput: runtimeResult.normalized,
+          validatedInput: decoded,
+          repairs,
+          warnings,
+          startedAt,
+        })
 
         return yield* config.execute(decoded, context).pipe(
           Effect.flatMap((output) =>
@@ -237,9 +240,11 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
               agent,
               modelID,
               toolCallID,
+              rawInput,
+              normalizedInput: decoded,
               validatedInput: decoded,
-              repairs: [],
-              warnings: [],
+              repairs,
+              warnings,
               startedAt,
               finishedAt: Date.now(),
               latencyMs: Date.now() - startedAt,
@@ -255,10 +260,10 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
               modelID,
               toolCallID,
               rawInput,
-              normalizedInput: normalized,
+              normalizedInput: decoded,
               validatedInput: decoded,
-              repairs: [],
-              warnings: [],
+              repairs,
+              warnings,
               startedAt,
               finishedAt: Date.now(),
               latencyMs: Date.now() - startedAt,
