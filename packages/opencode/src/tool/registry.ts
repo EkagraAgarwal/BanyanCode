@@ -382,11 +382,15 @@ const withBanyanDeps = Layer.unwrap(
     const intel = yield* Effect.serviceOption(Banyan.RepositoryIntelligence)
     const structural = yield* Effect.serviceOption(Banyan.StructuralQueries)
     const editPlanner = yield* Effect.serviceOption(Banyan.EditPlanner)
-    const worktreeFromInstance = (yield* InstanceRef)?.worktree
+    const worktreeAccessor: () => Effect.Effect<string | undefined> = () =>
+      Effect.gen(function* () {
+        const inst = yield* InstanceRef
+        return inst?.worktree
+      })
     const depsLayer = Layer.mergeAll(
       Layer.succeed(Tools.Service, tools.value),
       Layer.succeed(PermissionV2.Service, permission.value),
-      Layer.succeed(Banyan.WorktreeContext, worktreeFromInstance),
+      Layer.succeed(Banyan.WorktreeContext, worktreeAccessor),
       ...(Option.isSome(codegraphBuildService)
         ? [Layer.succeed(Banyan.CodegraphBuildService, codegraphBuildService.value)]
         : [Layer.empty as unknown as Layer.Layer<never, never, never>]),

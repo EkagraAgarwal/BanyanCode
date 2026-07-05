@@ -124,8 +124,9 @@ export const locationLayer = Layer.effectDiscard(
                   source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
                 })
 
-                const worktree = yield* Banyan.WorktreeContext
-                const root = input.root ?? worktree ?? process.cwd()
+                const worktreeAccessor = yield* Banyan.WorktreeContext
+                const worktreeOpt = yield* worktreeAccessor()
+                const root = input.root ?? worktreeOpt ?? process.cwd()
                 yield* buildService.start({ root, force: input.force ?? false })
 
                 let currentStatus = yield* buildService.status()
