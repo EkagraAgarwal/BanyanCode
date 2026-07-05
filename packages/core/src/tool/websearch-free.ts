@@ -82,9 +82,13 @@ export const layer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
+              const userAgent =
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
               const url = buildUrl(input.query, input.numResults, input.region, input.time)
               const request = HttpClientRequest.get(url).pipe(
-                HttpClientRequest.accept("text/html"),
+                HttpClientRequest.setHeader("User-Agent", userAgent),
+                HttpClientRequest.setHeader("Accept", "text/html"),
+                HttpClientRequest.setHeader("Accept-Language", "en-US,en;q=0.9"),
               )
 
               const body = yield* Effect.gen(function* () {
