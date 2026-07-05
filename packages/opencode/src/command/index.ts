@@ -155,7 +155,10 @@ export const layer = Layer.effect(
         execute: (input) =>
           Effect.gen(function* () {
             const buildServiceOpt = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
-            if (Option.isNone(buildServiceOpt)) return
+            if (Option.isNone(buildServiceOpt)) {
+              yield* Effect.logWarning("codegraph-build invoked but CodegraphBuildService is unavailable in scope")
+              return
+            }
             const args = parseArgs(input.arguments)
             const root = args.positional[0] ?? ctx.worktree
             const force = args.flags.force === true || args.flags.force === "true"
@@ -174,8 +177,13 @@ export const layer = Layer.effect(
         execute: () =>
           Effect.gen(function* () {
             const repoOpt = yield* Effect.serviceOption(Banyan.CodegraphRepo)
-            if (Option.isNone(repoOpt)) return
-            yield* repoOpt.value.clearAll({ dropFile: true })
+            if (Option.isNone(repoOpt)) {
+              yield* Effect.logWarning("codegraph-remove invoked but CodegraphRepo is unavailable in scope")
+              return
+            }
+            // default dropFile is false: banyancode.db is shared with sessions/memory/projects,
+            // so wiping the file would also wipe unrelated state.
+            yield* repoOpt.value.clearAll({ dropFile: false })
           }).pipe(Effect.provide(Banyan.codegraphRepoDefaultLayer)),
         hints: [],
       }

@@ -432,7 +432,15 @@ export const layer = Layer.effect(
         )
         .pipe(Effect.orDie)
 
-      if (input?.dropFile ?? true) {
+      // Checkpoint the WAL so the on-disk DB file actually shrinks after we
+      // delete rows. Without this, rows are gone but the file may keep its
+      // pre-delete size until the next VACUUM or full checkpoint.
+      yield* db.run(sql`PRAGMA wal_checkpoint(TRUNCATE)`).pipe(Effect.orDie)
+
+      // Default `dropFile` to false: the shared `banyancode.db` also holds
+      // sessions/memory/projects, so wiping the file would wipe unrelated
+      // state. Callers that explicitly want file removal pass dropFile: true.
+      if (input?.dropFile ?? false) {
         const filePath = Database.path()
         if (filePath !== ":memory:") {
           // SQLite holds the DB file open via the live connection. On Windows
