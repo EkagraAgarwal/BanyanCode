@@ -54,7 +54,15 @@ export const Info = Schema.Struct({
 
 export type Info = Omit<Schema.Schema.Type<typeof Info>, "template" | "execute"> & {
   template: Promise<string> | string
-  execute?: (input: { command: string; arguments: string }) => Effect.Effect<void, never, any>
+  /**
+   * Optional side-effecting executor for slash-commands that don't need the
+   * LLM in the loop (e.g. /codegraph-build, /codegraph-remove,
+   * /refresh-models, /yolo). The returned string (if any) is rendered as a
+   * synthetic assistant text part on the command response, so the user sees
+   * the real completion message (e.g. "Codegraph index removed. Freed 12.3
+   * MB (45.1 MB -> 32.8 MB).") instead of an empty parts array.
+   */
+  execute?: (input: { command: string; arguments: string }) => Effect.Effect<string | void, never, any>
 }
 
 export function hints(template: string) {
@@ -157,13 +165,34 @@ export const layer = Layer.effect(
             const buildServiceOpt = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
             if (Option.isNone(buildServiceOpt)) {
               yield* Effect.logWarning("codegraph-build invoked but CodegraphBuildService is unavailable in scope")
-              return
+              return "Codegraph build skipped: CodegraphBuildService is unavailable in this session."
             }
             const args = parseArgs(input.arguments)
             const root = args.positional[0] ?? ctx.worktree
             const force = args.flags.force === true || args.flags.force === "true"
             const dbPath = Database.path()
             yield* buildServiceOpt.value.start({ root, force, dbPath })
+
+            // Poll until the build leaves "running". Build is synchronous
+            // from the worker's perspective, so this is bounded by the
+            // indexing pass on the user's workspace.
+            let status = yield* buildServiceOpt.value.status()
+            while (status.status === "running") {
+              yield* Effect.sleep("500 millis")
+              status = yield* buildServiceOpt.value.status()
+            }
+
+            if (status.status === "failed") {
+              return `Codegraph build failed: ${status.error ?? "unknown error"}`
+            }
+            if (status.status === "cancelled") {
+              return "Codegraph build cancelled."
+            }
+            if (status.status === "completed" && status.result) {
+              const r = status.result
+              return `Codegraph build complete. indexed=${r.indexed} skipped=${r.skipped} (cached=${r.skippedByReason.cached}) symbols=${r.symbolsIndexed} duration_ms=${r.duration_ms} root=${root}`
+            }
+            return `Codegraph build ${status.status} for ${root}.`
           }),
         hints: hints(PROMPT_CODEGRAPH_BUILD),
       }
@@ -179,11 +208,16 @@ export const layer = Layer.effect(
             const repoOpt = yield* Effect.serviceOption(Banyan.CodegraphRepo)
             if (Option.isNone(repoOpt)) {
               yield* Effect.logWarning("codegraph-remove invoked but CodegraphRepo is unavailable in scope")
-              return
+              return "Codegraph remove skipped: CodegraphRepo is unavailable in this session."
             }
             // default dropFile is false: banyancode.db is shared with sessions/memory/projects,
             // so wiping the file would also wipe unrelated state.
-            yield* repoOpt.value.clearAll({ dropFile: false })
+            const { sizeBefore, sizeAfter } = yield* repoOpt.value.clearAll({ dropFile: false })
+            if (sizeBefore === 0) {
+              return `Codegraph index removed (DB size unknown).`
+            }
+            const freedBytes = Math.max(0, sizeBefore - sizeAfter)
+            return `Codegraph index removed. Freed ${formatBytes(freedBytes)} (${formatBytes(sizeBefore)} -> ${formatBytes(sizeAfter)}).`
           }).pipe(Effect.provide(Banyan.codegraphRepoDefaultLayer)),
         hints: [],
       }
@@ -386,5 +420,17 @@ export const defaultLayer = layer.pipe(
 )
 
 export const node = LayerNode.make(layer, [Config.node, MCP.node, Skill.node])
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ["KB", "MB", "GB", "TB"]
+  let value = bytes / 1024
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex++
+  }
+  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[unitIndex]}`
+}
 
 export * as Command from "."

@@ -871,13 +871,28 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
             dialog.clear()
             return
           }
-          void sdk.client.session.command({
-            sessionID: route.data.sessionID,
-            command: "codegraph-remove",
-            arguments: "",
-          })
           toast.show({ message: "Removing code graph index...", variant: "info" })
           dialog.clear()
+          sdk.client.session
+            .command({
+              sessionID: route.data.sessionID,
+              command: "codegraph-remove",
+              arguments: "",
+            })
+            .then((res) => {
+              const parts = (res.data?.parts ?? []) as Array<{ type?: string; text?: string }>
+              const completion = parts.find((p) => p.type === "text" && typeof p.text === "string")?.text
+              toast.show({
+                message: completion ?? "Codegraph index removed.",
+                variant: "success",
+              })
+            })
+            .catch((err) =>
+              toast.show({
+                message: `Codegraph remove failed: ${err instanceof Error ? err.message : String(err)}`,
+                variant: "error",
+              }),
+            )
         },
       },
       {
