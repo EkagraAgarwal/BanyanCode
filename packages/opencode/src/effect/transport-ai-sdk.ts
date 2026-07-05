@@ -1,6 +1,7 @@
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions } from "ai"
 import { Context, Effect, Layer } from "effect"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
+import type { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
 import type { ResolvedContract } from "@opencode-ai/core/tool/tool"
 import { ToolOutput, ToolContent, type ToolDefinition } from "@opencode-ai/llm"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -144,11 +145,11 @@ export class Service extends Context.Service<Service, ToolTransport<AITool>>()(
 }
 
 export const buildTools = Effect.fn("AiSdkTransport.buildTools")(function* (input: {
-  catalog: ToolRegistry.Interface
+  catalog: ToolCatalog.Interface
   ctx: ToolMaterializationContext
 }) {
   const materialization = yield* input.catalog.materialize(input.ctx.permissions)
-  const listed = input.catalog.list()
+  const listed = yield* input.catalog.list()
   const contractsByName = new Map<string, ResolvedContract>()
   for (const [name, tool] of listed) {
     contractsByName.set(name, tool.contract)
@@ -168,12 +169,12 @@ const materializationEffectRef: { current: ReturnType<typeof buildTools> | null 
   current: null,
 }
 
-export const layer: Layer.Layer<Service, never, ToolRegistry.Service> = Layer.succeed(
+export const layer: Layer.Layer<Service, never, never> = Layer.succeed(
   Service,
   {
     id: AiSdkTransportId,
-    buildTools: ((catalog: ToolRegistry.Interface, ctx: ToolMaterializationContext) =>
-      buildTools({ catalog, ctx } as never)) as never,
+    buildTools: ((catalog: ToolCatalog.Interface, ctx: ToolMaterializationContext) =>
+      buildTools({ catalog, ctx })) as never,
   } as never,
 )
 
