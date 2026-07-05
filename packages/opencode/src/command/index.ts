@@ -175,7 +175,7 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             const repoOpt = yield* Effect.serviceOption(Banyan.CodegraphRepo)
             if (Option.isNone(repoOpt)) return
-            yield* repoOpt.value.clearAll()
+            yield* repoOpt.value.clearAll({ dropFile: true })
           }).pipe(Effect.provide(Banyan.codegraphRepoDefaultLayer)),
         hints: [],
       }

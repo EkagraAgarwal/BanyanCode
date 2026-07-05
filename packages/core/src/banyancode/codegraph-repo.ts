@@ -51,7 +51,7 @@ export interface Interface {
     edges: CodegraphEdge[]
     previousFileID?: string
   }) => Effect.Effect<void, never, never>
-  readonly clearAll: () => Effect.Effect<void, never, never>
+  readonly clearAll: (input?: { dropFile?: boolean }) => Effect.Effect<void, never, never>
   readonly getMeta: () => Effect.Effect<CodegraphMeta | undefined, never, never>
   readonly setMeta: (m: CodegraphMeta) => Effect.Effect<void, never, never>
   readonly bumpVersion: (input: {
@@ -420,8 +420,38 @@ export const layer = Layer.effect(
       }))
     })
 
-    const clearAll = Effect.fn("CodegraphRepo.clearAll")(function* () {
-      yield* db.delete(CodegraphFilesTable).run().pipe(Effect.orDie)
+    const clearAll = Effect.fn("CodegraphRepo.clearAll")(function* (input?: { dropFile?: boolean }) {
+      yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx.delete(CodegraphEdgesTable).run().pipe(Effect.orDie)
+            yield* tx.delete(CodegraphNodesTable).run().pipe(Effect.orDie)
+            yield* tx.delete(CodegraphFilesTable).run().pipe(Effect.orDie)
+            yield* tx.delete(CodegraphMetaTable).run().pipe(Effect.orDie)
+          }),
+        )
+        .pipe(Effect.orDie)
+
+      if (input?.dropFile ?? true) {
+        const filePath = Database.path()
+        if (filePath !== ":memory:") {
+          // SQLite holds the DB file open via the live connection. On Windows
+          // the unlink fails with EBUSY while that handle is alive; on POSIX
+          // unlinking an open file succeeds (the inode stays alive until the
+          // last FD closes). We treat EBUSY as best-effort: the data is wiped
+          // which is the main goal, and the file will be removed when the app
+          // restarts or the DB connection closes. ENOENT means already gone.
+          yield* Effect.tryPromise({
+            try: () =>
+              Bun.file(filePath).delete().catch((err: unknown) => {
+                const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : ""
+                if (code === "ENOENT" || code === "EBUSY") return
+                throw err
+              }),
+            catch: (err) => err,
+          }).pipe(Effect.orDie)
+        }
+      }
     })
 
     const getMeta = Effect.fn("CodegraphRepo.getMeta")(function* () {
