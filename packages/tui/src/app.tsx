@@ -838,7 +838,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "BanyanCode",
         slashName: "codegraph-build",
         run: () => {
-          const worktree = route.data.type === "session" ? undefined : project.data.instance.path.worktree
+          const worktree = project.data.instance.path.worktree
           void sdk.client.global.codegraph
             .build({ root: worktree, force: false })
             .then((res) => {
@@ -1109,10 +1109,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
   const build = useCodegraphBuild()
   event.subscribe((evt, { workspace }) => {
-    if (workspace !== project.workspace.current()) return
-    if ((evt.type as string) === "banyancode.codegraph.build") {
-      build.set(evt.properties as CodegraphBuildState)
-    }
+    if ((evt.type as string) !== "banyancode.codegraph.build") return
+    // Accept events stamped with the current workspace, OR unscoped/global
+    // events (workspace === undefined) that some upstream paths emit without
+    // an explicit workspace stamp.
+    if (workspace !== undefined && workspace !== project.workspace.current()) return
+    build.set(evt.properties as CodegraphBuildState)
   })
 
   event.on("installation.update-available", async (evt) => {
