@@ -27,6 +27,15 @@ export const Info = Schema.Struct({
   // Used as both a prompt hint AND a hard runtime limit in MeshCoordinator.
   // Default: 5, max: 20
   banyancode_max_subagents: Schema.optional(Schema.Number),
+  banyancode_git_author_email: Schema.optional(Schema.String),
+  banyancode_codegraph_exclude_patterns: Schema.optional(Schema.Array(Schema.String)),
+  banyancode_codegraph_concurrency: Schema.optional(Schema.Number),
+  banyancode_codegraph_batch_size: Schema.optional(Schema.Number),
+  banyancode_trace_max_days: Schema.optional(Schema.Number),
+  banyancode_trace_max_events: Schema.optional(Schema.Number),
+  banyancode_mesh_default_provider: Schema.optional(Schema.String),
+  banyancode_mesh_default_model: Schema.optional(Schema.String),
+  banyancode_mesh_subagent_cooldown: Schema.optional(Schema.Number),
   // List of custom subagent definitions stored as markdown files in
   // .banyancode/agent/<name>.md. This field is metadata only —
   // actual agent configs are file-based (managed via dialog-agent-config).

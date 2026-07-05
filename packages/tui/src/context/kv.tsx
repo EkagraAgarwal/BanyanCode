@@ -38,16 +38,20 @@ export const { use: useKV, provider: KVProvider } = createSimpleContext({
       get store() {
         return store
       },
-      signal<T>(name: string, defaultValue: T) {
+      signal<T>(name: string, defaultValue: T): readonly [() => T, Setter<T>] {
         if (store[name] === undefined) setStore(name, defaultValue)
         return [
           function () {
-            return result.get(name)
+            return result.get(name) as T
           },
-          function setter(next: Setter<T>) {
-            result.set(name, next)
+          function setter(...args: any[]) {
+            const next = args[0]
+            const current = result.get(name)
+            const value = typeof next === "function" ? next(current) : next
+            result.set(name, value)
+            return value
           },
-        ] as const
+        ] as unknown as readonly [() => T, Setter<T>]
       },
       get(key: string, defaultValue?: any) {
         return store[key] ?? defaultValue

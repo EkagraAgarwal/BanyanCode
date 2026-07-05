@@ -106,6 +106,53 @@ function MaskedInput(props: {
   )
 }
 
+function TextInputRow(props: {
+  label: string
+  value: string
+  placeholder: string
+  onSave: (value: string) => void
+  theme: any
+}) {
+  const [editing, setEditing] = createSignal(false)
+  const [draft, setDraft] = createSignal("")
+  const display = () => (props.value ? props.value : props.placeholder)
+
+  return (
+    <box flexDirection="row" gap={1} alignItems="center">
+      <text fg={toHex(props.theme.textMuted)}>{props.label}:</text>
+      <text
+        fg={toHex(props.theme.text)}
+        onMouseUp={() => { setDraft(props.value); setEditing(true) }}
+      >
+        {display()}
+      </text>
+      {editing() && (
+        <box flexDirection="row" gap={1}>
+          <input
+            value={draft()}
+            onInput={setDraft}
+            onSubmit={() => { props.onSave(draft()); setEditing(false) }}
+            width={40}
+            placeholder={props.placeholder}
+          />
+          <text
+            fg={toHex(props.theme.primary)}
+            onMouseUp={() => { props.onSave(draft()); setEditing(false) }}
+          >
+            save
+          </text>
+          <text
+            fg={toHex(props.theme.textMuted)}
+            onMouseUp={() => setEditing(false)}
+          >
+            esc
+          </text>
+        </box>
+      )}
+    </box>
+  )
+}
+
 type EndpointEntry = {
   name: string
   base_url: string
@@ -220,6 +267,16 @@ function View(props: { api: TuiPluginApi }) {
 
   const subagentCount = () => (cfg().banyancode_subagents ?? []).length
 
+  const gitAuthorEmail = () => cfg().banyancode_git_author_email ?? ""
+  const codegraphExcludePatterns = () => (cfg().banyancode_codegraph_exclude_patterns ?? []).join(", ")
+  const codegraphConcurrency = () => cfg().banyancode_codegraph_concurrency ?? 8
+  const codegraphBatchSize = () => cfg().banyancode_codegraph_batch_size ?? 1000
+  const traceMaxDays = () => cfg().banyancode_trace_max_days ?? 7
+  const traceMaxEvents = () => cfg().banyancode_trace_max_events ?? 10000
+  const meshDefaultProvider = () => cfg().banyancode_mesh_default_provider ?? ""
+  const meshDefaultModel = () => cfg().banyancode_mesh_default_model ?? ""
+  const meshSubagentCooldown = () => cfg().banyancode_mesh_subagent_cooldown ?? 0
+
   return (
     <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
       <box flexDirection="column" paddingTop={1} paddingLeft={1} paddingRight={1}>
@@ -286,6 +343,74 @@ function View(props: { api: TuiPluginApi }) {
                       label="Disable Web Search"
                     />
                   </box>
+
+                  <box marginTop={1}>
+                    <NumberInput
+                      theme={theme()}
+                      value={meshSubagentCooldown()}
+                      onChange={(v) => update({ banyancode_mesh_subagent_cooldown: v })}
+                      label="Subagent Spawn Cooldown (ms)"
+                      min={0}
+                      max={10000}
+                    />
+                  </box>
+
+                  <box marginTop={1}>
+                    <TextInputRow
+                      label="Subagent Default Provider"
+                      value={meshDefaultProvider()}
+                      placeholder="e.g. anthropic"
+                      onSave={(v) => update({ banyancode_mesh_default_provider: v })}
+                      theme={theme()}
+                    />
+                  </box>
+
+                  <box marginTop={1}>
+                    <TextInputRow
+                      label="Subagent Default Model"
+                      value={meshDefaultModel()}
+                      placeholder="e.g. claude-3-5-sonnet"
+                      onSave={(v) => update({ banyancode_mesh_default_model: v })}
+                      theme={theme()}
+                    />
+                  </box>
+                </>
+              ),
+            },
+            {
+              id: "codegraph",
+              title: "Code Graph Indexer",
+              content: () => (
+                <>
+                  <TextInputRow
+                    label="Exclude Patterns (comma-separated)"
+                    value={codegraphExcludePatterns()}
+                    placeholder="e.g. node_modules, dist, temp"
+                    onSave={(v) => update({
+                      banyancode_codegraph_exclude_patterns: v.split(",").map((x) => x.trim()).filter(Boolean)
+                    })}
+                    theme={theme()}
+                  />
+                  <box marginTop={1}>
+                    <NumberInput
+                      theme={theme()}
+                      value={codegraphConcurrency()}
+                      onChange={(v) => update({ banyancode_codegraph_concurrency: v })}
+                      label="Concurrent Parsing Fibers"
+                      min={1}
+                      max={16}
+                    />
+                  </box>
+                  <box marginTop={1}>
+                    <NumberInput
+                      theme={theme()}
+                      value={codegraphBatchSize()}
+                      onChange={(v) => update({ banyancode_codegraph_batch_size: v })}
+                      label="Transaction Batch Size"
+                      min={100}
+                      max={5000}
+                    />
+                  </box>
                 </>
               ),
             },
@@ -345,6 +470,47 @@ function View(props: { api: TuiPluginApi }) {
                   <box marginTop={1}>
                     <text fg={toHex(theme().primary)}>[open Agents tab to add or edit]</text>
                   </box>
+                </>
+              ),
+            },
+            {
+              id: "telemetry",
+              title: "Telemetry & Logs",
+              content: () => (
+                <>
+                  <NumberInput
+                    theme={theme()}
+                    value={traceMaxDays()}
+                    onChange={(v) => update({ banyancode_trace_max_days: v })}
+                    label="Trace Retention (Days)"
+                    min={1}
+                    max={30}
+                  />
+                  <box marginTop={1}>
+                    <NumberInput
+                      theme={theme()}
+                      value={traceMaxEvents()}
+                      onChange={(v) => update({ banyancode_trace_max_events: v })}
+                      label="Trace Event Capacity"
+                      min={1000}
+                      max={50000}
+                    />
+                  </box>
+                </>
+              ),
+            },
+            {
+              id: "git",
+              title: "Git & Source Control",
+              content: () => (
+                <>
+                  <TextInputRow
+                    label="Override Git Author Email"
+                    value={gitAuthorEmail()}
+                    placeholder="e.g. developer@company.com"
+                    onSave={(v) => update({ banyancode_git_author_email: v })}
+                    theme={theme()}
+                  />
                 </>
               ),
             },

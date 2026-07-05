@@ -212,7 +212,7 @@ function EditableTitle(props: { controller: RowControllerProps; session: Session
             {props.session.title || "(untitled)"}
           </text>
           <text fg={toHex(c().theme.textMuted)}>{c().timeAgo(props.session.time?.updated)}</text>
-          <text fg={toHex(isSelected() ? c().theme.primary : c().theme.textMuted)}>[e rename]</text>
+          <text fg={toHex(isSelected() ? c().theme.primary : c().theme.textMuted)}>rename</text>
         </box>
       }
     >

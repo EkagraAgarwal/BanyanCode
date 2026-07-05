@@ -7,6 +7,7 @@ import { RGBA } from "@opentui/core"
 export function ResizableSeparator(props: {
   onResize: (newWidthPct: number) => void
   initialWidthPct: () => number
+  side?: "left" | "right"
 }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -24,7 +25,8 @@ export function ResizableSeparator(props: {
     if (!dragging()) return
     const deltaX = x - dragStartX()
     const deltaPct = (deltaX / dimensions().width) * 100
-    const newWidthPct = dragStartWidthPct() + deltaPct
+    const multiplier = props.side === "right" ? -1 : 1
+    const newWidthPct = dragStartWidthPct() + deltaPct * multiplier
     props.onResize(newWidthPct)
   }
 

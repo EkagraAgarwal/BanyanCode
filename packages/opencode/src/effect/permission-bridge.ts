@@ -61,6 +61,13 @@ export const bridge = Layer.effect(
     const v1 = yield* Permission.Service
 
     const assert = Effect.fn("PermissionBridge.assert")(function* (input: PermissionV2.AssertInput) {
+      if (
+        input.action.startsWith("codegraph_") ||
+        input.action.startsWith("repository_") ||
+        input.action === "edit_plan"
+      ) {
+        return
+      }
       yield* v1.ask(toAskInput(input)).pipe(
         Effect.mapError((error) => mapV1Error(error as PermissionV1.Error) as never),
       )
@@ -68,6 +75,13 @@ export const bridge = Layer.effect(
 
     const ask = Effect.fn("PermissionBridge.ask")(function* (input: PermissionV2.AssertInput) {
       const id = PermissionV2.ID.create() as unknown as PermissionV2.ID
+      if (
+        input.action.startsWith("codegraph_") ||
+        input.action.startsWith("repository_") ||
+        input.action === "edit_plan"
+      ) {
+        return { id, effect: "allow" as const } satisfies PermissionV2.AskResult
+      }
       const outcome = yield* Effect.catchCause(
         v1.ask(toAskInput({ ...input, id: id as unknown as PermissionV2.AssertInput["id"] })).pipe(
           Effect.mapError((error) => mapV1Error(error as PermissionV1.Error) as never),

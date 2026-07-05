@@ -268,6 +268,12 @@ export function Session() {
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
 
   const wide = createMemo(() => dimensions().width > 120)
+  createEffect(() => {
+    if (!wide()) {
+      setLeftCollapsed(true)
+      setRightCollapsed(true)
+    }
+  })
   const sidebarVisible = createMemo(() => {
     if (session()?.parentID) return false
     if (wide()) return !leftCollapsed()
@@ -1224,10 +1230,15 @@ export function Session() {
             <Show when={leftDocked()}>
               <ResizableSeparator
                 onResize={(newWidthPct) => {
-                  const clamped = Math.max(15, Math.min(45, newWidthPct))
-                  setLeftSidebarWidth(() => clamped)
+                  if (newWidthPct < 15) {
+                    setLeftCollapsed(true)
+                  } else {
+                    const clamped = Math.max(15, Math.min(45, newWidthPct))
+                    setLeftSidebarWidth(() => clamped)
+                  }
                 }}
                 initialWidthPct={leftSidebarWidth}
+                side="left"
               />
             </Show>
             <Show when={wide() && leftCollapsed() && !session()?.parentID}>
@@ -1428,10 +1439,15 @@ export function Session() {
             >
               <ResizableSeparator
                 onResize={(newWidthPct) => {
-                  const clamped = Math.max(15, Math.min(45, newWidthPct))
-                  setRightSidebarWidth(() => clamped)
+                  if (newWidthPct < 15) {
+                    setRightCollapsed(true)
+                  } else {
+                    const clamped = Math.max(15, Math.min(45, newWidthPct))
+                    setRightSidebarWidth(() => clamped)
+                  }
                 }}
                 initialWidthPct={rightSidebarWidth}
+                side="right"
               />
               <box width={`${rightSidebarWidth()}%`} flexShrink={0}>
                 <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
