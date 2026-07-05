@@ -13,6 +13,10 @@ export const State = Schema.Struct({
   total: Schema.Number,
   currentFile: Schema.optional(Schema.String),
   startedAt: Schema.optional(Schema.Number),
+  lastProgressAt: Schema.optional(Schema.Number),
+  lastCompletedFile: Schema.optional(Schema.String),
+  lastCompletedPath: Schema.optional(Schema.String),
+  currentlyParsing: Schema.optional(Schema.String),
   graphVersion: Schema.optional(Schema.Number),
   graphCoverage: Schema.optional(Schema.Number),
   result: Schema.optional(
@@ -72,11 +76,16 @@ export const layer = Layer.effect(
     const indexer = yield* CodegraphIndexer.Service
     const repo = yield* CodegraphRepo.Service
     const state = yield* Ref.make<State>({ status: "idle", done: 0, total: 0 })
-    const inFlight = yield* Ref.make<Fiber.Fiber<void, CodegraphIndexer.CodegraphError> | undefined>(undefined)
-    const events = yield* Queue.bounded<{ type: "banyancode.codegraph.build"; properties: State }>(64).pipe(Effect.orDie)
+    const inFlight = yield* Ref.make<Fiber.Fiber<unknown, unknown> | undefined>(undefined)
+    // Phase 2: dropping strategy so Queue.offer never suspends the producer.
+    // The events queue is drained by the bridge; if it falls behind, new
+    // events are dropped rather than blocking the worker. Per AGENTS.md,
+    // do not raise capacity or switch to unbounded — bounded with drop is
+    // the correct back-pressure shape for a progress-event stream.
+    const events = yield* Queue.dropping<{ type: "banyancode.codegraph.build"; properties: State }>(64).pipe(Effect.orDie)
     yield* Effect.addFinalizer(() => Queue.shutdown(events))
 
-    const publish = (s: State) => Queue.offer(events, { type: "banyancode.codegraph.build", properties: s }).pipe(Effect.orDie)
+    const publish = (s: State) => Queue.offer(events, { type: "banyancode.codegraph.build", properties: s }).pipe(Effect.ignore)
 
     // The events queue is drained by the build bridge in
     // packages/opencode/src/effect/banyancode-codegraph-bridge.ts, which
@@ -88,20 +97,43 @@ export const layer = Layer.effect(
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
         const currentFiber = yield* Ref.get(inFlight)
-        if (currentFiber) yield* Fiber.interrupt(currentFiber)
+        if (currentFiber) yield* Fiber.interrupt(currentFiber).pipe(Effect.ignore)
 
         yield* indexer.cancel()
-        const initial: State = { status: "running", root: input.root, dbPath: input.dbPath, done: 0, total: 0, startedAt: Date.now() }
+        const initial: State = {
+          status: "running",
+          root: input.root,
+          dbPath: input.dbPath,
+          done: 0,
+          total: 0,
+          startedAt: Date.now(),
+          lastProgressAt: Date.now(),
+        }
         yield* Ref.set(state, initial)
         yield* publish(initial)
 
-        const work = Effect.gen(function* () {
-          const startTime = Date.now()
+        const startTime = Date.now()
+
+        // Phase 2: terminal state-write lives in a sequencing fiber that
+        // JOINS the worker. If the terminal state were written inside the
+        // worker, the worker's final `publish` call could block on a full
+        // events queue and the build would never reach a terminal state.
+        const worker = Effect.gen(function* () {
           const result = yield* indexer.index({
             root: input.root,
             force: input.force ?? false,
-            onProgress: Effect.fn("CodegraphBuildService.onProgress")(function* ({ file, done, total }) {
-              const next: State = { ...initial, done, total, currentFile: file }
+            onProgress: Effect.fn("CodegraphBuildService.onProgress")(function* ({ file, done, total, currentFile }) {
+              const basename = file.split("/").pop() ?? file.split("\\").pop() ?? file
+              const next: State = {
+                ...initial,
+                done,
+                total,
+                currentFile: file,
+                lastProgressAt: Date.now(),
+                lastCompletedFile: basename,
+                lastCompletedPath: file,
+                currentlyParsing: currentFile,
+              }
               yield* Ref.set(state, next)
               yield* publish(next)
             }),
@@ -116,48 +148,70 @@ export const layer = Layer.effect(
             totalEdges: 0,
           })
 
-          const doneState: State = {
-            status: "completed",
-            root: initial.root,
-            dbPath: initial.dbPath,
-            done: result.indexed + result.skipped,
-            total: result.indexed + result.skipped,
-            startedAt: initial.startedAt,
-            graphVersion,
-            graphCoverage: coverage,
-            result: {
-              indexed: result.indexed,
-              skipped: result.skipped,
-              duration_ms: Date.now() - startTime,
-              symbolsIndexed: result.symbolsIndexed,
-              skippedByReason: result.skippedByReason,
-            },
-          }
-          yield* Ref.set(state, doneState)
-          yield* publish(doneState)
+          return { result, graphVersion, coverage }
         })
-
-        const forkWork = work.pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              const current = yield* Ref.get(state)
-              if (current.status === "running") {
-                const err = Cause.squash(cause)
-                const errorMsg = err instanceof Error ? err.message : String(err)
-                const next: State = { ...initial, status: "failed", error: errorMsg }
-                yield* Ref.set(state, next)
-                yield* publish(next)
-              }
-            }),
-          ),
-        )
 
         // Fork into the runtime's global scope (not the request scope). The fork
         // must outlive the originating request because the build runs for
         // minutes, but an HTTP handler completes in milliseconds. `cancel()`
         // interrupts the fiber directly, not by closing any scope.
-        const fiber = yield* Effect.forkDetach(forkWork)
-        yield* Ref.set(inFlight, fiber)
+        const workerFiber = yield* Effect.forkDetach(worker)
+        yield* Ref.set(inFlight, workerFiber)
+
+        // Sequencing fiber: joins the worker and writes the terminal state.
+        // Detached from the request scope (AppRuntime global scope) so it
+        // outlives the originating call. Per AGENTS.md use forkDetach, not
+        // forkScoped — the latter requires Scope in the fiber context which
+        // we don't have here.
+        yield* Effect.forkDetach(
+          Effect.gen(function* () {
+            const outcome = yield* Fiber.join(workerFiber).pipe(
+              Effect.map((r) => ({ kind: "completed" as const, ...r })),
+              Effect.catchCause((cause) => {
+                const err = Cause.squash(cause)
+                const errorMsg = err instanceof Error ? err.message : String(err)
+                return Effect.succeed({ kind: "failed" as const, error: errorMsg } as const)
+              }),
+            )
+
+            // Don't overwrite a state set by cancel/forceKill, and don't
+            // overwrite a state set by a NEWER start. If inFlight no longer
+            // points at our workerFiber, a newer start has taken over.
+            const liveFiber = yield* Ref.get(inFlight)
+            if (liveFiber !== workerFiber) return
+            const current = yield* Ref.get(state)
+            if (current.status !== "running") return
+
+            // Read state from Ref to preserve lastCompletedFile / currentlyParsing /
+            // lastProgressAt set by the last onProgress callback. Spreading
+            // `current` first means those fields survive into the terminal state.
+            const terminal: State = outcome.kind === "completed"
+              ? {
+                  ...current,
+                  status: "completed",
+                  done: outcome.result.indexed + outcome.result.skipped,
+                  total: outcome.result.indexed + outcome.result.skipped,
+                  graphVersion: outcome.graphVersion,
+                  graphCoverage: outcome.coverage,
+                  result: {
+                    indexed: outcome.result.indexed,
+                    skipped: outcome.result.skipped,
+                    duration_ms: Date.now() - startTime,
+                    symbolsIndexed: outcome.result.symbolsIndexed,
+                    skippedByReason: outcome.result.skippedByReason,
+                  },
+                }
+              : {
+                  ...current,
+                  status: "failed",
+                  lastProgressAt: Date.now(),
+                  error: outcome.error,
+                }
+
+            yield* Ref.set(state, terminal)
+            yield* publish(terminal)
+          }),
+        )
       }) as unknown as Effect.Effect<void, never, never>
 
     const cancel: Interface["cancel"] = () =>

@@ -18,7 +18,7 @@ export interface Interface {
     root: string
     force?: boolean
     maxFileSizeBytes?: number
-    onProgress?: (info: { file: string; done: number; total: number }) => Effect.Effect<void>
+    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
   }) => Effect.Effect<
     {
       indexed: number
@@ -216,7 +216,7 @@ export const layer = Layer.effect(
       root: string
       force?: boolean
       maxFileSizeBytes?: number
-      onProgress?: (info: { file: string; done: number; total: number }) => Effect.Effect<void>
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
@@ -281,6 +281,7 @@ export const layer = Layer.effect(
       const skippedParseFailureRef = yield* Ref.make(0)
       const total = codeFiles.length
       const progressCounter = yield* Ref.make(0)
+      const currentlyParsingRef = yield* Ref.make<string | undefined>(undefined)
 
       // Emit a pre-parse progress event so subscribers see total file count
       // before parsing begins. Empty `file` is a sentinel for "walk complete";
@@ -311,6 +312,7 @@ const skippedParsed = (relativePath: string): ParsedFile => ({
 const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
   const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
   return Effect.gen(function* () {
+    yield* Ref.set(currentlyParsingRef, relativePath)
     if (yield* Ref.get(cancelled)) {
       yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       return
@@ -427,8 +429,9 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
     Effect.ensuring(
       Effect.gen(function* () {
         const doneCount = yield* Ref.updateAndGet(progressCounter, (n) => n + 1)
+        const currentFile = yield* Ref.get(currentlyParsingRef)
         if (input.onProgress) {
-          yield* input.onProgress({ file: relativePath, done: doneCount, total })
+          yield* input.onProgress({ file: relativePath, done: doneCount, total, currentFile })
         }
       }),
     ),

@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { createContext, useContext, type ParentProps, Show, createMemo, createEffect, onCleanup } from "solid-js"
+import { createContext, useContext, type ParentProps, Show, createMemo, createEffect, onCleanup, createSignal } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTheme } from "../context/theme"
 import { useTerminalDimensions } from "@opentui/solid"
@@ -7,12 +7,16 @@ import { SplitBorder } from "../ui/border"
 import { TextAttributes } from "@opentui/core"
 
 export type CodegraphBuildState = {
-  status: "idle" | "running" | "completed" | "failed" | "cancelled"
+  status: "idle" | "running" | "completed" | "failed" | "cancelled" | "stuck"
   root?: string
   dbPath?: string
   done: number
   total: number
   currentFile?: string
+  lastProgressAt?: number
+  lastCompletedFile?: string
+  lastCompletedPath?: string
+  currentlyParsing?: string
   result?: { indexed: number; skipped: number; duration_ms: number }
   error?: string
 }
@@ -53,7 +57,7 @@ function bar(done: number, total: number): string {
 }
 
 function labelFor(status: CodegraphBuildState["status"]): string {
-  return { idle: "Idle", running: "Running", completed: "Completed", failed: "Failed", cancelled: "Cancelled" }[status]
+  return { idle: "Idle", running: "Running", completed: "Completed", failed: "Failed", cancelled: "Cancelled", stuck: "Stuck" }[status]
 }
 
 function borderColorFor(status: CodegraphBuildState["status"]): "info" | "success" | "warning" | "error" {
@@ -61,6 +65,7 @@ function borderColorFor(status: CodegraphBuildState["status"]): "info" | "succes
   if (status === "completed") return "success"
   if (status === "failed") return "error"
   if (status === "cancelled") return "warning"
+  if (status === "stuck") return "warning"
   return "info"
 }
 
@@ -69,8 +74,21 @@ export function CodegraphProgress() {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
 
+  const [now, setNow] = createSignal(Date.now())
   createEffect(() => {
-    const buildStatus = build.state.status
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    onCleanup(() => clearInterval(id))
+  })
+
+  const derivedStatus = createMemo(() => {
+    if (build.state.status === "running" && build.state.lastProgressAt && now() - build.state.lastProgressAt > 30000) {
+      return "stuck" as const
+    }
+    return build.state.status
+  })
+
+  createEffect(() => {
+    const buildStatus = derivedStatus()
     if (buildStatus === "completed" || buildStatus === "cancelled") {
       const timer = setTimeout(() => {
         build.set({ status: "idle", done: 0, total: 0 })
@@ -81,6 +99,11 @@ export function CodegraphProgress() {
 
   const isVisible = createMemo(() => {
     return build.state.status !== "idle"
+  })
+
+  const lastUpdateSeconds = createMemo(() => {
+    if (!build.state.lastProgressAt) return 0
+    return Math.floor((now() - build.state.lastProgressAt) / 1000)
   })
 
   return (
@@ -96,13 +119,13 @@ export function CodegraphProgress() {
         paddingTop={1}
         paddingBottom={1}
         backgroundColor={theme.backgroundPanel}
-        borderColor={theme[borderColorFor(build.state.status)]}
+        borderColor={theme[borderColorFor(derivedStatus())]}
         border={["left", "right"]}
         customBorderChars={SplitBorder.customBorderChars}
       >
         <Show when={build.state.status !== "idle"}>
           <text attributes={TextAttributes.BOLD} marginBottom={1} fg={theme.text}>
-            Codegraph Indexing — {labelFor(build.state.status)}
+            Codegraph Indexing — {labelFor(derivedStatus())}
           </text>
           <text fg={theme.text}>
             {`${bar(build.state.done, build.state.total)} ${build.state.done}/${build.state.total}`}
@@ -113,6 +136,30 @@ export function CodegraphProgress() {
                 Indexing: {file()}
               </text>
             )}
+          </Show>
+          <Show when={derivedStatus() === "stuck"}>
+            <text fg={theme.warning} marginTop={1}>
+              Build appears stuck
+            </text>
+            <Show when={build.state.lastCompletedFile}>
+              {(f) => (
+                <text fg={theme.textMuted} marginTop={1}>
+                  Last completed: {f()}
+                </text>
+              )}
+            </Show>
+            <Show when={build.state.currentlyParsing}>
+              {(f) => (
+                <text fg={theme.textMuted} marginTop={1}>
+                  Currently parsing: {f()}
+                </text>
+              )}
+            </Show>
+            <Show when={!build.state.currentlyParsing && build.state.lastProgressAt}>
+              <text fg={theme.textMuted} marginTop={1}>
+                Last update: {lastUpdateSeconds()}s ago
+              </text>
+            </Show>
           </Show>
           <Show when={build.state.status === "completed" && build.state.result}>
             {(result) => (
@@ -135,7 +182,7 @@ export function CodegraphProgress() {
               </text>
             )}
           </Show>
-          <Show when={build.state.status === "running"}>
+          <Show when={build.state.status === "running" || derivedStatus() === "stuck"}>
             <text fg={theme.textMuted} marginTop={1}>
               Press Ctrl+C to cancel
             </text>
