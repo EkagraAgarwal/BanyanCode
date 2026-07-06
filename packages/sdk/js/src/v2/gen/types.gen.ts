@@ -1370,10 +1370,18 @@ export type GlobalEvent = {
               banyanignored: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
               artifact: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
               tooLarge: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              minified: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              tooLargeParse: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
               cached: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              readError: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
               parseFailure: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
             }
           }
+          parseErrors?: Array<{
+            path: string
+            cause: string
+            indexedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }>
           error?: string
         }
       }
@@ -2137,6 +2145,15 @@ export type BanyanConfig = {
   banyancode_telegram_webhook_secret?: string
   banyancode_telegram_default_session?: string
   banyancode_max_subagents?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_git_author_email?: string
+  banyancode_codegraph_exclude_patterns?: Array<string>
+  banyancode_codegraph_concurrency?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_codegraph_batch_size?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_trace_max_days?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_trace_max_events?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_mesh_default_provider?: string
+  banyancode_mesh_default_model?: string
+  banyancode_mesh_subagent_cooldown?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   banyancode_subagents?: Array<{
     name: string
     description?: string
@@ -5250,10 +5267,18 @@ export type EventBanyancodeCodegraphBuild = {
         banyanignored: number | "NaN" | "Infinity" | "-Infinity"
         artifact: number | "NaN" | "Infinity" | "-Infinity"
         tooLarge: number | "NaN" | "Infinity" | "-Infinity"
+        minified: number | "NaN" | "Infinity" | "-Infinity"
+        tooLargeParse: number | "NaN" | "Infinity" | "-Infinity"
         cached: number | "NaN" | "Infinity" | "-Infinity"
+        readError: number | "NaN" | "Infinity" | "-Infinity"
         parseFailure: number | "NaN" | "Infinity" | "-Infinity"
       }
     }
+    parseErrors?: Array<{
+      path: string
+      cause: string
+      indexedAt: number | "NaN" | "Infinity" | "-Infinity"
+    }>
     error?: string
   }
 }
