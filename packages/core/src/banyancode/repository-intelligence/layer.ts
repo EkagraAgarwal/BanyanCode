@@ -165,7 +165,8 @@ export const layer = Layer.effect(
           if (current.depth >= maxDepth) continue
 
           const outgoing = yield* repo.edgesFrom(current.id)
-          const incoming = yield* repo.edgesTo(current.id)
+          const incomingRaw = yield* repo.edgesTo(current.id)
+          const incoming = incomingRaw.filter((e) => e.kind !== "imports" && e.kind !== "extends")
 
           const nextIDs: string[] = []
           for (const edge of [...outgoing, ...incoming]) {
@@ -236,7 +237,14 @@ export const layer = Layer.effect(
         const symbolID = (exactMatch ?? symbolResult.nodes[0])!.id
 
         const relevantTests: CodegraphNode[] = []
+        const outgoing = yield* repo.edgesFrom(symbolID)
+        const testedBy = new Set(outgoing.filter((e) => e.kind === "tested_by").map((e) => e.toNodeID))
+
         for (const node of testNodes) {
+          if (testedBy.has(node.id)) {
+            relevantTests.push(node)
+            continue
+          }
           const edges = yield* repo.edgesFrom(node.id)
           const references = edges.filter(
             (e) => e.toNodeID === symbolID && (e.kind === "calls" || e.kind === "references"),

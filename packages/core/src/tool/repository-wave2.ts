@@ -149,44 +149,44 @@ const OwnershipResultSchema = Schema.Struct({
 })
 
 const QueryInput = Schema.Struct({
-  query: Schema.String,
-  limit: optionalNumber,
+  query: Schema.String.annotate({ description: "The term, concept, or feature to search for." }),
+  limit: optionalNumber.annotate({ description: "Max number of results to return (default 50)." }),
   workspace: Schema.optional(WorkspaceContextSchema),
 })
 
 const ExplainInput = Schema.Struct({
-  symbol: Schema.String,
+  symbol: Schema.String.annotate({ description: "The symbol to explain (e.g. 'MemoryRepo')." }),
   workspace: Schema.optional(WorkspaceContextSchema),
 })
 
 const ImpactInput = Schema.Struct({
-  path: Schema.String,
+  path: Schema.String.annotate({ description: "The file path or feature name to analyze." }),
   workspace: Schema.optional(WorkspaceContextSchema),
 })
 
 const TraceInput = Schema.Struct({
-  symbol: Schema.String,
-  depth: optionalNumber,
+  symbol: Schema.String.annotate({ description: "The entrypoint or symbol to trace from." }),
+  depth: optionalNumber.annotate({ description: "Max traversal depth (default 2)." }),
   workspace: Schema.optional(WorkspaceContextSchema),
 })
 
 const TestsInput = Schema.Struct({
-  symbol: Schema.String,
+  symbol: Schema.String.annotate({ description: "The symbol to find tests for." }),
 })
 
 const SymbolsInput = Schema.Struct({
-  query: Schema.String,
-  limit: optionalNumber,
+  query: Schema.String.annotate({ description: "Symbol name or substring." }),
+  limit: optionalNumber.annotate({ description: "Max number of results (default 50)." }),
 })
 
 const RelationshipsInput = Schema.Struct({
-  nodeID: optionalString,
-  path: optionalString,
-  depth: optionalNumber,
+  nodeID: optionalString.annotate({ description: "The graph UUID of the node to trace from." }),
+  path: optionalString.annotate({ description: "The file path to trace from (if nodeID is omitted)." }),
+  depth: optionalNumber.annotate({ description: "Max traversal depth (default 2)." }),
 })
 
 const OwnershipInput = Schema.Struct({
-  path: Schema.String,
+  path: Schema.String.annotate({ description: "The file or directory path." }),
   workspace: Schema.optional(WorkspaceContextSchema),
 })
 

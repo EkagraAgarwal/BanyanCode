@@ -581,7 +581,12 @@ export const layer = Layer.effect(
     }) {
       return yield* db.transaction((tx) =>
         Effect.gen(function* () {
-          const coverage = input.scannedFiles > 0 ? input.indexedFiles / input.scannedFiles : 0
+          const fileRow = yield* tx
+            .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_files`)
+            .pipe(Effect.orDie)
+          const indexedFilesCount = fileRow?.c ?? 0
+          const coverage = input.scannedFiles > 0 ? indexedFilesCount / input.scannedFiles : 0
+          
           const row = yield* tx
             .select()
             .from(CodegraphMetaTable)

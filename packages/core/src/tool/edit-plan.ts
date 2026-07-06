@@ -14,12 +14,12 @@ const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 export const name = "edit_plan"
 
 export const Input = Schema.Struct({
-  phase: Schema.Literals(["before", "after"]),
-  targetSymbol: Schema.String,
-  changeKind: Schema.optional(Schema.Literals(["rename", "modify", "delete", "add"])),
-  filePath: optionalString,
-  diff: optionalString,
-  root: optionalString,
+  phase: Schema.Literals(["before", "after"]).annotate({ description: "Whether to plan before an edit or verify after an edit." }),
+  targetSymbol: Schema.String.annotate({ description: "The symbol being edited." }),
+  changeKind: Schema.optional(Schema.Literals(["rename", "modify", "delete", "add"])).annotate({ description: "The type of change (before phase only)." }),
+  filePath: optionalString.annotate({ description: "The file containing the target symbol." }),
+  diff: optionalString.annotate({ description: "The diff of the change (after phase only)." }),
+  root: optionalString.annotate({ description: "The workspace root." }),
 })
 
 export const Output = Schema.Struct({

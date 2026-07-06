@@ -18,11 +18,11 @@ const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 export const name = "code_find"
 
 export const Input = Schema.Struct({
-  intent: Schema.Literals(["definition", "callers", "dependents", "impact", "find_file"]),
-  target: optionalString,
-  minScore: optionalNumber,
-  includeKeywordFallback: optionalBoolean,
-  limit: optionalNumber,
+  intent: Schema.Literals(["definition", "callers", "dependents", "impact", "find_file"]).annotate({ description: "The type of search to perform. Start with 'definition' to resolve a node, then use 'callers'/'impact'." }),
+  target: optionalString.annotate({ description: "The symbol name, filename, or node ID (UUID:line-line) to search for." }),
+  minScore: optionalNumber.annotate({ description: "Minimum score for search results (optional)." }),
+  includeKeywordFallback: optionalBoolean.annotate({ description: "Whether to fall back to substring matching if exact symbol name isn't found. Defaults to true." }),
+  limit: optionalNumber.annotate({ description: "Maximum number of results to return. Defaults to 50." }),
 })
 
 export const Output = Schema.Struct({
@@ -132,7 +132,9 @@ export const locationLayer = Layer.effectDiscard(
                 }
                 case "callers": {
                   if (!input.target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_callers", _diagnostic: "empty-target" as const }
-                  const result = yield* analyzer.callers({ function: input.target }).pipe(
+                  const isNodeID = /^[0-9a-fA-F\-]{36}:\d+-\d+$/.test(input.target)
+                  const arg = isNodeID ? { nodeID: input.target } : { function: input.target }
+                  const result = yield* analyzer.callers(arg).pipe(
                     Effect.matchEffect({
                       onFailure: (err) => err._tag === "Banyan/SymbolNotFoundError"
                         ? Effect.succeed<CodegraphNode[]>([])
@@ -152,7 +154,9 @@ export const locationLayer = Layer.effectDiscard(
                 }
                 case "dependents": {
                   if (!input.target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_dependents", _diagnostic: "empty-target" as const }
-                  const result = yield* analyzer.dependents({ function: input.target }).pipe(
+                  const isNodeID = /^[0-9a-fA-F\-]{36}:\d+-\d+$/.test(input.target)
+                  const arg = isNodeID ? { nodeID: input.target } : { function: input.target }
+                  const result = yield* analyzer.dependents(arg).pipe(
                     Effect.matchEffect({
                       onFailure: (err) => err._tag === "Banyan/SymbolNotFoundError"
                         ? Effect.succeed<CodegraphNode[]>([])
@@ -172,7 +176,9 @@ export const locationLayer = Layer.effectDiscard(
                 }
                 case "impact": {
                   if (!input.target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_impact", _diagnostic: "empty-target" as const }
-                  const result = yield* analyzer.impact({ function: input.target }).pipe(
+                  const isNodeID = /^[0-9a-fA-F\-]{36}:\d+-\d+$/.test(input.target)
+                  const arg = isNodeID ? { nodeID: input.target } : { function: input.target }
+                  const result = yield* analyzer.impact(arg).pipe(
                     Effect.matchEffect({
                       onFailure: (err) => err._tag === "Banyan/SymbolNotFoundError"
                         ? Effect.succeed<{ dependents: CodegraphNode[]; transitive: CodegraphNode[] }>({ dependents: [], transitive: [] })

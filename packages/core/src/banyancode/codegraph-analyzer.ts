@@ -63,11 +63,10 @@ export const layer = Layer.effect(
           return yield* new SymbolNotFoundError({ symbol: input.function ?? input.nodeID ?? "unknown" })
         }
         const direct = yield* dependents({ nodeID })
-        const downstreamTransitive = yield* walkTransitive({ nodeID, direction: "downstream" })
         const upstreamTransitive = yield* walkTransitive({ nodeID, direction: "upstream" })
         const seen = new Set<string>()
         const transitive: CodegraphNode[] = []
-        for (const n of [...downstreamTransitive, ...upstreamTransitive]) {
+        for (const n of upstreamTransitive) {
           if (!seen.has(n.id)) {
             seen.add(n.id)
             transitive.push(n)
