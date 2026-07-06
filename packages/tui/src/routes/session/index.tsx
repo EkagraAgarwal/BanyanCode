@@ -2282,7 +2282,7 @@ function Subagent(props: ToolProps) {
       {formatSubagentTitle(
         Locale.titlecase(stringValue(props.input.agent) ?? stringValue(props.input.subagent_type) ?? "General"),
         description() ?? "Subagent",
-        props.metadata.background === true,
+        props.input.background === true || props.metadata.status === "running",
       )}
     </InlineTool>
   )
