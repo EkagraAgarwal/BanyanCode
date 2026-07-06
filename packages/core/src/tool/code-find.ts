@@ -31,7 +31,7 @@ export const Output = Schema.Struct({
   meta: Schema.optional(GraphMeta),
   intent: Schema.String,
   dispatchedTo: Schema.optional(Schema.String),
-  _diagnostic: Schema.optional(Schema.Literals(["symbol-not-in-graph"])),
+  _diagnostic: Schema.optional(Schema.Literals(["symbol-not-in-graph", "empty-target"])),
 })
 
 export const locationLayer = Layer.effectDiscard(
@@ -59,7 +59,9 @@ export const locationLayer = Layer.effectDiscard(
           "  you have a nodeID — use codegraph_query or repository_query directly.\n" +
           "After this, often: codegraph_callers, codegraph_impact — to traverse from\n" +
           "  the resolved node.\n" +
-          "Before this: codegraph_build (if not built).",
+          "Before this: codegraph_build (if not built).\n" +
+          "Note: includeKeywordFallback defaults to true — content-substring matching\n" +
+          "  is enabled when the symbol is not found by name. Set to false to opt out.",
         contract: { visibility: "public" },
         input: Input,
         output: Output,
@@ -108,7 +110,7 @@ export const locationLayer = Layer.effectDiscard(
                   if (!target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_query" }
                   const allNodes = yield* repo.listAllNodes()
                   const lowerTarget = target.toLowerCase()
-                  const allowKeyword = input.includeKeywordFallback === true
+                  const allowKeyword = input.includeKeywordFallback !== false
 
                   let matches: CodegraphNode[]
                   if (allowKeyword) {
@@ -129,6 +131,7 @@ export const locationLayer = Layer.effectDiscard(
                   return { matches, files: [], meta, intent: input.intent, dispatchedTo: "codegraph_query" }
                 }
                 case "callers": {
+                  if (!input.target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_callers", _diagnostic: "empty-target" as const }
                   const result = yield* analyzer.callers({ function: input.target }).pipe(
                     Effect.matchEffect({
                       onFailure: (err) => err._tag === "Banyan/SymbolNotFoundError"
@@ -148,6 +151,7 @@ export const locationLayer = Layer.effectDiscard(
                   }
                 }
                 case "dependents": {
+                  if (!input.target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_dependents", _diagnostic: "empty-target" as const }
                   const result = yield* analyzer.dependents({ function: input.target }).pipe(
                     Effect.matchEffect({
                       onFailure: (err) => err._tag === "Banyan/SymbolNotFoundError"
@@ -167,6 +171,7 @@ export const locationLayer = Layer.effectDiscard(
                   }
                 }
                 case "impact": {
+                  if (!input.target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_impact", _diagnostic: "empty-target" as const }
                   const result = yield* analyzer.impact({ function: input.target }).pipe(
                     Effect.matchEffect({
                       onFailure: (err) => err._tag === "Banyan/SymbolNotFoundError"
@@ -187,6 +192,7 @@ export const locationLayer = Layer.effectDiscard(
                 }
                 case "find_file": {
                   const target = input.target ?? ""
+                  if (!target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_query", _diagnostic: "empty-target" as const }
                   const allFiles = yield* repo.listAllFiles()
                   const allNodes = yield* repo.listAllNodes()
 

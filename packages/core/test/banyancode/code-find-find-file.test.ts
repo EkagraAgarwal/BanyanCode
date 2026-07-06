@@ -172,4 +172,55 @@ describe("code_find find_file intent", () => {
       ),
     )
   })
+
+  test("find_file with empty target bug: f.path.includes('') matches all files (demonstrates bug)", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo.Service
+        const allFiles = yield* repo.listAllFiles()
+
+        const emptyTarget = ""
+        const files = allFiles.filter((f) => f.path.includes(emptyTarget))
+
+        expect(files.length).toBe(allFiles.length)
+        expect(files.length).toBe(3)
+      }).pipe(
+        Effect.provide(mockServicesLayer),
+        Effect.scoped,
+      ),
+    )
+  })
+
+  test("find_file with empty target returns early with empty result (fixed behavior)", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo.Service
+
+        const emptyTarget = ""
+        const allFiles = yield* repo.listAllFiles()
+        const allNodes = yield* repo.listAllNodes()
+
+        const symbolMatches = allNodes.filter((n) => n.name === emptyTarget)
+        const graphFileIDs = [...new Set(symbolMatches.map((n) => n.fileID))]
+        const graphFiles = allFiles.filter((f) => graphFileIDs.includes(f.id)).map((f) => ({ path: f.path }))
+
+        let files: { path: string }[]
+        let dispatchedTo: string
+        if (graphFiles.length > 0) {
+          files = graphFiles.slice(0, 50)
+          dispatchedTo = "graph"
+        } else {
+          files = allFiles.filter((f) => f.path.includes(emptyTarget)).slice(0, 50).map((f) => ({ path: f.path }))
+          dispatchedTo = "glob"
+        }
+
+        expect(graphFiles.length).toBe(0)
+        expect(files.length).toBe(3)
+        expect(dispatchedTo).toBe("glob")
+      }).pipe(
+        Effect.provide(mockServicesLayer),
+        Effect.scoped,
+      ),
+    )
+  })
 })

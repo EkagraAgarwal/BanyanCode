@@ -164,4 +164,55 @@ describe("code_find definition intent", () => {
       ),
     )
   })
+
+  test("definition without includeKeywordFallback arg (undefined) falls back to keyword search", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo.Service
+        const nodes = yield* repo.listAllNodes()
+        const target = "effect.gen"
+        const lowerTarget = target.toLowerCase()
+        const includeKeywordFallback = undefined
+        const allowKeyword = includeKeywordFallback !== false
+        let matches: typeof nodes
+        if (allowKeyword) {
+          matches = nodes.filter((n) =>
+            n.name.toLowerCase() === lowerTarget || (n.code?.toLowerCase().includes(lowerTarget) ?? false)
+          )
+        } else {
+          matches = nodes.filter((n) => n.name.toLowerCase() === lowerTarget)
+        }
+        expect(matches.length).toBe(1)
+        expect(matches[0]?.name).toBe("EffectModule")
+      }).pipe(
+        Effect.provide(mockServicesLayer),
+        Effect.scoped,
+      ),
+    )
+  })
+
+  test("definition with includeKeywordFallback=false opts out of keyword search", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo.Service
+        const nodes = yield* repo.listAllNodes()
+        const target = "effect.gen"
+        const lowerTarget = target.toLowerCase()
+        const includeKeywordFallback = false
+        const allowKeyword = includeKeywordFallback !== false
+        let matches: typeof nodes
+        if (allowKeyword) {
+          matches = nodes.filter((n) =>
+            n.name.toLowerCase() === lowerTarget || (n.code?.toLowerCase().includes(lowerTarget) ?? false)
+          )
+        } else {
+          matches = nodes.filter((n) => n.name.toLowerCase() === lowerTarget)
+        }
+        expect(matches.length).toBe(0)
+      }).pipe(
+        Effect.provide(mockServicesLayer),
+        Effect.scoped,
+      ),
+    )
+  })
 })
