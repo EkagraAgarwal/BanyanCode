@@ -1,8 +1,7 @@
 /** @jsxImportSource @opentui/solid */
-import { createSignal } from "solid-js"
 import { useTheme } from "../context/theme"
-import { useTerminalDimensions } from "@opentui/solid"
-import { RGBA } from "@opentui/core"
+import { useTerminalDimensions, useRenderer } from "@opentui/solid"
+import { createSignal } from "solid-js"
 
 export function ResizableSeparator(props: {
   onResize: (newWidthPct: number) => void
@@ -11,18 +10,22 @@ export function ResizableSeparator(props: {
 }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
+  const renderer = useRenderer()
   const [dragging, setDragging] = createSignal(false)
   const [dragStartX, setDragStartX] = createSignal(0)
   const [dragStartWidthPct, setDragStartWidthPct] = createSignal(0)
+  let separatorRef: any
 
   const startDrag = (x: number) => {
     setDragging(true)
     setDragStartX(x)
     setDragStartWidthPct(props.initialWidthPct())
+    if (separatorRef) {
+      ;(renderer as any).setCapturedRenderable(separatorRef)
+    }
   }
 
-  const handleMouseMove = (x: number) => {
-    if (!dragging()) return
+  const handleDrag = (x: number) => {
     const deltaX = x - dragStartX()
     const deltaPct = (deltaX / dimensions().width) * 100
     const multiplier = props.side === "right" ? -1 : 1
@@ -35,27 +38,16 @@ export function ResizableSeparator(props: {
   }
 
   return (
-    <>
-      <box
-        width={1}
-        backgroundColor={dragging() ? theme.primary : theme.border}
-        onMouseDown={(e: { x: number }) => startDrag(e.x)}
-        onMouseMove={(e: { x: number }) => handleMouseMove(e.x)}
-        onMouseUp={endDrag}
-      />
-      {dragging() && (
-        <box
-          position="absolute"
-          left={0}
-          top={0}
-          width={dimensions().width}
-          height={dimensions().height}
-          backgroundColor={RGBA.fromInts(0, 0, 0, 0)}
-          onMouseMove={(e: { x: number }) => handleMouseMove(e.x)}
-          onMouseUp={endDrag}
-          zIndex={9999}
-        />
-      )}
-    </>
+    <box
+      ref={separatorRef}
+      width={1}
+      height="100%"
+      flexShrink={0}
+      backgroundColor={dragging() ? theme.primary : theme.border}
+      onMouseDown={(e: { x: number }) => startDrag(e.x)}
+      onMouseDrag={(e: { x: number }) => handleDrag(e.x)}
+      onMouseDragEnd={endDrag}
+      onMouseUp={endDrag}
+    />
   )
 }
