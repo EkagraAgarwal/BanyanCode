@@ -205,6 +205,17 @@ export const Plugin = PluginV2.define({
         )
       })
 
+      // Register V1-managed agents so PermissionV2.configured() can resolve them.
+      // Without this, any V2 tool assert({agent: "coder"}) falls through to
+      // missingAgentPermissions (deny-all) and intermittently prompts the user.
+      // All these agents inherit the same allow-all base as "build".
+      for (const id of ["coder", "researcher", "scout", "orchestrator"]) {
+        editor.update(AgentV2.ID.make(id), (item) => {
+          item.mode = "all"
+          item.permissions.push(...defaults)
+        })
+      }
+
       editor.update(AgentV2.ID.make("compaction"), (item) => {
         item.mode = "primary"
         item.hidden = true
