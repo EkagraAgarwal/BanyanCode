@@ -2,6 +2,7 @@ export * as CodegraphTools from "./codegraph"
 
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
+import { existsSync } from "node:fs"
 import path from "node:path"
 import { Banyan } from "../banyancode"
 import { traced } from "../observability/trace"
@@ -15,6 +16,18 @@ import { formatNodes } from "./codegraph-format"
 import { optionalBoolean, optionalNumber, optionalString } from "./tool-schema"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
+
+function findRepoRoot(startDir: string): string | undefined {
+  let dir = path.resolve(startDir)
+  const { root: fsRoot } = path.parse(dir)
+  while (dir !== fsRoot) {
+    if (existsSync(`${dir}/.git`) || existsSync(`${dir}/package.json`)) {
+      return dir
+    }
+    dir = path.dirname(dir)
+  }
+  return undefined
+}
 
 export const name_build = "codegraph_build"
 export const name_query = "codegraph_query"
@@ -125,9 +138,9 @@ export const locationLayer = Layer.effectDiscard(
             '  - "Index this codebase"\n' +
             "Returns\n" +
             "  { indexed, skipped, skippedByReason: { gitignored, banyanignored, artifact,\n" +
-            "    tooLarge, minified, tooLargeParse, cached, readError, parseFailure },\n" +
-            "    parseErrors: [{ path, cause, indexedAt }], symbolsIndexed, duration_ms, total,\n" +
-            "    graphVersion, graphCoverage, totalNodes, totalEdges }\n" +
+            "    tooLarge, minified, tooLargeParse, cached, readError, parseFailure } (9 buckets),\n" +
+            "    parseErrors: [{ path, cause, indexedAt }], symbolsIndexed, duration_ms,\n" +
+            "    meta: { graphVersion, graphCoverage, totalFiles, totalNodes, totalEdges } }\n" +
             "Avoid when\n" +
             "  the index is fresh — query first via codegraph_query or repository_query.\n" +
             "After this, often: codegraph_query or repository_query — to read the graph.\n" +
@@ -136,15 +149,27 @@ export const locationLayer = Layer.effectDiscard(
           input: InputBuild,
           output: OutputBuild,
           toModelOutput: ({ output }) => {
-            const parseFailures = (output.skippedByReason?.parseFailure ?? 0) + (output.skippedByReason?.readError ?? 0)
-            const total = (output.meta?.totalFiles ?? 0) + (output.skipped ?? 0)
+            const r = output.skippedByReason ?? {
+              gitignored: 0, banyanignored: 0, artifact: 0,
+              tooLarge: 0, minified: 0, tooLargeParse: 0,
+              cached: 0, readError: 0, parseFailure: 0,
+            }
             const parseErrorCount = output.parseErrors?.length ?? 0
-            return [
-              {
-                type: "text",
-                text: `indexed=${output.indexed} skipped=${output.skipped} parseFailures=${parseFailures} parseErrors=${parseErrorCount} total=${total} files symbols=${output.symbolsIndexed} duration_ms=${output.duration_ms}`,
-              },
+            const lines = [
+              `indexed=${output.indexed} skipped=${output.skipped}`,
+              `skippedByReason.gitignored=${r.gitignored} banyanignored=${r.banyanignored} artifact=${r.artifact}`,
+              `skippedByReason.tooLarge=${r.tooLarge} minified=${r.minified} tooLargeParse=${r.tooLargeParse}`,
+              `skippedByReason.cached=${r.cached} readError=${r.readError} parseFailure=${r.parseFailure}`,
+              `parseErrors.length=${parseErrorCount}`,
+              `symbolsIndexed=${output.symbolsIndexed} duration_ms=${output.duration_ms}`,
             ]
+            if (output.meta) {
+              const m = output.meta
+              lines.push(
+                `meta.graphVersion=${m.graphVersion} meta.graphCoverage=${m.graphCoverage?.toFixed(4) ?? "n/a"} meta.totalFiles=${m.totalFiles} meta.totalNodes=${m.totalNodes} meta.totalEdges=${m.totalEdges}`
+              )
+            }
+            return [{ type: "text", text: lines.join("\n") }]
           },
           execute: (input, context) => {
             return traced(
@@ -164,19 +189,21 @@ export const locationLayer = Layer.effectDiscard(
                   source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
                 })
 
-                const worktreeAccessor = yield* Banyan.WorktreeContext
-                const worktreeOpt = yield* worktreeAccessor()
-                // Resolve to absolute path so a relative `input.root` (e.g. "." or "src")
-                // anchors to the workspace rather than the server process's CWD.
-                const candidateRoot = input.root ?? worktreeOpt
-                const root = candidateRoot
-                  ? path.resolve(candidateRoot)
-                  : path.resolve(process.cwd())
-                if (!candidateRoot) {
-                  yield* Effect.logWarning(
-                    "codegraph_build: WorktreeContext returned no value; falling back to process.cwd()",
-                  )
+                let resolvedRoot: string | undefined = input.root
+                if (!resolvedRoot) {
+                  const ws = findRepoRoot(process.cwd())
+                  if (ws) {
+                    resolvedRoot = ws
+                    yield* Effect.logWarning(
+                      `codegraph_build: input.root not provided; walked up from CWD to repo root: ${ws}`,
+                    )
+                  } else {
+                    yield* Effect.logWarning(
+                      `codegraph_build: input.root not provided and no .git/package.json marker found from CWD ${process.cwd()}; falling back to process.cwd()`,
+                    )
+                  }
                 }
+                const root = path.resolve(resolvedRoot ?? process.cwd())
                 yield* buildService.start({ root, force: input.force ?? false })
 
                 let currentStatus = yield* buildService.status()

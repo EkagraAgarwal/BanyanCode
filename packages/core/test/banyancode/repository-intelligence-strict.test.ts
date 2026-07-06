@@ -110,6 +110,49 @@ describe("RepositoryIntelligence Strict Diagnostic Policy", () => {
     )
   })
 
+  test("findSymbolsByServiceTag does NOT false-positive on substring matches outside tag context", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        yield* repo.putFile({ id: "file-doc", path: "docs/effect-module.md", contentHash: "h1", language: "markdown", indexedAt: 1 })
+        yield* repo.putNode({
+          id: "node-doc",
+          fileID: "file-doc",
+          kind: "doc",
+          name: "EffectModule",
+          signature: undefined,
+          startLine: 1,
+          endLine: 10,
+          code: `# Effect.gen\nA markdown heading that mentions the substring…`,
+        })
+
+        yield* repo.putFile({ id: "file-utils", path: "src/baz-utils.ts", contentHash: "h2", language: "typescript", indexedAt: 2 })
+        yield* repo.putNode({
+          id: "node-utils",
+          fileID: "file-utils",
+          kind: "class",
+          name: "BazUtils",
+          signature: "class BazUtils",
+          startLine: 1,
+          endLine: 10,
+          code: `class BazUtils { method() { return "Effect.gen" } }`,
+        })
+
+        const ri = yield* RepositoryIntelligence.Service
+        const result = yield* ri.query({ query: "Effect.gen" })
+
+        expect(result.status).toBe("failed")
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
   test("repository_tests does not return substring noise", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.db")

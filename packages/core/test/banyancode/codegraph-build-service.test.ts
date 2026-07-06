@@ -259,4 +259,60 @@ describe("CodegraphBuildService", () => {
       }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
+
+  test("build result contains all 9 skippedByReason buckets for toModelOutput fidelity", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const mockIndexer = makeMockIndexer({
+      progressUpdates: [{ file: "a.ts", done: 1, total: 1 }],
+      indexResult: {
+        indexed: 5,
+        skipped: 10,
+        scannedFiles: 15,
+        symbolsIndexed: 20,
+        skippedByReason: {
+          gitignored: 2,
+          banyanignored: 1,
+          artifact: 1,
+          tooLarge: 2,
+          minified: 1,
+          tooLargeParse: 1,
+          cached: 1,
+          readError: 1,
+          parseFailure: 0,
+        },
+      },
+    })
+
+    const serviceLayer = layer.pipe(Layer.provide(mockIndexer), Layer.provide(EventV2.defaultLayer), Layer.provide(CodegraphRepo.defaultLayer))
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* CodegraphBuildService.Service
+
+        yield* service.start({ root: "/test", force: false })
+        yield* Effect.sleep(100)
+
+        const state = yield* service.status()
+        expect(state.status).toBe("completed")
+
+        const r = state.result?.skippedByReason
+        expect(r).toBeDefined()
+        expect(r?.gitignored).toBe(2)
+        expect(r?.banyanignored).toBe(1)
+        expect(r?.artifact).toBe(1)
+        expect(r?.tooLarge).toBe(2)
+        expect(r?.minified).toBe(1)
+        expect(r?.tooLargeParse).toBe(1)
+        expect(r?.cached).toBe(1)
+        expect(r?.readError).toBe(1)
+        expect(r?.parseFailure).toBe(0)
+
+        expect(state.parseErrors).toBeDefined()
+        expect(Array.isArray(state.parseErrors)).toBe(true)
+      }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
 })

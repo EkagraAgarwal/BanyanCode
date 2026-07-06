@@ -668,10 +668,18 @@ export const layer = Layer.effect(
 
     const findSymbolsByServiceTag = Effect.fn("CodegraphRepo.findSymbolsByServiceTag")(function* (tag: string) {
       const stripped = tag.replace(/^@[^/]+(\/[^/]+)*\//, "").replace(/^@/, "")
+      // Triple filter to suppress false positives on bare substring matches:
+      // 1. substring contains the bare service name (e.g., "MemoryRepo")
+      // 2. kind='class' excludes doc/test/config/docker/etc. nodes
+      // 3. code contains "Context.Service" — the registration pattern itself
+      // The closing-quote variant ("/Name\"") was tried but Turso's
+      // parameter-binding path silently drops results containing literal
+      // `"` characters in the LIKE pattern, while inline `${...}`
+      // interpolation works correctly with `%X%` + filters.
       const rows = yield* db
         .select()
         .from(CodegraphNodesTable)
-        .where(sql`code LIKE ${"%" + stripped + "%"} AND kind = 'class'`)
+        .where(sql`(code LIKE ${"%" + stripped + "%"}) AND kind = 'class' AND (code LIKE '%Context.Service%')`)
         .all()
         .pipe(Effect.orDie)
       return rows.map((row) => ({
