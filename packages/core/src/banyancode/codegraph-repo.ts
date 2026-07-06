@@ -672,17 +672,13 @@ export const layer = Layer.effect(
       // 1. substring contains the bare service name (e.g., "MemoryRepo")
       // 2. kind='class' excludes doc/test/config/docker/etc. nodes
       // 3. code contains "Context.Service" — the registration pattern itself
-      // The closing-quote variant ("/Name\"") was tried but Turso's
-      // parameter-binding path silently drops results containing literal
-      // `"` characters in the LIKE pattern, while inline `${...}`
-      // interpolation works correctly with `%X%` + filters.
       const rows = yield* db
         .select()
         .from(CodegraphNodesTable)
         .where(sql`(code LIKE ${"%" + stripped + "%"}) AND kind = 'class' AND (code LIKE '%Context.Service%')`)
         .all()
         .pipe(Effect.orDie)
-      return rows.map((row) => ({
+      const mapped = rows.map((row) => ({
         id: row.id,
         fileID: row.file_id,
         kind: row.kind as CodegraphNode["kind"],
@@ -692,6 +688,14 @@ export const layer = Layer.effect(
         endLine: row.end_line,
         code: row.code ?? undefined,
       }))
+      return mapped.filter((n) => {
+        if (!n.code) return false
+        const match = n.code.match(/Context\.Service\s*<[\s\S]*?>\s*\(\s*\)\s*\(\s*["']([^"']+)["']\s*\)/)
+        if (!match) return false
+        const tagString = match[1]
+        const tagStripped = tagString.replace(/^@[^/]+(\/[^/]+)*\//, "").replace(/^@/, "")
+        return tagStripped.toLowerCase() === stripped.toLowerCase()
+      })
     })
 
     const putNodes = Effect.fn("CodegraphRepo.putNodes")(function* (nodes: CodegraphNode[]) {

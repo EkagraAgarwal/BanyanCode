@@ -20,12 +20,25 @@ const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 function findRepoRoot(startDir: string): string | undefined {
   let dir = path.resolve(startDir)
   const { root: fsRoot } = path.parse(dir)
-  while (dir !== fsRoot) {
-    if (existsSync(`${dir}/.git`) || existsSync(`${dir}/package.json`)) {
-      return dir
+  
+  // First pass: look specifically for .git to find the true workspace/monorepo root
+  let current = dir
+  while (current !== fsRoot) {
+    if (existsSync(path.join(current, ".git"))) {
+      return current
     }
-    dir = path.dirname(dir)
+    current = path.dirname(current)
   }
+  
+  // Second pass: fallback to package.json if not a git repository
+  current = dir
+  while (current !== fsRoot) {
+    if (existsSync(path.join(current, "package.json"))) {
+      return current
+    }
+    current = path.dirname(current)
+  }
+  
   return undefined
 }
 

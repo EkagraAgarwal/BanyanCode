@@ -156,4 +156,40 @@ describe("findSymbolsByServiceTag precision", () => {
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
+
+  test("rejects service classes that mention the name in their bodies but have different tags", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        yield* repo.putFile({
+          id: "file-config",
+          path: "src/config.ts",
+          contentHash: "h1",
+          language: "typescript",
+          indexedAt: 1,
+        })
+        yield* repo.putNode({
+          id: "svc-config",
+          fileID: "file-config",
+          kind: "class",
+          name: "ConfigTag",
+          signature: "class ConfigTag extends Context.Service<ConfigTag, Info>()",
+          startLine: 1,
+          endLine: 10,
+          code: `class ConfigTag extends Context.Service<ConfigTag, Info>()("@opencode/RuntimeFlags") { method() { return Effect.gen } }`,
+        })
+
+        const results = yield* repo.findSymbolsByServiceTag("Effect")
+
+        expect(results.length).toBe(0)
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
 })

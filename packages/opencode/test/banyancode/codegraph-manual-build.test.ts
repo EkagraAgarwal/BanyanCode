@@ -47,7 +47,7 @@ describe("Manual codegraph build - progress reporting", () => {
   test("build reports progress during indexing", async () => {
     await using tmp = await tmpdir()
     const dir = tmp.path
-    await makeFixtureCodebase(dir, 10)
+    await makeFixtureCodebase(dir, 150)
     const dbPath = path.join(dir, "test.sqlite")
     const layer = makeTestLayer(dbPath)
 
@@ -84,7 +84,7 @@ describe("Manual codegraph build - progress reporting", () => {
     console.log("Last 3:", JSON.stringify(progressUpdates.slice(-3), null, 2))
     expect(progressUpdates.length).toBeGreaterThan(0)
     const finalUpdate = progressUpdates[progressUpdates.length - 1]
-    expect(finalUpdate.total).toBe(10)
+    expect(finalUpdate.total).toBe(150)
   }, 60000)
 
   test("clearAll removes all files, nodes, and edges", async () => {
