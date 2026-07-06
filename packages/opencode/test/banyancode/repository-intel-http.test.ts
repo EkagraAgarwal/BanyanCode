@@ -69,4 +69,83 @@ describe("repository-intel HttpApi", () => {
       expect(Array.isArray(yield* response.json)).toBe(true)
     }),
   )
+
+  it.live("query accepts single-element focusDirs array", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post(RepositoryIntelPaths.query).pipe(
+        HttpClientRequest.bodyJson({
+          query: "CodegraphRepo",
+          workspace: { worktree: "D:/OpenCode", focusDirs: ["packages"] },
+        }),
+        Effect.flatMap(HttpClient.execute),
+      )
+      expect(response.status).toBe(200)
+    }),
+  )
+
+  it.live("query accepts multi-element focusDirs array", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post(RepositoryIntelPaths.query).pipe(
+        HttpClientRequest.bodyJson({
+          query: "CodegraphRepo",
+          workspace: { worktree: "D:/OpenCode", focusDirs: ["packages", "specs"] },
+        }),
+        Effect.flatMap(HttpClient.execute),
+      )
+      expect(response.status).toBe(200)
+    }),
+  )
+
+  it.live("query rejects string-typed focusDirs (not an array)", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post(RepositoryIntelPaths.query).pipe(
+        HttpClientRequest.bodyJson({
+          query: "CodegraphRepo",
+          workspace: { worktree: "D:/OpenCode", focusDirs: "packages" },
+        }),
+        Effect.flatMap(HttpClient.execute),
+      )
+      expect(response.status).toBe(400)
+    }),
+  )
+
+  it.live("explain accepts single-element focusDirs array", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post(RepositoryIntelPaths.explain).pipe(
+        HttpClientRequest.bodyJson({
+          symbol: "CodegraphRepo",
+          workspace: { worktree: "D:/OpenCode", focusDirs: ["packages"] },
+        }),
+        Effect.flatMap(HttpClient.execute),
+      )
+      expect(response.status).toBe(200)
+    }),
+  )
+
+  it.live("trace accepts single-element focusDirs array", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post(RepositoryIntelPaths.trace).pipe(
+        HttpClientRequest.bodyJson({
+          symbol: "CodegraphRepo",
+          depth: 2,
+          workspace: { worktree: "D:/OpenCode", focusDirs: ["packages"] },
+        }),
+        Effect.flatMap(HttpClient.execute),
+      )
+      expect(response.status).toBe(200)
+    }),
+  )
+
+  it.live("impact accepts single-element focusDirs array", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post(RepositoryIntelPaths.impact).pipe(
+        HttpClientRequest.bodyJson({
+          path: "src/foo.ts",
+          workspace: { worktree: "D:/OpenCode", focusDirs: ["packages"] },
+        }),
+        Effect.flatMap(HttpClient.execute),
+      )
+      expect(response.status).toBe(200)
+    }),
+  )
 })

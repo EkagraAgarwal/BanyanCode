@@ -2195,15 +2195,13 @@ export type BanyanCodegraphNode = {
   code?: string
 }
 
-export type BanyanWorkspaceContext = {
-  worktree: string
-  focusDirs: Array<string>
-}
-
 export type BanyanQueryInput = {
   query: string
   limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  workspace?: BanyanWorkspaceContext
+  workspace?: {
+    worktree: string
+    focusDirs: Array<string>
+  }
 }
 
 export type BanyanCodegraphFile = {
@@ -2264,7 +2262,10 @@ export type BanyanRankingSignals = {
 export type BanyanRanking = {
   score: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   signals: BanyanRankingSignals
-  workspace?: BanyanWorkspaceContext
+  workspace?: {
+    worktree: string
+    focusDirs: Array<string>
+  }
 }
 
 export type BanyanRepositoryContext = {
@@ -2279,7 +2280,10 @@ export type BanyanRepositoryContext = {
   docs: Array<BanyanCodegraphFile>
   configs: Array<BanyanCodegraphFile>
   git: BanyanGitContext
-  workspace?: BanyanWorkspaceContext
+  workspace?: {
+    worktree: string
+    focusDirs: Array<string>
+  }
   diagnostics?: Array<unknown>
   ranking: BanyanRanking
 }
@@ -2291,18 +2295,27 @@ export type BanyanRepositoryResponse = {
 
 export type BanyanExplainInput = {
   symbol: string
-  workspace?: BanyanWorkspaceContext
+  workspace?: {
+    worktree: string
+    focusDirs: Array<string>
+  }
 }
 
 export type BanyanImpactInput = {
   path: string
-  workspace?: BanyanWorkspaceContext
+  workspace?: {
+    worktree: string
+    focusDirs: Array<string>
+  }
 }
 
 export type BanyanTraceInput = {
   symbol: string
   depth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  workspace?: BanyanWorkspaceContext
+  workspace?: {
+    worktree: string
+    focusDirs: Array<string>
+  }
 }
 
 export type BanyanTestsInput = {

@@ -132,7 +132,7 @@ const TestsCommand = effectCmd({
       const intel = yield* Banyan.RepositoryIntelligence
       const tests = yield* intel.tests({ symbol })
       UI.println(UI.Style.TEXT_HIGHLIGHT + `Tests referencing ${symbol}` + UI.Style.TEXT_NORMAL)
-      printNodeList(tests)
+      printNodeList(tests.tests)
     }).pipe(Effect.provide(repositoryIntelligenceLayer))
   }),
 })

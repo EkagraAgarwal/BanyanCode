@@ -61,7 +61,8 @@ export const repositoryIntelHandlers = HttpApiBuilder.group(RootHttpApi, "reposi
     const testsHandler = Effect.fn("RepositoryIntel.tests")(function* (ctx: {
       payload: typeof TestsInput.Type
     }) {
-      return yield* intel.tests({ symbol: ctx.payload.symbol })
+      const result = yield* intel.tests({ symbol: ctx.payload.symbol })
+      return result.tests
     })
 
     const symbolsHandler = Effect.fn("RepositoryIntel.symbols")(function* (ctx: {

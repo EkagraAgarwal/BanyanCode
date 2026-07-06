@@ -27,7 +27,7 @@ const CodegraphFileSchema = Schema.Struct({
 const WorkspaceContextSchema = Schema.Struct({
   worktree: Schema.String,
   focusDirs: Schema.Array(Schema.String),
-}).annotate({ identifier: "Banyan/WorkspaceContext" })
+})
 
 const RankingSignalsSchema = Schema.Struct({
   exact: Schema.Number,
