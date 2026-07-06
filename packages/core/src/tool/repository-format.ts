@@ -21,6 +21,7 @@ export type FormatRepositoryContext = {
     recentCommits: ReadonlyArray<{ sha: string; subject: string; ts: number }>
     ownership: ReadonlyArray<OwnershipEntry> | ReadonlyMap<string, number>
   }
+  diagnostics?: readonly { kind: string; message: string }[]
 }
 
 const truncate = (s: string, max: number): string =>
@@ -58,6 +59,7 @@ export type FormatArchitecturalSlice = ArchitecturalSlice & {
   recoveryHint?: string
   fallbackUsed?: boolean
   degraded?: boolean
+  diagnostics?: readonly { kind: string; message: string }[]
 }
 
 export const formatArchitecturalSlice = (slice: FormatArchitecturalSlice): string => {
@@ -66,11 +68,20 @@ export const formatArchitecturalSlice = (slice: FormatArchitecturalSlice): strin
     statusLines.push(`Status: ${slice.status.toUpperCase()}`)
     if (slice.reason) statusLines.push(`Reason: ${slice.reason}`)
     if (slice.recoveryHint) statusLines.push(`Recovery Hint: ${slice.recoveryHint}`)
-    if (slice.fallbackUsed) statusLines.push(`Fallback Used: true`)
+    if (slice.fallbackUsed) statusLines.push(`[Note: resolved via Context.Service tag fallback]`)
+  }
+
+  const noteLines: string[] = []
+  if (slice.diagnostics && slice.diagnostics.length > 0) {
+    noteLines.push(`Diagnostics:`)
+    for (const d of slice.diagnostics) {
+      noteLines.push(`  [${d.kind}] ${d.message}`)
+    }
   }
 
   return [
     ...(statusLines.length > 0 ? [statusLines.join("\n")] : []),
+    ...(noteLines.length > 0 ? [noteLines.join("\n")] : []),
     truncate(slice.summary, 600),
     renderNodesBlock(slice.entrypoints, "Entrypoints"),
     renderNodesBlock(slice.importantSymbols, "Important symbols"),
@@ -111,11 +122,20 @@ export const formatRepositoryContext = (ctx: FormatRepositoryContext): string =>
     statusLines.push(`Status: ${ctx.status.toUpperCase()}`)
     if (ctx.reason) statusLines.push(`Reason: ${ctx.reason}`)
     if (ctx.recoveryHint) statusLines.push(`Recovery Hint: ${ctx.recoveryHint}`)
-    if (ctx.fallbackUsed) statusLines.push(`Fallback Used: true`)
+    if (ctx.fallbackUsed) statusLines.push(`[Note: resolved via Context.Service tag fallback]`)
+  }
+
+  const noteLines: string[] = []
+  if (ctx.diagnostics && ctx.diagnostics.length > 0) {
+    noteLines.push(`Diagnostics:`)
+    for (const d of ctx.diagnostics) {
+      noteLines.push(`  [${d.kind}] ${d.message}`)
+    }
   }
 
   return [
     ...(statusLines.length > 0 ? [statusLines.join("\n")] : []),
+    ...(noteLines.length > 0 ? [noteLines.join("\n")] : []),
     `Repository query: ${ctx.query}`,
     renderNodesBlock(ctx.symbols, "Symbols"),
     renderFilesBlock(ctx.files, "Files"),

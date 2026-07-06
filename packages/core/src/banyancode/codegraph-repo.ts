@@ -1,6 +1,6 @@
 export * as CodegraphRepo from "./codegraph-repo"
 
-import { and, eq, inArray, sql } from "drizzle-orm"
+import { and, eq, inArray, like, sql } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
@@ -75,6 +75,7 @@ export interface Interface {
   readonly recordParseError: (input: { path: string; cause: string; indexedAt: number }) => Effect.Effect<void, never, never>
   readonly listParseErrors: () => Effect.Effect<Array<{ path: string; cause: string; indexedAt: number }>, never, never>
   readonly clearParseErrors: () => Effect.Effect<void, never, never>
+  readonly findSymbolsByServiceTag: (tag: string) => Effect.Effect<CodegraphNode[], never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Banyan/CodegraphRepo") {}
@@ -665,6 +666,27 @@ export const layer = Layer.effect(
       yield* db.delete(CodegraphParseErrorsTable).run().pipe(Effect.ignore)
     })
 
+    const findSymbolsByServiceTag = Effect.fn("CodegraphRepo.findSymbolsByServiceTag")(function* (tag: string) {
+      const stripped = tag.replace(/^@[^/]+\//, "")
+      const needle = `@banyancode/${stripped}`
+      const rows = yield* db
+        .select()
+        .from(CodegraphNodesTable)
+        .where(like(CodegraphNodesTable.code, `%${needle}%`))
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        fileID: row.file_id,
+        kind: row.kind as CodegraphNode["kind"],
+        name: row.name,
+        signature: row.signature ?? undefined,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        code: row.code ?? undefined,
+      }))
+    })
+
     const putNodes = Effect.fn("CodegraphRepo.putNodes")(function* (nodes: CodegraphNode[]) {
       if (nodes.length === 0) return
       yield* db
@@ -827,6 +849,7 @@ export const layer = Layer.effect(
       recordParseError,
       listParseErrors,
       clearParseErrors,
+      findSymbolsByServiceTag,
     })
   }),
 )

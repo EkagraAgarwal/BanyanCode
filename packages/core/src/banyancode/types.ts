@@ -136,7 +136,10 @@ export interface WorkspaceContext {
   readonly focusDirs: readonly string[]
 }
 
-export interface Diagnostic {}
+export interface Diagnostic {
+  readonly kind: string
+  readonly message: string
+}
 
 export interface Ranking {
   readonly score: number

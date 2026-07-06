@@ -61,7 +61,7 @@ async function main() {
 
       console.log("\n=== tests ===")
       const tests1 = yield* ri.tests({ symbol: "putNode" })
-      console.log(`tests({ symbol: "putNode" }) => ${tests1.length} test nodes`)
+      console.log(`tests({ symbol: "putNode" }) => ${tests1.tests.length} test nodes`)
 
       console.log("\n=== relationships ===")
       const symNode = (yield* repo.searchNodes({ name: "findSymbol" }))[0]

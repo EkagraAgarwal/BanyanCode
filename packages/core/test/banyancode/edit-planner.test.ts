@@ -59,6 +59,7 @@ const makeMockRepo = (options: {
       recordParseError: () => Effect.void,
       listParseErrors: () => Effect.succeed([]),
       clearParseErrors: () => Effect.void,
+      findSymbolsByServiceTag: () => Effect.succeed([]),
     }),
   )
 }

@@ -51,13 +51,13 @@ export const layer = Layer.effect(
       kind?: CodegraphNode["kind"]
       file?: string
       exact?: boolean
-    }): Effect.Effect<CodegraphNode[], never, never> =>
+    }): Effect.Effect<{ nodes: CodegraphNode[]; usedFallback: boolean }, never, never> =>
       Effect.gen(function* () {
         let fileID: string | undefined
         if (input.file) {
           const file = yield* repo.getFileByPath(input.file)
           fileID = file?.id
-          if (!fileID) return []
+          if (!fileID) return { nodes: [], usedFallback: false }
         }
 
         // Try exact name search first
@@ -89,10 +89,10 @@ export const layer = Layer.effect(
           }
         }
 
-        if (input.exact) return filtered
+        if (input.exact) return { nodes: filtered, usedFallback: false }
 
         const exactMatch = filtered.find((n) => n.name === searchName || n.name === input.name)
-        if (exactMatch) return filtered
+        if (exactMatch) return { nodes: filtered, usedFallback: false }
 
         const all = yield* repo.listAllNodes()
         const prefixResults = all.filter((n) => n.name.startsWith(searchName) || n.name.startsWith(input.name))
@@ -106,8 +106,16 @@ export const layer = Layer.effect(
           }
           prefixFiltered = prefixFiltered.filter((n) => validFileIDs.has(n.fileID))
         }
-        if (input.kind) return prefixFiltered.filter((n) => n.kind === input.kind)
-        return prefixFiltered
+        if (input.kind) return { nodes: prefixFiltered.filter((n) => n.kind === input.kind), usedFallback: false }
+
+        // Fallback: recover Context.Service tag strings (e.g., user queries "MemoryRepo"
+        // but the indexed name is "Service" because the parser extracted only the class
+        // identifier from `class Service extends Context.Service<...>("@banyancode/MemoryRepo")`).
+        const stripped = input.name.replace(/^@[^/]+\//, "")
+        const tagMatches = yield* repo.findSymbolsByServiceTag(stripped)
+        if (tagMatches.length > 0) return { nodes: tagMatches, usedFallback: true }
+
+        return { nodes: prefixFiltered, usedFallback: false }
       })
 
     const findSubsystem = (input: {
@@ -203,7 +211,7 @@ export const layer = Layer.effect(
 
     const findTests = (input: {
       symbol: string
-    }): Effect.Effect<CodegraphNode[], never, never> =>
+    }): Effect.Effect<{ nodes: CodegraphNode[]; notFound: boolean }, never, never> =>
       Effect.gen(function* () {
         const allFiles = yield* repo.listAllFiles()
         const allNodes = yield* repo.listAllNodes()
@@ -213,28 +221,20 @@ export const layer = Layer.effect(
           const lower = f.path.toLowerCase()
           return testFilePatterns.some((p) => lower.includes(p.toLowerCase()))
         })
-        if (testFiles.length === 0) return []
+        if (testFiles.length === 0) return { nodes: [], notFound: true }
 
         const testFileIDs = new Set(testFiles.map((f) => f.id))
         const testNodes = allNodes.filter((n) => testFileIDs.has(n.fileID))
-        if (testNodes.length === 0) return []
+        if (testNodes.length === 0) return { nodes: [], notFound: true }
 
-        const symbolMatches = yield* findSymbol({ name: input.symbol })
-        if (symbolMatches.length === 0) {
-          const relevantTests: CodegraphNode[] = []
-          const lowerSymbol = input.symbol.toLowerCase()
-          const symbolPart = input.symbol.includes(".") ? input.symbol.split(".").pop()!.toLowerCase() : lowerSymbol
-          for (const node of testNodes) {
-            if (node.name.toLowerCase().includes(symbolPart) || node.code?.toLowerCase().includes(symbolPart)) {
-              relevantTests.push(node)
-            }
-          }
-          return relevantTests
+        const symbolResult = yield* findSymbol({ name: input.symbol })
+        if (symbolResult.nodes.length === 0) {
+          return { nodes: [], notFound: true }
         }
 
         const searchName = input.symbol.includes(".") ? input.symbol.split(".").pop()! : input.symbol
-        const exactMatch = symbolMatches.find((n) => n.name === searchName)
-        const symbolID = (exactMatch ?? symbolMatches[0])!.id
+        const exactMatch = symbolResult.nodes.find((n) => n.name === searchName)
+        const symbolID = (exactMatch ?? symbolResult.nodes[0])!.id
 
         const relevantTests: CodegraphNode[] = []
         for (const node of testNodes) {
@@ -245,17 +245,7 @@ export const layer = Layer.effect(
           if (references.length > 0) relevantTests.push(node)
         }
 
-        if (relevantTests.length === 0) {
-          const lowerSymbol = input.symbol.toLowerCase()
-          const symbolPart = input.symbol.includes(".") ? input.symbol.split(".").pop()!.toLowerCase() : lowerSymbol
-          for (const node of testNodes) {
-            if (node.name.toLowerCase().includes(symbolPart) || node.code?.toLowerCase().includes(symbolPart)) {
-              relevantTests.push(node)
-            }
-          }
-        }
-
-        return relevantTests
+        return { nodes: relevantTests, notFound: false }
       })
 
     const findRelated = (input: {
@@ -305,7 +295,7 @@ export const layer = Layer.effect(
         const allFiles = yield* repo.listAllFiles()
         const allNodes = yield* repo.listAllNodes()
 
-        const symbolMatches = yield* findSymbol({ name: input.query })
+        const symbolResult = yield* findSymbol({ name: input.query })
         const fileByPath = yield* repo.getFileByPath(input.query)
         const fileMatches: CodegraphNode[] = fileByPath
           ? allNodes.filter((n) => n.fileID === fileByPath.id)
@@ -313,14 +303,14 @@ export const layer = Layer.effect(
 
         const seen = new Set<string>()
         const symbols: CodegraphNode[] = []
-        for (const n of [...symbolMatches, ...fileMatches]) {
+        for (const n of [...symbolResult.nodes, ...fileMatches]) {
           if (!seen.has(n.id)) {
             seen.add(n.id)
             symbols.push(n)
           }
         }
 
-        const tests: CodegraphNode[] = symbols.length > 0 ? yield* findTests({ symbol: input.query }) : []
+        const testsResult = symbols.length > 0 ? yield* findTests({ symbol: input.query }) : { nodes: [] as CodegraphNode[], notFound: true }
 
         const relatedNodes: CodegraphNode[] = []
         for (const sym of symbols) {
@@ -350,6 +340,14 @@ export const layer = Layer.effect(
         const graphNodesList = graphNodeIDs.size > 0 ? yield* repo.nodesByIDs([...graphNodeIDs]) : []
 
         const isDegraded = symbols.length === 0
+        const diagnostics: { kind: string; message: string }[] = []
+        if (isDegraded) {
+          diagnostics.push({
+            kind: "symbol-not-found",
+            message: `No symbol matched "${input.query}". The graph may be stale — run /codegraph-build --force.`,
+          })
+        }
+
         const docs = isDegraded ? [] : allFiles.filter((f) => isDocPath(f.path))
         const configs = isDegraded ? [] : allFiles.filter((f) => isConfigPath(f.path))
         const files = isDegraded ? [] : allFiles
@@ -363,18 +361,19 @@ export const layer = Layer.effect(
         return {
           status: isDegraded ? "failed" : "success",
           reason: isDegraded ? `No matching symbols found for query "${input.query}"` : undefined,
-          recoveryHint: isDegraded ? `Use code_find with intent='definition' to search for symbols, or check your query text.` : undefined,
+          recoveryHint: isDegraded ? `Run /codegraph-build --force to refresh the index, or use code_find with intent='definition' to search broadly.` : undefined,
           degraded: isDegraded,
-          fallbackUsed: isDegraded,
+          fallbackUsed: symbolResult.usedFallback,
           query: input.query,
           symbols,
           files,
           graph: { nodes: graphNodesList, edges: graphEdges },
-          tests,
+          tests: testsResult.nodes,
           docs,
           configs,
           git: { recentCommits, ownership },
           workspace: input.workspace,
+          diagnostics,
           ranking: {
             score: 0,
             signals: { exact: 0, symbol: 0, graph: 0, git: 0, workspace: 0 },
@@ -463,9 +462,9 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const ctx = yield* query({ query: input.symbol, workspace: input.workspace })
         const slc = yield* slice(ctx)
-        const symbolMatches = yield* findSymbol({ name: input.symbol })
-        if (symbolMatches.length > 0) {
-          const anchor = symbolMatches[0]!
+
+        if (ctx.symbols.length > 0) {
+          const anchor = ctx.symbols[0]!
           const downstream = yield* findRelated({ nodeID: anchor.id, depth: input.depth ?? 2 })
           const seen = new Set([...slc.entrypoints, ...slc.importantSymbols].map((n) => n.id))
           const expanded = [...slc.entrypoints]
@@ -482,14 +481,16 @@ export const layer = Layer.effect(
         return slc
       })
 
-    const tests = (input: { symbol: string }): Effect.Effect<readonly CodegraphNode[], never, never> =>
+    const tests = (input: { symbol: string }): Effect.Effect<{ tests: readonly CodegraphNode[]; notFound: boolean }, never, never> =>
       Effect.gen(function* () {
-        return yield* findTests(input)
+        const result = yield* findTests(input)
+        return { tests: result.nodes, notFound: result.notFound }
       })
 
     const symbols = (input: { query: string; limit?: number }): Effect.Effect<readonly CodegraphNode[], never, never> =>
       Effect.gen(function* () {
-        return yield* findSymbol({ name: input.query })
+        const result = yield* findSymbol({ name: input.query })
+        return result.nodes
       })
 
     const relationships = (input: {

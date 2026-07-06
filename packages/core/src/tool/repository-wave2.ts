@@ -94,6 +94,12 @@ const ArchitecturalSliceSchema = Schema.Struct({
       version: Schema.optional(Schema.String),
     }),
   ),
+  diagnostics: Schema.optional(Schema.Array(
+    Schema.Struct({
+      kind: Schema.String,
+      message: Schema.String,
+    }),
+  )),
 })
 
 const RepositoryContextSchema = Schema.Struct({
@@ -129,6 +135,12 @@ const RepositoryContextSchema = Schema.Struct({
   }),
   workspace: Schema.optional(WorkspaceContextSchema),
   ranking: RankingSchema,
+  diagnostics: Schema.optional(Schema.Array(
+    Schema.Struct({
+      kind: Schema.String,
+      message: Schema.String,
+    }),
+  )),
 })
 
 const OwnershipResultSchema = Schema.Struct({
@@ -183,7 +195,7 @@ const SliceOutput = ArchitecturalSliceSchema
 const ExplainOutput = ArchitecturalSliceSchema
 const ImpactOutput = ArchitecturalSliceSchema
 const TraceOutput = ArchitecturalSliceSchema
-const TestsOutput = Schema.Struct({ tests: CodegraphNodeSchemaArray })
+const TestsOutput = Schema.Struct({ tests: CodegraphNodeSchemaArray, notFound: Schema.Boolean })
 const SymbolsOutput = Schema.Struct({ symbols: CodegraphNodeSchemaArray })
 const RelationshipsOutput = Schema.Struct({ nodes: CodegraphNodeSchemaArray })
 const OwnershipOutput = OwnershipResultSchema
@@ -211,6 +223,7 @@ const contextToOutput = (
     recoveryHint?: string
     fallbackUsed?: boolean
     degraded?: boolean
+    diagnostics?: readonly { kind: string; message: string }[]
   },
 ) => ({
   status: ctx.status,
@@ -253,6 +266,7 @@ const contextToOutput = (
         }
       : {}),
   },
+  ...(ctx.diagnostics ? { diagnostics: [...ctx.diagnostics] } : {}),
 })
 
 const sliceToOutput = (
@@ -262,6 +276,7 @@ const sliceToOutput = (
     recoveryHint?: string
     fallbackUsed?: boolean
     degraded?: boolean
+    diagnostics?: readonly { kind: string; message: string }[]
   },
 ) => ({
   status: slc.status,
@@ -280,6 +295,7 @@ const sliceToOutput = (
     name: d.name,
     ...(d.version ? { version: d.version } : {}),
   })),
+  ...(slc.diagnostics ? { diagnostics: [...slc.diagnostics] } : {}),
 })
 
 export const InputQuery = QueryInput
@@ -578,7 +594,7 @@ export const locationLayer = Layer.effectDiscard(
               })
 
               const tests = yield* intel.tests({ symbol: input.symbol })
-              return { tests: [...tests] }
+              return { tests: [...tests.tests], notFound: tests.notFound }
             }),
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_tests failed" }))),
       }),

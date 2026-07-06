@@ -186,8 +186,9 @@ describe("RepositoryIntelligence", () => {
         const ri = yield* RepositoryIntelligence.Service
 
         const results = yield* ri.tests({ symbol: "processData" })
-        expect(results.length).toBeGreaterThan(0)
-        expect(results.some((n) => n.name === "processDataTest")).toBe(true)
+        expect(results.tests.length).toBeGreaterThan(0)
+        expect(results.tests.some((n) => n.name === "processDataTest")).toBe(true)
+        expect(results.notFound).toBe(false)
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
@@ -290,6 +291,96 @@ describe("RepositoryIntelligence", () => {
         expect(ctx.files).toEqual([])
         expect(ctx.reason).toContain("No matching symbols found")
         expect(ctx.recoveryHint).toBeDefined()
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("explain recovers Context.Service tag fallback", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        yield* repo.putFile({ id: "file-tag", path: "src/memory-repo.ts", contentHash: "h1", language: "typescript", indexedAt: 1 })
+        yield* repo.putNode({
+          id: "svc-memoryrepo",
+          fileID: "file-tag",
+          kind: "class",
+          name: "Service",
+          signature: "class Service extends Context.Service<Service, Interface>()",
+          startLine: 1,
+          endLine: 10,
+          code: `class Service extends Context.Service<Service, Interface>()("@banyancode/MemoryRepo")`,
+        })
+
+        const ri = yield* RepositoryIntelligence.Service
+        const slc = yield* ri.explain({ symbol: "MemoryRepo" })
+        expect(slc.importantSymbols.length).toBe(1)
+        expect(slc.importantSymbols[0]!.name).toBe("Service")
+        expect(slc.importantSymbols[0]!.code).toContain("@banyancode/MemoryRepo")
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("explain returns empty + diagnostic when symbol is genuinely missing", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        yield* repo.putFile({ id: "file-empty", path: "src/empty.ts", contentHash: "h1", language: "typescript", indexedAt: 1 })
+
+        const ri = yield* RepositoryIntelligence.Service
+        const slc = yield* ri.explain({ symbol: "DoesNotExistAnywhere" })
+        expect(slc.importantSymbols).toEqual([])
+        expect(slc.status).toBe("failed")
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("tests returns empty + notFound when symbol is not in graph", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        yield* seedFixture()
+        const ri = yield* RepositoryIntelligence.Service
+
+        const results = yield* ri.tests({ symbol: "NonExistent" })
+        expect(results.tests).toEqual([])
+        expect(results.notFound).toBe(true)
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("trace reuses ctx.symbols[0] for the anchor", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        yield* seedFixture()
+        const ri = yield* RepositoryIntelligence.Service
+
+        const slc = yield* ri.trace({ symbol: "MathUtil", depth: 2 })
+        expect(slc.entrypoints.length).toBeGreaterThan(0)
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })

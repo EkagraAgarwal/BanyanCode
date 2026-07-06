@@ -185,8 +185,8 @@ export const locationLayer = Layer.effectDiscard(
                   }
                 }
                 if (mode === "tests") {
-                  const nodes = yield* intel.tests({ symbol: input.query })
-                  lists.push(nodes.map((node) => ({ node, score: 1, signals: {} })))
+                  const result = yield* intel.tests({ symbol: input.query })
+                  lists.push(result.tests.map((node) => ({ node, score: 1, signals: {} })))
                 }
               }
 
