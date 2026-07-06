@@ -205,6 +205,35 @@ const CancelCommand = effectCmd({
   }),
 })
 
+const RemoveCommand = effectCmd({
+  command: "remove",
+  describe: "remove the codegraph index (preserves banyancode.db by default; pass --drop-file to also delete the file)",
+  instance: false,
+  builder: (yargs: Argv) =>
+    yargs.option("drop-file", {
+      type: "boolean",
+      default: false,
+      describe: "also delete the banyancode.db file (DANGEROUS: shared with sessions and memory)",
+    }),
+  handler: Effect.fn("Cli.codegraph.remove")(function* (args: { "drop-file": boolean }) {
+    const repoOpt = yield* Effect.serviceOption(Banyan.CodegraphRepo)
+    if (Option.isNone(repoOpt)) {
+      return yield* fail("CodegraphRepo is not registered in AppRuntime.")
+    }
+    const { sizeBefore, sizeAfter } = yield* repoOpt.value.clearAll({ dropFile: args["drop-file"] })
+    if (sizeBefore === 0) {
+      UI.println("Codegraph index was already empty.")
+      return
+    }
+    const freedBytes = Math.max(0, sizeBefore - sizeAfter)
+    UI.println(
+      UI.Style.TEXT_SUCCESS +
+        `✓ Codegraph index removed. Freed ${freedBytes} bytes (${sizeBefore} -> ${sizeAfter}).` +
+        UI.Style.TEXT_NORMAL,
+    )
+  }),
+})
+
 const ForceKillCommand = effectCmd({
   command: "force-kill",
   describe: "force-kill a stuck codegraph build (Fiber.interrupt + taskkill fallback)",
@@ -355,6 +384,7 @@ export const CodegraphCommand = effectCmd({
       .command(BuildCommand)
       .command(StatusCommand)
       .command(CancelCommand)
+      .command(RemoveCommand)
       .command(ForceKillCommand)
       .command(PathCommand)
       .command(TraceCommand)

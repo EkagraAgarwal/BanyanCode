@@ -7,6 +7,8 @@ import path from "node:path"
 import { Banyan } from "../banyancode"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
+import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
+import type { Interface as PermissionV2Interface } from "../permission"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -43,6 +45,7 @@ function findRepoRoot(startDir: string): string | undefined {
 }
 
 export const name_build = "codegraph_build"
+export const name_remove = "codegraph_remove"
 export const name_query = "codegraph_query"
 export const name_impact = "codegraph_impact"
 export const name_dependents = "codegraph_dependents"
@@ -127,6 +130,87 @@ export const OutputCallers = Schema.Struct({
   callers: Schema.Array(CodegraphNodeSchema),
   meta: Schema.optional(GraphMeta),
 })
+
+export const InputRemove = Schema.Struct({
+  dropFile: optionalBoolean,
+})
+export const OutputRemove = Schema.Struct({
+  status: Schema.Literals(["removed", "empty"]),
+  sizeBefore: Schema.Number,
+  sizeAfter: Schema.Number,
+  freedBytes: Schema.Number,
+})
+
+/**
+ * Build the `codegraph_remove` Core Tool. Exported so tests can invoke the
+ * tool directly via `Tool.settle(tool, call, context)` against a real
+ * `CodegraphRepo` + `PermissionV2` layer without spinning up the full
+ * AppRuntime.
+ */
+export const makeCodegraphRemoveTool = (deps: {
+  readonly permission: PermissionV2Interface
+  readonly repo: CodegraphRepoInterface
+}) =>
+  Tool.make({
+    description:
+      "Remove the current codegraph index. Use to recover from a corrupt or stale graph. " +
+      "Does not delete the banyancode.db file by default (it is shared with sessions and memory).",
+    contract: { visibility: "public" },
+    input: InputRemove,
+    output: OutputRemove,
+    toModelOutput: ({ output }) => [
+      {
+        type: "text",
+        text:
+          output.status === "empty"
+            ? "Codegraph index was already empty."
+            : `Codegraph index removed. Freed ${output.freedBytes} bytes (${output.sizeBefore} -> ${output.sizeAfter}).`,
+      },
+    ],
+    execute: (input, context) =>
+      traced(
+        process.cwd(),
+        context.sessionID,
+        name_remove,
+        input,
+        (output) => `status=${output.status} freedBytes=${output.freedBytes}`,
+        Effect.gen(function* () {
+          yield* deps.permission.assert({
+            action: name_remove,
+            resources: ["*"],
+            save: ["*"],
+            metadata: input,
+            sessionID: context.sessionID,
+            agent: context.agent,
+            source: {
+              type: "tool",
+              messageID: context.assistantMessageID,
+              callID: context.toolCallID,
+            },
+          })
+
+          const [filesBefore, nodesBefore, edgesBefore] = yield* Effect.all([
+            deps.repo.countFiles(),
+            deps.repo.countNodes(),
+            deps.repo.countEdges(),
+          ])
+          const graphWasEmpty = filesBefore === 0 && nodesBefore === 0 && edgesBefore === 0
+
+          const { sizeBefore, sizeAfter } = yield* deps.repo.clearAll({ dropFile: input.dropFile ?? false })
+          const freedBytes = Math.max(0, sizeBefore - sizeAfter)
+          return {
+            status: (graphWasEmpty ? "empty" : "removed") as "empty" | "removed",
+            sizeBefore,
+            sizeAfter,
+            freedBytes,
+          }
+        }),
+      ).pipe(
+        Effect.mapError((err) =>
+          err instanceof ToolFailure ? err : new ToolFailure({ message: "codegraph_remove failed" }),
+        ),
+      ),
+  })
 
 export const locationLayer = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -548,6 +632,7 @@ export const locationLayer = Layer.effectDiscard(
             ).pipe(Effect.mapError(() => new ToolFailure({ message: `codegraph_callers failed` })))
           },
         }),
+        [name_remove]: makeCodegraphRemoveTool({ permission, repo }),
       })
       .pipe(Effect.orDie)
   }),
