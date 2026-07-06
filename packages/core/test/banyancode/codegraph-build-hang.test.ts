@@ -68,9 +68,13 @@ describe("codegraph-build hang regression", () => {
                   banyanignored: 0,
                   artifact: 0,
                   tooLarge: 0,
+                  minified: 0,
+                  tooLargeParse: 0,
                   cached: 0,
+                  readError: 0,
                   parseFailure: 0,
                 },
+                parseErrors: [],
               }
             }),
           cancel: () => Effect.void,

@@ -98,9 +98,11 @@ describe("CodegraphIndexer", () => {
       }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
     )
 
-    // index.ts is indexed, dep.ts is pruned and not indexed nor count as skipped
+    // index.ts is indexed; dep.ts is pruned via .gitignore so the skip is
+    // surfaced in the gitignored bucket (PR1 separated bucket accounting).
     expect(result.indexed).toBe(1)
-    expect(result.skipped).toBe(0)
+    expect(result.skipped).toBe(1)
+    expect(result.skippedByReason.gitignored).toBe(1)
   })
 
   test("re-indexing stale file prunes old nodes and edges", async () => {

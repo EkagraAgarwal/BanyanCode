@@ -1,13 +1,7 @@
 /**
- * Phase 1 parity regression test.
+ * All 9 skip buckets + parseErrors implemented.
  *
- * Asserts manual and agent codegraph_build paths converge on all 7 pipeline metrics.
- *
- * Pending Phase 1 implementation:
- * - `result.symbolsIndexed` (currently absent from State.result schema)
- * - `result.skippedByReason` breakdown (currently absent from State.result schema)
- *
- * When those fields land, extend assertions below marked with TODO(phase-1-impl).
+ * Asserts manual and agent codegraph_build paths converge on all 9 pipeline metrics.
  */
 
 import { describe, expect, test } from "bun:test"
@@ -83,9 +77,13 @@ describe("codegraph_build parity", () => {
                   banyanignored: 1,
                   artifact: 0,
                   tooLarge: 0,
+                  minified: 0,
+                  tooLargeParse: 0,
                   cached: 0,
+                  readError: 0,
                   parseFailure: 0,
                 },
+                parseErrors: [],
               }
             }),
           cancel: () => Effect.void,
@@ -148,7 +146,7 @@ describe("codegraph_build parity", () => {
     const agentSkippedByReason = (agentState.result as any)?.skippedByReason
     if (manualSkippedByReason && agentSkippedByReason) {
       console.log("skippedByReason:")
-      for (const reason of ["gitignored", "banyanignored", "artifact", "tooLarge", "cached", "parseFailure"] as const) {
+      for (const reason of ["gitignored", "banyanignored", "artifact", "tooLarge", "minified", "tooLargeParse", "cached", "readError", "parseFailure"] as const) {
         const m = manualSkippedByReason[reason] ?? "N/A"
         const a = agentSkippedByReason[reason] ?? "N/A"
         console.log(`  ${reason.padEnd(16)} | ${String(m).padStart(6)} | ${String(a).padStart(6)} | ${m === a ? "✓" : "✗"}`)

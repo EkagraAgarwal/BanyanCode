@@ -5,6 +5,7 @@ import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
 import { CodegraphMetaTable } from "./codegraph-meta.sql"
+import { CodegraphParseErrorsTable } from "./codegraph-parse-errors.sql"
 import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from "./types"
 
 // Upper bound on nodes per DB insert batch. If a batched putNodes method is added,
@@ -71,6 +72,9 @@ export interface Interface {
     totalNodes: number
     totalEdges: number
   }) => Effect.Effect<{ graphVersion: number; coverage: number }, never, never>
+  readonly recordParseError: (input: { path: string; cause: string; indexedAt: number }) => Effect.Effect<void, never, never>
+  readonly listParseErrors: () => Effect.Effect<Array<{ path: string; cause: string; indexedAt: number }>, never, never>
+  readonly clearParseErrors: () => Effect.Effect<void, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Banyan/CodegraphRepo") {}
@@ -441,6 +445,7 @@ export const layer = Layer.effect(
             yield* tx.delete(CodegraphNodesTable).run().pipe(Effect.orDie)
             yield* tx.delete(CodegraphFilesTable).run().pipe(Effect.orDie)
             yield* tx.delete(CodegraphMetaTable).run().pipe(Effect.orDie)
+            yield* tx.delete(CodegraphParseErrorsTable).run().pipe(Effect.orDie)
           }),
         )
         .pipe(Effect.orDie)
@@ -637,6 +642,29 @@ export const layer = Layer.effect(
       ).pipe(Effect.orDie)
     })
 
+    const recordParseError = Effect.fn("CodegraphRepo.recordParseError")(function* (input: { path: string; cause: string; indexedAt: number }) {
+      yield* db
+        .insert(CodegraphParseErrorsTable)
+        .values({ path: input.path, cause: input.cause, indexed_at: input.indexedAt })
+        .run()
+        .pipe(Effect.ignore)
+    })
+
+    const listParseErrors = Effect.fn("CodegraphRepo.listParseErrors")(function* () {
+      const rows = yield* db
+        .select()
+        .from(CodegraphParseErrorsTable)
+        .orderBy(sql`${CodegraphParseErrorsTable.indexed_at} DESC`)
+        .limit(500)
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({ path: row.path, cause: row.cause, indexedAt: row.indexed_at }))
+    })
+
+    const clearParseErrors = Effect.fn("CodegraphRepo.clearParseErrors")(function* () {
+      yield* db.delete(CodegraphParseErrorsTable).run().pipe(Effect.ignore)
+    })
+
     const putNodes = Effect.fn("CodegraphRepo.putNodes")(function* (nodes: CodegraphNode[]) {
       if (nodes.length === 0) return
       yield* db
@@ -796,6 +824,9 @@ export const layer = Layer.effect(
       getMeta,
       setMeta,
       bumpVersion,
+      recordParseError,
+      listParseErrors,
+      clearParseErrors,
     })
   }),
 )

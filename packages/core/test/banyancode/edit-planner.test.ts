@@ -56,6 +56,9 @@ const makeMockRepo = (options: {
       bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1 }),
       nodesByIDs: (ids) => Effect.succeed(options.nodes?.filter((n) => ids.includes(n.id)) ?? []),
       putEdges: () => Effect.void,
+      recordParseError: () => Effect.void,
+      listParseErrors: () => Effect.succeed([]),
+      clearParseErrors: () => Effect.void,
     }),
   )
 }

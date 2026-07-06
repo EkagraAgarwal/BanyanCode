@@ -30,9 +30,13 @@ export interface Interface {
         banyanignored: number
         artifact: number
         tooLarge: number
+        minified: number
+        tooLargeParse: number
         cached: number
+        readError: number
         parseFailure: number
       }
+      parseErrors: Array<{ path: string; cause: string; indexedAt: number }>
     },
     CodegraphError,
     never
@@ -69,37 +73,46 @@ export const layer = Layer.effect(
     const database = yield* Database.Service
     const cancelled = yield* Ref.make(false)
 
-    const walkDirectory = (dir: string, maxFileSizeBytes: number, root: string, patterns: string[]): Effect.Effect<{ files: string[]; skippedBySize: number; skippedByIgnore: number }> => {
+    const walkDirectory = (dir: string, maxFileSizeBytes: number, root: string, gitignorePatterns: string[], banyanignorePatterns: string[]): Effect.Effect<{ files: string[]; skippedBySize: number; skippedByGitignore: number; skippedByBanyanignore: number }> => {
       return Effect.gen(function* () {
         const entries = yield* fs.readDirectoryEntries(dir).pipe(Effect.orDie)
         const files: string[] = []
         let skippedBySize = 0
-        let skippedByIgnore = 0
+        let skippedByGitignore = 0
+        let skippedByBanyanignore = 0
         for (const entry of entries) {
           if (entry.type !== "directory") continue
           const entryName = path.basename(entry.name)
           if (DEFAULT_IGNORED.includes(entryName)) {
-            skippedByIgnore++
+            skippedByGitignore++
             continue
           }
           const fullPath = path.join(dir, entryName)
-          if (isIgnored(patterns, root, fullPath)) {
-            skippedByIgnore++
+          if (isIgnoredByPatterns(gitignorePatterns, root, fullPath)) {
+            skippedByGitignore++
             continue
           }
-          const subResult = yield* walkDirectory(fullPath, maxFileSizeBytes, root, patterns)
+          if (isIgnoredByPatterns(banyanignorePatterns, root, fullPath)) {
+            skippedByBanyanignore++
+            continue
+          }
+          const subResult = yield* walkDirectory(fullPath, maxFileSizeBytes, root, gitignorePatterns, banyanignorePatterns)
           files.push(...subResult.files)
           skippedBySize += subResult.skippedBySize
-          skippedByIgnore += subResult.skippedByIgnore
+          skippedByGitignore += subResult.skippedByGitignore
+          skippedByBanyanignore += subResult.skippedByBanyanignore
         }
         for (const entry of entries) {
           if (entry.type !== "file") continue
           const fullPath = path.join(dir, entry.name)
-          if (isIgnored(patterns, root, fullPath)) {
-            skippedByIgnore++
+          if (isIgnoredByPatterns(gitignorePatterns, root, fullPath)) {
+            skippedByGitignore++
             continue
           }
-          // Skip files larger than maxFileSizeBytes before even reading them
+          if (isIgnoredByPatterns(banyanignorePatterns, root, fullPath)) {
+            skippedByBanyanignore++
+            continue
+          }
           const stats = yield* fs.stat(fullPath).pipe(Effect.orDie)
           if (stats.size > maxFileSizeBytes) {
             yield* Effect.logWarning(`Skipping file exceeding size limit: ${path.relative(root, fullPath).replace(/\\/g, "/")} (${stats.size} bytes)`)
@@ -108,30 +121,31 @@ export const layer = Layer.effect(
           }
           files.push(fullPath)
         }
-        return { files, skippedBySize, skippedByIgnore }
+        return { files, skippedBySize, skippedByGitignore, skippedByBanyanignore }
       })
     }
 
-    const loadIgnorePatterns = (root: string): Effect.Effect<string[]> => {
+    const loadIgnorePatterns = (root: string): Effect.Effect<{ gitignore: string[]; banyanignore: string[] }> => {
       return Effect.gen(function* () {
-        const patterns: string[] = [...DEFAULT_IGNORED]
+        const gitignore: string[] = [...DEFAULT_IGNORED]
+        const banyanignore: string[] = []
         const gitignorePath = path.join(root, ".gitignore")
         const banyancodeignorePath = path.join(root, ".banyancode", "ignore")
         const gitignoreExists = yield* fs.existsSafe(gitignorePath)
         if (gitignoreExists) {
           const content = yield* fs.readFileStringSafe(gitignorePath).pipe(Effect.orDie)
-          if (content) patterns.push(...content.split("\n").filter((l) => l.trim() && !l.startsWith("#")))
+          if (content) gitignore.push(...content.split("\n").filter((l) => l.trim() && !l.startsWith("#")))
         }
         const banyancodeExists = yield* fs.existsSafe(banyancodeignorePath)
         if (banyancodeExists) {
           const content = yield* fs.readFileStringSafe(banyancodeignorePath).pipe(Effect.orDie)
-          if (content) patterns.push(...content.split("\n").filter((l) => l.trim() && !l.startsWith("#")))
+          if (content) banyanignore.push(...content.split("\n").filter((l) => l.trim() && !l.startsWith("#")))
         }
-        return patterns
+        return { gitignore, banyanignore }
       })
     }
 
-    const isIgnored = (patterns: string[], root: string, filePath: string): boolean => {
+    const isIgnoredByPatterns = (patterns: string[], root: string, filePath: string): boolean => {
       const relativePath = path.relative(root, filePath).replace(/\\/g, "/")
       const segments = relativePath.split("/")
       for (const pattern of patterns) {
@@ -220,8 +234,8 @@ export const layer = Layer.effect(
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
-      const patterns = yield* loadIgnorePatterns(input.root)
-      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, patterns).pipe(Effect.orDie)
+      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root)
+      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, gitignore, banyanignore).pipe(Effect.orDie)
       const allFiles = walkResult.files
       const codeExtensions = new Set([
         ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs",
@@ -271,13 +285,16 @@ export const layer = Layer.effect(
       })
 
       const indexedRef = yield* Ref.make(0)
-      const skippedRef = yield* Ref.make(walkResult.skippedBySize)
+      const skippedRef = yield* Ref.make(0)
       const symbolsIndexedRef = yield* Ref.make(0)
-      const skippedIgnoredRef = yield* Ref.make(walkResult.skippedByIgnore)
+      const skippedGitignoredRef = yield* Ref.make(walkResult.skippedByGitignore)
+      const skippedBanyanignoredRef = yield* Ref.make(walkResult.skippedByBanyanignore)
+      const skippedArtifactRef = yield* Ref.make(0)
+      const skippedTooLargeRef = yield* Ref.make(walkResult.skippedBySize)
       const skippedTooLargeParseRef = yield* Ref.make(0)
       const skippedMinifiedRef = yield* Ref.make(0)
-      const skippedReadErrorRef = yield* Ref.make(0)
       const skippedCachedRef = yield* Ref.make(0)
+      const skippedReadErrorRef = yield* Ref.make(0)
       const skippedParseFailureRef = yield* Ref.make(0)
       const total = codeFiles.length
       const progressCounter = yield* Ref.make(0)
@@ -351,10 +368,19 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
       return
     }
 
-    const parser = getParserForPath(filePath)
     const baseForSkip = path.basename(filePath).toLowerCase()
     const isDockerfile = baseForSkip === "dockerfile" || baseForSkip.startsWith("dockerfile.") || baseForSkip.endsWith(".dockerfile")
-    const result = isArtifactPath(filePath) && !isDockerfile
+    const isArtifact = isArtifactPath(filePath) && !isDockerfile
+    const fileKind = classifyFileKind(filePath, content)
+    if (isArtifact && !fileKind) {
+      yield* Ref.update(skippedRef, (n) => n + 1)
+      yield* Ref.update(skippedArtifactRef, (n) => n + 1)
+      yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
+      return
+    }
+
+    const parser = getParserForPath(filePath)
+    const result = isArtifact
       ? { nodes: [], edges: [] }
       : parser.parse(content, filePath)
     let language = "generic"
@@ -394,7 +420,6 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
       kind: e.kind,
     }))
 
-    const fileKind = classifyFileKind(filePath, content)
     if (fileKind) {
       const lineCount = content.split("\n").length
       nodes.push({
@@ -420,7 +445,9 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.gen(function* () {
-        yield* Effect.logWarning(`Failed to index file: ${relativePath}`, { cause: Cause.pretty(cause) })
+        const prettyCause = Cause.pretty(cause)
+        yield* Effect.logWarning(`Failed to index file: ${relativePath}`, { cause: prettyCause })
+        yield* repo.recordParseError({ path: relativePath, cause: prettyCause, indexedAt: Date.now() }).pipe(Effect.ignore)
         yield* Ref.update(skippedRef, (n) => n + 1)
         yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
         yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
@@ -466,8 +493,10 @@ const drainParsedQueue = Effect.gen(function* () {
         }),
       ),
     )
-    yield* Ref.update(indexedRef, (n) => n + 1)
-    yield* Ref.update(symbolsIndexedRef, (n) => n + parsed.nodes.length)
+    if (parsed.nodes.length > 0) {
+      yield* Ref.update(indexedRef, (n) => n + 1)
+      yield* Ref.update(symbolsIndexedRef, (n) => n + parsed.nodes.length)
+    }
     if (processed % CHECKPOINT_EVERY === 0) {
       yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
     }
@@ -689,26 +718,46 @@ yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
       const indexed = yield* Ref.get(indexedRef)
       const skipped = yield* Ref.get(skippedRef)
       const symbolsIndexed = yield* Ref.get(symbolsIndexedRef)
-      const skippedIgnored = yield* Ref.get(skippedIgnoredRef)
+      const skippedGitignored = yield* Ref.get(skippedGitignoredRef)
+      const skippedBanyanignored = yield* Ref.get(skippedBanyanignoredRef)
+      const skippedArtifact = yield* Ref.get(skippedArtifactRef)
+      const skippedTooLarge = yield* Ref.get(skippedTooLargeRef)
       const skippedTooLargeParse = yield* Ref.get(skippedTooLargeParseRef)
       const skippedMinified = yield* Ref.get(skippedMinifiedRef)
-      const skippedReadError = yield* Ref.get(skippedReadErrorRef)
       const skippedCached = yield* Ref.get(skippedCachedRef)
+      const skippedReadError = yield* Ref.get(skippedReadErrorRef)
       const skippedParseFailure = yield* Ref.get(skippedParseFailureRef)
-      const skippedBySize = skipped - skippedIgnored - skippedTooLargeParse - skippedMinified - skippedReadError - skippedCached - skippedParseFailure
+
+      const totalSkipped =
+        skippedGitignored +
+        skippedBanyanignored +
+        skippedArtifact +
+        skippedTooLarge +
+        skippedTooLargeParse +
+        skippedMinified +
+        skippedCached +
+        skippedReadError +
+        skippedParseFailure
+
+      const parseErrors = yield* repo.listParseErrors()
+
       return {
         indexed,
-        skipped,
-        scannedFiles: indexed + skipped,
+        skipped: totalSkipped,
+        scannedFiles: indexed + totalSkipped,
         symbolsIndexed,
         skippedByReason: {
-          gitignored: skippedIgnored,
-          banyanignored: 0,
-          artifact: 0,
-          tooLarge: skippedBySize + skippedTooLargeParse + skippedMinified,
+          gitignored: skippedGitignored,
+          banyanignored: skippedBanyanignored,
+          artifact: skippedArtifact,
+          tooLarge: skippedTooLarge,
+          minified: skippedMinified,
+          tooLargeParse: skippedTooLargeParse,
           cached: skippedCached,
-          parseFailure: skippedParseFailure + skippedReadError,
+          readError: skippedReadError,
+          parseFailure: skippedParseFailure,
         },
+        parseErrors: parseErrors.slice(0, 50),
       }
     })
 

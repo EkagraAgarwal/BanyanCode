@@ -30,10 +30,22 @@ export const State = Schema.Struct({
         banyanignored: Schema.Number,
         artifact: Schema.Number,
         tooLarge: Schema.Number,
+        minified: Schema.Number,
+        tooLargeParse: Schema.Number,
         cached: Schema.Number,
+        readError: Schema.Number,
         parseFailure: Schema.Number,
       }),
     }),
+  ),
+  parseErrors: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        path: Schema.String,
+        cause: Schema.String,
+        indexedAt: Schema.Number,
+      }),
+    ),
   ),
   error: Schema.optional(Schema.String),
 }).annotate({ identifier: "Banyan/CodegraphBuildState" })
@@ -200,6 +212,7 @@ export const layer = Layer.effect(
                     symbolsIndexed: outcome.result.symbolsIndexed,
                     skippedByReason: outcome.result.skippedByReason,
                   },
+                  parseErrors: outcome.result.parseErrors,
                 }
               : {
                   ...current,

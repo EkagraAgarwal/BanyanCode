@@ -22,7 +22,10 @@ const makeMockIndexer = (options: {
       banyanignored: number
       artifact: number
       tooLarge: number
+      minified: number
+      tooLargeParse: number
       cached: number
+      readError: number
       parseFailure: number
     }
   }
@@ -44,13 +47,17 @@ const makeMockIndexer = (options: {
               banyanignored: 0,
               artifact: 0,
               tooLarge: 0,
+              minified: 0,
+              tooLargeParse: 0,
               cached: 0,
+              readError: 0,
               parseFailure: 0,
             }
             return {
               ...options.indexResult,
               symbolsIndexed: options.indexResult.symbolsIndexed ?? 0,
               skippedByReason: options.indexResult.skippedByReason ?? emptyReasons,
+              parseErrors: [],
             }
           }
           return {
@@ -63,9 +70,13 @@ const makeMockIndexer = (options: {
               banyanignored: 0,
               artifact: 0,
               tooLarge: 0,
+              minified: 0,
+              tooLargeParse: 0,
               cached: 0,
+              readError: 0,
               parseFailure: 0,
             },
+            parseErrors: [],
           }
         })
       },

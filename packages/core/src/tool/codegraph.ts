@@ -37,9 +37,21 @@ export const OutputBuild = Schema.Struct({
     banyanignored: Schema.Number,
     artifact: Schema.Number,
     tooLarge: Schema.Number,
+    minified: Schema.Number,
+    tooLargeParse: Schema.Number,
     cached: Schema.Number,
+    readError: Schema.Number,
     parseFailure: Schema.Number,
   }),
+  parseErrors: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        path: Schema.String,
+        cause: Schema.String,
+        indexedAt: Schema.Number,
+      }),
+    ),
+  ),
   meta: Schema.optional(GraphMeta),
 })
 
@@ -113,7 +125,8 @@ export const locationLayer = Layer.effectDiscard(
             '  - "Index this codebase"\n' +
             "Returns\n" +
             "  { indexed, skipped, skippedByReason: { gitignored, banyanignored, artifact,\n" +
-            "    tooLarge, cached, parseFailure }, symbolsIndexed, duration_ms, total,\n" +
+            "    tooLarge, minified, tooLargeParse, cached, readError, parseFailure },\n" +
+            "    parseErrors: [{ path, cause, indexedAt }], symbolsIndexed, duration_ms, total,\n" +
             "    graphVersion, graphCoverage, totalNodes, totalEdges }\n" +
             "Avoid when\n" +
             "  the index is fresh — query first via codegraph_query or repository_query.\n" +
@@ -123,12 +136,13 @@ export const locationLayer = Layer.effectDiscard(
           input: InputBuild,
           output: OutputBuild,
           toModelOutput: ({ output }) => {
-            const skippedCached = output.skippedByReason?.cached ?? 0
+            const parseFailures = (output.skippedByReason?.parseFailure ?? 0) + (output.skippedByReason?.readError ?? 0)
             const total = (output.meta?.totalFiles ?? 0) + (output.skipped ?? 0)
+            const parseErrorCount = output.parseErrors?.length ?? 0
             return [
               {
                 type: "text",
-                text: `indexed=${output.indexed} skipped=${output.skipped} (cached=${skippedCached}) total=${total} files symbols=${output.symbolsIndexed} duration_ms=${output.duration_ms}`,
+                text: `indexed=${output.indexed} skipped=${output.skipped} parseFailures=${parseFailures} parseErrors=${parseErrorCount} total=${total} files symbols=${output.symbolsIndexed} duration_ms=${output.duration_ms}`,
               },
             ]
           },
@@ -189,12 +203,14 @@ export const locationLayer = Layer.effectDiscard(
 
                 if (currentStatus.status === "completed" && currentStatus.result) {
                   const meta = yield* repo.getMeta()
+                  const indexerResult = currentStatus.result
                   return {
-                    indexed: currentStatus.result.indexed,
-                    skipped: currentStatus.result.skipped,
-                    duration_ms: currentStatus.result.duration_ms,
-                    symbolsIndexed: currentStatus.result.symbolsIndexed,
-                    skippedByReason: currentStatus.result.skippedByReason,
+                    indexed: indexerResult.indexed,
+                    skipped: indexerResult.skipped,
+                    duration_ms: indexerResult.duration_ms,
+                    symbolsIndexed: indexerResult.symbolsIndexed,
+                    skippedByReason: indexerResult.skippedByReason,
+                    parseErrors: (indexerResult as { parseErrors?: Array<{ path: string; cause: string; indexedAt: number }> }).parseErrors ?? [],
                     meta: meta
                       ? {
                           graphBuiltAt: meta.graphBuiltAt,
@@ -218,9 +234,13 @@ export const locationLayer = Layer.effectDiscard(
                     banyanignored: 0,
                     artifact: 0,
                     tooLarge: 0,
+                    minified: 0,
+                    tooLargeParse: 0,
                     cached: 0,
+                    readError: 0,
                     parseFailure: 0,
                   },
+                  parseErrors: [],
                   meta: undefined,
                 }
               }),
