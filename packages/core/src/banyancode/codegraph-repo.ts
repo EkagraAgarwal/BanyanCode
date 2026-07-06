@@ -1,6 +1,6 @@
 export * as CodegraphRepo from "./codegraph-repo"
 
-import { and, eq, inArray, like, sql } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
@@ -667,12 +667,11 @@ export const layer = Layer.effect(
     })
 
     const findSymbolsByServiceTag = Effect.fn("CodegraphRepo.findSymbolsByServiceTag")(function* (tag: string) {
-      const stripped = tag.replace(/^@[^/]+\//, "")
-      const needle = `@banyancode/${stripped}`
+      const stripped = tag.replace(/^@[^/]+(\/[^/]+)*\//, "").replace(/^@/, "")
       const rows = yield* db
         .select()
         .from(CodegraphNodesTable)
-        .where(like(CodegraphNodesTable.code, `%${needle}%`))
+        .where(sql`code LIKE ${"%" + stripped + "%"} AND kind = 'class'`)
         .all()
         .pipe(Effect.orDie)
       return rows.map((row) => ({

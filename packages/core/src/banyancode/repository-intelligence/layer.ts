@@ -111,8 +111,7 @@ export const layer = Layer.effect(
         // Fallback: recover Context.Service tag strings (e.g., user queries "MemoryRepo"
         // but the indexed name is "Service" because the parser extracted only the class
         // identifier from `class Service extends Context.Service<...>("@banyancode/MemoryRepo")`).
-        const stripped = input.name.replace(/^@[^/]+\//, "")
-        const tagMatches = yield* repo.findSymbolsByServiceTag(stripped)
+        const tagMatches = yield* repo.findSymbolsByServiceTag(input.name)
         if (tagMatches.length > 0) return { nodes: tagMatches, usedFallback: true }
 
         return { nodes: prefixFiltered, usedFallback: false }

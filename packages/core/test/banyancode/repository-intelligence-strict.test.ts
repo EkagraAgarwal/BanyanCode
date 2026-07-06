@@ -60,7 +60,7 @@ describe("RepositoryIntelligence Strict Diagnostic Policy", () => {
           signature: "class Service extends Context.Service<Service, Interface>()",
           startLine: 1,
           endLine: 10,
-          code: `class Service extends Context.Service<Service, Interface>()("@banyancode/MemoryRepo")`,
+          code: `export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Banyan/MemoryRepo") {}`,
         })
 
         const ri = yield* RepositoryIntelligence.Service
@@ -71,6 +71,41 @@ describe("RepositoryIntelligence Strict Diagnostic Policy", () => {
         expect(ctx.symbols.length).toBe(1)
         expect(ctx.symbols[0]!.name).toBe("Service")
         expect(ctx.diagnostics).toEqual([])
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("explain recovers realistic @opencode/v2/Banyan/MemoryRepo tag via substring + class filter", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        yield* repo.putFile({ id: "file-real", path: "src/memory-repo.ts", contentHash: "h1", language: "typescript", indexedAt: 1 })
+        yield* repo.putNode({
+          id: "svc-real",
+          fileID: "file-real",
+          kind: "class",
+          name: "Service",
+          signature: "class Service extends Context.Service<Service, Interface>()",
+          startLine: 1,
+          endLine: 10,
+          code: `class Service extends Context.Service<Service, Interface>()("@opencode/v2/Banyan/MemoryRepo")`,
+        })
+
+        const ri = yield* RepositoryIntelligence.Service
+        const slc = yield* ri.explain({ symbol: "MemoryRepo" })
+
+        expect(slc.status).toBe("success")
+        expect(slc.fallbackUsed).toBe(true)
+        expect(slc.importantSymbols.length).toBe(1)
+        expect(slc.importantSymbols[0]!.name).toBe("Service")
+        expect(slc.importantSymbols[0]!.kind).toBe("class")
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })

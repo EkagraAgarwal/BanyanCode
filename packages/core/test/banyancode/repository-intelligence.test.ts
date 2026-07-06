@@ -315,14 +315,14 @@ describe("RepositoryIntelligence", () => {
           signature: "class Service extends Context.Service<Service, Interface>()",
           startLine: 1,
           endLine: 10,
-          code: `class Service extends Context.Service<Service, Interface>()("@banyancode/MemoryRepo")`,
+          code: `export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Banyan/MemoryRepo") {}`,
         })
 
         const ri = yield* RepositoryIntelligence.Service
         const slc = yield* ri.explain({ symbol: "MemoryRepo" })
         expect(slc.importantSymbols.length).toBe(1)
         expect(slc.importantSymbols[0]!.name).toBe("Service")
-        expect(slc.importantSymbols[0]!.code).toContain("@banyancode/MemoryRepo")
+        expect(slc.importantSymbols[0]!.code).toContain("@opencode/v2/Banyan/MemoryRepo")
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
