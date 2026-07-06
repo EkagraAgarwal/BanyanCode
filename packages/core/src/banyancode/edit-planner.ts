@@ -2,7 +2,7 @@ export * as EditPlanner from "./edit-planner"
 
 import { Context, Effect, Layer, Schema } from "effect"
 import { CodegraphRepo } from "./codegraph-repo"
-import { CodegraphAnalyzer } from "./codegraph-analyzer"
+import { CodegraphAnalyzer, SymbolNotFoundError } from "./codegraph-analyzer"
 import type { CodegraphNode } from "./types"
 
 const RiskSeverity = Schema.Literals(["low", "med", "high"])
@@ -20,6 +20,7 @@ export const EditPlan = Schema.Struct({
     directDependents: Schema.Number,
     transitiveDependents: Schema.Number,
     testsToRun: Schema.Array(Schema.String),
+    unreliable: Schema.optional(Schema.String),
   }),
   risks: Schema.Array(
     Schema.Struct({
@@ -151,7 +152,12 @@ export const layer = Layer.effect(
               { tool: "grep", args: { pattern: input.targetSymbol }, rationale: "no indexed node found; fall back to text search" },
               { tool: "code_find", args: { intent: "definition", target: input.targetSymbol }, rationale: "try the semantic search path" },
             ],
-            expectedImpact: { directDependents: 0, transitiveDependents: 0, testsToRun: [] },
+            expectedImpact: {
+              directDependents: 0,
+              transitiveDependents: 0,
+              testsToRun: [],
+              unreliable: `target "${input.targetSymbol}" not found in graph; dependents are unknown — run /codegraph-build --force to refresh`,
+            },
             risks: [
               {
                 kind: "no-target",
@@ -162,7 +168,11 @@ export const layer = Layer.effect(
           }
         }
 
-        const impact = yield* analyzer.impact({ nodeID: target.id, function: target.name })
+        const impact = yield* analyzer.impact({ nodeID: target.id, function: target.name }).pipe(
+          Effect.catchTag("Banyan/SymbolNotFoundError", () =>
+            Effect.succeed({ dependents: [] as CodegraphNode[], transitive: [] as CodegraphNode[] })
+          ),
+        )
         const dependentPaths = impact.dependents.map((d: CodegraphNode) => d.fileID)
         const allFiles = yield* repo.listAllFiles()
         const filePathMap = new Map(allFiles.map((f) => [f.id, f.path]))
@@ -212,7 +222,12 @@ export const layer = Layer.effect(
           target = allNodes.find((n) => n.name === methodName && parentFiles.has(n.fileID))
         }
         const graphMeta = yield* repo.getMeta()
-        const callers = target ? yield* analyzer.callers({ nodeID: target.id, function: target.name }) : []
+        const callersRaw = target
+          ? analyzer.callers({ nodeID: target.id, function: target.name }).pipe(
+              Effect.catchTag("Banyan/SymbolNotFoundError", () => Effect.succeed([] as CodegraphNode[])),
+            )
+          : Effect.succeed([] as CodegraphNode[])
+        const callers: CodegraphNode[] = yield* callersRaw
         const dependentPaths = callers.map((d: CodegraphNode) => d.fileID)
         const allFiles = yield* repo.listAllFiles()
         const filePathMap = new Map(allFiles.map((f) => [f.id, f.path]))

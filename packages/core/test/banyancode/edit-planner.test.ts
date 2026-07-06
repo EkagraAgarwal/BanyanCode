@@ -170,6 +170,8 @@ describe("EditPlanner", () => {
         expect(plan.steps.map((s) => s.tool)).toContain("grep")
         const noTargetRisk = plan.risks.find((r) => r.kind === "no-target")
         expect(noTargetRisk?.severity).toBe("high")
+        expect(plan.expectedImpact.unreliable).toContain("not found in graph")
+        expect(plan.expectedImpact.unreliable).toContain("nonexistent")
       }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })

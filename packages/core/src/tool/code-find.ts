@@ -5,6 +5,7 @@ import { Effect, Layer, Schema } from "effect"
 import { Banyan } from "../banyancode"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
+import type { CodegraphNode } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -30,6 +31,7 @@ export const Output = Schema.Struct({
   meta: Schema.optional(GraphMeta),
   intent: Schema.String,
   dispatchedTo: Schema.optional(Schema.String),
+  _diagnostic: Schema.optional(Schema.Literals(["symbol-not-in-graph"])),
 })
 
 export const locationLayer = Layer.effectDiscard(
@@ -62,7 +64,7 @@ export const locationLayer = Layer.effectDiscard(
         input: Input,
         output: Output,
         toModelOutput: ({ output }) => {
-          const header = `intent=${output.intent} dispatched=${output.dispatchedTo ?? "n/a"} matches=${output.matches.length} files=${output.files.length}`
+          const header = `intent=${output.intent} dispatched=${output.dispatchedTo ?? "n/a"} matches=${output.matches.length} files=${output.files.length}${output._diagnostic ? ` diagnostic=${output._diagnostic}` : ""}`
           const matchesBlock = output.matches.length > 0 ? formatNodes(output.matches, "Matches") : "Matches: none."
           const filesBlock = output.files.length > 0
             ? `Files (${output.files.length}):\n${output.files.map((f) => `  ${f.path}`).join("\n")}`
@@ -103,30 +105,112 @@ export const locationLayer = Layer.effectDiscard(
               switch (input.intent) {
                 case "definition": {
                   const target = input.target ?? ""
+                  if (!target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_query" }
                   const allNodes = yield* repo.listAllNodes()
-                  const matches = allNodes.filter((n) => n.name === target || n.code?.includes(target)).slice(0, limit)
+                  const lowerTarget = target.toLowerCase()
+                  const allowKeyword = input.includeKeywordFallback === true
+
+                  let matches: CodegraphNode[]
+                  if (allowKeyword) {
+                    matches = allNodes.filter((n) =>
+                      n.name.toLowerCase() === lowerTarget || (n.code?.toLowerCase().includes(lowerTarget) ?? false)
+                    ).slice(0, limit)
+                  } else {
+                    matches = allNodes.filter((n) => n.name.toLowerCase() === lowerTarget).slice(0, limit)
+                  }
+
+                  if (matches.length === 0 && target.includes(".")) {
+                    const parts = target.toLowerCase().split(".")
+                    const lastPart = parts[parts.length - 1] ?? ""
+                    const methodMatches = allNodes.filter((n) => n.name.toLowerCase() === lastPart).slice(0, limit)
+                    if (methodMatches.length > 0) matches = methodMatches
+                  }
+
                   return { matches, files: [], meta, intent: input.intent, dispatchedTo: "codegraph_query" }
                 }
                 case "callers": {
-                  const result = yield* analyzer.callers({ function: input.target })
-                  return { matches: result, files: [], meta, intent: input.intent, dispatchedTo: "codegraph_callers" }
+                  const result = yield* analyzer.callers({ function: input.target }).pipe(
+                    Effect.matchEffect({
+                      onFailure: (err) => err._tag === "Banyan/SymbolNotFoundError"
+                        ? Effect.succeed<CodegraphNode[]>([])
+                        : Effect.fail(err),
+                      onSuccess: (nodes) => Effect.succeed(nodes),
+                    }),
+                  )
+                  const isEmpty = result.length === 0
+                  return {
+                    matches: result,
+                    files: [],
+                    meta,
+                    intent: input.intent,
+                    dispatchedTo: "codegraph_callers",
+                    ...(isEmpty ? { _diagnostic: "symbol-not-in-graph" as const } : {}),
+                  }
                 }
                 case "dependents": {
-                  const result = yield* analyzer.dependents({ function: input.target })
-                  return { matches: result, files: [], meta, intent: input.intent, dispatchedTo: "codegraph_dependents" }
+                  const result = yield* analyzer.dependents({ function: input.target }).pipe(
+                    Effect.matchEffect({
+                      onFailure: (err) => err._tag === "Banyan/SymbolNotFoundError"
+                        ? Effect.succeed<CodegraphNode[]>([])
+                        : Effect.fail(err),
+                      onSuccess: (nodes) => Effect.succeed(nodes),
+                    }),
+                  )
+                  const isEmpty = result.length === 0
+                  return {
+                    matches: result,
+                    files: [],
+                    meta,
+                    intent: input.intent,
+                    dispatchedTo: "codegraph_dependents",
+                    ...(isEmpty ? { _diagnostic: "symbol-not-in-graph" as const } : {}),
+                  }
                 }
                 case "impact": {
-                  const result = yield* analyzer.impact({ function: input.target })
-                  return { matches: result.dependents.slice(0, limit), files: [], meta, intent: input.intent, dispatchedTo: "codegraph_impact" }
+                  const result = yield* analyzer.impact({ function: input.target }).pipe(
+                    Effect.matchEffect({
+                      onFailure: (err) => err._tag === "Banyan/SymbolNotFoundError"
+                        ? Effect.succeed<{ dependents: CodegraphNode[]; transitive: CodegraphNode[] }>({ dependents: [], transitive: [] })
+                        : Effect.fail(err),
+                      onSuccess: (impact) => Effect.succeed(impact),
+                    }),
+                  )
+                  const isEmpty = result.dependents.length === 0
+                  return {
+                    matches: result.dependents.slice(0, limit),
+                    files: [],
+                    meta,
+                    intent: input.intent,
+                    dispatchedTo: "codegraph_impact",
+                    ...(isEmpty ? { _diagnostic: "symbol-not-in-graph" as const } : {}),
+                  }
                 }
                 case "find_file": {
                   const target = input.target ?? ""
                   const allFiles = yield* repo.listAllFiles()
-                  const files = allFiles
-                    .filter((f) => f.path.includes(target))
-                    .slice(0, limit)
-                    .map((f) => ({ path: f.path }))
-                  return { matches: [], files, meta, intent: input.intent, dispatchedTo: "glob" }
+                  const allNodes = yield* repo.listAllNodes()
+
+                  const symbolMatches = allNodes.filter((n) => n.name === target)
+                  const graphFileIDs = [...new Set(symbolMatches.map((n) => n.fileID))]
+                  const graphFiles = allFiles.filter((f) => graphFileIDs.includes(f.id)).map((f) => ({ path: f.path }))
+
+                  let files: { path: string }[]
+                  let dispatchedTo: string
+                  if (graphFiles.length > 0) {
+                    files = graphFiles.slice(0, limit)
+                    dispatchedTo = "graph"
+                  } else {
+                    files = allFiles.filter((f) => f.path.includes(target)).slice(0, limit).map((f) => ({ path: f.path }))
+                    dispatchedTo = "glob"
+                  }
+
+                  return {
+                    matches: symbolMatches.slice(0, limit),
+                    files,
+                    meta,
+                    intent: input.intent,
+                    dispatchedTo,
+                  }
                 }
               }
             }),

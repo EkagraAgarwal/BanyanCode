@@ -53,7 +53,11 @@ export const locationLayer = Layer.effectDiscard(
           output: Output,
           toModelOutput: ({ output }) => {
             const stepsBlock = output.plan.steps.map((s, i) => `${i + 1}. [${s.tool}] ${s.rationale} (args: ${JSON.stringify(s.args)})`).join("\n")
-            const impactBlock = `Direct Dependents: ${output.plan.expectedImpact.directDependents}\nTransitive Dependents: ${output.plan.expectedImpact.transitiveDependents}\nAffected Tests to Run: ${output.plan.expectedImpact.testsToRun.length > 0 ? output.plan.expectedImpact.testsToRun.join(", ") : "none"}`
+            const impactBlock = [
+              `Direct Dependents: ${output.plan.expectedImpact.directDependents}${output.plan.expectedImpact.unreliable ? " (unreliable: " + output.plan.expectedImpact.unreliable + ")" : ""}`,
+              `Transitive Dependents: ${output.plan.expectedImpact.transitiveDependents}${output.plan.expectedImpact.unreliable ? " (unreliable)" : ""}`,
+              `Affected Tests to Run: ${output.plan.expectedImpact.testsToRun.length > 0 ? output.plan.expectedImpact.testsToRun.join(", ") : "none"}`,
+            ].join("\n")
             const risksBlock = output.plan.risks.length > 0 
               ? output.plan.risks.map((r) => `- [${r.severity.toUpperCase()}] ${r.kind}: ${r.message}`).join("\n")
               : "none."

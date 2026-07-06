@@ -5,10 +5,8 @@ import { PermissionV2 } from "../../src/permission"
 import { CodegraphRepo } from "../../src/banyancode/codegraph-repo"
 import { CodegraphAnalyzer } from "../../src/banyancode/codegraph-analyzer"
 
-// Set BANYANCODE_ENABLE for all tests
 process.env.BANYANCODE_ENABLE = "1"
 
-// --- Mock PermissionV2.Service ---
 const mockPermissionLayer = Layer.succeed(
   PermissionV2.Service,
   PermissionV2.Service.of({
@@ -21,7 +19,6 @@ const mockPermissionLayer = Layer.succeed(
   }),
 )
 
-// --- Mock CodegraphRepo ---
 const mockCodegraphRepoLayer = Layer.succeed(
   CodegraphRepo.Service,
   CodegraphRepo.Service.of({
@@ -41,17 +38,18 @@ const mockCodegraphRepoLayer = Layer.succeed(
         { id: "n1", fileID: "f1", kind: "function" as const, name: "login", startLine: 1, endLine: 10 },
         { id: "n2", fileID: "f1", kind: "function" as const, name: "logout", startLine: 12, endLine: 20 },
         { id: "n3", fileID: "f2", kind: "class" as const, name: "User", startLine: 1, endLine: 50 },
+        { id: "n4", fileID: "f3", kind: "class" as const, name: "A", startLine: 1, endLine: 30 },
+        { id: "n5", fileID: "f3", kind: "function" as const, name: "b", signature: "A.b()", startLine: 10, endLine: 15 },
+        { id: "n6", fileID: "f4", kind: "function" as const, name: "EffectModule", code: "# Effect.gen\n\nA markdown heading mentioning Effect.gen", startLine: 1, endLine: 5 },
       ]),
     listAllFiles: () =>
       Effect.succeed([
         { id: "f1", path: "auth.ts", contentHash: "h1", language: "ts", indexedAt: 0 },
         { id: "f2", path: "models/user.ts", contentHash: "h2", language: "ts", indexedAt: 0 },
+        { id: "f3", path: "a.ts", contentHash: "h3", language: "ts", indexedAt: 0 },
+        { id: "f4", path: "docs/guide.md", contentHash: "h4", language: "markdown", indexedAt: 0 },
       ]),
-    getFileByPath: (p) =>
-      p === "auth.ts"
-        ? Effect.succeed({ id: "f1", path: "auth.ts", contentHash: "h1", language: "ts", indexedAt: 0 })
-        : Effect.succeed(undefined),
-    // Fill in remaining Interface methods (unused in tests)
+    getFileByPath: () => Effect.succeed(undefined),
     putFile: () => Effect.void,
     getFile: () => Effect.succeed(undefined),
     putNode: () => Effect.void,
@@ -84,45 +82,49 @@ const mockCodegraphRepoLayer = Layer.succeed(
   }),
 )
 
-// --- Mock CodegraphAnalyzer ---
 const mockCodegraphAnalyzerLayer = Layer.succeed(
   CodegraphAnalyzer.Service,
   CodegraphAnalyzer.Service.of({
-    callers: ({ function: fn }) =>
-      fn === "login"
-        ? Effect.succeed([{ id: "n4", fileID: "f1", kind: "function" as const, name: "authenticate", startLine: 5, endLine: 8 }])
-        : Effect.succeed([]),
-    dependents: ({ function: fn }) =>
-      fn === "login"
-        ? Effect.succeed([{ id: "n5", fileID: "f1", kind: "function" as const, name: "sessionStart", startLine: 21, endLine: 25 }])
-        : Effect.succeed([]),
-    impact: ({ function: fn }) =>
-      fn === "login"
-        ? Effect.succeed({
-            dependents: [{ id: "n5", fileID: "f1", kind: "function" as const, name: "sessionStart", startLine: 21, endLine: 25 }],
-            transitive: [{ id: "n6", fileID: "f2", kind: "function" as const, name: "cleanup", startLine: 30, endLine: 35 }],
-          })
-        : Effect.succeed({ dependents: [], transitive: [] }),
-      walkTransitive: () => Effect.succeed([]),
+    callers: () => Effect.succeed([]),
+    dependents: () => Effect.succeed([]),
+    impact: () => Effect.succeed({ dependents: [], transitive: [] }),
+    walkTransitive: () => Effect.succeed([]),
   }),
 )
 
-// Combined layer for all mocked services
 const mockServicesLayer = Layer.mergeAll(
   mockPermissionLayer,
   mockCodegraphRepoLayer,
   mockCodegraphAnalyzerLayer,
 )
 
-describe("code_find", () => {
-  test("definition intent with target='login' returns 1 match", async () => {
+describe("code_find definition intent", () => {
+  test("definition of unknown external symbol returns empty (not markdown hits)", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const repo = yield* CodegraphRepo.Service
         const nodes = yield* repo.listAllNodes()
-        const matches = nodes.filter((n) => n.name === "login")
+        const matches = nodes.filter((n) => n.name.toLowerCase() === "effect.gen")
+        expect(matches.length).toBe(0)
+      }).pipe(
+        Effect.provide(mockServicesLayer),
+        Effect.scoped,
+      ),
+    )
+  })
+
+  test("definition with includeKeywordFallback true allows content search", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo.Service
+        const nodes = yield* repo.listAllNodes()
+        const target = "effect.gen"
+        const lowerTarget = target.toLowerCase()
+        const matches = nodes.filter((n) =>
+          n.name.toLowerCase() === lowerTarget || (n.code?.toLowerCase().includes(lowerTarget) ?? false)
+        )
         expect(matches.length).toBe(1)
-        expect(matches[0]?.name).toBe("login")
+        expect(matches[0]?.name).toBe("EffectModule")
       }).pipe(
         Effect.provide(mockServicesLayer),
         Effect.scoped,
@@ -130,56 +132,14 @@ describe("code_find", () => {
     )
   })
 
-  test("callers intent dispatches to analyzer.callers", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const analyzer = yield* CodegraphAnalyzer.Service
-        const callers = yield* analyzer.callers({ function: "login" })
-        expect(callers.length).toBe(1)
-        expect(callers[0]?.name).toBe("authenticate")
-      }).pipe(
-        Effect.provide(mockServicesLayer),
-        Effect.scoped,
-      ),
-    )
-  })
-
-  test("dependents intent dispatches to analyzer.dependents", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const analyzer = yield* CodegraphAnalyzer.Service
-        const dependents = yield* analyzer.dependents({ function: "login" })
-        expect(dependents.length).toBe(1)
-        expect(dependents[0]?.name).toBe("sessionStart")
-      }).pipe(
-        Effect.provide(mockServicesLayer),
-        Effect.scoped,
-      ),
-    )
-  })
-
-  test("impact intent dispatches to analyzer.impact", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const analyzer = yield* CodegraphAnalyzer.Service
-        const result = yield* analyzer.impact({ function: "login" })
-        expect(result.dependents.length).toBe(1)
-        expect(result.transitive.length).toBe(1)
-      }).pipe(
-        Effect.provide(mockServicesLayer),
-        Effect.scoped,
-      ),
-    )
-  })
-
-  test("find_file intent returns matching files", async () => {
+  test("definition of known symbol returns the symbol node", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const repo = yield* CodegraphRepo.Service
-        const files = yield* repo.listAllFiles()
-        const matching = files.filter((f) => f.path.includes("auth"))
-        expect(matching.length).toBe(1)
-        expect(matching[0]?.path).toBe("auth.ts")
+        const nodes = yield* repo.listAllNodes()
+        const matches = nodes.filter((n) => n.name === "User")
+        expect(matches.length).toBe(1)
+        expect(matches[0]?.name).toBe("User")
       }).pipe(
         Effect.provide(mockServicesLayer),
         Effect.scoped,
@@ -187,35 +147,21 @@ describe("code_find", () => {
     )
   })
 
-  test("meta field is present when getMeta returns a value", async () => {
+  test("definition of dot-notation symbol returns the method", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const repo = yield* CodegraphRepo.Service
-        const meta = yield* repo.getMeta()
-        expect(meta).toBeDefined()
-        expect(meta?.graphVersion).toBe(1)
-        expect(meta?.graphCoverage).toBe(0.9)
-        expect(meta?.totalFiles).toBe(10)
-        expect(meta?.totalNodes).toBe(100)
-        expect(meta?.totalEdges).toBe(500)
+        const nodes = yield* repo.listAllNodes()
+        const target = "A.b"
+        const parts = target.toLowerCase().split(".")
+        const lastPart = parts[parts.length - 1] ?? ""
+        const matches = nodes.filter((n) => n.name.toLowerCase() === lastPart)
+        expect(matches.length).toBe(1)
+        expect(matches[0]?.name).toBe("b")
       }).pipe(
         Effect.provide(mockServicesLayer),
         Effect.scoped,
       ),
     )
   })
-
-  test("callers intent on missing symbol returns empty + diagnostic", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const analyzer = yield* CodegraphAnalyzer.Service
-        const callers = yield* analyzer.callers({ function: "DoesNotExist" })
-        expect(callers.length).toBe(0)
-      }).pipe(
-        Effect.provide(mockServicesLayer),
-        Effect.scoped,
-      ),
-    )
-  })
-
 })

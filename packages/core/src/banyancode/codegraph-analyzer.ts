@@ -1,13 +1,17 @@
 export * as CodegraphAnalyzer from "./codegraph-analyzer"
 
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { CodegraphRepo } from "./codegraph-repo"
 import type { CodegraphNode } from "./types"
 
+export class SymbolNotFoundError extends Schema.TaggedErrorClass<SymbolNotFoundError>()("Banyan/SymbolNotFoundError", {
+  symbol: Schema.String,
+}) {}
+
 export interface Interface {
-  readonly callers: (input: { nodeID?: string; function?: string }) => Effect.Effect<CodegraphNode[]>
-  readonly dependents: (input: { nodeID?: string; function?: string }) => Effect.Effect<CodegraphNode[]>
-  readonly impact: (input: { nodeID?: string; function?: string }) => Effect.Effect<{ dependents: CodegraphNode[]; transitive: CodegraphNode[] }>
+  readonly callers: (input: { nodeID?: string; function?: string }) => Effect.Effect<CodegraphNode[], SymbolNotFoundError>
+  readonly dependents: (input: { nodeID?: string; function?: string }) => Effect.Effect<CodegraphNode[], SymbolNotFoundError>
+  readonly impact: (input: { nodeID?: string; function?: string }) => Effect.Effect<{ dependents: CodegraphNode[]; transitive: CodegraphNode[] }, SymbolNotFoundError>
   readonly walkTransitive: (input: { nodeID: string; direction: "upstream" | "downstream"; maxDepth?: number }) => Effect.Effect<CodegraphNode[]>
 }
 
@@ -18,28 +22,46 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const repo = yield* CodegraphRepo.Service
 
-    const callers = (input: { nodeID?: string; function?: string }): Effect.Effect<CodegraphNode[]> =>
+    const callers = (input: { nodeID?: string; function?: string }): Effect.Effect<CodegraphNode[], SymbolNotFoundError> =>
       Effect.gen(function* () {
-        const nodeID = input.nodeID ?? (input.function ? (yield* repo.queryNodes({ function: input.function }))[0]?.id : undefined)
-        if (!nodeID) return []
+        let nodeID = input.nodeID
+        if (!nodeID && input.function) {
+          const matches = yield* repo.queryNodes({ function: input.function })
+          nodeID = matches[0]?.id
+        }
+        if (!nodeID) {
+          return yield* new SymbolNotFoundError({ symbol: input.function ?? input.nodeID ?? "unknown" })
+        }
         const edges = yield* repo.edgesTo(nodeID)
         const callerIDs = [...new Set(edges.filter((e) => e.kind === "calls" || e.kind === "references").map((e) => e.fromNodeID))]
         return yield* repo.nodesByIDs(callerIDs)
       })
 
-    const dependents = (input: { nodeID?: string; function?: string }): Effect.Effect<CodegraphNode[]> =>
+    const dependents = (input: { nodeID?: string; function?: string }): Effect.Effect<CodegraphNode[], SymbolNotFoundError> =>
       Effect.gen(function* () {
-        const nodeID = input.nodeID ?? (input.function ? (yield* repo.queryNodes({ function: input.function }))[0]?.id : undefined)
-        if (!nodeID) return []
+        let nodeID = input.nodeID
+        if (!nodeID && input.function) {
+          const matches = yield* repo.queryNodes({ function: input.function })
+          nodeID = matches[0]?.id
+        }
+        if (!nodeID) {
+          return yield* new SymbolNotFoundError({ symbol: input.function ?? input.nodeID ?? "unknown" })
+        }
         const edges = yield* repo.edgesTo(nodeID)
         const dependentIDs = [...new Set(edges.map((e) => e.fromNodeID))]
         return yield* repo.nodesByIDs(dependentIDs)
       })
 
-    const impact = (input: { nodeID?: string; function?: string }): Effect.Effect<{ dependents: CodegraphNode[]; transitive: CodegraphNode[] }> =>
+    const impact = (input: { nodeID?: string; function?: string }): Effect.Effect<{ dependents: CodegraphNode[]; transitive: CodegraphNode[] }, SymbolNotFoundError> =>
       Effect.gen(function* () {
-        const nodeID = input.nodeID ?? (input.function ? (yield* repo.queryNodes({ function: input.function }))[0]?.id : undefined)
-        if (!nodeID) return { dependents: [], transitive: [] }
+        let nodeID = input.nodeID
+        if (!nodeID && input.function) {
+          const matches = yield* repo.queryNodes({ function: input.function })
+          nodeID = matches[0]?.id
+        }
+        if (!nodeID) {
+          return yield* new SymbolNotFoundError({ symbol: input.function ?? input.nodeID ?? "unknown" })
+        }
         const direct = yield* dependents({ nodeID })
         const downstreamTransitive = yield* walkTransitive({ nodeID, direction: "downstream" })
         const upstreamTransitive = yield* walkTransitive({ nodeID, direction: "upstream" })
