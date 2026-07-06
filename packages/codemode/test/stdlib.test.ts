@@ -586,6 +586,85 @@ describe("Set", () => {
 })
 
 describe("stdlib integration", () => {
+  test("Object values and entries accept arrays", async () => {
+    expect(await value(`return [Object.values(["a", "b"]), Object.entries(["a", "b"])]`)).toEqual([
+      ["a", "b"],
+      [
+        ["0", "a"],
+        ["1", "b"],
+      ],
+    ])
+    expect(await value(`const match = /a/.exec("ba"); return [Object.values(match), Object.entries(match)]`)).toEqual([
+      ["a", 1],
+      [
+        ["0", "a"],
+        ["index", 1],
+      ],
+    ])
+    expect(await value(`return Object.keys(Object.values({ match: /a/.exec("ba") })[0])`)).toEqual(["0", "index"])
+  })
+
+  test("Object.fromEntries accepts every supported entry collection", async () => {
+    expect(
+      await value(`
+        return [
+          Object.fromEntries([["a", 1]]),
+          Object.fromEntries(new Map([["b", 2]])),
+          Object.fromEntries(new Set([["c", 3]])),
+          Object.fromEntries(new URLSearchParams("d=4")),
+          Object.fromEntries([{ 0: "e", 1: 5 }]),
+          Object.fromEntries(new Set([[{}, 6], [new Date(0), 7], [null, 8], [undefined, 9]])),
+        ]
+      `),
+    ).toEqual([
+      { a: 1 },
+      { b: 2 },
+      { c: 3 },
+      { d: "4" },
+      { e: 5 },
+      { "[object Object]": 6, "1970-01-01T00:00:00.000Z": 7, null: 8, undefined: 9 },
+    ])
+    expect(await value(`try { Object.fromEntries(new Set([Math.max])); return false } catch { return true }`)).toBe(
+      true,
+    )
+    expect(
+      await value(
+        `try { Object.fromEntries(new Map([["fn", Math.max]])); return false } catch { return true }`,
+      ),
+    ).toBe(true)
+  })
+
+  test("deterministic Math methods match the host runtime", async () => {
+    const result = await value(`
+      return [
+        Math.acos(0.5), Math.acosh(2), Math.asin(0.5), Math.asinh(2), Math.atan(1), Math.atan2(1, 2), Math.atanh(0.5),
+        Math.cos(0.5), Math.cosh(0.5), Math.sin(0.5), Math.sinh(0.5), Math.tan(0.5), Math.tanh(0.5),
+        Math.log1p(0.5), Math.expm1(0.5), Math.f16round(1.337), Math.fround(1.337), Math.clz32(1), Math.imul(2, 3),
+      ]
+    `)
+    expect(result).toEqual([
+      Math.acos(0.5),
+      Math.acosh(2),
+      Math.asin(0.5),
+      Math.asinh(2),
+      Math.atan(1),
+      Math.atan2(1, 2),
+      Math.atanh(0.5),
+      Math.cos(0.5),
+      Math.cosh(0.5),
+      Math.sin(0.5),
+      Math.sinh(0.5),
+      Math.tan(0.5),
+      Math.tanh(0.5),
+      Math.log1p(0.5),
+      Math.expm1(0.5),
+      Math.f16round(1.337),
+      Math.fround(1.337),
+      Math.clz32(1),
+      Math.imul(2, 3),
+    ])
+  })
+
   test("Object.assign mutates and returns its target", async () => {
     expect(
       await value(`

@@ -66,7 +66,7 @@ import {
   numberMethods,
   numberStatics,
 } from "../stdlib/number.js"
-import { invokeObjectMethod } from "../stdlib/object.js"
+import { invokeObjectMethod, objectMethodsPreservingIdentity } from "../stdlib/object.js"
 import { promiseStatics, TOOL_CALL_CONCURRENCY } from "../stdlib/promise.js"
 import {
   escapeRegexHint,
@@ -2013,9 +2013,9 @@ class Interpreter<R> {
       if (callable instanceof GlobalMethodReference) {
         if (callable.namespace === "console") return self.invokeConsole(callable.name, args, node)
         if (callable.namespace === "Object" && args[0] instanceof ToolReference) {
-          return self.invokeObjectMethodOnTools(callable.name, args[0] as ToolReference, node)
+          return self.invokeObjectMethodOnTools(callable.name, args[0], node)
         }
-        if (callable.namespace === "Object" && callable.name === "assign") {
+        if (callable.namespace === "Object" && objectMethodsPreservingIdentity.has(callable.name)) {
           return invokeGlobalMethod(callable, args, node)
         }
         return boundedData(invokeGlobalMethod(callable, args, node), `${callable.namespace}.${callable.name} result`)
@@ -2036,8 +2036,8 @@ class Interpreter<R> {
 
   // Object.* over a tool reference: `Object.keys(tools)` / `Object.keys(tools.ns)` enumerate
   // namespace/tool names from the host tool tree - the discovery idiom a model reaches for
-  // first. Every other Object helper cannot produce data from a tool reference, so it fails
-  // with a pointer at the working idioms instead of the generic plain-objects-only message.
+  // first. Other Object helpers fail with a pointer at the working idioms instead of a generic
+  // plain-data message.
   private invokeObjectMethodOnTools(name: string, ref: ToolReference, node: AstNode): unknown {
     if (name === "keys") {
       return boundedData(this.enumerableKeys(ref)!, "Object.keys result")
