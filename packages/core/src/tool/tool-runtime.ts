@@ -282,10 +282,27 @@ const extractRequiredFields = (schema: Schema.Top | undefined): ReadonlySet<stri
   }
 }
 
+const isArrayField = (s: any): boolean => {
+  const checkAST = (ast: any): boolean => {
+    if (!ast) return false
+    if (ast._tag === "Tuple" || ast._tag === "Arrays") return true
+    if (ast._tag === "Union") {
+      return ast.types.some(checkAST)
+    }
+    if (ast._tag === "Transformation") {
+      return checkAST(ast.from) || checkAST(ast.to)
+    }
+    if (ast.ast) return checkAST(ast.ast)
+    return false
+  }
+  return checkAST(s?.ast ?? s)
+}
+
 const normalizeValue = (
   value: unknown,
   field: string | undefined,
   repairs: RepairRecord[],
+  schema?: Schema.Top,
 ): unknown => {
   if (value === null) {
     if (field) {
@@ -314,6 +331,9 @@ const normalizeValue = (
       return undefined
     }
     if (arr.length === 1 && field) {
+      if (schema && isArrayField(schema)) {
+        return arr
+      }
       repairs.push({
         kind: "array-collapse",
         field,
@@ -328,7 +348,8 @@ const normalizeValue = (
   if (isPlainObject(value)) {
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(value)) {
-      const normalized = normalizeValue(v, k, repairs)
+      const fieldSchema = schema && "fields" in schema ? (schema.fields as any)[k] : undefined
+      const normalized = normalizeValue(v, k, repairs, fieldSchema)
       if (normalized !== undefined) out[k] = normalized
     }
     return out
@@ -389,9 +410,9 @@ const normalizeValue = (
   return value
 }
 
-export const normalize = (raw: unknown): readonly [Normalized, readonly RepairRecord[]] => {
+export const normalize = (raw: unknown, schema?: Schema.Top): readonly [Normalized, readonly RepairRecord[]] => {
   const repairs: RepairRecord[] = []
-  const value = normalizeValue(raw, undefined, repairs)
+  const value = normalizeValue(raw, undefined, repairs, schema)
   return [value, repairs] as const
 }
 
@@ -625,7 +646,7 @@ export const runOnce = <S extends Schema.Top>(
   contract: ToolContract,
   schema: S,
 ): RuntimeResult<S["Type"]> => {
-  const [normalized, normRepairs] = normalize(raw)
+  const [normalized, normRepairs] = normalize(raw, schema)
   const [aliased, aliasWarnings] = resolveAliases(normalized, contract.acceptsAliases)
   const [withDefaults, defaultWarnings] = applyDefaults(aliased, contract.defaultValues)
   const lintWarnings = lint(withDefaults, schema, contract.acceptsAliases, contract.defaultValues)
