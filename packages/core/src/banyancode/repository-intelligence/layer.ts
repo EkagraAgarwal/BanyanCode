@@ -355,9 +355,19 @@ export const layer = Layer.effect(
           })
         }
 
-        const docs = isDegraded ? [] : allFiles.filter((f) => isDocPath(f.path))
-        const configs = isDegraded ? [] : allFiles.filter((f) => isConfigPath(f.path))
-        const files = isDegraded ? [] : allFiles
+        const graphFileIDs = new Set<string>(
+          graphNodesList.map((n) => n.fileID).filter((id): id is string => Boolean(id))
+        )
+
+        const docs = isDegraded
+          ? []
+          : allFiles.filter((f) => graphFileIDs.has(f.id) && isDocPath(f.path))
+        const configs = isDegraded
+          ? []
+          : allFiles.filter((f) => graphFileIDs.has(f.id) && isConfigPath(f.path))
+        const files = isDegraded
+          ? []
+          : allFiles.filter((f) => graphFileIDs.has(f.id))
 
         const recentCommits = yield* git.recentCommits({
           limit: input.limit ?? 10,
@@ -375,7 +385,7 @@ export const layer = Layer.effect(
           symbols,
           files,
           graph: { nodes: graphNodesList, edges: graphEdges },
-          tests: testsResult.nodes,
+          tests: testsResult.nodes.filter((n) => graphFileIDs.has(n.fileID)),
           docs,
           configs,
           git: { recentCommits, ownership },
