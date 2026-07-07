@@ -674,14 +674,16 @@ export const layer = Layer.effect(
 
     const findSymbolsByServiceTag = Effect.fn("CodegraphRepo.findSymbolsByServiceTag")(function* (tag: string) {
       const stripped = tag.replace(/^@[^/]+(\/[^/]+)*\//, "").replace(/^@/, "")
-      // Triple filter to suppress false positives on bare substring matches:
-      // 1. substring contains the bare service name (e.g., "MemoryRepo")
-      // 2. kind='class' excludes doc/test/config/docker/etc. nodes
-      // 3. code contains "Context.Service" — the registration pattern itself
+      const candidates = [stripped, stripped.replace(/Service$/, ""), "Service"].filter(
+        (s, i, arr) => arr.indexOf(s) === i,
+      )
+      const likes = candidates.map((c) => sql`code LIKE ${"%" + c + "%"}`)
+      const whereClause = sql.join(likes, sql` OR `)
+
       const rows = yield* db
         .select()
         .from(CodegraphNodesTable)
-        .where(sql`(code LIKE ${"%" + stripped + "%"}) AND kind = 'class' AND (code LIKE '%Context.Service%')`)
+        .where(sql`(kind = 'class') AND (code LIKE '%Context.Service%') AND (${whereClause})`)
         .all()
         .pipe(Effect.orDie)
       const mapped = rows.map((row) => ({
@@ -694,13 +696,14 @@ export const layer = Layer.effect(
         endLine: row.end_line,
         code: row.code ?? undefined,
       }))
+      const normalize = (s: string) => s.replace(/Service$/, "").toLowerCase()
       return mapped.filter((n) => {
         if (!n.code) return false
         const match = n.code.match(/Context\.Service\s*<[\s\S]*?>\s*\(\s*\)\s*\(\s*["']([^"']+)["']\s*\)/)
         if (!match) return false
         const tagString = match[1]
         const tagStripped = tagString.replace(/^@[^/]+(\/[^/]+)*\//, "").replace(/^@/, "")
-        return tagStripped.toLowerCase() === stripped.toLowerCase()
+        return normalize(tagStripped) === normalize(stripped)
       })
     })
 

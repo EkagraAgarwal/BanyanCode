@@ -94,10 +94,16 @@ function extractClassMethods(classCode: string, classStartLine: number, fileID: 
 export function parseTypeScript(content: string, fileID: string): ParseResult {
   const nodes: ParsedNode[] = []
   const edges: ParsedEdge[] = []
-  const imports: string[] = []
 
   for (const match of content.matchAll(IMPORTS_REGEX)) {
-    imports.push(match[1])
+    const symbol = match[1]
+    if (!symbol) continue
+    edges.push({
+      id: `${fileID}:import:${symbol}`,
+      fromNodeID: `${fileID}:file`,
+      toNodeID: `module:${symbol}`,
+      kind: "imports",
+    })
   }
 
   for (const match of content.matchAll(EXPORT_CLASS_REGEX)) {
@@ -144,5 +150,5 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     nodes.push({ id: `${fileID}:type:${name}:${startLine}`, kind: "type", name, startLine, endLine, code })
   }
 
-  return { nodes, edges, imports }
+  return { nodes, edges, imports: [] }
 }
