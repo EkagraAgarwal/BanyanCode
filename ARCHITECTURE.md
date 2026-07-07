@@ -98,7 +98,7 @@ Every BanyanCode service follows the same pattern: a `Context.Service` class, a 
 | `CodegraphRepo` | Drizzle CRUD over `codegraph_*` tables; pagination via `searchNodes({ name?, kind?, limit })`; cheap cardinality via `countNodes/Edges/Files` | `Database` |
 | `MemoryRepo` | Drizzle CRUD over `memory_entries` (JSONB value/tags), optimistic-concurrency `update` | `Database` |
 | `SubagentMessagesRepo`, `SubagentPlansRepo` | Mesh persistence (with `markDelivered` for consume tracking) | `Database` |
-| `CodegraphIndexer` | Walk a directory, parse files, extract nodes/edges via tree-sitter. Wave 2 classifier adds `ci/docker/env/doc` file kinds + Markdown + Dockerfile parsers | `CodegraphRepo`, `FSUtil` |
+| `CodegraphIndexer` | Walk a directory, parse files, extract nodes/edges via tree-sitter (TS/JS/Python in PR 5/6, fallback regex for everything else). Wave 2 classifier adds `ci/docker/env/doc` file kinds + Markdown + Dockerfile parsers | `CodegraphRepo`, `FSUtil` |
 | `CodegraphBuildService` | Persistent build state, fork/cancel, publish `banyancode.codegraph.build` events | `CodegraphIndexer`, `EventV2` |
 | `CodegraphAnalyzer` | BFS impact/dependents/callers over the graph edges; computes L0/L1/L2/L3 layers | `CodegraphRepo` |
 | `MaxSubagentsService` | Reads `banyancode_max_subagents` config (default 5, max 20), validates, provides to orchestrator prompt + hard runtime limit | `BanyanConfigService` |
@@ -121,7 +121,7 @@ Service exports live in `packages/core/src/banyancode/index.ts` in two flavors:
     → CodegraphIndexer.index({ root, force, onProgress })
       → load ignore patterns (DEFAULT_IGNORED + .gitignore + .banyancode/ignore)
       → walk directory, filter by parser-recognized extensions
-      → parse each file via tree-sitter (TS/JS/Python) or regex fallback
+      → parse each file via tree-sitter (TS/JS/Python only in PR 5/6, regex for others) or regex fallback
       → upsert CodegraphRepo with file hash, nodes, edges
       → onProgress per file → publish BuildEvent
 ```
