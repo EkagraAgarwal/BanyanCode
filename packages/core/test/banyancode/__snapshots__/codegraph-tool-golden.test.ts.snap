@@ -1,0 +1,1019 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`codegraph-tool-golden ContextService (class with Context.Service tag) intent=definition 1`] = `
+{
+  "dispatchedTo": "codegraph_query",
+  "files": [],
+  "intent": "definition",
+  "matches": [
+    {
+      "derivation": "name-match",
+      "node": {
+        "code": "export class ContextService extends Context.Service<ContextService, Interface>()("@test/ContextService") {}",
+        "endLine": 20,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "class",
+        "name": "ContextService",
+        "signature": "class ContextService extends Context.Service<ContextService, Interface>()",
+        "startLine": 1,
+      },
+    },
+  ],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden ContextService (class with Context.Service tag) intent=callers 1`] = `
+{
+  "dispatchedTo": "codegraph_callers",
+  "files": [],
+  "intent": "callers",
+  "matches": [
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "callerA",
+        "signature": "callerA()",
+        "startLine": 1,
+      },
+    },
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "callerB",
+        "signature": "callerB()",
+        "startLine": 1,
+      },
+    },
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "callerC",
+        "signature": "callerC()",
+        "startLine": 1,
+      },
+    },
+  ],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden ContextService (class with Context.Service tag) intent=dependents 1`] = `
+{
+  "dispatchedTo": "codegraph_dependents",
+  "files": [],
+  "intent": "dependents",
+  "matches": [
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "callerA",
+        "signature": "callerA()",
+        "startLine": 1,
+      },
+    },
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "callerB",
+        "signature": "callerB()",
+        "startLine": 1,
+      },
+    },
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "callerC",
+        "signature": "callerC()",
+        "startLine": 1,
+      },
+    },
+  ],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden ContextService (class with Context.Service tag) intent=impact 1`] = `
+{
+  "dispatchedTo": "codegraph_impact",
+  "files": [],
+  "intent": "impact",
+  "matches": [
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "callerA",
+        "signature": "callerA()",
+        "startLine": 1,
+      },
+    },
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "callerB",
+        "signature": "callerB()",
+        "startLine": 1,
+      },
+    },
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "callerC",
+        "signature": "callerC()",
+        "startLine": 1,
+      },
+    },
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "callerA",
+        "signature": "callerA()",
+        "startLine": 1,
+      },
+    },
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "callerB",
+        "signature": "callerB()",
+        "startLine": 1,
+      },
+    },
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "callerC",
+        "signature": "callerC()",
+        "startLine": 1,
+      },
+    },
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "transitiveA",
+        "signature": "transitiveA()",
+        "startLine": 1,
+      },
+    },
+    {
+      "derivation": "tag-fallback",
+      "node": {
+        "endLine": 10,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "transitiveB",
+        "signature": "transitiveB()",
+        "startLine": 1,
+      },
+    },
+  ],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden BanyanConfigService (namespace re-export class) intent=definition 1`] = `
+{
+  "dispatchedTo": "codegraph_query",
+  "files": [],
+  "intent": "definition",
+  "matches": [
+    {
+      "derivation": "name-match",
+      "node": {
+        "code": "export class BanyanConfigService extends Context.Service<BanyanConfigService, Interface>()("@banyancode/BanyanConfig") {}",
+        "endLine": 50,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "class",
+        "name": "BanyanConfigService",
+        "signature": "class BanyanConfigService",
+        "startLine": 1,
+      },
+    },
+  ],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden BanyanConfigService (namespace re-export class) intent=callers 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_callers",
+  "files": [],
+  "intent": "callers",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden BanyanConfigService (namespace re-export class) intent=dependents 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_dependents",
+  "files": [],
+  "intent": "dependents",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden BanyanConfigService (namespace re-export class) intent=impact 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_impact",
+  "files": [],
+  "intent": "impact",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden PermissionV2 (plain class) intent=definition 1`] = `
+{
+  "dispatchedTo": "codegraph_query",
+  "files": [],
+  "intent": "definition",
+  "matches": [
+    {
+      "derivation": "name-match",
+      "node": {
+        "code": "class PermissionV2 extends Context.Service<PermissionV2, Interface>() {}",
+        "endLine": 30,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "class",
+        "name": "PermissionV2",
+        "signature": "class PermissionV2",
+        "startLine": 1,
+      },
+    },
+  ],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden PermissionV2 (plain class) intent=callers 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_callers",
+  "files": [],
+  "intent": "callers",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden PermissionV2 (plain class) intent=dependents 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_dependents",
+  "files": [],
+  "intent": "dependents",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden PermissionV2 (plain class) intent=impact 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_impact",
+  "files": [],
+  "intent": "impact",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden bumpVersion (exported function) intent=definition 1`] = `
+{
+  "dispatchedTo": "codegraph_query",
+  "files": [],
+  "intent": "definition",
+  "matches": [
+    {
+      "derivation": "name-match",
+      "node": {
+        "code": "const bumpVersion = Effect.fn(...)(function* (input: {...}) {...})",
+        "endLine": 650,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "bumpVersion",
+        "signature": "bumpVersion(input: {...})",
+        "startLine": 576,
+      },
+    },
+  ],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden bumpVersion (exported function) intent=callers 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_callers",
+  "files": [],
+  "intent": "callers",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden bumpVersion (exported function) intent=dependents 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_dependents",
+  "files": [],
+  "intent": "dependents",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden bumpVersion (exported function) intent=impact 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_impact",
+  "files": [],
+  "intent": "impact",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden resolveTarget (function with yield* calls) intent=definition 1`] = `
+{
+  "dispatchedTo": "codegraph_query",
+  "files": [],
+  "intent": "definition",
+  "matches": [
+    {
+      "derivation": "name-match",
+      "node": {
+        "code": "const resolveTarget = (repo, target) => Effect.gen(function* () { ... })",
+        "endLine": 134,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "resolveTarget",
+        "signature": "resolveTarget(repo, target)",
+        "startLine": 116,
+      },
+    },
+  ],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden resolveTarget (function with yield* calls) intent=callers 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_callers",
+  "files": [],
+  "intent": "callers",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden resolveTarget (function with yield* calls) intent=dependents 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_dependents",
+  "files": [],
+  "intent": "dependents",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden resolveTarget (function with yield* calls) intent=impact 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_impact",
+  "files": [],
+  "intent": "impact",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden getMeta (instance method) intent=definition 1`] = `
+{
+  "dispatchedTo": "codegraph_query",
+  "files": [],
+  "intent": "definition",
+  "matches": [
+    {
+      "derivation": "name-match",
+      "node": {
+        "code": "const getMeta = Effect.fn(...)(function* () { ... })",
+        "endLine": 514,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "method",
+        "name": "getMeta",
+        "signature": "getMeta()",
+        "startLine": 496,
+      },
+    },
+  ],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden getMeta (instance method) intent=callers 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_callers",
+  "files": [],
+  "intent": "callers",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden getMeta (instance method) intent=dependents 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_dependents",
+  "files": [],
+  "intent": "dependents",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden getMeta (instance method) intent=impact 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_impact",
+  "files": [],
+  "intent": "impact",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden clearParseErrors (static method) intent=definition 1`] = `
+{
+  "dispatchedTo": "codegraph_query",
+  "files": [],
+  "intent": "definition",
+  "matches": [
+    {
+      "derivation": "name-match",
+      "node": {
+        "code": "const clearParseErrors = Effect.fn(...)(function* () { ... })",
+        "endLine": 673,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "method",
+        "name": "clearParseErrors",
+        "signature": "clearParseErrors()",
+        "startLine": 671,
+      },
+    },
+  ],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden clearParseErrors (static method) intent=callers 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_callers",
+  "files": [],
+  "intent": "callers",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden clearParseErrors (static method) intent=dependents 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_dependents",
+  "files": [],
+  "intent": "dependents",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden clearParseErrors (static method) intent=impact 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_impact",
+  "files": [],
+  "intent": "impact",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden /global/codegraph-build (route (HttpApiEndpoint)) intent=definition 1`] = `
+{
+  "dispatchedTo": "codegraph_query",
+  "files": [],
+  "intent": "definition",
+  "matches": [
+    {
+      "derivation": "name-match",
+      "node": {
+        "code": "HttpApiEndpoint.post('codegraphBuild', '/global/codegraph-build', {...})",
+        "endLine": 20,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "route",
+        "name": "/global/codegraph-build",
+        "signature": "HttpApiEndpoint.post(...)",
+        "startLine": 1,
+      },
+    },
+  ],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden /global/codegraph-build (route (HttpApiEndpoint)) intent=callers 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_callers",
+  "files": [],
+  "intent": "callers",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden /global/codegraph-build (route (HttpApiEndpoint)) intent=dependents 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_dependents",
+  "files": [],
+  "intent": "dependents",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden /global/codegraph-build (route (HttpApiEndpoint)) intent=impact 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_impact",
+  "files": [],
+  "intent": "impact",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden banyancode.codegraph.build (event handler (EventV2)) intent=definition 1`] = `
+{
+  "dispatchedTo": "codegraph_query",
+  "files": [],
+  "intent": "definition",
+  "matches": [
+    {
+      "derivation": "name-match",
+      "node": {
+        "code": "export const onCodegraphBuild = (handler) => EventV2.on('banyancode.codegraph.build', handler)",
+        "endLine": 30,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "banyancode.codegraph.build",
+        "signature": "EventV2.on('banyancode.codegraph.build', handler)",
+        "startLine": 1,
+      },
+    },
+  ],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden banyancode.codegraph.build (event handler (EventV2)) intent=callers 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_callers",
+  "files": [],
+  "intent": "callers",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden banyancode.codegraph.build (event handler (EventV2)) intent=dependents 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_dependents",
+  "files": [],
+  "intent": "dependents",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden banyancode.codegraph.build (event handler (EventV2)) intent=impact 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_impact",
+  "files": [],
+  "intent": "impact",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden Permission.ask (function with Effect.gen) intent=definition 1`] = `
+{
+  "dispatchedTo": "codegraph_query",
+  "files": [],
+  "intent": "definition",
+  "matches": [
+    {
+      "derivation": "name-match",
+      "node": {
+        "code": "const ask = (input) => Effect.gen(function* () { const session = yield* ... })",
+        "endLine": 60,
+        "fileID": "[FILE_ID]",
+        "id": "[NODE_ID]",
+        "kind": "function",
+        "name": "Permission.ask",
+        "signature": "ask(input: {...})",
+        "startLine": 40,
+      },
+    },
+  ],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden Permission.ask (function with Effect.gen) intent=callers 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_callers",
+  "files": [],
+  "intent": "callers",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden Permission.ask (function with Effect.gen) intent=dependents 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_dependents",
+  "files": [],
+  "intent": "dependents",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
+
+exports[`codegraph-tool-golden Permission.ask (function with Effect.gen) intent=impact 1`] = `
+{
+  "_diagnostic": "symbol-not-in-graph",
+  "dispatchedTo": "codegraph_impact",
+  "files": [],
+  "intent": "impact",
+  "matches": [],
+  "meta": {
+    "graphBuiltAt": 0,
+    "graphCoverage": 0,
+    "graphVersion": 0,
+    "totalEdges": 0,
+    "totalFiles": 0,
+    "totalNodes": 0,
+  },
+}
+`;
