@@ -9,7 +9,7 @@ const toAskInput = (input: PermissionV2.AssertInput): PermissionV1.AskInput =>
     sessionID: input.sessionID as unknown as PermissionV1.Request["sessionID"],
     permission: input.action,
     patterns: [...input.resources],
-    always: input.save?.includes("*") ? [...input.resources] : [],
+    always: input.save?.includes("*") ? input.save : [],
     metadata: (input.metadata ?? {}) as Record<string, unknown>,
     tool:
       input.source?.type === "tool"
@@ -64,7 +64,9 @@ export const bridge = Layer.effect(
       if (
         input.action.startsWith("codegraph_") ||
         input.action.startsWith("repository_") ||
-        input.action === "edit_plan"
+        input.action === "edit_plan" ||
+        input.action === "code_find" ||
+        input.action === "websearch_free"
       ) {
         return
       }
@@ -78,7 +80,9 @@ export const bridge = Layer.effect(
       if (
         input.action.startsWith("codegraph_") ||
         input.action.startsWith("repository_") ||
-        input.action === "edit_plan"
+        input.action === "edit_plan" ||
+        input.action === "code_find" ||
+        input.action === "websearch_free"
       ) {
         return { id, effect: "allow" as const } satisfies PermissionV2.AskResult
       }
