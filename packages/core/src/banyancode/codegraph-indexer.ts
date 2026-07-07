@@ -72,8 +72,13 @@ export const layer = Layer.effect(
     const repo = yield* CodegraphRepo.Service
     const database = yield* Database.Service
     const cancelled = yield* Ref.make(false)
-
-    const walkDirectory = (dir: string, maxFileSizeBytes: number, root: string, gitignorePatterns: string[], banyanignorePatterns: string[]): Effect.Effect<{ files: string[]; skippedBySize: number; skippedByGitignore: number; skippedByBanyanignore: number }> => {
+    const walkDirectory = (
+      dir: string,
+      maxFileSizeBytes: number,
+      root: string,
+      gitignorePatterns: string[],
+      banyanignorePatterns: string[],
+    ): Effect.Effect<{ files: string[]; skippedBySize: number; skippedByGitignore: number; skippedByBanyanignore: number }> => {
       return Effect.gen(function* () {
         const entries = yield* fs.readDirectoryEntries(dir).pipe(Effect.orDie)
         const files: string[] = []
@@ -235,7 +240,7 @@ export const layer = Layer.effect(
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
       const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root)
-      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, gitignore, banyanignore).pipe(Effect.orDie)
+      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, gitignore, banyanignore)
       const allFiles = walkResult.files
       const codeExtensions = new Set([
         ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs",
@@ -351,19 +356,20 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
       yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       return
     }
-    if (content.split("\n").some((line) => line.length > 5000)) {
-      yield* Effect.logWarning(`Skipping minified/compiled file: ${relativePath}`)
+
+    const existing = yield* repo.getFileByPath(filePath)
+    const contentHash = hashContent(content)
+    if (existing && existing.contentHash === contentHash && !input.force) {
       yield* Ref.update(skippedRef, (n) => n + 1)
-      yield* Ref.update(skippedMinifiedRef, (n) => n + 1)
+      yield* Ref.update(skippedCachedRef, (n) => n + 1)
       yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       return
     }
 
-    const contentHash = hashContent(content)
-    const existing = yield* repo.getFileByPath(filePath)
-    if (existing && existing.contentHash === contentHash && !input.force) {
+    if (content.split("\n").some((line) => line.length > 5000)) {
+      yield* Effect.logWarning(`Skipping minified/compiled file: ${relativePath}`)
       yield* Ref.update(skippedRef, (n) => n + 1)
-      yield* Ref.update(skippedCachedRef, (n) => n + 1)
+      yield* Ref.update(skippedMinifiedRef, (n) => n + 1)
       yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
       return
     }
@@ -515,20 +521,35 @@ yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
 
       const isCancelled = yield* Ref.get(cancelled)
       if (!isCancelled) {
-        const allNodes = yield* repo.listAllNodes()
+        // A2 workaround: searchNodes does not support cursor pagination.
+        // All nodes are fetched in one call (limit 100_000) and processed
+        // in JS-side batches of 500. The cancellation check runs between batches.
+        // TODO (PR 3): use server-side cursor pagination to enable true streaming.
+        const allNodes = yield* repo.searchNodes({ limit: 100_000 })
         const allFiles = yield* repo.listAllFiles()
         const fileByID = new Map(allFiles.map((f) => [f.id, f]))
         const fileDir = (filePath: string) => path.dirname(filePath)
 
         const nodeMap = new Map<string, CodegraphNode[]>()
         const nodesByFileID = new Map<string, CodegraphNode[]>()
-        for (const node of allNodes) {
-          const list = nodeMap.get(node.name) ?? []
-          list.push(node)
-          nodeMap.set(node.name, list)
-          const fileList = nodesByFileID.get(node.fileID) ?? []
-          fileList.push(node)
-          nodesByFileID.set(node.fileID, fileList)
+        const BATCH_SIZE = 500
+        let processed = 0
+
+        for (let batchStart = 0; batchStart < allNodes.length; batchStart += BATCH_SIZE) {
+          if (yield* Ref.get(cancelled)) break
+          const batchEnd = Math.min(batchStart + BATCH_SIZE, allNodes.length)
+          const batch = allNodes.slice(batchStart, batchEnd)
+
+          for (const node of batch) {
+            const list = nodeMap.get(node.name) ?? []
+            list.push(node)
+            nodeMap.set(node.name, list)
+            const fileList = nodesByFileID.get(node.fileID) ?? []
+            fileList.push(node)
+            nodesByFileID.set(node.fileID, fileList)
+          }
+
+          processed += batch.length
         }
 
         const referenceEdges: { fromNodeID: string; toNodeID: string; kind: "imports" | "calls" | "extends" | "references" }[] = []
@@ -556,9 +577,6 @@ yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
           const identifiers = new Set<string>()
           for (const m of nodeA.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
             if (m[0].length >= 3 && nodeMap.has(m[0])) identifiers.add(m[0])
-          }
-          for (const m of nodeA.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_.]+\b/g)) {
-            if (m[0].includes(".") && nodeMap.has(m[0])) identifiers.add(m[0])
           }
 
           for (const name of identifiers) {
