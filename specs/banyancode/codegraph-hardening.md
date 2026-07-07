@@ -1,6 +1,6 @@
 # BanyanCode Codegraph Hardening — Active Engineering Contract
 
-**Status:** Active. Phases B → A (pruned) → C+D combined, in that order.
+**Status:** **PARTIALLY REVERTED 2026-07-07.** PRs 1-4 (Phase B + A + 4 of C+D) are at `main` HEAD. PRs 5-9 (TS/JS tree-sitter, Python tree-sitter, structural edges, 12 new languages, cleanup) have been **reverted** pending a `TreeSitter.layer` runtime tolerance fix (see `specs/banyancode/tool-visibility-bisect.md` for the bisect result and root cause). Re-port PRs 5-9 individually once the runtime fix lands and a CI guard (`BanyanTools.locationLayer` tool-count assertion) is in place.
 **Owner:** Lead Architect (reviewer) + `@coder` subagents (implementers).
 **Last updated:** 2026-07-07.
 

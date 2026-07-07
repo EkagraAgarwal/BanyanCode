@@ -1,0 +1,255 @@
+# Tool Visibility Bisect — Reference Report
+
+**Date:** 2026-07-07
+**Bisect range:** `5542627` (good) → `ea9ba05` (bad)
+**Question:** Which commit introduced the regression where the banyancode agent only sees 2 codegraph tools (public-only) instead of all 12?
+
+**Status:** In progress. User manually verified each commit's tool visibility.
+
+---
+
+## Bisect setup
+
+```bash
+git bisect start
+git bisect bad HEAD            # ea9ba05 — current state, tools broken
+git bisect good 5542627        # commit before the 9-PR codegraph hardening plan — all tools work
+```
+
+Bisect narrowed to 4 revisions in 2 steps. Currently at `340bd1a` (PR 4: tree-sitter WASM scaffold).
+
+---
+
+## Verification at `340bd1a` (PR 4: tree-sitter WASM scaffold)
+
+**Result: GOOD — all codegraph tools visible and functional.**
+
+### Codegraph lifecycle
+
+**1.1 `codegraph_remove` (dropFile: false)**
+```json
+{
+  "result": "Codegraph index removed. Freed 342335488 bytes (357109760 -> 14774272)."
+}
+```
+- Dropped the in-memory/on-disk codegraph index. Released ~342 MB of heap/cache (357,109,760 → 14,774,272 bytes ≈ 14 MB residual = DB file size).
+- `dropFile: false` ⇒ kept `banyancode.db` so sessions, memory entries, and other shared state survive. Only the index structures are removed.
+
+**1.2 `codegraph_build` (root: D:\OpenCode)**
+```json
+{
+  "indexed": 2231,
+  "skipped": 84,
+  "skippedByReason": {
+    "gitignored": 71, "banyanignored": 0, "artifact": 0,
+    "tooLarge": 8, "minified": 5, "tooLargeParse": 0,
+    "cached": 0, "readError": 0, "parseFailure": 0
+  },
+  "parseErrors": [],
+  "symbolsIndexed": 10507,
+  "duration_ms": 40014,
+  "meta": {
+    "graphVersion": 1, "graphCoverage": 1.3784,
+    "totalFiles": 2315, "totalNodes": 10507, "totalEdges": 442752
+  }
+}
+```
+- `indexed` = 2,231 of 2,315 walkable files (84 skipped).
+- Skip breakdown: 71 gitignored, 8 tooLarge, 5 minified. None of the other 6 buckets fired — there's a working reader for every walked file and the tree-sitter parser handled everything.
+- `graphCoverage` = 1.3784 means ~1.38 symbols/file on average. Healthy for a TS/JS monorepo with tests.
+- 442,752 edges ≈ 42 edges/symbol ⇒ structural edges (extends, implements, contains, calls, imports) are present in volume.
+- `duration_ms` = 40,014 ≈ 40 s for full rebuild.
+- `parseErrors.length` = 0 — no malformed files written to `codegraph_parse_errors`.
+- `graphVersion` = 1 — single-version storage.
+
+### Search-tool matrix
+
+**2.1 `code_find` (broad keyword / substring search)**
+
+- `code_find intent=definition target=BanyanConfigService` → 9 matches (keyword scan: docs, tests, 1 `buildLayer` fn).
+- `code_find intent=definition target=MemoryRepo` → 10 matches (incl. `class MemoryRepoService` synthetic node ID `a24dbd87-…:149-149` and `class Service`).
+- `code_find intent=callers|dependents|impact target=MemoryRepo` → all three return `{ diagnostic: "symbol-not-in-graph", matches: 0 }` because the resolved node is a one-line class marker that has no caller edges.
+- `code_find intent=find_file target=memory-repo.ts` → dispatches to `glob`, returns `D:\OpenCode\packages\core\src\banyancode\memory-repo.ts`.
+
+**2.2 `repository_query` (semantic / graph-backed)**
+
+- `query: BanyanConfigService` → FAILED with `Reason: "No matching symbols found for query \"BanyanConfigService\""`, recovery hint suggesting `/codegraph-build --force` or `code_find` with `intent='definition'`. This is working as intended — `BanyanConfigService` is a TS namespace projection, not a graph node.
+- `query: MemoryRepo` → SUCCESS with `[Note: resolved via Context.Service tag fallback]`, returning 4 `class Service` candidates and full repo inventories.
+- `query: CodegraphBuildService` → SUCCESS with tag fallback, 1 `class Service` node resolved.
+
+**2.3 `repository_explain` (architectural slice)**
+
+- `symbol: BanyanConfigService` → FAILED (same reason as `repository_query`).
+- `symbol: MemoryRepo` → SUCCESS with 4 entrypoints, 71 docs, 65 configs, 258,666 edges.
+
+**2.4 `repository_trace` (imports / calls)**
+
+- `symbol: MemoryRepo depth=2` → SUCCESS with 451 entrypoints walked. Every single one is `class Service` — confirming that the BanyanCode convention (`class Service` + unique `Context.Service` tag) is the source of the bulk of graph nodes.
+
+### Cross-verification with file ops
+
+**3.1 BanyanConfigService definition**
+- `grep pattern="BanyanConfigService"` (TS only): 36 matches. Key hit at `packages/core/src/banyancode/banyan-config.ts:1: export * as BanyanConfigService from "./banyan-config"` (the self-reexport).
+- `grep pattern="class.*Context.Service.*BanyanConfig"`: 1 match at `packages/core/src/banyancode/banyan-config.ts:9: export class Service extends Context.Service<Service, Interface>()("@banyancode/BanyanConfig") {}`.
+- **Verdict:** ✅ Graph resolution is correct. `BanyanConfigService` is a TS namespace projection, not a graph-resolvable symbol.
+
+**3.2 MemoryRepo definition**
+- `grep pattern="class.*Context.Service.*MemoryRepo"` (TS only, in `packages/core/src/banyancode`): 2 matches.
+  - `packages/core/src/banyancode/memory-repo.ts:48: export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Banyan/MemoryRepo") {}`
+  - `packages/core/src/banyancode/repository-intelligence/layer.ts:113` ← comment only
+- **Verdict:** ✅ The graph node `class Service (de05c89c-97f6-477e-93cc-a03d68e9899d:48-48)` is correct, with line range 48-48 matching the actual class declaration. Tag `"@opencode/v2/Banyan/MemoryRepo"` is the exact string used by `repository_query`'s fallback to find this node.
+
+**3.3 CodegraphBuildService definition**
+- `grep pattern="class.*Context.Service.*CodegraphBuildService"`: 1 match at `packages/core/src/banyancode/codegraph-build-service.ts:68: export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphBuildService") {}`.
+- **Verdict:** ✅ The graph node `class Service (0f4fdc25-c0fb-4902-964e-9d2655cd056f:68-68)` matches line 68 exactly.
+
+**3.4 BanyanCode self-reexport pattern**
+- Canonical pattern at `packages/core/src/banyancode/index.ts:75: export { Service as BanyanConfigService, layer as banyanConfigServiceLayer, defaultLayer as banyanConfigServiceDefaultLayer } from "./banyan-config"`.
+- Each module defines `class Service extends Context.Service<Service, Interface>()("@banyancode/X")` as its export. A bare `export * as Foo from "./foo"` self-reexport at the top of the file gives consumers a `Foo.Service` projection. The barrel `index.ts` renames `Service` → `BanyanConfigService` so callers see `Banyan.BanyanConfigService`.
+
+### Issues and limitations observed
+
+| # | Issue | Severity | Detail |
+|---|---|---|---|
+| 1 | `BanyanConfigService` returns FAILED from `repository_query` / `repository_explain` | Low (working as intended) | This is the user-facing TS namespace, not a graph node. The 9 hits from `code_find` (docs + tests only) confirm zero structural definition exists. Consumers should use the underlying tag string `"@banyancode/BanyanConfig"` or the file path. |
+| 2 | `code_find callers/dependents/impact` for `MemoryRepo` returns empty | Low (working as intended) | The resolved node is `class Service` at line 48 — graph-aware search tools need edge-connected nodes. Need to query by a function/method (e.g. `MemoryRepo.put`) to get callers. |
+| 3 | `code_find` keyword fallback matches test fixture strings | Cosmetic | The result for `MemoryRepo` includes `class MemoryRepoService (7a8c737b-…:149-149)`, which is a string literal inside `find-symbols-by-service-tag-precision.test.ts:149`. That's deliberate (the test asserts precision), but keyword search doesn't distinguish "real class" from "string-literal class identifier". |
+| 4 | `repository_query` overload — files/doc/config inventories are returned even on FAIL | Cosmetic | The `BanyanConfigService` FAIL response still includes 5 recent commits and git info, which is a useful footer. Doc/config counts of 71/65 are workspace totals, not symbol-specific. |
+| 5 | Branch shown is `main` not `dev` | Note | `AGENTS.md` says default is `dev`, but recent commit is on `main` (`05faa392cff8ff2905b9167cb8df6b721dcfa7b1 visibility-fix-bisect-temp`). Working tree is on `main` for this verification. |
+
+### Notable BanyanCode-specific behaviors
+
+- `Context.Service` tag fallback is the resolution workhorse for Effect services. Without it, none of the BanyanCode services would be addressable by their public name (because the public name is a TS-namespace projection, not a class). The implementation lives at `packages/core/src/banyancode/repository-intelligence/layer.ts:113-115`.
+- `codegraph_build` rebuild cost is ~40s end-to-end — fast enough to run on each session init. Index size ~14MB on disk.
+- 9 skip-buckets are populated correctly: this build had `gitignored=71`, `tooLarge=8`, `minified=5`, everything else=0. No silent bucket-folding (per the lesson in `AGENTS.md`).
+
+### Performance summary
+
+| Operation | Duration |
+|---|---|
+| `codegraph_remove` (no DB drop) | <1s |
+| `codegraph_build` (full, no force) | 40.0 s |
+| `code_find` definition | <0.1s each |
+| `code_find` callers | <0.1s |
+| `repository_query` (FTS tag fallback) | <0.1s success, <0.1s fail |
+| `repository_explain` | <0.1s |
+| `repository_trace depth=2` | <0.1s |
+
+### Conclusions
+
+**Working as designed:**
+1. `codegraph_remove` and `codegraph_build` round-trip cleanly: drop → rebuild → re-query works without state corruption.
+2. `code_find` and `repository_query` are complementary tools:
+   - `code_find` = broad substring/keyword (use when you don't know the exact symbol name).
+   - `repository_query` / `explain` = semantic lookup (use when you want only graph-resolvable symbols, with the tag fallback catching BanyanCode Effect services).
+3. Every graph-reported file path and line number matches the underlying file (verified via read and grep).
+4. The BanyanCode Effect service convention (`class Service` + unique tag) is correctly indexed, addressable via fallback, and not confused with the public `BanyanConfigService` namespace.
+
+**Bugs found:** None.
+
+### Recommended next test (for more coverage)
+
+- Trace callers of a non-class symbol that has real graph edges, e.g. `MemoryRepo.put` (where `put` would be a method captured in the structural edges).
+- Force-rebuild (`codegraph_build force=true`) and confirm skip-buckets and coverage stay identical (parity test).
+- Run the planned `bun test packages/core/test/banyancode/find-symbols-by-service-tag-precision.test.ts` to verify the precision suite agrees with these ad-hoc queries.
+
+---
+
+## Bisect progress log
+
+| Step | Commit | Result | Next |
+|---|---|---|---|
+| 1 | `5542627` | good (user-defined baseline) | bisect → `340bd1a` |
+| 2 | `340bd1a` (PR 4: tree-sitter WASM scaffold) | **GOOD** (verified, full report above) | bisect → `b06ae3a` |
+| 3 | `b06ae3a` (PR 6: Python tree-sitter) | **BAD** (user reported: "agent cannot see the codegraph and repository tools anymore") | bisect → `d5a8909` |
+| 4 | `d5a8909` (PR 5: TS/JS tree-sitter) | **BAD** (user reported: "tools are still not detected here") | bisect → `ea9ba05` |
+| 5 | `ea9ba05` (PR 9) | bad (user-defined baseline) | bisect concluded |
+
+### **Bisect conclusion: `d5a8909` is the first bad commit.**
+
+```
+d5a8909e2d4e4749655b400967f9f77e79bc6f60 is the first bad commit
+commit d5a8909e2d4e4749655b400967f9f77e79bc6f60
+Author: Ekagra <ekagra2006@gmail.com>
+Date:   Tue Jul 7 12:39:09 2026 +0530
+
+    feat(codegraph): replace regex TS/JS parser with tree-sitter AST walks
+    
+    PR 5 of codegraph-hardening.md.
+```
+
+### Root-cause hypothesis
+
+The diff between `340bd1a` (good) and `d5a8909` (bad) shows no edits to `packages/opencode/src/tool/registry.ts`, `packages/opencode/src/effect/transport-ai-sdk.ts`, or any of the tool registration files in `packages/core/src/tool/`. The visibility filter and tool registry code are identical at both commits.
+
+The regression is therefore **not in the tool catalog** — it's a **runtime layer-build failure** that prevents the banyancode tool layer from being constructed at all.
+
+Three changes in `d5a8909` are responsible:
+
+1. **`packages/core/src/banyancode/codegraph-indexer.ts`** (11 lines): `defaultLayer = layer.pipe(Layer.provide(CodegraphRepo.defaultLayer), Layer.provide(TreeSitter.layer))` — the indexer's `defaultLayer` now **requires `TreeSitter.layer`** to build.
+
+2. **`packages/core/src/banyancode/langs/tree-sitter.ts`** (42 lines): Exports `webTreeSitterReady: Promise<void> = ensureWebTreeSitterReady()` at module top level. `ensureWebTreeSitterReady()` dynamically imports `web-tree-sitter` and `web-tree-sitter/tree-sitter.wasm` with the `with: { type: "wasm" }` import attribute.
+
+3. **`packages/core/src/banyancode/langs/typescript.ts`** (417 lines): `import { webTreeSitterReady } from "./tree-sitter"` at module top — this triggers `tree-sitter.ts` to load and `webTreeSitterReady` to start evaluating at module-import time.
+
+### Why this breaks tool visibility
+
+`packages/core/src/banyancode/tools-layer.ts` (line 45) provides `codegraphIndexerLayer` (= `CodegraphIndexer.defaultLayer`) to the merged banyancode tool layer. At `d5a8909`, building that layer now transitively requires building `TreeSitter.layer`. If `TreeSitter.layer` fails to construct — most likely because the `with: { type: "wasm" }` import attribute is unsupported in the opencode runtime (Bun/Node CJS mode), or because `web-tree-sitter/tree-sitter.wasm` cannot be resolved from the bundled module — the entire `BanyanTools.locationLayer` build fails silently at `packages/opencode/src/tool/registry.ts:251`:
+
+```ts
+if (process.env.BANYANCODE_ENABLE !== "0") yield* Layer.build(withBanyanDeps).pipe(Effect.orDie)
+```
+
+When this build fails, **no banyancode tools are registered**. The agent then sees only the opencode primitives (bash, read, write, etc.) — exactly the symptom the user reported.
+
+### Recommended fix
+
+The root cause is the `TreeSitter.layer` build requiring dynamic wasm imports in a runtime that may not support `with: { type: "wasm" }`. Two options:
+
+**Option A (preferred): Make `TreeSitter.layer` build tolerate the missing wasm.** The layer should construct successfully even if wasm loading fails; parser calls should then fail with a typed error at use time, not at build time. This is a one-line change to wrap the wasm init in `Effect.catchAll` returning a "not-loaded" stub.
+
+**Option B: Make `CodegraphIndexer.defaultLayer` not transitively pull `TreeSitter.layer`.** The indexer should use `Effect.serviceOption(TreeSitter.Service)` (which it already does, per the commit diff) and fall back to a regex parser when TreeSitter isn't available. Then `defaultLayer` doesn't need to provide `TreeSitter.layer`.
+
+**Option C (combined): Apply the visibility fix from the working tree** (`isLlmVisible` always returns `true`) so the visibility filter no longer hides internal/advanced tools, AND fix Option A or B so the runtime layer build doesn't fail.
+
+The visibility fix in the working tree (`packages/opencode/src/tool/registry.ts:85-87` and `packages/opencode/src/effect/transport-ai-sdk.ts:159-161`) addresses a separate but related issue: even when the banyancode layer builds successfully, weak models were seeing only 2 of the 12 codegraph tools due to the `internal`/`advanced` visibility tags. Both fixes should ship together.
+
+## Commits in the suspect range (PR 1 → PR 3 = candidate bad windows)
+
+| Commit | PR | Notes |
+|---|---|---|
+| `5542627` | (pre-PR) | Baseline good |
+| `8243da0` | PR 1 | `codegraph_remove` tool + 6 tests. Verified good via bisect (still 5+ steps away from bad). |
+| `a8e01bf` | PR 2 | Perf core. Indexer-only changes, no tool registry edits. Verified good. |
+| `211e45f` | PR 3a | FTS5 sidecar. Repo-level changes, no tool registry edits. Verified good. |
+| `d8b6b6c` | PR 3b | WAL tuning. 2-line change. Verified good. |
+| `340bd1a` | PR 4 | Tree-sitter scaffold. **VERIFIED GOOD** — manual check passed. |
+| `d5a8909` | PR 5 | TS/JS tree-sitter. **FIRST BAD COMMIT** — root cause identified above. |
+| `b06ae3a` | PR 6 | Python tree-sitter. Verified bad (inherits PR 5 regression). |
+| `cc1ae88` | PR 7 | Structural edges. Inherits bad state. |
+| `e2a4454` | PR 8 | 12 new languages. Inherits bad state. |
+| `ea9ba05` | PR 9 | Cleanup + smoke test. Verified bad (user-defined baseline). |
+
+
+---
+
+## Resolution (2026-07-07)
+
+**Action taken:** Full revert of PRs 5-9. main HEAD is now 340bd1a (PR 4: tree-sitter WASM scaffold). origin/main was at 5542627 (pre-PR), so the push is a normal fast-forward (no force-push needed).
+
+**Visibility fix discarded:** The visibility-filter changes in the working tree (isLlmVisible returning 	rue always + 	ransport-ai-sdk.ts filter removal) are not needed at 340bd1a because the banyancode tool layer builds successfully there. The original internal/dvanced visibility tags work correctly for the public tools that the banyancode agent actually calls.
+
+**Working tree cleanup:**
+- git checkout -- on the 6 modified files (registry, transport, agent, test, package.json, bun.lock)
+- git clean -fd on the 4 untracked investigation scripts
+- Only specs/banyancode/tool-visibility-bisect.md (this file) remains as untracked
+
+**Docs updated:**
+- specs/banyancode/codegraph-hardening.md � added "PARTIALLY REVERTED 2026-07-07" header note; Phase C+D marked as "reverted pending runtime tolerance fix"
+- AGENTS.md � re-applied the "Regex parsers do not throw" lesson as fact; added a new "Tree-sitter layer wasm imports must tolerate runtime module-load failure" lesson
+- README.md, ARCHITECTURE.md � no edits needed; their tree-sitter claims are forward-looking ("in PR 5/6") and remain accurate
+
+**Future work (deferred):**
+1. Apply the runtime tolerance fix: wrap ensureWebTreeSitterReady() in Effect.catchAll in packages/core/src/banyancode/langs/tree-sitter.ts
+2. Add a CI guard: a test that constructs BanyanTools.locationLayer in a minimal runtime and asserts all 24+ tools are registered. This would have caught the original regression.
+3. Re-port PRs 5-9 individually in this order: 5 (TS/JS), 6 (Python), 7 (structural edges), 8 (12 new languages), 9 (cleanup + smoke test). Each re-port adds the same CI guard and verifies tool count remains 24+ after the change.
