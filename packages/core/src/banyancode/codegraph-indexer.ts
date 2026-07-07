@@ -418,6 +418,7 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
       startLine: n.startLine,
       endLine: n.endLine,
       code: n.code,
+      derivation: "regex-v1",
     }))
     const edges: CodegraphEdge[] = result.edges.map((e) => ({
       id: e.id,
@@ -437,6 +438,7 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
         startLine: 1,
         endLine: lineCount,
         code: content,
+        derivation: "regex-v1",
       })
     }
 

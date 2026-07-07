@@ -72,7 +72,13 @@ export type CodegraphNode = {
   startLine: number
   endLine: number
   code?: string
+  derivation?: CodegraphDerivation
 }
+
+export type CodegraphDerivation =
+  | "regex-v1"
+  | "tree-sitter-v1"
+  | "runtime-v1"
 
 export const CodegraphNodeSchema = Schema.Struct({
   id: Schema.String,
@@ -100,6 +106,7 @@ export const CodegraphNodeSchema = Schema.Struct({
   startLine: Schema.Number,
   endLine: Schema.Number,
   code: Schema.optional(Schema.String),
+  derivation: Schema.optional(Schema.Literals(["regex-v1", "tree-sitter-v1", "runtime-v1"])),
 }).annotate({ identifier: "Banyan/CodegraphNode" })
 
 export type CodegraphEdge = {

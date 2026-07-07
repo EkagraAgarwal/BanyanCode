@@ -2,6 +2,7 @@ export * as Banyan from "."
 
 export { MemoryEntriesTable } from "./memory.sql"
 export { CodegraphFilesTable, CodegraphNodesTable, CodegraphEdgesTable } from "./codegraph.sql"
+export { CodegraphTracesTable } from "./codegraph-traces.sql"
 export { CodegraphMetaTable } from "./codegraph-meta.sql"
 export { SubagentMessagesTable } from "./subagent-messages.sql"
 export { SubagentPlansTable } from "./subagent-plans.sql"
@@ -25,6 +26,18 @@ export {
   layer as codegraphBuildServiceLayer,
   defaultLayer as codegraphBuildServiceDefaultLayer,
 } from "./codegraph-build-service"
+export {
+  Service as TraceCollector,
+  layer as traceCollectorLayer,
+  defaultLayer as traceCollectorDefaultLayer,
+} from "./trace-collector"
+export type { TraceEvent, Interface as TraceCollectorInterface } from "./trace-collector"
+export {
+  Service as RuntimeCallGraph,
+  layer as runtimeCallGraphLayer,
+  defaultLayer as runtimeCallGraphDefaultLayer,
+} from "./runtime-call-graph"
+export type { DiffResult, Interface as RuntimeCallGraphInterface } from "./runtime-call-graph"
 export { WorktreeContext } from "./worktree-context"
 export {
   Service as ToolTelemetry,
