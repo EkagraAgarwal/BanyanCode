@@ -153,7 +153,7 @@ const banyan = Option.isSome(option) ? yield* option.value.get() : ({} as Banyan
 
 ## YOLO mode (auto-approve all permissions)
 
-YOLO mode (`banyancode_yolo_mode` in `BanyanConfig`) skips ALL permission prompts including dangerous and external-directory actions. It short-circuits in `evaluateInput` BEFORE any other permission logic — never narrow the check to specific tool categories. See `packages/opencode/src/permission/index.ts:83`.
+YOLO mode (`banyancode_yolo_mode` in `BanyanConfig`) skips ALL permission prompts including dangerous and external-directory actions. It short-circuits in `Permission.ask` BEFORE any other permission logic — never narrow the check to specific tool categories. See `packages/opencode/src/permission/index.ts:83`. <!-- function renamed from evaluateInput to Permission.ask -->
 
 ## Service deps in tool/service Init (R-leak avoidance)
 
