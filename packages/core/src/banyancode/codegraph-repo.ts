@@ -76,6 +76,7 @@ export interface Interface {
   readonly listParseErrors: () => Effect.Effect<Array<{ path: string; cause: string; indexedAt: number }>, never, never>
   readonly clearParseErrors: () => Effect.Effect<void, never, never>
   readonly findSymbolsByServiceTag: (tag: string) => Effect.Effect<CodegraphNode[], never, never>
+  readonly rebuildFtsIndex: () => Effect.Effect<{ rowsIndexed: number }, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Banyan/CodegraphRepo") {}
@@ -703,6 +704,22 @@ export const layer = Layer.effect(
       })
     })
 
+    const rebuildFtsIndex = Effect.fn("CodegraphRepo.rebuildFtsIndex")(function* () {
+      return yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          yield* tx.run(sql`DELETE FROM \`codegraph_fts\``)
+
+          yield* tx.run(sql`
+            INSERT INTO \`codegraph_fts\`(\`rowid\`, \`name\`, \`code\`)
+            SELECT \`rowid\`, \`name\`, \`code\` FROM \`codegraph_nodes\` WHERE \`code\` IS NOT NULL
+          `)
+
+          const countResult = yield* tx.get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM \`codegraph_fts\``)
+          return { rowsIndexed: countResult?.c ?? 0 }
+        }),
+      ).pipe(Effect.orDie)
+    })
+
     const putNodes = Effect.fn("CodegraphRepo.putNodes")(function* (nodes: CodegraphNode[]) {
       if (nodes.length === 0) return
       yield* db
@@ -866,6 +883,7 @@ export const layer = Layer.effect(
       listParseErrors,
       clearParseErrors,
       findSymbolsByServiceTag,
+      rebuildFtsIndex,
     })
   }),
 )

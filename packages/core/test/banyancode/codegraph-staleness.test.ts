@@ -45,6 +45,7 @@ const mockRepo = Layer.succeed(
     bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1 }),
     nodesByIDs: () => Effect.succeed([]),
     putEdges: () => Effect.void,
+    rebuildFtsIndex: () => Effect.succeed({ rowsIndexed: 0 }),
     recordParseError: () => Effect.void,
     listParseErrors: () => Effect.succeed([]),
     clearParseErrors: () => Effect.void,

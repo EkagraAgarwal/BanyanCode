@@ -79,6 +79,7 @@ const mockCodegraphRepoLayer = Layer.succeed(
     bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 0.9 }),
     nodesByIDs: () => Effect.succeed([]),
     putEdges: () => Effect.void,
+    rebuildFtsIndex: () => Effect.succeed({ rowsIndexed: 0 }),
   }),
 )
 
