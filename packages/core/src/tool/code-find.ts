@@ -3,6 +3,7 @@ export * as CodeFindTool from "./code-find"
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { Banyan } from "../banyancode"
+import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
 import type { CodegraphNode } from "../banyancode/types"
@@ -25,8 +26,15 @@ export const Input = Schema.Struct({
   limit: optionalNumber.annotate({ description: "Maximum number of results to return. Defaults to 50." }),
 })
 
+export const DerivationSchema = Schema.Literals(["tag-fallback", "name-match", "code-substring"])
+
+const MatchEntrySchema = Schema.Struct({
+  node: CodegraphNodeSchema,
+  derivation: DerivationSchema,
+})
+
 export const Output = Schema.Struct({
-  matches: Schema.Array(CodegraphNodeSchema),
+  matches: Schema.Array(MatchEntrySchema),
   files: Schema.Array(Schema.Struct({ path: Schema.String })),
   meta: Schema.optional(GraphMeta),
   intent: Schema.String,
@@ -67,7 +75,8 @@ export const locationLayer = Layer.effectDiscard(
         output: Output,
         toModelOutput: ({ output }) => {
           const header = `intent=${output.intent} dispatched=${output.dispatchedTo ?? "n/a"} matches=${output.matches.length} files=${output.files.length}${output._diagnostic ? ` diagnostic=${output._diagnostic}` : ""}`
-          const matchesBlock = output.matches.length > 0 ? formatNodes(output.matches, "Matches") : "Matches: none."
+          const nodeList = output.matches.map((m) => m.node)
+          const matchesBlock = output.matches.length > 0 ? formatNodes(nodeList, "Matches") : "Matches: none."
           const filesBlock = output.files.length > 0
             ? `Files (${output.files.length}):\n${output.files.map((f) => `  ${f.path}`).join("\n")}`
             : "Files: none."
@@ -104,6 +113,26 @@ export const locationLayer = Layer.effectDiscard(
                   }
                 : undefined
 
+              const resolveTarget = (
+                repo: CodegraphRepoInterface,
+                target: string,
+              ): Effect.Effect<{ nodeID: string; derivation: "tag-fallback" | "name-match" | "code-substring" } | null> =>
+                Effect.gen(function* () {
+                  const tagHits = yield* repo.findSymbolsByServiceTag(target)
+                  if (tagHits.length > 0) {
+                    return { nodeID: tagHits[0].id, derivation: "tag-fallback" as const }
+                  }
+                  const byName = yield* repo.queryNodes({ function: target })
+                  if (byName.length > 0) {
+                    return { nodeID: byName[0].id, derivation: "name-match" as const }
+                  }
+                  const byCode = yield* repo.searchNodes({ name: target })
+                  if (byCode.length > 0) {
+                    return { nodeID: byCode[0].id, derivation: "code-substring" as const }
+                  }
+                  return null
+                })
+
               switch (input.intent) {
                 case "definition": {
                   const target = input.target ?? ""
@@ -112,29 +141,30 @@ export const locationLayer = Layer.effectDiscard(
                   const lowerTarget = target.toLowerCase()
                   const allowKeyword = input.includeKeywordFallback !== false
 
-                  let matches: CodegraphNode[]
+                  let matchedNodes: CodegraphNode[]
                   if (allowKeyword) {
-                    matches = allNodes.filter((n) =>
+                    matchedNodes = allNodes.filter((n) =>
                       n.name.toLowerCase() === lowerTarget || (n.code?.toLowerCase().includes(lowerTarget) ?? false)
                     ).slice(0, limit)
                   } else {
-                    matches = allNodes.filter((n) => n.name.toLowerCase() === lowerTarget).slice(0, limit)
+                    matchedNodes = allNodes.filter((n) => n.name.toLowerCase() === lowerTarget).slice(0, limit)
                   }
 
-                  if (matches.length === 0 && target.includes(".")) {
+                  if (matchedNodes.length === 0 && target.includes(".")) {
                     const parts = target.toLowerCase().split(".")
                     const lastPart = parts[parts.length - 1] ?? ""
                     const methodMatches = allNodes.filter((n) => n.name.toLowerCase() === lastPart).slice(0, limit)
-                    if (methodMatches.length > 0) matches = methodMatches
+                    if (methodMatches.length > 0) matchedNodes = methodMatches
                   }
 
+                  const matches = matchedNodes.map((n) => ({ node: n, derivation: "name-match" as const }))
                   return { matches, files: [], meta, intent: input.intent, dispatchedTo: "codegraph_query" }
                 }
                 case "callers": {
                   if (!input.target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_callers", _diagnostic: "empty-target" as const }
-                  const isNodeID = /^[0-9a-fA-F\-]{36}:\d+-\d+$/.test(input.target)
-                  const arg = isNodeID ? { nodeID: input.target } : { function: input.target }
-                  const result = yield* analyzer.callers(arg).pipe(
+                  const resolved = yield* resolveTarget(repo, input.target)
+                  if (!resolved) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_callers", _diagnostic: "symbol-not-in-graph" as const }
+                  const result = yield* analyzer.callers({ nodeID: resolved.nodeID }).pipe(
                     Effect.matchEffect({
                       onFailure: (err) => err._tag === "Banyan/SymbolNotFoundError"
                         ? Effect.succeed<CodegraphNode[]>([])
@@ -142,9 +172,10 @@ export const locationLayer = Layer.effectDiscard(
                       onSuccess: (nodes) => Effect.succeed(nodes),
                     }),
                   )
-                  const isEmpty = result.length === 0
+                  const matches = result.map((n) => ({ node: n, derivation: resolved.derivation }))
+                  const isEmpty = matches.length === 0
                   return {
-                    matches: result,
+                    matches,
                     files: [],
                     meta,
                     intent: input.intent,
@@ -154,9 +185,9 @@ export const locationLayer = Layer.effectDiscard(
                 }
                 case "dependents": {
                   if (!input.target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_dependents", _diagnostic: "empty-target" as const }
-                  const isNodeID = /^[0-9a-fA-F\-]{36}:\d+-\d+$/.test(input.target)
-                  const arg = isNodeID ? { nodeID: input.target } : { function: input.target }
-                  const result = yield* analyzer.dependents(arg).pipe(
+                  const resolved = yield* resolveTarget(repo, input.target)
+                  if (!resolved) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_dependents", _diagnostic: "symbol-not-in-graph" as const }
+                  const result = yield* analyzer.dependents({ nodeID: resolved.nodeID }).pipe(
                     Effect.matchEffect({
                       onFailure: (err) => err._tag === "Banyan/SymbolNotFoundError"
                         ? Effect.succeed<CodegraphNode[]>([])
@@ -164,9 +195,10 @@ export const locationLayer = Layer.effectDiscard(
                       onSuccess: (nodes) => Effect.succeed(nodes),
                     }),
                   )
-                  const isEmpty = result.length === 0
+                  const matches = result.map((n) => ({ node: n, derivation: resolved.derivation }))
+                  const isEmpty = matches.length === 0
                   return {
-                    matches: result,
+                    matches,
                     files: [],
                     meta,
                     intent: input.intent,
@@ -176,9 +208,9 @@ export const locationLayer = Layer.effectDiscard(
                 }
                 case "impact": {
                   if (!input.target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_impact", _diagnostic: "empty-target" as const }
-                  const isNodeID = /^[0-9a-fA-F\-]{36}:\d+-\d+$/.test(input.target)
-                  const arg = isNodeID ? { nodeID: input.target } : { function: input.target }
-                  const result = yield* analyzer.impact(arg).pipe(
+                  const resolved = yield* resolveTarget(repo, input.target)
+                  if (!resolved) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_impact", _diagnostic: "symbol-not-in-graph" as const }
+                  const result = yield* analyzer.impact({ nodeID: resolved.nodeID }).pipe(
                     Effect.matchEffect({
                       onFailure: (err) => err._tag === "Banyan/SymbolNotFoundError"
                         ? Effect.succeed<{ dependents: CodegraphNode[]; transitive: CodegraphNode[] }>({ dependents: [], transitive: [] })
@@ -186,9 +218,13 @@ export const locationLayer = Layer.effectDiscard(
                       onSuccess: (impact) => Effect.succeed(impact),
                     }),
                   )
-                  const isEmpty = result.dependents.length === 0
+                  const matches: { node: CodegraphNode; derivation: "tag-fallback" | "name-match" | "code-substring" }[] = [
+                    ...result.dependents.map((n) => ({ node: n, derivation: resolved.derivation })),
+                    ...result.transitive.map((n) => ({ node: n, derivation: resolved.derivation })),
+                  ].slice(0, limit)
+                  const isEmpty = matches.length === 0
                   return {
-                    matches: result.dependents.slice(0, limit),
+                    matches,
                     files: [],
                     meta,
                     intent: input.intent,
@@ -216,8 +252,9 @@ export const locationLayer = Layer.effectDiscard(
                     dispatchedTo = "glob"
                   }
 
+                  const matches = symbolMatches.slice(0, limit).map((n) => ({ node: n, derivation: "name-match" as const }))
                   return {
-                    matches: symbolMatches.slice(0, limit),
+                    matches,
                     files,
                     meta,
                     intent: input.intent,
