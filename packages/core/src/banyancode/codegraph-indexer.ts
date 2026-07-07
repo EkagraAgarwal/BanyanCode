@@ -474,7 +474,7 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
 // Producer/consumer pipeline. Producers offer into a bounded queue; the
 // consumer drains it concurrently so a full queue cannot deadlock producers
 // (queue capacity is 128; workspaces often exceed that).
-const CHECKPOINT_EVERY = 200
+const CHECKPOINT_EVERY = 1000
 const totalExpected = codeFiles.length
 
 const drainParsedQueue = Effect.gen(function* () {
@@ -517,7 +517,7 @@ yield* Effect.all(
   { concurrency: 2, discard: true },
 )
 yield* Queue.shutdown(parsedQueue)
-yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
+yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
 
       const isCancelled = yield* Ref.get(cancelled)
       if (!isCancelled) {
