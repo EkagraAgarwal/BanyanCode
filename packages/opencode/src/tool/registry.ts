@@ -10,6 +10,9 @@ import { RepositoryIntelTool } from "@opencode-ai/core/tool/repository-intel-too
 import { RepositoryWave2 } from "@opencode-ai/core/tool/repository-wave2"
 import { StructuralQueriesTool } from "@opencode-ai/core/tool/structural-queries-tool"
 import { EditPlanTool } from "@opencode-ai/core/tool/edit-plan"
+import { PreflightTool } from "@opencode-ai/core/tool/preflight"
+import { BlastRadiusTool } from "@opencode-ai/core/tool/blast-radius"
+import { SafeRenameTool } from "@opencode-ai/core/tool/safe-rename"
 import { Tools } from "@opencode-ai/core/tool/tools"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { PlanExitTool } from "./plan"
@@ -373,6 +376,9 @@ const baseBanyanToolLayers = Layer.mergeAll(
   RepositoryWave2.locationLayer,
   StructuralQueriesTool.locationLayer,
   EditPlanTool.locationLayer,
+  PreflightTool.locationLayer,
+  BlastRadiusTool.locationLayer,
+  SafeRenameTool.locationLayer,
   WebSearchFreeTool.layer,
 )
 
