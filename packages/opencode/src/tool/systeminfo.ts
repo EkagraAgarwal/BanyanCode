@@ -27,13 +27,16 @@ export const SysteminfoTool = Tool.define(
 
           const memUsedGB = (status.memoryUsedBytes / 1024 / 1024 / 1024).toFixed(1)
           const memTotalGB = (status.memoryTotalBytes / 1024 / 1024 / 1024).toFixed(1)
+          const cpuLine = status.cpuPercent !== undefined
+            ? `CPU: ${status.cpuPercent.toFixed(1)}%`
+            : "CPU: (unavailable, sampling)"
           const gpuLine = status.gpuPercent !== undefined
             ? `GPU: ${status.gpuPercent}% | VRAM: ${(status.vramUsedBytes! / 1024 / 1024 / 1024).toFixed(1)}/${(status.gpuTotalBytes! / 1024 / 1024 / 1024).toFixed(1)} GB`
             : "GPU: N/A"
 
           const output = [
             `Platform: ${status.platform}`,
-            `CPU: ${status.cpuPercent.toFixed(1)}%`,
+            cpuLine,
             `Memory: ${memUsedGB} / ${memTotalGB} GB`,
             gpuLine,
           ].join("\n")
