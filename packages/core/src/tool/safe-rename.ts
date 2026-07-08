@@ -54,6 +54,23 @@ function splitQualified(name: string): { root: string; leaf: string } | undefine
   return { root, leaf }
 }
 
+const resolveNewName = (
+  oldSymbol: string,
+  newName: string,
+): { namespace: string; leaf: string } | undefined => {
+  if (newName.includes(".")) {
+    const parts = newName.split(".")
+    const leaf = parts.pop()!
+    const namespace = parts.join(".")
+    if (namespace.length === 0) return undefined
+    return { namespace, leaf }
+  }
+  const oldParts = oldSymbol.split(".")
+  const oldLeaf = oldParts.pop()
+  if (!oldLeaf || oldParts.length === 0) return undefined
+  return { namespace: oldParts.join("."), leaf: newName }
+}
+
 export const computeSafeRename = (
   deps: {
     readonly repo: CodegraphRepoInterface
@@ -64,10 +81,12 @@ export const computeSafeRename = (
   input: typeof Input.Type,
 ): Effect.Effect<typeof Output.Type, ToolFailure, never> =>
   Effect.gen(function* () {
-    const split = splitQualified(input.newName)
+    const split = resolveNewName(input.symbol, input.newName)
     if (!split) {
       return yield* Effect.fail(
-        new ToolFailure({ message: `safe_rename: newName must be qualified (e.g. "Foo.bar"), got "${input.newName}"` }),
+        new ToolFailure({
+          message: `safe_rename: cannot resolve namespace. Provide a qualified newName (e.g. "Foo.bar"), or pass a qualified symbol. Got newName="${input.newName}", symbol="${input.symbol}".`,
+        }),
       )
     }
 
@@ -75,6 +94,7 @@ export const computeSafeRename = (
     const targetNode = targetNodeResult[0]
     const oldLeaf = input.symbol.split(".").pop() ?? input.symbol
     const newLeaf = split.leaf
+    const newNamespace = split.namespace
 
     const callSiteFiles = new Map<string, { line: number }>()
     if (targetNode) {
@@ -167,14 +187,17 @@ export const makeSafeRenameTool = (deps: {
       "  the agent wants a list of edits required to safely rename a symbol, plus the\n" +
       "  tests it should run before declaring success.\n" +
       "Examples\n" +
-      '  - "Rename MemoryRepo.put to MemoryRepo.set safely"\n' +
+      '  - "Rename MemoryRepo.put to MemoryRepo.set safely" (both qualified)\n' +
+      '  - "Rename Foo.bar to baz safely" (bare newName, namespace inherited from Foo)\n' +
+      '  - "Rename Foo.bar to Foo.baz safely" (qualified newName)\n' +
       "Returns\n" +
       "  { edits: [{ file, oldText, newText, line }], testsToRun: [filePath], risks,\n" +
       "    preflight: <full preflight output> }\n" +
       "Avoid when\n" +
       "  the rename is purely textual and obvious — use edit.\n" +
       "After this, often: edit (per generated edit, with permission).\n" +
-      "Before this: preflight (this tool calls it internally).",
+      "Before this: preflight (this tool calls it internally).\n" +
+      "Namespace inference: if newName has no dot, the namespace is inherited from symbol.",
     contract: { visibility: "public" },
     input: Input,
     output: Output,

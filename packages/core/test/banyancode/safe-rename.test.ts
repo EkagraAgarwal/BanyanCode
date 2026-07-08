@@ -145,7 +145,7 @@ describe("safe_rename tool", () => {
     )
   })
 
-  test("computeSafeRename fails with ToolFailure when newName is unqualified", async () => {
+  test("computeSafeRename fails with ToolFailure when both symbol and newName are unqualified", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.db")
     const dbLayer = Database.layerFromPath(dbPath)
@@ -167,12 +167,43 @@ describe("safe_rename tool", () => {
               intel: intel as unknown as RepositoryIntelligenceInterface,
               planner: planner as unknown as EditPlannerInterface,
             },
-            { symbol: "Foo.bar", newName: "baz" },
+            { symbol: "bar", newName: "baz" },
           ),
         )
         if (exit._tag !== "Failure") throw new Error("expected Failure")
         const failure = exit.cause
-        expect(JSON.stringify(failure)).toContain("qualified")
+        expect(JSON.stringify(failure)).toContain("cannot resolve namespace")
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("computeSafeRename infers namespace from qualified symbol when newName is bare", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+        const analyzer = yield* CodegraphAnalyzer.Service
+        const intel = yield* RepositoryIntelligence.Service
+        const planner = yield* EditPlanner.Service
+        yield* seedRenameGraph(repo as unknown as CodegraphRepoInterface)
+
+        const result = yield* computeSafeRename(
+          {
+            repo: repo as unknown as CodegraphRepoInterface,
+            analyzer: analyzer as unknown as CodegraphAnalyzerInterface,
+            intel: intel as unknown as RepositoryIntelligenceInterface,
+            planner: planner as unknown as EditPlannerInterface,
+          },
+          { symbol: "Foo.bar", newName: "baz" },
+        )
+
+        expect(result.edits.length).toBeGreaterThanOrEqual(1)
+        expect(result.edits.every((e) => e.oldText === "bar" && e.newText === "baz")).toBe(true)
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
