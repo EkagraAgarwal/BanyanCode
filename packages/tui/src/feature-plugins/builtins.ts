@@ -21,6 +21,7 @@ import SidebarSystemStatus from "./sidebar/system-status"
 import SessionFooter from "./footer/session-footer"
 import AttentionStrip from "../component/attention-strip"
 import HeaderBrand from "./header/brand"
+import HeaderSessionCost from "./header/session-cost"
 import HeaderStatusPills from "./header/status-pills"
 import HeaderKeybindingHints from "./header/keybinding-hints"
 import DiffViewer from "./system/diff-viewer"
@@ -64,6 +65,7 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     SessionFooter,
     AttentionStrip,
     HeaderBrand,
+    HeaderSessionCost,
     HeaderStatusPills,
     HeaderKeybindingHints,
     Notifications,
