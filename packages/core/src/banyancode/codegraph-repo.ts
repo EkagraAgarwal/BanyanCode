@@ -6,12 +6,29 @@ import { Database } from "../database/database"
 import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
 import { CodegraphMetaTable } from "./codegraph-meta.sql"
 import { CodegraphParseErrorsTable } from "./codegraph-parse-errors.sql"
+import { CodegraphServiceTagsTable } from "./codegraph-service-tags.sql"
 import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from "./types"
 
 // Upper bound on nodes per DB insert batch. If a batched putNodes method is added,
 // chunk the input into groups of this size to avoid overwhelming the SQLite connection.
 export const MAX_NODES_PER_INSERT = 1000
 const MAX_EDGES_PER_INSERT = 1000
+
+const extractServiceTag = (code: string, nodeID: string, fileID: string): typeof CodegraphServiceTagsTable.$inferInsert | null => {
+  const match = code.match(/Context\.Service\s*<[\s\S]*?>\s*\(\s*\)\s*\(\s*["']([^"']+)["']\s*\)/)
+  if (!match) return null
+  const tag = match[1]
+  const serviceName = tag.replace(/^@[^/]+\//, "").replace(/Service$/, "")
+  return {
+    id: `${nodeID}:${tag}`,
+    tag,
+    service_name: serviceName,
+    file_id: fileID,
+    node_id: nodeID,
+    class_name: "Service",
+    indexed_at: Date.now(),
+  }
+}
 
 const safeSize = (path: string): number => {
   try {
@@ -32,6 +49,7 @@ export interface Interface {
   readonly nodeByID: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
   readonly nodesByIDs: (ids: string[]) => Effect.Effect<CodegraphNode[], never, never>
   readonly listNodesByFile: (fileID: string) => Effect.Effect<CodegraphNode[], never, never>
+  readonly listNodesByKind: (kind: string) => Effect.Effect<CodegraphNode[], never, never>
   readonly listAllNodes: () => Effect.Effect<CodegraphNode[], never, never>
   readonly queryNodes: (input: { function?: string; kind?: string }) => Effect.Effect<CodegraphNode[], never, never>
   readonly searchNodes: (input: { name?: string; kind?: string; limit?: number }) => Effect.Effect<CodegraphNode[], never, never>
@@ -76,6 +94,7 @@ export interface Interface {
   readonly listParseErrors: () => Effect.Effect<Array<{ path: string; cause: string; indexedAt: number }>, never, never>
   readonly clearParseErrors: () => Effect.Effect<void, never, never>
   readonly findSymbolsByServiceTag: (tag: string) => Effect.Effect<CodegraphNode[], never, never>
+  readonly lookupByServiceTag: (tag: string) => Effect.Effect<CodegraphNode | null, never, never>
   readonly rebuildFtsIndex: () => Effect.Effect<{ rowsIndexed: number }, never, never>
 }
 
@@ -207,6 +226,25 @@ export const layer = Layer.effect(
         .select()
         .from(CodegraphNodesTable)
         .where(eq(CodegraphNodesTable.file_id, fileID))
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        fileID: row.file_id,
+        kind: row.kind as CodegraphNode["kind"],
+        name: row.name,
+        signature: row.signature ?? undefined,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        code: row.code ?? undefined,
+      }))
+    })
+
+    const listNodesByKind = Effect.fn("CodegraphRepo.listNodesByKind")(function* (kind: string) {
+      const rows = yield* db
+        .select()
+        .from(CodegraphNodesTable)
+        .where(eq(CodegraphNodesTable.kind, kind))
         .all()
         .pipe(Effect.orDie)
       return rows.map((row) => ({
@@ -672,7 +710,25 @@ export const layer = Layer.effect(
       yield* db.delete(CodegraphParseErrorsTable).run().pipe(Effect.ignore)
     })
 
+    const lookupByServiceTag = Effect.fn("CodegraphRepo.lookupByServiceTag")(function* (tag: string) {
+      const rows = yield* db
+        .select()
+        .from(CodegraphServiceTagsTable)
+        .where(eq(CodegraphServiceTagsTable.tag, tag))
+        .limit(1)
+        .all()
+        .pipe(Effect.orDie)
+
+      if (rows.length === 0) return null
+
+      const node = yield* getNode(rows[0]!.node_id)
+      return node ?? null
+    })
+
     const findSymbolsByServiceTag = Effect.fn("CodegraphRepo.findSymbolsByServiceTag")(function* (tag: string) {
+      const indexed = yield* lookupByServiceTag(tag)
+      if (indexed) return [indexed]
+
       const stripped = tag.replace(/^@[^/]+(\/[^/]+)*\//, "").replace(/^@/, "")
       const candidates = [stripped, stripped.replace(/Service$/, ""), "Service"].filter(
         (s, i, arr) => arr.indexOf(s) === i,
@@ -823,6 +879,22 @@ export const layer = Layer.effect(
                 })
                 .run()
                 .pipe(Effect.orDie)
+
+              const serviceTagEntries = input.nodes
+                .map((n) => (n.code ? extractServiceTag(n.code, n.id, n.fileID) : null))
+                .filter((e): e is NonNullable<typeof e> => e !== null)
+
+              for (const entry of serviceTagEntries) {
+                yield* tx
+                  .insert(CodegraphServiceTagsTable)
+                  .values(entry)
+                  .onConflictDoUpdate({
+                    target: CodegraphServiceTagsTable.id,
+                    set: { indexed_at: entry.indexed_at },
+                  })
+                  .run()
+                  .pipe(Effect.orDie)
+              }
             }
 
             if (input.edges.length > 0) {
@@ -863,6 +935,7 @@ export const layer = Layer.effect(
       nodeByID,
       nodesByIDs,
       listNodesByFile,
+      listNodesByKind,
       listAllNodes,
       queryNodes,
       searchNodes,
@@ -886,6 +959,7 @@ export const layer = Layer.effect(
       listParseErrors,
       clearParseErrors,
       findSymbolsByServiceTag,
+      lookupByServiceTag,
       rebuildFtsIndex,
     })
   }),

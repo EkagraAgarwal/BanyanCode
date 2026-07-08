@@ -29,6 +29,7 @@ export class TreeSitterUnavailableError extends Error {
 interface LoadedParserBundle {
   readonly Parser: typeof import("web-tree-sitter").Parser
   readonly Language: typeof import("web-tree-sitter").Language
+  readonly Query: typeof import("web-tree-sitter").Query
   readonly parsersByExt: ReadonlyMap<string, import("web-tree-sitter").Parser>
   readonly languagesByExt: ReadonlyMap<string, unknown>
 }
@@ -118,6 +119,7 @@ export const ensureWebTreeSitterReady = (): Effect.Effect<void, never, never> =>
         return {
           Parser: webTreeSitter.Parser,
           Language: webTreeSitter.Language,
+          Query: webTreeSitter.Query,
           parsersByExt,
           languagesByExt,
         } satisfies LoadedParserBundle
@@ -203,3 +205,10 @@ export const layer: Layer.Layer<Service, never, never> = Layer.effect(
     return { getLanguage, parse, ensureReady } satisfies Interface
   }),
 )
+
+export {
+  parseTypeScriptWithTreeSitter,
+  parsePythonWithTreeSitter,
+  validateQueryFile,
+  QUERY_FILES,
+} from "./query-executor"

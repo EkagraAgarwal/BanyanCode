@@ -2,6 +2,7 @@ export * as Banyan from "."
 
 export { MemoryEntriesTable } from "./memory.sql"
 export { CodegraphFilesTable, CodegraphNodesTable, CodegraphEdgesTable } from "./codegraph.sql"
+export { CodegraphServiceTagsTable } from "./codegraph-service-tags.sql"
 export { CodegraphTracesTable } from "./codegraph-traces.sql"
 export { CodegraphMetaTable } from "./codegraph-meta.sql"
 export { SubagentMessagesTable } from "./subagent-messages.sql"

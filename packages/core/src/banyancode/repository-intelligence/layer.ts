@@ -211,21 +211,81 @@ export const layer = Layer.effect(
 
     const findTests = (input: {
       symbol: string
+      symbolID?: string
     }): Effect.Effect<{ nodes: CodegraphNode[]; notFound: boolean }, never, never> =>
       Effect.gen(function* () {
-        const allFiles = yield* repo.listAllFiles()
-        const allNodes = yield* repo.listAllNodes()
+        const allTestNodes = yield* repo.listNodesByKind("test")
 
-        const testFilePatterns = [".test.ts", ".spec.ts", "test_", "_test.go", "_test.py", ".test.tsx", ".spec.tsx"]
-        const testFiles = allFiles.filter((f) => {
-          const lower = f.path.toLowerCase()
-          return testFilePatterns.some((p) => lower.includes(p.toLowerCase()))
-        })
-        if (testFiles.length === 0) return { nodes: [], notFound: true }
+        const doImportMatch = (symbolModule: string, symbolName: string) => {
+          const matching: CodegraphNode[] = []
+          for (const testNode of allTestNodes) {
+            if (!testNode.code) continue
+            const importsTarget = testNode.code.includes(symbolModule.replace(/\.ts$/, "")) ||
+                                testNode.code.includes(symbolName)
+            if (importsTarget) {
+              matching.push(testNode)
+            }
+          }
+          return matching
+        }
 
-        const testFileIDs = new Set(testFiles.map((f) => f.id))
-        const testNodes = allNodes.filter((n) => testFileIDs.has(n.fileID))
-        if (testNodes.length === 0) return { nodes: [], notFound: true }
+        const doFallbackMatch = (symbolID: string): Effect.Effect<CodegraphNode[], never, never> =>
+          Effect.gen(function* () {
+            const allFiles = yield* repo.listAllFiles()
+            const allNodes = yield* repo.listAllNodes()
+            const testFilePatterns = [".test.ts", ".spec.ts", "test_", "_test.go", "_test.py", ".test.tsx", ".spec.tsx"]
+            const testFiles = allFiles.filter((f) => {
+              const lower = f.path.toLowerCase()
+              return testFilePatterns.some((p) => lower.includes(p.toLowerCase()))
+            })
+            if (testFiles.length === 0) return []
+
+            const testFileIDs = new Set(testFiles.map((f) => f.id))
+            const testNodesFromFiles = allNodes.filter((n) => testFileIDs.has(n.fileID))
+            if (testNodesFromFiles.length === 0) return []
+
+            const relevantTests: CodegraphNode[] = []
+            const outgoing = yield* repo.edgesFrom(symbolID)
+            const testedBy = new Set(outgoing.filter((e) => e.kind === "tested_by").map((e) => e.toNodeID))
+
+            for (const node of testNodesFromFiles) {
+              if (testedBy.has(node.id)) {
+                relevantTests.push(node)
+                continue
+              }
+              const edges = yield* repo.edgesFrom(node.id)
+              const references = edges.filter(
+                (e) => e.toNodeID === symbolID && (e.kind === "calls" || e.kind === "references"),
+              )
+              if (references.length > 0) relevantTests.push(node)
+            }
+
+            return relevantTests
+          })
+
+        if (input.symbolID) {
+          const targetNode = yield* repo.nodeByID(input.symbolID)
+          if (!targetNode) return { nodes: [], notFound: true }
+          const targetFile = yield* repo.getFile(targetNode.fileID)
+          if (!targetFile) return { nodes: [], notFound: true }
+
+          const symbolModule = targetFile.path
+          const importMatching = doImportMatch(symbolModule, input.symbol)
+
+          if (allTestNodes.length > 0) {
+            if (importMatching.length > 0) {
+              return { nodes: importMatching, notFound: false }
+            }
+            const fallback = yield* doFallbackMatch(input.symbolID)
+            if (fallback.length > 0) {
+              return { nodes: fallback, notFound: false }
+            }
+            return { nodes: [], notFound: false }
+          }
+
+          const fallback = yield* doFallbackMatch(input.symbolID)
+          return { nodes: fallback, notFound: fallback.length === 0 }
+        }
 
         const symbolResult = yield* findSymbol({ name: input.symbol })
         if (symbolResult.nodes.length === 0) {
@@ -236,23 +296,27 @@ export const layer = Layer.effect(
         const exactMatch = symbolResult.nodes.find((n) => n.name === searchName)
         const symbolID = (exactMatch ?? symbolResult.nodes[0])!.id
 
-        const relevantTests: CodegraphNode[] = []
-        const outgoing = yield* repo.edgesFrom(symbolID)
-        const testedBy = new Set(outgoing.filter((e) => e.kind === "tested_by").map((e) => e.toNodeID))
+        const targetNode = yield* repo.nodeByID(symbolID)
+        if (!targetNode) return { nodes: [], notFound: true }
+        const targetFile = yield* repo.getFile(targetNode.fileID)
+        if (!targetFile) return { nodes: [], notFound: true }
 
-        for (const node of testNodes) {
-          if (testedBy.has(node.id)) {
-            relevantTests.push(node)
-            continue
+        const symbolModule = targetFile.path
+        const importMatching = doImportMatch(symbolModule, input.symbol)
+
+        if (allTestNodes.length > 0) {
+          if (importMatching.length > 0) {
+            return { nodes: importMatching, notFound: false }
           }
-          const edges = yield* repo.edgesFrom(node.id)
-          const references = edges.filter(
-            (e) => e.toNodeID === symbolID && (e.kind === "calls" || e.kind === "references"),
-          )
-          if (references.length > 0) relevantTests.push(node)
+          const fallback = yield* doFallbackMatch(symbolID)
+          if (fallback.length > 0) {
+            return { nodes: fallback, notFound: false }
+          }
+          return { nodes: [], notFound: false }
         }
 
-        return { nodes: relevantTests, notFound: false }
+        const fallback = yield* doFallbackMatch(symbolID)
+        return { nodes: fallback, notFound: fallback.length === 0 }
       })
 
     const findRelated = (input: {
