@@ -8,5 +8,6 @@ export const migrations = (
     import("./migration/20260707120000_codegraph_fts"),
     import("./migration/20260708120000_codegraph_traces"),
     import("./migration/20260708130000_codegraph_service_tags"),
+    import("./migration/20260708140000_codegraph_node_entrypoint_signals"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

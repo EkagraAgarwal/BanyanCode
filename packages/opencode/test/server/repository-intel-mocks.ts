@@ -10,6 +10,8 @@ import type {
 const emptySlice: ArchitecturalSlice = {
   summary: "empty",
   entrypoints: [],
+  directCallers: [],
+  transitiveDependents: [],
   importantSymbols: [],
   relatedTests: [],
   relatedDocs: [],

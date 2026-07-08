@@ -6,7 +6,7 @@ export interface Interface {
   readonly slice: (ctx: RepositoryContext) => Effect.Effect<ArchitecturalSlice, never, never>
   readonly explain: (input: { symbol: string; workspace?: WorkspaceContext }) => Effect.Effect<ArchitecturalSlice, never, never>
   readonly impact: (input: { path: string; workspace?: WorkspaceContext }) => Effect.Effect<ArchitecturalSlice, never, never>
-  readonly trace: (input: { symbol: string; depth?: number; workspace?: WorkspaceContext }) => Effect.Effect<ArchitecturalSlice, never, never>
+  readonly trace: (input: { symbol: string; depth?: number; limit?: number; workspace?: WorkspaceContext }) => Effect.Effect<ArchitecturalSlice, never, never>
   readonly tests: (input: { symbol: string }) => Effect.Effect<{ tests: readonly CodegraphNode[]; notFound: boolean }, never, never>
   readonly symbols: (input: { query: string; limit?: number }) => Effect.Effect<readonly CodegraphNode[], never, never>
   readonly relationships: (input: {

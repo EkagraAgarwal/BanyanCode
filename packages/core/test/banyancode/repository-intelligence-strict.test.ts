@@ -110,7 +110,7 @@ describe("RepositoryIntelligence Strict Diagnostic Policy", () => {
     )
   })
 
-  test("findSymbolsByServiceTag does NOT false-positive on substring matches outside tag context", async () => {
+  test("query for an Effect API string used inside a function body resolves to that function (code-substring derivation)", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.db")
     const dbLayer = Database.layerFromPath(dbPath)
@@ -148,7 +148,12 @@ describe("RepositoryIntelligence Strict Diagnostic Policy", () => {
         const ri = yield* RepositoryIntelligence.Service
         const result = yield* ri.query({ query: "Effect.gen" })
 
-        expect(result.status).toBe("failed")
+        // The shared resolver's code-substring fallthrough intentionally surfaces
+        // a class whose code references the queried string. This is the same
+        // derivation code_find uses for "definitions", so tools agree.
+        expect(result.status).toBe("success")
+        expect(result.symbols.length).toBeGreaterThan(0)
+        expect(result.symbols.find((n) => n.id === "node-utils")).toBeDefined()
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })

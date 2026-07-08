@@ -7,19 +7,47 @@ import { traced } from "../observability/trace"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
-import { optionalString } from "./tool-schema"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 export const name = "edit_plan"
 
 export const Input = Schema.Struct({
-  phase: Schema.Literals(["before", "after"]).annotate({ description: "Whether to plan before an edit or verify after an edit." }),
-  targetSymbol: Schema.String.annotate({ description: "The symbol being edited." }),
-  changeKind: Schema.optional(Schema.Literals(["rename", "modify", "delete", "add"])).annotate({ description: "The type of change (before phase only)." }),
-  filePath: optionalString.annotate({ description: "The file containing the target symbol." }),
-  diff: optionalString.annotate({ description: "The diff of the change (after phase only)." }),
-  root: optionalString.annotate({ description: "The workspace root." }),
+  phase: Schema.Literals(["before", "after"]).annotate({
+    description:
+      "REQUIRED. 'before' plans an upcoming edit; 'after' verifies the " +
+      "blast radius of an edit that has already been applied.",
+  }),
+  targetSymbol: Schema.String.annotate({
+    description:
+      "REQUIRED. The symbol being edited (e.g. 'MemoryRepo.update').",
+  }),
+  changeKind: Schema.optional(Schema.Literals(["rename", "modify", "delete", "add"])).annotate({
+    description:
+      "Only meaningful when phase='before'. The kind of change being planned: " +
+      "'rename', 'modify', 'delete', or 'add'. Drives which steps are emitted. " +
+      "Defaults to 'modify' when omitted. Ignored when phase='after'.",
+  }),
+  filePath: Schema.optional(Schema.String).annotate({
+    description:
+      "The file containing the target symbol. Optional — when omitted the " +
+      "planner resolves it from the codegraph node for the resolved symbol. " +
+      "Required for phase='before' with changeKind='add' (no existing node to look up).",
+  }),
+  diff: Schema.optional(Schema.String).annotate({
+    description:
+      "Only meaningful when phase='after'. The diff of the change just " +
+      "applied. Ignored when phase='before'.",
+  }),
+  root: Schema.optional(Schema.String).annotate({
+    description:
+      "Workspace root for filesystem scans. Defaults to the current working " +
+      "directory when omitted.",
+  }),
+}).annotate({
+  description:
+    "Plan an edit before applying it, or verify blast radius after. Returns " +
+    "ordered steps the model should execute plus risk tags.",
 })
 
 export const Output = Schema.Struct({

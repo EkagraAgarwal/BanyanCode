@@ -52,8 +52,22 @@ export const name_dependents = "codegraph_dependents"
 export const name_callers = "codegraph_callers"
 
 export const InputBuild = Schema.Struct({
-  root: optionalString,
-  force: optionalBoolean,
+  root: optionalString.annotate({
+    description:
+      "Workspace root to scan. Defaults to the current working directory " +
+      "when omitted. Pass an absolute path to index a different workspace.",
+  }),
+  force: optionalBoolean.annotate({
+    description:
+      "When true, wipes any existing index for the workspace before " +
+      "rebuilding. Defaults to false (incremental). Set true after major " +
+      "source re-organizations or when the graph is suspected corrupt.",
+  }),
+}).annotate({
+  description:
+    "Build (or rebuild) the code graph for the current workspace. " +
+    "Walks the file tree, parses with tree-sitter, and indexes symbols + " +
+    "edges into banyancode.db.",
 })
 
 export const OutputBuild = Schema.Struct({
@@ -85,10 +99,29 @@ export const OutputBuild = Schema.Struct({
 })
 
 export const InputQuery = Schema.Struct({
-  file: optionalString,
-  function: optionalString,
-  kind: optionalString,
-  limit: optionalNumber,
+  file: optionalString.annotate({
+    description:
+      "Optional filename or path substring filter (e.g. 'memory-repo').",
+  }),
+  function: optionalString.annotate({
+    description:
+      "Optional symbol name filter (e.g. 'update'). Returns nodes whose " +
+      "name contains this substring.",
+  }),
+  kind: optionalString.annotate({
+    description:
+      "Optional node-kind filter (e.g. 'function', 'class', 'method'). " +
+      "Exact match against CodegraphNode.kind.",
+  }),
+  limit: optionalNumber.annotate({
+    description:
+      "Maximum number of nodes to return. Defaults to 200 when omitted.",
+  }),
+}).annotate({
+  description:
+    "Raw codegraph query: list nodes matching the given filters. " +
+    "All filters are optional but at least one should be provided — " +
+    "an unfiltered query returns up to `limit` arbitrary nodes.",
 })
 
 export const OutputQuery = Schema.Struct({
@@ -97,10 +130,29 @@ export const OutputQuery = Schema.Struct({
 })
 
 export const InputImpact = Schema.Struct({
-  nodeID: optionalString,
-  function: optionalString,
-  maxDepth: optionalNumber,
-  limit: optionalNumber,
+  nodeID: optionalString.annotate({
+    description:
+      "The graph UUID of the starting node. Provide nodeID OR function — " +
+      "the tool will reject calls with neither.",
+  }),
+  function: optionalString.annotate({
+    description:
+      "The symbol name to look up when nodeID is omitted " +
+      "(e.g. 'MemoryRepo.update').",
+  }),
+  maxDepth: optionalNumber.annotate({
+    description:
+      "Maximum traversal depth for transitive dependents. Defaults to 8 " +
+      "when omitted.",
+  }),
+  limit: optionalNumber.annotate({
+    description:
+      "Maximum number of result nodes to return. Defaults to 500.",
+  }),
+}).annotate({
+  description:
+    "Blast radius from a node: direct dependents and transitive dependents " +
+    "in the code graph.",
 })
 
 export const OutputImpact = Schema.Struct({
@@ -110,9 +162,21 @@ export const OutputImpact = Schema.Struct({
 })
 
 export const InputDependents = Schema.Struct({
-  nodeID: optionalString,
-  function: optionalString,
-  limit: optionalNumber,
+  nodeID: optionalString.annotate({
+    description:
+      "The graph UUID of the target node. Provide nodeID OR function.",
+  }),
+  function: optionalString.annotate({
+    description:
+      "The symbol name to look up when nodeID is omitted.",
+  }),
+  limit: optionalNumber.annotate({
+    description:
+      "Maximum number of dependents to return. Defaults to 500.",
+  }),
+}).annotate({
+  description:
+    "Direct dependents of a node — symbols that import or reference it.",
 })
 
 export const OutputDependents = Schema.Struct({
@@ -121,9 +185,21 @@ export const OutputDependents = Schema.Struct({
 })
 
 export const InputCallers = Schema.Struct({
-  nodeID: optionalString,
-  function: optionalString,
-  limit: optionalNumber,
+  nodeID: optionalString.annotate({
+    description:
+      "The graph UUID of the target node. Provide nodeID OR function.",
+  }),
+  function: optionalString.annotate({
+    description:
+      "The symbol name to look up when nodeID is omitted.",
+  }),
+  limit: optionalNumber.annotate({
+    description:
+      "Maximum number of callers to return. Defaults to 500.",
+  }),
+}).annotate({
+  description:
+    "Direct callers of a node — places that invoke the given symbol.",
 })
 
 export const OutputCallers = Schema.Struct({
@@ -132,7 +208,18 @@ export const OutputCallers = Schema.Struct({
 })
 
 export const InputRemove = Schema.Struct({
-  dropFile: optionalBoolean,
+  dropFile: optionalBoolean.annotate({
+    description:
+      "When true, drops the entire banyancode.db file (use only when the " +
+      "DB is corrupt and incremental delete fails). Defaults to false " +
+      "(delete rows only — the file remains, sessions and memory are " +
+      "preserved).",
+  }),
+}).annotate({
+  description:
+    "Remove the current codegraph index. Frees disk space but does not " +
+    "delete the banyancode.db file by default (the file is shared with " +
+    "sessions and memory).",
 })
 export const OutputRemove = Schema.Struct({
   status: Schema.Literals(["removed", "empty"]),

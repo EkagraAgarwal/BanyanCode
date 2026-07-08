@@ -21,10 +21,18 @@ export const CodegraphNodesTable = sqliteTable(
     start_line: integer().notNull(),
     end_line: integer().notNull(),
     code: text(),
+    // Phase 3 columns: precomputed ranking signals populated by the
+    // indexer after the parse pass. Defaults to 0 so existing rows are
+    // unaffected; existing DBs pick these up via the additive migration
+    // (see 20260708140000_codegraph_node_entrypoint_signals).
+    is_entrypoint: integer().notNull().default(0),
+    in_degree: integer().notNull().default(0),
   },
   (table) => [
     index("codegraph_node_file_name_idx").on(table.file_id, table.name),
     index("codegraph_node_kind_name_idx").on(table.kind, table.name),
+    index("codegraph_nodes_is_entrypoint_idx").on(table.is_entrypoint),
+    index("codegraph_nodes_in_degree_idx").on(table.in_degree),
   ],
 )
 

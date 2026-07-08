@@ -5,7 +5,8 @@ import { Effect, Layer, Schema } from "effect"
 import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import type { Interface as CodegraphAnalyzerInterface } from "../banyancode/codegraph-analyzer"
 import type { Interface as PermissionV2Interface } from "../permission"
-import { Banyan } from "../banyancode"
+import { Banyan, isStale } from "../banyancode"
+import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
 import { traced } from "../observability/trace"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
@@ -18,8 +19,23 @@ const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 export const name = "blast_radius"
 
 export const Input = Schema.Struct({
-  target: Schema.String,
-  maxDepth: optionalNumber,
+  target: Schema.String.annotate({
+    description:
+      "REQUIRED. The symbol name (e.g. 'MemoryRepo.update') or node ID " +
+      "(UUID:line-line) to measure blast radius for. Pass the same value " +
+      "you would pass to code_find intent='definition'.",
+  }),
+  maxDepth: optionalNumber.annotate({
+    description:
+      "Maximum traversal depth for transitive callers. Defaults to 64 when " +
+      "omitted (capped at the BFS_MAX constant inside the tool). " +
+      "Pass a smaller value (e.g. 3) for a shallow radius.",
+  }),
+}).annotate({
+  description:
+    "Count-only blast radius for a symbol: how many direct callers, " +
+    "transitive callers, files, and tests would be affected by a change. " +
+    "Returns counts only — for full candidate lists and risk tags, use preflight.",
 })
 
 export const Output = Schema.Struct({
@@ -28,6 +44,7 @@ export const Output = Schema.Struct({
   filesAffected: Schema.Number,
   testsToRun: Schema.Number,
   risk: Schema.Literals(["low", "medium", "high"]),
+  graphStale: Schema.optional(Schema.Boolean),
 })
 
 const BFS_MAX = 64
@@ -49,8 +66,17 @@ export const computeBlastRadius = (
   input: typeof Input.Type,
 ): Effect.Effect<typeof Output.Type, never, never> =>
   Effect.gen(function* () {
+    // Run the shared resolver first so the analyzer gets a nodeID back even
+    // when the input is a qualified name, a Context.Service tag, or a
+    // substring that only matches via code-substring. Previously we passed
+    // `function: input.target` straight to `analyzer.impact`, which only
+    // did exact-name lookups and returned 0 for everything except top-level
+    // class names.
+    const resolved = yield* resolveGraphTargetPure(deps.repo, { target: input.target })
+    const resolvedNodeID = resolved._tag === "Ok" ? resolved.value.nodeID : undefined
+
     const impact = yield* deps.analyzer
-      .impact({ function: input.target })
+      .impact(resolvedNodeID ? { nodeID: resolvedNodeID } : { function: input.target })
       .pipe(
         Effect.catchTag("Banyan/SymbolNotFoundError", () =>
           Effect.succeed({
@@ -75,12 +101,19 @@ export const computeBlastRadius = (
     const testsToRun = filePaths.filter((p) => TEST_PATH.test(p)).length
     const transitiveCount = input.maxDepth ? Math.min(impact.transitive.length, BFS_MAX) : impact.transitive.length
 
+    const metaRow = yield* deps.repo.getMeta()
+    const meta = metaRow
+      ? { graphBuiltAt: metaRow.graphBuiltAt, graphCoverage: metaRow.graphCoverage }
+      : undefined
+    const stale = isStale(meta)
+
     return {
       directCallers: impact.dependents.length,
       transitiveCallers: transitiveCount,
       filesAffected: seenFileIDs.size,
       testsToRun,
       risk: score(impact.dependents.length, transitiveCount),
+      ...(stale.stale ? { graphStale: true } : {}),
     }
   })
 

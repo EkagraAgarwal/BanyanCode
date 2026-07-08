@@ -13,7 +13,7 @@ import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { defaultLayer as editPlannerLayer } from "../banyancode/edit-planner"
-import { optionalBoolean } from "./tool-schema"
+import { computePreflight } from "./preflight"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
@@ -33,10 +33,32 @@ const RenameRiskSchema = Schema.Struct({
 })
 
 export const Input = Schema.Struct({
-  symbol: Schema.String,
-  newName: Schema.String,
-  dryRun: optionalBoolean,
-  root: Schema.optional(Schema.String),
+  symbol: Schema.String.annotate({
+    description:
+      "REQUIRED. The qualified symbol name to rename (e.g. 'Permission.ask'). " +
+      "Must be findable in the code graph.",
+  }),
+  newName: Schema.String.annotate({
+    description:
+      "REQUIRED. The new qualified name (e.g. 'Permission.request'). " +
+      "If newName has no dot, the namespace is inherited from symbol.",
+  }),
+  dryRun: Schema.Boolean.annotate({
+    description:
+      "REQUIRED. When true, the tool returns the preflight, test list, and " +
+      "risk report but emits zero edits — useful for previewing blast radius " +
+      "before committing. When false, emits edits[] alongside the same plan.",
+  }),
+  root: Schema.optional(Schema.String).annotate({
+    description:
+      "Workspace root for filesystem scans. Defaults to the current working " +
+      "directory when omitted.",
+  }),
+}).annotate({
+  description:
+    "Plan a symbol rename: list every call-site edit, the test files to " +
+    "re-run, and the risk tags. The tool never writes files — apply the " +
+    "returned edits with the edit tool.",
 })
 
 export const Output = Schema.Struct({
@@ -71,6 +93,35 @@ const resolveNewName = (
   return { namespace: oldParts.join("."), leaf: newName }
 }
 
+/**
+ * Returns a specific failure reason + message for the cases where
+ * `resolveNewName` can't infer a namespace. The two common shapes the user
+ * hits are:
+ *   - both bare:    symbol=Foo, newName=bar            → can't infer ns
+ *   - bad qualified newName: symbol=Ns.Foo, newName=.bar → empty ns
+ */
+function namespaceFailureReason(input: { symbol: string; newName: string }):
+  | { kind: "both-bare"; message: string }
+  | { kind: "bad-qualified-newname"; message: string } {
+  const symbolBare = !input.symbol.includes(".")
+  const newNameBare = !input.newName.includes(".")
+  if (symbolBare && newNameBare) {
+    return {
+      kind: "both-bare",
+      message:
+        `safe_rename: cannot resolve namespace because both inputs are bare ` +
+        `("symbol=${input.symbol}", "newName=${input.newName}"). ` +
+        `Pass a qualified symbol like "Namespace.${input.symbol}" (or a qualified newName like "Namespace.${input.newName}") so the tool knows where the rename belongs.`,
+    }
+  }
+  return {
+    kind: "bad-qualified-newname",
+    message:
+      `safe_rename: cannot derive a namespace from newName="${input.newName}". ` +
+      `newName must be a qualified name with a non-empty namespace, e.g. "Namespace.${input.newName.startsWith(".") ? input.newName.slice(1) : input.newName}".`,
+  }
+}
+
 export const computeSafeRename = (
   deps: {
     readonly repo: CodegraphRepoInterface
@@ -83,11 +134,8 @@ export const computeSafeRename = (
   Effect.gen(function* () {
     const split = resolveNewName(input.symbol, input.newName)
     if (!split) {
-      return yield* Effect.fail(
-        new ToolFailure({
-          message: `safe_rename: cannot resolve namespace. Provide a qualified newName (e.g. "Foo.bar"), or pass a qualified symbol. Got newName="${input.newName}", symbol="${input.symbol}".`,
-        }),
-      )
+      const reason = namespaceFailureReason({ symbol: input.symbol, newName: input.newName })
+      return yield* Effect.fail(new ToolFailure({ message: reason.message }))
     }
 
     const targetNodeResult = (yield* deps.intel.symbols({ query: input.symbol })) as Array<Banyan.CodegraphNode>
@@ -148,29 +196,27 @@ export const computeSafeRename = (
       message: r.message,
     }))
 
-    const fallbackPreflight: unknown = {
-      target: {
-        resolved: targetNode !== undefined,
-        node: targetNode,
-        candidates: targetNodeResult.slice(0, 10),
-      },
-      directCallers: [],
-      transitiveCallers: [],
-      testsToRun: [],
-      docsAffected: [],
-      configsAffected: [],
-      eventBridgesAffected: [],
-      httpRoutesAffected: [],
-      risks: [],
-      derivation: "regex-v1" as const,
-      generatedAt: Date.now(),
-    }
+    // Delegate to the real preflight so this tool's `preflight` field reflects
+    // the same risks + callers + event bridges the standalone `preflight` tool
+    // would have produced. Previously this built a stub object with empty
+    // arrays, which made the description claim ("calls preflight internally")
+    // a lie.
+    const preflight = yield* computePreflight(
+      { repo: deps.repo, analyzer: deps.analyzer, intel: deps.intel },
+      { action: "rename", target: input.symbol, ...(input.root ? { root: input.root } : {}) },
+    )
+
+    // `dryRun` gates the edits output. The tool never writes files regardless,
+    // but a dry-run caller wants the plan + risks without per-call-site edits
+    // cluttering the model output.
+    const isDryRun = input.dryRun === true
+    const emittedEdits = isDryRun ? [] : edits
 
     return {
-      edits,
+      edits: emittedEdits,
       testsToRun: Array.from(testPaths),
       risks: risksFromPlanner,
-      preflight: fallbackPreflight,
+      preflight,
     }
   })
 
@@ -197,7 +243,9 @@ export const makeSafeRenameTool = (deps: {
       "  the rename is purely textual and obvious — use edit.\n" +
       "After this, often: edit (per generated edit, with permission).\n" +
       "Before this: preflight (this tool calls it internally).\n" +
-      "Namespace inference: if newName has no dot, the namespace is inherited from symbol.",
+      "Namespace inference: if newName has no dot, the namespace is inherited from symbol.\n" +
+      "dryRun: when true, edits=[] but preflight + risks still returned; useful for\n" +
+      "  previewing the blast radius without committing to a rename plan.",
     contract: { visibility: "public" },
     input: Input,
     output: Output,

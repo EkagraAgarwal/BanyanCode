@@ -9,7 +9,7 @@ import type { Interface as CodegraphRepoInterface } from "../banyancode/codegrap
 import type { Interface as CodegraphAnalyzerInterface } from "../banyancode/codegraph-analyzer"
 import type { Interface as RepositoryIntelligenceInterface } from "../banyancode/repository-intelligence/service"
 import type { Interface as PermissionV2Interface } from "../permission"
-import { Banyan } from "../banyancode"
+import { Banyan, isStale } from "../banyancode"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
@@ -38,6 +38,7 @@ const RiskKindLiterals = Schema.Literals([
   "no-tests",
   "touches-event-bus",
   "touches-http-routes",
+  "stale-graph",
 ])
 const RiskSeverityLiterals = Schema.Literals(["low", "medium", "high"])
 const DerivationLiterals = Schema.Literals(["regex-v1", "tree-sitter-v1", "runtime-v1"])
@@ -49,10 +50,33 @@ const RiskSchema = Schema.Struct({
 })
 
 export const Input = Schema.Struct({
-  action: ActionLiterals,
-  target: Schema.String,
-  depth: optionalNumber,
-  root: optionalString,
+  action: ActionLiterals.annotate({
+    description:
+      "What kind of edit is being planned: 'rename' for symbol rename, " +
+      "'modify' for an in-place change, 'delete' for removal. Drives the " +
+      "candidate selection and which risk kinds fire.",
+  }),
+  target: Schema.String.annotate({
+    description:
+      "REQUIRED. The symbol name (e.g. 'MemoryRepo.update') or node ID " +
+      "(UUID:line-line) the edit is targeting. If the symbol is not in the " +
+      "code graph, the tool returns a 'no-target' risk with guidance.",
+  }),
+  depth: optionalNumber.annotate({
+    description:
+      "Maximum traversal depth for blast radius. Defaults to 64 (capped) when " +
+      "omitted. Pass 3-5 for shallow previews.",
+  }),
+  root: optionalString.annotate({
+    description:
+      "Workspace root for filesystem scans (event bridges, HTTP routes). " +
+      "Defaults to the current working directory when omitted.",
+  }),
+}).annotate({
+  description:
+    "Decision report for an upcoming edit: full candidate list, blast radius, " +
+    "touched event bridges, HTTP routes, configs, and structured risk tags. " +
+    "Use before any non-trivial rename or delete.",
 })
 
 export const Output = Schema.Struct({
@@ -123,6 +147,58 @@ async function readDirSafe(dir: string): Promise<string[]> {
 const ROUTE_REGEX =
   /HttpApiEndpoint\.(post|get|put|patch|delete)\(\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']/g
 
+/**
+ * Build an ordered list of search keys for a target, most specific first.
+ * Previously the scanner took only the bare leaf (e.g. `Service` after
+ * stripping `.Service` from `Foo.Bar.Service`), which produced false-positive
+ * hits whenever the leaf was a common suffix like "Service" or "Repository".
+ *
+ *   input: A.B.Service     →  ["A.B.Service", "A.B", "B.Service", "B"]
+ *   input: MyClass          →  ["MyClass"]
+ *   input: a.b.c            →  ["a.b.c", "a.b", "b.c", "c"]
+ */
+function candidateKeys(target: string): string[] {
+  const parts = target.split(".").filter((p) => p.length > 0)
+  if (parts.length === 0) return []
+  const keys: string[] = []
+  // full target
+  keys.push(parts.join("."))
+  // each successively shorter prefix (drops the leftmost segment)
+  for (let i = 1; i < parts.length; i++) {
+    keys.push(parts.slice(i).join("."))
+  }
+  // bare leaf as last resort only
+  return keys
+}
+
+const GENERIC_LEAVES = new Set([
+  "Service",
+  "Repository",
+  "Repo",
+  "Manager",
+  "Controller",
+  "Provider",
+  "Helper",
+  "Util",
+  "Utils",
+  "Impl",
+  "Interface",
+  "Module",
+])
+
+function pickStrongKey(target: string, content: string): string | undefined {
+  for (const key of candidateKeys(target)) {
+    if (content.includes(key)) {
+      // If the only key that hit is a generic single-word leaf, treat it as
+      // a false positive — the user almost certainly meant the more specific
+      // qualified form.
+      if (!key.includes(".") && GENERIC_LEAVES.has(key)) continue
+      return key
+    }
+  }
+  return undefined
+}
+
 async function scanHttpRoutes(
   repoRoot: string,
   target: string,
@@ -130,7 +206,6 @@ async function scanHttpRoutes(
   const groupsDir = path.join(repoRoot, "packages", "opencode", "src", "server", "routes", "instance", "httpapi", "groups")
   const entries = await readDirSafe(groupsDir)
   const out: Array<{ method: string; path: string; file: string }> = []
-  const symbolKey = target.split(".").pop() ?? target
   for (const entry of entries) {
     if (!entry.endsWith(".ts")) continue
     const full = path.join(groupsDir, entry)
@@ -140,7 +215,7 @@ async function scanHttpRoutes(
     } catch {
       continue
     }
-    if (!content.includes(symbolKey)) continue
+    if (!pickStrongKey(target, content)) continue
     ROUTE_REGEX.lastIndex = 0
     let match: RegExpExecArray | null
     while ((match = ROUTE_REGEX.exec(content)) !== null) {
@@ -157,7 +232,6 @@ async function scanEventBridges(
   const bridgesDir = path.join(repoRoot, "packages", "opencode", "src", "effect")
   const entries = await readDirSafe(bridgesDir)
   const out: Array<{ name: string; file: string }> = []
-  const symbolKey = target.split(".").pop() ?? target
   for (const entry of entries) {
     if (!entry.endsWith("-bridge.ts")) continue
     const full = path.join(bridgesDir, entry)
@@ -167,7 +241,7 @@ async function scanEventBridges(
     } catch {
       continue
     }
-    if (!content.includes(symbolKey)) continue
+    if (!pickStrongKey(target, content)) continue
     out.push({ name: entry.replace(/-bridge\.ts$/, ""), file: path.relative(repoRoot, full) })
   }
   return out
@@ -208,6 +282,10 @@ export const computePreflight = (
     for (const n of [...directCallers, ...transitiveCallers]) fileIDs.add(n.fileID)
 
     const allFiles = yield* deps.repo.listAllFiles()
+    const metaRow = yield* deps.repo.getMeta()
+    const meta = metaRow
+      ? { graphBuiltAt: metaRow.graphBuiltAt, graphCoverage: metaRow.graphCoverage }
+      : undefined
     const filePathByID = new Map(allFiles.map((f) => [f.id, f.path]))
 
     const testsList: { tests: ReadonlyArray<Banyan.CodegraphNode>; notFound: boolean } = primary
@@ -279,6 +357,14 @@ export const computePreflight = (
         kind: "touches-http-routes",
         severity: "medium",
         message: `${httpRoutes.length} HTTP route${httpRoutes.length === 1 ? "" : "s"} defined in files referencing this symbol; API contract may shift`,
+      })
+    }
+    const stale = isStale(meta)
+    if (stale.stale && stale.reason) {
+      risks.push({
+        kind: "stale-graph",
+        severity: stale.severity === "med" ? "medium" : "high",
+        message: stale.reason,
       })
     }
 

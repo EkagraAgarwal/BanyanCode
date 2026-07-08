@@ -1,5 +1,6 @@
 import { Effect, Layer } from "effect"
 import { CodegraphRepo } from "../codegraph-repo"
+import { resolveGraphTargetPure } from "../symbol-resolver"
 import { Service } from "./service"
 import type { Interface } from "./service"
 import type {
@@ -32,6 +33,72 @@ function kindRank(kind: CodegraphNode["kind"]): number {
   return idx === -1 ? Infinity : idx
 }
 
+// Phase 2 ranking heuristic for transitive dependents of a trace anchor.
+//
+//   score = (1 / depth) * ln(1 + inDegree) * (isEntrypoint ? 2 : 1)
+//
+// `inDegree` and `isEntrypoint` are read from optional CodegraphNode fields
+// when the columns are populated (Phase 3). Until then the function falls
+// back to `score = (1 / depth) * (isEntrypointHeuristic(node) ? 2 : 1)` so
+// callers see stable, depth-preferred ordering before the indexer
+// migration lands.
+const ENTRYPOINT_PATH_PATTERNS = [
+  /\/commands?\//i,
+  /\/cli\//i,
+  /\/routes?\//i,
+  /\/handlers?\//i,
+  /\/bin\//i,
+  /\/scripts?\//i,
+]
+// Match either the literal name (e.g. "handler", "main") or a name that
+// clearly looks like one ("cli-handler", "request-handler", "mainFn").
+const ENTRYPOINT_NAME_HINTS = /(handler|^main$|mainFn|mainHandler|^route$|^cmd$|^command$|^setup$|^bootstrap$)/i
+const ROUTE_REGEX_HINT = /\b(app|router|fastify|instance)\s*\.\s*(get|post|put|delete|patch|head|options|trace)\s*\(/i
+
+const isEntrypointHeuristic = (node: CodegraphNode, filePath?: string): boolean => {
+  if (ENTRYPOINT_NAME_HINTS.test(node.name)) return true
+  if (filePath && ENTRYPOINT_PATH_PATTERNS.some((p) => p.test(filePath))) return true
+  const sig = node.signature
+  if (sig && ENTRYPOINT_PATH_PATTERNS.some((p) => p.test(sig))) return true
+  if (node.code && ROUTE_REGEX_HINT.test(node.code)) return true
+  return false
+}
+
+const readIsEntrypoint = (node: CodegraphNode, filePath?: string): boolean => {
+  const raw = (node as CodegraphNode & { isEntrypoint?: number | boolean | undefined }).isEntrypoint
+  if (raw) return true
+  return isEntrypointHeuristic(node, filePath)
+}
+
+const readInDegree = (node: CodegraphNode): number => {
+  const raw = (node as CodegraphNode & { inDegree?: number }).inDegree
+  return typeof raw === "number" && raw > 0 ? raw : 1
+}
+
+// Score one transitive dependent. Higher score wins.
+//   full:  (1 / depth) * ln(1 + inDegree) * (isEntrypoint ? 2 : 1)
+//   fallback (pre-Phase-3): (1 / depth) * (isEntrypoint ? 2 : 1)
+const scoreTransitiveNode = (node: CodegraphNode, depth: number, filePath?: string): number => {
+  const isEp = readIsEntrypoint(node, filePath)
+  const inDegree = readInDegree(node)
+  const inDegreeWeight = (node as CodegraphNode & { inDegree?: number }).inDegree ? Math.log(1 + inDegree) : 1
+  return (1 / depth) * inDegreeWeight * (isEp ? 2 : 1)
+}
+
+const rankTransitiveDependents = (
+  tagged: ReadonlyArray<{ readonly node: CodegraphNode; readonly depth: number }>,
+  filePathByID: ReadonlyMap<string, string> = new Map(),
+): CodegraphNode[] => {
+  return [...tagged]
+    .map((t) => ({
+      node: t.node,
+      depth: t.depth,
+      score: scoreTransitiveNode(t.node, t.depth, filePathByID.get(t.node.fileID)),
+    }))
+    .sort((a, b) => b.score - a.score || a.depth - b.depth)
+    .map((t) => t.node)
+}
+
 function isDocPath(path: string): boolean {
   return DOC_PATH_PATTERNS.some((p) => p.test(path))
 }
@@ -60,61 +127,30 @@ export const layer = Layer.effect(
           if (!fileID) return { nodes: [], usedFallback: false }
         }
 
-        // Try exact name search first
-        const results = yield* repo.searchNodes({ name: input.name, kind: input.kind })
-        let filtered = fileID ? results.filter((n) => n.fileID === fileID) : results
+        // Delegate to the shared resolver so every tool sees the same candidates
+        // for the same input. `usedFallback` is reported when the resolver had
+        // to fall through to the Context.Service tag lookup, which is the only
+        // case where the model's intuition ("MemoryRepo") doesn't match an
+        // indexed node's `name` field exactly.
+        const result = yield* resolveGraphTargetPure(repo as never, {
+          target: input.name,
+          kind: input.kind,
+          ...(fileID ? { fileID } : {}),
+        })
 
-        let searchName = input.name
-        let parentName: string | undefined
+        if (result._tag === "Miss") return { nodes: [], usedFallback: false }
 
-        // If no matches and the name contains a dot, fallback to class/method resolution
-        if (filtered.length === 0 && input.name.includes(".")) {
-          const parts = input.name.split(".")
-          searchName = parts.pop()!
-          parentName = parts.join(".")
-
-          const splitResults = yield* repo.searchNodes({ name: searchName, kind: input.kind })
-          let splitFiltered = fileID ? splitResults.filter((n) => n.fileID === fileID) : splitResults
-
-          const allNodes = yield* repo.listAllNodes()
-          const validFileIDs = new Set<string>()
-          for (const node of allNodes) {
-            if (node.name === parentName) {
-              validFileIDs.add(node.fileID)
-            }
-          }
-          splitFiltered = splitFiltered.filter((n) => validFileIDs.has(n.fileID))
-          if (splitFiltered.length > 0) {
-            filtered = splitFiltered
+        const nodes = [...result.value.candidates]
+        if (input.exact) {
+          return {
+            nodes: nodes.filter((n) => n.name === input.name),
+            usedFallback: result.value.derivation === "tag-fallback",
           }
         }
-
-        if (input.exact) return { nodes: filtered, usedFallback: false }
-
-        const exactMatch = filtered.find((n) => n.name === searchName || n.name === input.name)
-        if (exactMatch) return { nodes: filtered, usedFallback: false }
-
-        const all = yield* repo.listAllNodes()
-        const prefixResults = all.filter((n) => n.name.startsWith(searchName) || n.name.startsWith(input.name))
-        let prefixFiltered = fileID ? prefixResults.filter((n) => n.fileID === fileID) : prefixResults
-        if (parentName) {
-          const validFileIDs = new Set<string>()
-          for (const node of all) {
-            if (node.name === parentName) {
-              validFileIDs.add(node.fileID)
-            }
-          }
-          prefixFiltered = prefixFiltered.filter((n) => validFileIDs.has(n.fileID))
+        return {
+          nodes,
+          usedFallback: result.value.derivation === "tag-fallback",
         }
-        if (input.kind) return { nodes: prefixFiltered.filter((n) => n.kind === input.kind), usedFallback: false }
-
-        // Fallback: recover Context.Service tag strings (e.g., user queries "MemoryRepo"
-        // but the indexed name is "Service" because the parser extracted only the class
-        // identifier from `class Service extends Context.Service<...>("@banyancode/MemoryRepo")`).
-        const tagMatches = yield* repo.findSymbolsByServiceTag(input.name)
-        if (tagMatches.length > 0) return { nodes: tagMatches, usedFallback: true }
-
-        return { nodes: prefixFiltered, usedFallback: false }
       })
 
     const findSubsystem = (input: {
@@ -269,22 +305,19 @@ export const layer = Layer.effect(
           const targetFile = yield* repo.getFile(targetNode.fileID)
           if (!targetFile) return { nodes: [], notFound: true }
 
-          const symbolModule = targetFile.path
-          const importMatching = doImportMatch(symbolModule, input.symbol)
-
-          if (allTestNodes.length > 0) {
-            if (importMatching.length > 0) {
-              return { nodes: importMatching, notFound: false }
-            }
-            const fallback = yield* doFallbackMatch(input.symbolID)
-            if (fallback.length > 0) {
-              return { nodes: fallback, notFound: false }
-            }
-            return { nodes: [], notFound: false }
+          // Edge-based match wins over substring match when we already have a
+          // nodeID — substring is only useful when there's no graph to lean on.
+          const edgeBased = yield* doFallbackMatch(input.symbolID)
+          if (edgeBased.length > 0) {
+            return { nodes: edgeBased, notFound: false }
           }
 
-          const fallback = yield* doFallbackMatch(input.symbolID)
-          return { nodes: fallback, notFound: fallback.length === 0 }
+          const symbolModule = targetFile.path
+          const importMatching = doImportMatch(symbolModule, input.symbol)
+          if (importMatching.length > 0) {
+            return { nodes: importMatching, notFound: false }
+          }
+          return { nodes: [], notFound: false }
         }
 
         const symbolResult = yield* findSymbol({ name: input.symbol })
@@ -301,22 +334,18 @@ export const layer = Layer.effect(
         const targetFile = yield* repo.getFile(targetNode.fileID)
         if (!targetFile) return { nodes: [], notFound: true }
 
-        const symbolModule = targetFile.path
-        const importMatching = doImportMatch(symbolModule, input.symbol)
-
-        if (allTestNodes.length > 0) {
-          if (importMatching.length > 0) {
-            return { nodes: importMatching, notFound: false }
-          }
-          const fallback = yield* doFallbackMatch(symbolID)
-          if (fallback.length > 0) {
-            return { nodes: fallback, notFound: false }
-          }
-          return { nodes: [], notFound: false }
+        // Same ordering for the resolved path: edge-based first.
+        const edgeBased = yield* doFallbackMatch(symbolID)
+        if (edgeBased.length > 0) {
+          return { nodes: edgeBased, notFound: false }
         }
 
-        const fallback = yield* doFallbackMatch(symbolID)
-        return { nodes: fallback, notFound: fallback.length === 0 }
+        const symbolModule = targetFile.path
+        const importMatching = doImportMatch(symbolModule, input.symbol)
+        if (importMatching.length > 0) {
+          return { nodes: importMatching, notFound: false }
+        }
+        return { nodes: [], notFound: false }
       })
 
     const findRelated = (input: {
@@ -348,6 +377,49 @@ export const layer = Layer.effect(
           if (nextIDs.length > 0) {
             const nodes = yield* repo.nodesByIDs(nextIDs)
             result.push(...nodes)
+            for (const id of nextIDs) {
+              queue.push({ id, depth: current.depth + 1 })
+            }
+          }
+        }
+
+        return result
+      })
+
+    // Depth-tagged BFS. Each discovered node carries the per-node hop distance
+    // from the anchor (depth=1 means the anchor calls/touches it directly).
+    // Phase 2 ranking consumes these depths to score transitive dependents.
+    const findRelatedWithDepth = (input: {
+      nodeID: string
+      depth?: number
+    }): Effect.Effect<Array<{ readonly node: CodegraphNode; readonly depth: number }>, never, never> =>
+      Effect.gen(function* () {
+        const maxDepth = input.depth ?? 2
+        const visited = new Set<string>([input.nodeID])
+        const result: Array<{ node: CodegraphNode; depth: number }> = []
+        const queue: Array<{ id: string; depth: number }> = [{ id: input.nodeID, depth: 0 }]
+
+        while (queue.length > 0) {
+          const current = queue.shift()!
+          if (current.depth >= maxDepth) continue
+
+          const outgoing = yield* repo.edgesFrom(current.id)
+          const incoming = yield* repo.edgesTo(current.id)
+
+          const nextIDs: string[] = []
+          for (const edge of [...outgoing, ...incoming]) {
+            const nextID = edge.fromNodeID === current.id ? edge.toNodeID : edge.fromNodeID
+            if (!visited.has(nextID)) {
+              visited.add(nextID)
+              nextIDs.push(nextID)
+            }
+          }
+
+          if (nextIDs.length > 0) {
+            const nodes = yield* repo.nodesByIDs(nextIDs)
+            for (const node of nodes) {
+              result.push({ node, depth: current.depth + 1 })
+            }
             for (const id of nextIDs) {
               queue.push({ id, depth: current.depth + 1 })
             }
@@ -423,15 +495,26 @@ export const layer = Layer.effect(
           graphNodesList.map((n) => n.fileID).filter((id): id is string => Boolean(id))
         )
 
+        // Tighter bucket scope: only the files that *contain* matched symbols
+        // or their direct related nodes (depth=1). Previously `graphFileIDs`
+        // was built by expanding to every edge endpoint reachable from those
+        // symbols (including `imports`/`extends`), which balloons to
+        // near-repo-wide for common queries.
+        const bucketFileIDs = new Set<string>(
+          [...symbols, ...relatedNodes]
+            .map((n) => n.fileID)
+            .filter((id): id is string => Boolean(id))
+        )
+
         const docs = isDegraded
           ? []
-          : allFiles.filter((f) => graphFileIDs.has(f.id) && isDocPath(f.path))
+          : allFiles.filter((f) => bucketFileIDs.has(f.id) && isDocPath(f.path))
         const configs = isDegraded
           ? []
-          : allFiles.filter((f) => graphFileIDs.has(f.id) && isConfigPath(f.path))
+          : allFiles.filter((f) => bucketFileIDs.has(f.id) && isConfigPath(f.path))
         const files = isDegraded
           ? []
-          : allFiles.filter((f) => graphFileIDs.has(f.id))
+          : allFiles.filter((f) => bucketFileIDs.has(f.id))
 
         const recentCommits = yield* git.recentCommits({
           limit: input.limit ?? 10,
@@ -449,7 +532,7 @@ export const layer = Layer.effect(
           symbols,
           files,
           graph: { nodes: graphNodesList, edges: graphEdges },
-          tests: testsResult.nodes.filter((n) => graphFileIDs.has(n.fileID)),
+          tests: testsResult.nodes.filter((n) => bucketFileIDs.has(n.fileID)),
           docs,
           configs,
           git: { recentCommits, ownership },
@@ -500,6 +583,8 @@ export const layer = Layer.effect(
           configs: ctx.configs,
           routes,
           dependencies: [] as readonly { name: string; version?: string }[],
+          directCallers: [] as readonly CodegraphNode[],
+          transitiveDependents: [] as readonly CodegraphNode[],
         } satisfies ArchitecturalSlice
       })
 
@@ -538,28 +623,67 @@ export const layer = Layer.effect(
     const trace = (input: {
       symbol: string
       depth?: number
+      limit?: number
       workspace?: WorkspaceContext
     }): Effect.Effect<ArchitecturalSlice, never, never> =>
       Effect.gen(function* () {
         const ctx = yield* query({ query: input.symbol, workspace: input.workspace })
         const slc = yield* slice(ctx)
 
-        if (ctx.symbols.length > 0) {
-          const anchor = ctx.symbols[0]!
-          const downstream = yield* findRelated({ nodeID: anchor.id, depth: input.depth ?? 2 })
-          const seen = new Set([...slc.entrypoints, ...slc.importantSymbols].map((n) => n.id))
-          const expanded = [...slc.entrypoints]
-          for (const dep of downstream) {
-            if (dep.kind === "function" || dep.kind === "class" || dep.kind === "method") {
-              if (!seen.has(dep.id)) {
-                seen.add(dep.id)
-                expanded.push(dep)
-              }
-            }
+        if (ctx.symbols.length === 0) {
+          return {
+            ...slc,
+            directCallers: [] as readonly CodegraphNode[],
+            transitiveDependents: [] as readonly CodegraphNode[],
           }
-          return { ...slc, entrypoints: expanded }
         }
-        return slc
+
+        const anchor = ctx.symbols[0]!
+        const maxDepth = input.depth ?? 2
+        const limit = Math.max(1, Math.min(1000, input.limit ?? 50))
+
+        const tagged = yield* findRelatedWithDepth({ nodeID: anchor.id, depth: maxDepth })
+
+        const isCodeLike = (k: CodegraphNode["kind"]) =>
+          k === "function" || k === "class" || k === "method"
+
+        const directCallers: CodegraphNode[] = []
+        const transitiveTagged: Array<{ node: CodegraphNode; depth: number }> = []
+
+        for (const t of tagged) {
+          if (!isCodeLike(t.node.kind)) continue
+          if (t.depth === 1) {
+            directCallers.push(t.node)
+          } else {
+            transitiveTagged.push(t)
+          }
+        }
+
+        // Build a fileID -> path lookup so the ranker can match path-based
+        // entrypoint heuristics without making N parallel getFile calls.
+        const fileIDs = new Set<string>()
+        for (const t of transitiveTagged) fileIDs.add(t.node.fileID)
+        const filePathByID = new Map<string, string>()
+        for (const id of fileIDs) {
+          const file = yield* repo.getFile(id)
+          if (file) filePathByID.set(id, file.path)
+        }
+
+        const rankedTransitive = rankTransitiveDependents(transitiveTagged, filePathByID)
+        let moreDependents = 0
+        let visibleTransitive: readonly CodegraphNode[] = rankedTransitive
+        if (rankedTransitive.length > limit) {
+          visibleTransitive = rankedTransitive.slice(0, limit)
+          moreDependents = rankedTransitive.length - limit
+        }
+
+        return {
+          ...slc,
+          directCallers,
+          transitiveDependents: visibleTransitive,
+          entrypoints: directCallers,
+          moreAvailable: moreDependents > 0 ? { dependents: moreDependents } : undefined,
+        } satisfies ArchitecturalSlice
       })
 
     const tests = (input: { symbol: string }): Effect.Effect<{ tests: readonly CodegraphNode[]; notFound: boolean }, never, never> =>

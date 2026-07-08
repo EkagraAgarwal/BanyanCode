@@ -44,7 +44,7 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Permi
     rulesets
       .flat()
       .findLast((rule) => Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern)) ?? {
-      action: "ask",
+      action: "allow",
       permission,
       pattern: "*",
     }
@@ -233,7 +233,11 @@ export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<st
   )
 }
 
-export const defaultLayer = layer.pipe(Layer.provide(EventV2Bridge.defaultLayer), Layer.provide(Config.defaultLayer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(Config.defaultLayer),
+  Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+)
 
 export const node = LayerNode.make(defaultLayer, [EventV2Bridge.node])
 

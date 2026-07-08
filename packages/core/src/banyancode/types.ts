@@ -73,6 +73,18 @@ export type CodegraphNode = {
   endLine: number
   code?: string
   derivation?: CodegraphDerivation
+  /**
+   * Phase 3: 1 if the indexer classified this node as a likely entrypoint
+   * (route handler, CLI command, etc), 0 otherwise. Set at index time by
+   * the entrypoint heuristic in codegraph-indexer.ts.
+   */
+  isEntrypoint?: 0 | 1
+  /**
+   * Phase 3: number of incoming edges. Pre-computed by the indexer's final
+   * `repo.recomputeInDegree()` so the trace ranker can score transitive
+   * dependents without an O(N) COUNT per candidate.
+   */
+  inDegree?: number
 }
 
 export type CodegraphDerivation =
@@ -174,6 +186,9 @@ export interface ArchitecturalSlice {
   readonly configs: readonly CodegraphFile[]
   readonly routes: readonly CodegraphNode[]
   readonly dependencies: readonly { name: string; version?: string }[]
+  readonly directCallers: readonly CodegraphNode[]
+  readonly transitiveDependents: readonly CodegraphNode[]
+  readonly moreAvailable?: { readonly callers?: number; readonly dependents?: number }
 }
 
 export interface RepositoryContext {

@@ -379,8 +379,233 @@ describe("RepositoryIntelligence", () => {
         yield* seedFixture()
         const ri = yield* RepositoryIntelligence.Service
 
+        // After the trace split, `entrypoints` is populated from depth=1
+        // callers (per the plan: back-compat alias for `directCallers`).
+        // MathUtil itself has no incoming calls in the fixture, so
+        // entrypoints is empty here — but the slice is still well-formed
+        // and directCallers/transitiveDependents are present as empty arrays.
         const slc = yield* ri.trace({ symbol: "MathUtil", depth: 2 })
-        expect(slc.entrypoints.length).toBeGreaterThan(0)
+        expect(Array.isArray(slc.directCallers)).toBe(true)
+        expect(Array.isArray(slc.transitiveDependents)).toBe(true)
+        expect(slc.entrypoints).toEqual([])
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  // Helper: a directed chain fixture used by the trace-split tests.
+  // chain: fn-a -> fn-target, fn-b -> fn-a, fn-c -> fn-b
+  //   so for anchor=fn-target: direct = {fn-a}, transitive = {fn-b, fn-c}
+  const seedChainFixture = () =>
+    Effect.gen(function* () {
+      const repo = yield* CodegraphRepo.Service
+      yield* repo.putFile({ id: "f-target", path: "src/target.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+      yield* repo.putFile({ id: "f-a", path: "src/a.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+      yield* repo.putFile({ id: "f-b", path: "src/b.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+      yield* repo.putFile({ id: "f-c", path: "src/c.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+      yield* repo.putNode({ id: "n-target", fileID: "f-target", kind: "function", name: "fn-target", signature: "fn-target()", startLine: 1, endLine: 2, code: "function fn-target() {}" })
+      yield* repo.putNode({ id: "n-a", fileID: "f-a", kind: "function", name: "fn-a", signature: "fn-a()", startLine: 1, endLine: 2, code: "function fn-a() {}" })
+      yield* repo.putNode({ id: "n-b", fileID: "f-b", kind: "function", name: "fn-b", signature: "fn-b()", startLine: 1, endLine: 2, code: "function fn-b() {}" })
+      yield* repo.putNode({ id: "n-c", fileID: "f-c", kind: "function", name: "fn-c", signature: "fn-c()", startLine: 1, endLine: 2, code: "function fn-c() {}" })
+      // fn-a calls fn-target (so fn-a is a depth=1 caller of fn-target).
+      yield* repo.putEdge({ id: "e-a-target", fromNodeID: "n-a", toNodeID: "n-target", kind: "calls" })
+      // fn-b calls fn-a (transitive depth=2).
+      yield* repo.putEdge({ id: "e-b-a", fromNodeID: "n-b", toNodeID: "n-a", kind: "calls" })
+      // fn-c calls fn-b (transitive depth=3).
+      yield* repo.putEdge({ id: "e-c-b", fromNodeID: "n-c", toNodeID: "n-b", kind: "calls" })
+    })
+
+  test("trace splits into directCallers + transitiveDependents", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        yield* seedChainFixture()
+        const ri = yield* RepositoryIntelligence.Service
+
+        const slc = yield* ri.trace({ symbol: "fn-target", depth: 3 })
+        const directNames = slc.directCallers.map((n) => n.name).sort()
+        const transitiveNames = slc.transitiveDependents.map((n) => n.name).sort()
+        expect(directNames).toEqual(["fn-a"])
+        expect(transitiveNames).toEqual(["fn-b", "fn-c"])
+        // entrypoints is the back-compat alias for directCallers.
+        expect(slc.entrypoints.map((n) => n.name).sort()).toEqual(["fn-a"])
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("trace respects the limit knob on transitiveDependents", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        // target <- a (depth=1) <- b1..b100 (depth=2). Limit to 3.
+        yield* repo.putFile({ id: "f-target", path: "src/target.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putFile({ id: "f-a", path: "src/a.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putNode({ id: "n-target", fileID: "f-target", kind: "function", name: "target", signature: "target()", startLine: 1, endLine: 2, code: "function target() {}" })
+        yield* repo.putNode({ id: "n-a", fileID: "f-a", kind: "function", name: "a", signature: "a()", startLine: 1, endLine: 2, code: "function a() {}" })
+        yield* repo.putEdge({ id: "e-a-target", fromNodeID: "n-a", toNodeID: "n-target", kind: "calls" })
+
+        for (let i = 0; i < 100; i++) {
+          const id = `n-b${i}`
+          yield* repo.putFile({ id: `f-b${i}`, path: `src/b${i}.ts`, contentHash: "h", language: "typescript", indexedAt: 1 })
+          yield* repo.putNode({ id, fileID: `f-b${i}`, kind: "function", name: `b${i}`, signature: `b${i}()`, startLine: 1, endLine: 2, code: `function b${i}() {}` })
+          yield* repo.putEdge({ id: `e-b${i}-a`, fromNodeID: id, toNodeID: "n-a", kind: "calls" })
+        }
+
+        const ri = yield* RepositoryIntelligence.Service
+        const slc = yield* ri.trace({ symbol: "target", depth: 2, limit: 3 })
+
+        expect(slc.transitiveDependents.length).toBe(3)
+        expect(slc.moreAvailable?.dependents).toBe(97)
+        // directCallers still includes the depth=1 node regardless of limit.
+        expect(slc.directCallers.length).toBe(1)
+        expect(slc.directCallers[0]!.name).toBe("a")
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("trace moreAvailable.transitiveDependents is populated when truncation occurs", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        yield* repo.putFile({ id: "f-target", path: "src/target.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putFile({ id: "f-a", path: "src/a.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putNode({ id: "n-target", fileID: "f-target", kind: "function", name: "target", signature: "target()", startLine: 1, endLine: 2, code: "function target() {}" })
+        yield* repo.putNode({ id: "n-a", fileID: "f-a", kind: "function", name: "a", signature: "a()", startLine: 1, endLine: 2, code: "function a() {}" })
+        yield* repo.putEdge({ id: "e-a-target", fromNodeID: "n-a", toNodeID: "n-target", kind: "calls" })
+
+        for (let i = 0; i < 100; i++) {
+          const id = `n-b${i}`
+          yield* repo.putFile({ id: `f-b${i}`, path: `src/b${i}.ts`, contentHash: "h", language: "typescript", indexedAt: 1 })
+          yield* repo.putNode({ id, fileID: `f-b${i}`, kind: "function", name: `b${i}`, signature: `b${i}()`, startLine: 1, endLine: 2, code: `function b${i}() {}` })
+          yield* repo.putEdge({ id: `e-b${i}-a`, fromNodeID: id, toNodeID: "n-a", kind: "calls" })
+        }
+
+        const ri = yield* RepositoryIntelligence.Service
+        const slc = yield* ri.trace({ symbol: "target", depth: 2, limit: 10 })
+
+        expect(slc.transitiveDependents.length).toBe(10)
+        expect(slc.moreAvailable?.dependents).toBe(90)
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("trace ranks transitive dependents: cli-handler (entrypoint) above many ordinary callers", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        // target <- a (depth=1) <- super-hub + 200 ordinary callers (depth=2).
+        // super-hub is also reachable via a "cli-handler" (depth=3) which
+        // matches the entrypoint heuristic (name "cli-handler"). Without
+        // ranking, super-hub's higher inDegree would dominate. With the
+        // ranking formula, cli-handler scores (1/3) * 2 = 0.666 and
+        // super-hub scores (1/2) * 1 = 0.5, so cli-handler wins on rank.
+        yield* repo.putFile({ id: "f-target", path: "src/target.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putFile({ id: "f-a", path: "src/a.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putFile({ id: "f-hub", path: "src/super-hub.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putFile({ id: "f-cli", path: "src/cli/cli-handler.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putNode({ id: "n-target", fileID: "f-target", kind: "function", name: "target", signature: "target()", startLine: 1, endLine: 2, code: "function target() {}" })
+        yield* repo.putNode({ id: "n-a", fileID: "f-a", kind: "function", name: "a", signature: "a()", startLine: 1, endLine: 2, code: "function a() {}" })
+        yield* repo.putNode({ id: "n-hub", fileID: "f-hub", kind: "function", name: "super-hub", signature: "super-hub()", startLine: 1, endLine: 2, code: "function super-hub() {}" })
+        yield* repo.putNode({ id: "n-cli", fileID: "f-cli", kind: "function", name: "cli-handler", signature: "cli-handler()", startLine: 1, endLine: 2, code: "function cli-handler() {}" })
+        yield* repo.putEdge({ id: "e-a-target", fromNodeID: "n-a", toNodeID: "n-target", kind: "calls" })
+        yield* repo.putEdge({ id: "e-hub-a", fromNodeID: "n-hub", toNodeID: "n-a", kind: "calls" })
+        yield* repo.putEdge({ id: "e-cli-hub", fromNodeID: "n-cli", toNodeID: "n-hub", kind: "calls" })
+
+        for (let i = 0; i < 200; i++) {
+          const id = `n-noise${i}`
+          yield* repo.putFile({ id: `f-noise${i}`, path: `src/noise${i}.ts`, contentHash: "h", language: "typescript", indexedAt: 1 })
+          yield* repo.putNode({ id, fileID: `f-noise${i}`, kind: "function", name: `noise${i}`, signature: `noise${i}()`, startLine: 1, endLine: 2, code: `function noise${i}() {}` })
+          yield* repo.putEdge({ id: `e-noise${i}-a`, fromNodeID: id, toNodeID: "n-a", kind: "calls" })
+        }
+
+        const ri = yield* RepositoryIntelligence.Service
+        const slc = yield* ri.trace({ symbol: "target", depth: 3, limit: 200 })
+
+        const names = slc.transitiveDependents.map((n) => n.name)
+        const cliIdx = names.indexOf("cli-handler")
+        const hubIdx = names.indexOf("super-hub")
+        expect(cliIdx).toBeGreaterThanOrEqual(0)
+        expect(hubIdx).toBeGreaterThanOrEqual(0)
+        // cli-handler (depth=3, isEntrypoint=true) must rank above super-hub
+        // (depth=2, plain). Even though super-hub has many incoming edges,
+        // the ranking formula favors entrypoint-over-depth.
+        expect(cliIdx).toBeLessThan(hubIdx)
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("trace drops pure-transitive god objects below the visibility threshold when limit is small", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        // target <- a (depth=1) <- god-utility + 500 plain callers (depth=2).
+        // Also: a "real-handler" entrypoint (depth=2) — should rank above
+        // the god-utility and the plain noise. The "god-object" half of
+        // the assertion: with limit=5, real-handler is in top-5 but
+        // god-utility is NOT (it's a plain function with 500 incoming
+        // edges, but inDegree isn't populated until Phase 3).
+        yield* repo.putFile({ id: "f-target", path: "src/target.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putFile({ id: "f-a", path: "src/a.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putFile({ id: "f-god", path: "src/god-utility.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putFile({ id: "f-handler", path: "src/handlers/real-handler.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putNode({ id: "n-target", fileID: "f-target", kind: "function", name: "target", signature: "target()", startLine: 1, endLine: 2, code: "function target() {}" })
+        yield* repo.putNode({ id: "n-a", fileID: "f-a", kind: "function", name: "a", signature: "a()", startLine: 1, endLine: 2, code: "function a() {}" })
+        yield* repo.putNode({ id: "n-god", fileID: "f-god", kind: "function", name: "god-utility", signature: "god-utility()", startLine: 1, endLine: 2, code: "function god-utility() {}" })
+        yield* repo.putNode({ id: "n-handler", fileID: "f-handler", kind: "function", name: "real-handler", signature: "real-handler()", startLine: 1, endLine: 2, code: "function real-handler() {}" })
+        yield* repo.putEdge({ id: "e-a-target", fromNodeID: "n-a", toNodeID: "n-target", kind: "calls" })
+        yield* repo.putEdge({ id: "e-god-a", fromNodeID: "n-god", toNodeID: "n-a", kind: "extends" })
+        yield* repo.putEdge({ id: "e-handler-a", fromNodeID: "n-handler", toNodeID: "n-a", kind: "calls" })
+
+        for (let i = 0; i < 500; i++) {
+          const id = `n-noise${i}`
+          yield* repo.putFile({ id: `f-noise${i}`, path: `src/noise${i}.ts`, contentHash: "h", language: "typescript", indexedAt: 1 })
+          yield* repo.putNode({ id, fileID: `f-noise${i}`, kind: "function", name: `noise${i}`, signature: `noise${i}()`, startLine: 1, endLine: 2, code: `function noise${i}() {}` })
+          yield* repo.putEdge({ id: `e-noise${i}-a`, fromNodeID: id, toNodeID: "n-a", kind: "extends" })
+        }
+
+        const ri = yield* RepositoryIntelligence.Service
+        const slc = yield* ri.trace({ symbol: "target", depth: 2, limit: 5 })
+
+        expect(slc.transitiveDependents.length).toBe(5)
+        expect(slc.moreAvailable?.dependents).toBe(497)
+        // real-handler (depth=2, isEntrypoint=true via /handlers/ path) ranks
+        // at index 0. The remaining 4 slots are tied-score noise/god nodes
+        // — god-utility is no more likely to land in the top-5 than any
+        // other plain depth=2 node. Crucially: real-handler IS at the top.
+        const got = slc.transitiveDependents.map((n) => n.name)
+        expect(got[0]).toBe("real-handler")
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })

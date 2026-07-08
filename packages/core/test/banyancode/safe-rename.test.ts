@@ -133,7 +133,7 @@ describe("safe_rename tool", () => {
             intel: intel as unknown as RepositoryIntelligenceInterface,
             planner: planner as unknown as EditPlannerInterface,
           },
-          { symbol: "Foo.bar", newName: "Foo.baz" },
+          { symbol: "Foo.bar", newName: "Foo.baz", dryRun: false },
         )
 
         expect(result.edits.length).toBeGreaterThanOrEqual(1)
@@ -167,7 +167,7 @@ describe("safe_rename tool", () => {
               intel: intel as unknown as RepositoryIntelligenceInterface,
               planner: planner as unknown as EditPlannerInterface,
             },
-            { symbol: "bar", newName: "baz" },
+            { symbol: "bar", newName: "baz", dryRun: false },
           ),
         )
         if (exit._tag !== "Failure") throw new Error("expected Failure")
@@ -199,7 +199,7 @@ describe("safe_rename tool", () => {
             intel: intel as unknown as RepositoryIntelligenceInterface,
             planner: planner as unknown as EditPlannerInterface,
           },
-          { symbol: "Foo.bar", newName: "baz" },
+          { symbol: "Foo.bar", newName: "baz", dryRun: false },
         )
 
         expect(result.edits.length).toBeGreaterThanOrEqual(1)
