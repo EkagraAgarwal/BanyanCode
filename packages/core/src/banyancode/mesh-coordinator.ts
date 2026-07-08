@@ -1,6 +1,8 @@
 export * as MeshCoordinator from "./mesh-coordinator"
 
 import { Context, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
+import { sql } from "drizzle-orm"
+import { Database } from "../database/database"
 import { EventV2 } from "../event"
 import { SessionSchema } from "../session/schema"
 import { SubagentBus } from "./subagent-bus"
@@ -17,6 +19,20 @@ export const MeshStatus = Schema.Struct({
       agent: Schema.String,
       status: Schema.Union([Schema.Literal("active"), Schema.Literal("idle"), Schema.Literal("disconnected")]),
       lastSeenAt: Schema.Number,
+      cost: Schema.optional(Schema.Number),
+      tokens: Schema.optional(
+        Schema.Struct({
+          input: Schema.Number,
+          output: Schema.Number,
+          reasoning: Schema.Number,
+          cache: Schema.Struct({
+            read: Schema.Number,
+            write: Schema.Number,
+          }),
+        }),
+      ),
+      lastActivityAt: Schema.optional(Schema.Number),
+      blockedReason: Schema.optional(Schema.String),
     }),
   ),
   pendingMessages: Schema.Number,
@@ -63,6 +79,56 @@ export const StatusUpdated = EventV2.define({
 })
 
 const ACTIVITY_WINDOW_MS = 5 * 60 * 1000
+const COST_CACHE_TTL_MS = 5 * 1000
+
+type CostCacheEntry = {
+  cost: number
+  tokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
+  lastActivityAt: number
+  blockedReason?: string
+  computedAt: number
+}
+
+const computePeerCost = (sessionID: string, agent: string, db: Database.Interface["db"]) =>
+  Effect.gen(function* () {
+    const row = yield* db
+      .get<{
+        cost: number
+        tokens_input: number
+        tokens_output: number
+        tokens_reasoning: number
+        tokens_cache_read: number
+        tokens_cache_write: number
+        last_activity: number | null
+      }>(
+        sql`SELECT
+            COALESCE(SUM(JSON_EXTRACT(data, '$.cost')), 0) as cost,
+            COALESCE(SUM(JSON_EXTRACT(data, '$.tokens.input')), 0) as tokens_input,
+            COALESCE(SUM(JSON_EXTRACT(data, '$.tokens.output')), 0) as tokens_output,
+            COALESCE(SUM(JSON_EXTRACT(data, '$.tokens.reasoning')), 0) as tokens_reasoning,
+            COALESCE(SUM(JSON_EXTRACT(data, '$.tokens.cache.read')), 0) as tokens_cache_read,
+            COALESCE(SUM(JSON_EXTRACT(data, '$.tokens.cache.write')), 0) as tokens_cache_write,
+            MAX(JSON_EXTRACT(data, '$.time.completed')) as last_activity
+          FROM session_message
+          WHERE session_id = ${sessionID}
+            AND type = 'assistant'
+            AND JSON_EXTRACT(data, '$.agent') = ${agent}`,
+      )
+      .pipe(Effect.orDie)
+
+    if (!row || row.cost === 0) return null
+
+    return {
+      cost: row.cost,
+      tokens: {
+        input: row.tokens_input,
+        output: row.tokens_output,
+        reasoning: row.tokens_reasoning,
+        cache: { read: row.tokens_cache_read, write: row.tokens_cache_write },
+      },
+      lastActivityAt: row.last_activity ?? 0,
+    }
+  })
 
 export const layer = Layer.effect(
   Service,
@@ -70,15 +136,55 @@ export const layer = Layer.effect(
     const bus = yield* SubagentBus.Service
     const plans = yield* SubagentPlans.Service
     const events = yield* EventV2.Service
+    const { db } = yield* Database.Service
     const activityRef = yield* Ref.make(new Map<string, Array<{ from: string; at: number }>>())
+    const costCacheRef = yield* Ref.make(new Map<string, CostCacheEntry>())
 
     const status = Effect.fn("MeshCoordinator.status")(function* (parentSessionID: SessionSchema.ID) {
       const peers = yield* bus.peers(parentSessionID)
       const recent = (yield* Ref.get(activityRef)).get(parentSessionID) ?? []
       const cutoff = Date.now() - ACTIVITY_WINDOW_MS
+      const now = Date.now()
+      const cache = yield* Ref.get(costCacheRef)
+
+      const enrichedPeers = yield* Effect.forEach(peers, (peer) =>
+        Effect.gen(function* () {
+          const cacheKey = `${peer.sessionID}:${peer.agent}`
+          const cached = cache.get(cacheKey)
+          if (cached && now - cached.computedAt <= COST_CACHE_TTL_MS) {
+            return {
+              ...peer,
+              cost: cached.cost,
+              tokens: cached.tokens,
+              lastActivityAt: cached.lastActivityAt,
+              blockedReason: peer.status === "disconnected" ? cached.blockedReason : undefined,
+            }
+          }
+
+          const computed = yield* computePeerCost(peer.sessionID, peer.agent, db)
+
+          if (computed) {
+            const entry: CostCacheEntry = { ...computed, computedAt: now }
+            yield* Ref.update(costCacheRef, (c) => {
+              const next = new Map(c)
+              next.set(cacheKey, entry)
+              return next
+            })
+            return {
+              ...peer,
+              cost: computed.cost,
+              tokens: computed.tokens,
+              lastActivityAt: computed.lastActivityAt,
+            }
+          }
+
+          return peer
+        }),
+      )
+
       return {
         parentSessionID,
-        peers,
+        peers: enrichedPeers,
         pendingMessages: 0,
         recentActivity: recent.filter((a) => a.at >= cutoff),
       }
@@ -250,4 +356,5 @@ export const defaultLayer = layer.pipe(
   Layer.provide(SubagentBus.defaultLayer),
   Layer.provide(SubagentPlans.defaultLayer),
   Layer.provide(MaxSubagents.defaultLayer),
+  Layer.provide(Database.defaultLayer),
 )

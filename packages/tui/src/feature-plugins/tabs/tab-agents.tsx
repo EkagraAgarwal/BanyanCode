@@ -22,8 +22,18 @@ function View(props: { api: TuiPluginApi }) {
 
   const [agents] = createResource<AgentInfo[]>(async () => {
     try {
-      const result = await (props.api.client as any).agent?.list?.({})
-      return (result?.data ?? builtInAgents()) as AgentInfo[]
+      const result = await props.api.client.session.mesh({ sessionID: "" })
+      const peers = result.data?.peers ?? []
+      if (peers.length > 0) {
+        return peers.map((peer) => ({
+          name: peer.agent,
+          mode: "subagent" as const,
+          description: peer.status,
+          cost: peer.cost,
+          tokens: peer.tokens,
+        }))
+      }
+      return builtInAgents()
     } catch {
       return builtInAgents()
     }

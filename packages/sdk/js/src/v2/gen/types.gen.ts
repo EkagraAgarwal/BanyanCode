@@ -1397,6 +1397,18 @@ export type GlobalEvent = {
             agent: string
             status: "active" | "idle" | "disconnected"
             lastSeenAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            tokens?: {
+              input: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              output: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              reasoning: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              cache: {
+                read: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                write: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              }
+            }
+            lastActivityAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            blockedReason?: string
           }>
           pendingMessages: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           recentActivity: Array<{
@@ -5313,6 +5325,18 @@ export type EventBanyancodeMeshStatus = {
       agent: string
       status: "active" | "idle" | "disconnected"
       lastSeenAt: number | "NaN" | "Infinity" | "-Infinity"
+      cost?: number | "NaN" | "Infinity" | "-Infinity"
+      tokens?: {
+        input: number | "NaN" | "Infinity" | "-Infinity"
+        output: number | "NaN" | "Infinity" | "-Infinity"
+        reasoning: number | "NaN" | "Infinity" | "-Infinity"
+        cache: {
+          read: number | "NaN" | "Infinity" | "-Infinity"
+          write: number | "NaN" | "Infinity" | "-Infinity"
+        }
+      }
+      lastActivityAt?: number | "NaN" | "Infinity" | "-Infinity"
+      blockedReason?: string
     }>
     pendingMessages: number | "NaN" | "Infinity" | "-Infinity"
     recentActivity: Array<{
@@ -9034,6 +9058,65 @@ export type SessionTodoResponses = {
 }
 
 export type SessionTodoResponse = SessionTodoResponses[keyof SessionTodoResponses]
+
+export type SessionMeshData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/mesh"
+}
+
+export type SessionMeshErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionMeshError = SessionMeshErrors[keyof SessionMeshErrors]
+
+export type SessionMeshResponses = {
+  /**
+   * Mesh status
+   */
+  200: {
+    parentSessionID: string
+    peers: Array<{
+      sessionID: string
+      agent: string
+      status: "active" | "idle" | "disconnected"
+      lastSeenAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      tokens?: {
+        input: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        output: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        reasoning: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cache: {
+          read: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          write: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+      }
+      lastActivityAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      blockedReason?: string
+    }>
+    pendingMessages: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    recentActivity: Array<{
+      from: string
+      at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+  }
+}
+
+export type SessionMeshResponse = SessionMeshResponses[keyof SessionMeshResponses]
 
 export type SessionDiffData = {
   body?: never

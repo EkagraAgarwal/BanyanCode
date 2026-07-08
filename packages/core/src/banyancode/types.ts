@@ -218,6 +218,15 @@ export type PeerInfo = {
   agent: string
   status: "active" | "idle" | "disconnected"
   lastSeenAt: number
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: { read: number; write: number }
+  }
+  lastActivityAt?: number
+  blockedReason?: string
 }
 
 export type CodegraphMeta = {

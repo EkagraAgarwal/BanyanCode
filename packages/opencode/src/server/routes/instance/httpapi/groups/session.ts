@@ -1,6 +1,7 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Permission } from "@/permission"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { MeshCoordinator } from "@opencode-ai/core/banyancode/mesh-coordinator"
 
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
@@ -81,6 +82,7 @@ export const SessionPaths = {
   get: `${root}/:sessionID`,
   children: `${root}/:sessionID/children`,
   todo: `${root}/:sessionID/todo`,
+  mesh: `${root}/:sessionID/mesh`,
   diff: `${root}/:sessionID/diff`,
   messages: `${root}/:sessionID/message`,
   message: `${root}/:sessionID/message/:messageID`,
@@ -163,6 +165,18 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.todo",
             summary: "Get session todos",
             description: "Retrieve the todo list associated with a specific session, showing tasks and action items.",
+          }),
+        ),
+        HttpApiEndpoint.get("mesh", SessionPaths.mesh, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(MeshCoordinator.MeshStatus, "Mesh status"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.mesh",
+            summary: "Get mesh status",
+            description: "Retrieve the current mesh status for a session, including subagent peer information and cost.",
           }),
         ),
         HttpApiEndpoint.get("diff", SessionPaths.diff, {
