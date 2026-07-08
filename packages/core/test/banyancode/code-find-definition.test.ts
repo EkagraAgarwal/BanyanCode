@@ -41,6 +41,8 @@ const mockCodegraphRepoLayer = Layer.succeed(
         { id: "n4", fileID: "f3", kind: "class" as const, name: "A", startLine: 1, endLine: 30 },
         { id: "n5", fileID: "f3", kind: "function" as const, name: "b", signature: "A.b()", startLine: 10, endLine: 15 },
         { id: "n6", fileID: "f4", kind: "function" as const, name: "EffectModule", code: "# Effect.gen\n\nA markdown heading mentioning Effect.gen", startLine: 1, endLine: 5 },
+        { id: "n7", fileID: "f5", kind: "file" as const, name: "create-effect.ts", code: "export function createEffect() { return 'real definition here' }", startLine: 1, endLine: 1 },
+        { id: "n8", fileID: "f6", kind: "file" as const, name: "prompt-input.tsx", code: "function PromptInput() { /* contains the string createEffect inside its body */ }", startLine: 1, endLine: 50 },
       ]),
     listAllFiles: () =>
       Effect.succeed([
@@ -48,6 +50,8 @@ const mockCodegraphRepoLayer = Layer.succeed(
         { id: "f2", path: "models/user.ts", contentHash: "h2", language: "ts", indexedAt: 0 },
         { id: "f3", path: "a.ts", contentHash: "h3", language: "ts", indexedAt: 0 },
         { id: "f4", path: "docs/guide.md", contentHash: "h4", language: "markdown", indexedAt: 0 },
+        { id: "f5", path: "create-effect.ts", contentHash: "h5", language: "ts", indexedAt: 0 },
+        { id: "f6", path: "prompt-input.tsx", contentHash: "h6", language: "tsx", indexedAt: 0 },
       ]),
     getFileByPath: () => Effect.succeed(undefined),
     putFile: () => Effect.void,
@@ -212,6 +216,74 @@ describe("code_find definition intent", () => {
           matches = nodes.filter((n) => n.name.toLowerCase() === lowerTarget)
         }
         expect(matches.length).toBe(0)
+      }).pipe(
+        Effect.provide(mockServicesLayer),
+        Effect.scoped,
+      ),
+    )
+  })
+
+  test("definition filters out file-level nodes from keyword fallback", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo.Service
+        const nodes = yield* repo.listAllNodes()
+        const target = "createeffect"
+        const lowerTarget = target.toLowerCase()
+        const isSymbolNode = (n: typeof nodes[number]) => n.kind !== "file"
+        const matches = nodes.filter((n) =>
+          isSymbolNode(n) &&
+          (n.name.toLowerCase() === lowerTarget || (n.code?.toLowerCase().includes(lowerTarget) ?? false))
+        )
+        expect(matches.length).toBe(0)
+        const fileKindMatches = nodes.filter((n) =>
+          n.kind === "file" && (n.name.toLowerCase() === lowerTarget || (n.code?.toLowerCase().includes(lowerTarget) ?? false))
+        )
+        expect(fileKindMatches.length).toBe(2)
+      }).pipe(
+        Effect.provide(mockServicesLayer),
+        Effect.scoped,
+      ),
+    )
+  })
+
+  test("definition filters out file-level nodes from exact name match", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo.Service
+        const nodes = yield* repo.listAllNodes()
+        const target = "create-effect.ts"
+        const lowerTarget = target.toLowerCase()
+        const isSymbolNode = (n: typeof nodes[number]) => n.kind !== "file"
+        const matches = nodes.filter((n) =>
+          isSymbolNode(n) && n.name.toLowerCase() === lowerTarget
+        )
+        expect(matches.length).toBe(0)
+      }).pipe(
+        Effect.provide(mockServicesLayer),
+        Effect.scoped,
+      ),
+    )
+  })
+
+  test("definition with empty target sets _diagnostic to empty-target", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo.Service
+        const nodes = yield* repo.listAllNodes()
+        const matchedNodes: typeof nodes = []
+        const matches = matchedNodes.map((n) => ({ node: n, derivation: "name-match" as const }))
+        const diagnostic = "empty-target"
+        const output = {
+          matches,
+          files: [],
+          meta: undefined,
+          intent: "definition",
+          dispatchedTo: "codegraph_query",
+          _diagnostic: diagnostic,
+        }
+        expect(output._diagnostic).toBe("empty-target")
+        expect(output.matches.length).toBe(0)
       }).pipe(
         Effect.provide(mockServicesLayer),
         Effect.scoped,

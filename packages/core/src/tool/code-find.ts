@@ -136,24 +136,31 @@ export const locationLayer = Layer.effectDiscard(
               switch (input.intent) {
                 case "definition": {
                   const target = input.target ?? ""
-                  if (!target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_query" }
+                  if (!target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_query", _diagnostic: "empty-target" as const }
                   const allNodes = yield* repo.listAllNodes()
                   const lowerTarget = target.toLowerCase()
                   const allowKeyword = input.includeKeywordFallback !== false
 
+                  const isSymbolNode = (n: CodegraphNode) => n.kind !== "file"
+
                   let matchedNodes: CodegraphNode[]
                   if (allowKeyword) {
                     matchedNodes = allNodes.filter((n) =>
-                      n.name.toLowerCase() === lowerTarget || (n.code?.toLowerCase().includes(lowerTarget) ?? false)
+                      isSymbolNode(n) &&
+                      (n.name.toLowerCase() === lowerTarget || (n.code?.toLowerCase().includes(lowerTarget) ?? false))
                     ).slice(0, limit)
                   } else {
-                    matchedNodes = allNodes.filter((n) => n.name.toLowerCase() === lowerTarget).slice(0, limit)
+                    matchedNodes = allNodes.filter((n) =>
+                      isSymbolNode(n) && n.name.toLowerCase() === lowerTarget
+                    ).slice(0, limit)
                   }
 
                   if (matchedNodes.length === 0 && target.includes(".")) {
                     const parts = target.toLowerCase().split(".")
                     const lastPart = parts[parts.length - 1] ?? ""
-                    const methodMatches = allNodes.filter((n) => n.name.toLowerCase() === lastPart).slice(0, limit)
+                    const methodMatches = allNodes.filter((n) =>
+                      isSymbolNode(n) && n.name.toLowerCase() === lastPart
+                    ).slice(0, limit)
                     if (methodMatches.length > 0) matchedNodes = methodMatches
                   }
 
@@ -238,21 +245,34 @@ export const locationLayer = Layer.effectDiscard(
                   const allFiles = yield* repo.listAllFiles()
                   const allNodes = yield* repo.listAllNodes()
 
-                  const symbolMatches = allNodes.filter((n) => n.name === target)
-                  const graphFileIDs = [...new Set(symbolMatches.map((n) => n.fileID))]
-                  const graphFiles = allFiles.filter((f) => graphFileIDs.includes(f.id)).map((f) => ({ path: f.path }))
+                  const looksLikeFilename = /\.(md|mdx|ts|tsx|js|jsx|mjs|cjs|json|yaml|yml|toml|sql|py|pyw|go|rs|java|kt|c|cpp|cc|cxx|h|hpp|hh|css|html|sh|ps1|vue|svelte|mdx)$/i.test(target)
+                  const sep = /[\\/]/.test(target) ? `[\\${"/"}]` : ""
 
                   let files: { path: string }[]
+                  let matches: { node: CodegraphNode; derivation: "name-match" }[]
                   let dispatchedTo: string
-                  if (graphFiles.length > 0) {
-                    files = graphFiles.slice(0, limit)
-                    dispatchedTo = "graph"
+
+                  if (looksLikeFilename || sep !== "") {
+                    const pathFiltered = allFiles.filter((f) => f.path.endsWith(`${sep}${target}`)).slice(0, limit)
+                    files = pathFiltered.map((f) => ({ path: f.path }))
+                    const fileIDs = new Set(pathFiltered.map((f) => f.id))
+                    const symbolMatches = allNodes.filter((n) =>
+                      fileIDs.has(n.fileID) || (n.kind === "file" && n.name === target)
+                    )
+                    matches = symbolMatches.slice(0, limit).map((n) => ({ node: n, derivation: "name-match" as const }))
+                    dispatchedTo = files.length > 0 ? "graph" : "glob"
                   } else {
-                    files = allFiles.filter((f) => f.path.includes(target)).slice(0, limit).map((f) => ({ path: f.path }))
-                    dispatchedTo = "glob"
+                    const symbolMatches = allNodes.filter((n) => n.kind !== "file" && n.name === target)
+                    const fileIDs = [...new Set(symbolMatches.map((n) => n.fileID))]
+                    files = allFiles.filter((f) => fileIDs.includes(f.id)).slice(0, limit).map((f) => ({ path: f.path }))
+                    matches = symbolMatches.slice(0, limit).map((n) => ({ node: n, derivation: "name-match" as const }))
+                    dispatchedTo = files.length > 0 ? "graph" : "glob"
+                    if (files.length === 0) {
+                      files = allFiles.filter((f) => f.path.includes(target)).slice(0, limit).map((f) => ({ path: f.path }))
+                      dispatchedTo = "glob"
+                    }
                   }
 
-                  const matches = symbolMatches.slice(0, limit).map((n) => ({ node: n, derivation: "name-match" as const }))
                   return {
                     matches,
                     files,
