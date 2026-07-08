@@ -8,6 +8,15 @@ import { CodegraphRepo } from "./codegraph-repo"
 import { Database } from "../database/database"
 import type { CodegraphEdge, CodegraphFile, CodegraphNode, CodegraphNodeKind } from "./types"
 import { getParserForPath } from "./langs/registry"
+import type { ParseResult } from "./langs/types"
+import {
+  parseTypeScriptWithTreeSitterIncremental,
+  parsePythonWithTreeSitterIncremental,
+} from "./langs/query-executor"
+import type { Tree } from "web-tree-sitter"
+
+const TS_LIKE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"])
+const PY_LIKE_EXTS = new Set([".py", ".pyw"])
 
 export class CodegraphError extends Schema.TaggedErrorClass<CodegraphError>()("Banyan/CodegraphError", {
   message: Schema.String,
@@ -72,6 +81,7 @@ export const layer = Layer.effect(
     const repo = yield* CodegraphRepo.Service
     const database = yield* Database.Service
     const cancelled = yield* Ref.make(false)
+    const treeCacheRef = yield* Ref.make(new Map<string, Tree>())
     const walkDirectory = (
       dir: string,
       maxFileSizeBytes: number,
@@ -386,9 +396,40 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
     }
 
     const parser = getParserForPath(filePath)
-    const result = isArtifact
-      ? { nodes: [], edges: [] }
-      : parser.parse(content, filePath)
+    const fileID = existing?.id ?? randomUUID()
+    let result: ParseResult
+    let newTree: Tree | undefined
+    if (isArtifact) {
+      result = { nodes: [], edges: [], imports: [] }
+    } else if (TS_LIKE_EXTS.has(ext)) {
+      const cached = yield* Ref.get(treeCacheRef)
+      const oldTree: Tree | undefined = cached.get(filePath)
+      const incr = yield* parseTypeScriptWithTreeSitterIncremental(content, fileID, oldTree)
+      result = incr.result
+      newTree = incr.tree
+      const capturedTree: Tree | undefined = newTree
+      if (capturedTree) {
+        yield* Ref.update(treeCacheRef, (m) => {
+          m.set(filePath, capturedTree)
+          return m
+        })
+      }
+    } else if (PY_LIKE_EXTS.has(ext)) {
+      const cached = yield* Ref.get(treeCacheRef)
+      const oldTree: Tree | undefined = cached.get(filePath)
+      const incr = yield* parsePythonWithTreeSitterIncremental(content, fileID, oldTree)
+      result = incr.result
+      newTree = incr.tree
+      const capturedTree: Tree | undefined = newTree
+      if (capturedTree) {
+        yield* Ref.update(treeCacheRef, (m) => {
+          m.set(filePath, capturedTree)
+          return m
+        })
+      }
+    } else {
+      result = parser.parse(content, filePath)
+    }
     let language = "generic"
     if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx" || ext === ".mts" || ext === ".cts" || ext === ".mjs" || ext === ".cjs") language = "typescript"
     else if (ext === ".py" || ext === ".pyw") language = "python"
@@ -406,7 +447,6 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
     else if (ext === ".html" || ext === ".css") language = "web"
     else if (ext === ".md") language = "markdown"
 
-    const fileID = existing?.id ?? randomUUID()
     const indexedAt = Date.now()
     const file: CodegraphFile = { id: fileID, path: filePath, contentHash, language, indexedAt }
     const nodes: CodegraphNode[] = result.nodes.map((n) => ({

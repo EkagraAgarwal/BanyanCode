@@ -157,6 +157,26 @@ export const withTreeSitter = <A>(
     return yield* Effect.sync(() => f(state))
   })
 
+export type IncrementalTree = import("web-tree-sitter").Tree
+
+export const parseIncremental = (
+  ext: string,
+  content: string,
+  oldTree: IncrementalTree | undefined,
+): Effect.Effect<IncrementalTree, TreeSitterUnavailableError, never> =>
+  withTreeSitter((state) => {
+    if (!SUPPORTED_EXTENSIONS.has(ext)) {
+      throw new Error(`Unsupported extension: ${ext}`)
+    }
+    const language = state.parser.languagesByExt.get(ext) as import("web-tree-sitter").Language | undefined
+    if (!language) throw new Error(`No language for: ${ext}`)
+    const parser = new state.parser.Parser()
+    parser.setLanguage(language)
+    return oldTree
+      ? (parser.parse(content, oldTree) as IncrementalTree)
+      : (parser.parse(content) as IncrementalTree)
+  })
+
 export interface Interface {
   readonly getLanguage: (ext: string) => Effect.Effect<unknown, TreeSitterUnavailableError, never>
   readonly parse: (ext: string, content: string) => Effect.Effect<ParseTree, TreeSitterUnavailableError, never>

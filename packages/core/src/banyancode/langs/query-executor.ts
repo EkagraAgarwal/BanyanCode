@@ -5,10 +5,11 @@ import type { ParseResult, ParsedEdge } from "./types"
 import { parseTypeScript } from "./typescript"
 import { parsePython } from "./python"
 import {
+  parseIncremental,
   TreeSitterUnavailableError,
   withTreeSitter,
 } from "./tree-sitter"
-import type { Language, Node, Parser, Query, QueryCapture, QueryMatch } from "web-tree-sitter"
+import type { Language, Node, Parser, Query, QueryCapture, QueryMatch, Tree } from "web-tree-sitter"
 
 const QUERIES_DIR = path.resolve(import.meta.dir, "queries")
 
@@ -148,21 +149,10 @@ interface BundleRefs {
   readonly Query: typeof Query
 }
 
-const runQueryAndExtract = (
-  refs: BundleRefs,
-  querySource: string,
-  content: string,
+const extractEdgesFromMatches = (
+  matches: readonly QueryMatch[],
   fileID: string,
 ): ParsedEdge[] => {
-  const tree = refs.parser.parse(content)
-  if (!tree) return []
-  let query: Query
-  try {
-    query = new refs.Query(refs.language, querySource)
-  } catch {
-    return []
-  }
-  const matches = query.matches(tree.rootNode)
   const seen = new Set<string>()
   const all: ParsedEdge[] = []
   for (const edge of [
@@ -175,6 +165,38 @@ const runQueryAndExtract = (
     all.push(edge)
   }
   return all
+}
+
+const buildQueryOnTree = (
+  tree: Tree,
+  language: Language,
+  queryCtor: typeof Query,
+  querySource: string,
+  fileID: string,
+): ParsedEdge[] => {
+  let query: Query
+  try {
+    query = new queryCtor(language, querySource)
+  } catch {
+    return []
+  }
+  return extractEdgesFromMatches(query.matches(tree.rootNode), fileID)
+}
+
+const runQueryAndExtract = (
+  refs: BundleRefs,
+  querySource: string,
+  content: string,
+  fileID: string,
+): ParsedEdge[] => {
+  const tree = refs.parser.parse(content)
+  if (!tree) return []
+  return buildQueryOnTree(tree, refs.language, refs.Query, querySource, fileID)
+}
+
+export interface IncrementalParseResult {
+  readonly result: ParseResult
+  readonly tree: Tree | undefined
 }
 
 export const parseTypeScriptWithTreeSitter = (
@@ -211,6 +233,70 @@ export const parsePythonWithTreeSitter = (
       const regex = parsePython(content, fileID)
       return { ...regex, edges: [...regex.edges, ...tsEdges] }
     })
+  })
+
+export const parseTypeScriptWithTreeSitterIncremental = (
+  content: string,
+  fileID: string,
+  oldTree: Tree | undefined,
+): Effect.Effect<IncrementalParseResult, never, never> =>
+  Effect.gen(function* () {
+    const querySource = yield* loadQuerySourceOrEmpty(".ts")
+    if (querySource === "") return { result: parseTypeScript(content, fileID), tree: undefined }
+    return yield* withTreeSitter((state) => {
+      const Parser = state.parser.Parser
+      const language = state.parser.languagesByExt.get(".ts") as Language | undefined
+      const Query = state.parser.Query
+      if (!language) return { result: parseTypeScript(content, fileID), tree: undefined }
+      const parser = new Parser()
+      parser.setLanguage(language)
+      const tree = (oldTree
+        ? parser.parse(content, oldTree)
+        : parser.parse(content)) as Tree | null
+      if (!tree) return { result: parseTypeScript(content, fileID), tree: undefined }
+      const tsEdges = buildQueryOnTree(tree, language, Query, querySource, fileID)
+      const regex = parseTypeScript(content, fileID)
+      return { result: { ...regex, edges: [...regex.edges, ...tsEdges] }, tree }
+    }).pipe(
+      Effect.catchCause(() =>
+        Effect.succeed<IncrementalParseResult>({
+          result: parseTypeScript(content, fileID),
+          tree: undefined,
+        }),
+      ),
+    )
+  })
+
+export const parsePythonWithTreeSitterIncremental = (
+  content: string,
+  fileID: string,
+  oldTree: Tree | undefined,
+): Effect.Effect<IncrementalParseResult, never, never> =>
+  Effect.gen(function* () {
+    const querySource = yield* loadQuerySourceOrEmpty(".py")
+    if (querySource === "") return { result: parsePython(content, fileID), tree: undefined }
+    return yield* withTreeSitter((state) => {
+      const Parser = state.parser.Parser
+      const language = state.parser.languagesByExt.get(".py") as Language | undefined
+      const Query = state.parser.Query
+      if (!language) return { result: parsePython(content, fileID), tree: undefined }
+      const parser = new Parser()
+      parser.setLanguage(language)
+      const tree = (oldTree
+        ? parser.parse(content, oldTree)
+        : parser.parse(content)) as Tree | null
+      if (!tree) return { result: parsePython(content, fileID), tree: undefined }
+      const tsEdges = buildQueryOnTree(tree, language, Query, querySource, fileID)
+      const regex = parsePython(content, fileID)
+      return { result: { ...regex, edges: [...regex.edges, ...tsEdges] }, tree }
+    }).pipe(
+      Effect.catchCause(() =>
+        Effect.succeed<IncrementalParseResult>({
+          result: parsePython(content, fileID),
+          tree: undefined,
+        }),
+      ),
+    )
   })
 
 export const validateQueryFile = (ext: string): Effect.Effect<boolean, TreeSitterUnavailableError, never> =>
