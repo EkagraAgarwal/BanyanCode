@@ -125,7 +125,8 @@ describe("CodegraphIndexer", () => {
 
         // First index
         yield* indexer.index({ root: tmp.path })
-        expect(yield* repo.countNodes()).toBe(1)
+        // 1 file-level node + 1 parser node (foo)
+        expect(yield* repo.countNodes()).toBe(2)
 
         // Modify file.ts: change function foo to class Bar (creates a different node ID/name)
         yield* Effect.promise(() => fs.writeFile(codeFilePath, "class Bar { method() {} }\n"))
@@ -133,10 +134,11 @@ describe("CodegraphIndexer", () => {
         // Second index (content hash changed, so it will re-index)
         yield* indexer.index({ root: tmp.path })
 
-        // The old function node (foo) should be gone, only the class node (Bar) should exist!
-        expect(yield* repo.countNodes()).toBe(1)
+        // The old function node (foo) should be gone, only the file-level + class node (Bar) should exist
+        expect(yield* repo.countNodes()).toBe(2)
         const nodes = yield* repo.listAllNodes()
-        expect(nodes[0].name).toBe("Bar")
+        expect(nodes.some((n) => n.name === "Bar")).toBe(true)
+        expect(nodes.some((n) => n.name === "foo")).toBe(false)
       }).pipe(
         Effect.provide(serviceLayer),
         Effect.provide(codegraphRepoDefaultLayer),

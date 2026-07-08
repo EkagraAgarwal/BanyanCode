@@ -50,6 +50,8 @@ const mockRepo = Layer.succeed(
     listParseErrors: () => Effect.succeed([]),
     clearParseErrors: () => Effect.void,
     findSymbolsByServiceTag: () => Effect.succeed([]),
+    listNodesByKind: () => Effect.succeed([]),
+    lookupByServiceTag: () => Effect.succeed(null),
   }),
 )
 

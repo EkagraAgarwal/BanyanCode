@@ -449,7 +449,18 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
 
     const indexedAt = Date.now()
     const file: CodegraphFile = { id: fileID, path: filePath, contentHash, language, indexedAt }
-    const nodes: CodegraphNode[] = result.nodes.map((n) => ({
+    const fileLevelNode: CodegraphNode = {
+      id: `${fileID}:file`,
+      fileID,
+      kind: "file",
+      name: path.basename(filePath),
+      signature: relativePath,
+      startLine: 1,
+      endLine: content.split("\n").length,
+      code: content,
+      derivation: "regex-v1",
+    }
+    const nodes: CodegraphNode[] = [fileLevelNode, ...result.nodes.map((n) => ({
       id: n.id,
       fileID,
       kind: n.kind,
@@ -458,14 +469,18 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
       startLine: n.startLine,
       endLine: n.endLine,
       code: n.code,
-      derivation: "regex-v1",
-    }))
-    const edges: CodegraphEdge[] = result.edges.map((e) => ({
-      id: e.id,
-      fromNodeID: e.fromNodeID,
-      toNodeID: e.toNodeID,
-      kind: e.kind,
-    }))
+      derivation: "regex-v1" as const,
+    }))]
+
+    const knownNodeIDs = new Set(nodes.map((n) => n.id))
+    const edges: CodegraphEdge[] = result.edges
+      .filter((e) => knownNodeIDs.has(e.fromNodeID) && knownNodeIDs.has(e.toNodeID))
+      .map((e) => ({
+        id: e.id,
+        fromNodeID: e.fromNodeID,
+        toNodeID: e.toNodeID,
+        kind: e.kind,
+      }))
 
     if (fileKind) {
       const lineCount = content.split("\n").length
