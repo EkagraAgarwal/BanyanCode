@@ -1,6 +1,8 @@
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import HomeFooter from "./home/footer"
 import HomeTips from "./home/tips"
+import SidebarAgents from "./sidebar/agents"
+import SidebarPerformance from "./sidebar/performance"
 import SidebarContext from "./sidebar/context"
 import SidebarFiles from "./sidebar/files"
 import SidebarFooter from "./sidebar/footer"
@@ -39,6 +41,8 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
   return [
     HomeFooter,
     HomeTips,
+    SidebarAgents,
+    SidebarPerformance,
     SidebarContext,
     SidebarCodegraphPanel,
     SidebarCodegraphIntelPanel,
