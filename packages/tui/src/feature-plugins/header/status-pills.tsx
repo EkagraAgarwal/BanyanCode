@@ -83,27 +83,38 @@ function View(props: { api: TuiPluginApi }) {
   const mcpLabel = () => (mcpConnectedCount() > 0 ? `MCP: ${mcpFirstConnected()}` : "MCP: —")
   const lspLabel = () => (lspCount() > 0 ? `LSP: ${lspCount()} server${lspCount() !== 1 ? "s" : ""}` : "LSP: Disabled")
 
-  const dotColor = (active: boolean) => active ? toHex(theme().success) : toHex(theme().textMuted)
+  const activeSessionDotColor = () => activeSessionCount() > 0 ? toHex(theme().success) : toHex(theme().textMuted)
+
+  const graphDotColor = () => {
+    const s = staleness()
+    if (!s) return toHex(theme().error)
+    if (s.isStale) return toHex(theme().warning)
+    return toHex(theme().success)
+  }
+
+  const mcpDotColor = () => mcpConnectedCount() > 0 ? toHex(theme().success) : toHex(theme().error)
+
+  const lspDotColor = () => lspCount() > 0 ? toHex(theme().success) : toHex(theme().error)
 
   return (
     <box flexDirection="row" gap={2}>
       <box flexDirection="row" gap={0}>
-        <text fg={dotColor(activeSessionCount() > 0)}>●</text>
+        <text fg={activeSessionDotColor()}>●</text>
         <text fg={toHex(theme().textMuted)}> {agentsLabel()}</text>
       </box>
       <text fg={toHex(theme().textMuted)}>|</text>
       <box flexDirection="row" gap={0}>
-        <text fg={dotColor(!staleness()?.isStale)}>●</text>
+        <text fg={graphDotColor()}>●</text>
         <text fg={toHex(theme().textMuted)}> {graphLabel()}</text>
       </box>
       <text fg={toHex(theme().textMuted)}>|</text>
       <box flexDirection="row" gap={0}>
-        <text fg={dotColor(mcpConnectedCount() > 0)}>●</text>
+        <text fg={mcpDotColor()}>●</text>
         <text fg={toHex(theme().textMuted)}> {mcpLabel()}</text>
       </box>
       <text fg={toHex(theme().textMuted)}>|</text>
       <box flexDirection="row" gap={0}>
-        <text fg={dotColor(lspCount() > 0)}>●</text>
+        <text fg={lspDotColor()}>●</text>
         <text fg={toHex(theme().textMuted)}> {lspLabel()}</text>
       </box>
     </box>

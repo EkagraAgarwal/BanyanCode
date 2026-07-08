@@ -19,6 +19,7 @@ import SidebarCodegraphPanel from "./sidebar/codegraph-panel"
 import SidebarCodegraphIntelPanel from "./sidebar/codegraph-intel-panel"
 import SidebarSystemStatus from "./sidebar/system-status"
 import SessionFooter from "./footer/session-footer"
+import AttentionStrip from "../component/attention-strip"
 import HeaderBrand from "./header/brand"
 import HeaderStatusPills from "./header/status-pills"
 import HeaderKeybindingHints from "./header/keybinding-hints"
@@ -61,6 +62,7 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     SidebarFiles,
     SidebarFooter,
     SessionFooter,
+    AttentionStrip,
     HeaderBrand,
     HeaderStatusPills,
     HeaderKeybindingHints,
