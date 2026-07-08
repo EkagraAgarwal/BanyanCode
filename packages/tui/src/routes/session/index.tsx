@@ -1201,6 +1201,7 @@ export function Session() {
           <box flexShrink={0} flexDirection="row" justifyContent="space-between" width="100%">
             <pluginRuntime.Slot name="app_top" session_id={route.sessionID} />
           </box>
+          <pluginRuntime.Slot name="session_attention_strip" session_id={route.sessionID} />
           <box flexDirection="row" flexGrow={1} minHeight={0}>
             <Show when={sidebarVisible()}>
               <Switch>
@@ -1234,7 +1235,7 @@ export function Session() {
                   if (newWidthPct < 15) {
                     setLeftCollapsed(true)
                   } else {
-                    const clamped = Math.max(15, Math.min(45, newWidthPct))
+                    const clamped = Math.max(18, Math.min(38, newWidthPct))
                     setLeftSidebarWidth(() => clamped)
                   }
                 }}
@@ -1443,7 +1444,7 @@ export function Session() {
                   if (newWidthPct < 15) {
                     setRightCollapsed(true)
                   } else {
-                    const clamped = Math.max(15, Math.min(45, newWidthPct))
+                    const clamped = Math.max(18, Math.min(34, newWidthPct))
                     setRightSidebarWidth(() => clamped)
                   }
                 }}
