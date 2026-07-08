@@ -60,6 +60,7 @@ import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
 import { Toast, useToast } from "../../ui/toast"
 import { CodegraphProgress } from "../../component/codegraph-progress"
+import { MessageBlock } from "../../component/message-block"
 import { ResizableSeparator } from "../../component/resizable-separator"
 import { useKV } from "../../context/kv.tsx"
 import stripAnsi from "strip-ansi"
@@ -2230,27 +2231,46 @@ function Shell(props: ToolProps) {
 }
 
 function Write(props: ToolProps) {
+  const ctx = use()
   const { theme, syntax } = useTheme()
   const pathFormatter = usePathFormatter()
+
+  const linkedAsk = createMemo(() => {
+    const requests = ctx.sync.data.permission[ctx.sessionID]
+    if (!requests) return undefined
+    return requests.find((req) => req.tool?.messageID === props.part.messageID)
+  })
+  const hasPermissionLink = createMemo(() => linkedAsk() !== undefined)
+  const permissionRequestID = createMemo(() => linkedAsk()?.id)
+
   const code = createMemo(() => {
     return stringValue(props.input.content) ?? ""
   })
 
+  const label = createMemo(() => `Diff · ${pathFormatter.format(stringValue(props.input.filePath) ?? "")}`)
+
   return (
     <Switch>
       <Match when={props.metadata.diagnostics !== undefined}>
-        <BlockTool title={"# Wrote " + pathFormatter.format(stringValue(props.input.filePath))} part={props.part}>
-          <line_number fg={theme.textMuted} minWidth={3} paddingRight={1}>
-            <code
-              conceal={false}
-              fg={theme.text}
-              filetype={filetype(stringValue(props.input.filePath))}
-              syntaxStyle={syntax()}
-              content={code()}
-            />
-          </line_number>
-          <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.filePath) ?? ""} />
-        </BlockTool>
+        <MessageBlock
+          mode="diff"
+          label={label()}
+          hasPermissionLink={hasPermissionLink()}
+          permissionRequestID={permissionRequestID()}
+        >
+          <BlockTool title={"# Wrote " + pathFormatter.format(stringValue(props.input.filePath))} part={props.part}>
+            <line_number fg={theme.textMuted} minWidth={3} paddingRight={1}>
+              <code
+                conceal={false}
+                fg={theme.text}
+                filetype={filetype(stringValue(props.input.filePath))}
+                syntaxStyle={syntax()}
+                content={code()}
+              />
+            </line_number>
+            <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.filePath) ?? ""} />
+          </BlockTool>
+        </MessageBlock>
       </Match>
       <Match when={true}>
         <InlineTool
@@ -2464,10 +2484,18 @@ function Edit(props: ToolProps) {
   const { theme, syntax } = useTheme()
   const pathFormatter = usePathFormatter()
 
+  const linkedAsk = createMemo(() => {
+    const requests = ctx.sync.data.permission[ctx.sessionID]
+    if (!requests) return undefined
+    return requests.find((req) => req.tool?.messageID === props.part.messageID)
+  })
+  const hasPermissionLink = createMemo(() => linkedAsk() !== undefined)
+  const permissionRequestID = createMemo(() => linkedAsk()?.id)
+  const label = createMemo(() => `Diff · ${pathFormatter.format(stringValue(props.input.filePath) ?? "")}`)
+
   const view = createMemo(() => {
     const diffStyle = ctx.tui.diff_style
     if (diffStyle === "stacked") return "unified"
-    // Default to "auto" behavior
     return ctx.width > 120 ? "split" : "unified"
   })
 
@@ -2478,30 +2506,37 @@ function Edit(props: ToolProps) {
   return (
     <Switch>
       <Match when={stringValue(props.metadata.diff) !== undefined}>
-        <BlockTool title={"← Edit " + pathFormatter.format(stringValue(props.input.filePath))} part={props.part}>
-          <box paddingLeft={1}>
-            <diff
-              diff={diffContent()}
-              view={view()}
-              filetype={ft()}
-              syntaxStyle={syntax()}
-              showLineNumbers={true}
-              width="100%"
-              wrapMode={ctx.diffWrapMode()}
-              fg={theme.text}
-              addedBg={theme.diffAddedBg}
-              removedBg={theme.diffRemovedBg}
-              contextBg={theme.diffContextBg}
-              addedSignColor={theme.diffHighlightAdded}
-              removedSignColor={theme.diffHighlightRemoved}
-              lineNumberFg={theme.diffLineNumber}
-              lineNumberBg={theme.diffContextBg}
-              addedLineNumberBg={theme.diffAddedLineNumberBg}
-              removedLineNumberBg={theme.diffRemovedLineNumberBg}
-            />
-          </box>
-          <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.filePath) ?? ""} />
-        </BlockTool>
+        <MessageBlock
+          mode="diff"
+          label={label()}
+          hasPermissionLink={hasPermissionLink()}
+          permissionRequestID={permissionRequestID()}
+        >
+          <BlockTool title={"← Edit " + pathFormatter.format(stringValue(props.input.filePath))} part={props.part}>
+            <box paddingLeft={1}>
+              <diff
+                diff={diffContent()}
+                view={view()}
+                filetype={ft()}
+                syntaxStyle={syntax()}
+                showLineNumbers={true}
+                width="100%"
+                wrapMode={ctx.diffWrapMode()}
+                fg={theme.text}
+                addedBg={theme.diffAddedBg}
+                removedBg={theme.diffRemovedBg}
+                contextBg={theme.diffContextBg}
+                addedSignColor={theme.diffHighlightAdded}
+                removedSignColor={theme.diffHighlightRemoved}
+                lineNumberFg={theme.diffLineNumber}
+                lineNumberBg={theme.diffContextBg}
+                addedLineNumberBg={theme.diffAddedLineNumberBg}
+                removedLineNumberBg={theme.diffRemovedLineNumberBg}
+              />
+            </box>
+            <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.filePath) ?? ""} />
+          </BlockTool>
+        </MessageBlock>
       </Match>
       <Match when={true}>
         <InlineTool icon="←" pending="Preparing edit..." complete={stringValue(props.input.filePath)} part={props.part}>
@@ -2516,6 +2551,14 @@ function ApplyPatch(props: ToolProps) {
   const ctx = use()
   const { theme, syntax } = useTheme()
   const pathFormatter = usePathFormatter()
+
+  const linkedAsk = createMemo(() => {
+    const requests = ctx.sync.data.permission[ctx.sessionID]
+    if (!requests) return undefined
+    return requests.find((req) => req.tool?.messageID === props.part.messageID)
+  })
+  const hasPermissionLink = createMemo(() => linkedAsk() !== undefined)
+  const permissionRequestID = createMemo(() => linkedAsk()?.id)
 
   const files = createMemo(() => parseApplyPatchFiles(props.metadata.files))
 
@@ -2558,24 +2601,36 @@ function ApplyPatch(props: ToolProps) {
     return "← Patched " + file.relativePath
   }
 
+  const patchLabel = createMemo(() => {
+    const count = files().length
+    return `Diff · ${count} file${count !== 1 ? "s" : ""}`
+  })
+
   return (
     <Switch>
       <Match when={files().length > 0}>
         <For each={files()}>
           {(file) => (
-            <BlockTool title={title(file)} part={props.part}>
-              <Show
-                when={file.type !== "delete"}
-                fallback={
-                  <text fg={theme.diffRemoved}>
-                    -{file.deletions} line{file.deletions !== 1 ? "s" : ""}
-                  </text>
-                }
-              >
-                <Diff diff={file.patch} filePath={file.filePath} />
-                <Diagnostics diagnostics={props.metadata.diagnostics} filePath={file.movePath ?? file.filePath} />
-              </Show>
-            </BlockTool>
+            <MessageBlock
+              mode="diff"
+              label={patchLabel()}
+              hasPermissionLink={hasPermissionLink()}
+              permissionRequestID={permissionRequestID()}
+            >
+              <BlockTool title={title(file)} part={props.part}>
+                <Show
+                  when={file.type !== "delete"}
+                  fallback={
+                    <text fg={theme.diffRemoved}>
+                      -{file.deletions} line{file.deletions !== 1 ? "s" : ""}
+                    </text>
+                  }
+                >
+                  <Diff diff={file.patch} filePath={file.filePath} />
+                  <Diagnostics diagnostics={props.metadata.diagnostics} filePath={file.movePath ?? file.filePath} />
+                </Show>
+              </BlockTool>
+            </MessageBlock>
           )}
         </For>
       </Match>
