@@ -18,7 +18,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { BanyanAgentSaveInput, BanyanConfigUpdateInput, CodegraphBuildInput, GlobalUpgradeInput, WebSearchFreeInput } from "../groups/global"
+import { BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, GlobalUpgradeInput, PreflightInput, SafeRenameInput, WebSearchFreeInput } from "../groups/global"
 import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
@@ -26,6 +26,17 @@ import { GraphMeta } from "@opencode-ai/core/banyancode/types"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import * as WebSearchFreeTool from "@opencode-ai/core/tool/websearch-free"
 import { parse as parseWebSearchFree } from "@opencode-ai/core/tool/websearch-free/parse"
+import * as PreflightTool from "@opencode-ai/core/tool/preflight"
+import * as BlastRadiusTool from "@opencode-ai/core/tool/blast-radius"
+import * as SafeRenameTool from "@opencode-ai/core/tool/safe-rename"
+import type { Interface as CodegraphRepoInterface } from "@opencode-ai/core/banyancode/codegraph-repo"
+import type { Interface as CodegraphAnalyzerInterface } from "@opencode-ai/core/banyancode/codegraph-analyzer"
+import type { Interface as RepositoryIntelligenceInterface } from "@opencode-ai/core/banyancode/repository-intelligence/service"
+import type { Interface as EditPlannerInterface } from "@opencode-ai/core/banyancode/edit-planner"
+import type { Interface as PermissionV2Interface } from "@opencode-ai/core/permission"
+import { Tool as ToolNS } from "@opencode-ai/core/tool/tool"
+import { ToolCall } from "@opencode-ai/llm"
+import { randomUUID } from "node:crypto"
 
 const websearchFreeDisabled = () => process.env.BANYANCODE_DISABLE_WEBSEARCH === "1"
 
@@ -406,6 +417,138 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       } satisfies typeof WebSearchFreeTool.Output.Type
     })
 
+    const settlePreflightHandler = (
+      payload: typeof PreflightInput.Type,
+      services: {
+        permission: PermissionV2Interface
+        repo: CodegraphRepoInterface
+        analyzer: CodegraphAnalyzerInterface
+        intel: RepositoryIntelligenceInterface
+      },
+    ): Effect.Effect<typeof PreflightTool.Output.Type, InvalidRequestError, never> =>
+      Effect.gen(function* () {
+        const tool = PreflightTool.makePreflightTool(services)
+        const call: ToolCall = {
+          type: "tool-call",
+          id: randomUUID(),
+          name: PreflightTool.name,
+          input: payload as unknown as Record<string, unknown>,
+        }
+        const ctxTool: ToolNS.Context = {
+          sessionID: "global" as ToolNS.Context["sessionID"],
+          agent: "global" as ToolNS.Context["agent"],
+          assistantMessageID: "global" as ToolNS.Context["assistantMessageID"],
+          toolCallID: call.id,
+        }
+        const settleResult = yield* ToolNS.settle(tool, call, ctxTool).pipe(
+          Effect.mapError((err) => new InvalidRequestError({ message: err.message })),
+        )
+        return (settleResult as { structured: typeof PreflightTool.Output.Type }).structured
+      })
+
+    const settleBlastRadiusHandler = (
+      payload: typeof BlastRadiusInput.Type,
+      services: {
+        permission: PermissionV2Interface
+        repo: CodegraphRepoInterface
+        analyzer: CodegraphAnalyzerInterface
+      },
+    ): Effect.Effect<typeof BlastRadiusTool.Output.Type, InvalidRequestError, never> =>
+      Effect.gen(function* () {
+        const tool = BlastRadiusTool.makeBlastRadiusTool(services)
+        const call: ToolCall = {
+          type: "tool-call",
+          id: randomUUID(),
+          name: BlastRadiusTool.name,
+          input: payload as unknown as Record<string, unknown>,
+        }
+        const ctxTool: ToolNS.Context = {
+          sessionID: "global" as ToolNS.Context["sessionID"],
+          agent: "global" as ToolNS.Context["agent"],
+          assistantMessageID: "global" as ToolNS.Context["assistantMessageID"],
+          toolCallID: call.id,
+        }
+        const settleResult = yield* ToolNS.settle(tool, call, ctxTool).pipe(
+          Effect.mapError((err) => new InvalidRequestError({ message: err.message })),
+        )
+        return (settleResult as { structured: typeof BlastRadiusTool.Output.Type }).structured
+      })
+
+    const settleSafeRenameHandler = (
+      payload: typeof SafeRenameInput.Type,
+      services: {
+        permission: PermissionV2Interface
+        repo: CodegraphRepoInterface
+        analyzer: CodegraphAnalyzerInterface
+        intel: RepositoryIntelligenceInterface
+        planner: EditPlannerInterface
+      },
+    ): Effect.Effect<typeof SafeRenameTool.Output.Type, InvalidRequestError, never> =>
+      Effect.gen(function* () {
+        const tool = SafeRenameTool.makeSafeRenameTool(services)
+        const call: ToolCall = {
+          type: "tool-call",
+          id: randomUUID(),
+          name: SafeRenameTool.name,
+          input: payload as unknown as Record<string, unknown>,
+        }
+        const ctxTool: ToolNS.Context = {
+          sessionID: "global" as ToolNS.Context["sessionID"],
+          agent: "global" as ToolNS.Context["agent"],
+          assistantMessageID: "global" as ToolNS.Context["assistantMessageID"],
+          toolCallID: call.id,
+        }
+        const settleResult = yield* ToolNS.settle(tool, call, ctxTool).pipe(
+          Effect.mapError((err) => new InvalidRequestError({ message: err.message })),
+        )
+        return (settleResult as { structured: typeof SafeRenameTool.Output.Type }).structured
+      })
+
+    const preflightHandler = Effect.fn("GlobalHttpApi.preflight")(function* (ctx: {
+      payload: typeof PreflightInput.Type
+    }) {
+      const repo = yield* Banyan.CodegraphRepo
+      const analyzer = yield* Banyan.CodegraphAnalyzer
+      const intel = yield* Banyan.RepositoryIntelligence
+      const permission = yield* PermissionV2.Service
+      return yield* settlePreflightHandler(ctx.payload, {
+        permission: permission as PermissionV2Interface,
+        repo: repo as CodegraphRepoInterface,
+        analyzer: analyzer as CodegraphAnalyzerInterface,
+        intel: intel as RepositoryIntelligenceInterface,
+      })
+    })
+
+    const blastRadiusHandler = Effect.fn("GlobalHttpApi.blastRadius")(function* (ctx: {
+      payload: typeof BlastRadiusInput.Type
+    }) {
+      const repo = yield* Banyan.CodegraphRepo
+      const analyzer = yield* Banyan.CodegraphAnalyzer
+      const permission = yield* PermissionV2.Service
+      return yield* settleBlastRadiusHandler(ctx.payload, {
+        permission: permission as PermissionV2Interface,
+        repo: repo as CodegraphRepoInterface,
+        analyzer: analyzer as CodegraphAnalyzerInterface,
+      })
+    })
+
+    const safeRenameHandler = Effect.fn("GlobalHttpApi.safeRename")(function* (ctx: {
+      payload: typeof SafeRenameInput.Type
+    }) {
+      const repo = yield* Banyan.CodegraphRepo
+      const analyzer = yield* Banyan.CodegraphAnalyzer
+      const intel = yield* Banyan.RepositoryIntelligence
+      const planner = yield* Banyan.EditPlanner
+      const permission = yield* PermissionV2.Service
+      return yield* settleSafeRenameHandler(ctx.payload, {
+        permission: permission as PermissionV2Interface,
+        repo: repo as CodegraphRepoInterface,
+        analyzer: analyzer as CodegraphAnalyzerInterface,
+        intel: intel as RepositoryIntelligenceInterface,
+        planner: planner as EditPlannerInterface,
+      })
+    })
+
     return handlers
       .handle("health", health)
       .handleRaw("event", event)
@@ -423,5 +566,8 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       .handle("codegraphEdges", codegraphEdgesHandler)
       .handle("banyanAgentSave", banyanAgentSaveHandler)
       .handle("websearchFree", websearchFreeHandler)
+      .handle("preflight", preflightHandler)
+      .handle("blastRadius", blastRadiusHandler)
+      .handle("safeRename", safeRenameHandler)
   }),
 )

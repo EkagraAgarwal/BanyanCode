@@ -280,7 +280,7 @@ describe("tool null normalization", () => {
       expect(result.structured.results).toEqual([])
     })
 
-    test("code-find Input accepts null", async () => {
+    test("code-find Input rejects null target and missing fallback flag", async () => {
       const { Input } = await import("@opencode-ai/core/tool/code-find")
 
       const tool = Tool.make({
@@ -294,14 +294,24 @@ describe("tool null normalization", () => {
         execute: () => Effect.succeed({ matches: [], files: [], intent: "definition" }),
       })
 
-      const result = await settleGeneric(tool, {
+      // `target` is required — null must be rejected so the agent can't ship
+      // empty intent="callers" queries that silently return zero rows.
+      const nullTarget = settleGeneric(tool, {
         intent: "definition",
         target: null,
-        minScore: null,
+        includeKeywordFallback: true,
+        limit: null,
+      })
+      await expect(nullTarget).rejects.toThrow(/target/)
+
+      // `includeKeywordFallback` is required — same reasoning.
+      const missingFallback = settleGeneric(tool, {
+        intent: "definition",
+        target: "MemoryRepo",
         includeKeywordFallback: null,
         limit: null,
       })
-      expect(result.structured.intent).toBe("definition")
+      await expect(missingFallback).rejects.toThrow(/includeKeywordFallback/)
     })
 
     test("websearch-free Input accepts null", async () => {

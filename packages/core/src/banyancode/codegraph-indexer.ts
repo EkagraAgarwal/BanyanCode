@@ -8,6 +8,43 @@ import { CodegraphRepo } from "./codegraph-repo"
 import { Database } from "../database/database"
 import type { CodegraphEdge, CodegraphFile, CodegraphNode, CodegraphNodeKind } from "./types"
 import { getParserForPath } from "./langs/registry"
+import type { ParseResult } from "./langs/types"
+import {
+  parseTypeScriptWithTreeSitterIncremental,
+  parsePythonWithTreeSitterIncremental,
+} from "./langs/query-executor"
+import type { Tree } from "web-tree-sitter"
+
+const TS_LIKE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"])
+const PY_LIKE_EXTS = new Set([".py", ".pyw"])
+
+// Phase 3 entrypoint heuristic — kept here (not in repository-intelligence)
+// because it must run during the parse pass so the column lands in the DB
+// the same build that writes the node. The function/class/method kinds are
+// the entrypoint candidates: routes (app.get(...)), CLI handlers
+// (cli-handler / cmd-* names), paths under commands/cli/routes/handlers,
+// and the bin/main export of any package.json.
+const ENTRYPOINT_PATH_PATTERNS = [
+  /\/commands?\//i,
+  /\/cli\//i,
+  /\/routes?\//i,
+  /\/handlers?\//i,
+  /\/bin\//i,
+  /\/scripts?\//i,
+]
+const ENTRYPOINT_NAME_HINTS = /(handler|^main$|mainFn|mainHandler|^route$|^cmd$|^command$|^setup$|^bootstrap$)/i
+const ROUTE_REGEX_HINT = /\b(app|router|fastify|instance)\s*\.\s*(get|post|put|delete|patch|head|options|trace)\s*\(/i
+const ENTRYPOINT_KINDS: ReadonlyArray<CodegraphNodeKind> = ["function", "class", "method"]
+
+const isEntrypointNode = (node: Pick<CodegraphNode, "name" | "kind" | "code" | "signature">, filePath: string): boolean => {
+  if (!ENTRYPOINT_KINDS.includes(node.kind)) return false
+  if (ENTRYPOINT_NAME_HINTS.test(node.name)) return true
+  if (ENTRYPOINT_PATH_PATTERNS.some((p) => p.test(filePath))) return true
+  const sig = node.signature
+  if (sig && ENTRYPOINT_PATH_PATTERNS.some((p) => p.test(sig))) return true
+  if (node.code && ROUTE_REGEX_HINT.test(node.code)) return true
+  return false
+}
 
 export class CodegraphError extends Schema.TaggedErrorClass<CodegraphError>()("Banyan/CodegraphError", {
   message: Schema.String,
@@ -72,6 +109,7 @@ export const layer = Layer.effect(
     const repo = yield* CodegraphRepo.Service
     const database = yield* Database.Service
     const cancelled = yield* Ref.make(false)
+    const treeCacheRef = yield* Ref.make(new Map<string, Tree>())
     const walkDirectory = (
       dir: string,
       maxFileSizeBytes: number,
@@ -386,9 +424,40 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
     }
 
     const parser = getParserForPath(filePath)
-    const result = isArtifact
-      ? { nodes: [], edges: [] }
-      : parser.parse(content, filePath)
+    const fileID = existing?.id ?? randomUUID()
+    let result: ParseResult
+    let newTree: Tree | undefined
+    if (isArtifact) {
+      result = { nodes: [], edges: [], imports: [] }
+    } else if (TS_LIKE_EXTS.has(ext)) {
+      const cached = yield* Ref.get(treeCacheRef)
+      const oldTree: Tree | undefined = cached.get(filePath)
+      const incr = yield* parseTypeScriptWithTreeSitterIncremental(content, fileID, oldTree)
+      result = incr.result
+      newTree = incr.tree
+      const capturedTree: Tree | undefined = newTree
+      if (capturedTree) {
+        yield* Ref.update(treeCacheRef, (m) => {
+          m.set(filePath, capturedTree)
+          return m
+        })
+      }
+    } else if (PY_LIKE_EXTS.has(ext)) {
+      const cached = yield* Ref.get(treeCacheRef)
+      const oldTree: Tree | undefined = cached.get(filePath)
+      const incr = yield* parsePythonWithTreeSitterIncremental(content, fileID, oldTree)
+      result = incr.result
+      newTree = incr.tree
+      const capturedTree: Tree | undefined = newTree
+      if (capturedTree) {
+        yield* Ref.update(treeCacheRef, (m) => {
+          m.set(filePath, capturedTree)
+          return m
+        })
+      }
+    } else {
+      result = parser.parse(content, filePath)
+    }
     let language = "generic"
     if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx" || ext === ".mts" || ext === ".cts" || ext === ".mjs" || ext === ".cjs") language = "typescript"
     else if (ext === ".py" || ext === ".pyw") language = "python"
@@ -406,25 +475,45 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
     else if (ext === ".html" || ext === ".css") language = "web"
     else if (ext === ".md") language = "markdown"
 
-    const fileID = existing?.id ?? randomUUID()
     const indexedAt = Date.now()
     const file: CodegraphFile = { id: fileID, path: filePath, contentHash, language, indexedAt }
-    const nodes: CodegraphNode[] = result.nodes.map((n) => ({
-      id: n.id,
+    const fileLevelNode: CodegraphNode = {
+      id: `${fileID}:file`,
       fileID,
-      kind: n.kind,
-      name: n.name,
-      signature: n.signature,
-      startLine: n.startLine,
-      endLine: n.endLine,
-      code: n.code,
-    }))
-    const edges: CodegraphEdge[] = result.edges.map((e) => ({
-      id: e.id,
-      fromNodeID: e.fromNodeID,
-      toNodeID: e.toNodeID,
-      kind: e.kind,
-    }))
+      kind: "file",
+      name: path.basename(filePath),
+      signature: relativePath,
+      startLine: 1,
+      endLine: content.split("\n").length,
+      code: content,
+      derivation: "regex-v1",
+    }
+    const nodes: CodegraphNode[] = [fileLevelNode, ...result.nodes.map((n) => {
+      const node: CodegraphNode = {
+        id: n.id,
+        fileID,
+        kind: n.kind,
+        name: n.name,
+        signature: n.signature,
+        startLine: n.startLine,
+        endLine: n.endLine,
+        code: n.code,
+        derivation: "regex-v1",
+      }
+      return Object.assign(node, {
+        isEntrypoint: isEntrypointNode(node, filePath) ? 1 : 0,
+      }) as CodegraphNode
+    })]
+
+    const knownNodeIDs = new Set(nodes.map((n) => n.id))
+    const edges: CodegraphEdge[] = result.edges
+      .filter((e) => knownNodeIDs.has(e.fromNodeID) && knownNodeIDs.has(e.toNodeID))
+      .map((e) => ({
+        id: e.id,
+        fromNodeID: e.fromNodeID,
+        toNodeID: e.toNodeID,
+        kind: e.kind,
+      }))
 
     if (fileKind) {
       const lineCount = content.split("\n").length
@@ -437,6 +526,7 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
         startLine: 1,
         endLine: lineCount,
         code: content,
+        derivation: "regex-v1",
       })
     }
 
@@ -453,7 +543,16 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
       Effect.gen(function* () {
         const prettyCause = Cause.pretty(cause)
         yield* Effect.logWarning(`Failed to index file: ${relativePath}`, { cause: prettyCause })
-        yield* repo.recordParseError({ path: relativePath, cause: prettyCause, indexedAt: Date.now() }).pipe(Effect.ignore)
+        // recordParseError now surfaces DB failures instead of swallowing them.
+        // Catch here so the parse-failure counter and queue update still run,
+        // but log any persistence failure from this path separately.
+        yield* repo
+          .recordParseError({ path: relativePath, cause: prettyCause, indexedAt: Date.now() })
+          .pipe(
+            Effect.catchCause((innerCause) =>
+              Effect.logWarning(`recordParseError insert failed for ${relativePath}`, { cause: Cause.pretty(innerCause) }),
+            ),
+          )
         yield* Ref.update(skippedRef, (n) => n + 1)
         yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
         yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
@@ -494,6 +593,15 @@ const drainParsedQueue = Effect.gen(function* () {
           yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
             cause: Cause.pretty(cause),
           })
+          yield* repo
+            .recordParseError({ path: parsed.relativePath, cause: Cause.pretty(cause), indexedAt: Date.now() })
+            .pipe(
+              Effect.catchCause((innerCause) =>
+                Effect.logWarning(`recordParseError insert failed for ${parsed.relativePath}`, {
+                  cause: Cause.pretty(innerCause),
+                }),
+              ),
+            )
           yield* Ref.update(skippedRef, (n) => n + 1)
           yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
         }),
@@ -731,6 +839,11 @@ yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
           })),
         ]
         yield* repo.putEdges(edgesToWrite)
+
+        // Phase 3: now that every edge is committed, derive the in-degree
+        // column with a single UPDATE. The trace ranker reads this column
+        // directly instead of running COUNT(*) per candidate.
+        yield* repo.recomputeInDegree().pipe(Effect.orDie)
       }
 
       const indexed = yield* Ref.get(indexedRef)

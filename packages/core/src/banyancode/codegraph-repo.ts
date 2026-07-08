@@ -6,12 +6,47 @@ import { Database } from "../database/database"
 import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
 import { CodegraphMetaTable } from "./codegraph-meta.sql"
 import { CodegraphParseErrorsTable } from "./codegraph-parse-errors.sql"
+import { CodegraphServiceTagsTable } from "./codegraph-service-tags.sql"
 import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from "./types"
 
 // Upper bound on nodes per DB insert batch. If a batched putNodes method is added,
 // chunk the input into groups of this size to avoid overwhelming the SQLite connection.
 export const MAX_NODES_PER_INSERT = 1000
 const MAX_EDGES_PER_INSERT = 1000
+
+const extractServiceTag = (code: string, nodeID: string, fileID: string): typeof CodegraphServiceTagsTable.$inferInsert | null => {
+  // Match Context.Service<...>()("tag") or Context.Service<...>( ) ( "tag" ).
+  // The non-greedy match for the generic argument list is bounded by a balanced
+  // angle-bracket scan so nested generics (e.g. Context.Service<Service<Inner>, Interface>)
+  // don't stop at the first inner `>`.
+  const i = code.indexOf("Context.Service")
+  if (i < 0) return null
+  const lt = code.indexOf("<", i)
+  if (lt < 0) return null
+  let depth = 1
+  let j = lt + 1
+  for (; j < code.length && depth > 0; j++) {
+    const ch = code[j]
+    if (ch === "<") depth++
+    else if (ch === ">") depth--
+  }
+  if (depth !== 0) return null
+  // j now sits one past the closing `>` of Context.Service<...>.
+  const tail = code.slice(j)
+  const tagMatch = tail.match(/^\s*\(\s*\)\s*\(\s*["']([^"']+)["']\s*\)/)
+  if (!tagMatch) return null
+  const tag = tagMatch[1]
+  const serviceName = tag.split("/").pop() ?? tag
+  return {
+    id: `${nodeID}:${tag}`,
+    tag,
+    service_name: serviceName,
+    file_id: fileID,
+    node_id: nodeID,
+    class_name: "Service",
+    indexed_at: Date.now(),
+  }
+}
 
 const safeSize = (path: string): number => {
   try {
@@ -32,6 +67,7 @@ export interface Interface {
   readonly nodeByID: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
   readonly nodesByIDs: (ids: string[]) => Effect.Effect<CodegraphNode[], never, never>
   readonly listNodesByFile: (fileID: string) => Effect.Effect<CodegraphNode[], never, never>
+  readonly listNodesByKind: (kind: string) => Effect.Effect<CodegraphNode[], never, never>
   readonly listAllNodes: () => Effect.Effect<CodegraphNode[], never, never>
   readonly queryNodes: (input: { function?: string; kind?: string }) => Effect.Effect<CodegraphNode[], never, never>
   readonly searchNodes: (input: { name?: string; kind?: string; limit?: number }) => Effect.Effect<CodegraphNode[], never, never>
@@ -63,6 +99,11 @@ export interface Interface {
   readonly clearAll: (
     input?: { dropFile?: boolean },
   ) => Effect.Effect<{ sizeBefore: number; sizeAfter: number }, never, never>
+  // Phase 3: recompute `codegraph_nodes.in_degree` from
+  // `codegraph_edges.to_node_id`. Called by the indexer after the parse
+  // pass writes all edges, so the ranker can read the column instead of
+  // running COUNT(*) per candidate.
+  readonly recomputeInDegree: () => Effect.Effect<void, never, never>
   readonly getMeta: () => Effect.Effect<CodegraphMeta | undefined, never, never>
   readonly setMeta: (m: CodegraphMeta) => Effect.Effect<void, never, never>
   readonly bumpVersion: (input: {
@@ -72,10 +113,11 @@ export interface Interface {
     totalNodes: number
     totalEdges: number
   }) => Effect.Effect<{ graphVersion: number; coverage: number }, never, never>
-  readonly recordParseError: (input: { path: string; cause: string; indexedAt: number }) => Effect.Effect<void, never, never>
+  readonly recordParseError: (input: { path: string; cause: string; indexedAt: number }) => Effect.Effect<void, unknown, never>
   readonly listParseErrors: () => Effect.Effect<Array<{ path: string; cause: string; indexedAt: number }>, never, never>
   readonly clearParseErrors: () => Effect.Effect<void, never, never>
   readonly findSymbolsByServiceTag: (tag: string) => Effect.Effect<CodegraphNode[], never, never>
+  readonly lookupByServiceTag: (tag: string) => Effect.Effect<CodegraphNode | null, never, never>
   readonly rebuildFtsIndex: () => Effect.Effect<{ rowsIndexed: number }, never, never>
 }
 
@@ -154,6 +196,10 @@ export const layer = Layer.effect(
     })
 
     const putNode = Effect.fn("CodegraphRepo.putNode")(function* (node: CodegraphNode) {
+      const rawIsEp = (node as CodegraphNode & { isEntrypoint?: number | boolean | undefined }).isEntrypoint
+      const isEntrypoint = rawIsEp ? 1 : 0
+      const rawInDeg = (node as CodegraphNode & { inDegree?: number | undefined }).inDegree
+      const inDegree = typeof rawInDeg === "number" ? rawInDeg : 0
       yield* db
         .insert(CodegraphNodesTable)
         .values({
@@ -165,6 +211,8 @@ export const layer = Layer.effect(
           start_line: node.startLine,
           end_line: node.endLine,
           code: node.code,
+          is_entrypoint: isEntrypoint,
+          in_degree: inDegree,
         })
         .onConflictDoUpdate({
           target: CodegraphNodesTable.id,
@@ -176,6 +224,7 @@ export const layer = Layer.effect(
             start_line: node.startLine,
             end_line: node.endLine,
             code: node.code,
+            is_entrypoint: isEntrypoint,
           },
         })
         .run()
@@ -199,8 +248,24 @@ export const layer = Layer.effect(
         startLine: row.start_line,
         endLine: row.end_line,
         code: row.code ?? undefined,
-      }
+        isEntrypoint: row.is_entrypoint,
+        inDegree: row.in_degree,
+      } as CodegraphNode & { isEntrypoint?: number; inDegree?: number }
     })
+
+    const rowToNode = (row: typeof CodegraphNodesTable.$inferSelect): CodegraphNode =>
+      ({
+        id: row.id,
+        fileID: row.file_id,
+        kind: row.kind as CodegraphNode["kind"],
+        name: row.name,
+        signature: row.signature ?? undefined,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        code: row.code ?? undefined,
+        isEntrypoint: row.is_entrypoint,
+        inDegree: row.in_degree,
+      } as CodegraphNode & { isEntrypoint?: number; inDegree?: number })
 
     const listNodesByFile = Effect.fn("CodegraphRepo.listNodesByFile")(function* (fileID: string) {
       const rows = yield* db
@@ -209,30 +274,22 @@ export const layer = Layer.effect(
         .where(eq(CodegraphNodesTable.file_id, fileID))
         .all()
         .pipe(Effect.orDie)
-      return rows.map((row) => ({
-        id: row.id,
-        fileID: row.file_id,
-        kind: row.kind as CodegraphNode["kind"],
-        name: row.name,
-        signature: row.signature ?? undefined,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        code: row.code ?? undefined,
-      }))
+      return rows.map(rowToNode)
+    })
+
+    const listNodesByKind = Effect.fn("CodegraphRepo.listNodesByKind")(function* (kind: string) {
+      const rows = yield* db
+        .select()
+        .from(CodegraphNodesTable)
+        .where(eq(CodegraphNodesTable.kind, kind))
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map(rowToNode)
     })
 
     const listAllNodes = Effect.fn("CodegraphRepo.listAllNodes")(function* () {
       const rows = yield* db.select().from(CodegraphNodesTable).all().pipe(Effect.orDie)
-      return rows.map((row) => ({
-        id: row.id,
-        fileID: row.file_id,
-        kind: row.kind as CodegraphNode["kind"],
-        name: row.name,
-        signature: row.signature ?? undefined,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        code: row.code ?? undefined,
-      }))
+      return rows.map(rowToNode)
     })
 
     const putEdge = Effect.fn("CodegraphRepo.putEdge")(function* (edge: CodegraphEdge) {
@@ -302,7 +359,20 @@ export const layer = Layer.effect(
     })
 
     const deleteFile = Effect.fn("CodegraphRepo.deleteFile")(function* (id: string) {
-      yield* db.delete(CodegraphFilesTable).where(eq(CodegraphFilesTable.id, id)).run().pipe(Effect.orDie)
+      yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            // Service tags point at codegraph_nodes, not directly at the file;
+            // without this delete they survive a rebuild and block re-registration.
+            yield* tx
+              .delete(CodegraphServiceTagsTable)
+              .where(eq(CodegraphServiceTagsTable.file_id, id))
+              .run()
+              .pipe(Effect.orDie)
+            yield* tx.delete(CodegraphFilesTable).where(eq(CodegraphFilesTable.id, id)).run().pipe(Effect.orDie)
+          }),
+        )
+        .pipe(Effect.orDie)
     })
 
     const nodeByID = Effect.fn("CodegraphRepo.nodeByID")(function* (id: string) {
@@ -323,16 +393,7 @@ export const layer = Layer.effect(
           .pipe(Effect.orDie)
         allRows.push(...rows)
       }
-      return allRows.map((row) => ({
-        id: row.id,
-        fileID: row.file_id,
-        kind: row.kind as CodegraphNode["kind"],
-        name: row.name,
-        signature: row.signature ?? undefined,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        code: row.code ?? undefined,
-      }))
+      return allRows.map(rowToNode)
     })
 
     const queryNodes = Effect.fn("CodegraphRepo.queryNodes")(function* (input: { function?: string; kind?: string }) {
@@ -350,16 +411,7 @@ export const layer = Layer.effect(
         .where(and(...conditions))
         .all()
         .pipe(Effect.orDie)
-      return rows.map((row) => ({
-        id: row.id,
-        fileID: row.file_id,
-        kind: row.kind as CodegraphNode["kind"],
-        name: row.name,
-        signature: row.signature ?? undefined,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        code: row.code ?? undefined,
-      }))
+      return rows.map(rowToNode)
     })
 
     const searchNodes = Effect.fn("CodegraphRepo.searchNodes")(function* (input: {
@@ -384,16 +436,7 @@ export const layer = Layer.effect(
           LIMIT ${limit}
         `)
         .pipe(Effect.orDie)
-      return rows.map((row) => ({
-        id: row.id,
-        fileID: row.file_id,
-        kind: row.kind as CodegraphNode["kind"],
-        name: row.name,
-        signature: row.signature ?? undefined,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        code: row.code ?? undefined,
-      }))
+      return rows.map(rowToNode)
     })
 
     const countNodes = Effect.fn("CodegraphRepo.countNodes")(function* () {
@@ -443,6 +486,7 @@ export const layer = Layer.effect(
       yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
+            yield* tx.delete(CodegraphServiceTagsTable).run().pipe(Effect.orDie)
             yield* tx.delete(CodegraphEdgesTable).run().pipe(Effect.orDie)
             yield* tx.delete(CodegraphNodesTable).run().pipe(Effect.orDie)
             yield* tx.delete(CodegraphFilesTable).run().pipe(Effect.orDie)
@@ -573,6 +617,20 @@ export const layer = Layer.effect(
       ).pipe(Effect.orDie)
     })
 
+    // Phase 3: populate `codegraph_nodes.in_degree` from the edges table.
+    // One UPDATE-with-correlated-subquery is cheap (one full pass) and the
+    // ranker can then read the column directly without a COUNT(*) per
+    // candidate during trace().
+    const recomputeInDegree = Effect.fn("CodegraphRepo.recomputeInDegree")(function* () {
+      yield* db.run(sql`
+        UPDATE \`codegraph_nodes\`
+        SET \`in_degree\` = (
+          SELECT COUNT(*) FROM \`codegraph_edges\`
+          WHERE \`codegraph_edges\`.\`to_node_id\` = \`codegraph_nodes\`.\`id\`
+        )
+      `).pipe(Effect.orDie)
+    })
+
     const bumpVersion = Effect.fn("CodegraphRepo.bumpVersion")(function* (input: {
       scannedFiles: number
       indexedFiles: number
@@ -582,11 +640,7 @@ export const layer = Layer.effect(
     }) {
       return yield* db.transaction((tx) =>
         Effect.gen(function* () {
-          const fileRow = yield* tx
-            .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_files`)
-            .pipe(Effect.orDie)
-          const indexedFilesCount = fileRow?.c ?? 0
-          const coverage = input.scannedFiles > 0 ? indexedFilesCount / input.scannedFiles : 0
+          const coverage = input.scannedFiles > 0 ? input.indexedFiles / input.scannedFiles : 0
           
           const row = yield* tx
             .select()
@@ -614,7 +668,10 @@ export const layer = Layer.effect(
             totalFiles: input.totalFiles,
             totalNodes,
             totalEdges,
-            schemaVersion: 1,
+            // Phase 3: the schema gained `is_entrypoint` and `in_degree`
+            // columns on codegraph_nodes. Bump the schemaVersion so
+            // consumers that compare against it can detect stale graphs.
+            schemaVersion: 2,
           }
 
           yield* tx
@@ -650,11 +707,21 @@ export const layer = Layer.effect(
     })
 
     const recordParseError = Effect.fn("CodegraphRepo.recordParseError")(function* (input: { path: string; cause: string; indexedAt: number }) {
+      // Don't swallow the error — let it propagate so indexer callers can log
+      // and the row is actually inserted. Surface unexpected failures rather
+      // than silently losing parse-error visibility.
       yield* db
         .insert(CodegraphParseErrorsTable)
         .values({ path: input.path, cause: input.cause, indexed_at: input.indexedAt })
         .run()
-        .pipe(Effect.ignore)
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logWarning(`codegraph.recordParseError failed for ${input.path}`, { cause })
+              return yield* Effect.failCause(cause)
+            }),
+          ),
+        )
     })
 
     const listParseErrors = Effect.fn("CodegraphRepo.listParseErrors")(function* () {
@@ -672,35 +739,47 @@ export const layer = Layer.effect(
       yield* db.delete(CodegraphParseErrorsTable).run().pipe(Effect.ignore)
     })
 
+    const lookupByServiceTag = Effect.fn("CodegraphRepo.lookupByServiceTag")(function* (tag: string) {
+      const rows = yield* db
+        .select()
+        .from(CodegraphServiceTagsTable)
+        .where(eq(CodegraphServiceTagsTable.tag, tag))
+        .limit(1)
+        .all()
+        .pipe(Effect.orDie)
+
+      if (rows.length === 0) return null
+
+      const node = yield* getNode(rows[0]!.node_id)
+      return node ?? null
+    })
+
     const findSymbolsByServiceTag = Effect.fn("CodegraphRepo.findSymbolsByServiceTag")(function* (tag: string) {
+      const indexed = yield* lookupByServiceTag(tag)
+      if (indexed) return [indexed]
+
       const stripped = tag.replace(/^@[^/]+(\/[^/]+)*\//, "").replace(/^@/, "")
-      // Triple filter to suppress false positives on bare substring matches:
-      // 1. substring contains the bare service name (e.g., "MemoryRepo")
-      // 2. kind='class' excludes doc/test/config/docker/etc. nodes
-      // 3. code contains "Context.Service" — the registration pattern itself
+      const candidates = [stripped, stripped.replace(/Service$/, ""), "Service"].filter(
+        (s, i, arr) => arr.indexOf(s) === i,
+      )
+      const likes = candidates.map((c) => sql`code LIKE ${"%" + c + "%"}`)
+      const whereClause = sql.join(likes, sql` OR `)
+
       const rows = yield* db
         .select()
         .from(CodegraphNodesTable)
-        .where(sql`(code LIKE ${"%" + stripped + "%"}) AND kind = 'class' AND (code LIKE '%Context.Service%')`)
+        .where(sql`(kind = 'class') AND (code LIKE '%Context.Service%') AND (${whereClause})`)
         .all()
         .pipe(Effect.orDie)
-      const mapped = rows.map((row) => ({
-        id: row.id,
-        fileID: row.file_id,
-        kind: row.kind as CodegraphNode["kind"],
-        name: row.name,
-        signature: row.signature ?? undefined,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        code: row.code ?? undefined,
-      }))
+      const mapped = rows.map(rowToNode)
+      const normalize = (s: string) => s.replace(/Service$/, "").toLowerCase()
       return mapped.filter((n) => {
         if (!n.code) return false
         const match = n.code.match(/Context\.Service\s*<[\s\S]*?>\s*\(\s*\)\s*\(\s*["']([^"']+)["']\s*\)/)
         if (!match) return false
         const tagString = match[1]
         const tagStripped = tagString.replace(/^@[^/]+(\/[^/]+)*\//, "").replace(/^@/, "")
-        return tagStripped.toLowerCase() === stripped.toLowerCase()
+        return normalize(tagStripped) === normalize(stripped)
       })
     })
 
@@ -720,22 +799,30 @@ export const layer = Layer.effect(
       ).pipe(Effect.orDie)
     })
 
+    const nodeToInsertRow = (n: CodegraphNode) => {
+      const rawIsEp = (n as CodegraphNode & { isEntrypoint?: number | boolean | undefined }).isEntrypoint
+      const isEntrypoint = rawIsEp ? 1 : 0
+      const rawInDeg = (n as CodegraphNode & { inDegree?: number | undefined }).inDegree
+      const inDegree = typeof rawInDeg === "number" ? rawInDeg : 0
+      return {
+        id: n.id,
+        file_id: n.fileID,
+        kind: n.kind,
+        name: n.name,
+        signature: n.signature,
+        start_line: n.startLine,
+        end_line: n.endLine,
+        code: n.code,
+        is_entrypoint: isEntrypoint,
+        in_degree: inDegree,
+      }
+    }
+
     const putNodes = Effect.fn("CodegraphRepo.putNodes")(function* (nodes: CodegraphNode[]) {
       if (nodes.length === 0) return
       yield* db
         .insert(CodegraphNodesTable)
-        .values(
-          nodes.map((n) => ({
-            id: n.id,
-            file_id: n.fileID,
-            kind: n.kind,
-            name: n.name,
-            signature: n.signature,
-            start_line: n.startLine,
-            end_line: n.endLine,
-            code: n.code,
-          })),
-        )
+        .values(nodes.map(nodeToInsertRow))
         .onConflictDoUpdate({
           target: CodegraphNodesTable.id,
           set: {
@@ -766,6 +853,11 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             if (input.previousFileID) {
               yield* tx
+                .delete(CodegraphServiceTagsTable)
+                .where(eq(CodegraphServiceTagsTable.file_id, input.previousFileID))
+                .run()
+                .pipe(Effect.orDie)
+              yield* tx
                 .delete(CodegraphFilesTable)
                 .where(eq(CodegraphFilesTable.id, input.previousFileID))
                 .run()
@@ -794,18 +886,7 @@ export const layer = Layer.effect(
             if (input.nodes.length > 0) {
               yield* tx
                 .insert(CodegraphNodesTable)
-                .values(
-                  input.nodes.map((n) => ({
-                    id: n.id,
-                    file_id: n.fileID,
-                    kind: n.kind,
-                    name: n.name,
-                    signature: n.signature,
-                    start_line: n.startLine,
-                    end_line: n.endLine,
-                    code: n.code,
-                  })),
-                )
+                .values(input.nodes.map(nodeToInsertRow))
                 .onConflictDoUpdate({
                   target: CodegraphNodesTable.id,
                   set: {
@@ -816,10 +897,58 @@ export const layer = Layer.effect(
                     start_line: input.nodes[0].startLine,
                     end_line: input.nodes[0].endLine,
                     code: input.nodes[0].code,
+                    // isEntrypoint is a per-build signal computed from the
+                    // node's source — re-write on every writeFileGraph so a
+                    // renamed function (now matching entrypoint heuristics)
+                    // flips its flag without a separate pass.
+                    is_entrypoint:
+                      ((input.nodes[0] as CodegraphNode & { isEntrypoint?: number | boolean }).isEntrypoint ? 1 : 0),
                   },
                 })
                 .run()
                 .pipe(Effect.orDie)
+
+              const serviceTagEntries = input.nodes
+                .map((n) =>
+                  n.kind === "class" && !n.id.includes(":artifact:") && n.code
+                    ? extractServiceTag(n.code, n.id, n.fileID)
+                    : null,
+                )
+                .filter((e): e is NonNullable<typeof e> => e !== null)
+
+              // Wipe any tags already pointing at this file id (e.g. from a
+              // previous indexer pass that succeeded partially) so the upsert
+              // below doesn't collide with itself.
+              if (serviceTagEntries.length > 0) {
+                yield* tx
+                  .delete(CodegraphServiceTagsTable)
+                  .where(eq(CodegraphServiceTagsTable.file_id, input.file.id))
+                  .run()
+                  .pipe(Effect.orDie)
+              }
+
+              // Upsert on the `tag` column (the actual UNIQUE index), not `id`.
+              // Two class nodes with different generated ids but the same
+              // @banyancode/X tag would otherwise collide and roll back the
+              // entire writeFileGraph transaction. Conflict target = tag means
+              // the latest indexer pass wins for the canonical service.
+              for (const entry of serviceTagEntries) {
+                yield* tx
+                  .insert(CodegraphServiceTagsTable)
+                  .values(entry)
+                  .onConflictDoUpdate({
+                    target: CodegraphServiceTagsTable.tag,
+                    set: {
+                      service_name: entry.service_name,
+                      file_id: entry.file_id,
+                      node_id: entry.node_id,
+                      class_name: entry.class_name,
+                      indexed_at: entry.indexed_at,
+                    },
+                  })
+                  .run()
+                  .pipe(Effect.orDie)
+              }
             }
 
             if (input.edges.length > 0) {
@@ -860,6 +989,7 @@ export const layer = Layer.effect(
       nodeByID,
       nodesByIDs,
       listNodesByFile,
+      listNodesByKind,
       listAllNodes,
       queryNodes,
       searchNodes,
@@ -883,7 +1013,9 @@ export const layer = Layer.effect(
       listParseErrors,
       clearParseErrors,
       findSymbolsByServiceTag,
+      lookupByServiceTag,
       rebuildFtsIndex,
+      recomputeInDegree,
     })
   }),
 )

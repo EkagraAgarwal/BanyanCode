@@ -2,6 +2,8 @@ export * as Banyan from "."
 
 export { MemoryEntriesTable } from "./memory.sql"
 export { CodegraphFilesTable, CodegraphNodesTable, CodegraphEdgesTable } from "./codegraph.sql"
+export { CodegraphServiceTagsTable } from "./codegraph-service-tags.sql"
+export { CodegraphTracesTable } from "./codegraph-traces.sql"
 export { CodegraphMetaTable } from "./codegraph-meta.sql"
 export { SubagentMessagesTable } from "./subagent-messages.sql"
 export { SubagentPlansTable } from "./subagent-plans.sql"
@@ -25,6 +27,18 @@ export {
   layer as codegraphBuildServiceLayer,
   defaultLayer as codegraphBuildServiceDefaultLayer,
 } from "./codegraph-build-service"
+export {
+  Service as TraceCollector,
+  layer as traceCollectorLayer,
+  defaultLayer as traceCollectorDefaultLayer,
+} from "./trace-collector"
+export type { TraceEvent, Interface as TraceCollectorInterface } from "./trace-collector"
+export {
+  Service as RuntimeCallGraph,
+  layer as runtimeCallGraphLayer,
+  defaultLayer as runtimeCallGraphDefaultLayer,
+} from "./runtime-call-graph"
+export type { DiffResult, Interface as RuntimeCallGraphInterface } from "./runtime-call-graph"
 export { WorktreeContext } from "./worktree-context"
 export {
   Service as ToolTelemetry,
@@ -39,6 +53,19 @@ export type {
   Interface as ToolTelemetryInterface,
 } from "./tool-telemetry"
 export { Service as CodegraphAnalyzer, layer as codegraphAnalyzerLayer, defaultLayer as codegraphAnalyzerDefaultLayer } from "./codegraph-analyzer"
+export {
+  Service as SymbolResolver,
+  layer as symbolResolverLayer,
+  defaultLayer as symbolResolverDefaultLayer,
+  resolveGraphTargetPure,
+} from "./symbol-resolver"
+export type {
+  Interface as SymbolResolverInterface,
+  ResolutionDerivation,
+  ResolutionResult,
+  ResolutionMiss,
+  ResolvedTarget,
+} from "./symbol-resolver"
 export {
   Service as RepositoryIntelligence,
   layer as repositoryIntelligenceLayer,
@@ -78,6 +105,7 @@ export * as MaxSubagents from "./max-subagents"
 export { Schema_URL as BanyanConfigSchemaURL, Info as BanyanConfigInfo } from "../v1/config/banyan-config"
 export { Service as CodegraphStaleness, layer as codegraphStalenessLayer, defaultLayer as codegraphStalenessDefaultLayer } from "./codegraph-staleness"
 export { StaleCheck } from "./codegraph-staleness"
+export { isStale, type StaleResult } from "./graph-staleness"
 export * as CodeFindTool from "../tool/code-find"
 export {
   Service as EditPlanner,
@@ -87,6 +115,9 @@ export {
 } from "./edit-planner"
 export type { Interface as EditPlannerInterface } from "./edit-planner"
 export * as EditPlanTool from "../tool/edit-plan"
+export * as PreflightTool from "../tool/preflight"
+export * as BlastRadiusTool from "../tool/blast-radius"
+export * as SafeRenameTool from "../tool/safe-rename"
 export { locationLayer as meshSubscribeToolLocationLayer } from "../tool/mesh-subscribe"
 export * as MeshSubscribeTool from "../tool/mesh-subscribe"
 export * as ToolCatalog from "../tool/tool-catalog"

@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BanyanCode TUI Concept</title>
+  <style>
+    :root{
+      --bg:#080808;
+      --panel:#141414;
+      --panel-2:#101010;
+      --border:#2b2b2b;
+      --text:#d3d3d3;
+      --muted:#8f8f8f;
+      --dim:#666;
+      --orange:#f1a24a;
+      --green:#8ad26b;
+      --blue:#72a8ff;
+      --purple:#b58cff;
+      --yellow:#d7b45a;
+      --red:#d26b6b;
+      --teal:#65c6c6;
+      --shadow: 0 0 0 1px rgba(255,255,255,0.02), 0 14px 40px rgba(0,0,0,0.30);
+      --radius: 10px;
+      --sidebar-left: 26%;
+      --sidebar-right: 24%;
+      --handle: 6px;
+      --line: rgba(255,255,255,.06);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body{
+      margin:0;
+      background:
+        radial-gradient(circle at 20% 0%, rgba(241,162,74,0.04), transparent 24%),
+        radial-gradient(circle at 80% 0%, rgba(114,168,255,0.04), transparent 20%),
+        linear-gradient(180deg, #090909, #070707 40%, #050505);
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      overflow: hidden;
+    }
+
+    .app{
+      height: 100vh;
+      display: grid;
+      grid-template-rows: 42px auto 1fr 28px;
+    }
+
+    .topbar, .bottombar{
+      display:flex;
+      align-items:center;
+      padding: 0 12px;
+      gap: 10px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(15,15,15,0.92);
+      backdrop-filter: blur(4px);
+    }
+    .bottombar{
+      border-top: 1px solid var(--border);
+      border-bottom: none;
+      font-size: 12px;
+      color: var(--muted);
+      justify-content: space-between;
+    }
+
+    .brand{
+      color: var(--orange);
+      font-weight: 800;
+      letter-spacing: .5px;
+      font-size: 15px;
+    }
+    .path{
+      color: #9a9a9a;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .topbar .spacer{ flex:1; }
+    .status-pill{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      font-size: 12px;
+      color: #bdbdbd;
+      white-space: nowrap;
+    }
+    .dot{
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 2px rgba(138,210,107,0.15);
+    }
+    .hotkey{
+      color:#b8b8b8;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .workspace{
+      display:grid;
+      grid-template-columns: var(--sidebar-left) 8px 1fr 8px var(--sidebar-right);
+      min-height: 0;
+      min-width: 0;
+    }
+
+    .pane{
+      min-width: 0;
+      min-height: 0;
+      padding: 10px;
+      background: rgba(8,8,8,0.92);
+      overflow: hidden;
+    }
+    .pane.center{
+      padding: 10px 8px;
+      background: transparent;
+    }
+
+    .sidebar, .center-panel, .right-panel{
+      height: 100%;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.012), rgba(255,255,255,0.004)),
+        rgba(10,10,10,0.92);
+    }
+
+    .section{
+      border-bottom: 1px solid var(--border);
+      padding: 12px 12px 10px;
+    }
+    .section:last-child{ border-bottom: none; }
+    .section-header{
+      display:flex;
+      align-items:center;
+      justify-content: space-between;
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--orange);
+      margin-bottom: 10px;
+      letter-spacing: .2px;
+    }
+    .section-header .count{
+      font-size: 12px;
+      color: #9f9f9f;
+      text-transform: none;
+      font-weight: 600;
+    }
+
+    .mono{
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--text);
+    }
+    .muted{ color: var(--muted); }
+    .dim{ color: var(--dim); }
+    .green{ color: var(--green); }
+    .blue{ color: var(--blue); }
+    .purple{ color: var(--purple); }
+    .orange{ color: var(--orange); }
+    .yellow{ color: var(--yellow); }
+    .red{ color: var(--red); }
+    .teal{ color: var(--teal); }
+
+    .agents{
+      display:flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .agent-row{
+      display:flex;
+      justify-content: space-between;
+      align-items:center;
+      gap: 10px;
+      white-space: nowrap;
+    }
+    .agent-name{
+      display:flex;
+      align-items:center;
+      gap: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .agent-name .state{
+      font-size: 11px;
+      min-width: 56px;
+      text-align: right;
+    }
+    .state.active{ color: var(--green); }
+    .state.idle{ color: var(--orange); }
+    .state.offline{ color: #7e7e7e; }
+
+    .tree{
+      margin-top: 4px;
+      padding-left: 2px;
+      display:flex;
+      flex-direction: column;
+      gap: 2px;
+      color: #d8d8d8;
+    }
+    .tree .node{
+      display:flex;
+      align-items:center;
+      gap: 8px;
+      min-height: 18px;
+    }
+    .tree .indent-1{ padding-left: 16px; }
+    .tree .indent-2{ padding-left: 32px; }
+    .tree .indent-3{ padding-left: 48px; }
+
+    .folder, .file, .agent-icon, .todo-icon{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      width: 16px;
+      color: #bfbfbf;
+      flex: 0 0 16px;
+    }
+
+    .scroll{
+      overflow:auto;
+      max-height: 100%;
+      padding-right: 4px;
+    }
+    .scroll::-webkit-scrollbar{ width: 8px; }
+    .scroll::-webkit-scrollbar-thumb{
+      background: rgba(255,255,255,0.08);
+      border-radius: 8px;
+    }
+    .scroll::-webkit-scrollbar-track{ background: transparent; }
+
+    .chip-row{
+      display:flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .chip{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      font-size: 12px;
+      color:#bdbdbd;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 8px;
+      background: rgba(255,255,255,0.01);
+    }
+
+    .bar-group{
+      display:grid;
+      gap: 10px;
+    }
+    .bar-metric{
+      display:grid;
+      grid-template-columns: 116px 1fr 54px;
+      align-items:center;
+      gap: 8px;
+      font-size: 12px;
+      color: #cfcfcf;
+    }
+    .bar-track{
+      position: relative;
+      height: 12px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .bar-fill{
+      position:absolute;
+      inset:0 auto 0 0;
+      width: 0%;
+      background: rgba(255,255,255,0.22);
+    }
+    .bar-fill.thinking{ background: rgba(181,140,255,0.42); }
+    .bar-fill.prompt{ background: rgba(114,168,255,0.42); }
+    .bar-fill.files{ background: rgba(138,210,107,0.38); }
+    .bar-fill.tools{ background: rgba(215,180,90,0.38); }
+    .bar-fill.memory{ background: rgba(241,162,74,0.32); }
+    .bar-fill.empty{
+      background: rgba(255,255,255,0.03);
+      width: 100%;
+    }
+    .bar-fill.context-used{
+      background: linear-gradient(90deg, rgba(181,140,255,0.16), rgba(114,168,255,0.18), rgba(138,210,107,0.14), rgba(215,180,90,0.14), rgba(241,162,74,0.14));
+    }
+    .bar-fill.context-free{
+      background: rgba(255,255,255,0.04);
+    }
+
+    .stack{
+      display:flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .metric-grid{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+
+    .mini{
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .context-summary{
+      display:flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items:center;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+    .context-total{
+      color: #d7d7d7;
+    }
+
+    .tabs{
+      display:flex;
+      align-items:center;
+      gap: 20px;
+      border-bottom: 1px solid var(--border);
+      padding: 0 8px;
+      min-height: 44px;
+      background: rgba(18,18,18,0.86);
+    }
+    .tab{
+      position: relative;
+      padding: 12px 4px 11px;
+      color: #9f9f9f;
+      font-size: 14px;
+      cursor: default;
+    }
+    .tab.active{
+      color: #f4b166;
+      font-weight: 700;
+    }
+    .tab.active::after{
+      content:'';
+      position:absolute;
+      left:0;
+      right:0;
+      bottom:-1px;
+      height:2px;
+      background: var(--orange);
+    }
+
+    .chat-body{
+      display:grid;
+      grid-template-rows: 1fr auto auto;
+      min-height: 0;
+      height: calc(100% - 44px);
+    }
+    .chat-stream{
+      min-height: 0;
+      overflow: auto;
+      padding: 12px 12px 10px;
+    }
+    .chat-stream::-webkit-scrollbar{ width: 8px; }
+    .chat-stream::-webkit-scrollbar-thumb{
+      background: rgba(255,255,255,0.08);
+      border-radius: 8px;
+    }
+
+    .code-line{
+      white-space: pre-wrap;
+      line-height: 1.45;
+      font-size: 12px;
+      color: #d5d5d5;
+    }
+    .code-line .num{
+      color:#7d7d7d;
+      display:inline-block;
+      width: 42px;
+      text-align:right;
+      margin-right: 14px;
+    }
+
+    .thought{
+      padding: 10px 12px;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      color: var(--orange);
+      font-size: 12px;
+      background: rgba(255,255,255,0.01);
+    }
+
+    .composer{
+      padding: 10px 12px 12px;
+    }
+    .input{
+      min-height: 48px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.015);
+      padding: 12px 12px;
+      color:#adadad;
+      display:flex;
+      align-items:center;
+      gap:10px;
+      justify-content: space-between;
+      font-size: 13px;
+    }
+    .input .prompt{
+      color:#bfbfbf;
+    }
+    .input .agent{
+      color:#d6d6d6;
+    }
+
+    .meta-row{
+      display:flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      align-items:center;
+    }
+
+    .handle{
+      cursor: col-resize;
+      position: relative;
+      background: transparent;
+    }
+    .handle::before{
+      content:'';
+      position:absolute;
+      left: 50%;
+      top: 0;
+      transform: translateX(-50%);
+      width: 1px;
+      height: 100%;
+      background: rgba(255,255,255,0.06);
+    }
+    .handle:hover::before{
+      background: rgba(241,162,74,0.35);
+    }
+
+    .right-header{
+      display:flex;
+      justify-content: space-between;
+      align-items:center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .task-title{
+      color: #d9d9d9;
+      font-weight: 700;
+    }
+    .task-idle{
+      color: var(--green);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .todo-list{
+      display:flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .todo-item{
+      display:flex;
+      gap: 8px;
+      align-items:flex-start;
+      line-height: 1.45;
+      font-size: 12px;
+    }
+    .todo-item .status{
+      flex: 0 0 16px;
+      text-align:center;
+      margin-top: 1px;
+    }
+    .todo-item.done{ color:#a8a8a8; }
+    .todo-item.active{ color: var(--orange); }
+    .todo-item.pending{ color:#cfcfcf; }
+    .todo-item .label{
+      flex:1;
+    }
+
+    .divider{
+      height:1px;
+      background: var(--border);
+      margin: 10px 0;
+    }
+
+    .context-breakdown{
+      display:grid;
+      gap: 7px;
+      margin-top: 8px;
+    }
+    .legend{
+      display:grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      align-items:center;
+      font-size: 12px;
+      color:#cfcfcf;
+    }
+    .legend .value{
+      color:#e0e0e0;
+    }
+    .legend .pct{
+      color:#9b9b9b;
+      min-width: 58px;
+      text-align:right;
+    }
+
+    .ctx-bar{
+      position: relative;
+      height: 16px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .ctx-free{
+      position:absolute;
+      inset:0 0 0 0;
+      background: rgba(255,255,255,0.03);
+    }
+    .ctx-used{
+      position:absolute;
+      left:0; top:0; bottom:0;
+      width: 7.4%;
+      display:flex;
+      overflow:hidden;
+    }
+    .seg{
+      height:100%;
+    }
+    .seg.thinking{ background: rgba(181,140,255,0.55); width: 32%; }
+    .seg.prompt{ background: rgba(114,168,255,0.55); width: 24%; }
+    .seg.files{ background: rgba(138,210,107,0.55); width: 18%; }
+    .seg.tools{ background: rgba(215,180,90,0.55); width: 16%; }
+    .seg.memory{ background: rgba(241,162,74,0.55); width: 10%; }
+
+    .bar-caption{
+      display:flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color:#b6b6b6;
+      margin-top: 6px;
+    }
+
+    .performance-list{
+      display:grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .resize-hint{
+      color:#8e8e8e;
+      font-size: 11px;
+      letter-spacing:.2px;
+    }
+
+    /* ---- Attention / alert strip ---- */
+    .attention-strip{
+      display:flex;
+      align-items:center;
+      gap: 14px;
+      padding: 7px 12px;
+      background: rgba(210,107,107,0.08);
+      border-bottom: 1px solid rgba(210,107,107,0.28);
+      font-size: 12px;
+      color: #e5b3b3;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    .attention-strip .a-item{
+      display:inline-flex;
+      align-items:center;
+      gap: 6px;
+      cursor: default;
+    }
+    .attention-strip .a-item::before{
+      content:'▲';
+      font-size: 9px;
+      color: var(--red);
+    }
+    .attention-strip .a-sep{
+      color: #4a4a4a;
+    }
+    .attention-strip .a-dismiss{
+      margin-left: auto;
+      color: #9a9a9a;
+      flex: 0 0 auto;
+    }
+
+    /* ---- Status pill severity ---- */
+    .status-pill.warn{ color: var(--yellow); }
+    .status-pill.warn .dot{ background: var(--yellow); box-shadow: 0 0 0 2px rgba(215,180,90,0.18); }
+    .status-pill.crit{ color: var(--red); }
+    .status-pill.crit .dot{ background: var(--red); box-shadow: 0 0 0 2px rgba(210,107,107,0.18); }
+    .cost-pill{
+      color: #cfead2;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    /* ---- Blocked / dependency tags on agent rows ---- */
+    .agent-row.has-issue{
+      background: rgba(210,107,107,0.05);
+      margin: 0 -6px;
+      padding: 3px 6px;
+      border-radius: 4px;
+    }
+    .blocked-tag{
+      display:block;
+      font-size: 10.5px;
+      color: #b98787;
+      margin-top: 1px;
+      padding-left: 24px;
+      white-space: normal;
+      line-height: 1.3;
+    }
+    .agent-cost{
+      font-size: 10.5px;
+      color: #7f9f82;
+      margin-top: 1px;
+      padding-left: 24px;
+    }
+    .agent-name-wrap{
+      display:flex;
+      flex-direction: column;
+      gap: 0px;
+      flex: 1;
+      min-width: 0;
+    }
+    .agent-name-wrap .agent-row{ margin:0; padding:0; background:none; }
+
+    /* ---- Chat message-type blocks ---- */
+    .msg-block{
+      margin-bottom: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: rgba(255,255,255,0.008);
+    }
+    .msg-label{
+      display:flex;
+      align-items:center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 10px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .4px;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--line);
+    }
+    .msg-label .tag-diff{ color: var(--green); }
+    .msg-label .tag-plan{ color: var(--purple); }
+    .msg-label .tag-tool{ color: var(--yellow); }
+    .msg-label .tag-cmd{ color: var(--blue); }
+    .msg-label .msg-meta{
+      text-transform: none;
+      font-weight: 400;
+      color: #8a8a8a;
+      font-size: 11px;
+      letter-spacing: 0;
+    }
+    .msg-body{ padding: 8px 10px; }
+
+    .diff-actions{
+      display:flex;
+      gap: 8px;
+      padding: 6px 10px;
+      border-top: 1px solid var(--line);
+      background: rgba(255,255,255,0.01);
+    }
+    .btn{
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      color: #cfcfcf;
+      cursor: default;
+      background: rgba(255,255,255,0.02);
+    }
+    .btn.approve{ color: var(--green); border-color: rgba(138,210,107,0.35); }
+    .btn.reject{ color: var(--red); border-color: rgba(210,107,107,0.35); }
+    .btn.view{ color: var(--blue); border-color: rgba(114,168,255,0.35); }
+
+    .plan-line{
+      font-size: 12px;
+      color: #cfcfcf;
+      line-height: 1.5;
+    }
+    .plan-line .phase{ color: var(--purple); }
+
+    /* ---- inline model switcher ---- */
+    .model-row{
+      display:flex;
+      align-items:center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .model-select{
+      font-size: 11px;
+      color: var(--blue);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 2px 6px;
+      cursor: default;
+    }
+
+    .field-alert{
+      color: var(--red);
+    }
+
+    .aggregate-row{
+      display:flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #9a9a9a;
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px dashed var(--line);
+    }
+
+    @media (max-width: 1100px){
+      .workspace{
+        grid-template-columns: 250px 8px 1fr 8px 235px;
+      }
+    }
+
+    @media (max-width: 900px){
+      body{ overflow:auto; }
+      .app{ height:auto; min-height: 100vh; }
+      .workspace{
+        grid-template-columns: 1fr;
+        grid-auto-rows: auto;
+        gap: 10px;
+        padding: 10px;
+      }
+      .handle{ display:none; }
+      .pane, .pane.center{ padding: 0; }
+      .sidebar, .center-panel, .right-panel{ height:auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div class="brand">BANYANCODE</div>
+      <div class="path">D:\OpenCode\packages\opencode</div>
+      <div class="spacer"></div>
+      <div class="cost-pill">Session: $4.82 · 312k tok</div>
+      <div class="status-pill warn"><span class="dot"></span>Graph: not built</div>
+      <div class="status-pill"><span class="dot"></span>MCP: MiniMax</div>
+      <div class="status-pill crit"><span class="dot"></span>LSP: Disabled</div>
+      <div class="spacer"></div>
+      <div class="hotkey">? help</div>
+      <div class="hotkey">q quit</div>
+      <div class="hotkey">ctrl+k menu</div>
+    </div>
+
+    <div class="attention-strip">
+      <span class="a-item">Reviewer blocked — waiting on Builder Phase 1e</span>
+      <span class="a-sep">·</span>
+      <span class="a-item">LSP disabled — code-intel degraded for all agents</span>
+      <span class="a-sep">·</span>
+      <span class="a-item">2 diffs awaiting your review</span>
+      <span class="a-dismiss">dismiss ×</span>
+    </div>
+
+    <div class="workspace" id="workspace">
+      <div class="pane">
+        <div class="sidebar scroll">
+          <div class="section">
+            <div class="section-header">Agents <span class="count">4 / 8 active</span></div>
+            <div class="agents mono">
+              <div class="agent-name-wrap">
+                <div class="agent-row"><div class="agent-name"><span class="agent-icon">◉</span>You (Main)</div><div class="state active">active</div></div>
+              </div>
+              <div class="agent-name-wrap">
+                <div class="agent-row"><div class="agent-name"><span class="agent-icon">◉</span>Builder</div><div class="state active">active</div></div>
+                <span class="agent-cost">$1.94 · 138.9k tok</span>
+              </div>
+              <div class="agent-name-wrap">
+                <div class="agent-row"><div class="agent-name"><span class="agent-icon">◉</span>Researcher</div><div class="state active">active</div></div>
+                <span class="agent-cost">$0.87 · 61.2k tok</span>
+              </div>
+              <div class="agent-name-wrap">
+                <div class="agent-row"><div class="agent-name"><span class="agent-icon">◉</span>Doc Explorer</div><div class="state idle">idle</div></div>
+                <span class="agent-cost">$0.31 · 22.0k tok</span>
+              </div>
+              <div class="agent-name-wrap">
+                <div class="agent-row"><div class="agent-name"><span class="agent-icon">◉</span>Coder</div><div class="state idle">idle</div></div>
+                <span class="agent-cost">$0.44 · 29.6k tok</span>
+              </div>
+              <div class="agent-name-wrap">
+                <div class="agent-row has-issue"><div class="agent-name"><span class="agent-icon">◉</span>Reviewer</div><div class="state offline">blocked</div></div>
+                <span class="blocked-tag">waiting on Builder → Phase 1e</span>
+              </div>
+              <div class="agent-name-wrap">
+                <div class="agent-row"><div class="agent-name"><span class="agent-icon">◉</span>Tester</div><div class="state offline">offline</div></div>
+                <span class="blocked-tag">not started · no tests to run yet</span>
+              </div>
+              <div class="agent-name-wrap">
+                <div class="agent-row"><div class="agent-name"><span class="agent-icon">◉</span>Analyzer</div><div class="state offline">offline</div></div>
+                <span class="blocked-tag">not started</span>
+              </div>
+            </div>
+            <div class="aggregate-row">
+              <span>Total across all agents</span>
+              <span>$4.82 · 312,043 tok</span>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-header">Context <span class="count">77,784 / 1,048,576 tokens (7.4%)</span></div>
+            <div class="context-summary">
+              <div class="mini">Transparent absolute bar. Free context is empty.</div>
+            </div>
+
+            <div class="ctx-bar" aria-label="context bar">
+              <div class="ctx-free"></div>
+              <div class="ctx-used">
+                <div class="seg thinking" title="Thinking 32.1%"></div>
+                <div class="seg prompt" title="Prompt 24.3%"></div>
+                <div class="seg files" title="Files Read 18.2%"></div>
+                <div class="seg tools" title="Tool Calls 15.6%"></div>
+                <div class="seg memory" title="Memory 9.8%"></div>
+              </div>
+            </div>
+            <div class="bar-caption">
+              <span>Used 77,784</span>
+              <span>Free 970,792</span>
+            </div>
+
+            <div class="context-breakdown">
+              <div class="legend"><span><span class="purple">■</span> Thinking</span><span class="value">24,973</span><span class="pct">32.1%</span></div>
+              <div class="legend"><span><span class="blue">■</span> Prompt</span><span class="value">18,870</span><span class="pct">24.3%</span></div>
+              <div class="legend"><span><span class="green">■</span> Files Read</span><span class="value">14,156</span><span class="pct">18.2%</span></div>
+              <div class="legend"><span><span class="yellow">■</span> Tool Calls</span><span class="value">12,082</span><span class="pct">15.6%</span></div>
+              <div class="legend"><span><span class="orange">■</span> Memory</span><span class="value">7,703</span><span class="pct">9.8%</span></div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-header">Performance</div>
+            <div class="performance-list">
+              <div class="bar-metric"><span>Tokens / sec</span><div class="bar-track"><div class="bar-fill blue" style="width: 68%"></div></div><span class="muted" style="text-align:right;">128.4</span></div>
+              <div class="bar-metric"><span>TTFT</span><div class="bar-track"><div class="bar-fill orange" style="width: 22%"></div></div><span class="muted" style="text-align:right;">842ms</span></div>
+              <div class="bar-metric"><span>Latency</span><div class="bar-track"><div class="bar-fill" style="width: 35%"></div></div><span class="muted" style="text-align:right;">1.42s</span></div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-header">System</div>
+            <div class="stack mono">
+              <div class="bar-metric"><span>CPU</span><div class="bar-track"><div class="bar-fill blue" style="width: 12%"></div></div><span class="muted" style="text-align:right;">12%</span></div>
+              <div class="bar-metric"><span>RAM</span><div class="bar-track"><div class="bar-fill orange" style="width: 26%"></div></div><span class="muted" style="text-align:right;">4.1/15.9 GB</span></div>
+              <div class="bar-metric"><span>Disk</span><div class="bar-track"><div class="bar-fill" style="width: 25%"></div></div><span class="muted" style="text-align:right;">128/512 GB</span></div>
+              <div class="bar-metric"><span>Temp</span><div class="bar-track"><div class="bar-fill red" style="width: 43%"></div></div><span class="muted" style="text-align:right;">43°C</span></div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-header">Codebase</div>
+            <div class="tree mono">
+              <div class="node"><span class="folder">▾</span><span>opencode</span></div>
+              <div class="node indent-1"><span class="folder">▾</span><span>packages</span></div>
+              <div class="node indent-2"><span class="folder">▾</span><span>core</span></div>
+              <div class="node indent-3"><span class="folder">▾</span><span>src</span></div>
+              <div class="node indent-3"><span class="file">▸</span><span class="dim">agent</span></div>
+              <div class="node indent-3"><span class="file">▸</span><span class="dim">server</span></div>
+              <div class="node indent-2"><span class="file">▸</span><span class="dim">tests</span></div>
+              <div class="node indent-1"><span class="file">▸</span><span class="dim">sdk</span></div>
+              <div class="node"><span class="file">•</span><span class="dim">package.json</span></div>
+              <div class="node"><span class="file">•</span><span class="dim">README.md</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="handle" id="leftHandle"></div>
+
+      <div class="pane center">
+        <div class="center-panel">
+          <div class="tabs">
+            <div class="tab active">CHAT</div>
+            <div class="tab">SESSIONS</div>
+            <div class="tab">AGENTS</div>
+            <div class="tab">MEMORY</div>
+            <div class="tab">SETTINGS</div>
+            <div class="tab">+</div>
+          </div>
+
+          <div class="chat-body">
+            <div class="chat-stream scroll">
+
+              <div class="msg-block">
+                <div class="msg-label"><span class="tag-plan">Plan · Phase 3</span><span class="msg-meta">Builder · new route registrations</span></div>
+                <div class="msg-body">
+                  <div class="plan-line"><span class="phase">Phase 3</span> wires the new codegraph endpoints into the HTTP API layer and rebuilds the SDK client after the routes land.</div>
+                </div>
+              </div>
+
+              <div class="msg-block">
+                <div class="msg-label"><span class="tag-diff">Diff · 7 files</span><span class="msg-meta">not yet applied</span></div>
+                <div class="msg-body">
+                  <div class="code-line"><span class="num">564</span><span class="green">+</span> <span class="green">`packages/opencode/src/server/routes/instance/httpapi/groups/global.ts`</span>  | Phase 3 (new route registrations)</div>
+                  <div class="code-line"><span class="num">565</span><span class="green">+</span> <span class="green">`packages/opencode/src/server/routes/instance/httpapi/server.ts`</span> | Phase 3 (new layer wirings)</div>
+                  <div class="code-line"><span class="num">566</span><span class="green">+</span> <span class="green">`packages/sdk/js/script/build.ts`</span> | Phase 3 (run after new endpoints)</div>
+                  <div class="code-line"><span class="num">567</span><span class="green">+</span> <span class="green">`packages/core/test/banyancode/codegraph-*.test.ts`</span> (new) | Phase 1e, 2e, 5a-d</div>
+                  <div class="code-line"><span class="num">568</span><span class="green">+</span> <span class="green">`packages/core/src/banyancode/trace-collector.ts`</span> (new) | Phase 4a</div>
+                  <div class="code-line"><span class="num">569</span><span class="green">+</span> <span class="green">`packages/core/src/banyancode/codegraph-traces.sql.ts`</span> (new) | Phase 4b</div>
+                  <div class="code-line"><span class="num">570</span><span class="green">+</span> <span class="green">`packages/core/src/banyancode/runtime-call-graph.ts`</span> (new) | Phase 4c</div>
+                </div>
+                <div class="diff-actions">
+                  <div class="btn approve">✓ approve all</div>
+                  <div class="btn reject">✕ reject</div>
+                  <div class="btn view">view full diff</div>
+                </div>
+              </div>
+
+              <div class="msg-block">
+                <div class="msg-label"><span class="tag-plan">Report</span><span class="msg-meta">§9 Reproducing this report</span></div>
+                <div class="msg-body">
+                  <div class="code-line"><span class="num">575</span> <span class="green">```powershell</span></div>
+                  <div class="code-line"><span class="num">576</span> <span class="green"># 1. Drop + rebuild the index</span></div>
+                  <div class="code-line"><span class="num">579</span> <span class="green">```</span></div>
+                </div>
+              </div>
+
+              <div class="msg-block">
+                <div class="msg-label"><span class="tag-tool">Tool calls · 2</span><span class="msg-meta">executed</span></div>
+                <div class="msg-body">
+                  <div class="code-line"><span class="yellow">▸</span> codegraph_remove <span class="dim">— dropped stale index</span></div>
+                  <div class="code-line"><span class="yellow">▸</span> codegraph_build <span class="dim">— rebuilding, ETA ~40s</span></div>
+                </div>
+              </div>
+
+            </div>
+
+            <div class="thought">Thought: 374ms</div>
+
+            <div class="composer">
+              <div class="input">
+                <span class="prompt">› Type your message...</span>
+                <span class="agent">Agent: Builder ▾</span>
+              </div>
+              <div class="meta-row">
+                <span>enter to send</span>
+                <span>shift+enter newline</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="handle" id="rightHandle"></div>
+
+      <div class="pane">
+        <div class="right-panel scroll">
+          <div class="section">
+            <div class="right-header">
+              <div class="section-header" style="margin:0;">Agent Details</div>
+              <div class="task-idle">◉ IDLE</div>
+            </div>
+            <div class="mono stack">
+              <div><span class="orange">Builder</span></div>
+              <div class="muted">Task: Listing available tools</div>
+              <div class="muted">Started: 00:07:23</div>
+              <div class="model-row">
+                <span class="muted">Model:</span>
+                <span class="model-select">MiniMax-M3 ▾</span>
+              </div>
+              <div class="muted">Tools: codegraph_remove, codegraph_build, todowrite +11</div>
+              <div class="muted">Memory: 138,921</div>
+              <div class="muted">Cost: <span class="green">$1.94</span> this session</div>
+              <div class="muted">Last: Plan appended to `D:\OpenCode\specs\b...`</div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-header">Todo</div>
+            <div class="todo-list">
+              <div class="todo-item done"><span class="status">[✓]</span><span class="label">Workstream A: code_find permission fix (ship now)</span></div>
+              <div class="todo-item done"><span class="status">[✓]</span><span class="label">Phase 0: codegraph reconnaissance memo</span></div>
+              <div class="todo-item active"><span class="status">[•]</span><span class="label">Phase 1a: code-find.ts tiered lookup (callers / impact / dependents route via analyzer)</span></div>
+              <div class="todo-item active"><span class="status">[•]</span><span class="label">Phase 1b: repository-intelligence layer.ts filter files/docs/configs against graphFileIDs</span></div>
+              <div class="todo-item active"><span class="status">[•]</span><span class="label">Phase 1c: codegraph-repo.ts fix findSymbolsByServiceTag consistency</span></div>
+              <div class="todo-item pending"><span class="status">[ ]</span><span class="label">Phase 1e: codegraph-tool-precision.test.ts coverage</span></div>
+              <div class="todo-item active"><span class="status">[•]</span><span class="label">Parser fix (Gate C): typescript.ts emit imports edges instead of populating throwaway array</span></div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-header">Agent Activity</div>
+            <div class="stack mono">
+              <div class="agent-row"><div class="agent-name"><span class="agent-icon">◉</span>Builder</div><div class="state active">active</div></div>
+              <div class="agent-row"><div class="agent-name"><span class="agent-icon">◉</span>Researcher</div><div class="state active">active</div></div>
+              <div class="agent-row"><div class="agent-name"><span class="agent-icon">◉</span>Doc Explorer</div><div class="state idle">idle</div></div>
+              <div class="agent-row"><div class="agent-name"><span class="agent-icon">◉</span>Coder</div><div class="state idle">idle</div></div>
+              <div class="agent-name-wrap">
+                <div class="agent-row has-issue"><div class="agent-name"><span class="agent-icon">◉</span>Reviewer</div><div class="state offline">blocked</div></div>
+                <span class="blocked-tag">waiting on Builder → Phase 1e</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bottombar">
+      <div>BanyanCode local · Git: main</div>
+      <div class="resize-hint"><span class="red">▲ 3 need attention</span> · drag the separators to resize panels</div>
+      <div>^p cmd palette · ^g build graph · ^m memory search · / search · ^t new tab · ^s save session · ^q quit</div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const workspace = document.getElementById('workspace');
+      const leftHandle = document.getElementById('leftHandle');
+      const rightHandle = document.getElementById('rightHandle');
+
+      const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+      function setupHandle(handle, side) {
+        let dragging = false;
+
+        handle.addEventListener('pointerdown', (e) => {
+          dragging = true;
+          handle.setPointerCapture(e.pointerId);
+          document.body.style.cursor = 'col-resize';
+          document.body.style.userSelect = 'none';
+        });
+
+        handle.addEventListener('pointermove', (e) => {
+          if (!dragging) return;
+          const rect = workspace.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const pct = (x / rect.width) * 100;
+
+          if (side === 'left') {
+            const left = clamp(pct, 18, 38);
+            document.documentElement.style.setProperty('--sidebar-left', left + '%');
+          } else {
+            const right = clamp(100 - pct, 18, 34);
+            document.documentElement.style.setProperty('--sidebar-right', right + '%');
+          }
+        });
+
+        const stop = () => {
+          dragging = false;
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+        };
+
+        handle.addEventListener('pointerup', stop);
+        handle.addEventListener('pointercancel', stop);
+        handle.addEventListener('lostpointercapture', stop);
+      }
+
+      setupHandle(leftHandle, 'left');
+      setupHandle(rightHandle, 'right');
+    })();
+  </script>
+</body>
+</html>

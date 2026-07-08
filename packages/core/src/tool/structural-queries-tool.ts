@@ -48,9 +48,19 @@ export const locationLayer = Layer.effectDiscard(
           "Before this: codegraph_build (if not built).",
         contract: { visibility: "internal" },
         input: Schema.Struct({
-          interfaceName: Schema.String,
-          file: optionalString,
-          language: optionalString,
+          interfaceName: Schema.String.annotate({
+            description:
+              "REQUIRED. The interface name to find implementations for " +
+              "(e.g. 'RepositoryIntelligence').",
+          }),
+          file: optionalString.annotate({
+            description:
+              "Optional filename substring filter (e.g. 'memory-repo').",
+          }),
+          language: optionalString.annotate({
+            description:
+              "Optional language filter (e.g. 'typescript', 'go').",
+          }),
         }),
         output: OutputNodes,
         toModelOutput: ({ output }) => [
@@ -85,10 +95,22 @@ export const locationLayer = Layer.effectDiscard(
           "Before this: codegraph_build (if not built).",
         contract: { visibility: "internal" },
         input: Schema.Struct({
-          methodName: Schema.String,
-          baseClass: optionalString,
-          file: optionalString,
-          language: optionalString,
+          methodName: Schema.String.annotate({
+            description:
+              "REQUIRED. The method name to find overrides for " +
+              "(e.g. 'parse').",
+          }),
+          baseClass: optionalString.annotate({
+            description:
+              "Optional base class to scope overrides to " +
+              "(e.g. 'Parser'). When omitted, returns all matching overrides.",
+          }),
+          file: optionalString.annotate({
+            description: "Optional filename substring filter.",
+          }),
+          language: optionalString.annotate({
+            description: "Optional language filter.",
+          }),
         }),
         output: OutputNodes,
         toModelOutput: ({ output }) => [
@@ -122,8 +144,12 @@ export const locationLayer = Layer.effectDiscard(
           "Use repository_query instead — the harness delegates this query when needed.",
         contract: { visibility: "internal" },
         input: Schema.Struct({
-          file: optionalString,
-          language: optionalString,
+          file: optionalString.annotate({
+            description: "Optional filename substring filter.",
+          }),
+          language: optionalString.annotate({
+            description: "Optional language filter.",
+          }),
         }),
         output: OutputNodes,
         toModelOutput: ({ output }) => [
@@ -157,8 +183,12 @@ export const locationLayer = Layer.effectDiscard(
           "Use repository_query instead — the harness delegates this query when needed.",
         contract: { visibility: "internal" },
         input: Schema.Struct({
-          file: optionalString,
-          language: optionalString,
+          file: optionalString.annotate({
+            description: "Optional filename substring filter.",
+          }),
+          language: optionalString.annotate({
+            description: "Optional language filter.",
+          }),
         }),
         output: OutputNodes,
         toModelOutput: ({ output }) => [
@@ -193,8 +223,12 @@ export const locationLayer = Layer.effectDiscard(
           "Use repository_query instead — the harness delegates this query when needed.",
         contract: { visibility: "internal" },
         input: Schema.Struct({
-          file: optionalString,
-          language: optionalString,
+          file: optionalString.annotate({
+            description: "Optional filename substring filter.",
+          }),
+          language: optionalString.annotate({
+            description: "Optional language filter.",
+          }),
         }),
         output: OutputNodes,
         toModelOutput: ({ output }) => [

@@ -1,6 +1,6 @@
 import type { ArchitecturalSlice, CodegraphFile, CodegraphNode } from "../banyancode/types"
 
-const MAX_ITEMS_PER_OUTPUT = 25
+const MAX_ITEMS_PER_OUTPUT = 50
 
 type OwnershipEntry = { path: string; count: number }
 
@@ -84,6 +84,11 @@ export const formatArchitecturalSlice = (slice: FormatArchitecturalSlice): strin
     ...(noteLines.length > 0 ? [noteLines.join("\n")] : []),
     truncate(slice.summary, 600),
     renderNodesBlock(slice.entrypoints, "Entrypoints"),
+    renderNodesBlock(slice.directCallers, "Direct callers"),
+    renderNodesBlock(slice.transitiveDependents, "Top transitive dependents"),
+    ...(slice.moreAvailable && (slice.moreAvailable.dependents ?? 0) > 0
+      ? [`(${slice.moreAvailable.dependents ?? 0} more transitive dependents not shown; pass limit: <N> to see more)`]
+      : []),
     renderNodesBlock(slice.importantSymbols, "Important symbols"),
     renderNodesBlock(slice.routes, "Routes"),
     renderNodesBlock(slice.relatedTests, "Related tests"),

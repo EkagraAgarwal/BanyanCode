@@ -7,6 +7,8 @@ const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(
 const ARROW_CONST_REGEX = /(?:^|\n)(?:export\s+)?const\s+(\w+)\s*=\s*(async\s+)?(?:\([^)]*\)|[^=>\n]+)\s*=>/g
 const INTERFACE_REGEX = /(?:^|\n)interface\s+(\w+)/g
 const TYPE_REGEX = /(?:^|\n)type\s+(\w+)\s*=/g
+const EFFECT_FN_REGEX = /Effect\.fn\s*\(\s*["']([^"']+)["']\s*\)/
+const EFFECT_FN_CONST_REGEX = /const\s+(\w+)\s*=\s*Effect\.fn\s*\(\s*["']([^"']+)["']\s*\)/g
 
 function getTSNodeBody(content: string, matchIndex: number, matchText: string): { code: string; endLine: number } {
   const startLine = content.substring(0, matchIndex).split("\n").length
@@ -78,13 +80,15 @@ function extractClassMethods(classCode: string, classStartLine: number, fileID: 
     const startLine = classStartLine + localStart - 1
     const { code, endLine: localEnd } = getTSNodeBody(classCode, match.index!, match[0])
     const endLine = classStartLine + localEnd - 1
+    const effectMatch = code.match(EFFECT_FN_REGEX)
+    const signature = effectMatch ? effectMatch[1] : match[0].trim()
     methods.push({
       id: `${fileID}:method:${className}:${name}:${startLine}`,
       kind: "method",
       name,
       startLine,
       endLine,
-      signature: match[0].trim(),
+      signature,
       code,
     })
   }
@@ -94,10 +98,16 @@ function extractClassMethods(classCode: string, classStartLine: number, fileID: 
 export function parseTypeScript(content: string, fileID: string): ParseResult {
   const nodes: ParsedNode[] = []
   const edges: ParsedEdge[] = []
-  const imports: string[] = []
 
   for (const match of content.matchAll(IMPORTS_REGEX)) {
-    imports.push(match[1])
+    const symbol = match[1]
+    if (!symbol) continue
+    edges.push({
+      id: `${fileID}:import:${symbol}`,
+      fromNodeID: `${fileID}:file`,
+      toNodeID: `module:${symbol}`,
+      kind: "imports",
+    })
   }
 
   for (const match of content.matchAll(EXPORT_CLASS_REGEX)) {
@@ -120,14 +130,51 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     const name = match[1]
     const startLine = content.substring(0, match.index).split("\n").length
     const { code, endLine } = getTSNodeBody(content, match.index, match[0])
-    nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature: match[0].trim(), code })
+    const effectMatch = code.match(EFFECT_FN_REGEX)
+    const signature = effectMatch ? effectMatch[1] : match[0].trim()
+    nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
   }
 
   for (const match of content.matchAll(ARROW_CONST_REGEX)) {
     const name = match[1]
     const startLine = content.substring(0, match.index).split("\n").length
     const { code, endLine } = getArrowBody(content, match.index!, match[0])
-    nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature: match[0].trim(), code })
+    const effectMatch = code.match(EFFECT_FN_REGEX)
+    const signature = effectMatch ? effectMatch[1] : match[0].trim()
+    nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
+  }
+
+  for (const match of content.matchAll(EFFECT_FN_CONST_REGEX)) {
+    const name = match[1]
+    const signature = match[2]
+    const startLine = content.substring(0, match.index).split("\n").length
+    const afterMatchIndex = match.index + match[0].length
+    let firstBrace = -1
+    for (let i = afterMatchIndex; i < content.length; i++) {
+      if (content[i] === "{") {
+        firstBrace = i
+        break
+      }
+    }
+    let code = match[0]
+    let endLine = startLine
+    if (firstBrace !== -1) {
+      let braceCount = 1
+      let i = firstBrace + 1
+      while (i < content.length) {
+        if (content[i] === "{") braceCount++
+        else if (content[i] === "}") {
+          braceCount--
+          if (braceCount === 0) {
+            code = content.substring(match.index, i + 1)
+            endLine = startLine + code.split("\n").length - 1
+            break
+          }
+        }
+        i++
+      }
+    }
+    nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
   }
 
   for (const match of content.matchAll(INTERFACE_REGEX)) {
@@ -144,5 +191,5 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     nodes.push({ id: `${fileID}:type:${name}:${startLine}`, kind: "type", name, startLine, endLine, code })
   }
 
-  return { nodes, edges, imports }
+  return { nodes, edges, imports: [] }
 }

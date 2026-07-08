@@ -94,6 +94,8 @@ import type {
   GlobalBanyanConfigGetResponses,
   GlobalBanyanConfigUpdateErrors,
   GlobalBanyanConfigUpdateResponses,
+  GlobalBlastRadiusErrors,
+  GlobalBlastRadiusResponses,
   GlobalCodegraphBuildErrors,
   GlobalCodegraphBuildResponses,
   GlobalCodegraphCancelErrors,
@@ -114,6 +116,10 @@ import type {
   GlobalEventResponses,
   GlobalHealthErrors,
   GlobalHealthResponses,
+  GlobalPreflightErrors,
+  GlobalPreflightResponses,
+  GlobalSafeRenameErrors,
+  GlobalSafeRenameResponses,
   GlobalStartupErrors,
   GlobalStartupResponses,
   GlobalUpgradeErrors,
@@ -1666,6 +1672,119 @@ export class Global extends HeyApiClient {
         },
       },
     )
+  }
+
+  /**
+   * Run preflight on a symbol
+   *
+   * Single-call decision report for a symbol: direct + transitive callers, tests to run, docs/configs affected, event bridges and HTTP routes impacted, and risk verdicts.
+   */
+  public preflight<ThrowOnError extends boolean = false>(
+    parameters?: {
+      action?: "rename" | "modify" | "delete"
+      target?: string
+      depth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      root?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "action" },
+            { in: "body", key: "target" },
+            { in: "body", key: "depth" },
+            { in: "body", key: "root" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<GlobalPreflightResponses, GlobalPreflightErrors, ThrowOnError>({
+      url: "/global/preflight",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Blast-radius counts
+   *
+   * Lightweight blast-radius read of a symbol: direct + transitive caller counts, files affected, tests to run, and a single risk verdict.
+   */
+  public blastRadius<ThrowOnError extends boolean = false>(
+    parameters?: {
+      target?: string
+      maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "target" },
+            { in: "body", key: "maxDepth" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<GlobalBlastRadiusResponses, GlobalBlastRadiusErrors, ThrowOnError>({
+      url: "/global/blast-radius",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Propose safe rename edits
+   *
+   * Compute the edit list for safely renaming a symbol, plus tests to run and risk list. Returns a preflight-shaped report so the caller can apply edits one at a time via the existing edit tool.
+   */
+  public safeRename<ThrowOnError extends boolean = false>(
+    parameters?: {
+      symbol?: string
+      newName?: string
+      dryRun?: boolean
+      root?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "symbol" },
+            { in: "body", key: "newName" },
+            { in: "body", key: "dryRun" },
+            { in: "body", key: "root" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<GlobalSafeRenameResponses, GlobalSafeRenameErrors, ThrowOnError>({
+      url: "/global/safe-rename",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 
   private _config?: Config

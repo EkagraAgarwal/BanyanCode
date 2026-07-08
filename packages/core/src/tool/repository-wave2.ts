@@ -1,6 +1,6 @@
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
-import { Banyan } from "../banyancode"
+import { Banyan, isStale } from "../banyancode"
 import { traced } from "../observability/trace"
 import {
   CodegraphNodeSchema,
@@ -11,6 +11,8 @@ import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { defaultLayer as repositoryIntelligenceLayer } from "../banyancode/repository-intelligence"
+import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
+import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import {
   formatArchitecturalSlice,
   formatNodesList,
@@ -83,6 +85,14 @@ const ArchitecturalSliceSchema = Schema.Struct({
   degraded: Schema.optional(Schema.Boolean),
   summary: Schema.String,
   entrypoints: CodegraphNodeSchemaArray,
+  directCallers: CodegraphNodeSchemaArray,
+  transitiveDependents: CodegraphNodeSchemaArray,
+  moreAvailable: Schema.optional(
+    Schema.Struct({
+      callers: Schema.optional(Schema.Number),
+      dependents: Schema.optional(Schema.Number),
+    }),
+  ),
   importantSymbols: CodegraphNodeSchemaArray,
   relatedTests: CodegraphNodeSchemaArray,
   relatedDocs: Schema.Array(CodegraphFileSchema),
@@ -149,45 +159,144 @@ const OwnershipResultSchema = Schema.Struct({
 })
 
 const QueryInput = Schema.Struct({
-  query: Schema.String.annotate({ description: "The term, concept, or feature to search for." }),
-  limit: optionalNumber.annotate({ description: "Max number of results to return (default 50)." }),
-  workspace: Schema.optional(WorkspaceContextSchema),
+  query: Schema.String.annotate({
+    description:
+      "REQUIRED. The term, concept, or feature to search for. Can be a " +
+      "symbol name ('MemoryRepo'), a concept ('authentication'), or a " +
+      "feature ('session recovery').",
+  }),
+  limit: optionalNumber.annotate({
+    description:
+      "Maximum number of results to return. Defaults to 50 when omitted. " +
+      "Allowed range: 1-500.",
+  }),
+  workspace: Schema.optional(WorkspaceContextSchema).annotate({
+    description:
+      "Optional workspace scoping. When omitted, the tool searches the " +
+      "currently indexed workspace.",
+  }),
+}).annotate({
+  description:
+    "Semantic repository search. Top-level entry point for high-level " +
+    "questions about a codebase. Returns symbols, files, tests, docs, " +
+    "configs, graph slices, and git ownership signals.",
 })
 
 const ExplainInput = Schema.Struct({
-  symbol: Schema.String.annotate({ description: "The symbol to explain (e.g. 'MemoryRepo')." }),
-  workspace: Schema.optional(WorkspaceContextSchema),
+  symbol: Schema.String.annotate({
+    description:
+      "REQUIRED. The symbol to explain (e.g. 'MemoryRepo', " +
+      "'Permission.ask'). The tool returns an architectural slice showing " +
+      "entrypoints, important symbols, related tests/docs, and dependencies.",
+  }),
+  workspace: Schema.optional(WorkspaceContextSchema).annotate({
+    description:
+      "Optional workspace scoping. Defaults to the currently indexed " +
+      "workspace when omitted.",
+  }),
+}).annotate({
+  description:
+    "Architectural slice for a single symbol: entrypoints, important " +
+    "symbols, related tests/docs, dependencies.",
 })
 
 const ImpactInput = Schema.Struct({
-  path: Schema.String.annotate({ description: "The file path or feature name to analyze." }),
-  workspace: Schema.optional(WorkspaceContextSchema),
+  path: Schema.String.annotate({
+    description:
+      "REQUIRED. The file path or feature name to analyze for impact " +
+      "(e.g. 'packages/core/src/banyancode/memory-repo.ts').",
+  }),
+  workspace: Schema.optional(WorkspaceContextSchema).annotate({
+    description: "Optional workspace scoping. Defaults to the current workspace.",
+  }),
+}).annotate({
+  description:
+    "Impact analysis rooted at a file or feature: which modules depend on " +
+    "it and what blast radius a change would have.",
 })
 
 const TraceInput = Schema.Struct({
-  symbol: Schema.String.annotate({ description: "The entrypoint or symbol to trace from." }),
-  depth: optionalNumber.annotate({ description: "Max traversal depth (default 2)." }),
-  workspace: Schema.optional(WorkspaceContextSchema),
+  symbol: Schema.String.annotate({
+    description:
+      "REQUIRED. The entrypoint or symbol to trace from " +
+      "(e.g. 'Permission.ask', 'main').",
+  }),
+  depth: optionalNumber.annotate({
+    description:
+      "Maximum traversal depth. Defaults to 2 when omitted. Higher values " +
+      "(e.g. 5) give wider traces; lower values stay focused.",
+  }),
+  limit: optionalNumber.annotate({
+    description:
+      "Maximum number of transitive dependents to surface. Defaults to 50 " +
+      "when omitted. Allowed range: 1-1000.",
+  }),
+  workspace: Schema.optional(WorkspaceContextSchema).annotate({
+    description: "Optional workspace scoping.",
+  }),
+}).annotate({
+  description:
+    "Semantic trace from a symbol outward: tests, docs, and edges in the " +
+    "code graph, with configurable depth.",
 })
 
 const TestsInput = Schema.Struct({
-  symbol: Schema.String.annotate({ description: "The symbol to find tests for." }),
+  symbol: Schema.String.annotate({
+    description:
+      "REQUIRED. The symbol to find tests for (e.g. 'MemoryRepo.update').",
+  }),
+}).annotate({
+  description:
+    "List tests that reference or exercise a given symbol.",
 })
 
 const SymbolsInput = Schema.Struct({
-  query: Schema.String.annotate({ description: "Symbol name or substring." }),
-  limit: optionalNumber.annotate({ description: "Max number of results (default 50)." }),
+  query: Schema.String.annotate({
+    description:
+      "REQUIRED. Symbol name or substring to search for " +
+      "(e.g. 'withCwd', 'Memory').",
+  }),
+  limit: optionalNumber.annotate({
+    description:
+      "Maximum number of symbols to return. Defaults to 50 when omitted.",
+  }),
+}).annotate({
+  description:
+    "List symbols matching a name or substring, in codegraph order.",
 })
 
 const RelationshipsInput = Schema.Struct({
-  nodeID: optionalString.annotate({ description: "The graph UUID of the node to trace from." }),
-  path: optionalString.annotate({ description: "The file path to trace from (if nodeID is omitted)." }),
-  depth: optionalNumber.annotate({ description: "Max traversal depth (default 2)." }),
+  nodeID: optionalString.annotate({
+    description:
+      "The graph UUID of the node to trace from. Provide either nodeID " +
+      "OR path — the tool will reject calls with neither.",
+  }),
+  path: optionalString.annotate({
+    description:
+      "The file path to trace from when nodeID is omitted.",
+  }),
+  depth: optionalNumber.annotate({
+    description:
+      "Maximum traversal depth. Defaults to 2 when omitted.",
+  }),
+}).annotate({
+  description:
+    "List nodes reachable from a given node or path within N hops in the " +
+    "code graph.",
 })
 
 const OwnershipInput = Schema.Struct({
-  path: Schema.String.annotate({ description: "The file or directory path." }),
-  workspace: Schema.optional(WorkspaceContextSchema),
+  path: Schema.String.annotate({
+    description:
+      "REQUIRED. The file or directory path to find the git owner for " +
+      "(e.g. 'packages/core/src/banyancode').",
+  }),
+  workspace: Schema.optional(WorkspaceContextSchema).annotate({
+    description: "Optional workspace scoping.",
+  }),
+}).annotate({
+  description:
+    "Git ownership signal: which developer has touched the given path most.",
 })
 
 const QueryOutput = RepositoryContextSchema
@@ -286,6 +395,16 @@ const sliceToOutput = (
   degraded: slc.degraded,
   summary: slc.summary,
   entrypoints: [...slc.entrypoints],
+  directCallers: [...(slc.directCallers ?? [])],
+  transitiveDependents: [...(slc.transitiveDependents ?? [])],
+  ...(slc.moreAvailable
+    ? {
+        moreAvailable: {
+          ...(slc.moreAvailable.callers !== undefined ? { callers: slc.moreAvailable.callers } : {}),
+          ...(slc.moreAvailable.dependents !== undefined ? { dependents: slc.moreAvailable.dependents } : {}),
+        },
+      }
+    : {}),
   importantSymbols: [...slc.importantSymbols],
   relatedTests: [...slc.relatedTests],
   relatedDocs: [...slc.relatedDocs],
@@ -325,6 +444,7 @@ export const locationLayer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const permission = yield* PermissionV2.Service
     const intel = yield* Banyan.RepositoryIntelligence
+    const repo = yield* Banyan.CodegraphRepo
 
     yield* tools.register({
       [name_query]: Tool.make({
@@ -376,6 +496,15 @@ export const locationLayer = Layer.effectDiscard(
                 ...(input.limit ? { limit: input.limit } : {}),
                 ...(ws ? { workspace: ws } : {}),
               })
+              const metaRow = yield* repo.getMeta()
+              const meta = metaRow
+                ? { graphBuiltAt: metaRow.graphBuiltAt, graphCoverage: metaRow.graphCoverage }
+                : undefined
+              const staleResult = isStale(meta)
+              if (staleResult.stale && staleResult.reason && !ctx.reason) {
+                ;(ctx as { reason?: string; degraded?: boolean }).reason = `${staleResult.reason}; results may be incomplete`
+                ;(ctx as { reason?: string; degraded?: boolean }).degraded = true
+              }
               return contextToOutput(ctx)
             }),
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_query failed" }))),
@@ -418,6 +547,15 @@ export const locationLayer = Layer.effectDiscard(
 
               const ctx = yield* intel.query({ query: input.query, ...(input.limit ? { limit: input.limit } : {}) })
               const slc = yield* intel.slice(ctx)
+              const metaRow = yield* repo.getMeta()
+              const meta = metaRow
+                ? { graphBuiltAt: metaRow.graphBuiltAt, graphCoverage: metaRow.graphCoverage }
+                : undefined
+              const staleResult = isStale(meta)
+              if (staleResult.stale && staleResult.reason && !slc.reason) {
+                ;(slc as { reason?: string; degraded?: boolean }).reason = `${staleResult.reason}; results may be incomplete`
+                ;(slc as { reason?: string; degraded?: boolean }).degraded = true
+              }
               return sliceToOutput(slc)
             }),
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_slice failed" }))),
@@ -463,6 +601,15 @@ export const locationLayer = Layer.effectDiscard(
                 symbol: input.symbol,
                 ...(ws ? { workspace: ws } : {}),
               })
+              const metaRow = yield* repo.getMeta()
+              const meta = metaRow
+                ? { graphBuiltAt: metaRow.graphBuiltAt, graphCoverage: metaRow.graphCoverage }
+                : undefined
+              const staleResult = isStale(meta)
+              if (staleResult.stale && staleResult.reason && !slc.reason) {
+                ;(slc as { reason?: string; degraded?: boolean }).reason = `${staleResult.reason}; results may be incomplete`
+                ;(slc as { reason?: string; degraded?: boolean }).degraded = true
+              }
               return sliceToOutput(slc)
             }),
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_explain failed" }))),
@@ -552,6 +699,7 @@ export const locationLayer = Layer.effectDiscard(
               const slc = yield* intel.trace({
                 symbol: input.symbol,
                 ...(input.depth !== undefined ? { depth: input.depth } : {}),
+                ...(input.limit !== undefined ? { limit: input.limit } : {}),
                 ...(ws ? { workspace: ws } : {}),
               })
               return sliceToOutput(slc)
@@ -593,8 +741,45 @@ export const locationLayer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
+              // Resolve the symbol so we can scope the returned tests to the
+              // symbol's own file (and a small set of directly related files)
+              // instead of returning every test that contains the substring.
+              const resolved = yield* resolveGraphTargetPure(
+                repo as CodegraphRepoInterface,
+                { target: input.symbol },
+              )
+
               const tests = yield* intel.tests({ symbol: input.symbol })
-              return { tests: [...tests.tests], notFound: tests.notFound }
+              if (resolved._tag === "Miss") {
+                return { tests: [...tests.tests], notFound: tests.notFound }
+              }
+
+              // bucketFileIDs: the resolved node's file plus files of its
+              // direct (depth=1) related nodes. Anything outside that set is
+              // dropped — the old behavior returned every test in the repo.
+              const bucketFileIDs = new Set<string>([resolved.value.node.fileID])
+              const allNodes = yield* repo.listAllNodes()
+              const seen = new Set<string>([resolved.value.node.id])
+              const queue: Array<{ id: string; depth: number }> = [
+                { id: resolved.value.node.id, depth: 0 },
+              ]
+              while (queue.length > 0) {
+                const cur = queue.shift()!
+                if (cur.depth >= 1) continue
+                const out = yield* repo.edgesFrom(cur.id)
+                const inc = yield* repo.edgesTo(cur.id)
+                for (const e of [...out, ...inc]) {
+                  const next = e.fromNodeID === cur.id ? e.toNodeID : e.fromNodeID
+                  if (seen.has(next)) continue
+                  seen.add(next)
+                  queue.push({ id: next, depth: cur.depth + 1 })
+                }
+              }
+              for (const n of allNodes) {
+                if (seen.has(n.id)) bucketFileIDs.add(n.fileID)
+              }
+              const scoped = tests.tests.filter((t) => bucketFileIDs.has(t.fileID))
+              return { tests: [...scoped], notFound: tests.notFound && scoped.length === 0 }
             }),
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_tests failed" }))),
       }),

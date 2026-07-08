@@ -57,10 +57,13 @@ const makeMockRepo = (options: {
       nodesByIDs: (ids) => Effect.succeed(options.nodes?.filter((n) => ids.includes(n.id)) ?? []),
       putEdges: () => Effect.void,
     rebuildFtsIndex: () => Effect.succeed({ rowsIndexed: 0 }),
+      recomputeInDegree: () => Effect.void,
       recordParseError: () => Effect.void,
       listParseErrors: () => Effect.succeed([]),
       clearParseErrors: () => Effect.void,
       findSymbolsByServiceTag: () => Effect.succeed([]),
+      listNodesByKind: () => Effect.succeed([]),
+      lookupByServiceTag: () => Effect.succeed(null),
     }),
   )
 }

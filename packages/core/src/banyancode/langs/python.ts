@@ -48,14 +48,27 @@ function getPythonNodeBody(content: string, matchIndex: number, matchText: strin
 export function parsePython(content: string, fileID: string): ParseResult {
   const nodes: ParsedNode[] = []
   const edges: ParsedEdge[] = []
-  const imports: string[] = []
 
   for (const match of content.matchAll(FROM_IMPORT_REGEX)) {
-    imports.push(match[2])
+    const symbol = match[2]
+    if (!symbol) continue
+    edges.push({
+      id: `${fileID}:import:${symbol}`,
+      fromNodeID: `${fileID}:file`,
+      toNodeID: `module:${symbol}`,
+      kind: "imports",
+    })
   }
 
   for (const match of content.matchAll(IMPORT_REGEX)) {
-    imports.push(match[3])
+    const symbol = match[3]
+    if (!symbol) continue
+    edges.push({
+      id: `${fileID}:import:${symbol}`,
+      fromNodeID: `${fileID}:file`,
+      toNodeID: `module:${symbol}`,
+      kind: "imports",
+    })
   }
 
   for (const match of content.matchAll(CLASS_REGEX)) {
@@ -72,5 +85,5 @@ export function parsePython(content: string, fileID: string): ParseResult {
     nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, code })
   }
 
-  return { nodes, edges, imports }
+  return { nodes, edges, imports: [] }
 }

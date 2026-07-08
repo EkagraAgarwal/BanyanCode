@@ -77,11 +77,14 @@ const mockCodegraphRepoLayer = Layer.succeed(
     listParseErrors: () => Effect.succeed([]),
     clearParseErrors: () => Effect.void,
     findSymbolsByServiceTag: () => Effect.succeed([]),
+    listNodesByKind: () => Effect.succeed([]),
+    lookupByServiceTag: () => Effect.succeed(null),
     setMeta: () => Effect.void,
     bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 0.9 }),
     nodesByIDs: () => Effect.succeed([]),
     putEdges: () => Effect.void,
     rebuildFtsIndex: () => Effect.succeed({ rowsIndexed: 0 }),
+    recomputeInDegree: () => Effect.void,
   }),
 )
 

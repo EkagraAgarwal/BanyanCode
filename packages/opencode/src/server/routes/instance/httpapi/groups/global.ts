@@ -11,6 +11,9 @@ import { described } from "./metadata"
 import { CodegraphNodeSchema } from "@opencode-ai/core/banyancode/types"
 import { GraphMeta } from "@opencode-ai/core/banyancode/types"
 import * as WebSearchFreeTool from "@opencode-ai/core/tool/websearch-free"
+import * as PreflightTool from "@opencode-ai/core/tool/preflight"
+import * as BlastRadiusTool from "@opencode-ai/core/tool/blast-radius"
+import * as SafeRenameTool from "@opencode-ai/core/tool/safe-rename"
 
 const CodegraphEdgesQuery = Schema.Struct({
   nodeID: Schema.optional(Schema.String),
@@ -109,6 +112,15 @@ export const CodegraphBuildResult = Schema.Struct({
 export const WebSearchFreeInput = WebSearchFreeTool.Input
 export const WebSearchFreeResult = WebSearchFreeTool.Output
 
+export const PreflightInput = PreflightTool.Input
+export const PreflightResult = PreflightTool.Output
+
+export const BlastRadiusInput = BlastRadiusTool.Input
+export const BlastRadiusResult = BlastRadiusTool.Output
+
+export const SafeRenameInput = SafeRenameTool.Input
+export const SafeRenameResult = SafeRenameTool.Output
+
 const GlobalUpgradeResult = Schema.Union([
   Schema.Struct({
     success: Schema.Literal(true),
@@ -135,6 +147,9 @@ export const GlobalPaths = {
   codegraphEdges: "/global/codegraph-edges",
   banyanAgentSave: "/global/banyan-agent/save",
   websearchFree: "/global/websearch-free",
+  preflight: "/global/preflight",
+  blastRadius: "/global/blast-radius",
+  safeRename: "/global/safe-rename",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -332,6 +347,42 @@ export const GlobalApi = HttpApi.make("global").add(
           summary: "DuckDuckGo web search",
           description:
             "Run a free web search using DuckDuckGo HTML. Honors BANYANCODE_DISABLE_WEBSEARCH=1 to disable the tool entirely.",
+        }),
+      ),
+      HttpApiEndpoint.post("preflight", GlobalPaths.preflight, {
+        payload: PreflightInput,
+        success: described(PreflightResult, "Decision-ready preflight report"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.preflight",
+          summary: "Run preflight on a symbol",
+          description:
+            "Single-call decision report for a symbol: direct + transitive callers, tests to run, docs/configs affected, event bridges and HTTP routes impacted, and risk verdicts.",
+        }),
+      ),
+      HttpApiEndpoint.post("blastRadius", GlobalPaths.blastRadius, {
+        payload: BlastRadiusInput,
+        success: described(BlastRadiusResult, "Blast-radius counts"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.blastRadius",
+          summary: "Blast-radius counts",
+          description:
+            "Lightweight blast-radius read of a symbol: direct + transitive caller counts, files affected, tests to run, and a single risk verdict.",
+        }),
+      ),
+      HttpApiEndpoint.post("safeRename", GlobalPaths.safeRename, {
+        payload: SafeRenameInput,
+        success: described(SafeRenameResult, "Proposed rename edits + tests + risks"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.safeRename",
+          summary: "Propose safe rename edits",
+          description:
+            "Compute the edit list for safely renaming a symbol, plus tests to run and risk list. Returns a preflight-shaped report so the caller can apply edits one at a time via the existing edit tool.",
         }),
       ),
     )
