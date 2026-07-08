@@ -5,11 +5,12 @@ import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath, RelativePath } from "@opencode-ai/core/schema"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import ignore from "ignore"
 import path from "path"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
+import { Banyan } from "@opencode-ai/core/banyancode"
 
 export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handlers) =>
   Effect.gen(function* () {
@@ -113,6 +114,14 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       return []
     })
 
+    const tree = Effect.fn("FileHttpApi.tree")(function* (ctx: { query: { path?: string; depth?: number } }) {
+      const location = yield* Location.Service
+      const fsOpt = yield* Effect.serviceOption(Banyan.BanyanFilesystemService)
+      if (Option.isNone(fsOpt)) return { path: location.directory, name: path.basename(location.directory), kind: "directory" as const, children: [] }
+      const root = ctx.query.path ?? location.directory
+      return yield* fsOpt.value.listTree({ root, maxDepth: ctx.query.depth ?? 3 })
+    })
+
     return handlers
       .handle("findText", findText)
       .handle("findFile", findFile)
@@ -120,5 +129,6 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       .handle("list", list)
       .handle("content", content)
       .handle("status", status)
+      .handle("tree", tree)
   }),
 ).pipe(Layer.provide(LocationServiceMap.layer))

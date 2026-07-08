@@ -80,6 +80,8 @@ import type {
   FileReadResponses,
   FileStatusErrors,
   FileStatusResponses,
+  FileTreeErrors,
+  FileTreeResponses,
   FindFilesErrors,
   FindFilesResponses,
   FindSymbolsErrors,
@@ -2593,6 +2595,40 @@ export class File extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<FileStatusResponses, FileStatusErrors, ThrowOnError>({
       url: "/file/status",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get file tree
+   *
+   * Get a recursive tree of files and directories.
+   */
+  public tree<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      path?: string
+      depth?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "path" },
+            { in: "query", key: "depth" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileTreeResponses, FileTreeErrors, ThrowOnError>({
+      url: "/file/tree",
       ...options,
       ...params,
     })

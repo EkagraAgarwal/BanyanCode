@@ -7341,6 +7341,41 @@ export type FileStatusResponses = {
 
 export type FileStatusResponse = FileStatusResponses[keyof FileStatusResponses]
 
+export type FileTreeData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    path?: string
+    depth?: string
+  }
+  url: "/file/tree"
+}
+
+export type FileTreeErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type FileTreeError = FileTreeErrors[keyof FileTreeErrors]
+
+export type FileTreeResponses = {
+  /**
+   * File tree
+   */
+  200: {
+    path: string
+    name: string
+    kind: "file" | "directory"
+    children?: Array<unknown>
+  }
+}
+
+export type FileTreeResponse = FileTreeResponses[keyof FileTreeResponses]
+
 export type InstanceDisposeData = {
   body?: never
   path?: never

@@ -61,6 +61,7 @@ import { PluginV2 } from "@opencode-ai/core/plugin"
 import { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
 import * as AiSdkTransportModule from "./transport-ai-sdk"
 import { applyCodegraphBuildBridge } from "./banyancode-codegraph-bridge"
+import { applyFilesystemBridge } from "./banyancode-filesystem-bridge"
 
 export const AppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -122,6 +123,11 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(Banyan.codegraphStalenessDefaultLayer),
   Layer.provideMerge(Banyan.editPlannerDefaultLayer),
   Layer.provideMerge(Banyan.codegraphAnalyzerDefaultLayer),
+  Layer.provideMerge(
+    Banyan.banyanFilesystemDefaultLayer.pipe(
+      Layer.provide(EventV2.defaultLayer),
+    ),
+  ),
   Layer.provideMerge(Banyan.searchDefaultLayer),
   Layer.provideMerge(Banyan.structuralQueriesDefaultLayer),
   Layer.provideMerge(
@@ -207,6 +213,7 @@ export const AppRuntime: Runtime = {
 }
 
 AppRuntime.runFork(applyCodegraphBuildBridge as never)
+AppRuntime.runFork(applyFilesystemBridge as never)
 
 /**
  * Assert the canonical tool pipeline is consistent: every registered tool
