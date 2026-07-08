@@ -2193,6 +2193,7 @@ export type BanyanCodegraphNode = {
   startLine: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   endLine: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   code?: string
+  derivation?: "regex-v1" | "tree-sitter-v1" | "runtime-v1"
 }
 
 export type BanyanQueryInput = {
@@ -6225,6 +6226,159 @@ export type GlobalWebsearchFreeResponses = {
 }
 
 export type GlobalWebsearchFreeResponse = GlobalWebsearchFreeResponses[keyof GlobalWebsearchFreeResponses]
+
+export type GlobalPreflightData = {
+  body?: {
+    action: "rename" | "modify" | "delete"
+    target: string
+    depth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    root?: string
+  }
+  path?: never
+  query?: never
+  url: "/global/preflight"
+}
+
+export type GlobalPreflightErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalPreflightError = GlobalPreflightErrors[keyof GlobalPreflightErrors]
+
+export type GlobalPreflightResponses = {
+  /**
+   * Decision-ready preflight report
+   */
+  200: {
+    target: {
+      resolved: boolean
+      node?: BanyanCodegraphNode
+      candidates: Array<BanyanCodegraphNode>
+    }
+    directCallers: Array<BanyanCodegraphNode>
+    transitiveCallers: Array<BanyanCodegraphNode>
+    testsToRun: Array<{
+      id: string
+      path: string
+      contentHash: string
+      language: string
+      indexedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+    docsAffected: Array<{
+      id: string
+      path: string
+      contentHash: string
+      language: string
+      indexedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+    configsAffected: Array<{
+      id: string
+      path: string
+      contentHash: string
+      language: string
+      indexedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+    eventBridgesAffected: Array<{
+      name: string
+      file: string
+    }>
+    httpRoutesAffected: Array<{
+      method: string
+      path: string
+      file: string
+    }>
+    risks: Array<{
+      kind: "no-target" | "many-callers" | "no-tests" | "touches-event-bus" | "touches-http-routes"
+      severity: "low" | "medium" | "high"
+      message: string
+    }>
+    derivation: "regex-v1" | "tree-sitter-v1" | "runtime-v1"
+    generatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type GlobalPreflightResponse = GlobalPreflightResponses[keyof GlobalPreflightResponses]
+
+export type GlobalBlastRadiusData = {
+  body?: {
+    target: string
+    maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path?: never
+  query?: never
+  url: "/global/blast-radius"
+}
+
+export type GlobalBlastRadiusErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalBlastRadiusError = GlobalBlastRadiusErrors[keyof GlobalBlastRadiusErrors]
+
+export type GlobalBlastRadiusResponses = {
+  /**
+   * Blast-radius counts
+   */
+  200: {
+    directCallers: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    transitiveCallers: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    filesAffected: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    testsToRun: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    risk: "low" | "medium" | "high"
+  }
+}
+
+export type GlobalBlastRadiusResponse = GlobalBlastRadiusResponses[keyof GlobalBlastRadiusResponses]
+
+export type GlobalSafeRenameData = {
+  body?: {
+    symbol: string
+    newName: string
+    dryRun?: boolean
+    root?: string
+  }
+  path?: never
+  query?: never
+  url: "/global/safe-rename"
+}
+
+export type GlobalSafeRenameErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalSafeRenameError = GlobalSafeRenameErrors[keyof GlobalSafeRenameErrors]
+
+export type GlobalSafeRenameResponses = {
+  /**
+   * Proposed rename edits + tests + risks
+   */
+  200: {
+    edits: Array<{
+      file: string
+      oldText: string
+      newText: string
+      line: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+    testsToRun: Array<string>
+    risks: Array<{
+      kind: string
+      severity: string
+      message: string
+    }>
+    preflight: unknown
+  }
+}
+
+export type GlobalSafeRenameResponse = GlobalSafeRenameResponses[keyof GlobalSafeRenameResponses]
 
 export type RepositoryIntelQueryData = {
   body?: BanyanQueryInput
