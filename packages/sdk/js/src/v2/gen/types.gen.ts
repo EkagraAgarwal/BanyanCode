@@ -956,6 +956,8 @@ export type GlobalEvent = {
             }
           }
           snapshot?: string
+          ttftMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          tokensPerSecond?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
         }
       }
     | {
@@ -1407,7 +1409,7 @@ export type GlobalEvent = {
         id: string
         type: "banyancode.system.updated"
         properties: {
-          cpuPercent: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          cpuPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           memoryUsedBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           memoryTotalBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           gpuPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -3701,6 +3703,8 @@ export type SyncEventSessionNextStepEnded = {
         }
       }
       snapshot?: string
+      ttftMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      tokensPerSecond?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     }
   }
 }
@@ -4831,6 +4835,8 @@ export type EventSessionNextStepEnded = {
       }
     }
     snapshot?: string
+    ttftMs?: number | "NaN" | "Infinity" | "-Infinity"
+    tokensPerSecond?: number | "NaN" | "Infinity" | "-Infinity"
   }
 }
 
@@ -5320,7 +5326,7 @@ export type EventBanyancodeSystemUpdated = {
   id: string
   type: "banyancode.system.updated"
   properties: {
-    cpuPercent: number | "NaN" | "Infinity" | "-Infinity"
+    cpuPercent?: number | "NaN" | "Infinity" | "-Infinity"
     memoryUsedBytes: number | "NaN" | "Infinity" | "-Infinity"
     memoryTotalBytes: number | "NaN" | "Infinity" | "-Infinity"
     gpuPercent?: number | "NaN" | "Infinity" | "-Infinity"
@@ -6228,9 +6234,21 @@ export type GlobalWebsearchFreeResponses = {
 export type GlobalWebsearchFreeResponse = GlobalWebsearchFreeResponses[keyof GlobalWebsearchFreeResponses]
 
 export type GlobalPreflightData = {
+  /**
+   * Decision report for an upcoming edit: full candidate list, blast radius, touched event bridges, HTTP routes, configs, and structured risk tags. Use before any non-trivial rename or delete.
+   */
   body?: {
+    /**
+     * What kind of edit is being planned: 'rename' for symbol rename, 'modify' for an in-place change, 'delete' for removal. Drives the candidate selection and which risk kinds fire.
+     */
     action: "rename" | "modify" | "delete"
+    /**
+     * REQUIRED. The symbol name (e.g. 'MemoryRepo.update') or node ID (UUID:line-line) the edit is targeting. If the symbol is not in the code graph, the tool returns a 'no-target' risk with guidance.
+     */
     target: string
+    /**
+     * Maximum traversal depth for blast radius. Defaults to 64 (capped) when omitted. Pass 3-5 for shallow previews.
+     */
     depth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     root?: string
   }
@@ -6291,7 +6309,7 @@ export type GlobalPreflightResponses = {
       file: string
     }>
     risks: Array<{
-      kind: "no-target" | "many-callers" | "no-tests" | "touches-event-bus" | "touches-http-routes"
+      kind: "no-target" | "many-callers" | "no-tests" | "touches-event-bus" | "touches-http-routes" | "stale-graph"
       severity: "low" | "medium" | "high"
       message: string
     }>
@@ -6303,8 +6321,17 @@ export type GlobalPreflightResponses = {
 export type GlobalPreflightResponse = GlobalPreflightResponses[keyof GlobalPreflightResponses]
 
 export type GlobalBlastRadiusData = {
+  /**
+   * Count-only blast radius for a symbol: how many direct callers, transitive callers, files, and tests would be affected by a change. Returns counts only — for full candidate lists and risk tags, use preflight.
+   */
   body?: {
+    /**
+     * REQUIRED. The symbol name (e.g. 'MemoryRepo.update') or node ID (UUID:line-line) to measure blast radius for. Pass the same value you would pass to code_find intent='definition'.
+     */
     target: string
+    /**
+     * Maximum traversal depth for transitive callers. Defaults to 64 when omitted (capped at the BFS_MAX constant inside the tool). Pass a smaller value (e.g. 3) for a shallow radius.
+     */
     maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   }
   path?: never
@@ -6331,16 +6358,29 @@ export type GlobalBlastRadiusResponses = {
     filesAffected: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     testsToRun: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     risk: "low" | "medium" | "high"
+    graphStale?: boolean
   }
 }
 
 export type GlobalBlastRadiusResponse = GlobalBlastRadiusResponses[keyof GlobalBlastRadiusResponses]
 
 export type GlobalSafeRenameData = {
+  /**
+   * Plan a symbol rename: list every call-site edit, the test files to re-run, and the risk tags. The tool never writes files — apply the returned edits with the edit tool.
+   */
   body?: {
+    /**
+     * REQUIRED. The qualified symbol name to rename (e.g. 'Permission.ask'). Must be findable in the code graph.
+     */
     symbol: string
+    /**
+     * REQUIRED. The new qualified name (e.g. 'Permission.request'). If newName has no dot, the namespace is inherited from symbol.
+     */
     newName: string
-    dryRun?: boolean
+    /**
+     * REQUIRED. When true, the tool returns the preflight, test list, and risk report but emits zero edits — useful for previewing blast radius before committing. When false, emits edits[] alongside the same plan.
+     */
+    dryRun: boolean
     root?: string
   }
   path?: never
