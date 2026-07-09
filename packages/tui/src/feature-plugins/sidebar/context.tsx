@@ -67,28 +67,26 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
             </text>
             <Show when={tb().total > 0}>
               <box flexDirection="row" marginTop={1} gap={0}>
-                <text wrapMode="none">
-                  <Show when={tb().reasoning > 0}>
-                    <text fg={toHex(theme().accent)}>
-                      {"█".repeat(Math.round((tb().reasoning / tb().total) * 12))}
-                    </text>
-                  </Show>
-                  <Show when={tb().input > 0}>
-                    <text fg={toHex(theme().info)}>
-                      {"█".repeat(Math.round((tb().input / tb().total) * 12))}
-                    </text>
-                  </Show>
-                  <Show when={tb().output > 0}>
-                    <text fg={toHex(theme().success)}>
-                      {"█".repeat(Math.round((tb().output / tb().total) * 12))}
-                    </text>
-                  </Show>
-                  <Show when={tb().cacheRead + tb().cacheWrite > 0}>
-                    <text fg={toHex(theme().warning)}>
-                      {"█".repeat(Math.round(((tb().cacheRead + tb().cacheWrite) / tb().total) * 12))}
-                    </text>
-                  </Show>
-                </text>
+                <Show when={tb().reasoning > 0}>
+                  <text fg={toHex(theme().accent)}>
+                    {"█".repeat(Math.round((tb().reasoning / tb().total) * 12))}
+                  </text>
+                </Show>
+                <Show when={tb().input > 0}>
+                  <text fg={toHex(theme().info)}>
+                    {"█".repeat(Math.round((tb().input / tb().total) * 12))}
+                  </text>
+                </Show>
+                <Show when={tb().output > 0}>
+                  <text fg={toHex(theme().success)}>
+                    {"█".repeat(Math.round((tb().output / tb().total) * 12))}
+                  </text>
+                </Show>
+                <Show when={tb().cacheRead + tb().cacheWrite > 0}>
+                  <text fg={toHex(theme().warning)}>
+                    {"█".repeat(Math.round(((tb().cacheRead + tb().cacheWrite) / tb().total) * 12))}
+                  </text>
+                </Show>
               </box>
             </Show>
             <box flexDirection="column" marginTop={1} gap={0}>
