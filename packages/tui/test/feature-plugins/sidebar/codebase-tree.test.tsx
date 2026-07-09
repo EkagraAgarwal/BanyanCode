@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import { onMount } from "solid-js"
-import InspectorAgentDetails from "../../../src/feature-plugins/inspector/agent-details"
+import { createSignal, onMount } from "solid-js"
+import SidebarCodebaseTree from "../../../src/feature-plugins/sidebar/codebase-tree"
 import { createTuiPluginApi } from "../../fixture/tui-plugin"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { TestTuiContexts } from "../../fixture/tui-environment"
@@ -28,28 +28,58 @@ const stubTheme = {
   info: { r: 100, g: 100, b: 100, a: 1 },
 }
 
-test("inspector agent-details session_inspector slot renders with session data", async () => {
+const fixtureTree = {
+  path: "/test/workspace",
+  name: "workspace",
+  kind: "directory" as const,
+  children: [
+    { path: "/test/workspace/src", name: "src", kind: "directory" as const, children: [
+      { path: "/test/workspace/src/index.ts", name: "index.ts", kind: "file" as const },
+      { path: "/test/workspace/src/utils.ts", name: "utils.ts", kind: "file" as const },
+    ]},
+    { path: "/test/workspace/package.json", name: "package.json", kind: "file" as const },
+  ],
+}
+
+test("sidebar codebase-tree sidebar_content slot renders with tree data", async () => {
   const events = createEventSource()
-  const calls = createFetch()
+  const calls = createFetch((url) => {
+    if (url.pathname === "/file/tree") {
+      return new Response(JSON.stringify({ data: fixtureTree }), {
+        headers: { "content-type": "application/json" },
+      })
+    }
+    return undefined
+  })
   const config = createTuiResolvedConfig()
-  let done: () => void
-  const ready = new Promise<void>((r) => { done = r })
+  const [slotContent, setSlotContent] = createSignal<any>(null)
 
   function Inner() {
     const api: any = {
       ...createTuiPluginApi({}),
       theme: { current: stubTheme },
-      slots: {
-        register(plugin: any) {
-          if (!plugin?.slots?.session_inspector) return () => {}
-          void plugin.tui(api, undefined as any, { id: "test" } as any)
-          plugin.slots.session_inspector({}, { session_id: "session_test" })
-          return () => {}
-        },
+      client: {
+        file: { tree: async (args: any) => ({ data: fixtureTree }) },
+      },
+      state: {
+        session: { get: () => undefined },
+        path: { directory: "/test/workspace" },
+        mcp: () => [],
+        lsp: () => [],
       },
     }
-    onMount(done)
-    return <box />
+    api.slots = {
+      register: (plugin: any) => {
+        if (!plugin?.slots?.sidebar_content) return () => {}
+        const el = plugin.slots.sidebar_content({})
+        setSlotContent(() => el)
+        return () => {}
+      },
+    }
+    onMount(() => {
+      SidebarCodebaseTree.tui(api as any, undefined as any, { id: "test" } as any).catch(() => {})
+    })
+    return <box>{slotContent()}</box>
   }
 
   const testSetup = await testRender(() => (
@@ -73,8 +103,6 @@ test("inspector agent-details session_inspector slot renders with session data",
       </TestTuiContexts>
     </ExitProvider>
   ), { width: 40, height: 50 })
-
-  await ready
   await testSetup.renderOnce()
   await new Promise((r) => setTimeout(r, 0))
   await testSetup.renderOnce()

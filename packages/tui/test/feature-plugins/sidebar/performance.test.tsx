@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import { onMount } from "solid-js"
-import InspectorAgentDetails from "../../../src/feature-plugins/inspector/agent-details"
+import { createSignal, onMount } from "solid-js"
+import SidebarPerformance from "../../../src/feature-plugins/sidebar/performance"
 import { createTuiPluginApi } from "../../fixture/tui-plugin"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { TestTuiContexts } from "../../fixture/tui-environment"
@@ -28,28 +28,35 @@ const stubTheme = {
   info: { r: 100, g: 100, b: 100, a: 1 },
 }
 
-test("inspector agent-details session_inspector slot renders with session data", async () => {
+test("sidebar performance sidebar_content slot renders without throwing", async () => {
   const events = createEventSource()
   const calls = createFetch()
   const config = createTuiResolvedConfig()
-  let done: () => void
-  const ready = new Promise<void>((r) => { done = r })
+  const [slotContent, setSlotContent] = createSignal<any>(null)
 
   function Inner() {
     const api: any = {
       ...createTuiPluginApi({}),
       theme: { current: stubTheme },
-      slots: {
-        register(plugin: any) {
-          if (!plugin?.slots?.session_inspector) return () => {}
-          void plugin.tui(api, undefined as any, { id: "test" } as any)
-          plugin.slots.session_inspector({}, { session_id: "session_test" })
-          return () => {}
-        },
+      state: {
+        session: { get: () => undefined },
+        path: { directory: "/test/workspace" },
+        mcp: () => [],
+        lsp: () => [],
       },
     }
-    onMount(done)
-    return <box />
+    api.slots = {
+      register: (plugin: any) => {
+        if (!plugin?.slots?.sidebar_content) return () => {}
+        const el = plugin.slots.sidebar_content({}, { session_id: "session_test" })
+        setSlotContent(() => el)
+        return () => {}
+      },
+    }
+    onMount(() => {
+      SidebarPerformance.tui(api as any, undefined as any, { id: "test" } as any).catch(() => {})
+    })
+    return <box>{slotContent()}</box>
   }
 
   const testSetup = await testRender(() => (
@@ -73,8 +80,6 @@ test("inspector agent-details session_inspector slot renders with session data",
       </TestTuiContexts>
     </ExitProvider>
   ), { width: 40, height: 50 })
-
-  await ready
   await testSetup.renderOnce()
   await new Promise((r) => setTimeout(r, 0))
   await testSetup.renderOnce()

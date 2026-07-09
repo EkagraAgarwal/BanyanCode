@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import { onMount } from "solid-js"
-import InspectorAgentDetails from "../../../src/feature-plugins/inspector/agent-details"
+import InspectorTodo from "../../../src/feature-plugins/inspector/todo"
 import { createTuiPluginApi } from "../../fixture/tui-plugin"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { TestTuiContexts } from "../../fixture/tui-environment"
@@ -28,7 +28,13 @@ const stubTheme = {
   info: { r: 100, g: 100, b: 100, a: 1 },
 }
 
-test("inspector agent-details session_inspector slot renders with session data", async () => {
+const fixtureTodos = [
+  { id: "todo-1", status: "pending" as const, content: "First task" },
+  { id: "todo-2", status: "in_progress" as const, content: "Second task" },
+  { id: "todo-3", status: "completed" as const, content: "Third task" },
+]
+
+test("inspector todo session_inspector slot renders with todo list", async () => {
   const events = createEventSource()
   const calls = createFetch()
   const config = createTuiResolvedConfig()
@@ -39,6 +45,15 @@ test("inspector agent-details session_inspector slot renders with session data",
     const api: any = {
       ...createTuiPluginApi({}),
       theme: { current: stubTheme },
+      state: {
+        session: {
+          get: () => undefined,
+          todo: (sessionID: string) => fixtureTodos,
+        },
+        path: { directory: "/test/workspace" },
+        mcp: () => [],
+        lsp: () => [],
+      },
       slots: {
         register(plugin: any) {
           if (!plugin?.slots?.session_inspector) return () => {}

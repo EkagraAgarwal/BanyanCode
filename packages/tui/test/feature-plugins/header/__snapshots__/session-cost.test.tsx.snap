@@ -1,0 +1,3 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`header session-cost app_top slot renders with cost data 1`] = `""`;

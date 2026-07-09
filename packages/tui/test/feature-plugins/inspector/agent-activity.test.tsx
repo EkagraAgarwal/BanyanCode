@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import { onMount } from "solid-js"
-import InspectorAgentDetails from "../../../src/feature-plugins/inspector/agent-details"
+import InspectorAgentActivity from "../../../src/feature-plugins/inspector/agent-activity"
 import { createTuiPluginApi } from "../../fixture/tui-plugin"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { TestTuiContexts } from "../../fixture/tui-environment"
@@ -28,7 +28,17 @@ const stubTheme = {
   info: { r: 100, g: 100, b: 100, a: 1 },
 }
 
-test("inspector agent-details session_inspector slot renders with session data", async () => {
+const fixtureMeshStatus = {
+  parentSessionID: "session_test",
+  peers: [
+    { sessionID: "peer-1", agent: "Explore", status: "active" as const, lastSeenAt: Date.now(), cost: 0.01 },
+    { sessionID: "peer-2", agent: "Coder", status: "idle" as const, lastSeenAt: Date.now() - 3000 },
+  ],
+  pendingMessages: 0,
+  recentActivity: [],
+}
+
+test("inspector agent-activity session_inspector slot renders with mesh peers", async () => {
   const events = createEventSource()
   const calls = createFetch()
   const config = createTuiResolvedConfig()
@@ -43,12 +53,22 @@ test("inspector agent-details session_inspector slot renders with session data",
         register(plugin: any) {
           if (!plugin?.slots?.session_inspector) return () => {}
           void plugin.tui(api, undefined as any, { id: "test" } as any)
-          plugin.slots.session_inspector({}, { session_id: "session_test" })
+          plugin.slots.session_inspector({})
           return () => {}
         },
       },
     }
     onMount(done)
+    queueMicrotask(() => {
+      events.emit({
+        directory,
+        payload: {
+          id: "evt_mesh",
+          type: "banyancode.mesh.status",
+          properties: fixtureMeshStatus,
+        } as any,
+      })
+    })
     return <box />
   }
 
