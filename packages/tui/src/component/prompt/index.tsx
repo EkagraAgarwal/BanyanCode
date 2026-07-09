@@ -1573,7 +1573,6 @@ export function Prompt(props: PromptProps) {
           customBorderChars={RoundedBorder.customBorderChars}
           border={["left", "right", "top", "bottom"]}
           borderColor={theme.borderSubtle}
-          backgroundColor={theme.backgroundElement}
         >
           <box
             paddingLeft={1}

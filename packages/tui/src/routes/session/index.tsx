@@ -62,7 +62,6 @@ import { Toast, useToast } from "../../ui/toast"
 import { CodegraphProgress } from "../../component/codegraph-progress"
 import { MessageBlock } from "../../component/message-block"
 import { ResizableSeparator } from "../../component/resizable-separator"
-import { pillFill } from "../../util/palette"
 import { useKV } from "../../context/kv.tsx"
 import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
@@ -1682,57 +1681,27 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
       </Show>
       <Switch>
         <Match when={props.last || final() || props.message.error?.name === "MessageAbortedError"}>
-          <box paddingLeft={3} marginTop={1} flexDirection="row" gap={1} flexShrink={0}>
-            <box
-              customBorderChars={RoundedBorder.customBorderChars}
-              border={["left", "right", "top", "bottom"]}
-              borderColor={local.agent.color(props.message.agent)}
-              backgroundColor={pillFill(
-                theme.backgroundPanel,
-                local.agent.color(props.message.agent),
-                "info",
-              )}
-              paddingLeft={1}
-              paddingRight={1}
-              flexShrink={0}
-            >
-              <text
-                fg={
-                  props.message.error?.name === "MessageAbortedError"
-                    ? theme.textMuted
-                    : local.agent.color(props.message.agent)
-                }
+          <box paddingLeft={3}>
+            <text marginTop={1}>
+              <span
+                style={{
+                  fg:
+                    props.message.error?.name === "MessageAbortedError"
+                      ? theme.textMuted
+                      : local.agent.color(props.message.agent),
+                }}
               >
-                ▣ {Locale.titlecase(props.message.mode)}
-              </text>
-            </box>
-            <box
-              customBorderChars={RoundedBorder.customBorderChars}
-              border={["left", "right", "top", "bottom"]}
-              borderColor={theme.borderSubtle}
-              backgroundColor={pillFill(theme.backgroundPanel, theme.borderSubtle, "neutral")}
-              paddingLeft={1}
-              paddingRight={1}
-              flexShrink={0}
-            >
-              <text fg={theme.text}>{model()}</text>
-            </box>
-            <Show when={duration()}>
-              <box
-                customBorderChars={RoundedBorder.customBorderChars}
-                border={["left", "right", "top", "bottom"]}
-                borderColor={theme.borderSubtle}
-                backgroundColor={pillFill(theme.backgroundPanel, theme.borderSubtle, "neutral")}
-                paddingLeft={1}
-                paddingRight={1}
-                flexShrink={0}
-              >
-                <text fg={theme.textMuted}>{Locale.duration(duration())}</text>
-              </box>
-            </Show>
-            <Show when={props.message.error?.name === "MessageAbortedError"}>
-              <text fg={theme.textMuted}> · interrupted</text>
-            </Show>
+                ▣{" "}
+              </span>{" "}
+              <span style={{ fg: theme.text }}>{Locale.titlecase(props.message.mode)}</span>
+              <span style={{ fg: theme.textMuted }}> · {model()}</span>
+              <Show when={duration()}>
+                <span style={{ fg: theme.textMuted }}> · {Locale.duration(duration())}</span>
+              </Show>
+              <Show when={props.message.error?.name === "MessageAbortedError"}>
+                <span style={{ fg: theme.textMuted }}> · interrupted</span>
+              </Show>
+            </text>
           </box>
         </Match>
       </Switch>
