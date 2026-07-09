@@ -1,34 +1,35 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js"
+import { createMemo, createSignal, onCleanup, Show } from "solid-js"
 import { useEvent } from "../../context/event"
+import { useSync } from "../../context/sync"
 import { toHex } from "../../util/color"
 
 const id = "internal:sidebar-performance"
 
 interface StepMetrics {
-  stepId: string
-  ttftMs?: number
-  tokensPerSecond?: number
-  latencyMs?: number
+  source: string
+  ttftMs: number | undefined
+  tokensPerSecond: number | undefined
+  tokensOut: number | undefined
 }
 
 function numeric(v: number | "NaN" | "Infinity" | "-Infinity" | undefined): number | undefined {
-  if (v === undefined || v === "NaN" || !isFinite(v as number)) return undefined
+  if (v === undefined || v === "NaN" || !Number.isFinite(v as number)) return undefined
   return v as number
 }
 
 function BarMetric(props: {
   label: string
   value: string
-  fillPercent: number
+  filled: number
+  width: number
   color: "primary" | "success" | "info" | "warning"
   theme: () => any
 }) {
-  const width = 12
-  const filled = Math.round((props.fillPercent / 100) * width)
-  const bar = "█".repeat(filled) + "░".repeat(width - filled)
+  const filled = Math.max(0, Math.min(props.width, Math.round(props.filled)))
+  const bar = "█".repeat(filled) + "░".repeat(props.width - filled)
 
   const colorFn = () => {
     const t = props.theme()
@@ -44,9 +45,7 @@ function BarMetric(props: {
         <text fg={toHex(props.theme().textMuted)}>{props.label}</text>
         <text fg={colorFn()}>{props.value}</text>
       </box>
-      <box flexDirection="row" gap={0}>
-        <text fg={colorFn()}>{bar}</text>
-      </box>
+      <text fg={colorFn()}>{bar}</text>
     </box>
   )
 }
@@ -54,81 +53,72 @@ function BarMetric(props: {
 function View(props: { api: TuiPluginApi; session_id: string }) {
   const theme = () => props.api.theme.current
   const ev = useEvent()
+  const sync = useSync()
 
-  const [steps, setSteps] = createSignal<StepMetrics[]>([])
+  const [step, setStep] = createSignal<StepMetrics | undefined>(undefined)
 
-  const MAX_STEPS = 3
+  const total = createMemo(() => {
+    const messages = sync.data.message[props.session_id] ?? []
+    const assistants = messages.filter((m: any) => m.role === "assistant" && m.time?.completed)
+    return assistants.reduce(
+      (sum: number, m: any) => sum + (m.tokens?.output ?? 0),
+      0,
+    )
+  })
 
-  const unsub = ev.on("session.next.step.ended", (event) => {
-    const tps = numeric(event.properties.tokensPerSecond)
-    const latency = event.properties.tokens.output > 0 && tps ? event.properties.tokens.output / tps * 1000 : undefined
-    setSteps((prev) => {
-      const next = [
-        {
-          stepId: event.properties.assistantMessageID,
-          ttftMs: numeric(event.properties.ttftMs),
-          tokensPerSecond: tps,
-          latencyMs: latency,
-        },
-        ...prev,
-      ]
-      return next.slice(0, MAX_STEPS)
+  const unsub = ev.on("session.next.step.ended", (event: any) => {
+    setStep({
+      source: event.properties.assistantMessageID,
+      ttftMs: numeric(event.properties.ttftMs),
+      tokensPerSecond: numeric(event.properties.tokensPerSecond),
+      tokensOut: event.properties.tokens?.output,
     })
   })
   onCleanup(unsub)
-
-  const peakTps = createMemo(() => Math.max(...steps().map((s) => s.tokensPerSecond ?? 0), 0))
-  const peakTtft = createMemo(() => Math.max(...steps().map((s) => s.ttftMs ?? 0), 0))
-  const peakLatency = createMemo(() => Math.max(...steps().map((s) => s.latencyMs ?? 0), 0))
-
-  const recentSteps = createMemo(() => steps().slice(0, MAX_STEPS))
 
   return (
     <box>
       <text fg={toHex(theme().primary)}>
         <b>PERFORMANCE</b>
       </text>
+      <text fg={toHex(theme().textMuted)} marginTop={1}>
+        {total()} tokens generated this session
+      </text>
       <Show
-        when={recentSteps().length > 0}
+        when={step()}
         fallback={
           <text fg={toHex(theme().textMuted)} marginTop={1}>
-            Waiting for step data…
+            step metrics after first turn
           </text>
         }
       >
-        <For each={recentSteps()}>
-          {(step) => (
-            <box marginTop={1} gap={0}>
-              <Show when={step.tokensPerSecond !== undefined && peakTps() > 0}>
-                <BarMetric
-                  label="Tokens/sec"
-                  value={step.tokensPerSecond!.toFixed(1)}
-                  fillPercent={(step.tokensPerSecond! / peakTps()) * 100}
-                  color="success"
-                  theme={theme}
-                />
-              </Show>
-              <Show when={step.ttftMs !== undefined && peakTtft() > 0}>
-                <BarMetric
-                  label="TTFT"
-                  value={`${step.ttftMs!.toFixed(0)}ms`}
-                  fillPercent={(step.ttftMs! / peakTtft()) * 100}
-                  color="warning"
-                  theme={theme}
-                />
-              </Show>
-              <Show when={step.latencyMs !== undefined && peakLatency() > 0}>
-                <BarMetric
-                  label="Latency"
-                  value={`${step.latencyMs!.toFixed(0)}ms`}
-                  fillPercent={(step.latencyMs! / peakLatency()) * 100}
-                  color="info"
-                  theme={theme}
-                />
-              </Show>
-            </box>
-          )}
-        </For>
+        {(s) => (
+          <box marginTop={1} gap={0}>
+            <Show when={s().ttftMs !== undefined}>
+              <BarMetric
+                label="TTFT"
+                value={`${s().ttftMs!.toFixed(0)}ms`}
+                filled={Math.min(12, Math.max(1, Math.round((s().ttftMs! ?? 0) / 500)))}
+                width={12}
+                color="warning"
+                theme={theme}
+              />
+            </Show>
+            <Show when={s().tokensPerSecond !== undefined}>
+              <BarMetric
+                label="Tokens/sec"
+                value={s().tokensPerSecond!.toFixed(1)}
+                filled={Math.min(12, Math.max(1, Math.round(s().tokensPerSecond! / 10)))}
+                width={12}
+                color="success"
+                theme={theme}
+              />
+            </Show>
+            <Show when={s().ttftMs === undefined && s().tokensPerSecond === undefined}>
+              <text fg={toHex(theme().textMuted)}>tool-only step · {(s().tokensOut ?? 0).toLocaleString()} tokens</text>
+            </Show>
+          </box>
+        )}
       </Show>
     </box>
   )
