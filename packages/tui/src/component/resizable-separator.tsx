@@ -12,6 +12,7 @@ export function ResizableSeparator(props: {
   const dimensions = useTerminalDimensions()
   const renderer = useRenderer()
   const [dragging, setDragging] = createSignal(false)
+  const [hovered, setHovered] = createSignal(false)
   const [dragStartX, setDragStartX] = createSignal(0)
   const [dragStartWidthPct, setDragStartWidthPct] = createSignal(0)
   let separatorRef: any
@@ -37,17 +38,25 @@ export function ResizableSeparator(props: {
     setDragging(false)
   }
 
+  const fillColor = () => {
+    if (dragging()) return theme.primary
+    if (hovered()) return theme.primary
+    return theme.border
+  }
+
   return (
     <box
       ref={separatorRef}
       width={1}
       height="100%"
       flexShrink={0}
-      backgroundColor={dragging() ? theme.primary : theme.border}
+      backgroundColor={fillColor()}
       onMouseDown={(e: { x: number }) => startDrag(e.x)}
       onMouseDrag={(e: { x: number }) => handleDrag(e.x)}
       onMouseDragEnd={endDrag}
       onMouseUp={endDrag}
+      onMouseOver={() => setHovered(true)}
+      onMouseOut={() => setHovered(false)}
     />
   )
 }
