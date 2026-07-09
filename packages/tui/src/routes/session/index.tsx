@@ -1198,7 +1198,7 @@ export function Session() {
         }}
       >
         <box flexDirection="column" flexGrow={1} minHeight={0}>
-          <box flexShrink={0} flexDirection="row" justifyContent="space-between" width="100%">
+          <box flexShrink={0} flexDirection="row" justifyContent="space-between" width="100%" gap={2}>
             <pluginRuntime.Slot name="app_top" session_id={route.sessionID} />
           </box>
           <pluginRuntime.Slot name="session_attention_strip" session_id={route.sessionID} />

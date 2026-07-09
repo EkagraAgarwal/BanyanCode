@@ -100,7 +100,8 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onDis
     <Show when={items().length > 0}>
       <box
         flexDirection="row"
-        gap={4}
+        alignItems="center"
+        gap={2}
         border={["bottom"]}
         borderColor={toHex(theme().error)}
         paddingTop={0}
@@ -108,6 +109,7 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onDis
         paddingLeft={1}
         paddingRight={1}
       >
+        <text fg={toHex(theme().error)}>▲</text>
         <For each={items()}>
           {(item, i) => (
             <>
@@ -123,14 +125,13 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onDis
             </>
           )}
         </For>
-        <box flexDirection="row" flexGrow={1} justifyContent="flex-end">
-          <text
-            fg={toHex(theme().textMuted)}
-            onMouseDown={() => props.onDismissAll()}
-          >
-            dismiss ×
-          </text>
-        </box>
+        <box flexGrow={1} />
+        <text
+          fg={toHex(theme().textMuted)}
+          onMouseDown={() => props.onDismissAll()}
+        >
+          dismiss ×
+        </text>
       </box>
     </Show>
   )

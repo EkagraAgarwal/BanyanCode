@@ -8,8 +8,6 @@ import SidebarFiles from "./sidebar/files"
 import SidebarFooter from "./sidebar/footer"
 import SidebarLsp from "./sidebar/lsp"
 import SidebarMcp from "./sidebar/mcp"
-import SidebarAgentTree from "./sidebar/agent-tree"
-import SidebarTodo from "./sidebar/todo"
 import SidebarCodebaseTree from "./sidebar/codebase-tree"
 import InspectorAgentDetails from "./inspector/agent-details"
 import InspectorTodo from "./inspector/todo"
@@ -49,21 +47,19 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     SidebarAgents,
     SidebarPerformance,
     SidebarContext,
+    SidebarSystemStatus,
     SidebarCodebaseTree,
     SidebarCodegraphPanel,
     SidebarCodegraphIntelPanel,
-    SidebarSystemStatus,
     SidebarMcp,
-    SidebarAgentTree,
     SidebarLsp,
-    SidebarTodo,
+    SidebarFiles,
+    SidebarFooter,
     InspectorAgentDetails,
     InspectorTodo,
     InspectorAgentActivity,
     InspectorGraphExplorer,
     InspectorPendingActions,
-    SidebarFiles,
-    SidebarFooter,
     SessionFooter,
     AttentionStrip,
     HeaderBrand,

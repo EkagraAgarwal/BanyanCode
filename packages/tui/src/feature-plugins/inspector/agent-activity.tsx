@@ -99,9 +99,9 @@ function View(props: { api: TuiPluginApi }) {
 
 const tui: TuiPlugin = async (api) => {
   api.slots.register({
-    order: 300,
+    order: 250,
     slots: {
-      session_inspector_activity() {
+      session_inspector() {
         return <View api={api} />
       },
     },

@@ -176,9 +176,9 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
 
 const tui: TuiPlugin = async (api) => {
   api.slots.register({
-    order: 100,
+    order: 50,
     slots: {
-      session_inspector_details(_ctx, slotProps) {
+      session_inspector(_ctx, slotProps) {
         const sessionID = (slotProps as { session_id?: string }).session_id
         if (!sessionID) return () => <box />
         return <View api={api} sessionID={sessionID} />

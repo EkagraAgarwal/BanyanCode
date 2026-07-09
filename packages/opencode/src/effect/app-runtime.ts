@@ -62,6 +62,7 @@ import { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
 import * as AiSdkTransportModule from "./transport-ai-sdk"
 import { applyCodegraphBuildBridge } from "./banyancode-codegraph-bridge"
 import { applyFilesystemBridge } from "./banyancode-filesystem-bridge"
+import { applySystemMonitorBridge } from "./banyancode-system-bridge"
 
 export const AppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -214,6 +215,7 @@ export const AppRuntime: Runtime = {
 
 AppRuntime.runFork(applyCodegraphBuildBridge as never)
 AppRuntime.runFork(applyFilesystemBridge as never)
+AppRuntime.runFork(applySystemMonitorBridge as never)
 
 /**
  * Assert the canonical tool pipeline is consistent: every registered tool
