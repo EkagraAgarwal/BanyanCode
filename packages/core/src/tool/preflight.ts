@@ -10,6 +10,7 @@ import type { Interface as CodegraphAnalyzerInterface } from "../banyancode/code
 import type { Interface as RepositoryIntelligenceInterface } from "../banyancode/repository-intelligence/service"
 import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan, isStale } from "../banyancode"
+import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
@@ -259,8 +260,8 @@ export const computePreflight = (
     const repoRoot = input.root ?? findRepoRoot(process.cwd()) ?? process.cwd()
     const now = Date.now()
 
-    const symbolResult = yield* deps.intel.symbols({ query: input.target })
-    const candidates = symbolResult.slice(0, 10) as Array<Banyan.CodegraphNode>
+    const resolution = yield* resolveGraphTargetPure(deps.repo, { target: input.target })
+    const candidates = resolution._tag === "Ok" ? resolution.value.candidates.slice(0, 10) : []
     const primary = candidates[0]
     const resolved = primary !== undefined
 
