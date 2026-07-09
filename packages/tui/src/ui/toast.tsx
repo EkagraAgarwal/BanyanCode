@@ -3,7 +3,7 @@ import { createContext, useContext, type ParentProps, Show, For, onCleanup } fro
 import { createStore, produce } from "solid-js/store"
 import { useTheme } from "../context/theme"
 import { useTerminalDimensions } from "@opentui/solid"
-import { SplitBorder } from "./border"
+import { RoundedBorder } from "./border"
 import { TextAttributes } from "@opentui/core"
 export type ToastOptions = {
   title?: string
@@ -69,7 +69,7 @@ function ToastItem(props: { entry: ToastEntry; theme: ReturnType<typeof useTheme
       backgroundColor={theme().backgroundPanel}
       borderColor={theme()[entry.variant]}
       border={["left", "right", "top", "bottom"]}
-      customBorderChars={SplitBorder.customBorderChars}
+      customBorderChars={RoundedBorder.customBorderChars}
       onMouseUp={() => toast.dismiss(entry.id)}
     >
       <Show when={entry.title}>

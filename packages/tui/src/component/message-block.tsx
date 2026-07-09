@@ -3,6 +3,8 @@ import { createMemo, Show } from "solid-js"
 import { useTheme } from "../context/theme"
 import { useSDK } from "../context/sdk"
 import { useOpencodeKeymap } from "../keymap"
+import { RoundedBorder } from "../ui/border"
+import { severityFill } from "../util/palette"
 import type { JSX } from "@opentui/solid"
 
 export interface MessageBlockProps {
@@ -51,8 +53,10 @@ export function MessageBlock(props: MessageBlockProps) {
 
   return (
     <box
-      border={["left"]}
+      customBorderChars={RoundedBorder.customBorderChars}
+      border={["left", "right", "top", "bottom"]}
       borderColor={borderColor()}
+      backgroundColor={theme.backgroundPanel}
       paddingTop={1}
       paddingBottom={1}
       paddingLeft={2}
@@ -72,14 +76,70 @@ export function MessageBlock(props: MessageBlockProps) {
       {props.children}
       <Show when={props.mode === "diff" && props.hasPermissionLink && props.actions === undefined}>
         <box flexDirection="row" gap={2} paddingLeft={2}>
-          <text fg={theme.success} onMouseUp={approve}>[approve]</text>
-          <text fg={theme.error} onMouseUp={reject}>[reject]</text>
-          <text fg={theme.info} onMouseUp={viewDiff}>[view full diff]</text>
+          <box
+            customBorderChars={RoundedBorder.customBorderChars}
+            border={["left", "right", "top", "bottom"]}
+            borderColor={theme.success}
+            backgroundColor={severityFill(theme.backgroundPanel, theme.success, "success")}
+            paddingLeft={1}
+            paddingRight={1}
+            flexShrink={0}
+            onMouseUp={approve}
+          >
+            <box flexDirection="row" alignItems="center" gap={1}>
+              <text fg={theme.success}>✓</text>
+              <text fg={theme.text}>approve</text>
+            </box>
+          </box>
+          <box
+            customBorderChars={RoundedBorder.customBorderChars}
+            border={["left", "right", "top", "bottom"]}
+            borderColor={theme.error}
+            backgroundColor={severityFill(theme.backgroundPanel, theme.error, "error")}
+            paddingLeft={1}
+            paddingRight={1}
+            flexShrink={0}
+            onMouseUp={reject}
+          >
+            <box flexDirection="row" alignItems="center" gap={1}>
+              <text fg={theme.error}>✕</text>
+              <text fg={theme.text}>reject</text>
+            </box>
+          </box>
+          <box
+            customBorderChars={RoundedBorder.customBorderChars}
+            border={["left", "right", "top", "bottom"]}
+            borderColor={theme.info}
+            backgroundColor={severityFill(theme.backgroundPanel, theme.info, "info")}
+            paddingLeft={1}
+            paddingRight={1}
+            flexShrink={0}
+            onMouseUp={viewDiff}
+          >
+            <box flexDirection="row" alignItems="center" gap={1}>
+              <text fg={theme.info}>ⓘ</text>
+              <text fg={theme.text}>view full diff</text>
+            </box>
+          </box>
         </box>
       </Show>
       <Show when={props.mode === "diff" && !props.hasPermissionLink && props.actions === undefined}>
         <box flexDirection="row" gap={2} paddingLeft={2}>
-          <text fg={theme.info} onMouseUp={viewDiff}>[view full diff]</text>
+          <box
+            customBorderChars={RoundedBorder.customBorderChars}
+            border={["left", "right", "top", "bottom"]}
+            borderColor={theme.info}
+            backgroundColor={severityFill(theme.backgroundPanel, theme.info, "info")}
+            paddingLeft={1}
+            paddingRight={1}
+            flexShrink={0}
+            onMouseUp={viewDiff}
+          >
+            <box flexDirection="row" alignItems="center" gap={1}>
+              <text fg={theme.info}>ⓘ</text>
+              <text fg={theme.text}>view full diff</text>
+            </box>
+          </box>
         </box>
       </Show>
       <Show when={props.actions !== undefined}>

@@ -17,7 +17,7 @@ import { fileURLToPath } from "url"
 import { useLocal } from "../../context/local"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { tint, useTheme } from "../../context/theme"
-import { EmptyBorder, SplitBorder } from "../../ui/border"
+import { EmptyBorder, RoundedBorder, SplitBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
 import { Spinner } from "../spinner"
@@ -1570,12 +1570,10 @@ export function Prompt(props: PromptProps) {
     <box ref={(r: BoxRenderable) => (anchor = r)} visible={props.visible !== false} width="100%">
         <box
           width="100%"
-          border={["left"]}
-          borderColor={borderHighlight()}
-          customBorderChars={{
-            ...SplitBorder.customBorderChars,
-            bottomLeft: "╹",
-          }}
+          customBorderChars={RoundedBorder.customBorderChars}
+          border={["left", "right", "top", "bottom"]}
+          borderColor={theme.borderSubtle}
+          backgroundColor={theme.backgroundElement}
         >
           <box
             paddingLeft={2}
