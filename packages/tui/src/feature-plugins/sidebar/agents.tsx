@@ -4,6 +4,7 @@ import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { useEvent } from "../../context/event"
 import { toHex } from "../../util/color"
+import { DashedDividerChars } from "../../ui/border"
 
 const id = "internal:sidebar-agents"
 
@@ -140,8 +141,11 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
         <box flexDirection="column" marginTop={1} gap={0}>
           <For each={peers()}>{(peer) => <PeerRow peer={peer} theme={theme()} />}</For>
         </box>
-        <box flexDirection="row" gap={1} marginTop={1}>
-          <text fg={toHex(theme().textMuted)}>Total:</text>
+        <text fg={toHex(theme().borderSubtle)} marginTop={1}>
+          {DashedDividerChars.horizontal.repeat(80)}
+        </text>
+        <box flexDirection="row" gap={1} marginTop={0}>
+          <text fg={toHex(theme().textMuted)}>Total across all agents</text>
           <text fg={toHex(theme().text)}>{money.format(totalCost())}</text>
           <text fg={toHex(theme().textMuted)}>·</text>
           <text fg={toHex(theme().text)}>{formatTokens(totalTokens())} tok</text>
