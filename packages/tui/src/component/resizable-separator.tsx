@@ -41,7 +41,7 @@ export function ResizableSeparator(props: {
   const fillColor = () => {
     if (dragging()) return theme.primary
     if (hovered()) return theme.primary
-    return theme.border
+    return theme.background
   }
 
   return (

@@ -9,6 +9,7 @@ import { usePluginRuntime } from "../../plugin/runtime"
 
 import { getScrollAcceleration } from "../../util/scroll"
 import { WorkspaceLabel } from "../../component/workspace-label"
+import { RoundedBorder } from "../../ui/border"
 
 export function Sidebar(props: { sessionID: string; overlay?: boolean; onClose?: () => void; width?: number | "auto" | `${number}%` }) {
   const pluginRuntime = usePluginRuntime()
@@ -31,11 +32,14 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean; onClose?:
         width={props.width ?? "30%"}
         minWidth={32}
         height="100%"
-        paddingTop={1}
-        paddingBottom={1}
+        marginTop={1}
+        marginBottom={1}
         paddingLeft={2}
         paddingRight={2}
         position={props.overlay ? "absolute" : "relative"}
+        customBorderChars={RoundedBorder.customBorderChars}
+        border={["left", "right", "top", "bottom"]}
+        borderColor={theme.borderSubtle}
       >
         <box flexDirection="row" justifyContent="space-between" width="100%" marginBottom={1}>
           <text fg={theme.primary}>

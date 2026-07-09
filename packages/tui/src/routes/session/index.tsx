@@ -21,7 +21,7 @@ import { useRoute, useRouteData } from "../../context/route"
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
 import { useEvent } from "../../context/event"
-import { SplitBorder } from "../../ui/border"
+import { SplitBorder, RoundedBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { Spinner } from "../../component/spinner"
 import { createSyntaxStyleMemo, generateSubtleSyntax, selectedForeground, useTheme } from "../../context/theme"
@@ -1446,7 +1446,16 @@ export function Session() {
                 initialWidthPct={rightSidebarWidth}
                 side="right"
               />
-              <box width={`${rightSidebarWidth()}%`} flexShrink={0}>
+              <box
+                width={`${rightSidebarWidth()}%`}
+                flexShrink={0}
+                marginTop={1}
+                marginBottom={1}
+                customBorderChars={RoundedBorder.customBorderChars}
+                border={["left", "right", "top", "bottom"]}
+                borderColor={theme.borderSubtle}
+                backgroundColor={theme.backgroundPanel}
+              >
                 <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
               </box>
             </Show>

@@ -5,6 +5,9 @@ import { createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { useEvent } from "../context/event"
 import { useSync } from "../context/sync"
 import { toHex } from "../util/color"
+import { RoundedBorder } from "../ui/border"
+import { severityFill } from "../util/palette"
+import type { Severity } from "../util/palette"
 
 export * as AttentionStrip from "./attention-strip"
 
@@ -96,14 +99,26 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onDis
     return result
   })
 
+  const accentForSeverity = (item: StripItem) => {
+    if (item.kind === "blocked") return theme().error
+    if (item.kind === "permission" && item.id === "diff") return theme().warning
+    if (item.kind === "lsp" || item.kind === "mcp") return theme().warning
+    return theme().info
+  }
+
+  const severityForKind = (item: StripItem): Severity => {
+    if (item.kind === "blocked") return "error"
+    if (item.kind === "permission" && item.id === "diff") return "warning"
+    if (item.kind === "lsp" || item.kind === "mcp") return "warning"
+    return "info"
+  }
+
   return (
     <Show when={items().length > 0}>
       <box
         flexDirection="row"
         alignItems="center"
         gap={2}
-        border={["bottom"]}
-        borderColor={toHex(theme().error)}
         paddingTop={0}
         paddingBottom={0}
         paddingLeft={1}
@@ -116,12 +131,22 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onDis
               <Show when={i() > 0}>
                 <text fg={toHex(theme().textMuted)}>·</text>
               </Show>
-              <text
-                fg={toHex(theme().text)}
-                onMouseDown={() => props.onJump(item.kind, item.id)}
+              <box
+                customBorderChars={RoundedBorder.customBorderChars}
+                border={["left", "right", "top", "bottom"]}
+                borderColor={accentForSeverity(item)}
+                backgroundColor={severityFill(theme().backgroundElement, accentForSeverity(item), severityForKind(item))}
+                paddingLeft={1}
+                paddingRight={1}
+                flexShrink={0}
               >
-                {item.label}
-              </text>
+                <text
+                  fg={toHex(theme().text)}
+                  onMouseDown={() => props.onJump(item.kind, item.id)}
+                >
+                  {item.label}
+                </text>
+              </box>
             </>
           )}
         </For>
