@@ -121,14 +121,14 @@ Detection: `useTerminalDimensions().width` (already used in `app.tsx:1191-1238`)
 
 ### Left sidebar (4 sections)
 
-| Section | Source | Component (new) | Status pill |
+| Section | Source | Component | Status pill |
 |---|---|---|---|
 | Agents | `banyancode.mesh.status` per-peer + aggregate row | `sidebar/agents.tsx` | active=success, idle=warning, disconnected=error, offline=textMuted |
-| Context | `Sync.session.last().tokens` | rewrite `sidebar/context.tsx` | 4-segment bar (Thinking / Prompt / Output / Cache); Files/Tools/Memory deferred |
-| Performance | `Step.Ended.{ttftMs, tokensPerSecond}` + step latency | `sidebar/performance.tsx` | 3 `BarMetric`s; hide bar if metric undefined |
-| System | `SystemStatus` (extended) | rewrite `sidebar/system-status.tsx` | CPU + RAM only; hide fields not available |
+| Context | `Sync.session.last().tokens` + tool-part heuristic | rewrite `sidebar/context.tsx` | 5-segment bar (Thinking / Files / Tools / Output / Prompt). Files and Tools from `Assistant.content[]` walk with text-length/4 token estimate. |
+| Performance | `Step.Ended.{ttftMs, tokensPerSecond}` + cumulative tokens from `sync.data.message` | `sidebar/performance.tsx` | "N tokens generated this session" header + per-step TTFT/TPS when present |
+| System | `SystemStatus` (extended) | rewrite `sidebar/system-status.tsx` | CPU + RAM + Disk + Temp (Linux + Windows; macOS undefined per user call). Bar fill is absolute (segments sum to ≤ 100%). |
 
-> **Note:** The mockup's 5th section "Codebase" (file tree) was carved out to PR 3.5 — it requires a new `BanyanFilesystemService` core service. Not in the big-bang PR.
+> **Codebase section:** Implemented in PR 3.5 (`c936b02`). Reads from the new `BanyanFilesystemService` via `GET /file/tree`. Falls back to "Loading…" while the HTTP call is in flight.
 
 ### Right sidebar (inspector, 3 sections)
 
@@ -218,18 +218,22 @@ The `ui-v2-overhaul` branch accumulates all of the above. Each commit in PR 3 is
 
 ## 12. Out of scope (deferred)
 
-| Item | Reason | Land in |
+| Item | Reason | Status |
 |---|---|---|
-| `temperatureC` sensor | No cross-platform sensor without platform-specific deps. PR 1A scope cut. | Future PR |
-| `diskUsedBytes` / `diskTotalBytes` | cut from PR 1A | Future PR |
-| Apple Silicon GPU | Requires `system_profiler` plumbing | Future PR |
-| Files / Tools / Memory context breakdown bars | Need categorization logic + token-attribution heuristic | Future PR |
-| Memory intensity metric for agent details | Need `BanyanMemoryAnalyticsService` | Future PR |
+| Apple Silicon GPU | Requires `system_profiler` plumbing; macOS intentionally left undefined in the temperature fallback | Deferred indefinitely per user |
+| Memory intensity metric for agent details | Need `BanyanMemoryAnalyticsService`; user opted to skip re-adding the line for now | Future PR |
+| Per-agent memory intensity on agent-details panel | Same as above | Future PR |
 | Client-side "dismissed" set for non-permission diffs | Requires KV-backed state + UI surface | Future PR |
-| Tying write-tool diffs to `permission.asked` automatically | Affects `permission/index.ts` and the agent runtime | Out of overhaul |
-| Codebase tree (5th section) | New core service | PR 3.5 |
-| Snapshot regression tests for the new widgets | Depends on opentui's snapshot capability | Verify in PR 1 setup; if absent, manual 9-cell matrix (3 widths × 3 themes) |
-| Per-agent memory intensity on agent-details panel | Memory service doesn't exist | Future PR |
+| Tying write-tool diffs to `permission.asked` automatically | Affects `permission/index.ts` and the agent runtime, separate workstream | Out of overhaul |
+| Patch: `code_find intent='dependents'` returning same node as `safe_rename dryRun` | Test the dependency-resolution parity end-to-end | Future test |
+| Build: `memory.recall` tool | Currently `MemoryRepo` is write-only via the tool layer; an actual recall tool would track injected-token attribution | Future PR |
+
+> **Resolved since the original plan:**
+> - `temperatureC` / `diskUsedBytes` / `diskTotalBytes` — added in PR 4b
+> - Files / Tools / Memory context breakdown (Files + Tools attribution) — heuristic implemented in PR 5a
+> - Codebase tree (5th section) — implemented in PR 3.5
+> - Snapshot regression tests — implemented in PR 5c
+> - Tool resolution inconsistency between `preflight`/`safe_rename` and `blast_radius`/`code_find` — fixed in PR 5d (both now use `resolveGraphTargetPure`)
 
 ---
 
@@ -247,3 +251,33 @@ The `ui-v2-overhaul` branch accumulates all of the above. Each commit in PR 3 is
 - Theme colors via tokens only — never literal hex.
 - BanyanCode namespace: `Banyan.X.Service` for consumers in `packages/opencode`.
 - Self-export pattern: `export * as X from "./x"` at the bottom of each module file.
+
+
+---
+
+## 14. Final state (after the v2 + post-v2 PR series)
+
+The branch `ui-v2-overhaul` ended at commit `c936b02` for the v2 series (PRs 1Aâ€“3.5). After the user review in 2026-07-09, additional commits were layered on top:
+
+- Graph tab, graph-related sidebar widgets, graph explorer, pending actions removed (commits `c260106`, `d995cb7`, etc.).
+- Codebase tree wiring fixed: `banyanFilesystemDefaultLayer` was missing from the server.ts merge â€” added in `d995cb7`.
+- Right inspector widgets re-pointed to `session_inspector` so they actually render (`c260106`).
+- System monitor bridge wired at `app-runtime.ts` startup instead of the `/global/startup` HTTP endpoint (`c260106`).
+- Bottom bar rewritten for compact 3-slot layout (`65aa396`).
+- Top bar trimmed (pathâ†’workspace basename, Graph pill removed, simplified `HeaderStatusPills`).
+- Context widget redesigned with absolute-scale bar + minimum-1-cell so small `Output` segments render (`3ba6978`, `d995cb7`).
+- Performance widget reads cumulative tokens from `sync.data.message` so it shows data immediately (`9a91a81`).
+
+Then PR Aâ€“E (the post-overhaul follow-up in this order):
+
+| PR | Commit | What |
+|---|---|---|
+| A | `734948b` | 5-segment context bar with heuristic Files/Tools attribution via `Assistant.content[]` |
+| B | `9ad617e` | Disk + Temp sensors (Linux + Windows; macOS undefined) in `SystemStatus` |
+| C | `cd3b214` | Snapshot regression tests for the 11 new widgets via opentui `testRender` + `captureCharFrame` |
+| D | `6e8642b` | `preflight` and `safe_rename` swapped to shared `resolveGraphTargetPure` (fixes the 2026-07-08 inconsistency report) |
+| E | this commit | Spec doc update |
+
+`bun turbo typecheck` is green across all 23 packages. The branch is ready to push to `origin`.
+
+For verification commands, see each commit body.
