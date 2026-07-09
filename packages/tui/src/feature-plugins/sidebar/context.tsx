@@ -7,11 +7,87 @@ import { toHex } from "../../util/color"
 
 const id = "internal:sidebar-context"
 
+const FILES_TOOLS = new Set(["read", "glob", "grep", "ls", "list"])
+const TOKEN_HEURISTIC_CHARS_PER_TOKEN = 4
+
+const estimateTokens = (s: string): number =>
+  s.length === 0 ? 0 : Math.max(1, Math.ceil(s.length / TOKEN_HEURISTIC_CHARS_PER_TOKEN))
+
+interface ToolPart {
+  type: "tool"
+  tool: string
+  state: {
+    status: string
+    input?: unknown
+    output?: string
+    content?: Array<{ type: string; text?: string }>
+    attachments?: Array<{ text?: string }>
+    error?: string
+    [key: string]: unknown
+  }
+}
+
+const sumToolTokens = (tool: ToolPart): number => {
+  let total = 0
+  const s = tool.state
+  if (s.status === "pending") {
+    total += estimateTokens(String(s.input ?? ""))
+    return total
+  }
+  if (s.input && typeof s.input === "object") {
+    total += estimateTokens(JSON.stringify(s.input))
+  }
+  if (Array.isArray(s.content)) {
+    for (const item of s.content) {
+      if (typeof item?.text === "string") total += estimateTokens(item.text)
+    }
+  }
+  if (Array.isArray(s.attachments)) {
+    for (const att of s.attachments) {
+      if (typeof att?.text === "string") total += estimateTokens(att.text)
+    }
+  }
+  if (typeof s.error === "string") {
+    total += estimateTokens(s.error)
+  }
+  return total
+}
+
+const categorizeTokens = (assistant: AssistantMessage) => {
+  // Heuristic attribution: tool-name → category, text-length/4 token
+  // estimate. Not exact — the AI SDK reports only aggregate tokens per
+  // message. Treated as illustrative.
+  let filesTokens = 0
+  let toolsTokens = 0
+  const parts = (assistant as any).content ?? []
+  for (const part of parts) {
+    if (part?.type === "tool") {
+      const t = part as ToolPart
+      const est = sumToolTokens(t)
+      if (FILES_TOOLS.has(t.tool)) filesTokens += est
+      else toolsTokens += est
+    }
+  }
+  const reasoning = assistant.tokens.reasoning
+  const output = assistant.tokens.output
+  const cacheTotal = assistant.tokens.cache.read + assistant.tokens.cache.write
+  const inputTotal = assistant.tokens.input
+  const prompt = Math.max(0, inputTotal + cacheTotal - filesTokens - toolsTokens)
+  return {
+    thinking: reasoning,
+    files: filesTokens,
+    tools: toolsTokens,
+    output,
+    prompt,
+    total: reasoning + output + filesTokens + toolsTokens + prompt,
+  }
+}
+
 interface Segment {
   key: string
   label: string
   tokens: number
-  color: "accent" | "info" | "success" | "warning"
+  color: "accent" | "info" | "success" | "warning" | "muted"
 }
 
 function View(props: { api: TuiPluginApi; session_id: string }) {
@@ -22,14 +98,10 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     return messages.findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
   })
 
-  const breakdown = createMemo(() => {
+  const categorization = createMemo(() => {
     const a = lastAssistant()
     if (!a) return null
-    const reasoning = a.tokens.reasoning
-    const input = a.tokens.input
-    const output = a.tokens.output
-    const cache = a.tokens.cache.read + a.tokens.cache.write
-    return { reasoning, input, output, cache, total: reasoning + input + output + cache }
+    return categorizeTokens(a)
   })
 
   const modelContextLimit = createMemo(() => {
@@ -40,20 +112,21 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   })
 
   const contextPercent = createMemo(() => {
-    const tb = breakdown()
+    const tb = categorization()
     const limit = modelContextLimit()
     if (!tb || !limit || limit === 0) return null
     return Math.round((tb.total / limit) * 100)
   })
 
   const segments = createMemo<Segment[]>(() => {
-    const tb = breakdown()
-    if (!tb) return []
+    const cat = categorization()
+    if (!cat) return []
     return [
-      { key: "thinking", label: "Thinking", tokens: tb.reasoning, color: "accent" },
-      { key: "prompt", label: "Prompt", tokens: tb.input, color: "info" },
-      { key: "output", label: "Output", tokens: tb.output, color: "success" },
-      { key: "cache", label: "Cache", tokens: tb.cache, color: "warning" },
+      { key: "thinking", label: "Thinking", tokens: cat.thinking, color: "accent" },
+      { key: "files", label: "Files", tokens: cat.files, color: "success" },
+      { key: "tools", label: "Tools", tokens: cat.tools, color: "warning" },
+      { key: "output", label: "Output", tokens: cat.output, color: "info" },
+      { key: "prompt", label: "Prompt", tokens: cat.prompt, color: "muted" },
     ]
   })
 
@@ -63,6 +136,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     if (color === "info") return toHex(t.info)
     if (color === "success") return toHex(t.success)
     if (color === "warning") return toHex(t.warning)
+    if (color === "muted") return toHex(t.textMuted)
     return toHex(t.text)
   }
 
@@ -74,7 +148,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
         <b>CONTEXT</b>
       </text>
       <Show
-        when={breakdown()}
+        when={categorization()}
         fallback={
           <text fg={toHex(theme().textMuted)} marginTop={1}>
             no data
