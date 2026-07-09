@@ -165,6 +165,7 @@ export const {
         case "server.instance.disposed":
           void bootstrap()
           break
+        case "permission.v2.replied":
         case "permission.replied": {
           const requests = store.permission[event.properties.sessionID]
           if (!requests) break
@@ -180,23 +181,24 @@ export const {
           break
         }
 
+        case "permission.v2.asked":
         case "permission.asked": {
           const request = event.properties
           const requests = store.permission[request.sessionID]
           if (!requests) {
-            setStore("permission", request.sessionID, [request])
+            setStore("permission", request.sessionID, [request as any])
             break
           }
           const match = search(requests, request.id, (r) => r.id)
           if (match.found) {
-            setStore("permission", request.sessionID, match.index, reconcile(request))
+            setStore("permission", request.sessionID, match.index, reconcile(request as any))
             break
           }
           setStore(
             "permission",
             request.sessionID,
             produce((draft) => {
-              draft.splice(match.index, 0, request)
+              draft.splice(match.index, 0, request as any)
             }),
           )
           break
@@ -333,6 +335,19 @@ export const {
                 }),
               )
             })
+          }
+          if ((event.properties.info.time as any)?.completed) {
+            sdk.client.session.get({ sessionID: event.properties.info.sessionID }).then((res) => {
+              if (res.data) {
+                setStore(
+                  "session",
+                  produce((draft) => {
+                    const match = search(draft, res.data.id, (s) => s.id)
+                    if (match.found) draft[match.index] = res.data
+                  })
+                )
+              }
+            }).catch(() => {})
           }
           break
         }
@@ -567,11 +582,13 @@ export const {
           const tracker = { messages: new Set<string>(), parts: new Set<string>() }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
-            const [session, messages, todo, diff] = await Promise.all([
+            const [session, messages, todo, diff, permissionsResult, questionsResult] = await Promise.all([
               sdk.client.session.get({ sessionID }, { throwOnError: true }),
               sdk.client.session.messages({ sessionID, limit: 100 }),
               sdk.client.session.todo({ sessionID }),
               sdk.client.session.diff({ sessionID }),
+              sdk.client.v2.session.permission.list({ sessionID }).catch(() => ({ data: [] as any })),
+              sdk.client.v2.session.question.list({ sessionID }).catch(() => ({ data: [] as any })),
             ])
             setStore(
               produce((draft) => {
@@ -579,6 +596,8 @@ export const {
                 if (match.found) draft.session[match.index] = session.data!
                 if (!match.found) draft.session.splice(match.index, 0, session.data!)
                 draft.todo[sessionID] = todo.data ?? []
+                draft.permission[sessionID] = (permissionsResult.data as any)?.data ?? []
+                draft.question[sessionID] = (questionsResult.data as any)?.data ?? []
                 const currentMessages = draft.message[sessionID] ?? []
                 const infos = (messages.data ?? []).flatMap((message) => {
                   if (!tracker.messages.has(message.info.id)) return [message.info]
