@@ -17,7 +17,6 @@ export interface SystemStatus {
   gpuTotalBytes?: number
   diskUsedBytes?: number
   diskTotalBytes?: number
-  temperatureC?: number
   platform: "windows" | "linux" | "darwin"
 }
 
@@ -40,7 +39,6 @@ export const Updated = EventV2.define({
     gpuTotalBytes: Schema.optional(Schema.Number),
     diskUsedBytes: Schema.optional(Schema.Number),
     diskTotalBytes: Schema.optional(Schema.Number),
-    temperatureC: Schema.optional(Schema.Number),
     platform: Schema.Literals(["windows", "linux", "darwin"]),
   },
 })
@@ -83,50 +81,6 @@ const readDisk = (
   }).pipe(Effect.orDie)
 }
 
-const readTemperature = (
-  proc: AppProcess.Interface,
-): Effect.Effect<{ temperatureC?: number }, never, never> => {
-  if (process.platform === "darwin") return Effect.succeed({})
-  if (process.platform === "win32") {
-    return Effect.flatMap(proc.run(
-      ChildProcess.make(
-        "powershell",
-        [
-          "-NoProfile",
-          "-Command",
-          "(Get-CimInstance -Namespace 'root/wmi' -ClassName MSAcpi_ThermalZoneTemperature | Measure-Object -Property CurrentTemperature -Maximum).Maximum",
-        ],
-        { extendEnv: true, stdin: "ignore" },
-      ),
-      { maxOutputBytes: 256, maxErrorBytes: 256 },
-    ), (result) => {
-      if (result.exitCode !== 0) return Effect.succeed({})
-      const deciKelvin = Number(result.stdout.toString().trim())
-      if (!Number.isFinite(deciKelvin) || deciKelvin <= 0) return Effect.succeed({})
-      const celsius = deciKelvin / 10 - 273.15
-      return Effect.succeed({ temperatureC: Math.round(celsius * 10) / 10 })
-    }).pipe(Effect.orDie)
-  }
-  return Effect.flatMap(proc.run(
-    ChildProcess.make(
-      "sh",
-      ["-c", "cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null"],
-      { extendEnv: true, stdin: "ignore" },
-    ),
-    { maxOutputBytes: 256, maxErrorBytes: 256 },
-  ), (result) => {
-    if (result.exitCode !== 0) return Effect.succeed({})
-    const temps: number[] = []
-    for (const line of result.stdout.toString().split("\n")) {
-      const milliC = Number(line.trim())
-      if (Number.isFinite(milliC) && milliC > 0) temps.push(milliC)
-    }
-    if (temps.length === 0) return Effect.succeed({})
-    const maxMilli = Math.max(...temps)
-    return Effect.succeed({ temperatureC: Math.round(maxMilli / 10) / 100 })
-  }).pipe(Effect.orDie)
-}
-
 const detectPlatform = (): "windows" | "linux" | "darwin" => {
   const p = process.platform
   if (p === "win32") return "windows"
@@ -162,17 +116,17 @@ interface Cache {
   cached: CachedStatus | undefined
   gpu: { gpuPercent: number; vramUsedBytes: number; gpuTotalBytes: number } | undefined
   gpuAt: number
-  diskAndTemp: { diskUsedBytes?: number; diskTotalBytes?: number; temperatureC?: number } | undefined
-  diskAndTempAt: number
+  disk: { diskUsedBytes?: number; diskTotalBytes?: number } | undefined
+  diskAt: number
 }
 
 const GPU_CACHE_TTL_MS = 30_000
-const DISK_TEMP_CACHE_TTL_MS = 5_000
+const DISK_CACHE_TTL_MS = 5_000
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const cache = yield* Ref.make<Cache>({ cached: undefined, gpu: undefined, gpuAt: 0, diskAndTemp: undefined, diskAndTempAt: 0 })
+    const cache = yield* Ref.make<Cache>({ cached: undefined, gpu: undefined, gpuAt: 0, disk: undefined, diskAt: 0 })
     const cpuPrev = yield* Ref.make<Map<string, number> | undefined>(undefined)
     const proc = yield* AppProcess.Service
 
@@ -207,14 +161,13 @@ export const layer = Layer.effect(
           }
         }
 
-        let diskAndTemp: { diskUsedBytes?: number; diskTotalBytes?: number; temperatureC?: number } | undefined
-        if (snapshot.diskAndTemp && now - snapshot.diskAndTempAt < DISK_TEMP_CACHE_TTL_MS) {
-          diskAndTemp = snapshot.diskAndTemp
+        let disk: { diskUsedBytes?: number; diskTotalBytes?: number } | undefined
+        if (snapshot.disk && now - snapshot.diskAt < DISK_CACHE_TTL_MS) {
+          disk = snapshot.disk
         } else {
-          const disk = yield* readDisk(proc as AppProcess.Interface)
-          const temp = yield* readTemperature(proc as AppProcess.Interface)
-          if (Object.keys(disk).length > 0 || Object.keys(temp).length > 0) {
-            diskAndTemp = { ...disk, ...temp }
+          const result = yield* readDisk(proc as AppProcess.Interface)
+          if (Object.keys(result).length > 0) {
+            disk = result
           }
         }
 
@@ -224,8 +177,8 @@ export const layer = Layer.effect(
             ...(gpu
               ? { gpuPercent: gpu.gpuPercent, vramUsedBytes: gpu.vramUsedBytes, gpuTotalBytes: gpu.gpuTotalBytes }
               : {}),
-            ...(diskAndTemp
-              ? { diskUsedBytes: diskAndTemp.diskUsedBytes, diskTotalBytes: diskAndTemp.diskTotalBytes, temperatureC: diskAndTemp.temperatureC }
+            ...(disk
+              ? { diskUsedBytes: disk.diskUsedBytes, diskTotalBytes: disk.diskTotalBytes }
               : {}),
           }
         }
@@ -247,12 +200,12 @@ export const layer = Layer.effect(
           ...(gpu
             ? { gpuPercent: gpu.gpuPercent, vramUsedBytes: gpu.vramUsedBytes, gpuTotalBytes: gpu.gpuTotalBytes }
             : {}),
-          ...(diskAndTemp
-            ? { diskUsedBytes: diskAndTemp.diskUsedBytes, diskTotalBytes: diskAndTemp.diskTotalBytes, temperatureC: diskAndTemp.temperatureC }
+          ...(disk
+            ? { diskUsedBytes: disk.diskUsedBytes, diskTotalBytes: disk.diskTotalBytes }
             : {}),
         }
 
-        yield* Ref.set(cache, { cached: { value, at: now }, gpu, gpuAt: now, diskAndTemp, diskAndTempAt: now })
+        yield* Ref.set(cache, { cached: { value, at: now }, gpu, gpuAt: now, disk, diskAt: now })
         return value
       })
 

@@ -13,7 +13,6 @@ interface SystemStatus {
   memoryTotalBytes: number
   diskUsedBytes?: number
   diskTotalBytes?: number
-  temperatureC?: number
   platform: "windows" | "linux" | "darwin"
 }
 
@@ -59,8 +58,6 @@ function View(props: { api: TuiPluginApi }) {
     if (s?.diskUsedBytes === undefined || s?.diskTotalBytes === undefined) return undefined
     return Math.round((s.diskUsedBytes / s.diskTotalBytes) * 100)
   }
-
-  const tempC = () => status()?.temperatureC
 
   return (
     <box>
@@ -119,28 +116,6 @@ function View(props: { api: TuiPluginApi }) {
                 <box flexDirection="row" gap={0}>
                   <text fg={colorForPercent(diskPercent()!, theme())}>
                     {progressBar(diskPercent()!)}
-                  </text>
-                </box>
-              </box>
-            </Show>
-
-            <Show when={tempC() !== undefined}>
-              <box marginTop={1} gap={0}>
-                <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">
-                  <text fg={toHex(theme().textMuted)}>Temp</text>
-                  <text fg={colorForPercent(
-                    Math.round(Math.min(Math.max((tempC()! - 20) / 80 * 100, 0), 100)),
-                    theme(),
-                  )}>
-                    {tempC()!.toFixed(1)}°C
-                  </text>
-                </box>
-                <box flexDirection="row" gap={0}>
-                  <text fg={colorForPercent(
-                    Math.round(Math.min(Math.max((tempC()! - 20) / 80 * 100, 0), 100)),
-                    theme(),
-                  )}>
-                    {progressBar(Math.round(Math.min(Math.max((tempC()! - 20) / 80 * 100, 0), 100)))}
                   </text>
                 </box>
               </box>
