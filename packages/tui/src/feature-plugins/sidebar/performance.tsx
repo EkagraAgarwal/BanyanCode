@@ -81,13 +81,13 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
       <text fg={toHex(theme().primary)}>
         <b>PERFORMANCE</b>
       </text>
-      <text fg={toHex(theme().textMuted)} marginTop={1}>
+      <text fg={toHex(theme().textMuted)} marginTop={0}>
         {total()} tokens generated this session
       </text>
       <Show
         when={step()}
         fallback={
-          <text fg={toHex(theme().textMuted)} marginTop={1}>
+          <text fg={toHex(theme().textMuted)} marginTop={0}>
             step metrics after first turn
           </text>
         }

@@ -73,7 +73,7 @@ function View(props: { api: TuiPluginApi }) {
         <b>CODEBASE</b> {displayRoot()}
       </text>
       <Show when={error()}>
-        <text fg={toHex(theme().textMuted)} marginTop={1}>
+        <text fg={toHex(theme().textMuted)} marginTop={0}>
           {error()}
         </text>
       </Show>

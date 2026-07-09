@@ -66,7 +66,7 @@ function View(props: { api: TuiPluginApi }) {
       </text>
 
       <Show when={status()} fallback={
-        <box flexDirection="row" gap={2} marginTop={1} alignItems="center">
+        <box flexDirection="row" gap={2} marginTop={0} alignItems="center">
           <text fg={toHex(theme().primary)}>◌</text>
           <text fg={toHex(theme().textMuted)}>Waiting for system data…</text>
         </box>

@@ -140,7 +140,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     return toHex(t.text)
   }
 
-  const BAR_WIDTH = 18
+  const BAR_WIDTH = 36
 
   return (
     <box>
@@ -155,47 +155,47 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
           </text>
         }
       >
-        {(tb) => (
-          <>
-            <text fg={toHex(theme().textMuted)} marginTop={1}>
-              {tb().total.toLocaleString()} used
-              {contextPercent() !== null ? ` · ${contextPercent()}% of context` : ""}
-            </text>
-            <Show when={tb().total > 0}>
-              <box flexDirection="row" marginTop={1} gap={0}>
-                <For each={segments().filter((s) => s.tokens > 0)}>
-                  {(seg) => {
-                    const cells = Math.max(1, Math.round((seg.tokens / tb().total) * BAR_WIDTH))
-                    return <text fg={segColor(seg.color)}>{"█".repeat(cells)}</text>
-                  }}
-                </For>
-                <text fg={toHex(theme().textMuted)}>
-                  {"░".repeat(
-                    Math.max(
-                      0,
-                      BAR_WIDTH - segments().filter((s) => s.tokens > 0).reduce(
-                        (sum, seg) => sum + Math.max(1, Math.round((seg.tokens / tb().total) * BAR_WIDTH)),
-                        0,
-                      ),
-                    ),
-                  )}
-                </text>
+        {(tb) => {
+          const limit = modelContextLimit() ?? 1
+          const usedWidthTotal = () =>
+            segments().filter((s) => s.tokens > 0).reduce((sum, seg) => sum + Math.max(0, Math.round((seg.tokens / limit) * BAR_WIDTH)), 0)
+          return (
+            <>
+              <text fg={toHex(theme().textMuted)} marginTop={1}>
+                {tb().total.toLocaleString()} used
+                {contextPercent() !== null ? ` · ${contextPercent()}% of context` : ""}
+              </text>
+              <box flexDirection="row" width="100%" height={1} marginTop={1}>
+                <Show when={tb().total > 0}>
+                  <For each={segments().filter((s) => s.tokens > 0)}>
+                    {(seg) => (
+                      <box
+                        width={Math.max(0, Math.round((seg.tokens / limit) * BAR_WIDTH))}
+                        backgroundColor={segColor(seg.color)}
+                      />
+                    )}
+                  </For>
+                </Show>
+                <box
+                  width={Math.max(0, BAR_WIDTH - usedWidthTotal())}
+                  backgroundColor={toHex(theme().backgroundElement)}
+                />
               </box>
-            </Show>
-            <box flexDirection="column" marginTop={1} gap={0}>
-              <For each={segments().filter((s) => s.tokens > 0)}>
-                {(seg) => (
-                  <box flexDirection="row" gap={1}>
-                    <text fg={segColor(seg.color)}>■</text>
-                    <text fg={toHex(theme().textMuted)}>
-                      {seg.label}: {seg.tokens.toLocaleString()}
-                    </text>
-                  </box>
-                )}
-              </For>
-            </box>
-          </>
-        )}
+              <box flexDirection="column" marginTop={1} gap={0}>
+                <For each={segments().filter((s) => s.tokens > 0)}>
+                  {(seg) => (
+                    <box flexDirection="row" gap={1}>
+                      <text fg={segColor(seg.color)}>■</text>
+                      <text fg={toHex(theme().textMuted)}>
+                        {seg.label}: {seg.tokens.toLocaleString()}
+                      </text>
+                    </box>
+                  )}
+                </For>
+              </box>
+            </>
+          )
+        }}
       </Show>
     </box>
   )

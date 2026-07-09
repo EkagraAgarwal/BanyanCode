@@ -133,7 +133,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
       <Show
         when={peers().length > 0}
         fallback={
-          <text fg={toHex(theme().textMuted)} marginTop={1}>
+          <text fg={toHex(theme().textMuted)} marginTop={0}>
             No active agents
           </text>
         }

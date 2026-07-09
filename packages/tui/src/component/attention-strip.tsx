@@ -24,7 +24,7 @@ interface StripItem {
   label: string
 }
 
-function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onDismissAll: () => void; onJump: (kind: AttentionKind, id: string) => void }) {
+function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onJump: (kind: AttentionKind, id: string) => void }) {
   const theme = () => props.api.theme.current
   const ev = useEvent()
   const sync = useSync()
@@ -34,7 +34,6 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onDis
   const [diffCount, setDiffCount] = createSignal(0)
   const [questionCount, setQuestionCount] = createSignal(0)
 
-  const lspDown = createMemo(() => props.api.state.lsp().length === 0)
   const mcpDown = createMemo(() => {
     const list = props.api.state.mcp()
     return list.filter((m: { status: string }) => m.status === "connected").length === 0
@@ -89,9 +88,6 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onDis
     }
     if (questionCount() > 0) {
       result.push({ kind: "question", id: "question", label: `${questionCount()} question${questionCount() !== 1 ? "s" : ""} awaiting` })
-    }
-    if (lspDown()) {
-      result.push({ kind: "lsp", id: "lsp", label: "LSP down" })
     }
     if (mcpDown()) {
       result.push({ kind: "mcp", id: "mcp", label: "MCP down" })
@@ -150,13 +146,6 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onDis
             </>
           )}
         </For>
-        <box flexGrow={1} />
-        <text
-          fg={toHex(theme().textMuted)}
-          onMouseDown={() => props.onDismissAll()}
-        >
-          dismiss ×
-        </text>
       </box>
     </Show>
   )
@@ -172,7 +161,6 @@ const plugin: TuiPlugin = async (api) => {
           <AttentionStripView
             api={api}
             sessionID={props.sessionID}
-            onDismissAll={() => {}}
             onJump={() => {}}
           />
         )
