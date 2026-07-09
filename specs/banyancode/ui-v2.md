@@ -281,3 +281,55 @@ Then PR Aâ€“E (the post-overhaul follow-up in this order):
 `bun turbo typecheck` is green across all 23 packages. The branch is ready to push to `origin`.
 
 For verification commands, see each commit body.
+
+---
+
+## 15. Visual finish — translation notes
+
+The original visual-finish spec (provided during the 2026-07-09 review) was written for a CSS/web layout with `rgba()`, gradients, box-shadow, backdrop-filter, border-radius, scrollbar styling, and alpha compositing. BanyanCode's TUI is built on opentui, which is a character-grid renderer:
+
+- 24-bit color per cell is supported, but the terminal does not composite alpha (a "30% white" cell renders as solid 30% white; nothing shows through).
+- No off-screen rendering, no `backdrop-filter`, no per-cell gradient fills, no `box-shadow`. Borders are limited to character-drawing art (`─│╭╮╰╯┌─┐`).
+- Scrollbar width is OS/terminal controlled; only the track and thumb colors can be themed.
+
+The spec was translated to TUI primitives where possible, and skipped with a documented reason where not.
+
+### Translation outcomes
+
+| Spec item | Outcome | Reason |
+|---|---|---|
+| 1.1 Global radial gradients (orange/blue corners) | **Skipped** | Character grid has no per-cell gradient. |
+| 1.2 Glassmorphism (`rgba(15,15,15,0.92)` + `backdrop-filter: blur(4px)`) | **Skipped** | No compositor / no backdrop blur. |
+| 1.3 Panel sheen (subtle internal linear gradient) | **Skipped** | Sub-perceptible at the spec'd alpha. |
+| 1.4a 1px white-transparent ring | **Implemented** as `theme.borderSubtle` border on every panel. | |
+| 1.4b Drop shadow (`0 14px 40px rgba(0,0,0,0.30)`) | **Skipped** | No off-screen rendering. |
+| 2.1 8px column gaps | **Implemented** — 1-cell canvas margins top + bottom around side panels (`marginTop`/`marginBottom` on sidebar + inspector). Column gap preserved via the 1-cell resizable separator (canvas-transparent at rest, `theme.primary` on hover/drag). | |
+| 2.2 Resize handle hover illumination | **Implemented** — added `onMouseOver`/`onMouseOut` to `resizable-separator.tsx`; hover state fills with `theme.primary`. | |
+| 3.1 Border-radius 10/8/5/999px | **Implemented as binary rounded** — `RoundedBorder` preset using `╭╮╰╯` corners. The multiple radius values in the spec collapse to a single rounded shape in a character grid. Pill shape (used for status pills) is `box + tinted bg + horizontal padding`. | |
+| 3.2 1px `#2b2b2b` borders | **Implemented** via `theme.borderSubtle`. | |
+| 4.1 Custom 8px slim scrollbars | **Skipped** | OS/terminal controlled; only `backgroundColor` is themable, kept as-is. | |
+| 4.2 Translucent colored fills | **Implemented** — `severityFill()` and `pillFill()` helpers in `util/palette.ts` use the existing `tint()` blend at alpha 0.18 (severity) / 0.108 (pill). | |
+| 4.3 Dashed dividers | **Implemented narrowly** — `╌` (U+2540) for the agents-widget aggregate row divider only. Wider replacement of `─` was deferred — over-application muddies visual hierarchy in a character grid. | |
+
+### What the implementation produced
+
+- **Three floating columns**: left sidebar + center chat + right inspector, each with `RoundedBorder` + `theme.borderSubtle` + `theme.backgroundPanel` surface. Center column sits inside the same flex row and inherits chat layout (RoundedBorder is on the surrounding chat surface, not on each message). Top bar and bottom bar remain borderless full-width, per mockup.
+- **1-cell canvas margin** above and below the side panels; 1-cell resizable separator columns between them (canvas-transparent at rest, primary on hover/drag).
+- **Status pills** (top bar): each is a small rounded box with semantic-tinted background and matching border. Severity → accent mapping: `success` → green, `warning` → yellow, `error` → red, `info` → blue, `neutral` → borderSubtle.
+- **Attention strip items**: each alert is a rounded box with severity-tinted background; mapping `blocked` → error, `permission (diff)` → warning, `permission (regular)` → info, `question` → info, `lsp`/`mcp` → warning.
+- **Message blocks**: full rounded border with mode accent (`plan` → accent, `diff` → success, `tool` → warning, `report` → borderSubtle), `theme.backgroundPanel` block surface.
+- **Approve / Reject / View-diff buttons**: small rounded boxes with semantic border + tinted background (success/error/info).
+- **Prompt composer**: `RoundedBorder` with `theme.borderSubtle` border + `theme.backgroundElement` surface.
+- **Toast**: `RoundedBorder` full border, color follows the toast variant.
+- **Revert / permission / question / error / subagent-footer boxes**: kept their single-side accent identity (left-only border with `┃` heavy-vertical) via `SplitBorder` — these are chat-content elements and the left stripe is part of their design language.
+- **Resizable separators**: resting fill is `theme.background` (matches canvas, invisible), hover/drag fills with `theme.primary`. The 1-cell column is preserved so the affordance still triggers.
+
+### Phased commits (branch `ui-v2-finish`)
+
+| Phase | Commit | Files | What |
+|---|---|---|---|
+| 1 | `58dbd9d` | border.ts, resizable-separator.tsx, util/palette.ts (new) | `RoundedBorder`, `DashedDividerChars`, separator hover state, palette helpers |
+| 2 | `9fba0fb` | header/status-pills.tsx, status-pills.test.tsx | Top-bar pills → rounded containers with tinted bg + semantic border |
+| 3 | `8c3cb00` | sidebar.tsx, routes/session/index.tsx (inspector), resizable-separator.tsx, attention-strip.tsx | Floating panels with rounded borders, transparent separator at rest, attention items get tinted bg |
+| 4 | `289ecbf` | message-block.tsx, prompt/index.tsx, ui/toast.tsx, 4 routes | Full rounded message blocks, approve/reject buttons, prompt composer, toast; reverted bad `SplitBorder → RoundedBorder` swaps on chat-content elements with `border={["left"]}` |
+| 5 | this phase | feature-plugins/sidebar/agents.tsx | Dashed divider (`╌`) before the "Total across all agents" aggregate row |
