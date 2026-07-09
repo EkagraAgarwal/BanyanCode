@@ -1371,11 +1371,6 @@ export function Session() {
                     <pluginRuntime.Slot name="session_tab_sessions" />
                   </box>
                 </Match>
-                <Match when={activeTab() === "graph"}>
-                  <box flexGrow={1} minHeight={0} flexDirection="column">
-                    <pluginRuntime.Slot name="session_tab_graph" />
-                  </box>
-                </Match>
                 <Match when={activeTab() === "memory"}>
                   <box flexGrow={1} minHeight={0} flexDirection="column">
                     <pluginRuntime.Slot name="session_tab_memory" />

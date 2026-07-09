@@ -263,12 +263,15 @@ export function createRoutes(
       HttpServer.layerServices,
     ]),
     Layer.provideMerge(
-      Banyan.codegraphBuildServiceDefaultLayer.pipe(
-        Layer.provide(Banyan.codegraphStalenessDefaultLayer),
-        Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
-        Layer.provide(Banyan.editPlannerDefaultLayer),
-        Layer.provide(Banyan.codegraphAnalyzerDefaultLayer),
-        Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
+      Layer.mergeAll(
+        Banyan.codegraphBuildServiceDefaultLayer.pipe(
+          Layer.provide(Banyan.codegraphStalenessDefaultLayer),
+          Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+          Layer.provide(Banyan.editPlannerDefaultLayer),
+          Layer.provide(Banyan.codegraphAnalyzerDefaultLayer),
+          Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
+        ),
+        Banyan.banyanFilesystemDefaultLayer,
       ),
     ),
     Layer.provideMerge(
