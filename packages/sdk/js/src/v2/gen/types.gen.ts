@@ -1427,6 +1427,9 @@ export type GlobalEvent = {
           gpuPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           vramUsedBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           gpuTotalBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          diskUsedBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          diskTotalBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          temperatureC?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           platform: "windows" | "linux" | "darwin"
         }
       }
@@ -5356,6 +5359,9 @@ export type EventBanyancodeSystemUpdated = {
     gpuPercent?: number | "NaN" | "Infinity" | "-Infinity"
     vramUsedBytes?: number | "NaN" | "Infinity" | "-Infinity"
     gpuTotalBytes?: number | "NaN" | "Infinity" | "-Infinity"
+    diskUsedBytes?: number | "NaN" | "Infinity" | "-Infinity"
+    diskTotalBytes?: number | "NaN" | "Infinity" | "-Infinity"
+    temperatureC?: number | "NaN" | "Infinity" | "-Infinity"
     platform: "windows" | "linux" | "darwin"
   }
 }
