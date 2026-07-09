@@ -40,12 +40,10 @@ function BarMetric(props: {
   }
 
   return (
-    <box marginTop={1} gap={0}>
-      <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">
-        <text fg={toHex(props.theme().textMuted)}>{props.label}</text>
-        <text fg={colorFn()}>{props.value}</text>
-      </box>
+    <box flexDirection="row" justifyContent="space-between" width="100%" marginTop={1} alignItems="center">
+      <text fg={toHex(props.theme().textMuted)} width={10}>{props.label}</text>
       <text fg={colorFn()}>{bar}</text>
+      <text fg={colorFn()} width={6}>{props.value.padStart(6)}</text>
     </box>
   )
 }
@@ -59,20 +57,56 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
 
   const total = createMemo(() => {
     const messages = sync.data.message[props.session_id] ?? []
-    const assistants = messages.filter((m: any) => m.role === "assistant" && m.time?.completed)
+    const assistants = messages.filter((m: any) => ((m as any).type === "assistant" || m.role === "assistant") && (m as any).time?.completed)
     return assistants.reduce(
-      (sum: number, m: any) => sum + (m.tokens?.output ?? 0),
+      (sum: number, m: any) => sum + ((m as any).tokens?.output ?? 0),
       0,
     )
   })
 
+  const lastAssistant = createMemo(() => {
+    const messages = sync.data.message[props.session_id] ?? []
+    return messages.findLast((m: any) => ((m as any).type === "assistant" || m.role === "assistant") && (m as any).time?.completed)
+  })
+
+  const tokensPerSecondFallback = createMemo(() => {
+    const last = lastAssistant()
+    if (!last || !(last as any).time?.completed || !(last as any).time?.created) return undefined
+    const durationMs = (last as any).time.completed - (last as any).time.created
+    if (durationMs <= 0 || !(last as any).tokens?.output) return undefined
+    return ((last as any).tokens.output / durationMs) * 1000
+  })
+
+  const activeStep = createMemo<StepMetrics | undefined>(() => {
+    const current = step()
+    if (current && current.source) {
+      const messages = sync.data.message[props.session_id] ?? []
+      if (messages.some((m: any) => m.id === current.source)) {
+        return current
+      }
+    }
+    const last = lastAssistant()
+    if (last) {
+      const tps = tokensPerSecondFallback()
+      return {
+        source: last.id,
+        ttftMs: undefined,
+        tokensPerSecond: tps,
+        tokensOut: (last as any).tokens?.output,
+      }
+    }
+    return undefined
+  })
+
   const unsub = ev.on("session.next.step.ended", (event: any) => {
-    setStep({
-      source: event.properties.assistantMessageID,
-      ttftMs: numeric(event.properties.ttftMs),
-      tokensPerSecond: numeric(event.properties.tokensPerSecond),
-      tokensOut: event.properties.tokens?.output,
-    })
+    if (event.properties.sessionID === props.session_id) {
+      setStep({
+        source: event.properties.assistantMessageID,
+        ttftMs: numeric(event.properties.ttftMs),
+        tokensPerSecond: numeric(event.properties.tokensPerSecond),
+        tokensOut: event.properties.tokens?.output,
+      })
+    }
   })
   onCleanup(unsub)
 
@@ -85,7 +119,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
         {total()} tokens generated this session
       </text>
       <Show
-        when={step()}
+        when={activeStep()}
         fallback={
           <text fg={toHex(theme().textMuted)} marginTop={0}>
             step metrics after first turn
@@ -98,18 +132,18 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
               <BarMetric
                 label="TTFT"
                 value={`${s().ttftMs!.toFixed(0)}ms`}
-                filled={Math.min(12, Math.max(1, Math.round((s().ttftMs! ?? 0) / 500)))}
-                width={12}
+                filled={Math.min(8, Math.max(1, Math.round((s().ttftMs! ?? 0) / 500)))}
+                width={8}
                 color="warning"
                 theme={theme}
               />
             </Show>
             <Show when={s().tokensPerSecond !== undefined}>
               <BarMetric
-                label="Tokens/sec"
+                label="Tokens / sec"
                 value={s().tokensPerSecond!.toFixed(1)}
-                filled={Math.min(12, Math.max(1, Math.round(s().tokensPerSecond! / 10)))}
-                width={12}
+                filled={Math.min(8, Math.max(1, Math.round(s().tokensPerSecond! / 10)))}
+                width={8}
                 color="success"
                 theme={theme}
               />

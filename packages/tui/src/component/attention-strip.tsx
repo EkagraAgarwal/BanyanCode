@@ -30,9 +30,13 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onJum
   const sync = useSync()
 
   const [blockedPeers, setBlockedPeers] = createSignal<BlockedPeer[]>([])
-  const [permissionCount, setPermissionCount] = createSignal(0)
-  const [diffCount, setDiffCount] = createSignal(0)
-  const [questionCount, setQuestionCount] = createSignal(0)
+
+  const permissions = createMemo(() => sync.data.permission[props.sessionID] ?? [])
+  const questions = createMemo(() => sync.data.question[props.sessionID] ?? [])
+
+  const permissionCount = createMemo(() => permissions().length)
+  const diffCount = createMemo(() => permissions().filter((p: any) => p.tool).length)
+  const questionCount = createMemo(() => questions().length)
 
   const mcpDown = createMemo(() => {
     const list = props.api.state.mcp()
@@ -47,32 +51,6 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onJum
     )
   })
   onCleanup(unsubMesh)
-
-  const unsubPerm = ev.on("permission.asked" as any, () => {
-    const perms = sync.data.permission[props.sessionID] ?? []
-    setPermissionCount(perms.length)
-    setDiffCount(perms.filter((p: any) => p.tool).length)
-  })
-  onCleanup(unsubPerm)
-
-  const unsubPermReplied = ev.on("permission.replied" as any, () => {
-    const perms = sync.data.permission[props.sessionID] ?? []
-    setPermissionCount(perms.length)
-    setDiffCount(perms.filter((p: any) => p.tool).length)
-  })
-  onCleanup(unsubPermReplied)
-
-  const unsubQuest = ev.on("question.asked" as any, () => {
-    const quests = sync.data.question[props.sessionID] ?? []
-    setQuestionCount(quests.length)
-  })
-  onCleanup(unsubQuest)
-
-  const unsubQuestReplied = ev.on("question.replied" as any, () => {
-    const quests = sync.data.question[props.sessionID] ?? []
-    setQuestionCount(quests.length)
-  })
-  onCleanup(unsubQuestReplied)
 
   const items = createMemo<StripItem[]>(() => {
     const result: StripItem[] = []
@@ -131,17 +109,24 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onJum
                 customBorderChars={RoundedBorder.customBorderChars}
                 border={["left", "right", "top", "bottom"]}
                 borderColor={accentForSeverity(item)}
-                backgroundColor={severityFill(theme().backgroundElement, accentForSeverity(item), severityForKind(item))}
-                paddingLeft={1}
-                paddingRight={1}
                 flexShrink={0}
               >
-                <text
-                  fg={toHex(theme().text)}
-                  onMouseDown={() => props.onJump(item.kind, item.id)}
+                <box
+                  backgroundColor={severityFill(theme().backgroundElement, accentForSeverity(item), severityForKind(item))}
+                  paddingLeft={1}
+                  paddingRight={1}
+                  width="100%"
+                  height="100%"
+                  flexDirection="row"
+                  alignItems="center"
                 >
-                  {item.label}
-                </text>
+                  <text
+                    fg={toHex(theme().text)}
+                    onMouseDown={() => props.onJump(item.kind, item.id)}
+                  >
+                    {item.label}
+                  </text>
+                </box>
               </box>
             </>
           )}

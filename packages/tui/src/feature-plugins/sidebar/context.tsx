@@ -4,6 +4,7 @@ import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, For, Show } from "solid-js"
 import { toHex } from "../../util/color"
+import { RoundedBorder } from "../../ui/border"
 
 const id = "internal:sidebar-context"
 
@@ -12,6 +13,12 @@ const TOKEN_HEURISTIC_CHARS_PER_TOKEN = 4
 
 const estimateTokens = (s: string): number =>
   s.length === 0 ? 0 : Math.max(1, Math.ceil(s.length / TOKEN_HEURISTIC_CHARS_PER_TOKEN))
+
+function formatTokensCompact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`
+  return String(n)
+}
 
 interface ToolPart {
   type: "tool"
@@ -68,10 +75,11 @@ const categorizeTokens = (assistant: AssistantMessage) => {
       else toolsTokens += est
     }
   }
-  const reasoning = assistant.tokens.reasoning
-  const output = assistant.tokens.output
-  const cacheTotal = assistant.tokens.cache.read + assistant.tokens.cache.write
-  const inputTotal = assistant.tokens.input
+  const tokens = assistant.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  const reasoning = tokens.reasoning ?? 0
+  const output = tokens.output ?? 0
+  const cacheTotal = (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0)
+  const inputTotal = tokens.input ?? 0
   const prompt = Math.max(0, inputTotal + cacheTotal - filesTokens - toolsTokens)
   return {
     thinking: reasoning,
@@ -87,7 +95,7 @@ interface Segment {
   key: string
   label: string
   tokens: number
-  color: "accent" | "info" | "success" | "warning" | "muted"
+  color: "primary" | "accent" | "info" | "success" | "warning" | "muted"
 }
 
 function View(props: { api: TuiPluginApi; session_id: string }) {
@@ -95,7 +103,9 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
 
   const lastAssistant = createMemo(() => {
     const messages = props.api.state.session.messages(props.session_id)
-    return messages.findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
+    return messages.findLast((item): item is AssistantMessage => 
+      item.role === "assistant" && item.tokens && (item.tokens.output ?? 0) > 0
+    )
   })
 
   const categorization = createMemo(() => {
@@ -123,15 +133,16 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     if (!cat) return []
     return [
       { key: "thinking", label: "Thinking", tokens: cat.thinking, color: "accent" },
-      { key: "files", label: "Files", tokens: cat.files, color: "success" },
-      { key: "tools", label: "Tools", tokens: cat.tools, color: "warning" },
-      { key: "output", label: "Output", tokens: cat.output, color: "info" },
-      { key: "prompt", label: "Prompt", tokens: cat.prompt, color: "muted" },
+      { key: "prompt", label: "Prompt", tokens: cat.prompt, color: "info" },
+      { key: "files", label: "Files Read", tokens: cat.files, color: "success" },
+      { key: "tools", label: "Tool Calls", tokens: cat.tools, color: "warning" },
+      { key: "output", label: "Memory", tokens: cat.output, color: "primary" },
     ]
   })
 
   const segColor = (color: Segment["color"]): string => {
     const t = theme()
+    if (color === "primary") return toHex(t.primary)
     if (color === "accent") return toHex(t.accent)
     if (color === "info") return toHex(t.info)
     if (color === "success") return toHex(t.success)
@@ -140,13 +151,25 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     return toHex(t.text)
   }
 
-  const BAR_WIDTH = 36
+  const BAR_WIDTH = 24
 
   return (
     <box>
-      <text fg={toHex(theme().primary)}>
-        CONTEXT
-      </text>
+      <box flexDirection="row" gap={1} alignItems="center">
+        <text fg={toHex(theme().primary)}>
+          <b>CONTEXT</b>
+        </text>
+        <Show when={categorization()}>
+          {(tb) => {
+            const limit = modelContextLimit() ?? 1
+            return (
+              <text fg={toHex(theme().textMuted)}>
+                {" "}{formatTokensCompact(tb().total)} / {formatTokensCompact(limit)} ({contextPercent() ?? 0}%)
+              </text>
+            )
+          }}
+        </Show>
+      </box>
       <Show
         when={categorization()}
         fallback={
@@ -161,17 +184,22 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
             segments().filter((s) => s.tokens > 0).reduce((sum, seg) => sum + Math.max(0, Math.round((seg.tokens / limit) * BAR_WIDTH)), 0)
           return (
             <>
-              <text fg={toHex(theme().textMuted)} marginTop={1}>
-                {tb().total.toLocaleString()} used
-                {contextPercent() !== null ? ` · ${contextPercent()}% of context` : ""}
-              </text>
-              <box flexDirection="row" width="100%" height={1} marginTop={1}>
+              <box
+                width={BAR_WIDTH + 2}
+                height={3}
+                marginTop={1}
+                customBorderChars={RoundedBorder.customBorderChars}
+                border={["left", "right", "top", "bottom"]}
+                borderColor={theme().borderSubtle}
+                flexDirection="row"
+              >
                 <Show when={tb().total > 0}>
                   <For each={segments().filter((s) => s.tokens > 0)}>
                     {(seg) => (
                       <box
                         width={Math.max(0, Math.round((seg.tokens / limit) * BAR_WIDTH))}
                         backgroundColor={segColor(seg.color)}
+                        height={1}
                       />
                     )}
                   </For>
@@ -179,18 +207,37 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                 <box
                   width={Math.max(0, BAR_WIDTH - usedWidthTotal())}
                   backgroundColor={toHex(theme().backgroundElement)}
+                  height={1}
                 />
               </box>
-              <box flexDirection="column" marginTop={1} gap={0}>
+              <box flexDirection="row" justifyContent="space-between" marginTop={1} width="100%">
+                <text fg={toHex(theme().text)}>Used {tb().total.toLocaleString()}</text>
+                <text fg={toHex(theme().textMuted)}>/ {formatTokensCompact(limit)} in context</text>
+              </box>
+              <box flexDirection="column" marginTop={1} gap={0} width="100%">
                 <For each={segments().filter((s) => s.tokens > 0)}>
-                  {(seg) => (
-                    <box flexDirection="row" gap={1}>
-                      <text fg={segColor(seg.color)}>■</text>
-                      <text fg={toHex(theme().textMuted)}>
-                        {seg.label}: {seg.tokens.toLocaleString()}
-                      </text>
-                    </box>
-                  )}
+                  {(seg) => {
+                    const pct = () => {
+                      if (tb().total === 0) return "0.0"
+                      return ((seg.tokens / tb().total) * 100).toFixed(1)
+                    }
+                    return (
+                      <box flexDirection="row" justifyContent="space-between" width="100%">
+                        <box flexDirection="row" gap={1}>
+                          <text fg={segColor(seg.color)}>■</text>
+                          <text fg={toHex(theme().text)}>{seg.label}</text>
+                        </box>
+                        <box flexDirection="row" gap={2}>
+                          <text fg={toHex(theme().text)}>
+                            {seg.tokens.toLocaleString().padStart(8)}
+                          </text>
+                          <text fg={toHex(theme().textMuted)}>
+                            {`${pct()}%`.padStart(6)}
+                          </text>
+                        </box>
+                      </box>
+                    )
+                  }}
                 </For>
               </box>
             </>

@@ -49,7 +49,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   return (
     <Show when={hasData()}>
       <text fg={toHex(theme().text)}>
-        Session: ${cost()!.toFixed(2)} · {formatTokens(tokens()!)} tok
+        Session: ${cost()!.toFixed(2)} · {formatTokens(tokens()!)} tok (session total)
       </text>
     </Show>
   )

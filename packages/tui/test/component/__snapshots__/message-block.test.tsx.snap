@@ -8,9 +8,9 @@ exports[`MessageBlock mode=plan renders plan label 1`] = `
 │                                                                              │
 │  Plan details here                                                           │
 │                                                                              │
+│                                                                              │
+│                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-                                                                                
-                                                                                
 "
 `;
 
@@ -22,7 +22,7 @@ exports[`MessageBlock mode=diff with permission link renders approve/reject acti
 │  Diff content                                                                │
 │                                                                              │
 │    ╭───────────╮  ╭──────────╮  ╭──────────────────╮                         │
-│    ╰─✓─approve─╯  ╰─✕─reject─╯  ╰─ⓘ─view─full─diff─╯                         │
+│    ╰ ✓ approve ╯  ╰ ✕ reject ╯  ╰ ⓘ view full diff ╯                         │
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 "
@@ -36,7 +36,7 @@ exports[`MessageBlock mode=diff without permission link renders view diff action
 │  Diff content                                                                │
 │                                                                              │
 │    ╭──────────────────╮                                                      │
-│    ╰─ⓘ─view─full─diff─╯                                                      │
+│    ╰ ⓘ view full diff ╯                                                      │
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 "
@@ -50,8 +50,8 @@ exports[`MessageBlock mode=tool renders tool label 1`] = `
 │                                                                              │
 │  Tool output                                                                 │
 │                                                                              │
+│                                                                              │
+│                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-                                                                                
-                                                                                
 "
 `;

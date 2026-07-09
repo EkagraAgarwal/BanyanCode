@@ -87,7 +87,7 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
     return t.length > 40 ? t.substring(0, 37) + "..." : t
   })
 
-  const startMs = () => session()?.time.updated ?? Date.now()
+  const startMs = () => session()?.time.created ?? Date.now()
   const startedTime = createMemo(() => {
     void tick()
     return new Date(startMs()).toLocaleTimeString("en-US", { hour12: false })
@@ -122,14 +122,30 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
     return first + rest
   })
 
-  const cost = createMemo(() => session()?.cost)
-  const tokens = createMemo(() => session()?.tokens)
+  const cost = createMemo(() => {
+    const messages = sync.data.message[props.sessionID] ?? []
+    return messages.reduce((sum: number, m: any) => sum + (m.cost ?? 0), 0)
+  })
+
+  const tokens = createMemo(() => {
+    const messages = sync.data.message[props.sessionID] ?? []
+    const init = { input: 0, output: 0, reasoning: 0 }
+    return messages.reduce((sum: typeof init, m: any) => {
+      if (m.tokens) {
+        sum.input += m.tokens.input ?? 0
+        sum.output += m.tokens.output ?? 0
+        sum.reasoning += m.tokens.reasoning ?? 0
+      }
+      return sum
+    }, init)
+  })
 
   const lastActivity = createMemo(() => {
+    void tick()
     const messages = sync.data.message[props.sessionID] ?? []
-    const lastAssistant = messages.findLast((m) => m.role === "assistant")
-    if (!lastAssistant?.time?.completed) return null
-    return formatElapsed(lastAssistant.time.completed)
+    const lastAssistant = messages.findLast((m: any) => m.type === "assistant" || m.role === "assistant")
+    if (!(lastAssistant as any)?.time?.completed) return null
+    return formatElapsed((lastAssistant as any).time.completed)
   })
 
   const gridRow = (label: string, value: () => string) => (

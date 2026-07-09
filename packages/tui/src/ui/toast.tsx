@@ -62,32 +62,38 @@ function ToastItem(props: { entry: ToastEntry; theme: ReturnType<typeof useTheme
     <box
       position="relative"
       width={props.maxWidth}
-      paddingLeft={1}
-      paddingRight={1}
-      paddingTop={1}
-      paddingBottom={1}
-      backgroundColor={theme().backgroundPanel}
       borderColor={theme()[entry.variant]}
       border={["left", "right", "top", "bottom"]}
       customBorderChars={RoundedBorder.customBorderChars}
       onMouseUp={() => toast.dismiss(entry.id)}
     >
-      <Show when={entry.title}>
-        <text attributes={TextAttributes.BOLD} marginBottom={1} fg={theme().text}>
-          {entry.title}
-        </text>
-      </Show>
-      <text fg={theme().text} wrapMode="word" width="100%">
-        {entry.message}
-      </text>
       <box
-        position="absolute"
-        bottom={0}
-        left={0}
-        height={1}
-        width={`${Math.round(progress * 100)}%`}
-        backgroundColor={theme()[entry.variant]}
-      />
+        backgroundColor={theme().backgroundPanel}
+        width="100%"
+        height="100%"
+        paddingLeft={1}
+        paddingRight={1}
+        paddingTop={1}
+        paddingBottom={1}
+        flexDirection="column"
+      >
+        <Show when={entry.title}>
+          <text attributes={TextAttributes.BOLD} marginBottom={1} fg={theme().text}>
+            {entry.title}
+          </text>
+        </Show>
+        <text fg={theme().text} wrapMode="word" width="100%">
+          {entry.message}
+        </text>
+        <box
+          position="absolute"
+          bottom={0}
+          left={0}
+          height={1}
+          width={`${Math.round(progress * 100)}%`}
+          backgroundColor={theme()[entry.variant]}
+        />
+      </box>
     </box>
   )
 }

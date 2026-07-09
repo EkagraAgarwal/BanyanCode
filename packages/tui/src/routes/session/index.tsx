@@ -1400,9 +1400,6 @@ export function Session() {
                     directory={sync.session.get(questions()[0].sessionID)?.directory}
                   />
                 </Show>
-                <Show when={session()?.parentID}>
-                  <SubagentFooter />
-                </Show>
                 <Show when={visible()}>
                   <pluginRuntime.Slot
                     name="session_prompt"
@@ -1454,9 +1451,15 @@ export function Session() {
                 customBorderChars={RoundedBorder.customBorderChars}
                 border={["left", "right", "top", "bottom"]}
                 borderColor={theme.borderSubtle}
-                backgroundColor={theme.backgroundPanel}
               >
-                <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
+                <box
+                  backgroundColor={theme.backgroundPanel}
+                  width="100%"
+                  height="100%"
+                  flexDirection="column"
+                >
+                  <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
+                </box>
               </box>
             </Show>
           </box>
@@ -1821,14 +1824,21 @@ function ReasoningHeader(props: {
 function TextPart(props: { last: boolean; part: TextPart; message: AssistantMessage }) {
   const ctx = use()
   const { theme, syntax } = useTheme()
+  const content = createMemo(() => {
+    const text = props.part.text.trim()
+    if (text.startsWith("</think>")) {
+      return text.slice(8).trim()
+    }
+    return text
+  })
   return (
-    <Show when={props.part.text.trim()}>
+    <Show when={content()}>
       <box id={"text-" + props.part.id} paddingLeft={3} marginTop={1} flexShrink={0}>
         <markdown
           syntaxStyle={syntax()}
           streaming={true}
           internalBlockMode="top-level"
-          content={props.part.text.trim()}
+          content={content()}
           tableOptions={{ style: "grid" }}
           conceal={ctx.conceal()}
           fg={theme.markdownText}
@@ -2307,6 +2317,7 @@ function Read(props: ToolProps) {
   const { theme } = useTheme()
   const pathFormatter = usePathFormatter()
   const isRunning = createMemo(() => props.part.state.status === "running")
+  const isCompleted = createMemo(() => props.part.state.status === "completed")
   const loaded = createMemo(() => {
     if (props.part.state.status !== "completed") return []
     if (props.part.state.time.compacted) return []
@@ -2315,26 +2326,43 @@ function Read(props: ToolProps) {
     return value.filter((p): p is string => typeof p === "string")
   })
   return (
-    <>
-      <InlineTool
-        icon="→"
-        pending="Reading file..."
-        complete={stringValue(props.input.filePath)}
-        spinner={isRunning()}
-        part={props.part}
-      >
-        Read {pathFormatter.format(stringValue(props.input.filePath))} {input(props.input, ["filePath"])}
-      </InlineTool>
-      <For each={loaded()}>
-        {(filepath, index) => (
-          <box id={`tool-inline-loaded-${props.part.id}-${index()}`} paddingLeft={3}>
-            <text paddingLeft={3} fg={theme.textMuted}>
-              ↳ Loaded {pathFormatter.format(filepath)}
-            </text>
+    <Switch>
+      <Match when={isCompleted()}>
+        <MessageBlock mode="tool" label="TOOL CALL · read">
+          <box paddingLeft={1} paddingTop={0} paddingBottom={1}>
+            <InlineTool
+              icon="→"
+              pending="Reading file..."
+              complete={stringValue(props.input.filePath)}
+              spinner={isRunning()}
+              part={props.part}
+            >
+              Read {pathFormatter.format(stringValue(props.input.filePath))} {input(props.input, ["filePath"])}
+            </InlineTool>
+            <For each={loaded()}>
+              {(filepath, index) => (
+                <box id={`tool-inline-loaded-${props.part.id}-${index()}`} paddingLeft={3}>
+                  <text paddingLeft={3} fg={theme.textMuted}>
+                    ↳ Loaded {pathFormatter.format(filepath)}
+                  </text>
+                </box>
+              )}
+            </For>
           </box>
-        )}
-      </For>
-    </>
+        </MessageBlock>
+      </Match>
+      <Match when={true}>
+        <InlineTool
+          icon="→"
+          pending="Reading file..."
+          complete={stringValue(props.input.filePath)}
+          spinner={isRunning()}
+          part={props.part}
+        >
+          Read {pathFormatter.format(stringValue(props.input.filePath))} {input(props.input, ["filePath"])}
+        </InlineTool>
+      </Match>
+    </Switch>
   )
 }
 
@@ -2649,14 +2677,17 @@ function ApplyPatch(props: ToolProps) {
 
 function TodoWrite(props: ToolProps) {
   const todos = createMemo(() => parseTodos(props.input.todos))
+  const isCompleted = createMemo(() => parseTodos(props.metadata.todos).length > 0)
   return (
     <Switch>
-      <Match when={parseTodos(props.metadata.todos).length}>
-        <BlockTool title="# Todos" part={props.part}>
-          <box>
-            <For each={todos()}>{(todo) => <TodoItem status={todo.status} content={todo.content} />}</For>
-          </box>
-        </BlockTool>
+      <Match when={isCompleted()}>
+        <MessageBlock mode="plan" label="PLAN · Todos">
+          <BlockTool title="# Todos" part={props.part}>
+            <box>
+              <For each={todos()}>{(todo) => <TodoItem status={todo.status} content={todo.content} />}</For>
+            </box>
+          </BlockTool>
+        </MessageBlock>
       </Match>
       <Match when={true}>
         <InlineTool icon="⚙" pending="Updating todos..." complete={false} part={props.part}>

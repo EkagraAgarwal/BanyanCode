@@ -52,11 +52,11 @@ function View(props: { api: TuiPluginApi }) {
     >
       <text fg={theme().textMuted}>
         {workspaceLabel()}
-        {branch() ? `:${branch()}` : ""}
+        {branch() ? ` · Git: ${branch()}` : ""}
       </text>
       <box flexGrow={1} />
       <text fg={attentionCount() > 0 ? theme().error : theme().success}>
-        {attentionCount() === 0 ? "▲ clear" : `▲ ${attentionCount()}`}
+        {`▲ ${attentionCount()} need attention`}
       </text>
       <text fg={theme().textMuted}>
         ^p cmd · ^m memory · / search · ^t tab · ^q quit

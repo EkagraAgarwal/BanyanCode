@@ -14,10 +14,28 @@ const id = "internal:header-status-pills"
 function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
   const [activeSessionCount, setActiveSessionCount] = createSignal<number>(0)
+  const [graphBuilt, setGraphBuilt] = createSignal<boolean>(false)
 
   const ev = useEvent()
   const unsubSession = ev.on("session.updated" as any, () => refreshSessionCount())
   onCleanup(unsubSession)
+
+  const unsubGraph = ev.on("banyancode.codegraph.build" as any, (evt: any) => {
+    if (evt.properties?.status === "completed") {
+      setGraphBuilt(true)
+    }
+  })
+  onCleanup(unsubGraph)
+
+  const checkGraph = async () => {
+    try {
+      const nodesResult = await props.api.client.global.codegraph.nodes()
+      const hasNodes = (nodesResult.data?.nodes?.length ?? 0) > 0
+      setGraphBuilt(hasNodes)
+    } catch {
+      setGraphBuilt(false)
+    }
+  }
 
   const refreshSessionCount = async () => {
     try {
@@ -36,6 +54,7 @@ function View(props: { api: TuiPluginApi }) {
 
   onMount(() => {
     refreshSessionCount()
+    checkGraph()
   })
 
   const mcpList = createMemo(() => props.api.state.mcp())
@@ -47,74 +66,30 @@ function View(props: { api: TuiPluginApi }) {
   const agentsLabel = () => `${activeSessionCount()} active`
   const mcpLabel = () => (mcpConnectedCount() > 0 ? `MCP: ${mcpFirstConnected()}` : "MCP: —")
   const lspLabel = () => (lspCount() > 0 ? `LSP: ${lspCount()}` : "LSP: off")
-
-  const agentsSeverity = (): Severity => (activeSessionCount() > 0 ? "success" : "neutral")
-  const mcpSeverity = (): Severity => (mcpConnectedCount() > 0 ? "success" : "error")
-  const lspSeverity = (): Severity => (lspCount() > 0 ? "success" : "error")
+  const graphLabel = () => (graphBuilt() ? "Graph: built" : "Graph: off")
 
   const agentsDotColor = () => (activeSessionCount() > 0 ? toHex(theme().success) : toHex(theme().textMuted))
   const mcpDotColor = () => (mcpConnectedCount() > 0 ? toHex(theme().success) : toHex(theme().error))
   const lspDotColor = () => (lspCount() > 0 ? toHex(theme().success) : toHex(theme().error))
-
-  const agentsBorderColor = () => (activeSessionCount() > 0 ? theme().success : theme().textMuted)
-  const mcpBorderColor = () => (mcpConnectedCount() > 0 ? theme().success : theme().error)
-  const lspBorderColor = () => (lspCount() > 0 ? theme().success : theme().error)
-
-  const accentForSeverity = (severity: Severity) =>
-    severity === "success"
-      ? theme().success
-      : severity === "warning"
-        ? theme().warning
-        : severity === "error"
-          ? theme().error
-          : severity === "info"
-            ? theme().info
-            : theme().borderSubtle
-
-  const agentsPillBg = () => pillFill(theme().backgroundPanel, accentForSeverity(agentsSeverity()), agentsSeverity())
-  const mcpPillBg = () => pillFill(theme().backgroundPanel, accentForSeverity(mcpSeverity()), mcpSeverity())
-  const lspPillBg = () => pillFill(theme().backgroundPanel, accentForSeverity(lspSeverity()), lspSeverity())
+  const graphDotColor = () => (graphBuilt() ? toHex(theme().success) : toHex(theme().error))
 
   return (
     <box flexDirection="row" gap={2} alignItems="center">
-      <box
-        flexDirection="row"
-        flexShrink={0}
-        customBorderChars={RoundedBorder.customBorderChars}
-        border={["left", "right", "top", "bottom"]}
-        borderColor={agentsBorderColor()}
-        backgroundColor={agentsPillBg()}
-        paddingLeft={1}
-        paddingRight={1}
-      >
+      <box flexDirection="row" flexShrink={0} gap={1}>
         <text fg={agentsDotColor()}>●</text>
-        <text fg={toHex(theme().textMuted)}>{" "}{agentsLabel()}</text>
+        <text fg={toHex(theme().textMuted)}>{agentsLabel()}</text>
       </box>
-      <box
-        flexDirection="row"
-        flexShrink={0}
-        customBorderChars={RoundedBorder.customBorderChars}
-        border={["left", "right", "top", "bottom"]}
-        borderColor={mcpBorderColor()}
-        backgroundColor={mcpPillBg()}
-        paddingLeft={1}
-        paddingRight={1}
-      >
+      <box flexDirection="row" flexShrink={0} gap={1}>
         <text fg={mcpDotColor()}>●</text>
-        <text fg={toHex(theme().textMuted)}>{" "}{mcpLabel()}</text>
+        <text fg={toHex(theme().textMuted)}>{mcpLabel()}</text>
       </box>
-      <box
-        flexDirection="row"
-        flexShrink={0}
-        customBorderChars={RoundedBorder.customBorderChars}
-        border={["left", "right", "top", "bottom"]}
-        borderColor={lspBorderColor()}
-        backgroundColor={lspPillBg()}
-        paddingLeft={1}
-        paddingRight={1}
-      >
+      <box flexDirection="row" flexShrink={0} gap={1}>
         <text fg={lspDotColor()}>●</text>
-        <text fg={toHex(theme().textMuted)}>{" "}{lspLabel()}</text>
+        <text fg={toHex(theme().textMuted)}>{lspLabel()}</text>
+      </box>
+      <box flexDirection="row" flexShrink={0} gap={1}>
+        <text fg={graphDotColor()}>●</text>
+        <text fg={toHex(theme().textMuted)}>{graphLabel()}</text>
       </box>
     </box>
   )

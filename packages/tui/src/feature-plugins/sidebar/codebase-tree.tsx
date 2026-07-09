@@ -79,7 +79,7 @@ function View(props: { api: TuiPluginApi }) {
       </Show>
       <Show when={!error() && tree() === null}>
         <text fg={toHex(theme().textMuted)} marginTop={1}>
-          Loading...
+          Coming soon
         </text>
       </Show>
       <Show when={!error() && tree() !== null}>

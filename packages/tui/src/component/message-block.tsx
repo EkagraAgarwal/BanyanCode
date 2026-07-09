@@ -56,14 +56,18 @@ export function MessageBlock(props: MessageBlockProps) {
       customBorderChars={RoundedBorder.customBorderChars}
       border={["left", "right", "top", "bottom"]}
       borderColor={borderColor()}
-      backgroundColor={theme.backgroundPanel}
-      paddingTop={1}
-      paddingBottom={1}
-      paddingLeft={2}
       marginTop={1}
-      flexDirection="column"
-      gap={1}
     >
+      <box
+        backgroundColor={theme.backgroundPanel}
+        width="100%"
+        height="100%"
+        paddingTop={1}
+        paddingBottom={1}
+        paddingLeft={2}
+        flexDirection="column"
+        gap={1}
+      >
       <box flexDirection="row" gap={1} alignItems="center">
         <text fg={borderColor()} paddingLeft={2}>
           {props.label}
@@ -80,13 +84,19 @@ export function MessageBlock(props: MessageBlockProps) {
             customBorderChars={RoundedBorder.customBorderChars}
             border={["left", "right", "top", "bottom"]}
             borderColor={theme.success}
-            backgroundColor={severityFill(theme.backgroundPanel, theme.success, "success")}
-            paddingLeft={1}
-            paddingRight={1}
             flexShrink={0}
             onMouseUp={approve}
           >
-            <box flexDirection="row" alignItems="center" gap={1}>
+            <box
+              flexDirection="row"
+              alignItems="center"
+              gap={1}
+              backgroundColor={severityFill(theme.backgroundPanel, theme.success, "success")}
+              paddingLeft={1}
+              paddingRight={1}
+              width="100%"
+              height="100%"
+            >
               <text fg={theme.success}>✓</text>
               <text fg={theme.text}>approve</text>
             </box>
@@ -95,13 +105,19 @@ export function MessageBlock(props: MessageBlockProps) {
             customBorderChars={RoundedBorder.customBorderChars}
             border={["left", "right", "top", "bottom"]}
             borderColor={theme.error}
-            backgroundColor={severityFill(theme.backgroundPanel, theme.error, "error")}
-            paddingLeft={1}
-            paddingRight={1}
             flexShrink={0}
             onMouseUp={reject}
           >
-            <box flexDirection="row" alignItems="center" gap={1}>
+            <box
+              flexDirection="row"
+              alignItems="center"
+              gap={1}
+              backgroundColor={severityFill(theme.backgroundPanel, theme.error, "error")}
+              paddingLeft={1}
+              paddingRight={1}
+              width="100%"
+              height="100%"
+            >
               <text fg={theme.error}>✕</text>
               <text fg={theme.text}>reject</text>
             </box>
@@ -110,13 +126,19 @@ export function MessageBlock(props: MessageBlockProps) {
             customBorderChars={RoundedBorder.customBorderChars}
             border={["left", "right", "top", "bottom"]}
             borderColor={theme.info}
-            backgroundColor={severityFill(theme.backgroundPanel, theme.info, "info")}
-            paddingLeft={1}
-            paddingRight={1}
             flexShrink={0}
             onMouseUp={viewDiff}
           >
-            <box flexDirection="row" alignItems="center" gap={1}>
+            <box
+              flexDirection="row"
+              alignItems="center"
+              gap={1}
+              backgroundColor={severityFill(theme.backgroundPanel, theme.info, "info")}
+              paddingLeft={1}
+              paddingRight={1}
+              width="100%"
+              height="100%"
+            >
               <text fg={theme.info}>ⓘ</text>
               <text fg={theme.text}>view full diff</text>
             </box>
@@ -129,13 +151,19 @@ export function MessageBlock(props: MessageBlockProps) {
             customBorderChars={RoundedBorder.customBorderChars}
             border={["left", "right", "top", "bottom"]}
             borderColor={theme.info}
-            backgroundColor={severityFill(theme.backgroundPanel, theme.info, "info")}
-            paddingLeft={1}
-            paddingRight={1}
             flexShrink={0}
             onMouseUp={viewDiff}
           >
-            <box flexDirection="row" alignItems="center" gap={1}>
+            <box
+              flexDirection="row"
+              alignItems="center"
+              gap={1}
+              backgroundColor={severityFill(theme.backgroundPanel, theme.info, "info")}
+              paddingLeft={1}
+              paddingRight={1}
+              width="100%"
+              height="100%"
+            >
               <text fg={theme.info}>ⓘ</text>
               <text fg={theme.text}>view full diff</text>
             </box>
@@ -145,6 +173,7 @@ export function MessageBlock(props: MessageBlockProps) {
       <Show when={props.actions !== undefined}>
         {props.actions}
       </Show>
+      </box>
     </box>
   )
 }
