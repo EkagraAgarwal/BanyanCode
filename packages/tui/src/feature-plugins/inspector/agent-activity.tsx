@@ -81,7 +81,7 @@ function View(props: { api: TuiPluginApi }) {
   return (
     <box>
       <text fg={toHex(theme().primary)} marginBottom={1}>
-        <b>AGENT ACTIVITY</b> {peerCount()}
+        AGENT ACTIVITY {peerCount()}
       </text>
       <Show
         when={peers().length > 0}

@@ -17,7 +17,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   return (
     <box>
       <text fg={toHex(theme().primary)} marginBottom={1}>
-        <b>TODO</b> {incompleteCount()}/{totalCount()}
+        TODO {incompleteCount()}/{totalCount()}
       </text>
       <Show
         when={list().length > 0}

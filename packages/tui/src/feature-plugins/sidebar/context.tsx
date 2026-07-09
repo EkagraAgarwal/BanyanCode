@@ -145,7 +145,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   return (
     <box>
       <text fg={toHex(theme().primary)}>
-        <b>CONTEXT</b>
+        CONTEXT
       </text>
       <Show
         when={categorization()}

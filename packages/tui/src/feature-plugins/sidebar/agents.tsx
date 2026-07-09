@@ -128,7 +128,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   return (
     <box>
       <text fg={toHex(theme().primary)}>
-        <b>AGENTS</b> {activeCount()}/{maxSubagents()} active
+        AGENTS {activeCount()}/{maxSubagents()} active
       </text>
       <Show
         when={peers().length > 0}

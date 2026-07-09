@@ -142,7 +142,7 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
   return (
     <box>
       <text fg={toHex(theme().primary)} marginBottom={1}>
-        <b>AGENT DETAILS</b>
+        AGENT DETAILS
       </text>
       <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">
         <text fg={toHex(theme().primary)}>

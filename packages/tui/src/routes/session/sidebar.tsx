@@ -34,8 +34,8 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean; onClose?:
         height="100%"
         marginTop={1}
         marginBottom={1}
-        paddingLeft={2}
-        paddingRight={2}
+        paddingLeft={1}
+        paddingRight={1}
         position={props.overlay ? "absolute" : "relative"}
         customBorderChars={RoundedBorder.customBorderChars}
         border={["left", "right", "top", "bottom"]}
