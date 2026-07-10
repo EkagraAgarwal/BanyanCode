@@ -118,3 +118,11 @@ test("sidebar codebase-tree sidebar_content slot renders with tree data", async 
     testSetup.renderer.destroy()
   }
 })
+
+test("codebase-tree module no longer exports Coming soon fallback", () => {
+  const source = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/codebase-tree.tsx"),
+    "utf8",
+  )
+  expect(source).not.toContain("Coming soon")
+})

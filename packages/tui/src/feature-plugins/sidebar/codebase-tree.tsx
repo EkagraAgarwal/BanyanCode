@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { useEvent } from "../../context/event"
 import { toHex } from "../../util/color"
 
@@ -14,21 +14,37 @@ interface TreeNode {
   children?: TreeNode[]
 }
 
-function renderNode(node: TreeNode, depth: number, theme: any): any {
-  const indent = "  ".repeat(depth)
-  const icon = node.kind === "directory" ? "▾" : "•"
-  const color = node.kind === "directory" ? toHex(theme.text) : toHex(theme.textMuted)
-  const rows = [
-    <text fg={color}>
-      {indent}{icon} {node.name}
-    </text>,
-  ]
-  if (node.children) {
-    for (const child of node.children) {
-      rows.push(renderNode(child, depth + 1, theme))
-    }
-  }
-  return rows
+const COLLAPSED_BY_DEFAULT = new Set([".git", "node_modules", "dist", "build", ".banyancode", ".opencode", "target", "__pycache__", ".next", ".nuxt", ".cache"])
+const RELOAD_DEBOUNCE_MS = 250
+
+function TreeRow(props: { node: TreeNode; depth: number; theme: any }) {
+  const theme = () => props.theme
+  const isDir = () => props.node.kind === "directory"
+  const defaultCollapsed = () => isDir() && COLLAPSED_BY_DEFAULT.has(props.node.name)
+  const [open, setOpen] = createSignal(!defaultCollapsed())
+
+  const indent = createMemo(() => "  ".repeat(props.depth))
+  const icon = createMemo(() => (isDir() ? (open() ? "▾" : "▸") : "•"))
+  const color = createMemo(() => (isDir() ? toHex(theme().text) : toHex(theme().textMuted)))
+
+  return (
+    <box flexDirection="column">
+      <box
+        flexDirection="row"
+        gap={0}
+        onMouseDown={() => isDir() && setOpen((x) => !x)}
+      >
+        <text fg={color()}>
+          {indent()}{icon()} {props.node.name}
+        </text>
+      </box>
+      <Show when={isDir() && open() && (props.node.children?.length ?? 0) > 0}>
+        <For each={props.node.children ?? []}>
+          {(child) => <TreeRow node={child} depth={props.depth + 1} theme={theme()} />}
+        </For>
+      </Show>
+    </box>
+  )
 }
 
 function View(props: { api: TuiPluginApi }) {
@@ -36,6 +52,7 @@ function View(props: { api: TuiPluginApi }) {
   const ev = useEvent()
   const [tree, setTree] = createSignal<TreeNode | null>(null)
   const [error, setError] = createSignal<string | null>(null)
+  const [loading, setLoading] = createSignal(true)
 
   const rootPath = createMemo(() => props.api.state.path.directory)
 
@@ -49,18 +66,27 @@ function View(props: { api: TuiPluginApi }) {
       } else {
         setTree(null)
       }
-    } catch {
-      setError("Filesystem service unavailable")
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Filesystem service unavailable")
       setTree(null)
+    } finally {
+      setLoading(false)
     }
   }
 
   void loadTree()
 
+  let reloadTimer: ReturnType<typeof setTimeout> | null = null
   const unsub = ev.on("file.watcher.updated" as any, () => {
-    void loadTree()
+    if (reloadTimer) clearTimeout(reloadTimer)
+    reloadTimer = setTimeout(() => {
+      void loadTree()
+    }, RELOAD_DEBOUNCE_MS)
   })
-  onCleanup(unsub)
+  onCleanup(() => {
+    unsub()
+    if (reloadTimer) clearTimeout(reloadTimer)
+  })
 
   const displayRoot = createMemo(() => {
     const parts = rootPath().split(/[/\\]/)
@@ -68,32 +94,30 @@ function View(props: { api: TuiPluginApi }) {
   })
 
   return (
-    <box>
+    <box flexDirection="column" gap={0}>
       <text fg={toHex(theme().primary)}>
         <b>CODEBASE</b> {displayRoot()}
       </text>
       <Show when={error()}>
-        <text fg={toHex(theme().textMuted)} marginTop={0}>
+        <text fg={toHex(theme().error)} marginTop={0}>
           {error()}
         </text>
       </Show>
-      <Show when={!error() && tree() === null}>
-        <text fg={toHex(theme().textMuted)} marginTop={1}>
-          Coming soon
+      <Show when={!error() && loading()}>
+        <text fg={toHex(theme().textMuted)} marginTop={0}>
+          Loading…
         </text>
       </Show>
-      <Show when={!error() && tree() !== null}>
-        <box flexDirection="column" marginTop={1}>
-          <Show
-            when={!!tree()?.children?.length}
-            fallback={
-              <text fg={toHex(theme().textMuted)}>No files</text>
-            }
-          >
-            <For each={tree()?.children ?? []}>
-              {(node) => <>{renderNode(node, 0, theme())}</>}
-            </For>
-          </Show>
+      <Show when={!error() && !loading() && (tree()?.children?.length ?? 0) === 0}>
+        <text fg={toHex(theme().textMuted)} marginTop={0}>
+          No files
+        </text>
+      </Show>
+      <Show when={!error() && !loading() && (tree()?.children?.length ?? 0) > 0}>
+        <box flexDirection="column" marginTop={0}>
+          <For each={tree()?.children ?? []}>
+            {(node) => <TreeRow node={node} depth={0} theme={theme()} />}
+          </For>
         </box>
       </Show>
     </box>
