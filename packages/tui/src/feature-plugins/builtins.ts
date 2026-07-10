@@ -6,7 +6,6 @@ import SidebarPerformance from "./sidebar/performance"
 import SidebarContext from "./sidebar/context"
 import SidebarFiles from "./sidebar/files"
 import SidebarFooter from "./sidebar/footer"
-import SidebarLsp from "./sidebar/lsp"
 import SidebarMcp from "./sidebar/mcp"
 import SidebarCodebaseTree from "./sidebar/codebase-tree"
 import InspectorAgentDetails from "./inspector/agent-details"
@@ -16,7 +15,6 @@ import SidebarSystemStatus from "./sidebar/system-status"
 import SessionFooter from "./footer/session-footer"
 import AttentionStrip from "../component/attention-strip"
 import HeaderBrand from "./header/brand"
-import HeaderSessionCost from "./header/session-cost"
 import HeaderStatusPills from "./header/status-pills"
 import HeaderKeybindingHints from "./header/keybinding-hints"
 import DiffViewer from "./system/diff-viewer"
@@ -45,7 +43,6 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     SidebarSystemStatus,
     SidebarCodebaseTree,
     SidebarMcp,
-    SidebarLsp,
     SidebarFiles,
     SidebarFooter,
     InspectorAgentDetails,
@@ -54,7 +51,6 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     SessionFooter,
     AttentionStrip,
     HeaderBrand,
-    HeaderSessionCost,
     HeaderStatusPills,
     HeaderKeybindingHints,
     Notifications,
