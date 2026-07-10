@@ -10,7 +10,7 @@ export const name = "system_status"
 
 export const Input = Schema.Struct({})
 export const Output = Schema.Struct({
-  cpuPercent: Schema.Number,
+  cpuPercent: Schema.optional(Schema.Number),
   memoryUsedBytes: Schema.Number,
   memoryTotalBytes: Schema.Number,
   gpuPercent: Schema.optional(Schema.Number),
@@ -30,12 +30,17 @@ export const layer = Layer.effectDiscard(
           description: "Get current system health: CPU usage, memory used/total, GPU usage (if available), and platform. Call proactively before resource-intensive operations like code indexing, embedding, or LLM queries to make informed decisions.",
           input: Input,
           output: Output,
-          toModelOutput: ({ output }) => [
-            {
-              type: "text",
-              text: `CPU: ${output.cpuPercent.toFixed(1)}%, Memory: ${(output.memoryUsedBytes / 1024 / 1024).toFixed(0)}MB / ${(output.memoryTotalBytes / 1024 / 1024).toFixed(0)}MB, Platform: ${output.platform}`,
-            },
-          ],
+          toModelOutput: ({ output }) => {
+            const cpuLine = output.cpuPercent !== undefined
+              ? `CPU: ${output.cpuPercent.toFixed(1)}%`
+              : "CPU: (unavailable, sampling)"
+            return [
+              {
+                type: "text",
+                text: `${cpuLine}, Memory: ${(output.memoryUsedBytes / 1024 / 1024).toFixed(0)}MB / ${(output.memoryTotalBytes / 1024 / 1024).toFixed(0)}MB, Platform: ${output.platform}`,
+              },
+            ]
+          },
           execute: (_input, _context) =>
             Effect.gen(function* () {
               const status = yield* monitor.status()

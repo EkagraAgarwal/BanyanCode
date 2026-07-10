@@ -1,8 +1,11 @@
 export * as MeshCoordinator from "./mesh-coordinator"
 
 import { Context, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
+import { sql } from "drizzle-orm"
+import { Database } from "../database/database"
 import { EventV2 } from "../event"
 import { SessionSchema } from "../session/schema"
+import { SessionTable } from "../session/sql"
 import { SubagentBus } from "./subagent-bus"
 import { SubagentPlans } from "./subagent-plans-repo"
 import { MaxSubagents } from "./max-subagents"
@@ -17,6 +20,20 @@ export const MeshStatus = Schema.Struct({
       agent: Schema.String,
       status: Schema.Union([Schema.Literal("active"), Schema.Literal("idle"), Schema.Literal("disconnected")]),
       lastSeenAt: Schema.Number,
+      cost: Schema.optional(Schema.Number),
+      tokens: Schema.optional(
+        Schema.Struct({
+          input: Schema.Number,
+          output: Schema.Number,
+          reasoning: Schema.Number,
+          cache: Schema.Struct({
+            read: Schema.Number,
+            write: Schema.Number,
+          }),
+        }),
+      ),
+      lastActivityAt: Schema.optional(Schema.Number),
+      blockedReason: Schema.optional(Schema.String),
     }),
   ),
   pendingMessages: Schema.Number,
@@ -32,6 +49,8 @@ export type MeshStatus = typeof MeshStatus.Type
 
 export interface Interface {
   readonly status: (parentSessionID: SessionSchema.ID) => Effect.Effect<MeshStatus, never, never>
+  readonly trackParent: (parentSessionID: SessionSchema.ID) => Effect.Effect<void, never, never>
+  readonly listTrackedParents: () => Effect.Effect<ReadonlyArray<SessionSchema.ID>, never, never>
   readonly drain: (parentSessionID: SessionSchema.ID) => Effect.Effect<SubagentMessage[], never, never>
   readonly watch: (parentSessionID: SessionSchema.ID) => Effect.Effect<Stream.Stream<MeshStatus>, never, never>
   readonly subscribe: (input: { parentSessionID: SessionSchema.ID; agentName?: string }) => Effect.Effect<Stream.Stream<SubagentMessage, never, never>, never, never>
@@ -63,6 +82,79 @@ export const StatusUpdated = EventV2.define({
 })
 
 const ACTIVITY_WINDOW_MS = 5 * 60 * 1000
+const COST_CACHE_TTL_MS = 5 * 1000
+const NATIVE_CHILD_RECENT_MS = 5 * 60 * 1000
+
+type NativeChildRow = {
+  id: string
+  parent_id: string | null
+  title: string
+  agent: string | null
+  time_created: number
+  time_updated: number
+}
+
+const listNativeChildren = (
+  parentSessionID: SessionSchema.ID,
+  db: Database.Interface["db"],
+): Effect.Effect<NativeChildRow[], never, never> =>
+  db
+    .all<NativeChildRow>(
+      sql`SELECT id, parent_id, title, agent, time_created, time_updated
+          FROM session
+          WHERE parent_id = ${parentSessionID}
+          ORDER BY time_updated DESC`,
+    )
+    .pipe(Effect.orDie)
+
+type CostCacheEntry = {
+  cost: number
+  tokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
+  lastActivityAt: number
+  blockedReason?: string
+  computedAt: number
+}
+
+const computePeerCost = (sessionID: string, agent: string, db: Database.Interface["db"]) =>
+  Effect.gen(function* () {
+    const row = yield* db
+      .get<{
+        cost: number
+        tokens_input: number
+        tokens_output: number
+        tokens_reasoning: number
+        tokens_cache_read: number
+        tokens_cache_write: number
+        last_activity: number | null
+      }>(
+        sql`SELECT
+            COALESCE(SUM(JSON_EXTRACT(data, '$.cost')), 0) as cost,
+            COALESCE(SUM(JSON_EXTRACT(data, '$.tokens.input')), 0) as tokens_input,
+            COALESCE(SUM(JSON_EXTRACT(data, '$.tokens.output')), 0) as tokens_output,
+            COALESCE(SUM(JSON_EXTRACT(data, '$.tokens.reasoning')), 0) as tokens_reasoning,
+            COALESCE(SUM(JSON_EXTRACT(data, '$.tokens.cache.read')), 0) as tokens_cache_read,
+            COALESCE(SUM(JSON_EXTRACT(data, '$.tokens.cache.write')), 0) as tokens_cache_write,
+            MAX(JSON_EXTRACT(data, '$.time.completed')) as last_activity
+          FROM session_message
+          WHERE session_id = ${sessionID}
+            AND type = 'assistant'
+            AND JSON_EXTRACT(data, '$.agent') = ${agent}`,
+      )
+      .pipe(Effect.orDie)
+
+    if (!row || row.cost === 0) return null
+
+    return {
+      cost: row.cost,
+      tokens: {
+        input: row.tokens_input,
+        output: row.tokens_output,
+        reasoning: row.tokens_reasoning,
+        cache: { read: row.tokens_cache_read, write: row.tokens_cache_write },
+      },
+      lastActivityAt: row.last_activity ?? 0,
+    }
+  })
 
 export const layer = Layer.effect(
   Service,
@@ -70,15 +162,76 @@ export const layer = Layer.effect(
     const bus = yield* SubagentBus.Service
     const plans = yield* SubagentPlans.Service
     const events = yield* EventV2.Service
+    const { db } = yield* Database.Service
     const activityRef = yield* Ref.make(new Map<string, Array<{ from: string; at: number }>>())
+    const costCacheRef = yield* Ref.make(new Map<string, CostCacheEntry>())
+    const trackedParentsRef = yield* Ref.make(new Set<SessionSchema.ID>())
 
     const status = Effect.fn("MeshCoordinator.status")(function* (parentSessionID: SessionSchema.ID) {
       const peers = yield* bus.peers(parentSessionID)
       const recent = (yield* Ref.get(activityRef)).get(parentSessionID) ?? []
       const cutoff = Date.now() - ACTIVITY_WINDOW_MS
+      const now = Date.now()
+      const cache = yield* Ref.get(costCacheRef)
+
+      const enrichedPeers = yield* Effect.forEach(peers, (peer) =>
+        Effect.gen(function* () {
+          const cacheKey = `${peer.sessionID}:${peer.agent}`
+          const cached = cache.get(cacheKey)
+          if (cached && now - cached.computedAt <= COST_CACHE_TTL_MS) {
+            return {
+              ...peer,
+              cost: cached.cost,
+              tokens: cached.tokens,
+              lastActivityAt: cached.lastActivityAt,
+              blockedReason: peer.status === "disconnected" ? cached.blockedReason : undefined,
+            }
+          }
+
+          const computed = yield* computePeerCost(peer.sessionID, peer.agent, db)
+
+          if (computed) {
+            const entry: CostCacheEntry = { ...computed, computedAt: now }
+            yield* Ref.update(costCacheRef, (c) => {
+              const next = new Map(c)
+              next.set(cacheKey, entry)
+              return next
+            })
+            return {
+              ...peer,
+              cost: computed.cost,
+              tokens: computed.tokens,
+              lastActivityAt: computed.lastActivityAt,
+            }
+          }
+
+          return peer
+        }),
+      )
+
+      const nativeChildren = yield* listNativeChildren(parentSessionID, db)
+      const nativeChildCutoff = now - NATIVE_CHILD_RECENT_MS
+      const nativePeers: MeshStatus["peers"] = nativeChildren.map((row) => {
+        const lastSeen = Math.max(row.time_updated, row.time_created)
+        const status: "active" | "idle" | "disconnected" =
+          lastSeen >= nativeChildCutoff ? "active" : "idle"
+        return {
+          sessionID: row.id,
+          agent: row.agent ?? "subagent",
+          status,
+          lastSeenAt: lastSeen,
+        }
+      })
+
+      const busSessionIDs = new Set(enrichedPeers.map((p) => p.sessionID))
+      const mergedPeers: MeshStatus["peers"] = [
+        ...enrichedPeers,
+        ...nativePeers.filter((p) => !busSessionIDs.has(p.sessionID)),
+      ]
+
       return {
         parentSessionID,
-        peers,
+        peers: mergedPeers,
         pendingMessages: 0,
         recentActivity: recent.filter((a) => a.at >= cutoff),
       }
@@ -242,12 +395,40 @@ export const layer = Layer.effect(
       } as const
     })
 
-    return Service.of({ status, drain, watch, subscribe, checkin, steer, kill, planFor, tryReserveSubagentSlot })
+    const trackParent: Interface["trackParent"] = Effect.fn("MeshCoordinator.trackParent")(function* (
+      parentSessionID: SessionSchema.ID,
+    ) {
+      yield* Ref.update(trackedParentsRef, (set) => {
+        const next = new Set(set)
+        next.add(parentSessionID)
+        return next
+      })
+    })
+
+    const listTrackedParents: Interface["listTrackedParents"] = Effect.fn(
+      "MeshCoordinator.listTrackedParents",
+    )(function* () {
+      return Array.from(yield* Ref.get(trackedParentsRef))
+    })
+
+    return Service.of({
+      status,
+      drain,
+      watch,
+      subscribe,
+      checkin,
+      steer,
+      kill,
+      planFor,
+      tryReserveSubagentSlot,
+      trackParent,
+      listTrackedParents,
+    })
   }),
 )
 
 export const defaultLayer = layer.pipe(
   Layer.provide(SubagentBus.defaultLayer),
   Layer.provide(SubagentPlans.defaultLayer),
-  Layer.provide(MaxSubagents.defaultLayer),
+  Layer.provide(Database.defaultLayer),
 )

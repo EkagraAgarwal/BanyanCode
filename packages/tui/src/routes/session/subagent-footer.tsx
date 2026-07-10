@@ -71,7 +71,7 @@ export function SubagentFooter() {
         paddingLeft={2}
         paddingRight={1}
         {...SplitBorder}
-        border={["left"]}
+        border={["left", "right", "top", "bottom"]}
         borderColor={theme.border}
         flexShrink={0}
         backgroundColor={theme.backgroundPanel}

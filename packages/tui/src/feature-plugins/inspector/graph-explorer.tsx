@@ -152,7 +152,7 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
 
   return (
     <box>
-      <text fg={toHex(theme().text)} marginBottom={1}><b>GRAPH EXPLORER</b></text>
+      <text fg={toHex(theme().text)} marginBottom={1}>GRAPH EXPLORER</text>
       <box flexDirection="row" gap={1} marginBottom={1}>
         <For each={tabs}>{(tab) => {
           const isActive = () => activeLayer() === tab.name

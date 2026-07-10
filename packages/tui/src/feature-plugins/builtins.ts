@@ -1,20 +1,18 @@
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import HomeFooter from "./home/footer"
 import HomeTips from "./home/tips"
+import SidebarAgents from "./sidebar/agents"
+import SidebarPerformance from "./sidebar/performance"
 import SidebarContext from "./sidebar/context"
 import SidebarFiles from "./sidebar/files"
 import SidebarFooter from "./sidebar/footer"
-import SidebarLsp from "./sidebar/lsp"
 import SidebarMcp from "./sidebar/mcp"
-import SidebarAgentTree from "./sidebar/agent-tree"
-import SidebarTodo from "./sidebar/todo"
 import InspectorAgentDetails from "./inspector/agent-details"
-import InspectorGraphExplorer from "./inspector/graph-explorer"
-import InspectorPendingActions from "./inspector/pending-actions"
-import SidebarCodegraphPanel from "./sidebar/codegraph-panel"
-import SidebarCodegraphIntelPanel from "./sidebar/codegraph-intel-panel"
+import InspectorTodo from "./inspector/todo"
+import InspectorAgentActivity from "./inspector/agent-activity"
 import SidebarSystemStatus from "./sidebar/system-status"
 import SessionFooter from "./footer/session-footer"
+import AttentionStrip from "../component/attention-strip"
 import HeaderBrand from "./header/brand"
 import HeaderStatusPills from "./header/status-pills"
 import HeaderKeybindingHints from "./header/keybinding-hints"
@@ -23,7 +21,6 @@ import Notifications from "./system/notifications"
 import PluginManager from "./system/plugins"
 import WhichKey from "./system/which-key"
 import TabBar from "./tabs/tab-bar"
-import TabGraph from "./tabs/tab-graph"
 import TabMemory from "./tabs/tab-memory"
 import TabAgents from "./tabs/tab-agents"
 import TabSettings from "./tabs/tab-settings"
@@ -39,20 +36,18 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
   return [
     HomeFooter,
     HomeTips,
+    SidebarAgents,
+    SidebarPerformance,
     SidebarContext,
-    SidebarCodegraphPanel,
-    SidebarCodegraphIntelPanel,
     SidebarSystemStatus,
     SidebarMcp,
-    SidebarAgentTree,
-    SidebarLsp,
-    SidebarTodo,
-    InspectorAgentDetails,
-    InspectorGraphExplorer,
-    InspectorPendingActions,
     SidebarFiles,
     SidebarFooter,
+    InspectorAgentDetails,
+    InspectorTodo,
+    InspectorAgentActivity,
     SessionFooter,
+    AttentionStrip,
     HeaderBrand,
     HeaderStatusPills,
     HeaderKeybindingHints,
@@ -61,11 +56,9 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     WhichKey,
     DiffViewer,
     TabBar,
-    TabGraph,
     TabMemory,
     TabAgents,
     TabSessions,
     TabSettings,
   ]
 }
-

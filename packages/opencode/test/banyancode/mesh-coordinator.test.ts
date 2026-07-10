@@ -90,4 +90,18 @@ describe("mesh-coordinator", () => {
       expect(status.parentSessionID).toBe("ses_mesh")
     }),
   )
+
+  it.effect("trackParent + listTrackedParents round-trip", () =>
+    Effect.gen(function* () {
+      const svc = yield* MeshCoordinator.Service
+      yield* svc.trackParent(SessionSchema.ID.make("ses_track_1"))
+      yield* svc.trackParent(SessionSchema.ID.make("ses_track_2"))
+      yield* svc.trackParent(SessionSchema.ID.make("ses_track_1"))
+      const parents = yield* svc.listTrackedParents()
+      expect([...parents].sort()).toEqual([
+        SessionSchema.ID.make("ses_track_1"),
+        SessionSchema.ID.make("ses_track_2"),
+      ])
+    }),
+  )
 })

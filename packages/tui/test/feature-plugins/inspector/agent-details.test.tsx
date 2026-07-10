@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, test } from "bun:test"
+import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import { onMount } from "solid-js"
 import InspectorAgentDetails from "../../../src/feature-plugins/inspector/agent-details"
@@ -11,10 +11,10 @@ import { KVProvider } from "../../../src/context/kv"
 import { TuiConfigProvider } from "../../../src/config"
 import { SDKProvider } from "../../../src/context/sdk"
 import { createEventSource, createFetch, directory } from "../../fixture/tui-sdk"
-import { ArgsProvider } from "../../../src/context/args"
-import { ProjectProvider } from "../../../src/context/project"
 import { SyncProvider } from "../../../src/context/sync"
+import { ProjectProvider } from "../../../src/context/project"
 import { ExitProvider } from "../../../src/context/exit"
+import { ArgsProvider } from "../../../src/context/args"
 
 const stubTheme = {
   text: { r: 200, g: 200, b: 200, a: 1 },
@@ -24,16 +24,16 @@ const stubTheme = {
   success: { r: 100, g: 200, b: 100, a: 1 },
   error: { r: 200, g: 100, b: 100, a: 1 },
   warning: { r: 200, g: 200, b: 100, a: 1 },
+  accent: { r: 150, g: 150, b: 150, a: 1 },
+  info: { r: 100, g: 100, b: 100, a: 1 },
 }
 
-test("agent-details session_inspector slot renders without throwing", async () => {
+test("inspector agent-details session_inspector slot renders with session data", async () => {
   const events = createEventSource()
   const calls = createFetch()
   const config = createTuiResolvedConfig()
   let done: () => void
-  const ready = new Promise<void>((r) => {
-    done = r
-  })
+  const ready = new Promise<void>((r) => { done = r })
 
   function Inner() {
     const api: any = {
@@ -52,12 +52,9 @@ test("agent-details session_inspector slot renders without throwing", async () =
     return <box />
   }
 
-  // TestTuiContexts provides TuiPathsProvider > TuiTerminalEnvironmentProvider > TuiStartupProvider
-  // ExitProvider must be inside TestTuiContexts because SyncProvider.init calls useExit()
-  // ExitProvider must wrap SyncProvider (inside TestTuiContexts)
-  const app = await testRender(() => (
-    <TestTuiContexts>
-      <ExitProvider exit={console.error}>
+  const testSetup = await testRender(() => (
+    <ExitProvider exit={console.error}>
+      <TestTuiContexts>
         <ArgsProvider>
           <KVProvider>
             <SDKProvider url="http://test" directory={directory} fetch={calls.fetch} events={events.source}>
@@ -73,16 +70,23 @@ test("agent-details session_inspector slot renders without throwing", async () =
             </SDKProvider>
           </KVProvider>
         </ArgsProvider>
-      </ExitProvider>
-    </TestTuiContexts>
-  ))
+      </TestTuiContexts>
+    </ExitProvider>
+  ), { width: 40, height: 50 })
 
   await ready
-  await new Promise((r) => setTimeout(r, 200))
-  await app.renderOnce()
+  await testSetup.renderOnce()
+  await new Promise((r) => setTimeout(r, 0))
+  await testSetup.renderOnce()
+  const snapshot = testSetup
+    .captureCharFrame()
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trimEnd()
   try {
-    expect(true).toBe(true)
+    expect(snapshot).toMatchSnapshot()
   } finally {
-    app.renderer.destroy()
+    testSetup.renderer.destroy()
   }
 })

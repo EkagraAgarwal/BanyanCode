@@ -152,17 +152,21 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
 
   const session = createMemo(() => sync.data.session.find((s) => s.id === props.request.sessionID))
 
+  const tool = createMemo(() => props.request.tool ?? (props.request as any).source)
   const input = createMemo(() => {
-    const tool = props.request.tool
-    if (!tool) return {}
-    const parts = sync.data.part[tool.messageID] ?? []
+    const t = tool()
+    if (!t) return {}
+    const parts = sync.data.part[t.messageID] ?? []
     for (const part of parts) {
-      if (part.type === "tool" && part.callID === tool.callID && part.state.status !== "pending") {
+      if (part.type === "tool" && part.callID === t.callID && part.state.status !== "pending") {
         return part.state.input ?? {}
       }
     }
     return {}
   })
+
+  const always = createMemo(() => props.request.always ?? (props.request as any).save)
+  const permission = createMemo(() => props.request.permission ?? (props.request as any).action)
 
   const { theme } = useTheme()
 
@@ -173,14 +177,14 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           title="Always allow"
           body={
             <Switch>
-              <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
-                <TextBody title={"This will allow " + props.request.permission + " until OpenCode is restarted."} />
+              <Match when={always() && always().length === 1 && always()[0] === "*"}>
+                <TextBody title={"This will allow " + permission() + " until OpenCode is restarted."} />
               </Match>
               <Match when={true}>
                 <box paddingLeft={1} gap={1}>
                   <text fg={theme.textMuted}>This will allow the following patterns until OpenCode is restarted</text>
                   <box>
-                    <For each={props.request.always}>
+                    <For each={always() ?? []}>
                       {(pattern) => (
                         <text fg={theme.text}>
                           {"- "}
@@ -198,11 +202,10 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           onSelect={(option) => {
             setStore("stage", "permission")
             if (option === "cancel") return
-            void sdk.client.permission.reply({
-              reply: "always",
+            void sdk.client.v2.session.permission.reply({
+              sessionID: props.request.sessionID,
               requestID: props.request.id,
-              directory: props.directory,
-              workspace: project.workspace.current(),
+              reply: "always",
             })
           }}
         />
@@ -210,12 +213,11 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
       <Match when={store.stage === "reject"}>
         <RejectPrompt
           onConfirm={(message) => {
-            void sdk.client.permission.reply({
-              reply: "reject",
+            void sdk.client.v2.session.permission.reply({
+              sessionID: props.request.sessionID,
               requestID: props.request.id,
-              directory: props.directory,
+              reply: "reject",
               message: message || undefined,
-              workspace: project.workspace.current(),
             })
           }}
           onCancel={() => {
@@ -226,10 +228,10 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
       <Match when={store.stage === "permission"}>
         {(() => {
           const info = () => {
-            const permission = props.request.permission
+            const actionName = permission()
             const data = input()
 
-            if (permission === "edit") {
+            if (actionName === "edit") {
               const raw = props.request.metadata?.filepath
               const filepath = typeof raw === "string" ? raw : ""
               return {
@@ -239,7 +241,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
-            if (permission === "read") {
+            if (actionName === "read") {
               const raw = data.filePath
               const filePath = typeof raw === "string" ? raw : ""
               return {
@@ -255,7 +257,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
-            if (permission === "glob") {
+            if (actionName === "glob") {
               const pattern = typeof data.pattern === "string" ? data.pattern : ""
               return {
                 icon: "✱",
@@ -270,7 +272,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
-            if (permission === "grep") {
+            if (actionName === "grep") {
               const pattern = typeof data.pattern === "string" ? data.pattern : ""
               return {
                 icon: "✱",
@@ -285,7 +287,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
-            if (permission === "list") {
+            if (actionName === "list") {
               const raw = data.path
               const dir = typeof raw === "string" ? raw : ""
               return {
@@ -301,7 +303,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
-            if (permission === "bash") {
+            if (actionName === "bash") {
               const title =
                 typeof data.description === "string" && data.description ? data.description : "Shell command"
               const command = typeof data.command === "string" ? data.command : ""
@@ -318,7 +320,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
-            if (permission === "task") {
+            if (actionName === "task") {
               const type = typeof data.subagent_type === "string" ? data.subagent_type : "Unknown"
               const desc = typeof data.description === "string" ? data.description : ""
               return {
@@ -334,7 +336,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
-            if (permission === "webfetch") {
+            if (actionName === "webfetch") {
               const url = typeof data.url === "string" ? data.url : ""
               return {
                 icon: "%",
@@ -349,7 +351,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
-            if (permission === "websearch") {
+            if (actionName === "websearch") {
               const query = typeof data.query === "string" ? data.query : ""
               return {
                 icon: "◈",
@@ -364,17 +366,18 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
-            if (permission === "external_directory") {
+            if (actionName === "external_directory") {
               const meta = props.request.metadata ?? {}
               const parent = typeof meta["parentDir"] === "string" ? meta["parentDir"] : undefined
               const filepath = typeof meta["filepath"] === "string" ? meta["filepath"] : undefined
-              const pattern = props.request.patterns?.[0]
+              const patternsRaw = props.request.patterns ?? (props.request as any).resources ?? []
+              const pattern = patternsRaw[0]
               const derived =
                 typeof pattern === "string" ? (pattern.includes("*") ? dirname(pattern) : pattern) : undefined
 
               const raw = parent ?? filepath ?? derived
               const dir = pathFormatter.format(raw)
-              const patterns = (props.request.patterns ?? []).filter((p): p is string => typeof p === "string")
+              const patterns = patternsRaw.filter((p: any): p is string => typeof p === "string")
 
               return {
                 icon: "←",
@@ -392,7 +395,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
-            if (permission === "doom_loop") {
+            if (actionName === "doom_loop") {
               return {
                 icon: "⟳",
                 title: "Continue after repeated failures",
@@ -406,10 +409,10 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
 
             return {
               icon: "⚙",
-              title: `Call tool ${permission}`,
+              title: `Call tool ${actionName}`,
               body: (
                 <box paddingLeft={1}>
-                  <text fg={theme.textMuted}>{"Tool: " + permission}</text>
+                  <text fg={theme.textMuted}>{"Tool: " + actionName}</text>
                 </box>
               ),
             }
@@ -437,7 +440,11 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               title="Permission required"
               header={header()}
               body={current.body}
-              options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
+              options={
+                always() && always().length > 0
+                  ? { once: "Allow once", always: "Allow always", reject: "Reject" }
+                  : { once: "Allow once", reject: "Reject" }
+              }
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {
@@ -450,19 +457,17 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                     setStore("stage", "reject")
                     return
                   }
-                  void sdk.client.permission.reply({
-                    reply: "reject",
+                  void sdk.client.v2.session.permission.reply({
+                    sessionID: props.request.sessionID,
                     requestID: props.request.id,
-                    directory: props.directory,
-                    workspace: project.workspace.current(),
+                    reply: "reject",
                   })
                   return
                 }
-                void sdk.client.permission.reply({
-                  reply: "once",
+                void sdk.client.v2.session.permission.reply({
+                  sessionID: props.request.sessionID,
                   requestID: props.request.id,
-                  directory: props.directory,
-                  workspace: project.workspace.current(),
+                  reply: "once",
                 })
               }}
             />

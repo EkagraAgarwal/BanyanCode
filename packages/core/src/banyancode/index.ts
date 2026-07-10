@@ -123,3 +123,7 @@ export * as MeshSubscribeTool from "../tool/mesh-subscribe"
 export * as ToolCatalog from "../tool/tool-catalog"
 export { defaultLayer as toolCatalogDefaultLayer } from "../tool/tool-catalog"
 export { defaultLayer as toolRegistryDefaultLayer } from "../tool/registry"
+export {
+  Service as BanyanFilesystemService,
+  defaultLayer as banyanFilesystemDefaultLayer,
+} from "./filesystem"

@@ -302,3 +302,61 @@ describe("code-substring short-name bypass", () => {
     expect(ok.value.node.fileID).toBe("fA")
   })
 })
+
+describe("regression: tool resolution consistency (PR D)", () => {
+  // The user reported 2026-07-08 that `preflight` returned "no target
+  // found" for `MemoryRepo.put` while `blast_radius` correctly resolved
+  // the same target and reported 9,930 transitive callers. Root cause was
+  // that `preflight` (and `safe_rename`) used a separate
+  // `intel.symbols` resolver while `blast_radius` and `code_find` use
+  // the shared `resolveGraphTargetPure` resolver. Now both paths go
+  // through the shared resolver; this regression test verifies the
+  // case that previously failed.
+  const seedMemoryRepoPut = Effect.gen(function* () {
+    yield* seedEffect
+    const repo = yield* CodegraphRepo.Service
+    yield* repo.writeFileGraph({
+      file: { id: "fA", path: "src/memory.ts", contentHash: "h1", language: "typescript", indexedAt: 1 },
+      nodes: [
+        {
+          id: "fA:n1",
+          fileID: "fA",
+          kind: "class",
+          name: "MemoryRepo",
+          signature: "class MemoryRepo extends Context.Service",
+          startLine: 1,
+          endLine: 30,
+          code: "class MemoryRepo extends Context.Service<MemoryRepo, Interface>()('@opencode/v2/Banyan/MemoryRepo') {}",
+        },
+        {
+          id: "fA:n2",
+          fileID: "fA",
+          kind: "method",
+          name: "put",
+          signature: "put(): Effect<void>",
+          startLine: 5,
+          endLine: 15,
+          code: "put() {}",
+        },
+      ],
+      edges: [],
+    })
+  })
+
+  test("MemoryRepo.put resolves via the shared resolver (a tag-fallback also works)", async () => {
+    const result = await withTmpDb((dbLayer) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* seedMemoryRepoPut
+          const repo = yield* CodegraphRepo.Service
+          return yield* resolveGraphTargetPure(repo as never, { target: "MemoryRepo.put" })
+        }),
+      ),
+    )
+    // Either tag-fallback (since we provided a Context.Service tag for
+    // MemoryRepo and the put method is a child node in the same file) or
+    // qualified-split works. The key invariant is Ok, not the specific
+    // derivation, because the resolver picks the first hit in priority order.
+    expect(result._tag).toBe("Ok")
+  })
+})

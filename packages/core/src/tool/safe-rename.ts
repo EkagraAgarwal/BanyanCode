@@ -8,6 +8,7 @@ import type { Interface as RepositoryIntelligenceInterface } from "../banyancode
 import type { Interface as EditPlannerInterface } from "../banyancode/edit-planner"
 import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan } from "../banyancode"
+import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
 import { traced } from "../observability/trace"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
@@ -138,8 +139,8 @@ export const computeSafeRename = (
       return yield* Effect.fail(new ToolFailure({ message: reason.message }))
     }
 
-    const targetNodeResult = (yield* deps.intel.symbols({ query: input.symbol })) as Array<Banyan.CodegraphNode>
-    const targetNode = targetNodeResult[0]
+    const resolution = yield* resolveGraphTargetPure(deps.repo, { target: input.symbol })
+    const targetNode = resolution._tag === "Ok" ? resolution.value.node : undefined
     const oldLeaf = input.symbol.split(".").pop() ?? input.symbol
     const newLeaf = split.leaf
     const newNamespace = split.namespace

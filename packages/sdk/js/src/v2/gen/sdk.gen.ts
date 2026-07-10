@@ -80,6 +80,8 @@ import type {
   FileReadResponses,
   FileStatusErrors,
   FileStatusResponses,
+  FileTreeErrors,
+  FileTreeResponses,
   FindFilesErrors,
   FindFilesResponses,
   FindSymbolsErrors,
@@ -249,6 +251,8 @@ import type {
   SessionInitResponses,
   SessionListErrors,
   SessionListResponses,
+  SessionMeshErrors,
+  SessionMeshResponses,
   SessionMessageErrors,
   SessionMessageResponses,
   SessionMessagesErrors,
@@ -2595,6 +2599,40 @@ export class File extends HeyApiClient {
       ...params,
     })
   }
+
+  /**
+   * Get file tree
+   *
+   * Get a recursive tree of files and directories.
+   */
+  public tree<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      path?: string
+      depth?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "path" },
+            { in: "query", key: "depth" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<FileTreeResponses, FileTreeErrors, ThrowOnError>({
+      url: "/file/tree",
+      ...options,
+      ...params,
+    })
+  }
 }
 
 export class Instance extends HeyApiClient {
@@ -4343,6 +4381,38 @@ export class Session2 extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<SessionTodoResponses, SessionTodoErrors, ThrowOnError>({
       url: "/session/{sessionID}/todo",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get mesh status
+   *
+   * Retrieve the current mesh status for a session, including subagent peer information and cost.
+   */
+  public mesh<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<SessionMeshResponses, SessionMeshErrors, ThrowOnError>({
+      url: "/session/{sessionID}/mesh",
       ...options,
       ...params,
     })

@@ -21,5 +21,5 @@ export const applySystemMonitorBridge = Effect.gen(function* () {
     }
   })
 
-  yield* Effect.forkIn(work, yield* Effect.scope)
+  yield* Effect.forkDetach(work)
 })

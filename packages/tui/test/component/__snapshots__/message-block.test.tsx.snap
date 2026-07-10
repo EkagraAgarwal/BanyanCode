@@ -1,0 +1,57 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`MessageBlock mode=plan renders plan label 1`] = `
+"                                                                                
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│  Planning next step                                                          │
+│                                                                              │
+│  Plan details here                                                           │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+"
+`;
+
+exports[`MessageBlock mode=diff with permission link renders approve/reject actions 1`] = `
+"                                                                                
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│  Changes                                                                     │
+│  Diff content                                                                │
+│                                                                              │
+│    ╭───────────╮  ╭──────────╮  ╭──────────────────╮                         │
+│    ╰ ✓ approve ╯  ╰ ✕ reject ╯  ╰ ⓘ view full diff ╯                         │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+"
+`;
+
+exports[`MessageBlock mode=diff without permission link renders view diff action 1`] = `
+"                                                                                
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│  Changes                                                                     │
+│  Diff content                                                                │
+│                                                                              │
+│    ╭──────────────────╮                                                      │
+│    ╰ ⓘ view full diff ╯                                                      │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+"
+`;
+
+exports[`MessageBlock mode=tool renders tool label 1`] = `
+"                                                                                
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│  Tool: bash                                                                  │
+│                                                                              │
+│  Tool output                                                                 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+"
+`;

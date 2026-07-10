@@ -21,7 +21,7 @@ import { useRoute, useRouteData } from "../../context/route"
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
 import { useEvent } from "../../context/event"
-import { SplitBorder } from "../../ui/border"
+import { SplitBorder, RoundedBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { Spinner } from "../../component/spinner"
 import { createSyntaxStyleMemo, generateSubtleSyntax, selectedForeground, useTheme } from "../../context/theme"
@@ -60,6 +60,7 @@ import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
 import { Toast, useToast } from "../../ui/toast"
 import { CodegraphProgress } from "../../component/codegraph-progress"
+import { MessageBlock } from "../../component/message-block"
 import { ResizableSeparator } from "../../component/resizable-separator"
 import { useKV } from "../../context/kv.tsx"
 import stripAnsi from "strip-ansi"
@@ -1197,9 +1198,10 @@ export function Session() {
         }}
       >
         <box flexDirection="column" flexGrow={1} minHeight={0}>
-          <box flexShrink={0} flexDirection="row" justifyContent="space-between" width="100%">
+          <box flexShrink={0} flexDirection="row" justifyContent="space-between" width="100%" gap={1}>
             <pluginRuntime.Slot name="app_top" session_id={route.sessionID} />
           </box>
+          <pluginRuntime.Slot name="session_attention_strip" session_id={route.sessionID} />
           <box flexDirection="row" flexGrow={1} minHeight={0}>
             <Show when={sidebarVisible()}>
               <Switch>
@@ -1233,7 +1235,7 @@ export function Session() {
                   if (newWidthPct < 15) {
                     setLeftCollapsed(true)
                   } else {
-                    const clamped = Math.max(15, Math.min(45, newWidthPct))
+                    const clamped = Math.max(18, Math.min(38, newWidthPct))
                     setLeftSidebarWidth(() => clamped)
                   }
                 }}
@@ -1289,16 +1291,16 @@ export function Session() {
                               }
 
                               return (
-                                <box
-                                  onMouseOver={() => setHover(true)}
-                                  onMouseOut={() => setHover(false)}
-                                  onMouseUp={handleUnrevert}
-                                  marginTop={1}
-                                  flexShrink={0}
-                                  border={["left"]}
-                                  customBorderChars={SplitBorder.customBorderChars}
-                                  borderColor={theme.backgroundPanel}
-                                >
+                              <box
+                                onMouseOver={() => setHover(true)}
+                                onMouseOut={() => setHover(false)}
+                                onMouseUp={handleUnrevert}
+                                marginTop={1}
+                                flexShrink={0}
+                                border={["left"]}
+                                customBorderChars={SplitBorder.customBorderChars}
+                                borderColor={theme.backgroundPanel}
+                              >
                                   <box
                                     paddingTop={1}
                                     paddingBottom={1}
@@ -1369,11 +1371,6 @@ export function Session() {
                     <pluginRuntime.Slot name="session_tab_sessions" />
                   </box>
                 </Match>
-                <Match when={activeTab() === "graph"}>
-                  <box flexGrow={1} minHeight={0} flexDirection="column">
-                    <pluginRuntime.Slot name="session_tab_graph" />
-                  </box>
-                </Match>
                 <Match when={activeTab() === "memory"}>
                   <box flexGrow={1} minHeight={0} flexDirection="column">
                     <pluginRuntime.Slot name="session_tab_memory" />
@@ -1402,9 +1399,6 @@ export function Session() {
                     request={questions()[0]}
                     directory={sync.session.get(questions()[0].sessionID)?.directory}
                   />
-                </Show>
-                <Show when={session()?.parentID}>
-                  <SubagentFooter />
                 </Show>
                 <Show when={visible()}>
                   <pluginRuntime.Slot
@@ -1442,15 +1436,30 @@ export function Session() {
                   if (newWidthPct < 15) {
                     setRightCollapsed(true)
                   } else {
-                    const clamped = Math.max(15, Math.min(45, newWidthPct))
+                    const clamped = Math.max(18, Math.min(34, newWidthPct))
                     setRightSidebarWidth(() => clamped)
                   }
                 }}
                 initialWidthPct={rightSidebarWidth}
                 side="right"
               />
-              <box width={`${rightSidebarWidth()}%`} flexShrink={0}>
-                <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
+              <box
+                width={`${rightSidebarWidth()}%`}
+                flexShrink={0}
+                marginTop={1}
+                marginBottom={1}
+                customBorderChars={RoundedBorder.customBorderChars}
+                border={["left", "right", "top", "bottom"]}
+                borderColor={theme.borderSubtle}
+              >
+                <box
+                  backgroundColor={theme.backgroundPanel}
+                  width="100%"
+                  height="100%"
+                  flexDirection="column"
+                >
+                  <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
+                </box>
               </box>
             </Show>
           </box>
@@ -1663,13 +1672,12 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
       <Show when={props.message.error && props.message.error.name !== "MessageAbortedError"}>
         <box
           border={["left"]}
-          paddingTop={1}
-          paddingBottom={1}
+          paddingTop={0}
+          paddingBottom={0}
           paddingLeft={2}
           marginTop={1}
-          backgroundColor={theme.backgroundPanel}
           customBorderChars={SplitBorder.customBorderChars}
-          borderColor={theme.error}
+          borderColor={theme.borderSubtle}
         >
           <text fg={theme.textMuted}>{props.message.error?.data.message}</text>
         </box>
@@ -1816,14 +1824,21 @@ function ReasoningHeader(props: {
 function TextPart(props: { last: boolean; part: TextPart; message: AssistantMessage }) {
   const ctx = use()
   const { theme, syntax } = useTheme()
+  const content = createMemo(() => {
+    const text = props.part.text.trim()
+    if (text.startsWith("</think>")) {
+      return text.slice(8).trim()
+    }
+    return text
+  })
   return (
-    <Show when={props.part.text.trim()}>
+    <Show when={content()}>
       <box id={"text-" + props.part.id} paddingLeft={3} marginTop={1} flexShrink={0}>
         <markdown
           syntaxStyle={syntax()}
           streaming={true}
           internalBlockMode="top-level"
-          content={props.part.text.trim()}
+          content={content()}
           tableOptions={{ style: "grid" }}
           conceal={ctx.conceal()}
           fg={theme.markdownText}
@@ -2230,27 +2245,46 @@ function Shell(props: ToolProps) {
 }
 
 function Write(props: ToolProps) {
+  const ctx = use()
   const { theme, syntax } = useTheme()
   const pathFormatter = usePathFormatter()
+
+  const linkedAsk = createMemo(() => {
+    const requests = ctx.sync.data.permission[ctx.sessionID]
+    if (!requests) return undefined
+    return requests.find((req) => req.tool?.messageID === props.part.messageID)
+  })
+  const hasPermissionLink = createMemo(() => linkedAsk() !== undefined)
+  const permissionRequestID = createMemo(() => linkedAsk()?.id)
+
   const code = createMemo(() => {
     return stringValue(props.input.content) ?? ""
   })
 
+  const label = createMemo(() => `Diff · ${pathFormatter.format(stringValue(props.input.filePath) ?? "")}`)
+
   return (
     <Switch>
       <Match when={props.metadata.diagnostics !== undefined}>
-        <BlockTool title={"# Wrote " + pathFormatter.format(stringValue(props.input.filePath))} part={props.part}>
-          <line_number fg={theme.textMuted} minWidth={3} paddingRight={1}>
-            <code
-              conceal={false}
-              fg={theme.text}
-              filetype={filetype(stringValue(props.input.filePath))}
-              syntaxStyle={syntax()}
-              content={code()}
-            />
-          </line_number>
-          <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.filePath) ?? ""} />
-        </BlockTool>
+        <MessageBlock
+          mode="diff"
+          label={label()}
+          hasPermissionLink={hasPermissionLink()}
+          permissionRequestID={permissionRequestID()}
+        >
+          <BlockTool title={"# Wrote " + pathFormatter.format(stringValue(props.input.filePath))} part={props.part}>
+            <line_number fg={theme.textMuted} minWidth={3} paddingRight={1}>
+              <code
+                conceal={false}
+                fg={theme.text}
+                filetype={filetype(stringValue(props.input.filePath))}
+                syntaxStyle={syntax()}
+                content={code()}
+              />
+            </line_number>
+            <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.filePath) ?? ""} />
+          </BlockTool>
+        </MessageBlock>
       </Match>
       <Match when={true}>
         <InlineTool
@@ -2283,6 +2317,7 @@ function Read(props: ToolProps) {
   const { theme } = useTheme()
   const pathFormatter = usePathFormatter()
   const isRunning = createMemo(() => props.part.state.status === "running")
+  const isCompleted = createMemo(() => props.part.state.status === "completed")
   const loaded = createMemo(() => {
     if (props.part.state.status !== "completed") return []
     if (props.part.state.time.compacted) return []
@@ -2291,26 +2326,43 @@ function Read(props: ToolProps) {
     return value.filter((p): p is string => typeof p === "string")
   })
   return (
-    <>
-      <InlineTool
-        icon="→"
-        pending="Reading file..."
-        complete={stringValue(props.input.filePath)}
-        spinner={isRunning()}
-        part={props.part}
-      >
-        Read {pathFormatter.format(stringValue(props.input.filePath))} {input(props.input, ["filePath"])}
-      </InlineTool>
-      <For each={loaded()}>
-        {(filepath, index) => (
-          <box id={`tool-inline-loaded-${props.part.id}-${index()}`} paddingLeft={3}>
-            <text paddingLeft={3} fg={theme.textMuted}>
-              ↳ Loaded {pathFormatter.format(filepath)}
-            </text>
+    <Switch>
+      <Match when={isCompleted()}>
+        <MessageBlock mode="tool" label="TOOL CALL · read">
+          <box paddingLeft={1} paddingTop={0} paddingBottom={1}>
+            <InlineTool
+              icon="→"
+              pending="Reading file..."
+              complete={stringValue(props.input.filePath)}
+              spinner={isRunning()}
+              part={props.part}
+            >
+              Read {pathFormatter.format(stringValue(props.input.filePath))} {input(props.input, ["filePath"])}
+            </InlineTool>
+            <For each={loaded()}>
+              {(filepath, index) => (
+                <box id={`tool-inline-loaded-${props.part.id}-${index()}`} paddingLeft={3}>
+                  <text paddingLeft={3} fg={theme.textMuted}>
+                    ↳ Loaded {pathFormatter.format(filepath)}
+                  </text>
+                </box>
+              )}
+            </For>
           </box>
-        )}
-      </For>
-    </>
+        </MessageBlock>
+      </Match>
+      <Match when={true}>
+        <InlineTool
+          icon="→"
+          pending="Reading file..."
+          complete={stringValue(props.input.filePath)}
+          spinner={isRunning()}
+          part={props.part}
+        >
+          Read {pathFormatter.format(stringValue(props.input.filePath))} {input(props.input, ["filePath"])}
+        </InlineTool>
+      </Match>
+    </Switch>
   )
 }
 
@@ -2464,10 +2516,18 @@ function Edit(props: ToolProps) {
   const { theme, syntax } = useTheme()
   const pathFormatter = usePathFormatter()
 
+  const linkedAsk = createMemo(() => {
+    const requests = ctx.sync.data.permission[ctx.sessionID]
+    if (!requests) return undefined
+    return requests.find((req) => req.tool?.messageID === props.part.messageID)
+  })
+  const hasPermissionLink = createMemo(() => linkedAsk() !== undefined)
+  const permissionRequestID = createMemo(() => linkedAsk()?.id)
+  const label = createMemo(() => `Diff · ${pathFormatter.format(stringValue(props.input.filePath) ?? "")}`)
+
   const view = createMemo(() => {
     const diffStyle = ctx.tui.diff_style
     if (diffStyle === "stacked") return "unified"
-    // Default to "auto" behavior
     return ctx.width > 120 ? "split" : "unified"
   })
 
@@ -2478,30 +2538,37 @@ function Edit(props: ToolProps) {
   return (
     <Switch>
       <Match when={stringValue(props.metadata.diff) !== undefined}>
-        <BlockTool title={"← Edit " + pathFormatter.format(stringValue(props.input.filePath))} part={props.part}>
-          <box paddingLeft={1}>
-            <diff
-              diff={diffContent()}
-              view={view()}
-              filetype={ft()}
-              syntaxStyle={syntax()}
-              showLineNumbers={true}
-              width="100%"
-              wrapMode={ctx.diffWrapMode()}
-              fg={theme.text}
-              addedBg={theme.diffAddedBg}
-              removedBg={theme.diffRemovedBg}
-              contextBg={theme.diffContextBg}
-              addedSignColor={theme.diffHighlightAdded}
-              removedSignColor={theme.diffHighlightRemoved}
-              lineNumberFg={theme.diffLineNumber}
-              lineNumberBg={theme.diffContextBg}
-              addedLineNumberBg={theme.diffAddedLineNumberBg}
-              removedLineNumberBg={theme.diffRemovedLineNumberBg}
-            />
-          </box>
-          <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.filePath) ?? ""} />
-        </BlockTool>
+        <MessageBlock
+          mode="diff"
+          label={label()}
+          hasPermissionLink={hasPermissionLink()}
+          permissionRequestID={permissionRequestID()}
+        >
+          <BlockTool title={"← Edit " + pathFormatter.format(stringValue(props.input.filePath))} part={props.part}>
+            <box paddingLeft={1}>
+              <diff
+                diff={diffContent()}
+                view={view()}
+                filetype={ft()}
+                syntaxStyle={syntax()}
+                showLineNumbers={true}
+                width="100%"
+                wrapMode={ctx.diffWrapMode()}
+                fg={theme.text}
+                addedBg={theme.diffAddedBg}
+                removedBg={theme.diffRemovedBg}
+                contextBg={theme.diffContextBg}
+                addedSignColor={theme.diffHighlightAdded}
+                removedSignColor={theme.diffHighlightRemoved}
+                lineNumberFg={theme.diffLineNumber}
+                lineNumberBg={theme.diffContextBg}
+                addedLineNumberBg={theme.diffAddedLineNumberBg}
+                removedLineNumberBg={theme.diffRemovedLineNumberBg}
+              />
+            </box>
+            <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.filePath) ?? ""} />
+          </BlockTool>
+        </MessageBlock>
       </Match>
       <Match when={true}>
         <InlineTool icon="←" pending="Preparing edit..." complete={stringValue(props.input.filePath)} part={props.part}>
@@ -2516,6 +2583,14 @@ function ApplyPatch(props: ToolProps) {
   const ctx = use()
   const { theme, syntax } = useTheme()
   const pathFormatter = usePathFormatter()
+
+  const linkedAsk = createMemo(() => {
+    const requests = ctx.sync.data.permission[ctx.sessionID]
+    if (!requests) return undefined
+    return requests.find((req) => req.tool?.messageID === props.part.messageID)
+  })
+  const hasPermissionLink = createMemo(() => linkedAsk() !== undefined)
+  const permissionRequestID = createMemo(() => linkedAsk()?.id)
 
   const files = createMemo(() => parseApplyPatchFiles(props.metadata.files))
 
@@ -2558,24 +2633,36 @@ function ApplyPatch(props: ToolProps) {
     return "← Patched " + file.relativePath
   }
 
+  const patchLabel = createMemo(() => {
+    const count = files().length
+    return `Diff · ${count} file${count !== 1 ? "s" : ""}`
+  })
+
   return (
     <Switch>
       <Match when={files().length > 0}>
         <For each={files()}>
           {(file) => (
-            <BlockTool title={title(file)} part={props.part}>
-              <Show
-                when={file.type !== "delete"}
-                fallback={
-                  <text fg={theme.diffRemoved}>
-                    -{file.deletions} line{file.deletions !== 1 ? "s" : ""}
-                  </text>
-                }
-              >
-                <Diff diff={file.patch} filePath={file.filePath} />
-                <Diagnostics diagnostics={props.metadata.diagnostics} filePath={file.movePath ?? file.filePath} />
-              </Show>
-            </BlockTool>
+            <MessageBlock
+              mode="diff"
+              label={patchLabel()}
+              hasPermissionLink={hasPermissionLink()}
+              permissionRequestID={permissionRequestID()}
+            >
+              <BlockTool title={title(file)} part={props.part}>
+                <Show
+                  when={file.type !== "delete"}
+                  fallback={
+                    <text fg={theme.diffRemoved}>
+                      -{file.deletions} line{file.deletions !== 1 ? "s" : ""}
+                    </text>
+                  }
+                >
+                  <Diff diff={file.patch} filePath={file.filePath} />
+                  <Diagnostics diagnostics={props.metadata.diagnostics} filePath={file.movePath ?? file.filePath} />
+                </Show>
+              </BlockTool>
+            </MessageBlock>
           )}
         </For>
       </Match>
@@ -2590,14 +2677,17 @@ function ApplyPatch(props: ToolProps) {
 
 function TodoWrite(props: ToolProps) {
   const todos = createMemo(() => parseTodos(props.input.todos))
+  const isCompleted = createMemo(() => parseTodos(props.metadata.todos).length > 0)
   return (
     <Switch>
-      <Match when={parseTodos(props.metadata.todos).length}>
-        <BlockTool title="# Todos" part={props.part}>
-          <box>
-            <For each={todos()}>{(todo) => <TodoItem status={todo.status} content={todo.content} />}</For>
-          </box>
-        </BlockTool>
+      <Match when={isCompleted()}>
+        <MessageBlock mode="plan" label="PLAN · Todos">
+          <BlockTool title="# Todos" part={props.part}>
+            <box>
+              <For each={todos()}>{(todo) => <TodoItem status={todo.status} content={todo.content} />}</For>
+            </box>
+          </BlockTool>
+        </MessageBlock>
       </Match>
       <Match when={true}>
         <InlineTool icon="⚙" pending="Updating todos..." complete={false} part={props.part}>

@@ -83,6 +83,8 @@ interface ProcessorContext extends Input {
   currentTextID: string | undefined
   reasoningMap: Record<string, SessionV1.ReasoningPart>
   v2AssistantMessageID: SessionMessage.ID | undefined
+  stepStartedAt?: number
+  firstTextAt?: number
 }
 
 type StreamEvent = LLMEvent
@@ -681,6 +683,8 @@ export const layer = Layer.effect(
                 yield* ensureV2AssistantMessage()
               }
             }
+            ctx.stepStartedAt = Date.now()
+            ctx.firstTextAt = undefined
             yield* session.updatePart({
               id: PartID.ascending(),
               messageID: ctx.assistantMessage.id,
@@ -698,6 +702,16 @@ export const layer = Layer.effect(
               usage: value.usage ?? new Usage({}),
               metadata: value.providerMetadata,
             })
+            const now = Date.now()
+            const stepDurationMs = ctx.stepStartedAt !== undefined ? now - ctx.stepStartedAt : 0
+            const ttftMs =
+              ctx.firstTextAt !== undefined && ctx.stepStartedAt !== undefined
+                ? ctx.firstTextAt - ctx.stepStartedAt
+                : undefined
+            const tokensPerSecond =
+              stepDurationMs > 0 && usage.tokens.output > 0
+                ? (usage.tokens.output / stepDurationMs) * 1000
+                : undefined
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
@@ -708,9 +722,13 @@ export const layer = Layer.effect(
                   cost: usage.cost,
                   tokens: usage.tokens,
                   snapshot: completedSnapshot,
-                  timestamp: DateTime.makeUnsafe(Date.now()),
+                  timestamp: DateTime.makeUnsafe(now),
+                  ...(ttftMs !== undefined ? { ttftMs } : {}),
+                  ...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
                 })
                 ctx.v2AssistantMessageID = undefined
+                ctx.stepStartedAt = undefined
+                ctx.firstTextAt = undefined
               }
             }
             ctx.assistantMessage.finish = value.reason
@@ -768,6 +786,7 @@ export const layer = Layer.effect(
                 })
               }
             }
+            if (ctx.firstTextAt === undefined) ctx.firstTextAt = Date.now()
             ctx.currentText = {
               id: PartID.ascending(),
               messageID: ctx.assistantMessage.id,

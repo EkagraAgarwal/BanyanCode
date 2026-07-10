@@ -4,48 +4,38 @@ import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { useEvent } from "../../context/event"
 import { toHex } from "../../util/color"
+import { pillFill, type Severity } from "../../util/palette"
+import { RoundedBorder } from "../../ui/border"
 
 export * as HeaderStatusPills from "./status-pills"
 
 const id = "internal:header-status-pills"
 
-interface StalenessState {
-  isStale: boolean
-  reason?: string
-  lastChecked: number
-}
-
-
-
-function timeAgo(ts: number): string {
-  const diff = Date.now() - ts
-  const seconds = Math.floor(diff / 1000)
-  if (seconds < 60) return `${seconds}s ago`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
-}
-
 function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
-  const [staleness, setStaleness] = createSignal<StalenessState | null>(null)
   const [activeSessionCount, setActiveSessionCount] = createSignal<number>(0)
+  const [graphBuilt, setGraphBuilt] = createSignal<boolean>(false)
 
   const ev = useEvent()
-  const unsub = ev.on("banyancode.codegraph.staleness" as any, (event: any) => {
-    setStaleness({
-      isStale: event.properties.isStale,
-      reason: event.properties.reason,
-      lastChecked: event.properties.lastChecked,
-    })
-  })
-  onCleanup(unsub)
-
   const unsubSession = ev.on("session.updated" as any, () => refreshSessionCount())
   onCleanup(unsubSession)
+
+  const unsubGraph = ev.on("banyancode.codegraph.build" as any, (evt: any) => {
+    if (evt.properties?.status === "completed") {
+      setGraphBuilt(true)
+    }
+  })
+  onCleanup(unsubGraph)
+
+  const checkGraph = async () => {
+    try {
+      const nodesResult = await props.api.client.global.codegraph.nodes()
+      const hasNodes = (nodesResult.data?.nodes?.length ?? 0) > 0
+      setGraphBuilt(hasNodes)
+    } catch {
+      setGraphBuilt(false)
+    }
+  }
 
   const refreshSessionCount = async () => {
     try {
@@ -64,47 +54,42 @@ function View(props: { api: TuiPluginApi }) {
 
   onMount(() => {
     refreshSessionCount()
+    checkGraph()
   })
 
   const mcpList = createMemo(() => props.api.state.mcp())
   const mcpConnectedCount = createMemo(() => mcpList().filter((m) => m.status === "connected").length)
-  const mcpFirstConnected = createMemo(() => mcpList().find((m) => m.status === "connected")?.name ?? "")
+  const mcpFirstConnected = createMemo(() => mcpList().find((m: any) => m.status === "connected")?.name ?? "")
 
   const lspCount = createMemo(() => props.api.state.lsp().length)
 
-  const graphLabel = () => {
-    const s = staleness()
-    if (!s) return "Graph: not built"
-    if (s.isStale) return `Graph: ${s.reason ?? "stale"}`
-    return `Graph: Fresh (${timeAgo(s.lastChecked)})`
-  }
-
   const agentsLabel = () => `${activeSessionCount()} active`
   const mcpLabel = () => (mcpConnectedCount() > 0 ? `MCP: ${mcpFirstConnected()}` : "MCP: —")
-  const lspLabel = () => (lspCount() > 0 ? `LSP: ${lspCount()} server${lspCount() !== 1 ? "s" : ""}` : "LSP: Disabled")
+  const lspLabel = () => (lspCount() > 0 ? `LSP: ${lspCount()}` : "LSP: off")
+  const graphLabel = () => (graphBuilt() ? "Graph: built" : "Graph: off")
 
-  const dotColor = (active: boolean) => active ? toHex(theme().success) : toHex(theme().textMuted)
+  const agentsDotColor = () => (activeSessionCount() > 0 ? toHex(theme().success) : toHex(theme().textMuted))
+  const mcpDotColor = () => (mcpConnectedCount() > 0 ? toHex(theme().success) : toHex(theme().error))
+  const lspDotColor = () => (lspCount() > 0 ? toHex(theme().success) : toHex(theme().error))
+  const graphDotColor = () => (graphBuilt() ? toHex(theme().success) : toHex(theme().error))
 
   return (
-    <box flexDirection="row" gap={2}>
-      <box flexDirection="row" gap={0}>
-        <text fg={dotColor(activeSessionCount() > 0)}>●</text>
-        <text fg={toHex(theme().textMuted)}> {agentsLabel()}</text>
+    <box flexDirection="row" gap={2} alignItems="center">
+      <box flexDirection="row" flexShrink={0} gap={1}>
+        <text fg={agentsDotColor()}>●</text>
+        <text fg={toHex(theme().textMuted)}>{agentsLabel()}</text>
       </box>
-      <text fg={toHex(theme().textMuted)}>|</text>
-      <box flexDirection="row" gap={0}>
-        <text fg={dotColor(!staleness()?.isStale)}>●</text>
-        <text fg={toHex(theme().textMuted)}> {graphLabel()}</text>
+      <box flexDirection="row" flexShrink={0} gap={1}>
+        <text fg={mcpDotColor()}>●</text>
+        <text fg={toHex(theme().textMuted)}>{mcpLabel()}</text>
       </box>
-      <text fg={toHex(theme().textMuted)}>|</text>
-      <box flexDirection="row" gap={0}>
-        <text fg={dotColor(mcpConnectedCount() > 0)}>●</text>
-        <text fg={toHex(theme().textMuted)}> {mcpLabel()}</text>
+      <box flexDirection="row" flexShrink={0} gap={1}>
+        <text fg={lspDotColor()}>●</text>
+        <text fg={toHex(theme().textMuted)}>{lspLabel()}</text>
       </box>
-      <text fg={toHex(theme().textMuted)}>|</text>
-      <box flexDirection="row" gap={0}>
-        <text fg={dotColor(lspCount() > 0)}>●</text>
-        <text fg={toHex(theme().textMuted)}> {lspLabel()}</text>
+      <box flexDirection="row" flexShrink={0} gap={1}>
+        <text fg={graphDotColor()}>●</text>
+        <text fg={toHex(theme().textMuted)}>{graphLabel()}</text>
       </box>
     </box>
   )

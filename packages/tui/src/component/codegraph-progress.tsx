@@ -3,7 +3,7 @@ import { createContext, useContext, type ParentProps, Show, createMemo, createEf
 import { createStore } from "solid-js/store"
 import { useTheme } from "../context/theme"
 import { useTerminalDimensions } from "@opentui/solid"
-import { SplitBorder } from "../ui/border"
+import { RoundedBorder } from "../ui/border"
 import { TextAttributes } from "@opentui/core"
 
 export type CodegraphBuildState = {
@@ -120,8 +120,8 @@ export function CodegraphProgress() {
         paddingBottom={1}
         backgroundColor={theme.backgroundPanel}
         borderColor={theme[borderColorFor(derivedStatus())]}
-        border={["left", "right"]}
-        customBorderChars={SplitBorder.customBorderChars}
+        border={["left", "right", "top", "bottom"]}
+        customBorderChars={RoundedBorder.customBorderChars}
       >
         <Show when={build.state.status !== "idle"}>
           <text attributes={TextAttributes.BOLD} marginBottom={1} fg={theme.text}>

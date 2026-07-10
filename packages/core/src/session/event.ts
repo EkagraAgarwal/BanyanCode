@@ -204,6 +204,8 @@ export namespace Step {
         }),
       }),
       snapshot: Schema.String.pipe(Schema.optional),
+      ttftMs: Schema.Number.pipe(Schema.optional),
+      tokensPerSecond: Schema.Number.pipe(Schema.optional),
     },
   })
   export type Ended = typeof Ended.Type

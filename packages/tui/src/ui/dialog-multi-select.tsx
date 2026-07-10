@@ -62,7 +62,7 @@ export function DialogMultiSelect<T extends string = string>(props: DialogMultiS
 
   return (
     <box flexDirection="column" width="100%" height="100%" backgroundColor={toHex(theme.background)}>
-      <box flexDirection="row" paddingLeft={2} paddingRight={2} paddingTop={1}>
+      <box flexDirection="row" paddingLeft={1} paddingRight={1} paddingTop={1}>
         <text fg={toHex(theme.primary)}>
           <b>{props.title}</b>
         </text>

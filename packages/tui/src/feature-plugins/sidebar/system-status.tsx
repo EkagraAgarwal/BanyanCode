@@ -1,19 +1,18 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createSignal, onCleanup } from "solid-js"
+import { createSignal, onCleanup, Show } from "solid-js"
 import { useEvent } from "../../context/event"
 import { toHex } from "../../util/color"
 
 const id = "internal:sidebar-system-status"
 
 interface SystemStatus {
-  cpuPercent: number
+  cpuPercent?: number
   memoryUsedBytes: number
   memoryTotalBytes: number
-  gpuPercent?: number
-  vramUsedBytes?: number
-  gpuTotalBytes?: number
+  diskUsedBytes?: number
+  diskTotalBytes?: number
   platform: "windows" | "linux" | "darwin"
 }
 
@@ -29,9 +28,26 @@ function progressBar(percent: number, width = 12): string {
   return "█".repeat(filled) + "░".repeat(width - filled)
 }
 
+function Bar(props: { percent: number; theme: any }) {
+  const pct = () => Math.max(0, Math.min(100, props.percent))
+  const color = () => {
+    const t = props.theme
+    if (pct() >= 85) return toHex(t.error)
+    if (pct() >= 60) return toHex(t.warning)
+    return toHex(t.success)
+  }
+  const emptyColor = () => toHex(props.theme.backgroundElement)
+  return (
+    <box flexDirection="row" height={1} width="100%">
+      <box backgroundColor={color()} width={`${pct()}%`} height={1} />
+      <box backgroundColor={emptyColor()} width={`${100 - pct()}%`} height={1} />
+    </box>
+  )
+}
+
 function colorForPercent(percent: number, theme: any): string {
-  if (percent > 85) return toHex(theme.error)
-  if (percent > 60) return toHex(theme.warning)
+  if (percent >= 85) return toHex(theme.error)
+  if (percent >= 60) return toHex(theme.warning)
   return toHex(theme.success)
 }
 
@@ -47,94 +63,74 @@ function View(props: { api: TuiPluginApi }) {
   })
   onCleanup(unsub)
 
-  const platformLabel = () => {
-    const s = status()
-    if (!s) return "—"
-    const labels: Record<string, string> = { windows: "Windows", linux: "Linux", darwin: "Darwin" }
-    return labels[s.platform] ?? s.platform
-  }
-
-  const cpuPercent = () => status()?.cpuPercent ?? 0
+  const cpuPercent = () => status()?.cpuPercent
   const memPercent = () => {
     const s = status()
-    if (!s) return 0
+    if (!s) return undefined
     return Math.round((s.memoryUsedBytes / s.memoryTotalBytes) * 100)
   }
-  const gpuPercent = () => status()?.gpuPercent ?? 0
+
+  const diskPercent = () => {
+    const s = status()
+    if (s?.diskUsedBytes === undefined || s?.diskTotalBytes === undefined) return undefined
+    return Math.round((s.diskUsedBytes / s.diskTotalBytes) * 100)
+  }
 
   return (
-    <box>
+    <box flexDirection="column" gap={0}>
       <text fg={toHex(theme().primary)}>
         <b>SYSTEM</b>
       </text>
 
-      {!status() ? (
-        <box flexDirection="row" gap={2} marginTop={1} alignItems="center">
+      <Show when={status()} fallback={
+        <box flexDirection="row" gap={2} marginTop={0} alignItems="center">
           <text fg={toHex(theme().primary)}>◌</text>
           <text fg={toHex(theme().textMuted)}>Waiting for system data…</text>
         </box>
-      ) : (
-        <>
-          <box marginTop={1} gap={0}>
-            <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">
-              <text fg={toHex(theme().textMuted)}>CPU</text>
-              <text fg={colorForPercent(cpuPercent(), theme())}>
-                {cpuPercent().toFixed(0)}%
-              </text>
-            </box>
-            <box flexDirection="row" gap={0}>
-              <text fg={colorForPercent(cpuPercent(), theme())}>
-                {progressBar(cpuPercent())}
-              </text>
-            </box>
-          </box>
-
-          <box marginTop={1} gap={0}>
-            <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">
-              <text fg={toHex(theme().textMuted)}>Memory</text>
-              <text fg={colorForPercent(memPercent(), theme())}>
-                {formatBytes(status()!.memoryUsedBytes)} / {formatBytes(status()!.memoryTotalBytes)}
-              </text>
-            </box>
-            <box flexDirection="row" gap={0}>
-              <text fg={colorForPercent(memPercent(), theme())}>
-                {progressBar(memPercent())}
-              </text>
-            </box>
-          </box>
-
-          {status()!.gpuPercent !== undefined && (
-            <box marginTop={1} gap={0}>
-              <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">
-                <text fg={toHex(theme().textMuted)}>GPU</text>
-                <text fg={colorForPercent(gpuPercent(), theme())}>
-                  {gpuPercent().toFixed(0)}%
-                </text>
+      }>
+        {(s) => (
+          <>
+            <Show when={cpuPercent() !== undefined}>
+              <box flexDirection="column" gap={0} marginTop={0} width="100%">
+                <box flexDirection="row" gap={1}>
+                  <text fg={toHex(theme().textMuted)}>CPU</text>
+                  <box flexGrow={1}></box>
+                  <text fg={colorForPercent(cpuPercent()!, theme())} wrapMode="none">
+                    {cpuPercent()!.toFixed(0)}%
+                  </text>
+                </box>
+                <Bar percent={cpuPercent()!} theme={theme()} />
               </box>
-              <box flexDirection="row" gap={0}>
-                <text fg={colorForPercent(gpuPercent(), theme())}>
-                  {progressBar(gpuPercent())}
-                </text>
-              </box>
-            </box>
-          )}
+            </Show>
 
-          {status()!.gpuPercent !== undefined && (
-            <box marginTop={1} gap={0}>
-              <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">
-                <text fg={toHex(theme().textMuted)}>VRAM</text>
-                <text fg={toHex(theme().textMuted)}>
-                  {formatBytes(status()!.vramUsedBytes!)} / {formatBytes(status()!.gpuTotalBytes!)}
-                </text>
+            <Show when={memPercent() !== undefined}>
+              <box flexDirection="column" gap={0} marginTop={1} width="100%">
+                <box flexDirection="row" gap={1}>
+                  <text fg={toHex(theme().textMuted)}>Memory</text>
+                  <box flexGrow={1}></box>
+                  <text fg={colorForPercent(memPercent()!, theme())} wrapMode="none">
+                    {formatBytes(s().memoryUsedBytes)} / {formatBytes(s().memoryTotalBytes)}
+                  </text>
+                </box>
+                <Bar percent={memPercent()!} theme={theme()} />
               </box>
-            </box>
-          )}
+            </Show>
 
-          <box marginTop={1} gap={0}>
-            <text fg={toHex(theme().textMuted)}>Platform: {platformLabel()}</text>
-          </box>
-        </>
-      )}
+            <Show when={diskPercent() !== undefined}>
+              <box flexDirection="column" gap={0} marginTop={1} width="100%">
+                <box flexDirection="row" gap={1}>
+                  <text fg={toHex(theme().textMuted)}>Disk</text>
+                  <box flexGrow={1}></box>
+                  <text fg={colorForPercent(diskPercent()!, theme())} wrapMode="none">
+                    {formatBytes(s().diskUsedBytes!)} / {formatBytes(s().diskTotalBytes!)}
+                  </text>
+                </box>
+                <Bar percent={diskPercent()!} theme={theme()} />
+              </box>
+            </Show>
+          </>
+        )}
+      </Show>
     </box>
   )
 }

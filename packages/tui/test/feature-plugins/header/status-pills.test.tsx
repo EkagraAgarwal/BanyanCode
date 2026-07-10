@@ -11,15 +11,24 @@ import { KVProvider } from "../../../src/context/kv"
 import { TuiConfigProvider } from "../../../src/config"
 import { SDKProvider } from "../../../src/context/sdk"
 import { createEventSource, createFetch, directory } from "../../fixture/tui-sdk"
+import { RGBA } from "@opentui/core"
 
 const stubTheme = {
-  text: { r: 200, g: 200, b: 200, a: 1 },
-  textMuted: { r: 120, g: 120, b: 120, a: 1 },
-  primary: { r: 100, g: 200, b: 100, a: 1 },
-  secondary: { r: 100, g: 100, b: 200, a: 1 },
-  success: { r: 100, g: 200, b: 100, a: 1 },
-  error: { r: 200, g: 100, b: 100, a: 1 },
-  warning: { r: 200, g: 200, b: 100, a: 1 },
+  text: RGBA.fromInts(200, 200, 200),
+  textMuted: RGBA.fromInts(120, 120, 120),
+  primary: RGBA.fromInts(100, 200, 100),
+  secondary: RGBA.fromInts(100, 100, 200),
+  accent: RGBA.fromInts(100, 200, 100),
+  success: RGBA.fromInts(100, 200, 100),
+  error: RGBA.fromInts(200, 100, 100),
+  warning: RGBA.fromInts(200, 200, 100),
+  info: RGBA.fromInts(100, 200, 200),
+  background: RGBA.fromInts(20, 20, 20),
+  backgroundPanel: RGBA.fromInts(30, 30, 30),
+  backgroundElement: RGBA.fromInts(40, 40, 40),
+  border: RGBA.fromInts(80, 80, 80),
+  borderSubtle: RGBA.fromInts(60, 60, 60),
+  borderActive: RGBA.fromInts(100, 100, 100),
 }
 
 test("header status-pills app_top slot renders without throwing", async () => {

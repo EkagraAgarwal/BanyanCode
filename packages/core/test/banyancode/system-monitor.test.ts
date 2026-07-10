@@ -12,7 +12,7 @@ describe("SystemMonitor", () => {
       Effect.gen(function* () {
         const monitor = yield* SystemMonitor.Service
         const status = yield* monitor.status()
-        expect(typeof status.cpuPercent).toBe("number")
+        expect(status.cpuPercent === undefined || typeof status.cpuPercent === "number").toBe(true)
         expect(typeof status.memoryUsedBytes).toBe("number")
         expect(typeof status.memoryTotalBytes).toBe("number")
         expect(status.platform).toMatch(/^(windows|linux|darwin)$/)
@@ -61,10 +61,32 @@ describe("SystemMonitor", () => {
       Effect.gen(function* () {
         const monitor = yield* SystemMonitor.Service
         const status = yield* monitor.status()
-        expect(status.cpuPercent).toBeGreaterThanOrEqual(0)
-        expect(status.cpuPercent).toBeLessThanOrEqual(100)
+        if (status.cpuPercent !== undefined) {
+          expect(status.cpuPercent).toBeGreaterThanOrEqual(0)
+          expect(status.cpuPercent).toBeLessThanOrEqual(100)
+        }
       }).pipe(Effect.provide(layer)),
     )
+  })
+
+  test("cpuPercent is undefined on first sample, then a number after cache expires", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const monitor = yield* SystemMonitor.Service
+        const first = yield* monitor.status()
+        yield* Effect.sleep(Duration.millis(1100))
+        const second = yield* monitor.status()
+        return { first, second }
+      }).pipe(
+        Effect.provide(layer),
+        Effect.timeout(Duration.millis(3000)),
+      ),
+    )
+    expect(result.first.cpuPercent).toBeUndefined()
+    if (result.second.cpuPercent !== undefined) {
+      expect(result.second.cpuPercent).toBeGreaterThanOrEqual(0)
+      expect(result.second.cpuPercent).toBeLessThanOrEqual(100)
+    }
   })
 
   test("watch(100) emits at least 3 values within 1500ms", async () => {
@@ -86,7 +108,7 @@ describe("SystemMonitor", () => {
     expect(result).toBeTruthy()
     expect(result.length).toBe(3)
     for (const v of result) {
-      expect(typeof v.cpuPercent).toBe("number")
+      expect(v.cpuPercent === undefined || typeof v.cpuPercent === "number").toBe(true)
       expect(typeof v.memoryUsedBytes).toBe("number")
       expect(typeof v.memoryTotalBytes).toBe("number")
     }

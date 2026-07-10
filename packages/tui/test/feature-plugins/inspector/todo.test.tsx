@@ -1,0 +1,120 @@
+/** @jsxImportSource @opentui/solid */
+import { expect, test } from "bun:test"
+import { testRender } from "@opentui/solid"
+import { onMount } from "solid-js"
+import InspectorTodo from "../../../src/feature-plugins/inspector/todo"
+import { createTuiPluginApi } from "../../fixture/tui-plugin"
+import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { TestTuiContexts } from "../../fixture/tui-environment"
+import { ThemeProvider } from "../../../src/context/theme"
+import { KVProvider } from "../../../src/context/kv"
+import { TuiConfigProvider } from "../../../src/config"
+import { SDKProvider } from "../../../src/context/sdk"
+import { createEventSource, createFetch, directory } from "../../fixture/tui-sdk"
+import { SyncProvider } from "../../../src/context/sync"
+import { ProjectProvider } from "../../../src/context/project"
+import { ExitProvider } from "../../../src/context/exit"
+import { ArgsProvider } from "../../../src/context/args"
+
+const stubTheme = {
+  text: { r: 200, g: 200, b: 200, a: 1 },
+  textMuted: { r: 120, g: 120, b: 120, a: 1 },
+  primary: { r: 100, g: 200, b: 100, a: 1 },
+  secondary: { r: 100, g: 100, b: 200, a: 1 },
+  success: { r: 100, g: 200, b: 100, a: 1 },
+  error: { r: 200, g: 100, b: 100, a: 1 },
+  warning: { r: 200, g: 200, b: 100, a: 1 },
+  accent: { r: 150, g: 150, b: 150, a: 1 },
+  info: { r: 100, g: 100, b: 100, a: 1 },
+}
+
+const fixtureTodos = [
+  { id: "todo-1", status: "pending" as const, content: "First task" },
+  { id: "todo-2", status: "in_progress" as const, content: "Second task" },
+  { id: "todo-3", status: "completed" as const, content: "Third task" },
+]
+
+test("inspector todo session_inspector slot renders with todo list", async () => {
+  const events = createEventSource()
+  const calls = createFetch()
+  const config = createTuiResolvedConfig()
+  let done: () => void
+  const ready = new Promise<void>((r) => { done = r })
+
+  function Inner() {
+    const api: any = {
+      ...createTuiPluginApi({}),
+      theme: { current: stubTheme },
+      state: {
+        session: {
+          get: () => undefined,
+          todo: (sessionID: string) => fixtureTodos,
+        },
+        path: { directory: "/test/workspace" },
+        mcp: () => [],
+        lsp: () => [],
+      },
+      slots: {
+        register(plugin: any) {
+          if (!plugin?.slots?.session_inspector) return () => {}
+          void plugin.tui(api, undefined as any, { id: "test" } as any)
+          plugin.slots.session_inspector({}, { session_id: "session_test" })
+          return () => {}
+        },
+      },
+    }
+    onMount(done)
+    return <box />
+  }
+
+  const testSetup = await testRender(() => (
+    <ExitProvider exit={console.error}>
+      <TestTuiContexts>
+        <ArgsProvider>
+          <KVProvider>
+            <SDKProvider url="http://test" directory={directory} fetch={calls.fetch} events={events.source}>
+              <ProjectProvider>
+                <SyncProvider>
+                  <TuiConfigProvider config={config}>
+                    <ThemeProvider mode="dark">
+                      <Inner />
+                    </ThemeProvider>
+                  </TuiConfigProvider>
+                </SyncProvider>
+              </ProjectProvider>
+            </SDKProvider>
+          </KVProvider>
+        </ArgsProvider>
+      </TestTuiContexts>
+    </ExitProvider>
+  ), { width: 40, height: 50 })
+
+  await ready
+  await testSetup.renderOnce()
+  await new Promise((r) => setTimeout(r, 0))
+  await testSetup.renderOnce()
+  const snapshot = testSetup
+    .captureCharFrame()
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trimEnd()
+  try {
+    expect(snapshot).toMatchSnapshot()
+  } finally {
+    testSetup.renderer.destroy()
+  }
+})
+
+test("inspector todo counter shows completed/total not incomplete/total", async () => {
+  const readSource = () =>
+    require("fs").readFileSync(
+      require("path").resolve(__dirname, "../../../src/feature-plugins/inspector/todo.tsx"),
+      "utf8",
+    )
+  const source = readSource()
+  expect(source).toMatch(/completedCount\s*=\s*createMemo/)
+  expect(source).toMatch(/TODO \{completedCount\(\)\}\/\{totalCount\(\)\}/)
+  expect(source).not.toMatch(/incompleteCount\s*=\s*createMemo/)
+  expect(source).not.toMatch(/incompleteCount\(\)/)
+})

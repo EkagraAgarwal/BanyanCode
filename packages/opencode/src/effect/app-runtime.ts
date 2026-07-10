@@ -61,6 +61,9 @@ import { PluginV2 } from "@opencode-ai/core/plugin"
 import { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
 import * as AiSdkTransportModule from "./transport-ai-sdk"
 import { applyCodegraphBuildBridge } from "./banyancode-codegraph-bridge"
+import { applyFilesystemBridge } from "./banyancode-filesystem-bridge"
+import { applyMeshBridge } from "./banyancode-mesh-bridge"
+import { applySystemMonitorBridge } from "./banyancode-system-bridge"
 
 export const AppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -122,6 +125,11 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(Banyan.codegraphStalenessDefaultLayer),
   Layer.provideMerge(Banyan.editPlannerDefaultLayer),
   Layer.provideMerge(Banyan.codegraphAnalyzerDefaultLayer),
+  Layer.provideMerge(
+    Banyan.banyanFilesystemDefaultLayer.pipe(
+      Layer.provide(EventV2.defaultLayer),
+    ),
+  ),
   Layer.provideMerge(Banyan.searchDefaultLayer),
   Layer.provideMerge(Banyan.structuralQueriesDefaultLayer),
   Layer.provideMerge(
@@ -174,6 +182,13 @@ export const AppLayer = Layer.mergeAll(
     PermissionBridge.layer
       .pipe(Layer.provide(Permission.defaultLayer)) as unknown as Layer.Layer<never, never, never>,
   ),
+  Layer.provideMerge(
+    Banyan.meshCoordinatorDefaultLayer.pipe(
+      Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+      Layer.provide(Banyan.maxSubagentsLayer.pipe(Layer.provide(Banyan.banyanConfigServiceDefaultLayer))),
+      Layer.provide(EventV2.defaultLayer),
+    ) as unknown as Layer.Layer<never, never, never>,
+  ),
 )
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })
@@ -207,6 +222,9 @@ export const AppRuntime: Runtime = {
 }
 
 AppRuntime.runFork(applyCodegraphBuildBridge as never)
+AppRuntime.runFork(applyFilesystemBridge as never)
+AppRuntime.runFork(applyMeshBridge as never)
+AppRuntime.runFork(applySystemMonitorBridge as never)
 
 /**
  * Assert the canonical tool pipeline is consistent: every registered tool

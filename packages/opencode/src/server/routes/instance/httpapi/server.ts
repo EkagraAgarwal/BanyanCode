@@ -61,6 +61,7 @@ import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { MeshCoordinator } from "@opencode-ai/core/banyancode/mesh-coordinator"
 import * as AiSdkTransportModule from "@/effect/transport-ai-sdk"
 import { Api } from "@opencode-ai/server/api"
 import { PublicApi } from "./public"
@@ -161,6 +162,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
 
 const instanceRoutes = instanceApiRoutes.pipe(
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, schemaErrorLayer]),
+  Layer.provideMerge(MeshCoordinator.defaultLayer),
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(handlers),
@@ -261,12 +263,15 @@ export function createRoutes(
       HttpServer.layerServices,
     ]),
     Layer.provideMerge(
-      Banyan.codegraphBuildServiceDefaultLayer.pipe(
-        Layer.provide(Banyan.codegraphStalenessDefaultLayer),
-        Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
-        Layer.provide(Banyan.editPlannerDefaultLayer),
-        Layer.provide(Banyan.codegraphAnalyzerDefaultLayer),
-        Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
+      Layer.mergeAll(
+        Banyan.codegraphBuildServiceDefaultLayer.pipe(
+          Layer.provide(Banyan.codegraphStalenessDefaultLayer),
+          Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+          Layer.provide(Banyan.editPlannerDefaultLayer),
+          Layer.provide(Banyan.codegraphAnalyzerDefaultLayer),
+          Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
+        ),
+        Banyan.banyanFilesystemDefaultLayer,
       ),
     ),
     Layer.provideMerge(

@@ -1,7 +1,6 @@
 export * as SystemMonitor from "./system-monitor"
 
 import { Context, Effect, Duration, Layer, Queue, Ref, Stream } from "effect"
-import * as fs from "node:fs"
 import os from "node:os"
 import { ChildProcess } from "effect/unstable/process"
 import { AppProcess } from "../process"
@@ -10,12 +9,14 @@ import { EventV2 } from "../event"
 import * as Schedule from "effect/Schedule"
 
 export interface SystemStatus {
-  cpuPercent: number
+  cpuPercent?: number
   memoryUsedBytes: number
   memoryTotalBytes: number
   gpuPercent?: number
   vramUsedBytes?: number
   gpuTotalBytes?: number
+  diskUsedBytes?: number
+  diskTotalBytes?: number
   platform: "windows" | "linux" | "darwin"
 }
 
@@ -30,15 +31,55 @@ export class Service extends Context.Service<Service, Interface>()("@banyancode/
 export const Updated = EventV2.define({
   type: "banyancode.system.updated",
   schema: {
-    cpuPercent: Schema.Number,
+    cpuPercent: Schema.optional(Schema.Number),
     memoryUsedBytes: Schema.Number,
     memoryTotalBytes: Schema.Number,
     gpuPercent: Schema.optional(Schema.Number),
     vramUsedBytes: Schema.optional(Schema.Number),
     gpuTotalBytes: Schema.optional(Schema.Number),
+    diskUsedBytes: Schema.optional(Schema.Number),
+    diskTotalBytes: Schema.optional(Schema.Number),
     platform: Schema.Literals(["windows", "linux", "darwin"]),
   },
 })
+
+const readDisk = (
+  proc: AppProcess.Interface,
+): Effect.Effect<{ diskUsedBytes?: number; diskTotalBytes?: number }, never, never> => {
+  if (process.platform === "darwin") return Effect.succeed({})
+  if (process.platform === "win32") {
+    return Effect.flatMap(proc.run(
+      ChildProcess.make(
+        "wmic",
+        ["logicaldisk", "where", "DeviceID='C:'", "get", "Size,FreeSpace", "/format:csv,noheader"],
+        { extendEnv: true, stdin: "ignore" },
+      ),
+      { maxOutputBytes: 1024, maxErrorBytes: 256 },
+    ), (result) => {
+      if (result.exitCode !== 0) return Effect.succeed({})
+      const cells = result.stdout.toString().trim().split(",")
+      if (cells.length < 2) return Effect.succeed({})
+      const freeSpace = Number(cells[0])
+      const size = Number(cells[1])
+      if (!Number.isFinite(freeSpace) || !Number.isFinite(size)) return Effect.succeed({})
+      return Effect.succeed({ diskTotalBytes: size, diskUsedBytes: size - freeSpace })
+    }).pipe(Effect.orDie)
+  }
+  return Effect.flatMap(proc.run(
+    ChildProcess.make("df", ["-k", "/"], { extendEnv: true, stdin: "ignore" }),
+    { maxOutputBytes: 1024, maxErrorBytes: 256 },
+  ), (result) => {
+    if (result.exitCode !== 0) return Effect.succeed({})
+    const lines = result.stdout.toString().trim().split("\n")
+    if (lines.length < 2) return Effect.succeed({})
+    const cells = lines[1].split(/\s+/)
+    if (cells.length < 3) return Effect.succeed({})
+    const total = Number(cells[1]) * 1024
+    const used = Number(cells[2]) * 1024
+    if (!Number.isFinite(total) || !Number.isFinite(used)) return Effect.succeed({})
+    return Effect.succeed({ diskTotalBytes: total, diskUsedBytes: used })
+  }).pipe(Effect.orDie)
+}
 
 const detectPlatform = (): "windows" | "linux" | "darwin" => {
   const p = process.platform
@@ -47,30 +88,23 @@ const detectPlatform = (): "windows" | "linux" | "darwin" => {
   return "linux"
 }
 
-const readLinuxCPU = Effect.fn("SystemMonitor.readLinuxCPU")(function* () {
-  const stat = yield* Effect.try({
-    try: () => fs.readFileSync("/proc/stat", "utf-8"),
-    catch: () => "",
-  })
-  const line = stat.split("\n").find((l) => l.startsWith("cpu "))
-  if (!line) return 0
-  const parts = line.split(/\s+/)
-  const user = Number(parts[1])
-  const nice = Number(parts[2])
-  const system = Number(parts[3])
-  const idle = Number(parts[4])
-  const iowait = Number(parts[5]) || 0
-  const irq = Number(parts[6]) || 0
-  const softirq = Number(parts[7]) || 0
-  const total = user + nice + system + idle + iowait + irq + softirq
-  if (total === 0) return 0
-  return ((total - idle - iowait) / total) * 100
-})
+const takeCpuSnapshot = (): Map<string, number> => {
+  const cpus = os.cpus()
+  const totals = new Map<string, number>()
+  for (const cpu of cpus) {
+    const total = cpu.times.user + cpu.times.nice + cpu.times.sys + cpu.times.idle + (cpu.times.irq ?? 0)
+    totals.set("total", (totals.get("total") ?? 0) + total)
+    totals.set("idle", (totals.get("idle") ?? 0) + cpu.times.idle)
+  }
+  return totals
+}
 
-const sampleCPU = (): Effect.Effect<number, never, never> => {
-  const p = process.platform
-  if (p === "linux") return readLinuxCPU().pipe(Effect.catch(() => Effect.succeed(0)))
-  return Effect.succeed(0)
+const computeCpuPercent = (prev: Map<string, number> | undefined, cur: Map<string, number>): number | undefined => {
+  if (!prev) return undefined
+  const totalDelta = (cur.get("total") ?? 0) - (prev.get("total") ?? 0)
+  const idleDelta = (cur.get("idle") ?? 0) - (prev.get("idle") ?? 0)
+  if (totalDelta <= 0) return undefined
+  return (1 - idleDelta / totalDelta) * 100
 }
 
 interface CachedStatus {
@@ -82,14 +116,18 @@ interface Cache {
   cached: CachedStatus | undefined
   gpu: { gpuPercent: number; vramUsedBytes: number; gpuTotalBytes: number } | undefined
   gpuAt: number
+  disk: { diskUsedBytes?: number; diskTotalBytes?: number } | undefined
+  diskAt: number
 }
 
 const GPU_CACHE_TTL_MS = 30_000
+const DISK_CACHE_TTL_MS = 5_000
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const cache = yield* Ref.make<Cache>({ cached: undefined, gpu: undefined, gpuAt: 0 })
+    const cache = yield* Ref.make<Cache>({ cached: undefined, gpu: undefined, gpuAt: 0, disk: undefined, diskAt: 0 })
+    const cpuPrev = yield* Ref.make<Map<string, number> | undefined>(undefined)
     const proc = yield* AppProcess.Service
 
     const status: Interface["status"] = () =>
@@ -123,11 +161,24 @@ export const layer = Layer.effect(
           }
         }
 
+        let disk: { diskUsedBytes?: number; diskTotalBytes?: number } | undefined
+        if (snapshot.disk && now - snapshot.diskAt < DISK_CACHE_TTL_MS) {
+          disk = snapshot.disk
+        } else {
+          const result = yield* readDisk(proc as AppProcess.Interface)
+          if (Object.keys(result).length > 0) {
+            disk = result
+          }
+        }
+
         if (snapshot.cached && now - snapshot.cached.at < 1000) {
           return {
             ...snapshot.cached.value,
             ...(gpu
               ? { gpuPercent: gpu.gpuPercent, vramUsedBytes: gpu.vramUsedBytes, gpuTotalBytes: gpu.gpuTotalBytes }
+              : {}),
+            ...(disk
+              ? { diskUsedBytes: disk.diskUsedBytes, diskTotalBytes: disk.diskTotalBytes }
               : {}),
           }
         }
@@ -135,19 +186,26 @@ export const layer = Layer.effect(
         const totalMem = os.totalmem()
         const freeMem = os.freemem()
         const platform = detectPlatform()
-        const cpu = yield* sampleCPU()
+
+        const prev = yield* Ref.get(cpuPrev)
+        const cur = takeCpuSnapshot()
+        const cpuPercent = computeCpuPercent(prev, cur)
+        yield* Ref.set(cpuPrev, cur)
 
         const value: SystemStatus = {
-          cpuPercent: cpu,
+          cpuPercent,
           memoryUsedBytes: totalMem - freeMem,
           memoryTotalBytes: totalMem,
           platform,
           ...(gpu
             ? { gpuPercent: gpu.gpuPercent, vramUsedBytes: gpu.vramUsedBytes, gpuTotalBytes: gpu.gpuTotalBytes }
             : {}),
+          ...(disk
+            ? { diskUsedBytes: disk.diskUsedBytes, diskTotalBytes: disk.diskTotalBytes }
+            : {}),
         }
 
-        yield* Ref.set(cache, { cached: { value, at: now }, gpu, gpuAt: now })
+        yield* Ref.set(cache, { cached: { value, at: now }, gpu, gpuAt: now, disk, diskAt: now })
         return value
       })
 

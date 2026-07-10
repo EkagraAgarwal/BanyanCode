@@ -29,7 +29,7 @@ function View(props: { api: TuiPluginApi }) {
 
   return (
     <Show when={list().length > 0}>
-      <box>
+      <box flexDirection="column" gap={0}>
         <box flexDirection="row" gap={1} onMouseDown={() => list().length > 2 && setOpen((x) => !x)}>
           <Show when={list().length > 2}>
             <text fg={theme().text}>{open() ? "▼" : "▶"}</text>
