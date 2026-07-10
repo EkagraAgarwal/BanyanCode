@@ -5,6 +5,7 @@ import { sql } from "drizzle-orm"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
 import { SessionSchema } from "../session/schema"
+import { SessionTable } from "../session/sql"
 import { SubagentBus } from "./subagent-bus"
 import { SubagentPlans } from "./subagent-plans-repo"
 import { MaxSubagents } from "./max-subagents"
@@ -80,6 +81,29 @@ export const StatusUpdated = EventV2.define({
 
 const ACTIVITY_WINDOW_MS = 5 * 60 * 1000
 const COST_CACHE_TTL_MS = 5 * 1000
+const NATIVE_CHILD_RECENT_MS = 5 * 60 * 1000
+
+type NativeChildRow = {
+  id: string
+  parent_id: string | null
+  title: string
+  agent: string | null
+  time_created: number
+  time_updated: number
+}
+
+const listNativeChildren = (
+  parentSessionID: SessionSchema.ID,
+  db: Database.Interface["db"],
+): Effect.Effect<NativeChildRow[], never, never> =>
+  db
+    .all<NativeChildRow>(
+      sql`SELECT id, parent_id, title, agent, time_created, time_updated
+          FROM session
+          WHERE parent_id = ${parentSessionID}
+          ORDER BY time_updated DESC`,
+    )
+    .pipe(Effect.orDie)
 
 type CostCacheEntry = {
   cost: number
@@ -182,9 +206,29 @@ export const layer = Layer.effect(
         }),
       )
 
+      const nativeChildren = yield* listNativeChildren(parentSessionID, db)
+      const nativeChildCutoff = now - NATIVE_CHILD_RECENT_MS
+      const nativePeers: MeshStatus["peers"] = nativeChildren.map((row) => {
+        const lastSeen = Math.max(row.time_updated, row.time_created)
+        const status: "active" | "idle" | "disconnected" =
+          lastSeen >= nativeChildCutoff ? "active" : "idle"
+        return {
+          sessionID: row.id,
+          agent: row.agent ?? "subagent",
+          status,
+          lastSeenAt: lastSeen,
+        }
+      })
+
+      const busSessionIDs = new Set(enrichedPeers.map((p) => p.sessionID))
+      const mergedPeers: MeshStatus["peers"] = [
+        ...enrichedPeers,
+        ...nativePeers.filter((p) => !busSessionIDs.has(p.sessionID)),
+      ]
+
       return {
         parentSessionID,
-        peers: enrichedPeers,
+        peers: mergedPeers,
         pendingMessages: 0,
         recentActivity: recent.filter((a) => a.at >= cutoff),
       }

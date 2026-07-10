@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Queue, Stream } from "effect"
+import { sql } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "../../src/event"
 import { tmpdir } from "../fixture/tmpdir"
@@ -298,6 +299,90 @@ describe("MeshCoordinator", () => {
 
         expect(items.length).toBeGreaterThan(0)
         expect(items[0].parentSessionID).toBe("ses_parent")
+      }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("status merges native child sessions with bus peers", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const now = Date.now()
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* db.run(
+          sql`INSERT INTO project (id, worktree, sandboxes, time_created, time_updated) VALUES ('prj_test', '/test', '[]', ${now - 1000}, ${now - 1000})`,
+        )
+        yield* db.run(
+          sql`INSERT INTO session (id, project_id, parent_id, slug, directory, title, version, agent, time_created, time_updated)
+              VALUES ('ses_parent_native', 'prj_test', NULL, 'parent', '/test', 'parent', 'v1', NULL, ${now - 2000}, ${now - 2000})`,
+        )
+        yield* db.run(
+          sql`INSERT INTO session (id, project_id, parent_id, slug, directory, title, version, agent, time_created, time_updated)
+              VALUES ('ses_child_native_1', 'prj_test', 'ses_parent_native', 'native-1', '/test', 'native child 1', 'v1', 'coder', ${now - 1000}, ${now - 1000})`,
+        )
+        yield* db.run(
+          sql`INSERT INTO session (id, project_id, parent_id, slug, directory, title, version, agent, time_created, time_updated)
+              VALUES ('ses_child_native_2', 'prj_test', 'ses_parent_native', 'native-2', '/test', 'native child 2', 'v1', 'explore', ${now - 60_000}, ${now - 60_000})`,
+        )
+        yield* db.run(
+          sql`INSERT INTO session (id, project_id, parent_id, slug, directory, title, version, agent, time_created, time_updated)
+              VALUES ('ses_unrelated', 'prj_test', NULL, 'unrelated', '/test', 'unrelated', 'v1', NULL, ${now - 1000}, ${now - 1000})`,
+        )
+      }).pipe(Effect.provide(dbLayer), Effect.scoped),
+    )
+
+    const mockBus = Layer.effect(
+      SubagentBus.Service,
+      Effect.gen(function* () {
+        const q = yield* Queue.unbounded<SubagentMessage>()
+        return SubagentBus.Service.of({
+          publish: () => Effect.void,
+          subscribe: () => Effect.succeed(q),
+          peers: () =>
+            Effect.succeed([
+              {
+                sessionID: "ses_bus_peer",
+                agent: "researcher",
+                status: "active" as const,
+                lastSeenAt: now,
+              },
+            ]),
+        })
+      }),
+    )
+
+    const mockPlans = Layer.succeed(
+      SubagentPlans.Service,
+      SubagentPlans.Service.of({
+        put: () => Effect.void,
+        getByID: () => Effect.succeed(undefined),
+        listByParent: () => Effect.succeed([]),
+        listBySession: () => Effect.succeed([]),
+        markCompleted: () => Effect.void,
+        markCancelled: () => Effect.void,
+      }),
+    )
+
+    const serviceLayer = layer.pipe(
+      Layer.provide(mockBus),
+      Layer.provide(mockPlans),
+      Layer.provide(EventV2.defaultLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const mesh = yield* MeshCoordinator.Service
+        const result = yield* mesh.status("ses_parent_native" as any)
+
+        const sessionIDs = result.peers.map((p) => p.sessionID).sort()
+        expect(sessionIDs).toContain("ses_bus_peer")
+        expect(sessionIDs).toContain("ses_child_native_1")
+        expect(sessionIDs).toContain("ses_child_native_2")
+        expect(sessionIDs).not.toContain("ses_unrelated")
+        expect(result.peers).toHaveLength(3)
       }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
