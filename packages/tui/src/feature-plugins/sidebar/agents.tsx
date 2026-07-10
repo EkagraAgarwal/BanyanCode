@@ -141,16 +141,23 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
         <box flexDirection="column" marginTop={1} gap={0}>
           <For each={peers()}>{(peer) => <PeerRow peer={peer} theme={theme()} />}</For>
         </box>
-        <text fg={toHex(theme().borderSubtle)} marginTop={1}>
-          {DashedDividerChars.horizontal.repeat(80)}
-        </text>
-        <box flexDirection="row" gap={1} marginTop={0}>
-          <text fg={toHex(theme().textMuted)}>Total across all agents</text>
-          <text fg={toHex(theme().text)}>{money.format(totalCost())}</text>
-          <text fg={toHex(theme().textMuted)}>·</text>
-          <text fg={toHex(theme().text)}>{formatTokens(totalTokens())} tok</text>
-        </box>
       </Show>
+      {/*
+        The dashed separator + totals row sit OUTSIDE the Show block so they
+        remain present in the layout across mesh status republishes. Previously
+        they were inside the `when={peers().length > 0}` branch, which caused
+        the separator to vanish for a frame whenever the bridge republish
+        briefly arrived with empty peers, shifting the content below up/down.
+      */}
+      <text fg={toHex(theme().borderSubtle)} marginTop={1}>
+        {DashedDividerChars.horizontal.repeat(80)}
+      </text>
+      <box flexDirection="row" gap={1} marginTop={0}>
+        <text fg={toHex(theme().textMuted)}>Total across all agents</text>
+        <text fg={toHex(theme().text)}>{money.format(totalCost())}</text>
+        <text fg={toHex(theme().textMuted)}>·</text>
+        <text fg={toHex(theme().text)}>{formatTokens(totalTokens())} tok</text>
+      </box>
     </box>
   )
 }
