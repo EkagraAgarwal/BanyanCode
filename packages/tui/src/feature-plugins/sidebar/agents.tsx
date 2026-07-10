@@ -4,7 +4,6 @@ import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { useEvent } from "../../context/event"
 import { toHex } from "../../util/color"
-import { DashedDividerChars } from "../../ui/border"
 
 const id = "internal:sidebar-agents"
 
@@ -122,9 +121,6 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const peers = createMemo(() => meshStatus()?.peers ?? [])
   const activeCount = createMemo(() => peers().filter((p) => p.status === "active").length)
 
-  const totalCost = createMemo(() => peers().reduce((sum, p) => sum + (p.cost ?? 0), 0))
-  const totalTokens = createMemo(() => peers().reduce((sum, p) => sum + peerTokensTotal(p), 0))
-
   return (
     <box>
       <text fg={toHex(theme().primary)}>
@@ -138,26 +134,10 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
           </text>
         }
       >
-        <box flexDirection="column" marginTop={1} gap={0}>
+        <box flexDirection="column" marginTop={0} gap={0}>
           <For each={peers()}>{(peer) => <PeerRow peer={peer} theme={theme()} />}</For>
         </box>
       </Show>
-      {/*
-        The dashed separator + totals row sit OUTSIDE the Show block so they
-        remain present in the layout across mesh status republishes. Previously
-        they were inside the `when={peers().length > 0}` branch, which caused
-        the separator to vanish for a frame whenever the bridge republish
-        briefly arrived with empty peers, shifting the content below up/down.
-      */}
-      <text fg={toHex(theme().borderSubtle)} marginTop={1}>
-        {DashedDividerChars.horizontal.repeat(80)}
-      </text>
-      <box flexDirection="row" gap={1} marginTop={0}>
-        <text fg={toHex(theme().textMuted)}>Total across all agents</text>
-        <text fg={toHex(theme().text)}>{money.format(totalCost())}</text>
-        <text fg={toHex(theme().textMuted)}>·</text>
-        <text fg={toHex(theme().text)}>{formatTokens(totalTokens())} tok</text>
-      </box>
     </box>
   )
 }

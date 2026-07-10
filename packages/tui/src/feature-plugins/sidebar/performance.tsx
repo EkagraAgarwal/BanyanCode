@@ -40,7 +40,7 @@ function BarMetric(props: {
   }
 
   return (
-    <box flexDirection="row" justifyContent="space-between" width="100%" marginTop={1} alignItems="center">
+    <box flexDirection="row" justifyContent="space-between" width="100%" marginTop={0} alignItems="center">
       <text fg={toHex(props.theme().textMuted)} width={10}>{props.label}</text>
       <text fg={colorFn()}>{bar}</text>
       <text fg={colorFn()} width={6}>{props.value.padStart(6)}</text>
@@ -54,15 +54,6 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const sync = useSync()
 
   const [step, setStep] = createSignal<StepMetrics | undefined>(undefined)
-
-  const total = createMemo(() => {
-    const messages = sync.data.message[props.session_id] ?? []
-    const assistants = messages.filter((m: any) => ((m as any).type === "assistant" || m.role === "assistant") && (m as any).time?.completed)
-    return assistants.reduce(
-      (sum: number, m: any) => sum + ((m as any).tokens?.output ?? 0),
-      0,
-    )
-  })
 
   const lastAssistant = createMemo(() => {
     const messages = sync.data.message[props.session_id] ?? []
@@ -115,9 +106,6 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
       <text fg={toHex(theme().primary)}>
         <b>PERFORMANCE</b>
       </text>
-      <text fg={toHex(theme().textMuted)} marginTop={0}>
-        {total()} tokens generated this session
-      </text>
       <Show
         when={activeStep()}
         fallback={
@@ -127,7 +115,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
         }
       >
         {(s) => (
-          <box marginTop={1} gap={0}>
+          <box marginTop={0} gap={0}>
             <Show when={s().ttftMs !== undefined}>
               <BarMetric
                 label="TTFT"

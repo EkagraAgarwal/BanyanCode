@@ -173,7 +173,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
       <Show
         when={categorization()}
         fallback={
-          <text fg={toHex(theme().textMuted)} marginTop={1}>
+          <text fg={toHex(theme().textMuted)} marginTop={0}>
             no data
           </text>
         }
@@ -187,7 +187,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
               <box
                 width={BAR_WIDTH + 2}
                 height={3}
-                marginTop={1}
+                marginTop={0}
                 customBorderChars={RoundedBorder.customBorderChars}
                 border={["left", "right", "top", "bottom"]}
                 borderColor={theme().borderSubtle}

@@ -91,7 +91,7 @@ function View(props: { api: TuiPluginApi }) {
         {(s) => (
           <>
             <Show when={cpuPercent() !== undefined}>
-              <box flexDirection="column" gap={0} marginTop={1} width="100%">
+              <box flexDirection="column" gap={0} marginTop={0} width="100%">
                 <box flexDirection="row" gap={1}>
                   <text fg={toHex(theme().textMuted)}>CPU</text>
                   <box flexGrow={1}></box>
