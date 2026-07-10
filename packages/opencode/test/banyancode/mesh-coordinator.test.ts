@@ -98,7 +98,10 @@ describe("mesh-coordinator", () => {
       yield* svc.trackParent(SessionSchema.ID.make("ses_track_2"))
       yield* svc.trackParent(SessionSchema.ID.make("ses_track_1"))
       const parents = yield* svc.listTrackedParents()
-      expect(parents.sort()).toEqual(["ses_track_1", "ses_track_2"])
+      expect([...parents].sort()).toEqual([
+        SessionSchema.ID.make("ses_track_1"),
+        SessionSchema.ID.make("ses_track_2"),
+      ])
     }),
   )
 })
