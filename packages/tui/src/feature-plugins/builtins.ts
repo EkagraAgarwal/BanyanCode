@@ -9,7 +9,6 @@ import SidebarFooter from "./sidebar/footer"
 import SidebarMcp from "./sidebar/mcp"
 import InspectorAgentDetails from "./inspector/agent-details"
 import InspectorTodo from "./inspector/todo"
-import InspectorAgentActivity from "./inspector/agent-activity"
 import SidebarSystemStatus from "./sidebar/system-status"
 import SessionFooter from "./footer/session-footer"
 import AttentionStrip from "../component/attention-strip"
@@ -45,7 +44,6 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     SidebarFooter,
     InspectorAgentDetails,
     InspectorTodo,
-    InspectorAgentActivity,
     SessionFooter,
     AttentionStrip,
     HeaderBrand,

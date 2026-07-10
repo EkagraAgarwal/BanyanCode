@@ -1,5 +1,0 @@
-// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
-
-exports[`inspector agent-activity session_inspector slot renders with mesh peers 1`] = `""`;
-
-exports[`inspector agent-activity session_inspector slot renders with mesh peers 2`] = `""`;
