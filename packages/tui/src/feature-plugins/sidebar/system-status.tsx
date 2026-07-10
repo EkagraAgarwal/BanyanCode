@@ -28,6 +28,23 @@ function progressBar(percent: number, width = 12): string {
   return "█".repeat(filled) + "░".repeat(width - filled)
 }
 
+function Bar(props: { percent: number; theme: any }) {
+  const pct = () => Math.max(0, Math.min(100, props.percent))
+  const color = () => {
+    const t = props.theme
+    if (pct() >= 85) return toHex(t.error)
+    if (pct() >= 60) return toHex(t.warning)
+    return toHex(t.success)
+  }
+  const emptyColor = () => toHex(props.theme.backgroundElement)
+  return (
+    <box flexDirection="row" flexGrow={1} flexBasis={0} flexShrink={1} height={1}>
+      <box backgroundColor={color()} width={`${pct()}%`} height={1} flexShrink={1} />
+      <box backgroundColor={emptyColor()} width={`${100 - pct()}%`} height={1} flexShrink={1} />
+    </box>
+  )
+}
+
 function colorForPercent(percent: number, theme: any): string {
   if (percent >= 85) return toHex(theme.error)
   if (percent >= 60) return toHex(theme.warning)
@@ -60,7 +77,7 @@ function View(props: { api: TuiPluginApi }) {
   }
 
   return (
-    <box>
+    <box flexDirection="column" gap={0}>
       <text fg={toHex(theme().primary)}>
         <b>SYSTEM</b>
       </text>
@@ -74,49 +91,46 @@ function View(props: { api: TuiPluginApi }) {
         {(s) => (
           <>
             <Show when={cpuPercent() !== undefined}>
-              <box marginTop={1} gap={0}>
-                <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">
+              <box flexDirection="column" gap={0} marginTop={1} width="100%">
+                <box flexDirection="row" gap={1}>
                   <text fg={toHex(theme().textMuted)}>CPU</text>
-                  <text fg={colorForPercent(cpuPercent()!, theme())}>
+                  <box flexGrow={1}></box>
+                  <text fg={colorForPercent(cpuPercent()!, theme())} wrapMode="none">
                     {cpuPercent()!.toFixed(0)}%
                   </text>
                 </box>
-                <box flexDirection="row" gap={0}>
-                  <text fg={colorForPercent(cpuPercent()!, theme())}>
-                    {progressBar(cpuPercent()!)}
-                  </text>
+                <box width="100%">
+                  <Bar percent={cpuPercent()!} theme={theme()} />
                 </box>
               </box>
             </Show>
 
             <Show when={memPercent() !== undefined}>
-              <box marginTop={1} gap={0}>
-                <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">
+              <box flexDirection="column" gap={0} marginTop={1} width="100%">
+                <box flexDirection="row" gap={1}>
                   <text fg={toHex(theme().textMuted)}>Memory</text>
-                  <text fg={colorForPercent(memPercent()!, theme())}>
+                  <box flexGrow={1}></box>
+                  <text fg={colorForPercent(memPercent()!, theme())} wrapMode="none">
                     {formatBytes(s().memoryUsedBytes)} / {formatBytes(s().memoryTotalBytes)}
                   </text>
                 </box>
-                <box flexDirection="row" gap={0}>
-                  <text fg={colorForPercent(memPercent()!, theme())}>
-                    {progressBar(memPercent()!)}
-                  </text>
+                <box width="100%">
+                  <Bar percent={memPercent()!} theme={theme()} />
                 </box>
               </box>
             </Show>
 
             <Show when={diskPercent() !== undefined}>
-              <box marginTop={1} gap={0}>
-                <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">
+              <box flexDirection="column" gap={0} marginTop={1} width="100%">
+                <box flexDirection="row" gap={1}>
                   <text fg={toHex(theme().textMuted)}>Disk</text>
-                  <text fg={colorForPercent(diskPercent()!, theme())}>
+                  <box flexGrow={1}></box>
+                  <text fg={colorForPercent(diskPercent()!, theme())} wrapMode="none">
                     {formatBytes(s().diskUsedBytes!)} / {formatBytes(s().diskTotalBytes!)}
                   </text>
                 </box>
-                <box flexDirection="row" gap={0}>
-                  <text fg={colorForPercent(diskPercent()!, theme())}>
-                    {progressBar(diskPercent()!)}
-                  </text>
+                <box width="100%">
+                  <Bar percent={diskPercent()!} theme={theme()} />
                 </box>
               </box>
             </Show>

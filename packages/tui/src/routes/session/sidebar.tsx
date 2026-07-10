@@ -66,7 +66,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean; onClose?:
               },
             }}
           >
-            <box flexShrink={0} gap={1} paddingRight={1}>
+            <box flexDirection="column" flexShrink={0} gap={0} paddingRight={1}>
               <pluginRuntime.Slot
                 name="sidebar_title"
                 mode="single_winner"
