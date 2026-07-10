@@ -61,7 +61,6 @@ export function MessageBlock(props: MessageBlockProps) {
       <box
         backgroundColor={theme.backgroundPanel}
         width="100%"
-        height="100%"
         paddingTop={1}
         paddingBottom={1}
         paddingLeft={2}
@@ -95,7 +94,6 @@ export function MessageBlock(props: MessageBlockProps) {
               paddingLeft={1}
               paddingRight={1}
               width="100%"
-              height="100%"
             >
               <text fg={theme.success}>✓</text>
               <text fg={theme.text}>approve</text>
@@ -116,7 +114,6 @@ export function MessageBlock(props: MessageBlockProps) {
               paddingLeft={1}
               paddingRight={1}
               width="100%"
-              height="100%"
             >
               <text fg={theme.error}>✕</text>
               <text fg={theme.text}>reject</text>
@@ -137,7 +134,6 @@ export function MessageBlock(props: MessageBlockProps) {
               paddingLeft={1}
               paddingRight={1}
               width="100%"
-              height="100%"
             >
               <text fg={theme.info}>ⓘ</text>
               <text fg={theme.text}>view full diff</text>
@@ -162,7 +158,6 @@ export function MessageBlock(props: MessageBlockProps) {
               paddingLeft={1}
               paddingRight={1}
               width="100%"
-              height="100%"
             >
               <text fg={theme.info}>ⓘ</text>
               <text fg={theme.text}>view full diff</text>

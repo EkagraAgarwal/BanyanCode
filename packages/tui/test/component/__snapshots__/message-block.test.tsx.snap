@@ -8,9 +8,9 @@ exports[`MessageBlock mode=plan renders plan label 1`] = `
 │                                                                              │
 │  Plan details here                                                           │
 │                                                                              │
-│                                                                              │
-│                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
+                                                                                
+                                                                                
 "
 `;
 
@@ -50,8 +50,8 @@ exports[`MessageBlock mode=tool renders tool label 1`] = `
 │                                                                              │
 │  Tool output                                                                 │
 │                                                                              │
-│                                                                              │
-│                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
+                                                                                
+                                                                                
 "
 `;
