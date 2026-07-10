@@ -105,3 +105,16 @@ test("inspector todo session_inspector slot renders with todo list", async () =>
     testSetup.renderer.destroy()
   }
 })
+
+test("inspector todo counter shows completed/total not incomplete/total", async () => {
+  const readSource = () =>
+    require("fs").readFileSync(
+      require("path").resolve(__dirname, "../../../src/feature-plugins/inspector/todo.tsx"),
+      "utf8",
+    )
+  const source = readSource()
+  expect(source).toMatch(/completedCount\s*=\s*createMemo/)
+  expect(source).toMatch(/TODO \{completedCount\(\)\}\/\{totalCount\(\)\}/)
+  expect(source).not.toMatch(/incompleteCount\s*=\s*createMemo/)
+  expect(source).not.toMatch(/incompleteCount\(\)/)
+})

@@ -11,13 +11,13 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const theme = () => props.api.theme.current
   const list = createMemo(() => props.api.state.session.todo(props.session_id))
 
-  const incompleteCount = createMemo(() => list().filter((item) => item.status !== "completed").length)
+  const completedCount = createMemo(() => list().filter((item) => item.status === "completed").length)
   const totalCount = createMemo(() => list().length)
 
   return (
     <box>
       <text fg={toHex(theme().primary)} marginBottom={1}>
-        TODO {incompleteCount()}/{totalCount()}
+        TODO {completedCount()}/{totalCount()}
       </text>
       <Show
         when={list().length > 0}
