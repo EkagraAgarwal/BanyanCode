@@ -7,7 +7,6 @@ import SidebarContext from "./sidebar/context"
 import SidebarFiles from "./sidebar/files"
 import SidebarFooter from "./sidebar/footer"
 import SidebarMcp from "./sidebar/mcp"
-import SidebarCodebaseTree from "./sidebar/codebase-tree"
 import InspectorAgentDetails from "./inspector/agent-details"
 import InspectorTodo from "./inspector/todo"
 import InspectorAgentActivity from "./inspector/agent-activity"
@@ -41,7 +40,6 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     SidebarPerformance,
     SidebarContext,
     SidebarSystemStatus,
-    SidebarCodebaseTree,
     SidebarMcp,
     SidebarFiles,
     SidebarFooter,

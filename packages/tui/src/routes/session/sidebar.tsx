@@ -4,7 +4,7 @@ import { useSync } from "../../context/sync"
 import { createMemo, Show } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { useTuiConfig } from "../../config"
-import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
+import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { usePluginRuntime } from "../../plugin/runtime"
 
 import { getScrollAcceleration } from "../../util/scroll"
@@ -46,16 +46,13 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean; onClose?:
           paddingRight={1}
           flexDirection="column"
         >
-          <box flexDirection="row" justifyContent="space-between" width="100%" marginBottom={1}>
-            <text fg={theme.primary}>
-              <b>BANYANTREE</b>
-            </text>
-            <Show when={props.onClose}>
+          <Show when={props.onClose}>
+            <box flexDirection="row" justifyContent="flex-end" width="100%" marginBottom={1}>
               <text fg={theme.textMuted} onMouseDown={props.onClose}>
                 ✕
               </text>
-            </Show>
-          </box>
+            </box>
+          </Show>
           <scrollbox
             flexGrow={1}
             scrollAcceleration={scrollAcceleration()}
@@ -78,9 +75,6 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean; onClose?:
                   <text fg={theme.text}>
                     <b>{session()!.title}</b>
                   </text>
-                  <Show when={InstallationChannel !== "latest"}>
-                    <text fg={theme.textMuted}>{props.sessionID}</text>
-                  </Show>
                   <Show when={session()!.workspaceID}>
                     <text fg={theme.textMuted}>
                       <Show

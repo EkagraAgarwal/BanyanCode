@@ -22,14 +22,14 @@ import { resolve } from "path"
  * `marginTop={1}` back into plugin first-elements after a future edit.
  */
 
-const PLUGIN_FILES = [
+const PLUGIN_FILES: string[] = [
   "agents.tsx",
   "codebase-tree.tsx",
   "context.tsx",
   "mcp.tsx",
   "performance.tsx",
   "system-status.tsx",
-] as const
+]
 
 function readPlugin(name: string): string {
   return readFileSync(
