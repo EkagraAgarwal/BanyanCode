@@ -49,6 +49,8 @@ export type MeshStatus = typeof MeshStatus.Type
 
 export interface Interface {
   readonly status: (parentSessionID: SessionSchema.ID) => Effect.Effect<MeshStatus, never, never>
+  readonly trackParent: (parentSessionID: SessionSchema.ID) => Effect.Effect<void, never, never>
+  readonly listTrackedParents: () => Effect.Effect<ReadonlyArray<SessionSchema.ID>, never, never>
   readonly drain: (parentSessionID: SessionSchema.ID) => Effect.Effect<SubagentMessage[], never, never>
   readonly watch: (parentSessionID: SessionSchema.ID) => Effect.Effect<Stream.Stream<MeshStatus>, never, never>
   readonly subscribe: (input: { parentSessionID: SessionSchema.ID; agentName?: string }) => Effect.Effect<Stream.Stream<SubagentMessage, never, never>, never, never>
@@ -163,6 +165,7 @@ export const layer = Layer.effect(
     const { db } = yield* Database.Service
     const activityRef = yield* Ref.make(new Map<string, Array<{ from: string; at: number }>>())
     const costCacheRef = yield* Ref.make(new Map<string, CostCacheEntry>())
+    const trackedParentsRef = yield* Ref.make(new Set<SessionSchema.ID>())
 
     const status = Effect.fn("MeshCoordinator.status")(function* (parentSessionID: SessionSchema.ID) {
       const peers = yield* bus.peers(parentSessionID)
@@ -392,13 +395,40 @@ export const layer = Layer.effect(
       } as const
     })
 
-    return Service.of({ status, drain, watch, subscribe, checkin, steer, kill, planFor, tryReserveSubagentSlot })
+    const trackParent: Interface["trackParent"] = Effect.fn("MeshCoordinator.trackParent")(function* (
+      parentSessionID: SessionSchema.ID,
+    ) {
+      yield* Ref.update(trackedParentsRef, (set) => {
+        const next = new Set(set)
+        next.add(parentSessionID)
+        return next
+      })
+    })
+
+    const listTrackedParents: Interface["listTrackedParents"] = Effect.fn(
+      "MeshCoordinator.listTrackedParents",
+    )(function* () {
+      return Array.from(yield* Ref.get(trackedParentsRef))
+    })
+
+    return Service.of({
+      status,
+      drain,
+      watch,
+      subscribe,
+      checkin,
+      steer,
+      kill,
+      planFor,
+      tryReserveSubagentSlot,
+      trackParent,
+      listTrackedParents,
+    })
   }),
 )
 
 export const defaultLayer = layer.pipe(
   Layer.provide(SubagentBus.defaultLayer),
   Layer.provide(SubagentPlans.defaultLayer),
-  Layer.provide(MaxSubagents.defaultLayer),
   Layer.provide(Database.defaultLayer),
 )

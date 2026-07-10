@@ -98,6 +98,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const mesh = Effect.fn("SessionHttpApi.mesh")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* meshSvc.trackParent(ctx.params.sessionID)
       return yield* meshSvc.status(ctx.params.sessionID)
     })
 
