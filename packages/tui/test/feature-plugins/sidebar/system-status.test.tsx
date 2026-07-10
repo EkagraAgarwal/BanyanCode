@@ -95,3 +95,25 @@ test("sidebar system-status sidebar_content slot renders without throwing", asyn
     testSetup.renderer.destroy()
   }
 })
+
+test("system-status Bar uses height=1 with no flexGrow to prevent vertical expansion", () => {
+  const source = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/system-status.tsx"),
+    "utf8",
+  )
+  expect(source).toContain('flexDirection="row" height={1} width="100%"')
+  const barBlockMatch = source.match(/function Bar[\s\S]*?^}/m)
+  expect(barBlockMatch).not.toBeNull()
+  const barBlock = barBlockMatch![0]
+  expect(barBlock).not.toMatch(/flexGrow=\{1\}/)
+})
+
+test("system-status wraps every Bar in a flexDirection=column metric wrapper", () => {
+  const source = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/system-status.tsx"),
+    "utf8",
+  )
+  expect(source).toMatch(/<Show when=\{cpuPercent\(\) !== undefined\}>[\s\S]*?flexDirection="column"[\s\S]*?<Bar/)
+  expect(source).toMatch(/<Show when=\{memPercent\(\) !== undefined\}>[\s\S]*?flexDirection="column"[\s\S]*?<Bar/)
+  expect(source).toMatch(/<Show when=\{diskPercent\(\) !== undefined\}>[\s\S]*?flexDirection="column"[\s\S]*?<Bar/)
+})

@@ -38,9 +38,9 @@ function Bar(props: { percent: number; theme: any }) {
   }
   const emptyColor = () => toHex(props.theme.backgroundElement)
   return (
-    <box flexDirection="row" flexGrow={1} flexBasis={0} flexShrink={1} height={1}>
-      <box backgroundColor={color()} width={`${pct()}%`} height={1} flexShrink={1} />
-      <box backgroundColor={emptyColor()} width={`${100 - pct()}%`} height={1} flexShrink={1} />
+    <box flexDirection="row" height={1} width="100%">
+      <box backgroundColor={color()} width={`${pct()}%`} height={1} />
+      <box backgroundColor={emptyColor()} width={`${100 - pct()}%`} height={1} />
     </box>
   )
 }
@@ -99,9 +99,7 @@ function View(props: { api: TuiPluginApi }) {
                     {cpuPercent()!.toFixed(0)}%
                   </text>
                 </box>
-                <box width="100%">
-                  <Bar percent={cpuPercent()!} theme={theme()} />
-                </box>
+                <Bar percent={cpuPercent()!} theme={theme()} />
               </box>
             </Show>
 
@@ -114,9 +112,7 @@ function View(props: { api: TuiPluginApi }) {
                     {formatBytes(s().memoryUsedBytes)} / {formatBytes(s().memoryTotalBytes)}
                   </text>
                 </box>
-                <box width="100%">
-                  <Bar percent={memPercent()!} theme={theme()} />
-                </box>
+                <Bar percent={memPercent()!} theme={theme()} />
               </box>
             </Show>
 
@@ -129,9 +125,7 @@ function View(props: { api: TuiPluginApi }) {
                     {formatBytes(s().diskUsedBytes!)} / {formatBytes(s().diskTotalBytes!)}
                   </text>
                 </box>
-                <box width="100%">
-                  <Bar percent={diskPercent()!} theme={theme()} />
-                </box>
+                <Bar percent={diskPercent()!} theme={theme()} />
               </box>
             </Show>
           </>
