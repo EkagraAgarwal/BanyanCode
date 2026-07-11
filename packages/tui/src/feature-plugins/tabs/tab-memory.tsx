@@ -11,6 +11,10 @@ interface MemoryEntry {
   version: number
   agentID?: string
   value: unknown
+  kind?: string
+  title?: string
+  body?: string
+  status?: string
 }
 
 import { toHex } from "../../util/color"
@@ -28,13 +32,17 @@ function View(props: { api: TuiPluginApi }) {
 
   onMount(async () => {
     try {
-      // (api.client as any).memory?.list() — use as any until SDK is regenerated
-      const result = await (props.api.client as any).memory?.list?.({ scope: "global" })
-      if (result?.data) {
+      // Typed SDK: HttpApi generator emits `client.memory.list(...)` for
+      // the `/global/memory/*` group at the SDK level. The body is wrapped
+      // under the schema identifier name (`banyanMemoryListInput`).
+      const result = await props.api.client.memory.list({
+        banyanMemoryListInput: { scope: "global" },
+      })
+      if (result.data) {
         setEntries(result.data as MemoryEntry[])
       }
     } catch {
-      // stub — no memory SDK API yet
+      // ignore — the typed SDK may fail before the endpoint is reachable
     } finally {
       setLoading(false)
     }
