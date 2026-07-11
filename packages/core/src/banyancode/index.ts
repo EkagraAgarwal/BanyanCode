@@ -26,6 +26,28 @@ export {
   layer as memoryServiceLayer,
   defaultLayer as memoryServiceDefaultLayer,
 } from "./memory-service"
+export {
+  Service as MemoryExtractor,
+  layer as memoryExtractorLayer,
+  defaultLayer as memoryExtractorDefaultLayer,
+} from "./memory-extractor"
+export type { ExtractInput, ExtractResult, ExtractAction } from "./memory-extractor"
+export {
+  KEEP_THRESHOLD,
+  MERGE_THRESHOLD,
+  decide,
+  normalizeForDedupe,
+  score,
+  scoreKind,
+  scoreSource,
+  scoreConfidence,
+  scoreImportance,
+  scoreSpecificity,
+  scoreRepeat,
+  suggestKey,
+  totalScore,
+} from "./memory-significance"
+export type { KeepDecision, ScoreInput, SignificanceBreakdown } from "./memory-significance"
 export type {
   EmitCandidateInput,
   PromoteInput,
