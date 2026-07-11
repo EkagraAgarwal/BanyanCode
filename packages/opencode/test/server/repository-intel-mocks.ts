@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Queue } from "effect"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import type {
   ArchitecturalSlice,
@@ -89,6 +89,21 @@ export const repositoryIntelServiceMocks = Layer.mergeAll(
       searchRanked: () => Effect.succeed({ entries: [], totalHits: 0 }),
       vacuum: () => Effect.succeed(0),
       update: () => Effect.die("not used"),
+    }),
+  ),
+  Layer.succeed(
+    Banyan.MemoryService,
+    Banyan.MemoryService.of({
+      emitCandidate: () => Effect.die("not used"),
+      promote: () => Effect.die("not used"),
+      reject: () => Effect.die("not used"),
+      listCandidates: () => Effect.succeed([]),
+      events: () => {
+        // Mock Dequeue — the bridge never runs in HTTP tests, so this is never
+        // taken from. `as never` narrows it past the Queue.Dequeue type-check.
+        const queue = {} as never
+        return queue as unknown as Queue.Dequeue<never>
+      },
     }),
   ),
 )

@@ -104,6 +104,51 @@ export const MemoryForgetResult = Schema.Struct({
   removed: Schema.Number,
 }).annotate({ identifier: "Banyan/MemoryForgetResult" })
 
+/**
+ * Phase 1b: candidate lifecycle endpoints. Candidates live in the same
+ * `memory_entries` table; `status="pending"` distinguishes them from canonical
+ * active entries. `promote` flips a candidate to active and supersedes any
+ * matching actives; `reject` flips it to rejected.
+ */
+
+export const MemoryCandidatesInput = Schema.Struct({
+  status: Schema.optional(MemoryStatusSchema),
+  scope: Schema.optional(Schema.String.check(Schema.isPattern(SCOPE_PATTERN, { identifier: "Banyan/MemoryScope" }))),
+  limit: Schema.optional(Schema.Number),
+}).annotate({ identifier: "Banyan/MemoryCandidatesInput" })
+
+export const MemoryCandidatesResult = Schema.Struct({
+  entries: Schema.Array(MemoryEntrySchema),
+  count: Schema.Number,
+}).annotate({ identifier: "Banyan/MemoryCandidatesResult" })
+
+export const MemoryPromoteInput = Schema.Struct({
+  id: Schema.String.check(Schema.isPattern(ID_PATTERN, { identifier: "Banyan/MemoryID" })),
+  expectedVersion: Schema.Number,
+  key: Schema.optional(Schema.String.check(Schema.isPattern(KEY_PATTERN, { identifier: "Banyan/MemoryKey" }))),
+  scope: Schema.optional(Schema.String.check(Schema.isPattern(SCOPE_PATTERN, { identifier: "Banyan/MemoryScope" }))),
+  skipSupersede: Schema.optional(Schema.Boolean),
+}).annotate({ identifier: "Banyan/MemoryPromoteInput" })
+
+export const MemoryPromoteResult = Schema.Struct({
+  id: Schema.String,
+  key: Schema.String,
+  status: Schema.Literals(["active"]),
+  version: Schema.Number,
+  supersededIds: Schema.Array(Schema.String),
+}).annotate({ identifier: "Banyan/MemoryPromoteResult" })
+
+export const MemoryRejectInput = Schema.Struct({
+  id: Schema.String.check(Schema.isPattern(ID_PATTERN, { identifier: "Banyan/MemoryID" })),
+  expectedVersion: Schema.Number,
+}).annotate({ identifier: "Banyan/MemoryRejectInput" })
+
+export const MemoryRejectResult = Schema.Struct({
+  id: Schema.String,
+  status: Schema.Literals(["rejected"]),
+  version: Schema.Number,
+}).annotate({ identifier: "Banyan/MemoryRejectResult" })
+
 export const MEMORY_PREFIX = "/global/memory"
 
 export const MemoryPaths = {
@@ -113,6 +158,9 @@ export const MemoryPaths = {
   search: `${MEMORY_PREFIX}/search`,
   store: `${MEMORY_PREFIX}/store`,
   forget: `${MEMORY_PREFIX}/forget`,
+  candidates: `${MEMORY_PREFIX}/candidates`,
+  promote: `${MEMORY_PREFIX}/promote`,
+  reject: `${MEMORY_PREFIX}/reject`,
 } as const
 
 export const MemoryApi = HttpApi.make("memory").add(
@@ -178,6 +226,39 @@ export const MemoryApi = HttpApi.make("memory").add(
           identifier: "memory.forget",
           summary: "Forget memory entries",
           description: "Removes the entry by id OR by (scope, key) pair. Returns the number of rows removed.",
+        }),
+      ),
+      HttpApiEndpoint.post("candidates", MemoryPaths.candidates, {
+        payload: MemoryCandidatesInput,
+        success: described(MemoryCandidatesResult, "Candidate memory entries"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "memory.candidates",
+          summary: "List candidate memory entries",
+          description:
+            "Lists memory entries filtered by status (typically `pending`). The candidate lifecycle is: emit (status=pending) → promote (status=active, supersedes matching actives) → reject (status=rejected).",
+        }),
+      ),
+      HttpApiEndpoint.post("promote", MemoryPaths.promote, {
+        payload: MemoryPromoteInput,
+        success: described(MemoryPromoteResult, "Promote result"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "memory.promote",
+          summary: "Promote a candidate memory entry",
+          description:
+            "Transitions a candidate entry to status=active. Optimistic concurrency on `expectedVersion`. Unless `skipSupersede=true`, also marks existing actives that share the same fingerprint (kind + title) as `superseded`.",
+        }),
+      ),
+      HttpApiEndpoint.post("reject", MemoryPaths.reject, {
+        payload: MemoryRejectInput,
+        success: described(MemoryRejectResult, "Reject result"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "memory.reject",
+          summary: "Reject a candidate memory entry",
+          description:
+            "Transitions a candidate entry to status=rejected. Optimistic concurrency on `expectedVersion`.",
         }),
       ),
     )

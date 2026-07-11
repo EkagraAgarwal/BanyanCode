@@ -28,6 +28,13 @@ import path from "path"
 const buildApiLayer = (dbPath: string) => {
   const dbLayer = Database.layerFromPath(dbPath)
   const memoryLayer = Banyan.memoryRepoLayer.pipe(Layer.provide(dbLayer))
+  const memoryServiceLayer = Banyan.memoryServiceLayer.pipe(
+    Layer.provide(memoryLayer as Layer.Layer<never, never, never>),
+    Layer.provide(dbLayer),
+  )
+
+  // Merge repo + service so handlers reading either service get the same DB.
+  const memoryLayerFinal = Layer.merge(memoryLayer, memoryServiceLayer)
 
   return HttpRouter.serve(
     HttpApiBuilder.layer(RootHttpApi).pipe(
@@ -39,7 +46,7 @@ const buildApiLayer = (dbPath: string) => {
         memoryHandlers,
       ]),
       Layer.provide([authorizationLayer, schemaErrorLayer]),
-      Layer.provide(memoryLayer),
+      Layer.provide(memoryLayerFinal),
       HttpRouter.provideRequest(Layer.succeedContext(Context.empty() as Context.Context<unknown>)),
     ),
     { disableListenLog: true, disableLogger: true },

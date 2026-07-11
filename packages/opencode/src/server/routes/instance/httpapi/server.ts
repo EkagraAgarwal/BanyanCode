@@ -281,6 +281,7 @@ export function createRoutes(
         Banyan.searchDefaultLayer,
         Banyan.structuralQueriesDefaultLayer,
         Banyan.memoryRepoDefaultLayer,
+        Banyan.memoryServiceDefaultLayer,
       ).pipe(Layer.provide(Banyan.codegraphRepoDefaultLayer), Layer.provide(Database.defaultLayer)),
     ),
     Layer.provideMerge(

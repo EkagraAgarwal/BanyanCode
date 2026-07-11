@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { NotFoundError as MemoryNotFoundError, StaleWriteError } from "@opencode-ai/core/banyancode/types"
 import type { MemoryEntry } from "@opencode-ai/core/banyancode/types"
 import {
   encodeMemoryValue,
@@ -10,10 +11,13 @@ import {
 import { randomUUID } from "node:crypto"
 import { RootHttpApi } from "../api"
 import {
+  MemoryCandidatesInput,
   MemoryForgetInput,
   MemoryGetInput,
   MemoryListInput,
+  MemoryPromoteInput,
   MemoryRecallInput,
+  MemoryRejectInput,
   MemorySearchInput,
   MemoryStoreInput,
 } from "../groups/memory"
@@ -22,6 +26,7 @@ import { InvalidRequestError } from "../errors"
 export const memoryHandlers = HttpApiBuilder.group(RootHttpApi, "memory", (handlers) =>
   Effect.gen(function* () {
     const repo = yield* Banyan.MemoryRepo
+    const memoryService = yield* Banyan.MemoryService
 
     const toWire = (entry: MemoryEntry) => ({
       id: entry.id,
@@ -144,6 +149,78 @@ export const memoryHandlers = HttpApiBuilder.group(RootHttpApi, "memory", (handl
       return { removed: 0 }
     })
 
+    const candidatesHandler = Effect.fn("Memory.candidates")(function* (ctx: {
+      payload: typeof MemoryCandidatesInput.Type
+    }) {
+      const status = ctx.payload.status as "pending" | "active" | "superseded" | "rejected" | "expired" | undefined
+      const scope = ctx.payload.scope as "global" | "session" | undefined
+      const entries = yield* memoryService.listCandidates({
+        status,
+        scope,
+        limit: ctx.payload.limit ?? 200,
+      })
+      return { entries: entries.map(toWire), count: entries.length }
+    })
+
+    const promoteHandler = Effect.fn("Memory.promote")(function* (ctx: {
+      payload: typeof MemoryPromoteInput.Type
+    }) {
+      const result = yield* memoryService.promote({
+        id: ctx.payload.id,
+        expectedVersion: ctx.payload.expectedVersion,
+        key: ctx.payload.key ?? undefined,
+        scope: ctx.payload.scope as "global" | "session" | undefined,
+        skipSupersede: ctx.payload.skipSupersede ?? false,
+      }).pipe(
+        Effect.catchTag("NotFoundError", (e: MemoryNotFoundError) =>
+          Effect.fail(
+            new InvalidRequestError({ message: `memory entry ${e.id} not found` }),
+          ),
+        ),
+        Effect.catchTag("StaleWriteError", (e: StaleWriteError) =>
+          Effect.fail(
+            new InvalidRequestError({
+              message: `stale write: expected v${e.expectedVersion}, current v${e.currentVersion} for id=${e.id}`,
+            }),
+          ),
+        ),
+      )
+      return {
+        id: result.entry.id,
+        key: result.entry.key,
+        status: "active" as const,
+        version: result.entry.version,
+        supersededIds: result.supersededIds,
+      }
+    })
+
+    const rejectHandler = Effect.fn("Memory.reject")(function* (ctx: {
+      payload: typeof MemoryRejectInput.Type
+    }) {
+      const updated = yield* memoryService.reject({
+        id: ctx.payload.id,
+        expectedVersion: ctx.payload.expectedVersion,
+      }).pipe(
+        Effect.catchTag("NotFoundError", (e: MemoryNotFoundError) =>
+          Effect.fail(
+            new InvalidRequestError({ message: `memory entry ${e.id} not found` }),
+          ),
+        ),
+        Effect.catchTag("StaleWriteError", (e: StaleWriteError) =>
+          Effect.fail(
+            new InvalidRequestError({
+              message: `stale write: expected v${e.expectedVersion}, current v${e.currentVersion} for id=${e.id}`,
+            }),
+          ),
+        ),
+      )
+      return {
+        id: updated.id,
+        status: "rejected" as const,
+        version: updated.version,
+      }
+    })
+
     return handlers
       .handle("list", listHandler)
       .handle("get", getHandler)
@@ -151,5 +228,8 @@ export const memoryHandlers = HttpApiBuilder.group(RootHttpApi, "memory", (handl
       .handle("search", searchHandler)
       .handle("store", storeHandler)
       .handle("forget", forgetHandler)
+      .handle("candidates", candidatesHandler)
+      .handle("promote", promoteHandler)
+      .handle("reject", rejectHandler)
   }),
 )
