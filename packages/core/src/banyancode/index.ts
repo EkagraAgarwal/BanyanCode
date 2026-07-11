@@ -22,6 +22,24 @@ export { NotFoundError, StaleWriteError } from "./types"
 export { Service as MemoryRepo, layer as memoryRepoLayer, defaultLayer as memoryRepoDefaultLayer } from "./memory-repo"
 export type { SearchRankedInput, SearchRankedResult } from "./memory-repo"
 export {
+  Service as MemoryService,
+  layer as memoryServiceLayer,
+  defaultLayer as memoryServiceDefaultLayer,
+} from "./memory-service"
+export type {
+  EmitCandidateInput,
+  PromoteInput,
+  RejectInput,
+  ListCandidatesInput,
+  Interface as MemoryServiceInterface,
+} from "./memory-service"
+export {
+  MemoryCommitted,
+  MemoryCandidateEmitted,
+  MemoryPromoted,
+  MemoryRejected,
+} from "./memory-events"
+export {
   MemoryKindSchema,
   MemoryPayloadV1Schema,
   MemoryEnvelopeV1Schema,
