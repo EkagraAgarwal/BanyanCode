@@ -49,6 +49,27 @@ export type {
   RankSignals,
 } from "./memory-retrieval"
 export {
+  Service as MemoryProjection,
+  layer as memoryProjectionLayer,
+  defaultLayer as memoryProjectionDefaultLayer,
+} from "./memory-projection"
+export type {
+  ProjectSummary,
+  ProjectSummarySection,
+  AgentWorkingNotes,
+  ActiveList,
+} from "./memory-projection"
+export {
+  Service as MemoryHygiene,
+  layer as memoryHygieneLayer,
+  defaultLayer as memoryHygieneDefaultLayer,
+} from "./memory-hygiene"
+export type {
+  ExpireResult,
+  PruneResult,
+  ReconcileResult,
+} from "./memory-hygiene"
+export {
   KEEP_THRESHOLD,
   MERGE_THRESHOLD,
   decide,
