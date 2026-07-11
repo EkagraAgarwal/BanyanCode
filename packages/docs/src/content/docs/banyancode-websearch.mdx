@@ -9,7 +9,7 @@ BanyanCode includes a free web search tool powered by DuckDuckGo HTML, designed 
 
 ## Overview
 
-The `websearch_free` tool performs web searches through DuckDuckGo's HTML interface. It is available when BanyanCode features are enabled via the `BANYANCODE_ENABLE` runtime flag.
+The `websearch_free` tool performs web searches through DuckDuckGo's HTML interface. It is available by default; set `BANYANCODE_DISABLE_WEBSEARCH=1` to opt out.
 
 ## Usage
 
@@ -40,7 +40,7 @@ The tool accepts the following parameters:
 
 ### Runtime Flags
 
-Set `BANYANCODE_ENABLE=1` in your environment to enable BanyanCode features including the websearch_free tool.
+BanyanCode is on by default; the `websearch_free` tool is registered automatically.
 
 ### Disabling Websearch
 
@@ -50,7 +50,7 @@ Set `BANYANCODE_DISABLE_WEBSEARCH=1` to disable the websearch_free tool even whe
 
 ### Tool not available
 
-Ensure `BANYANCODE_ENABLE=1` is set in your environment. Without this flag, the tool will not be registered.
+BanyanCode is on by default. If `websearch_free` is missing, check that `BANYANCODE_DISABLE_WEBSEARCH` is not set to `1` and that `BANYANCODE_ENABLE` is not set to `0`.
 
 ### Search returns no results
 

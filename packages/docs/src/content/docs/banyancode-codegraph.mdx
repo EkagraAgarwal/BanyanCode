@@ -23,15 +23,13 @@ Run `/codegraph-build` from the prompt. A floating progress widget shows the cur
 
 ### CLI
 
-With `BANYANCODE_ENABLE=1`:
-
 ```bash
-opencode codegraph build --force
-opencode codegraph build --root ./packages/core --force
-opencode codegraph status
-opencode codegraph cancel
-opencode codegraph force-kill   # if cancel does not unblock a stuck build
-opencode codegraph path         # print .banyancode/banyancode.db location
+banyancode codegraph build --force
+banyancode codegraph build --root ./packages/core --force
+banyancode codegraph status
+banyancode codegraph cancel
+banyancode codegraph force-kill   # if cancel does not unblock a stuck build
+banyancode codegraph path         # print .banyancode/banyancode.db location
 ```
 
 ### Agent tools
@@ -46,9 +44,9 @@ Use slash commands such as `/codegraph-search` and `/repo-find-subsystem`, or as
 
 ### Build hangs or stalls
 
-- Check `opencode codegraph status` — if stuck at the same count, run `opencode codegraph cancel` then `opencode codegraph force-kill`.
+- Check `banyancode codegraph status` — if stuck at the same count, run `banyancode codegraph cancel` then `banyancode codegraph force-kill`.
 - Ensure only one build runs at a time; a second `build` call is rejected while status is `running`.
-- Verify `BANYANCODE_ENABLE=1` is set.
+- Verify BanyanCode is enabled (it is by default; only set `BANYANCODE_ENABLE=0` if you want to turn it off).
 
 ### Index fails
 
@@ -58,5 +56,5 @@ Use slash commands such as `/codegraph-search` and `/repo-find-subsystem`, or as
 
 ### Search returns no results
 
-- Run `opencode codegraph build --force` (or `/codegraph-build`) first.
+- Run `banyancode codegraph build --force` (or `/codegraph-build`) first.
 - Try a more specific query or use `codegraph_query` for exact symbol matches.

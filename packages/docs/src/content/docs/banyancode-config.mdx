@@ -51,13 +51,13 @@ You can change this at runtime via the TUI: `/agent-model`. The change takes eff
 
 ### `BANYANCODE_ENABLE`
 
-Enables all BanyanCode features. Set to `1` to register the orchestrator, researcher, mesh tools, memory tools, codegraph tools, and BanyanCode slash commands.
+BanyanCode services are **on by default**. Every BanyanCode feature (orchestrator, researcher, mesh, memory, codegraph, slash commands) registers automatically.
 
 ```bash
-BANYANCODE_ENABLE=1
+BANYANCODE_ENABLE=0   # disable BanyanCode and run as upstream OpenCode
 ```
 
-Without this, the existing OpenCode experience is unchanged.
+This is the only way to turn the feature gate off; the env var is read as a boolean (`0` disables, anything else keeps the default on).
 
 ### `BANYANCODE_DISABLE_WEBSEARCH`
 
@@ -103,8 +103,8 @@ If the build fails, the widget shows the error message in red.
 
 Cancelling a running build is currently available only through the HTTP `codegraphCancel` endpoint; there is no slash command for it yet. Multiple builds cancel the previous one — if you run `/codegraph-build` while another build is running, the old build is cancelled and the new one starts.
 
-This feature is gated on `BANYANCODE_ENABLE=1`.
+This feature is on by default; set `BANYANCODE_ENABLE=0` to disable it.
 
 ## Feature gates
 
-All BanyanCode features (orchestrator, researcher, mesh, memory, codegraph) are gated behind `BANYANCODE_ENABLE=1`. When unset, none of the new tools, agents, or slash commands register, and the user-facing behavior is identical to upstream OpenCode.
+All BanyanCode features (orchestrator, researcher, mesh, memory, codegraph) are on by default. Set `BANYANCODE_ENABLE=0` to disable them, at which point the user-facing behavior is identical to upstream OpenCode.

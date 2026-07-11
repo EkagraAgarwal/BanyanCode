@@ -16,12 +16,25 @@ BanyanCode is a CLI/TUI-only fork of [OpenCode](https://github.com/anomalyco/ope
 
 ## Quick start
 
+### From source
+
 ```bash
 bun install
 bun dev
 ```
 
-BanyanCode features are opt-in. Set `BANYANCODE_ENABLE=1` in your environment to enable them.
+BanyanCode features are on by default. Set `BANYANCODE_ENABLE=0` to run as upstream OpenCode.
+
+### Standalone binary
+
+```bash
+cd packages/opencode
+bun run script/build.ts -- --single
+install -m 0755 dist/opencode-<platform>-<arch>/bin/banyancode ~/.local/bin/
+# or on Windows: copy dist\opencode-windows-x64\bin\banyancode.exe to a PATH directory
+```
+
+Then run `banyancode` in any project directory. The binary is fully self-contained — no `node_modules` or Bun runtime required.
 
 ## Feature overview
 

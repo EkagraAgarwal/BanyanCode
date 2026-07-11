@@ -18,7 +18,7 @@ BanyanCode keeps the entire OpenCode architecture and adds services alongside it
 
 | OpenCode layer | BanyanCode addition |
 |----------------|---------------------|
-| Agent registry (`packages/opencode/src/agent/`) | `orchestrator`, `researcher`, `scout`, `coder`, `explore`, `general` agents registered under the `BANYANCODE_ENABLE=1` feature gate |
+| Agent registry (`packages/opencode/src/agent/`) | `orchestrator`, `researcher`, `scout`, `coder`, `explore`, `general` agents registered when the BanyanCode feature gate is on (default on; set `BANYANCODE_ENABLE=0` to turn off) |
 | Command shell (`packages/opencode/src/command/`) | `/codegraph-build`, `/codegraph-remove`, `/yolo` slash commands; Wave 1 adds `/repo-find-subsystem`, `/repo-find-tests`, `/codegraph-search`, `/codegraph-find-routes`, `/codegraph-find-async`, `/codegraph-find-overrides`, `/codegraph-find-recursive`, `/codegraph-find-implementations`, `/codegraph-trace-execution`; Wave 2 adds `/repository-query`, `/repository-explain`, `/repository-trace`, `/repository-impact`, `/repository-tests`, `/repository-symbols`, `/repository-relationships`, `/repository-ownership`, `/websearch-free` |
 | Tool registry (`packages/core/src/tool/`) | `memory_*`, `websearch_free`, `codegraph_*`, `code_*`, `system_*`, `mesh_*`, `systeminfo` tools; Wave 1 adds 7 `repo_*` tools and 5 `codegraph_find_*` / `codegraph_search` tools (13 in total); Wave 2 adds 9 `repository_*` tool wrappers (`repository_query`, `repository_slice`, `repository_explain`, `repository_impact`, `repository_trace`, `repository_tests`, `repository_symbols`, `repository_relationships`, `repository_ownership`) |
 | CLI (`packages/opencode/src/cli/`) | Wave 1 adds `opencode codegraph {build,status,cancel,force-kill,path,trace}`; Wave 2 adds `opencode repository {query,explain,impact,trace,tests,relationships,ownership}` and `opencode websearch-free <query>` |
@@ -29,7 +29,7 @@ BanyanCode keeps the entire OpenCode architecture and adds services alongside it
 | Config schema (`packages/core/src/v1/config/`) | Separate `BanyanConfig.Info` schema — never mixed with OpenCode's `ConfigV1.Info` |
 | Permissions (`packages/opencode/src/effect/permission-bridge.ts`) | Wave 2 adds a `PermissionV2.Service` bridge over the opencode `Permission.Service` so core consumers can stay Effect-native without leaking v1 types |
 
-The feature gate (`BANYANCODE_ENABLE`) keeps the additions opt-in. With the gate off, BanyanCode is a no-op and the OpenCode experience is unchanged.
+The feature gate (`BANYANCODE_ENABLE`) defaults to **on**. BanyanCode services register automatically; set `BANYANCODE_ENABLE=0` to disable them (the binary then behaves like upstream OpenCode).
 
 ## Project-local directory layout
 
@@ -49,12 +49,49 @@ The resolved DB path is shown in the TUI's codegraph progress widget during `/co
 
 ## Quick start
 
+### From source (dev)
+
 ```bash
 bun install
 bun dev
 ```
 
-`bun dev` runs the TUI from `packages/opencode`. Set `BANYANCODE_ENABLE=1` to enable the BanyanCode additions.
+`bun dev` runs the TUI from `packages/opencode`. BanyanCode services are on by default.
+
+### Standalone binary (system-wide install)
+
+Compile a single self-contained `banyancode` executable (JS + libsql N-API addon + all native deps embedded — no `node_modules` needed at runtime):
+
+```bash
+cd packages/opencode
+bun run script/build.ts -- --single
+```
+
+Then copy the binary to a directory on your `PATH`:
+
+```powershell
+# Windows
+$bin = "$env:LOCALAPPDATA\banyancode\bin"
+New-Item -ItemType Directory -Force -Path $bin | Out-Null
+Copy-Item dist\opencode-windows-x64\bin\banyancode.exe "$bin\banyancode.exe"
+[Environment]::SetEnvironmentVariable("Path", $env:Path + ";$bin", "User")
+```
+
+```bash
+# macOS / Linux
+install -d ~/.local/bin
+cp dist/opencode-darwin-arm64/bin/banyancode ~/.local/bin/
+```
+
+Then from any terminal:
+
+```bash
+cd /path/to/any/project
+banyancode                  # TUI in cwd
+banyancode "explain this"   # non-interactive run
+```
+
+To upgrade after editing source: rebuild and overwrite the same file. The `banyancode.exe` is fully self-contained — the build also runs a smoke test that spawns it in a clean temp dir and confirms the libsql native addon loads.
 
 To configure the orchestrator's parallel-subagent limit:
 
@@ -70,30 +107,30 @@ To add a custom subagent:
 
 ### Codegraph CLI
 
-With `BANYANCODE_ENABLE=1`, build and inspect the index from the shell (no TUI required):
+Build and inspect the index from the shell (no TUI required):
 
 ```bash
-opencode codegraph build --force          # index cwd, stream progress
-opencode codegraph build --root ./packages/core --force
-opencode codegraph status                 # current build state
-opencode codegraph cancel                 # cancel in-flight build
-opencode codegraph force-kill             # interrupt stuck build (Windows: taskkill fallback)
-opencode codegraph path                   # print .banyancode/banyancode.db path
-opencode codegraph trace --session <id>   # tail the .banyancode/trace/<id>.jsonl file
+banyancode codegraph build --force          # index cwd, stream progress
+banyancode codegraph build --root ./packages/core --force
+banyancode codegraph status                 # current build state
+banyancode codegraph cancel                 # cancel in-flight build
+banyancode codegraph force-kill             # interrupt stuck build (Windows: taskkill fallback)
+banyancode codegraph path                   # print .banyancode/banyancode.db path
+banyancode codegraph trace --session <id>   # tail the .banyancode/trace/<id>.jsonl file
 ```
 
 ### Repository intelligence CLI (Wave 2)
 
 ```bash
-opencode repository query <query>                 # unified repository context
-opencode repository explain <symbol>              # ArchitecturalSlice for a symbol
-opencode repository trace <symbol> [--depth N]    # downstream entrypoints
-opencode repository impact <path>                 # dependents of a file
-opencode repository tests <symbol>                # tests referencing a symbol
-opencode repository relationships <nodeID>         # BFS from a node
-opencode repository ownership <path>              # most active git author
+banyancode repository query <query>                 # unified repository context
+banyancode repository explain <symbol>              # ArchitecturalSlice for a symbol
+banyancode repository trace <symbol> [--depth N]    # downstream entrypoints
+banyancode repository impact <path>                 # dependents of a file
+banyancode repository tests <symbol>                # tests referencing a symbol
+banyancode repository relationships <nodeID>         # BFS from a node
+banyancode repository ownership <path>              # most active git author
 
-opencode websearch-free <query>                   # DuckDuckGo HTML; gated by BANYANCODE_DISABLE_WEBSEARCH
+banyancode websearch-free <query>                   # DuckDuckGo HTML; gated by BANYANCODE_DISABLE_WEBSEARCH
 ```
 
 ## Architecture (one paragraph each)

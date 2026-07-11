@@ -46,7 +46,7 @@ BanyanCode is its **own product** that runs alongside OpenCode. The two products
 | Env var prefix | `OPENCODE_*` | `BANYANCODE_*` |
 | Config schema | `ConfigV1.Info` | `BanyanConfig.Info` |
 
-Both products can be installed side by side. BanyanCode reads/writes only `banyancode.*` and `.banyancode/`; OpenCode reads/writes only its own paths. Disabling BanyanCode (`BANYANCODE_ENABLE` unset) leaves OpenCode untouched.
+Both products can be installed side by side. BanyanCode reads/writes only `banyancode.*` and `.banyancode/`; OpenCode reads/writes only its own paths. BanyanCode is on by default; set `BANYANCODE_ENABLE=0` to disable it, at which point the binary behaves like upstream OpenCode.
 
 The repo's source code uses the `@opencode-ai/*` package namespace internally (e.g. `@opencode-ai/core/banyancode`); only user-facing surfaces (binary, install script, brand text, repo URL) carry the BanyanCode name.
 
@@ -90,7 +90,7 @@ Debug logs (stderr):
 
 ## BanyanCode service layer (`packages/core/src/banyancode/`)
 
-Every BanyanCode service follows the same pattern: a `Context.Service` class, a `layer` builder, and a `defaultLayer` that wires the service's dependencies. All services are gated by `BANYANCODE_ENABLE` (default off) so disabling BanyanCode is a no-op.
+Every BanyanCode service follows the same pattern: a `Context.Service` class, a `layer` builder, and a `defaultLayer` that wires the service's dependencies. The feature gate defaults to **on** (`boolTrue` in `runtime-flags.ts`); set `BANYANCODE_ENABLE=0` to disable, in which case every service is a no-op.
 
 | Service | Purpose | Key deps |
 |---------|---------|----------|
@@ -147,7 +147,7 @@ Computed by `CodegraphAnalyzer` via BFS over `codegraph_edges`.
 
 ## Orchestrator + mesh
 
-- `orchestrator` agent is registered by `packages/opencode/src/agent/agent.ts` when `BANYANCODE_ENABLE=1`.
+- `orchestrator` agent is registered by `packages/opencode/src/agent/agent.ts` when BanyanCode is enabled (the default).
 - The orchestrator prompt is templated: `{{maxSubagents}}` is rendered from `BanyanConfig.banyancode_max_subagents` (default `5`, capped at `20`) at agent-load time.
 - It decomposes a prompt into a plan, then `MeshCoordinator` issues bounded parallel `Effect.forkIn(scope, ...)` calls to subagents.
 - Hard cap: `MeshCoordinator.tryReserveSubagentSlot` enforces the limit. At cap:
@@ -318,7 +318,7 @@ BanyanCode-specific test files:
 ## Runtime flags
 
 `packages/core/src/effect/runtime-flags.ts` (and the opencode-package twin) captures env-var configuration into a `RuntimeFlags` service:
-- `BANYANCODE_ENABLE=1` — feature gate; default off
+- `BANYANCODE_ENABLE` — feature gate; default on (`boolTrue`). Set to `0` to disable BanyanCode and run as upstream OpenCode.
 - `BANYANCODE_DISABLE_WEBSEARCH=1` — disable `websearch_free`
 - `BANYANCODE_CONFIG_DIR` — override global config directory
 - `BANYANCODE_DISABLE_PROJECT_CONFIG=1` — skip project-local `.banyancode/` discovery
