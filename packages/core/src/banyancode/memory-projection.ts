@@ -51,6 +51,44 @@ export interface ActiveList {
   generatedAt: number
 }
 
+export interface DigestItem {
+  id: string
+  kind: MemoryEntry["kind"]
+  title: string
+  body: string
+  importance: "low" | "medium" | "high"
+  confidence: "low" | "medium" | "high"
+  updatedAt: number
+}
+
+export interface DigestProjection {
+  items: DigestItem[]
+  generatedAt: number
+  totalActive: number
+}
+
+/**
+ * Build a flat, plain-text-friendly list of digest items from memory entries.
+ * Strips envelopes down to (title, body, kind, importance, confidence,
+ * updatedAt) so callers can render inline summaries in TUI / CLI output.
+ */
+export const buildDigest = (entries: MemoryEntry[]): DigestItem[] => {
+  const out: DigestItem[] = []
+  for (const e of entries) {
+    const payload = unwrapMemoryValue(e.value, e.key)
+    out.push({
+      id: e.id,
+      kind: payload.kind,
+      title: payload.title,
+      body: payload.body,
+      importance: payload.importance,
+      confidence: payload.confidence,
+      updatedAt: e.updatedAt,
+    })
+  }
+  return out
+}
+
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Banyan/MemoryProjection") {}
 
 export interface Interface {
@@ -76,6 +114,16 @@ export interface Interface {
     sessionID?: string
   }) => Effect.Effect<ActiveList, never, never>
   readonly agentWorkingNotes: (input: { agentID: string; scope?: "global" | "session" }) => Effect.Effect<AgentWorkingNotes, never, never>
+  readonly decisionDigest: (input?: {
+    scope?: "global" | "session"
+    sessionID?: string
+    maxItems?: number
+  }) => Effect.Effect<DigestProjection, never, never>
+  readonly warningDigest: (input?: {
+    scope?: "global" | "session"
+    sessionID?: string
+    maxItems?: number
+  }) => Effect.Effect<DigestProjection, never, never>
 }
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
@@ -104,6 +152,8 @@ export const layer: Layer.Layer<Service, never, MemoryRepo.Service | Database.Se
         recentChanges: () => Effect.succeed({ entries: [], totalActive: 0, generatedAt: 0 }),
         openTodos: () => Effect.succeed({ entries: [], totalActive: 0, generatedAt: 0 }),
         agentWorkingNotes: () => Effect.succeed({ agentID: "", entries: [], generatedAt: 0 }),
+        decisionDigest: () => Effect.succeed({ items: [], generatedAt: 0, totalActive: 0 }),
+        warningDigest: () => Effect.succeed({ items: [], generatedAt: 0, totalActive: 0 }),
       })
     }
 
@@ -258,6 +308,30 @@ export const layer: Layer.Layer<Service, never, MemoryRepo.Service | Database.Se
         }
       })
 
+    const decisionDigest: Interface["decisionDigest"] = (input = {}) =>
+      Effect.gen(function* () {
+        const rows = yield* fetchActiveByKind(ACTIVE_LIST_KINDS.decisions, input.scope, input.sessionID)
+        const limited = typeof input.maxItems === "number" ? rows.slice(0, input.maxItems) : rows
+        const totalActive = yield* countActive(input.scope, input.sessionID)
+        return {
+          items: buildDigest(mapRows(limited)),
+          generatedAt: Date.now(),
+          totalActive,
+        }
+      })
+
+    const warningDigest: Interface["warningDigest"] = (input = {}) =>
+      Effect.gen(function* () {
+        const rows = yield* fetchActiveByKind(ACTIVE_LIST_KINDS.warnings, input.scope, input.sessionID)
+        const limited = typeof input.maxItems === "number" ? rows.slice(0, input.maxItems) : rows
+        const totalActive = yield* countActive(input.scope, input.sessionID)
+        return {
+          items: buildDigest(mapRows(limited)),
+          generatedAt: Date.now(),
+          totalActive,
+        }
+      })
+
     return Service.of({
       projectSummary,
       activeDecisions,
@@ -265,6 +339,8 @@ export const layer: Layer.Layer<Service, never, MemoryRepo.Service | Database.Se
       recentChanges,
       openTodos,
       agentWorkingNotes,
+      decisionDigest,
+      warningDigest,
     })
   }),
 )

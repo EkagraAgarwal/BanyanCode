@@ -182,4 +182,92 @@ describe("Banyan.MemoryProjection", () => {
       ),
     )
   })
+
+  test("decisionDigest and warningDigest compress entries into flat digests", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "memory-projection-digest.sqlite")
+    const { dbLayer, memoryLayer, projectionLayer } = buildLayers(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* Effect.gen(function* () {
+          const { db } = yield* Database.Service
+          yield* DatabaseMigration.apply(db)
+        }).pipe(Effect.provide(dbLayer), Effect.scoped)
+
+        const repo = yield* Banyan.MemoryRepo
+        yield* repo.put({
+          id: "d1",
+          key: "decision:db",
+          value: sample({ title: "Use Turso", kind: "decision", body: "Storage backend is Turso.", importance: "high", confidence: "high" }),
+          scope: "global",
+        })
+        yield* repo.put({
+          id: "a1",
+          key: "architecture:layers",
+          value: sample({ title: "Layer boundaries", kind: "architecture", body: "Three layers." }),
+          scope: "global",
+        })
+        yield* repo.put({
+          id: "w1",
+          key: "warning:env",
+          value: sample({
+            title: "Env fragility",
+            kind: "warning",
+            body: "Watch out for env-specific behavior.",
+            confidence: "medium",
+            importance: "medium",
+            source: { type: "agent" },
+          }),
+          scope: "global",
+        })
+        yield* repo.put({
+          id: "f1",
+          key: "failure:db-migrate",
+          value: sample({
+            title: "DB migration crash",
+            kind: "failure",
+            body: "Migration crashed on empty schema.",
+            confidence: "high",
+            importance: "high",
+            source: { type: "agent" },
+          }),
+          scope: "global",
+        })
+        yield* repo.put({
+          id: "t1",
+          key: "todo:cleanup",
+          value: sample({
+            title: "Cleanup unused indexes",
+            kind: "todo",
+            body: "Drop unused indexes.",
+            source: { type: "system" },
+          }),
+          scope: "global",
+        })
+
+        const projection = yield* Banyan.MemoryProjection
+        const dec = yield* projection.decisionDigest()
+        expect(dec.items.length).toBe(2)
+        const kinds = dec.items.map((i) => i.kind).sort()
+        expect(kinds).toEqual(["architecture", "decision"])
+        expect(dec.items[0]?.title.length).toBeGreaterThan(0)
+        expect(dec.items[0]?.body.length).toBeGreaterThan(0)
+        expect(dec.totalActive).toBe(5)
+
+        const warn = yield* projection.warningDigest()
+        expect(warn.items.length).toBe(2)
+        const warnKinds = warn.items.map((i) => i.kind).sort()
+        expect(warnKinds).toEqual(["failure", "warning"])
+
+        const capped = yield* projection.decisionDigest({ maxItems: 1 })
+        expect(capped.items.length).toBe(1)
+      }).pipe(
+        Effect.provide(projectionLayer),
+        Effect.provide(memoryLayer),
+        Effect.provide(dbLayer),
+        Effect.scoped,
+      ),
+    )
+  })
 })

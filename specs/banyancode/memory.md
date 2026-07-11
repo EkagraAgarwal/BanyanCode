@@ -225,6 +225,107 @@ Candidate service, tool permission gates, events (drain like bridge), tab-memory
 - **Phase 5 — Agent integration:** allowlist in `BanyanConfig` (widen beyond build/orchestrator), session-start system prompt injection.
 - **Phase 6 — Hygiene:** `compact`, `reconcile`, `prune`, `export`, retrieval usefulness counters.
 
+## Phase 2 — Extraction (DONE)
+
+Implemented in `packages/core/src/banyancode/memory-significance.ts` and `memory-extractor.ts`.
+
+**Significance scoring (`memory-significance.ts`):**
+
+| Axis            | Heuristic                                                          | Range    |
+| --------------- | ------------------------------------------------------------------ | -------- |
+| `scoreKind`     | high-signal kinds (decision, architecture, failure, warning) → 1; medium (preference, identity, convention, constraint, ownership) → 0.6; low (observation, summary, environment, pattern) → 0.3; todo → 0.4. | 0–1      |
+| `scoreSource`   | user > system > agent > import                                     | 0–1      |
+| `scoreConfidence` | enum-derived (high=1, medium=0.5, low=0.1)                       | 0–1      |
+| `scoreImportance` | enum-derived (high=1, medium=0.5, low=0.1)                      | 0–1      |
+| `scoreSpecificity` | body has file refs / symbol refs / tags → 0.7–1; otherwise 0.2 | 0–1      |
+| `scoreRepeat`   | duplicates of existing payload fingerprint bump score              | 0–1      |
+
+`totalScore = sum(scores) / 6`. `decide(score, kind)` returns one of `discard | summarize | merge | keep` using thresholds (`DISCARD_THRESHOLD = 0.3`, `SUMMARIZE_THRESHOLD = 0.5`, `MERGE_THRESHOLD = 0.65`).
+
+**Dedupe:**
+
+- `normalizeForDedupe(payload)` lowercases title + body, collapses whitespace, strips trivial punctuation.
+- `suggestKey(payload, normalized)` returns `kind:slug(title)` — used as the natural key so the same logical memory writes to the same row.
+- `payloadFingerprint(payload)` returns `kind::title.toLowerCase()` — used by the merge path and by Phase 6 reconcile.
+
+**Extractor (`memory-extractor.ts`):**
+
+- `MemoryExtractor.Service.extract(input)` inspects a candidate payload, returns one of:
+  - `keep` — payload stored as-is.
+  - `merge` — payload written through `MemoryRepo.put` with the existing row's key, body and key reuse the existing row's `id` so version + history are preserved.
+  - `summarize` — multi-bullet bodies are condensed by stripping the longest body whose length is below the median of the merge candidates' bodies.
+  - `discard` — no-op (extractor never silently writes a low-signal entry).
+- Looks up merge targets via `payloadFingerprint` so similar-but-not-equal payloads still merge.
+- All extraction decisions are returned to the caller; the caller (`MemoryService.emit`) decides whether to call `repo.put` based on the action.
+
+Tests in `memory-significance.test.ts` and `memory-extractor.test.ts` cover each decision branch and the merge-with-existing-row path.
+
+## Phase 3 — Retrieval (DONE)
+
+Implemented in `packages/core/src/banyancode/memory-retrieval.ts`.
+
+**Intent classification (`classifyQuery`):**
+
+Five intents drive the routing:
+
+| Intent          | Heuristic                                                                 | Backend |
+| --------------- | ------------------------------------------------------------------------- | ------- |
+| `code`          | query mentions identifiers, paths, or `find/grep/locate/where is/in`       | codegraph (returns empty memory fallback) |
+| `history`       | query starts with `why did we / what did we / previously / last time`      | memory  |
+| `preference`    | query mentions `prefer / style / formatting / always / never`              | memory  |
+| `continuation`  | query is a short referential follow-up (`that / this / those / again`)     | memory  |
+| `general`       | default                                                                  | memory  |
+
+When `intent = code` the retrieval returns `[]` and asks the caller to fall through to `Banyan.RepositoryIntelligence`.
+
+**Multi-signal ranking (`retrieve`):**
+
+Each candidate gets a score on these axes (clamped 0–1, summed into a weighted total):
+
+- `bm25` — from `MemoryRepo.searchRanked` (FTS5 BM25 OR semantics with a JS keyword fallback for short queries).
+- `tagOverlap` — Jaccard between query tokens and payload tags.
+- `recency` — `exp(-Δdays / 14)` so an entry 2 weeks old scores ~0.37, 4 weeks ~0.13.
+- `importance` — high=1, medium=0.5, low=0.1.
+- `agentRole` — boost if `payload.agentID` matches the caller's agent allowlist.
+- `scopeMatch` — same-scope gets +0.15, cross-scope gets 0.
+
+Final ranking sorts descending and returns top N (default 5).
+
+Tests in `memory-retrieval.test.ts` cover intent classification for each branch, multi-signal ranking that prefers same-scope + higher importance + recent entries, and the OR-semantic keyword fallback when BM25 finds nothing.
+
+## Phase 4 — Projections (DONE)
+
+Implemented in `packages/core/src/banyancode/memory-projection.ts`.
+
+All projections are **pure read-side** — no event publishing, no caching, no DB writes. They are derived from the canonical `memory_entries` table on demand.
+
+| Method                | Returns                                                       | Notes |
+| --------------------- | ------------------------------------------------------------- | ----- |
+| `projectSummary`      | `{ totalActive, byKind: [{kind, entries[]}], generatedAt }`   | one section per observed kind, sorted by kind name. |
+| `activeDecisions`     | entries of kind in `{decision, architecture, constraint}`     | sorted by `updated_at DESC`. |
+| `activeWarnings`      | entries of kind in `{warning, failure}`                       | sorted by `updated_at DESC`. |
+| `recentChanges`       | active entries updated within `withinMs` (default 7 days)     | default cutoff configurable. |
+| `openTodos`           | active entries of kind `todo`                                 | sorted by `updated_at DESC`. |
+| `agentWorkingNotes`   | per-agent view (titles + bodies derived from payload)         | derives kind/title/body from `unwrapMemoryValue` so the caller sees the canonical payload even when the envelope was stored under a different column set. |
+| `decisionDigest`      | `{ items: [{id, kind, title, body, importance, confidence, updatedAt}], totalActive }` | a flat, plain-text-friendly subset of `activeDecisions`. Accepts `maxItems` to cap. |
+| `warningDigest`       | same shape, over `activeWarnings`                             | — |
+
+`buildDigest(entries)` is exported as a helper so the TUI / CLI can render inline digests without re-fetching from the DB.
+
+Tests in `memory-projection.test.ts` cover projectSummary grouping, activeDecisions filtering, agentWorkingNotes attribution, and digest construction (with `maxItems`).
+
+## Phase 6 — Hygiene (PARTIAL)
+
+Implemented in `packages/core/src/banyancode/memory-hygiene.ts`. Covers `expire`, `prune`, `reconcile`. `compact` and `export` are deferred.
+
+| Method       | Behaviour                                                                                  |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| `expire`     | flips `status` from `active` → `expired` for any row where `expires_at < now`; returns count. |
+| `prune`      | deletes `rejected` / `expired` rows with `updated_at < now - olderThanMs` (default 30 d). Returns count. |
+| `reconcile`  | walks active rows, fingerprints each payload via `payloadFingerprint`, marks all-but-newest duplicate as `superseded`, then runs `prune()`. Returns `{ superseded, pruned }`. |
+
+Tests in `memory-hygiene.test.ts` cover all three operations against a real DB. **Deferred for Phase 6b:** `compact` (rewrite-many-orphans into one), `export` (JSON / NDJSON dump), retrieval usefulness counters (per-entry `retrievalCount` / `lastReferencedAt` writes from `MemoryRetrieval`).
+
 ## Out of scope for Phase 1a/1b
 
 - Embeddings / vector search
