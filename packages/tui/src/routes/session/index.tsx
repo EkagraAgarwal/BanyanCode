@@ -2326,43 +2326,28 @@ function Read(props: ToolProps) {
     return value.filter((p): p is string => typeof p === "string")
   })
   return (
-    <Switch>
-      <Match when={isCompleted()}>
-        <MessageBlock mode="tool" label="TOOL CALL · read">
-          <box paddingLeft={1} paddingTop={0} paddingBottom={1}>
-            <InlineTool
-              icon="→"
-              pending="Reading file..."
-              complete={stringValue(props.input.filePath)}
-              spinner={isRunning()}
-              part={props.part}
-            >
-              Read {pathFormatter.format(stringValue(props.input.filePath))} {input(props.input, ["filePath"])}
-            </InlineTool>
-            <For each={loaded()}>
-              {(filepath, index) => (
-                <box id={`tool-inline-loaded-${props.part.id}-${index()}`} paddingLeft={3}>
-                  <text paddingLeft={3} fg={theme.textMuted}>
-                    ↳ Loaded {pathFormatter.format(filepath)}
-                  </text>
-                </box>
-              )}
-            </For>
-          </box>
-        </MessageBlock>
-      </Match>
-      <Match when={true}>
-        <InlineTool
-          icon="→"
-          pending="Reading file..."
-          complete={stringValue(props.input.filePath)}
-          spinner={isRunning()}
-          part={props.part}
-        >
-          Read {pathFormatter.format(stringValue(props.input.filePath))} {input(props.input, ["filePath"])}
-        </InlineTool>
-      </Match>
-    </Switch>
+    <>
+      <InlineTool
+        icon="→"
+        pending="Reading file..."
+        complete={stringValue(props.input.filePath)}
+        spinner={isRunning()}
+        part={props.part}
+      >
+        Read {pathFormatter.format(stringValue(props.input.filePath))} {input(props.input, ["filePath"])}
+      </InlineTool>
+      <Show when={isCompleted() && loaded().length > 0}>
+        <For each={loaded()}>
+          {(filepath, index) => (
+            <box id={`tool-inline-loaded-${props.part.id}-${index()}`} paddingLeft={3}>
+              <text paddingLeft={3} fg={theme.textMuted}>
+                ↳ Loaded {pathFormatter.format(filepath)}
+              </text>
+            </box>
+          )}
+        </For>
+      </Show>
+    </>
   )
 }
 
