@@ -10,7 +10,7 @@ import * as fuzzysort from "fuzzysort"
 import { useConnected } from "./use-connected"
 import { useData } from "../context/data"
 
-export function DialogModel(props: { providerID?: string }) {
+export function DialogModel(props: { providerID?: string; onSelect?: (model: { providerID: string; modelID: string }) => void }) {
   const local = useLocal()
   const data = useData()
   const dialog = useDialog()
@@ -133,6 +133,11 @@ export function DialogModel(props: { providerID?: string }) {
   })
 
   function onSelect(providerID: string, modelID: string) {
+    if (props.onSelect) {
+      props.onSelect({ providerID, modelID })
+      dialog.clear()
+      return
+    }
     local.model.set({ providerID, modelID }, { recent: true })
     const list = local.model.variant.list()
     const cur = local.model.variant.selected()

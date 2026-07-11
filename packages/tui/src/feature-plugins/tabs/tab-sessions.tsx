@@ -2,10 +2,18 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createSignal, createResource, createMemo, onCleanup, For, Show } from "solid-js"
-import { useKeyboard } from "@opentui/solid"
-import { useToast } from "../../ui/toast"
+import { useDialog } from "../../ui/dialog"
+import { useRoute } from "../../context/route"
 import { useEvent } from "../../context/event"
+import { useSync } from "../../context/sync"
+import { useProject } from "../../context/project"
 import { toHex } from "../../util/color"
+import { setActiveTab } from "./state"
+import { DialogSessionRename } from "../../component/dialog-session-rename"
+import { DialogSessionDeleteFailed } from "../../component/dialog-session-delete-failed"
+import { DialogConfirm } from "../../ui/dialog-confirm"
+import { errorMessage } from "../../util/error"
+import { RoundedBorder } from "../../ui/border.ts"
 
 const id = "internal:tab-sessions"
 
@@ -14,15 +22,27 @@ interface SessionItem {
   parentID?: string
   title: string
   agent?: string
+  workspaceID?: string
   time?: { created: number; updated: number }
   version?: string
 }
 
 function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
-  const toast = useToast()
   const event = useEvent()
+  const dialog = useDialog()
+  const route = useRoute()
+  const sync = useSync()
+  const project = useProject()
   const [refreshTrigger, setRefreshTrigger] = createSignal(0)
+
+  const notify = (message: string) => {
+    void props.api.attention.notify({
+      message,
+      notification: false,
+      sound: false,
+    })
+  }
 
   const [sessions] = createResource<SessionItem[], number>(refreshTrigger, async () => {
     try {
@@ -33,21 +53,26 @@ function View(props: { api: TuiPluginApi }) {
     }
   })
 
-  // Renames (and any other session mutation) emit session.updated; refetch so the new title shows immediately.
   onCleanup(event.on("session.updated", () => setRefreshTrigger((n) => n + 1)))
 
-  const [editingId, setEditingId] = createSignal<string | null>(null)
-  const [editingTitle, setEditingTitle] = createSignal("")
-  const [selectedId, setSelectedId] = createSignal<string | null>(null)
+  const merged = createMemo<SessionItem[]>(() => {
+    const live = sync.data.session
+    if (!live || live.length === 0) return sessions() ?? []
+    const byID = new Map<string, SessionItem>()
+    for (const s of live) byID.set(s.id, s as SessionItem)
+    for (const s of sessions() ?? []) if (!byID.has(s.id)) byID.set(s.id, s)
+    return Array.from(byID.values())
+  })
 
   const rootSessions = createMemo(() =>
-    (sessions() ?? []).filter((s) => !s.parentID).sort((a, b) =>
-      (b.time?.updated ?? 0) - (a.time?.updated ?? 0)
-    )
+    merged()
+      .filter((s) => !s.parentID)
+      .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0)),
   )
 
-  const children = (parentID: string) =>
-    (sessions() ?? []).filter((s) => s.parentID === parentID)
+  const children = (parentID: string) => merged().filter((s) => s.parentID === parentID)
+
+  const statusOf = (sessionID: string) => sync.data.session_status?.[sessionID]
 
   const timeAgo = (ts?: number) => {
     if (!ts) return "—"
@@ -61,171 +86,216 @@ function View(props: { api: TuiPluginApi }) {
     return `${Math.floor(h / 24)}d ago`
   }
 
-  const startEdit = (s: SessionItem) => {
-    setEditingId(s.id)
-    setEditingTitle(s.title)
+  const dotColor = (sessionID: string) => {
+    const status = statusOf(sessionID)?.type
+    if (status === "busy" || status === "retry") return toHex(theme().success)
+    return toHex(theme().textMuted)
   }
 
-  const cancelEdit = () => {
-    setEditingId(null)
-    setEditingTitle("")
-  }
-
-  const saveEdit = async (s: SessionItem) => {
-    const newTitle = editingTitle().trim()
-    if (!newTitle || newTitle === s.title) {
-      cancelEdit()
-      return
-    }
+  const createNew = async () => {
     try {
-      await props.api.client.session.update({
-        sessionID: s.id as any,
-        title: newTitle,
-      })
-      toast.show({ message: `Renamed to "${newTitle}"`, variant: "success" })
-      setRefreshTrigger((n) => n + 1)
+      const res = await props.api.client.session.create({})
+      const created = (res as any)?.data
+      const newID = created?.id ?? (res as any)?.id
+      if (newID) {
+        route.navigate({ type: "session", sessionID: newID })
+        setActiveTab("chat")
+        notify("Session created")
+        setRefreshTrigger((n) => n + 1)
+      } else {
+        notify("Could not create session")
+      }
     } catch (e) {
-      toast.show({ message: `Rename failed: ${String(e)}`, variant: "error" })
+      notify(`Create failed: ${String(e)}`)
     }
-    cancelEdit()
   }
 
-  useKeyboard((evt) => {
-    if (editingId() !== null) {
-      if (evt.name === "escape") cancelEdit()
-      return
+  const continueSession = (s: SessionItem) => {
+    route.navigate({ type: "session", sessionID: s.id })
+    setActiveTab("chat")
+  }
+
+  const renameSession = (s: SessionItem) => {
+    dialog.replace(() => <DialogSessionRename session={s.id} />)
+  }
+
+  const deleteSession = async (s: SessionItem) => {
+    const kids = children(s.id)
+    const ok = await DialogConfirm.show(
+      dialog,
+      "Delete session",
+      kids.length > 0
+        ? `Delete "${s.title || "(untitled)"}" and its ${kids.length} subagent session${kids.length === 1 ? "" : "s"}? This cannot be undone.`
+        : `Delete "${s.title || "(untitled)"}"? This cannot be undone.`,
+    )
+    if (!ok) return
+
+    const workspaceID = s.workspaceID
+    const title = s.title || "(untitled)"
+
+    const runDelete = async (): Promise<boolean> => {
+      try {
+        const result = await props.api.client.session.delete({ sessionID: s.id })
+        if ((result as any)?.error) {
+          if (workspaceID) {
+            const workspace = project.workspace.get(workspaceID)
+            dialog.replace(() => (
+              <DialogSessionDeleteFailed
+                session={title}
+                workspace={workspace?.name ?? workspaceID}
+                onDone={() => {
+                  dialog.clear()
+                  setRefreshTrigger((n) => n + 1)
+                }}
+                onDelete={async () => {
+                  try {
+                    const r = await props.api.client.session.delete({ sessionID: s.id })
+                    if ((r as any)?.error) {
+                      notify(`Delete failed: ${errorMessage((r as any).error)}`)
+                      return false
+                    }
+                    notify("Session deleted")
+                    return true
+                  } catch (err) {
+                    notify(`Delete failed: ${errorMessage(err)}`)
+                    return false
+                  }
+                }}
+              />
+            ))
+            return false
+          }
+          notify(`Delete failed: ${errorMessage((result as any).error)}`)
+          return false
+        }
+        notify("Session deleted")
+        return true
+      } catch (err) {
+        if (workspaceID) {
+          const workspace = project.workspace.get(workspaceID)
+          dialog.replace(() => (
+            <DialogSessionDeleteFailed
+              session={title}
+              workspace={workspace?.name ?? workspaceID}
+              onDone={() => {
+                dialog.clear()
+                setRefreshTrigger((n) => n + 1)
+              }}
+            />
+          ))
+          return false
+        }
+        notify(`Delete failed: ${errorMessage(err)}`)
+        return false
+      }
     }
-    if (evt.name !== "e") return
-    const target = selectedId() ?? rootSessions()[0]?.id
-    const match = (sessions() ?? []).find((s) => s.id === target)
-    if (match) startEdit(match)
-  })
+
+    const ok2 = await runDelete()
+    if (ok2) setRefreshTrigger((n) => n + 1)
+  }
 
   return (
-    <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
-      <box flexDirection="column" paddingTop={1} gap={1}>
-        <text fg={toHex(theme().text)}><b>Sessions</b></text>
-        <Show when={sessions() !== undefined} fallback={
-          <text fg={toHex(theme().textMuted)} paddingLeft={2} paddingTop={2}>Loading…</text>
-        }>
-          <Show
-            when={rootSessions().length > 0}
-            fallback={
-              <box flexDirection="column" paddingLeft={2} paddingTop={2} gap={1}>
-                <box flexDirection="row" gap={2} alignItems="center">
-                  <text fg={toHex(theme().textMuted)}>∅</text>
-                  <text fg={toHex(theme().text)}>No sessions yet</text>
-                </box>
-                <box paddingLeft={4}>
-                  <text fg={toHex(theme().textMuted)}>Start a session from the chat tab with <b>/new</b>.</text>
-                </box>
-              </box>
-            }
-          >
-            <For each={rootSessions()}>
-              {(session) => <SessionRow
-                session={session}
-                children={children(session.id)}
-                theme={theme()}
-                editingId={editingId()}
-                editTitle={editingTitle()}
-                selectedId={selectedId()}
-                onSelect={setSelectedId}
-                onEditTitle={setEditingTitle}
-                onStartEdit={startEdit}
-                onCancelEdit={cancelEdit}
-                onSaveEdit={saveEdit}
-                timeAgo={timeAgo}
-              />}
-            </For>
-          </Show>
-        </Show>
+    <box flexDirection="column" flexGrow={1} minHeight={0}>
+      <box flexDirection="row" justifyContent="space-between" alignItems="center" paddingLeft={2} paddingRight={2} paddingTop={1}>
+        <text fg={toHex(theme().text)}>
+          <b>Sessions</b>
+        </text>
+        <text fg={toHex(theme().primary)} onMouseUp={createNew}>
+          [+ New session]
+        </text>
       </box>
-    </scrollbox>
+      <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
+        <box flexDirection="column" paddingTop={1} gap={1}>
+          <Show when={sessions() !== undefined} fallback={
+            <text fg={toHex(theme().textMuted)} paddingLeft={2} paddingTop={2}>Loading…</text>
+          }>
+            <Show
+              when={rootSessions().length > 0}
+              fallback={
+                <box flexDirection="column" paddingLeft={2} paddingTop={2} gap={1}>
+                  <box flexDirection="row" gap={2} alignItems="center">
+                    <text fg={toHex(theme().textMuted)}>∅</text>
+                    <text fg={toHex(theme().text)}>No sessions yet</text>
+                  </box>
+                  <box paddingLeft={4}>
+                    <text fg={toHex(theme().textMuted)}>Click <b>+ New session</b> above to start one.</text>
+                  </box>
+                </box>
+              }
+            >
+              <For each={rootSessions()}>
+                {(session) => (
+                  <box paddingLeft={2} paddingRight={2}>
+                    <SessionCard
+                      session={session}
+                      children={children(session.id)}
+                      theme={theme()}
+                      dotColor={dotColor(session.id)}
+                      onContinue={() => continueSession(session)}
+                      onRename={() => renameSession(session)}
+                      onDelete={() => deleteSession(session)}
+                      timeAgo={timeAgo}
+                    />
+                  </box>
+                )}
+              </For>
+            </Show>
+          </Show>
+        </box>
+      </scrollbox>
+    </box>
   )
 }
 
-interface RowControllerProps {
+function SessionCard(props: {
+  session: SessionItem
+  children: SessionItem[]
   theme: any
-  editingId: string | null
-  editTitle: string
-  selectedId: string | null
-  onSelect: (id: string) => void
-  onEditTitle: (v: string) => void
-  onStartEdit: (s: SessionItem) => void
-  onCancelEdit: () => void
-  onSaveEdit: (s: SessionItem) => void
+  dotColor: string
+  onContinue: () => void
+  onRename: () => void
+  onDelete: () => void
   timeAgo: (ts?: number) => string
-}
-
-function SessionRow(props: RowControllerProps & { session: SessionItem; children: SessionItem[] }) {
+}) {
   return (
-    <box flexDirection="column">
-      <box
-        flexDirection="row"
-        gap={1}
-        alignItems="center"
-        onMouseDown={() => props.onSelect(props.session.id)}
-      >
-        <text fg={toHex(props.theme.success)}>●</text>
-        <EditableTitle controller={props} session={props.session} />
+    <box
+      flexDirection="column"
+      border={["left", "right", "top", "bottom"]}
+      borderColor={props.theme.border}
+      customBorderChars={RoundedBorder.customBorderChars}
+      paddingLeft={1}
+      paddingRight={1}
+      paddingTop={0}
+      paddingBottom={0}
+    >
+      <box flexDirection="row" gap={1} alignItems="center">
+        <text fg={props.dotColor}>●</text>
+        <text fg={toHex(props.theme.text)} flexGrow={1}>
+          {props.session.title || "(untitled)"}
+        </text>
+        <text fg={toHex(props.theme.textMuted)}>{props.timeAgo(props.session.time?.updated)}</text>
       </box>
       <Show when={props.children.length > 0}>
-        <box flexDirection="column" paddingLeft={3} marginTop={1}>
+        <box flexDirection="column" paddingLeft={3} marginTop={0}>
           <For each={props.children}>
             {(child) => (
-              <box
-                flexDirection="row"
-                gap={1}
-                alignItems="center"
-                onMouseDown={() => props.onSelect(child.id)}
-              >
+              <box flexDirection="row" gap={1} alignItems="center">
                 <text fg={toHex(props.theme.textMuted)}>└─</text>
-                <text fg={toHex(props.theme.text)}>↳</text>
                 <text fg={toHex(props.theme.textMuted)}>{child.agent ?? "subagent"}</text>
                 <text fg={toHex(props.theme.textMuted)}>·</text>
-                <EditableTitle controller={props} session={child} />
+                <text fg={toHex(props.theme.text)} flexGrow={1}>{child.title || "(untitled)"}</text>
+                <text fg={toHex(props.theme.textMuted)}>{props.timeAgo(child.time?.updated)}</text>
               </box>
             )}
           </For>
         </box>
       </Show>
+      <box flexDirection="row" gap={2} paddingTop={0}>
+        <text fg={toHex(props.theme.success)} onMouseUp={props.onContinue}>continue</text>
+        <text fg={toHex(props.theme.info)} onMouseUp={props.onRename}>rename</text>
+        <text fg={toHex(props.theme.error)} onMouseUp={props.onDelete}>delete</text>
+      </box>
     </box>
-  )
-}
-
-function EditableTitle(props: { controller: RowControllerProps; session: SessionItem }) {
-  const c = () => props.controller
-  const isEditing = () => c().editingId === props.session.id
-  const isSelected = () => c().selectedId === props.session.id
-  return (
-    <Show
-      when={isEditing()}
-      fallback={
-        <box
-          flexDirection="row"
-          gap={1}
-          flexGrow={1}
-          onMouseDown={() => c().onStartEdit(props.session)}
-        >
-          <text fg={toHex(c().theme.text)} flexGrow={1}>
-            {props.session.title || "(untitled)"}
-          </text>
-          <text fg={toHex(c().theme.textMuted)}>{c().timeAgo(props.session.time?.updated)}</text>
-          <text fg={toHex(isSelected() ? c().theme.primary : c().theme.textMuted)}>rename</text>
-        </box>
-      }
-    >
-      <input
-        value={c().editTitle}
-        onInput={(v: string) => c().onEditTitle(v)}
-        onSubmit={() => c().onSaveEdit(props.session)}
-        flexGrow={1}
-        ref={(r: { focus(): void } | undefined) => setTimeout(() => r?.focus(), 1)}
-      />
-      <text fg={toHex(c().theme.success)}>[⏎ save]</text>
-      <text fg={toHex(c().theme.textMuted)} onMouseDown={() => c().onCancelEdit()}>[esc cancel]</text>
-    </Show>
   )
 }
 

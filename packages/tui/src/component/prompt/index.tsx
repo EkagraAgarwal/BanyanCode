@@ -1491,6 +1491,8 @@ export function Prompt(props: PromptProps) {
     if (store.mode === "shell") return theme.primary
     const agent = local.agent.current()
     if (!agent) return theme.border
+    if (agent.name === "plan") return theme.accent
+    if (agent.name === "build") return local.agent.color(agent.name) ?? theme.success
     return local.agent.color(agent.name)
   })
 
@@ -1820,13 +1822,13 @@ export function Prompt(props: PromptProps) {
               <Switch>
                 <Match when={store.mode === "normal"}>
                   <text fg={theme.text}>
-                    {agentShortcut()} <span style={{ fg: theme.textMuted }}>agents</span>
+                    {agentShortcut()} <span style={{ fg: theme.textMuted }}>mode</span>
                   </text>
                   <text fg={theme.text}>
                     {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
                   </text>
                   <text fg={theme.textMuted}>·</text>
-                  <text fg={theme.textMuted}>/agents  /graph  /memory  /theme</text>
+                  <text fg={theme.textMuted}>/mode  /graph  /memory  /theme</text>
                   <text fg={theme.textMuted}>·</text>
                   <text fg={theme.text}>{tabShortcut()} <span style={{ fg: theme.textMuted }}>switch tab</span></text>
                 </Match>

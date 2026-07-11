@@ -682,9 +682,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "agent.list",
-        title: "Switch agent",
+        title: "Switch mode",
         category: "Agent",
-        slashName: "agents",
+        slashName: "mode",
+        slashAliases: ["modes"],
         run: () => {
           dialog.replace(() => <DialogAgent />)
         },
@@ -718,11 +719,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "agent.cycle",
-        title: "Agent cycle",
+        title: "Toggle Build/Plan mode",
         category: "Agent",
         hidden: true,
         run: () => {
-          local.agent.move(1)
+          const current = local.agent.current()?.name
+          local.agent.set(current === "plan" ? "build" : "plan")
         },
       },
       {
@@ -752,11 +754,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "agent.cycle.reverse",
-        title: "Agent cycle reverse",
+        title: "Toggle Build/Plan mode (reverse)",
         category: "Agent",
         hidden: true,
         run: () => {
-          local.agent.move(-1)
+          const current = local.agent.current()?.name
+          local.agent.set(current === "plan" ? "build" : "plan")
         },
       },
       {

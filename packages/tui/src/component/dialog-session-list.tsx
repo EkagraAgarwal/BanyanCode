@@ -19,7 +19,7 @@ import { errorMessage } from "../util/error"
 import { DialogSessionDeleteFailed } from "./dialog-session-delete-failed"
 import { useCommandShortcut } from "../keymap"
 
-export function DialogSessionList() {
+export function DialogSessionList(props: { initialFocusId?: string } = {}) {
   const dialog = useDialog()
   const route = useRoute()
   const sync = useSync()
@@ -43,7 +43,7 @@ export function DialogSessionList() {
     },
   )
 
-  const currentSessionID = createMemo(() => (route.data.type === "session" ? route.data.sessionID : undefined))
+  const currentSessionID = createMemo(() => props.initialFocusId ?? (route.data.type === "session" ? route.data.sessionID : undefined))
   const sessions = createMemo(() => searchResults() ?? sync.data.session)
 
   function recover(session: NonNullable<ReturnType<typeof sessions>[number]>) {
