@@ -503,6 +503,7 @@
       "version": "1.17.3",
       "bin": {
         "opencode": "./bin/opencode",
+        "banyancode": "./bin/banyancode",
       },
       "dependencies": {
         "@actions/core": "1.11.1",
