@@ -14,6 +14,13 @@ export type MemoryEntry = {
   version: number
   updatedAt: number
   namespace?: string
+  // Phase 1a: denormalized columns read from the envelope. Optional so
+  // legacy rows from pre-Phase-1 DBs don't fail type checks; the repo fills
+  // them on every write.
+  kind?: string
+  title?: string
+  body?: string
+  status?: string
 }
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("NotFoundError", {

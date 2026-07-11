@@ -42,25 +42,34 @@ describe("MemoryRepo", () => {
         yield* repo.put(sessionEntry)
 
         const retrievedGlobal = yield* repo.get("global-1")
-        expect(retrievedGlobal).toEqual({
-          ...globalEntry,
-          context: undefined,
-          expiresAt: undefined,
-          agentID: undefined,
+        expect(retrievedGlobal).toMatchObject({
+          id: "global-1",
+          key: "test-key",
+          scope: "global",
+          tags: ["tag1"],
           version: 1,
           updatedAt: retrievedGlobal!.updatedAt,
-          namespace: undefined,
+          kind: "observation",
+          title: "test-key",
+          body: JSON.stringify({ foo: "bar" }),
+          status: "active",
         })
+        // value is envelope-wrapped.
+        expect((retrievedGlobal!.value as { _v: number })._v).toBe(1)
 
         const retrievedSession = yield* repo.get("session-1")
-        expect(retrievedSession).toEqual({
-          ...sessionEntry,
-          context: undefined,
-          expiresAt: undefined,
-          agentID: undefined,
+        expect(retrievedSession).toMatchObject({
+          id: "session-1",
+          key: "session-key",
+          scope: "session",
+          sessionID: "session-abc",
+          tags: ["session-tag"],
           version: 1,
           updatedAt: retrievedSession!.updatedAt,
-          namespace: undefined,
+          kind: "observation",
+          title: "session-key",
+          body: JSON.stringify({ session: "data" }),
+          status: "active",
         })
 
         const globalList = yield* repo.list("global")
@@ -191,7 +200,11 @@ describe("MemoryRepo", () => {
         })
 
         const retrieved = yield* repo.get("conflict-id")
-        expect(retrieved?.value).toEqual({ foo: "updated" })
+        // Phase 1a: stored value is wrapped in an envelope.
+        const stored = retrieved?.value as { _v: number; data: { body: string } }
+        expect(stored._v).toBe(1)
+        expect(JSON.parse(stored.data.body)).toEqual({ foo: "updated" })
+        expect(retrieved?.body).toBe(JSON.stringify({ foo: "updated" }))
         expect(retrieved?.createdAt).toBe(originalCreatedAt)
         expect(retrieved?.version).toBe(2)
       }).pipe(Effect.provide(memoryLayer), Effect.provide(dbLayer), Effect.scoped),

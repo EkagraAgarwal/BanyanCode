@@ -119,7 +119,9 @@ describe("Memory versioning", () => {
 
         let entry = yield* repo.get("a")
         expect(entry!.version).toBe(1)
-        expect(entry!.value).toEqual({ original: true })
+        // Phase 1a: value is wrapped in envelope; payload.body holds the JSON.
+        expect((entry!.value as { _v: number })._v).toBe(1)
+        expect(entry!.body).toBe(JSON.stringify({ original: true }))
 
         const updated = yield* repo.update({
           id: "a",
@@ -128,7 +130,8 @@ describe("Memory versioning", () => {
         })
 
         expect(updated.version).toBe(2)
-        expect(updated.value).toEqual({ updated: true })
+        expect((updated.value as { _v: number })._v).toBe(1)
+        expect(updated.body).toBe(JSON.stringify({ updated: true }))
 
         entry = yield* repo.get("a")
         expect(entry!.version).toBe(2)

@@ -21,11 +21,22 @@ export const MemoryEntriesTable = sqliteTable(
     version: integer().notNull().default(1),
     updated_at: integer().notNull(),
     namespace: text(),
+    // Phase 1a: denormalized payload fields. Mirrors the envelope's
+    // `kind` / `title` / `body` / `status` so FTS triggers and filters can
+    // read them as SQL columns without re-parsing JSON. Nullable for legacy
+    // rows pre-dating the migration; unwrapMemoryValue synthesizes defaults
+    // on read.
+    kind: text(),
+    title: text(),
+    body: text(),
+    status: text().notNull().default("active"),
   },
   (table) => [
     index("memory_scope_key_idx").on(table.scope, table.key),
     index("memory_scope_session_idx").on(table.scope, table.session_id),
+    index("memory_status_updated_idx").on(table.status, table.updated_at),
+    index("memory_kind_status_idx").on(table.kind, table.status),
   ],
 )
 
-console.error("[turso.schema] memory_entries with jsonb columns configured")
+console.error("[turso.schema] memory_entries with jsonb columns + denorm payload columns configured")

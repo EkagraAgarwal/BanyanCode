@@ -20,6 +20,30 @@ export { CodegraphNodeSchema } from "./types"
 export { GraphMeta } from "./types"
 export { NotFoundError, StaleWriteError } from "./types"
 export { Service as MemoryRepo, layer as memoryRepoLayer, defaultLayer as memoryRepoDefaultLayer } from "./memory-repo"
+export type { SearchRankedInput, SearchRankedResult } from "./memory-repo"
+export {
+  MemoryKindSchema,
+  MemoryPayloadV1Schema,
+  MemoryEnvelopeV1Schema,
+  MemoryStatusSchema,
+  MemorySourceSchema,
+  encodeMemoryValue,
+  unwrapMemoryValue,
+  normalizeMemoryValue,
+  looksLikeMemoryPayload,
+  payloadFingerprint,
+  payloadBody,
+} from "./memory-payload"
+export type {
+  MemoryPayloadV1,
+  MemoryEnvelopeV1,
+  MemoryKind,
+  MemoryStatus,
+  MemoryConfidence,
+  MemoryImportance,
+  MemorySource,
+  MemorySourceType,
+} from "./memory-payload"
 export { Service as CodegraphRepo, layer as codegraphRepoLayer, defaultLayer as codegraphRepoDefaultLayer } from "./codegraph-repo"
 export { Service as CodegraphIndexer, layer as codegraphIndexerLayer, defaultLayer as codegraphIndexerDefaultLayer } from "./codegraph-indexer"
 export {
