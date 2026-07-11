@@ -2600,6 +2600,35 @@ export type BanyanMemoryRejectResult = {
   version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
+export type BanyanMemorySummaryInput = {
+  scope?: BanyanMemoryScope
+  sessionID?: string
+  maxItems?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type BanyanMemorySummarySection = {
+  kind: string
+  count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type BanyanMemoryDigestItem = {
+  id: string
+  kind: string
+  title: string
+  body: string
+  importance: "low" | "medium" | "high"
+  confidence: "low" | "medium" | "high"
+  updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type BanyanMemorySummaryResult = {
+  totalActive: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  byKind: Array<BanyanMemorySummarySection>
+  decisionDigest: Array<BanyanMemoryDigestItem>
+  warningDigest: Array<BanyanMemoryDigestItem>
+  generatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
 export type Model = {
   id: string
   providerID: string
@@ -7193,6 +7222,31 @@ export type MemoryRejectResponses = {
 }
 
 export type MemoryRejectResponse = MemoryRejectResponses[keyof MemoryRejectResponses]
+
+export type MemorySummaryData = {
+  body?: BanyanMemorySummaryInput
+  path?: never
+  query?: never
+  url: "/global/memory/summary"
+}
+
+export type MemorySummaryErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type MemorySummaryError = MemorySummaryErrors[keyof MemorySummaryErrors]
+
+export type MemorySummaryResponses = {
+  /**
+   * Memory summary projection
+   */
+  200: BanyanMemorySummaryResult
+}
+
+export type MemorySummaryResponse = MemorySummaryResponses[keyof MemorySummaryResponses]
 
 export type EventSubscribeData = {
   body?: never

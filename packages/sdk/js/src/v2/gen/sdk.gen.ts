@@ -27,6 +27,7 @@ import type {
   BanyanMemoryRejectInput,
   BanyanMemorySearchInput,
   BanyanMemoryStoreInput,
+  BanyanMemorySummaryInput,
   BanyanOwnershipInput,
   BanyanQueryInput,
   BanyanRelationshipsInput,
@@ -178,6 +179,8 @@ import type {
   MemorySearchResponses,
   MemoryStoreErrors,
   MemoryStoreResponses,
+  MemorySummaryErrors,
+  MemorySummaryResponses,
   MoveSessionDestination,
   OutputFormat,
   Part as Part2,
@@ -2295,6 +2298,30 @@ export class Memory extends HeyApiClient {
     const params = buildClientParams([parameters], [{ args: [{ key: "banyanMemoryRejectInput", map: "body" }] }])
     return (options?.client ?? this.client).post<MemoryRejectResponses, MemoryRejectErrors, ThrowOnError>({
       url: "/global/memory/reject",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Memory summary projection
+   *
+   * Returns a regenerable derived view: total active count, by-kind sections, decision digest, and warning digest. Backed by `MemoryProjection`.
+   */
+  public summary<ThrowOnError extends boolean = false>(
+    parameters?: {
+      banyanMemorySummaryInput?: BanyanMemorySummaryInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "banyanMemorySummaryInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<MemorySummaryResponses, MemorySummaryErrors, ThrowOnError>({
+      url: "/global/memory/summary",
       ...options,
       ...params,
       headers: {

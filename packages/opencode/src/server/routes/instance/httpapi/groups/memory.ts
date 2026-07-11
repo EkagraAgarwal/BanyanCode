@@ -149,6 +149,40 @@ export const MemoryRejectResult = Schema.Struct({
   version: Schema.Number,
 }).annotate({ identifier: "Banyan/MemoryRejectResult" })
 
+/**
+ * Phase 4: projection / digest endpoints. Read-only derived views over
+ * `memory_entries`.
+ */
+
+export const MemorySummaryInput = Schema.Struct({
+  scope: Schema.optional(Schema.String.check(Schema.isPattern(SCOPE_PATTERN, { identifier: "Banyan/MemoryScope" }))),
+  sessionID: Schema.optional(Schema.String),
+  maxItems: Schema.optional(Schema.Number),
+}).annotate({ identifier: "Banyan/MemorySummaryInput" })
+
+export const MemoryDigestItem = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.String,
+  title: Schema.String,
+  body: Schema.String,
+  importance: Schema.Literals(["low", "medium", "high"]),
+  confidence: Schema.Literals(["low", "medium", "high"]),
+  updatedAt: Schema.Number,
+}).annotate({ identifier: "Banyan/MemoryDigestItem" })
+
+export const MemorySummarySection = Schema.Struct({
+  kind: Schema.String,
+  count: Schema.Number,
+}).annotate({ identifier: "Banyan/MemorySummarySection" })
+
+export const MemorySummaryResult = Schema.Struct({
+  totalActive: Schema.Number,
+  byKind: Schema.Array(MemorySummarySection),
+  decisionDigest: Schema.Array(MemoryDigestItem),
+  warningDigest: Schema.Array(MemoryDigestItem),
+  generatedAt: Schema.Number,
+}).annotate({ identifier: "Banyan/MemorySummaryResult" })
+
 export const MEMORY_PREFIX = "/global/memory"
 
 export const MemoryPaths = {
@@ -161,6 +195,7 @@ export const MemoryPaths = {
   candidates: `${MEMORY_PREFIX}/candidates`,
   promote: `${MEMORY_PREFIX}/promote`,
   reject: `${MEMORY_PREFIX}/reject`,
+  summary: `${MEMORY_PREFIX}/summary`,
 } as const
 
 export const MemoryApi = HttpApi.make("memory").add(
@@ -259,6 +294,17 @@ export const MemoryApi = HttpApi.make("memory").add(
           summary: "Reject a candidate memory entry",
           description:
             "Transitions a candidate entry to status=rejected. Optimistic concurrency on `expectedVersion`.",
+        }),
+      ),
+      HttpApiEndpoint.post("summary", MemoryPaths.summary, {
+        payload: MemorySummaryInput,
+        success: described(MemorySummaryResult, "Memory summary projection"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "memory.summary",
+          summary: "Memory summary projection",
+          description:
+            "Returns a regenerable derived view: total active count, by-kind sections, decision digest, and warning digest. Backed by `MemoryProjection`.",
         }),
       ),
     )

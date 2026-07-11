@@ -582,6 +582,37 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     }
   }
 
+  const runMemorySummary = async () => {
+    try {
+      const res = await sdk.client.memory.summary({
+        banyanMemorySummaryInput: { scope: "global", maxItems: 25 },
+      })
+      const data = (res as any)?.data as
+        | {
+            totalActive?: number
+            byKind?: Array<{ kind: string; count: number }>
+            decisionDigest?: Array<{ id: string; kind: string; title: string; body: string }>
+            warningDigest?: Array<{ id: string; kind: string; title: string; body: string }>
+          }
+        | undefined
+      const total = data?.totalActive ?? 0
+      const dec = data?.decisionDigest ?? []
+      const warn = data?.warningDigest ?? []
+      const sections = (data?.byKind ?? []).map((s) => `${s.kind}=${s.count}`).join(", ")
+      const head = `Memory: ${total} active (${sections || "no kinds"})`
+      const lines: string[] = [head]
+      for (const d of dec.slice(0, 3)) lines.push(`  • [${d.kind}] ${d.title}`)
+      for (const d of warn.slice(0, 3)) lines.push(`  • [${d.kind}] ${d.title}`)
+      toast.show({ message: lines.join("\n"), variant: "info" })
+      setActiveTab("memory")
+    } catch (err) {
+      toast.show({
+        message: `memory summary failed: ${err instanceof Error ? err.message : String(err)}`,
+        variant: "error",
+      })
+    }
+  }
+
   const appCommands = createMemo(() =>
     [
       {
@@ -962,6 +993,16 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           setActiveTab("memory")
           dialog.clear()
           toast.show({ message: "Click an entry in the memory tab and choose forget.", variant: "info" })
+        },
+      },
+      {
+        name: "memory.summary",
+        title: "Memory summary projection (active + decisions + warnings)",
+        category: "BanyanCode",
+        slashName: "memory-summary",
+        keybind: "",
+        run: () => {
+          void runMemorySummary()
         },
       },
       {

@@ -106,4 +106,22 @@ export const repositoryIntelServiceMocks = Layer.mergeAll(
       },
     }),
   ),
+  Layer.succeed(
+    Banyan.MemoryProjection,
+    Banyan.MemoryProjection.of({
+      projectSummary: () =>
+        Effect.succeed({
+          totalActive: 0,
+          byKind: [],
+          generatedAt: 0,
+        }),
+      activeDecisions: () => Effect.succeed({ entries: [], totalActive: 0, generatedAt: 0 }),
+      activeWarnings: () => Effect.succeed({ entries: [], totalActive: 0, generatedAt: 0 }),
+      recentChanges: () => Effect.succeed({ entries: [], totalActive: 0, generatedAt: 0 }),
+      openTodos: () => Effect.succeed({ entries: [], totalActive: 0, generatedAt: 0 }),
+      agentWorkingNotes: () => Effect.succeed({ agentID: "", entries: [], generatedAt: 0 }),
+      decisionDigest: () => Effect.succeed({ items: [], generatedAt: 0, totalActive: 0 }),
+      warningDigest: () => Effect.succeed({ items: [], generatedAt: 0, totalActive: 0 }),
+    }),
+  ),
 )

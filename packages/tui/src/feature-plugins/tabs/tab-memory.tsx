@@ -28,6 +28,14 @@ interface MemoryEntry {
   sessionID?: string
 }
 
+interface MemorySummary {
+  totalActive: number
+  byKind: Array<{ kind: string; count: number }>
+  decisionDigest: Array<{ id: string; kind: string; title: string; body: string }>
+  warningDigest: Array<{ id: string; kind: string; title: string; body: string }>
+  generatedAt: number
+}
+
 type ScopeFilter = "global" | "session"
 type StatusFilter = "pending" | "active" | "superseded" | "rejected"
 type KindFilter = "any" | string
@@ -90,6 +98,7 @@ function View(props: { api: TuiPluginApi }) {
   const [scope, setScope] = createSignal<ScopeFilter>("global")
   const [statusFilter, setStatusFilter] = createSignal<"any" | StatusFilter>("active")
   const [kindFilter, setKindFilter] = createSignal<KindFilter>("any")
+  const [showSummary, setShowSummary] = createSignal(true)
 
   const statusForBackend = (s: "any" | StatusFilter) =>
     s === "any" ? undefined : (s as "active" | "pending" | "superseded" | "rejected")
@@ -146,6 +155,21 @@ function View(props: { api: TuiPluginApi }) {
       return []
     }
   })
+
+  const [summary, { refetch: refetchSummary }] = createResource<MemorySummary | null, number>(
+    refreshTrigger,
+    async () => {
+      try {
+        const result = await props.api.client.memory.summary({
+          banyanMemorySummaryInput: { scope: scope(), maxItems: 25 },
+        })
+        const data = (result as any)?.data as MemorySummary | undefined
+        return data ?? null
+      } catch {
+        return null
+      }
+    },
+  )
 
   onMount(() => {
     const unsubs = [
@@ -331,7 +355,30 @@ function View(props: { api: TuiPluginApi }) {
         >
           [any]
         </text>
+        <text fg={toHex(theme().textMuted)}> | </text>
+        <text
+          fg={toHex(showSummary() ? theme().primary : theme().textMuted)}
+          onMouseUp={() => setShowSummary((v) => !v)}
+        >
+          [summary]
+        </text>
+        <text
+          fg={toHex(theme().info)}
+          onMouseUp={() => {
+            void refetchSummary()
+          }}
+        >
+          refresh
+        </text>
       </box>
+
+      <Show when={showSummary()}>
+        <SummaryPanel
+          theme={theme()}
+          summary={summary() ?? null}
+          loading={summary.loading}
+        />
+      </Show>
 
       <Show when={actionError()}>
         <box paddingLeft={2} paddingTop={1}>
@@ -409,6 +456,53 @@ function Section(props: { title: string; theme: any; children: any }) {
         <b>{props.title}</b>
       </text>
       <box flexDirection="column" marginTop={0}>{props.children}</box>
+    </box>
+  )
+}
+
+function SummaryPanel(props: { theme: any; summary: MemorySummary | null; loading: boolean }) {
+  const kinds = () => {
+    const items = props.summary?.byKind ?? []
+    if (items.length === 0) return "no kinds"
+    return items.map((s) => `${s.kind}=${s.count}`).join(", ")
+  }
+  return (
+    <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={1}>
+      <text fg={toHex(props.theme.primary)}>
+        <b>Summary</b>
+      </text>
+      <Show
+        when={!props.loading && props.summary}
+        fallback={
+          <text fg={toHex(props.theme.textMuted)}>{props.loading ? "loading…" : "no summary"}</text>
+        }
+      >
+        <box flexDirection="column" marginTop={0}>
+          <text fg={toHex(props.theme.text)}>
+            <b>{props.summary?.totalActive ?? 0}</b> active · {kinds()}
+          </text>
+          <Show when={(props.summary?.decisionDigest?.length ?? 0) > 0}>
+            <text fg={toHex(props.theme.success)}>Decisions</text>
+            <For each={(props.summary?.decisionDigest ?? []).slice(0, 3)}>
+              {(d) => (
+                <text fg={toHex(props.theme.textMuted)}>
+                  {"  "}• [{d.kind}] {d.title}
+                </text>
+              )}
+            </For>
+          </Show>
+          <Show when={(props.summary?.warningDigest?.length ?? 0) > 0}>
+            <text fg={toHex(props.theme.warning)}>Warnings</text>
+            <For each={(props.summary?.warningDigest ?? []).slice(0, 3)}>
+              {(d) => (
+                <text fg={toHex(props.theme.textMuted)}>
+                  {"  "}• [{d.kind}] {d.title}
+                </text>
+              )}
+            </For>
+          </Show>
+        </box>
+      </Show>
     </box>
   )
 }

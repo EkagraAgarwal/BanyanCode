@@ -32,9 +32,13 @@ const buildApiLayer = (dbPath: string) => {
     Layer.provide(memoryLayer as Layer.Layer<never, never, never>),
     Layer.provide(dbLayer),
   )
+  const memoryProjectionLayer = Banyan.memoryProjectionLayer.pipe(
+    Layer.provide(memoryLayer as Layer.Layer<never, never, never>),
+    Layer.provide(dbLayer),
+  )
 
-  // Merge repo + service so handlers reading either service get the same DB.
-  const memoryLayerFinal = Layer.merge(memoryLayer, memoryServiceLayer)
+  // Merge repo + service + projection so handlers reading any of them get the same DB.
+  const memoryLayerFinal = Layer.merge(Layer.merge(memoryLayer, memoryServiceLayer), memoryProjectionLayer)
 
   return HttpRouter.serve(
     HttpApiBuilder.layer(RootHttpApi).pipe(
@@ -73,8 +77,8 @@ const makePost = (path: string, body: unknown) =>
     Effect.flatMap(HttpClient.execute),
   )
 
-const runWithFreshDb = <A, E>(
-  body: (dbPath: string) => Effect.Effect<A, E, never>,
+const runWithFreshDb = <A, E, R>(
+  body: (dbPath: string) => Effect.Effect<A, E, R>,
 ) =>
   Effect.gen(function* () {
     const tmp = yield* Effect.promise(() => tmpdir())
@@ -223,6 +227,80 @@ describe("memory HttpApi", () => {
           const body = (yield* response.json) as { entries: Array<{ key: string }>; totalHits: number }
           expect(body.totalHits).toBe(1)
           expect(body.entries[0]?.key).toBe("decision:active")
+        }),
+      )
+    }),
+  )
+
+  it.live("summary returns totalActive, byKind, and empty digests for empty store", () =>
+    Effect.gen(function* () {
+      yield* runWithFreshDb((dbPath) =>
+        Effect.gen(function* () {
+          const dbLayer = Database.layerFromPath(dbPath)
+          const apiLayer = buildApiLayer(dbPath)
+          yield* Effect.gen(function* () {
+            const { db } = yield* Database.Service
+            yield* DatabaseMigration.apply(db)
+          }).pipe(Effect.provide(dbLayer), Effect.scoped)
+
+          const response = yield* makePost(MemoryPaths.summary, { scope: "global" }).pipe(
+            Effect.provide(apiLayer),
+          )
+          expect(response.status).toBe(200)
+          const body = (yield* response.json) as {
+            totalActive: number
+            byKind: Array<{ kind: string; count: number }>
+            decisionDigest: Array<{ title: string }>
+            warningDigest: Array<{ title: string }>
+          }
+          expect(body.totalActive).toBe(0)
+          expect(body.byKind).toEqual([])
+          expect(body.decisionDigest).toEqual([])
+          expect(body.warningDigest).toEqual([])
+        }),
+      )
+    }),
+  )
+
+  it.live("summary includes decisionDigest entries when decisions are stored", () =>
+    Effect.gen(function* () {
+      yield* runWithFreshDb((dbPath) =>
+        Effect.gen(function* () {
+          const dbLayer = Database.layerFromPath(dbPath)
+          const apiLayer = buildApiLayer(dbPath)
+          yield* Effect.gen(function* () {
+            const { db } = yield* Database.Service
+            yield* DatabaseMigration.apply(db)
+          }).pipe(Effect.provide(dbLayer), Effect.scoped)
+
+          yield* makePost(MemoryPaths.store, {
+            key: "decision:db",
+            scope: "global",
+            value: {
+              kind: "decision",
+              title: "Use Turso",
+              body: "Storage backend is Turso.",
+              source: { type: "user" },
+              confidence: "high",
+              importance: "high",
+              status: "active",
+            },
+          }).pipe(Effect.provide(apiLayer))
+
+          const response = yield* makePost(MemoryPaths.summary, { scope: "global" }).pipe(
+            Effect.provide(apiLayer),
+          )
+          expect(response.status).toBe(200)
+          const body = (yield* response.json) as {
+            totalActive: number
+            byKind: Array<{ kind: string; count: number }>
+            decisionDigest: Array<{ title: string; kind: string }>
+          }
+          expect(body.totalActive).toBe(1)
+          expect(body.byKind).toEqual([{ kind: "decision", count: 1 }])
+          expect(body.decisionDigest.length).toBe(1)
+          expect(body.decisionDigest[0]?.title).toBe("Use Turso")
+          expect(body.decisionDigest[0]?.kind).toBe("decision")
         }),
       )
     }),

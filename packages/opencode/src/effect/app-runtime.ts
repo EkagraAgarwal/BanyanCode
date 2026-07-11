@@ -168,6 +168,7 @@ export const AppLayer = Layer.mergeAll(
       Banyan.systemMonitorDefaultLayer,
       Banyan.memoryRepoDefaultLayer,
       Banyan.memoryServiceDefaultLayer,
+      Banyan.memoryProjectionDefaultLayer,
     ).pipe(
       Layer.provide(AppProcess.defaultLayer as Layer.Layer<unknown, unknown, never>),
       Layer.provide(

@@ -20,6 +20,7 @@ import {
   MemoryRejectInput,
   MemorySearchInput,
   MemoryStoreInput,
+  MemorySummaryInput,
 } from "../groups/memory"
 import { InvalidRequestError } from "../errors"
 
@@ -27,6 +28,7 @@ export const memoryHandlers = HttpApiBuilder.group(RootHttpApi, "memory", (handl
   Effect.gen(function* () {
     const repo = yield* Banyan.MemoryRepo
     const memoryService = yield* Banyan.MemoryService
+    const projection = yield* Banyan.MemoryProjection
 
     const toWire = (entry: MemoryEntry) => ({
       id: entry.id,
@@ -221,6 +223,29 @@ export const memoryHandlers = HttpApiBuilder.group(RootHttpApi, "memory", (handl
       }
     })
 
+    const summaryHandler = Effect.fn("Memory.summary")(function* (ctx: {
+      payload: typeof MemorySummaryInput.Type
+    }) {
+      const scope = ctx.payload.scope as "global" | "session" | undefined
+      const sessionID = ctx.payload.sessionID ?? undefined
+      const maxItems = ctx.payload.maxItems ?? 25
+      const [summary, decisions, warnings] = yield* Effect.all(
+        [
+          projection.projectSummary({ scope, sessionID }),
+          projection.decisionDigest({ scope, sessionID, maxItems }),
+          projection.warningDigest({ scope, sessionID, maxItems }),
+        ],
+        { concurrency: "unbounded" },
+      )
+      return {
+        totalActive: summary.totalActive,
+        byKind: summary.byKind.map((s) => ({ kind: String(s.kind), count: s.entries.length })),
+        decisionDigest: decisions.items.map((d) => ({ ...d, kind: d.kind ?? "observation" })),
+        warningDigest: warnings.items.map((d) => ({ ...d, kind: d.kind ?? "warning" })),
+        generatedAt: Math.max(summary.generatedAt, decisions.generatedAt, warnings.generatedAt),
+      }
+    })
+
     return handlers
       .handle("list", listHandler)
       .handle("get", getHandler)
@@ -231,5 +256,6 @@ export const memoryHandlers = HttpApiBuilder.group(RootHttpApi, "memory", (handl
       .handle("candidates", candidatesHandler)
       .handle("promote", promoteHandler)
       .handle("reject", rejectHandler)
+      .handle("summary", summaryHandler)
   }),
 )
