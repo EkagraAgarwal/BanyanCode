@@ -87,7 +87,8 @@ describe("shared_memory", () => {
       })
       expect((readResult.output?.structured as any).ok).toBe(true)
       expect((readResult.output?.structured as any).entries.length).toBe(1)
-      expect((readResult.output?.structured as any).entries[0].value).toBe(2)
+      // Phase 1a: numeric values are synthesized into MemoryPayloadV1 under body.
+      expect((readResult.output?.structured as any).entries[0].value.data.body).toBe("2")
     }),
   )
 
@@ -135,7 +136,8 @@ describe("shared_memory", () => {
       })
 
       expect((readResult.output?.structured as any).ok).toBe(true)
-      expect((readResult.output?.structured as any).entries[0].value).toBe("v3")
+      // Phase 1a: string values are synthesized into MemoryPayloadV1 under body.
+      expect((readResult.output?.structured as any).entries[0].value.data.body).toBe("v3")
     }),
   )
 
@@ -243,7 +245,8 @@ describe("shared_memory", () => {
         call: { type: "tool-call", id: "call-5", name: "shared_memory", input: { op: "read", id: "tokeep" } },
       })
       expect((readKept.output?.structured as any).ok).toBe(true)
-      expect((readKept.output?.structured as any).entries[0].value).toBe("yes")
+      // Phase 1a: string values are synthesized into MemoryPayloadV1 under body.
+      expect((readKept.output?.structured as any).entries[0].value.data.body).toBe("yes")
     }),
   )
 })

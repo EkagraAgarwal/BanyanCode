@@ -150,7 +150,8 @@ describe("subagent-mesh", () => {
         call: { type: "tool-call", id: "call-read", name: "shared_memory", input: { op: "read", key: "shared:result" } },
       })
       expect((readShared.output?.structured as any).ok).toBe(true)
-      expect((readShared.output?.structured as any).entries[0].value).toBe("computed")
+      // Phase 1a: string values are synthesized into MemoryPayloadV1 under body.
+      expect((readShared.output?.structured as any).entries[0].value.data.body).toBe("computed")
 
       const msgResult = yield* mat.settle({
         sessionID: ctx.sessionID,
