@@ -33,8 +33,12 @@ export const layer = Layer.effect(
           const msg = yield* Queue.take(queue)
           switch (msg.kind) {
             case "plan": {
+              // Phase 1a idempotency fix: reuse msg.id as the memory entry
+              // id. The `memory_entries.id` primary key + the put
+              // onConflictDoUpdate path make the second redelivery a
+              // version bump (no duplicate row) instead of a fresh insert.
               yield* memory.put({
-                id: crypto.randomUUID(),
+                id: msg.id,
                 key: `plan:${input.agent}`,
                 value: msg.payload,
                 tags: [],

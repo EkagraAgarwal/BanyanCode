@@ -280,7 +280,7 @@ export const locationLayer = Layer.effectDiscard(
         }),
         [name_search]: Tool.make({
           description:
-            "Search memory entries using keyword search across keys, values, and context.",
+            "Search memory entries using BM25-ranked FTS5 across keys, titles, bodies, and kinds.",
           input: InputSearch,
           output: OutputSearch,
           toModelOutput: ({ output }) => [
@@ -299,10 +299,13 @@ export const locationLayer = Layer.effectDiscard(
               } as any)
 
               const scope = (input.scope ?? "global") as "global" | "session"
-              const allEntries = yield* repo.list(scope, input.sessionID)
-
-              const keywordMatches = keywordSearch(input.query, allEntries)
-              return { entries: keywordMatches, degraded: false }
+              const ranked = yield* repo.searchRanked({
+                query: input.query,
+                limit: input.limit ?? 10,
+                scope,
+                sessionID: input.sessionID,
+              })
+              return { entries: ranked.entries, degraded: false }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `memory_search failed` })))
           },
         }),

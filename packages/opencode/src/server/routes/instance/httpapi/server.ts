@@ -81,6 +81,7 @@ import { experimentalHandlers } from "./handlers/experimental"
 import { fileHandlers } from "./handlers/file"
 import { globalHandlers } from "./handlers/global"
 import { repositoryIntelHandlers } from "./handlers/repository-intel"
+import { memoryHandlers } from "./handlers/memory"
 import { instanceHandlers } from "./handlers/instance"
 import { mcpHandlers } from "./handlers/mcp"
 import { permissionHandlers } from "./handlers/permission"
@@ -128,7 +129,7 @@ const ptyConnectHttpApiAuthLayer = ptyConnectAuthorizationLayer.pipe(Layer.provi
 const serverHttpApiAuthLayer = serverAuthorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
 const workspaceRoutingLive = workspaceRoutingLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal))
 const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
-  Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers, repositoryIntelHandlers]),
+  Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers, repositoryIntelHandlers, memoryHandlers]),
   Layer.provide(schemaErrorLayer),
   Layer.provide(httpApiAuthLayer),
 )
@@ -279,6 +280,7 @@ export function createRoutes(
         Banyan.repositoryIntelligenceDefaultLayer,
         Banyan.searchDefaultLayer,
         Banyan.structuralQueriesDefaultLayer,
+        Banyan.memoryRepoDefaultLayer,
       ).pipe(Layer.provide(Banyan.codegraphRepoDefaultLayer), Layer.provide(Database.defaultLayer)),
     ),
     Layer.provideMerge(

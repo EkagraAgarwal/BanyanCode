@@ -77,4 +77,18 @@ export const repositoryIntelServiceMocks = Layer.mergeAll(
       findImports: () => Effect.succeed([]),
     }),
   ),
+  Layer.succeed(
+    Banyan.MemoryRepo,
+    Banyan.MemoryRepo.of({
+      put: () => Effect.void,
+      get: () => Effect.succeed(undefined),
+      list: () => Effect.succeed([]),
+      forget: () => Effect.void,
+      forgetByKey: () => Effect.succeed(0),
+      search: () => Effect.succeed([]),
+      searchRanked: () => Effect.succeed({ entries: [], totalHits: 0 }),
+      vacuum: () => Effect.succeed(0),
+      update: () => Effect.die("not used"),
+    }),
+  ),
 )
