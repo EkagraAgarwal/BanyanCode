@@ -205,7 +205,7 @@ function View(props: { api: TuiPluginApi }) {
         </text>
       </box>
       <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
-        <box flexDirection="column" paddingTop={1} gap={1}>
+        <box flexDirection="column" paddingTop={1} gap={0}>
           <Show when={sessions() !== undefined} fallback={
             <text fg={toHex(theme().textMuted)} paddingLeft={2} paddingTop={2}>Loading…</text>
           }>
@@ -225,7 +225,7 @@ function View(props: { api: TuiPluginApi }) {
             >
               <For each={rootSessions()}>
                 {(session) => (
-                  <box paddingLeft={2} paddingRight={2}>
+                  <box paddingLeft={1} paddingRight={1} paddingBottom={1}>
                     <SessionCard
                       session={session}
                       children={children(session.id)}

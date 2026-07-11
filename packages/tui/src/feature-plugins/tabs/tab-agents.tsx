@@ -255,7 +255,7 @@ function AgentCard(props: {
           </box>
         </Show>
       </box>
-      <text fg={toHex(props.theme.text)}>{description()}</text>
+      <text fg={toHex(props.theme.info)}>{description()}</text>
       <box flexDirection="row" gap={1} alignItems="center">
         <text fg={toHex(props.theme.textMuted)}>Model</text>
         <text fg={toHex(props.theme.info)} onMouseUp={props.onOpenModel}>
