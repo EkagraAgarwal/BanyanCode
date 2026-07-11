@@ -28,6 +28,7 @@ import { SessionCommand } from "./cli/cmd/session"
 import { DbCommand } from "./cli/cmd/db"
 import { CodegraphCommand } from "./cli/cmd/codegraph"
 import { RepositoryCommand } from "./cli/cmd/repository"
+import { MemoryCommand } from "./cli/cmd/memory"
 import { WebsearchFreeCommand } from "./cli/cmd/websearch-free"
 import { ToolsCommand } from "./cli/cmd/tools"
 import { errorMessage } from "./util/error"
@@ -107,6 +108,7 @@ const cli = yargs(args)
   .command(DbCommand)
   .command(CodegraphCommand)
   .command(RepositoryCommand)
+  .command(MemoryCommand)
   .command(WebsearchFreeCommand)
   .command(ToolsCommand)
   .fail((msg, err) => {

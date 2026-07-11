@@ -83,6 +83,7 @@ import {
 import type { EventSource } from "./context/sdk"
 import { DialogVariant } from "./component/dialog-variant"
 import { createTuiAttention } from "./attention"
+import { setActiveTab } from "./feature-plugins/tabs/state"
 import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
@@ -562,6 +563,25 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (workspace?.type !== "worktree" || !workspace.directory) return
     return workspace
   })
+  const runMemorySearch = async (opts: { preset: "recall" | "search" }) => {
+    const query = opts.preset === "recall" ? "" : ""
+    try {
+      const res = await sdk.client.memory.search({ banyanMemorySearchInput: { query, limit: 25 } })
+      const data = (res as any)?.data
+      const entries = data?.entries ?? []
+      if (entries.length === 0) {
+        toast.show({ message: "Memory is empty (no candidates / actives yet)", variant: "info" })
+        return
+      }
+      setActiveTab("memory")
+    } catch (err) {
+      toast.show({
+        message: `memory search failed: ${err instanceof Error ? err.message : String(err)}`,
+        variant: "error",
+      })
+    }
+  }
+
   const appCommands = createMemo(() =>
     [
       {
@@ -896,6 +916,79 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
                 variant: "error",
               }),
             )
+        },
+      },
+      {
+        name: "memory.recall",
+        title: "Recall memory by key",
+        category: "BanyanCode",
+        slashName: "memory-recall",
+        keybind: "",
+        run: () => {
+          void runMemorySearch({ preset: "recall" })
+          dialog.clear()
+        },
+      },
+      {
+        name: "memory.search",
+        title: "Search memory (FTS5 / BM25)",
+        category: "BanyanCode",
+        slashName: "memory-search",
+        keybind: "",
+        run: () => {
+          void runMemorySearch({ preset: "search" })
+          dialog.clear()
+        },
+      },
+      {
+        name: "memory.pending",
+        title: "Show pending memory candidates",
+        category: "BanyanCode",
+        slashName: "memory-pending",
+        keybind: "",
+        run: () => {
+          setActiveTab("memory")
+          dialog.clear()
+          toast.show({ message: "Filter memory by status=pending", variant: "info" })
+        },
+      },
+      {
+        name: "memory.forget",
+        title: "Forget a memory entry",
+        category: "BanyanCode",
+        slashName: "memory-forget",
+        keybind: "",
+        run: () => {
+          setActiveTab("memory")
+          dialog.clear()
+          toast.show({ message: "Click an entry in the memory tab and choose forget.", variant: "info" })
+        },
+      },
+      {
+        name: "memory.add",
+        title: "Add a memory entry (orchestrator prompt)",
+        category: "BanyanCode",
+        slashName: "memory-add",
+        keybind: "",
+        run: () => {
+          if (route.data.type !== "session") {
+            toast.show({ message: "Start a session to add memory", variant: "warning" })
+            dialog.clear()
+            return
+          }
+          sdk.client.session
+            .command({
+              sessionID: route.data.sessionID,
+              command: "memory-add",
+              arguments: "",
+            })
+            .catch((err) =>
+              toast.show({
+                message: `memory-add failed: ${err instanceof Error ? err.message : String(err)}`,
+                variant: "error",
+              }),
+            )
+          dialog.clear()
         },
       },
       {

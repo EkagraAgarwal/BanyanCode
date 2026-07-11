@@ -63,6 +63,7 @@ import * as AiSdkTransportModule from "./transport-ai-sdk"
 import { applyCodegraphBuildBridge } from "./banyancode-codegraph-bridge"
 import { applyFilesystemBridge } from "./banyancode-filesystem-bridge"
 import { applyMeshBridge } from "./banyancode-mesh-bridge"
+import { applyMemoryBridge } from "./banyancode-memory-bridge"
 import { applySystemMonitorBridge } from "./banyancode-system-bridge"
 
 export const AppLayer = Layer.mergeAll(
@@ -165,6 +166,8 @@ export const AppLayer = Layer.mergeAll(
       Banyan.structuralQueriesDefaultLayer,
       Banyan.gitDefaultLayer,
       Banyan.systemMonitorDefaultLayer,
+      Banyan.memoryRepoDefaultLayer,
+      Banyan.memoryServiceDefaultLayer,
     ).pipe(
       Layer.provide(AppProcess.defaultLayer as Layer.Layer<unknown, unknown, never>),
       Layer.provide(
@@ -223,6 +226,7 @@ export const AppRuntime: Runtime = {
 
 AppRuntime.runFork(applyCodegraphBuildBridge as never)
 AppRuntime.runFork(applyFilesystemBridge as never)
+AppRuntime.runFork(applyMemoryBridge as never)
 AppRuntime.runFork(applyMeshBridge as never)
 AppRuntime.runFork(applySystemMonitorBridge as never)
 
