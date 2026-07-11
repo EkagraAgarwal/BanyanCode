@@ -345,9 +345,44 @@ const VacuumCommand = effectCmd({
   }),
 })
 
+const hygieneLayer = Banyan.memoryHygieneLayer.pipe(
+  Layer.provide(Banyan.memoryRepoDefaultLayer),
+  Layer.provide(Database.defaultLayer),
+)
+
+const SweepCommand = effectCmd({
+  command: "sweep",
+  describe: "run a hygiene sweep: expire → reconcile → prune (cron-style, idempotent)",
+  instance: false,
+  builder: (yargs: Argv) =>
+    yargs
+      .option("scope", { type: "string", describe: "scope filter for reconcile (global|session)" })
+      .option("older-than-ms", { type: "number", describe: "prune cutoff (default 30d)" })
+      .option("skip-expire", { type: "boolean", default: false })
+      .option("skip-reconcile", { type: "boolean", default: false })
+      .option("skip-prune", { type: "boolean", default: false }),
+  handler: Effect.fn("Cli.memory.sweep")(function* (args: any) {
+    return yield* Effect.gen(function* () {
+      const hygiene = yield* Banyan.MemoryHygiene
+      const result = yield* hygiene.sweep({
+        expire: !args.skipExpire,
+        reconcile: !args.skipReconcile,
+        prune: !args.skipPrune,
+        olderThanMs: args.olderThanMs,
+        scope: args.scope,
+      })
+      UI.println(`${UI.Style.TEXT_SUCCESS_BOLD}sweep complete${UI.Style.TEXT_NORMAL}`)
+      UI.println(dim(`  expired=${result.expired}`))
+      UI.println(dim(`  superseded=${result.supersededIds.length}`))
+      UI.println(dim(`  pruned=${result.pruned}`))
+      UI.println(dim(`  duration=${result.finishedAt - result.startedAt}ms`))
+    }).pipe(Effect.provide(hygieneLayer))
+  }),
+})
+
 export const MemoryCommand = effectCmd({
   command: "memory",
-  describe: "banyancode memory subcommands (list/get/search/recall/store/forget/candidates/vacuum)",
+  describe: "banyancode memory subcommands (list/get/search/recall/store/forget/candidates/vacuum/sweep)",
   instance: false,
   builder: (yargs: Argv) =>
     yargs
@@ -359,6 +394,7 @@ export const MemoryCommand = effectCmd({
       .command(ForgetCommand)
       .command(CandidatesCommand)
       .command(VacuumCommand)
+      .command(SweepCommand)
       .demandCommand(),
   handler: Effect.fn("Cli.memory")(function* () {}),
 })

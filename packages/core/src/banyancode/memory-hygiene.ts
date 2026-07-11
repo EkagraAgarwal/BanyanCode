@@ -44,12 +44,37 @@ export interface ReconcileResult {
   scannedAt: number
 }
 
+export interface SweepOptions {
+  /** Whether to expire past-due entries. Default: true. */
+  expire?: boolean
+  /** Whether to reconcile duplicate active fingerprints. Default: true. */
+  reconcile?: boolean
+  /** Whether to prune old rejected/expired rows after reconcile. Default: true. */
+  prune?: boolean
+  /** Override prune cutoff (ms). Default: 30 days. */
+  olderThanMs?: number
+  /** Optional scope filter for reconcile. */
+  scope?: "global" | "session"
+}
+
+export interface SweepResult {
+  expired: number
+  supersededIds: string[]
+  pruned: number
+  startedAt: number
+  finishedAt: number
+  ranExpire: boolean
+  ranReconcile: boolean
+  ranPrune: boolean
+}
+
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Banyan/MemoryHygiene") {}
 
 export interface Interface {
   readonly expire: (input?: { now?: number }) => Effect.Effect<ExpireResult, never, never>
   readonly prune: (input?: { olderThanMs?: number }) => Effect.Effect<PruneResult, never, never>
   readonly reconcile: (input?: { scope?: "global" | "session" }) => Effect.Effect<ReconcileResult, never, never>
+  readonly sweep: (input?: SweepOptions) => Effect.Effect<SweepResult, never, never>
 }
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
@@ -62,6 +87,17 @@ export const layer: Layer.Layer<Service, never, Database.Service> = Layer.effect
         expire: () => Effect.succeed({ expired: 0, scanned: 0, scannedAt: 0 }),
         prune: () => Effect.succeed({ deleted: 0, scannedAt: 0 }),
         reconcile: () => Effect.succeed({ supersededIds: [], pruned: 0, scannedAt: 0 }),
+        sweep: () =>
+          Effect.succeed({
+            expired: 0,
+            supersededIds: [],
+            pruned: 0,
+            startedAt: 0,
+            finishedAt: 0,
+            ranExpire: false,
+            ranReconcile: false,
+            ranPrune: false,
+          }),
       })
     }
 
@@ -144,7 +180,48 @@ export const layer: Layer.Layer<Service, never, Database.Service> = Layer.effect
         return { supersededIds, pruned, scannedAt: now }
       })
 
-    return Service.of({ expire, prune, reconcile })
+    /**
+     * Cron-style hygiene sweep. Runs `expire` → `reconcile` → `prune` in
+     * sequence (the same order the spec recommends), with each step
+     * independently toggleable. Safe to run from a background scheduler
+     * (e.g. every 10 minutes) — each op is idempotent on its own.
+     */
+    const sweep: Interface["sweep"] = (input = {}) =>
+      Effect.gen(function* () {
+        const startedAt = Date.now()
+        const ranExpire = input.expire !== false
+        const ranReconcile = input.reconcile !== false
+        const ranPrune = input.prune !== false
+
+        const expired = ranExpire ? (yield* expire().pipe(Effect.orDie)).expired : 0
+
+        const reconcileResult = ranReconcile
+          ? yield* reconcile(input.scope ? { scope: input.scope } : {}).pipe(Effect.orDie)
+          : { supersededIds: [] as string[], pruned: 0 }
+
+        const pruneResult = ranPrune
+          ? yield* prune({ olderThanMs: input.olderThanMs }).pipe(Effect.orDie)
+          : { deleted: 0 }
+
+        const pruned = ranReconcile
+          ? ranPrune
+            ? reconcileResult.pruned + pruneResult.deleted
+            : reconcileResult.pruned
+          : pruneResult.deleted
+
+        return {
+          expired,
+          supersededIds: reconcileResult.supersededIds,
+          pruned,
+          startedAt,
+          finishedAt: Date.now(),
+          ranExpire,
+          ranReconcile,
+          ranPrune,
+        }
+      })
+
+    return Service.of({ expire, prune, reconcile, sweep })
   }),
 )
 

@@ -190,4 +190,120 @@ describe("Banyan.MemoryHygiene", () => {
       ),
     )
   })
+
+  test("sweep runs expire → reconcile → prune in sequence", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "memory-hygiene-sweep.sqlite")
+    const { dbLayer, memoryLayer, hygieneLayer } = buildLayers(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* Effect.gen(function* () {
+          const { db } = yield* Database.Service
+          yield* DatabaseMigration.apply(db)
+        }).pipe(Effect.provide(dbLayer), Effect.scoped)
+
+        const repo = yield* Banyan.MemoryRepo
+        const now = Date.now()
+
+        // past-due (will be expired)
+        yield* repo.put({
+          id: "stale",
+          key: "decision:stale",
+          value: sample({ title: "Stale decision" }),
+          scope: "global",
+          expiresAt: now - 86_400_000,
+        })
+        // fresh duplicate pair (reconcile supersedes older)
+        yield* repo.put({
+          id: "first",
+          key: "decision:dup",
+          value: sample({ title: "Dup", body: "Dup body." }),
+          scope: "global",
+        })
+        yield* repo.put({
+          id: "second",
+          key: "decision:dup-2",
+          value: sample({ title: "Dup", body: "Dup body." }),
+          scope: "global",
+        })
+        // rejected entry to be pruned (use olderThanMs=0 so it's deleted)
+        yield* repo.put({
+          id: "rej",
+          key: "warning:noise",
+          value: sample({
+            kind: "warning",
+            title: "Noise",
+            body: "Noise.",
+            confidence: "low",
+            importance: "low",
+            source: { type: "system" },
+          }),
+          scope: "global",
+        })
+        const rejRow = yield* repo.get("rej")
+        if (rejRow) {
+          yield* repo.update({
+            id: "rej",
+            expectedVersion: rejRow.version,
+            overrides: { status: "rejected" },
+          })
+        }
+
+        const hygiene = yield* Banyan.MemoryHygiene
+        const result = yield* hygiene.sweep({ olderThanMs: 0 })
+        expect(result.ranExpire).toBe(true)
+        expect(result.ranReconcile).toBe(true)
+        expect(result.ranPrune).toBe(true)
+        expect(result.expired).toBeGreaterThanOrEqual(1)
+        expect(result.supersededIds.length).toBeGreaterThanOrEqual(1)
+        expect(result.pruned).toBeGreaterThanOrEqual(1)
+        expect(result.finishedAt).toBeGreaterThanOrEqual(result.startedAt)
+      }).pipe(
+        Effect.provide(hygieneLayer),
+        Effect.provide(memoryLayer),
+        Effect.provide(dbLayer),
+        Effect.scoped,
+      ),
+    )
+  })
+
+  test("sweep respects per-step opt-outs", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "memory-hygiene-sweep-skip.sqlite")
+    const { dbLayer, memoryLayer, hygieneLayer } = buildLayers(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* Effect.gen(function* () {
+          const { db } = yield* Database.Service
+          yield* DatabaseMigration.apply(db)
+        }).pipe(Effect.provide(dbLayer), Effect.scoped)
+
+        const repo = yield* Banyan.MemoryRepo
+        const now = Date.now()
+        yield* repo.put({
+          id: "stale",
+          key: "decision:stale",
+          value: sample({ title: "Stale decision" }),
+          scope: "global",
+          expiresAt: now - 86_400_000,
+        })
+
+        const hygiene = yield* Banyan.MemoryHygiene
+        const result = yield* hygiene.sweep({ reconcile: false, prune: false })
+        expect(result.ranExpire).toBe(true)
+        expect(result.ranReconcile).toBe(false)
+        expect(result.ranPrune).toBe(false)
+        expect(result.expired).toBe(1)
+        expect(result.supersededIds.length).toBe(0)
+        expect(result.pruned).toBe(0)
+      }).pipe(
+        Effect.provide(hygieneLayer),
+        Effect.provide(memoryLayer),
+        Effect.provide(dbLayer),
+        Effect.scoped,
+      ),
+    )
+  })
 })
