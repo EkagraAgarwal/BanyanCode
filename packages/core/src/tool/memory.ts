@@ -82,6 +82,19 @@ export class MemoryQuotaError extends Schema.TaggedErrorClass<MemoryQuotaError>(
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
+/**
+ * Agents allowed to write canonical global memory. Subagents (anything not in
+ * this list) must use `memory_candidate_emit` for durable facts and only write
+ * directly to `session` scope.
+ */
+const GLOBAL_WRITE_ALLOWLIST = new Set<string>(["build", "orchestrator"])
+
+const guardGlobalWrite = (scope: "global" | "session", agent: string): string | null => {
+  if (scope !== "global") return null
+  if (GLOBAL_WRITE_ALLOWLIST.has(agent)) return null
+  return `agent "${agent || "<unknown>"}" may not write scope=global memory. Use memory_candidate_emit for durable facts; only the build / orchestrator agent may write canonical global memory.`
+}
+
 function keywordSearch(query: string, entries: Banyan.MemoryEntry[]): Banyan.MemoryEntry[] {
   const lowerQuery = query.toLowerCase()
   return entries
@@ -106,23 +119,32 @@ export const locationLayer = Layer.effectDiscard(
     yield* tools
       .register({
         [name_store]: Tool.make({
-          description: "Store a memory entry with key-value pair, optional context, tags, scope, and TTL",
+          description:
+            "Store a memory entry with key-value pair, optional context, tags, scope, and TTL. scope=global is only allowed for build / orchestrator; other agents should use memory_candidate_emit for durable facts.",
           input: InputStore,
           output: OutputStore,
           toModelOutput: ({ output }) => [
             { type: "text", text: `stored id=${output.id} createdAt=${output.createdAt}` },
           ],
-          execute: (input) => {
+          execute: (input, context) => {
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_store,
                 resources: [input.key],
                 save: ["*"],
                 metadata: input,
-                sessionID: (input.sessionID ?? "") as any,
-                agent: "" as any,
-                source: { type: "tool", messageID: "" as any, callID: "" },
-              } as any)
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+
+              const scope = (input.scope ?? "global") as "global" | "session"
+              const sessionID = input.sessionID ?? context.sessionID
+
+              const guard = guardGlobalWrite(scope, context.agent)
+              if (guard) {
+                return yield* new MemoryQuotaError({ message: guard })
+              }
 
               const valueSize = Buffer.byteLength(JSON.stringify(input.value), "utf8")
               if (valueSize > MAX_VALUE_SIZE_BYTES) {
@@ -131,8 +153,7 @@ export const locationLayer = Layer.effectDiscard(
                 })
               }
 
-              const scope = (input.scope ?? "global") as "global" | "session"
-              const existing = yield* repo.list(scope, input.sessionID)
+              const existing = yield* repo.list(scope, sessionID)
               if (existing.length >= MAX_ENTRIES_PER_SCOPE) {
                 return yield* new MemoryQuotaError({
                   message: `Scope limit ${MAX_ENTRIES_PER_SCOPE} reached`,
@@ -152,19 +173,19 @@ export const locationLayer = Layer.effectDiscard(
 
               const id = crypto.randomUUID()
               const now = Date.now()
-              const entry = {
+
+              yield* repo.put({
                 id,
                 key: input.key,
                 value: input.value,
                 context: input.context,
                 tags: [...(input.tags ?? [])],
                 scope,
-                sessionID: input.sessionID,
+                sessionID,
+                agentID: context.agent,
                 createdAt: now,
                 expiresAt: input.ttlSeconds ? now + input.ttlSeconds * 1000 : undefined,
-              }
-
-              yield* repo.put(entry)
+              })
 
               return { id, createdAt: now }
             }).pipe(

@@ -37,6 +37,19 @@ export const Output = Schema.Struct({
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
+/**
+ * Agents allowed to write canonical global memory. Subagents (anything not in
+ * this list) must write to scope=session only and emit candidates for durable
+ * facts via memory_candidate_emit.
+ */
+const GLOBAL_WRITE_ALLOWLIST = new Set<string>(["build", "orchestrator"])
+
+const guardGlobalWrite = (scope: "global" | "session", agent: string): string | null => {
+  if (scope !== "global") return null
+  if (GLOBAL_WRITE_ALLOWLIST.has(agent)) return null
+  return `agent "${agent || "<unknown>"}" may not write scope=global memory via shared_memory. Use memory_candidate_emit for durable facts; only the build / orchestrator agent may write canonical global memory.`
+}
+
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     if (!banyancodeEnabled()) return
@@ -72,6 +85,12 @@ export const layer = Layer.effectDiscard(
 
               if (input.op === "write" && !input.key) {
                 return { ok: false, entries: [] as unknown[], error: "write requires key" }
+              }
+              if (input.op === "write") {
+                const guard = guardGlobalWrite(effectiveScope, context.agent)
+                if (guard) {
+                  return { ok: false, entries: [] as unknown[], error: guard }
+                }
               }
               if (input.op === "delete" && !input.key) {
                 return { ok: false, entries: [] as unknown[], error: "delete requires key" }

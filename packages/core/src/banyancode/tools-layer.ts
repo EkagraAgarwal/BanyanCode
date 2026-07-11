@@ -10,11 +10,13 @@ import { EditPlanTool } from "../tool/edit-plan"
 import { MeshControlTool } from "../tool/mesh-control"
 import { MeshSubscribeTool } from "../tool/mesh-subscribe"
 import { MemoryTools } from "../tool/memory"
+import { MemoryCandidateTool } from "../tool/memory-candidate"
 import { SharedMemoryTool } from "../tool/shared-memory"
 import { SubagentMessageTool } from "../tool/subagent-message"
 import { SystemStatusTool } from "../tool/system-status"
 import { WebSearchFreeTool } from "../tool/websearch-free"
 import { defaultLayer as memoryRepoLayer } from "./memory-repo"
+import { defaultLayer as memoryServiceLayer } from "./memory-service"
 import { defaultLayer as subagentBusLayer } from "./subagent-bus"
 import { defaultLayer as codegraphRepoLayer } from "./codegraph-repo"
 import { defaultLayer as codegraphIndexerLayer } from "./codegraph-indexer"
@@ -30,6 +32,7 @@ export const locationLayer = Layer.mergeAll(
   MeshControlTool.locationLayer,
   MeshSubscribeTool.locationLayer,
   MemoryTools.locationLayer,
+  MemoryCandidateTool.layer,
   CodegraphTools.locationLayer,
   CodeFindTool.locationLayer,
   RepositoryIntelTool.locationLayer,
@@ -41,6 +44,7 @@ export const locationLayer = Layer.mergeAll(
 ).pipe(
   Layer.provide(subagentBusLayer),
   Layer.provide(memoryRepoLayer),
+  Layer.provide(memoryServiceLayer),
   Layer.provide(codegraphRepoLayer),
   Layer.provide(codegraphIndexerLayer),
   Layer.provide(codegraphAnalyzerLayer),
