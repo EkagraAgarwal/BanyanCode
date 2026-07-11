@@ -281,13 +281,15 @@ export const layer = Layer.effect(
 
         // Sanitize the FTS5 query: wrap each whitespace-delimited token in
         // double quotes so punctuation in the user query doesn't break the
-        // FTS5 expression. Stemming still happens via the unicode61 tokenizer.
+        // FTS5 expression. We OR-join (any-term-matches) instead of AND
+        // so natural questions with stop words ("why did we switch")
+        // still rank meaningful entries above the noise.
         const tokens = ftsQuery
           .split(/\s+/)
           .map((t) => t.replace(/"/g, ""))
           .filter((t) => t.length > 0)
         if (tokens.length === 0) return { entries: [], totalHits: 0 }
-        const ftsExpression = tokens.map((t) => `"${t}"`).join(" ")
+        const ftsExpression = tokens.map((t) => `"${t}"`).join(" OR ")
 
         // Build optional filter clauses via `sql` templates so params are
         // bound, not spliced.
@@ -346,7 +348,7 @@ export const layer = Layer.effect(
               if (input.status && e.status !== input.status) return false
               if (input.kind && e.kind !== input.kind) return false
               const hay = [e.key, e.title ?? "", e.body ?? "", e.kind ?? ""].join(" ").toLowerCase()
-              return tokens.every((t) => hay.includes(t.toLowerCase()))
+              return tokens.some((t) => hay.includes(t.toLowerCase()))
             })
             .slice(0, limit)
           return { entries: matched, totalHits: matched.length }

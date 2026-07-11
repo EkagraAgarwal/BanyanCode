@@ -33,6 +33,22 @@ export {
 } from "./memory-extractor"
 export type { ExtractInput, ExtractResult, ExtractAction } from "./memory-extractor"
 export {
+  Service as MemoryRetrieval,
+  layer as memoryRetrievalLayer,
+  defaultLayer as memoryRetrievalDefaultLayer,
+  classifyQuery,
+  computeRankSignals,
+} from "./memory-retrieval"
+export type {
+  ClassifyQueryInput,
+  ClassifyQueryResult,
+  QueryIntent,
+  RetrieveInput,
+  RetrieveHit,
+  RetrieveResult,
+  RankSignals,
+} from "./memory-retrieval"
+export {
   KEEP_THRESHOLD,
   MERGE_THRESHOLD,
   decide,
