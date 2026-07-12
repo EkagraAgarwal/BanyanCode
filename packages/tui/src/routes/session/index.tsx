@@ -1550,15 +1550,15 @@ function UserMessage(props: {
               setHover(false)
             }}
             onMouseUp={props.onMouseUp}
-            paddingTop={1}
-            paddingBottom={1}
+            paddingTop={0}
+            paddingBottom={0}
             paddingLeft={2}
             backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
             flexShrink={0}
           >
-            <text fg={theme.text}>{text()}</text>
+            <text fg={theme.text} paddingTop={1} paddingBottom={1}>{text()}</text>
             <Show when={files().length}>
-              <box flexDirection="row" paddingBottom={metadataVisible() ? 1 : 0} paddingTop={1} gap={1} flexWrap="wrap">
+              <box flexDirection="row" paddingBottom={metadataVisible() ? 1 : 0} paddingTop={0} gap={1} flexWrap="wrap">
                 <For each={files()}>
                   {(file) => {
                     const bg = createMemo(() => {
@@ -1760,7 +1760,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
           />
         </box>
         <Show when={(!inMinimal() || expanded()) && summary().body}>
-          <box paddingLeft={inMinimal() ? 2 : 0} marginTop={1}>
+          <box paddingLeft={inMinimal() ? 2 : 0}>
             <code
               filetype="markdown"
               drawUnstyledText={false}
@@ -1833,7 +1833,7 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   })
   return (
     <Show when={content()}>
-      <box id={"text-" + props.part.id} paddingLeft={3} marginTop={1} flexShrink={0}>
+      <box id={"text-" + props.part.id} paddingLeft={3} flexShrink={0}>
         <markdown
           syntaxStyle={syntax()}
           streaming={true}
@@ -1959,18 +1959,24 @@ function GenericTool(props: ToolProps) {
         </InlineTool>
       }
     >
-      <BlockTool
-        title={`# ${props.tool} ${input(props.input)}`}
-        part={props.part}
-        onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
-      >
-        <box gap={1}>
-          <text fg={theme.text}>{limited()}</text>
-          <Show when={collapsed().overflow}>
-            <text fg={theme.textMuted}>{expanded() ? "Click to collapse" : "Click to expand"}</text>
-          </Show>
-        </box>
-      </BlockTool>
+      <MessageBlock mode="tool" label={`TOOL · ${props.tool}`} compact>
+        <BlockTool
+          title={input(props.input)}
+          part={props.part}
+          onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
+        >
+          <box gap={0}>
+            <text fg={theme.text} wrapMode="word">
+              {limited()}
+            </text>
+            <Show when={collapsed().overflow}>
+              <text fg={theme.textMuted} marginTop={0}>
+                {expanded() ? "Click to collapse" : "Click to expand"}
+              </text>
+            </Show>
+          </box>
+        </BlockTool>
+      </MessageBlock>
     </Show>
   )
 }
@@ -2152,15 +2158,21 @@ function BlockTool(props: {
   return (
     <box
       id={props.part ? "tool-block-" + props.part.id : undefined}
-      border={["left"]}
-      paddingTop={1}
-      paddingBottom={1}
       paddingLeft={2}
-      marginTop={1}
+      paddingRight={2}
+      paddingTop={0}
+      paddingBottom={0}
       gap={1}
-      backgroundColor={hover() ? theme.backgroundMenu : theme.backgroundPanel}
-      customBorderChars={SplitBorder.customBorderChars}
-      borderColor={theme.background}
+      flexShrink={0}
+      ref={(el: BoxRenderable) => {
+        setPreLayoutSiblingMargin(el, (previous) => {
+          if (!previous?.id) return 0
+          if (previous.id.startsWith("tool-block-")) return 0
+          if (previous.id.startsWith("tool-inline-")) return 0
+          if (previous.id.startsWith("text-")) return 0
+          return 1
+        })
+      }}
       onMouseOver={() => props.onClick && setHover(true)}
       onMouseOut={() => setHover(false)}
       onMouseUp={() => {
@@ -2171,7 +2183,7 @@ function BlockTool(props: {
       <Show
         when={props.spinner}
         fallback={
-          <text paddingLeft={3} fg={theme.textMuted}>
+          <text fg={theme.textMuted}>
             {props.title}
           </text>
         }
@@ -2218,22 +2230,27 @@ function Shell(props: ToolProps) {
   return (
     <Switch>
       <Match when={stringValue(props.metadata.output) !== undefined}>
-        <BlockTool
-          title={title()}
-          part={props.part}
-          spinner={isRunning()}
-          onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
-        >
-          <box gap={1}>
-            <text fg={theme.text}>$ {stringValue(props.input.command)}</text>
-            <Show when={output()}>
-              <text fg={theme.text}>{limited()}</text>
-            </Show>
-            <Show when={collapsed().overflow}>
-              <text fg={theme.textMuted}>{expanded() ? "Click to collapse" : "Click to expand"}</text>
-            </Show>
-          </box>
-        </BlockTool>
+        <MessageBlock mode="tool" label={`TOOL · ${title().replace(/^# /, "")}`} compact>
+          <BlockTool
+            title={"$ " + stringValue(props.input.command)}
+            part={props.part}
+            spinner={isRunning()}
+            onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
+          >
+            <box gap={0}>
+              <Show when={output()}>
+                <text fg={theme.text} wrapMode="word">
+                  {limited()}
+                </text>
+              </Show>
+              <Show when={collapsed().overflow}>
+                <text fg={theme.textMuted} marginTop={0}>
+                  {expanded() ? "Click to collapse" : "Click to expand"}
+                </text>
+              </Show>
+            </box>
+          </BlockTool>
+        </MessageBlock>
       </Match>
       <Match when={true}>
         <InlineTool icon="$" pending="Writing command..." complete={stringValue(props.input.command)} part={props.part}>
@@ -2666,7 +2683,7 @@ function TodoWrite(props: ToolProps) {
   return (
     <Switch>
       <Match when={isCompleted()}>
-        <MessageBlock mode="plan" label="PLAN · Todos">
+        <MessageBlock mode="plan" label="PLAN · Todos" compact>
           <BlockTool title="# Todos" part={props.part}>
             <box>
               <For each={todos()}>{(todo) => <TodoItem status={todo.status} content={todo.content} />}</For>
@@ -2697,18 +2714,20 @@ function Question(props: ToolProps) {
   return (
     <Switch>
       <Match when={answers()}>
-        <BlockTool title="# Questions" part={props.part}>
-          <box gap={1}>
-            <For each={questions()}>
-              {(q, i) => (
-                <box flexDirection="column">
-                  <text fg={theme.textMuted}>{q.question}</text>
-                  <text fg={theme.text}>{format(answers()?.[i()])}</text>
-                </box>
-              )}
-            </For>
-          </box>
-        </BlockTool>
+        <MessageBlock mode="tool" label={`TOOL · Questions (${count()})`} compact>
+          <BlockTool title="# Questions" part={props.part}>
+            <box gap={0}>
+              <For each={questions()}>
+                {(q, i) => (
+                  <box flexDirection="column">
+                    <text fg={theme.textMuted}>{q.question}</text>
+                    <text fg={theme.text}>{format(answers()?.[i()])}</text>
+                  </box>
+                )}
+              </For>
+            </box>
+          </BlockTool>
+        </MessageBlock>
       </Match>
       <Match when={true}>
         <InlineTool icon="→" pending="Asking questions..." complete={count()} part={props.part}>

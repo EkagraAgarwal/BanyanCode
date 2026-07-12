@@ -1,4 +1,4 @@
-import { Layer, ManagedRuntime, Effect } from "effect"
+import { Layer, ManagedRuntime, Effect, Option, Cause } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { AppProcess } from "@opencode-ai/core/process"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -61,6 +61,7 @@ import { PluginV2 } from "@opencode-ai/core/plugin"
 import { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
 import * as AiSdkTransportModule from "./transport-ai-sdk"
 import { applyCodegraphBuildBridge } from "./banyancode-codegraph-bridge"
+import { applyCodegraphAutoUpdateBridge } from "./banyancode-codegraph-auto-update-bridge"
 import { applyFilesystemBridge } from "./banyancode-filesystem-bridge"
 import { applyMeshBridge } from "./banyancode-mesh-bridge"
 import { applyMemoryBridge } from "./banyancode-memory-bridge"
@@ -193,6 +194,11 @@ export const AppLayer = Layer.mergeAll(
       Layer.provide(EventV2.defaultLayer),
     ) as unknown as Layer.Layer<never, never, never>,
   ),
+  Layer.provideMerge(
+    Banyan.codegraphAutoUpdateDefaultLayer.pipe(
+      Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
+    ) as unknown as Layer.Layer<never, never, never>,
+  ),
 )
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })
@@ -225,7 +231,46 @@ export const AppRuntime: Runtime = {
   dispose: () => rt.dispose(),
 }
 
+// One-time startup catch-up for the codegraph: index files that changed
+// while the app was closed. Auto-update's watcher only sees events emitted
+// after the listener attaches, so anything edited in a previous session is
+// invisible unless we scan for mtime > indexedAt and re-index.
+AppRuntime.runFork(
+  Effect.gen(function* () {
+    const repoOpt = yield* Effect.serviceOption(Banyan.CodegraphRepo)
+    if (Option.isNone(repoOpt)) return
+    const indexerOpt = yield* Effect.serviceOption(Banyan.CodegraphIndexer)
+    if (Option.isNone(indexerOpt)) return
+    const fsOpt = yield* Effect.serviceOption(FSUtil.Service)
+    if (Option.isNone(fsOpt)) return
+
+    const meta = yield* repoOpt.value.getMeta()
+    if (!meta || !meta.indexedRoot) return
+    const files = yield* repoOpt.value.listAllFiles()
+    if (files.length === 0) return
+
+    const changed: string[] = []
+    for (const f of files) {
+      const stat = yield* fsOpt.value.stat(f.path).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      if (!stat) continue
+      const mtimeMs = Option.getOrElse(stat.mtime, () => new Date(0)).getTime()
+      if (mtimeMs > f.indexedAt) changed.push(f.path)
+    }
+    if (changed.length > 0) {
+      yield* Effect.logInfo(`codegraph: startup catch-up — ${changed.length} file(s) changed since last session`)
+      yield* indexerOpt.value.indexFiles({ root: meta.indexedRoot, paths: changed }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("codegraph startup catch-up failed", { cause: Cause.pretty(cause) }),
+        ),
+      )
+    }
+  }).pipe(
+    Effect.catchCause((cause) => Effect.logWarning("codegraph startup catch-up crashed", { cause: Cause.pretty(cause) })),
+  ) as never,
+)
+
 AppRuntime.runFork(applyCodegraphBuildBridge as never)
+AppRuntime.runFork(applyCodegraphAutoUpdateBridge as never)
 AppRuntime.runFork(applyFilesystemBridge as never)
 AppRuntime.runFork(applyMemoryBridge as never)
 AppRuntime.runFork(applyMeshBridge as never)

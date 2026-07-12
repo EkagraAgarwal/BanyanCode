@@ -113,81 +113,87 @@ export function CodegraphProgress() {
         bottom={2}
         right={2}
         zIndex={2000}
-        maxWidth={Math.min(60, dimensions().width - 6)}
-        paddingLeft={2}
-        paddingRight={2}
-        paddingTop={1}
-        paddingBottom={1}
-        backgroundColor={theme.backgroundPanel}
+        width={Math.min(60, dimensions().width - 6)}
         borderColor={theme[borderColorFor(derivedStatus())]}
         border={["left", "right", "top", "bottom"]}
         customBorderChars={RoundedBorder.customBorderChars}
       >
-        <Show when={build.state.status !== "idle"}>
-          <text attributes={TextAttributes.BOLD} marginBottom={1} fg={theme.text}>
-            Codegraph Indexing — {labelFor(derivedStatus())}
-          </text>
-          <text fg={theme.text}>
-            {`${bar(build.state.done, build.state.total)} ${build.state.done}/${build.state.total}`}
-          </text>
-          <Show when={build.state.status === "running" && build.state.currentFile}>
-            {(file) => (
-              <text fg={theme.textMuted} marginTop={1}>
-                Indexing: {file()}
-              </text>
-            )}
-          </Show>
-          <Show when={derivedStatus() === "stuck"}>
-            <text fg={theme.warning} marginTop={1}>
-              Build appears stuck
+        <box
+          backgroundColor={theme.backgroundPanel}
+          width="100%"
+          height="100%"
+          paddingLeft={2}
+          paddingRight={2}
+          paddingTop={1}
+          paddingBottom={1}
+          flexDirection="column"
+        >
+          <Show when={build.state.status !== "idle"}>
+            <text attributes={TextAttributes.BOLD} marginBottom={1} fg={theme.text}>
+              Codegraph Indexing — {labelFor(derivedStatus())}
             </text>
-            <Show when={build.state.lastCompletedFile}>
-              {(f) => (
+            <text fg={theme.text}>
+              {`${bar(build.state.done, build.state.total)} ${build.state.done}/${build.state.total}`}
+            </text>
+            <Show when={build.state.status === "running" && build.state.currentFile}>
+              {(file) => (
                 <text fg={theme.textMuted} marginTop={1}>
-                  Last completed: {f()}
+                  Indexing: {file()}
                 </text>
               )}
             </Show>
-            <Show when={build.state.currentlyParsing}>
-              {(f) => (
+            <Show when={derivedStatus() === "stuck"}>
+              <text fg={theme.warning} marginTop={1}>
+                Build appears stuck
+              </text>
+              <Show when={build.state.lastCompletedFile}>
+                {(f) => (
+                  <text fg={theme.textMuted} marginTop={1}>
+                    Last completed: {f()}
+                  </text>
+                )}
+              </Show>
+              <Show when={build.state.currentlyParsing}>
+                {(f) => (
+                  <text fg={theme.textMuted} marginTop={1}>
+                    Currently parsing: {f()}
+                  </text>
+                )}
+              </Show>
+              <Show when={!build.state.currentlyParsing && build.state.lastProgressAt}>
                 <text fg={theme.textMuted} marginTop={1}>
-                  Currently parsing: {f()}
+                  Last update: {lastUpdateSeconds()}s ago
+                </text>
+              </Show>
+            </Show>
+            <Show when={build.state.status === "completed" && build.state.result}>
+              {(result) => (
+                <text fg={theme.success} marginTop={1}>
+                  {`✓ ${result().indexed} indexed, ${result().skipped} skipped (${result().duration_ms}ms)`}
                 </text>
               )}
             </Show>
-            <Show when={!build.state.currentlyParsing && build.state.lastProgressAt}>
+            <Show when={build.state.status === "failed" && build.state.error}>
+              {(err) => (
+                <text fg={theme.error} marginTop={1} wrapMode="word" width="100%">
+                  {err()}
+                </text>
+              )}
+            </Show>
+            <Show when={build.state.dbPath}>
+              {(p) => (
+                <text fg={theme.textMuted} marginTop={1} wrapMode="word" width="100%">
+                  Index → {p()}
+                </text>
+              )}
+            </Show>
+            <Show when={build.state.status === "running" || derivedStatus() === "stuck"}>
               <text fg={theme.textMuted} marginTop={1}>
-                Last update: {lastUpdateSeconds()}s ago
+                Press Ctrl+C to cancel
               </text>
             </Show>
           </Show>
-          <Show when={build.state.status === "completed" && build.state.result}>
-            {(result) => (
-              <text fg={theme.success} marginTop={1}>
-                {`✓ ${result().indexed} indexed, ${result().skipped} skipped (${result().duration_ms}ms)`}
-              </text>
-            )}
-          </Show>
-          <Show when={build.state.status === "failed" && build.state.error}>
-            {(err) => (
-              <text fg={theme.error} marginTop={1} wrapMode="word" width="100%">
-                {err()}
-              </text>
-            )}
-          </Show>
-          <Show when={build.state.dbPath}>
-            {(p) => (
-              <text fg={theme.textMuted} marginTop={1} wrapMode="word" width="100%">
-                Index → {p()}
-              </text>
-            )}
-          </Show>
-          <Show when={build.state.status === "running" || derivedStatus() === "stuck"}>
-            <text fg={theme.textMuted} marginTop={1}>
-              Press Ctrl+C to cancel
-            </text>
-          </Show>
-        </Show>
+        </box>
       </box>
     </Show>
   )

@@ -55,3 +55,15 @@ exports[`MessageBlock mode=tool renders tool label 1`] = `
                                                                                 
 "
 `;
+
+exports[`MessageBlock mode=tool compact renders a tight single-line label and content 1`] = `
+"╭──────────────────────────────────────────────────────────────────────────────╮
+│  TOOL · Shell · ls                                                           │
+│  $ ls                                                                        │
+│  file.ts                                                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+                                                                                
+                                                                                
+                                                                                
+"
+`;

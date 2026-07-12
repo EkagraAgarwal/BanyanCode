@@ -26,6 +26,8 @@ function View(props: { api: TuiPluginApi }) {
 
   const [blockedPeerCount, setBlockedPeerCount] = createSignal(0)
   const unsubMesh = ev.on("banyancode.mesh.status" as any, (event: any) => {
+    const currentSessionID = route.data.type === "session" ? route.data.sessionID : undefined
+    if (!currentSessionID || event.properties.parentSessionID !== currentSessionID) return
     const peers = event.properties.peers ?? []
     setBlockedPeerCount(peers.filter((p: any) => p.status === "disconnected" && p.blockedReason).length)
   })

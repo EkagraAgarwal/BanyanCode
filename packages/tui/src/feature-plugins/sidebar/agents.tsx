@@ -97,8 +97,16 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   }
 
   const unsub = ev.on("banyancode.mesh.status" as any, (event: any) => {
+    const next = event.properties as MeshStatus | undefined
+    if (!next || next.parentSessionID !== props.session_id) return
     setEventFired(true)
-    setMeshStatus(event.properties as MeshStatus)
+    setMeshStatus((prev) => {
+      // Keep the last-known populated peer list when an update for the same
+      // parent session arrives with no peers — avoids transient reflow while
+      // the mesh coordinator is mid-update.
+      if (next.peers.length === 0 && (prev?.peers.length ?? 0) > 0) return prev
+      return next
+    })
     if (pollTimer()) {
       clearTimeout(pollTimer()!)
       setPollTimer(null)

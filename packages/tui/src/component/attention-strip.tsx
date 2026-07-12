@@ -44,6 +44,7 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onJum
   })
 
   const unsubMesh = ev.on("banyancode.mesh.status" as any, (event: any) => {
+    if (event.properties.parentSessionID !== props.sessionID) return
     const peers = event.properties.peers ?? []
     setBlockedPeers(
       peers.filter((p: any) => p.status === "disconnected" && p.blockedReason)

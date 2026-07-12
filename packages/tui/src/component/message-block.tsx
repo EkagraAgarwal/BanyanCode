@@ -15,6 +15,7 @@ export interface MessageBlockProps {
   permissionRequestID?: string
   children: JSX.Element
   actions?: JSX.Element
+  compact?: boolean
 }
 
 export function MessageBlock(props: MessageBlockProps) {
@@ -26,7 +27,7 @@ export function MessageBlock(props: MessageBlockProps) {
     switch (props.mode) {
       case "plan": return theme.accent
       case "diff": return theme.success
-      case "tool": return theme.warning
+      case "tool": return theme.borderSubtle
       case "report": return theme.borderSubtle
     }
   })
@@ -51,24 +52,27 @@ export function MessageBlock(props: MessageBlockProps) {
     keymap.dispatchCommand("diff.toggle")
   }
 
+  const compact = () => Boolean(props.compact)
+  const labelPadding = () => (compact() ? 1 : 2)
+
   return (
     <box
       customBorderChars={RoundedBorder.customBorderChars}
       border={["left", "right", "top", "bottom"]}
       borderColor={borderColor()}
-      marginTop={1}
+      marginTop={compact() ? 0 : 1}
     >
       <box
         backgroundColor={theme.backgroundPanel}
         width="100%"
-        paddingTop={1}
-        paddingBottom={1}
+        paddingTop={compact() ? 0 : 1}
+        paddingBottom={compact() ? 0 : 1}
         paddingLeft={2}
         flexDirection="column"
-        gap={1}
+        gap={compact() ? 0 : 1}
       >
       <box flexDirection="row" gap={1} alignItems="center">
-        <text fg={borderColor()} paddingLeft={2}>
+        <text fg={borderColor()} paddingLeft={labelPadding()}>
           {props.label}
         </text>
         <Show when={props.meta}>

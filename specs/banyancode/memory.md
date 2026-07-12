@@ -334,3 +334,7 @@ Tests in `memory-hygiene.test.ts` cover all three operations against a real DB. 
 - `memory_export` / compact / reconcile / prune
 - Changing codegraph or repository-intelligence APIs
 - Plugin-SDK "memory hook" (memory stays Banyan-native services + tools)
+
+## User-facing memory UI (Phase 1b follow-up)
+
+User-facing memory interaction is **only** the `MEMORY` tab in the TUI. There are no `/memory-*` slash commands, no CLI subcommands meant for daily end-user use, and no chat-prompt syntax for memory ops — all of those surfaces would let users write directly to canonical memory without the orchestrator's review gate. The `[+ Add memory]` chip inside the `MEMORY` tab is the single user affordance for creating a new memory: it chains three `DialogPrompt.show()` calls (title → body → kind) and posts a row with `status: "pending"`, which `Banyan.MemoryService.promote` later transitions to `status: "active"`. Every other memory operation (recall, search, summary, promote, reject, forget, candidates list) is internal to agents via the `BanyanTools.memory_*` tools, the `Banyan.MemoryService` HTTP surface, or the CLI debug subcommands (`opencode memory ...`) — none of those are exposed in the slash palette or the command palette. The HTTP API (`/global/memory/*`), the `Banyan.MemoryService` and `Banyan.MemoryProjection` services, and the `BanyanTools.memory_*` tool layer stay as-is; this is purely a UI-surface restriction.

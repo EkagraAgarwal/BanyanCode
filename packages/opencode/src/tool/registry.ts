@@ -15,6 +15,9 @@ import { BlastRadiusTool } from "@opencode-ai/core/tool/blast-radius"
 import { SafeRenameTool } from "@opencode-ai/core/tool/safe-rename"
 import { Tools } from "@opencode-ai/core/tool/tools"
 import { PermissionV2 } from "@opencode-ai/core/permission"
+import { MemoryTools } from "@opencode-ai/core/tool/memory"
+import { MemoryCandidateTool } from "@opencode-ai/core/tool/memory-candidate"
+import { SharedMemoryTool } from "@opencode-ai/core/tool/shared-memory"
 import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
@@ -380,6 +383,9 @@ const baseBanyanToolLayers = Layer.mergeAll(
   BlastRadiusTool.locationLayer,
   SafeRenameTool.locationLayer,
   WebSearchFreeTool.layer,
+  MemoryTools.locationLayer,
+  MemoryCandidateTool.layer,
+  SharedMemoryTool.layer,
 )
 
 // `withBanyanDeps` wraps `baseBanyanToolLayers` in a `Layer.unwrap` that,
@@ -408,6 +414,8 @@ const withBanyanDeps = Layer.unwrap(
     const structural = yield* Effect.serviceOption(Banyan.StructuralQueries)
     const editPlanner = yield* Effect.serviceOption(Banyan.EditPlanner)
     const telemetry = yield* Effect.serviceOption(Banyan.ToolTelemetry)
+    const memoryRepo = yield* Effect.serviceOption(Banyan.MemoryRepo)
+    const memoryService = yield* Effect.serviceOption(Banyan.MemoryService)
     const worktreeAccessor: () => Effect.Effect<string | undefined> = () =>
       Effect.gen(function* () {
         const inst = yield* InstanceRef
@@ -439,6 +447,12 @@ const withBanyanDeps = Layer.unwrap(
         Layer.empty as unknown as Layer.Layer<never, never, never>,
       ]),
       ...(Option.isSome(telemetry) ? [Layer.succeed(Banyan.ToolTelemetry, telemetry.value)] : [
+        Layer.empty as unknown as Layer.Layer<never, never, never>,
+      ]),
+      ...(Option.isSome(memoryRepo) ? [Layer.succeed(Banyan.MemoryRepo, memoryRepo.value)] : [
+        Layer.empty as unknown as Layer.Layer<never, never, never>,
+      ]),
+      ...(Option.isSome(memoryService) ? [Layer.succeed(Banyan.MemoryService, memoryService.value)] : [
         Layer.empty as unknown as Layer.Layer<never, never, never>,
       ]),
     ) as unknown as Layer.Layer<never, never, never>

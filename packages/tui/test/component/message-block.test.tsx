@@ -124,4 +124,25 @@ describe("MessageBlock", () => {
       testSetup.renderer.destroy()
     }
   })
+
+  test("mode=tool compact renders a tight single-line label and content", async () => {
+    const testSetup = await testRender(() => (
+      <Harness>
+        <box flexDirection="column">
+          <MessageBlock mode="tool" label="TOOL · Shell · ls" compact>
+            <text>$ ls</text>
+            <text>file.ts</text>
+          </MessageBlock>
+        </box>
+      </Harness>
+    ), { width: 80, height: 8 })
+    await new Promise((r) => setTimeout(r, 100))
+    await testSetup.renderOnce()
+    const snapshot = testSetup.captureCharFrame()
+    try {
+      expect(snapshot).toMatchSnapshot()
+    } finally {
+      testSetup.renderer.destroy()
+    }
+  })
 })

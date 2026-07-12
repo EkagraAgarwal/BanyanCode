@@ -6,8 +6,10 @@ import { useEvent } from "../../context/event"
 import { useDialog } from "../../ui/dialog"
 import { DialogConfirm } from "../../ui/dialog-confirm"
 import { DialogAlert } from "../../ui/dialog-alert"
+import { RoundedBorder } from "../../ui/border.ts"
 import { toHex } from "../../util/color"
 import { errorMessage } from "../../util/error"
+import { openAddMemoryDialog } from "../../component/dialog-memory-add"
 
 const id = "internal:tabs-tab-memory"
 
@@ -37,8 +39,6 @@ interface MemorySummary {
 }
 
 type ScopeFilter = "global" | "session"
-type StatusFilter = "pending" | "active" | "superseded" | "rejected"
-type KindFilter = "any" | string
 
 const KIND_SECTIONS: Array<{ key: string; label: string }> = [
   { key: "preference", label: "Preferences" },
@@ -96,72 +96,56 @@ function View(props: { api: TuiPluginApi }) {
   const dialog = useDialog()
   const [refreshTrigger, setRefreshTrigger] = createSignal(0)
   const [scope, setScope] = createSignal<ScopeFilter>("global")
-  const [statusFilter, setStatusFilter] = createSignal<"any" | StatusFilter>("active")
-  const [kindFilter, setKindFilter] = createSignal<KindFilter>("any")
+  const [kindFilter, setKindFilter] = createSignal<string>("all")
   const [showSummary, setShowSummary] = createSignal(true)
-
-  const statusForBackend = (s: "any" | StatusFilter) =>
-    s === "any" ? undefined : (s as "active" | "pending" | "superseded" | "rejected")
-  const kindForBackend = (k: KindFilter) =>
-    k === "any" ? undefined : (k as "preference" | "decision" | "convention" | "architecture" | "pattern" | "warning" | "failure" | "todo" | "observation" | "summary" | "ownership" | "constraint" | "environment" | "identity")
   const [actionError, setActionError] = createSignal<string | null>(null)
 
   const notify = (message: string) => {
     void props.api.attention.notify({ message, notification: false, sound: false })
   }
 
-  const [entries] = createResource<MemoryEntry[], number>(refreshTrigger, async (n) => {
-    n
-    try {
-      const filterStatus = statusForBackend(statusFilter())
-      const filterKind = kindForBackend(kindFilter())
-      const result = await props.api.client.memory.search({
-        banyanMemorySearchInput: {
-          limit: 100,
-          scope: scope(),
-          status: filterStatus,
-          kind: filterKind,
-          query: "",
-        },
-      })
-      const data = (result as any)?.data
-      if (result.error || !data) {
-        // Fall back to the list endpoint when search rejects an empty query.
-        const listResult = await props.api.client.memory.list({
+  const [entries] = createResource(
+    () => ({ scope: scope(), trigger: refreshTrigger() }),
+    async (source) => {
+      try {
+        const filterStatus = undefined
+        const filterKind = undefined
+        const result = await props.api.client.memory.list({
           banyanMemoryListInput: {
-            scope: scope(),
+            scope: source.scope,
             status: filterStatus,
             kind: filterKind,
             limit: 100,
           },
         })
-        return ((listResult as any)?.data ?? []) as MemoryEntry[]
+        return ((result as any)?.data ?? []) as MemoryEntry[]
+      } catch {
+        return []
       }
-      const payload = data as { entries?: MemoryEntry[] }
-      return payload.entries ?? ((Array.isArray(data) ? data : []) as MemoryEntry[])
-    } catch {
-      return []
     }
-  })
+  )
 
-  const [candidates] = createResource<MemoryEntry[], number>(refreshTrigger, async () => {
-    try {
-      const result = await props.api.client.memory.candidates({
-        banyanMemoryCandidatesInput: { scope: scope(), status: "pending", limit: 100 },
-      })
-      const data = (result as any)?.data
-      return ((data?.entries ?? (Array.isArray(data) ? data : [])) as MemoryEntry[])
-    } catch {
-      return []
+  const [candidates] = createResource(
+    () => ({ scope: scope(), trigger: refreshTrigger() }),
+    async (source) => {
+      try {
+        const result = await props.api.client.memory.candidates({
+          banyanMemoryCandidatesInput: { scope: source.scope, status: "pending", limit: 100 },
+        })
+        const data = (result as any)?.data
+        return ((data?.entries ?? (Array.isArray(data) ? data : [])) as MemoryEntry[])
+      } catch {
+        return []
+      }
     }
-  })
+  )
 
-  const [summary, { refetch: refetchSummary }] = createResource<MemorySummary | null, number>(
-    refreshTrigger,
-    async () => {
+  const [summary, { refetch: refetchSummary }] = createResource(
+    () => ({ scope: scope(), trigger: refreshTrigger() }),
+    async (source) => {
       try {
         const result = await props.api.client.memory.summary({
-          banyanMemorySummaryInput: { scope: scope(), maxItems: 25 },
+          banyanMemorySummaryInput: { scope: source.scope, maxItems: 25 },
         })
         const data = (result as any)?.data as MemorySummary | undefined
         return data ?? null
@@ -191,20 +175,23 @@ function View(props: { api: TuiPluginApi }) {
     })
   })
 
-  const allActive = createMemo<MemoryEntry[]>(() => {
-    const list = entries() ?? []
-    return list.filter((e) => (statusFilter() === "any" ? true : e.status === statusFilter()))
-  })
-
-  const grouped = createMemo<Map<string, MemoryEntry[]>>(() => {
-    const map = new Map<string, MemoryEntry[]>()
-    for (const e of allActive()) {
-      const kind = e.kind ?? "observation"
-      const arr = map.get(kind) ?? []
-      arr.push(e)
-      map.set(kind, arr)
+  const filteredEntries = createMemo<MemoryEntry[]>(() => {
+    const c = candidates() ?? []
+    const e = entries() ?? []
+    const seen = new Set<string>()
+    const merged: MemoryEntry[] = []
+    for (const item of [...c, ...e]) {
+      if (!seen.has(item.id)) {
+        seen.add(item.id)
+        merged.push(item)
+      }
     }
-    return map
+    const kFilter = kindFilter()
+    const filtered = merged.filter((item) => {
+      const kind = item.kind ?? "observation"
+      return kFilter === "all" || kind === kFilter
+    })
+    return filtered.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
   })
 
   const showDetail = (entry: MemoryEntry) => {
@@ -293,7 +280,14 @@ function View(props: { api: TuiPluginApi }) {
     }
   }
 
-  const candidatesList = () => candidates() ?? []
+  const openAdd = () => {
+    openAddMemoryDialog(props.api, dialog)
+  }
+
+  const refreshAll = () => {
+    setRefreshTrigger((n) => n + 1)
+    void refetchSummary()
+  }
 
   return (
     <box flexDirection="column" flexGrow={1} minHeight={0}>
@@ -309,74 +303,58 @@ function View(props: { api: TuiPluginApi }) {
           <b>Memory</b>
         </text>
         <box flexDirection="row" gap={2}>
-          <text
-            fg={toHex(scope() === "global" ? theme().primary : theme().textMuted)}
-            onMouseUp={() => {
-              setScope("global")
-              setRefreshTrigger((n) => n + 1)
-            }}
-          >
-            [global]
+          <text fg={toHex(theme().primary)} onMouseUp={openAdd}>
+            [+ Add memory]
           </text>
-          <text
-            fg={toHex(scope() === "session" ? theme().primary : theme().textMuted)}
-            onMouseUp={() => {
-              setScope("session")
-              setRefreshTrigger((n) => n + 1)
-            }}
-          >
-            [session]
+          <text fg={toHex(theme().info)} onMouseUp={refreshAll}>
+            [↻]
           </text>
         </box>
       </box>
 
       <box flexDirection="row" gap={2} paddingLeft={2} paddingRight={2} paddingTop={1}>
-        <text fg={toHex(theme().textMuted)}>status:</text>
-        <For each={["any", "active", "pending", "superseded", "rejected"]}>
-          {(s) => (
-            <text
-              fg={toHex(statusFilter() === s ? theme().primary : theme().textMuted)}
-              onMouseUp={() => {
-                setStatusFilter(s as any)
-                setRefreshTrigger((n) => n + 1)
-              }}
-            >
-              [{s}]
-            </text>
-          )}
-        </For>
-        <text fg={toHex(theme().textMuted)}> | kind:</text>
+        <text fg={toHex(theme().textMuted)}>scope:</text>
         <text
-          fg={toHex(kindFilter() === "any" ? theme().primary : theme().textMuted)}
+          fg={toHex(scope() === "global" ? theme().primary : theme().textMuted)}
           onMouseUp={() => {
-            setKindFilter("any")
+            setScope("global")
             setRefreshTrigger((n) => n + 1)
           }}
         >
-          [any]
-        </text>
-        <text fg={toHex(theme().textMuted)}> | </text>
-        <text
-          fg={toHex(showSummary() ? theme().primary : theme().textMuted)}
-          onMouseUp={() => setShowSummary((v) => !v)}
-        >
-          [summary]
+          [global]
         </text>
         <text
-          fg={toHex(theme().info)}
+          fg={toHex(scope() === "session" ? theme().primary : theme().textMuted)}
           onMouseUp={() => {
-            void refetchSummary()
+            setScope("session")
+            setRefreshTrigger((n) => n + 1)
           }}
         >
-          refresh
+          [session]
         </text>
       </box>
 
+      <box flexDirection="row" gap={2} paddingLeft={2} paddingRight={2} paddingTop={1}>
+        <text fg={toHex(theme().textMuted)}>kind: </text>
+        <For each={["all", "fact", "decision", "preference", "file-note"]}>
+          {(k) => (
+            <text
+              fg={toHex(kindFilter() === k ? theme().primary : theme().textMuted)}
+              onMouseUp={() => setKindFilter(k)}
+            >
+              [{k}]
+            </text>
+          )}
+        </For>
+      </box>
+
       <Show when={showSummary()}>
-        <SummaryPanel
+        <SummaryCard
           theme={theme()}
           summary={summary() ?? null}
           loading={summary.loading}
+          onRefresh={() => void refetchSummary()}
+          onHide={() => setShowSummary(false)}
         />
       </Show>
 
@@ -387,30 +365,10 @@ function View(props: { api: TuiPluginApi }) {
       </Show>
 
       <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
-        <box flexDirection="column" paddingTop={1}>
-          <Show when={entries() !== undefined} fallback={<LoadingState theme={theme()} />}>
-            <Show when={candidatesList().length > 0}>
-              <Section
-                title={`Pending candidates (${candidatesList().length})`}
-                theme={theme()}
-              >
-                <For each={candidatesList()}>
-                  {(c) => (
-                    <MemoryRow
-                      entry={c}
-                      theme={theme()}
-                      timeAgo={timeAgo}
-                      onShow={showDetail}
-                      onPromote={promote}
-                      onReject={reject}
-                      onForget={forget}
-                    />
-                  )}
-                </For>
-              </Section>
-            </Show>
+        <box flexDirection="column" paddingTop={1} gap={0}>
+          <Show when={entries() !== undefined && candidates() !== undefined} fallback={<LoadingState theme={theme()} />}>
             <Show
-              when={allActive().length > 0}
+              when={filteredEntries().length > 0}
               fallback={
                 <EmptyState
                   theme={theme()}
@@ -419,26 +377,19 @@ function View(props: { api: TuiPluginApi }) {
                 />
               }
             >
-              <For each={KIND_SECTIONS.filter((s) => grouped().get(s.key)?.length)}>
-                {(section) => (
-                  <Section
-                    title={`${section.label} (${grouped().get(section.key)?.length ?? 0})`}
-                    theme={theme()}
-                  >
-                    <For each={grouped().get(section.key) ?? []}>
-                      {(entry) => (
-                        <MemoryRow
-                          entry={entry}
-                          theme={theme()}
-                          timeAgo={timeAgo}
-                          onShow={showDetail}
-                          onPromote={promote}
-                          onReject={reject}
-                          onForget={forget}
-                        />
-                      )}
-                    </For>
-                  </Section>
+              <For each={filteredEntries()}>
+                {(entry) => (
+                  <box paddingLeft={1} paddingRight={1} paddingBottom={1}>
+                    <MemoryCard
+                      entry={entry}
+                      theme={theme()}
+                      timeAgo={timeAgo}
+                      onShow={showDetail}
+                      onPromote={promote}
+                      onReject={reject}
+                      onForget={forget}
+                    />
+                  </box>
                 )}
               </For>
             </Show>
@@ -449,60 +400,90 @@ function View(props: { api: TuiPluginApi }) {
   )
 }
 
-function Section(props: { title: string; theme: any; children: any }) {
+function GroupLabel(props: { label: string; theme: any }) {
   return (
-    <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={1}>
-      <text fg={toHex(props.theme.primary)}>
-        <b>{props.title}</b>
-      </text>
-      <box flexDirection="column" marginTop={0}>{props.children}</box>
-    </box>
+    <text fg={toHex(props.theme.textMuted)} paddingLeft={2} paddingTop={1}>
+      <b>{props.label}</b>
+    </text>
   )
 }
 
-function SummaryPanel(props: { theme: any; summary: MemorySummary | null; loading: boolean }) {
+function SummaryCard(props: {
+  theme: any
+  summary: MemorySummary | null
+  loading: boolean
+  onRefresh: () => void
+  onHide: () => void
+}) {
   const kinds = () => {
     const items = props.summary?.byKind ?? []
     if (items.length === 0) return "no kinds"
     return items.map((s) => `${s.kind}=${s.count}`).join(", ")
   }
+  const decisionItems = () => props.summary?.decisionDigest ?? []
+  const warningItems = () => props.summary?.warningDigest ?? []
   return (
-    <box flexDirection="column" paddingLeft={2} paddingRight={2} paddingBottom={1}>
-      <text fg={toHex(props.theme.primary)}>
-        <b>Summary</b>
-      </text>
-      <Show
-        when={!props.loading && props.summary}
-        fallback={
-          <text fg={toHex(props.theme.textMuted)}>{props.loading ? "loading…" : "no summary"}</text>
-        }
+    <box
+      flexDirection="column"
+      marginTop={1}
+      marginLeft={2}
+      marginRight={2}
+      border={["left", "right", "top", "bottom"]}
+      borderColor={props.theme.border}
+      customBorderChars={RoundedBorder.customBorderChars}
+    >
+      <box
+        flexDirection="column"
+        backgroundColor={props.theme.background}
+        width="100%"
+        paddingLeft={1}
+        paddingRight={1}
+        paddingTop={1}
+        paddingBottom={1}
+        gap={0}
       >
-        <box flexDirection="column" marginTop={0}>
+        <box flexDirection="row" gap={1} alignItems="center" marginTop={0} marginBottom={0}>
+          <text fg={toHex(props.theme.success)}>●</text>
           <text fg={toHex(props.theme.text)}>
             <b>{props.summary?.totalActive ?? 0}</b> active · {kinds()}
           </text>
-          <Show when={(props.summary?.decisionDigest?.length ?? 0) > 0}>
-            <text fg={toHex(props.theme.success)}>Decisions</text>
-            <For each={(props.summary?.decisionDigest ?? []).slice(0, 3)}>
-              {(d) => (
-                <text fg={toHex(props.theme.textMuted)}>
-                  {"  "}• [{d.kind}] {d.title}
-                </text>
-              )}
-            </For>
-          </Show>
-          <Show when={(props.summary?.warningDigest?.length ?? 0) > 0}>
-            <text fg={toHex(props.theme.warning)}>Warnings</text>
-            <For each={(props.summary?.warningDigest ?? []).slice(0, 3)}>
-              {(d) => (
-                <text fg={toHex(props.theme.textMuted)}>
-                  {"  "}• [{d.kind}] {d.title}
-                </text>
-              )}
-            </For>
-          </Show>
         </box>
-      </Show>
+        <Show when={props.loading && !props.summary}>
+          <text fg={toHex(props.theme.textMuted)} marginTop={0}>loading…</text>
+        </Show>
+        <Show when={!props.loading && decisionItems().length > 0}>
+          <box flexDirection="column" marginTop={0} marginBottom={0}>
+            <text fg={toHex(props.theme.success)}>Decisions</text>
+            <For each={decisionItems().slice(0, 3)}>
+              {(d) => (
+                <text fg={toHex(props.theme.textMuted)}>
+                  {"  "}• [{d.kind}] {d.title}
+                </text>
+              )}
+            </For>
+          </box>
+        </Show>
+        <Show when={!props.loading && warningItems().length > 0}>
+          <box flexDirection="column" marginTop={0} marginBottom={0}>
+            <text fg={toHex(props.theme.warning)}>Warnings</text>
+            <For each={warningItems().slice(0, 3)}>
+              {(d) => (
+                <text fg={toHex(props.theme.textMuted)}>
+                  {"  "}• [{d.kind}] {d.title}
+                </text>
+              )}
+            </For>
+          </box>
+        </Show>
+        <box flexDirection="row" gap={2} marginTop={0} marginBottom={0}>
+          <text fg={toHex(props.theme.info)} onMouseUp={props.onRefresh}>
+            refresh
+          </text>
+          <text fg={toHex(props.theme.textMuted)} onMouseUp={props.onHide}>
+            hide
+          </text>
+        </box>
+      </box>
     </box>
   )
 }
@@ -532,7 +513,7 @@ function EmptyState(props: { theme: any; message: string; hint: string }) {
   )
 }
 
-function MemoryRow(props: {
+function MemoryCard(props: {
   entry: MemoryEntry
   theme: any
   timeAgo: (ts?: number) => string
@@ -545,39 +526,51 @@ function MemoryRow(props: {
   const show = () => props.onShow(props.entry)
   const isPending = () => props.entry.status === "pending"
   return (
-    <box flexDirection="column" marginTop={0}>
-      <box flexDirection="row" gap={2}>
-        <text fg={toHex(props.theme[status().color])}>{status().glyph}</text>
-        <text fg={toHex(props.theme.primary)} flexGrow={3} flexBasis={0} flexShrink={1} truncate>
-          {props.entry.title ?? props.entry.key}
-        </text>
-        <text fg={toHex(props.theme.textMuted)} flexShrink={0}>
-          v{props.entry.version}
-        </text>
-        <text fg={toHex(props.theme.textMuted)} flexShrink={0}>
-          {props.timeAgo(props.entry.updatedAt)}
-        </text>
-      </box>
-      <box flexDirection="row" gap={2} paddingLeft={3}>
-        <text fg={toHex(props.theme.textMuted)} flexGrow={1} flexBasis={0} flexShrink={1} truncate>
+    <box
+      flexDirection="column"
+      border={["left", "right", "top", "bottom"]}
+      borderColor={props.theme.border}
+      customBorderChars={RoundedBorder.customBorderChars}
+    >
+      <box
+        flexDirection="column"
+        backgroundColor={props.theme.background}
+        width="100%"
+        paddingLeft={1}
+        paddingRight={1}
+        paddingTop={1}
+        paddingBottom={1}
+        gap={0}
+      >
+        <box flexDirection="row" gap={1} alignItems="center" marginTop={0} marginBottom={0}>
+          <text fg={toHex(props.theme[status().color])}>{status().glyph}</text>
+          <text fg={toHex(props.theme.primary)}>
+            <b>{props.entry.kind ?? "observation"}:{props.entry.key}</b>
+          </text>
+          <text fg={toHex(props.theme.textMuted)}>v{props.entry.version}</text>
+          <box flexGrow={1} justifyContent="flex-end" flexDirection="row">
+            <text fg={toHex(props.theme.textMuted)}>{props.timeAgo(props.entry.updatedAt)}</text>
+          </box>
+        </box>
+        <text fg={toHex(props.theme.textMuted)} marginTop={0} marginBottom={0}>
           {previewBody(props.entry)}
         </text>
-      </box>
-      <box flexDirection="row" gap={2} paddingLeft={3} paddingBottom={0}>
-        <text fg={toHex(props.theme.info)} onMouseUp={show}>
-          open
-        </text>
-        <Show when={isPending()}>
-          <text fg={toHex(props.theme.success)} onMouseUp={() => props.onPromote(props.entry)}>
-            promote
+        <box flexDirection="row" gap={2} paddingTop={0} marginTop={0} marginBottom={0}>
+          <text fg={toHex(props.theme.info)} onMouseUp={show}>
+            open
           </text>
-          <text fg={toHex(props.theme.error)} onMouseUp={() => props.onReject(props.entry)}>
-            reject
+          <Show when={isPending()}>
+            <text fg={toHex(props.theme.success)} onMouseUp={() => props.onPromote(props.entry)}>
+              promote
+            </text>
+            <text fg={toHex(props.theme.error)} onMouseUp={() => props.onReject(props.entry)}>
+              reject
+            </text>
+          </Show>
+          <text fg={toHex(props.theme.error)} onMouseUp={() => props.onForget(props.entry)}>
+            forget
           </text>
-        </Show>
-        <text fg={toHex(props.theme.error)} onMouseUp={() => props.onForget(props.entry)}>
-          forget
-        </text>
+        </box>
       </box>
     </box>
   )
@@ -598,5 +591,7 @@ const plugin: BuiltinTuiPlugin = {
   id,
   tui,
 }
+
+// PENDING CANDIDATES
 
 export default plugin

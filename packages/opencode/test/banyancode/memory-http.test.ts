@@ -305,4 +305,65 @@ describe("memory HttpApi", () => {
       )
     }),
   )
+
+  it.live("store persists status=pending from a full MemoryPayloadV1 value", () =>
+    Effect.gen(function* () {
+      yield* runWithFreshDb((dbPath) =>
+        Effect.gen(function* () {
+          const dbLayer = Database.layerFromPath(dbPath)
+          const apiLayer = buildApiLayer(dbPath)
+          yield* Effect.gen(function* () {
+            const { db } = yield* Database.Service
+            yield* DatabaseMigration.apply(db)
+          }).pipe(Effect.provide(dbLayer), Effect.scoped)
+
+          // Exact shape the [+ Add memory] dialog sends — full MemoryPayloadV1
+          // embedded in `value` with status="pending".
+          const storeResponse = yield* makePost(MemoryPaths.store, {
+            key: "user:draft",
+            scope: "global",
+            value: {
+              kind: "observation",
+              title: "Why we use Effect v4 over v3",
+              body: "Smaller surface area; better fiber handling.",
+              source: { type: "user" },
+              confidence: "medium",
+              importance: "medium",
+              status: "pending",
+            },
+          }).pipe(Effect.provide(apiLayer))
+          expect(storeResponse.status).toBe(200)
+          const stored = (yield* storeResponse.json) as { id: string; version: number }
+
+          // List reflects the pending row (status default = any).
+          const listResponse = yield* makePost(MemoryPaths.list, { scope: "global" }).pipe(
+            Effect.provide(apiLayer),
+          )
+          expect(listResponse.status).toBe(200)
+          const listed = (yield* listResponse.json) as Array<{
+            id: string
+            key: string
+            status?: string
+          }>
+          const storedRow = listed.find((e) => e.id === stored.id)
+          expect(storedRow?.key).toBe("user:draft")
+          expect(storedRow?.status).toBe("pending")
+
+          // The candidates endpoint (status=pending filter) returns this row.
+          const candidatesResponse = yield* makePost(MemoryPaths.candidates, {
+            scope: "global",
+            status: "pending",
+          }).pipe(Effect.provide(apiLayer))
+          expect(candidatesResponse.status).toBe(200)
+          const candidates = (yield* candidatesResponse.json) as {
+            entries: Array<{ id: string; status?: string }>
+            count: number
+          }
+          expect(candidates.count).toBe(1)
+          expect(candidates.entries[0]?.id).toBe(stored.id)
+          expect(candidates.entries[0]?.status).toBe("pending")
+        }),
+      )
+    }),
+  )
 })
