@@ -50,6 +50,7 @@ const makeMockRepo = (options: {
       listAllEdges: () => Effect.succeed([]),
       listEdgesByNode: () => Effect.succeed([]),
       deleteFile: () => Effect.void,
+      deleteDerivedEdgesForFiles: () => Effect.void,
     writeFileGraph: () => Effect.void,
       clearAll: () => Effect.succeed({ sizeBefore: 0, sizeAfter: 0 }),
       setMeta: () => Effect.void,

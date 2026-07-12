@@ -78,6 +78,21 @@ export interface Interface {
     CodegraphError,
     never
   >
+  readonly indexFiles: (input: {
+    root: string
+    paths: string[]
+    force?: boolean
+    maxFileSizeBytes?: number
+    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+  }) => Effect.Effect<{
+    indexed: number
+    skipped: number
+    parseErrors: Array<{ path: string; cause: string; indexedAt: number }>
+  }>
+  readonly removeFiles: (input: {
+    root: string
+    paths: string[]
+  }) => Effect.Effect<void, never, never>
   readonly cancel: () => Effect.Effect<void, never, never>
 }
 
@@ -269,89 +284,7 @@ export const layer = Layer.effect(
       return ext ? base.slice(0, -ext.length) : base
     }
 
-    const index = Effect.fn("CodegraphIndexer.index")(function* (input: {
-      root: string
-      force?: boolean
-      maxFileSizeBytes?: number
-      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
-    }) {
-      yield* Ref.set(cancelled, false)
-      const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
-      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root)
-      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, gitignore, banyanignore)
-      const allFiles = walkResult.files
-      const codeExtensions = new Set([
-        ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs",
-        ".py", ".pyw",
-        ".zig",
-        ".rs",
-        ".go",
-        ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh",
-        ".java", ".kt",
-        ".cs",
-        ".swift",
-        ".rb",
-        ".php",
-        ".sh", ".bat", ".ps1",
-        ".sql",
-        ".html", ".css",
-        ".md",
-      ])
-      const isArtifactPath = (filePath: string) => {
-        const base = path.basename(filePath)
-        const lower = base.toLowerCase()
-        const normPath = filePath.replace(/\\/g, "/")
-        if (lower === "package.json") return true
-        if (lower === "dockerfile" || lower.startsWith("dockerfile.") || lower.endsWith(".dockerfile")) return true
-        if (lower === "compose.yml" || lower === "compose.yaml") return true
-        if (lower === "docker-compose.yml" || lower === "docker-compose.yaml") return true
-        if (lower === "jenkinsfile") return true
-        if (lower === ".gitlab-ci.yml") return true
-        if (lower.startsWith("azure-pipelines") && lower.endsWith(".yml")) return true
-        if (lower.startsWith("tsconfig") && lower.endsWith(".json")) return true
-        if (lower === "pnpm-workspace.yaml" || lower === "pnpm-workspace.yml") return true
-        if (lower === "pyproject.toml") return true
-        if (lower === "cargo.toml") return true
-        if (lower === "go.mod") return true
-        if (lower === ".envrc" || lower === ".env.example") return true
-        if (lower.startsWith(".env")) return true
-        if (lower.startsWith("dotenv")) return true
-        if (/\/\.github\/workflows\/.+\.(yml|yaml)$/i.test(normPath)) return true
-        if (/\/\.circleci\/.+\.(yml|yaml)$/i.test(normPath)) return true
-        if (/\.config\.(json|js|ts)$/i.test(base)) return true
-        if (lower === "config.json") return true
-        return false
-      }
-      const codeFiles = allFiles.filter((f) => {
-        const ext = path.extname(f).toLowerCase()
-        return codeExtensions.has(ext) || isArtifactPath(f)
-      })
-
-      const indexedRef = yield* Ref.make(0)
-      const skippedRef = yield* Ref.make(0)
-      const symbolsIndexedRef = yield* Ref.make(0)
-      const skippedGitignoredRef = yield* Ref.make(walkResult.skippedByGitignore)
-      const skippedBanyanignoredRef = yield* Ref.make(walkResult.skippedByBanyanignore)
-      const skippedArtifactRef = yield* Ref.make(0)
-      const skippedTooLargeRef = yield* Ref.make(walkResult.skippedBySize)
-      const skippedTooLargeParseRef = yield* Ref.make(0)
-      const skippedMinifiedRef = yield* Ref.make(0)
-      const skippedCachedRef = yield* Ref.make(0)
-      const skippedReadErrorRef = yield* Ref.make(0)
-      const skippedParseFailureRef = yield* Ref.make(0)
-      const total = codeFiles.length
-      const progressCounter = yield* Ref.make(0)
-      const currentlyParsingRef = yield* Ref.make<string | undefined>(undefined)
-
-      // Emit a pre-parse progress event so subscribers see total file count
-      // before parsing begins. Empty `file` is a sentinel for "walk complete";
-      // the TUI ignores progress while currentFile === "".
-      if (input.onProgress) {
-        yield* input.onProgress({ file: "", done: 0, total })
-      }
-
-      // Producer-consumer pipeline: parse fibers offer into a bounded queue;
-      // a concurrent consumer drains and writes so the queue cannot deadlock.
+    // Shared type and constants at layer factory level
 type ParsedFile = {
   readonly file: CodegraphFile
   readonly nodes: CodegraphNode[]
@@ -360,66 +293,112 @@ type ParsedFile = {
   readonly skipped: boolean
   readonly previousFileID?: string
 }
-const parsedQueue = yield* Queue.bounded<ParsedFile>(128)
-const skippedParsed = (relativePath: string): ParsedFile => ({
-  file: { id: "", path: "", contentHash: "", language: "", indexedAt: 0 },
-  nodes: [],
-  edges: [],
-  relativePath,
-  skipped: true,
-})
+const CHECKPOINT_EVERY = 1000
 
-const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
-  const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
+const indexCandidateFileCore = (
+  filePath: string,
+  relativePath: string,
+  cfg: {
+    input: {
+      root: string
+      force?: boolean
+      maxFileSizeBytes?: number
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+    }
+    maxFileSizeBytes: number
+    total: number
+    parsedQueue: Queue.Queue<ParsedFile>
+    skippedParsed: (rp: string) => ParsedFile
+    skippedRef: Ref.Ref<number>
+    skippedTooLargeParseRef: Ref.Ref<number>
+    skippedMinifiedRef: Ref.Ref<number>
+    skippedArtifactRef: Ref.Ref<number>
+    skippedReadErrorRef: Ref.Ref<number>
+    skippedParseFailureRef: Ref.Ref<number>
+    skippedCachedRef: Ref.Ref<number>
+    cancelled: Ref.Ref<boolean>
+    currentlyParsingRef: Ref.Ref<string | undefined>
+    progressCounter: Ref.Ref<number>
+    treeCacheRef: Ref.Ref<Map<string, Tree>>
+  },
+): Effect.Effect<void, never, never> => {
   return Effect.gen(function* () {
-    yield* Ref.set(currentlyParsingRef, relativePath)
-    if (yield* Ref.get(cancelled)) {
-      yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
+    yield* Ref.set(cfg.currentlyParsingRef, relativePath)
+    if (yield* Ref.get(cfg.cancelled)) {
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
       return
     }
 
     const ext = path.extname(filePath).toLowerCase()
     const content = yield* fs.readFileStringSafe(filePath)
     if (content === undefined) {
-      yield* Ref.update(skippedRef, (n) => n + 1)
-      yield* Ref.update(skippedReadErrorRef, (n) => n + 1)
-      yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
+      yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+      yield* Ref.update(cfg.skippedReadErrorRef, (n) => n + 1)
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
       return
     }
 
-    if (content.length > maxFileSizeBytes) {
-      yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars, limit: ${maxFileSizeBytes})`)
-      yield* Ref.update(skippedRef, (n) => n + 1)
-      yield* Ref.update(skippedTooLargeParseRef, (n) => n + 1)
-      yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
+    if (content.length > cfg.maxFileSizeBytes) {
+      yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars, limit: ${cfg.maxFileSizeBytes})`)
+      yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+      yield* Ref.update(cfg.skippedTooLargeParseRef, (n) => n + 1)
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
       return
     }
 
     const existing = yield* repo.getFileByPath(filePath)
     const contentHash = hashContent(content)
-    if (existing && existing.contentHash === contentHash && !input.force) {
-      yield* Ref.update(skippedRef, (n) => n + 1)
-      yield* Ref.update(skippedCachedRef, (n) => n + 1)
-      yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
+    if (existing && existing.contentHash === contentHash && !cfg.input.force) {
+      yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+      yield* Ref.update(cfg.skippedCachedRef, (n) => n + 1)
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
       return
     }
 
     if (content.split("\n").some((line) => line.length > 5000)) {
       yield* Effect.logWarning(`Skipping minified/compiled file: ${relativePath}`)
-      yield* Ref.update(skippedRef, (n) => n + 1)
-      yield* Ref.update(skippedMinifiedRef, (n) => n + 1)
-      yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
+      yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+      yield* Ref.update(cfg.skippedMinifiedRef, (n) => n + 1)
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
       return
     }
 
-    const baseForSkip = path.basename(filePath).toLowerCase()
-    const isDockerfile = baseForSkip === "dockerfile" || baseForSkip.startsWith("dockerfile.") || baseForSkip.endsWith(".dockerfile")
-    const isArtifact = isArtifactPath(filePath) && !isDockerfile
+    const baseForArtifact = path.basename(filePath).toLowerCase()
+    const normPathForArtifact = filePath.replace(/\\/g, "/")
+    const isArtifact =
+      (normPathForArtifact.endsWith("package.json") ||
+        normPathForArtifact.endsWith("dockerfile") ||
+        normPathForArtifact.includes("dockerfile.") ||
+        normPathForArtifact.endsWith(".dockerfile") ||
+        normPathForArtifact.endsWith("compose.yml") ||
+        normPathForArtifact.endsWith("compose.yaml") ||
+        normPathForArtifact.endsWith("docker-compose.yml") ||
+        normPathForArtifact.endsWith("docker-compose.yaml") ||
+        normPathForArtifact.endsWith("jenkinsfile") ||
+        normPathForArtifact.endsWith(".gitlab-ci.yml") ||
+        (normPathForArtifact.includes("azure-pipelines") && normPathForArtifact.endsWith(".yml")) ||
+        (baseForArtifact.startsWith("tsconfig") && baseForArtifact.endsWith(".json")) ||
+        normPathForArtifact.endsWith("pnpm-workspace.yaml") ||
+        normPathForArtifact.endsWith("pnpm-workspace.yml") ||
+        normPathForArtifact.endsWith("pyproject.toml") ||
+        normPathForArtifact.endsWith("cargo.toml") ||
+        normPathForArtifact.endsWith("go.mod") ||
+        normPathForArtifact.endsWith(".envrc") ||
+        normPathForArtifact.endsWith(".env.example") ||
+        baseForArtifact.startsWith(".env") ||
+        baseForArtifact.startsWith("dotenv") ||
+        /\/\.github\/workflows\/.+\.(yml|yaml)$/i.test(normPathForArtifact) ||
+        /\/\.circleci\/.+\.(yml|yaml)$/i.test(normPathForArtifact) ||
+        /\.config\.(json|js|ts)$/i.test(baseForArtifact) ||
+        baseForArtifact === "config.json") &&
+      baseForArtifact !== "dockerfile" &&
+      !baseForArtifact.startsWith("dockerfile.") &&
+      !baseForArtifact.endsWith(".dockerfile")
     const fileKind = classifyFileKind(filePath, content)
     if (isArtifact && !fileKind) {
-      yield* Ref.update(skippedRef, (n) => n + 1)
-      yield* Ref.update(skippedArtifactRef, (n) => n + 1)
-      yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
+      yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+      yield* Ref.update(cfg.skippedArtifactRef, (n) => n + 1)
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
       return
     }
 
@@ -430,27 +409,27 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
     if (isArtifact) {
       result = { nodes: [], edges: [], imports: [] }
     } else if (TS_LIKE_EXTS.has(ext)) {
-      const cached = yield* Ref.get(treeCacheRef)
+      const cached = yield* Ref.get(cfg.treeCacheRef)
       const oldTree: Tree | undefined = cached.get(filePath)
       const incr = yield* parseTypeScriptWithTreeSitterIncremental(content, fileID, oldTree)
       result = incr.result
       newTree = incr.tree
       const capturedTree: Tree | undefined = newTree
       if (capturedTree) {
-        yield* Ref.update(treeCacheRef, (m) => {
+        yield* Ref.update(cfg.treeCacheRef, (m) => {
           m.set(filePath, capturedTree)
           return m
         })
       }
     } else if (PY_LIKE_EXTS.has(ext)) {
-      const cached = yield* Ref.get(treeCacheRef)
+      const cached = yield* Ref.get(cfg.treeCacheRef)
       const oldTree: Tree | undefined = cached.get(filePath)
       const incr = yield* parsePythonWithTreeSitterIncremental(content, fileID, oldTree)
       result = incr.result
       newTree = incr.tree
       const capturedTree: Tree | undefined = newTree
       if (capturedTree) {
-        yield* Ref.update(treeCacheRef, (m) => {
+        yield* Ref.update(cfg.treeCacheRef, (m) => {
           m.set(filePath, capturedTree)
           return m
         })
@@ -530,7 +509,7 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
       })
     }
 
-    yield* Queue.offer(parsedQueue, {
+    yield* Queue.offer(cfg.parsedQueue, {
       file,
       nodes,
       edges,
@@ -543,9 +522,6 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
       Effect.gen(function* () {
         const prettyCause = Cause.pretty(cause)
         yield* Effect.logWarning(`Failed to index file: ${relativePath}`, { cause: prettyCause })
-        // recordParseError now surfaces DB failures instead of swallowing them.
-        // Catch here so the parse-failure counter and queue update still run,
-        // but log any persistence failure from this path separately.
         yield* repo
           .recordParseError({ path: relativePath, cause: prettyCause, indexedAt: Date.now() })
           .pipe(
@@ -553,298 +529,391 @@ const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
               Effect.logWarning(`recordParseError insert failed for ${relativePath}`, { cause: Cause.pretty(innerCause) }),
             ),
           )
-        yield* Ref.update(skippedRef, (n) => n + 1)
-        yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
-        yield* Queue.offer(parsedQueue, skippedParsed(relativePath))
+        yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+        yield* Ref.update(cfg.skippedParseFailureRef, (n) => n + 1)
+        yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
       }),
     ),
     Effect.ensuring(
       Effect.gen(function* () {
-        const doneCount = yield* Ref.updateAndGet(progressCounter, (n) => n + 1)
-        const currentFile = yield* Ref.get(currentlyParsingRef)
-        if (input.onProgress) {
-          yield* input.onProgress({ file: relativePath, done: doneCount, total, currentFile })
+        const doneCount = yield* Ref.updateAndGet(cfg.progressCounter, (n) => n + 1)
+        const currentFile = yield* Ref.get(cfg.currentlyParsingRef)
+        if (cfg.input.onProgress) {
+          yield* cfg.input.onProgress({ file: relativePath, done: doneCount, total: cfg.total, currentFile })
         }
       }),
     ),
   )
 }
 
-// Producer/consumer pipeline. Producers offer into a bounded queue; the
-// consumer drains it concurrently so a full queue cannot deadlock producers
-// (queue capacity is 128; workspaces often exceed that).
-const CHECKPOINT_EVERY = 1000
-const totalExpected = codeFiles.length
+const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(function* (changedFileIDs: string[] | undefined) {
+  const isCancelled = yield* Ref.get(cancelled)
+  if (isCancelled) return
+  if (changedFileIDs && changedFileIDs.length > 0) {
+    yield* repo.deleteDerivedEdgesForFiles({ fileIDs: changedFileIDs })
+  }
+  const allNodes = yield* repo.searchNodes({ limit: 100_000 })
+  const allFiles = yield* repo.listAllFiles()
+  const fileByID = new Map(allFiles.map((f) => [f.id, f]))
+  const fileDir = (filePath: string) => path.dirname(filePath)
 
-const drainParsedQueue = Effect.gen(function* () {
-  let processed = 0
-  while (processed < totalExpected) {
-    const parsed = yield* Queue.take(parsedQueue)
-    processed++
-    if (parsed.skipped) continue
-    yield* repo.writeFileGraph({
-      file: parsed.file,
-      nodes: parsed.nodes,
-      edges: parsed.edges,
-      ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.gen(function* () {
-          yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
-            cause: Cause.pretty(cause),
-          })
-          yield* repo
-            .recordParseError({ path: parsed.relativePath, cause: Cause.pretty(cause), indexedAt: Date.now() })
-            .pipe(
-              Effect.catchCause((innerCause) =>
-                Effect.logWarning(`recordParseError insert failed for ${parsed.relativePath}`, {
-                  cause: Cause.pretty(innerCause),
-                }),
-              ),
-            )
-          yield* Ref.update(skippedRef, (n) => n + 1)
-          yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
-        }),
-      ),
-    )
-    if (parsed.nodes.length > 0) {
-      yield* Ref.update(indexedRef, (n) => n + 1)
-      yield* Ref.update(symbolsIndexedRef, (n) => n + parsed.nodes.length)
-    }
-    if (processed % CHECKPOINT_EVERY === 0) {
-      yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
+  const nodeMap = new Map<string, CodegraphNode[]>()
+  const nodesByFileID = new Map<string, CodegraphNode[]>()
+  const BATCH_SIZE = 500
+
+  for (let batchStart = 0; batchStart < allNodes.length; batchStart += BATCH_SIZE) {
+    if (yield* Ref.get(cancelled)) break
+    const batchEnd = Math.min(batchStart + BATCH_SIZE, allNodes.length)
+    const batch = allNodes.slice(batchStart, batchEnd)
+
+    for (const node of batch) {
+      const list = nodeMap.get(node.name) ?? []
+      list.push(node)
+      nodeMap.set(node.name, list)
+      const fileList = nodesByFileID.get(node.fileID) ?? []
+      fileList.push(node)
+      nodesByFileID.set(node.fileID, fileList)
     }
   }
+
+  const referenceEdges: { fromNodeID: string; toNodeID: string; kind: "imports" | "calls" | "extends" | "references" }[] = []
+  const crossEdges: { fromNodeID: string; toNodeID: string; kind: CodegraphEdge["kind"] }[] = []
+  const referenceEdgeKeys = new Set<string>()
+
+  for (const nodeA of allNodes) {
+    if (
+      !nodeA.code ||
+      nodeA.kind === "test" ||
+      nodeA.kind === "route" ||
+      nodeA.kind === "config" ||
+      nodeA.kind === "build" ||
+      nodeA.kind === "package" ||
+      nodeA.kind === "generated" ||
+      nodeA.kind === "ci" ||
+      nodeA.kind === "docker" ||
+      nodeA.kind === "env" ||
+      nodeA.kind === "doc" ||
+      nodeA.kind === "file"
+    ) {
+      continue
+    }
+
+    const identifiers = new Set<string>()
+    for (const m of nodeA.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
+      if (m[0].length >= 3 && nodeMap.has(m[0])) identifiers.add(m[0])
+    }
+
+    for (const name of identifiers) {
+      const targets = nodeMap.get(name)
+      if (!targets || targets.length > 10) continue
+
+      for (const nodeB of targets) {
+        if (nodeB.id === nodeA.id) continue
+
+        const kind =
+          nodeA.kind === "class" && nodeA.code.includes(`extends ${name}`)
+            ? ("extends" as const)
+            : nodeA.code.includes(`${name}(`)
+              ? ("calls" as const)
+              : ("references" as const)
+
+        const key = `${nodeA.id}->${nodeB.id}:${kind}`
+        if (referenceEdgeKeys.has(key)) continue
+        referenceEdgeKeys.add(key)
+        referenceEdges.push({
+          fromNodeID: nodeA.id,
+          toNodeID: nodeB.id,
+          kind,
+        })
+      }
+    }
+  }
+
+  const configNodes = allNodes.filter((n) => n.kind === "config")
+  const dockerNodes = allNodes.filter((n) => n.kind === "docker")
+  const testNodes = allNodes.filter((n) => n.kind === "test")
+  const routeNodes = allNodes.filter((n) => n.kind === "route")
+  const generatedNodes = allNodes.filter((n) => n.kind === "generated")
+
+  for (const testNode of testNodes) {
+    if (yield* Ref.get(cancelled)) {
+      yield* Effect.logWarning("codegraph: cancelled during tested_by")
+      break
+    }
+    const testFile = fileByID.get(testNode.fileID)
+    if (!testFile || !testNode.code) continue
+    const referenced = new Set<string>()
+    for (const m of testNode.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
+      referenced.add(m[0])
+    }
+    for (const name of referenced) {
+      const candidates = nodeMap.get(name)
+      if (!candidates || candidates.length > 10) continue
+      for (const node of candidates) {
+        if (node.fileID === testNode.fileID) continue
+        if (node.kind === "test") continue
+        const nodeFile = fileByID.get(node.fileID)
+        if (!nodeFile) continue
+        if (/\.(test|spec)\./i.test(nodeFile.path.toLowerCase())) continue
+        crossEdges.push({ fromNodeID: node.id, toNodeID: testNode.id, kind: "tested_by" })
+      }
+    }
+  }
+
+  for (const cfg of configNodes) {
+    if (yield* Ref.get(cancelled)) {
+      yield* Effect.logWarning("codegraph: cancelled during configured_by")
+      break
+    }
+    const cfgFile = fileByID.get(cfg.fileID)
+    if (!cfgFile) continue
+    const cfgDir = fileDir(cfgFile.path)
+    for (const file of allFiles) {
+      if (fileDir(file.path) !== cfgDir) continue
+      if (file.id === cfg.fileID) continue
+      const fileNodes = nodesByFileID.get(file.id) ?? []
+      const fromNode =
+        fileNodes.find(
+          (n) =>
+            n.kind !== "config" &&
+            n.kind !== "docker" &&
+            n.kind !== "package" &&
+            n.kind !== "build" &&
+            n.kind !== "ci" &&
+            n.kind !== "env" &&
+            n.kind !== "doc" &&
+            n.kind !== "test" &&
+            n.kind !== "route" &&
+            n.kind !== "generated",
+        ) ?? fileNodes[0]
+      if (!fromNode) continue
+      crossEdges.push({ fromNodeID: fromNode.id, toNodeID: cfg.id, kind: "configured_by" })
+    }
+  }
+
+  for (const cfg of configNodes) {
+    const cfgFile = fileByID.get(cfg.fileID)
+    if (!cfgFile) continue
+    const cfgDir = fileDir(cfgFile.path)
+    const docker = dockerNodes.find((n) => {
+      const f = fileByID.get(n.fileID)
+      return f ? fileDir(f.path) === cfgDir : false
+    })
+    if (docker) crossEdges.push({ fromNodeID: cfg.id, toNodeID: docker.id, kind: "built_by" })
+  }
+
+  if (yield* Ref.get(cancelled)) {
+    yield* Effect.logWarning("codegraph: cancelled before mounts")
+  } else {
+    const routeHandlerRegex = /app\.(?:get|post|put|delete|patch|all|use)\s*\([^,]+,\s*(\w+)\s*\)/g
+    for (const routeNode of routeNodes) {
+      if (!routeNode.code) continue
+      for (const match of routeNode.code.matchAll(routeHandlerRegex)) {
+        const handlerName = match[1]
+        const handlers = nodeMap.get(handlerName)
+        const handler = handlers?.find((n) => n.fileID === routeNode.fileID)
+        if (handler) crossEdges.push({ fromNodeID: routeNode.id, toNodeID: handler.id, kind: "mounts" })
+      }
+    }
+
+    for (const gen of generatedNodes) {
+      if (yield* Ref.get(cancelled)) {
+        yield* Effect.logWarning("codegraph: cancelled during generated_from")
+        break
+      }
+      const genFile = fileByID.get(gen.fileID)
+      if (!genFile) continue
+      const genDir = fileDir(genFile.path)
+      const genBase = path.basename(genFile.path).replace(/\.generated(\.[^.]+)$/i, "$1")
+      const sourceFile = allFiles.find(
+        (f) => fileDir(f.path) === genDir && path.basename(f.path) === genBase,
+      )
+      if (!sourceFile) continue
+      const sourceNodes = nodesByFileID.get(sourceFile.id)
+      const sourceNode = sourceNodes?.find((n) => n.kind !== "generated") ?? sourceNodes?.[0]
+      if (sourceNode) crossEdges.push({ fromNodeID: gen.id, toNodeID: sourceNode.id, kind: "generated_from" })
+    }
+  }
+
+  const edgesToWrite = [
+    ...referenceEdges.map((e) => ({
+      id: `${e.fromNodeID}->${e.toNodeID}:${e.kind}`,
+      fromNodeID: e.fromNodeID,
+      toNodeID: e.toNodeID,
+      kind: e.kind,
+    })),
+    ...crossEdges.map((e) => ({
+      id: `${e.fromNodeID}->${e.toNodeID}:${e.kind}`,
+      fromNodeID: e.fromNodeID,
+      toNodeID: e.toNodeID,
+      kind: e.kind,
+    })),
+  ]
+  yield* repo.putEdges(edgesToWrite)
+  yield* repo.recomputeInDegree().pipe(Effect.orDie)
 })
 
-yield* Effect.all(
-  [
-    Effect.forEach(codeFiles, parseFiber, { concurrency: 8, discard: true }),
-    drainParsedQueue,
-  ],
-  { concurrency: 2, discard: true },
-)
-yield* Queue.shutdown(parsedQueue)
-yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
-
-      const isCancelled = yield* Ref.get(cancelled)
-      if (!isCancelled) {
-        // A2 workaround: searchNodes does not support cursor pagination.
-        // All nodes are fetched in one call (limit 100_000) and processed
-        // in JS-side batches of 500. The cancellation check runs between batches.
-        // TODO (PR 3): use server-side cursor pagination to enable true streaming.
-        const allNodes = yield* repo.searchNodes({ limit: 100_000 })
-        const allFiles = yield* repo.listAllFiles()
-        const fileByID = new Map(allFiles.map((f) => [f.id, f]))
-        const fileDir = (filePath: string) => path.dirname(filePath)
-
-        const nodeMap = new Map<string, CodegraphNode[]>()
-        const nodesByFileID = new Map<string, CodegraphNode[]>()
-        const BATCH_SIZE = 500
-        let processed = 0
-
-        for (let batchStart = 0; batchStart < allNodes.length; batchStart += BATCH_SIZE) {
-          if (yield* Ref.get(cancelled)) break
-          const batchEnd = Math.min(batchStart + BATCH_SIZE, allNodes.length)
-          const batch = allNodes.slice(batchStart, batchEnd)
-
-          for (const node of batch) {
-            const list = nodeMap.get(node.name) ?? []
-            list.push(node)
-            nodeMap.set(node.name, list)
-            const fileList = nodesByFileID.get(node.fileID) ?? []
-            fileList.push(node)
-            nodesByFileID.set(node.fileID, fileList)
-          }
-
-          processed += batch.length
-        }
-
-        const referenceEdges: { fromNodeID: string; toNodeID: string; kind: "imports" | "calls" | "extends" | "references" }[] = []
-        const crossEdges: { fromNodeID: string; toNodeID: string; kind: CodegraphEdge["kind"] }[] = []
-        const referenceEdgeKeys = new Set<string>()
-
-        for (const nodeA of allNodes) {
-          if (
-            !nodeA.code ||
-            nodeA.kind === "test" ||
-            nodeA.kind === "route" ||
-            nodeA.kind === "config" ||
-            nodeA.kind === "build" ||
-            nodeA.kind === "package" ||
-            nodeA.kind === "generated" ||
-            nodeA.kind === "ci" ||
-            nodeA.kind === "docker" ||
-            nodeA.kind === "env" ||
-            nodeA.kind === "doc" ||
-            nodeA.kind === "file"
-          ) {
-            continue
-          }
-
-          const identifiers = new Set<string>()
-          for (const m of nodeA.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
-            if (m[0].length >= 3 && nodeMap.has(m[0])) identifiers.add(m[0])
-          }
-
-          for (const name of identifiers) {
-            const targets = nodeMap.get(name)
-            if (!targets) continue
-
-            for (const nodeB of targets) {
-              if (nodeB.id === nodeA.id) continue
-
-              const kind =
-                nodeA.kind === "class" && nodeA.code.includes(`extends ${name}`)
-                  ? ("extends" as const)
-                  : nodeA.code.includes(`${name}(`)
-                    ? ("calls" as const)
-                    : ("references" as const)
-
-              const key = `${nodeA.id}->${nodeB.id}:${kind}`
-              if (referenceEdgeKeys.has(key)) continue
-              referenceEdgeKeys.add(key)
-              referenceEdges.push({
-                fromNodeID: nodeA.id,
-                toNodeID: nodeB.id,
-                kind,
-              })
-            }
-          }
-        }
-
-        const configNodes = allNodes.filter((n) => n.kind === "config")
-        const dockerNodes = allNodes.filter((n) => n.kind === "docker")
-        const testNodes = allNodes.filter((n) => n.kind === "test")
-        const routeNodes = allNodes.filter((n) => n.kind === "route")
-        const generatedNodes = allNodes.filter((n) => n.kind === "generated")
-
-        for (const testNode of testNodes) {
-          if (yield* Ref.get(cancelled)) {
-            yield* Effect.logWarning("codegraph: cancelled during tested_by")
-            break
-          }
-          const testFile = fileByID.get(testNode.fileID)
-          if (!testFile || !testNode.code) continue
-          // Tokenize the test file's source once into a unique identifier set,
-          // then for each identifier look it up in the name -> nodes index
-          // instead of substring-scanning the full test code for every
-          // production node. 3,067-file workspaces were taking >5 min here.
-          const referenced = new Set<string>()
-          for (const m of testNode.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
-            referenced.add(m[0])
-          }
-          for (const name of referenced) {
-            const candidates = nodeMap.get(name)
-            if (!candidates) continue
-            for (const node of candidates) {
-              if (node.fileID === testNode.fileID) continue
-              if (node.kind === "test") continue
-              const nodeFile = fileByID.get(node.fileID)
-              if (!nodeFile) continue
-              if (/\.(test|spec)\./i.test(nodeFile.path.toLowerCase())) continue
-              crossEdges.push({ fromNodeID: node.id, toNodeID: testNode.id, kind: "tested_by" })
-            }
-          }
-        }
-
-        for (const cfg of configNodes) {
-          if (yield* Ref.get(cancelled)) {
-            yield* Effect.logWarning("codegraph: cancelled during configured_by")
-            break
-          }
-          const cfgFile = fileByID.get(cfg.fileID)
-          if (!cfgFile) continue
-          const cfgDir = fileDir(cfgFile.path)
-          for (const file of allFiles) {
-            if (fileDir(file.path) !== cfgDir) continue
-            if (file.id === cfg.fileID) continue
-            const fileNodes = nodesByFileID.get(file.id) ?? []
-            const fromNode =
-              fileNodes.find(
-                (n) =>
-                  n.kind !== "config" &&
-                  n.kind !== "docker" &&
-                  n.kind !== "package" &&
-                  n.kind !== "build" &&
-                  n.kind !== "ci" &&
-                  n.kind !== "env" &&
-                  n.kind !== "doc" &&
-                  n.kind !== "test" &&
-                  n.kind !== "route" &&
-                  n.kind !== "generated",
-              ) ?? fileNodes[0]
-            if (!fromNode) continue
-            crossEdges.push({ fromNodeID: fromNode.id, toNodeID: cfg.id, kind: "configured_by" })
-          }
-        }
-
-        for (const cfg of configNodes) {
-          const cfgFile = fileByID.get(cfg.fileID)
-          if (!cfgFile) continue
-          const cfgDir = fileDir(cfgFile.path)
-          const docker = dockerNodes.find((n) => {
-            const f = fileByID.get(n.fileID)
-            return f ? fileDir(f.path) === cfgDir : false
-          })
-          if (docker) crossEdges.push({ fromNodeID: cfg.id, toNodeID: docker.id, kind: "built_by" })
-        }
-
-        if (yield* Ref.get(cancelled)) {
-          yield* Effect.logWarning("codegraph: cancelled before mounts")
-          // Fall through; the putEdges call below will simply write what we have so far.
-        } else {
-          const routeHandlerRegex = /app\.(?:get|post|put|delete|patch|all|use)\s*\([^,]+,\s*(\w+)\s*\)/g
-          for (const routeNode of routeNodes) {
-            if (!routeNode.code) continue
-            for (const match of routeNode.code.matchAll(routeHandlerRegex)) {
-              const handlerName = match[1]
-              const handlers = nodeMap.get(handlerName)
-              const handler = handlers?.find((n) => n.fileID === routeNode.fileID)
-              if (handler) crossEdges.push({ fromNodeID: routeNode.id, toNodeID: handler.id, kind: "mounts" })
-            }
-          }
-
-          for (const gen of generatedNodes) {
-            if (yield* Ref.get(cancelled)) {
-              yield* Effect.logWarning("codegraph: cancelled during generated_from")
-              break
-            }
-            const genFile = fileByID.get(gen.fileID)
-            if (!genFile) continue
-            const genDir = fileDir(genFile.path)
-            const genBase = path.basename(genFile.path).replace(/\.generated(\.[^.]+)$/i, "$1")
-            const sourceFile = allFiles.find(
-              (f) => fileDir(f.path) === genDir && path.basename(f.path) === genBase,
-            )
-            if (!sourceFile) continue
-            const sourceNodes = nodesByFileID.get(sourceFile.id)
-            const sourceNode = sourceNodes?.find((n) => n.kind !== "generated") ?? sourceNodes?.[0]
-            if (sourceNode) crossEdges.push({ fromNodeID: gen.id, toNodeID: sourceNode.id, kind: "generated_from" })
-          }
-        }
-
-        const edgesToWrite = [
-          ...referenceEdges.map((e) => ({
-            id: `${e.fromNodeID}->${e.toNodeID}:${e.kind}`,
-            fromNodeID: e.fromNodeID,
-            toNodeID: e.toNodeID,
-            kind: e.kind,
-          })),
-          ...crossEdges.map((e) => ({
-            id: `${e.fromNodeID}->${e.toNodeID}:${e.kind}`,
-            fromNodeID: e.fromNodeID,
-            toNodeID: e.toNodeID,
-            kind: e.kind,
-          })),
-        ]
-        yield* repo.putEdges(edgesToWrite)
-
-        // Phase 3: now that every edge is committed, derive the in-degree
-        // column with a single UPDATE. The trace ranker reads this column
-        // directly instead of running COUNT(*) per candidate.
-        yield* repo.recomputeInDegree().pipe(Effect.orDie)
+    const index = Effect.fn("CodegraphIndexer.index")(function* (input: {
+      root: string
+      force?: boolean
+      maxFileSizeBytes?: number
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+    }) {
+      yield* Ref.set(cancelled, false)
+      const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
+      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root)
+      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, gitignore, banyanignore)
+      const allFiles = walkResult.files
+      const codeExtensions = new Set([
+        ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs",
+        ".py", ".pyw",
+        ".zig",
+        ".rs",
+        ".go",
+        ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh",
+        ".java", ".kt",
+        ".cs",
+        ".swift",
+        ".rb",
+        ".php",
+        ".sh", ".bat", ".ps1",
+        ".sql",
+        ".html", ".css",
+        ".md",
+      ])
+      const isArtifactPath = (filePath: string) => {
+        const base = path.basename(filePath)
+        const lower = base.toLowerCase()
+        const normPath = filePath.replace(/\\/g, "/")
+        if (lower === "package.json") return true
+        if (lower === "dockerfile" || lower.startsWith("dockerfile.") || lower.endsWith(".dockerfile")) return true
+        if (lower === "compose.yml" || lower === "compose.yaml") return true
+        if (lower === "docker-compose.yml" || lower === "docker-compose.yaml") return true
+        if (lower === "jenkinsfile") return true
+        if (lower === ".gitlab-ci.yml") return true
+        if (lower.startsWith("azure-pipelines") && lower.endsWith(".yml")) return true
+        if (lower.startsWith("tsconfig") && lower.endsWith(".json")) return true
+        if (lower === "pnpm-workspace.yaml" || lower === "pnpm-workspace.yml") return true
+        if (lower === "pyproject.toml") return true
+        if (lower === "cargo.toml") return true
+        if (lower === "go.mod") return true
+        if (lower === ".envrc" || lower === ".env.example") return true
+        if (lower.startsWith(".env")) return true
+        if (lower.startsWith("dotenv")) return true
+        if (/\/\.github\/workflows\/.+\.(yml|yaml)$/i.test(normPath)) return true
+        if (/\/\.circleci\/.+\.(yml|yaml)$/i.test(normPath)) return true
+        if (/\.config\.(json|js|ts)$/i.test(base)) return true
+        if (lower === "config.json") return true
+        return false
       }
+      const codeFiles = allFiles.filter((f) => {
+        const ext = path.extname(f).toLowerCase()
+        return codeExtensions.has(ext) || isArtifactPath(f)
+      })
+
+      const indexedRef = yield* Ref.make(0)
+      const skippedRef = yield* Ref.make(0)
+      const symbolsIndexedRef = yield* Ref.make(0)
+      const skippedGitignoredRef = yield* Ref.make(walkResult.skippedByGitignore)
+      const skippedBanyanignoredRef = yield* Ref.make(walkResult.skippedByBanyanignore)
+      const skippedArtifactRef = yield* Ref.make(0)
+      const skippedTooLargeRef = yield* Ref.make(walkResult.skippedBySize)
+      const skippedTooLargeParseRef = yield* Ref.make(0)
+      const skippedMinifiedRef = yield* Ref.make(0)
+      const skippedCachedRef = yield* Ref.make(0)
+      const skippedReadErrorRef = yield* Ref.make(0)
+      const skippedParseFailureRef = yield* Ref.make(0)
+      const total = codeFiles.length
+      const progressCounter = yield* Ref.make(0)
+      const currentlyParsingRef = yield* Ref.make<string | undefined>(undefined)
+
+      if (input.onProgress) {
+        yield* input.onProgress({ file: "", done: 0, total })
+      }
+
+      const parsedQueue = yield* Queue.bounded<ParsedFile>(128)
+      const skippedParsed = (relativePath: string): ParsedFile => ({
+        file: { id: "", path: "", contentHash: "", language: "", indexedAt: 0 },
+        nodes: [],
+        edges: [],
+        relativePath,
+        skipped: true,
+      })
+
+      const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
+        const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
+        return indexCandidateFileCore(filePath, relativePath, {
+          input,
+          maxFileSizeBytes,
+          total,
+          parsedQueue,
+          skippedParsed,
+          skippedRef,
+          skippedTooLargeParseRef,
+          skippedMinifiedRef,
+          skippedArtifactRef,
+          skippedReadErrorRef,
+          skippedParseFailureRef,
+          skippedCachedRef,
+          cancelled,
+          currentlyParsingRef,
+          progressCounter,
+          treeCacheRef,
+        })
+      }
+
+      const drainParsedQueue = Effect.gen(function* () {
+        let processed = 0
+        while (processed < total) {
+          const parsed = yield* Queue.take(parsedQueue)
+          processed++
+          if (parsed.skipped) continue
+          yield* repo.writeFileGraph({
+            file: parsed.file,
+            nodes: parsed.nodes,
+            edges: parsed.edges,
+            ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
+                  cause: Cause.pretty(cause),
+                })
+                yield* repo
+                  .recordParseError({ path: parsed.relativePath, cause: Cause.pretty(cause), indexedAt: Date.now() })
+                  .pipe(
+                    Effect.catchCause((innerCause) =>
+                      Effect.logWarning(`recordParseError insert failed for ${parsed.relativePath}`, {
+                        cause: Cause.pretty(innerCause),
+                      }),
+                    ),
+                  )
+                yield* Ref.update(skippedRef, (n) => n + 1)
+                yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
+              }),
+            ),
+          )
+          if (parsed.nodes.length > 0) {
+            yield* Ref.update(indexedRef, (n) => n + 1)
+            yield* Ref.update(symbolsIndexedRef, (n) => n + parsed.nodes.length)
+          }
+          if (processed % CHECKPOINT_EVERY === 0) {
+            yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
+          }
+        }
+      })
+
+      yield* Effect.all(
+        [
+          Effect.forEach(codeFiles, parseFiber, { concurrency: 8, discard: true }),
+          drainParsedQueue,
+        ],
+        { concurrency: 2, discard: true },
+      )
+      yield* Queue.shutdown(parsedQueue)
+      yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
+
+      yield* rebuildDerivedGraph(undefined)
 
       const indexed = yield* Ref.get(indexedRef)
       const skipped = yield* Ref.get(skippedRef)
@@ -896,7 +965,187 @@ yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
       yield* Ref.set(cancelled, true)
     })
 
-    return Service.of({ index, cancel })
+    const indexFiles = Effect.fn("CodegraphIndexer.indexFiles")(function* (input: {
+      root: string
+      paths: string[]
+      force?: boolean
+      maxFileSizeBytes?: number
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+    }) {
+      const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
+      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root)
+
+      const filteredPaths: string[] = []
+      for (const filePath of input.paths) {
+        const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
+        if (isIgnoredByPatterns(gitignore, input.root, filePath) || isIgnoredByPatterns(banyanignore, input.root, filePath)) {
+          const existing = yield* repo.getFileByPath(filePath)
+          if (existing) yield* repo.deleteFile(existing.id)
+          continue
+        }
+        const stats = yield* fs.stat(filePath).pipe(Effect.orDie)
+        if (stats.size > maxFileSizeBytes) {
+          yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${stats.size} bytes, limit: ${maxFileSizeBytes})`)
+          const existing = yield* repo.getFileByPath(filePath)
+          if (existing) yield* repo.deleteFile(existing.id)
+          continue
+        }
+        filteredPaths.push(filePath)
+      }
+
+      if (filteredPaths.length === 0) {
+        return { indexed: 0, skipped: input.paths.length, parseErrors: [] }
+      }
+
+      const skippedRef = yield* Ref.make(0)
+      const skippedTooLargeParseRef = yield* Ref.make(0)
+      const skippedMinifiedRef = yield* Ref.make(0)
+      const skippedArtifactRef = yield* Ref.make(0)
+      const skippedReadErrorRef = yield* Ref.make(0)
+      const skippedParseFailureRef = yield* Ref.make(0)
+      const skippedCachedRef = yield* Ref.make(0)
+      const indexedRef = yield* Ref.make(0)
+      const progressCounter = yield* Ref.make(0)
+      const currentlyParsingRef = yield* Ref.make<string | undefined>(undefined)
+      const changedFileIDsRef = yield* Ref.make<Set<string>>(new Set())
+      const total = filteredPaths.length
+
+      if (input.onProgress) {
+        yield* input.onProgress({ file: "", done: 0, total })
+      }
+
+      const parsedQueue = yield* Queue.bounded<ParsedFile>(128)
+      const skippedParsedFn = (relativePath: string): ParsedFile => ({
+        file: { id: "", path: "", contentHash: "", language: "", indexedAt: 0 },
+        nodes: [],
+        edges: [],
+        relativePath,
+        skipped: true,
+      })
+
+      yield* Effect.forEach(filteredPaths, (filePath) => {
+        const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
+        return indexCandidateFileCore(filePath, relativePath, {
+          input,
+          maxFileSizeBytes,
+          total,
+          parsedQueue,
+          skippedParsed: skippedParsedFn,
+          skippedRef,
+          skippedTooLargeParseRef,
+          skippedMinifiedRef,
+          skippedArtifactRef,
+          skippedReadErrorRef,
+          skippedParseFailureRef,
+          skippedCachedRef,
+          cancelled,
+          currentlyParsingRef,
+          progressCounter,
+          treeCacheRef,
+        })
+      }, { concurrency: 8, discard: true })
+
+      let processed = 0
+      while (processed < total) {
+        const parsed = yield* Queue.take(parsedQueue)
+        processed++
+        if (parsed.skipped) continue
+        if (parsed.previousFileID) {
+          yield* Ref.update(changedFileIDsRef, (s) => {
+            s.add(parsed.previousFileID!)
+            return s
+          })
+        }
+        if (parsed.file.id) {
+          yield* Ref.update(changedFileIDsRef, (s) => {
+            s.add(parsed.file.id)
+            return s
+          })
+        }
+        yield* repo.writeFileGraph({
+          file: parsed.file,
+          nodes: parsed.nodes,
+          edges: parsed.edges,
+          ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
+                cause: Cause.pretty(cause),
+              })
+              yield* repo
+                .recordParseError({ path: parsed.relativePath, cause: Cause.pretty(cause), indexedAt: Date.now() })
+                .pipe(
+                  Effect.catchCause((innerCause) =>
+                    Effect.logWarning(`recordParseError insert failed for ${parsed.relativePath}`, {
+                      cause: Cause.pretty(innerCause),
+                    }),
+                  ),
+                )
+              yield* Ref.update(skippedRef, (n) => n + 1)
+              yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
+            }),
+          ),
+        )
+        if (parsed.nodes.length > 0) {
+          yield* Ref.update(indexedRef, (n) => n + 1)
+        }
+        if (processed % CHECKPOINT_EVERY === 0) {
+          yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
+        }
+      }
+
+      yield* Queue.shutdown(parsedQueue)
+      yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
+
+      const changedFileIDs = Array.from(yield* Ref.get(changedFileIDsRef))
+      yield* rebuildDerivedGraph(changedFileIDs)
+
+      const fileCount = yield* repo.countFiles()
+      const nodeCount = yield* repo.countNodes()
+      const edgeCount = yield* repo.countEdges()
+      yield* repo.bumpVersion({
+        scannedFiles: fileCount,
+        indexedFiles: fileCount,
+        totalFiles: fileCount,
+        totalNodes: nodeCount,
+        totalEdges: edgeCount,
+        indexedRoot: input.root,
+      })
+
+      const indexed = yield* Ref.get(indexedRef)
+      const parseErrors = yield* repo.listParseErrors()
+      return { indexed, skipped: yield* Ref.get(skippedRef), parseErrors: parseErrors.slice(0, 50) }
+    })
+
+    const removeFiles = Effect.fn("CodegraphIndexer.removeFiles")(function* (input: {
+      root: string
+      paths: string[]
+    }) {
+      const removedFileIDs: string[] = []
+      for (const filePath of input.paths) {
+        const existing = yield* repo.getFileByPath(filePath)
+        if (existing) {
+          removedFileIDs.push(existing.id)
+          yield* repo.deleteFile(existing.id)
+        }
+      }
+      if (removedFileIDs.length === 0) return
+      yield* rebuildDerivedGraph(removedFileIDs)
+      const fileCount = yield* repo.countFiles()
+      const nodeCount = yield* repo.countNodes()
+      const edgeCount = yield* repo.countEdges()
+      yield* repo.bumpVersion({
+        scannedFiles: fileCount,
+        indexedFiles: fileCount,
+        totalFiles: fileCount,
+        totalNodes: nodeCount,
+        totalEdges: edgeCount,
+        indexedRoot: input.root,
+      })
+    })
+
+    return Service.of({ index, indexFiles, removeFiles, cancel })
   }),
 )
 

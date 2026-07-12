@@ -68,6 +68,7 @@ export type Event =
   | EventBanyancodeMemoryPromoted
   | EventBanyancodeMemoryRejected
   | EventBanyancodeCodegraphBuild
+  | EventBanyancodeCodegraphAutoUpdate
   | EventBanyancodeMeshStatus
   | EventBanyancodeSystemUpdated
   | EventQuestionV2Asked
@@ -1436,6 +1437,15 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "banyancode.codegraph.auto-update"
+        properties: {
+          status: "idle" | "watching" | "draining" | "paused"
+          pending: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          lastChangeAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+      }
+    | {
+        id: string
         type: "banyancode.mesh.status"
         properties: {
           parentSessionID: string
@@ -2212,6 +2222,8 @@ export type BanyanConfig = {
   banyancode_codegraph_exclude_patterns?: Array<string>
   banyancode_codegraph_concurrency?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   banyancode_codegraph_batch_size?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_codegraph_watch_enabled?: boolean
+  banyancode_codegraph_watch_debounce_ms?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   banyancode_trace_max_days?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   banyancode_trace_max_events?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   banyancode_mesh_default_provider?: string
@@ -5632,6 +5644,16 @@ export type EventBanyancodeCodegraphBuild = {
       indexedAt: number | "NaN" | "Infinity" | "-Infinity"
     }>
     error?: string
+  }
+}
+
+export type EventBanyancodeCodegraphAutoUpdate = {
+  id: string
+  type: "banyancode.codegraph.auto-update"
+  properties: {
+    status: "idle" | "watching" | "draining" | "paused"
+    pending: number | "NaN" | "Infinity" | "-Infinity"
+    lastChangeAt?: number | "NaN" | "Infinity" | "-Infinity"
   }
 }
 

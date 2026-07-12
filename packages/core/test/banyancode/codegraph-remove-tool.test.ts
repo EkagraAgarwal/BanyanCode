@@ -84,6 +84,9 @@ const settleWithRepo = async (
   input: unknown,
   seed: boolean,
 ) => {
+  // Snapshot OPENCODE_DB so this test cannot leak its tmpdir path into
+  // subsequent tests that resolve Database.path() (which reads this env var).
+  const previousOpencodeDb = process.env.OPENCODE_DB
   process.env.OPENCODE_DB = dbPath
 
   const { CodegraphRepo } = await import("../../src/banyancode/codegraph-repo")
@@ -97,23 +100,31 @@ const settleWithRepo = async (
     mockPermission as never,
   )
 
-  const effect = Effect.gen(function* () {
-    const repo = yield* CodegraphRepo.Service
-    if (seed) yield* seedRepo(repo as unknown as CodegraphRepoInterface)
-    const tool = makeCodegraphRemoveTool({
-      permission: (yield* PermissionV2.Service) as unknown as Parameters<typeof makeCodegraphRemoveTool>[0]["permission"],
-      repo: repo as unknown as Parameters<typeof makeCodegraphRemoveTool>[0]["repo"],
-    })
-    const settleResult = yield* Tool.settle(tool, makeCall(input), makeContext())
-    const afterCounts = {
-      files: yield* repo.countFiles(),
-      nodes: yield* repo.countNodes(),
-      edges: yield* repo.countEdges(),
-    }
-    return { result: settleResult, afterCounts }
-  }).pipe(Effect.provide(repoLayer), Effect.provide(permissionLayer), Effect.scoped)
+  try {
+    const effect = Effect.gen(function* () {
+      const repo = yield* CodegraphRepo.Service
+      if (seed) yield* seedRepo(repo as unknown as CodegraphRepoInterface)
+      const tool = makeCodegraphRemoveTool({
+        permission: (yield* PermissionV2.Service) as unknown as Parameters<typeof makeCodegraphRemoveTool>[0]["permission"],
+        repo: repo as unknown as Parameters<typeof makeCodegraphRemoveTool>[0]["repo"],
+      })
+      const settleResult = yield* Tool.settle(tool, makeCall(input), makeContext())
+      const afterCounts = {
+        files: yield* repo.countFiles(),
+        nodes: yield* repo.countNodes(),
+        edges: yield* repo.countEdges(),
+      }
+      return { result: settleResult, afterCounts }
+    }).pipe(Effect.provide(repoLayer), Effect.provide(permissionLayer), Effect.scoped)
 
-  return await Effect.runPromise(effect as unknown as Effect.Effect<unknown, never, never>)
+    return await Effect.runPromise(effect as unknown as Effect.Effect<unknown, never, never>)
+  } finally {
+    if (previousOpencodeDb === undefined) {
+      delete process.env.OPENCODE_DB
+    } else {
+      process.env.OPENCODE_DB = previousOpencodeDb
+    }
+  }
 }
 
 describe("codegraph-remove tool", () => {

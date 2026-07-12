@@ -158,6 +158,7 @@ export const layer = Layer.effect(
             totalFiles: result.indexed + result.skipped,
             totalNodes: result.indexed + result.skipped,
             totalEdges: 0,
+            indexedRoot: input.root,
           })
 
           return { result, graphVersion, coverage }

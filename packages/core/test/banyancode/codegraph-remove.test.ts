@@ -10,6 +10,9 @@ describe("codegraph-remove", () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "codegraph.sqlite")
 
+    // Snapshot the previous OPENCODE_DB so a failure in this test does not
+    // leak the tmpdir path into subsequent tests (Database.path() reads it).
+    const previousOpencodeDb = process.env.OPENCODE_DB
     process.env.OPENCODE_DB = dbPath
 
     const { CodegraphRepo, layer: repoLayerInner } = await import("../../src/banyancode/codegraph-repo")
@@ -120,5 +123,11 @@ describe("codegraph-remove", () => {
       fsSync.unlinkSync(dbPath)
     }
     expect(fsSync.existsSync(dbPath)).toBe(false)
+
+    if (previousOpencodeDb === undefined) {
+      delete process.env.OPENCODE_DB
+    } else {
+      process.env.OPENCODE_DB = previousOpencodeDb
+    }
   })
 })

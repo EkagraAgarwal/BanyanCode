@@ -1,6 +1,6 @@
 export * as CodegraphRepo from "./codegraph-repo"
 
-import { and, eq, inArray, sql } from "drizzle-orm"
+import { and, eq, inArray, or, sql } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
@@ -12,7 +12,7 @@ import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from 
 // Upper bound on nodes per DB insert batch. If a batched putNodes method is added,
 // chunk the input into groups of this size to avoid overwhelming the SQLite connection.
 export const MAX_NODES_PER_INSERT = 1000
-const MAX_EDGES_PER_INSERT = 1000
+const MAX_EDGES_PER_INSERT = 5000
 
 const extractServiceTag = (code: string, nodeID: string, fileID: string): typeof CodegraphServiceTagsTable.$inferInsert | null => {
   // Match Context.Service<...>()("tag") or Context.Service<...>( ) ( "tag" ).
@@ -82,6 +82,7 @@ export interface Interface {
   readonly edgesFrom: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesTo: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly deleteFile: (id: string) => Effect.Effect<void, never, never>
+  readonly deleteDerivedEdgesForFiles: (input: { fileIDs: string[] }) => Effect.Effect<void, never, never>
   /**
    * Atomically replace one file's worth of graph data: if `previousFileID`
    * is set, delete that file (cascade-removes its nodes/edges); then insert
@@ -112,6 +113,7 @@ export interface Interface {
     totalFiles: number
     totalNodes: number
     totalEdges: number
+    indexedRoot?: string
   }) => Effect.Effect<{ graphVersion: number; coverage: number }, never, never>
   readonly recordParseError: (input: { path: string; cause: string; indexedAt: number }) => Effect.Effect<void, unknown, never>
   readonly listParseErrors: () => Effect.Effect<Array<{ path: string; cause: string; indexedAt: number }>, never, never>
@@ -375,6 +377,33 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
     })
 
+    // Clears edges that became invalid because their endpoints' files were re-indexed.
+    const deleteDerivedEdgesForFiles = Effect.fn("CodegraphRepo.deleteDerivedEdgesForFiles")(function* (input: { fileIDs: string[] }) {
+      if (input.fileIDs.length === 0) return
+      yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          const nodeIDRows = yield* tx
+            .select({ id: CodegraphNodesTable.id })
+            .from(CodegraphNodesTable)
+            .where(inArray(CodegraphNodesTable.file_id, input.fileIDs))
+            .all()
+            .pipe(Effect.orDie)
+          const nodeIDs = nodeIDRows.map((r) => r.id)
+          if (nodeIDs.length === 0) return
+          yield* tx
+            .delete(CodegraphEdgesTable)
+            .where(
+              or(
+                inArray(CodegraphEdgesTable.from_node_id, nodeIDs),
+                inArray(CodegraphEdgesTable.to_node_id, nodeIDs),
+              ),
+            )
+            .run()
+            .pipe(Effect.orDie)
+        }),
+      ).pipe(Effect.orDie)
+    })
+
     const nodeByID = Effect.fn("CodegraphRepo.nodeByID")(function* (id: string) {
       return yield* getNode(id)
     })
@@ -554,6 +583,7 @@ export const layer = Layer.effect(
         totalNodes: row.total_nodes,
         totalEdges: row.total_edges,
         schemaVersion: row.schema_version,
+        indexedRoot: row.indexed_root ?? undefined,
       }
     })
 
@@ -569,6 +599,7 @@ export const layer = Layer.effect(
           total_nodes: m.totalNodes,
           total_edges: m.totalEdges,
           schema_version: m.schemaVersion,
+          indexed_root: m.indexedRoot ?? null,
         })
         .onConflictDoUpdate({
           target: CodegraphMetaTable.id,
@@ -580,6 +611,7 @@ export const layer = Layer.effect(
             total_nodes: m.totalNodes,
             total_edges: m.totalEdges,
             schema_version: m.schemaVersion,
+            indexed_root: m.indexedRoot ?? null,
           },
         })
         .run()
@@ -602,13 +634,8 @@ export const layer = Layer.effect(
                   kind: e.kind,
                 })),
               )
-              .onConflictDoUpdate({
+              .onConflictDoNothing({
                 target: CodegraphEdgesTable.id,
-                set: {
-                  from_node_id: batch[0].fromNodeID,
-                  to_node_id: batch[0].toNodeID,
-                  kind: batch[0].kind,
-                },
               })
               .run()
               .pipe(Effect.orDie)
@@ -637,11 +664,12 @@ export const layer = Layer.effect(
       totalFiles: number
       totalNodes: number
       totalEdges: number
+      indexedRoot?: string
     }) {
       return yield* db.transaction((tx) =>
         Effect.gen(function* () {
           const coverage = input.scannedFiles > 0 ? input.indexedFiles / input.scannedFiles : 0
-          
+
           const row = yield* tx
             .select()
             .from(CodegraphMetaTable)
@@ -649,7 +677,7 @@ export const layer = Layer.effect(
             .get()
             .pipe(Effect.orDie)
           const nextVersion = (row?.graph_version ?? 0) + 1
-          
+
           const nodeRow = yield* tx
             .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_nodes`)
             .pipe(Effect.orDie)
@@ -671,7 +699,8 @@ export const layer = Layer.effect(
             // Phase 3: the schema gained `is_entrypoint` and `in_degree`
             // columns on codegraph_nodes. Bump the schemaVersion so
             // consumers that compare against it can detect stale graphs.
-            schemaVersion: 2,
+            schemaVersion: 3,
+            indexedRoot: input.indexedRoot ?? row?.indexed_root ?? undefined,
           }
 
           yield* tx
@@ -685,6 +714,7 @@ export const layer = Layer.effect(
               total_nodes: meta.totalNodes,
               total_edges: meta.totalEdges,
               schema_version: meta.schemaVersion,
+              indexed_root: meta.indexedRoot ?? null,
             })
             .onConflictDoUpdate({
               target: CodegraphMetaTable.id,
@@ -696,6 +726,7 @@ export const layer = Layer.effect(
                 total_nodes: meta.totalNodes,
                 total_edges: meta.totalEdges,
                 schema_version: meta.schemaVersion,
+                indexed_root: meta.indexedRoot ?? null,
               },
             })
             .run()
@@ -890,19 +921,14 @@ export const layer = Layer.effect(
                 .onConflictDoUpdate({
                   target: CodegraphNodesTable.id,
                   set: {
-                    file_id: input.nodes[0].fileID,
-                    kind: input.nodes[0].kind,
-                    name: input.nodes[0].name,
-                    signature: input.nodes[0].signature,
-                    start_line: input.nodes[0].startLine,
-                    end_line: input.nodes[0].endLine,
-                    code: input.nodes[0].code,
-                    // isEntrypoint is a per-build signal computed from the
-                    // node's source — re-write on every writeFileGraph so a
-                    // renamed function (now matching entrypoint heuristics)
-                    // flips its flag without a separate pass.
-                    is_entrypoint:
-                      ((input.nodes[0] as CodegraphNode & { isEntrypoint?: number | boolean }).isEntrypoint ? 1 : 0),
+                    file_id: sql`excluded.file_id`,
+                    kind: sql`excluded.kind`,
+                    name: sql`excluded.name`,
+                    signature: sql`excluded.signature`,
+                    start_line: sql`excluded.start_line`,
+                    end_line: sql`excluded.end_line`,
+                    code: sql`excluded.code`,
+                    is_entrypoint: sql`excluded.is_entrypoint`,
                   },
                 })
                 .run()
@@ -962,13 +988,8 @@ export const layer = Layer.effect(
                     kind: e.kind,
                   })),
                 )
-                .onConflictDoUpdate({
+                .onConflictDoNothing({
                   target: CodegraphEdgesTable.id,
-                  set: {
-                    from_node_id: input.edges[0].fromNodeID,
-                    to_node_id: input.edges[0].toNodeID,
-                    kind: input.edges[0].kind,
-                  },
                 })
                 .run()
                 .pipe(Effect.orDie)
@@ -1004,6 +1025,7 @@ export const layer = Layer.effect(
       edgesFrom,
       edgesTo,
       deleteFile,
+      deleteDerivedEdgesForFiles,
       writeFileGraph,
       clearAll,
       getMeta,

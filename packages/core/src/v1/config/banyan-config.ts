@@ -31,6 +31,12 @@ export const Info = Schema.Struct({
   banyancode_codegraph_exclude_patterns: Schema.optional(Schema.Array(Schema.String)),
   banyancode_codegraph_concurrency: Schema.optional(Schema.Number),
   banyancode_codegraph_batch_size: Schema.optional(Schema.Number),
+  // Incremental codegraph auto-update. When false, the file-watcher bridge
+  // never invokes indexFiles/removeFiles in response to file events. The
+  // user must run /codegraph-build manually. Debounce bounds the queue wake
+  // signal so a `git rebase`-style burst collapses into one batch.
+  banyancode_codegraph_watch_enabled: Schema.optional(Schema.Boolean),
+  banyancode_codegraph_watch_debounce_ms: Schema.optional(Schema.Number),
   banyancode_trace_max_days: Schema.optional(Schema.Number),
   banyancode_trace_max_events: Schema.optional(Schema.Number),
   banyancode_mesh_default_provider: Schema.optional(Schema.String),

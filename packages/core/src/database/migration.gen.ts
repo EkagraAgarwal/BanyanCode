@@ -11,5 +11,6 @@ export const migrations = (
     import("./migration/20260708140000_codegraph_node_entrypoint_signals"),
     import("./migration/20260711120000_memory_payload_columns"),
     import("./migration/20260711130000_memory_entries_fts"),
+    import("./migration/20260712000000_codegraph_indexed_root"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

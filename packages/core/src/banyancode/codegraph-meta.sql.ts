@@ -9,4 +9,8 @@ export const CodegraphMetaTable = sqliteTable("codegraph_meta", {
   total_nodes: integer().notNull(),
   total_edges: integer().notNull(),
   schema_version: integer().notNull(),
+  // Workspace root whose files are indexed by this graph. Auto-update only
+  // processes file events whose event.location.directory equals this root.
+  // Nullable so legacy graphs created before this column existed keep working.
+  indexed_root: text(),
 })

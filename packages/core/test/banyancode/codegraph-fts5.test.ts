@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import path from "path"
 import { tmpdir } from "../fixture/tmpdir"
 import { Effect, Layer } from "effect"
@@ -8,6 +8,19 @@ import { Database } from "@opencode-ai/core/database/database"
 import ftsMigration from "../../src/database/migration/20260707120000_codegraph_fts"
 
 process.env.BANYANCODE_ENABLE = "1"
+
+// Each test below sets process.env.OPENCODE_DB to a tmpdir path. Database.path()
+// reads this env var, so a leak would silently route subsequent tests to a
+// path that no longer exists (CANTOPEN 14). Snapshot and restore on every
+// test to keep the global env clean.
+const previousOpencodeDb = process.env.OPENCODE_DB
+afterEach(() => {
+  if (previousOpencodeDb === undefined) {
+    delete process.env.OPENCODE_DB
+  } else {
+    process.env.OPENCODE_DB = previousOpencodeDb
+  }
+})
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const applyFtsMigration = (db: any) =>

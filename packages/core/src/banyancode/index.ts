@@ -129,6 +129,11 @@ export {
   defaultLayer as codegraphBuildServiceDefaultLayer,
 } from "./codegraph-build-service"
 export {
+  Service as CodegraphAutoUpdate,
+  layer as codegraphAutoUpdateLayer,
+  defaultLayer as codegraphAutoUpdateDefaultLayer,
+} from "./codegraph-auto-update"
+export {
   Service as TraceCollector,
   layer as traceCollectorLayer,
   defaultLayer as traceCollectorDefaultLayer,

@@ -245,6 +245,7 @@ export type CodegraphMeta = {
   totalNodes: number
   totalEdges: number
   schemaVersion: number
+  indexedRoot?: string
 }
 
 export const GraphMeta = Schema.Struct({
