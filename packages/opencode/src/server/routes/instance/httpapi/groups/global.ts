@@ -10,6 +10,7 @@ import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, Op
 import { described } from "./metadata"
 import { CodegraphNodeSchema } from "@opencode-ai/core/banyancode/types"
 import { GraphMeta } from "@opencode-ai/core/banyancode/types"
+import { MeshStatus } from "@opencode-ai/core/banyancode/mesh-coordinator"
 import * as WebSearchFreeTool from "@opencode-ai/core/tool/websearch-free"
 import * as PreflightTool from "@opencode-ai/core/tool/preflight"
 import * as BlastRadiusTool from "@opencode-ai/core/tool/blast-radius"
@@ -121,6 +122,15 @@ export const BlastRadiusResult = BlastRadiusTool.Output
 export const SafeRenameInput = SafeRenameTool.Input
 export const SafeRenameResult = SafeRenameTool.Output
 
+const MeshStatusQuery = Schema.Struct({
+  parentSessionID: Schema.String.check(
+    Schema.isPattern(/^ses_[a-zA-Z0-9]{16,64}$/, {
+      identifier: "MeshParentSessionID",
+      description: "Parent session ID (must look like a ses_<id> identifier)",
+    }),
+  ),
+})
+
 const GlobalUpgradeResult = Schema.Union([
   Schema.Struct({
     success: Schema.Literal(true),
@@ -150,6 +160,7 @@ export const GlobalPaths = {
   preflight: "/global/preflight",
   blastRadius: "/global/blast-radius",
   safeRename: "/global/safe-rename",
+  meshStatus: "/global/mesh/status",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -383,6 +394,17 @@ export const GlobalApi = HttpApi.make("global").add(
           summary: "Propose safe rename edits",
           description:
             "Compute the edit list for safely renaming a symbol, plus tests to run and risk list. Returns a preflight-shaped report so the caller can apply edits one at a time via the existing edit tool.",
+        }),
+      ),
+      HttpApiEndpoint.get("meshStatus", GlobalPaths.meshStatus, {
+        query: MeshStatusQuery,
+        success: described(MeshStatus, "Mesh status for the given parent session"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.mesh.status",
+          summary: "Get mesh status",
+          description:
+            "Read the orchestrator mesh status (peers, pending messages, recent activity) for a given parent session. Works whether or not the session is currently active.",
         }),
       ),
     )

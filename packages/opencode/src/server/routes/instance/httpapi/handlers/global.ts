@@ -549,6 +549,21 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       })
     })
 
+    const meshStatusHandler = Effect.fn("GlobalHttpApi.meshStatus")(function* (ctx: {
+      query: { parentSessionID: string }
+    }) {
+      const opt = yield* Effect.serviceOption(Banyan.MeshCoordinator)
+      if (Option.isNone(opt)) {
+        return {
+          parentSessionID: ctx.query.parentSessionID,
+          peers: [],
+          pendingMessages: 0,
+          recentActivity: [],
+        }
+      }
+      return yield* opt.value.status(ctx.query.parentSessionID as never)
+    })
+
     return handlers
       .handle("health", health)
       .handleRaw("event", event)
@@ -569,5 +584,6 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       .handle("preflight", preflightHandler)
       .handle("blastRadius", blastRadiusHandler)
       .handle("safeRename", safeRenameHandler)
+      .handle("meshStatus", meshStatusHandler)
   }),
 )
