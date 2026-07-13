@@ -17,6 +17,12 @@ import { Database } from "@opencode-ai/core/database/database"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { Service as SubagentBusService } from "@opencode-ai/core/banyancode/subagent-bus"
 import { Service as SubagentPlansService, type PlanStep } from "@opencode-ai/core/banyancode/subagent-plans-repo"
+import { Service as SubagentConsumerService } from "@opencode-ai/core/banyancode/subagent-consumer"
+import { Service as NestedSpawnRegistryService, NestedSpawnBudgetExceededError } from "@opencode-ai/core/banyancode/nested-spawn-registry"
+import {
+  MAX_NESTED_EXPLORE_LIFETIME_PER_CODER,
+  MAX_NESTED_EXPLORE_PER_CODER,
+} from "@opencode-ai/core/banyancode/max-subagents"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -133,6 +139,24 @@ export const TaskTool = Tool.define(
         return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))
       }
 
+      // Nested explore budget: only relevant when a coder is spawning a fresh explore.
+      // The cap is enforced at spawn time (not at continuation/resume time) because
+      // it tracks how many explores a coder has launched, not how many are alive.
+      const isNewCoderExploreSpawn = !params.task_id && ctx.agent === "coder" && next.name === "explore"
+      if (isNewCoderExploreSpawn) {
+        const registryOpt = yield* Effect.serviceOption(NestedSpawnRegistryService)
+        if (Option.isSome(registryOpt)) {
+          const reserve = yield* registryOpt.value.tryReserveSlot(ctx.sessionID)
+          if (!reserve.ok) {
+            return yield* Effect.fail(
+              new NestedSpawnBudgetExceededError({
+                error: reserve.error,
+              }),
+            )
+          }
+        }
+      }
+
       const session = params.task_id
         ? yield* sessions.get(SessionID.make(params.task_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
@@ -171,6 +195,18 @@ export const TaskTool = Tool.define(
             ),
           ],
         }))
+
+      // Start a SubagentConsumer for this new subagent session so it can
+      // receive peer messages addressed to it (replies, kills, plans, etc).
+      // Only when this is a fresh spawn — resuming an existing task via
+      // task_id should NOT restart the consumer (it was started on first
+      // spawn and is already forkDetached).
+      if (!params.task_id) {
+        const consumerOpt = yield* Effect.serviceOption(SubagentConsumerService)
+        if (Option.isSome(consumerOpt)) {
+          yield* consumerOpt.value.start({ sessionID: nextSession.id, agent: next.name })
+        }
+      }
 
       if (params.plan) {
         const plan = params.plan

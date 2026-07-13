@@ -324,7 +324,10 @@ export const layer = Layer.effect(
                 code_find: "allow",
                 todowrite: "allow",
                 question: "allow",
-                task: "deny",
+                task: {
+                  "*": "deny",
+                  explore: "allow",
+                },
                 subagent_message: "deny",
                 mesh_control: "deny",
               }),

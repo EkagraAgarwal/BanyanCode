@@ -53,22 +53,27 @@ const layer = Layer.effect(
       let result: { ok: true } | { ok: false; error: "concurrent" | "lifetime" } = { ok: true }
 
       yield* Ref.update(state, (map) => {
-        const entry = map.get(pid)
-        if (!entry) {
-          map.set(pid, { concurrent: 1, lifetime: 1, children: new Map() })
-          return map
+        const existing = map.get(pid)
+        if (!existing) {
+          const next = new Map(map)
+          next.set(pid, { concurrent: 1, lifetime: 1, children: new Map() })
+          return next
         }
-        if (entry.concurrent >= MAX_NESTED_EXPLORE_PER_CODER) {
+        if (existing.concurrent >= MAX_NESTED_EXPLORE_PER_CODER) {
           result = { ok: false, error: "concurrent" }
           return map
         }
-        if (entry.lifetime >= MAX_NESTED_EXPLORE_LIFETIME_PER_CODER) {
+        if (existing.lifetime >= MAX_NESTED_EXPLORE_LIFETIME_PER_CODER) {
           result = { ok: false, error: "lifetime" }
           return map
         }
-        entry.concurrent++
-        entry.lifetime++
-        return map
+        const next = new Map(map)
+        next.set(pid, {
+          concurrent: existing.concurrent + 1,
+          lifetime: existing.lifetime + 1,
+          children: existing.children,
+        })
+        return next
       })
 
       if (DEBUG) {
@@ -86,11 +91,13 @@ const layer = Layer.effect(
       const cid = childSessionID as string
 
       yield* Ref.update(state, (map) => {
-        const entry = map.get(pid)
-        if (entry) {
-          entry.children.set(cid, { fiber })
-        }
-        return map
+        const existing = map.get(pid)
+        if (!existing) return map
+        const next = new Map(map)
+        const nextChildren = new Map(existing.children)
+        nextChildren.set(cid, { fiber })
+        next.set(pid, { ...existing, children: nextChildren })
+        return next
       })
 
       if (DEBUG) {
@@ -107,12 +114,23 @@ const layer = Layer.effect(
       const cid = childSessionID as string
 
       yield* Ref.update(state, (map) => {
-        const entry = map.get(pid)
-        if (entry) {
-          entry.children.delete(cid)
-          entry.concurrent = Math.max(0, entry.concurrent - 1)
+        const existing = map.get(pid)
+        if (!existing) return map
+        if (!existing.children.has(cid)) {
+          // No-op: child already unregistered. Concurrent idempotent calls
+          // can both land here; concurrent counter is untouched so we don't
+          // double-decrement.
+          return map
         }
-        return map
+        const next = new Map(map)
+        const nextChildren = new Map(existing.children)
+        nextChildren.delete(cid)
+        next.set(pid, {
+          ...existing,
+          children: nextChildren,
+          concurrent: Math.max(0, existing.concurrent - 1),
+        })
+        return next
       })
 
       if (DEBUG) {
