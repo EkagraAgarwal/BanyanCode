@@ -210,7 +210,10 @@ export const TaskTool = Tool.define(
       if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
       const variant = msg.info.variant
 
-      const model = next.model ?? {
+      const banyanCfgOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+      const banyanCfg = Option.isSome(banyanCfgOpt) ? yield* banyanCfgOpt.value.get() : undefined
+      const override = banyanCfg?.banyancode_agent_models?.[next.name]
+      const model = override ?? next.model ?? {
         modelID: msg.info.modelID,
         providerID: msg.info.providerID,
       }

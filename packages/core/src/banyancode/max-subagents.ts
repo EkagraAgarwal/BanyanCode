@@ -4,6 +4,9 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { BanyanConfigService } from "./banyan-config"
 import { DEFAULT_MAX_SUBAGENTS, MAX_SUBAGENTS_LIMIT } from "../v1/config/banyan-config"
 
+export const MAX_NESTED_EXPLORE_PER_CODER = 1
+export const MAX_NESTED_EXPLORE_LIFETIME_PER_CODER = 5
+
 export interface Interface {
   readonly current: () => Effect.Effect<number, never>
   readonly validate: (value: number) => Effect.Effect<number, MaxSubagentsError>
