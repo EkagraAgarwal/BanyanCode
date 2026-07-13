@@ -1,16 +1,25 @@
 export * as MeshCoordinator from "./mesh-coordinator"
 
-import { Context, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
-import { sql } from "drizzle-orm"
+import { Context, Effect, Fiber, Layer, Queue, Ref, Schema, Stream } from "effect"
+import { and, eq, isNull, sql } from "drizzle-orm"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
 import { SessionSchema } from "../session/schema"
 import { SessionTable } from "../session/sql"
 import { SubagentBus } from "./subagent-bus"
 import { SubagentPlans } from "./subagent-plans-repo"
+import { SubagentMessagesTable } from "./subagent-messages.sql"
 import { MaxSubagents } from "./max-subagents"
 import { DEFAULT_MAX_SUBAGENTS } from "../v1/config/banyan-config"
 import type { PeerInfo, SubagentMessage } from "./types"
+
+const GC_AGE_MS = 24 * 60 * 60 * 1000
+
+export interface TrackedParent {
+  status: "active" | "idle" | "ended"
+  lastSeenAt: number
+  consumerHandles: Map<string, Fiber.Fiber<unknown, unknown>>
+}
 
 export const MeshStatus = Schema.Struct({
   parentSessionID: Schema.String,
@@ -72,6 +81,9 @@ export interface Interface {
   readonly tryReserveSubagentSlot: (
     parentSessionID: SessionSchema.ID,
   ) => Effect.Effect<{ ok: true; killed: string | null } | { ok: false; error: string }, never, never>
+  readonly registerConsumer: (parentSessionID: SessionSchema.ID, agentName: string, fiber: Fiber.Fiber<unknown, unknown>) => Effect.Effect<void, never, never>
+  readonly unregisterConsumer: (parentSessionID: SessionSchema.ID, agentName: string) => Effect.Effect<void, never, never>
+  readonly runGarbageCollection: () => Effect.Effect<{ swept: number; interrupted: number }, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/MeshCoordinator") {}
@@ -165,7 +177,47 @@ export const layer = Layer.effect(
     const { db } = yield* Database.Service
     const activityRef = yield* Ref.make(new Map<string, Array<{ from: string; at: number }>>())
     const costCacheRef = yield* Ref.make(new Map<string, CostCacheEntry>())
-    const trackedParentsRef = yield* Ref.make(new Set<SessionSchema.ID>())
+    const trackedParentsRef = yield* Ref.make(new Map<SessionSchema.ID, TrackedParent>())
+
+    // Startup-recovery pass: sweep undelivered messages whose parent sessions no longer exist.
+    const runStartupRecovery = Effect.fn("MeshCoordinator.runStartupRecovery")(function* () {
+      const now = Date.now()
+      const rows = yield* db
+        .select()
+        .from(SubagentMessagesTable)
+        .where(isNull(SubagentMessagesTable.delivered_at))
+        .all()
+        .pipe(Effect.orDie)
+
+      for (const row of rows) {
+        // Mark delivered so we don't re-process on next startup.
+        yield* db
+          .update(SubagentMessagesTable)
+          .set({ delivered_at: now })
+          .where(eq(SubagentMessagesTable.id, row.id))
+          .run()
+          .pipe(Effect.orDie)
+
+        // Check if the parent session still exists.
+        const parentExists = yield* db
+          .select({ id: SessionTable.id })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, row.parent_session_id as SessionSchema.ID))
+          .get()
+          .pipe(Effect.orDie)
+
+        if (!parentExists) {
+          // Sweep the stale parent entry if it exists.
+          yield* Ref.update(trackedParentsRef, (map) => {
+            const next = new Map(map)
+            next.delete(row.parent_session_id as SessionSchema.ID)
+            return next
+          })
+        }
+      }
+    })
+
+    yield* runStartupRecovery()
 
     const status = Effect.fn("MeshCoordinator.status")(function* (parentSessionID: SessionSchema.ID) {
       const peers = yield* bus.peers(parentSessionID)
@@ -398,9 +450,11 @@ export const layer = Layer.effect(
     const trackParent: Interface["trackParent"] = Effect.fn("MeshCoordinator.trackParent")(function* (
       parentSessionID: SessionSchema.ID,
     ) {
-      yield* Ref.update(trackedParentsRef, (set) => {
-        const next = new Set(set)
-        next.add(parentSessionID)
+      yield* Ref.update(trackedParentsRef, (map) => {
+        const next = new Map(map)
+        if (!next.has(parentSessionID)) {
+          next.set(parentSessionID, { status: "active", lastSeenAt: Date.now(), consumerHandles: new Map() })
+        }
         return next
       })
     })
@@ -408,7 +462,71 @@ export const layer = Layer.effect(
     const listTrackedParents: Interface["listTrackedParents"] = Effect.fn(
       "MeshCoordinator.listTrackedParents",
     )(function* () {
-      return Array.from(yield* Ref.get(trackedParentsRef))
+      return Array.from((yield* Ref.get(trackedParentsRef)).keys())
+    })
+
+    const registerConsumer: Interface["registerConsumer"] = Effect.fn(
+      "MeshCoordinator.registerConsumer",
+    )(function* (parentSessionID: SessionSchema.ID, agentName: string, fiber: Fiber.Fiber<unknown, unknown>) {
+      yield* Ref.update(trackedParentsRef, (map) => {
+        const next = new Map(map)
+        const existing = next.get(parentSessionID)
+        if (existing) {
+          const handles = new Map(existing.consumerHandles)
+          handles.set(agentName, fiber)
+          next.set(parentSessionID, { ...existing, consumerHandles: handles })
+        } else {
+          const handles = new Map<string, Fiber.Fiber<unknown, unknown>>()
+          handles.set(agentName, fiber)
+          next.set(parentSessionID, { status: "active", lastSeenAt: Date.now(), consumerHandles: handles })
+        }
+        return next
+      })
+    })
+
+    const unregisterConsumer: Interface["unregisterConsumer"] = Effect.fn(
+      "MeshCoordinator.unregisterConsumer",
+    )(function* (parentSessionID: SessionSchema.ID, agentName: string) {
+      yield* Ref.update(trackedParentsRef, (map) => {
+        const next = new Map(map)
+        const existing = next.get(parentSessionID)
+        if (existing) {
+          const handles = new Map(existing.consumerHandles)
+          handles.delete(agentName)
+          next.set(parentSessionID, { ...existing, consumerHandles: handles })
+        }
+        return next
+      })
+    })
+
+    const runGarbageCollection: Interface["runGarbageCollection"] = Effect.fn(
+      "MeshCoordinator.runGarbageCollection",
+    )(function* () {
+      const now = Date.now()
+      const map = yield* Ref.get(trackedParentsRef)
+      let swept = 0
+      let interrupted = 0
+
+      for (const [parentSessionID, parent] of map) {
+        const shouldSweep = parent.status === "ended" || now - parent.lastSeenAt > GC_AGE_MS
+        if (!shouldSweep) continue
+
+        // Interrupt all registered consumer fibers.
+        for (const [, fiber] of parent.consumerHandles) {
+          yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
+          interrupted++
+        }
+
+        // Remove the entry.
+        yield* Ref.update(trackedParentsRef, (m) => {
+          const next = new Map(m)
+          next.delete(parentSessionID)
+          return next
+        })
+        swept++
+      }
+
+      return { swept, interrupted }
     })
 
     return Service.of({
@@ -423,6 +541,9 @@ export const layer = Layer.effect(
       tryReserveSubagentSlot,
       trackParent,
       listTrackedParents,
+      registerConsumer,
+      unregisterConsumer,
+      runGarbageCollection,
     })
   }),
 )
