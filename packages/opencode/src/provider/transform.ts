@@ -1433,6 +1433,8 @@ export function schema(model: Provider.Model, schema: JSONSchema7): JSONSchema7 
   return schema
 }
 
+// DRIFT NOTICE: This logic is duplicated and customized in packages/core/src/plugin/models-dev.ts
+// If you modify reasoning variants mapping here, please update the other file as well.
 export function reasoningVariants(model: ModelsDev.Model, target: Provider.Model): Provider.Model["variants"] {
   const options = model.reasoning_options
   if (options === undefined) return
@@ -1498,6 +1500,28 @@ function reasoningToggle(model: Provider.Model): NonNullable<Provider.Model["var
     return {
       none: { thinking: { type: "disabled" } },
       high: { thinking: { type: "enabled" } },
+    }
+  if (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/google-vertex/anthropic") {
+    const budget = Math.min(Math.max(1024, Math.floor((model.limit.output - 1) * 0.8)), 32000)
+    return {
+      none: { thinking: { type: "disabled" } },
+      thinking: { thinking: { type: "enabled", budgetTokens: budget } },
+    }
+  }
+  if (
+    model.api.npm === "@ai-sdk/openai-compatible" ||
+    model.api.npm === "@ai-sdk/xai" ||
+    model.api.npm === "@ai-sdk/mistral" ||
+    model.api.npm === "@ai-sdk/groq" ||
+    model.api.npm === "@ai-sdk/cerebras" ||
+    model.api.npm === "@ai-sdk/deepinfra" ||
+    model.api.npm === "@ai-sdk/togetherai" ||
+    model.api.npm === "venice-ai-sdk-provider" ||
+    model.api.npm === "ai-gateway-provider"
+  )
+    return {
+      none: { thinking: false },
+      thinking: { thinking: true },
     }
   return {}
 }
