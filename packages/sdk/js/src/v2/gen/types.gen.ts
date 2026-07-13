@@ -2241,6 +2241,12 @@ export type BanyanConfig = {
     enabled?: boolean
     filePath: string
   }>
+  banyancode_agent_models?: {
+    [key: string]: {
+      providerID: string
+      modelID: string
+    }
+  }
 }
 
 export type BanyanCodegraphNode = {

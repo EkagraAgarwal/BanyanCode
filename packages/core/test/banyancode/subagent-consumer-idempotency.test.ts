@@ -4,6 +4,9 @@ import { SubagentConsumer, layer } from "@opencode-ai/core/banyancode/subagent-c
 import { SubagentBus } from "@opencode-ai/core/banyancode/subagent-bus"
 import { MemoryRepo } from "@opencode-ai/core/banyancode/memory-repo"
 import { SubagentMessagesRepo } from "@opencode-ai/core/banyancode/subagent-messages-repo"
+import { MeshCoordinator } from "@opencode-ai/core/banyancode/mesh-coordinator"
+import { SubagentPlans } from "@opencode-ai/core/banyancode/subagent-plans-repo"
+import { EventV2 } from "@opencode-ai/core/event"
 import { Database } from "@opencode-ai/core/database/database"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import { Banyan } from "@opencode-ai/core/banyancode"
@@ -20,12 +23,45 @@ const buildLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>) => {
     SubagentBus.Service,
     SubagentBus.Service.of({
       publish: () => Effect.void,
+      publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
       subscribe: () => Effect.succeed(queue),
       peers: () => Effect.succeed([]),
     }),
   )
 
-  // Real MemoryRepo + SubagentMessagesRepo against the test DB; mock SubagentBus.
+  const mockMesh = Layer.succeed(
+    MeshCoordinator.Service,
+    MeshCoordinator.Service.of({
+      status: () => Effect.die("not used"),
+      trackParent: () => Effect.void,
+      listTrackedParents: () => Effect.succeed([]),
+      drain: () => Effect.succeed([]),
+      watch: () => Effect.die("not used"),
+      subscribe: () => Effect.die("not used"),
+      checkin: () => Effect.succeed([]),
+      steer: () => Effect.void,
+      kill: () => Effect.void,
+      planFor: () => Effect.void,
+      tryReserveSubagentSlot: () => Effect.succeed({ ok: true, killed: null }),
+      registerConsumer: () => Effect.void,
+      unregisterConsumer: () => Effect.void,
+      runGarbageCollection: () => Effect.succeed({ swept: 0, interrupted: 0 }),
+    }),
+  )
+
+  const mockPlans = Layer.succeed(
+    SubagentPlans.Service,
+    SubagentPlans.Service.of({
+      put: () => Effect.void,
+      getByID: () => Effect.succeed(undefined),
+      listByParent: () => Effect.succeed([]),
+      listBySession: () => Effect.succeed([]),
+      markCompleted: () => Effect.void,
+      markCancelled: () => Effect.void,
+    }),
+  )
+
+  // Real MemoryRepo + SubagentMessagesRepo against the test DB; mock SubagentBus and MeshCoordinator.
   // Provide them in the order the consumer's internal layer expects.
   const memoryLayer = Banyan.memoryRepoDefaultLayer.pipe(Layer.provide(dbLayer))
   const messagesLayer = SubagentMessagesRepo.defaultLayer.pipe(Layer.provide(dbLayer))
@@ -33,6 +69,8 @@ const buildLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>) => {
     Layer.provide(mockBus),
     Layer.provide(memoryLayer),
     Layer.provide(messagesLayer),
+    Layer.provide(mockPlans),
+    Layer.provide(mockMesh),
   )
   return Layer.mergeAll(consumerLayer, memoryLayer, messagesLayer)
 }

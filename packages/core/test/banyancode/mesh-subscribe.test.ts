@@ -24,6 +24,7 @@ describe("MeshCoordinator.subscribe", () => {
       Effect.gen(function* () {
         return SubagentBus.Service.of({
           publish: () => Effect.void,
+          publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(mockQueue),
           peers: () => Effect.succeed([]),
         })
@@ -94,6 +95,7 @@ describe("MeshCoordinator.subscribe", () => {
       Effect.gen(function* () {
         return SubagentBus.Service.of({
           publish: () => Effect.void,
+          publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(mockQueue),
           peers: () => Effect.succeed([]),
         })
