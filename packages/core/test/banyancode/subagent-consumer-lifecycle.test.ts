@@ -61,7 +61,6 @@ const buildServiceLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>) 
       status: () => Effect.die("not used"),
       trackParent: () => Effect.void,
       listTrackedParents: () => Effect.succeed([]),
-      drain: () => Effect.succeed([]),
       watch: () => Effect.die("not used"),
       subscribe: () => Effect.die("not used"),
       checkin: () => Effect.succeed([]),
@@ -72,6 +71,7 @@ const buildServiceLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>) 
       registerConsumer: () => Effect.void,
       unregisterConsumer: () => Effect.void,
       runGarbageCollection: () => Effect.succeed({ swept: 0, interrupted: 0 }),
+      markParentEnded: () => Effect.void,
     }),
   )
 
@@ -101,7 +101,6 @@ describe("SubagentConsumer lifecycle", () => {
         status: () => Effect.die("not used"),
         trackParent: () => Effect.void,
         listTrackedParents: () => Effect.succeed([]),
-        drain: () => Effect.succeed([]),
         watch: () => Effect.die("not used"),
         subscribe: () => Effect.die("not used"),
         checkin: () => Effect.succeed([]),
@@ -115,6 +114,7 @@ describe("SubagentConsumer lifecycle", () => {
           }),
         unregisterConsumer: () => Effect.void,
         runGarbageCollection: () => Effect.succeed({ swept: 0, interrupted: 0 }),
+        markParentEnded: () => Effect.void,
       }),
     )
 
@@ -176,7 +176,6 @@ describe("SubagentConsumer lifecycle", () => {
         status: () => Effect.die("not used"),
         trackParent: () => Effect.void,
         listTrackedParents: () => Effect.succeed([]),
-        drain: () => Effect.succeed([]),
         watch: () => Effect.die("not used"),
         subscribe: () => Effect.die("not used"),
         checkin: () => Effect.succeed([]),
@@ -187,6 +186,7 @@ describe("SubagentConsumer lifecycle", () => {
         registerConsumer: () => Effect.void,
         unregisterConsumer: () => Effect.sync(() => { unregistered = true }),
         runGarbageCollection: () => Effect.succeed({ swept: 0, interrupted: 0 }),
+        markParentEnded: () => Effect.void,
       }),
     )
 
@@ -256,7 +256,6 @@ describe("SubagentConsumer lifecycle", () => {
         status: () => Effect.die("not used"),
         trackParent: () => Effect.void,
         listTrackedParents: () => Effect.succeed([]),
-        drain: () => Effect.succeed([]),
         watch: () => Effect.die("not used"),
         subscribe: () => Effect.die("not used"),
         checkin: () => Effect.succeed([]),
@@ -268,6 +267,7 @@ describe("SubagentConsumer lifecycle", () => {
           Effect.sync(() => { interruptedFiber = fiber }),
         unregisterConsumer: () => Effect.void,
         runGarbageCollection: () => Effect.succeed({ swept: 0, interrupted: 0 }),
+        markParentEnded: () => Effect.void,
       }),
     )
 

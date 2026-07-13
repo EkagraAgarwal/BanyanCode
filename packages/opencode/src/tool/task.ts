@@ -313,6 +313,14 @@ export const TaskTool = Tool.define(
           .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
       })
 
+      const unregisterNested = () =>
+        Effect.gen(function* () {
+          const registryOpt = yield* Effect.serviceOption(NestedSpawnRegistryService)
+          if (Option.isSome(registryOpt)) {
+            yield* registryOpt.value.unregisterFiber(ctx.sessionID, nextSession.id)
+          }
+        })
+
       const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {
         yield* background.wait({ id: jobID }).pipe(
           Effect.flatMap((result) => {
@@ -320,6 +328,7 @@ export const TaskTool = Tool.define(
             if (result.info?.status === "error") return inject("error", result.info.error ?? "")
             return Effect.void
           }),
+          Effect.flatMap(() => unregisterNested()),
           Effect.forkIn(scope, { startImmediately: true }),
         )
       })
@@ -417,8 +426,11 @@ export const TaskTool = Tool.define(
               yield* Effect.all([cancel, background.cancel(nextSession.id)], { discard: true })
           }).pipe(
             Effect.ensuring(
-              Effect.sync(() => {
-                ctx.abort.removeEventListener("abort", onAbort)
+              Effect.gen(function* () {
+                yield* unregisterNested()
+                yield* Effect.sync(() => {
+                  ctx.abort.removeEventListener("abort", onAbort)
+                })
               }),
             ),
           ),

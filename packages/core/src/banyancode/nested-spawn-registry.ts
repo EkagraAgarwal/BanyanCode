@@ -15,11 +15,20 @@ interface ChildEntry {
   fiber: Fiber.Fiber<unknown, unknown>
 }
 
+// Windowed lifetime: counts nested-explore spawns per coder per 1-hour window.
+// When the window expires, the counter resets.
+interface LifetimeWindow {
+  count: number
+  windowStart: number
+}
+
 interface ParentEntry {
   concurrent: number
-  lifetime: number
+  lifetime: LifetimeWindow
   children: Map<string, ChildEntry>
 }
+
+const LIFETIME_WINDOW_MS = 60 * 60 * 1000 // 1 hour
 
 export interface Interface {
   readonly tryReserveSlot: (
@@ -54,24 +63,41 @@ const layer = Layer.effect(
 
       yield* Ref.update(state, (map) => {
         const existing = map.get(pid)
-        if (!existing) {
+        const now = Date.now()
+
+        // Check if window has expired; reset if so.
+        const windowExpired = existing ? now - existing.lifetime.windowStart > LIFETIME_WINDOW_MS : true
+        const currentLifetime = windowExpired
+          ? { count: 0, windowStart: now }
+          : existing!.lifetime
+
+        if (!existing || windowExpired) {
           const next = new Map(map)
-          next.set(pid, { concurrent: 1, lifetime: 1, children: new Map() })
+          next.set(pid, {
+            concurrent: 1,
+            lifetime: { count: 1, windowStart: now },
+            children: new Map(),
+          })
           return next
         }
+
         if (existing.concurrent >= MAX_NESTED_EXPLORE_PER_CODER) {
           result = { ok: false, error: "concurrent" }
           return map
         }
-        if (existing.lifetime >= MAX_NESTED_EXPLORE_LIFETIME_PER_CODER) {
+
+        if (currentLifetime.count >= MAX_NESTED_EXPLORE_LIFETIME_PER_CODER) {
           result = { ok: false, error: "lifetime" }
           return map
         }
+
+        // Always create a new map and a new entry to avoid mutating the
+        // entry already stored in the map.
         const next = new Map(map)
         next.set(pid, {
           concurrent: existing.concurrent + 1,
-          lifetime: existing.lifetime + 1,
-          children: existing.children,
+          lifetime: { count: currentLifetime.count + 1, windowStart: currentLifetime.windowStart },
+          children: new Map(existing.children),
         })
         return next
       })

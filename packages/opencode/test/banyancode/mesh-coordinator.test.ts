@@ -63,14 +63,6 @@ describe("mesh-coordinator", () => {
     }),
   )
 
-  it.effect("drain returns empty array when no messages", () =>
-    Effect.gen(function* () {
-      const svc = yield* MeshCoordinator.Service
-      const drained = yield* svc.drain(SessionSchema.ID.make("ses_test"))
-      expect(Array.isArray(drained)).toBe(true)
-    }),
-  )
-
   it.live("after publishing messages via bus, status reflects them", () =>
     Effect.gen(function* () {
       const parentSessionID = SessionSchema.ID.make("ses_mesh")
