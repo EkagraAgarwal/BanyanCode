@@ -41,6 +41,7 @@ export function provider(model: Provider.Model) {
 export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
+  readonly codegraph: () => Effect.Effect<string | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SystemPrompt") {}
@@ -102,6 +103,32 @@ export const layer = Layer.effect(
           // the agents seem to ingest the information about skills a bit better if we present a more verbose
           // version of them here and a less verbose version in tool description, rather than vice versa.
           Skill.fmt(list, { verbose: true }),
+        ].join("\n")
+      }),
+
+      codegraph: Effect.fn("SystemPrompt.codegraph")(function* () {
+        const enabled = process.env.BANYANCODE_ENABLE !== "0"
+        if (!enabled) return
+
+        return [
+          "## Codegraph-first search policy",
+          "",
+          "If a code graph index exists for this workspace (built via /codegraph-build), prefer graph tools over grep/glob:",
+          "",
+          "- **code_find(intent='definition', target=...)** — exact symbol/file lookup",
+          "- **code_find(intent='callers', target=...)** — who calls this function",
+          "- **code_find(intent='dependents', target=...)** — what this depends on",
+          "- **code_find(intent='impact', target=...)** — full blast radius (transitive closure)",
+          "- **code_find(intent='find_file', target=...)** — locate files by name",
+          "- **codegraph_query / codegraph_callers / codegraph_impact / codegraph_dependents** — specialized queries",
+          "- **repository_query / repository_explain / repository_trace / repository_impact** — Wave 2 repository intelligence",
+          "",
+          "Only fall back to grep/glob when:",
+          "- The codegraph is empty or stale",
+          "- The user explicitly asks for regex/pattern matching",
+          "- You're searching across non-code files (configs, docs, JSON, etc.)",
+          "",
+          "To check graph freshness: run /codegraph-status. If `graphCoverage < 1.0`, run /codegraph-build first.",
         ].join("\n")
       }),
     })
