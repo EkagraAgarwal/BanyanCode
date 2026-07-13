@@ -1,6 +1,6 @@
 export * as MeshCoordinator from "./mesh-coordinator"
 
-import { Context, Effect, Fiber, Layer, Queue, Ref, Schema, Stream } from "effect"
+import { Cause, Context, Duration, Effect, Fiber, Layer, Queue, Ref, Schedule, Schema, Stream } from "effect"
 import { and, eq, isNull, sql } from "drizzle-orm"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -187,7 +187,9 @@ export const layer = Layer.effect(
         .from(SubagentMessagesTable)
         .where(isNull(SubagentMessagesTable.delivered_at))
         .all()
-        .pipe(Effect.orDie)
+        .pipe(Effect.catchCause((cause) => Effect.logError("startup-recovery: read failed", { cause: Cause.pretty(cause) })))
+
+      if (!rows) return
 
       for (const row of rows) {
         // Mark delivered so we don't re-process on next startup.
@@ -196,7 +198,7 @@ export const layer = Layer.effect(
           .set({ delivered_at: now })
           .where(eq(SubagentMessagesTable.id, row.id))
           .run()
-          .pipe(Effect.orDie)
+          .pipe(Effect.catchCause((cause) => Effect.logError("startup-recovery: mark-delivered failed", { cause: Cause.pretty(cause), rowID: row.id })))
 
         // Check if the parent session still exists.
         const parentExists = yield* db
@@ -204,7 +206,9 @@ export const layer = Layer.effect(
           .from(SessionTable)
           .where(eq(SessionTable.id, row.parent_session_id as SessionSchema.ID))
           .get()
-          .pipe(Effect.orDie)
+          .pipe(Effect.catchCause((cause) => Effect.logError("startup-recovery: parent lookup failed", { cause: Cause.pretty(cause), rowID: row.id })))
+
+        if (parentExists === undefined) continue
 
         if (!parentExists) {
           // Sweep the stale parent entry if it exists.
@@ -217,7 +221,7 @@ export const layer = Layer.effect(
       }
     })
 
-    yield* runStartupRecovery()
+    yield* runStartupRecovery().pipe(Effect.catchCause((cause) => Effect.logError("startup-recovery: aborted", { cause: Cause.pretty(cause) })))
 
     const status = Effect.fn("MeshCoordinator.status")(function* (parentSessionID: SessionSchema.ID) {
       const peers = yield* bus.peers(parentSessionID)
@@ -528,6 +532,17 @@ export const layer = Layer.effect(
 
       return { swept, interrupted }
     })
+
+    // Schedule periodic GC. forkScoped attaches the worker to the layer's
+    // scope so it's interrupted when the layer is disposed.
+    yield* Effect.forkScoped(
+      runGarbageCollection().pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError("mesh-coordinator: GC pass failed", { cause: Cause.pretty(cause) }),
+        ),
+        Effect.repeat(Schedule.spaced(Duration.hours(1))),
+      ),
+    )
 
     return Service.of({
       status,
