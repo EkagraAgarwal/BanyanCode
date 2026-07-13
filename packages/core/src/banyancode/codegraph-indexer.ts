@@ -1,7 +1,7 @@
 export * as CodegraphIndexer from "./codegraph-indexer"
 
 import { Cause, Context, Effect, Layer, Queue, Ref, Schema } from "effect"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import path from "path"
 import { FSUtil } from "../fs-util"
 import { CodegraphRepo } from "./codegraph-repo"
@@ -225,13 +225,7 @@ export const layer = Layer.effect(
 
     const hashContent = (content: string | undefined): string => {
       if (!content) return ""
-      let hash = 0
-      for (let i = 0; i < content.length; i++) {
-        const char = content.charCodeAt(i)
-        hash = (hash << 5) - hash + char
-        hash = hash & hash
-      }
-      return Math.abs(hash).toString(16)
+      return createHash("sha256").update(content).digest("hex")
     }
 
     const classifyFileKind = (filePath: string, content: string): CodegraphNodeKind | undefined => {

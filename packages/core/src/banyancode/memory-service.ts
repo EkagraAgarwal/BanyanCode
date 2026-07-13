@@ -16,7 +16,7 @@ import { Context, Effect, Layer, Queue } from "effect"
 import { randomUUID } from "node:crypto"
 import { Database } from "../database/database"
 import { MemoryEntriesTable } from "./memory.sql"
-import { MemoryRepo } from "./memory-repo"
+import { MemoryRepo, mapMemoryRowToEntry } from "./memory-repo"
 import { payloadFingerprint, unwrapMemoryValue, type MemoryPayloadV1 } from "./memory-payload"
 import { MemoryCandidateEmitted, MemoryCommitted, MemoryPromoted, MemoryRejected } from "./memory-events"
 import type { MemoryEntry } from "./types"
@@ -295,24 +295,6 @@ export const defaultLayer: Layer.Layer<Service, never, never> = layer.pipe(
   Layer.provide(Database.defaultLayer),
 )
 
-const mapRowToEntry = (row: typeof MemoryEntriesTable.$inferSelect): MemoryEntry => ({
-  id: row.id,
-  key: row.key,
-  value: row.value,
-  context: row.context ?? undefined,
-  tags: row.tags,
-  scope: row.scope as "global" | "session",
-  sessionID: row.session_id ?? undefined,
-  createdAt: row.created_at,
-  expiresAt: row.expires_at ?? undefined,
-  agentID: row.agent_id ?? undefined,
-  version: row.version,
-  updatedAt: row.updated_at,
-  namespace: row.namespace ?? undefined,
-  kind: row.kind ?? undefined,
-  title: row.title ?? undefined,
-  body: row.body ?? undefined,
-  status: row.status ?? undefined,
-})
+const mapRowToEntry = mapMemoryRowToEntry
 
 export type { MemoryPayloadV1 }

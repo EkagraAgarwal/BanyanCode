@@ -133,6 +133,9 @@ const mapRowToEntry = (row: typeof MemoryEntriesTable.$inferSelect): MemoryEntry
   status: row.status ?? undefined,
 })
 
+/** Shared row→entry mapper. MemoryService consumes this to avoid a second copy. */
+export const mapMemoryRowToEntry = mapRowToEntry
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -332,26 +335,41 @@ export const layer = Layer.effect(
           return { entries: rankedRows.map(mapRowToEntry), totalHits: totalRow?.c ?? 0 }
         } catch {
           // FTS table missing or query malformed — fall back to a degraded
-          // in-memory keyword scan against `body` + `key`. The tool wrapper
-          // layer surfaces `degraded: true` for this case via the shape of
-          // what we return (entries without `bm25` ranking).
-          const all = yield* db
-            .select()
-            .from(MemoryEntriesTable)
-            .all()
+          // SQL LIKE scan pushed down to the DB so we don't load the entire
+          // table into memory. Each token is OR-joined, same semantics as the
+          // FTS5 path. The tool wrapper layer surfaces `degraded: true` via
+          // the shape of what we return (entries without `bm25` ranking).
+          const likes = tokens.map((t) => {
+            const escaped = "%" + t.toLowerCase().replace(/[\\%_]/g, (m) => "\\" + m) + "%"
+            return sql`LOWER(COALESCE(\`memory_entries\`.\`key\`, '') || ' ' || COALESCE(\`memory_entries\`.\`title\`, '') || ' ' || COALESCE(\`memory_entries\`.\`body\`, '')) LIKE ${escaped} ESCAPE '\\'`
+          })
+          const haystack = sql.join(likes, sql` OR `)
+
+          const filterChunks: ReturnType<typeof sql>[] = [sql`(${haystack})`]
+          if (input.scope) {
+            filterChunks.push(sql`AND \`memory_entries\`.\`scope\` = ${input.scope}`)
+            if (input.scope === "session") {
+              filterChunks.push(sql`AND \`memory_entries\`.\`session_id\` = ${input.sessionID ?? ""}`)
+            }
+          }
+          if (input.status) filterChunks.push(sql`AND \`memory_entries\`.\`status\` = ${input.status}`)
+          if (input.kind) filterChunks.push(sql`AND \`memory_entries\`.\`kind\` = ${input.kind}`)
+          const filterSql = sql.join(filterChunks, sql` `)
+
+          type RankedRow = typeof MemoryEntriesTable.$inferSelect
+
+          const fallbackRows = yield* db
+            .all<RankedRow>(sql`
+              SELECT \`memory_entries\`.* FROM \`memory_entries\`
+              WHERE ${filterSql}
+              LIMIT ${limit}
+            `)
             .pipe(Effect.orDie)
-          const matched = all
-            .map(mapRowToEntry)
-            .filter((e) => {
-              if (input.scope && e.scope !== input.scope) return false
-              if (input.scope === "session" && input.sessionID && e.sessionID !== input.sessionID) return false
-              if (input.status && e.status !== input.status) return false
-              if (input.kind && e.kind !== input.kind) return false
-              const hay = [e.key, e.title ?? "", e.body ?? "", e.kind ?? ""].join(" ").toLowerCase()
-              return tokens.some((t) => hay.includes(t.toLowerCase()))
-            })
-            .slice(0, limit)
-          return { entries: matched, totalHits: matched.length }
+
+          return {
+            entries: fallbackRows.map(mapRowToEntry),
+            totalHits: fallbackRows.length,
+          }
         }
       })
     }
