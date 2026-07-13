@@ -2,7 +2,7 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import type { TextareaRenderable } from "@opentui/core"
-import { createSignal, createMemo, For, Show } from "solid-js"
+import { createSignal, createMemo, For, Show, onCleanup } from "solid-js"
 import { toHex } from "../../util/color"
 import { useDialog } from "../../ui/dialog"
 import { useSync } from "../../context/sync"
@@ -108,11 +108,15 @@ function View(props: { api: TuiPluginApi }) {
         onSelect={async (model) => {
           const current = banyanConfig().banyancode_agent_models ?? {}
           try {
-            await props.api.client.global.banyanConfig.update({
+            const updated = await props.api.client.global.banyanConfig.update({
               config: { banyancode_agent_models: { ...current, [name]: model } },
               scope: "project",
             })
-            await loadBanyanConfig()
+            if (updated?.data) {
+              setBanyanConfig(updated.data as Record<string, any>)
+            } else {
+              await loadBanyanConfig()
+            }
             toast.show({ message: `${name}: ${model.providerID}/${model.modelID}`, variant: "success" })
           } catch (e) {
             toast.show({ message: `Failed to save model: ${String(e)}`, variant: "error" })
@@ -136,6 +140,15 @@ function View(props: { api: TuiPluginApi }) {
     }
     return "(default)"
   }
+
+  // Subscribe to cross-tab config updates so the agents tab stays in sync when
+  // banyancode.json is edited via the SETTINGS tab or another window.
+  const event = props.api.event
+  onCleanup(
+    event.on("banyancode.config.updated" as never, () => {
+      void loadBanyanConfig()
+    }) as () => void,
+  )
 
   const promptText = (agent: AgentInfo): string =>
     promptDrafts()[agent.name] ?? agent.prompt ?? ""
