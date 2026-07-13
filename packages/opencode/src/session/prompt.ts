@@ -60,6 +60,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
+import { Banyan } from "@opencode-ai/core/banyancode"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -82,6 +83,18 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   // They are not pending work and must not trigger an assistant-prefill request.
   return part.state.status === "error" && part.state.metadata?.interrupted === true
 }
+
+export const readAgentModelOverride = Effect.fnUntraced(function* (agentName: string) {
+  const opt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+  if (Option.isNone(opt)) return undefined
+  const cfg = yield* opt.value.get()
+  const override = cfg.banyancode_agent_models?.[agentName]
+  if (!override) return undefined
+  return {
+    providerID: ProviderV2.ID.make(override.providerID),
+    modelID: ModelV2.ID.make(override.modelID),
+  } as const
+})
 
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
@@ -449,7 +462,8 @@ export const layer = Layer.effect(
               yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
               throw error
             }
-            const model = input.model ?? agent.model ?? (yield* currentModel(input.sessionID))
+const agentModelOverride = yield* readAgentModelOverride(agent.name)
+            const model = input.model ?? agentModelOverride ?? agent.model ?? (yield* currentModel(input.sessionID))
             const userMsg: SessionV1.User = {
               id: input.messageID ?? MessageID.ascending(),
               sessionID: input.sessionID,
@@ -649,7 +663,8 @@ export const layer = Layer.effect(
         .where(eq(SessionTable.id, input.sessionID))
         .get()
         .pipe(Effect.orDie)
-      const model = input.model ?? ag.model ?? (yield* currentModel(input.sessionID))
+      const agentModelOverride = yield* readAgentModelOverride(ag.name)
+      const model = input.model ?? agentModelOverride ?? ag.model ?? (yield* currentModel(input.sessionID))
       const same = ag.model && model.providerID === ag.model.providerID && model.modelID === ag.model.modelID
       const full =
         !input.variant && ag.variant && same

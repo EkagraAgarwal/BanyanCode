@@ -6,6 +6,7 @@ import { createSignal, createMemo, For, Show } from "solid-js"
 import { toHex } from "../../util/color"
 import { useDialog } from "../../ui/dialog"
 import { useSync } from "../../context/sync"
+import { useToast } from "../../ui/toast"
 import { RoundedBorder } from "../../ui/border.ts"
 import { DialogAgentConfig } from "../../component/dialog-agent-config"
 import { DialogModel } from "../../component/dialog-model"
@@ -28,10 +29,21 @@ function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
   const dialog = useDialog()
   const sync = useSync()
+  const toast = useToast()
   const [enabled, setEnabled] = createSignal<Record<string, boolean>>({})
-  const [modelOverrides, setModelOverrides] = createSignal<Record<string, { providerID: string; modelID: string }>>({})
+  const [banyanConfig, setBanyanConfig] = createSignal<Record<string, any>>({})
   const [promptDrafts, setPromptDrafts] = createSignal<Record<string, string>>({})
   const [editingPrompt, setEditingPrompt] = createSignal<string | null>(null)
+
+  const loadBanyanConfig = async () => {
+    try {
+      const result = await props.api.client.global.banyanConfig.get({})
+      setBanyanConfig(result?.data ?? {})
+    } catch {
+      setBanyanConfig({})
+    }
+  }
+  void loadBanyanConfig()
 
   const notify = (message: string) => {
     void props.api.attention.notify({
@@ -93,9 +105,18 @@ function View(props: { api: TuiPluginApi }) {
   const openModelPicker = (name: string) => {
     dialog.replace(() => (
       <DialogModel
-        onSelect={(model) => {
-          setModelOverrides((prev) => ({ ...prev, [name]: model }))
-          notify(`${name}: ${model.providerID}/${model.modelID}`)
+        onSelect={async (model) => {
+          const current = banyanConfig().banyancode_agent_models ?? {}
+          try {
+            await props.api.client.global.banyanConfig.update({
+              config: { banyancode_agent_models: { ...current, [name]: model } },
+              scope: "project",
+            })
+            await loadBanyanConfig()
+            toast.show({ message: `${name}: ${model.providerID}/${model.modelID}`, variant: "success" })
+          } catch (e) {
+            toast.show({ message: `Failed to save model: ${String(e)}`, variant: "error" })
+          }
         }}
       />
     ))
@@ -106,7 +127,7 @@ function View(props: { api: TuiPluginApi }) {
   }
 
   const modelLabel = (agent: AgentInfo): string => {
-    const override = modelOverrides()[agent.name]
+    const override = banyanConfig().banyancode_agent_models?.[agent.name]
     if (override) return `${override.providerID}/${override.modelID}`
     if (agent.model?.modelID) {
       return agent.model.providerID

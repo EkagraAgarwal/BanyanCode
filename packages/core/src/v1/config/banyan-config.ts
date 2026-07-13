@@ -1,6 +1,8 @@
 export * as BanyanConfig from "./banyan-config"
 
 import { Schema } from "effect"
+import { ModelV2 } from "../../model"
+import { ProviderV2 } from "../../provider"
 
 export const Schema_URL = "https://banyan.dev/schema/banyancode.json"
 
@@ -62,6 +64,18 @@ export const Info = Schema.Struct({
         mode: Schema.Literals(["subagent", "primary"]),
         enabled: Schema.optional(Schema.Boolean),
         filePath: Schema.String, // absolute path to the .md file
+      }),
+    ),
+  ),
+  // Per-agent model override map. Key is the agent name (e.g., "coder",
+  // "researcher", "scout", "explore", "orchestrator"). Used by the task tool
+  // to override the agent's static `model` config when spawning subagents.
+  banyancode_agent_models: Schema.optional(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        providerID: ProviderV2.ID,
+        modelID: ModelV2.ID,
       }),
     ),
   ),
