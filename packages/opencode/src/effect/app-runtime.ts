@@ -167,7 +167,8 @@ export const AppLayer = Layer.mergeAll(
       Banyan.searchDefaultLayer,
       Banyan.structuralQueriesDefaultLayer,
       Banyan.gitDefaultLayer,
-      Banyan.systemMonitorDefaultLayer,
+Banyan.systemMonitorDefaultLayer,
+  Banyan.banyanConfigServiceDefaultLayer,
       Banyan.memoryRepoDefaultLayer,
       Banyan.memoryServiceDefaultLayer,
       Banyan.memoryProjectionDefaultLayer,
@@ -179,6 +180,7 @@ export const AppLayer = Layer.mergeAll(
       Layer.provide(Banyan.codegraphRepoDefaultLayer),
       Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
       Layer.provide(Database.defaultLayer),
+      Layer.provide(FSUtil.defaultLayer),
     ) as unknown as Layer.Layer<never, never, never>,
   ),
   Layer.provideMerge(
