@@ -95,6 +95,7 @@ export const AppLayer = Layer.mergeAll(
   EventV2.defaultLayer,
   Banyan.subagentBusDefaultLayer,
   Banyan.subagentPlansRepoDefaultLayer,
+  Banyan.subagentConsumerDefaultLayer,
   Banyan.systemMonitorDefaultLayer,
   SessionRunState.defaultLayer,
   SessionProcessor.defaultLayer,

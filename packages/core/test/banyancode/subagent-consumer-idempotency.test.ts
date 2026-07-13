@@ -101,10 +101,7 @@ describe("SubagentConsumer plan idempotency", () => {
           createdAt: 1700000000000,
         })
 
-        yield* consumer.start(
-          { sessionID: "ses_ide" as any, agent: "coder" },
-          yield* Effect.scope,
-        )
+        yield* consumer.start({ sessionID: "ses_ide" as any, agent: "coder" })
 
         // Deliver the same message id twice — the consumer should write
         // one entry, then bump the version on redelivery.

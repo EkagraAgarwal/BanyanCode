@@ -150,10 +150,7 @@ describe("SubagentConsumer lifecycle", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const consumer = yield* SubagentConsumer.Service
-        yield* consumer.start(
-          { sessionID: "ses_lifecycle_test" as any, agent: "coder" },
-          yield* Effect.scope,
-        )
+        yield* consumer.start({ sessionID: "ses_lifecycle_test" as any, agent: "coder" })
         yield* Effect.sleep(50)
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
@@ -225,10 +222,7 @@ describe("SubagentConsumer lifecycle", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const consumer = yield* SubagentConsumer.Service
-        yield* consumer.start(
-          { sessionID: "ses_kill_test" as any, agent: "coder" },
-          yield* Effect.scope,
-        )
+        yield* consumer.start({ sessionID: "ses_kill_test" as any, agent: "coder" })
         // Send a kill message.
         yield* Queue.offer(queue, {
           id: "kill-msg-lifecycle",
@@ -310,10 +304,7 @@ describe("SubagentConsumer lifecycle", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const consumer = yield* SubagentConsumer.Service
-        yield* consumer.start(
-          { sessionID: "ses_sweep_test" as any, agent: "coder" },
-          yield* Effect.scope,
-        )
+        yield* consumer.start({ sessionID: "ses_sweep_test" as any, agent: "coder" })
         yield* Effect.sleep(50)
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )

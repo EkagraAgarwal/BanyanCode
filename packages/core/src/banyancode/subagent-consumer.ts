@@ -1,6 +1,6 @@
 export * as SubagentConsumer from "./subagent-consumer"
 
-import { Context, Effect, Fiber, Layer, Queue, Scope } from "effect"
+import { Context, Effect, Fiber, Layer, Queue } from "effect"
 import { SubagentBus } from "./subagent-bus"
 import { MemoryRepo } from "./memory-repo"
 import { SubagentMessagesRepo } from "./subagent-messages-repo"
@@ -9,14 +9,11 @@ import type { PlanDefinition, SubagentMessage } from "./types"
 import type { SessionSchema } from "../session/schema"
 
 export interface Interface {
-  readonly start: (
-    input: {
-      sessionID: SessionSchema.ID
-      agent: string
-      plan?: PlanDefinition
-    },
-    scope: Scope.Scope,
-  ) => Effect.Effect<void, never, Scope.Scope>
+  readonly start: (input: {
+    sessionID: SessionSchema.ID
+    agent: string
+    plan?: PlanDefinition
+  }) => Effect.Effect<void, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/SubagentConsumer") {}
@@ -76,10 +73,15 @@ export const layer = Layer.effect(
         }
       })
 
-    const start: Interface["start"] = (input, scope) =>
+    // forkDetach (not forkIn): the consumer must survive the spawning request
+    // scope. Per AGENTS.md, `forkIn(scope)` requires Scope in the fiber's
+    // CONTEXT which a long-lived background consumer doesn't carry, and ties
+    // the fiber lifetime to scope — when the orchestrator's HTTP request
+    // returns the fiber is interrupted and peer messages pile up undelivered.
+    const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
         const queue = yield* bus.subscribe(input.sessionID)
-        const fiber = yield* Effect.forkIn(loop(input, queue), scope)
+        const fiber = yield* Effect.forkDetach(loop(input, queue))
         yield* mesh.registerConsumer(input.sessionID, input.agent, fiber)
       })
 

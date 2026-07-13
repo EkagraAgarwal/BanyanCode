@@ -106,10 +106,7 @@ describe("SubagentConsumer", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const consumer = yield* SubagentConsumer.Service
-        yield* consumer.start(
-          { sessionID: "ses_parent" as any, agent: "coder" },
-          yield* Effect.scope,
-        )
+        yield* consumer.start({ sessionID: "ses_parent" as any, agent: "coder" })
         yield* Queue.offer(queue, {
           id: "msg-1",
           parentSessionID: "ses_parent" as any,
@@ -150,10 +147,7 @@ describe("SubagentConsumer", () => {
           payload: {},
           createdAt: Date.now(),
         })
-        yield* consumer.start(
-          { sessionID: "ses_killtest" as any, agent: "coder" },
-          yield* Effect.scope,
-        )
+        yield* consumer.start({ sessionID: "ses_killtest" as any, agent: "coder" })
         yield* Queue.offer(queue, {
           id: "kill-msg",
           parentSessionID: "ses_killtest" as any,
@@ -180,10 +174,7 @@ describe("SubagentConsumer", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const consumer = yield* SubagentConsumer.Service
-        const result = yield* consumer.start(
-          { sessionID: "ses_voidtest" as any, agent: "coder" },
-          yield* Effect.scope,
-        )
+        const result = yield* consumer.start({ sessionID: "ses_voidtest" as any, agent: "coder" })
         expect(result).toBeUndefined()
       }).pipe(Effect.provide(serviceLayer), Effect.scoped),
     )
