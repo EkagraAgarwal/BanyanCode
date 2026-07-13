@@ -1562,6 +1562,8 @@ export function Prompt(props: PromptProps) {
             paddingTop={1}
             flexShrink={0}
             flexGrow={1}
+            flexDirection="row"
+            justifyContent="center"
             width="100%"
           >
             <textarea
