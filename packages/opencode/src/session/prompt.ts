@@ -462,7 +462,7 @@ export const layer = Layer.effect(
               yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
               throw error
             }
-const agentModelOverride = yield* readAgentModelOverride(agent.name)
+            const agentModelOverride = yield* readAgentModelOverride(agent.name)
             const model = input.model ?? agentModelOverride ?? agent.model ?? (yield* currentModel(input.sessionID))
             const userMsg: SessionV1.User = {
               id: input.messageID ?? MessageID.ascending(),
