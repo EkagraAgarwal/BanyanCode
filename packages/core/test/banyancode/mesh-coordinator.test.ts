@@ -41,6 +41,7 @@ describe("MeshCoordinator", () => {
         for (const m of mockMessages) yield* Queue.offer(q, m)
         return SubagentBus.Service.of({
           publish: () => Effect.void,
+          publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(q),
           peers: () => Effect.succeed(mockPeers),
         })
@@ -90,6 +91,7 @@ describe("MeshCoordinator", () => {
         const q = yield* Queue.unbounded<SubagentMessage>()
         return SubagentBus.Service.of({
           publish: (msg: any) => Effect.sync(() => { publishedMessage = msg }),
+          publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(q),
           peers: () => Effect.succeed([]),
         })
@@ -144,6 +146,7 @@ describe("MeshCoordinator", () => {
         const q = yield* Queue.unbounded<SubagentMessage>()
         return SubagentBus.Service.of({
           publish: (msg: any) => Effect.sync(() => { publishedMessage = msg }),
+          publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(q),
           peers: () => Effect.succeed([]),
         })
@@ -198,6 +201,7 @@ describe("MeshCoordinator", () => {
         const q = yield* Queue.unbounded<SubagentMessage>()
         return SubagentBus.Service.of({
           publish: (msg: any) => Effect.sync(() => { publishedMessage = msg }),
+          publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(q),
           peers: () => Effect.succeed([]),
         })
@@ -263,6 +267,7 @@ describe("MeshCoordinator", () => {
         const q = yield* Queue.unbounded<SubagentMessage>()
         return SubagentBus.Service.of({
           publish: () => Effect.void,
+          publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(q),
           peers: () => Effect.succeed([]),
         })
@@ -340,6 +345,7 @@ describe("MeshCoordinator", () => {
         const q = yield* Queue.unbounded<SubagentMessage>()
         return SubagentBus.Service.of({
           publish: () => Effect.void,
+          publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(q),
           peers: () =>
             Effect.succeed([

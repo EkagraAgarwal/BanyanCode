@@ -4,6 +4,9 @@ import { SubagentConsumer, layer } from "../../src/banyancode/subagent-consumer"
 import { SubagentBus } from "../../src/banyancode/subagent-bus"
 import { MemoryRepo } from "../../src/banyancode/memory-repo"
 import { SubagentMessagesRepo } from "../../src/banyancode/subagent-messages-repo"
+import { MeshCoordinator } from "../../src/banyancode/mesh-coordinator"
+import { SubagentPlans } from "../../src/banyancode/subagent-plans-repo"
+import { EventV2 } from "../../src/event"
 import { Database } from "../../src/database/database"
 import { tmpdir } from "../fixture/tmpdir"
 import path from "path"
@@ -19,6 +22,7 @@ const buildServiceLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>, 
     SubagentBus.Service,
     SubagentBus.Service.of({
       publish: () => Effect.void,
+      publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
       subscribe: () => Effect.succeed(queue),
       peers: () => Effect.succeed([]),
     }),
@@ -50,7 +54,45 @@ const buildServiceLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>, 
     }),
   )
 
-  return layer.pipe(Layer.provide(mockBus), Layer.provide(mockMemory), Layer.provide(messagesLayer))
+  const mockPlans = Layer.succeed(
+    SubagentPlans.Service,
+    SubagentPlans.Service.of({
+      put: () => Effect.void,
+      getByID: () => Effect.succeed(undefined),
+      listByParent: () => Effect.succeed([]),
+      listBySession: () => Effect.succeed([]),
+      markCompleted: () => Effect.void,
+      markCancelled: () => Effect.void,
+    }),
+  )
+
+  const mockMesh = Layer.succeed(
+    MeshCoordinator.Service,
+    MeshCoordinator.Service.of({
+      status: () => Effect.die("not used"),
+      trackParent: () => Effect.void,
+      listTrackedParents: () => Effect.succeed([]),
+      drain: () => Effect.succeed([]),
+      watch: () => Effect.die("not used"),
+      subscribe: () => Effect.die("not used"),
+      checkin: () => Effect.succeed([]),
+      steer: () => Effect.void,
+      kill: () => Effect.void,
+      planFor: () => Effect.void,
+      tryReserveSubagentSlot: () => Effect.succeed({ ok: true, killed: null }),
+      registerConsumer: () => Effect.void,
+      unregisterConsumer: () => Effect.void,
+      runGarbageCollection: () => Effect.succeed({ swept: 0, interrupted: 0 }),
+    }),
+  )
+
+  return layer.pipe(
+    Layer.provide(mockBus),
+    Layer.provide(mockMemory),
+    Layer.provide(messagesLayer),
+    Layer.provide(mockPlans),
+    Layer.provide(mockMesh),
+  )
 }
 
 describe("SubagentConsumer", () => {
