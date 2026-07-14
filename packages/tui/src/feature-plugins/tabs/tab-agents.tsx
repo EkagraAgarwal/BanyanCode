@@ -59,21 +59,34 @@ function View(props: { api: TuiPluginApi }) {
     }
   }
 
-  const [overridesData, setOverridesData] = createSignal<Array<{ name: string; enabled?: boolean; model?: { providerID: string; modelID: string } }>>([])
-
-  const loadOverrides = async () => {
-    const result = await loadAgentOverrides()
-    setOverridesData(result)
+  const loadAgentPrompts = async () => {
+    try {
+      // TODO: regenerate SDK to include banyancode_agent_prompts
+      const result = await (props.api.client as any).global.banyanConfig.get({})
+      return result?.data?.banyancode_agent_prompts ?? []
+    } catch {
+      return []
+    }
   }
 
-  // Subscribe to config-updated events to re-read overrides
+  const [overridesData, setOverridesData] = createSignal<Array<{ name: string; enabled?: boolean; model?: { providerID: string; modelID: string } }>>([])
+
+  const [promptsData, setPromptsData] = createSignal<Array<{ name: string; prompt: string }>>([])
+
+  const loadOverrides = async () => {
+    const [overrides, prompts] = await Promise.all([loadAgentOverrides(), loadAgentPrompts()])
+    setOverridesData(overrides)
+    setPromptsData(prompts)
+  }
+
+  // Subscribe to config-updated events to re-read overrides and prompts
   onCleanup(
     ev.on("banyancode.config.updated" as any, () => {
       void loadOverrides()
     }),
   )
 
-  // Load overrides on mount
+  // Load overrides and prompts on mount
   void loadOverrides()
 
   const enabledFor = (name: string) => {
@@ -151,8 +164,15 @@ function View(props: { api: TuiPluginApi }) {
     if (editingPrompt() === name) setEditingPrompt(null)
   }
 
-  const saveEditPrompt = (name: string) => {
-    notify(`Saved prompt for "${name}"`)
+  const saveEditPrompt = async (name: string) => {
+    const value = promptDrafts()[name] ?? ""
+    try {
+      // TODO: regenerate SDK to drop the as any cast
+      await (props.api.client as any).global.updateBanyanAgentPrompt({ name, prompt: value })
+      toast.show({ message: `Saved prompt for ${name}`, variant: "success" })
+    } catch {
+      toast.show({ message: `Failed to save prompt for ${name}`, variant: "error" })
+    }
     setEditingPrompt(null)
   }
 
@@ -212,8 +232,13 @@ function View(props: { api: TuiPluginApi }) {
     return "(default)"
   }
 
-  const promptText = (agent: AgentInfo): string =>
-    promptDrafts()[agent.name] ?? agent.prompt ?? ""
+  const promptText = (agent: AgentInfo): string => {
+    const draft = promptDrafts()[agent.name]
+    if (draft !== undefined) return draft
+    const persisted = promptsData().find((p) => p.name === agent.name)
+    if (persisted) return persisted.prompt
+    return agent.prompt ?? ""
+  }
 
   return (
     <box flexDirection="column" flexGrow={1} minHeight={0}>
@@ -250,7 +275,7 @@ function View(props: { api: TuiPluginApi }) {
                     onPromptChange={(v) =>
                       setPromptDrafts((prev) => ({ ...prev, [prim().name]: v }))
                     }
-                    onSavePrompt={() => saveEditPrompt(prim().name)}
+                    onSavePrompt={() => void saveEditPrompt(prim().name)}
                     onCancelPrompt={() => cancelEditPrompt(prim().name)}
                   />
                 </box>
@@ -276,7 +301,7 @@ function View(props: { api: TuiPluginApi }) {
                   onPromptChange={(v) =>
                     setPromptDrafts((prev) => ({ ...prev, [agent.name]: v }))
                   }
-                  onSavePrompt={() => saveEditPrompt(agent.name)}
+                  onSavePrompt={() => void saveEditPrompt(agent.name)}
                   onCancelPrompt={() => cancelEditPrompt(agent.name)}
                 />
               )}

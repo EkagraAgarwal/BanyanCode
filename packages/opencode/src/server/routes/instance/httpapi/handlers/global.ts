@@ -18,7 +18,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { BanyanAgentOverrideUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, GlobalUpgradeInput, PreflightInput, SafeRenameInput, WebSearchFreeInput } from "../groups/global"
+import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, GlobalUpgradeInput, PreflightInput, SafeRenameInput, WebSearchFreeInput } from "../groups/global"
 import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
@@ -207,6 +207,25 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
         ...(payload.enabled !== undefined ? { enabled: payload.enabled } : {}),
         ...modelPatch,
       })
+
+      GlobalBus.emit("event", {
+        directory: "global",
+        payload: {
+          type: "banyancode.config.updated" as any,
+          properties: { scope: "global" },
+        },
+      })
+
+      return updated
+    })
+
+    const banyanAgentPromptUpdateHandler = Effect.fn("GlobalHttpApi.banyanAgentPromptUpdate")(function* ({
+      payload,
+    }: {
+      payload: typeof BanyanAgentPromptUpdateInput.Type
+    }) {
+      const svc = yield* Banyan.BanyanConfigService
+      const updated = yield* svc.updateAgentPrompt(payload.name, payload.prompt)
 
       GlobalBus.emit("event", {
         directory: "global",
@@ -591,6 +610,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       .handle("getBanyanConfig", getBanyanConfigHandler)
       .handle("updateBanyanConfig", updateBanyanConfigHandler)
       .handle("updateBanyanAgentOverride", banyanAgentOverrideUpdateHandler)
+      .handle("updateBanyanAgentPrompt", banyanAgentPromptUpdateHandler)
       .handle("codegraphCancel", codegraphCancelHandler)
       .handle("codegraphForceKill", codegraphForceKillHandler)
       .handle("codegraphBuild", codegraphBuildHandler)

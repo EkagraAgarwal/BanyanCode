@@ -128,6 +128,18 @@ export const BanyanAgentOverrideUpdateInput = Schema.Struct({
   ),
 })
 
+export const BanyanAgentPromptUpdateInput = Schema.Struct({
+  name: Schema.String.check(
+    Schema.isPattern(/^[a-zA-Z0-9._-]+$/, {
+      identifier: "AgentPromptName",
+      description: "Agent name (letters, digits, '.', '_', '-' only)",
+    }),
+    Schema.isMinLength(1),
+    Schema.isMaxLength(64),
+  ),
+  prompt: Schema.String.check(Schema.isMaxLength(50_000)),
+})
+
 export const CodegraphBuildInput = Schema.Struct({
   root: Schema.optional(Schema.String),
   force: Schema.optional(Schema.Boolean),
@@ -179,6 +191,7 @@ export const GlobalPaths = {
   codegraphEdges: "/global/codegraph-edges",
   banyanAgentSave: "/global/banyan-agent/save",
   banyanAgentOverride: "/global/banyan-agent-override",
+  banyanAgentPrompt: "/global/banyan-agent-prompt",
   websearchFree: "/global/websearch-free",
   preflight: "/global/preflight",
   blastRadius: "/global/blast-radius",
@@ -274,6 +287,17 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.banyanAgentOverride.update",
           summary: "Update per-agent override",
           description: "Atomically update one agent's enabled/model override in ~/.config/banyancode/banyancode.json.",
+        }),
+      ),
+      HttpApiEndpoint.patch("updateBanyanAgentPrompt", GlobalPaths.banyanAgentPrompt, {
+        payload: BanyanAgentPromptUpdateInput,
+        success: described(BanyanConfig.Info, "Updated BanyanConfig"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.banyanAgentPrompt.update",
+          summary: "Update per-agent prompt override",
+          description: "Atomically update one agent's prompt override in ~/.config/banyancode/banyancode.json.",
         }),
       ),
       HttpApiEndpoint.post("codegraphCancel", GlobalPaths.codegraphCancel, {

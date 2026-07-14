@@ -205,4 +205,15 @@ describe("tab-agents agent override persistence", () => {
     expect(source).toContain("Saved ${name} override")
     expect(source).toContain("Failed to update ${name}")
   })
+
+  // Slice E: prompt persistence
+  test("saveEditPrompt calls updateBanyanAgentPrompt endpoint", async () => {
+    const fs = require("fs") as typeof import("fs")
+    const path = require("path") as typeof import("path")
+    const source = fs.readFileSync(
+      path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-agents.tsx"),
+      "utf8",
+    )
+    expect(source).toContain("updateBanyanAgentPrompt")
+  })
 })

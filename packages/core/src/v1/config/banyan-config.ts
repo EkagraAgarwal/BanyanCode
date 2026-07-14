@@ -89,6 +89,24 @@ export const Info = Schema.Struct({
       }),
     ),
   ),
+  // Per-agent prompt overrides for built-in native agents. Custom agents
+  // (those defined by ~/.config/banyancode/agent/<name>.md) use the file
+  // as source of truth; this field only stores overrides for built-in agents.
+  banyancode_agent_prompts: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String.check(
+          Schema.isPattern(/^[a-zA-Z0-9._-]+$/, {
+            identifier: "AgentPromptName",
+            description: "Agent name (letters, digits, '.', '_', '-' only)",
+          }),
+          Schema.isMinLength(1),
+          Schema.isMaxLength(64),
+        ),
+        prompt: Schema.String.check(Schema.isMaxLength(50_000)),
+      }),
+    ),
+  ),
 }).annotate({ identifier: "BanyanConfig" })
 
 export type Info = typeof Info.Type

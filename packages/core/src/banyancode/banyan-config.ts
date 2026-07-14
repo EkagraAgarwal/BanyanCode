@@ -18,6 +18,7 @@ export interface Interface {
     patch: { enabled?: boolean; model?: { providerID: string; modelID: string } | null },
   ) => Effect.Effect<BanyanConfig.Info, never, never>
   readonly getAgentOverrides: () => Effect.Effect<BanyanConfig.Info["banyancode_agent_overrides"], never, never>
+  readonly updateAgentPrompt: (name: string, prompt: string) => Effect.Effect<BanyanConfig.Info, never, never>
 }
 
 const configFile = path.join(Global.Path.banyan.config, "banyancode.json")
@@ -141,7 +142,40 @@ export const layer = Layer.effect(
       },
     )
 
-    return Service.of({ get, getGlobal, update, getAgentOverrides, updateAgentOverride })
+    const updateAgentPrompt = Effect.fn("BanyanConfig.updateAgentPrompt")(function* (name: string, prompt: string) {
+      return yield* flock
+        .withLock(
+          Effect.gen(function* () {
+            const current = yield* readConfig().pipe(
+              Effect.catch(() => Effect.succeed({} as BanyanConfig.Info)),
+            )
+            const prompts = current.banyancode_agent_prompts ?? []
+            const idx = prompts.findIndex((p) => p.name === name)
+
+            if (idx >= 0) {
+              const newPrompts = [...prompts]
+              newPrompts[idx] = { name, prompt }
+              const merged: BanyanConfig.Info = Object.assign({}, current, {
+                banyancode_agent_prompts: newPrompts,
+              })
+              yield* doWriteConfig(merged)
+              return merged
+            }
+
+            // Append new entry
+            const newPrompts = [...prompts, { name, prompt }]
+            const merged: BanyanConfig.Info = Object.assign({}, current, {
+              banyancode_agent_prompts: newPrompts,
+            })
+            yield* doWriteConfig(merged)
+            return merged
+          }),
+          `banyan-config:${configFile}`,
+        )
+        .pipe(Effect.orDie)
+    })
+
+    return Service.of({ get, getGlobal, update, getAgentOverrides, updateAgentOverride, updateAgentPrompt })
   }),
 )
 
