@@ -2,10 +2,12 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import type { TextareaRenderable } from "@opentui/core"
-import { createSignal, createMemo, For, Show } from "solid-js"
+import { createSignal, createMemo, For, Show, onCleanup } from "solid-js"
 import { toHex } from "../../util/color"
 import { useDialog } from "../../ui/dialog"
 import { useSync } from "../../context/sync"
+import { useToast } from "../../ui/toast"
+import { useEvent } from "../../context/event"
 import { RoundedBorder } from "../../ui/border.ts"
 import { DialogAgentConfig } from "../../component/dialog-agent-config"
 import { DialogModel } from "../../component/dialog-model"
@@ -28,8 +30,8 @@ function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
   const dialog = useDialog()
   const sync = useSync()
-  const [enabled, setEnabled] = createSignal<Record<string, boolean>>({})
-  const [modelOverrides, setModelOverrides] = createSignal<Record<string, { providerID: string; modelID: string }>>({})
+  const toast = useToast()
+  const ev = useEvent()
   const [promptDrafts, setPromptDrafts] = createSignal<Record<string, string>>({})
   const [editingPrompt, setEditingPrompt] = createSignal<string | null>(null)
 
@@ -48,7 +50,43 @@ function View(props: { api: TuiPluginApi }) {
     return list.filter((a) => !a.hidden && !HIDDEN_FROM_TAB.has(a.name))
   })
 
-  const isOn = (name: string) => enabled()[name] ?? true
+  const loadAgentOverrides = async () => {
+    try {
+      const result = await props.api.client.global.banyanConfig.get({})
+      return result?.data?.banyancode_agent_overrides ?? []
+    } catch {
+      return []
+    }
+  }
+
+  const [overridesData, setOverridesData] = createSignal<Array<{ name: string; enabled?: boolean; model?: { providerID: string; modelID: string } }>>([])
+
+  const loadOverrides = async () => {
+    const result = await loadAgentOverrides()
+    setOverridesData(result)
+  }
+
+  // Subscribe to config-updated events to re-read overrides
+  onCleanup(
+    ev.on("banyancode.config.updated" as any, () => {
+      void loadOverrides()
+    }),
+  )
+
+  // Load overrides on mount
+  void loadOverrides()
+
+  const enabledFor = (name: string) => {
+    const override = overridesData().find((o) => o.name === name)
+    return override?.enabled ?? true
+  }
+
+  const modelFor = (name: string) => {
+    const override = overridesData().find((o) => o.name === name)
+    return override?.model
+  }
+
+  const isOn = (name: string) => enabledFor(name)
 
   const orchestrator = createMemo(() => {
     const list = agents()
@@ -67,8 +105,36 @@ function View(props: { api: TuiPluginApi }) {
     return list.filter((a) => a !== primary && a.mode !== "primary")
   })
 
-  const toggle = (name: string) => {
-    setEnabled((prev) => ({ ...prev, [name]: !(prev[name] ?? true) }))
+  const toggle = async (name: string) => {
+    const currentEnabled = enabledFor(name)
+    const nextEnabled = !currentEnabled
+    // Optimistic update
+    setOverridesData((prev) => {
+      const idx = prev.findIndex((o) => o.name === name)
+      if (idx >= 0) {
+        const next = [...prev]
+        next[idx] = { ...next[idx], enabled: nextEnabled }
+        return next
+      }
+      return [...prev, { name, enabled: nextEnabled }]
+    })
+    try {
+      // TODO: regenerate SDK to drop the as any cast
+      await (props.api.client as any).global.updateBanyanAgentOverride({ name, enabled: nextEnabled })
+      toast.show({ message: `Saved ${name} override`, variant: "success" })
+    } catch {
+      // Revert on failure
+      setOverridesData((prev) => {
+        const idx = prev.findIndex((o) => o.name === name)
+        if (idx >= 0) {
+          const next = [...prev]
+          next[idx] = { ...next[idx], enabled: currentEnabled }
+          return next
+        }
+        return prev
+      })
+      toast.show({ message: `Failed to update ${name}`, variant: "error" })
+    }
   }
 
   const startEditPrompt = (name: string, current: string) => {
@@ -94,8 +160,38 @@ function View(props: { api: TuiPluginApi }) {
     dialog.replace(() => (
       <DialogModel
         onSelect={(model) => {
-          setModelOverrides((prev) => ({ ...prev, [name]: model }))
-          notify(`${name}: ${model.providerID}/${model.modelID}`)
+          // Optimistic update
+          setOverridesData((prev) => {
+            const idx = prev.findIndex((o) => o.name === name)
+            if (idx >= 0) {
+              const next = [...prev]
+              next[idx] = { ...next[idx], model }
+              return next
+            }
+            return [...prev, { name, model }]
+          })
+          // Call endpoint
+          ;(async () => {
+            try {
+              // TODO: regenerate SDK to drop the as any cast
+              await (props.api.client as any).global.updateBanyanAgentOverride({ name, model })
+              toast.show({ message: `Saved ${name} override`, variant: "success" })
+            } catch {
+              // Revert on failure
+              setOverridesData((prev) => {
+                const idx = prev.findIndex((o) => o.name === name)
+                if (idx >= 0) {
+                  const next = [...prev]
+                  const existing = next[idx]
+                  const { model: _model, ...rest } = existing
+                  next[idx] = rest
+                  return next.filter((o) => Object.keys(o).length > 1)
+                }
+                return prev
+              })
+              toast.show({ message: `Failed to update ${name}`, variant: "error" })
+            }
+          })()
         }}
       />
     ))
@@ -106,7 +202,7 @@ function View(props: { api: TuiPluginApi }) {
   }
 
   const modelLabel = (agent: AgentInfo): string => {
-    const override = modelOverrides()[agent.name]
+    const override = modelFor(agent.name)
     if (override) return `${override.providerID}/${override.modelID}`
     if (agent.model?.modelID) {
       return agent.model.providerID
