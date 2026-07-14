@@ -18,7 +18,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, GlobalUpgradeInput, PreflightInput, SafeRenameInput, WebSearchFreeInput } from "../groups/global"
+import { BanyanAgentOverrideUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, GlobalUpgradeInput, PreflightInput, SafeRenameInput, WebSearchFreeInput } from "../groups/global"
 import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
@@ -189,6 +189,34 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     }) {
       const svc = yield* Banyan.BanyanConfigService
       return yield* svc.update(payload.config)
+    })
+
+    const banyanAgentOverrideUpdateHandler = Effect.fn("GlobalHttpApi.banyanAgentOverrideUpdate")(function* ({
+      payload,
+    }: {
+      payload: typeof BanyanAgentOverrideUpdateInput.Type
+    }) {
+      const svc = yield* Banyan.BanyanConfigService
+      const modelPatch =
+        payload.model === null
+          ? { model: undefined as { providerID: string; modelID: string } | undefined }
+          : payload.model === undefined
+            ? {}
+            : { model: payload.model }
+      const updated = yield* svc.updateAgentOverride(payload.name, {
+        ...(payload.enabled !== undefined ? { enabled: payload.enabled } : {}),
+        ...modelPatch,
+      })
+
+      GlobalBus.emit("event", {
+        directory: "global",
+        payload: {
+          type: "banyancode.config.updated" as any,
+          properties: { scope: "global" },
+        },
+      })
+
+      return updated
     })
 
     const codegraphCancelHandler = Effect.fn("GlobalHttpApi.codegraphCancel")(function* () {
@@ -559,6 +587,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       .handle("startup", startupHandler)
       .handle("getBanyanConfig", getBanyanConfigHandler)
       .handle("updateBanyanConfig", updateBanyanConfigHandler)
+      .handle("updateBanyanAgentOverride", banyanAgentOverrideUpdateHandler)
       .handle("codegraphCancel", codegraphCancelHandler)
       .handle("codegraphForceKill", codegraphForceKillHandler)
       .handle("codegraphBuild", codegraphBuildHandler)

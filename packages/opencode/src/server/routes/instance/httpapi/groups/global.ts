@@ -96,6 +96,27 @@ export const BanyanAgentSaveResult = Schema.Struct({
   filePath: Schema.String,
 })
 
+export const BanyanAgentOverrideUpdateInput = Schema.Struct({
+  name: Schema.String.check(
+    Schema.isPattern(/^[a-zA-Z0-9._-]+$/, {
+      identifier: "AgentOverrideName",
+      description: "Agent name (letters, digits, '.', '_', '-' only)",
+    }),
+    Schema.isMinLength(1),
+    Schema.isMaxLength(64),
+  ),
+  enabled: Schema.optional(Schema.Boolean),
+  model: Schema.optional(
+    Schema.Union([
+      Schema.Struct({
+        providerID: Schema.String.check(Schema.isMaxLength(128)),
+        modelID: Schema.String.check(Schema.isMaxLength(128)),
+      }),
+      Schema.Null,
+    ]),
+  ),
+})
+
 export const CodegraphBuildInput = Schema.Struct({
   root: Schema.optional(Schema.String),
   force: Schema.optional(Schema.Boolean),
@@ -146,6 +167,7 @@ export const GlobalPaths = {
   codegraphNodes: "/global/codegraph-nodes",
   codegraphEdges: "/global/codegraph-edges",
   banyanAgentSave: "/global/banyan-agent/save",
+  banyanAgentOverride: "/global/banyan-agent-override",
   websearchFree: "/global/websearch-free",
   preflight: "/global/preflight",
   blastRadius: "/global/blast-radius",
@@ -230,6 +252,17 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.banyanConfig.update",
           summary: "Update BanyanCode config",
           description: "Update the BanyanCode config in ~/.config/banyancode/banyancode.json.",
+        }),
+      ),
+      HttpApiEndpoint.patch("updateBanyanAgentOverride", GlobalPaths.banyanAgentOverride, {
+        payload: BanyanAgentOverrideUpdateInput,
+        success: described(BanyanConfig.Info, "Updated BanyanConfig"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.banyanAgentOverride.update",
+          summary: "Update per-agent override",
+          description: "Atomically update one agent's enabled/model override in ~/.config/banyancode/banyancode.json.",
         }),
       ),
       HttpApiEndpoint.post("codegraphCancel", GlobalPaths.codegraphCancel, {

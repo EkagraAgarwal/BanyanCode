@@ -1199,6 +1199,11 @@ const yoloLayer = Layer.succeed(
       Effect.succeed({
         banyancode_yolo_mode: true,
       }) as never,
+    updateAgentOverride: () =>
+      Effect.succeed({
+        banyancode_yolo_mode: true,
+      }) as never,
+    getAgentOverrides: () => Effect.succeed([]) as never,
   }),
 )
 

@@ -65,6 +65,30 @@ export const Info = Schema.Struct({
       }),
     ),
   ),
+  // Per-agent override state set from the TUI's Agents tab. Built-in agents
+  // (coder, explore, scout, researcher, general) use this instead of the
+  // file-backed banyancode_subagents array.
+  banyancode_agent_overrides: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String.check(
+          Schema.isPattern(/^[a-zA-Z0-9._-]+$/, {
+            identifier: "AgentOverrideName",
+            description: "Agent name (letters, digits, '.', '_', '-' only)",
+          }),
+          Schema.isMinLength(1),
+          Schema.isMaxLength(64),
+        ),
+        enabled: Schema.optional(Schema.Boolean),
+        model: Schema.optional(
+          Schema.Struct({
+            providerID: Schema.String.check(Schema.isMaxLength(128)),
+            modelID: Schema.String.check(Schema.isMaxLength(128)),
+          }),
+        ),
+      }),
+    ),
+  ),
 }).annotate({ identifier: "BanyanConfig" })
 
 export type Info = typeof Info.Type

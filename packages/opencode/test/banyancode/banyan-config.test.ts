@@ -17,6 +17,8 @@ describe("BanyanConfig", () => {
         get: () => Effect.succeed(mockBanyanConfig),
         getGlobal: () => Effect.succeed(mockBanyanConfig),
         update: () => Effect.succeed(mockBanyanConfig),
+        updateAgentOverride: () => Effect.succeed(mockBanyanConfig),
+        getAgentOverrides: () => Effect.succeed([]),
       }),
     )
 
@@ -43,6 +45,8 @@ describe("BanyanConfig", () => {
           updatedConfig = patch
           return Effect.succeed(patch)
         },
+        updateAgentOverride: (name, patch) => Effect.succeed({} as any),
+        getAgentOverrides: () => Effect.succeed([]),
       }),
     )
 
@@ -70,6 +74,8 @@ describe("BanyanConfig", () => {
           storedConfig = { ...storedConfig, ...patch }
           return Effect.succeed(storedConfig)
         },
+        updateAgentOverride: (name, patch) => Effect.succeed(storedConfig),
+        getAgentOverrides: () => Effect.succeed([]),
       }),
     )
 
@@ -111,6 +117,8 @@ describe("BanyanConfig", () => {
         get: () => Effect.succeed({}),
         getGlobal: () => Effect.succeed({}),
         update: () => Effect.succeed({}),
+        updateAgentOverride: () => Effect.succeed({}),
+        getAgentOverrides: () => Effect.succeed([]),
       }),
     )
 

@@ -13,6 +13,8 @@ const makeMockConfig = (config: Record<string, unknown> = {}) =>
       get: () => Effect.succeed(config as any),
       getGlobal: () => Effect.succeed(config as any),
       update: (patch: any) => Effect.succeed({ ...config, ...patch } as any),
+      updateAgentOverride: (name: string, patch: any) => Effect.succeed({ ...config } as any),
+      getAgentOverrides: () => Effect.succeed([] as any),
     }),
   )
 
