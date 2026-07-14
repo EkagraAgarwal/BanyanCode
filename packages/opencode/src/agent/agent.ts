@@ -16,6 +16,7 @@ import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_CODER from "./prompt/coder.txt"
+import PROMPT_GENERAL from "./prompt/general.txt"
 import PROMPT_SCOUT from "./prompt/scout.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
@@ -73,7 +74,7 @@ const GeneratedAgent = Schema.Struct({
 })
 
 export interface Interface {
-  readonly get: (agent: string) => Effect.Effect<Info>
+  readonly get: (agent: string) => Effect.Effect<Info | undefined>
   readonly list: () => Effect.Effect<Info[]>
   readonly defaultInfo: () => Effect.Effect<Info>
   readonly defaultAgent: () => Effect.Effect<string>
@@ -224,6 +225,7 @@ export const layer = Layer.effect(
           general: {
             name: "general",
             description: `General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.`,
+            prompt: PROMPT_GENERAL,
             permission: Permission.merge(
               defaults,
               Permission.fromConfig({
@@ -546,19 +548,46 @@ export const layer = Layer.effect(
         }
 
         const get = Effect.fnUntraced(function* (agent: string) {
-          return agents[agent]
+          const overrideMap = new Map<string, { enabled?: boolean; model?: { providerID: string; modelID: string } }>()
+          if (banyanConfigOpt._tag === "Some") {
+            const overrides = yield* banyanConfigOpt.value.getAgentOverrides()
+            for (const o of overrides ?? []) {
+              overrideMap.set(o.name, { enabled: o.enabled, model: o.model })
+            }
+          }
+          const override = overrideMap.get(agent)
+          const info = agents[agent]
+          if (!info) return undefined
+          // Disabled subagents are not resolvable (return undefined like non-existent)
+          if (override?.enabled === false && info.mode === "subagent") {
+            return undefined
+          }
+          if (override?.model) {
+            return { ...info, model: Provider.parseModel(`${override.model.providerID}/${override.model.modelID}`) as Info["model"] }
+          }
+          return info
         })
 
         const list = Effect.fnUntraced(function* () {
           const cfg = yield* config.get()
-          return pipe(
-            agents,
-            values(),
-            sortBy(
-              [(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "build"), "desc"],
-              [(x) => x.name, "asc"],
-            ),
+          const overrideMap = new Map<string, { enabled?: boolean; model?: { providerID: string; modelID: string } }>()
+          if (banyanConfigOpt._tag === "Some") {
+            const overrides = yield* banyanConfigOpt.value.getAgentOverrides()
+            for (const o of overrides ?? []) {
+              overrideMap.set(o.name, { enabled: o.enabled, model: o.model })
+            }
+          }
+          const disabledNames = new Set<string>()
+          for (const [name, override] of overrideMap) {
+            if (override.enabled === false) disabledNames.add(name)
+          }
+          const filtered = values(agents).filter((a) => !(a.mode === "subagent" && disabledNames.has(a.name)))
+          const allAgents = sortBy(
+            filtered,
+            [(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "build"), "desc"],
+            [(x) => x.name, "asc"],
           )
+          return allAgents
         })
 
         const defaultInfo = Effect.fnUntraced(function* () {

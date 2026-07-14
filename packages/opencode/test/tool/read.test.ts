@@ -285,12 +285,12 @@ describe("tool.read env file permissions", () => {
                   ask: (req: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">) =>
                     Effect.sync(() => {
                       for (const pattern of req.patterns) {
-                        const rule = Permission.evaluate(req.permission, pattern, info.permission)
+                        const rule = Permission.evaluate(req.permission, pattern, info!.permission)
                         if (rule.action === "ask" && req.permission === "read") {
                           asked = true
                         }
                         if (rule.action === "deny") {
-                          throw new PermissionV1.DeniedError({ ruleset: info.permission })
+                          throw new PermissionV1.DeniedError({ ruleset: info!.permission })
                         }
                       }
                     }),

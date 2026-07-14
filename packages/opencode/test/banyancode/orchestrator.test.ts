@@ -46,6 +46,8 @@ describe("orchestrator agent", () => {
         expect(orchestrator?.mode).toBe("primary")
         expect(orchestrator?.native).toBe(true)
         const detail = yield* agents.get("orchestrator")
+        expect(detail).toBeDefined()
+        if (!detail) return
         expect(detail.prompt).toBeDefined()
         const prompt = detail.prompt!
         expect(prompt).toContain("shared_memory")
@@ -71,6 +73,8 @@ describe("researcher agent", () => {
         expect(researcher?.mode).toBe("subagent")
         expect(researcher?.native).toBe(true)
         const detail = yield* agents.get("researcher")
+        expect(detail).toBeDefined()
+        if (!detail) return
         expect(detail.prompt).toBeDefined()
         const prompt = detail.prompt!
         expect(prompt).toContain("websearch_free")

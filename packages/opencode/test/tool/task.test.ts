@@ -138,6 +138,7 @@ describe("tool.task", () => {
       Effect.gen(function* () {
         const agent = yield* Agent.Service
         const build = yield* agent.get("build")
+        if (!build) throw new Error("build agent not found")
         const registry = yield* ToolRegistry.Service
         const get = Effect.fnUntraced(function* () {
           const tools = yield* registry.tools({ ...ref, agent: build })
@@ -180,6 +181,7 @@ describe("tool.task", () => {
       Effect.gen(function* () {
         const agent = yield* Agent.Service
         const build = yield* agent.get("build")
+        if (!build) throw new Error("build agent not found")
         const registry = yield* ToolRegistry.Service
         const description =
           (yield* registry.tools({ ...ref, agent: build })).find((tool) => tool.id === TaskTool.id)?.description ?? ""

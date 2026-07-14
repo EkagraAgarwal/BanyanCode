@@ -56,6 +56,7 @@ export const projectCopyHandlers = HttpApiBuilder.group(InstanceHttpApi, "projec
         { concurrency: 2 },
       )
       if (!fallback) return Slug.create()
+      if (!titleAgent) return Slug.create()
       const model = titleAgent.model
         ? yield* provider.getModel(titleAgent.model.providerID, titleAgent.model.modelID)
         : ((yield* provider.getSmallModel(fallback.providerID)) ??

@@ -90,6 +90,7 @@ describe("tool permissions — all agents get all banyancode tools", () => {
       Effect.gen(function* () {
         const agent = yield* Agent.Service.use((svc) => svc.get(agentName))
         expect(agent).toBeDefined()
+        if (!agent) return
         for (const tool of ALL_BANYANCODE_TOOLS) {
           expect(evalPerm(agent.permission, tool)).toBe("allow")
         }

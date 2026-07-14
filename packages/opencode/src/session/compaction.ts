@@ -336,6 +336,7 @@ export const layer = Layer.effect(
       }
 
       const agent = yield* agents.get("compaction")
+      if (!agent) throw new Error("compaction agent not found")
       const model = agent.model
         ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
         : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
