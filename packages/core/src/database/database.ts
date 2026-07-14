@@ -5,6 +5,7 @@ import { layer as sqliteLayer } from "#sqlite"
 import { Context, Effect, Layer } from "effect"
 import { Global } from "../global"
 import { Flag } from "../flag/flag"
+import { createHash } from "node:crypto"
 import { isAbsolute, join } from "path"
 import { DatabaseMigration } from "./migration"
 import { InstallationChannel } from "../installation/version"
@@ -64,6 +65,10 @@ function findProjectRoot(startDir: string): string | undefined {
   return undefined
 }
 
+function shortHash(s: string): string {
+  return createHash("sha256").update(s).digest("hex").slice(0, 12)
+}
+
 function findOrCreateBanyanProjectDir(startDir: string): string | undefined {
   let dir = startDir
   while (true) {
@@ -103,13 +108,31 @@ export function path() {
 
   const projectBanyanDir = findOrCreateBanyanProjectDir(process.cwd())
   if (projectBanyanDir) {
-    if (
+    // BANYANCODE_LEGACY_DB_PATH=1 falls back to the old filename for one
+    // release cycle so existing per-project DBs are not silently abandoned.
+    const legacy =
+      process.env.BANYANCODE_LEGACY_DB_PATH === "1" || process.env.BANYANCODE_LEGACY_DB_PATH === "true"
+    if (legacy) {
+      if (
+        ["latest", "beta", "prod"].includes(InstallationChannel) ||
+        process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" ||
+        process.env.OPENCODE_DISABLE_CHANNEL_DB === "true"
+      )
+        return join(projectBanyanDir, "banyancode.db")
+      return join(projectBanyanDir, `banyancode-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}.db`)
+    }
+    // Include a hash of the workspace root so two workspaces in the same
+    // project tree never share a single banyancode.db (the singleton
+    // codegraph_meta row would otherwise let the second workspace's
+    // indexed_root overwrite the first's, breaking auto-update isolation).
+    const workspaceTag = shortHash(process.cwd())
+    const channelSuffix =
       ["latest", "beta", "prod"].includes(InstallationChannel) ||
       process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" ||
       process.env.OPENCODE_DISABLE_CHANNEL_DB === "true"
-    )
-      return join(projectBanyanDir, "banyancode.db")
-    return join(projectBanyanDir, `banyancode-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}.db`)
+        ? ""
+        : `-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}`
+    return join(projectBanyanDir, `banyancode-${workspaceTag}${channelSuffix}.db`)
   }
 
   if (
