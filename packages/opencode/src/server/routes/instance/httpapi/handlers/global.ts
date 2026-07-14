@@ -334,6 +334,9 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
         ctx.payload.hidden !== undefined ? `hidden: ${ctx.payload.hidden}` : null,
         ctx.payload.model ? `model: ${JSON.stringify(ctx.payload.model)}` : null,
         `permission: [${(ctx.payload.permission ?? []).map(escapeYamlScalar).join(", ")}]`,
+        ctx.payload.tools && ctx.payload.tools.length > 0
+          ? `tools: [${ctx.payload.tools.map(escapeYamlScalar).join(", ")}]`
+          : null,
         "---",
         "",
       ]

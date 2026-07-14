@@ -88,6 +88,17 @@ export const BanyanAgentSaveInput = Schema.Struct({
     }),
   ),
   permission: Schema.optional(Schema.Array(Schema.String.check(Schema.isMaxLength(128)))),
+  tools: Schema.optional(
+    Schema.Array(
+      Schema.String.check(
+        Schema.isPattern(/^[a-zA-Z0-9_]+$/, {
+          identifier: "BanyanAgentToolName",
+          description: "Tool name (letters, digits, underscores only; no path separators)",
+        }),
+        Schema.isMaxLength(128),
+      ),
+    ),
+  ),
   prompt: Schema.optional(Schema.String.check(Schema.isMaxLength(50_000))),
 })
 

@@ -6,6 +6,7 @@ import { useSDK } from "../context/sdk"
 import { useToast } from "../ui/toast"
 import { toHex } from "../util/color"
 import { DialogMultiSelect } from "../ui/dialog-multi-select"
+import { DialogModel } from "./dialog-model"
 
 export interface AgentConfigInput {
   name?: string
@@ -143,6 +144,7 @@ export function DialogAgentConfig(props: {
             onInput={setName}
             onSubmit={() => setStep("description")}
             placeholder="my-researcher"
+            ref={(el) => { if (el) setTimeout(() => el.focus(), 0) }}
           />
         </box>
       </Show>
@@ -155,6 +157,7 @@ export function DialogAgentConfig(props: {
             value={description()}
             onInput={setDescription}
             onSubmit={() => setStep("model")}
+            ref={(el) => { if (el) setTimeout(() => el.focus(), 0) }}
           />
         </box>
       </Show>
@@ -179,8 +182,14 @@ export function DialogAgentConfig(props: {
             <text
               fg={toHex(theme.primary)}
               onMouseUp={() => {
-                // TODO: open model picker dialog
-                setStep("tools")
+                dialog.replace(() => (
+                  <DialogModel
+                    onSelect={(model) => {
+                      setModel(model)
+                      setStep("tools")
+                    }}
+                  />
+                ))
               }}
             >
               [space picker]
