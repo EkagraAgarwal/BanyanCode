@@ -543,10 +543,37 @@ const indexCandidateFileCore = (
 const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(function* (changedFileIDs: string[] | undefined) {
   const isCancelled = yield* Ref.get(cancelled)
   if (isCancelled) return
-  if (changedFileIDs && changedFileIDs.length > 0) {
-    yield* repo.deleteDerivedEdgesForFiles({ fileIDs: changedFileIDs })
+
+  const changedSet = changedFileIDs && changedFileIDs.length > 0 ? new Set(changedFileIDs) : null
+
+  if (changedSet) {
+    // Incremental: delete derived edges touching changed files first.
+    // changedSet is only truthy when changedFileIDs was truthy, so assert non-null.
+    yield* repo.deleteDerivedEdgesForFiles({ fileIDs: changedFileIDs! })
   }
-  const allNodes = yield* repo.searchNodes({ limit: 100_000 })
+
+  // For incremental mode, fetch changed nodes WITH code and all other nodes WITHOUT code.
+  // For full rebuild, fetch everything with code (existing path).
+  let allNodesForIndex: CodegraphNode[]
+
+  if (changedSet && changedSet.size > 0) {
+    // Incremental: changed nodes (with code) + all other nodes (light, no code)
+    // changedSet.size > 0 implies changedFileIDs was truthy, so assert non-null.
+    const [changedNodes, lightNodes] = yield* Effect.all([
+      repo.nodesByFileIDs({ fileIDs: changedFileIDs! }),
+      repo.searchNodesLight({ limit: 100_000 }),
+    ])
+    const changedIDs = new Set(changedNodes.map((n) => n.id))
+    // lightNodes already have no `code` field; spread to lose the Omit type
+    allNodesForIndex = [
+      ...changedNodes,
+      ...lightNodes.filter((n) => !changedIDs.has(n.id)),
+    ]
+  } else {
+    // Full rebuild
+    allNodesForIndex = yield* repo.searchNodes({ limit: 100_000 })
+  }
+
   const allFiles = yield* repo.listAllFiles()
   const fileByID = new Map(allFiles.map((f) => [f.id, f]))
   const fileDir = (filePath: string) => path.dirname(filePath)
@@ -555,10 +582,10 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   const nodesByFileID = new Map<string, CodegraphNode[]>()
   const BATCH_SIZE = 500
 
-  for (let batchStart = 0; batchStart < allNodes.length; batchStart += BATCH_SIZE) {
+  for (let batchStart = 0; batchStart < allNodesForIndex.length; batchStart += BATCH_SIZE) {
     if (yield* Ref.get(cancelled)) break
-    const batchEnd = Math.min(batchStart + BATCH_SIZE, allNodes.length)
-    const batch = allNodes.slice(batchStart, batchEnd)
+    const batchEnd = Math.min(batchStart + BATCH_SIZE, allNodesForIndex.length)
+    const batch = allNodesForIndex.slice(batchStart, batchEnd)
 
     for (const node of batch) {
       const list = nodeMap.get(node.name) ?? []
@@ -574,7 +601,9 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   const crossEdges: { fromNodeID: string; toNodeID: string; kind: CodegraphEdge["kind"] }[] = []
   const referenceEdgeKeys = new Set<string>()
 
-  for (const nodeA of allNodes) {
+  // For referenceEdges: iterate only nodes that have code and are NOT skipped kinds.
+  // In incremental mode, only iterate changed-file nodes as nodeA (sources of new edges).
+  for (const nodeA of allNodesForIndex) {
     if (
       !nodeA.code ||
       nodeA.kind === "test" ||
@@ -591,6 +620,9 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     ) {
       continue
     }
+
+    // Incremental: skip nodeA if its file is unchanged
+    if (changedSet && !changedSet.has(nodeA.fileID)) continue
 
     const identifiers = new Set<string>()
     for (const m of nodeA.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
@@ -623,11 +655,14 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }
   }
 
-  const configNodes = allNodes.filter((n) => n.kind === "config")
-  const dockerNodes = allNodes.filter((n) => n.kind === "docker")
-  const testNodes = allNodes.filter((n) => n.kind === "test")
-  const routeNodes = allNodes.filter((n) => n.kind === "route")
-  const generatedNodes = allNodes.filter((n) => n.kind === "generated")
+  // Filter node lists by file set for crossEdges that are scope-limited to changed files.
+  // In incremental mode, only config/test/route/generated nodes IN changed files are processed.
+  // In full mode, all nodes are processed (changedSet is null).
+  const configNodes = allNodesForIndex.filter((n) => n.kind === "config" && (!changedSet || changedSet.has(n.fileID)))
+  const dockerNodes = allNodesForIndex.filter((n) => n.kind === "docker")
+  const testNodes = allNodesForIndex.filter((n) => n.kind === "test" && (!changedSet || changedSet.has(n.fileID)))
+  const routeNodes = allNodesForIndex.filter((n) => n.kind === "route" && (!changedSet || changedSet.has(n.fileID)))
+  const generatedNodes = allNodesForIndex.filter((n) => n.kind === "generated" && (!changedSet || changedSet.has(n.fileID)))
 
   for (const testNode of testNodes) {
     if (yield* Ref.get(cancelled)) {
