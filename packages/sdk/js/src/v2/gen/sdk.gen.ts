@@ -100,6 +100,10 @@ import type {
   FindTextResponses,
   FormatterStatusErrors,
   FormatterStatusResponses,
+  GlobalBanyanAgentOverrideUpdateErrors,
+  GlobalBanyanAgentOverrideUpdateResponses,
+  GlobalBanyanAgentPromptUpdateErrors,
+  GlobalBanyanAgentPromptUpdateResponses,
   GlobalBanyanAgentSaveErrors,
   GlobalBanyanAgentSaveResponses,
   GlobalBanyanConfigGetErrors,
@@ -128,6 +132,8 @@ import type {
   GlobalEventResponses,
   GlobalHealthErrors,
   GlobalHealthResponses,
+  GlobalMeshStatusErrors,
+  GlobalMeshStatusResponses,
   GlobalPreflightErrors,
   GlobalPreflightResponses,
   GlobalSafeRenameErrors,
@@ -181,6 +187,7 @@ import type {
   MemoryStoreResponses,
   MemorySummaryErrors,
   MemorySummaryResponses,
+  MeshParentSessionId,
   MoveSessionDestination,
   OutputFormat,
   Part as Part2,
@@ -1435,6 +1442,93 @@ export class BanyanConfig extends HeyApiClient {
   }
 }
 
+export class BanyanAgentOverride extends HeyApiClient {
+  /**
+   * Update per-agent override
+   *
+   * Atomically update one agent's enabled/model override in ~/.config/banyancode/banyancode.json.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters?: {
+      name?: string
+      enabled?: boolean
+      model?: {
+        providerID: string
+        modelID: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "name" },
+            { in: "body", key: "enabled" },
+            { in: "body", key: "model" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<
+      GlobalBanyanAgentOverrideUpdateResponses,
+      GlobalBanyanAgentOverrideUpdateErrors,
+      ThrowOnError
+    >({
+      url: "/global/banyan-agent-override",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class BanyanAgentPrompt extends HeyApiClient {
+  /**
+   * Update per-agent prompt override
+   *
+   * Atomically update one agent's prompt override in ~/.config/banyancode/banyancode.json.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters?: {
+      name?: string
+      prompt?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "name" },
+            { in: "body", key: "prompt" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<
+      GlobalBanyanAgentPromptUpdateResponses,
+      GlobalBanyanAgentPromptUpdateErrors,
+      ThrowOnError
+    >({
+      url: "/global/banyan-agent-prompt",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Codegraph extends HeyApiClient {
   /**
    * Cancel codegraph build
@@ -1557,6 +1651,7 @@ export class BanyanAgent extends HeyApiClient {
         modelID: string
       }
       permission?: Array<string>
+      tools?: Array<string>
       prompt?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -1572,6 +1667,7 @@ export class BanyanAgent extends HeyApiClient {
             { in: "body", key: "hidden" },
             { in: "body", key: "model" },
             { in: "body", key: "permission" },
+            { in: "body", key: "tools" },
             { in: "body", key: "prompt" },
           ],
         },
@@ -1590,6 +1686,27 @@ export class BanyanAgent extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+}
+
+export class Mesh extends HeyApiClient {
+  /**
+   * Get mesh status
+   *
+   * Read the orchestrator mesh status (peers, pending messages, recent activity) for a given parent session. Works whether or not the session is currently active.
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters: {
+      parentSessionID: MeshParentSessionId
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "parentSessionID" }] }])
+    return (options?.client ?? this.client).get<GlobalMeshStatusResponses, GlobalMeshStatusErrors, ThrowOnError>({
+      url: "/global/mesh/status",
+      ...options,
+      ...params,
     })
   }
 }
@@ -1831,6 +1948,16 @@ export class Global extends HeyApiClient {
     return (this._banyanConfig ??= new BanyanConfig({ client: this.client }))
   }
 
+  private _banyanAgentOverride?: BanyanAgentOverride
+  get banyanAgentOverride(): BanyanAgentOverride {
+    return (this._banyanAgentOverride ??= new BanyanAgentOverride({ client: this.client }))
+  }
+
+  private _banyanAgentPrompt?: BanyanAgentPrompt
+  get banyanAgentPrompt(): BanyanAgentPrompt {
+    return (this._banyanAgentPrompt ??= new BanyanAgentPrompt({ client: this.client }))
+  }
+
   private _codegraph?: Codegraph
   get codegraph(): Codegraph {
     return (this._codegraph ??= new Codegraph({ client: this.client }))
@@ -1839,6 +1966,11 @@ export class Global extends HeyApiClient {
   private _banyanAgent?: BanyanAgent
   get banyanAgent(): BanyanAgent {
     return (this._banyanAgent ??= new BanyanAgent({ client: this.client }))
+  }
+
+  private _mesh?: Mesh
+  get mesh(): Mesh {
+    return (this._mesh ??= new Mesh({ client: this.client }))
   }
 }
 

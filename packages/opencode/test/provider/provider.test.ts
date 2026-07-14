@@ -545,6 +545,45 @@ it.instance(
 )
 
 it.instance(
+  "model config preserves explicitly empty models.dev variants",
+  Effect.gen(function* () {
+    yield* set("OPENAI_API_KEY", "test-api-key")
+    const providers = yield* list
+    const model = providers[ProviderV2.ID.openai].models["custom-gpt-chat"]
+    expect(model.name).toBe("Custom GPT Chat")
+    expect(model.variants).toEqual({})
+  }),
+  {
+    config: {
+      provider: {
+        openai: { models: { "custom-gpt-chat": { id: "gpt-5-chat-latest", name: "Custom GPT Chat" } } },
+      },
+    },
+  },
+)
+
+it.instance(
+  "model config regenerates variants when overriding the provider package",
+  Effect.gen(function* () {
+    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    const providers = yield* list
+    const model = providers[ProviderV2.ID.anthropic].models["claude-sonnet-4-6"]
+    expect(model.variants?.low).toEqual({ reasoningEffort: "low" })
+    expect(model.variants?.max).toBeUndefined()
+  }),
+  {
+    config: {
+      provider: {
+        anthropic: {
+          npm: "@ai-sdk/openai-compatible",
+          models: { "claude-sonnet-4-6": { name: "Claude via OpenAI" } },
+        },
+      },
+    },
+  },
+)
+
+it.instance(
   "disabled_providers prevents loading even with env var",
   Effect.gen(function* () {
     yield* set("OPENAI_API_KEY", "test-openai-key")
@@ -1308,6 +1347,88 @@ test("models.dev normalization fills required response fields", () => {
   expect(model.capabilities.attachment).toBe(false)
   expect(model.capabilities.toolcall).toBe(true)
   expect(model.release_date).toBe("")
+})
+
+test("models.dev reasoning options replace generated variants and unsupported options fall back", () => {
+  const provider = {
+    id: "reasoning",
+    name: "Reasoning",
+    env: [],
+    npm: "@ai-sdk/openai",
+    models: {
+      explicit: {
+        id: "gpt-5.4",
+        name: "Explicit",
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["low"] }],
+        limit: { context: 128_000, output: 64_000 },
+      },
+      empty: {
+        id: "gpt-5.4",
+        name: "Empty",
+        reasoning: true,
+        reasoning_options: [],
+        limit: { context: 128_000, output: 64_000 },
+      },
+      fallback: {
+        id: "gpt-5.4",
+        name: "Fallback",
+        reasoning: true,
+        reasoning_options: [{ type: "toggle" }],
+        limit: { context: 128_000, output: 64_000 },
+      },
+      override: {
+        id: "gemini-3-pro",
+        name: "Override",
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["high"] }],
+        provider: { npm: "@ai-sdk/google" },
+        limit: { context: 128_000, output: 64_000 },
+        experimental: { modes: { fast: {} } },
+      },
+    },
+  } as unknown as ModelsDev.Provider
+
+  const models = Provider.fromModelsDevProvider(provider).models
+  expect(models.explicit.variants).toEqual({
+    low: {
+      reasoningEffort: "low",
+      reasoningSummary: "auto",
+      include: ["reasoning.encrypted_content"],
+    },
+  })
+  expect(models.empty.variants).toEqual({})
+  expect(Object.keys(models.fallback.variants ?? {})).toEqual(["none", "low", "medium", "high", "xhigh"])
+  expect(models.override.variants).toEqual({
+    high: { thinkingConfig: { includeThoughts: true, thinkingLevel: "high" } },
+  })
+  expect(models["gemini-3-pro-fast"].variants).toEqual(models.override.variants)
+})
+
+test("public provider info omits invalid models", () => {
+  const provider = Provider.fromModelsDevProvider({
+    id: "test",
+    name: "Test",
+    env: [],
+    models: {
+      valid: {
+        id: "valid",
+        name: "Valid",
+        cost: { input: 1, output: 1 },
+        limit: { context: 128_000, output: 16_000 },
+      },
+    },
+  } as unknown as ModelsDev.Provider)
+  provider.models.invalid = {
+    ...provider.models.valid,
+    id: ModelV2.ID.make("invalid"),
+    cost: { ...provider.models.valid.cost, input: Number.NaN },
+  }
+
+  const result = Provider.toPublicInfo(provider)
+
+  expect(result.models.valid).toBeDefined()
+  expect(result.models.invalid).toBeUndefined()
 })
 
 it.instance("model variants are generated for reasoning models", () =>

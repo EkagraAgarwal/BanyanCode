@@ -1,16 +1,28 @@
 export * as MeshCoordinator from "./mesh-coordinator"
 
-import { Context, Effect, Layer, Queue, Ref, Schema, Stream } from "effect"
-import { sql } from "drizzle-orm"
+import { Cause, Context, Duration, Effect, Fiber, Layer, Queue, Ref, Schedule, Schema, Stream } from "effect"
+import { and, eq, isNull, sql } from "drizzle-orm"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
 import { SessionSchema } from "../session/schema"
 import { SessionTable } from "../session/sql"
 import { SubagentBus } from "./subagent-bus"
 import { SubagentPlans } from "./subagent-plans-repo"
+import { SubagentMessagesTable } from "./subagent-messages.sql"
 import { MaxSubagents } from "./max-subagents"
 import { DEFAULT_MAX_SUBAGENTS } from "../v1/config/banyan-config"
 import type { PeerInfo, SubagentMessage } from "./types"
+
+const GC_AGE_MS = 24 * 60 * 60 * 1000
+// Messages older than this from a still-live parent are marked delivered
+// at startup so the consumer drains them on first run rather than re-delivering.
+const ORPHAN_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+export interface TrackedParent {
+  status: "active" | "idle" | "ended"
+  lastSeenAt: number
+  consumerHandles: Map<string, Fiber.Fiber<unknown, unknown>>
+}
 
 export const MeshStatus = Schema.Struct({
   parentSessionID: Schema.String,
@@ -49,9 +61,6 @@ export type MeshStatus = typeof MeshStatus.Type
 
 export interface Interface {
   readonly status: (parentSessionID: SessionSchema.ID) => Effect.Effect<MeshStatus, never, never>
-  readonly trackParent: (parentSessionID: SessionSchema.ID) => Effect.Effect<void, never, never>
-  readonly listTrackedParents: () => Effect.Effect<ReadonlyArray<SessionSchema.ID>, never, never>
-  readonly drain: (parentSessionID: SessionSchema.ID) => Effect.Effect<SubagentMessage[], never, never>
   readonly watch: (parentSessionID: SessionSchema.ID) => Effect.Effect<Stream.Stream<MeshStatus>, never, never>
   readonly subscribe: (input: { parentSessionID: SessionSchema.ID; agentName?: string }) => Effect.Effect<Stream.Stream<SubagentMessage, never, never>, never, never>
   readonly checkin: (
@@ -72,6 +81,12 @@ export interface Interface {
   readonly tryReserveSubagentSlot: (
     parentSessionID: SessionSchema.ID,
   ) => Effect.Effect<{ ok: true; killed: string | null } | { ok: false; error: string }, never, never>
+  readonly trackParent: (parentSessionID: SessionSchema.ID) => Effect.Effect<void, never, never>
+  readonly listTrackedParents: () => Effect.Effect<ReadonlyArray<SessionSchema.ID>, never, never>
+  readonly registerConsumer: (parentSessionID: SessionSchema.ID, agentName: string, fiber: Fiber.Fiber<unknown, unknown>) => Effect.Effect<void, never, never>
+  readonly unregisterConsumer: (parentSessionID: SessionSchema.ID, agentName: string) => Effect.Effect<void, never, never>
+  readonly markParentEnded: (parentSessionID: SessionSchema.ID) => Effect.Effect<void, never, never>
+  readonly runGarbageCollection: () => Effect.Effect<{ swept: number; interrupted: number }, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/MeshCoordinator") {}
@@ -165,7 +180,58 @@ export const layer = Layer.effect(
     const { db } = yield* Database.Service
     const activityRef = yield* Ref.make(new Map<string, Array<{ from: string; at: number }>>())
     const costCacheRef = yield* Ref.make(new Map<string, CostCacheEntry>())
-    const trackedParentsRef = yield* Ref.make(new Set<SessionSchema.ID>())
+    const trackedParentsRef = yield* Ref.make(new Map<SessionSchema.ID, TrackedParent>())
+
+    // Startup-recovery pass: sweep undelivered messages whose parent sessions no longer exist
+    // OR whose messages are older than ORPHAN_TTL_MS (stale orphans). Live parents' messages
+    // stay undelivered so the consumer drains them on first run.
+    const runStartupRecovery = Effect.fn("MeshCoordinator.runStartupRecovery")(function* () {
+      const now = Date.now()
+      const rows = yield* db
+        .select()
+        .from(SubagentMessagesTable)
+        .where(isNull(SubagentMessagesTable.delivered_at))
+        .all()
+        .pipe(Effect.catchCause((cause) => Effect.logError("startup-recovery: read failed", { cause: Cause.pretty(cause) })))
+
+      if (!rows) return
+
+      for (const row of rows) {
+        // Check if the parent session still exists.
+        const parentExists = yield* db
+          .select({ id: SessionTable.id })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, row.parent_session_id as SessionSchema.ID))
+          .get()
+          .pipe(Effect.catchCause((cause) => Effect.logError("startup-recovery: parent lookup failed", { cause: Cause.pretty(cause), rowID: row.id })))
+
+        if (parentExists === undefined) continue
+
+        const isOrphan = !parentExists
+        const isStale = now - row.created_at > ORPHAN_TTL_MS
+
+        // Leave messages from live parents for the consumer to drain.
+        if (!isOrphan && !isStale) continue
+
+        // Mark delivered so we don't re-process on next startup.
+        yield* db
+          .update(SubagentMessagesTable)
+          .set({ delivered_at: now })
+          .where(eq(SubagentMessagesTable.id, row.id))
+          .run()
+          .pipe(Effect.catchCause((cause) => Effect.logError("startup-recovery: mark-delivered failed", { cause: Cause.pretty(cause), rowID: row.id })))
+
+        if (isOrphan) {
+          yield* Ref.update(trackedParentsRef, (map) => {
+            const next = new Map(map)
+            next.delete(row.parent_session_id as SessionSchema.ID)
+            return next
+          })
+        }
+      }
+    })
+
+    yield* runStartupRecovery().pipe(Effect.catchCause((cause) => Effect.logError("startup-recovery: aborted", { cause: Cause.pretty(cause) })))
 
     const status = Effect.fn("MeshCoordinator.status")(function* (parentSessionID: SessionSchema.ID) {
       const peers = yield* bus.peers(parentSessionID)
@@ -237,34 +303,11 @@ export const layer = Layer.effect(
       }
     })
 
-    const drain = Effect.fn("MeshCoordinator.drain")(function* (parentSessionID: SessionSchema.ID) {
-      const queue = yield* bus.subscribe(parentSessionID)
-      const drained: SubagentMessage[] = []
-      let item = yield* Queue.poll(queue)
-      while (item._tag === "Some") {
-        drained.push(item.value)
-        item = yield* Queue.poll(queue)
-      }
-      return drained
-    })
-
     const watch = Effect.fn("MeshCoordinator.watch")(function* (parentSessionID: SessionSchema.ID) {
       const meshStatus = yield* status(parentSessionID)
       yield* events.publish(StatusUpdated, meshStatus)
       return Stream.make(meshStatus)
     })
-
-    const subscribe: Interface["subscribe"] = (input) =>
-      Effect.gen(function* () {
-        const queue = yield* bus.subscribe(input.parentSessionID)
-        const stream = Stream.fromQueue(queue)
-        if (input.agentName) {
-          return stream.pipe(
-            Stream.filter((m) => m.fromAgent === input.agentName || m.toAgent === input.agentName),
-          )
-        }
-        return stream
-      })
 
     const checkin = Effect.fn("MeshCoordinator.checkin")(function* (
       parentSessionID: SessionSchema.ID,
@@ -395,12 +438,103 @@ export const layer = Layer.effect(
       } as const
     })
 
+    const registerConsumer: Interface["registerConsumer"] = Effect.fn(
+      "MeshCoordinator.registerConsumer",
+    )(function* (parentSessionID: SessionSchema.ID, agentName: string, fiber: Fiber.Fiber<unknown, unknown>) {
+      yield* Ref.update(trackedParentsRef, (map) => {
+        const next = new Map(map)
+        const existing = next.get(parentSessionID)
+        if (existing) {
+          const handles = new Map(existing.consumerHandles)
+          handles.set(agentName, fiber)
+          next.set(parentSessionID, { ...existing, consumerHandles: handles })
+        } else {
+          const handles = new Map<string, Fiber.Fiber<unknown, unknown>>()
+          handles.set(agentName, fiber)
+          next.set(parentSessionID, { status: "active", lastSeenAt: Date.now(), consumerHandles: handles })
+        }
+        return next
+      })
+    })
+
+    const unregisterConsumer: Interface["unregisterConsumer"] = Effect.fn(
+      "MeshCoordinator.unregisterConsumer",
+    )(function* (parentSessionID: SessionSchema.ID, agentName: string) {
+      yield* Ref.update(trackedParentsRef, (map) => {
+        const next = new Map(map)
+        const existing = next.get(parentSessionID)
+        if (existing) {
+          const handles = new Map(existing.consumerHandles)
+          handles.delete(agentName)
+          next.set(parentSessionID, { ...existing, consumerHandles: handles })
+        }
+        return next
+      })
+    })
+
+    // Visible test helper: marks a tracked parent as ended so GC will sweep it.
+    const markParentEnded: Interface["markParentEnded"] = Effect.fn(
+      "MeshCoordinator.markParentEnded",
+    )(function* (parentSessionID: SessionSchema.ID) {
+      yield* Ref.update(trackedParentsRef, (map) => {
+        const next = new Map(map)
+        const existing = next.get(parentSessionID)
+        if (existing) {
+          next.set(parentSessionID, { ...existing, status: "ended" })
+        }
+        return next
+      })
+    })
+
+    const runGarbageCollection: Interface["runGarbageCollection"] = Effect.fn(
+      "MeshCoordinator.runGarbageCollection",
+    )(function* () {
+      const now = Date.now()
+      const map = yield* Ref.get(trackedParentsRef)
+      let swept = 0
+      let interrupted = 0
+
+      for (const [parentSessionID, parent] of map) {
+        const shouldSweep = parent.status === "ended" || now - parent.lastSeenAt > GC_AGE_MS
+        if (!shouldSweep) continue
+
+        // Interrupt all registered consumer fibers.
+        for (const [, fiber] of parent.consumerHandles) {
+          yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
+          interrupted++
+        }
+
+        // Remove the entry.
+        yield* Ref.update(trackedParentsRef, (m) => {
+          const next = new Map(m)
+          next.delete(parentSessionID)
+          return next
+        })
+        swept++
+      }
+
+      return { swept, interrupted }
+    })
+
+    // Schedule periodic GC. forkScoped attaches the worker to the layer's
+    // scope so it's interrupted when the layer is disposed.
+    yield* Effect.forkScoped(
+      runGarbageCollection().pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError("mesh-coordinator: GC pass failed", { cause: Cause.pretty(cause) }),
+        ),
+        Effect.repeat(Schedule.spaced(Duration.hours(1))),
+      ),
+    )
+
     const trackParent: Interface["trackParent"] = Effect.fn("MeshCoordinator.trackParent")(function* (
       parentSessionID: SessionSchema.ID,
     ) {
-      yield* Ref.update(trackedParentsRef, (set) => {
-        const next = new Set(set)
-        next.add(parentSessionID)
+      yield* Ref.update(trackedParentsRef, (map) => {
+        const next = new Map(map)
+        if (!next.has(parentSessionID)) {
+          next.set(parentSessionID, { status: "active", lastSeenAt: Date.now(), consumerHandles: new Map() })
+        }
         return next
       })
     })
@@ -408,12 +542,23 @@ export const layer = Layer.effect(
     const listTrackedParents: Interface["listTrackedParents"] = Effect.fn(
       "MeshCoordinator.listTrackedParents",
     )(function* () {
-      return Array.from(yield* Ref.get(trackedParentsRef))
+      return Array.from((yield* Ref.get(trackedParentsRef)).keys())
     })
+
+    const subscribe: Interface["subscribe"] = (input) =>
+      Effect.gen(function* () {
+        const queue = yield* bus.subscribe(input.parentSessionID)
+        const stream = Stream.fromQueue(queue)
+        if (input.agentName) {
+          return stream.pipe(
+            Stream.filter((m) => m.fromAgent === input.agentName || m.toAgent === input.agentName),
+          )
+        }
+        return stream
+      })
 
     return Service.of({
       status,
-      drain,
       watch,
       subscribe,
       checkin,
@@ -423,6 +568,10 @@ export const layer = Layer.effect(
       tryReserveSubagentSlot,
       trackParent,
       listTrackedParents,
+      registerConsumer,
+      unregisterConsumer,
+      markParentEnded,
+      runGarbageCollection,
     })
   }),
 )

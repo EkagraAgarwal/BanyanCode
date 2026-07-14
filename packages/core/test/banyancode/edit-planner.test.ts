@@ -65,6 +65,8 @@ const makeMockRepo = (options: {
       findSymbolsByServiceTag: () => Effect.succeed([]),
       listNodesByKind: () => Effect.succeed([]),
       lookupByServiceTag: () => Effect.succeed(null),
+      searchNodesLight: () => Effect.succeed([]),
+      nodesByFileIDs: () => Effect.succeed([]),
     }),
   )
 }

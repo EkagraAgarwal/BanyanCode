@@ -23,6 +23,7 @@ const mockRepoLayer = Layer.succeed(SubagentMessagesRepo.Service, SubagentMessag
 
 const mockBusLayer = Layer.succeed(SubagentBus.Service, SubagentBus.Service.of({
   publish: (msg) => Effect.sync(() => mockMessages.push(msg)),
+  publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
   subscribe: () => Queue.unbounded<any>(),
   peers: () => Effect.succeed([]),
 }))
@@ -59,14 +60,6 @@ describe("mesh-coordinator", () => {
       expect(status.parentSessionID).toBe("ses_test")
       expect(Array.isArray(status.peers)).toBe(true)
       expect(Array.isArray(status.recentActivity)).toBe(true)
-    }),
-  )
-
-  it.effect("drain returns empty array when no messages", () =>
-    Effect.gen(function* () {
-      const svc = yield* MeshCoordinator.Service
-      const drained = yield* svc.drain(SessionSchema.ID.make("ses_test"))
-      expect(Array.isArray(drained)).toBe(true)
     }),
   )
 

@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm"
 import { Context, Effect, Layer, Ref } from "effect"
 import { Database } from "../database/database"
 import { SubagentPlansTable } from "./subagent-plans.sql"
+import { unwrapPayload, wrapPayload } from "./subagent-types"
 
 export interface PlanStep {
   content: string
@@ -44,6 +45,7 @@ export const layer = Layer.effect(
       plan: Omit<SubagentPlan, "updatedAt"> & { updatedAt?: number },
     ) {
       const now = Date.now()
+      const wrappedSteps = wrapPayload(plan.steps)
       yield* db
         .insert(SubagentPlansTable)
         .values({
@@ -52,7 +54,7 @@ export const layer = Layer.effect(
           agent: plan.agent,
           session_id: plan.sessionID,
           title: plan.title,
-          steps: plan.steps,
+          steps: wrappedSteps as any,
           exit_criteria: plan.exitCriteria,
           status: plan.status,
           created_at: plan.createdAt,
@@ -65,7 +67,7 @@ export const layer = Layer.effect(
             agent: plan.agent,
             session_id: plan.sessionID,
             title: plan.title,
-            steps: plan.steps,
+            steps: wrappedSteps as any,
             exit_criteria: plan.exitCriteria,
             status: plan.status,
             created_at: plan.createdAt,
@@ -99,7 +101,7 @@ export const layer = Layer.effect(
         agent: row.agent,
         sessionID: row.session_id,
         title: row.title,
-        steps: row.steps as PlanStep[],
+        steps: unwrapPayload(row.steps) as PlanStep[],
         exitCriteria: row.exit_criteria,
         status: row.status as SubagentPlan["status"],
         createdAt: row.created_at,
@@ -120,7 +122,7 @@ export const layer = Layer.effect(
         agent: row.agent,
         sessionID: row.session_id,
         title: row.title,
-        steps: row.steps as PlanStep[],
+        steps: unwrapPayload(row.steps) as PlanStep[],
         exitCriteria: row.exit_criteria,
         status: row.status as SubagentPlan["status"],
         createdAt: row.created_at,
@@ -141,7 +143,7 @@ export const layer = Layer.effect(
         agent: row.agent,
         sessionID: row.session_id,
         title: row.title,
-        steps: row.steps as PlanStep[],
+        steps: unwrapPayload(row.steps) as PlanStep[],
         exitCriteria: row.exit_criteria,
         status: row.status as SubagentPlan["status"],
         createdAt: row.created_at,

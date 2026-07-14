@@ -4,6 +4,7 @@ import { and, eq, isNotNull, isNull } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { SubagentMessagesTable } from "./subagent-messages.sql"
+import { unwrapPayload, wrapPayload } from "./subagent-types"
 import type { SubagentMessage } from "./types"
 
 export interface Interface {
@@ -24,6 +25,7 @@ export const layer = Layer.effect(
     const put = Effect.fn("SubagentMessagesRepo.put")(function* (
       message: Omit<SubagentMessage, "deliveredAt"> & { deliveredAt?: number },
     ) {
+      const wrappedPayload = wrapPayload(message.payload)
       yield* db
         .insert(SubagentMessagesTable)
         .values({
@@ -34,7 +36,7 @@ export const layer = Layer.effect(
           to_session: message.toSession,
           to_agent: message.toAgent,
           kind: message.kind,
-          payload: message.payload,
+          payload: wrappedPayload,
           created_at: message.createdAt,
           delivered_at: message.deliveredAt,
         })
@@ -47,7 +49,7 @@ export const layer = Layer.effect(
             to_session: message.toSession,
             to_agent: message.toAgent,
             kind: message.kind,
-            payload: message.payload,
+            payload: wrappedPayload,
             created_at: message.createdAt,
             delivered_at: message.deliveredAt,
           },
@@ -72,7 +74,7 @@ export const layer = Layer.effect(
         toSession: row.to_session ?? undefined,
         toAgent: row.to_agent ?? undefined,
         kind: row.kind as SubagentMessage["kind"],
-        payload: row.payload,
+        payload: unwrapPayload(row.payload),
         deliveredAt: row.delivered_at ?? undefined,
         createdAt: row.created_at,
       }
@@ -103,7 +105,7 @@ export const layer = Layer.effect(
         toSession: row.to_session ?? undefined,
         toAgent: row.to_agent ?? undefined,
         kind: row.kind as SubagentMessage["kind"],
-        payload: row.payload,
+        payload: unwrapPayload(row.payload),
         deliveredAt: row.delivered_at ?? undefined,
         createdAt: row.created_at,
       }))
@@ -138,7 +140,7 @@ export const layer = Layer.effect(
         toSession: row.to_session ?? undefined,
         toAgent: row.to_agent ?? undefined,
         kind: row.kind as SubagentMessage["kind"],
-        payload: row.payload,
+        payload: unwrapPayload(row.payload),
         deliveredAt: row.delivered_at ?? undefined,
         createdAt: row.created_at,
       }))

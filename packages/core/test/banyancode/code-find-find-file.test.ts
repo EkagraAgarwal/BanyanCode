@@ -82,6 +82,8 @@ const mockCodegraphRepoLayer = Layer.succeed(
     putEdges: () => Effect.void,
     rebuildFtsIndex: () => Effect.succeed({ rowsIndexed: 0 }),
     recomputeInDegree: () => Effect.void,
+    searchNodesLight: () => Effect.succeed([]),
+    nodesByFileIDs: () => Effect.succeed([]),
   }),
 )
 

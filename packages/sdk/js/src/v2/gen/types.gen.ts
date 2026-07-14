@@ -2241,6 +2241,24 @@ export type BanyanConfig = {
     enabled?: boolean
     filePath: string
   }>
+  banyancode_agent_overrides?: Array<{
+    /**
+     * Agent name (letters, digits, '.', '_', '-' only)
+     */
+    name: string
+    enabled?: boolean
+    model?: {
+      providerID: string
+      modelID: string
+    }
+  }>
+  banyancode_agent_prompts?: Array<{
+    /**
+     * Agent name (letters, digits, '.', '_', '-' only)
+     */
+    name: string
+    prompt: string
+  }>
 }
 
 export type BanyanCodegraphNode = {
@@ -2270,6 +2288,8 @@ export type BanyanCodegraphNode = {
   code?: string
   derivation?: "regex-v1" | "tree-sitter-v1" | "runtime-v1"
 }
+
+export type MeshParentSessionId = string
 
 export type BanyanQueryInput = {
   query: string
@@ -6325,6 +6345,76 @@ export type GlobalBanyanConfigUpdateResponses = {
 export type GlobalBanyanConfigUpdateResponse =
   GlobalBanyanConfigUpdateResponses[keyof GlobalBanyanConfigUpdateResponses]
 
+export type GlobalBanyanAgentOverrideUpdateData = {
+  body?: {
+    /**
+     * Agent name (letters, digits, '.', '_', '-' only)
+     */
+    name: string
+    enabled?: boolean
+    model?: {
+      providerID: string
+      modelID: string
+    }
+  }
+  path?: never
+  query?: never
+  url: "/global/banyan-agent-override"
+}
+
+export type GlobalBanyanAgentOverrideUpdateErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalBanyanAgentOverrideUpdateError =
+  GlobalBanyanAgentOverrideUpdateErrors[keyof GlobalBanyanAgentOverrideUpdateErrors]
+
+export type GlobalBanyanAgentOverrideUpdateResponses = {
+  /**
+   * Updated BanyanConfig
+   */
+  200: BanyanConfig
+}
+
+export type GlobalBanyanAgentOverrideUpdateResponse =
+  GlobalBanyanAgentOverrideUpdateResponses[keyof GlobalBanyanAgentOverrideUpdateResponses]
+
+export type GlobalBanyanAgentPromptUpdateData = {
+  body?: {
+    /**
+     * Agent name (letters, digits, '.', '_', '-' only)
+     */
+    name: string
+    prompt: string
+  }
+  path?: never
+  query?: never
+  url: "/global/banyan-agent-prompt"
+}
+
+export type GlobalBanyanAgentPromptUpdateErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalBanyanAgentPromptUpdateError =
+  GlobalBanyanAgentPromptUpdateErrors[keyof GlobalBanyanAgentPromptUpdateErrors]
+
+export type GlobalBanyanAgentPromptUpdateResponses = {
+  /**
+   * Updated BanyanConfig
+   */
+  200: BanyanConfig
+}
+
+export type GlobalBanyanAgentPromptUpdateResponse =
+  GlobalBanyanAgentPromptUpdateResponses[keyof GlobalBanyanAgentPromptUpdateResponses]
+
 export type GlobalCodegraphCancelData = {
   body?: never
   path?: never
@@ -6532,6 +6622,7 @@ export type GlobalBanyanAgentSaveData = {
       modelID: string
     }
     permission?: Array<string>
+    tools?: Array<string>
     prompt?: string
   }
   path?: never
@@ -6787,6 +6878,58 @@ export type GlobalSafeRenameResponses = {
 }
 
 export type GlobalSafeRenameResponse = GlobalSafeRenameResponses[keyof GlobalSafeRenameResponses]
+
+export type GlobalMeshStatusData = {
+  body?: never
+  path?: never
+  query: {
+    parentSessionID: MeshParentSessionId
+  }
+  url: "/global/mesh/status"
+}
+
+export type GlobalMeshStatusErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalMeshStatusError = GlobalMeshStatusErrors[keyof GlobalMeshStatusErrors]
+
+export type GlobalMeshStatusResponses = {
+  /**
+   * Mesh status for the given parent session
+   */
+  200: {
+    parentSessionID: string
+    peers: Array<{
+      sessionID: string
+      agent: string
+      status: "active" | "idle" | "disconnected"
+      lastSeenAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      tokens?: {
+        input: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        output: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        reasoning: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cache: {
+          read: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          write: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+      }
+      lastActivityAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      blockedReason?: string
+    }>
+    pendingMessages: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    recentActivity: Array<{
+      from: string
+      at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+  }
+}
+
+export type GlobalMeshStatusResponse = GlobalMeshStatusResponses[keyof GlobalMeshStatusResponses]
 
 export type RepositoryIntelQueryData = {
   body?: BanyanQueryInput

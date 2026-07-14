@@ -36,6 +36,13 @@ const mockRepoLayer = Layer.succeed(SubagentMessagesRepo.Service, SubagentMessag
 
 const mockBusLayer = Layer.succeed(SubagentBus.Service, SubagentBus.Service.of({
   publish: (msg) => Effect.sync(() => mockMessages.push(msg)),
+  publishOrFetch: (msg) =>
+    Effect.sync(() => {
+      const existing = mockMessages.find((m) => m.id === msg.id)
+      if (existing) return { id: existing.id, createdAt: existing.createdAt, created: false }
+      mockMessages.push(msg)
+      return { id: msg.id, createdAt: msg.createdAt, created: true }
+    }),
   subscribe: () => Effect.succeed({} as any),
   peers: () => Effect.succeed([]),
 }))

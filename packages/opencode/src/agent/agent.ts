@@ -11,12 +11,12 @@ import { ProviderTransform } from "@/provider/transform"
 
 import PROMPT_ORCHESTRATOR from "./prompt/orchestrator.txt"
 import PROMPT_RESEARCHER from "./prompt/researcher.txt"
+import PROMPT_GENERAL from "./prompt/general.txt"
 
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_CODER from "./prompt/coder.txt"
-import PROMPT_GENERAL from "./prompt/general.txt"
 import PROMPT_SCOUT from "./prompt/scout.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
@@ -166,6 +166,15 @@ export const layer = Layer.effect(
               Permission.fromConfig({
                 question: "allow",
                 plan_enter: "allow",
+                task: {
+                  "*": "deny",
+                  explore: "allow",
+                  scout: "allow",
+                  general: "allow",
+                },
+                subagent_message: "allow",
+                mesh_control: "deny",
+                mesh_subscribe: "allow",
               }),
               user,
             ),
@@ -231,6 +240,15 @@ export const layer = Layer.effect(
               Permission.fromConfig({
                 todowrite: "deny",
                 systeminfo: "allow",
+                task: {
+                  "*": "deny",
+                  explore: "allow",
+                  scout: "allow",
+                  researcher: "allow",
+                },
+                subagent_message: "allow",
+                mesh_control: "deny",
+                mesh_subscribe: "allow",
               }),
               user,
             ),
@@ -275,6 +293,13 @@ export const layer = Layer.effect(
                 code_find: "allow",
                 edit_plan: "allow",
                 external_directory: readonlyExternalDirectory,
+                task: {
+                  "*": "deny",
+                  scout: "allow",
+                },
+                subagent_message: "allow",
+                mesh_control: "deny",
+                mesh_subscribe: "allow",
               }),
               user,
             ),
@@ -326,9 +351,14 @@ export const layer = Layer.effect(
                 code_find: "allow",
                 todowrite: "allow",
                 question: "allow",
-                task: "deny",
-                subagent_message: "deny",
+                task: {
+                  "*": "deny",
+                  explore: "allow",
+                  scout: "allow",
+                },
+                subagent_message: "allow",
                 mesh_control: "deny",
+                mesh_subscribe: "allow",
               }),
               user,
             ),
@@ -373,8 +403,9 @@ export const layer = Layer.effect(
                 edit_plan: "allow",
                 todowrite: "deny",
                 task: "deny",
-                subagent_message: "deny",
+                subagent_message: "allow",
                 mesh_control: "deny",
+                mesh_subscribe: "allow",
               }),
               user,
             ),
@@ -446,6 +477,7 @@ export const layer = Layer.effect(
                 shared_memory: "allow",
                 subagent_message: "allow",
                 mesh_control: "allow",
+                mesh_subscribe: "allow",
                 todowrite: "allow",
                 question: "allow",
                 systeminfo: "allow",
@@ -495,6 +527,12 @@ export const layer = Layer.effect(
                 edit_plan: "allow",
                 shared_memory: "allow",
                 subagent_message: "allow",
+                task: {
+                  "*": "deny",
+                  scout: "allow",
+                },
+                mesh_control: "deny",
+                mesh_subscribe: "allow",
               }),
               user,
             ),

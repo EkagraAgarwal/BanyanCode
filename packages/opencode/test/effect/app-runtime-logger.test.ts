@@ -43,7 +43,9 @@ it.live("makeRuntime installs the observability logger", () =>
 
 it.live("AppLayer also installs the observability logger", () =>
   Effect.gen(function* () {
-    const current = yield* Effect.map(Effect.service(Logger.CurrentLoggers), check).pipe(Effect.provide(AppLayer))
+    const current = yield* Effect.map(Effect.service(Logger.CurrentLoggers), check).pipe(
+      Effect.provide(AppLayer as unknown as Layer.Layer<never, never, never>),
+    )
 
     expect(current.size).toBeGreaterThan(0)
   }),

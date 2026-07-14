@@ -61,8 +61,7 @@ function View(props: { api: TuiPluginApi }) {
 
   const loadAgentPrompts = async () => {
     try {
-      // TODO: regenerate SDK to include banyancode_agent_prompts
-      const result = await (props.api.client as any).global.banyanConfig.get({})
+      const result = await props.api.client.global.banyanConfig.get({})
       return result?.data?.banyancode_agent_prompts ?? []
     } catch {
       return []
@@ -81,7 +80,7 @@ function View(props: { api: TuiPluginApi }) {
 
   // Subscribe to config-updated events to re-read overrides and prompts
   onCleanup(
-    ev.on("banyancode.config.updated" as any, () => {
+    ev.on("banyancode.config.updated" as never, () => {
       void loadOverrides()
     }),
   )
@@ -132,8 +131,7 @@ function View(props: { api: TuiPluginApi }) {
       return [...prev, { name, enabled: nextEnabled }]
     })
     try {
-      // TODO: regenerate SDK to drop the as any cast
-      await (props.api.client as any).global.updateBanyanAgentOverride({ name, enabled: nextEnabled })
+      await props.api.client.global.banyanAgentOverride.update({ name, enabled: nextEnabled })
       toast.show({ message: `Saved ${name} override`, variant: "success" })
     } catch {
       // Revert on failure
@@ -167,8 +165,7 @@ function View(props: { api: TuiPluginApi }) {
   const saveEditPrompt = async (name: string) => {
     const value = promptDrafts()[name] ?? ""
     try {
-      // TODO: regenerate SDK to drop the as any cast
-      await (props.api.client as any).global.updateBanyanAgentPrompt({ name, prompt: value })
+      await props.api.client.global.banyanAgentPrompt.update({ name, prompt: value })
       toast.show({ message: `Saved prompt for ${name}`, variant: "success" })
     } catch {
       toast.show({ message: `Failed to save prompt for ${name}`, variant: "error" })
@@ -193,8 +190,7 @@ function View(props: { api: TuiPluginApi }) {
           // Call endpoint
           ;(async () => {
             try {
-              // TODO: regenerate SDK to drop the as any cast
-              await (props.api.client as any).global.updateBanyanAgentOverride({ name, model })
+              await props.api.client.global.banyanAgentOverride.update({ name, model })
               toast.show({ message: `Saved ${name} override`, variant: "success" })
             } catch {
               // Revert on failure

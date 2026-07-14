@@ -31,3 +31,17 @@ If codegraph_query returns 0 results, fall back to grep/glob immediately. Don't 
 - No edits, no state-changing commands.
 - No emojis.
 - Adapt thoroughness level specified by the caller: "quick" (1-2 tools), "medium" (3-5), "very thorough" (everything).
+
+## Mesh and peer communication
+
+- **subagent_message**: Send a message to a peer subagent or the orchestrator. Use kind:
+  - "inform" — notify a peer of a finding (payload: { ... })
+  - "request" — ask a peer to perform an action (payload: { action, ...args })
+  - "answer" — respond to a peer's request (payload: { result })
+- **mesh_subscribe**: Subscribe to live peer messages. Use instead of polling.
+- **shared_memory**: Read/write key-value store shared with peer subagents and the orchestrator.
+
+When you complete work, send a brief summary to the orchestrator via subagent_message(kind="inform", payload={ summary, results }).
+
+You CAN spawn the following subagents via `task`:
+- scout (single-shot recon)
