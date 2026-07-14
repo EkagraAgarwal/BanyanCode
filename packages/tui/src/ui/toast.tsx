@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { createContext, useContext, type ParentProps, Show, For, onCleanup } from "solid-js"
+import { createContext, useContext, type ParentProps, Show, For, onCleanup, createEffect } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { useTheme } from "../context/theme"
 import { useTerminalDimensions } from "@opentui/solid"
@@ -57,6 +57,11 @@ function ToastItem(props: { entry: ToastEntry; theme: ReturnType<typeof useTheme
   }
   rafId = requestAnimationFrame(tick)
   onCleanup(() => { if (rafId !== null) cancelAnimationFrame(rafId) })
+
+  createEffect(() => {
+    const timer = setTimeout(() => toast.dismiss(entry.id), entry.duration)
+    onCleanup(() => clearTimeout(timer))
+  })
 
   return (
     <box
