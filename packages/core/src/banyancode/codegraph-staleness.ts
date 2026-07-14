@@ -24,6 +24,7 @@ export interface Interface {
   readonly isStale: (input: { root: string; thresholdMs?: number }) => Effect.Effect<typeof StaleCheck.Type, never, never>
   readonly watch: (input: { root: string; intervalMs?: number }) => Stream.Stream<typeof StaleCheck.Type, never, never>
   readonly status: () => Effect.Effect<typeof StaleCheck.Type | undefined, never, never>
+  readonly collectChanges: (input: { root: string }) => Effect.Effect<{ changed: string[]; missing: string[] }, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphStaleness") {}
@@ -141,7 +142,38 @@ export const layer = Layer.effect(
         }),
       )
 
-    return Service.of({ isStale, watch, status })
+    const collectChanges: Interface["collectChanges"] = (input) =>
+      Effect.gen(function* () {
+        const files = yield* repo.listAllFiles()
+        if (files.length === 0) {
+          return { changed: [], missing: [] }
+        }
+        const changedRef = yield* Ref.make<string[]>([])
+        const missingRef = yield* Ref.make<string[]>([])
+        yield* Effect.forEach(
+          files,
+          (file) =>
+            Effect.gen(function* () {
+              const statResult = yield* fs.stat(file.path).pipe(
+                Effect.catch(() => Effect.succeed(undefined)),
+              )
+              if (statResult === undefined) {
+                yield* Ref.update(missingRef, (arr) => [...arr, file.path])
+                return
+              }
+              const mtimeMs = Option.getOrElse(statResult.mtime, () => new Date(0)).getTime()
+              if (mtimeMs > file.indexedAt) {
+                yield* Ref.update(changedRef, (arr) => [...arr, file.path])
+              }
+            }),
+          { concurrency: 16, discard: true },
+        )
+        const changed = yield* Ref.get(changedRef)
+        const missing = yield* Ref.get(missingRef)
+        return { changed, missing }
+      })
+
+    return Service.of({ isStale, watch, status, collectChanges })
   }),
 )
 

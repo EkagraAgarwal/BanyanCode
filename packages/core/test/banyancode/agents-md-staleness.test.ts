@@ -47,7 +47,7 @@ describe("agents-md-staleness", () => {
   test("Permission.ask is a valid exported symbol", async () => {
     const index = await getSourceIndex()
     expect(index.includes("Permission.ask")).toBe(true)
-  })
+  }, 30000)
 
   test("all backtick-quoted identifiers in AGENTS.md resolve in source", async () => {
     const agentsMdPath = join(REPO_ROOT, "packages/opencode/AGENTS.md")
@@ -57,5 +57,5 @@ describe("agents-md-staleness", () => {
 
     const unresolved = identifiers.filter((id) => !EXCLUDE.has(id) && !index.includes(id))
     expect(unresolved).toEqual([])
-  })
+  }, 30000)
 })

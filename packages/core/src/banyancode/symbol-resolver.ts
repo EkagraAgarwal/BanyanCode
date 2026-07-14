@@ -133,28 +133,26 @@ export const resolveGraphTargetPure = (
     }
 
     // 4) Code-substring + last-segment fallback (mirrors code_find definition).
-    //    Skip when the leaf is short (< 6 chars) -- short tokens like "gen",
-    //    "map", "get" are too likely to match unrelated source code. The
-    //    typical false positive is Effect.gen → class ConfigTag whose source
-    //    happens to contain the substring. qualified-split already covered the
-    //    case where leaf is short AND the parent resolves to a node.
+    //    Code-substring uses the FULL lowerTarget (e.g. "Effect.gen"), which is
+    //    safe even for short leaves because it's specific enough not to
+    //    false-positive on unrelated source. Name-based matching is still gated
+    //    by isShortLeaf since short names like "gen" are too generic.
     const lowerTarget = target.toLowerCase()
     const leaf = target.includes(".") ? target.split(".").pop()!.toLowerCase() : lowerTarget
     const isShortLeaf = leaf.length < 6
-    let codeHits: CodegraphNode[] = []
-    if (!isShortLeaf) {
-      const allNodes = yield* repo.listAllNodes()
-      const codeHitsRaw = allNodes.filter(
-        (n) =>
-          n.kind !== "file" &&
-          (input.kind ? n.kind === input.kind : true) &&
-          (!input.fileID || n.fileID === input.fileID) &&
-          (n.name.toLowerCase() === lowerTarget ||
-            n.name.toLowerCase() === leaf ||
-            n.code?.toLowerCase().includes(lowerTarget) === true),
-      )
-      codeHits = sortBySpecificity(codeHitsRaw, lowerTarget)
+    const allNodes = yield* repo.listAllNodes()
+    const nameMatches = (n: CodegraphNode): boolean => {
+      if (isShortLeaf) return false
+      return n.name.toLowerCase() === lowerTarget || n.name.toLowerCase() === leaf
     }
+    const codeHitsRaw = allNodes.filter(
+      (n) =>
+        n.kind !== "file" &&
+        (input.kind ? n.kind === input.kind : true) &&
+        (!input.fileID || n.fileID === input.fileID) &&
+        (nameMatches(n) || n.code?.toLowerCase().includes(lowerTarget) === true),
+    )
+    const codeHits = sortBySpecificity(codeHitsRaw, lowerTarget)
     tried.push("code-substring")
     if (codeHits.length > 0) {
       return toResult(dedupeByID(codeHits).slice(0, limit), "code-substring")

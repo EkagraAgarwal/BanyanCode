@@ -1,7 +1,7 @@
 export * as CodegraphRepo from "./codegraph-repo"
 
 import { and, eq, inArray, or, sql } from "drizzle-orm"
-import { Context, Effect, Layer } from "effect"
+import { Cause, Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
 import { CodegraphMetaTable } from "./codegraph-meta.sql"
@@ -71,6 +71,10 @@ export interface Interface {
   readonly listAllNodes: () => Effect.Effect<CodegraphNode[], never, never>
   readonly queryNodes: (input: { function?: string; kind?: string }) => Effect.Effect<CodegraphNode[], never, never>
   readonly searchNodes: (input: { name?: string; kind?: string; limit?: number }) => Effect.Effect<CodegraphNode[], never, never>
+  /** Like searchNodes but without the `code` field — suitable for callers that only need metadata. */
+  readonly searchNodesLight: (input: { name?: string; kind?: string; fileID?: string; limit?: number }) => Effect.Effect<Array<Omit<CodegraphNode, "code"> & { code?: never }>, never, never>
+  /** Fetch nodes for a specific set of files. Used by incremental rebuildDerivedGraph. */
+  readonly nodesByFileIDs: (input: { fileIDs: string[] }) => Effect.Effect<CodegraphNode[], never, never>
   readonly countNodes: () => Effect.Effect<number, never, never>
   readonly countEdges: () => Effect.Effect<number, never, never>
   readonly countFiles: () => Effect.Effect<number, never, never>
@@ -468,6 +472,63 @@ export const layer = Layer.effect(
       return rows.map(rowToNode)
     })
 
+    const searchNodesLight = Effect.fn("CodegraphRepo.searchNodesLight")(function* (input: {
+      name?: string
+      kind?: string
+      fileID?: string
+      limit?: number
+    }) {
+      const limit = input.limit ?? 1000
+      const conditions = []
+      if (input.name) {
+        conditions.push(sql`${CodegraphNodesTable.name} LIKE ${"%" + input.name + "%"}`)
+      }
+      if (input.kind) {
+        conditions.push(sql`${CodegraphNodesTable.kind} = ${input.kind}`)
+      }
+      if (input.fileID) {
+        conditions.push(sql`${CodegraphNodesTable.file_id} = ${input.fileID}`)
+      }
+      const whereClause = conditions.length > 0 ? sql`WHERE ${sql.join(conditions, sql` AND `)}` : sql``
+      const rows = yield* db
+        .all<{
+          id: string
+          file_id: string
+          kind: string
+          name: string
+          signature: string | null
+          start_line: number
+          end_line: number
+        }>(sql`
+          SELECT id, file_id, kind, name, signature, start_line, end_line
+          FROM codegraph_nodes
+          ${whereClause}
+          ORDER BY codegraph_nodes.name
+          LIMIT ${limit}
+        `)
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        fileID: row.file_id,
+        kind: row.kind as CodegraphNode["kind"],
+        name: row.name,
+        signature: row.signature ?? undefined,
+        startLine: row.start_line,
+        endLine: row.end_line,
+      }))
+    })
+
+    const nodesByFileIDs = Effect.fn("CodegraphRepo.nodesByFileIDs")(function* (input: { fileIDs: string[] }) {
+      if (input.fileIDs.length === 0) return []
+      const rows = yield* db
+        .select()
+        .from(CodegraphNodesTable)
+        .where(inArray(CodegraphNodesTable.file_id, input.fileIDs))
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map(rowToNode)
+    })
+
     const countNodes = Effect.fn("CodegraphRepo.countNodes")(function* () {
       const row = yield* db
         .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_nodes`)
@@ -748,7 +809,7 @@ export const layer = Layer.effect(
         .pipe(
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
-              yield* Effect.logWarning(`codegraph.recordParseError failed for ${input.path}`, { cause })
+              yield* Effect.logWarning(`codegraph.recordParseError failed for ${input.path}`, { cause: Cause.pretty(cause) })
               return yield* Effect.failCause(cause)
             }),
           ),
@@ -1014,6 +1075,8 @@ export const layer = Layer.effect(
       listAllNodes,
       queryNodes,
       searchNodes,
+      searchNodesLight,
+      nodesByFileIDs,
       countNodes,
       countEdges,
       countFiles,

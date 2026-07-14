@@ -38,6 +38,7 @@ const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 const DEBOUNCE_MS = 500
 const POLL_MS = 2000
+const MAX_BATCH_PATHS = 200
 
 export const layer: Layer.Layer<
   Service,
@@ -128,6 +129,20 @@ export const layer: Layer.Layer<
       yield* publish(next)
     })
 
+    // Helper: derive the longest common prefix path from a list of file paths.
+    // Simple approach: start with the first path, walk up with dirname until all paths share the prefix.
+    const deriveRootFromPending = (paths: string[]): string | undefined => {
+      if (paths.length === 0) return undefined
+      let candidate = paths[0]
+      const isPrefix = (p: string) => candidate === p || p.startsWith(candidate + "/") || candidate.startsWith(p + "/")
+      while (candidate && !paths.every(isPrefix)) {
+        candidate = candidate.split("/").slice(0, -1).join("/")
+      }
+      return candidate || undefined
+    }
+
+    const initialBuildTriggeredRef = yield* Ref.make(false)
+
     // Re-read graph metadata lazily before each batch so a fresh full build
     // that changed indexed_root steers subsequent events to the new root.
     const processBatch = Effect.fn("CodegraphAutoUpdate.processBatch")(function* () {
@@ -136,7 +151,33 @@ export const layer: Layer.Layer<
         const removes = yield* Ref.getAndUpdate(pendingRemoveRef, () => new Set())
         return { adds, removes }
       })
-      if (collected.adds.size === 0 && collected.removes.size === 0) return
+
+      // Cap the batch to prevent OOM on a 10K-file event storm.
+      let batchAdds = collected.adds
+      let batchRemoves = collected.removes
+      let overflowAdds: Array<string> = []
+      let overflowRemoves: Array<string> = []
+
+      const total = collected.adds.size + collected.removes.size
+      if (total > MAX_BATCH_PATHS) {
+        const addEntries = [...collected.adds.entries()]
+        const removeArr = [...collected.removes]
+
+        const splitAdd = Math.min(addEntries.length, MAX_BATCH_PATHS)
+        batchAdds = new Map(addEntries.slice(0, splitAdd))
+        overflowAdds = addEntries.slice(splitAdd).map(([k]) => k)
+
+        const remaining = MAX_BATCH_PATHS - splitAdd
+        if (remaining > 0) {
+          batchRemoves = new Set(removeArr.slice(0, remaining))
+          overflowRemoves = removeArr.slice(remaining)
+        } else {
+          batchRemoves = new Set()
+          overflowRemoves = removeArr
+        }
+      }
+
+      if (batchAdds.size === 0 && batchRemoves.size === 0) return
 
       yield* recomputeStatus()
 
@@ -145,11 +186,11 @@ export const layer: Layer.Layer<
         yield* Effect.logDebug("codegraph auto-update: deferring until build completes")
         yield* Effect.sleep(Duration.millis(POLL_MS))
         yield* Ref.update(pendingAddRef, (m) => {
-          for (const k of collected.adds.keys()) m.set(k, true)
+          for (const k of batchAdds.keys()) m.set(k, true)
           return m
         })
         yield* Ref.update(pendingRemoveRef, (s) => {
-          for (const k of collected.removes) s.add(k)
+          for (const k of batchRemoves) s.add(k)
           return s
         })
         yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
@@ -157,23 +198,70 @@ export const layer: Layer.Layer<
       }
 
       const meta = yield* repo.getMeta()
-      if (!meta || !meta.indexedRoot) return
+      if (!meta || !meta.indexedRoot) {
+        // Fresh workspace: derive root from pending files and trigger initial build
+        const pendingPaths = [...batchAdds.keys(), ...batchRemoves]
+        if (pendingPaths.length > 0) {
+          const derived = deriveRootFromPending(pendingPaths)
+          if (derived) {
+            const alreadyTriggered = yield* Ref.get(initialBuildTriggeredRef)
+            if (!alreadyTriggered) {
+              yield* Ref.set(initialBuildTriggeredRef, true)
+              yield* Effect.logInfo(`codegraph auto-update: no indexedRoot, triggering initial build for ${derived}`)
+              yield* buildService.start({ root: derived, force: false }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("codegraph auto-update: initial build failed", { cause: Cause.pretty(cause) }),
+                ),
+              )
+            }
+          } else {
+            yield* Effect.logWarning("codegraph auto-update: could not derive root from pending paths, skipping")
+          }
+        }
+        // Re-queue overflow into the refs for the next batch.
+        if (overflowAdds.length > 0 || overflowRemoves.length > 0) {
+          yield* Ref.update(pendingAddRef, (m) => {
+            for (const p of overflowAdds) m.set(p, true)
+            return m
+          })
+          yield* Ref.update(pendingRemoveRef, (s) => {
+            for (const p of overflowRemoves) s.add(p)
+            return s
+          })
+          yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
+        }
+        return
+      }
       const root = meta.indexedRoot
 
-      if (collected.removes.size > 0) {
-        yield* indexer.removeFiles({ root, paths: [...collected.removes] }).pipe(
+      if (batchRemoves.size > 0) {
+        yield* indexer.removeFiles({ root, paths: [...batchRemoves] }).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("codegraph auto-update: removeFiles failed", { cause: Cause.pretty(cause) }),
           ),
         )
       }
-      if (collected.adds.size > 0) {
-        yield* indexer.indexFiles({ root, paths: [...collected.adds.keys()] }).pipe(
+      if (batchAdds.size > 0) {
+        yield* indexer.indexFiles({ root, paths: [...batchAdds.keys()] }).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("codegraph auto-update: indexFiles failed", { cause: Cause.pretty(cause) }),
           ),
         )
       }
+
+      // Re-queue overflow into the refs for the next batch.
+      if (overflowAdds.length > 0 || overflowRemoves.length > 0) {
+        yield* Ref.update(pendingAddRef, (m) => {
+          for (const p of overflowAdds) m.set(p, true)
+          return m
+        })
+        yield* Ref.update(pendingRemoveRef, (s) => {
+          for (const p of overflowRemoves) s.add(p)
+          return s
+        })
+        yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
+      }
+
       yield* recomputeStatus()
     })
 

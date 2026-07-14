@@ -29,6 +29,8 @@ const mockRepo = Layer.succeed(
     listAllNodes: () => Effect.succeed([]),
     queryNodes: () => Effect.succeed([]),
     searchNodes: () => Effect.succeed([]),
+    searchNodesLight: () => Effect.succeed([]),
+    nodesByFileIDs: () => Effect.succeed([]),
     countNodes: () => Effect.succeed(0),
     countEdges: () => Effect.succeed(0),
     countFiles: () => Effect.succeed(0),
@@ -275,6 +277,58 @@ describe("CodegraphStaleness", () => {
         expect(afterCheck).toBeDefined()
         expect(afterCheck!.isStale).toBe(true)
         expect(afterCheck!.reason).toBe("no indexed files")
+      }).pipe(Effect.provide(stalenessLayer)),
+    )
+  })
+
+  test("collectChanges returns changed, missing, and unchanged files correctly", async () => {
+    const now = Date.now()
+    mockFiles.length = 0
+    mockFiles.push(
+      { id: "1", path: "/test/changed.ts", contentHash: "abc", language: "typescript", indexedAt: now - 5000 },
+      { id: "2", path: "/test/unchanged.ts", contentHash: "def", language: "typescript", indexedAt: now - 5000 },
+      { id: "3", path: "/test/missing.ts", contentHash: "ghi", language: "typescript", indexedAt: now - 5000 },
+    )
+    mockMeta.value = {
+      id: "singleton",
+      graphBuiltAt: now - 5000,
+      graphVersion: 1,
+      graphCoverage: 1,
+      totalFiles: 3,
+      totalNodes: 0,
+      totalEdges: 0,
+      schemaVersion: 1,
+    }
+    // changed.ts: modified AFTER indexedAt (mtime > indexedAt)
+    mockMtimes.set("/test/changed.ts", now)
+    // unchanged.ts: NOT modified (mtime < indexedAt, which is now - 5000)
+    mockMtimes.set("/test/unchanged.ts", now - 10000)
+    // missing.ts: no entry in mockMtimes, so real fs.stat is called and will throw
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* CodegraphStaleness.Service
+        const result = yield* service.collectChanges({ root: "/test" })
+        expect(result.changed).toEqual(["/test/changed.ts"])
+        expect(result.missing).toEqual(["/test/missing.ts"])
+        // unchanged should not appear in either list
+        expect(result.changed).not.toContain("/test/unchanged.ts")
+        expect(result.missing).not.toContain("/test/unchanged.ts")
+      }).pipe(Effect.provide(stalenessLayer)),
+    )
+  })
+
+  test("collectChanges returns empty arrays when no files", async () => {
+    mockFiles.length = 0
+    mockMeta.value = undefined
+    mockMtimes.clear()
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* CodegraphStaleness.Service
+        const result = yield* service.collectChanges({ root: "/test" })
+        expect(result.changed).toEqual([])
+        expect(result.missing).toEqual([])
       }).pipe(Effect.provide(stalenessLayer)),
     )
   })

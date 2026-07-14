@@ -241,26 +241,50 @@ AppRuntime.runFork(
     if (Option.isNone(repoOpt)) return
     const indexerOpt = yield* Effect.serviceOption(Banyan.CodegraphIndexer)
     if (Option.isNone(indexerOpt)) return
-    const fsOpt = yield* Effect.serviceOption(FSUtil.Service)
-    if (Option.isNone(fsOpt)) return
 
     const meta = yield* repoOpt.value.getMeta()
     if (!meta || !meta.indexedRoot) return
-    const files = yield* repoOpt.value.listAllFiles()
-    if (files.length === 0) return
 
-    const changed: string[] = []
-    for (const f of files) {
-      const stat = yield* fsOpt.value.stat(f.path).pipe(Effect.catch(() => Effect.succeed(undefined)))
-      if (!stat) continue
-      const mtimeMs = Option.getOrElse(stat.mtime, () => new Date(0)).getTime()
-      if (mtimeMs > f.indexedAt) changed.push(f.path)
+    // Try to use CodegraphStaleness.collectChanges if available (concurrency 16)
+    const stalenessOpt = yield* Effect.serviceOption(Banyan.CodegraphStaleness)
+    let changed: string[] = []
+    let missing: string[] = []
+
+    if (Option.isSome(stalenessOpt)) {
+      const result = yield* stalenessOpt.value.collectChanges({ root: meta.indexedRoot })
+      changed = result.changed
+      missing = result.missing
+    } else {
+      // Fallback: manual iteration without concurrency
+      const fsOpt = yield* Effect.serviceOption(FSUtil.Service)
+      if (Option.isNone(fsOpt)) return
+      const files = yield* repoOpt.value.listAllFiles()
+      if (files.length === 0) return
+
+      for (const f of files) {
+        const stat = yield* fsOpt.value.stat(f.path).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        if (!stat) {
+          missing.push(f.path)
+          continue
+        }
+        const mtimeMs = Option.getOrElse(stat.mtime, () => new Date(0)).getTime()
+        if (mtimeMs > f.indexedAt) changed.push(f.path)
+      }
     }
+
     if (changed.length > 0) {
       yield* Effect.logInfo(`codegraph: startup catch-up — ${changed.length} file(s) changed since last session`)
       yield* indexerOpt.value.indexFiles({ root: meta.indexedRoot, paths: changed }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("codegraph startup catch-up failed", { cause: Cause.pretty(cause) }),
+        ),
+      )
+    }
+    if (missing.length > 0) {
+      yield* Effect.logInfo(`codegraph: startup catch-up — ${missing.length} file(s) missing from disk`)
+      yield* indexerOpt.value.removeFiles({ root: meta.indexedRoot, paths: missing }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("codegraph startup catch-up: removeFiles failed", { cause: Cause.pretty(cause) }),
         ),
       )
     }

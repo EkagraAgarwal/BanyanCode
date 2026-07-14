@@ -31,9 +31,9 @@ function makeTestLayer(dbPath: string) {
   )
 }
 
-describe("repository_trace end-to-end (Permission.ask)", () => {
+describe("repository_trace end-to-end (Permission.evaluate)", () => {
   test(
-    "traces Permission.ask on the real BanyanCode workspace: snapshot directCallers + transitiveDependents",
+    "traces Permission.evaluate on the real BanyanCode workspace: snapshot directCallers + transitiveDependents",
     async () => {
       const workspaceRoot = "D:\\OpenCode"
       const dbPath = path.join(
@@ -60,8 +60,8 @@ describe("repository_trace end-to-end (Permission.ask)", () => {
             "5 minutes",
           )
 
-          // Now trace Permission.ask.
-          const slice = yield* intel.trace({ symbol: "Permission.ask", depth: 2 })
+          // Now trace Permission.evaluate.
+          const slice = yield* intel.trace({ symbol: "Permission.evaluate", depth: 2 })
           return slice
         }).pipe(Effect.provide(layer), Effect.scoped),
       )
