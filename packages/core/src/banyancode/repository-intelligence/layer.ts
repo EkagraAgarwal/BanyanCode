@@ -627,8 +627,20 @@ export const layer = Layer.effect(
           ? allNodes.filter((n) => n.fileID === fileByPath.id)
           : []
 
+        const isMultiToken = /\s/.test(input.query)
+        const ftsHits = isMultiToken && symbolResult.nodes.length === 0
+          ? yield* repo.ftsSearchNodes({ query: input.query, limit: input.limit ?? 50 })
+          : []
+        const ftsDerivation = ftsHits.length > 0 ? ("fts-bm25" as const) : undefined
+
         const seen = new Set<string>()
         const symbols: CodegraphNode[] = []
+        for (const hit of ftsHits) {
+          if (!seen.has(hit.id)) {
+            seen.add(hit.id)
+            symbols.push(hit)
+          }
+        }
         for (const n of [...symbolResult.nodes, ...fileMatches]) {
           if (!seen.has(n.id)) {
             seen.add(n.id)
@@ -683,6 +695,11 @@ export const layer = Layer.effect(
             message: "Multiple exact-name matches found; pass focusDirs to disambiguate.",
             candidates: candidateFiles,
           })
+        } else if (ftsDerivation) {
+          diagnostics.push({
+            kind: "fts-fallback",
+            message: `Resolved via FTS5 bm25 ranking for "${input.query}".`,
+          })
         }
 
         const graphFileIDs = new Set<string>(
@@ -723,6 +740,7 @@ export const layer = Layer.effect(
           degraded: isDegraded,
           fallbackUsed: symbolResult.usedFallback,
           query: input.query,
+          ...(ftsDerivation ? { searchDerivation: ftsDerivation } : {}),
           symbols,
           files,
           graph: { nodes: graphNodesList, edges: graphEdges },

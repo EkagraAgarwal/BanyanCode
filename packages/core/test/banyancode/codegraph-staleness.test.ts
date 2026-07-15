@@ -30,6 +30,7 @@ const mockRepo = Layer.succeed(
     queryNodes: () => Effect.succeed([]),
     searchNodes: () => Effect.succeed([]),
     searchNodesLight: () => Effect.succeed([]),
+    ftsSearchNodes: () => Effect.succeed([]),
     nodesByFileIDs: () => Effect.succeed([]),
     countNodes: () => Effect.succeed(0),
     countEdges: () => Effect.succeed(0),
