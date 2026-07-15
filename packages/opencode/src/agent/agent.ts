@@ -171,6 +171,8 @@ export const layer = Layer.effect(
                   explore: "allow",
                   scout: "allow",
                   general: "allow",
+                  coder: "allow",
+                  researcher: "allow",
                 },
                 subagent_message: "allow",
                 mesh_control: "deny",
