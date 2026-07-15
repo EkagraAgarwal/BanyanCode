@@ -576,6 +576,11 @@ describe("RepositoryIntelligence", () => {
         // the assertion: with limit=5, real-handler is in top-5 but
         // god-utility is NOT (it's a plain function with 500 incoming
         // edges, but inDegree isn't populated until Phase 3).
+        //
+        // DIRECTIONAL CHANGE: findRelatedWithDepth now only follows incoming
+        // calls/references, NOT extends. So from a at depth=2 we only get
+        // real-handler (calls) and NOT god-utility/noise (extends).
+        // transitiveDependents = [real-handler] only.
         yield* repo.putFile({ id: "f-target", path: "src/target.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
         yield* repo.putFile({ id: "f-a", path: "src/a.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
         yield* repo.putFile({ id: "f-god", path: "src/god-utility.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
@@ -598,12 +603,11 @@ describe("RepositoryIntelligence", () => {
         const ri = yield* RepositoryIntelligence.Service
         const slc = yield* ri.trace({ symbol: "target", depth: 2, limit: 5 })
 
-        expect(slc.transitiveDependents.length).toBe(5)
-        expect(slc.moreAvailable?.dependents).toBe(497)
-        // real-handler (depth=2, isEntrypoint=true via /handlers/ path) ranks
-        // at index 0. The remaining 4 slots are tied-score noise/god nodes
-        // — god-utility is no more likely to land in the top-5 than any
-        // other plain depth=2 node. Crucially: real-handler IS at the top.
+        expect(slc.transitiveDependents.length).toBe(1)
+        expect(slc.moreAvailable?.dependents).toBeUndefined()
+        // real-handler (depth=2, isEntrypoint=true via /handlers/ path) is the
+        // ONLY transitive dependent since findRelatedWithDepth now drops incoming
+        // extends edges. god-utility and all 500 noise nodes use extends, not calls.
         const got = slc.transitiveDependents.map((n) => n.name)
         expect(got[0]).toBe("real-handler")
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),

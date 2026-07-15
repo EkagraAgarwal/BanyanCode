@@ -99,6 +99,16 @@ const rankTransitiveDependents = (
     .map((t) => t.node)
 }
 
+type EdgeDirection = "callers" | "dependencies"
+
+const CALLER_EDGE_KINDS: ReadonlySet<CodegraphEdge["kind"]> = new Set(["calls", "references"])
+const DEPENDENCY_EDGE_KINDS: ReadonlySet<CodegraphEdge["kind"]> = new Set([
+  "calls",
+  "references",
+  "imports",
+  "extends",
+])
+
 function isDocPath(path: string): boolean {
   return DOC_PATH_PATTERNS.some((p) => p.test(path))
 }
@@ -447,11 +457,18 @@ export const layer = Layer.effect(
           const incoming = yield* repo.edgesTo(current.id)
 
           const nextIDs: string[] = []
-          for (const edge of [...outgoing, ...incoming]) {
-            const nextID = edge.fromNodeID === current.id ? edge.toNodeID : edge.fromNodeID
-            if (!visited.has(nextID)) {
-              visited.add(nextID)
-              nextIDs.push(nextID)
+          for (const edge of outgoing) {
+            if (!DEPENDENCY_EDGE_KINDS.has(edge.kind)) continue
+            if (!visited.has(edge.toNodeID)) {
+              visited.add(edge.toNodeID)
+              nextIDs.push(edge.toNodeID)
+            }
+          }
+          for (const edge of incoming) {
+            if (!CALLER_EDGE_KINDS.has(edge.kind)) continue
+            if (!visited.has(edge.fromNodeID)) {
+              visited.add(edge.fromNodeID)
+              nextIDs.push(edge.fromNodeID)
             }
           }
 
@@ -470,6 +487,8 @@ export const layer = Layer.effect(
     // Depth-tagged BFS. Each discovered node carries the per-node hop distance
     // from the anchor (depth=1 means the anchor calls/touches it directly).
     // Phase 2 ranking consumes these depths to score transitive dependents.
+    // Directional-but-tolerant: outgoing uses all dependency kinds, incoming
+    // uses only caller kinds (calls/references).
     const findRelatedWithDepth = (input: {
       nodeID: string
       depth?: number
@@ -488,11 +507,18 @@ export const layer = Layer.effect(
           const incoming = yield* repo.edgesTo(current.id)
 
           const nextIDs: string[] = []
-          for (const edge of [...outgoing, ...incoming]) {
-            const nextID = edge.fromNodeID === current.id ? edge.toNodeID : edge.fromNodeID
-            if (!visited.has(nextID)) {
-              visited.add(nextID)
-              nextIDs.push(nextID)
+          for (const edge of outgoing) {
+            if (!DEPENDENCY_EDGE_KINDS.has(edge.kind)) continue
+            if (!visited.has(edge.toNodeID)) {
+              visited.add(edge.toNodeID)
+              nextIDs.push(edge.toNodeID)
+            }
+          }
+          for (const edge of incoming) {
+            if (!CALLER_EDGE_KINDS.has(edge.kind)) continue
+            if (!visited.has(edge.fromNodeID)) {
+              visited.add(edge.fromNodeID)
+              nextIDs.push(edge.fromNodeID)
             }
           }
 
@@ -501,6 +527,82 @@ export const layer = Layer.effect(
             for (const node of nodes) {
               result.push({ node, depth: current.depth + 1 })
             }
+            for (const id of nextIDs) {
+              queue.push({ id, depth: current.depth + 1 })
+            }
+          }
+        }
+
+        return result
+      })
+
+    // Strict directional BFS: incoming calls/references only.
+    const findCallers = (input: {
+      nodeID: string
+      depth?: number
+    }): Effect.Effect<CodegraphNode[], never, never> =>
+      Effect.gen(function* () {
+        const maxDepth = input.depth ?? 2
+        const visited = new Set<string>([input.nodeID])
+        const result: CodegraphNode[] = []
+        const queue: Array<{ id: string; depth: number }> = [{ id: input.nodeID, depth: 0 }]
+
+        while (queue.length > 0) {
+          const current = queue.shift()!
+          if (current.depth >= maxDepth) continue
+
+          const incoming = yield* repo.edgesTo(current.id)
+          const nextIDs: string[] = []
+          for (const edge of incoming) {
+            if (!CALLER_EDGE_KINDS.has(edge.kind)) continue
+            const nextID = edge.fromNodeID
+            if (!visited.has(nextID)) {
+              visited.add(nextID)
+              nextIDs.push(nextID)
+            }
+          }
+
+          if (nextIDs.length > 0) {
+            const nodes = yield* repo.nodesByIDs(nextIDs)
+            result.push(...nodes)
+            for (const id of nextIDs) {
+              queue.push({ id, depth: current.depth + 1 })
+            }
+          }
+        }
+
+        return result
+      })
+
+    // Strict directional BFS: outgoing calls/references/imports/extends only.
+    const findDependencies = (input: {
+      nodeID: string
+      depth?: number
+    }): Effect.Effect<CodegraphNode[], never, never> =>
+      Effect.gen(function* () {
+        const maxDepth = input.depth ?? 2
+        const visited = new Set<string>([input.nodeID])
+        const result: CodegraphNode[] = []
+        const queue: Array<{ id: string; depth: number }> = [{ id: input.nodeID, depth: 0 }]
+
+        while (queue.length > 0) {
+          const current = queue.shift()!
+          if (current.depth >= maxDepth) continue
+
+          const outgoing = yield* repo.edgesFrom(current.id)
+          const nextIDs: string[] = []
+          for (const edge of outgoing) {
+            if (!DEPENDENCY_EDGE_KINDS.has(edge.kind)) continue
+            const nextID = edge.toNodeID
+            if (!visited.has(nextID)) {
+              visited.add(nextID)
+              nextIDs.push(nextID)
+            }
+          }
+
+          if (nextIDs.length > 0) {
+            const nodes = yield* repo.nodesByIDs(nextIDs)
+            result.push(...nodes)
             for (const id of nextIDs) {
               queue.push({ id, depth: current.depth + 1 })
             }
