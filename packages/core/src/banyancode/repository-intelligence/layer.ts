@@ -764,6 +764,35 @@ export const layer = Layer.effect(
         if (ctx.graph.edges.length > 0) summaryParts.push(`${ctx.graph.edges.length} edges`)
         const summary = summaryParts.join(" — ")
 
+        const defaultLimit = 25
+
+        const directCallersSet = new Map<string, CodegraphNode>()
+        const transitiveSet = new Map<string, CodegraphNode>()
+        const dependencySet = new Map<string, { name: string; version?: string }>()
+
+        if (ctx.symbols.length > 0) {
+          const anchorIDs = ctx.symbols.slice(0, 1).map((s) => s.id)
+          for (const anchorID of anchorIDs) {
+            const callers = yield* findCallers({ nodeID: anchorID, depth: 1 })
+            for (const c of callers) directCallersSet.set(c.id, c)
+            const transitive = yield* findCallers({ nodeID: anchorID, depth: 3 })
+            for (const t of transitive) {
+              if (!directCallersSet.has(t.id)) transitiveSet.set(t.id, t)
+            }
+            const deps = yield* findDependencies({ nodeID: anchorID, depth: 1 })
+            for (const d of deps) {
+              if (d.kind === "function" || d.kind === "class" || d.kind === "method" || d.kind === "type") {
+                dependencySet.set(d.name, { name: d.name })
+              }
+            }
+          }
+        }
+
+        const directCallers = [...directCallersSet.values()].slice(0, defaultLimit)
+        const transitiveDependents = [...transitiveSet.values()]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .slice(0, defaultLimit)
+
         return {
           status: ctx.status,
           reason: ctx.reason,
@@ -777,9 +806,16 @@ export const layer = Layer.effect(
           relatedDocs: ctx.docs,
           configs: ctx.configs,
           routes,
-          dependencies: [] as readonly { name: string; version?: string }[],
-          directCallers: [] as readonly CodegraphNode[],
-          transitiveDependents: [] as readonly CodegraphNode[],
+          dependencies: [...dependencySet.values()],
+          directCallers,
+          transitiveDependents,
+          moreAvailable:
+            directCallersSet.size + transitiveSet.size > defaultLimit
+              ? {
+                  callers: directCallersSet.size - directCallers.length,
+                  dependents: transitiveSet.size - transitiveDependents.length,
+                }
+              : undefined,
         } satisfies ArchitecturalSlice
       })
 
