@@ -14,7 +14,7 @@
  *     codegraph_find_overrides, codegraph_find_implementations
  *   - repository tools: repository_query, repository_explain, repository_trace,
  *     repository_impact, repository_tests, repository_symbols,
- *     repository_relationships, repository_slice, repository_ownership
+ *     repository_relationships, repository_ownership
  *   - other: websearch_free, code_find, edit_plan
  */
 
@@ -68,7 +68,6 @@ const REPOSITORY_TOOLS = [
   "repository_tests",
   "repository_symbols",
   "repository_relationships",
-  "repository_slice",
   "repository_ownership",
 ] as const
 

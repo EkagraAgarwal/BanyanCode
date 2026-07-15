@@ -6,7 +6,6 @@ import { CodegraphTools } from "@opencode-ai/core/tool/codegraph"
 import { CodeFindTool } from "@opencode-ai/core/tool/code-find"
 import { WebSearchFreeTool } from "@opencode-ai/core/tool/websearch-free"
 import { CodegraphSearchTool } from "@opencode-ai/core/tool/codegraph-search-tool"
-import { RepositoryIntelTool } from "@opencode-ai/core/tool/repository-intel-tool"
 import { RepositoryWave2 } from "@opencode-ai/core/tool/repository-wave2"
 import { StructuralQueriesTool } from "@opencode-ai/core/tool/structural-queries-tool"
 import { EditPlanTool } from "@opencode-ai/core/tool/edit-plan"
@@ -375,7 +374,7 @@ const baseBanyanToolLayers = Layer.mergeAll(
   CodegraphTools.locationLayer,
   CodeFindTool.locationLayer,
   CodegraphSearchTool.locationLayer,
-  RepositoryIntelTool.locationLayer,
+  RepositoryWave2.locationLayer,
   RepositoryWave2.locationLayer,
   StructuralQueriesTool.locationLayer,
   EditPlanTool.locationLayer,

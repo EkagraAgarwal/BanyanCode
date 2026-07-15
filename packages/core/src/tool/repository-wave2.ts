@@ -24,7 +24,7 @@ import { optionalNumber, optionalString } from "./tool-schema"
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 export const name_query = "repository_query"
-export const name_slice = "repository_slice"
+// repository_slice retired: repository_explain supersedes it
 export const name_explain = "repository_explain"
 export const name_impact = "repository_impact"
 export const name_trace = "repository_trace"
@@ -300,7 +300,6 @@ const OwnershipInput = Schema.Struct({
 })
 
 const QueryOutput = RepositoryContextSchema
-const SliceOutput = ArchitecturalSliceSchema
 const ExplainOutput = ArchitecturalSliceSchema
 const ImpactOutput = ArchitecturalSliceSchema
 const TraceOutput = ArchitecturalSliceSchema
@@ -418,7 +417,7 @@ const sliceToOutput = (
 })
 
 export const InputQuery = QueryInput
-export const InputSlice = QueryInput
+// repository_slice retired — its input was the same as QueryInput
 export const InputExplain = ExplainInput
 export const InputImpact = ImpactInput
 export const InputTrace = TraceInput
@@ -428,7 +427,7 @@ export const InputRelationships = RelationshipsInput
 export const InputOwnership = OwnershipInput
 
 export const OutputQuery = QueryOutput
-export const OutputSlice = SliceOutput
+// repository_slice retired — its output was ArchitecturalSliceSchema (same as ExplainOutput)
 export const OutputExplain = ExplainOutput
 export const OutputImpact = ImpactOutput
 export const OutputTrace = TraceOutput
@@ -509,57 +508,7 @@ export const locationLayer = Layer.effectDiscard(
             }),
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_query failed" }))),
       }),
-      [name_slice]: Tool.make({
-        description:
-          "Use when:\n" +
-          "  composing an ArchitecturalSlice directly from a query (advanced — usually\n" +
-          "  repository_explain already returns one).\n" +
-          "Examples\n" +
-          "  - \"Slice for `Effect.gen`\"\n" +
-          "Returns\n" +
-          "  ArchitecturalSlice { summary, entrypoints, importantSymbols, relatedTests,\n" +
-          "    relatedDocs, configs, routes, dependencies }\n" +
-          "Avoid when\n" +
-          "  repository_explain already returns one — prefer that.\n" +
-          "Visibility: advanced (eventually retire; absorbed into repository_explain).",
-        contract: { visibility: "advanced" },
-        input: InputSlice,
-        output: OutputSlice,
-        toModelOutput: ({ output }) => [{ type: "text", text: formatArchitecturalSlice(output) }],
-        execute: (input, context) =>
-          traced(
-            process.cwd(),
-            context.sessionID,
-            name_slice,
-            input,
-            (output) =>
-              `entrypoints=${output.entrypoints.length} symbols=${output.importantSymbols.length} tests=${output.relatedTests.length}`,
-            Effect.gen(function* () {
-              yield* permission.assert({
-                action: name_slice,
-                resources: [input.query],
-                save: ["*"],
-                metadata: input,
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-              })
-
-              const ctx = yield* intel.query({ query: input.query, ...(input.limit ? { limit: input.limit } : {}) })
-              const slc = yield* intel.slice(ctx)
-              const metaRow = yield* repo.getMeta()
-              const meta = metaRow
-                ? { graphBuiltAt: metaRow.graphBuiltAt, graphCoverage: metaRow.graphCoverage }
-                : undefined
-              const staleResult = isStale(meta)
-              if (staleResult.stale && staleResult.reason && !slc.reason) {
-                ;(slc as { reason?: string; degraded?: boolean }).reason = `${staleResult.reason}; results may be incomplete`
-                ;(slc as { reason?: string; degraded?: boolean }).degraded = true
-              }
-              return sliceToOutput(slc)
-            }),
-          ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_slice failed" }))),
-      }),
+      // repository_slice retired: repository_explain supersedes it
       [name_explain]: Tool.make({
         description:
           "Use when:\n" +

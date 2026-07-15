@@ -106,7 +106,6 @@ const mockTools: Tool.Def[] = [
   createMockTool("repository_ownership", "internal"),
   createMockTool("codegraph_impact", "advanced"),
   createMockTool("repository_impact", "advanced"),
-  createMockTool("repository_slice", "advanced"),
 ]
 
 const combinedLayer = Layer.mergeAll(agentLayer(), makeMockToolRegistry(mockTools))

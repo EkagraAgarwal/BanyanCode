@@ -216,7 +216,7 @@ export const layer = Layer.effect(
                 repository_tests: "allow",
                 repository_symbols: "allow",
                 repository_relationships: "allow",
-                repository_slice: "allow",
+
                 repository_ownership: "allow",
                 websearch_free: "allow",
                 code_find: "allow",
@@ -289,7 +289,7 @@ export const layer = Layer.effect(
                 repository_tests: "allow",
                 repository_symbols: "allow",
                 repository_relationships: "allow",
-                repository_slice: "allow",
+
                 repository_ownership: "allow",
                 websearch_free: "allow",
                 code_find: "allow",
@@ -346,7 +346,7 @@ export const layer = Layer.effect(
                 repository_tests: "allow",
                 repository_symbols: "allow",
                 repository_relationships: "allow",
-                repository_slice: "allow",
+
                 repository_ownership: "allow",
                 websearch_free: "allow",
                 edit_plan: "allow",
@@ -398,7 +398,7 @@ export const layer = Layer.effect(
                 repository_tests: "allow",
                 repository_symbols: "allow",
                 repository_relationships: "allow",
-                repository_slice: "allow",
+
                 repository_ownership: "allow",
                 websearch_free: "allow",
                 code_find: "allow",
@@ -523,7 +523,7 @@ export const layer = Layer.effect(
                 repository_tests: "allow",
                 repository_symbols: "allow",
                 repository_relationships: "allow",
-                repository_slice: "allow",
+
                 repository_ownership: "allow",
                 code_find: "allow",
                 edit_plan: "allow",
