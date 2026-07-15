@@ -262,6 +262,7 @@ export function createRoutes(
       FSUtil.defaultLayer,
       FetchHttpClient.layer,
       HttpServer.layerServices,
+      Banyan.banyanConfigServiceDefaultLayer,
     ]),
     Layer.provideMerge(
       Layer.mergeAll(

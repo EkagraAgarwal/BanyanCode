@@ -1638,7 +1638,7 @@ export function Prompt(props: PromptProps) {
               cursorColor={props.disabled ? theme.backgroundElement : theme.text}
               syntaxStyle={syntax()}
             />
-            <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="flex-end">
+            <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="flex-start">
               <Show when={local.agent.current()} fallback={<box height={1} />}>
                 {(agent) => (
                   <box flexDirection="row" gap={1}>

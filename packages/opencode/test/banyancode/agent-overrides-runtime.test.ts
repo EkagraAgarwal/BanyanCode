@@ -15,7 +15,7 @@ import type { BanyanConfigInfo } from "@opencode-ai/core/banyancode"
 
 process.env.BANYANCODE_ENABLE = "1"
 
-type BanyanOverrides = NonNullable<BanyanConfigInfo["banyancode_agent_overrides"]>
+type BanyanAgentRecord = NonNullable<BanyanConfigInfo["agent"]>
 
 const baseLayer = Layer.mergeAll(
   Plugin.defaultLayer,
@@ -27,7 +27,7 @@ const baseLayer = Layer.mergeAll(
   RuntimeFlags.layer({}),
 )
 
-const makeBanyanLayer = (overrides: BanyanOverrides) =>
+const makeBanyanLayer = (agent: BanyanAgentRecord) =>
   Layer.succeed(
     Banyan.BanyanConfigService,
     Banyan.BanyanConfigService.of({
@@ -35,15 +35,15 @@ const makeBanyanLayer = (overrides: BanyanOverrides) =>
       getGlobal: () => Effect.succeed({} as BanyanConfigInfo),
       update: () => Effect.succeed({} as BanyanConfigInfo),
       updateAgentOverride: () => Effect.succeed({} as BanyanConfigInfo),
-      getAgentOverrides: () => Effect.succeed(overrides),
+      getAgentOverrides: () => Effect.succeed(agent),
       updateAgentPrompt: () => Effect.succeed({} as BanyanConfigInfo),
     }),
   )
 
-const makeAgentLayer = (overrides: BanyanOverrides = []) =>
+const makeAgentLayer = (agent: BanyanAgentRecord = {}) =>
   Agent.layer.pipe(
     Layer.provide(baseLayer),
-    Layer.provide(makeBanyanLayer(overrides)),
+    Layer.provide(makeBanyanLayer(agent)),
   )
 
 afterEach(async () => {
@@ -54,7 +54,7 @@ const TEST_OPTS = { timeout: 30_000 } as const
 
 describe("agent overrides runtime", () => {
   describe("no overrides", () => {
-    const it = testEffect(makeAgentLayer([]))
+    const it = testEffect(makeAgentLayer({}))
     it.instance(
       "list() returns all built-in agents",
       () =>
@@ -87,7 +87,7 @@ describe("agent overrides runtime", () => {
 
   describe("disable coder", () => {
     const it = testEffect(
-      makeAgentLayer([{ name: "coder", enabled: false }]),
+      makeAgentLayer({ coder: { enabled: false } }),
     )
     it.instance(
       "list() excludes disabled subagent",
@@ -118,7 +118,7 @@ describe("agent overrides runtime", () => {
 
   describe("orchestrator not disableable", () => {
     const it = testEffect(
-      makeAgentLayer([{ name: "build", enabled: false }]),
+      makeAgentLayer({ build: { enabled: false } }),
     )
     it.instance(
       "list() still includes build despite override",
@@ -136,7 +136,7 @@ describe("agent overrides runtime", () => {
 
   describe("model override", () => {
     const it = testEffect(
-      makeAgentLayer([{ name: "coder", model: { providerID: "p", modelID: "m" } }]),
+      makeAgentLayer({ coder: { model: "p/m" } }),
     )
     it.instance(
       "get(coder) returns agent with model override",
@@ -156,7 +156,7 @@ describe("agent overrides runtime", () => {
 
   describe("re-enable after disable", () => {
     const it = testEffect(
-      makeAgentLayer([{ name: "coder", enabled: true }]),
+      makeAgentLayer({ coder: { enabled: true } }),
     )
     it.instance(
       "list() includes coder after re-enable",

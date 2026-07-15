@@ -2241,24 +2241,22 @@ export type BanyanConfig = {
     enabled?: boolean
     filePath: string
   }>
-  banyancode_agent_overrides?: Array<{
-    /**
-     * Agent name (letters, digits, '.', '_', '-' only)
-     */
-    name: string
-    enabled?: boolean
-    model?: {
-      providerID: string
-      modelID: string
-    }
-  }>
-  banyancode_agent_prompts?: Array<{
-    /**
-     * Agent name (letters, digits, '.', '_', '-' only)
-     */
-    name: string
-    prompt: string
-  }>
+  agent?: {
+    [key: string]:
+      | unknown
+      | {
+          mode?: "primary" | "subagent" | null
+          model?: unknown | null
+          permission?: {
+            [key: string]: string
+          } | null
+          options?: {
+            [key: string]: unknown
+          } | null
+          prompt?: unknown | null
+          enabled?: boolean | null
+        }
+  }
 }
 
 export type BanyanCodegraphNode = {
@@ -2408,6 +2406,7 @@ export type BanyanImpactInput = {
 export type BanyanTraceInput = {
   symbol: string
   depth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   workspace?: {
     worktree: string
     focusDirs: Array<string>
@@ -2424,16 +2423,21 @@ export type BanyanSymbolsInput = {
 }
 
 export type BanyanRelationshipsInput = {
-  nodeID: string
+  nodeID?: string
+  path?: string
   depth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type BanyanOwnershipInput = {
   path: string
+  workspace?: {
+    worktree: string
+    focusDirs: Array<string>
+  }
 }
 
 export type BanyanOwnershipResult = {
-  user?: string
+  owner?: string
   count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 

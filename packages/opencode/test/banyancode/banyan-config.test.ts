@@ -18,7 +18,7 @@ describe("BanyanConfig", () => {
         getGlobal: () => Effect.succeed(mockBanyanConfig),
         update: () => Effect.succeed(mockBanyanConfig),
         updateAgentOverride: () => Effect.succeed(mockBanyanConfig),
-        getAgentOverrides: () => Effect.succeed([]),
+        getAgentOverrides: () => Effect.succeed({}),
         updateAgentPrompt: () => Effect.succeed(mockBanyanConfig),
       }),
     )
@@ -47,7 +47,7 @@ describe("BanyanConfig", () => {
           return Effect.succeed(patch)
         },
         updateAgentOverride: (name, patch) => Effect.succeed({} as any),
-        getAgentOverrides: () => Effect.succeed([]),
+        getAgentOverrides: () => Effect.succeed({}),
         updateAgentPrompt: () => Effect.succeed({} as any),
       }),
     )
@@ -77,7 +77,7 @@ describe("BanyanConfig", () => {
           return Effect.succeed(storedConfig)
         },
         updateAgentOverride: (name, patch) => Effect.succeed(storedConfig),
-        getAgentOverrides: () => Effect.succeed([]),
+        getAgentOverrides: () => Effect.succeed({}),
         updateAgentPrompt: () => Effect.succeed(storedConfig),
       }),
     )
@@ -121,7 +121,7 @@ describe("BanyanConfig", () => {
         getGlobal: () => Effect.succeed({}),
         update: () => Effect.succeed({}),
         updateAgentOverride: () => Effect.succeed({}),
-        getAgentOverrides: () => Effect.succeed([]),
+        getAgentOverrides: () => Effect.succeed({}),
         updateAgentPrompt: () => Effect.succeed({}),
       }),
     )

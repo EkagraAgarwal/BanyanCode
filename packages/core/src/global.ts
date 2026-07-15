@@ -17,7 +17,10 @@ const tmp = path.join(os.tmpdir(), app)
 const banyanApp = "banyancode"
 const banyanData = path.join(xdgData!, banyanApp)
 const banyanCache = path.join(xdgCache!, banyanApp)
-const banyanConfig = path.join(xdgConfig!, banyanApp)
+const banyanConfig =
+  process.platform === "win32"
+    ? path.join(process.env.OPENCODE_TEST_HOME ?? os.homedir(), ".config", banyanApp)
+    : path.join(xdgConfig!, banyanApp)
 const banyanState = path.join(xdgState!, banyanApp)
 const banyanTmp = path.join(os.tmpdir(), banyanApp)
 

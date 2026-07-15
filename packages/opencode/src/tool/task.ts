@@ -249,16 +249,23 @@ export const TaskTool = Tool.define(
       const variant = msg.info.variant
 
       const banyanCfgOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
-      const banyanOverrides = Option.isSome(banyanCfgOpt)
+      const banyanAgentMap = Option.isSome(banyanCfgOpt)
         ? yield* banyanCfgOpt.value.getAgentOverrides()
-        : []
-      const entry = banyanOverrides?.find((o) => o.name === next.name)
-      const model = entry?.model
-        ? { providerID: entry.model.providerID, modelID: entry.model.modelID }
-        : next.model ?? {
-            modelID: msg.info.modelID,
-            providerID: msg.info.providerID,
-          }
+        : undefined
+      const entry = banyanAgentMap ? banyanAgentMap[next.name] : undefined
+      let model: { providerID: string; modelID: string } | undefined = undefined
+      if (entry?.model) {
+        const parts = entry.model.split("/")
+        model = {
+          providerID: parts[0],
+          modelID: parts.slice(1).join("/"),
+        }
+      } else {
+        model = next.model ?? {
+          modelID: msg.info.modelID,
+          providerID: msg.info.providerID,
+        }
+      }
       const metadata = {
         parentSessionId: ctx.sessionID,
         sessionId: nextSession.id,

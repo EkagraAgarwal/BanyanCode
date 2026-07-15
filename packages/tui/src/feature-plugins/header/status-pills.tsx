@@ -80,10 +80,6 @@ function View(props: { api: TuiPluginApi }) {
         <text fg={toHex(theme().textMuted)}>{agentsLabel()}</text>
       </box>
       <box flexDirection="row" flexShrink={0} gap={1}>
-        <text fg={mcpDotColor()}>●</text>
-        <text fg={toHex(theme().textMuted)}>{mcpLabel()}</text>
-      </box>
-      <box flexDirection="row" flexShrink={0} gap={1}>
         <text fg={lspDotColor()}>●</text>
         <text fg={toHex(theme().textMuted)}>{lspLabel()}</text>
       </box>

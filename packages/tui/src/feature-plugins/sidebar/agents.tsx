@@ -50,11 +50,21 @@ function statusColor(status: Peer["status"], theme: any): string {
   return toHex(theme.textMuted)
 }
 
-function PeerRow(props: { peer: Peer; theme: any }) {
+function PeerRow(props: { peer: Peer; theme: any; api: TuiPluginApi }) {
   const p = props.peer
   const stateLabel = p.status === "active" ? "active" : p.status === "idle" ? "idle" : p.status === "disconnected" ? "disconnected" : "offline"
+  const [hover, setHover] = createSignal(false)
   return (
-    <box flexDirection="row" gap={1} alignItems="center">
+    <box
+      flexDirection="row"
+      gap={1}
+      alignItems="center"
+      onMouseDown={() => props.api.route.navigate("session", { sessionID: p.sessionID })}
+      onMouseOver={() => setHover(true)}
+      onMouseOut={() => setHover(false)}
+      backgroundColor={hover() ? toHex(props.theme.backgroundElement) : undefined}
+      width="100%"
+    >
       <text fg={statusColor(p.status, props.theme)}>◉</text>
       <text fg={toHex(props.theme.text)}><b>{p.agent}</b></text>
       <text fg={statusColor(p.status, props.theme)}>[{stateLabel}]</text>
@@ -143,7 +153,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
         }
       >
         <box flexDirection="column" marginTop={0} gap={0}>
-          <For each={peers()}>{(peer) => <PeerRow peer={peer} theme={theme()} />}</For>
+          <For each={peers()}>{(peer) => <PeerRow peer={peer} theme={theme()} api={props.api} />}</For>
         </box>
       </Show>
     </box>

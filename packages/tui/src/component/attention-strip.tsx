@@ -11,7 +11,7 @@ import type { Severity } from "../util/palette"
 
 export * as AttentionStrip from "./attention-strip"
 
-type AttentionKind = "permission" | "question" | "blocked" | "lsp" | "mcp"
+type AttentionKind = "permission" | "question" | "blocked" | "lsp"
 
 interface BlockedPeer {
   agent: string
@@ -38,11 +38,6 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onJum
   const diffCount = createMemo(() => permissions().filter((p: any) => p.tool).length)
   const questionCount = createMemo(() => questions().length)
 
-  const mcpDown = createMemo(() => {
-    const list = props.api.state.mcp()
-    return list.filter((m: { status: string }) => m.status === "connected").length === 0
-  })
-
   const unsubMesh = ev.on("banyancode.mesh.status" as any, (event: any) => {
     if (event.properties.parentSessionID !== props.sessionID) return
     const peers = event.properties.peers ?? []
@@ -68,23 +63,20 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onJum
     if (questionCount() > 0) {
       result.push({ kind: "question", id: "question", label: `${questionCount()} question${questionCount() !== 1 ? "s" : ""} awaiting` })
     }
-    if (mcpDown()) {
-      result.push({ kind: "mcp", id: "mcp", label: "MCP down" })
-    }
     return result
   })
 
   const accentForSeverity = (item: StripItem) => {
     if (item.kind === "blocked") return theme().error
     if (item.kind === "permission" && item.id === "diff") return theme().warning
-    if (item.kind === "lsp" || item.kind === "mcp") return theme().warning
+    if (item.kind === "lsp") return theme().warning
     return theme().info
   }
 
   const severityForKind = (item: StripItem): Severity => {
     if (item.kind === "blocked") return "error"
     if (item.kind === "permission" && item.id === "diff") return "warning"
-    if (item.kind === "lsp" || item.kind === "mcp") return "warning"
+    if (item.kind === "lsp") return "warning"
     return "info"
   }
 
@@ -117,7 +109,6 @@ function AttentionStripView(props: { api: TuiPluginApi; sessionID: string; onJum
                   paddingLeft={1}
                   paddingRight={1}
                   width="100%"
-                  height="100%"
                   flexDirection="row"
                   alignItems="center"
                 >

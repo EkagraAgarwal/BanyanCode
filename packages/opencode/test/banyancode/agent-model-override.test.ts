@@ -25,7 +25,7 @@ describe("readAgentModelOverride", () => {
         getGlobal: () => Effect.succeed({}),
         update: () => Effect.succeed({}),
         updateAgentOverride: () => Effect.succeed({}),
-        getAgentOverrides: () => Effect.succeed([]),
+        getAgentOverrides: () => Effect.succeed({}),
         updateAgentPrompt: () => Effect.succeed({}),
       }),
     )
@@ -45,7 +45,7 @@ describe("readAgentModelOverride", () => {
         getGlobal: () => Effect.succeed({}),
         update: () => Effect.succeed({}),
         updateAgentOverride: () => Effect.succeed({}),
-        getAgentOverrides: () => Effect.succeed([{ name: "coder", model: coderOverride }]),
+        getAgentOverrides: () => Effect.succeed({ coder: { model: "minimax/MiniMax-M3" } }),
         updateAgentPrompt: () => Effect.succeed({}),
       }),
     )
@@ -66,10 +66,10 @@ describe("readAgentModelOverride", () => {
         update: () => Effect.succeed({}),
         updateAgentOverride: () => Effect.succeed({}),
         getAgentOverrides: () =>
-          Effect.succeed([
-            { name: "coder", model: coderOverride },
-            { name: "explore", model: exploreOverride },
-          ]),
+          Effect.succeed({
+            coder: { model: "minimax/MiniMax-M3" },
+            explore: { model: "minimax/MiniMax-M2" },
+          }),
         updateAgentPrompt: () => Effect.succeed({}),
       }),
     )

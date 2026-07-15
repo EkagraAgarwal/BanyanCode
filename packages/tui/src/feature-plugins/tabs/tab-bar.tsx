@@ -56,7 +56,17 @@ function View(props: { api: TuiPluginApi }) {
   })
 
   return (
-    <box flexDirection="row" flexShrink={0} gap={0}>
+    <box
+      flexDirection="row"
+      flexShrink={0}
+      gap={0}
+      justifyContent="center"
+      paddingLeft={2}
+      paddingRight={2}
+      border={["bottom"]}
+      borderColor={toHex(theme().borderSubtle)}
+      width="100%"
+    >
       <For each={TABS}>{(tab) => {
         const isActive = () => activeTab() === tab.key
         return (

@@ -17,7 +17,7 @@ export interface Interface {
     name: string,
     patch: { enabled?: boolean; model?: { providerID: string; modelID: string } | null },
   ) => Effect.Effect<BanyanConfig.Info, never, never>
-  readonly getAgentOverrides: () => Effect.Effect<BanyanConfig.Info["banyancode_agent_overrides"], never, never>
+  readonly getAgentOverrides: () => Effect.Effect<BanyanConfig.Info["agent"], never, never>
   readonly updateAgentPrompt: (name: string, prompt: string) => Effect.Effect<BanyanConfig.Info, never, never>
 }
 
@@ -66,7 +66,7 @@ export const layer = Layer.effect(
       const config = yield* readConfig().pipe(
         Effect.catch(() => Effect.succeed({} as BanyanConfig.Info)),
       )
-      return config.banyancode_agent_overrides ?? []
+      return config.agent
     })
 
     const updateAgentOverride = Effect.fn("BanyanConfig.updateAgentOverride")(
@@ -80,59 +80,38 @@ export const layer = Layer.effect(
               const current = yield* readConfig().pipe(
                 Effect.catch(() => Effect.succeed({} as BanyanConfig.Info)),
               )
-              const overrides = current.banyancode_agent_overrides ?? []
-              const idx = overrides.findIndex((o) => o.name === name)
+              const agents = current.agent ?? {}
+              const existing = agents[name] ?? {}
 
+              let modelStr: string | undefined = existing.model
               if (patch.model === null) {
-                // Clear model from existing override, preserving enabled
-                if (idx >= 0) {
-                  const existing = overrides[idx]
-                  const updated = {
-                    ...existing,
-                    model: undefined,
-                    enabled: patch.enabled !== undefined ? patch.enabled : existing.enabled,
-                  }
-                  const newOverrides = [...overrides]
-                  newOverrides[idx] = updated
-                  const merged: BanyanConfig.Info = Object.assign({}, current, {
-                    banyancode_agent_overrides: newOverrides,
-                  })
-                  yield* doWriteConfig(merged)
-                  return merged
-                }
-                // Entry doesn't exist, nothing to clear
-                return current
+                modelStr = undefined
+              } else if (patch.model !== undefined) {
+                modelStr = `${patch.model.providerID}/${patch.model.modelID}`
               }
 
-              if (patch.enabled === undefined && patch.model === undefined) {
-                return current
-              }
-
-              if (idx >= 0) {
-                const existing = overrides[idx]
-                const updated: (typeof overrides)[number] = {
-                  ...existing,
-                  ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-                  ...(patch.model !== undefined ? { model: patch.model } : {}),
-                }
-                const newOverrides = [...overrides]
-                newOverrides[idx] = updated
-                const merged: BanyanConfig.Info = Object.assign({}, current, {
-                  banyancode_agent_overrides: newOverrides,
-                })
-                yield* doWriteConfig(merged)
-                return merged
-              }
-
-              // Append new entry
-              const newEntry: (typeof overrides)[number] = {
-                name,
+              const updated = {
+                ...existing,
                 ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-                ...(patch.model !== undefined ? { model: patch.model } : {}),
+                ...(patch.model !== undefined || patch.model === null ? { model: modelStr } : {}),
               }
-              const merged: BanyanConfig.Info = Object.assign({}, current, {
-                banyancode_agent_overrides: [...overrides, newEntry],
-              })
+
+              if (updated.model === undefined) delete updated.model
+              if (updated.enabled === undefined) delete updated.enabled
+
+              const nextAgents = {
+                ...agents,
+                [name]: updated,
+              }
+
+              if (Object.keys(nextAgents[name]).length === 0) {
+                delete nextAgents[name]
+              }
+
+              const merged: BanyanConfig.Info = {
+                ...current,
+                agent: nextAgents,
+              }
               yield* doWriteConfig(merged)
               return merged
             }),
@@ -149,24 +128,19 @@ export const layer = Layer.effect(
             const current = yield* readConfig().pipe(
               Effect.catch(() => Effect.succeed({} as BanyanConfig.Info)),
             )
-            const prompts = current.banyancode_agent_prompts ?? []
-            const idx = prompts.findIndex((p) => p.name === name)
-
-            if (idx >= 0) {
-              const newPrompts = [...prompts]
-              newPrompts[idx] = { name, prompt }
-              const merged: BanyanConfig.Info = Object.assign({}, current, {
-                banyancode_agent_prompts: newPrompts,
-              })
-              yield* doWriteConfig(merged)
-              return merged
+            const agents = current.agent ?? {}
+            const existing = agents[name] ?? {}
+            const updated = {
+              ...existing,
+              prompt,
             }
-
-            // Append new entry
-            const newPrompts = [...prompts, { name, prompt }]
-            const merged: BanyanConfig.Info = Object.assign({}, current, {
-              banyancode_agent_prompts: newPrompts,
-            })
+            const merged: BanyanConfig.Info = {
+              ...current,
+              agent: {
+                ...agents,
+                [name]: updated,
+              },
+            }
             yield* doWriteConfig(merged)
             return merged
           }),

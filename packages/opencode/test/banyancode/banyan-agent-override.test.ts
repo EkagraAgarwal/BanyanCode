@@ -128,10 +128,10 @@ describe("BanyanConfigService.updateAgentOverride", () => {
       }).pipe(Effect.provide(layer)),
     )
 
-    expect(result.banyancode_agent_overrides).toEqual([{ name: "coder", enabled: false }])
+    expect(result.agent).toEqual({ coder: { enabled: false } })
 
     const onDisk = JSON.parse(await Bun.file(CONFIG_PATH).text())
-    expect(onDisk.banyancode_agent_overrides).toEqual([{ name: "coder", enabled: false }])
+    expect(onDisk.agent).toEqual({ coder: { enabled: false } })
   })
 
   test("happy path - model override", async () => {
@@ -145,17 +145,17 @@ describe("BanyanConfigService.updateAgentOverride", () => {
       }).pipe(Effect.provide(layer)),
     )
 
-    expect(result.banyancode_agent_overrides).toEqual([
-      { name: "coder", model: { providerID: "minimax-coding-plan", modelID: "MiniMax-M3" } },
-    ])
+    expect(result.agent).toEqual({
+      coder: { model: "minimax-coding-plan/MiniMax-M3" },
+    })
   })
 
   test("clear model with null", async () => {
     // First set enabled + model
     await writeConfig({
-      banyancode_agent_overrides: [
-        { name: "coder", enabled: true, model: { providerID: "p", modelID: "m" } },
-      ],
+      agent: {
+        coder: { enabled: true, model: "p/m" },
+      },
     })
 
     const layer = buildLayer()
@@ -167,7 +167,7 @@ describe("BanyanConfigService.updateAgentOverride", () => {
     )
 
     // Model should be removed, enabled should be preserved
-    expect(result.banyancode_agent_overrides).toEqual([{ name: "coder", enabled: true }])
+    expect(result.agent).toEqual({ coder: { enabled: true } })
   })
 
   test("upsert existing entry", async () => {
@@ -192,9 +192,9 @@ describe("BanyanConfigService.updateAgentOverride", () => {
     )
 
     // Should have single entry with both fields
-    expect(result.banyancode_agent_overrides).toEqual([
-      { name: "coder", enabled: false, model: { providerID: "minimax", modelID: "M3" } },
-    ])
+    expect(result.agent).toEqual({
+      coder: { enabled: false, model: "minimax/M3" },
+    })
   })
 
   test("preserves other top-level keys", async () => {
@@ -214,7 +214,7 @@ describe("BanyanConfigService.updateAgentOverride", () => {
 
     expect(result.banyancode_yolo_mode).toBe(true)
     expect(result.banyancode_subagents).toEqual([{ name: "custom-agent", mode: "subagent", filePath: "/path/to/agent.md" }])
-    expect(result.banyancode_agent_overrides).toEqual([{ name: "coder", enabled: false }])
+    expect(result.agent).toEqual({ coder: { enabled: false } })
   })
 
   // Note: schema validation for invalid names happens at the HTTP handler layer,
@@ -228,6 +228,6 @@ describe("BanyanConfigService.updateAgentOverride", () => {
       }).pipe(Effect.provide(layer)),
     )
     // The service writes whatever name is given; HTTP layer would reject this
-    expect(result.banyancode_agent_overrides).toEqual([{ name: "../etc/passwd", enabled: false }])
+    expect(result.agent).toEqual({ "../etc/passwd": { enabled: false } })
   })
 })

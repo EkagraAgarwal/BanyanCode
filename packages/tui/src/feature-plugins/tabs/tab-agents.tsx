@@ -53,7 +53,22 @@ function View(props: { api: TuiPluginApi }) {
   const loadAgentOverrides = async () => {
     try {
       const result = await props.api.client.global.banyanConfig.get({})
-      return result?.data?.banyancode_agent_overrides ?? []
+      const agents = (result?.data?.agent ?? {}) as Record<string, any>
+      return Object.entries(agents).map(([name, conf]) => {
+        let model: { providerID: string; modelID: string } | undefined = undefined
+        if (conf.model) {
+          const parts = conf.model.split('/')
+          model = {
+            providerID: parts[0],
+            modelID: parts.slice(1).join('/')
+          }
+        }
+        return {
+          name,
+          enabled: conf.enabled,
+          model
+        }
+      })
     } catch {
       return []
     }
@@ -62,7 +77,13 @@ function View(props: { api: TuiPluginApi }) {
   const loadAgentPrompts = async () => {
     try {
       const result = await props.api.client.global.banyanConfig.get({})
-      return result?.data?.banyancode_agent_prompts ?? []
+      const agents = (result?.data?.agent ?? {}) as Record<string, any>
+      return Object.entries(agents)
+        .filter(([_, conf]) => conf.prompt !== undefined)
+        .map(([name, conf]) => ({
+          name,
+          prompt: conf.prompt!
+        }))
     } catch {
       return []
     }
@@ -192,7 +213,7 @@ function View(props: { api: TuiPluginApi }) {
             try {
               await props.api.client.global.banyanAgentOverride.update({ name, model })
               toast.show({ message: `Saved ${name} override`, variant: "success" })
-            } catch {
+            } catch (err) {
               // Revert on failure
               setOverridesData((prev) => {
                 const idx = prev.findIndex((o) => o.name === name)
@@ -205,7 +226,7 @@ function View(props: { api: TuiPluginApi }) {
                 }
                 return prev
               })
-              toast.show({ message: `Failed to update ${name}`, variant: "error" })
+              toast.show({ message: `Failed to update ${name}: ${String(err)}`, variant: "error" })
             }
           })()
         }}

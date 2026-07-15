@@ -65,48 +65,35 @@ export const Info = Schema.Struct({
       }),
     ),
   ),
-  // Per-agent override state set from the TUI's Agents tab. Built-in agents
-  // (coder, explore, scout, researcher, general) use this instead of the
-  // file-backed banyancode_subagents array.
-  banyancode_agent_overrides: Schema.optional(
-    Schema.Array(
+  // Config for each agent (built-in or custom)
+  agent: Schema.optional(
+    Schema.Record(
+      Schema.String.check(
+        Schema.isPattern(/^[a-zA-Z0-9._-]+$/, {
+          identifier: "AgentName",
+          description: "Agent name (letters, digits, '.', '_', '-' only)",
+        }),
+        Schema.isMinLength(1),
+        Schema.isMaxLength(64),
+      ),
       Schema.Struct({
-        name: Schema.String.check(
-          Schema.isPattern(/^[a-zA-Z0-9._-]+$/, {
-            identifier: "AgentOverrideName",
-            description: "Agent name (letters, digits, '.', '_', '-' only)",
-          }),
-          Schema.isMinLength(1),
-          Schema.isMaxLength(64),
-        ),
+        mode: Schema.optional(Schema.Literals(["primary", "subagent"])),
+        model: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+        permission: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+        options: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+        prompt: Schema.optional(Schema.String.check(Schema.isMaxLength(50_000))),
         enabled: Schema.optional(Schema.Boolean),
-        model: Schema.optional(
-          Schema.Struct({
-            providerID: Schema.String.check(Schema.isMaxLength(128)),
-            modelID: Schema.String.check(Schema.isMaxLength(128)),
-          }),
-        ),
-      }),
-    ),
-  ),
-  // Per-agent prompt overrides for built-in native agents. Custom agents
-  // (those defined by ~/.config/banyancode/agent/<name>.md) use the file
-  // as source of truth; this field only stores overrides for built-in agents.
-  banyancode_agent_prompts: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        name: Schema.String.check(
-          Schema.isPattern(/^[a-zA-Z0-9._-]+$/, {
-            identifier: "AgentPromptName",
-            description: "Agent name (letters, digits, '.', '_', '-' only)",
-          }),
-          Schema.isMinLength(1),
-          Schema.isMaxLength(64),
-        ),
-        prompt: Schema.String.check(Schema.isMaxLength(50_000)),
       }),
     ),
   ),
 }).annotate({ identifier: "BanyanConfig" })
 
 export type Info = typeof Info.Type
+export type AgentConfig = typeof Info.Type extends { agent?: infer A }
+  ? A extends undefined
+    ? never
+    : NonNullable<A> extends Record<string, infer T>
+      ? T
+      : never
+  : never
+

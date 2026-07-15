@@ -87,12 +87,13 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
 export const readAgentModelOverride = Effect.fnUntraced(function* (agentName: string) {
   const opt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
   if (Option.isNone(opt)) return undefined
-  const overrides = yield* opt.value.getAgentOverrides()
-  const entry = overrides?.find((o) => o.name === agentName)
+  const agentRecord = yield* opt.value.getAgentOverrides()
+  const entry = agentRecord ? agentRecord[agentName] : undefined
   if (!entry?.model) return undefined
+  const parts = entry.model.split("/")
   return {
-    providerID: ProviderV2.ID.make(entry.model.providerID),
-    modelID: ModelV2.ID.make(entry.model.modelID),
+    providerID: ProviderV2.ID.make(parts[0]),
+    modelID: ModelV2.ID.make(parts.slice(1).join("/")),
   } as const
 })
 

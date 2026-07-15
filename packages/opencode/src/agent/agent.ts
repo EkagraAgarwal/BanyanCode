@@ -590,9 +590,17 @@ export const layer = Layer.effect(
         const get = Effect.fnUntraced(function* (agent: string) {
           const overrideMap = new Map<string, { enabled?: boolean; model?: { providerID: string; modelID: string } }>()
           if (banyanConfigOpt._tag === "Some") {
-            const overrides = yield* banyanConfigOpt.value.getAgentOverrides()
-            for (const o of overrides ?? []) {
-              overrideMap.set(o.name, { enabled: o.enabled, model: o.model })
+            const agentRecord = yield* banyanConfigOpt.value.getAgentOverrides()
+            for (const [name, conf] of Object.entries(agentRecord ?? {})) {
+              let model: { providerID: string; modelID: string } | undefined = undefined
+              if (conf.model) {
+                const parts = conf.model.split("/")
+                model = {
+                  providerID: parts[0],
+                  modelID: parts.slice(1).join("/"),
+                }
+              }
+              overrideMap.set(name, { enabled: conf.enabled, model })
             }
           }
           const override = overrideMap.get(agent)
@@ -612,9 +620,17 @@ export const layer = Layer.effect(
           const cfg = yield* config.get()
           const overrideMap = new Map<string, { enabled?: boolean; model?: { providerID: string; modelID: string } }>()
           if (banyanConfigOpt._tag === "Some") {
-            const overrides = yield* banyanConfigOpt.value.getAgentOverrides()
-            for (const o of overrides ?? []) {
-              overrideMap.set(o.name, { enabled: o.enabled, model: o.model })
+            const agentRecord = yield* banyanConfigOpt.value.getAgentOverrides()
+            for (const [name, conf] of Object.entries(agentRecord ?? {})) {
+              let model: { providerID: string; modelID: string } | undefined = undefined
+              if (conf.model) {
+                const parts = conf.model.split("/")
+                model = {
+                  providerID: parts[0],
+                  modelID: parts.slice(1).join("/"),
+                }
+              }
+              overrideMap.set(name, { enabled: conf.enabled, model })
             }
           }
           const disabledNames = new Set<string>()

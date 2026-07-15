@@ -69,7 +69,7 @@ describe("PR 5: BanyanConfigService exposes endpoints", () => {
             getGlobal: () => Effect.succeed({}),
             update: () => Effect.succeed({}),
             updateAgentOverride: () => Effect.succeed({}),
-            getAgentOverrides: () => Effect.succeed([]),
+            getAgentOverrides: () => Effect.succeed({}),
             updateAgentPrompt: () => Effect.succeed({}),
           }),
         ),

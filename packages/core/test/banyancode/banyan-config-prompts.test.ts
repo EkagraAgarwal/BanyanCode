@@ -58,10 +58,10 @@ describe("BanyanConfigService.updateAgentPrompt", () => {
       }).pipe(Effect.provide(layer)),
     )
 
-    expect(result.banyancode_agent_prompts).toEqual([{ name: "coder", prompt: "new prompt for coder" }])
+    expect(result.agent).toEqual({ coder: { prompt: "new prompt for coder" } })
 
     const onDisk = JSON.parse(await Bun.file(CONFIG_PATH).text())
-    expect(onDisk.banyancode_agent_prompts).toEqual([{ name: "coder", prompt: "new prompt for coder" }])
+    expect(onDisk.agent).toEqual({ coder: { prompt: "new prompt for coder" } })
   })
 
   test("subsequent updates overwrite existing entry", async () => {
@@ -81,17 +81,17 @@ describe("BanyanConfigService.updateAgentPrompt", () => {
       }).pipe(Effect.provide(layer2)),
     )
 
-    expect(result.banyancode_agent_prompts).toEqual([{ name: "coder", prompt: "second prompt" }])
+    expect(result.agent).toEqual({ coder: { prompt: "second prompt" } })
 
     const onDisk = JSON.parse(await Bun.file(CONFIG_PATH).text())
-    expect(onDisk.banyancode_agent_prompts).toEqual([{ name: "coder", prompt: "second prompt" }])
+    expect(onDisk.agent).toEqual({ coder: { prompt: "second prompt" } })
   })
 
   test("preserves other top-level keys", async () => {
     // Pre-populate with yolo_mode and agent_overrides
     await writeConfig({
       banyancode_yolo_mode: true,
-      banyancode_agent_overrides: [{ name: "explorer", enabled: false }],
+      agent: { explorer: { enabled: false } },
     })
 
     const layer = buildLayer()
@@ -103,7 +103,9 @@ describe("BanyanConfigService.updateAgentPrompt", () => {
     )
 
     expect(result.banyancode_yolo_mode).toBe(true)
-    expect(result.banyancode_agent_overrides).toEqual([{ name: "explorer", enabled: false }])
-    expect(result.banyancode_agent_prompts).toEqual([{ name: "coder", prompt: "coder's new prompt" }])
+    expect(result.agent).toEqual({
+      explorer: { enabled: false },
+      coder: { prompt: "coder's new prompt" },
+    })
   })
 })

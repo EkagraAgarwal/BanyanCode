@@ -1202,6 +1202,7 @@ export function Session() {
             <pluginRuntime.Slot name="app_top" session_id={route.sessionID} />
           </box>
           <pluginRuntime.Slot name="session_attention_strip" session_id={route.sessionID} />
+          <pluginRuntime.Slot name="session_main_tabs" />
           <box flexDirection="row" flexGrow={1} minHeight={0}>
             <Show when={sidebarVisible()}>
               <Switch>
@@ -1248,7 +1249,6 @@ export function Session() {
             </Show>
             <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1} zIndex={1000}>
             <Show when={session()}>
-              <pluginRuntime.Slot name="session_main_tabs" />
               <Switch>
                 <Match when={activeTab() === "chat"}>
                   <scrollbox
@@ -1388,6 +1388,9 @@ export function Session() {
                 </Match>
               </Switch>
               <box flexShrink={0}>
+                <Show when={session()?.parentID}>
+                  <SubagentFooter />
+                </Show>
                 <Show when={permissions().length > 0}>
                   <PermissionPrompt
                     request={permissions()[0]}
