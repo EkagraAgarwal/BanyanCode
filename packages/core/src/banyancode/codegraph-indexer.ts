@@ -56,6 +56,7 @@ export interface Interface {
     root: string
     force?: boolean
     maxFileSizeBytes?: number
+    excludePatterns?: readonly string[]
     onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
   }) => Effect.Effect<
     {
@@ -84,6 +85,7 @@ export interface Interface {
     paths: string[]
     force?: boolean
     maxFileSizeBytes?: number
+    excludePatterns?: readonly string[]
     onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
   }) => Effect.Effect<{
     indexed: number
@@ -116,6 +118,19 @@ const DEFAULT_IGNORED = [
   ".git",
   ".opencode",
   ".banyancode",
+]
+
+// Out-of-product UI packages that the codegraph never needs to index.
+// These are out of scope per AGENTS.md ("desktop, web, app, storybook
+// packages are explicitly out of scope"). They are still respected
+// when the user explicitly lists them in `banyancode_codegraph_exclude_patterns`
+// or `.banyancode/ignore`, but they are also excluded by default so
+// that a fresh build does not waste time walking packages/desktop etc.
+const DEFAULT_PRODUCT_EXCLUDES = [
+  "packages/web",
+  "packages/app",
+  "packages/desktop",
+  "packages/storybook",
 ]
 
 export const layer = Layer.effect(
@@ -184,9 +199,9 @@ export const layer = Layer.effect(
       })
     }
 
-    const loadIgnorePatterns = (root: string): Effect.Effect<{ gitignore: string[]; banyanignore: string[] }> => {
+    const loadIgnorePatterns = (root: string, excludePatterns?: readonly string[]): Effect.Effect<{ gitignore: string[]; banyanignore: string[] }> => {
       return Effect.gen(function* () {
-        const gitignore: string[] = [...DEFAULT_IGNORED]
+        const gitignore: string[] = [...DEFAULT_IGNORED, ...DEFAULT_PRODUCT_EXCLUDES]
         const banyanignore: string[] = []
         const gitignorePath = path.join(root, ".gitignore")
         const banyancodeignorePath = path.join(root, ".banyancode", "ignore")
@@ -199,6 +214,12 @@ export const layer = Layer.effect(
         if (banyancodeExists) {
           const content = yield* fs.readFileStringSafe(banyancodeignorePath).pipe(Effect.orDie)
           if (content) banyanignore.push(...content.split("\n").filter((l) => l.trim() && !l.startsWith("#")))
+        }
+        if (excludePatterns && excludePatterns.length > 0) {
+          for (const p of excludePatterns) {
+            const trimmed = p.trim()
+            if (trimmed) banyanignore.push(trimmed)
+          }
         }
         return { gitignore, banyanignore }
       })
@@ -800,11 +821,12 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       root: string
       force?: boolean
       maxFileSizeBytes?: number
+      excludePatterns?: readonly string[]
       onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
-      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root)
+      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root, input.excludePatterns)
       const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, gitignore, banyanignore)
       const allFiles = walkResult.files
       const codeExtensions = new Set([
@@ -1013,10 +1035,11 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       paths: string[]
       force?: boolean
       maxFileSizeBytes?: number
+      excludePatterns?: readonly string[]
       onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
     }) {
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
-      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root)
+      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root, input.excludePatterns)
 
       const filteredPaths: string[] = []
       for (const filePath of input.paths) {

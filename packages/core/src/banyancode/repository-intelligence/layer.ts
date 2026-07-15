@@ -113,6 +113,24 @@ function isDocPath(path: string): boolean {
   return DOC_PATH_PATTERNS.some((p) => p.test(path))
 }
 
+// Normalize a caller-provided path against the indexed graph's root so
+// the same input resolves whether the user typed an absolute Windows
+// path, a path with backslashes, or a clean repo-relative path. The
+// graph stores paths relative to `codegraph_meta.indexed_root`, so any
+// incoming path must be reduced to the same form before being looked
+// up via `getFileByPath`.
+const normalizePathForLookup = (input: string, indexedRoot?: string): string => {
+  const cleaned = input.replace(/\\/g, "/").trim()
+  if (!cleaned) return cleaned
+  if (!indexedRoot) return cleaned
+  const root = indexedRoot.replace(/\\/g, "/").replace(/\/+$/, "")
+  if (cleaned === root) return ""
+  if (cleaned.startsWith(root + "/")) {
+    return cleaned.slice(root.length + 1)
+  }
+  return cleaned
+}
+
 function isConfigPath(path: string): boolean {
   return CONFIG_PATH_PATTERNS.some((p) => p.test(path))
 }
@@ -620,9 +638,12 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const allFiles = yield* repo.listAllFiles()
         const allNodes = yield* repo.listAllNodes()
+        const meta = yield* repo.getMeta()
+        const indexedRoot = meta?.indexedRoot
 
+        const normalizedQuery = normalizePathForLookup(input.query, indexedRoot)
         const symbolResult = yield* findSymbol({ name: input.query, workspace: input.workspace })
-        const fileByPath = yield* repo.getFileByPath(input.query)
+        const fileByPath = yield* repo.getFileByPath(normalizedQuery)
         const fileMatches: CodegraphNode[] = fileByPath
           ? allNodes.filter((n) => n.fileID === fileByPath.id)
           : []
@@ -851,9 +872,11 @@ export const layer = Layer.effect(
       workspace?: WorkspaceContext
     }): Effect.Effect<ArchitecturalSlice, never, never> =>
       Effect.gen(function* () {
+        const meta = yield* repo.getMeta()
+        const normalizedPath = normalizePathForLookup(input.path, meta?.indexedRoot)
         const ctx = yield* query({ query: input.path, workspace: input.workspace })
         const slc = yield* slice(ctx)
-        const file = yield* repo.getFileByPath(input.path)
+        const file = yield* repo.getFileByPath(normalizedPath)
         if (file) {
           const dependents = yield* findEntrypoints({ feature: file.path.split("/").pop() ?? file.path })
           const seen = new Set(slc.importantSymbols.map((n) => n.id))
@@ -957,7 +980,9 @@ export const layer = Layer.effect(
           // Resolve the file by path, then aggregate relationships across every
           // node belonging to that file. This is the path-based fallback for
           // tools that don't have an exact codegraph nodeID handy.
-          const file = yield* repo.getFileByPath(input.path)
+          const meta = yield* repo.getMeta()
+          const normalizedPath = normalizePathForLookup(input.path, meta?.indexedRoot)
+          const file = yield* repo.getFileByPath(normalizedPath)
           if (!file) return []
           const fileNodes = yield* repo.listNodesByFile(file.id)
           const seen = new Set<string>()
