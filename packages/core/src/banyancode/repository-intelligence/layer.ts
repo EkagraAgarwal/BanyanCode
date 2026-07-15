@@ -99,8 +99,36 @@ const rankTransitiveDependents = (
     .map((t) => t.node)
 }
 
+type EdgeDirection = "callers" | "dependencies"
+
+const CALLER_EDGE_KINDS: ReadonlySet<CodegraphEdge["kind"]> = new Set(["calls", "references"])
+const DEPENDENCY_EDGE_KINDS: ReadonlySet<CodegraphEdge["kind"]> = new Set([
+  "calls",
+  "references",
+  "imports",
+  "extends",
+])
+
 function isDocPath(path: string): boolean {
   return DOC_PATH_PATTERNS.some((p) => p.test(path))
+}
+
+// Normalize a caller-provided path against the indexed graph's root so
+// the same input resolves whether the user typed an absolute Windows
+// path, a path with backslashes, or a clean repo-relative path. The
+// graph stores paths relative to `codegraph_meta.indexed_root`, so any
+// incoming path must be reduced to the same form before being looked
+// up via `getFileByPath`.
+const normalizePathForLookup = (input: string, indexedRoot?: string): string => {
+  const cleaned = input.replace(/\\/g, "/").trim()
+  if (!cleaned) return cleaned
+  if (!indexedRoot) return cleaned
+  const root = indexedRoot.replace(/\\/g, "/").replace(/\/+$/, "")
+  if (cleaned === root) return ""
+  if (cleaned.startsWith(root + "/")) {
+    return cleaned.slice(root.length + 1)
+  }
+  return cleaned
 }
 
 function isConfigPath(path: string): boolean {
@@ -118,7 +146,8 @@ export const layer = Layer.effect(
       kind?: CodegraphNode["kind"]
       file?: string
       exact?: boolean
-    }): Effect.Effect<{ nodes: CodegraphNode[]; usedFallback: boolean }, never, never> =>
+      workspace?: WorkspaceContext
+    }): Effect.Effect<{ nodes: CodegraphNode[]; usedFallback: boolean; ambiguity?: { total: number; kept: number } }, never, never> =>
       Effect.gen(function* () {
         let fileID: string | undefined
         if (input.file) {
@@ -127,11 +156,6 @@ export const layer = Layer.effect(
           if (!fileID) return { nodes: [], usedFallback: false }
         }
 
-        // Delegate to the shared resolver so every tool sees the same candidates
-        // for the same input. `usedFallback` is reported when the resolver had
-        // to fall through to the Context.Service tag lookup, which is the only
-        // case where the model's intuition ("MemoryRepo") doesn't match an
-        // indexed node's `name` field exactly.
         const result = yield* resolveGraphTargetPure(repo as never, {
           target: input.name,
           kind: input.kind,
@@ -140,16 +164,101 @@ export const layer = Layer.effect(
 
         if (result._tag === "Miss") return { nodes: [], usedFallback: false }
 
-        const nodes = [...result.value.candidates]
+        let nodes = [...result.value.candidates]
+        const derivation = result.value.derivation
+        const hasFocusDirs = input.workspace?.focusDirs && input.workspace.focusDirs.length > 0
+
         if (input.exact) {
+          nodes = nodes.filter((n) => n.name === input.name)
+        }
+
+        if (hasFocusDirs) {
+          const focusSet = new Set(
+            input.workspace!.focusDirs.map((d) => d.replace(/\\/g, "/")),
+          )
+          const focused: CodegraphNode[] = []
+          const unfocused: CodegraphNode[] = []
+
+          for (const node of nodes) {
+            const file = yield* repo.getFile(node.fileID)
+            if (!file) {
+              unfocused.push(node)
+              continue
+            }
+            const normalizedPath = file.path.replace(/\\/g, "/")
+            const isFocused = [...focusSet].some(
+              (prefix) =>
+                normalizedPath === prefix ||
+                normalizedPath.startsWith(prefix + "/"),
+            )
+            if (isFocused) {
+              focused.push(node)
+            } else {
+              unfocused.push(node)
+            }
+          }
+
+          if (focused.length > 0) {
+            return {
+              nodes: focused,
+              usedFallback: derivation === "tag-fallback",
+            }
+          }
           return {
-            nodes: nodes.filter((n) => n.name === input.name),
-            usedFallback: result.value.derivation === "tag-fallback",
+            nodes: [...focused, ...unfocused],
+            usedFallback: derivation === "tag-fallback",
+            ambiguity: { total: nodes.length, kept: 0 },
           }
         }
+
+        const usedFallback = derivation === "tag-fallback"
+
+        if (nodes.length > 1 && derivation === "name-exact") {
+          const PRODUCT_PREFIXES = [
+            "packages/opencode",
+            "packages/core",
+            "packages/tui",
+          ]
+          const UI_EXCLUDED = [
+            "packages/web",
+            "packages/app",
+            "packages/desktop",
+            "packages/storybook",
+          ]
+
+          const filePathByNodeID = new Map<string, string>()
+          for (const node of nodes) {
+            const file = yield* repo.getFile(node.fileID)
+            if (file) filePathByNodeID.set(node.id, file.path.replace(/\\/g, "/"))
+          }
+
+          const productNodes = nodes.filter((n) => {
+            const path = filePathByNodeID.get(n.id) ?? ""
+            return PRODUCT_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))
+          })
+          const uiNodes = nodes.filter((n) => {
+            const path = filePathByNodeID.get(n.id) ?? ""
+            return UI_EXCLUDED.some((p) => path === p || path.startsWith(p + "/"))
+          })
+
+          if (productNodes.length > 0) {
+            return {
+              nodes: productNodes,
+              usedFallback,
+              ambiguity: { total: nodes.length, kept: productNodes.length },
+            }
+          }
+
+          return {
+            nodes,
+            usedFallback,
+            ambiguity: { total: nodes.length, kept: nodes.length },
+          }
+        }
+
         return {
           nodes,
-          usedFallback: result.value.derivation === "tag-fallback",
+          usedFallback: derivation === "tag-fallback",
         }
       })
 
@@ -366,11 +475,18 @@ export const layer = Layer.effect(
           const incoming = yield* repo.edgesTo(current.id)
 
           const nextIDs: string[] = []
-          for (const edge of [...outgoing, ...incoming]) {
-            const nextID = edge.fromNodeID === current.id ? edge.toNodeID : edge.fromNodeID
-            if (!visited.has(nextID)) {
-              visited.add(nextID)
-              nextIDs.push(nextID)
+          for (const edge of outgoing) {
+            if (!DEPENDENCY_EDGE_KINDS.has(edge.kind)) continue
+            if (!visited.has(edge.toNodeID)) {
+              visited.add(edge.toNodeID)
+              nextIDs.push(edge.toNodeID)
+            }
+          }
+          for (const edge of incoming) {
+            if (!CALLER_EDGE_KINDS.has(edge.kind)) continue
+            if (!visited.has(edge.fromNodeID)) {
+              visited.add(edge.fromNodeID)
+              nextIDs.push(edge.fromNodeID)
             }
           }
 
@@ -389,6 +505,8 @@ export const layer = Layer.effect(
     // Depth-tagged BFS. Each discovered node carries the per-node hop distance
     // from the anchor (depth=1 means the anchor calls/touches it directly).
     // Phase 2 ranking consumes these depths to score transitive dependents.
+    // Directional-but-tolerant: outgoing uses all dependency kinds, incoming
+    // uses only caller kinds (calls/references).
     const findRelatedWithDepth = (input: {
       nodeID: string
       depth?: number
@@ -407,11 +525,18 @@ export const layer = Layer.effect(
           const incoming = yield* repo.edgesTo(current.id)
 
           const nextIDs: string[] = []
-          for (const edge of [...outgoing, ...incoming]) {
-            const nextID = edge.fromNodeID === current.id ? edge.toNodeID : edge.fromNodeID
-            if (!visited.has(nextID)) {
-              visited.add(nextID)
-              nextIDs.push(nextID)
+          for (const edge of outgoing) {
+            if (!DEPENDENCY_EDGE_KINDS.has(edge.kind)) continue
+            if (!visited.has(edge.toNodeID)) {
+              visited.add(edge.toNodeID)
+              nextIDs.push(edge.toNodeID)
+            }
+          }
+          for (const edge of incoming) {
+            if (!CALLER_EDGE_KINDS.has(edge.kind)) continue
+            if (!visited.has(edge.fromNodeID)) {
+              visited.add(edge.fromNodeID)
+              nextIDs.push(edge.fromNodeID)
             }
           }
 
@@ -429,6 +554,82 @@ export const layer = Layer.effect(
         return result
       })
 
+    // Strict directional BFS: incoming calls/references only.
+    const findCallers = (input: {
+      nodeID: string
+      depth?: number
+    }): Effect.Effect<CodegraphNode[], never, never> =>
+      Effect.gen(function* () {
+        const maxDepth = input.depth ?? 2
+        const visited = new Set<string>([input.nodeID])
+        const result: CodegraphNode[] = []
+        const queue: Array<{ id: string; depth: number }> = [{ id: input.nodeID, depth: 0 }]
+
+        while (queue.length > 0) {
+          const current = queue.shift()!
+          if (current.depth >= maxDepth) continue
+
+          const incoming = yield* repo.edgesTo(current.id)
+          const nextIDs: string[] = []
+          for (const edge of incoming) {
+            if (!CALLER_EDGE_KINDS.has(edge.kind)) continue
+            const nextID = edge.fromNodeID
+            if (!visited.has(nextID)) {
+              visited.add(nextID)
+              nextIDs.push(nextID)
+            }
+          }
+
+          if (nextIDs.length > 0) {
+            const nodes = yield* repo.nodesByIDs(nextIDs)
+            result.push(...nodes)
+            for (const id of nextIDs) {
+              queue.push({ id, depth: current.depth + 1 })
+            }
+          }
+        }
+
+        return result
+      })
+
+    // Strict directional BFS: outgoing calls/references/imports/extends only.
+    const findDependencies = (input: {
+      nodeID: string
+      depth?: number
+    }): Effect.Effect<CodegraphNode[], never, never> =>
+      Effect.gen(function* () {
+        const maxDepth = input.depth ?? 2
+        const visited = new Set<string>([input.nodeID])
+        const result: CodegraphNode[] = []
+        const queue: Array<{ id: string; depth: number }> = [{ id: input.nodeID, depth: 0 }]
+
+        while (queue.length > 0) {
+          const current = queue.shift()!
+          if (current.depth >= maxDepth) continue
+
+          const outgoing = yield* repo.edgesFrom(current.id)
+          const nextIDs: string[] = []
+          for (const edge of outgoing) {
+            if (!DEPENDENCY_EDGE_KINDS.has(edge.kind)) continue
+            const nextID = edge.toNodeID
+            if (!visited.has(nextID)) {
+              visited.add(nextID)
+              nextIDs.push(nextID)
+            }
+          }
+
+          if (nextIDs.length > 0) {
+            const nodes = yield* repo.nodesByIDs(nextIDs)
+            result.push(...nodes)
+            for (const id of nextIDs) {
+              queue.push({ id, depth: current.depth + 1 })
+            }
+          }
+        }
+
+        return result
+      })
+
     const query = (input: {
       query: string
       limit?: number
@@ -437,15 +638,30 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const allFiles = yield* repo.listAllFiles()
         const allNodes = yield* repo.listAllNodes()
+        const meta = yield* repo.getMeta()
+        const indexedRoot = meta?.indexedRoot
 
-        const symbolResult = yield* findSymbol({ name: input.query })
-        const fileByPath = yield* repo.getFileByPath(input.query)
+        const normalizedQuery = normalizePathForLookup(input.query, indexedRoot)
+        const symbolResult = yield* findSymbol({ name: input.query, workspace: input.workspace })
+        const fileByPath = yield* repo.getFileByPath(normalizedQuery)
         const fileMatches: CodegraphNode[] = fileByPath
           ? allNodes.filter((n) => n.fileID === fileByPath.id)
           : []
 
+        const isMultiToken = /\s/.test(input.query)
+        const ftsHits = isMultiToken && symbolResult.nodes.length === 0
+          ? yield* repo.ftsSearchNodes({ query: input.query, limit: input.limit ?? 50 })
+          : []
+        const ftsDerivation = ftsHits.length > 0 ? ("fts-bm25" as const) : undefined
+
         const seen = new Set<string>()
         const symbols: CodegraphNode[] = []
+        for (const hit of ftsHits) {
+          if (!seen.has(hit.id)) {
+            seen.add(hit.id)
+            symbols.push(hit)
+          }
+        }
         for (const n of [...symbolResult.nodes, ...fileMatches]) {
           if (!seen.has(n.id)) {
             seen.add(n.id)
@@ -483,11 +699,27 @@ export const layer = Layer.effect(
         const graphNodesList = graphNodeIDs.size > 0 ? yield* repo.nodesByIDs([...graphNodeIDs]) : []
 
         const isDegraded = symbols.length === 0
-        const diagnostics: { kind: string; message: string }[] = []
+        const diagnostics: { kind: string; message: string; candidates?: readonly CodegraphNode[] }[] = []
         if (isDegraded) {
           diagnostics.push({
             kind: "symbol-not-found",
             message: `No symbol matched "${input.query}". The graph may be stale — run /codegraph-build --force.`,
+          })
+        } else if (symbolResult.ambiguity) {
+          const candidateFiles: CodegraphNode[] = []
+          for (const n of symbolResult.nodes) {
+            const file = yield* repo.getFile(n.fileID)
+            if (file) candidateFiles.push(n)
+          }
+          diagnostics.push({
+            kind: "ambiguous-symbol",
+            message: "Multiple exact-name matches found; pass focusDirs to disambiguate.",
+            candidates: candidateFiles,
+          })
+        } else if (ftsDerivation) {
+          diagnostics.push({
+            kind: "fts-fallback",
+            message: `Resolved via FTS5 bm25 ranking for "${input.query}".`,
           })
         }
 
@@ -529,6 +761,7 @@ export const layer = Layer.effect(
           degraded: isDegraded,
           fallbackUsed: symbolResult.usedFallback,
           query: input.query,
+          ...(ftsDerivation ? { searchDerivation: ftsDerivation } : {}),
           symbols,
           files,
           graph: { nodes: graphNodesList, edges: graphEdges },
@@ -542,6 +775,7 @@ export const layer = Layer.effect(
             score: 0,
             signals: { exact: 0, symbol: 0, graph: 0, git: 0, workspace: 0 },
           },
+          ...(symbolResult.ambiguity ? { ambiguity: symbolResult.ambiguity } : {}),
         } satisfies RepositoryContext
       })
 
@@ -569,6 +803,35 @@ export const layer = Layer.effect(
         if (ctx.graph.edges.length > 0) summaryParts.push(`${ctx.graph.edges.length} edges`)
         const summary = summaryParts.join(" — ")
 
+        const defaultLimit = 25
+
+        const directCallersSet = new Map<string, CodegraphNode>()
+        const transitiveSet = new Map<string, CodegraphNode>()
+        const dependencySet = new Map<string, { name: string; version?: string }>()
+
+        if (ctx.symbols.length > 0) {
+          const anchorIDs = ctx.symbols.slice(0, 1).map((s) => s.id)
+          for (const anchorID of anchorIDs) {
+            const callers = yield* findCallers({ nodeID: anchorID, depth: 1 })
+            for (const c of callers) directCallersSet.set(c.id, c)
+            const transitive = yield* findCallers({ nodeID: anchorID, depth: 3 })
+            for (const t of transitive) {
+              if (!directCallersSet.has(t.id)) transitiveSet.set(t.id, t)
+            }
+            const deps = yield* findDependencies({ nodeID: anchorID, depth: 1 })
+            for (const d of deps) {
+              if (d.kind === "function" || d.kind === "class" || d.kind === "method" || d.kind === "type") {
+                dependencySet.set(d.name, { name: d.name })
+              }
+            }
+          }
+        }
+
+        const directCallers = [...directCallersSet.values()].slice(0, defaultLimit)
+        const transitiveDependents = [...transitiveSet.values()]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .slice(0, defaultLimit)
+
         return {
           status: ctx.status,
           reason: ctx.reason,
@@ -582,9 +845,16 @@ export const layer = Layer.effect(
           relatedDocs: ctx.docs,
           configs: ctx.configs,
           routes,
-          dependencies: [] as readonly { name: string; version?: string }[],
-          directCallers: [] as readonly CodegraphNode[],
-          transitiveDependents: [] as readonly CodegraphNode[],
+          dependencies: [...dependencySet.values()],
+          directCallers,
+          transitiveDependents,
+          moreAvailable:
+            directCallersSet.size + transitiveSet.size > defaultLimit
+              ? {
+                  callers: directCallersSet.size - directCallers.length,
+                  dependents: transitiveSet.size - transitiveDependents.length,
+                }
+              : undefined,
         } satisfies ArchitecturalSlice
       })
 
@@ -602,9 +872,11 @@ export const layer = Layer.effect(
       workspace?: WorkspaceContext
     }): Effect.Effect<ArchitecturalSlice, never, never> =>
       Effect.gen(function* () {
+        const meta = yield* repo.getMeta()
+        const normalizedPath = normalizePathForLookup(input.path, meta?.indexedRoot)
         const ctx = yield* query({ query: input.path, workspace: input.workspace })
         const slc = yield* slice(ctx)
-        const file = yield* repo.getFileByPath(input.path)
+        const file = yield* repo.getFileByPath(normalizedPath)
         if (file) {
           const dependents = yield* findEntrypoints({ feature: file.path.split("/").pop() ?? file.path })
           const seen = new Set(slc.importantSymbols.map((n) => n.id))
@@ -708,7 +980,9 @@ export const layer = Layer.effect(
           // Resolve the file by path, then aggregate relationships across every
           // node belonging to that file. This is the path-based fallback for
           // tools that don't have an exact codegraph nodeID handy.
-          const file = yield* repo.getFileByPath(input.path)
+          const meta = yield* repo.getMeta()
+          const normalizedPath = normalizePathForLookup(input.path, meta?.indexedRoot)
+          const file = yield* repo.getFileByPath(normalizedPath)
           if (!file) return []
           const fileNodes = yield* repo.listNodesByFile(file.id)
           const seen = new Set<string>()

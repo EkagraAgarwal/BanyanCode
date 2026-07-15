@@ -112,7 +112,7 @@ it("adds two numbers", () => { expect(add(1, 2)).toBe(3) })`,
     await fs.writeFile(path.join(tmp.path, "package.json"), JSON.stringify({ name: "my-proj" }))
     await fs.mkdir(path.join(tmp.path, "src"), { recursive: true })
     await fs.writeFile(path.join(tmp.path, "src", "package.json"), JSON.stringify({ name: "my-proj-src" }))
-    await fs.writeFile(path.join(tmp.path, "src", "index.ts"), "export function x() { return 1 }")
+    await fs.writeFile(path.join(tmp.path, "src", "index.ts"), 'import pkg from "./package.json"\nexport function x() { return pkg.name }')
 
     const serviceLayer = CodegraphIndexer.layer.pipe(
       Layer.provide(FSUtil.defaultLayer),

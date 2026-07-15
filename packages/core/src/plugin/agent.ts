@@ -189,7 +189,6 @@ export const Plugin = PluginV2.define({
               { action: "codegraph_find_overrides", resource: "*", effect: "allow" },
               { action: "codegraph_find_implementations", resource: "*", effect: "allow" },
               { action: "repository_query", resource: "*", effect: "allow" },
-              { action: "repository_slice", resource: "*", effect: "allow" },
               { action: "repository_explain", resource: "*", effect: "allow" },
               { action: "repository_impact", resource: "*", effect: "allow" },
               { action: "repository_trace", resource: "*", effect: "allow" },

@@ -9,6 +9,8 @@ import { CodegraphParseErrorsTable } from "./codegraph-parse-errors.sql"
 import { CodegraphServiceTagsTable } from "./codegraph-service-tags.sql"
 import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from "./types"
 
+export type FTSResult = CodegraphNode & { readonly bm25: number }
+
 // Upper bound on nodes per DB insert batch. If a batched putNodes method is added,
 // chunk the input into groups of this size to avoid overwhelming the SQLite connection.
 export const MAX_NODES_PER_INSERT = 1000
@@ -73,6 +75,8 @@ export interface Interface {
   readonly searchNodes: (input: { name?: string; kind?: string; limit?: number }) => Effect.Effect<CodegraphNode[], never, never>
   /** Like searchNodes but without the `code` field — suitable for callers that only need metadata. */
   readonly searchNodesLight: (input: { name?: string; kind?: string; fileID?: string; limit?: number }) => Effect.Effect<Array<Omit<CodegraphNode, "code"> & { code?: never }>, never, never>
+  /** FTS5 full-text search across symbol names and code, ranked by bm25. */
+  readonly ftsSearchNodes: (input: { query: string; limit?: number }) => Effect.Effect<FTSResult[], never, never>
   /** Fetch nodes for a specific set of files. Used by incremental rebuildDerivedGraph. */
   readonly nodesByFileIDs: (input: { fileIDs: string[] }) => Effect.Effect<CodegraphNode[], never, never>
   readonly countNodes: () => Effect.Effect<number, never, never>
@@ -515,6 +519,50 @@ export const layer = Layer.effect(
         signature: row.signature ?? undefined,
         startLine: row.start_line,
         endLine: row.end_line,
+      }))
+    })
+
+    const ftsSearchNodes = Effect.fn("CodegraphRepo.ftsSearchNodes")(function* (input: {
+      query: string
+      limit?: number
+    }) {
+      const limit = input.limit ?? 50
+      const sanitized = input.query.replace(/['"]/g, " ").trim()
+      if (!sanitized) return []
+      const tokens = sanitized.split(/\s+/).filter(Boolean)
+      const ftsQuery = tokens.map((t) => `"${t}"`).join(" OR ")
+      if (!ftsQuery) return []
+      type FTSRow = {
+        id: string
+        file_id: string
+        kind: string
+        name: string
+        signature: string | null
+        start_line: number
+        end_line: number
+        code: string | null
+        bm25: number
+      }
+      const rows: FTSRow[] = yield* db
+        .all<FTSRow>(sql`
+          SELECT n.id, n.file_id, n.kind, n.name, n.signature, n.start_line, n.end_line, n.code, bm25(codegraph_fts) AS bm25
+          FROM codegraph_fts
+          INNER JOIN codegraph_nodes n ON n.rowid = codegraph_fts.rowid
+          WHERE codegraph_fts MATCH ${ftsQuery}
+          ORDER BY bm25
+          LIMIT ${limit}
+        `)
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        fileID: row.file_id,
+        kind: row.kind as CodegraphNode["kind"],
+        name: row.name,
+        signature: row.signature ?? undefined,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        code: row.code ?? undefined,
+        bm25: row.bm25,
       }))
     })
 
@@ -1076,6 +1124,7 @@ export const layer = Layer.effect(
       queryNodes,
       searchNodes,
       searchNodesLight,
+      ftsSearchNodes,
       nodesByFileIDs,
       countNodes,
       countEdges,

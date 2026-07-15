@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import type { ResolutionDerivation } from "./symbol-resolver"
 
 export type MemoryEntry = {
   id: string
@@ -218,6 +219,8 @@ export interface RepositoryContext {
   readonly workspace?: WorkspaceContext
   readonly diagnostics?: readonly Diagnostic[]
   readonly ranking: Ranking
+  readonly ambiguity?: { readonly total: number; readonly kept: number }
+  readonly searchDerivation?: ResolutionDerivation
 }
 
 export type PeerInfo = {

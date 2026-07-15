@@ -59,7 +59,7 @@ export const BuildEvent = EventV2.define({
 
 export interface Interface {
   readonly status: () => Effect.Effect<State, never, never>
-  readonly start: (input: { root: string; force?: boolean; dbPath?: string }) => Effect.Effect<void, never, never>
+  readonly start: (input: { root: string; force?: boolean; dbPath?: string; excludePatterns?: readonly string[] }) => Effect.Effect<void, never, never>
   readonly cancel: () => Effect.Effect<void, never, never>
   readonly forceKill: () => Effect.Effect<{ ok: boolean; message: string }, never, never>
   readonly events: () => Queue.Dequeue<{ type: "banyancode.codegraph.build"; properties: State }>
@@ -134,6 +134,7 @@ export const layer = Layer.effect(
           const result = yield* indexer.index({
             root: input.root,
             force: input.force ?? false,
+            ...(input.excludePatterns ? { excludePatterns: input.excludePatterns } : {}),
             onProgress: Effect.fn("CodegraphBuildService.onProgress")(function* ({ file, done, total, currentFile }) {
               const basename = file.split("/").pop() ?? file.split("\\").pop() ?? file
               const next: State = {

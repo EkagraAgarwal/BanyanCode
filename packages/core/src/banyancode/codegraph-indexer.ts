@@ -14,6 +14,7 @@ import {
   parsePythonWithTreeSitterIncremental,
 } from "./langs/query-executor"
 import type { Tree } from "web-tree-sitter"
+import { extractTestFileImports } from "./codegraph-helpers"
 
 const TS_LIKE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"])
 const PY_LIKE_EXTS = new Set([".py", ".pyw"])
@@ -55,6 +56,7 @@ export interface Interface {
     root: string
     force?: boolean
     maxFileSizeBytes?: number
+    excludePatterns?: readonly string[]
     onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
   }) => Effect.Effect<
     {
@@ -83,6 +85,7 @@ export interface Interface {
     paths: string[]
     force?: boolean
     maxFileSizeBytes?: number
+    excludePatterns?: readonly string[]
     onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
   }) => Effect.Effect<{
     indexed: number
@@ -115,6 +118,19 @@ const DEFAULT_IGNORED = [
   ".git",
   ".opencode",
   ".banyancode",
+]
+
+// Out-of-product UI packages that the codegraph never needs to index.
+// These are out of scope per AGENTS.md ("desktop, web, app, storybook
+// packages are explicitly out of scope"). They are still respected
+// when the user explicitly lists them in `banyancode_codegraph_exclude_patterns`
+// or `.banyancode/ignore`, but they are also excluded by default so
+// that a fresh build does not waste time walking packages/desktop etc.
+const DEFAULT_PRODUCT_EXCLUDES = [
+  "packages/web",
+  "packages/app",
+  "packages/desktop",
+  "packages/storybook",
 ]
 
 export const layer = Layer.effect(
@@ -183,9 +199,9 @@ export const layer = Layer.effect(
       })
     }
 
-    const loadIgnorePatterns = (root: string): Effect.Effect<{ gitignore: string[]; banyanignore: string[] }> => {
+    const loadIgnorePatterns = (root: string, excludePatterns?: readonly string[]): Effect.Effect<{ gitignore: string[]; banyanignore: string[] }> => {
       return Effect.gen(function* () {
-        const gitignore: string[] = [...DEFAULT_IGNORED]
+        const gitignore: string[] = [...DEFAULT_IGNORED, ...DEFAULT_PRODUCT_EXCLUDES]
         const banyanignore: string[] = []
         const gitignorePath = path.join(root, ".gitignore")
         const banyancodeignorePath = path.join(root, ".banyancode", "ignore")
@@ -198,6 +214,12 @@ export const layer = Layer.effect(
         if (banyancodeExists) {
           const content = yield* fs.readFileStringSafe(banyancodeignorePath).pipe(Effect.orDie)
           if (content) banyanignore.push(...content.split("\n").filter((l) => l.trim() && !l.startsWith("#")))
+        }
+        if (excludePatterns && excludePatterns.length > 0) {
+          for (const p of excludePatterns) {
+            const trimmed = p.trim()
+            if (trimmed) banyanignore.push(trimmed)
+          }
         }
         return { gitignore, banyanignore }
       })
@@ -576,7 +598,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
 
   const allFiles = yield* repo.listAllFiles()
   const fileByID = new Map(allFiles.map((f) => [f.id, f]))
-  const fileDir = (filePath: string) => path.dirname(filePath)
+  const fileDir = (filePath: string) => path.dirname(filePath).replace(/\\/g, "/")
 
   const nodeMap = new Map<string, CodegraphNode[]>()
   const nodesByFileID = new Map<string, CodegraphNode[]>()
@@ -671,6 +693,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }
     const testFile = fileByID.get(testNode.fileID)
     if (!testFile || !testNode.code) continue
+    const testFileImports = extractTestFileImports(testNode.code)
     const referenced = new Set<string>()
     for (const m of testNode.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
       referenced.add(m[0])
@@ -684,7 +707,17 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         const nodeFile = fileByID.get(node.fileID)
         if (!nodeFile) continue
         if (/\.(test|spec)\./i.test(nodeFile.path.toLowerCase())) continue
-        crossEdges.push({ fromNodeID: node.id, toNodeID: testNode.id, kind: "tested_by" })
+
+        const targetImport = nodeFile.path.replace(/\.(ts|tsx|js|jsx)$/, "").replace(/^.*\//, "")
+        const importsFile = testFileImports.has(targetImport)
+
+        const callOnlyMatch = !importsFile &&
+          candidates.length === 1 &&
+          (testNode.code ?? "").includes(`${name}(`)
+
+        if (importsFile || callOnlyMatch) {
+          crossEdges.push({ fromNodeID: node.id, toNodeID: testNode.id, kind: "tested_by" })
+        }
       }
     }
   }
@@ -697,25 +730,27 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     const cfgFile = fileByID.get(cfg.fileID)
     if (!cfgFile) continue
     const cfgDir = fileDir(cfgFile.path)
+    const cfgBasename = cfgFile.path.replace(/\\/g, "/").split("/").pop() ?? cfgFile.path
     for (const file of allFiles) {
       if (fileDir(file.path) !== cfgDir) continue
       if (file.id === cfg.fileID) continue
-      const fileNodes = nodesByFileID.get(file.id) ?? []
-      const fromNode =
-        fileNodes.find(
-          (n) =>
-            n.kind !== "config" &&
-            n.kind !== "docker" &&
-            n.kind !== "package" &&
-            n.kind !== "build" &&
-            n.kind !== "ci" &&
-            n.kind !== "env" &&
-            n.kind !== "doc" &&
-            n.kind !== "test" &&
-            n.kind !== "route" &&
-            n.kind !== "generated",
-        ) ?? fileNodes[0]
+      const fromNodes = nodesByFileID.get(file.id) ?? []
+      const fromNode = fromNodes.find(
+        (n) =>
+          n.kind !== "config" &&
+          n.kind !== "docker" &&
+          n.kind !== "package" &&
+          n.kind !== "build" &&
+          n.kind !== "ci" &&
+          n.kind !== "env" &&
+          n.kind !== "doc" &&
+          n.kind !== "test" &&
+          n.kind !== "route" &&
+          n.kind !== "generated",
+      ) ?? fromNodes[0]
       if (!fromNode) continue
+      const code = fromNode.code ?? ""
+      if (!code.includes(cfgBasename)) continue
       crossEdges.push({ fromNodeID: fromNode.id, toNodeID: cfg.id, kind: "configured_by" })
     }
   }
@@ -786,11 +821,12 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       root: string
       force?: boolean
       maxFileSizeBytes?: number
+      excludePatterns?: readonly string[]
       onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
-      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root)
+      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root, input.excludePatterns)
       const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, gitignore, banyanignore)
       const allFiles = walkResult.files
       const codeExtensions = new Set([
@@ -999,10 +1035,11 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       paths: string[]
       force?: boolean
       maxFileSizeBytes?: number
+      excludePatterns?: readonly string[]
       onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
     }) {
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
-      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root)
+      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root, input.excludePatterns)
 
       const filteredPaths: string[] = []
       for (const filePath of input.paths) {

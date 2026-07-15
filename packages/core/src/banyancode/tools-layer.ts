@@ -4,7 +4,7 @@ import { Layer } from "effect"
 import { CodegraphTools } from "../tool/codegraph"
 import { CodeFindTool } from "../tool/code-find"
 import { CodegraphSearchTool } from "../tool/codegraph-search-tool"
-import { RepositoryIntelTool } from "../tool/repository-intel-tool"
+import { RepositoryWave2 } from "../tool/repository-wave2"
 import { StructuralQueriesTool } from "../tool/structural-queries-tool"
 import { EditPlanTool } from "../tool/edit-plan"
 import { MeshControlTool } from "../tool/mesh-control"
@@ -35,7 +35,7 @@ export const locationLayer = Layer.mergeAll(
   MemoryCandidateTool.layer,
   CodegraphTools.locationLayer,
   CodeFindTool.locationLayer,
-  RepositoryIntelTool.locationLayer,
+  RepositoryWave2.locationLayer,
   CodegraphSearchTool.locationLayer,
   StructuralQueriesTool.locationLayer,
   EditPlanTool.locationLayer,

@@ -23,6 +23,7 @@ export type ResolutionDerivation =
   | "qualified-split"
   | "code-substring"
   | "name-like"
+  | "fts-bm25"
 
 export interface ResolvedTarget {
   readonly nodeID: string

@@ -64,7 +64,7 @@ export const Input = Schema.Struct({
     "downstream tool based on `intent`. Always pass both `intent` and `target`.",
 })
 
-export const DerivationSchema = Schema.Literals(["tag-fallback", "name-exact", "qualified-split", "code-substring", "name-like"])
+export const DerivationSchema = Schema.Literals(["tag-fallback", "name-exact", "qualified-split", "code-substring", "name-like", "fts-bm25"])
 
 const MatchEntrySchema = Schema.Struct({
   node: CodegraphNodeSchema,

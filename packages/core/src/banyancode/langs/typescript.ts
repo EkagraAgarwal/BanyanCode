@@ -5,6 +5,7 @@ const EXPORT_CLASS_REGEX = /export\s+class\s+(\w+)(?:\s+extends\s+(\w+))?/g
 const CLASS_REGEX = /(?:^|\n)(?!export\s+)class\s+(\w+)(?:\s+extends\s+(\w+))?/g
 const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(/g
 const ARROW_CONST_REGEX = /(?:^|\n)(?:export\s+)?const\s+(\w+)\s*=\s*(async\s+)?(?:\([^)]*\)|[^=>\n]+)\s*=>/g
+const FACTORY_EXPORT_REGEX = /(?:^|\n)export\s+const\s+(\w+)\s*=\s*((?:Tool\.define|Layer\.effect|Layer\.succeed|Layer\.scoped|Context\.Service|Context\.Tag|Layer\.mergeAll)(?:<[^>]+>)?)\s*\(/g
 const INTERFACE_REGEX = /(?:^|\n)interface\s+(\w+)/g
 const TYPE_REGEX = /(?:^|\n)type\s+(\w+)\s*=/g
 const EFFECT_FN_REGEX = /Effect\.fn\s*\(\s*["']([^"']+)["']\s*\)/
@@ -71,6 +72,24 @@ function getArrowBody(content: string, matchIndex: number, matchText: string): {
   return { code, endLine }
 }
 
+function getFactoryBody(content: string, matchIndex: number, matchText: string): { code: string; endLine: number } {
+  const startLine = content.substring(0, matchIndex).split("\n").length
+  const afterMatchIndex = matchIndex + matchText.length
+  const openParen = content.indexOf("(", afterMatchIndex)
+  if (openParen === -1) return getTSNodeBody(content, matchIndex, matchText)
+  let parenCount = 1
+  let i = openParen + 1
+  while (i < content.length && parenCount > 0) {
+    if (content[i] === "(") parenCount++
+    else if (content[i] === ")") parenCount--
+    i++
+  }
+  const closeParen = i - 1
+  const code = content.substring(matchIndex, closeParen + 1)
+  const endLine = startLine + code.split("\n").length - 1
+  return { code, endLine }
+}
+
 function extractClassMethods(classCode: string, classStartLine: number, fileID: string, className: string): ParsedNode[] {
   const methods: ParsedNode[] = []
   for (const match of classCode.matchAll(CLASS_METHOD_REGEX)) {
@@ -133,6 +152,15 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     const effectMatch = code.match(EFFECT_FN_REGEX)
     const signature = effectMatch ? effectMatch[1] : match[0].trim()
     nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
+  }
+
+  for (const match of content.matchAll(FACTORY_EXPORT_REGEX)) {
+    const name = match[1]
+    const factoryCall = match[2]
+    const signature = factoryCall.replace(/\s*\($/, "")
+    const startLine = content.substring(0, match.index).split("\n").length
+    const { code, endLine } = getFactoryBody(content, match.index!, match[0])
+    nodes.push({ id: `${fileID}:factory:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
   }
 
   for (const match of content.matchAll(ARROW_CONST_REGEX)) {

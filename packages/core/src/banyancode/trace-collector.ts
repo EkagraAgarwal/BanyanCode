@@ -40,15 +40,32 @@ export const layer = Layer.effect(
     const queue = yield* Queue.dropping<TraceEvent>(1024).pipe(Effect.orDie)
     yield* Effect.addFinalizer(() => Queue.shutdown(queue))
 
-    const resolveNameCache = yield* Ref.make<Map<string, string>>(new Map())
+    // Phase 8: version-aware name→nodeID cache. The trace collector's
+    // job is to map runtime trace names to stable codegraph nodeIDs.
+    // After a graph rebuild the nodeID for a name can change (the node
+    // was deleted and re-created), so the cache must be tied to
+    // codegraph_meta.graph_version. Without this, traces recorded after
+    // a rebuild would silently point at deleted nodeIDs.
+    const resolveNameCacheRef = yield* Ref.make<{ version: number; map: Map<string, string> }>({
+      version: -1,
+      map: new Map(),
+    })
     const resolveName = (name: string): Effect.Effect<string, never, never> =>
       Effect.gen(function* () {
-        const cached = yield* Ref.get(resolveNameCache)
-        const hit = cached.get(name)
-        if (hit !== undefined) return hit
+        const meta = yield* repo.getMeta()
+        const version = meta?.graphVersion ?? 0
+        const cached = yield* Ref.get(resolveNameCacheRef)
+        if (cached.version === version) {
+          const hit = cached.map.get(name)
+          if (hit !== undefined) return hit
+        }
         const matches = yield* repo.queryNodes({ function: name })
         const nodeID = matches[0]?.id ?? unknownIDFor(name)
-        yield* Ref.update(resolveNameCache, (m) => new Map(m).set(name, nodeID))
+        yield* Ref.update(resolveNameCacheRef, (c) =>
+          c.version === version
+            ? { version, map: new Map(c.map).set(name, nodeID) }
+            : { version, map: new Map().set(name, nodeID) },
+        )
         return nodeID
       })
 

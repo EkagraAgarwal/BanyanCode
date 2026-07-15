@@ -123,6 +123,7 @@ export const ImpactInput = Schema.Struct({
 export const TraceInput = Schema.Struct({
   symbol: Schema.String,
   depth: Schema.optional(Schema.Number),
+  limit: Schema.optional(Schema.Number),
   workspace: Schema.optional(WorkspaceContextSchema),
 }).annotate({ identifier: "Banyan/TraceInput" })
 
@@ -136,16 +137,18 @@ export const SymbolsInput = Schema.Struct({
 }).annotate({ identifier: "Banyan/SymbolsInput" })
 
 export const RelationshipsInput = Schema.Struct({
-  nodeID: Schema.String,
+  nodeID: Schema.optional(Schema.String),
+  path: Schema.optional(Schema.String),
   depth: Schema.optional(Schema.Number),
 }).annotate({ identifier: "Banyan/RelationshipsInput" })
 
 export const OwnershipInput = Schema.Struct({
   path: Schema.String,
+  workspace: Schema.optional(WorkspaceContextSchema),
 }).annotate({ identifier: "Banyan/OwnershipInput" })
 
 export const OwnershipResult = Schema.Struct({
-  user: Schema.optional(Schema.String),
+  owner: Schema.optional(Schema.String),
   count: Schema.Number,
 }).annotate({ identifier: "Banyan/OwnershipResult" })
 
