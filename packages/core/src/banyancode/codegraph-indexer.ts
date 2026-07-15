@@ -14,6 +14,7 @@ import {
   parsePythonWithTreeSitterIncremental,
 } from "./langs/query-executor"
 import type { Tree } from "web-tree-sitter"
+import { extractTestFileImports } from "./codegraph-helpers"
 
 const TS_LIKE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"])
 const PY_LIKE_EXTS = new Set([".py", ".pyw"])
@@ -576,7 +577,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
 
   const allFiles = yield* repo.listAllFiles()
   const fileByID = new Map(allFiles.map((f) => [f.id, f]))
-  const fileDir = (filePath: string) => path.dirname(filePath)
+  const fileDir = (filePath: string) => path.dirname(filePath).replace(/\\/g, "/")
 
   const nodeMap = new Map<string, CodegraphNode[]>()
   const nodesByFileID = new Map<string, CodegraphNode[]>()
@@ -671,6 +672,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }
     const testFile = fileByID.get(testNode.fileID)
     if (!testFile || !testNode.code) continue
+    const testFileImports = extractTestFileImports(testNode.code)
     const referenced = new Set<string>()
     for (const m of testNode.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
       referenced.add(m[0])
@@ -684,7 +686,17 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         const nodeFile = fileByID.get(node.fileID)
         if (!nodeFile) continue
         if (/\.(test|spec)\./i.test(nodeFile.path.toLowerCase())) continue
-        crossEdges.push({ fromNodeID: node.id, toNodeID: testNode.id, kind: "tested_by" })
+
+        const targetImport = nodeFile.path.replace(/\.(ts|tsx|js|jsx)$/, "").replace(/^.*\//, "")
+        const importsFile = testFileImports.has(targetImport)
+
+        const callOnlyMatch = !importsFile &&
+          candidates.length === 1 &&
+          (testNode.code ?? "").includes(`${name}(`)
+
+        if (importsFile || callOnlyMatch) {
+          crossEdges.push({ fromNodeID: node.id, toNodeID: testNode.id, kind: "tested_by" })
+        }
       }
     }
   }
@@ -697,25 +709,27 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     const cfgFile = fileByID.get(cfg.fileID)
     if (!cfgFile) continue
     const cfgDir = fileDir(cfgFile.path)
+    const cfgBasename = cfgFile.path.replace(/\\/g, "/").split("/").pop() ?? cfgFile.path
     for (const file of allFiles) {
       if (fileDir(file.path) !== cfgDir) continue
       if (file.id === cfg.fileID) continue
-      const fileNodes = nodesByFileID.get(file.id) ?? []
-      const fromNode =
-        fileNodes.find(
-          (n) =>
-            n.kind !== "config" &&
-            n.kind !== "docker" &&
-            n.kind !== "package" &&
-            n.kind !== "build" &&
-            n.kind !== "ci" &&
-            n.kind !== "env" &&
-            n.kind !== "doc" &&
-            n.kind !== "test" &&
-            n.kind !== "route" &&
-            n.kind !== "generated",
-        ) ?? fileNodes[0]
+      const fromNodes = nodesByFileID.get(file.id) ?? []
+      const fromNode = fromNodes.find(
+        (n) =>
+          n.kind !== "config" &&
+          n.kind !== "docker" &&
+          n.kind !== "package" &&
+          n.kind !== "build" &&
+          n.kind !== "ci" &&
+          n.kind !== "env" &&
+          n.kind !== "doc" &&
+          n.kind !== "test" &&
+          n.kind !== "route" &&
+          n.kind !== "generated",
+      ) ?? fromNodes[0]
       if (!fromNode) continue
+      const code = fromNode.code ?? ""
+      if (!code.includes(cfgBasename)) continue
       crossEdges.push({ fromNodeID: fromNode.id, toNodeID: cfg.id, kind: "configured_by" })
     }
   }
