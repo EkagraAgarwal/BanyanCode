@@ -218,6 +218,7 @@ export interface RepositoryContext {
   readonly workspace?: WorkspaceContext
   readonly diagnostics?: readonly Diagnostic[]
   readonly ranking: Ranking
+  readonly ambiguity?: { readonly total: number; readonly kept: number }
 }
 
 export type PeerInfo = {

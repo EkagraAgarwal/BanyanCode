@@ -118,7 +118,8 @@ export const layer = Layer.effect(
       kind?: CodegraphNode["kind"]
       file?: string
       exact?: boolean
-    }): Effect.Effect<{ nodes: CodegraphNode[]; usedFallback: boolean }, never, never> =>
+      workspace?: WorkspaceContext
+    }): Effect.Effect<{ nodes: CodegraphNode[]; usedFallback: boolean; ambiguity?: { total: number; kept: number } }, never, never> =>
       Effect.gen(function* () {
         let fileID: string | undefined
         if (input.file) {
@@ -127,11 +128,6 @@ export const layer = Layer.effect(
           if (!fileID) return { nodes: [], usedFallback: false }
         }
 
-        // Delegate to the shared resolver so every tool sees the same candidates
-        // for the same input. `usedFallback` is reported when the resolver had
-        // to fall through to the Context.Service tag lookup, which is the only
-        // case where the model's intuition ("MemoryRepo") doesn't match an
-        // indexed node's `name` field exactly.
         const result = yield* resolveGraphTargetPure(repo as never, {
           target: input.name,
           kind: input.kind,
@@ -140,16 +136,101 @@ export const layer = Layer.effect(
 
         if (result._tag === "Miss") return { nodes: [], usedFallback: false }
 
-        const nodes = [...result.value.candidates]
+        let nodes = [...result.value.candidates]
+        const derivation = result.value.derivation
+        const hasFocusDirs = input.workspace?.focusDirs && input.workspace.focusDirs.length > 0
+
         if (input.exact) {
+          nodes = nodes.filter((n) => n.name === input.name)
+        }
+
+        if (hasFocusDirs) {
+          const focusSet = new Set(
+            input.workspace!.focusDirs.map((d) => d.replace(/\\/g, "/")),
+          )
+          const focused: CodegraphNode[] = []
+          const unfocused: CodegraphNode[] = []
+
+          for (const node of nodes) {
+            const file = yield* repo.getFile(node.fileID)
+            if (!file) {
+              unfocused.push(node)
+              continue
+            }
+            const normalizedPath = file.path.replace(/\\/g, "/")
+            const isFocused = [...focusSet].some(
+              (prefix) =>
+                normalizedPath === prefix ||
+                normalizedPath.startsWith(prefix + "/"),
+            )
+            if (isFocused) {
+              focused.push(node)
+            } else {
+              unfocused.push(node)
+            }
+          }
+
+          if (focused.length > 0) {
+            return {
+              nodes: focused,
+              usedFallback: derivation === "tag-fallback",
+            }
+          }
           return {
-            nodes: nodes.filter((n) => n.name === input.name),
-            usedFallback: result.value.derivation === "tag-fallback",
+            nodes: [...focused, ...unfocused],
+            usedFallback: derivation === "tag-fallback",
+            ambiguity: { total: nodes.length, kept: 0 },
           }
         }
+
+        const usedFallback = derivation === "tag-fallback"
+
+        if (nodes.length > 1 && derivation === "name-exact") {
+          const PRODUCT_PREFIXES = [
+            "packages/opencode",
+            "packages/core",
+            "packages/tui",
+          ]
+          const UI_EXCLUDED = [
+            "packages/web",
+            "packages/app",
+            "packages/desktop",
+            "packages/storybook",
+          ]
+
+          const filePathByNodeID = new Map<string, string>()
+          for (const node of nodes) {
+            const file = yield* repo.getFile(node.fileID)
+            if (file) filePathByNodeID.set(node.id, file.path.replace(/\\/g, "/"))
+          }
+
+          const productNodes = nodes.filter((n) => {
+            const path = filePathByNodeID.get(n.id) ?? ""
+            return PRODUCT_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))
+          })
+          const uiNodes = nodes.filter((n) => {
+            const path = filePathByNodeID.get(n.id) ?? ""
+            return UI_EXCLUDED.some((p) => path === p || path.startsWith(p + "/"))
+          })
+
+          if (productNodes.length > 0) {
+            return {
+              nodes: productNodes,
+              usedFallback,
+              ambiguity: { total: nodes.length, kept: productNodes.length },
+            }
+          }
+
+          return {
+            nodes,
+            usedFallback,
+            ambiguity: { total: nodes.length, kept: nodes.length },
+          }
+        }
+
         return {
           nodes,
-          usedFallback: result.value.derivation === "tag-fallback",
+          usedFallback: derivation === "tag-fallback",
         }
       })
 
@@ -438,7 +519,7 @@ export const layer = Layer.effect(
         const allFiles = yield* repo.listAllFiles()
         const allNodes = yield* repo.listAllNodes()
 
-        const symbolResult = yield* findSymbol({ name: input.query })
+        const symbolResult = yield* findSymbol({ name: input.query, workspace: input.workspace })
         const fileByPath = yield* repo.getFileByPath(input.query)
         const fileMatches: CodegraphNode[] = fileByPath
           ? allNodes.filter((n) => n.fileID === fileByPath.id)
@@ -483,11 +564,22 @@ export const layer = Layer.effect(
         const graphNodesList = graphNodeIDs.size > 0 ? yield* repo.nodesByIDs([...graphNodeIDs]) : []
 
         const isDegraded = symbols.length === 0
-        const diagnostics: { kind: string; message: string }[] = []
+        const diagnostics: { kind: string; message: string; candidates?: readonly CodegraphNode[] }[] = []
         if (isDegraded) {
           diagnostics.push({
             kind: "symbol-not-found",
             message: `No symbol matched "${input.query}". The graph may be stale — run /codegraph-build --force.`,
+          })
+        } else if (symbolResult.ambiguity) {
+          const candidateFiles: CodegraphNode[] = []
+          for (const n of symbolResult.nodes) {
+            const file = yield* repo.getFile(n.fileID)
+            if (file) candidateFiles.push(n)
+          }
+          diagnostics.push({
+            kind: "ambiguous-symbol",
+            message: "Multiple exact-name matches found; pass focusDirs to disambiguate.",
+            candidates: candidateFiles,
           })
         }
 
@@ -542,6 +634,7 @@ export const layer = Layer.effect(
             score: 0,
             signals: { exact: 0, symbol: 0, graph: 0, git: 0, workspace: 0 },
           },
+          ...(symbolResult.ambiguity ? { ambiguity: symbolResult.ambiguity } : {}),
         } satisfies RepositoryContext
       })
 
