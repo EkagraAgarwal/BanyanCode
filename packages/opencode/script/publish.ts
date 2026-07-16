@@ -10,6 +10,29 @@ process.chdir(dir)
 const WRAPPER_NAME = "banyancode"
 const HOMEBREW_TAP_REPO = process.env.HOMEBREW_TAP_REPO ?? "EkagraAgarwal/homebrew-tap"
 const HOMEBREW_FORMULA_PATH = "banyancode.rb"
+const HOMEBREW_TAP_TOKEN = process.env.HOMEBREW_TAP_TOKEN
+const AUR_SSH_KEY = process.env.AUR_KEY
+const AUR_PACKAGE_NAME = process.env.AUR_PACKAGE_NAME ?? "banyancode-bin"
+const AUR_GIT_URL = `ssh://aur@aur.archlinux.org/${AUR_PACKAGE_NAME}.git`
+
+function requireEnv(name: string, value: string | undefined): string {
+  if (!value) {
+    console.error(`Missing required env var: ${name}`)
+    process.exit(1)
+  }
+  return value
+}
+
+if (!Script.preview) {
+  if (!AUR_SSH_KEY) {
+    console.error("Skipping AUR push: AUR_KEY is not set; the package upload will fail unless you configure it.")
+  }
+  if (!HOMEBREW_TAP_TOKEN) {
+    console.error(
+      "Skipping Homebrew tap push: HOMEBREW_TAP_TOKEN is not set. Without it, the GITHUB_TOKEN scoped to the current repo can't push to a separate tap.",
+    )
+  }
+}
 
 async function published(name: string, version: string) {
   return (await $`npm view ${name}@${version} version`.nothrow()).exitCode === 0
@@ -114,21 +137,44 @@ if (!Script.preview) {
     "",
   ].join("\n")
 
-  for (let i = 0; i < 30; i++) {
-    try {
-      await $`rm -rf ./dist/aur-banyancode-bin`
-      await $`git clone ssh://aur@aur.archlinux.org/banyancode-bin.git ./dist/aur-banyancode-bin`
-      await $`cd ./dist/aur-banyancode-bin && git checkout master`
-      await Bun.file(`./dist/aur-banyancode-bin/PKGBUILD`).write(binaryPkgbuild)
-      await $`cd ./dist/aur-banyancode-bin && makepkg --printsrcinfo > .SRCINFO`
-      await $`cd ./dist/aur-banyancode-bin && git add PKGBUILD .SRCINFO`
-      if ((await $`cd ./dist/aur-banyancode-bin && git diff --cached --quiet`.nothrow()).exitCode === 0) break
-      await $`cd ./dist/aur-banyancode-bin && git commit -m "Update to v${Script.version}"`
-      await $`cd ./dist/aur-banyancode-bin && git push`
-      break
-    } catch {
-      continue
+  let aurPushed = false
+  let aurLastError: unknown
+  if (!AUR_SSH_KEY) {
+    console.error("AUR_KEY missing; refusing AUR push rather than retrying into a black hole.")
+  } else {
+    for (let i = 0; i < 5; i++) {
+      try {
+        await $`rm -rf ./dist/aur-banyancode-bin`
+        await $`rm -f ~/.ssh/aur_banyancode`
+        await Bun.file(process.env.HOME + "/.ssh/aur_banyancode").write(AUR_SSH_KEY)
+        await $`chmod 600 ~/.ssh/aur_banyancode`
+        await $`ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null`.nothrow()
+        await $`GIT_SSH_COMMAND='ssh -i ~/.ssh/aur_banyancode -o StrictHostKeyChecking=accept-new' git clone ${AUR_GIT_URL} ./dist/aur-banyancode-bin`
+        await $`cd ./dist/aur-banyancode-bin && GIT_SSH_COMMAND='ssh -i ~/.ssh/aur_banyancode -o StrictHostKeyChecking=accept-new' git checkout master`
+        await Bun.file(`./dist/aur-banyancode-bin/PKGBUILD`).write(binaryPkgbuild)
+        await $`cd ./dist/aur-banyancode-bin && makepkg --printsrcinfo > .SRCINFO`
+        await $`cd ./dist/aur-banyancode-bin && git add PKGBUILD .SRCINFO`
+        if ((await $`cd ./dist/aur-banyancode-bin && git diff --cached --quiet`.nothrow()).exitCode === 0) {
+          console.log("AUR PKGBUILD unchanged; skipping push.")
+          aurPushed = true
+          break
+        }
+        await $`cd ./dist/aur-banyancode-bin && git commit -m "Update to v${Script.version}"`
+        await $`cd ./dist/aur-banyancode-bin && GIT_SSH_COMMAND='ssh -i ~/.ssh/aur_banyancode -o StrictHostKeyChecking=accept-new' git push`
+        aurPushed = true
+        break
+      } catch (e) {
+        aurLastError = e
+        console.error(`AUR push attempt ${i + 1} failed: ${e instanceof Error ? e.message : String(e)}`)
+        await new Promise((resolve) => setTimeout(resolve, 1500))
+      }
     }
+  }
+
+  if (!aurPushed) {
+    throw new Error(
+      `AUR push failed after 5 attempts: ${aurLastError instanceof Error ? aurLastError.message : String(aurLastError)}`,
+    )
   }
 
   const homebrewFormula = [
@@ -181,10 +227,9 @@ if (!Script.preview) {
     "",
   ].join("\n")
 
-  const token = process.env.GITHUB_TOKEN
+  const token = HOMEBREW_TAP_TOKEN ?? process.env.GITHUB_TOKEN
   if (!token) {
-    console.error("GITHUB_TOKEN is required to update homebrew tap")
-    process.exit(1)
+    throw new Error("HOMEBREW_TAP_TOKEN (or fallback GITHUB_TOKEN) is required to update the homebrew tap")
   }
   const tap = `https://x-access-token:${token}@github.com/${HOMEBREW_TAP_REPO}.git`
   await $`rm -rf ./dist/homebrew-tap`
