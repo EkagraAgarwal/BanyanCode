@@ -32,6 +32,13 @@ describe("PR C: SystemPrompt.codegraph auto-tools policy", () => {
     }),
   )
 
+  // The V1 layer here does NOT provide Banyan.CodegraphSystemSource, so
+  // SystemPrompt.codegraph() falls back to `legacyCodegraphPolicy()` in
+  // packages/opencode/src/session/system.ts. That fallback intentionally
+  // ships the same header (`## Codegraph-first search policy`) the V2 source
+  // emits so V1 always carries at least the policy section. The per-tool
+  // catalog is added by tests / calling layers that provide the V2 source
+  // (see `codegraph-system-source.test.ts`).
   it.effect("returns the codegraph block when BanyanCode is enabled", () =>
     Effect.gen(function* () {
       const svc = yield* SystemPrompt.Service
