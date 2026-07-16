@@ -97,9 +97,9 @@ jobs:
         with:
           name: banyancode-${{ matrix.target }}
           path: |
-            packages/opencode/dist/banyancode-${{ matrix.target }}/bin
-            packages/opencode/dist/banyancode-${{ matrix.target }}.zip
+            packages/opencode/dist/banyancode-${{ matrix.target }}
             packages/opencode/dist/banyancode-${{ matrix.target }}.tar.gz
+            packages/opencode/dist/banyancode-${{ matrix.target }}.zip
 
       - name: Upload Windows CLI artifact
         if: matrix.os-suffix == 'windows'
@@ -107,8 +107,7 @@ jobs:
         with:
           name: banyancode-${{ matrix.target }}
           path: |
-            packages/opencode/dist/banyancode-${{ matrix.target }}/bin
-            packages/opencode/dist/banyancode-${{ matrix.target }}/package.json
+            packages/opencode/dist/banyancode-${{ matrix.target }}
             packages/opencode/dist/banyancode-${{ matrix.target }}.zip
 
   sign-windows:

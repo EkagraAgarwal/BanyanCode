@@ -329,11 +329,12 @@ if (Script.release) {
   for (const key of Object.keys(binaries)) {
     if (key.includes("linux")) {
       await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
-    } else {
-      await $`zip -r ../../${key}.zip *`.cwd(`dist/${key}/bin`)
     }
+    // macOS + Windows zips are produced by publish.yml (zip on macos,
+    // PowerShell Compress-Archive on Windows) — neither runner has a
+    // working `zip` in PATH via bun's shell.
   }
-  console.log("zip/tar.gz archive creation done; release upload is handled by publish.yml")
+  console.log("linux tar.gz archives created; mac/windows zips are produced by publish.yml")
 }
 
 export { binaries }
