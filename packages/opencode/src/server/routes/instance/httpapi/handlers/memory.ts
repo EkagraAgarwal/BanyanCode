@@ -240,8 +240,12 @@ export const memoryHandlers = HttpApiBuilder.group(RootHttpApi, "memory", (handl
       return {
         totalActive: summary.totalActive,
         byKind: summary.byKind.map((s) => ({ kind: String(s.kind), count: s.entries.length })),
-        decisionDigest: decisions.items.map((d) => ({ ...d, kind: d.kind ?? "observation" })),
-        warningDigest: warnings.items.map((d) => ({ ...d, kind: d.kind ?? "warning" })),
+        decisionDigest: decisions.items
+          .slice(0, maxItems)
+          .map((d) => ({ ...d, kind: d.kind ?? "observation" })),
+        warningDigest: warnings.items
+          .slice(0, maxItems)
+          .map((d) => ({ ...d, kind: d.kind ?? "warning" })),
         generatedAt: Math.max(summary.generatedAt, decisions.generatedAt, warnings.generatedAt),
       }
     })
