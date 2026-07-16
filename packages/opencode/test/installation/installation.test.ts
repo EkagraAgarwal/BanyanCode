@@ -86,7 +86,7 @@ describe("installation", () => {
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("npm")
         expect(result).toBe("1.5.0")
-        expect(npmCalls).toContain(`https://registry.npmjs.org/opencode-ai/${InstallationChannel}`)
+        expect(npmCalls).toContain(`https://registry.npmjs.org/banyancode/${InstallationChannel}`)
       }),
     )
 
@@ -100,7 +100,7 @@ describe("installation", () => {
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("bun")
         expect(result).toBe("1.6.0")
-        expect(bunCalls).toContain(`https://registry.npmjs.org/opencode-ai/${InstallationChannel}`)
+        expect(bunCalls).toContain(`https://registry.npmjs.org/banyancode/${InstallationChannel}`)
       }),
     )
 
@@ -114,7 +114,7 @@ describe("installation", () => {
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("pnpm")
         expect(result).toBe("1.7.0")
-        expect(pnpmCalls).toContain(`https://registry.npmjs.org/opencode-ai/${InstallationChannel}`)
+        expect(pnpmCalls).toContain(`https://registry.npmjs.org/banyancode/${InstallationChannel}`)
       }),
     )
 
@@ -139,8 +139,8 @@ describe("installation", () => {
         () => jsonResponse({ versions: { stable: "2.0.0" } }),
         (cmd, args) => {
           // getBrewFormula: return core formula (no tap)
-          if (cmd === "brew" && args.includes("--formula") && args.includes("anomalyco/tap/opencode")) return ""
-          if (cmd === "brew" && args.includes("--formula") && args.includes("opencode")) return "opencode"
+          if (cmd === "brew" && args.includes("--formula") && args.includes("ekagraagarwal/tap/banyancode")) return ""
+          if (cmd === "brew" && args.includes("--formula") && args.includes("banyancode")) return "banyancode"
           return ""
         },
       ),
@@ -158,7 +158,7 @@ describe("installation", () => {
       testLayer(
         () => jsonResponse({}), // HTTP not used for tap formula
         (cmd, args) => {
-          if (cmd === "brew" && args.includes("anomalyco/tap/opencode") && args.includes("--formula")) return "opencode"
+          if (cmd === "brew" && args.includes("ekagraagarwal/tap/banyancode") && args.includes("--formula")) return "banyancode"
           if (cmd === "brew" && args.includes("--json=v2")) return brewInfoJson
           return ""
         },
