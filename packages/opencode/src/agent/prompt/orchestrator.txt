@@ -7,15 +7,11 @@ Available subagents (via the task tool):
 - general: General-purpose agent
 - scout: Quick reconnaissance
 
-Your tools (in addition to standard tools):
-- shared_memory: Read/write key-value store shared with peer subagents
-- subagent_message: Send messages to peer subagents (fire-and-persist)
-- memory_store / memory_recall: Cross-session persistent memory
-- memory_search: Semantic search over memory
-- codegraph_*: Code graph queries (see below)
-- websearch_free: Free DuckDuckGo web search (no API key)
-- websearch: Exa/Parallel web search (paid, needs API key)
-- webfetch: Fetch a web page and read its content
+## Tool guide (external)
+
+The "BanyanCode tool guide" in your system context is the single source of
+truth for tool names, descriptions, and usage. Always defer to it for any
+code question — prefer graph + repository tools over grep/glob/bash.
 
 ## Mesh and peer communication
 
@@ -24,29 +20,11 @@ Your tools (in addition to standard tools):
 - **subagent_message**: Fire-and-forget message to a peer subagent or the orchestrator.
 - **shared_memory**: Read/write key-value store shared with peer subagents.
 
-## Codegraph-first search policy (PREFERRED)
-
-When the codebase has been indexed with /codegraph-build, you have a much more powerful search than grep/glob. Default to `code_find` as the single entry point, with five intents:
-
-1. **code_find(intent="definition", target="...")** — exact symbol/file lookup. Combines codegraph_query behavior into one tool.
-2. **code_find(intent="callers", target="...")** — who calls this function.
-3. **code_find(intent="dependents", target="...")** — what this node depends on.
-4. **code_find(intent="impact", target="...")** — full blast radius (transitive closure).
-5. **code_find(intent="find_file", target="...")** — locate files by name.
-
-All `code_find` responses include a `meta` field with `graphVersion`/`graphCoverage` so you can reason about freshness.
-
-Specialized tools (codegraph_build, codegraph_query, codegraph_callers, codegraph_dependents, codegraph_impact) remain available for advanced workflows.
-
-**grep** / **glob** — only when the codegraph is empty/stale or you're doing a quick regex match.
-
-If codegraph_query returns 0 nodes, the codegraph likely hasn't been built in this session. Run /codegraph-build once, or fall back to grep/glob for the current task.
-
 ## Before making any edit
 
 For any non-trivial change to a function or class, use the `edit_plan` tool with phase=before to get a structured plan including steps, expected impact, and risks (stale-graph, broad-impact, missing-tests, no-target).
 
-## After making any edit
+## After making an edit
 
 For any non-trivial change, use the `edit_plan` tool with phase=after to re-verify callers, check blast radius, and run affected tests.
 
@@ -69,7 +47,7 @@ For any non-trivial change, use the `edit_plan` tool with phase=after to re-veri
 - Specify what they should write to shared_memory.
 - Specify what they should return via subagent_message.
 - For research tasks, point the researcher at websearch_free first.
-- For code exploration, tell the subagent to use codegraph_query as primary, falling back to grep/glob if the codegraph is empty.
+- For code exploration, tell the subagent to use the canonical graph query tool as primary, falling back to grep/glob if the codegraph is empty.
 
 ## When synthesizing
 
