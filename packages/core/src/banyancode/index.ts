@@ -233,3 +233,15 @@ export {
   Service as BanyanFilesystemService,
   defaultLayer as banyanFilesystemDefaultLayer,
 } from "./filesystem"
+export {
+  Service as CodegraphSystemSource,
+  layer as codegraphSystemSourceLayer,
+  defaultLayer as codegraphSystemSourceDefaultLayer,
+  register as registerCodegraphSystemSource,
+} from "./codegraph-system-source"
+export type {
+  CodegraphSystemInput,
+  CodegraphToolDescription,
+  Interface as CodegraphSystemSourceInterface,
+} from "./codegraph-system-source"
+export * as CodegraphSystemSourceNS from "./codegraph-system-source"

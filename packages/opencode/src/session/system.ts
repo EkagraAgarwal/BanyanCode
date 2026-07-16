@@ -1,5 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option } from "effect"
 
 import { InstanceState } from "@/effect/instance-state"
 
@@ -21,6 +21,7 @@ import { Location } from "@opencode-ai/core/location"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Reference } from "@opencode-ai/core/reference"
+import { Banyan } from "@opencode-ai/core/banyancode"
 
 export function provider(model: Provider.Model) {
   if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3"))
@@ -110,26 +111,16 @@ export const layer = Layer.effect(
         const enabled = process.env.BANYANCODE_ENABLE !== "0"
         if (!enabled) return
 
-        return [
-          "## Codegraph-first search policy",
-          "",
-          "If a code graph index exists for this workspace (built via /codegraph-build), prefer graph tools over grep/glob:",
-          "",
-          "- **code_find(intent='definition', target=...)** — exact symbol/file lookup",
-          "- **code_find(intent='callers', target=...)** — who calls this function",
-          "- **code_find(intent='dependents', target=...)** — what this depends on",
-          "- **code_find(intent='impact', target=...)** — full blast radius (transitive closure)",
-          "- **code_find(intent='find_file', target=...)** — locate files by name",
-          "- **codegraph_query / codegraph_callers / codegraph_impact / codegraph_dependents** — specialized queries",
-          "- **repository_query / repository_explain / repository_trace / repository_impact** — Wave 2 repository intelligence",
-          "",
-          "Only fall back to grep/glob when:",
-          "- The codegraph is empty or stale",
-          "- The user explicitly asks for regex/pattern matching",
-          "- You're searching across non-code files (configs, docs, JSON, etc.)",
-          "",
-          "To check graph freshness: run /codegraph-status. If `graphCoverage < 1.0`, run /codegraph-build first.",
-        ].join("\n")
+        // Prefer the BanyanCode source module when it is in scope (e.g. tests
+        // that provide the layer, or future wiring via `defaultLayer`). Falls
+        // back to the policy-only block when the service is not available so
+        // the V1 prompt still ships a model-facing preference for graph +
+        // repository tools over grep/glob/bash.
+        const source = yield* Effect.serviceOption(Banyan.CodegraphSystemSource)
+        return yield* Option.match(source, {
+          onSome: (svc) => svc.load(),
+          onNone: () => Effect.succeed(legacyCodegraphPolicy()),
+        })
       }),
     })
   }),
@@ -140,5 +131,29 @@ export const defaultLayer = layer.pipe(Layer.provide(Skill.defaultLayer), Layer.
 const locationServiceMapNode = LayerNode.make(LocationServiceMap.layer, [])
 
 export const node = LayerNode.make(layer, [Skill.node, locationServiceMapNode])
+
+/**
+ * Policy-only fallback rendered when the BanyanCode `CodegraphSystemSource`
+ * service is not in scope. Mirrors the section header the V2 source emits so
+ * V1 always carries at least the section heading; the per-tool guide is added
+ * by the V2 path or by tests/calling layers that provide
+ * `Banyan.CodegraphSystemSource` to the layer graph.
+ */
+function legacyCodegraphPolicy(): string {
+  return [
+    "## Codegraph-first search policy",
+    "",
+    "If a code graph index exists for this workspace (built via /codegraph-build), prefer graph tools over grep/glob:",
+    "",
+    "- For symbol/file lookup, start with `code_find` (five intents: definition, callers, dependents, impact, find_file).",
+    "- For semantic/architectural context, escalate to `repository_query`, `repository_explain`, `repository_trace`, `repository_tests`.",
+    "- Before any non-trivial edit, run `blast_radius` (summary) or `preflight` (decision-ready: callers, tests, docs, configs, event bridges, HTTP routes).",
+    "",
+    "Only fall back to grep/glob when:",
+    "- The codegraph is empty or stale",
+    "- The user explicitly asks for regex/pattern matching",
+    "- You're searching across non-code files (configs, docs, JSON, etc.)",
+  ].join("\n")
+}
 
 export * as SystemPrompt from "./system"
