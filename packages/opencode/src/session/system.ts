@@ -1,5 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option } from "effect"
 
 import { InstanceState } from "@/effect/instance-state"
 
@@ -23,6 +23,7 @@ import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/l
 import { Reference } from "@opencode-ai/core/reference"
 import { MCP } from "@/mcp"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { Banyan } from "@opencode-ai/core/banyancode"
 
 export function provider(model: Provider.Model) {
   if (model.api.id.includes("muse-spark")) return [PROMPT_META]
@@ -45,6 +46,7 @@ export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
   readonly mcp: (agent: Agent.Info, permission?: PermissionV1.Ruleset) => Effect.Effect<string | undefined>
+  readonly codegraph: () => Effect.Effect<string | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SystemPrompt") {}
@@ -69,7 +71,7 @@ const layer = Layer.effect(
             `<env>`,
             `  Working directory: ${ctx.directory}`,
             `  Workspace root folder: ${ctx.worktree}`,
-            `  Is directory a git repo: ${ctx.project.vcs === "git" ? "yes" : "no"}`,
+            `  Is directory a git repo: ${ctx.project.vcs === "git" ? "yes" : "no"`,
             `  Platform: ${process.platform}`,
             `  Today's date: ${new Date().toDateString()}`,
             `</env>`,
@@ -126,6 +128,17 @@ const layer = Layer.effect(
           "</mcp_instructions>",
         ].join("\n")
       }),
+
+      codegraph: Effect.fn("SystemPrompt.codegraph")(function* () {
+        const enabled = process.env.BANYANCODE_ENABLE !== "0"
+        if (!enabled) return
+
+        const source = yield* Effect.serviceOption(Banyan.CodegraphSystemSource)
+        return yield* Option.match(source, {
+          onSome: (svc) => svc.load(),
+          onNone: () => Effect.succeed(legacyCodegraphPolicy()),
+        })
+      }),
     })
   }),
 )
@@ -141,5 +154,22 @@ export const node = LayerNode.make({
   layer: layer,
   deps: [Skill.node, MCP.node, locationServiceMapNode],
 })
+
+function legacyCodegraphPolicy(): string {
+  return [
+    "## Codegraph-first search policy",
+    "",
+    "If a code graph index exists for this workspace (built via /codegraph-build), prefer graph tools over grep/glob:",
+    "",
+    "- For symbol/file lookup, start with `code_find` (five intents: definition, callers, dependents, impact, find_file).",
+    "- For semantic/architectural context, escalate to `repository_query`, `repository_explain`, `repository_trace`, `repository_tests`.",
+    "- Before any non-trivial edit, run `blast_radius` (summary) or `preflight` (decision-ready: callers, tests, docs, configs, event bridges, HTTP routes).",
+    "",
+    "Only fall back to grep/glob when:",
+    "- The codegraph is empty or stale",
+    "- The user explicitly asks for regex/pattern matching",
+    "- You're searching across non-code files (configs, docs, JSON, etc.)",
+  ].join("\n")
+}
 
 export * as SystemPrompt from "./system"
