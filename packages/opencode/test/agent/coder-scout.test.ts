@@ -55,11 +55,12 @@ it.instance("scout agent resolves from registry", () =>
   }),
 )
 
-it.instance("coder prompt includes codegraph", () =>
+it.instance("coder prompt defers to BanyanCode tool guide", () =>
   Effect.gen(function* () {
     const coder = yield* load((svc) => svc.get("coder"))
     expect(coder).toBeDefined()
-    expect(coder?.prompt).toContain("codegraph")
+    expect(coder?.prompt).toContain("BanyanCode tool guide")
+    expect(coder?.prompt).not.toContain("prefer using Glob and Grep")
   }),
 )
 
