@@ -47,6 +47,9 @@ jobs:
             echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Mark package scripts executable
+        run: git ls-files -z 'packages/*/script/*.{ts,mjs,js}' | xargs -0 -I {} chmod +x {}
+
   build:
     name: Build BanyanCode ${{ matrix.target }}
     needs: version
@@ -80,7 +83,7 @@ jobs:
         uses: ./.github/actions/setup-bun
 
       - name: Build ${{ matrix.target }}
-        run: ./packages/opencode/script/build.ts --single
+        run: bun ./packages/opencode/script/build.ts --single
         env:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
           OPENCODE_RELEASE: ${{ github.event_name == 'push' }}
@@ -236,7 +239,7 @@ jobs:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
           OPENCODE_RELEASE: 'true'
           OPENCODE_CHANNEL: latest
-        run: ./packages/opencode/script/build.ts --single
+        run: bun ./packages/opencode/script/build.ts --single
 
       - name: Upload all release artifacts to GitHub release (draft)
         env:
@@ -263,7 +266,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           NPM_CONFIG_REGISTRY: https://registry.npmjs.org
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: ./packages/opencode/script/publish.ts
+        run: bun ./packages/opencode/script/publish.ts
 
       - name: Publish release (finalize draft)
         if: always()

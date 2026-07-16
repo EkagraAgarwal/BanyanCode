@@ -39,6 +39,9 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Resolved version $VERSION from packages/opencode/package.json"
 
+      - name: Mark package scripts executable
+        run: git ls-files -z 'packages/*/script/*.{ts,mjs,js}' | xargs -0 -I {} chmod +x {}
+
       - name: npm auth check
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -60,7 +63,7 @@ jobs:
           OPENCODE_VERSION: ${{ steps.v.outputs.version }}
           OPENCODE_RELEASE: 'false'
           OPENCODE_CHANNEL: latest
-        run: ./packages/opencode/script/build.ts --single
+        run: bun ./packages/opencode/script/build.ts --single
 
       - name: Smoke-test binary
         shell: bash
