@@ -12,12 +12,18 @@ const dir = path.resolve(__dirname, "..")
 
 process.chdir(dir)
 
+if (!process.env.BUN_INSTALL_CACHE_DIR) {
+  process.env.BUN_INSTALL_CACHE_DIR = path.join(dir, ".bun-cache")
+}
+
 const generated = await import("./generate.ts")
 
 import { Script } from "@opencode-ai/script"
 import pkg from "../package.json"
 
-const singleFlag = process.argv.includes("--single")
+const allFlag = process.argv.includes("--all")
+const isCI = !!(process.env.CI || process.env.GITHUB_ACTIONS || Script.release)
+const singleFlag = process.argv.includes("--single") || (!allFlag && !isCI)
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
@@ -38,6 +44,7 @@ const libsqlTargetFor = (compileTarget: string): string | null => {
     "bun-linux-x64-modern": "@libsql/linux-x64-gnu",
     "bun-linux-arm64": "@libsql/linux-arm64-gnu",
     "bun-linux-x64-musl": "@libsql/linux-x64-musl",
+    "bun-linux-x64-baseline-musl": "@libsql/linux-x64-musl",
     "bun-linux-arm64-musl": "@libsql/linux-arm64-musl",
     "bun-darwin-x64": "@libsql/darwin-x64",
     "bun-darwin-x64-baseline": "@libsql/darwin-x64",
@@ -152,10 +159,10 @@ const allTargets: {
     avx2: false,
   },
   {
-    os: "win32",
-    arch: "arm64",
-  },
-  {
+    // win32/arm64 intentionally omitted — @libsql does not publish a
+    // win32-arm64-msvc native binding, so a bundled libsql build cannot
+    // ship for that target. Cross-compiling for win32/arm64 without
+    // libsql would silently produce a binary that crashes on first DB use.
     os: "win32",
     arch: "x64",
   },
