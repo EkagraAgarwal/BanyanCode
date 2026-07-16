@@ -45,10 +45,15 @@ jobs:
         run: |
           if [ -z "$NODE_AUTH_TOKEN" ]; then
             echo "::error::NPM_TOKEN is missing. Add the secret before tagging a release."
-            exit 1
+            echo "BLOCKER_NPM_TOKEN=missing" >> "$GITHUB_OUTPUT"
+          else
+            if ! npm whoami; then
+              echo "::error::NPM_TOKEN is set but npm whoami failed; the token may be invalid."
+              echo "BLOCKER_NPM_TOKEN=invalid" >> "$GITHUB_OUTPUT"
+            else
+              echo "npm auth OK ($(npm whoami))"
+            fi
           fi
-          npm whoami
-          echo "npm auth OK ($(npm whoami 2>/dev/null || true))"
 
       - name: Build locally (--single)
         env:
