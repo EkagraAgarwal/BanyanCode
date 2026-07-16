@@ -93,6 +93,13 @@ jobs:
           OPENCODE_RELEASE: ${{ github.event_name == 'push' }}
           OPENCODE_CHANNEL: latest
 
+      - name: Package macOS binaries
+        if: matrix.os-suffix == 'darwin'
+        working-directory: packages/opencode/dist
+        run: |
+          cd banyancode-${{ matrix.target }}/bin
+          zip -r ../../banyancode-${{ matrix.target }}.zip *
+
       - name: Upload CLI artifacts (Unix)
         if: matrix.os-suffix != 'windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
