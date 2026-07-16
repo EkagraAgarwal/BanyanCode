@@ -73,7 +73,7 @@ export const Script = {
     return IS_PREVIEW
   },
   get release(): boolean {
-    return !!env.OPENCODE_RELEASE
+    return env.OPENCODE_RELEASE === "true" || env.OPENCODE_RELEASE === "1"
   },
   get team() {
     return team
