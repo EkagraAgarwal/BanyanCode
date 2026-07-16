@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   version:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     if: github.repository == 'EkagraAgarwal/BanyanCode'
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
@@ -51,11 +51,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runs-on: blacksmith-4vcpu-ubuntu-2404
+          - runs-on: ubuntu-latest
             target: linux-x64
             os-suffix: linux
             artifact: banyancode-cli
-          - runs-on: blacksmith-4vcpu-ubuntu-2404
+          - runs-on: ubuntu-latest
             target: linux-arm64
             os-suffix: linux
             artifact: banyancode-cli
@@ -115,7 +115,7 @@ jobs:
       - build-cli
       - version
     if: github.repository == 'EkagraAgarwal/BanyanCode'
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: windows-latest
     env:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -197,7 +197,7 @@ jobs:
       - build-cli
       - sign-cli-windows
     if: always() && !failure() && !cancelled()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
