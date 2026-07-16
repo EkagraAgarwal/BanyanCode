@@ -9,7 +9,13 @@ import { DialogAlert } from "../../ui/dialog-alert"
 import { RoundedBorder } from "../../ui/border.ts"
 import { toHex } from "../../util/color"
 import { errorMessage } from "../../util/error"
-import { openAddMemoryDialog } from "../../component/dialog-memory-add"
+import {
+  openAddMemoryDialog,
+  MEMORY_KINDS,
+  MEMORY_STATUSES,
+  DialogMemoryKind,
+  DialogMemoryStatus,
+} from "../../component/dialog-memory-add"
 
 const id = "internal:tabs-tab-memory"
 
@@ -39,23 +45,12 @@ interface MemorySummary {
 }
 
 type ScopeFilter = "global" | "session"
+type StatusFilter = "all" | "active" | "pending" | "rejected" | "superseded" | "expired"
 
-const KIND_SECTIONS: Array<{ key: string; label: string }> = [
-  { key: "preference", label: "Preferences" },
-  { key: "decision", label: "Decisions" },
-  { key: "convention", label: "Conventions" },
-  { key: "architecture", label: "Architecture" },
-  { key: "pattern", label: "Patterns" },
-  { key: "warning", label: "Warnings" },
-  { key: "failure", label: "Failures" },
-  { key: "todo", label: "Todos" },
-  { key: "observation", label: "Observations" },
-  { key: "summary", label: "Summaries" },
-  { key: "ownership", label: "Ownership" },
-  { key: "constraint", label: "Constraints" },
-  { key: "environment", label: "Environment" },
-  { key: "identity", label: "Identity" },
-]
+const KIND_FILTER_VALUES: ReadonlyArray<string> = ["all", ...MEMORY_KINDS]
+const STATUS_FILTER_VALUES: ReadonlyArray<StatusFilter> = [...(MEMORY_STATUSES as StatusFilter[])]
+void KIND_FILTER_VALUES
+void STATUS_FILTER_VALUES
 
 function timeAgo(ts?: number) {
   if (!ts) return "—"
@@ -83,10 +78,20 @@ function statusGlyph(status?: string) {
   }
 }
 
-function previewBody(e: MemoryEntry): string {
-  if (e.body) return e.body.slice(0, 80)
-  if (typeof e.value === "string") return e.value.slice(0, 80)
-  if (e.value && typeof e.value === "object") return JSON.stringify(e.value).slice(0, 80)
+function previewBody(e: MemoryEntry, max = 80): string {
+  const normalize = (s: string) => s.replace(/\s+/g, " ").trim()
+  if (e.body) {
+    const body = normalize(e.body)
+    return body.length > max ? body.slice(0, max - 1) + "…" : body
+  }
+  if (typeof e.value === "string") {
+    const str = normalize(e.value)
+    return str.length > max ? str.slice(0, max - 1) + "…" : str
+  }
+  if (e.value && typeof e.value === "object") {
+    const json = normalize(JSON.stringify(e.value))
+    return json.length > max ? json.slice(0, max - 1) + "…" : json
+  }
   return ""
 }
 
@@ -97,6 +102,7 @@ function View(props: { api: TuiPluginApi }) {
   const [refreshTrigger, setRefreshTrigger] = createSignal(0)
   const [scope, setScope] = createSignal<ScopeFilter>("global")
   const [kindFilter, setKindFilter] = createSignal<string>("all")
+  const [statusFilter, setStatusFilter] = createSignal<StatusFilter>("all")
   const [showSummary, setShowSummary] = createSignal(true)
   const [actionError, setActionError] = createSignal<string | null>(null)
 
@@ -104,17 +110,42 @@ function View(props: { api: TuiPluginApi }) {
     void props.api.attention.notify({ message, notification: false, sound: false })
   }
 
+  const listFilter = () => ({
+    scope: scope() as ScopeFilter,
+    kind: (kindFilter() === "all" ? undefined : kindFilter()) as
+      | "warning"
+      | "preference"
+      | "identity"
+      | "convention"
+      | "decision"
+      | "architecture"
+      | "pattern"
+      | "failure"
+      | "todo"
+      | "observation"
+      | "summary"
+      | "ownership"
+      | "constraint"
+      | "environment"
+      | undefined,
+    status: (statusFilter() === "all" ? undefined : statusFilter()) as
+      | "active"
+      | "pending"
+      | "rejected"
+      | "superseded"
+      | "expired"
+      | undefined,
+  })
+
   const [entries] = createResource(
-    () => ({ scope: scope(), trigger: refreshTrigger() }),
+    () => ({ ...listFilter(), trigger: refreshTrigger() }),
     async (source) => {
       try {
-        const filterStatus = undefined
-        const filterKind = undefined
         const result = await props.api.client.memory.list({
           banyanMemoryListInput: {
             scope: source.scope,
-            status: filterStatus,
-            kind: filterKind,
+            status: source.status,
+            kind: source.kind,
             limit: 100,
           },
         })
@@ -126,11 +157,12 @@ function View(props: { api: TuiPluginApi }) {
   )
 
   const [candidates] = createResource(
-    () => ({ scope: scope(), trigger: refreshTrigger() }),
+    () => ({ scope: scope(), status: statusFilter(), trigger: refreshTrigger() }),
     async (source) => {
       try {
+        const status = source.status === "all" ? "pending" : source.status
         const result = await props.api.client.memory.candidates({
-          banyanMemoryCandidatesInput: { scope: source.scope, status: "pending", limit: 100 },
+          banyanMemoryCandidatesInput: { scope: source.scope, status, limit: 100 },
         })
         const data = (result as any)?.data
         return ((data?.entries ?? (Array.isArray(data) ? data : [])) as MemoryEntry[])
@@ -284,6 +316,30 @@ function View(props: { api: TuiPluginApi }) {
     openAddMemoryDialog(props.api, dialog)
   }
 
+  const openKindPicker = () => {
+    dialog.replace(() => (
+      <DialogMemoryKind
+        current={kindFilter()}
+        onSelect={(value) => {
+          setKindFilter(value)
+          setRefreshTrigger((n) => n + 1)
+        }}
+      />
+    ))
+  }
+
+  const openStatusPicker = () => {
+    dialog.replace(() => (
+      <DialogMemoryStatus
+        current={statusFilter()}
+        onSelect={(value) => {
+          setStatusFilter(value as StatusFilter)
+          setRefreshTrigger((n) => n + 1)
+        }}
+      />
+    ))
+  }
+
   const refreshAll = () => {
     setRefreshTrigger((n) => n + 1)
     void refetchSummary()
@@ -335,17 +391,23 @@ function View(props: { api: TuiPluginApi }) {
       </box>
 
       <box flexDirection="row" gap={2} paddingLeft={2} paddingRight={2} paddingTop={1}>
-        <text fg={toHex(theme().textMuted)}>kind: </text>
-        <For each={["all", "fact", "decision", "preference", "file-note"]}>
-          {(k) => (
-            <text
-              fg={toHex(kindFilter() === k ? theme().primary : theme().textMuted)}
-              onMouseUp={() => setKindFilter(k)}
-            >
-              [{k}]
-            </text>
-          )}
-        </For>
+        <text fg={toHex(theme().textMuted)}>kind:</text>
+        <text
+          fg={toHex(kindFilter() === "all" ? theme().primary : theme().text)}
+          onMouseUp={openKindPicker}
+        >
+          [{kindFilter()} ▾]
+        </text>
+      </box>
+
+      <box flexDirection="row" gap={2} paddingLeft={2} paddingRight={2} paddingTop={1}>
+        <text fg={toHex(theme().textMuted)}>status:</text>
+        <text
+          fg={toHex(statusFilter() === "all" ? theme().primary : theme().text)}
+          onMouseUp={openStatusPicker}
+        >
+          [{statusFilter()} ▾]
+        </text>
       </box>
 
       <Show when={showSummary()}>
@@ -417,7 +479,7 @@ function SummaryCard(props: {
 }) {
   const kinds = () => {
     const items = props.summary?.byKind ?? []
-    if (items.length === 0) return "no kinds"
+    if (items.length === 0) return "—"
     return items.map((s) => `${s.kind}=${s.count}`).join(", ")
   }
   const decisionItems = () => props.summary?.decisionDigest ?? []
@@ -440,7 +502,7 @@ function SummaryCard(props: {
         paddingRight={1}
         paddingTop={1}
         paddingBottom={1}
-        gap={0}
+        gap={1}
       >
         <box flexDirection="row" gap={1} alignItems="center" marginTop={0} marginBottom={0}>
           <text fg={toHex(props.theme.success)}>●</text>
@@ -449,10 +511,12 @@ function SummaryCard(props: {
           </text>
         </box>
         <Show when={props.loading && !props.summary}>
-          <text fg={toHex(props.theme.textMuted)} marginTop={0}>loading…</text>
+          <box flexDirection="row" marginTop={0} marginBottom={0}>
+            <text fg={toHex(props.theme.textMuted)}>loading…</text>
+          </box>
         </Show>
         <Show when={!props.loading && decisionItems().length > 0}>
-          <box flexDirection="column" marginTop={0} marginBottom={0}>
+          <box flexDirection="column" marginTop={0} marginBottom={0} gap={0}>
             <text fg={toHex(props.theme.success)}>Decisions</text>
             <For each={decisionItems().slice(0, 3)}>
               {(d) => (
@@ -464,7 +528,7 @@ function SummaryCard(props: {
           </box>
         </Show>
         <Show when={!props.loading && warningItems().length > 0}>
-          <box flexDirection="column" marginTop={0} marginBottom={0}>
+          <box flexDirection="column" marginTop={0} marginBottom={0} gap={0}>
             <text fg={toHex(props.theme.warning)}>Warnings</text>
             <For each={warningItems().slice(0, 3)}>
               {(d) => (

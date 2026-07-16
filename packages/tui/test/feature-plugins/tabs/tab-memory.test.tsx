@@ -132,3 +132,119 @@ test("SummaryCard source pushes the first content row below the top border", () 
   // so the status row never collides with the rounded top border.
   expect(source).toMatch(/function SummaryCard[\s\S]+paddingTop=\{1\}/)
 })
+
+test("SummaryCard wraps loading text in a layout-stable box (regression: refresh…hiddenobservation=3)", () => {
+  const fs = require("fs") as typeof import("fs")
+  const path = require("path") as typeof import("path")
+  const source = fs.readFileSync(
+    path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-memory.tsx"),
+    "utf8",
+  )
+  const startIdx = source.indexOf("function SummaryCard")
+  expect(startIdx).toBeGreaterThan(-1)
+  const tail = source.slice(startIdx)
+  // SummaryCard renders, in order: status row, optional loading box, optional
+  // decision/warning digests, action row with refresh+hide. The loading fallback
+  // must be wrapped in a box (not a bare <text>) so the column height stays
+  // stable when loading flips on/off and rows do not collapse onto the status
+  // row (the "refresh…hiddenobservation=3" regression).
+  expect(tail).toContain("loading…")
+  // kinds() default literal must not read like a kind name in the status row.
+  expect(tail).toContain('if (items.length === 0) return "—"')
+  // Inner column has a real row gap (>= 1) so summary/loading/controls separate.
+  expect(tail).toContain("gap={1}")
+  // Loading fallback wraps the <text> in a <box>.
+  const loadingBlockIdx = tail.indexOf("props.loading && !props.summary")
+  expect(loadingBlockIdx).toBeGreaterThan(-1)
+  const loadingBlock = tail.slice(loadingBlockIdx, tail.indexOf("</Show>", loadingBlockIdx))
+  expect(loadingBlock).toContain("<box")
+  expect(loadingBlock).toContain("</box>")
+})
+
+test("memory tab exposes compact kind/status selectors (no fact/file-note sentinels)", () => {
+  const fs = require("fs") as typeof import("fs")
+  const path = require("path") as typeof import("path")
+  const tab = fs.readFileSync(
+    path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-memory.tsx"),
+    "utf8",
+  )
+  // The chip walls are gone; the filter rows render a single labelled value
+  // that opens a DialogSelect. Hard-coded bogus kinds are still absent.
+  expect(tab).toContain("openKindPicker")
+  expect(tab).toContain("openStatusPicker")
+  expect(tab).toContain("DialogMemoryKind")
+  expect(tab).toContain("DialogMemoryStatus")
+  expect(tab).not.toContain('"file-note"')
+  expect(tab).not.toContain('"fact"')
+  expect(tab).not.toMatch(/For each=\{KIND_FILTER_VALUES\}/)
+  expect(tab).not.toMatch(/For each=\{STATUS_FILTER_VALUES\}/)
+})
+
+test("memory tab wires kindFilter and statusFilter into the list request source", () => {
+  const fs = require("fs") as typeof import("fs")
+  const path = require("path") as typeof import("path")
+  const tab = fs.readFileSync(
+    path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-memory.tsx"),
+    "utf8",
+  )
+  // The dead `filterStatus = undefined` / `filterKind = undefined` locals are gone.
+  expect(tab).not.toContain("const filterStatus = undefined")
+  expect(tab).not.toContain("const filterKind = undefined")
+  // The statusFilter signal must be created and forwarded to the request.
+  expect(tab).toContain('createSignal<StatusFilter>("all")')
+  expect(tab).toContain('createSignal<string>("all")')
+  // Status updates now flow through the compact picker callback.
+  expect(tab).toContain("setStatusFilter(value as StatusFilter)")
+  expect(tab).toContain("setKindFilter(value)")
+  // The list request payload sources status and kind from the resource source signal.
+  expect(tab).toContain("status: source.status,")
+  expect(tab).toContain("kind: source.kind,")
+})
+
+test("memory tab renders compact kind/status selectors (no chip walls)", () => {
+  const fs = require("fs") as typeof import("fs")
+  const path = require("path") as typeof import("path")
+  const tab = fs.readFileSync(
+    path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-memory.tsx"),
+    "utf8",
+  )
+  // The responsive selector rows render a single labelled value, not a chip wall.
+  // Asserting the shape on the source protects against regression to the long chip row.
+  expect(tab).toMatch(/<text[^>]*>\s*kind:<\/text>/)
+  expect(tab).toMatch(/<text[^>]*>\s*status:<\/text>/)
+  expect(tab).toMatch(/\[{kindFilter\(\)} ▾\]/)
+  expect(tab).toMatch(/\[{statusFilter\(\)} ▾\]/)
+  // The two chip walls are gone.
+  expect(tab).not.toMatch(/For each=\{KIND_FILTER_VALUES\}/)
+  expect(tab).not.toMatch(/For each=\{STATUS_FILTER_VALUES\}/)
+})
+
+test("memory tab view body exposes picker handlers bound to DialogSelect dialogs", () => {
+  const fs = require("fs") as typeof import("fs")
+  const path = require("path") as typeof import("path")
+  const tab = fs.readFileSync(
+    path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-memory.tsx"),
+    "utf8",
+  )
+  // The compact selector rows must open the kind/status pickers, which call back
+  // into the existing signals and trigger a refresh.
+  expect(tab).toContain("const openKindPicker")
+  expect(tab).toContain("const openStatusPicker")
+  expect(tab).toMatch(/openKindPicker[\s\S]+?DialogMemoryKind[\s\S]+?setKindFilter\(value\)/)
+  expect(tab).toMatch(/openStatusPicker[\s\S]+?DialogMemoryStatus[\s\S]+?setStatusFilter\(value as StatusFilter\)/)
+})
+
+test("previewBody deliberately truncates long bodies to a single-line ellipsis", () => {
+  // Reproduces the long body clipping visible in the screenshots.
+  const body = "first line\n  second line with detail\n   third line with more detail"
+  const normalize = (s: string) => s.replace(/\s+/g, " ").trim()
+  const max = 40
+  const preview = normalize(body).length > max
+    ? normalize(body).slice(0, max - 1) + "…"
+    : normalize(body)
+  expect(preview.endsWith("…")).toBe(true)
+  expect(preview.length).toBeLessThanOrEqual(40)
+  // Whitespace is collapsed so the preview fits on one terminal row.
+  expect(preview.includes("\n")).toBe(false)
+  expect(preview.includes("  ")).toBe(false)
+})
