@@ -114,7 +114,7 @@ jobs:
         if: matrix.os-suffix == 'windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: banyancode-${{ matrix.target }}
+          name: temp-banyancode-${{ matrix.target }}
           path: |
             packages/opencode/dist/banyancode-${{ matrix.target }}
             packages/opencode/dist/banyancode-${{ matrix.target }}.zip
@@ -134,7 +134,7 @@ jobs:
       - name: Download Windows CLI artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: banyancode-windows-x64
+          name: temp-banyancode-windows-x64
           path: packages/opencode/dist
 
       - name: Decide signing path
@@ -198,8 +198,10 @@ jobs:
       - name: Upload signed BanyanCode Windows artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: banyancode-windows-x64-bundle
-          path: packages/opencode/dist/banyancode-windows-x64.zip
+          name: banyancode-windows-x64
+          path: |
+            packages/opencode/dist/banyancode-windows-x64.zip
+            packages/opencode/dist/banyancode-windows-x64
 
   publish:
     name: Publish to npm + AUR + Homebrew tap
@@ -239,23 +241,7 @@ jobs:
         with:
           pattern: banyancode-*
           merge-multiple: true
-
-      - name: Reassemble dist directory
-        run: |
-          mkdir -p packages/opencode/dist
-          shopt -s nullglob
-          for d in banyancode-*; do
-            if [ -d "$d/bin" ]; then
-              mv "$d" packages/opencode/dist/
-            fi
-          done
-
-      - name: Re-build per-platform packages + wrapper
-        env:
-          OPENCODE_VERSION: ${{ needs.version.outputs.version }}
-          OPENCODE_RELEASE: 'true'
-          OPENCODE_CHANNEL: latest
-        run: bun ./packages/opencode/script/build.ts --single --skip-install
+          path: packages/opencode/dist
 
       - name: Upload all release artifacts to GitHub release (draft, prerelease)
         env:
