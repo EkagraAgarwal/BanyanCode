@@ -90,6 +90,7 @@ export const Default = {
   REPOSITORY_OWNERSHIP: "repository-ownership",
   WEBSEARCH_FREE: "websearch-free",
   YOLO: "yolo",
+  MAX_SUBAGENTS: "max-subagents",
   REFRESH_MODELS: "refresh-models",
 } as const
 
@@ -318,6 +319,38 @@ export const layer = Layer.effect(
             const newValue = !current.banyancode_yolo_mode
             yield* banyan.update({ banyancode_yolo_mode: newValue })
             return Effect.succeed({ toggled: newValue }) as any
+          }),
+        hints: [],
+      }
+      commands[Default.MAX_SUBAGENTS] = {
+        name: Default.MAX_SUBAGENTS,
+        description: "set max concurrent subagents (1-20); with no arg, prints the current value",
+        source: "command",
+        get template() {
+          return "Set the max concurrent subagents limit (1-20)."
+        },
+        execute: (input) =>
+          Effect.gen(function* () {
+            const opt = yield* Effect.serviceOption(Banyan.MaxSubagentsService)
+            if (Option.isNone(opt)) return "Max-subagents disabled (BanyanCode off)."
+            const svc = opt.value
+            const trimmed = input.arguments.trim()
+            if (trimmed === "") {
+              const cur = yield* svc.current()
+              return `Max subagents is ${cur}. Usage: /max-subagents <1-20>`
+            }
+            const n = Number(trimmed)
+            if (!Number.isFinite(n) || !Number.isInteger(n)) {
+              return `Max subagents must be an integer; got "${trimmed}".`
+            }
+            const validated = yield* svc.validate(n).pipe(
+              Effect.catchTag("Banyan/MaxSubagentsError", (e) => Effect.succeed(e.message)),
+            )
+            if (typeof validated === "string") return validated
+            const banyanOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+            if (Option.isNone(banyanOpt)) return `Max subagents set to ${validated} (BanyanCode disabled; not persisted).`
+            yield* banyanOpt.value.update({ banyancode_max_subagents: validated })
+            return `Max subagents set to ${validated}.`
           }),
         hints: [],
       }

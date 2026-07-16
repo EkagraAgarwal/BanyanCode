@@ -70,7 +70,7 @@ let arch = archMap[os.arch()]
 if (!arch) {
   arch = os.arch()
 }
-const base = "opencode-" + platform + "-" + arch
+const base = "banyancode-" + platform + "-" + arch
 const binary = platform === "windows" ? "banyancode.exe" : "banyancode"
 
 function supportsAvx2() {

@@ -21,6 +21,8 @@ const generated = await import("./generate.ts")
 import { Script } from "@opencode-ai/script"
 import pkg from "../package.json"
 
+const BINARY_NAME = "banyancode"
+
 const allFlag = process.argv.includes("--all")
 const isCI = !!(process.env.CI || process.env.GITHUB_ACTIONS || Script.release)
 const singleFlag = process.argv.includes("--single") || (!allFlag && !isCI)
@@ -204,7 +206,7 @@ if (!skipInstall) {
 }
 for (const item of targets) {
   const name = [
-    pkg.name,
+    BINARY_NAME,
     // changing to win32 flags npm for some reason
     item.os === "win32" ? "windows" : item.os,
     item.arch,
@@ -225,7 +227,7 @@ for (const item of targets) {
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
   const workerRelativePath = path.relative(dir, parserWorker).replaceAll("\\", "/")
 
-  const compileTarget = name.replace(pkg.name, "bun")
+  const compileTarget = name.replace(BINARY_NAME, "bun")
   const libsqlTarget = libsqlTargetFor(compileTarget)
   if (!libsqlTarget) {
     throw new Error(`No libsql native binding available for compile target ${compileTarget}`)
@@ -246,8 +248,8 @@ for (const item of targets) {
       autoloadTsconfig: true,
       autoloadPackageJson: true,
       target: compileTarget as any,
-      outfile: `dist/${name}/bin/banyancode`,
-      execArgv: [`--user-agent=opencode/${Script.version}`, "--use-system-ca", "--"],
+      outfile: `dist/${name}/bin/${BINARY_NAME}`,
+      execArgv: [`--user-agent=${BINARY_NAME}/${Script.version}`, "--use-system-ca", "--"],
       windows: {},
     },
     files: embeddedFileMap ? { "opencode-web-ui.gen.ts": embeddedFileMap } : {},
@@ -266,7 +268,7 @@ for (const item of targets) {
 
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
-    const binaryPath = `dist/${name}/bin/banyancode${item.os === "win32" ? ".exe" : ""}`
+    const binaryPath = `dist/${name}/bin/${BINARY_NAME}${item.os === "win32" ? ".exe" : ""}`
     console.log(`Running smoke test: ${binaryPath} --version`)
     try {
       const versionOutput = await $`${binaryPath} --version`.text()

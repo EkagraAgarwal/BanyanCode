@@ -1,0 +1,214 @@
+---
+title: Installation channels
+description: Per-channel install / upgrade / uninstall instructions for BanyanCode
+---
+
+# Installation channels
+
+BanyanCode distributes the same Bun-compiled binary through four channels. The shell surface (`banyancode --version`, `banyancode upgrade`, `banyancode memory ...`) is identical regardless of how you installed.
+
+## Which channel should I pick?
+
+| Channel | Best for | Asset backing |
+|---|---|---|
+| `curl \| bash` | First-time install on a clean Linux/macOS/WSL box | GitHub release tarball / zip |
+| `npm i -g banyancode` | Anyone with Node, plus Windows | `banyancode` npm wrapper + per-platform `banyancode-<os>-<arch>` |
+| `brew install banyancode` (via `ekagraagarwal/tap`) | macOS + Linux users with Homebrew | Pre-built release zip / tarball |
+| `pacman -S banyancode-bin` / `paru -S banyancode-bin` | Arch / Manjaro / EndeavourOS | Pre-built release tarball |
+
+All four channels serve the **same** binary that `.github/workflows/publish.yml` produces on every `v*` tag push. The install script, npm postinstall, brew formula, and AUR PKGBUILD all pin a SHA256 (or trust GitHub's signed release) against the same artifact.
+
+## 1. curl|bash
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install | bash
+```
+
+What it does:
+
+1. Detects OS + arch + libc (glibc vs musl) + AVX2 support.
+2. Selects the right asset — `banyancode-linux-x64.tar.gz`, `banyancode-linux-x64-baseline.tar.gz`, `banyancode-linux-arm64.tar.gz`, `banyancode-linux-x64-musl.tar.gz`, etc.
+3. Downloads to `${TMPDIR:-/tmp}/banyancode-install-<pid>/`.
+4. Unpacks, copies `banyancode` (or `banyancode.exe`) into `~/.banyancode/bin/`.
+5. Adds `~/.banyancode/bin` to your shell rc (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`) — pass `--no-modify-path` to skip.
+6. Prints the ascii banner, a short quick-start, and a link to these docs.
+
+Installer flags:
+
+```bash
+# Pin a version
+curl -fsSL https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install | bash -s -- --version 25.07.0
+
+# Install from a local binary (useful for CI smoke tests)
+./install --binary /path/to/banyancode
+
+# Don't touch shell rc files
+./install --no-modify-path
+```
+
+Confirm a working install:
+
+```bash
+banyancode --version    # e.g. banyancode 25.07.0
+which banyancode        # ~/.banyancode/bin/banyancode
+```
+
+## 2. npm
+
+```bash
+npm i -g banyancode
+```
+
+What gets installed:
+
+- `banyancode` — top-level wrapper package, just a `package.json` + `bin/banyancode` (Node shim) + `postinstall.mjs` plugin.
+- `banyancode-linux-x64` (or `-arm64`, `-darwin-x64`, `-darwin-arm64`, `-windows-x64`) — the actual binary, picked by `optionalDependencies` + CPU/OS filters.
+- `banyancode.exe` lands inside `node_modules/banyancode/bin/` after `postinstall` runs.
+
+If you ever see "It seems that your package manager failed to install the right banyancode CLI package":
+
+```bash
+# Re-run the postinstall manually
+cd $(npm root -g)/banyancode && node postinstall.mjs
+
+# Or reinstall without --ignore-scripts
+npm i -g banyancode --foreground-scripts
+```
+
+Windows: `npm i -g banyancode` from PowerShell places `banyancode.exe` in `%LOCALAPPDATA%\banyancode\bin`. Add that to `PATH` if npm didn't.
+
+Upgrade:
+
+```bash
+npm update -g banyancode
+# or
+banyancode upgrade   # auto-detects npm method
+```
+
+## 3. Homebrew
+
+```bash
+brew tap ekagraagarwal/tap
+brew install banyancode
+```
+
+While the formula is hosted on `EkagraAgarwal/homebrew-tap`, you can also submit it to homebrew-core so `brew install banyancode` works without `brew tap` first — track the PR in [ARCHITECTURE.md](../../ARCHITECTURE.md).
+
+Upgrade:
+
+```bash
+brew upgrade banyancode
+# or
+banyancode upgrade
+```
+
+Uninstall:
+
+```bash
+brew untap ekagraagarwal/tap
+brew uninstall banyancode
+```
+
+## 4. Arch Linux (AUR)
+
+`banyancode-bin` is published to AUR. The PKGBUILD points at the GitHub release tarball with a pinned sha256.
+
+```bash
+# AUR helper (paru, yay, pikaur, ...)
+paru -S banyancode-bin
+# or explicitly:
+paru -S --needed banyancode-bin
+
+# Upstream / manual
+git clone https://aur.archlinux.org/banyancode-bin.git
+cd banyancode-bin
+makepkg -si
+```
+
+Upgrade:
+
+```bash
+paru -Syu           # pulls banyancode-bin along with everything else
+banyancode upgrade   # auto-detects, but yaourt/paru are cleaner
+```
+
+Uninstall:
+
+```bash
+paru -Rns banyancode-bin
+```
+
+## Upgrade in-app
+
+From any install method, `banyancode upgrade` figures out which channel you came from (curl, npm, pnpm, bun, brew, scoop, choco) and calls the right upgrade command for you:
+
+```text
+$ banyancode upgrade
+? Pick a channel to upgrade via:
+  ❯ curl   https://raw.githubusercontent.com/...
+    npm    npm i -g banyancode@<version>
+    brew   brew upgrade banyancode
+    pnpm   pnpm add -g banyancode@<version>
+    bun    bun add -g banyancode@<version>
+    scoop  scoop install banyancode@<version>
+    choco  choco upgrade banyancode --version=<version>
+```
+
+`banyancode upgrade` is gated by `BANYANCODE_ENABLE` and reads `banyancode.json` for any user preferences.
+
+## Uninstall
+
+| Channel | Command |
+|---|---|
+| curl | `rm -rf ~/.banyancode` |
+| npm | `npm uninstall -g banyancode` |
+| brew | `brew uninstall banyancode` |
+| AUR | `paru -Rns banyancode-bin` |
+| Scoop* | `scoop uninstall banyancode` |
+| choco* | `choco uninstall banyancode` |
+
+`*` Scoop and Chocolatey are planned but not yet enabled in this release.
+
+## Versioning and channels
+
+BanyanCode uses its own **CalVer** scheme decoupled from upstream OpenCode. The format is:
+
+```text
+YY.MM.PATCH[-prerelease]
+```
+
+Examples:
+
+- `25.07.0` — July 2025 release, first stable.
+- `25.07.1` — July 2025 hotfix.
+- `25.08.0-rc.1` — August 2025 release candidate.
+- `25.08.0-dev.<sha>` — daily build cut from `dev` branch.
+- `0.0.0-dev-202607151200` — local-preview build (timestamp-suffixed; never published).
+
+Channels and what they mean:
+
+| Channel | Dist-tag | Audience | Asset suffix | DB filename |
+|---|---|---|---|---|
+| `latest` | `latest` | Everyone who runs `npm i -g banyancode` (no tag) | `banyancode-<os>-<arch>.{tar.gz,zip}` | `banyancode.db` |
+| `next` | `next` | Opt-in testers of pre-release | `banyancode-<os>-<arch>.{tar.gz,zip}` (same) | `banyancode-next.db` |
+| `dev` | `dev` | Every push to the `dev` branch — internal | same | `banyancode-dev.db` |
+
+Tag format on GitHub: `vYY.MM.PATCH` (e.g. `v25.07.0`).
+
+Full plan lives at `specs/banyancode/versioning.md` in the repo. Highlights:
+
+- **Source of truth is `packages/opencode/package.json` `"version"`** — no longer fetched from `opencode-ai` on npm.
+- **Minor release per month is the default cadence**; patch releases are hotfixes; a CalVer `MM` bump is a real feature drop, not just a date.
+- **Pre-release builds use SemVer-shaped suffixes**, never float above a published stable.
+- **The DB schema is versioned by `graphVersion` / `migrationVersion` columns** — a `YY.MM+1` bump that includes a schema migration ships the migration script in the same release; an incompatible change requires a major bump (handled separately, see `specs/banyancode/storage.md`).
+- **Channels map to npm dist-tags** (`latest`, `next`, `dev`) so users can opt in: `npm i -g banyancode@next`.
+
+## Diagnosing install issues
+
+| Symptom | Probable cause |
+|---|---|
+| `command not found: banyancode` after curl installer | shell rc not sourced. Open a new shell, or `source ~/.zshrc` / `source ~/.bashrc`. |
+| `postinstall` failed (npm) | `--ignore-scripts` was used. Reinstall without it, or run `node postinstall.mjs` manually. |
+| Wrong binary (linux-x64-baseline picked on AVX2) | libc / CPU detection. Check `banyancode --version` and report. |
+| AUR build fails (signature mismatch) | AUR PKGBUILD sha256 stale — upgrade and re-run `makepkg -sf` to refresh. |
+| Windows SmartScreen blocks `banyancode.exe` | Not yet code-signed. Use the npm install on Windows, or `Set-MpPreference -SubmitSamplesConsent 2`. Track: add Azure Trusted Signing to the release pipeline (we already sign via Azure — see `sign-cli-windows` job — but most Windows installs run unsigned for now). |

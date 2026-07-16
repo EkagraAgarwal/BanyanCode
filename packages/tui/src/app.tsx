@@ -40,6 +40,7 @@ import { DataProvider } from "./context/data"
 import { LocalProvider, useLocal } from "./context/local"
 import { DialogModel } from "./component/dialog-model"
 import { DialogAgentModel } from "./component/dialog-agent-model"
+import { DialogMaxSubagents } from "./component/dialog-max-subagents"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
 import { DialogStatus } from "./component/dialog-status"
@@ -913,6 +914,30 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           })
           toast.show({ message: "Refreshing models catalog...", variant: "info" })
           dialog.clear()
+        },
+      },
+      {
+        name: "yolo.toggle",
+        title: "Toggle YOLO mode",
+        category: "BanyanCode",
+        slashName: "yolo",
+        run: () => {
+          void sdk.client.session.command({
+            sessionID: route.data.type === "session" ? route.data.sessionID : "",
+            command: "yolo",
+            arguments: "",
+          })
+          toast.show({ message: "Toggling YOLO mode...", variant: "info" })
+          dialog.clear()
+        },
+      },
+      {
+        name: "subagents.max_subagents",
+        title: "Set max concurrent subagents",
+        category: "BanyanCode",
+        slashName: "max-subagents",
+        run: () => {
+          dialog.replace(() => <DialogMaxSubagents />)
         },
       },
       {

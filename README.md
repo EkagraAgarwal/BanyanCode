@@ -14,6 +14,33 @@ Disable everything: `BANYANCODE_ENABLE=0`
 
 ---
 
+## Install
+
+Pick whichever channel works on your platform:
+
+```bash
+# macOS / Linux / WSL — one-liner (binary lands in ~/.banyancode/bin)
+curl -fsSL https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install | bash
+
+# npm (any platform with Node)
+npm i -g banyancode
+
+# Homebrew (macOS / Linux)
+brew tap ekagraagarwal/tap
+brew install banyancode
+
+# Arch Linux / Manjaro / EndeavourOS
+paru -S banyancode-bin   # or: pacman -S banyancode-bin
+```
+
+Windows users running `npm i -g banyancode` from PowerShell get `banyancode.exe` automatically; the curl installer requires a Bash shell (Git Bash, WSL, MSYS).
+
+BanyanCode and OpenCode install side by side and never read or write each other's files — `banyancode.json` vs `opencode.json`, `.banyancode/` vs `.opencode/`, etc. See [AGENTS.md](./AGENTS.md) for the full identity table.
+
+To upgrade an existing install: `banyancode upgrade` from inside the CLI (npm/brew/scoop/curl available), or re-run the matching install command above.
+
+---
+
 ## Quick start
 
 | | Dev (hot reload) | Standalone binary (system-wide) |
@@ -32,12 +59,12 @@ bun run script/build.ts -- --single
 
 # macOS / Linux
 install -d ~/.local/bin
-install -m 0755 dist/opencode-<platform>-<arch>/bin/banyancode ~/.local/bin/
+install -m 0755 dist/banyancode-<platform>-<arch>/bin/banyancode ~/.local/bin/
 
 # Windows
 $bin = "$env:LOCALAPPDATA\banyancode\bin"
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
-Copy-Item dist\opencode-windows-x64\bin\banyancode.exe "$bin\banyancode.exe"
+Copy-Item dist\banyancode-windows-x64\bin\banyancode.exe "$bin\banyancode.exe"
 [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$bin", "User")
 ```
 
