@@ -7,6 +7,7 @@ import { useRoute } from "../../context/route"
 import { useSync } from "../../context/sync"
 import { useEvent } from "../../context/event"
 import { toHex } from "../../util/color"
+import { YoloIndicator } from "../../component/yolo-indicator"
 
 const id = "internal:session-footer"
 
@@ -57,6 +58,7 @@ function View(props: { api: TuiPluginApi }) {
         {branch() ? ` · Git: ${branch()}` : ""}
       </text>
       <box flexGrow={1} />
+      <YoloIndicator />
       <text fg={attentionCount() > 0 ? theme().error : theme().success}>
         {`▲ ${attentionCount()} need attention`}
       </text>
