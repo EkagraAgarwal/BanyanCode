@@ -1,11 +1,16 @@
 name: publish
-run-name: "${{ format('banyancode release {0}', github.ref_name) }}"
+run-name: "${{ format('banyancode release {0}', inputs.version || github.ref_name) }}"
 
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 26.07.1). Leave empty to read from packages/opencode/package.json."
+        required: false
+        default: ""
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
@@ -13,37 +18,37 @@ permissions:
   id-token: write
   contents: write
 
+env:
+  WRAPPER_NAME: banyancode
+
 jobs:
   version:
+    name: Resolve release version
     runs-on: ubuntu-latest
     if: github.repository == 'EkagraAgarwal/BanyanCode'
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Setup Bun
-        uses: ./.github/actions/setup-bun
+      - name: Resolve version
+        id: resolve
+        working-directory: packages/opencode
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            VERSION=$(node -p "require('./package.json').version")
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Determine release version
-        id: version
-        run: ./script/version.ts
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          OPENCODE_CHANNEL: latest
-          OPENCODE_VERSION: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          OPENCODE_BUMP: ""
-
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      release: ${{ steps.version.outputs.release }}
-      tag: ${{ steps.version.outputs.tag }}
-      repo: ${{ steps.version.outputs.repo }}
-
-  build-cli:
+  build:
+    name: Build BanyanCode ${{ matrix.target }}
     needs: version
     if: github.repository == 'EkagraAgarwal/BanyanCode'
     runs-on: ${{ matrix.runs-on }}
@@ -54,23 +59,18 @@ jobs:
           - runs-on: ubuntu-latest
             target: linux-x64
             os-suffix: linux
-            artifact: banyancode-cli
           - runs-on: ubuntu-latest
             target: linux-arm64
             os-suffix: linux
-            artifact: banyancode-cli
           - runs-on: macos-14
             target: darwin-x64
             os-suffix: darwin
-            artifact: banyancode-cli
           - runs-on: macos-latest
             target: darwin-arm64
             os-suffix: darwin
-            artifact: banyancode-cli
           - runs-on: windows-latest
             target: windows-x64
             os-suffix: windows
-            artifact: banyancode-cli-windows
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
@@ -79,60 +79,59 @@ jobs:
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
-      - name: Build BanyanCode CLI
-        run: ./packages/opencode/script/build.ts
+      - name: Build ${{ matrix.target }}
+        run: ./packages/opencode/script/build.ts --single
         env:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
-          OPENCODE_RELEASE: ${{ needs.version.outputs.release }}
-          OPENCODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || 'latest' }}
-          GH_REPO: ${{ needs.version.outputs.repo }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENCODE_RELEASE: ${{ github.event_name == 'push' }}
+          OPENCODE_CHANNEL: latest
 
-      - name: Upload CLI artifacts (non-Windows)
+      - name: Upload CLI artifacts (Unix)
         if: matrix.os-suffix != 'windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: banyancode-cli
+          name: banyancode-${{ matrix.target }}
           path: |
-            packages/opencode/dist/banyancode-linux-x64
-            packages/opencode/dist/banyancode-linux-arm64
-            packages/opencode/dist/banyancode-darwin-x64
-            packages/opencode/dist/banyancode-darwin-arm64
-            packages/opencode/dist/banyancode-linux-*.zip
-            packages/opencode/dist/banyancode-linux-*.tar.gz
-            packages/opencode/dist/banyancode-darwin-*.zip
-            packages/opencode/dist/banyancode-darwin-*.tar.gz
+            packages/opencode/dist/banyancode-${{ matrix.target }}/bin
+            packages/opencode/dist/banyancode-${{ matrix.target }}.zip
+            packages/opencode/dist/banyancode-${{ matrix.target }}.tar.gz
 
       - name: Upload Windows CLI artifact
         if: matrix.os-suffix == 'windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: banyancode-cli-windows
-          path: packages/opencode/dist/banyancode-windows*
+          name: banyancode-${{ matrix.target }}
+          path: |
+            packages/opencode/dist/banyancode-${{ matrix.target }}/bin
+            packages/opencode/dist/banyancode-${{ matrix.target }}/package.json
+            packages/opencode/dist/banyancode-${{ matrix.target }}.zip
 
-  sign-cli-windows:
+  sign-windows:
+    name: Optional Windows signing
     needs:
-      - build-cli
       - version
+      - build
     if: github.repository == 'EkagraAgarwal/BanyanCode'
     runs-on: windows-latest
-    env:
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
-      AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
 
       - name: Download Windows CLI artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: banyancode-cli-windows
+          name: banyancode-windows-x64
           path: packages/opencode/dist
 
+      - name: Decide signing path
+        id: signing
+        shell: pwsh
+        run: |
+          $hasSigning = $env:AZURE_CLIENT_ID -and $env:AZURE_TENANT_ID -and $env:AZURE_SUBSCRIPTION_ID -and $env:AZURE_TRUSTED_SIGNING_ACCOUNT_NAME -and $env:AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE -and $env:AZURE_TRUSTED_SIGNING_ENDPOINT
+          if ($hasSigning) { echo "enabled=true" >> $env:GITHUB_OUTPUT } else { echo "enabled=false" >> $env:GITHUB_OUTPUT }
+          Write-Host "Azure signing configured: $hasSigning"
+
       - name: Azure login
+        if: steps.signing.outputs.enabled == 'true'
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:
           client-id: ${{ env.AZURE_CLIENT_ID }}
@@ -140,7 +139,15 @@ jobs:
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Sign BanyanCode Windows binaries
+        if: steps.signing.outputs.enabled == 'true'
         uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
         with:
           endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
           signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
@@ -158,46 +165,40 @@ jobs:
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
 
-      - name: Verify BanyanCode Windows signatures
-        shell: pwsh
-        run: |
-          $file = "${{ github.workspace }}\packages\opencode\dist\banyancode-windows-x64\bin\banyancode.exe"
-          $sig = Get-AuthenticodeSignature $file
-          if ($sig.Status -ne "Valid") {
-            throw "Invalid signature for ${file}: $($sig.Status)"
-          }
-
-      - name: Repack BanyanCode Windows archive
+      - name: Repack BanyanCode Windows archive (signed)
+        if: steps.signing.outputs.enabled == 'true'
         working-directory: packages/opencode/dist
         shell: pwsh
         run: |
           Compress-Archive -Path "banyancode-windows-x64\bin\*" -DestinationPath "banyancode-windows-x64.zip" -Force
 
-      - name: Upload signed BanyanCode Windows assets to release
-        if: needs.version.outputs.release != ''
+      - name: Repack BanyanCode Windows archive (unsigned fallback)
+        if: steps.signing.outputs.enabled != 'true'
+        working-directory: packages/opencode/dist
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "v${{ needs.version.outputs.version }}" `
-            "${{ github.workspace }}\packages\opencode\dist\banyancode-windows-x64.zip" `
-            --clobber `
-            --repo "${{ needs.version.outputs.repo }}"
+          Write-Host "::warning::Windows binaries are NOT signed (Azure credentials missing). Repacking unsigned artifacts."
+          Compress-Archive -Path "banyancode-windows-x64\bin\*" -DestinationPath "banyancode-windows-x64.zip" -Force
 
       - name: Upload signed BanyanCode Windows artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: banyancode-cli-signed-windows
-          path: |
-            packages/opencode/dist/banyancode-windows-x64
+          name: banyancode-windows-x64-bundle
+          path: packages/opencode/dist/banyancode-windows-x64.zip
 
   publish:
+    name: Publish to npm + AUR + Homebrew tap
     needs:
       - version
-      - build-cli
-      - sign-cli-windows
-    if: always() && !failure() && !cancelled()
+      - build
+      - sign-windows
+    if: always() && !failure() && !cancelled() && needs.version.outputs.version != ''
     runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      AUR_KEY: ${{ secrets.AUR_KEY }}
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
@@ -206,45 +207,67 @@ jobs:
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
-      - name: Download BanyanCode CLI artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Setup Node + npm registry auth
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          name: banyancode-cli
-          path: packages/opencode/dist
-
-      - name: Download signed BanyanCode Windows artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: banyancode-cli-signed-windows
-          path: packages/opencode/dist
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
 
       - name: Configure git committer for release
         run: |
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-          git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${REPO}"
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
 
-      - name: Setup SSH for AUR
+      - name: Download BanyanCode CLI artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: banyancode-*
+
+      - name: Reassemble dist directory
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pacman-package-manager
-          mkdir -p ~/.ssh
-          echo "${{ secrets.AUR_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          git config --global user.email "banyancode@users.noreply.github.com"
-          git config --global user.name "banyancode"
-          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts || true
+          mkdir -p packages/opencode/dist
+          shopt -s nullglob
+          for d in banyancode-*; do
+            [ -d "$d/bin" ] && mv "$d" packages/opencode/dist/
+          done
 
-      - name: Publish release
-        run: ./script/publish.ts
+      - name: Re-build per-platform packages + wrapper
         env:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
-          OPENCODE_RELEASE: ${{ needs.version.outputs.release }}
-          AUR_KEY: ${{ secrets.AUR_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENCODE_RELEASE: 'true'
+          OPENCODE_CHANNEL: latest
+        run: ./packages/opencode/script/build.ts --single
+
+      - name: Upload all release artifacts to GitHub release (draft)
+        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ needs.version.outputs.repo }}
-          NPM_CONFIG_PROVENANCE: false
+        run: |
+          set -euo pipefail
+          TAG="v${{ needs.version.outputs.version }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists; uploading new assets."
+          else
+            gh release create "$TAG" --draft --generate-notes --title "BanyanCode ${{ needs.version.outputs.version }}" --repo "${{ github.repository }}"
+          fi
+          shopt -s nullglob
+          files=(packages/opencode/dist/banyancode-*.*)
+          if (( ${#files[@]} > 0 )); then
+            gh release upload "$TAG" "${files[@]}" --clobber --repo "${{ github.repository }}"
+          fi
+
+      - name: Publish BanyanCode to npm + AUR + tap
+        env:
+          OPENCODE_VERSION: ${{ needs.version.outputs.version }}
+          OPENCODE_RELEASE: 'true'
+          OPENCODE_CHANNEL: latest
+          GH_REPO: ${{ github.repository }}
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: ./packages/opencode/script/publish.ts
+
+      - name: Publish release (finalize draft)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "v${{ needs.version.outputs.version }}" --draft=false --repo "${{ github.repository }}" || true

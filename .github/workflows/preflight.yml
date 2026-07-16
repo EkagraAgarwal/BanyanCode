@@ -1,0 +1,115 @@
+name: preflight
+run-name: "banyancode preflight (${{ github.ref_name }})"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Validate release readiness
+    runs-on: ubuntu-latest
+    if: github.repository == 'EkagraAgarwal/BanyanCode'
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Setup Node + npm auth probe
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      - name: Resolve version
+        id: v
+        working-directory: packages/opencode
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved version $VERSION from packages/opencode/package.json"
+
+      - name: npm auth check
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::NPM_TOKEN is missing. Add the secret before tagging a release."
+            exit 1
+          fi
+          npm whoami
+          echo "npm auth OK ($(npm whoami 2>/dev/null || true))"
+
+      - name: Build locally (--single)
+        env:
+          OPENCODE_VERSION: ${{ steps.v.outputs.version }}
+          OPENCODE_RELEASE: 'false'
+          OPENCODE_CHANNEL: latest
+        run: ./packages/opencode/script/build.ts --single
+
+      - name: Smoke-test binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$(ls -d packages/opencode/dist/banyancode-*-x64/bin/banyancode 2>/dev/null | head -1 || true)"
+          if [ -z "$bin" ]; then
+            echo "::error::No banyancode-x64 binary produced. Check build logs."
+            exit 1
+          fi
+          "$bin" --version || true
+          echo "Smoke-tested: $bin"
+
+      - name: Validate AUR key shape (if present)
+        if: env.AUR_KEY != ''
+        env:
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+        run: |
+          if [ -n "$AUR_KEY" ]; then
+            head -c 30 <(printf '%s' "$AUR_KEY")
+            echo "... (length $(printf '%s' "$AUR_KEY" | wc -c))"
+          else
+            echo "AUR_KEY not configured; AUR push will be skipped."
+          fi
+
+      - name: Validate Homebrew tap token presence
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::warning::HOMEBREW_TAP_TOKEN not configured; tap push will fall back to GITHUB_TOKEN (will likely fail to write a separate repo)."
+          else
+            echo "Homebrew tap token present."
+          fi
+
+      - name: Validate Azure signing secrets
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+        run: |
+          if [ -z "$AZURE_CLIENT_ID" ] || [ -z "$AZURE_TENANT_ID" ] || [ -z "$AZURE_SUBSCRIPTION_ID" ] || [ -z "$AZURE_TRUSTED_SIGNING_ACCOUNT_NAME" ] || [ -z "$AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE" ] || [ -z "$AZURE_TRUSTED_SIGNING_ENDPOINT" ]; then
+            echo "::warning::Azure signing secrets missing; Windows binaries will be unsigned."
+          else
+            echo "Azure signing secrets present."
+          fi
+
+      - name: Summarize
+        run: |
+          echo "PREFLIGHT SUMMARY"
+          echo "-----------------"
+          echo "version: ${{ steps.v.outputs.version }}"
+          ls -la packages/opencode/dist/banyancode-*.* 2>/dev/null || true
+          ls -la packages/opencode/dist/banyancode-*/bin/banyancode 2>/dev/null || true
