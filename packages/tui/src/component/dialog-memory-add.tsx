@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { Show, createSignal } from "solid-js"
+import { Show, createMemo, createSignal } from "solid-js"
 import { useDialog } from "../ui/dialog"
 import { DialogPrompt } from "../ui/dialog-prompt"
 import { DialogAlert } from "../ui/dialog-alert"
+import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
 import { errorMessage } from "../util/error"
 
 const ALLOWED_KINDS = new Set([
@@ -22,6 +23,88 @@ const ALLOWED_KINDS = new Set([
   "constraint",
   "environment",
 ])
+
+export const MEMORY_KINDS: ReadonlyArray<string> = Array.from(ALLOWED_KINDS)
+
+export const MEMORY_STATUSES: ReadonlyArray<string> = [
+  "all",
+  "active",
+  "pending",
+  "rejected",
+  "superseded",
+  "expired",
+]
+
+const KIND_DESCRIPTIONS: Record<string, string> = {
+  preference: "User preference — how the agent should behave",
+  identity: "Identity fact — who/what the project is",
+  convention: "Coding or workflow convention",
+  decision: "Decision with rationale",
+  architecture: "Architectural choice or constraint",
+  pattern: "Recurring pattern observed in the codebase",
+  warning: "Warning the next session should heed",
+  failure: "Failure mode to avoid repeating",
+  todo: "Open task to track",
+  observation: "Factual observation from the agent",
+  summary: "Summary of a session or task",
+  ownership: "Owner of a file / area / service",
+  constraint: "Hard constraint (security, infra, policy)",
+  environment: "Environment-specific fact",
+}
+
+const STATUS_DESCRIPTIONS: Record<string, string> = {
+  all: "Show every entry regardless of status",
+  active: "Entries currently used by the agent",
+  pending: "Candidates awaiting review (promote/reject)",
+  rejected: "Entries the user rejected",
+  superseded: "Entries replaced by a newer version",
+  expired: "Entries past their TTL",
+}
+
+export function DialogMemoryKind(props: { current?: string; onSelect?: (value: string) => void }) {
+  const dialog = useDialog()
+  const options = createMemo<DialogSelectOption<string>[]>(() => [
+    { value: "all", title: "All kinds", description: KIND_DESCRIPTIONS.observation ? "Show every kind" : undefined },
+    ...MEMORY_KINDS.map((k) => ({
+      value: k,
+      title: k,
+      description: KIND_DESCRIPTIONS[k],
+    })),
+  ])
+  return (
+    <DialogSelect<string>
+      title="Filter memory by kind"
+      current={props.current ?? "all"}
+      options={options()}
+      onSelect={(option) => {
+        props.onSelect?.(option.value)
+        dialog.clear()
+      }}
+    />
+  )
+}
+
+export function DialogMemoryStatus(props: { current?: string; onSelect?: (value: string) => void }) {
+  const dialog = useDialog()
+  const options = createMemo<DialogSelectOption<string>[]>(() =>
+    MEMORY_STATUSES.map((s) => ({
+      value: s,
+      title: s,
+      description: STATUS_DESCRIPTIONS[s],
+    })),
+  )
+  return (
+    <DialogSelect<string>
+      title="Filter memory by status"
+      current={props.current ?? "all"}
+      options={options()}
+      onSelect={(option) => {
+        props.onSelect?.(option.value)
+        dialog.clear()
+      }}
+    />
+  )
+}
 
 const slugify = (title: string): string =>
   title

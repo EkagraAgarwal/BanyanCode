@@ -14,6 +14,23 @@ const enabledByExperimental = (name: string) =>
     Config.map((flags) => Option.getOrElse(flags.enabled, () => flags.experimental)),
   )
 
+// Background subagents default to ON for BanyanCode installs. The precedence is:
+//   1. Explicit OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true|false always wins.
+//   2. OPENCODE_EXPERIMENTAL=true (umbrella) enables it.
+//   3. Otherwise default to ON — BanyanCode users get background subagents out
+//      of the box. Operators can still disable for a single install via
+//      OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=false or BANYANCODE_ENABLE=0
+//      (which falls back to BANYANCODE_ENABLE's existing boolTrue default).
+const experimentalBackgroundSubagentsConfig = Config.all({
+  enabled: Config.boolean("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS").pipe(Config.option),
+  experimental,
+  banyancodeEnable: Config.boolean("BANYANCODE_ENABLE").pipe(Config.withDefault(true)),
+}).pipe(
+  Config.map((flags) =>
+    Option.getOrElse(flags.enabled, () => flags.experimental || flags.banyancodeEnable),
+  ),
+)
+
 export class Service extends ConfigService.Service<Service>()("@opencode/RuntimeFlags", {
   autoShare: bool("OPENCODE_AUTO_SHARE"),
   banyancodeEnable: boolTrue("BANYANCODE_ENABLE"),
@@ -43,7 +60,7 @@ export class Service extends ConfigService.Service<Service>()("@opencode/Runtime
   enableExperimentalModels: bool("OPENCODE_ENABLE_EXPERIMENTAL_MODELS"),
   enableQuestionTool: bool("OPENCODE_ENABLE_QUESTION_TOOL"),
   experimentalReferences: enabledByExperimental("OPENCODE_EXPERIMENTAL_REFERENCES"),
-  experimentalBackgroundSubagents: enabledByExperimental("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
+  experimentalBackgroundSubagents: experimentalBackgroundSubagentsConfig,
   experimentalLspTy: bool("OPENCODE_EXPERIMENTAL_LSP_TY"),
   experimentalLspTool: enabledByExperimental("OPENCODE_EXPERIMENTAL_LSP_TOOL"),
   experimentalOxfmt: enabledByExperimental("OPENCODE_EXPERIMENTAL_OXFMT"),

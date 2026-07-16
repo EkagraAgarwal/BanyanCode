@@ -51,7 +51,7 @@ const brokenPluginLayer = Layer.succeed(
 const root = LayerNode.group([ToolRegistry.node, Agent.node])
 const replacements = [
   LayerNode.replace(Config.node, configLayer),
-  LayerNode.replace(RuntimeFlags.node, RuntimeFlags.layer()),
+  LayerNode.replace(RuntimeFlags.node, RuntimeFlags.layer({ experimentalBackgroundSubagents: false })),
 ]
 
 const it = testEffect(LayerNode.buildLayer(root, { replacements }))

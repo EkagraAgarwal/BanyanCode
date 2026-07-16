@@ -31,6 +31,9 @@ opencode-dev
 UPCOMING_CHANGELOG.md
 logs/
 *.bun-build
+.bun-cache/
+**/.bun-cache/
+Continuation.md
 tsconfig.tsbuildinfo
 
 # BanyanCode runtime artifacts (project-local SQLite DB dirs)

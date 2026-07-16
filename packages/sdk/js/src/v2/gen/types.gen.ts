@@ -2212,6 +2212,7 @@ export type BanyanConfig = {
     models?: Array<string>
   }>
   banyancode_yolo_mode?: boolean
+  banyancode_background_subagents?: boolean
   banyancode_disable_websearch?: boolean
   banyancode_telegram_enabled?: boolean
   banyancode_telegram_bot_token?: string

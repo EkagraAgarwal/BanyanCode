@@ -18,6 +18,11 @@ export const Info = Schema.Struct({
   $schema: Schema.optional(Schema.String),
   banyancode_openai_compatible_endpoints: Schema.optional(Schema.Array(OpenAICompatibleEndpoint)),
   banyancode_yolo_mode: Schema.optional(Schema.Boolean),
+  // Default true. When false, `task({ background: true })` is rejected at the
+  // tool boundary and the session-background HTTP route is a no-op. Override
+  // here to disable for a single install; OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS
+  // (env) is the runtime override used by tests and OpenCode-only environments.
+  banyancode_background_subagents: Schema.optional(Schema.Boolean),
   banyancode_disable_websearch: Schema.optional(Schema.Boolean),
   banyancode_telegram_enabled: Schema.optional(Schema.Boolean),
   banyancode_telegram_bot_token: Schema.optional(Schema.String),
