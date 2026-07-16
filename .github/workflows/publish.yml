@@ -85,7 +85,7 @@ jobs:
         uses: ./.github/actions/setup-bun
 
       - name: Build ${{ matrix.target }}
-        run: bun ./packages/opencode/script/build.ts --single
+        run: bun ./packages/opencode/script/build.ts --single --skip-install
         env:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
           OPENCODE_RELEASE: ${{ github.event_name == 'push' }}
@@ -244,7 +244,7 @@ jobs:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
           OPENCODE_RELEASE: 'true'
           OPENCODE_CHANNEL: latest
-        run: bun ./packages/opencode/script/build.ts --single
+        run: bun ./packages/opencode/script/build.ts --single --skip-install
 
       - name: Upload all release artifacts to GitHub release (draft, prerelease)
         env:

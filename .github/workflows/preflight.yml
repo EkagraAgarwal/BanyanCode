@@ -63,7 +63,7 @@ jobs:
           OPENCODE_VERSION: ${{ steps.v.outputs.version }}
           OPENCODE_RELEASE: 'false'
           OPENCODE_CHANNEL: latest
-        run: bun ./packages/opencode/script/build.ts --single
+        run: bun ./packages/opencode/script/build.ts --single --skip-install
 
       - name: Smoke-test binary
         shell: bash
