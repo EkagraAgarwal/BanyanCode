@@ -333,15 +333,7 @@ if (Script.release) {
       await $`zip -r ../../${key}.zip *`.cwd(`dist/${key}/bin`)
     }
   }
-  const releaseFiles = [
-    ...new Bun.Glob("*.zip").scanSync({ cwd: "./dist" }),
-    ...new Bun.Glob("*.tar.gz").scanSync({ cwd: "./dist" }),
-  ]
-  if (releaseFiles.length === 0) {
-    console.log("no zip/tar.gz found in ./dist; skipping gh release upload")
-  } else {
-    await $`gh release upload v${Script.version} ${releaseFiles} --clobber --repo ${process.env.GH_REPO}`
-  }
+  console.log("zip/tar.gz archive creation done; release upload is handled by publish.yml")
 }
 
 export { binaries }
