@@ -236,7 +236,9 @@ jobs:
           mkdir -p packages/opencode/dist
           shopt -s nullglob
           for d in banyancode-*; do
-            [ -d "$d/bin" ] && mv "$d" packages/opencode/dist/
+            if [ -d "$d/bin" ]; then
+              mv "$d" packages/opencode/dist/
+            fi
           done
 
       - name: Re-build per-platform packages + wrapper
