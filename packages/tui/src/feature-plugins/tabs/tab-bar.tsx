@@ -11,8 +11,7 @@ const TABS: { key: ActiveTab; label: string }[] = [
   { key: "sessions", label: "SESSIONS" },
   { key: "agents", label: "AGENTS" },
   { key: "memory", label: "MEMORY" },
-  { key: "settings", label: "SETTINGS" },
-]
+] 
 
 import { toHex } from "../../util/color"
 

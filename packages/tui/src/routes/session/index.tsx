@@ -129,7 +129,6 @@ const sessionBindingCommands = [
   "session.toggle.timestamps",
   "session.toggle.thinking",
   "session.toggle.actions",
-  "session.toggle.scrollbar",
   "session.toggle.generic_tool_output",
   "session.first",
   "session.last",
@@ -263,7 +262,6 @@ export function Session() {
   const [timestamps, setTimestamps] = kv.signal<"hide" | "show">("timestamps", "hide")
   const [showDetails, setShowDetails] = kv.signal("tool_details_visibility", true)
   const [showAssistantMetadata, _setShowAssistantMetadata] = kv.signal("assistant_metadata_visibility", true)
-  const [showScrollbar, setShowScrollbar] = kv.signal("scrollbar_visible", false)
   const [diffWrapMode] = kv.signal<"word" | "none">("diff_wrap_mode", "word")
   const [_animationsEnabled, _setAnimationsEnabled] = kv.signal("animations_enabled", true)
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
@@ -759,15 +757,6 @@ export function Session() {
       },
     },
     {
-      title: "Toggle session scrollbar",
-      value: "session.toggle.scrollbar",
-      category: "Session",
-      run: () => {
-        setShowScrollbar((prev) => !prev)
-        dialog.clear()
-      },
-    },
-    {
       title: showGenericToolOutput() ? "Hide generic tool output" : "Show generic tool output",
       value: "session.toggle.generic_tool_output",
       category: "Session",
@@ -1254,11 +1243,11 @@ export function Session() {
                   <scrollbox
                     ref={(r) => (scroll = r)}
                     viewportOptions={{
-                      paddingRight: showScrollbar() ? 1 : 0,
+                      paddingRight: 1,
                     }}
                     verticalScrollbarOptions={{
                       paddingLeft: 1,
-                      visible: showScrollbar(),
+                      visible: true,
                       trackOptions: {
                         backgroundColor: theme.backgroundElement,
                         foregroundColor: theme.border,
@@ -1379,11 +1368,6 @@ export function Session() {
                 <Match when={activeTab() === "agents"}>
                   <box flexGrow={1} minHeight={0} flexDirection="column">
                     <pluginRuntime.Slot name="session_tab_agents" />
-                  </box>
-                </Match>
-                <Match when={activeTab() === "settings"}>
-                  <box flexGrow={1} minHeight={0} flexDirection="column">
-                    <pluginRuntime.Slot name="session_tab_settings" />
                   </box>
                 </Match>
               </Switch>
