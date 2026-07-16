@@ -77,28 +77,6 @@ jobs:
           "$bin" --version || true
           echo "Smoke-tested: $bin"
 
-      - name: Validate AUR key shape (if present)
-        if: env.AUR_KEY != ''
-        env:
-          AUR_KEY: ${{ secrets.AUR_KEY }}
-        run: |
-          if [ -n "$AUR_KEY" ]; then
-            head -c 30 <(printf '%s' "$AUR_KEY")
-            echo "... (length $(printf '%s' "$AUR_KEY" | wc -c))"
-          else
-            echo "AUR_KEY not configured; AUR push will be skipped."
-          fi
-
-      - name: Validate Homebrew tap token presence
-        env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
-            echo "::warning::HOMEBREW_TAP_TOKEN not configured; tap push will fall back to GITHUB_TOKEN (will likely fail to write a separate repo)."
-          else
-            echo "Homebrew tap token present."
-          fi
-
       - name: Validate Azure signing secrets
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -121,3 +99,4 @@ jobs:
           echo "version: ${{ steps.v.outputs.version }}"
           ls -la packages/opencode/dist/banyancode-*.* 2>/dev/null || true
           ls -la packages/opencode/dist/banyancode-*/bin/banyancode 2>/dev/null || true
+          echo "AUR + Homebrew tap pushes are out of scope for this release (npm-only)."

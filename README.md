@@ -22,6 +22,9 @@ Pick whichever channel works on your platform:
 # macOS / Linux / WSL — one-liner (binary lands in ~/.banyancode/bin)
 curl -fsSL https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install | bash
 
+# Windows — PowerShell one-liner (binary lands in %LOCALAPPDATA%\banyancode\bin)
+irm https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install.ps1 | iex
+
 # npm (any platform with Node)
 npm i -g banyancode
 
@@ -33,7 +36,7 @@ brew install banyancode
 paru -S banyancode-bin   # or: pacman -S banyancode-bin
 ```
 
-Windows users running `npm i -g banyancode` from PowerShell get `banyancode.exe` automatically; the curl installer requires a Bash shell (Git Bash, WSL, MSYS).
+The `install` bash script requires a Bash shell (Git Bash, WSL, MSYS). Windows users can use the PowerShell `install.ps1` snippet above, or `npm i -g banyancode` from any shell that can install npm globals.
 
 BanyanCode and OpenCode install side by side and never read or write each other's files — `banyancode.json` vs `opencode.json`, `.banyancode/` vs `.opencode/`, etc. See [AGENTS.md](./AGENTS.md) for the full identity table.
 
