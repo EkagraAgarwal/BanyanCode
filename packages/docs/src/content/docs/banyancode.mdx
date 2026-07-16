@@ -1,18 +1,60 @@
 ---
 title: BanyanCode
-description: Overview of BanyanCode features
+description: Overview + install guide for BanyanCode — a CLI/TUI fork of OpenCode
 ---
 
 # BanyanCode
 
 BanyanCode is a CLI/TUI-only fork of [OpenCode](https://github.com/anomalyco/opencode) that adds a parallel subagent mesh, cross-session memory, a code graph utility, and a researcher agent with free web search. It is designed for developers who want orchestrated multi-agent workflows with persistent memory across sessions.
 
+## Install
+
+Pick whichever channel works on your platform:
+
+<CodeGroup>
+
+```bash macOS / Linux / WSL
+# One-liner installer (binary lands in ~/.banyancode/bin)
+curl -fsSL https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install | bash
+```
+
+```bash npm (any platform with Node)
+npm i -g banyancode
+```
+
+```bash Homebrew (macOS / Linux)
+brew tap ekagraagarwal/tap
+brew install banyancode
+```
+
+```bash Arch Linux / Manjaro / EndeavourOS
+paru -S banyancode-bin   # or: pacman -S banyancode-bin
+```
+
+```powershell Windows (PowerShell)
+npm i -g banyancode
+# banyancode.exe lands in %LOCALAPPDATA%\banyancode\bin
+```
+
+</CodeGroup>
+
+BanyanCode and OpenCode install side by side and never read or write each other's files — `banyancode.json` vs `opencode.json`, `.banyancode/` vs `.opencode/`, `BANYANCODE_*` vs `OPENCODE_*`. See [AGENTS.md](https://github.com/EkagraAgarwal/BanyanCode/blob/main/AGENTS.md) for the full identity table.
+
+The binary is fully self-contained — no `node_modules` or Bun runtime required. To upgrade, run `banyancode upgrade` from inside the CLI, or re-run the matching install command above.
+
+<Note>
+  **Channels covered.** BanyanCode currently publishes to curl|bash, npm, Homebrew (via `EkagraAgarwal/homebrew-tap` and a pending `homebrew-core` submission), and the AUR (`banyancode-bin`). mise, Nix, Scoop, Chocolatey, and Docker are intentionally out of scope.
+</Note>
+
+For per-channel details — exact asset URLs, manual binary install, env-var diagnostics, and the Windows signing story — see [Installation channels](./banyancode-install).
+
 ## What BanyanCode adds over OpenCode
 
-- **Orchestrator + subagent mesh.** A primary `orchestrator` agent decomposes complex tasks, fans out to specialized subagents in parallel, and coordinates them via peer messaging and shared memory.
-- **Cross-session memory.** A persistent key-value store with JSONB indexable payloads, exposed as tools and a skill.
-- **Codebase utility.** Builds a polyglot code graph using tree-sitter. `/codegraph-build` or `opencode codegraph build` runs in the background; a floating TUI widget shows progress, current file, and lets you cancel. See [banyancode-codegraph](./banyancode-codegraph.mdx) and [banyancode-config](./banyancode-config.mdx#background-codegraph-build).
-- **Researcher agent with free web search.** A `researcher` subagent that uses DuckDuckGo-backed `websearch_free` by default.
+- **Orchestrator + subagent mesh.** A primary `orchestrator` agent decomposes complex tasks, fans out to specialized subagents in parallel, and coordinates them via peer messaging and shared memory. The mesh caps concurrent subagents (default `5`, max `20`); see [banyancode-orchestrator](./banyancode-orchestrator.mdx).
+- **Cross-session memory.** A persistent key-value store with JSONB indexable payloads, exposed as tools and a skill. See [banyancode-memory](./banyancode-memory.mdx).
+- **Codebase utility.** Builds a polyglot code graph using tree-sitter. `/codegraph-build` or `banyancode codegraph build` runs in the background; a floating TUI widget shows progress, current file, and lets you cancel. See [banyancode-codegraph](./banyancode-codegraph.mdx).
+- **Researcher agent with free web search.** A `researcher` subagent that uses DuckDuckGo-backed `websearch_free` by default, with no API key required. See [banyancode-websearch](./banyancode-websearch.mdx).
+- **Repository intelligence.** 9 methods (`query`, `slice`, `explain`, `impact`, `trace`, `tests`, `symbols`, `relationships`, `ownership`) that traverse the code graph; exposed both as agent tools and as `banyancode repository ...` CLI subcommands.
 
 ## Quick start
 
@@ -30,11 +72,11 @@ BanyanCode features are on by default. Set `BANYANCODE_ENABLE=0` to run as upstr
 ```bash
 cd packages/opencode
 bun run script/build.ts -- --single
-install -m 0755 dist/opencode-<platform>-<arch>/bin/banyancode ~/.local/bin/
-# or on Windows: copy dist\opencode-windows-x64\bin\banyancode.exe to a PATH directory
+install -m 0755 dist/banyancode-<platform>-<arch>/bin/banyancode ~/.local/bin/
+# or on Windows: copy dist\banyancode-windows-x64\bin\banyancode.exe to a PATH directory
 ```
 
-Then run `banyancode` in any project directory. The binary is fully self-contained — no `node_modules` or Bun runtime required.
+Then run `banyancode` in any project directory.
 
 ## Feature overview
 
@@ -47,17 +89,24 @@ Then run `banyancode` in any project directory. The binary is fully self-contain
 | System monitor | Health checks for orchestrator and users | [banyancode-system-monitor](./banyancode-system-monitor.mdx) |
 | Free web search | DuckDuckGo-backed search without API keys | [banyancode-websearch](./banyancode-websearch.mdx) |
 | TUI model picker | Pick per-agent models from the TUI | [banyancode-config](./banyancode-config.mdx) |
+| Repository intelligence | 9-method graph-first retrieval + agent tools | [banyancode-config](./banyancode-config.mdx) |
 
 ## When to use the orchestrator vs build/plan
 
 Use the **orchestrator** when:
+
 - A task decomposes into independent parallel subtasks (e.g., explore multiple files, implement multiple features)
 - You want the system to coordinate subagents automatically
 - You need fan-out from a single prompt
 
 Use **build/plan** directly when:
+
 - You want single-agent focused work
 - The task is linear and does not benefit from parallel fan-out
 - You prefer direct control over agent behavior
 
 The orchestrator activates via `tab` cycle or `@orchestrator` mention in the prompt.
+
+## Versioning
+
+BanyanCode uses its own [CalVer scheme](./banyancode-install#versioning-and-channels) decoupled from upstream OpenCode. See `specs/banyancode/versioning.md` in the repo for the full plan.
