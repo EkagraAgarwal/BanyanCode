@@ -63,7 +63,7 @@ function View(props: { api: TuiPluginApi }) {
         {`▲ ${attentionCount()} need attention`}
       </text>
       <text fg={theme().textMuted}>
-        ^p cmd · ^m memory · / search · ^t tab · ^q quit
+        ^p cmd · / search
       </text>
     </box>
   )

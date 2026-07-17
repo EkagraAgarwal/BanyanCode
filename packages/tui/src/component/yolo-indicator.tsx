@@ -3,7 +3,6 @@ import { createSignal, onCleanup } from "solid-js"
 import { useSDK } from "../context/sdk"
 import { useEvent } from "../context/event"
 import { useTheme } from "../context/theme"
-import { toHex } from "../util/color"
 
 const CONFIG_UPDATED = "banyancode.config.updated"
 
@@ -27,9 +26,10 @@ export function YoloIndicator() {
   const unsub = ev.on(CONFIG_UPDATED as any, () => void refresh())
   onCleanup(unsub)
 
+  if (!enabled()) return null
   return (
-    <text fg={toHex(enabled() ? theme.error : theme.textMuted)} onMouseUp={() => void refresh()}>
-      {enabled() ? "[YOLO●]" : "[YOLO○]"}
+    <text fg={theme.error} onMouseUp={() => void refresh()}>
+      [yolo]
     </text>
   )
 }
