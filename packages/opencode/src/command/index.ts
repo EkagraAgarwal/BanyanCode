@@ -10,6 +10,7 @@ import { Skill } from "../skill"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { Database } from "@opencode-ai/core/database/database"
+import { GlobalBus } from "@/bus/global"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
@@ -318,6 +319,13 @@ export const layer = Layer.effect(
             const current = yield* banyan.get()
             const newValue = !current.banyancode_yolo_mode
             yield* banyan.update({ banyancode_yolo_mode: newValue })
+            GlobalBus.emit("event", {
+              directory: "global",
+              payload: {
+                type: "banyancode.config.updated" as any,
+                properties: { scope: "global" },
+              },
+            })
             return Effect.succeed({ toggled: newValue }) as any
           }),
         hints: [],
