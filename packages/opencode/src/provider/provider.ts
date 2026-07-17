@@ -1600,8 +1600,7 @@ export const layer = Layer.effect(
           }
 
           if (Object.keys(provider.models).length === 0) {
-            delete providers[providerID]
-            continue
+            yield* Effect.logDebug("provider has no models", { providerID })
           }
         }
 

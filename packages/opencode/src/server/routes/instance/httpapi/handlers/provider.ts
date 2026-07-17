@@ -10,6 +10,8 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { ProviderAuthApiError } from "../groups/provider"
 import { ProviderV2 } from "@opencode-ai/core/provider"
+import * as InstanceState from "@/effect/instance-state"
+import { markInstanceForDisposal } from "../lifecycle"
 
 function mapProviderAuthError<A, R>(self: Effect.Effect<A, ProviderAuth.Error, R>) {
   return self.pipe(
@@ -101,6 +103,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
           code: ctx.payload.code,
         }),
       )
+      yield* markInstanceForDisposal(yield* InstanceState.context)
       return true
     })
 
