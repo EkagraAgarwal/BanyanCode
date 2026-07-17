@@ -26,9 +26,8 @@ export function YoloIndicator() {
   const unsub = ev.on(CONFIG_UPDATED as any, () => void refresh())
   onCleanup(unsub)
 
-  if (!enabled()) return null
   return (
-    <text fg={theme.error} onMouseUp={() => void refresh()}>
+    <text fg={enabled() ? theme.error : theme.textMuted} onMouseUp={() => void refresh()}>
       [yolo]
     </text>
   )
