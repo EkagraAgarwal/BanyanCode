@@ -53,6 +53,74 @@ BanyanCode-specific keys (`banyancode_yolo_mode`, `banyancode_max_subagents`, `b
 
 For each sub-directory loader in `packages/opencode/src/config/`, the loader iterates BOTH `.opencode/` and `.banyancode/`. So `.opencode/agents/foo.md` AND `.banyancode/agents/foo.md` are both discovered and merged. Convention: `agent/`, `agents/`, `command/`, `commands/`, `skill/`, `skills/`, `plugin/`, `plugins/`, `plans/`, plus `tui.json`.
 
+## Release and publish workflow
+
+BanyanCode ships to npm (`banyancode`) and a GitHub release (`v<version>`) through one CI pipeline (`.github/workflows/publish.yml`). Releases are **npm-only** — AUR and Homebrew tap pushes are intentionally out of scope. See the trailing comment at `packages/opencode/script/publish.ts:81-84`.
+
+### Versioning
+
+- CalVer `YY.MM.PATCH` per `specs/banyancode/versioning.md` (e.g. `26.07.4`). npm drops the leading zero (`banyancode@26.7.4`); git tags keep it (`v26.07.4`).
+- Single source of truth: `packages/opencode/package.json:3` `version` field. The version-bump commit (`chore(opencode): bump version to <version>`) touches that file plus `bun.lock`.
+- Tags are **annotated**: `git tag -a v<version> -m "BanyanCode <version>" <bump-sha>`. Lightweight tags work but lose tagger info — match the existing `v26.07.0`–`v26.07.4` pattern.
+
+### Cutting a release
+
+```bash
+# After the version bump lands on main (or whatever branch you publish from):
+git tag -a v26.07.4 -m "BanyanCode 26.07.4" <bump-sha>
+git push origin v26.07.4          # the TAG push triggers publish.yml
+```
+
+The local `pre-push` hook runs `bun turbo typecheck` across 23 packages (cached after first run). If it fails, the push is rejected — fix the typecheck before tagging. The push only fires `publish.yml`; pushes to `main`/`dev` branches only fire `preflight.yml`.
+
+### What `publish.yml` does
+
+Triggered by `push: tags: v*` or `workflow_dispatch` with optional `version` input. Gated on `github.repository == 'EkagraAgarwal/BanyanCode'` so forks never run it.
+
+| Job | Purpose |
+|---|---|
+| `version` | Resolves version in priority order: `GITHUB_REF_NAME` (tag push, `v` prefix stripped) → `inputs.version` (manual dispatch) → `packages/opencode/package.json` (fallback). Also chmods script files. |
+| `build` (matrix: linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64) | `bun ./packages/opencode/script/build.ts --target=<target> --skip-install`. macOS artifacts are zipped, Linux tar.gz'd, Windows uploaded separately for the signing step. |
+| `sign-windows` | Optional Azure code-signing. If any `AZURE_*` secret is missing, falls back to unsigned Windows binaries with a `::warning::` annotation (not a failure). |
+| `publish` | Downloads artifacts, creates a `--draft --prerelease` GitHub release, runs `bun ./packages/opencode/script/publish.ts`, then finalizes the draft (`--draft=false`). |
+
+Concurrency: `${{ github.workflow }}-${{ github.ref }}` — each tag is its own group. Pushing the same tag twice re-runs the workflow safely; see the "never move a tag" lesson below.
+
+### `publish.ts` semantics
+
+`packages/opencode/script/publish.ts` reads every per-platform `dist/<target>/package.json`, picks the version from any of them (they should all match), packs each with `bun pm pack`, then `npm publish *.tgz --access public --tag <channel>`. Channel comes from `OPENCODE_CHANNEL` (default `latest`).
+
+- **Idempotent**: `published()` (`packages/opencode/script/publish.ts:12-14`) probes `npm view <name>@<version>` first; already-published tarballs are skipped with `already published <name>@<version>`. Safe to re-run.
+- **Per-platform packages + umbrella wrapper**: each `<target>` package is published under its own npm name (e.g. `banyancode-linux-x64`, `banyancode-darwin-arm64`); the umbrella `banyancode` package pulls the right one via `optionalDependencies` and runs a `postinstall.mjs` shim.
+- **`OPENCODE_RELEASE=true`** signals a real release (vs a dev build) — affects `build.ts` cross-compile defaults and `OPENCODE_CHANNEL`.
+
+### Required secrets
+
+| Secret | Consumed by | If missing |
+|---|---|---|
+| `NPM_TOKEN` | `publish.ts` (npm publish) | `publish` job fails. Preflight surfaces the blocker without failing the run (see `.github/workflows/preflight.yml:45-59`). |
+| `AZURE_CLIENT_ID` / `_TENANT_ID` / `_SUBSCRIPTION_ID` / `_TRUSTED_SIGNING_ACCOUNT_NAME` / `_TRUSTED_SIGNING_CERTIFICATE_PROFILE` / `_TRUSTED_SIGNING_ENDPOINT` | `sign-windows` | Windows binaries ship unsigned with `::warning::`. Functional but not code-signed. |
+| `HOMEBREW_TAP_TOKEN`, `AUR_KEY` | declared in `publish.yml:217-218` but **not consumed** — legacy from the upstream OpenCode pipeline | n/a |
+| `GITHUB_TOKEN` | auto-provisioned; release upload + finalize | n/a |
+
+### Manual dispatch
+
+`Actions → publish → Run workflow` accepts an optional `version` input. When blank, it falls back to `packages/opencode/package.json`. Use this to re-run a publish against the same tag (e.g. after a transient npm failure) without retagging or to dry-run a tag at a specific SHA.
+
+### Pre-flight (sanity check before tagging)
+
+`.github/workflows/preflight.yml` runs on `push: branches: main` and `workflow_dispatch`. It validates `NPM_TOKEN`, builds locally with `--single` (linux-x64 only), smoke-tests the binary (`banyancode --version`), and warns about missing Azure secrets. Trigger it manually before cutting a tag to catch issues without burning the tag.
+
+### Post-publish verification
+
+```bash
+npm view banyancode version                       # should match the tag (without leading 0)
+gh release view v<version> --repo EkagraAgarwal/BanyanCode \
+  --json isPrerelease,assets | jq '.assets | length'   # 5 platform assets
+```
+
+If the release was cut as `--prerelease` and you want to promote it to GA: `gh release edit v<version> --prerelease=false --repo EkagraAgarwal/BanyanCode`.
+
 ## Parallel subagent work
 
 When dispatching multiple `@coder` subagents in parallel, expect git index.lock races and commit content races (one subagent's `git add` can pick up files meant for another). Pattern:
@@ -122,3 +190,9 @@ When dispatching multiple `@coder` subagents in parallel, expect git index.lock 
 **Default-allowing tools in `permissions` defaults vs per-agent `"*": "deny"` — `Permission.merge` uses `findLast`.** Adding a tool to the `defaults` block (`agent.ts:129-146`) is NOT enough for agents that have `"*": "deny"` at the top of their own config (e.g., `explore:266`). Because `Permission.merge` concatenates and `findLast` (`packages/core/src/permission/index.ts:102-112`) takes the last matching rule, the deny on `*` does NOT silently merge with `defaults["*"]: "allow"` — every tool you want allowed in such an agent must appear explicitly AFTER the `*` deny. Symptom: a test passes for most agents but the agent with `"*": "deny"` denies the new tool. Fix: add the tool allow row to that agent's per-agent permission block, not just the defaults. Reference: `explore` permission block at `packages/opencode/src/agent/agent.ts:265-313` (explicit allow rows for `codegraph_remove`, `blast_radius`, `preflight`, `safe_rename` were required after defaults added them, per audit finding #2 and Phase 5 commit `133231ef0`).
 
 **Three-commit split for parallel subagent work on prompt/system files.** When the work touches both (a) a system-prompt module, (b) per-agent `.txt` prompts and permissions, and (c) provider prompt files, dispatch in parallel but commit separately. The natural seams are the three file groups themselves. Test files that assert on prompt content (e.g., `coder-scout.test.ts:62`'s `toContain("codegraph")`) break when the prompt strips happen (group b), but the fix to the test assertion logically belongs with the prompt change — so bundle the test fix with the prompt commit, not with a separate "tests" commit. Reference: commits `7998ad094`, `133231ef0`, `469b55b18` on `main`.
+
+**`gh run list` defaults to whichever repo GitHub auth's primary is — pass `--repo` explicitly when cutting releases.** When the local checkout has both `origin` (your fork, e.g. `EkagraAgarwal/BanyanCode`) and `upstream` (e.g. `anomalyco/opencode`), `gh run list --workflow=publish` will report runs from the wrong repo: the GitHub CLI follows `gh auth status`'s active account against whichever repo it picks as the current working directory's "owner/repo". For BanyanCode work that owner can easily resolve to `anomalyco/opencode` (the upstream), and you'll see only upstream runs while your own fork's runs are "missing". Always pass `--repo EkagraAgarwal/BanyanCode` (or `--repo <owner>/<name>`) on every `gh run` and `gh release` subcommand when polling or viewing release artifacts. Reference: `gh run view 29563862883 --repo EkagraAgarwal/BanyanCode --json url,status,conclusion,headSha` for the v26.07.4 publish.
+
+**Tags are immutable once a release ships — never move a published tag.** `npm publish` writes a tag at one `banyancode@<version>` per machine forever (npm rejects re-publish of an existing version), and the GitHub release at that tag has its own asset URLs and a unique `releases/<id>`. Force-moving an existing tag with `git tag -f v26.07.4 <new-sha>` plus `git push origin v26.07.4 --force` confuses every consumer that pinned to the tag and re-runs `publish.yml` against stale state. To roll back a bad release, cut a NEW patch version (e.g. `26.07.5`) with the fix and let the workflow publish it normally. The publish workflow's concurrency key is `${{ github.workflow }}-${{ github.ref }}` — pushing the same tag twice is safe (re-runs the same run group) but moving it is not.
+
+**Don't run `publish.ts` locally — it depends on CI-built per-platform artifacts.** `packages/opencode/script/publish.ts` reads `packages/opencode/dist/<target>/package.json` files for each supported platform (linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64). Those are produced by the matrix build in `publish.yml`, not by local builds. Running `publish.ts` locally — even if you've manually copied binaries around — will mis-publish missing platforms or skip the version check entirely. For local sanity, use `bun ./packages/opencode/script/build.ts --single` to produce the single-arch bundle that preflight uses for `banyancode --version`.
