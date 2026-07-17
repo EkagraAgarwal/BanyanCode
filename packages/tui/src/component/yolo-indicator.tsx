@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { Show, createSignal, onCleanup } from "solid-js"
+import { createSignal, onCleanup } from "solid-js"
 import { useSDK } from "../context/sdk"
 import { useEvent } from "../context/event"
 import { useTheme } from "../context/theme"
@@ -28,10 +28,8 @@ export function YoloIndicator() {
   onCleanup(unsub)
 
   return (
-    <Show when={enabled()}>
-      <text fg={toHex(theme.error)} onMouseUp={() => void refresh()}>
-        [YOLO●]
-      </text>
-    </Show>
+    <text fg={toHex(enabled() ? theme.error : theme.textMuted)} onMouseUp={() => void refresh()}>
+      {enabled() ? "[YOLO●]" : "[YOLO○]"}
+    </text>
   )
 }
