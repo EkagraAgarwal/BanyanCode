@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { createContext, type JSX, useContext } from "solid-js"
 import { read, write } from "../clipboard"
 

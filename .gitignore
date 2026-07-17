@@ -31,18 +31,4 @@ opencode-dev
 UPCOMING_CHANGELOG.md
 logs/
 *.bun-build
-.bun-cache/
-**/.bun-cache/
-Continuation.md
 tsconfig.tsbuildinfo
-
-# BanyanCode runtime artifacts (project-local SQLite DB dirs)
-/.banyancode/
-/packages/*/.banyancode/
-
-# Throwaway debug scripts
-scratch-*.ts
-scratch-*.js
-
-# Phase 0 codegraph recon (2026-07-08) - research only, never commit
-codegraph-recon-*.ts

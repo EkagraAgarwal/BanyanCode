@@ -1,6 +1,6 @@
 import * as InstanceState from "@/effect/instance-state"
 import { FileSystem } from "@opencode-ai/core/filesystem"
-import { LocationServiceMap } from "@opencode-ai/core/location-layer"
+import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Location } from "@opencode-ai/core/location"
@@ -10,12 +10,11 @@ import ignore from "ignore"
 import path from "path"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
-import { Banyan } from "@opencode-ai/core/banyancode"
 
 export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handlers) =>
   Effect.gen(function* () {
     const ripgrep = yield* Ripgrep.Service
-    const locations = yield* LocationServiceMap
+    const locations = yield* LocationServiceMap.Service
 
     const filesystem = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
       return yield* effect.pipe(
@@ -102,24 +101,31 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       return yield* filesystem(
         FileSystem.Service.use((fs) => fs.read({ path: RelativePath.make(ctx.query.path) })),
       ).pipe(
-        Effect.map((item) => ({
-          type: item.encoding === "utf8" ? ("text" as const) : ("binary" as const),
-          content: item.encoding === "utf8" ? item.content.trim() : item.content,
-          ...(item.encoding === "base64" ? { encoding: item.encoding, mimeType: item.mime } : {}),
-        })),
+        Effect.flatMap((item) =>
+          Effect.gen(function* () {
+            const text = item.content.includes(0)
+              ? Option.none<string>()
+              : yield* Effect.sync(() => new TextDecoder("utf-8", { fatal: true }).decode(item.content)).pipe(
+                  Effect.option,
+                )
+            return { item, text }
+          }),
+        ),
+        Effect.map(({ item, text }) =>
+          Option.isSome(text)
+            ? { type: "text" as const, content: text.value.trim() }
+            : {
+                type: "binary" as const,
+                content: Buffer.from(item.content).toString("base64"),
+                encoding: "base64" as const,
+                mimeType: item.mime,
+              },
+        ),
       )
     })
 
     const status = Effect.fn("FileHttpApi.status")(function* () {
       return []
-    })
-
-    const tree = Effect.fn("FileHttpApi.tree")(function* (ctx: { query: { path?: string; depth?: number } }) {
-      const location = yield* Location.Service
-      const fsOpt = yield* Effect.serviceOption(Banyan.BanyanFilesystemService)
-      if (Option.isNone(fsOpt)) return { path: location.directory, name: path.basename(location.directory), kind: "directory" as const, children: [] }
-      const root = ctx.query.path ?? location.directory
-      return yield* fsOpt.value.listTree({ root, maxDepth: ctx.query.depth ?? 3 })
     })
 
     return handlers
@@ -129,6 +135,5 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       .handle("list", list)
       .handle("content", content)
       .handle("status", status)
-      .handle("tree", tree)
   }),
-).pipe(Layer.provide(LocationServiceMap.layer))
+).pipe(Layer.provide(locationServiceMapLayer))

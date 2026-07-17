@@ -11,6 +11,7 @@ import { Wildcard } from "../util/wildcard"
 import { ApplicationTools } from "./application-tools"
 import { definition, permission, settle, validateName, type AnyTool, type RegistrationError } from "./tool"
 import { Tools } from "./tools"
+import { makeLocationNode } from "../effect/app-node"
 
 export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
@@ -21,12 +22,6 @@ export type ExecuteInput = {
 
 export interface Interface {
   readonly materialize: (permissions?: PermissionV2.Ruleset) => Effect.Effect<Materialization>
-  /**
-   * Snapshot of all currently-registered tool entries (location-local + process-scoped
-   * application). The map is keyed by tool name and orders nothing; use
-   * `materialize(...).definitions` for an LLM-facing, permission-filtered projection.
-   */
-  readonly list: () => ReadonlyMap<string, AnyTool>
   /** Internal registration capability exposed publicly only through Tools.Service. */
   readonly register: (tools: Readonly<Record<string, AnyTool>>) => Effect.Effect<void, RegistrationError, Scope.Scope>
 }
@@ -108,15 +103,6 @@ const registryLayer = Layer.effect(
           }),
         )
       }),
-      list: () => {
-        const snapshot = new Map<string, AnyTool>()
-        for (const [name, entry] of applications.entries()) snapshot.set(name, entry.tool)
-        for (const [name, entries] of local) {
-          const last = entries.at(-1)?.registration.tool
-          if (last !== undefined) snapshot.set(name, last)
-        }
-        return snapshot
-      },
       materialize: Effect.fn("ToolRegistry.materialize")(function* (permissions = []) {
         const registrations = new Map(applications.entries())
         for (const [name, entries] of local) {
@@ -138,7 +124,7 @@ const registryLayer = Layer.effect(
   }),
 )
 
-export const layer = Layer.effect(
+const layer = Layer.effect(
   Tools.Service,
   Service.use((registry) => Effect.succeed(Tools.Service.of({ register: registry.register }))),
 ).pipe(Layer.provideMerge(registryLayer))
@@ -148,7 +134,14 @@ function whollyDisabled(action: string, rules: PermissionV2.Ruleset) {
   return rule?.resource === "*" && rule.effect === "deny"
 }
 
-export const defaultLayer = layer.pipe(
-  Layer.provide(ApplicationTools.layer),
-  Layer.provide(ToolOutputStore.defaultLayer),
-)
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [ApplicationTools.node, ToolOutputStore.node],
+})
+
+export const toolsNode = makeLocationNode({
+  service: Tools.Service,
+  layer,
+  deps: [ApplicationTools.node, ToolOutputStore.node],
+})

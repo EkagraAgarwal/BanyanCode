@@ -1,7 +1,8 @@
 import { describe, expect } from "bun:test"
-import { Tool } from "@opencode-ai/core/public"
+import { Tool } from "@opencode-ai/core/tool/tool"
 import { ApplicationTools } from "@opencode-ai/core/tool/application-tools"
-import { PermissionV2 } from "@opencode-ai/core/permission"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { AgentV2 } from "@opencode-ai/core/agent"
@@ -9,19 +10,14 @@ import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { executeTool, settleTool, toolDefinitions } from "./lib/tool"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { Tools } from "@opencode-ai/core/tool/tools"
-import { Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
+import { Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect"
 import { testEffect } from "./lib/effect"
 
-const permission = Layer.mock(PermissionV2.Service, {
-  assert: () => Effect.void,
-})
-const applications = ApplicationTools.layer
-const registry = ToolRegistry.layer.pipe(
-  Layer.provide(permission),
-  Layer.provide(applications),
-  Layer.provide(ToolOutputStore.defaultLayer),
+const it = testEffect(
+  AppNodeBuilder.build(LayerNode.group([ApplicationTools.node, ToolRegistry.node, ToolRegistry.toolsNode]), [
+    [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+  ]),
 )
-const it = testEffect(Layer.mergeAll(applications, registry))
 
 const sessionID = SessionV2.ID.make("ses_application_tool")
 const agent = AgentV2.ID.make("build")
@@ -286,25 +282,6 @@ describe("ApplicationTools", () => {
       ).toMatchObject({ result: { type: "content" } })
       expect(locationContexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-shared" }])
       expect(applicationContexts).toEqual([])
-    }),
-  )
-
-  it.effect("list() exposes both Location and application registrations under their final overlay", () =>
-    Effect.gen(function* () {
-      const applications = yield* ApplicationTools.Service
-      const registry = yield* ToolRegistry.Service
-      const scope = yield* Scope.make()
-      yield* applications.register({ application_only: contextual([]) })
-      yield* registry.register({ location_only: contextual([]) }).pipe(Scope.provide(scope))
-      yield* registry.register({ shared: contextual([]) })
-      yield* applications.register({ shared: contextual([]) })
-
-      const list = registry.list()
-      expect([...list.keys()].toSorted()).toEqual(["application_only", "location_only", "shared"])
-
-      yield* Scope.close(scope, Exit.void)
-      const afterScope = registry.list()
-      expect([...afterScope.keys()].toSorted()).toEqual(["application_only", "shared"])
     }),
   )
 })

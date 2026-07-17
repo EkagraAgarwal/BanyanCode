@@ -12,34 +12,9 @@ import {
 } from "../middleware/workspace-routing"
 import { described } from "./metadata"
 
-export const TreeQuery = Schema.Struct({
-  ...WorkspaceRoutingQueryFields,
-  path: Schema.optional(Schema.String),
-  depth: Schema.optional(
-    Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(4)),
-  ),
-})
-
-const TreeNodeSchema: Schema.Schema<{
-  path: string
-  name: string
-  kind: "file" | "directory"
-  children?: ReadonlyArray<unknown>
-}> = Schema.Struct({
-  path: Schema.String,
-  name: Schema.String,
-  kind: Schema.Literals(["file", "directory"]),
-  children: Schema.optional(Schema.Array(Schema.Unknown)),
-})
-
 export const FileQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
-  path: Schema.String.check(
-    Schema.isPattern(/^[a-zA-Z0-9._/-]+$/, {
-      identifier: "FilePathPattern",
-      description: "Relative file path",
-    }),
-  ),
+  path: Schema.String,
 })
 
 export const FindTextQuery = Schema.Struct({
@@ -124,7 +99,6 @@ export const FilePaths = {
   list: "/file",
   content: "/file/content",
   status: "/file/status",
-  tree: "/file/tree",
 } as const
 
 export const FileApi = HttpApi.make("file")
@@ -189,16 +163,6 @@ export const FileApi = HttpApi.make("file")
             identifier: "file.status",
             summary: "Get file status",
             description: "Get the git status of all files in the project.",
-          }),
-        ),
-        HttpApiEndpoint.get("tree", FilePaths.tree, {
-          query: TreeQuery,
-          success: described(TreeNodeSchema, "File tree"),
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "file.tree",
-            summary: "Get file tree",
-            description: "Get a recursive tree of files and directories.",
           }),
         ),
       )

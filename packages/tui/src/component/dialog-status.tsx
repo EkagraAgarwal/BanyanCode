@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core"
 import { fileURLToPath } from "bun"
 import { useTheme } from "../context/theme"
@@ -42,7 +41,7 @@ export function DialogStatus() {
   })
 
   return (
-    <box paddingLeft={1} paddingRight={1} gap={1} paddingBottom={1}>
+    <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
       <box flexDirection="row" justifyContent="space-between">
         <text fg={theme.text} attributes={TextAttributes.BOLD}>
           Status
@@ -157,7 +156,7 @@ export function DialogStatus() {
                 </text>
                 <text wrapMode="word" fg={theme.text}>
                   <b>{item.name}</b>
-                  {item.version ? <span style={{ fg: theme.textMuted }}> @{item.version}</span> : ""}
+                  {item.version && <span style={{ fg: theme.textMuted }}> @{item.version}</span>}
                 </text>
               </box>
             )}

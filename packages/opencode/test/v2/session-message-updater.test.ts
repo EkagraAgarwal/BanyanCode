@@ -52,8 +52,6 @@ test.skip("step snapshots carry over to assistant messages", () => {
           cache: { read: 0, write: 0 },
         },
         snapshot: "after",
-        ttftMs: 123,
-        tokensPerSecond: 42.5,
       },
     } satisfies SessionEvent.Event),
   )

@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import {
   BoxRenderable,
   RGBA,
@@ -11,13 +10,13 @@ import {
 } from "@opentui/core"
 import type { CommandContext } from "@opentui/keymap"
 import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
-import "opentui-spinner/solid"
+import { registerOpencodeSpinner } from "../register-spinner"
 import path from "path"
 import { fileURLToPath } from "url"
 import { useLocal } from "../../context/local"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { tint, useTheme } from "../../context/theme"
-import { EmptyBorder, RoundedBorder, SplitBorder } from "../../ui/border"
+import { EmptyBorder, SplitBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
 import { Spinner } from "../spinner"
@@ -36,8 +35,7 @@ import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
-import { type AutocompleteRef } from "./autocomplete"
-import { useAutocomplete } from "../../context/autocomplete"
+import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { AssistantMessage, FilePart, UserMessage } from "@opencode-ai/sdk/v2"
 import { Locale } from "../../util/locale"
@@ -48,7 +46,6 @@ import { useDialog } from "../../ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
 import { DialogAlert } from "../../ui/dialog-alert"
 import { useToast } from "../../ui/toast"
-import { pushIntelResult } from "../../feature-plugins/sidebar/codegraph-intel-panel"
 import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
@@ -59,6 +56,9 @@ import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
+import { useLocation } from "../../context/location"
+
+registerOpencodeSpinner()
 
 export type PromptProps = {
   sessionID?: string
@@ -149,8 +149,8 @@ export function Prompt(props: PromptProps) {
   const local = useLocal()
   const args = useArgs()
   const paths = useTuiPaths()
+  const location = useLocation()
   const terminalEnvironment = useTuiTerminalEnvironment()
-  const autocompleteCtx = useAutocomplete()
   const clipboard = useClipboard()
   const sdk = useSDK()
   const editor = useEditorContext()
@@ -166,7 +166,6 @@ export function Prompt(props: PromptProps) {
   const keymap = useOpencodeKeymap()
   const agentShortcut = useCommandShortcut("agent.cycle")
   const paletteShortcut = useCommandShortcut("command.palette.show")
-  const tabShortcut = useCommandShortcut("tabs.next")
   const renderer = useRenderer()
   const exit = useExit()
   const dimensions = useTerminalDimensions()
@@ -259,6 +258,26 @@ export function Prompt(props: PromptProps) {
     const messages = sync.data.message[props.sessionID]
     if (!messages) return undefined
     return messages.findLast((m): m is UserMessage => m.role === "user")
+  })
+
+  const usage = createMemo(() => {
+    if (!props.sessionID) return
+    const session = sync.session.get(props.sessionID)
+    const msg = sync.data.message[props.sessionID] ?? []
+    const last = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
+    if (!last) return
+
+    const tokens =
+      last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
+    if (tokens <= 0) return
+
+    const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
+    const pct = model?.limit.context ? `${Math.round((tokens / model.limit.context) * 100)}%` : undefined
+    const cost = session?.cost ?? 0
+    return {
+      context: pct ? `${Locale.number(tokens)} (${pct})` : Locale.number(tokens),
+      cost: cost > 0 ? money.format(cost) : undefined,
+    }
   })
 
   const [store, setStore] = createStore<{
@@ -525,48 +544,12 @@ export function Prompt(props: PromptProps) {
       },
       {
         title: "Move session",
-        desc: "Move the session to another project directory",
+        desc: "Move to another project dir",
         name: "session.move",
         category: "Session",
         slashName: "move",
         run: () => {
           move.open()
-        },
-      },
-      {
-        title: "Choose reasoning variant",
-        desc: "Choose reasoning variant level (e.g. low, medium, high, off)",
-        name: "prompt.variant",
-        category: "Prompt",
-        slashName: "variant",
-        run: () => {
-          input.setText("/variant ")
-          setStore("prompt", { input: "/variant ", parts: [] })
-          input.gotoBufferEnd()
-        },
-      },
-      {
-        title: "Choose reasoning thinking budget",
-        desc: "Choose reasoning thinking budget/effort (e.g. low, high, off)",
-        name: "prompt.thinking",
-        category: "Prompt",
-        slashName: "thinking",
-        run: () => {
-          input.setText("/thinking ")
-          setStore("prompt", { input: "/thinking ", parts: [] })
-          input.gotoBufferEnd()
-        },
-      },
-      {
-        title: "Choose reasoning effort",
-        desc: "Choose reasoning effort (e.g. low, medium, high, off)",
-        name: "prompt.reasoning",
-        category: "Prompt",
-        slashName: "reasoning",
-        run: () => {
-          input.setText("/reasoning ")
-          setStore("prompt", { input: "/reasoning ", parts: [] })
-          input.gotoBufferEnd()
         },
       },
     ].map((entry) => ({
@@ -588,6 +571,7 @@ export function Prompt(props: PromptProps) {
       "prompt.stash",
       "prompt.stash.pop",
       "prompt.stash.list",
+      "prompt.skills",
       "session.interrupt",
       "workspace.set",
       "session.move",
@@ -645,36 +629,6 @@ export function Prompt(props: PromptProps) {
     }
     setInputTarget(undefined)
     props.ref?.(undefined)
-  })
-
-  createEffect(() => {
-    if (!anchor || !input) return
-    autocompleteCtx.register({
-      sessionID: props.sessionID,
-      anchor: () => anchor,
-      input: () => input,
-      setPrompt: (cb) => {
-        setStore("prompt", produce(cb))
-      },
-      setExtmark: (partIndex, extmarkId) => {
-        setStore("extmarkToPartIndex", (map: Map<number, number>) => {
-          const newMap = new Map(map)
-          newMap.set(extmarkId, partIndex)
-          return newMap
-        })
-      },
-      value: store.prompt.input,
-      fileStyleId,
-      agentStyleId,
-      promptPartTypeId: () => promptPartTypeId,
-      ref: (r) => {
-        setAuto(() => r)
-      },
-    })
-  })
-
-  onCleanup(() => {
-    autocompleteCtx.register(undefined)
   })
 
   createEffect(() => {
@@ -1010,59 +964,6 @@ export function Prompt(props: PromptProps) {
       void exit()
       return true
     }
-
-    const firstWord = trimmed.split(/\s+/)[0]
-    if (["/variant", "/thinking", "/reasoning"].includes(firstWord)) {
-      const args = trimmed.slice(firstWord.length).trim()
-      const list = local.model.variant.list()
-
-      if (args === "") {
-        const current = local.model.variant.current() ? local.model.variant.current() : "default"
-        toast.show({
-          message: `Current variant: ${current}. Available variants: ${list.join(", ") || "none"}`,
-          variant: "info",
-        })
-      } else {
-        const val = args.toLowerCase()
-        if (["off", "none", "disabled", "false"].includes(val)) {
-          local.model.variant.set(undefined)
-          toast.show({
-            message: "Reasoning variant disabled (set to default).",
-            variant: "success",
-          })
-        } else if (["on", "enabled", "true"].includes(val)) {
-          if (list.length > 0) {
-            const target = list.includes("high") ? "high" : list[0]
-            local.model.variant.set(target)
-            toast.show({
-              message: `Reasoning variant enabled (set to ${target}).`,
-              variant: "success",
-            })
-          } else {
-            toast.show({
-              message: "No variants available for the current model.",
-              variant: "warning",
-            })
-          }
-        } else {
-          if (list.includes(val)) {
-            local.model.variant.set(val)
-            toast.show({
-              message: `Reasoning variant set to ${val}.`,
-              variant: "success",
-            })
-          } else {
-            toast.show({
-              message: `Variant "${args}" is not supported by current model. Available: ${list.join(", ") || "none"}`,
-              variant: "warning",
-            })
-          }
-        }
-      }
-      input.setText("")
-      setStore("prompt", { input: "", parts: [] })
-      return true
-    }
     const selectedModel = local.model.current()
     if (!selectedModel) {
       void promptModelWarning()
@@ -1170,154 +1071,51 @@ export function Prompt(props: PromptProps) {
       inputText.startsWith("/") &&
       sync.data.command.some((x) => x.name === inputText.split("\n")[0].split(" ")[0].slice(1))
     ) {
+      move.startSubmit()
+      // Parse command from first line, preserve multi-line content in arguments
       const firstLineEnd = inputText.indexOf("\n")
       const firstLine = firstLineEnd === -1 ? inputText : inputText.slice(0, firstLineEnd)
-      const [command] = firstLine.split(" ")
+      const [command, ...firstLineArgs] = firstLine.split(" ")
+      const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
+      const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
 
-      if (command === "/codegraph-build") {
-        void sdk.client.global.codegraph
-          .build({ root: project.data.instance.path.worktree, force: false })
-          .then((res) => {
-            if (res.data?.started) {
-              toast.show({ message: `Building code graph for ${res.data.root ?? "workspace"}`, variant: "info" })
-            } else {
-              const reason = res.data?.reason ?? (res as { error?: { message?: string } }).error?.message
-              toast.show({
-                message: reason
-                  ? `Could not start codegraph build: ${reason}`
-                  : "Could not start codegraph build (no response from server; the server may be busy or unresponsive)",
-                variant: "error",
-              })
-            }
-          })
-          .catch((err) =>
-            toast.show({
-              message: `Codegraph build failed: ${err instanceof Error ? err.message : String(err)}`,
-              variant: "error",
-            }),
-          )
-      } else if (command === "/codegraph-cancel") {
-        void sdk.client.global.codegraph.cancel({}).catch(() => {})
-        toast.show({ message: "Codegraph build cancelled", variant: "info" })
-      } else if (command === "/codegraph-force-kill") {
-        void sdk.client.global.codegraph.forceKill({}).then((res) => {
-          toast.show({
-            message: res.data?.message ?? (res.data?.ok ? "Force-killed" : "Force-kill failed"),
-            variant: res.data?.ok ? "info" : "error",
-          })
-        }).catch((err) =>
-          toast.show({
-            message: `Codegraph force-kill failed: ${err instanceof Error ? err.message : String(err)}`,
-            variant: "error",
-          }),
-        )
-      } else if (command === "/codegraph-remove") {
-        void sdk.client.session.command({
-          sessionID,
-          command: "codegraph-remove",
-          arguments: "",
-        })
-        toast.show({ message: "Removing code graph index...", variant: "info" })
-      } else if (command === "/repo-find-subsystem") {
-        const query = firstLine.split(" ").slice(1).join(" ").trim()
-        if (!query) {
-          toast.show({ message: "Usage: /repo-find-subsystem <query>", variant: "error" })
-        } else {
-          void sdk
-            .fetch(`${sdk.url}/global/repo/find-subsystem`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ query }),
-            })
-            .then((res) => res.json())
-            .then((data: { entry?: { name?: string }; related?: unknown[] }) => {
-              const summary = `entry=${data.entry?.name ?? "?"} related=${data.related?.length ?? 0}`
-              pushIntelResult({ id: String(Date.now()), kind: "subsystem", query, summary })
-              toast.show({ message: summary, variant: "info" })
-            })
-            .catch((err) =>
-              toast.show({
-                message: `Repo intel failed: ${err instanceof Error ? err.message : String(err)}`,
-                variant: "error",
-              }),
-            )
-        }
-      } else if (command === "/codegraph-search") {
-        const query = firstLine.split(" ").slice(1).join(" ").trim()
-        if (!query) {
-          toast.show({ message: "Usage: /codegraph-search <query>", variant: "error" })
-        } else {
-          void sdk
-            .fetch(`${sdk.url}/global/codegraph/search`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ query, modes: ["fuzzy"] }),
-            })
-            .then((res) => res.json())
-            .then((data: Array<{ node?: { name?: string } }>) => {
-              const summary = `${data.length} hits${data[0]?.node?.name ? `; top=${data[0].node.name}` : ""}`
-              pushIntelResult({ id: String(Date.now()), kind: "search", query, summary })
-              toast.show({ message: summary, variant: "info" })
-            })
-            .catch((err) =>
-              toast.show({
-                message: `Search failed: ${err instanceof Error ? err.message : String(err)}`,
-                variant: "error",
-              }),
-            )
-        }
-      } else if (command === "/codegraph-find-routes") {
-        void sdk
-          .fetch(`${sdk.url}/global/codegraph/find-http-routes`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
-          })
-          .then((res) => res.json())
-          .then((data: Array<{ name?: string }>) => {
-            const summary = `${data.length} routes${data[0]?.name ? `; first=${data[0].name}` : ""}`
-            pushIntelResult({ id: String(Date.now()), kind: "routes", query: "http-routes", summary })
-            toast.show({ message: summary, variant: "info" })
-          })
-          .catch((err) =>
-            toast.show({
-              message: `Route search failed: ${err instanceof Error ? err.message : String(err)}`,
-              variant: "error",
-            }),
-          )
-      } else {
-        move.startSubmit()
-        const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
-        const args = firstLine.split(" ").slice(1).join(" ") + (restOfInput ? "\n" + restOfInput : "")
-        void sdk.client.session.command({
-          sessionID,
-          command: command.slice(1),
-          arguments: args,
-          agent: agent.name,
-          model: `${selectedModel.providerID}/${selectedModel.modelID}`,
-          variant,
-          parts: nonTextParts.filter((x) => x.type === "file"),
-        })
-      }
+      void sdk.client.session.command({
+        sessionID,
+        command: command.slice(1),
+        arguments: args,
+        agent: agent.name,
+        model: `${selectedModel.providerID}/${selectedModel.modelID}`,
+        variant,
+        parts: nonTextParts.filter((x) => x.type === "file"),
+      })
     } else {
       move.startSubmit()
       sdk.client.session
-        .prompt({
-          sessionID,
-          ...selectedModel,
-          agent: agent.name,
-          model: selectedModel,
-          variant,
-          parts: [
-            ...editorParts,
-            {
-              type: "text",
-              text: inputText,
-            },
-            ...nonTextParts,
-          ],
+        .prompt(
+          {
+            sessionID,
+            ...selectedModel,
+            agent: agent.name,
+            model: selectedModel,
+            variant,
+            parts: [
+              ...editorParts,
+              {
+                type: "text",
+                text: inputText,
+              },
+              ...nonTextParts,
+            ],
+          },
+          { throwOnError: true },
+        )
+        .catch((error) => {
+          toast.show({
+            title: "Failed to send prompt",
+            message: errorMessage(error),
+            variant: "error",
+          })
         })
-        .catch(() => {})
       if (editorParts.length > 0) editor.markSelectionSent()
     }
     history.append({
@@ -1491,8 +1289,6 @@ export function Prompt(props: PromptProps) {
     if (store.mode === "shell") return theme.primary
     const agent = local.agent.current()
     if (!agent) return theme.border
-    if (agent.name === "plan") return theme.accent
-    if (agent.name === "build") return local.agent.color(agent.name) ?? theme.success
     return local.agent.color(agent.name)
   })
 
@@ -1549,20 +1345,24 @@ export function Prompt(props: PromptProps) {
   const moveLabelWidth = createMemo(() => Math.max(12, Math.min(44, dimensions().width - 48)))
 
   return (
-    <box ref={(r: BoxRenderable) => (anchor = r)} visible={props.visible !== false} width="100%">
+    <>
+      <box ref={(r: BoxRenderable) => (anchor = r)} visible={props.visible !== false} width="100%">
         <box
           width="100%"
-          customBorderChars={RoundedBorder.customBorderChars}
-          border={["left", "right", "top", "bottom"]}
-          borderColor={theme.borderSubtle}
+          border={["left"]}
+          borderColor={borderHighlight()}
+          customBorderChars={{
+            ...SplitBorder.customBorderChars,
+            bottomLeft: "╹",
+          }}
         >
           <box
-            paddingLeft={1}
-            paddingRight={1}
+            paddingLeft={2}
+            paddingRight={2}
             paddingTop={1}
             flexShrink={0}
+            backgroundColor={theme.backgroundElement}
             flexGrow={1}
-            flexDirection="column"
             width="100%"
           >
             <textarea
@@ -1634,42 +1434,79 @@ export function Prompt(props: PromptProps) {
                 }, 0)
               }}
               onMouseDown={(r: MouseEvent) => r.target?.focus()}
-              focusedBackgroundColor={theme.background}
+              focusedBackgroundColor={theme.backgroundElement}
               cursorColor={props.disabled ? theme.backgroundElement : theme.text}
               syntaxStyle={syntax()}
             />
-            <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="flex-start">
-              <Show when={local.agent.current()} fallback={<box height={1} />}>
-                {(agent) => (
-                  <box flexDirection="row" gap={1}>
-                    <text fg={fadeColor(highlight(), agentMetaAlpha())}>
-                      {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
-                    </text>
-                    <Show when={store.mode === "normal"}>
-                      <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>·</text>
-                      <text
-                        flexShrink={0}
-                        fg={fadeColor(leader() ? theme.textMuted : theme.text, modelMetaAlpha())}
-                      >
-                        {local.model.parsed().model}
+            <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="space-between">
+              <box flexDirection="row" gap={1}>
+                <Show when={local.agent.current()} fallback={<box height={1} />}>
+                  {(agent) => (
+                    <>
+                      <text fg={fadeColor(highlight(), agentMetaAlpha())}>
+                        {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
                       </text>
-                      <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>{currentProviderLabel()}</text>
-                      <Show when={showVariant()}>
-                        <text fg={fadeColor(theme.textMuted, variantMetaAlpha())}>·</text>
-                        <text>
-                          <span style={{ fg: fadeColor(theme.warning, variantMetaAlpha()), bold: true }}>
-                            {local.model.variant.current()}
-                          </span>
-                        </text>
+                      <Show when={store.mode === "normal" && local.permission.mode === "auto"}>
+                        <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>auto</text>
                       </Show>
-                    </Show>
-                  </box>
-                )}
+                      <Show when={store.mode === "normal"}>
+                        <box flexDirection="row" gap={1}>
+                          <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>·</text>
+                          <text
+                            flexShrink={0}
+                            fg={fadeColor(leader() ? theme.textMuted : theme.text, modelMetaAlpha())}
+                          >
+                            {local.model.parsed().model}
+                          </text>
+                          <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>{currentProviderLabel()}</text>
+                          <Show when={showVariant()}>
+                            <text fg={fadeColor(theme.textMuted, variantMetaAlpha())}>·</text>
+                            <text>
+                              <span style={{ fg: fadeColor(theme.warning, variantMetaAlpha()), bold: true }}>
+                                {local.model.variant.current()}
+                              </span>
+                            </text>
+                          </Show>
+                        </box>
+                      </Show>
+                    </>
+                  )}
+                </Show>
+              </box>
+              <Show when={hasRightContent()}>
+                <box flexDirection="row" gap={1} alignItems="center">
+                  {props.right}
+                </box>
               </Show>
             </box>
           </box>
         </box>
-
+        <box
+          height={1}
+          border={["left"]}
+          borderColor={borderHighlight()}
+          customBorderChars={{
+            ...EmptyBorder,
+            vertical: theme.backgroundElement.a !== 0 ? "╹" : " ",
+          }}
+        >
+          <box
+            height={1}
+            border={["bottom"]}
+            borderColor={theme.backgroundElement}
+            customBorderChars={
+              theme.backgroundElement.a !== 0
+                ? {
+                    ...EmptyBorder,
+                    horizontal: "▀",
+                  }
+                : {
+                    ...EmptyBorder,
+                    horizontal: " ",
+                  }
+            }
+          />
+        </box>
         <box width="100%" flexDirection="row" justifyContent="space-between">
           <Switch>
             <Match when={status().type !== "idle"}>
@@ -1802,10 +1639,18 @@ export function Prompt(props: PromptProps) {
                 <text fg={theme.accent}>(new working copy)</text>
               </box>
             </Match>
-            <Match when={true}>{props.hint ?? <text />}</Match>
+            <Match when={true}>
+              {props.hint ?? (
+                <Show when={props.sessionID}>
+                  <box marginLeft={1}>
+                    <text fg={theme.textMuted}>{location()?.directory ?? paths.cwd}</text>
+                  </box>
+                </Show>
+              )}
+            </Match>
           </Switch>
           <Show when={status().type !== "retry"}>
-            <box gap={1} flexDirection="row">
+            <box gap={2} flexDirection="row">
               <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
                 {(file) => (
                   <text fg={editorContextLabelState() === "pending" ? theme.secondary : theme.textMuted}>{file()}</text>
@@ -1813,16 +1658,23 @@ export function Prompt(props: PromptProps) {
               </Show>
               <Switch>
                 <Match when={store.mode === "normal"}>
-                  <text fg={theme.text}>
-                    {agentShortcut()} <span style={{ fg: theme.textMuted }}>mode</span>
-                  </text>
+                  <Switch>
+                    <Match when={usage()}>
+                      {(item) => (
+                        <text fg={theme.textMuted} wrapMode="none">
+                          {[item().context, item().cost].filter(Boolean).join(" · ")}
+                        </text>
+                      )}
+                    </Match>
+                    <Match when={true}>
+                      <text fg={theme.text}>
+                        {agentShortcut()} <span style={{ fg: theme.textMuted }}>agents</span>
+                      </text>
+                    </Match>
+                  </Switch>
                   <text fg={theme.text}>
                     {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
                   </text>
-                  <text fg={theme.textMuted}>·</text>
-                  <text fg={theme.textMuted}>/mode  /graph  /memory  /theme</text>
-                  <text fg={theme.textMuted}>·</text>
-                  <text fg={theme.text}>{tabShortcut()} <span style={{ fg: theme.textMuted }}>switch tab</span></text>
                 </Match>
                 <Match when={store.mode === "shell"}>
                   <text fg={theme.text}>
@@ -1834,5 +1686,28 @@ export function Prompt(props: PromptProps) {
           </Show>
         </box>
       </box>
+      <Autocomplete
+        sessionID={props.sessionID}
+        ref={(r) => {
+          setAuto(() => r)
+        }}
+        anchor={() => anchor}
+        input={() => input}
+        setPrompt={(cb) => {
+          setStore("prompt", produce(cb))
+        }}
+        setExtmark={(partIndex, extmarkId) => {
+          setStore("extmarkToPartIndex", (map: Map<number, number>) => {
+            const newMap = new Map(map)
+            newMap.set(extmarkId, partIndex)
+            return newMap
+          })
+        }}
+        value={store.prompt.input}
+        fileStyleId={fileStyleId}
+        agentStyleId={agentStyleId}
+        promptPartTypeId={() => promptPartTypeId}
+      />
+    </>
   )
 }

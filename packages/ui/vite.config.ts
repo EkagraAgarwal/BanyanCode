@@ -30,10 +30,6 @@ export default defineConfig({
   worker: {
     format: "es",
   },
-  esbuild: {
-    jsx: "automatic",
-    jsxImportSource: "solid-js",
-  },
 })
 
 function providerIconsPlugin() {

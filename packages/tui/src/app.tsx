@@ -1,5 +1,5 @@
-/** @jsxImportSource @opentui/solid */
 import { render, TimeToFirstDraw, useRenderer, useTerminalDimensions } from "@opentui/solid"
+import { registerOpencodeSpinner } from "./component/register-spinner"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { Deferred, Effect } from "effect"
 import { Global } from "@opencode-ai/core/global"
@@ -9,7 +9,7 @@ import { ClipboardProvider, useClipboard } from "./context/clipboard"
 import { ExitProvider, useExit } from "./context/exit"
 import { EpilogueProvider } from "./context/epilogue"
 import * as Selection from "./util/selection"
-import { createCliRenderer, MouseButton, type CliRenderer } from "@opentui/core"
+import { createCliRenderer, MouseButton } from "@opentui/core"
 import { RouteProvider, useRoute } from "./context/route"
 import {
   Switch,
@@ -27,7 +27,6 @@ import {
 import { TuiPathsProvider, TuiStartupProvider, TuiTerminalEnvironmentProvider, useTuiStartup } from "./context/runtime"
 import { DialogProvider, useDialog } from "./ui/dialog"
 import { DialogProvider as DialogProviderList } from "./component/dialog-provider"
-import { Autocomplete, AutocompleteProvider, useAutocomplete } from "./context/autocomplete"
 import { ErrorComponent } from "./component/error-component"
 import { PluginRouteMissing } from "./component/plugin-route-missing"
 import { ProjectProvider, useProject } from "./context/project"
@@ -37,17 +36,17 @@ import { SDKProvider, useSDK } from "./context/sdk"
 import { StartupLoading } from "./component/startup-loading"
 import { SyncProvider, useSync } from "./context/sync"
 import { DataProvider } from "./context/data"
+import { LocationProvider } from "./context/location"
 import { LocalProvider, useLocal } from "./context/local"
+import { PermissionProvider } from "./context/permission"
 import { DialogModel } from "./component/dialog-model"
-import { DialogAgentModel } from "./component/dialog-agent-model"
-import { DialogMaxSubagents } from "./component/dialog-max-subagents"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
 import { DialogStatus } from "./component/dialog-status"
+import { DialogDebug } from "./component/dialog-debug"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
 import { DialogAgent } from "./component/dialog-agent"
-import { DialogAgentControl } from "./component/dialog-agent-control"
 import { DialogSessionList } from "./component/dialog-session-list"
 import { DialogWorkspaceList } from "./component/dialog-workspace-list"
 import { DialogConsoleOrg } from "./component/dialog-console-org"
@@ -60,7 +59,6 @@ import { PromptStashProvider } from "./component/prompt/stash"
 import { DialogAlert } from "./ui/dialog-alert"
 import { DialogConfirm } from "./ui/dialog-confirm"
 import { ToastProvider, useToast } from "./ui/toast"
-import { CodegraphBuildProvider, useCodegraphBuild, CodegraphProgress, type CodegraphBuildState } from "./component/codegraph-progress"
 import { isDefaultTitle } from "./util/session"
 import { KVProvider, useKV } from "./context/kv"
 import * as Model from "./util/model"
@@ -84,11 +82,12 @@ import {
 import type { EventSource } from "./context/sdk"
 import { DialogVariant } from "./component/dialog-variant"
 import { createTuiAttention } from "./attention"
-import { setActiveTab } from "./feature-plugins/tabs/state"
 import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat } from "./util/error"
+
+registerOpencodeSpinner()
 
 const appGlobalBindingCommands = [
   "session.list",
@@ -120,11 +119,13 @@ const appBindingCommands = [
   "provider.connect",
   "console.org.switch",
   "opencode.status",
+  "opencode.debug",
   "theme.switch",
   "theme.switch_mode",
   "theme.mode.lock",
   "help.show",
   "docs.open",
+  "diff.open",
   "workspace.list",
   "app.debug",
   "app.console",
@@ -185,24 +186,26 @@ function isVersionGreater(left: string, right: string) {
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const global = yield* Global.Service
   const exit = { epilogue: undefined as string | undefined, reason: undefined as unknown }
-  yield* Effect.scoped(
+  const result = yield* Effect.scoped(
     Effect.gen(function* () {
       const renderer = yield* Effect.acquireRelease(
-        Effect.tryPromise(() =>
-          createCliRenderer({
-            externalOutputMode: "passthrough",
-            targetFps: 60,
-            gatherStats: false,
-            exitOnCtrlC: false,
-            useKittyKeyboard: {},
-            autoFocus: false,
-            openConsoleOnError: false,
-            useMouse: !Flag.OPENCODE_DISABLE_MOUSE && input.config.mouse,
-            consoleOptions: {
-              keyBindings: [{ name: "y", ctrl: true, action: "copy-selection" }],
-            },
-          }),
-        ),
+        Effect.tryPromise({
+          try: () =>
+            createCliRenderer({
+              externalOutputMode: "passthrough",
+              targetFps: 60,
+              gatherStats: false,
+              exitOnCtrlC: false,
+              useKittyKeyboard: {},
+              autoFocus: false,
+              openConsoleOnError: false,
+              useMouse: !Flag.OPENCODE_DISABLE_MOUSE && input.config.mouse,
+              consoleOptions: {
+                keyBindings: [{ name: "y", ctrl: true, action: "copy-selection" }],
+              },
+            }),
+          catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+        }),
         (renderer) =>
           Effect.sync(() => {
             destroyRenderer(renderer)
@@ -280,7 +283,6 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                             <ArgsProvider {...input.args}>
                               <KVProvider>
                                 <ToastProvider>
-                                  <CodegraphBuildProvider>
                                   <RouteProvider
                                     initialRoute={
                                       input.args.continue
@@ -300,39 +302,40 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                           headers={input.headers}
                                           events={input.events}
                                         >
-                                          <ProjectProvider>
-                                            <SyncProvider>
-                                              <DataProvider>
-                                                <ThemeProvider mode={mode}>
-                                                  <LocalProvider>
-                                                    <PromptStashProvider>
-                                                      <DialogProvider>
-                                                        <AutocompleteProvider>
+                                          <PermissionProvider>
+                                            <ProjectProvider>
+                                              <SyncProvider>
+                                                <DataProvider>
+                                                  <ThemeProvider mode={mode}>
+                                                    <LocalProvider>
+                                                      <PromptStashProvider>
+                                                        <DialogProvider>
                                                           <FrecencyProvider>
-                                                          <PromptHistoryProvider>
-                                                            <PromptRefProvider>
-                                                              <EditorContextProvider>
-                                                                <App
-                                                                  onSnapshot={input.onSnapshot}
-                                                                  pluginHost={input.pluginHost}
-                                                                />
-                                                              </EditorContextProvider>
-                                                            </PromptRefProvider>
-                                                          </PromptHistoryProvider>
-                                                        </FrecencyProvider>
-                                                      </AutocompleteProvider>
-                                                    </DialogProvider>
-                                                    </PromptStashProvider>
-                                                  </LocalProvider>
-                                                </ThemeProvider>
-                                              </DataProvider>
-                                            </SyncProvider>
-                                          </ProjectProvider>
+                                                            <PromptHistoryProvider>
+                                                              <PromptRefProvider>
+                                                                <EditorContextProvider>
+                                                                  <LocationProvider>
+                                                                    <App
+                                                                      onSnapshot={input.onSnapshot}
+                                                                      pluginHost={input.pluginHost}
+                                                                    />
+                                                                  </LocationProvider>
+                                                                </EditorContextProvider>
+                                                              </PromptRefProvider>
+                                                            </PromptHistoryProvider>
+                                                          </FrecencyProvider>
+                                                        </DialogProvider>
+                                                      </PromptStashProvider>
+                                                    </LocalProvider>
+                                                  </ThemeProvider>
+                                                </DataProvider>
+                                              </SyncProvider>
+                                            </ProjectProvider>
+                                          </PermissionProvider>
                                         </SDKProvider>
                                       </PluginRuntimeProvider>
                                     </TuiConfigProvider>
                                   </RouteProvider>
-                                </CodegraphBuildProvider>
                                 </ToastProvider>
                               </KVProvider>
                             </ArgsProvider>
@@ -348,24 +351,16 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         }, renderer)
       })
       yield* Deferred.await(shutdown)
+      return { epilogue: exit.epilogue, reason: exit.reason }
     }),
   )
   yield* Effect.sync(() => {
     win32FlushInputBuffer()
-    if (exit.reason !== undefined)
-      process.stderr.write((cliErrorMessage(exit.reason) ?? errorFormat(exit.reason)) + "\n")
-    if (exit.epilogue) process.stdout.write(exit.epilogue + "\n")
+    if (result.reason !== undefined)
+      process.stderr.write((cliErrorMessage(result.reason) ?? errorFormat(result.reason)) + "\n")
+    if (result.epilogue) process.stdout.write(result.epilogue + "\n")
   })
 })
-
-function AutocompleteOverlay() {
-  const ctx = useAutocomplete()
-  return (
-    <Show when={ctx.getProps()}>
-      {(props) => <Autocomplete {...props()} />}
-    </Show>
-  )
-}
 
 function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPluginHost }) {
   const startup = useTuiStartup()
@@ -501,9 +496,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         })
       }
     })
-    sdk.client.global.startup({}).catch((err: unknown) => {
-      toast.error(err)
-    })
   })
 
   let continued = false
@@ -564,7 +556,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (workspace?.type !== "worktree" || !workspace.directory) return
     return workspace
   })
-
   const appCommands = createMemo(() =>
     [
       {
@@ -685,21 +676,11 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "agent.list",
-        title: "Switch mode",
+        title: "Switch agent",
         category: "Agent",
-        slashName: "mode",
-        slashAliases: ["modes"],
+        slashName: "agents",
         run: () => {
           dialog.replace(() => <DialogAgent />)
-        },
-      },
-      {
-        name: "agent.tree",
-        title: "Open agent tree",
-        category: "BanyanCode",
-        slashName: "agent-tree",
-        run: () => {
-          dialog.replace(() => <DialogAgentControl />)
         },
       },
       {
@@ -712,22 +693,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         },
       },
       {
-        name: "agent.model",
-        title: "Pick model for orchestrator or subagent",
-        category: "Agent",
-        slashName: "agent-model",
-        run: () => {
-          dialog.replace(() => <DialogAgentModel agentName="orchestrator" />)
-        },
-      },
-      {
         name: "agent.cycle",
-        title: "Toggle Build/Plan mode",
+        title: "Agent cycle",
         category: "Agent",
         hidden: true,
         run: () => {
-          const current = local.agent.current()?.name
-          local.agent.set(current === "plan" ? "build" : "plan")
+          local.agent.move(1)
         },
       },
       {
@@ -757,12 +728,11 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "agent.cycle.reverse",
-        title: "Toggle Build/Plan mode (reverse)",
+        title: "Agent cycle reverse",
         category: "Agent",
         hidden: true,
         run: () => {
-          const current = local.agent.current()?.name
-          local.agent.set(current === "plan" ? "build" : "plan")
+          local.agent.move(-1)
         },
       },
       {
@@ -800,6 +770,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "System",
       },
       {
+        name: "opencode.debug",
+        title: "View debug info",
+        slashName: "debug",
+        run: () => {
+          dialog.replace(() => <DialogDebug />)
+        },
+        category: "System",
+      },
+      {
         name: "theme.switch",
         title: "Switch theme",
         slashName: "themes",
@@ -826,119 +805,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           dialog.clear()
         },
         category: "System",
-      },
-      {
-        name: "codegraph.cancel",
-        title: "Cancel codegraph build",
-        category: "BanyanCode",
-        slashName: "codegraph-cancel",
-        run: () => {
-          sdk.client.global.codegraph.cancel({}).catch(() => {})
-          toast.show({ message: "Codegraph build cancelled", variant: "info" })
-          dialog.clear()
-        },
-      },
-      {
-        name: "codegraph.build",
-        title: "Build code graph index",
-        category: "BanyanCode",
-        slashName: "codegraph-build",
-        run: () => {
-          const worktree = project.data.instance.path.worktree
-          void sdk.client.global.codegraph
-            .build({ root: worktree, force: false })
-            .then((res) => {
-              if (res.data?.started) {
-                toast.show({ message: `Building code graph for ${res.data.root ?? "workspace"}`, variant: "info" })
-              } else {
-                toast.show({
-                  message: res.data?.reason ?? "Could not start codegraph build",
-                  variant: "error",
-                })
-              }
-            })
-            .catch((err) =>
-              toast.show({
-                message: `Codegraph build failed: ${err instanceof Error ? err.message : String(err)}`,
-                variant: "error",
-              }),
-            )
-          dialog.clear()
-        },
-      },
-      {
-        name: "codegraph.remove",
-        title: "Remove code graph index",
-        category: "BanyanCode",
-        slashName: "codegraph-remove",
-        run: () => {
-          if (route.data.type !== "session") {
-            toast.show({ message: "Start a session first to remove the code graph", variant: "warning" })
-            dialog.clear()
-            return
-          }
-          toast.show({ message: "Removing code graph index...", variant: "info" })
-          dialog.clear()
-          sdk.client.session
-            .command({
-              sessionID: route.data.sessionID,
-              command: "codegraph-remove",
-              arguments: "",
-            })
-            .then((res) => {
-              const parts = (res.data?.parts ?? []) as Array<{ type?: string; text?: string }>
-              const completion = parts.find((p) => p.type === "text" && typeof p.text === "string")?.text
-              toast.show({
-                message: completion ?? "Codegraph index removed.",
-                variant: "success",
-              })
-            })
-            .catch((err) =>
-              toast.show({
-                message: `Codegraph remove failed: ${err instanceof Error ? err.message : String(err)}`,
-                variant: "error",
-              }),
-            )
-        },
-      },
-      {
-        name: "models.refresh",
-        title: "Refresh models catalog",
-        category: "BanyanCode",
-        slashName: "refresh-models",
-        run: () => {
-          void sdk.client.session.command({
-            sessionID: route.data.type === "session" ? route.data.sessionID : "",
-            command: "refresh-models",
-            arguments: "",
-          })
-          toast.show({ message: "Refreshing models catalog...", variant: "info" })
-          dialog.clear()
-        },
-      },
-      {
-        name: "yolo.toggle",
-        title: "Toggle YOLO mode",
-        category: "BanyanCode",
-        slashName: "yolo",
-        run: () => {
-          void sdk.client.session.command({
-            sessionID: route.data.type === "session" ? route.data.sessionID : "",
-            command: "yolo",
-            arguments: "",
-          })
-          toast.show({ message: "Toggling YOLO mode...", variant: "info" })
-          dialog.clear()
-        },
-      },
-      {
-        name: "subagents.max_subagents",
-        title: "Set max concurrent subagents",
-        category: "BanyanCode",
-        slashName: "max-subagents",
-        run: () => {
-          dialog.replace(() => <DialogMaxSubagents />)
-        },
       },
       {
         name: "help.show",
@@ -1077,6 +943,16 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           dialog.clear()
         },
       },
+      {
+        name: "permission.mode",
+        title:
+          local.permission.mode === "auto" ? "Disable auto-approve permissions" : "Enable auto-approve permissions",
+        category: "System",
+        run: () => {
+          local.permission.toggle()
+          dialog.clear()
+        },
+      },
     ].map((command) => ({
       namespace: "palette",
       ...command,
@@ -1150,16 +1026,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       message,
       duration: 5000,
     })
-  })
-
-  const build = useCodegraphBuild()
-  event.subscribe((evt, { workspace }) => {
-    if ((evt.type as string) !== "banyancode.codegraph.build") return
-    // Accept events stamped with the current workspace, OR unscoped/global
-    // events (workspace === undefined) that some upstream paths emit without
-    // an explicit workspace stamp.
-    if (workspace !== undefined && workspace !== project.workspace.current()) return
-    build.set(evt.properties as CodegraphBuildState)
   })
 
   event.on("installation.update-available", async (evt) => {
@@ -1263,7 +1129,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       <Show when={!startup.skipInitialLoading}>
         <StartupLoading ready={ready} />
       </Show>
-      <AutocompleteOverlay />
     </box>
   )
 }

@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core"
 import { useKeyboard } from "@opentui/solid"
 import type { VcsFileStatus } from "@opencode-ai/sdk/v2"

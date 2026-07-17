@@ -1,4 +1,5 @@
-// Per-file profiler for finding slow candidate test files.
+// Per-file profiler for finding candidate test-speed work; see ../../perf/test-suite.md
+// for the benchmark notes, kept wins, and discarded experiments.
 // Example: TEST_PROFILE_GLOB='test/server/**/*.test.ts' TEST_PROFILE_TOP=15 bun run profile:test
 const pattern = Bun.env.TEST_PROFILE_GLOB ?? "test/**/*.test.{ts,tsx}"
 const limit = Number(Bun.env.TEST_PROFILE_LIMIT ?? 0)

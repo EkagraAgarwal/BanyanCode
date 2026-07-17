@@ -3,26 +3,20 @@ import { test, expect } from "bun:test"
 import os from "os"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
-import { Config } from "../../src/config/config"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import { Database } from "@opencode-ai/core/database/database"
-import { Banyan } from "@opencode-ai/core/banyancode"
 import { Permission } from "../../src/permission"
-import { InstanceBootstrap } from "../../src/project/bootstrap-service"
+import { InstanceBootstrap } from "../../src/project/bootstrap"
 import { InstanceStore } from "../../src/project/instance-store"
 import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 
-const events = Layer.succeed(EventV2Bridge.Service, {} as any)
-const config = Layer.succeed(Config.Service, Config.Service.of({ get: () => Effect.succeed({} as any), getGlobal: () => Effect.succeed({} as any), getConsoleState: () => Effect.succeed({} as any), update: () => Effect.void, updateGlobal: () => Effect.succeed({ info: {} as any, changed: false }), invalidate: () => Effect.void, directories: () => Effect.succeed([]), waitForDependencies: () => Effect.void }))
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
-const env = Layer.mergeAll(
-  Permission.layer.pipe(Layer.provide(Database.defaultLayer), Layer.provide(events), Layer.provide(config)),
-  events,
-  config,
-  CrossSpawnSpawner.defaultLayer,
-  InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
+const env = AppNodeBuilder.build(
+  LayerNode.group([Permission.node, EventV2Bridge.node, CrossSpawnSpawner.node, InstanceStore.node]),
+  [[InstanceStore.bootstrapNode, noopBootstrap]],
 )
 const it = testEffect(env)
 
@@ -330,26 +324,26 @@ test("evaluate - order matters for specificity", () => {
   expect(result.action).toBe("deny")
 })
 
-test("evaluate - unknown permission returns allow (default fallback)", () => {
+test("evaluate - unknown permission returns ask", () => {
   const result = Permission.evaluate("unknown_tool", "anything", [
     { permission: "bash", pattern: "*", action: "allow" },
   ])
-  expect(result.action).toBe("allow")
+  expect(result.action).toBe("ask")
 })
 
-test("evaluate - empty ruleset returns allow (default fallback)", () => {
+test("evaluate - empty ruleset returns ask", () => {
   const result = Permission.evaluate("bash", "rm", [])
-  expect(result.action).toBe("allow")
+  expect(result.action).toBe("ask")
 })
 
-test("evaluate - no matching pattern returns allow (default fallback)", () => {
+test("evaluate - no matching pattern returns ask", () => {
   const result = Permission.evaluate("edit", "etc/passwd", [{ permission: "edit", pattern: "src/*", action: "allow" }])
-  expect(result.action).toBe("allow")
+  expect(result.action).toBe("ask")
 })
 
-test("evaluate - empty rules array returns allow (default fallback)", () => {
+test("evaluate - empty rules array returns ask", () => {
   const result = Permission.evaluate("bash", "rm", [])
-  expect(result.action).toBe("allow")
+  expect(result.action).toBe("ask")
 })
 
 test("evaluate - multiple matching patterns, last wins", () => {
@@ -1175,92 +1169,6 @@ it.instance(
       const exit = yield* Fiber.await(fiber)
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(PermissionV1.RejectedError)
-    }),
-  { git: true },
-)
-
-// Regression for: Permission.defaultLayer used to omit BanyanConfigService,
-// so the YOLO short-circuit (which reads banyancode_yolo_mode via
-// Effect.serviceOption) never fired. With YOLO enabled, ask() must return
-// without publishing a permission.asked event — verified by counting pending
-// requests and confirming the call completes inline.
-const yoloLayer = Layer.succeed(
-  Banyan.BanyanConfigService,
-  Banyan.BanyanConfigService.of({
-    get: () =>
-      Effect.succeed({
-        banyancode_yolo_mode: true,
-      }) as never,
-    getGlobal: () =>
-      Effect.succeed({
-        banyancode_yolo_mode: true,
-      }) as never,
-    update: () =>
-      Effect.succeed({
-        banyancode_yolo_mode: true,
-      }) as never,
-    updateAgentOverride: () =>
-      Effect.succeed({
-        banyancode_yolo_mode: true,
-      }) as never,
-    getAgentOverrides: () => Effect.succeed([]) as never,
-    updateAgentPrompt: () =>
-      Effect.succeed({
-        banyancode_yolo_mode: true,
-      }) as never,
-  }),
-)
-
-const yoloEnv = Layer.mergeAll(
-  Permission.layer.pipe(
-    Layer.provide(Database.defaultLayer),
-    Layer.provide(events),
-    Layer.provide(config),
-    Layer.provide(yoloLayer),
-  ),
-  events,
-  config,
-  yoloLayer,
-  CrossSpawnSpawner.defaultLayer,
-  InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
-)
-const yoloIt = testEffect(yoloEnv)
-
-yoloIt.instance(
-  "ask returns immediately without dialog when banyancode_yolo_mode is on",
-  () =>
-    Effect.gen(function* () {
-      const before = yield* list()
-      // Even an empty ruleset (which normally falls through to action=ask and
-      // publishes a permission.asked event) should be bypassed by YOLO.
-      yield* ask({
-        sessionID: SessionID.make("session_yolo"),
-        permission: "bash",
-        patterns: ["echo hello"],
-        metadata: {},
-        always: ["*"],
-        ruleset: [],
-      }).pipe(Effect.timeout("200 millis"))
-      const after = yield* list()
-      expect(after).toHaveLength(before.length)
-    }),
-  { git: true },
-)
-
-yoloIt.instance(
-  "ask returns immediately even for normally-denied patterns when YOLO is on",
-  () =>
-    Effect.gen(function* () {
-      yield* ask({
-        sessionID: SessionID.make("session_yolo_deny"),
-        permission: "bash",
-        patterns: ["rm -rf /"],
-        metadata: {},
-        always: ["*"],
-        ruleset: [{ permission: "bash", pattern: "rm *", action: "deny" }],
-      }).pipe(Effect.timeout("200 millis"))
-      // No DeniedError, no prompt — YOLO wins.
-      expect((yield* list()).length).toBe(0)
     }),
   { git: true },
 )

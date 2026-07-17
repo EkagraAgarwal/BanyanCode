@@ -1,22 +1,6 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { httpClient } from "@opencode-ai/core/effect/layer-node-platform"
+import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
-import { Banyan } from "@opencode-ai/core/banyancode"
-import { CodegraphTools } from "@opencode-ai/core/tool/codegraph"
-import { CodeFindTool } from "@opencode-ai/core/tool/code-find"
-import { WebSearchFreeTool } from "@opencode-ai/core/tool/websearch-free"
-import { CodegraphSearchTool } from "@opencode-ai/core/tool/codegraph-search-tool"
-import { RepositoryWave2 } from "@opencode-ai/core/tool/repository-wave2"
-import { StructuralQueriesTool } from "@opencode-ai/core/tool/structural-queries-tool"
-import { EditPlanTool } from "@opencode-ai/core/tool/edit-plan"
-import { PreflightTool } from "@opencode-ai/core/tool/preflight"
-import { BlastRadiusTool } from "@opencode-ai/core/tool/blast-radius"
-import { SafeRenameTool } from "@opencode-ai/core/tool/safe-rename"
-import { Tools } from "@opencode-ai/core/tool/tools"
-import { PermissionV2 } from "@opencode-ai/core/permission"
-import { MemoryTools } from "@opencode-ai/core/tool/memory"
-import { MemoryCandidateTool } from "@opencode-ai/core/tool/memory-candidate"
-import { SharedMemoryTool } from "@opencode-ai/core/tool/shared-memory"
 import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
@@ -45,17 +29,14 @@ import { WebSearchTool } from "./websearch"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
-import { SysteminfoTool } from "./systeminfo"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
-import { Effect, Layer, Context, Option } from "effect"
-import { FetchHttpClient, HttpClient } from "effect/unstable/http"
+import { Effect, Layer, Context } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
-import { InstanceRef } from "@/effect/instance-ref"
 import { EffectBridge } from "@/effect/bridge"
 import { Question } from "../question"
 import { Todo } from "../session/todo"
@@ -70,28 +51,12 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { MCP } from "@/mcp"
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { McpCatalog } from "@/mcp/catalog"
 
 export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
   return providerID === ProviderV2.ID.opencode || flags.exa || flags.parallel
-}
-
-export function isStrongModel(modelID: ModelV2.ID): boolean {
-  const id = modelID.toLowerCase()
-  if (id.includes("claude-opus")) return true
-  if (id.includes("claude-sonnet")) return true
-  if (id.includes("gpt-5")) return true
-  if (id.includes("o1")) return true
-  if (id.includes("o3")) return true
-  if (id.startsWith("claude-3-5")) return true
-  if (id.startsWith("claude-3-7")) return true
-  return false
-}
-
-function isLlmVisible(tool: Tool.Def, modelID: ModelV2.ID): boolean {
-  const visibility = tool.contract?.visibility ?? "public"
-  if (visibility === "internal") return false
-  if (visibility === "advanced" && !isStrongModel(modelID)) return false
-  return true
 }
 
 type TaskDef = Tool.InferDef<typeof TaskTool>
@@ -112,12 +77,13 @@ export interface Interface {
     providerID: ProviderV2.ID
     modelID: ModelV2.ID
     agent: Agent.Info
+    permission?: PermissionV1.Ruleset
   }) => Effect.Effect<Tool.Def[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/ToolRegistry") {}
 
-export const layer = Layer.effect(
+const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
@@ -125,6 +91,7 @@ export const layer = Layer.effect(
     const agents = yield* Agent.Service
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
+    const mcp = yield* MCP.Service
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
@@ -133,7 +100,6 @@ export const layer = Layer.effect(
     const todo = yield* TodoWriteTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
-    const systeminfo = yield* SysteminfoTool
     const webfetch = yield* WebFetchTool
     const websearch = yield* WebSearchTool
     const shell = yield* ShellTool
@@ -144,6 +110,8 @@ export const layer = Layer.effect(
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
     const agent = yield* Agent.Service
+    const codeMode = flags.experimentalCodeMode ? yield* Effect.promise(() => import("./code-mode")) : undefined
+    const codeModeTool = codeMode ? yield* codeMode.CodeModeTool : undefined
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("ToolRegistry.state")(function* (ctx) {
@@ -152,7 +120,7 @@ export const layer = Layer.effect(
         function fromPlugin(id: string, def: ToolDefinition): Tool.Def {
           // Plugin tools still expose Zod args publicly; keep that compatibility
           // boxed at the registry boundary and give the LLM the original JSON Schema.
-          // Normalize missing args to `{}` once ΓÇö pre-1.14.49 the code was
+          // Normalize missing args to `{}` once — pre-1.14.49 the code was
           // `z.object(def.args)` and Zod silently tolerated undefined (#27451, #27630).
           const args = def.args ?? {}
           const entries = Object.entries(args)
@@ -250,10 +218,8 @@ export const layer = Layer.effect(
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
-          systeminfo: Tool.init(systeminfo),
+          ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
         })
-
-        if (process.env.BANYANCODE_ENABLE !== "0") yield* Layer.build(withBanyanDeps).pipe(Effect.orDie)
 
         return {
           custom,
@@ -272,7 +238,7 @@ export const layer = Layer.effect(
             tool.search,
             tool.skill,
             tool.patch,
-            tool.systeminfo,
+            ...(tool.execute ? [tool.execute] : []),
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
           ],
@@ -306,6 +272,17 @@ export const layer = Layer.effect(
       return ["Available agent types and the tools they have access to:", description].join("\n")
     })
 
+    const describeCodeMode = Effect.fn("ToolRegistry.describeCodeMode")(function* (input: {
+      agent: Agent.Info
+      permission?: PermissionV1.Ruleset
+    }) {
+      if (!codeMode) return
+      const ruleset = Permission.merge(input.agent.permission, input.permission ?? [])
+      const tools = Permission.visibleTools(yield* mcp.tools(), ruleset)
+      if (Object.keys(tools).length === 0) return
+      return codeMode.describeCatalog(tools, Object.keys(yield* mcp.clients()).map(McpCatalog.sanitize))
+    })
+
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
       const filtered = (yield* all()).filter((tool) => {
         if (tool.id === WebSearchTool.id) {
@@ -317,11 +294,16 @@ export const layer = Layer.effect(
         if (tool.id === ApplyPatchTool.id) return usePatch
         if (tool.id === EditTool.id || tool.id === WriteTool.id) return !usePatch
 
-        return isLlmVisible(tool, input.modelID)
+        return true
       })
 
+      const codeModeDescription = filtered.some((tool) => tool.id === "execute")
+        ? yield* describeCodeMode(input)
+        : undefined
+      const visible = filtered.filter((tool) => tool.id !== "execute" || codeModeDescription)
+
       return yield* Effect.forEach(
-        filtered,
+        visible,
         Effect.fnUntraced(function* (tool: Tool.Def) {
           const output = {
             description: tool.description,
@@ -335,7 +317,11 @@ export const layer = Layer.effect(
               : undefined
           return {
             id: tool.id,
-            description: [output.description, tool.id === TaskTool.id ? yield* describeTask(input.agent) : undefined]
+            description: [
+              output.description,
+              tool.id === TaskTool.id ? yield* describeTask(input.agent) : undefined,
+              tool.id === "execute" ? codeModeDescription : undefined,
+            ]
               .filter(Boolean)
               .join("\n"),
             parameters: output.parameters,
@@ -355,132 +341,6 @@ export const layer = Layer.effect(
 
     return Service.of({ ids, all, named, tools })
   }),
-)
-
-// `baseBanyanToolLayers` aggregates every BanyanCode Tool `locationLayer`
-// (one per `Tools.Service.register({...})` factory). Each location layer
-// requires `Tools.Service` (CORE) at registration time and
-// `PermissionV2.Service` (CORE) at execution time, plus per-tool BanyanCode
-// services (e.g. `Banyan.CodegraphAnalyzer`, `Banyan.Search`,
-// `Banyan.RepositoryIntelligence`, `Banyan.StructuralQueries`). The
-// previous attempts to wire this through `ToolRegistry.defaultLayer` and
-// through a dedicated `LayerNode` either leaked the core deps into R or
-// required `as never` casts that bypassed the dependency check, so we
-// mount it inline from `ToolRegistry.state` (see the `if (env !== "0")`
-// branch below) using `withBanyanDeps` and `Layer.build`. That keeps the
-// registrations on the workspace lifetime scope and avoids touching
-// `ToolRegistry.defaultLayer` or its consumer's app layer.
-const baseBanyanToolLayers = Layer.mergeAll(
-  CodegraphTools.locationLayer,
-  CodeFindTool.locationLayer,
-  CodegraphSearchTool.locationLayer,
-  RepositoryWave2.locationLayer,
-  RepositoryWave2.locationLayer,
-  StructuralQueriesTool.locationLayer,
-  EditPlanTool.locationLayer,
-  PreflightTool.locationLayer,
-  BlastRadiusTool.locationLayer,
-  SafeRenameTool.locationLayer,
-  WebSearchFreeTool.layer,
-  MemoryTools.locationLayer,
-  MemoryCandidateTool.layer,
-  SharedMemoryTool.layer,
-)
-
-// `withBanyanDeps` wraps `baseBanyanToolLayers` in a `Layer.unwrap` that,
-// at runtime, looks up each optional dependency via `Effect.serviceOption`
-// and feeds it to a `Layer.succeed(...)` so the merged deps layer has R =
-// `never`. We then `Layer.provide(baseBanyanToolLayers, depsLayer)` so
-// every tool gets `Tools.Service`, `PermissionV2.Service`, and the
-// per-tool BanyanCode services it captured. The resulting layer's R is
-// empty (the only inputs are the `Layer.succeed` outputs we already
-// provide, plus the omitted `Banyan.codegraphBuildServiceDefaultLayer` —
-// which we provide via its own `Layer.succeed`/`Layer.provide` step so
-// `Layer.build` doesn't need any services in scope). If either of the
-// mandatory pair (`Tools.Service` / `PermissionV2.Service`) is missing
-// (e.g. in test contexts) we return `Layer.empty` so the registration
-// is a graceful no-op rather than failing at build time.
-const withBanyanDeps = Layer.unwrap(
-  Effect.gen(function* () {
-    const tools = yield* Effect.serviceOption(Tools.Service)
-    const permission = yield* Effect.serviceOption(PermissionV2.Service)
-    if (Option.isNone(tools) || Option.isNone(permission)) return Layer.empty
-    const codegraphBuildService = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
-    const codegraphRepo = yield* Effect.serviceOption(Banyan.CodegraphRepo)
-    const analyzer = yield* Effect.serviceOption(Banyan.CodegraphAnalyzer)
-    const search = yield* Effect.serviceOption(Banyan.Search)
-    const intel = yield* Effect.serviceOption(Banyan.RepositoryIntelligence)
-    const structural = yield* Effect.serviceOption(Banyan.StructuralQueries)
-    const editPlanner = yield* Effect.serviceOption(Banyan.EditPlanner)
-    const telemetry = yield* Effect.serviceOption(Banyan.ToolTelemetry)
-    const memoryRepo = yield* Effect.serviceOption(Banyan.MemoryRepo)
-    const memoryService = yield* Effect.serviceOption(Banyan.MemoryService)
-    const worktreeAccessor: () => Effect.Effect<string | undefined> = () =>
-      Effect.gen(function* () {
-        const inst = yield* InstanceRef
-        return inst?.worktree
-      })
-    const depsLayer = Layer.mergeAll(
-      Layer.succeed(Tools.Service, tools.value),
-      Layer.succeed(PermissionV2.Service, permission.value),
-      Layer.succeed(Banyan.WorktreeContext, worktreeAccessor),
-      ...(Option.isSome(codegraphBuildService)
-        ? [Layer.succeed(Banyan.CodegraphBuildService, codegraphBuildService.value)]
-        : [Layer.empty as unknown as Layer.Layer<never, never, never>]),
-      ...(Option.isSome(codegraphRepo) ? [Layer.succeed(Banyan.CodegraphRepo, codegraphRepo.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(analyzer) ? [Layer.succeed(Banyan.CodegraphAnalyzer, analyzer.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(search) ? [Layer.succeed(Banyan.Search, search.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(intel) ? [Layer.succeed(Banyan.RepositoryIntelligence, intel.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(structural) ? [Layer.succeed(Banyan.StructuralQueries, structural.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(editPlanner) ? [Layer.succeed(Banyan.EditPlanner, editPlanner.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(telemetry) ? [Layer.succeed(Banyan.ToolTelemetry, telemetry.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(memoryRepo) ? [Layer.succeed(Banyan.MemoryRepo, memoryRepo.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(memoryService) ? [Layer.succeed(Banyan.MemoryService, memoryService.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-    ) as unknown as Layer.Layer<never, never, never>
-    return baseBanyanToolLayers.pipe(Layer.provide(depsLayer)) as unknown as Layer.Layer<never, never, never>
-  }),
-)
-
-export const defaultLayer = Layer.suspend(() =>
-  layer
-    .pipe(
-      Layer.provide(Config.defaultLayer),
-      Layer.provide(Plugin.defaultLayer),
-      Layer.provide(Question.defaultLayer),
-      Layer.provide(Todo.defaultLayer),
-      Layer.provide(Skill.defaultLayer),
-      Layer.provide(Agent.defaultLayer),
-      Layer.provide(Session.defaultLayer),
-      Layer.provide(BackgroundJob.defaultLayer),
-      Layer.provide(Provider.defaultLayer),
-      Layer.provide(LSP.defaultLayer),
-      Layer.provide(Instruction.defaultLayer),
-      Layer.provide(FSUtil.defaultLayer),
-      Layer.provide(EventV2Bridge.defaultLayer),
-      Layer.provide(FetchHttpClient.layer),
-      Layer.provide(Format.defaultLayer),
-      Layer.provide(CrossSpawnSpawner.defaultLayer),
-      Layer.provide(Truncate.defaultLayer),
-    )
-    .pipe(Layer.provide(Database.defaultLayer), Layer.provide(RuntimeFlags.defaultLayer)),
 )
 
 function isZodType(value: unknown): value is z.ZodType {
@@ -559,28 +419,32 @@ function isJsonSchemaObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-const coreRegistryNode = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer)), [
-  Config.node,
-  Plugin.node,
-  Question.node,
-  Todo.node,
-  Agent.node,
-  Skill.node,
-  Session.node,
-  BackgroundJob.node,
-  Provider.node,
-  LSP.node,
-  Instruction.node,
-  FSUtil.node,
-  EventV2Bridge.node,
-  httpClient,
-  CrossSpawnSpawner.node,
-  Format.node,
-  Truncate.node,
-  RuntimeFlags.node,
-  Database.node,
-])
-
-export const node = coreRegistryNode
+export const node = LayerNode.make({
+  service: Service,
+  layer,
+  deps: [
+    Config.node,
+    Plugin.node,
+    Question.node,
+    Todo.node,
+    Agent.node,
+    Skill.node,
+    Session.node,
+    BackgroundJob.node,
+    Provider.node,
+    LSP.node,
+    Instruction.node,
+    FSUtil.node,
+    EventV2Bridge.node,
+    httpClient,
+    CrossSpawnSpawner.node,
+    Format.node,
+    Truncate.node,
+    RuntimeFlags.node,
+    MCP.node,
+    Database.node,
+    Ripgrep.node,
+  ],
+})
 
 export * as ToolRegistry from "./registry"

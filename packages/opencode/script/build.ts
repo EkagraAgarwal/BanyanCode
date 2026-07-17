@@ -12,79 +12,17 @@ const dir = path.resolve(__dirname, "..")
 
 process.chdir(dir)
 
-if (!process.env.BUN_INSTALL_CACHE_DIR) {
-  process.env.BUN_INSTALL_CACHE_DIR = path.join(dir, ".bun-cache")
-}
-
 const generated = await import("./generate.ts")
 
 import { Script } from "@opencode-ai/script"
 import pkg from "../package.json"
 
-const BINARY_NAME = "banyancode"
-
-const allFlag = process.argv.includes("--all")
-const isCI = !!(process.env.CI || process.env.GITHUB_ACTIONS || Script.release)
-const singleFlag = process.argv.includes("--single") || (!allFlag && !isCI)
+const singleFlag = process.argv.includes("--single")
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
 const plugin = createSolidTransformPlugin()
 const skipEmbedWebUi = process.argv.includes("--skip-embed-web-ui")
-
-// libsql native binding: the libsql package uses a dynamic
-// `require(\`@libsql/${target}\`)` to load the platform-specific N-API
-// addon. Bun's compile mode cannot resolve such transitive dynamic requires
-// from its embedded virtual filesystem, so the lookup always fails. The
-// build plugin below rewrites that call into a static require for the
-// build's target; the bundler then follows the require, reads the .node
-// file via the napi loader, and embeds the addon in the binary.
-const libsqlTargetFor = (compileTarget: string): string | null => {
-  const map: Record<string, string> = {
-    "bun-linux-x64": "@libsql/linux-x64-gnu",
-    "bun-linux-x64-baseline": "@libsql/linux-x64-gnu",
-    "bun-linux-x64-modern": "@libsql/linux-x64-gnu",
-    "bun-linux-arm64": "@libsql/linux-arm64-gnu",
-    "bun-linux-x64-musl": "@libsql/linux-x64-musl",
-    "bun-linux-x64-baseline-musl": "@libsql/linux-x64-musl",
-    "bun-linux-arm64-musl": "@libsql/linux-arm64-musl",
-    "bun-darwin-x64": "@libsql/darwin-x64",
-    "bun-darwin-x64-baseline": "@libsql/darwin-x64",
-    "bun-darwin-arm64": "@libsql/darwin-arm64",
-    "bun-windows-x64": "@libsql/win32-x64-msvc",
-    "bun-windows-x64-baseline": "@libsql/win32-x64-msvc",
-    "bun-windows-x64-modern": "@libsql/win32-x64-msvc",
-  }
-  return map[compileTarget] ?? null
-}
-
-type LibsqlPlugin = {
-  name: string
-  setup(build: {
-    onLoad: (
-      opts: { filter: RegExp },
-      cb: (args: { path: string }) => Promise<{ contents: string; loader: string }>,
-    ) => void
-  }): void
-}
-
-const createLibsqlPlugin = (libsqlPkg: string): LibsqlPlugin => ({
-  name: "banyancode-libsql-native",
-  setup(build) {
-    const needle = /function requireNative\(\) \{[\s\S]*?\n\}/
-    build.onLoad({ filter: /[\\/]libsql[\\/]index\.js$/ }, async (args) => {
-      const original = await Bun.file(args.path).text()
-      if (!needle.test(original)) {
-        throw new Error(`libsql/index.js structure changed; cannot patch requireNative`)
-      }
-      const replacement = `function requireNative() {\n  return require(${JSON.stringify(libsqlPkg)});\n}`
-      return {
-        contents: original.replace(needle, replacement),
-        loader: "js",
-      }
-    })
-  },
-})
 
 const createEmbeddedWebUIBundle = async () => {
   console.log(`Building Web UI to embed in the binary`)
@@ -161,10 +99,10 @@ const allTargets: {
     avx2: false,
   },
   {
-    // win32/arm64 intentionally omitted — @libsql does not publish a
-    // win32-arm64-msvc native binding, so a bundled libsql build cannot
-    // ship for that target. Cross-compiling for win32/arm64 without
-    // libsql would silently produce a binary that crashes on first DB use.
+    os: "win32",
+    arch: "arm64",
+  },
+  {
     os: "win32",
     arch: "x64",
   },
@@ -175,33 +113,26 @@ const allTargets: {
   },
 ]
 
-const targetArg = process.argv.find((arg) => arg.startsWith("--target="))?.split("=")[1]
-
-const targets = targetArg
+const targets = singleFlag
   ? allTargets.filter((item) => {
-      const itemTarget = (item.os === "win32" ? "windows" : item.os) + "-" + item.arch
-      return itemTarget === targetArg
+      if (item.os !== process.platform || item.arch !== process.arch) {
+        return false
+      }
+
+      // When building for the current platform, prefer a single native binary by default.
+      // Baseline binaries require additional Bun artifacts and can be flaky to download.
+      if (item.avx2 === false) {
+        return baselineFlag
+      }
+
+      // also skip abi-specific builds for the same reason
+      if (item.abi !== undefined) {
+        return false
+      }
+
+      return true
     })
-  : (singleFlag
-      ? allTargets.filter((item) => {
-          if (item.os !== process.platform || item.arch !== process.arch) {
-            return false
-          }
-
-          // When building for the current platform, prefer a single native binary by default.
-          // Baseline binaries require additional Bun artifacts and can be flaky to download.
-          if (item.avx2 === false) {
-            return baselineFlag
-          }
-
-          // also skip abi-specific builds for the same reason
-          if (item.abi !== undefined) {
-            return false
-          }
-
-          return true
-        })
-      : allTargets)
+  : allTargets
 
 await $`rm -rf dist`
 
@@ -213,7 +144,7 @@ if (!skipInstall) {
 }
 for (const item of targets) {
   const name = [
-    BINARY_NAME,
+    pkg.name,
     // changing to win32 flags npm for some reason
     item.os === "win32" ? "windows" : item.os,
     item.arch,
@@ -234,16 +165,10 @@ for (const item of targets) {
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
   const workerRelativePath = path.relative(dir, parserWorker).replaceAll("\\", "/")
 
-  const compileTarget = name.replace(BINARY_NAME, "bun")
-  const libsqlTarget = libsqlTargetFor(compileTarget)
-  if (!libsqlTarget) {
-    throw new Error(`No libsql native binding available for compile target ${compileTarget}`)
-  }
-
   await Bun.build({
     conditions: ["bun", "node"],
     tsconfig: "./tsconfig.json",
-    plugins: [plugin, createLibsqlPlugin(libsqlTarget) as any],
+    plugins: [plugin],
     external: ["node-gyp"],
     format: "esm",
     minify: true,
@@ -254,9 +179,9 @@ for (const item of targets) {
       autoloadDotenv: false,
       autoloadTsconfig: true,
       autoloadPackageJson: true,
-      target: compileTarget as any,
-      outfile: `dist/${name}/bin/${BINARY_NAME}`,
-      execArgv: [`--user-agent=${BINARY_NAME}/${Script.version}`, "--use-system-ca", "--"],
+      target: name.replace(pkg.name, "bun") as any,
+      outfile: `dist/${name}/bin/opencode`,
+      execArgv: [`--user-agent=opencode/${Script.version}`, "--use-system-ca", "--"],
       windows: {},
     },
     files: embeddedFileMap ? { "opencode-web-ui.gen.ts": embeddedFileMap } : {},
@@ -275,7 +200,7 @@ for (const item of targets) {
 
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
-    const binaryPath = `dist/${name}/bin/${BINARY_NAME}${item.os === "win32" ? ".exe" : ""}`
+    const binaryPath = `dist/${name}/bin/opencode`
     console.log(`Running smoke test: ${binaryPath} --version`)
     try {
       const versionOutput = await $`${binaryPath} --version`.text()
@@ -283,34 +208,6 @@ for (const item of targets) {
     } catch (e) {
       console.error(`Smoke test failed for ${name}:`, e)
       process.exit(1)
-    }
-
-    // Extended smoke test: launch the TUI briefly in a clean temp directory
-    // so the libsql native binding is actually loaded (the BanyanCode schema
-    // init log only appears once the addon is dlopen'd). The TUI is killed
-    // after a short delay; we just need to confirm startup doesn't crash
-    // with `Cannot find module '@libsql/...'` or a dlopen failure.
-    const smokeDir = fs.mkdtempSync(path.join(require("os").tmpdir(), "banyancode-smoke-"))
-    try {
-      const proc = Bun.spawn([path.resolve(binaryPath)], {
-        cwd: smokeDir,
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-      const timer = setTimeout(() => proc.kill(), 2500)
-      const stderr = await new Response(proc.stderr).text()
-      clearTimeout(timer)
-      await proc.exited
-      const bindingLoaded = stderr.includes("turso.schema")
-      if (!bindingLoaded) {
-        console.error(
-          `Smoke test failed: libsql native binding did not load. stderr:\n${stderr.slice(0, 500)}`,
-        )
-        process.exit(1)
-      }
-      console.log("Native binding smoke test passed (libsql loaded from embedded binary)")
-    } finally {
-      fs.rmSync(smokeDir, { recursive: true, force: true })
     }
   }
 
@@ -336,12 +233,11 @@ if (Script.release) {
   for (const key of Object.keys(binaries)) {
     if (key.includes("linux")) {
       await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
+    } else {
+      await $`zip -r ../../${key}.zip *`.cwd(`dist/${key}/bin`)
     }
-    // macOS + Windows zips are produced by publish.yml (zip on macos,
-    // PowerShell Compress-Archive on Windows) — neither runner has a
-    // working `zip` in PATH via bun's shell.
   }
-  console.log("linux tar.gz archives created; mac/windows zips are produced by publish.yml")
+  await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${process.env.GH_REPO}`
 }
 
 export { binaries }

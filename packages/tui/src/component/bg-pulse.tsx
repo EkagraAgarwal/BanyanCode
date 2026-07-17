@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import {
   FrameBufferRenderable,
   RGBA,

@@ -1,124 +1,161 @@
-# BanyanCode
+- To regenerate the legacy JavaScript SDK, run `./packages/sdk/js/script/build.ts`.
+- After changing the public Protocol or Server `HttpApi`, run `bun run generate` from `packages/client`. Do not edit `src/generated` or `src/generated-effect` directly.
+- Keep runtime dependencies directed from Schema to Core and Protocol, then from Core and Protocol to Server. Client runtime code may depend on Schema and Protocol but never Core or Server; `sdk-next` composes Client, Core, and Server.
+- The default branch in this repo is `dev`.
+- Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
 
-This repository is a fork of [OpenCode](https://github.com/anomalyco/opencode). BanyanCode adds: (1) an **orchestrator + subagent mesh** for parallel multi-agent workflows, (2) **cross-session memory** with JSONB payloads, (3) a **tree-sitter code graph** utility, and (4) a **researcher agent** with free web search via DuckDuckGo. BanyanCode is TUI/CLI only — `desktop`, `web`, `app`, `storybook` packages are explicitly out of scope.
+## Branch Names
 
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for repo layout, runtime layers, and the BanyanCode service architecture. Per-feature design lives in `specs/banyancode/`. Active work is tracked via issues and PRs — there is no separate "implementation plan" doc.
+Use a short branch name of at most three words, separated by hyphens. Do not use slashes or type prefixes such as `feat/` or `fix/`.
 
-## Branch, commit, and PR conventions
+Examples: `session-recovery`, `fix-scroll-state`, `regenerate-sdk`.
 
-- Default branch is `dev`; use `dev` or `origin/dev` for diffs. Local `main` ref may not exist.
-- Branch names: ≤ three words, hyphen-separated, no type prefixes (`feat/`, `fix/`). Examples: `session-recovery`, `fix-scroll-state`, `regenerate-sdk`.
-- Commits and PR titles: `type(scope): summary`. Valid types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`. Useful scopes: `core`, `opencode`, `tui`, `sdk`, `plugin`.
-- One logical change per commit. Run `bun typecheck` and the relevant `bun test` between commits.
-- Regenerate the JS SDK after any HTTP route or schema change: `./packages/sdk/js/script/build.ts`.
+## Commits and PR Titles
 
-## Style guide
+Use conventional commit-style messages and PR titles: `type(scope): summary`.
 
-- Keep things in one function unless composable or reusable. Don't extract single-use helpers preemptively.
-- Inline values that are only used once.
-- Prefer `const` over `let`. Use ternaries or early returns instead of reassignment.
-- Avoid `else`; prefer early returns.
-- Avoid `try`/`catch` where possible; let errors propagate.
-- Avoid the `any` type. Rely on type inference; declare types only for exports or clarity.
-- Prefer functional array methods (`flatMap`, `filter`, `map`) over `for` loops; use type guards on `filter` to keep downstream inference.
-- Avoid unnecessary destructuring; use dot notation to preserve context.
-- Never alias imports (`import { foo as bar }`) and never use star imports.
-- Use Bun APIs where possible (`Bun.file()`).
-- In `src/config`, follow the self-export pattern (`export * as ConfigAgent from "./agent"`) when adding a config module.
-- Drizzle: use `snake_case` field names so column names don't need redefinition.
-- Comments only for non-obvious constraints or surprising behavior.
+Valid types are `feat`, `fix`, `docs`, `chore`, `refactor`, and `test`. Scopes are optional; use the affected package or area when helpful, e.g. `core`, `opencode`, `tui`, `app`, `desktop`, `sdk`, or `plugin`.
 
-## Testing and type checking
+Examples: `fix(tui): simplify thinking toggle styling`, `docs: update contributing guide`, `chore(sdk): regenerate types`.
 
-- Tests cannot run from repo root (guard: `do-not-run-tests-from-root`). Run from package directories, e.g. `packages/opencode` or `packages/core`.
-- Avoid mocks. Test actual implementation. Use `tmpdir()` + `Database.layerFromPath(tmpDbPath)` for any BanyanCode repo test that hits a real DB.
-- Always run `bun typecheck` from a package directory; never `tsc` directly.
+## Style Guide
 
-## BanyanCode product identity
+### General Principles
 
-BanyanCode is its own product, NOT a plugin or config of OpenCode. Both install side by side and never read or write each other's files.
+- Keep things in one function unless composable or reusable
+- Do not extract single-use helpers preemptively. Inline the logic at the call site unless the helper is reused, hides a genuinely complex boundary, or has a clear independent name that improves the caller.
+- Avoid `try`/`catch` where possible
+- Avoid using the `any` type
+- Use Bun APIs when possible, like `Bun.file()`
+- Rely on type inference when possible; avoid explicit type annotations or interfaces unless necessary for exports or clarity
+- Prefer functional array methods (flatMap, filter, map) over for loops; use type guards on filter to maintain type inference downstream
+- In `src/config`, follow the existing self-export pattern at the top of the file (for example `export * as ConfigAgent from "./agent"`) when adding a new config module.
+- In Effect generators, bind services to named variables before calling methods. Do not use nested service yields such as `yield* (yield* Foo.Service).bar()`.
 
-| Concern | OpenCode | BanyanCode |
-|---|---|---|
-| Per-project config | `./opencode.json` | `./banyancode.json` |
-| Per-project dir | `./.opencode/` | `./.banyancode/` |
-| Global config | `~/.config/opencode/` | `~/.config/banyancode/` |
-| Data dir | `~/.local/share/opencode/` | `~/.local/share/banyancode/` |
-| DB filename | `opencode.db` | `banyancode.db` |
-| Env var prefix | `OPENCODE_*` | `BANYANCODE_*` |
-| Config schema | `ConfigV1.Info` | `BanyanConfig.Info` |
-| Service namespace | (n/a) | `Banyan.X.Service` |
+Reduce total variable count by inlining when a value is only used once.
 
-BanyanCode-specific keys (`banyancode_yolo_mode`, `banyancode_max_subagents`, `banyancode_telegram_*`, future runtime keys) live in `BanyanConfig.Info` (`packages/core/src/v1/config/banyan-config.ts`). They were removed from `ConfigV1.Info`. Consumers MUST use `Banyan.BanyanConfigService` — `Config.Service.getGlobal().banyancode_*` will fail typecheck.
+```ts
+// Good
+const journal = await Bun.file(path.join(dir, "journal.json")).json()
 
-For each sub-directory loader in `packages/opencode/src/config/`, the loader iterates BOTH `.opencode/` and `.banyancode/`. So `.opencode/agents/foo.md` AND `.banyancode/agents/foo.md` are both discovered and merged. Convention: `agent/`, `agents/`, `command/`, `commands/`, `skill/`, `skills/`, `plugin/`, `plugins/`, `plans/`, plus `tui.json`.
+// Bad
+const journalPath = path.join(dir, "journal.json")
+const journal = await Bun.file(journalPath).json()
+```
 
-## Parallel subagent work
+### Destructuring
 
-When dispatching multiple `@coder` subagents in parallel, expect git index.lock races and commit content races (one subagent's `git add` can pick up files meant for another). Pattern:
-- The lead agent does all commits.
-- Each subagent returns a list of files modified, never commits.
-- Lead runs `git add <specific files>` and commits each change separately.
-- Run `bun typecheck` and `bun test` between phases.
+Avoid unnecessary destructuring. Use dot notation to preserve context.
 
-## Hard-won lessons (update this section as we learn more)
+```ts
+// Good
+obj.a
+obj.b
 
-**Path traversal in HTTP schemas is the default — always validate.** Any string that ends up in `path.join` (filenames, slugs, identifiers written to disk) MUST be `Schema.isPattern` constrained at the schema boundary AND escape-validated in the handler. Defense-in-depth: strip disallowed chars AND verify the resolved absolute path is still inside the resolved parent directory. Reference: `BanyanAgentSaveInput.name` validation in `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:68` + `handlers/global.ts:242`.
+// Bad
+const { a, b } = obj
+```
 
-**Schema migrations are dangerous — preserve data across destructive refactors.** Default to non-destructive migrations; reserve `{ force: true }` for explicit "wipe everything" calls.
+### Imports
 
-**`Effect.runSync` from a non-Fiber runtime throws `FiberFailure`.** Any service method that reads from `Ref` / `Queue` / `Stream` MUST be `Effect.Effect<A, E, R>`, never a sync accessor that internally does `Effect.runSync(...)`. If callers legitimately need sync, do `Effect.runSync` at the call site, not in the service impl.
+- Never alias imports. Do not use `import { foo as bar } from "..."` or renamed imports like `resolve as pathResolve`.
+- Never use star imports. Do not use `import * as Foo from "..."` or `import type * as Foo from "..."`.
+- If a namespace-style value is needed, import the module's own exported namespace by name, for example `import { Project } from "@opencode-ai/core/project"`, then reference `Project.ID`.
+- Prefer dynamic imports for heavy modules that are only needed in selected code paths, especially in startup-sensitive entrypoints. Destructure dynamic import bindings near the top of the narrowest scope that needs them so they read like normal imports. Avoid inline chains such as `await import("./module").then((mod) => mod.value())` or `(await import("./module")).value()`. Keep branch-specific imports inside the branch that needs them to preserve lazy loading.
 
-**Subscription leaks come from `bus.on(...)` inside component bodies.** Every `useEvent().on(type, handler)` or `event.on(type, handler)` inside a Solid component body MUST be paired with `onCleanup(unsub)`. Otherwise listeners accumulate across remounts and the bus fires the handler N times for N visits. The two correct patterns are `const unsub = ev.on(...); onCleanup(unsub)` and inline `onCleanup(event.on(...))`.
+### Variables
 
-**Hot-path collections need explicit bounds.** A `Queue.unbounded` polled by an event loop grows without limit if no consumer is attached. Use `Queue.bounded(N)` where N is the max acceptable back-pressure window. Per-call `Effect.runForkWith(context)` spawns fibers with no scope; replace with `Stream.fromQueue(sharedQueue)` (throttled if needed) instead of one fiber per consumer.
+Prefer `const` over `let`. Use ternaries or early returns instead of reassignment.
 
-**Count and stream, don't `SELECT *` + `.length`.** `bumpVersion` originally loaded every node and every edge into JS just to call `.length`. Use `SELECT COUNT(*)` for cardinality and stream with cursors for bulk iteration. 10K-node codegraphs blew up RSS on every indexer cycle before this was fixed.
+```ts
+// Good
+const foo = condition ? 1 : 2
 
-**Read-modify-write in repos is a data-loss bug by default.** Any repo method that does `SELECT` then `UPDATE` (or read-then-write to a file) MUST be wrapped in a single `db.transaction()` (or a `Flock.withLock` for files) so the check and the write are atomic. Phase 1 caught four of these — `MemoryRepo.update`, `BanyanConfig.update`, `CodegraphRepo.bumpVersion`, plus `SubagentConsumer` re-delivery duplicating memory entries. Pattern: the public repo signature stays the same, the body becomes `db.transaction((tx) => Effect.gen(...))` and uses `tx` for every statement. For files, `Flock.withLock(key, async () => { ... })` from `@opencode-ai/core/util/flock` (or `EffectFlock.Service` for Effect-native callers) is the existing primitive.
+// Bad
+let foo
+if (condition) foo = 1
+else foo = 2
+```
 
-**Idempotency on at-least-once consumers is the consumer's job, not the bus's.** When a consumer crashes after a side-effect (e.g. `memory.put`) but before the dedup marker (e.g. `markDelivered`), the next start will reprocess and duplicate. Fix: side-effect rows must use a **deterministic natural key** (e.g. `msg.id` not `crypto.randomUUID()`) so the storage layer's `onConflictDoNothing` / upsert is idempotent on redelivery. `subagent-consumer.plan` was generating fresh UUIDs per call — fixed by reusing the message id.
+### Control Flow
 
-**`Effect.runSync` from a returned callback is a footgun even when the function "looks sync".** `bridge.bind` was returning `(...args) => Effect.runSync(...)` — a sync function that internally crossed the Effect boundary. The caller could not tell, and any invocation from an event handler / async callback / non-Fiber context crashed with `FiberFailure`. The fix is to make the bridge return an `async (...args) => Promise<A>` and use `Effect.runPromise` internally. The shape of the bridge interface must change too: `bind` now takes `fn: (...args) => Effect.Effect<A, unknown, never>` and returns `(...args) => Promise<A>`. Callers that had `bind(syncFn)` become `bind(() => Effect.sync(() => syncFn()))` or migrate to `Effect.gen`.
+Avoid `else` statements. Prefer early returns.
 
-**Malformed `JSON.parse` in socket handlers must not kill the socket.** WebSocket `onmessage` handlers, provider response parsing, and any inbound boundary MUST wrap `JSON.parse` in try/catch. On failure, emit a structured error event (e.g. `bus.publish("rpc.error", ...)`) and keep the socket alive. The `Workspace` and `Provider` paths were already guarded; `util/rpc` was not. New tests post a malformed message and assert the socket survives — these tests catch regressions if someone later removes the try/catch "for cleanliness".
+```ts
+// Good
+function foo() {
+  if (condition) return 1
+  return 2
+}
 
-**Effect v4 beta: `catchAll` is gone — use `catchCause` / `catchTag` / `catchIf`.** The old `Effect.catchAll((error) => ...)` does not exist in effect-smol. Use `Effect.catchCause((cause) => ...)` for catch-all, `Effect.catchTag("TagName", (error) => ...)` for specific tagged errors, `Effect.catchIf(predicate, (error) => ...)` for predicate-based handling. Reference: Phase 2 health handlers use `Effect.catchCause` to convert DB errors to a structured failure response.
+// Bad
+function foo() {
+  if (condition) return 1
+  else return 2
+}
+```
 
-**Effect v4: `Schema.Union` takes an array, not multiple args.** `Schema.Union(A, B)` silently produces the wrong type. Use `Schema.Union([A, B])`. Reference: Phase 2 `GlobalHealth = Schema.Union([GlobalHealthSuccess, GlobalHealthFailure])` in `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:29`.
+### Complex Logic
 
-**Drizzle: `db.select(...)` requires `SelectedFields`, not raw SQL.** The `select` builder takes a record of column references (or `sql\`x\`` aliased), NOT a raw `SQL` object. For raw probes like `SELECT 1`, use `db.run(sql\`SELECT 1\`)` which takes any SQL. Reference: Phase 2 health handlers use `db.run(sql\`SELECT 1\`).pipe(Effect.timeout("2 seconds"))`.
+When a function has several validation branches or supporting details, make the main function read as the happy path and move supporting details into small helpers below it.
 
-**Effect `Queue` is single-consumer — never add a second drain in the layer AND a bridge.** The `CodegraphBuildService` exposed an `events()` `Queue.Dequeue` so a downstream bridge (e.g. `banyancode-codegraph-bridge.ts`) could drain and re-publish through `EventV2Bridge` (which stamps the instance/workspace location). The layer ALSO had an internal `Effect.forkScoped(Effect.forever(Queue.take(events) → eventBus.publish(...)))` worker. Both consumers pulled from the same `Queue.bounded(64)`, so each event went to exactly one of them. The TUI's `banyancode.codegraph.build` subscription lost roughly half of the progress events and the progress widget stayed at `0/0 Running` forever, even though the indexer was happily writing nodes to the DB. Rule: a service that exposes its `events()` queue for an external consumer MUST NOT also drain it internally. Pick one owner — the consumer that can stamp the location correctly is the right one. Reference: `packages/core/src/banyancode/codegraph-build-service.ts` (commit `32f307a`, re-applied from `ecfb2eb` on `review-fixes`). Regression test in `codegraph-manual-build.test.ts` drains the queue the same way the bridge does and asserts every progress event arrives — fails on the unfixed code (last event eaten by the rogue drain) and passes after the fix.
+```ts
+// Good
+export function loadThing(input: unknown) {
+  const config = requireConfig(input)
+  const metadata = readMetadata(input)
+  return createThing({ config, metadata })
+}
 
-**`Layer.effect(Service, Effect.fail(...))` fails the service at access time (a defect), not via the Effect error channel.** This means `Effect.catchCause` in the consumer cannot observe the failure — the layer access itself throws. To test Effect error handling in a layer, use a working service and force a failure inside the operation (e.g. invalid SQL on a real DB connection). Reference: Phase 2 test files use `db.run(sql\`THIS IS INVALID SQL\`)` to force a typed `DrizzleQueryError` that `Effect.catchCause` can handle.
+function requireConfig(input: unknown) {
+  ...
+}
+```
 
-**Hot-path callbacks that need Effect queue handoff: use `Queue.bounded + runFork(offer) + forkScoped(Stream.fromQueue)`.** Native callbacks (parcel watcher, node-pty, file watchers) can't `await` Effect. Old pattern was per-event `Effect.runForkWith(context)` which spawned an unbounded number of fibers. New pattern: one `Queue.bounded(N)` per watcher instance, the callback does `Effect.runFork(Queue.offer(queue, event))`, and a single `Effect.forkScoped(Stream.fromQueue(queue))` drains. Bounded backpressure + single drain fiber replaces unbounded forks. Reference: Phase 5 `packages/core/src/filesystem/watcher.ts:86-99`.
+- Keep helpers close to the code they support, below the main export when that improves readability.
+- Do not over-abstract simple expressions into many single-use helpers; extract only when it names a real concept like `requireConfig` or `readMetadata`.
+- Do not return `Effect` from helpers unless they actually perform effectful work. Synchronous parsing, validation, and option building should stay synchronous.
+- Prefer Effect schema helpers such as `Schema.UnknownFromJsonString` and `Schema.decodeUnknownOption` over manual `JSON.parse` wrapped in `Effect.try` when parsing untrusted JSON strings.
+- Add comments for non-obvious constraints and surprising behavior, not for obvious assignments or control flow.
 
-**Versioned JSONB payloads enable non-destructive schema evolution.** Drizzle `text({ mode: "json" })` columns should be paired with `.$type<Shape>()` AND wrapped at write time as `{ _v: 1, data: T }`. Reads use a defensive parser that accepts BOTH versioned (`{ _v, data }`) and legacy (raw `T`) shapes so old rows continue to work. This avoids the "default to non-destructive migrations" lesson failing for JSONB columns specifically. Reference: Phase 9 `packages/core/src/banyancode/memory-payload.ts` (new file) and `memory-repo.ts` defensive `unwrapMemoryValue`.
+### Schema Definitions (Drizzle)
 
-**Skip-reason counters must be explicit per-bucket, never a residual.** When a code-walker classifies files into multiple skip reasons (gitignored, banyanignored, artifact, tooLarge, minified, tooLargeParse, cached, readError, parseFailure, etc.), never compute one bucket as `total - sumOfOtherBuckets` to avoid double-counting. Hardcoding the missing reasons to `0` or silently merging them into a `tooLarge` aggregate is also wrong — the caller can't tell why files were skipped. Pattern: a `Ref<number>` per bucket, incremented at the exact decision site. The `result.skipped` field is the EXPLICIT SUM of all bucket Refs. Reference: Phase 4 PR 1 `packages/core/src/banyancode/codegraph-indexer.ts:712-738`. Old shape (a debugging black box): `skippedByReason: { gitignored, banyanignored: 0, artifact: 0, tooLarge: skippedBySize + skippedTooLargeParse + skippedMinified, cached, parseFailure: skippedParseFailure + skippedReadError }`. New shape: 9 separate buckets, every counter populated at the exact skip site.
+Use snake_case for field names so column names don't need to be redefined as strings.
 
-**Regex parsers do not throw — `parseFailure` counters stay at zero forever.** The codegraph typescript/python parsers in `packages/core/src/banyancode/langs/` are pure regex. They silently produce empty node lists for malformed input — they never raise. So `CodegraphRepo.recordParseError` records only Effect failures (e.g., DB write errors, Drizzle typed errors during `tx.insert(...)`), not actual syntax errors. A user reading `codegraph_parse_errors` will see Effect stack traces, not "missing brace on line 42". Real parse-error visibility requires migrating to a real tree-sitter (or other grammar) backend — tracked as Wave 5. Until then, surface this caveat in any tool that claims to report parse failures: `parseErrors.length === 0` does NOT mean the code parsed correctly, only that no Effect failure occurred during indexing. Adding a test that triggers a true parse failure requires either the tree-sitter migration OR injecting a deliberately-malformed Effect throw at the parser level.
+```ts
+// Good
+const table = sqliteTable("session", {
+  id: text().primaryKey(),
+  project_id: text().notNull(),
+  created_at: integer().notNull(),
+})
 
-**Tree-sitter layer wasm imports must tolerate runtime module-load failure.** Re-applied 2026-07-07 after PRs 5-9 of the codegraph-hardening plan were reverted (root cause: `langs/tree-sitter.ts` exports a top-level `webTreeSitterReady: Promise<void> = ensureWebTreeSitterReady()` that synchronously kicks off `import("web-tree-sitter/tree-sitter.wasm", { with: { type: "wasm" } })`. The `with: { type: "wasm" }` import-attribute syntax is Stage-3 ECMAScript and **not supported in all module loaders** (older Node CJS, some Bun SSR contexts, or when bundled by Bun for opencode distribution). If the dynamic import rejects, `CodegraphIndexer.defaultLayer` (which `Layer.provide`s `TreeSitter.layer`) fails to build, which transitively breaks `BanyanTools.locationLayer` (since `tools-layer.ts:45` provides `codegraphIndexerLayer` to the merged banyancode tool layer), which means **no banyancode tools get registered** at runtime — the agent sees only opencode primitives). Fix pattern: wrap the wasm init in `Effect.catchAll` so the layer always constructs successfully; parser calls fail at use time with a typed error, not at build time with a silent registration failure. Reference: `specs/banyancode/tool-visibility-bisect.md` for the full bisect log and root-cause analysis.
+// Bad
+const table = sqliteTable("session", {
+  id: text("id").primaryKey(),
+  projectID: text("project_id").notNull(),
+  createdAt: integer("created_at").notNull(),
+})
+```
 
-**`Schema.annotate({ identifier })` on a struct used as an HTTP body field can corrupt single-element array decoding.** Symptom: POST with `focusDirs: ["packages"]` returns `Expected array, got "packages"` (HTTP 400); `focusDirs: ["packages", "specs"]` works. Diagnosis: tested all 4 layers in isolation — the Schema decoder handles single-element arrays correctly, the Banyan layer handles them correctly, the OpenAPI spec renders `focusDirs` as `type: array`, the SDK gen renders `focusDirs: Array<string>`. The bug only manifests through the actual HttpApi body pipeline when the struct is extracted into a named `$ref` via `.annotate({ identifier })`. Effect's HttpApi $ref-resolution path drops the wrapper for single-element arrays in this case. Fix: drop `.annotate({ identifier })` so the struct is inlined into each input schema (matches the pattern in `tool/repository-wave2.ts` which never had the bug). Symptom was first reported against `focusDirs` on `WorkspaceContextSchema` in `groups/repository-intel.ts` (Phase 4 PR 4). Add a regression test that POSTs both shapes through the actual HTTP layer — testing only the Schema or the Banyan layer will not catch this. Reference: `packages/opencode/test/banyancode/repository-intel-http.test.ts`.
+## Testing
 
-**`Effect.forkScoped` / `Effect.forkIn(work, Effect.scope)` requires Scope in the fiber's CONTEXT.** It works inside `Effect.scoped` and inside fibers created by `Effect.scoped`. It FAILS with `Service not found: effect/Scope` inside fibers created by `ManagedRuntime.runFork` because `Fiber.runIn(scope)` (the default `onFiberStart`) attaches the fiber as a CHILD of the runtime scope, but does NOT add Scope to the fiber context. Use `Effect.forkDetach(work)` instead when you need a long-lived background task to survive the originating request scope — it attaches to the runtime's global scope (never closed) and doesn't need Scope in context. This bit `CodegraphBuildService.start()` and `banyancode-codegraph-bridge.ts` — both silently forked fibers whose work gen never ran (no `onProgress` ever fired, TUI stuck at `0/0 Running`). Symptom: handler returns successfully, TUI shows the toast, but the DB WAL never grows.
+- Avoid mocks as much as possible, you shouldn't be using globalThis.\* at all unless it's the only option.
+- Test actual implementation, do not duplicate logic into tests
+- Tests cannot run from repo root (guard: `do-not-run-tests-from-root`); run from package dirs like `packages/opencode`.
 
-**When wiring a new HTTP route that kicks off a long-running task, the handler must run the kickoff via `AppRuntime.runFork(...)`.** Even after fixing `forkScoped` → `forkDetach` inside the service, the handler itself runs in the REQUEST scope. If the handler does `yield* buildService.start(...)` directly, the call enters the service from the request fiber; the service's `Effect.forkDetach` still works (it attaches to the global scope), but the surrounding gen completes in the request scope. Pattern: wrap the call in `AppRuntime.runFork(Effect.gen(function*() { yield* buildService.start(...) }))` so the whole kickoff runs in the AppRuntime's fiber, isolating it from request teardown. Reference: `packages/opencode/src/server/routes/instance/httpapi/handlers/global.ts:174-189` (the `codegraphBuildHandler`).
+## Type Checking
 
-**BanyanCode-specific HTTP routes that kick off long-running work must live on `/global/*` (RootHttpApi), not on `/session/{id}/*`.** Slash commands like `/codegraph-build`, `/codegraph-cancel`, `/codegraph-remove` should be exposed as global endpoints (`POST /global/codegraph-build`) so they work whether or not the user has an active session. The TUI command-palette entry and the prompt-input slash handler both call the global endpoint. The session-scoped `/session/{id}/command` route is fine for LLM-driven commands (which need a session context) but wrong for workspace-level utility commands that just take a root and a flag. Reference: `packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:106-118` (`GlobalPaths.codegraphBuild`) and `handlers/global.ts:174-189`.
+- Always run `bun typecheck` from package directories (e.g., `packages/opencode`), never `tsc` directly.
 
-**Iterating over an Effect without `yield*` doesn't always throw — it can silently yield undefined.** If an interface defines a method returning an `Effect.Effect<ReadonlyMap<K, V>>`, and a consumer expects a synchronous `ReadonlyMap<K, V>` (perhaps due to an `as never` type erasure in the bridge code), a loop like `for (const [key, value] of catalog.list())` will iterate over the Effect object itself rather than failing to compile. This results in undefined values (e.g., `TypeError: undefined is not an object` when accessing properties on the value) instead of a clear "not iterable" error. Always ensure methods returning Effects are `yield*`ed and that interface boundaries between layers (like `ToolCatalog.Interface` vs `ToolRegistry.Interface`) are strictly typed without `as never` casts hiding the return type.
+## V2 Session Core
 
-**Sidebar plugin spacing: the wrapper owns the inter-plugin gap, plugins must NOT add their own.** The sidebar renders each `sidebar_content` plugin as a sibling under one `<box flexDirection="column">`. Setting `gap={1}` on that wrapper gives every plugin a consistent 1-row separator. But if any individual plugin's first content element ALSO uses `marginTop={1}` to push itself away from its own header, those two gaps stack into 2 blank rows between sections. Pattern: (a) wrapper has `gap={1}`; (b) every plugin's first content element after the header uses `marginTop={0}`. Internal spacing WITHIN a plugin (e.g. between two bar charts) may still use `marginTop={1}` since it's a different axis. Test it: `packages/tui/test/feature-plugins/sidebar/sidebar-compact-spacing.test.tsx` asserts the wrapper has `gap={1}` AND every plugin's first content element after the header has `marginTop={0}` — if any plugin regresses and adds its own `marginTop={1}`, the test fails. Reference: `packages/tui/src/routes/session/sidebar.tsx:69` and the sidebar plugins under `packages/tui/src/feature-plugins/sidebar/`.
-
-**System-prompt tool guide = static policy header + dynamic catalog rendered from the tool registry.** Hand-typing tool catalogs into agent `.txt` files or provider prompts drifts the moment the registry changes. Pattern: the `CodegraphSystemSource` (`packages/core/src/banyancode/codegraph-system-source.ts`) splits into (a) a static `POLICY_TEXT` header always emitted when BanyanCode is enabled, and (b) a `renderToolGuide(tools)` helper that takes a filtered `Tool.Def[]` and renders the per-tool section. A single `BANYAN_TOOL_IDS` allowlist inside the source decides which IDs are LLM-facing; the upstream `ToolRegistry.tools(agent, model)` call already enforces visibility (public/advanced/internal) and permission. Adding a tool to `registry.ts` automatically updates every prompt. Reference: commits `7998ad094` (source layer), `469b55b18` (provider-prompt fix), and `e8f867236` (test suite) on `main`.
-
-**V1 and V2 runtimes are independent — both need code-graph-policy awareness.** `packages/opencode/src/session/system.ts` (V1, default) and `packages/core/src/session/runner/llm.ts:170-227` (V2, gated by `OPENCODE_EXPERIMENTAL_EVENT_SYSTEM`) each assemble their system prompt from independent sources. A fix that only touches V1 reaches half the agents. The `CodegraphSystemSource` module exports both a V1 adapter (via `Effect.serviceOption` in `system.ts:codegraph`) and a V2 registration helper (`register(registry)` against `SystemContextRegistry.Service`). Any future prompt-level policy needs both seams.
-
-**Default-allowing tools in `permissions` defaults vs per-agent `"*": "deny"` — `Permission.merge` uses `findLast`.** Adding a tool to the `defaults` block (`agent.ts:129-146`) is NOT enough for agents that have `"*": "deny"` at the top of their own config (e.g., `explore:266`). Because `Permission.merge` concatenates and `findLast` (`packages/core/src/permission/index.ts:102-112`) takes the last matching rule, the deny on `*` does NOT silently merge with `defaults["*"]: "allow"` — every tool you want allowed in such an agent must appear explicitly AFTER the `*` deny. Symptom: a test passes for most agents but the agent with `"*": "deny"` denies the new tool. Fix: add the tool allow row to that agent's per-agent permission block, not just the defaults. Reference: `explore` permission block at `packages/opencode/src/agent/agent.ts:265-313` (explicit allow rows for `codegraph_remove`, `blast_radius`, `preflight`, `safe_rename` were required after defaults added them, per audit finding #2 and Phase 5 commit `133231ef0`).
-
-**Three-commit split for parallel subagent work on prompt/system files.** When the work touches both (a) a system-prompt module, (b) per-agent `.txt` prompts and permissions, and (c) provider prompt files, dispatch in parallel but commit separately. The natural seams are the three file groups themselves. Test files that assert on prompt content (e.g., `coder-scout.test.ts:62`'s `toContain("codegraph")`) break when the prompt strips happen (group b), but the fix to the test assertion logically belongs with the prompt change — so bundle the test fix with the prompt commit, not with a separate "tests" commit. Reference: commits `7998ad094`, `133231ef0`, `469b55b18` on `main`.
+- Keep durable prompt admission separate from model execution. `SessionV2.prompt(...)` admits one durable `session_input` row before scheduling advisory `SessionExecution.wake(sessionID)` unless `resume: false` requests admit-only behavior. The serialized runner promotes admitted inputs into visible user messages at safe boundaries.
+- Reusing a Session ID adopts the existing Session. Reusing a prompt message ID reconciles an exact retry only when Session, prompt, and delivery mode match; conflicting reuse fails. Historical projected prompts lazily synthesize promoted inbox records during exact retry.
+- Keep `SessionExecution` process-global and Session-ID based. Its local implementation owns the process-local Session coordinator and discovers placement through `SessionStore` plus `LocationServiceMap.get(session.location)` only when a drain starts; no layer should take a Session ID. V2 interruption targets the active process-local ownership chain for that Session; idle or missing interruption is a no-op.
+- Keep `SessionRunner`, model resolution, tool registry, permissions, and filesystem Location-scoped. Omitted `Location.workspaceID` means implicit-local placement; explicit workspace identity remains reserved for future placement semantics.
+- Preserve one explicit `llm.stream(request)` call per provider turn and reload projected history before durable continuation. Do not bridge through legacy `SessionPrompt.loop(...)` or delegate orchestration to an in-memory tool loop.
+- Keep local Session drains process-local until clustering is implemented. `SessionRunCoordinator` joins explicit same-Session resumes, coalesces prompt wakeups, and allows different Sessions to run concurrently. Advisory wakes drain eligible durable inbox rows only; post-crash continuation recovery requires a separate explicit design before it may retry provider work. A drain has no durable identity or transcript boundary.
+- Keep delivery vocabulary explicit. Prompts steer by default and promote at the next safe provider-turn boundary while the current drain requires continuation. An explicit `queue` input remains pending until the Session would otherwise become idle; promote one queued input at that boundary, then reevaluate continuation before promoting another. Promoting any new user input resets the selected agent's provider-turn allowance; a batch of steers resets it once.
+- Keep EventV2 replay owner claims separate from clustered Session execution ownership.
+- Keep the System Context algebra, registry, and built-ins in `src/system-context`; keep Context Source producers with their observed domains, and keep Session History selection plus Context Epoch persistence Session-owned.

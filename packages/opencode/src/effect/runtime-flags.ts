@@ -2,7 +2,6 @@ import { Config, ConfigProvider, Context, Effect, Layer, Option } from "effect"
 import { ConfigService } from "@/effect/config-service"
 
 const bool = (name: string) => Config.boolean(name).pipe(Config.withDefault(false))
-const boolTrue = (name: string) => Config.boolean(name).pipe(Config.withDefault(true))
 const positiveInteger = (name: string) =>
   Config.number(name).pipe(
     Config.map((value) => (Number.isInteger(value) && value > 0 ? value : undefined)),
@@ -14,27 +13,8 @@ const enabledByExperimental = (name: string) =>
     Config.map((flags) => Option.getOrElse(flags.enabled, () => flags.experimental)),
   )
 
-// Background subagents default to ON for BanyanCode installs. The precedence is:
-//   1. Explicit OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true|false always wins.
-//   2. OPENCODE_EXPERIMENTAL=true (umbrella) enables it.
-//   3. Otherwise default to ON — BanyanCode users get background subagents out
-//      of the box. Operators can still disable for a single install via
-//      OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=false or BANYANCODE_ENABLE=0
-//      (which falls back to BANYANCODE_ENABLE's existing boolTrue default).
-const experimentalBackgroundSubagentsConfig = Config.all({
-  enabled: Config.boolean("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS").pipe(Config.option),
-  experimental,
-  banyancodeEnable: Config.boolean("BANYANCODE_ENABLE").pipe(Config.withDefault(true)),
-}).pipe(
-  Config.map((flags) =>
-    Option.getOrElse(flags.enabled, () => flags.experimental || flags.banyancodeEnable),
-  ),
-)
-
 export class Service extends ConfigService.Service<Service>()("@opencode/RuntimeFlags", {
   autoShare: bool("OPENCODE_AUTO_SHARE"),
-  banyancodeEnable: boolTrue("BANYANCODE_ENABLE"),
-  banyancodeYoloMode: bool("BANYANCODE_YOLO_MODE"),
   pure: bool("OPENCODE_PURE"),
   disableDefaultPlugins: bool("OPENCODE_DISABLE_DEFAULT_PLUGINS"),
   disableEmbeddedWebUi: bool("OPENCODE_DISABLE_EMBEDDED_WEB_UI"),
@@ -60,11 +40,12 @@ export class Service extends ConfigService.Service<Service>()("@opencode/Runtime
   enableExperimentalModels: bool("OPENCODE_ENABLE_EXPERIMENTAL_MODELS"),
   enableQuestionTool: bool("OPENCODE_ENABLE_QUESTION_TOOL"),
   experimentalReferences: enabledByExperimental("OPENCODE_EXPERIMENTAL_REFERENCES"),
-  experimentalBackgroundSubagents: experimentalBackgroundSubagentsConfig,
+  experimentalBackgroundSubagents: enabledByExperimental("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
   experimentalLspTy: bool("OPENCODE_EXPERIMENTAL_LSP_TY"),
   experimentalLspTool: enabledByExperimental("OPENCODE_EXPERIMENTAL_LSP_TOOL"),
   experimentalOxfmt: enabledByExperimental("OPENCODE_EXPERIMENTAL_OXFMT"),
   experimentalPlanMode: enabledByExperimental("OPENCODE_EXPERIMENTAL_PLAN_MODE"),
+  experimentalCodeMode: enabledByExperimental("OPENCODE_EXPERIMENTAL_CODE_MODE"),
   experimentalEventSystem: enabledByExperimental("OPENCODE_EXPERIMENTAL_EVENT_SYSTEM"),
   experimentalWorkspaces: enabledByExperimental("OPENCODE_EXPERIMENTAL_WORKSPACES"),
   experimentalIconDiscovery: enabledByExperimental("OPENCODE_EXPERIMENTAL_ICON_DISCOVERY"),
@@ -77,7 +58,7 @@ export class Service extends ConfigService.Service<Service>()("@opencode/Runtime
 
 export type Info = Context.Service.Shape<typeof Service>
 
-const emptyConfigLayer = Service.defaultLayer.pipe(
+const emptyConfigLayer = Service.layer.pipe(
   Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
   Layer.orDie,
 )
@@ -91,9 +72,7 @@ export const layer = (overrides: Partial<Info> = {}) =>
     }),
   ).pipe(Layer.provide(emptyConfigLayer))
 
-export const defaultLayer = Service.defaultLayer.pipe(Layer.orDie)
-
-export const node = LayerNode.make(defaultLayer, [])
+export const node = LayerNode.make({ service: Service, layer: Service.layer.pipe(Layer.orDie), deps: [] })
 
 export * as RuntimeFlags from "./runtime-flags"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"

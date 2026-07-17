@@ -83,11 +83,7 @@ export function formatAssistantHeader(
 
 export function formatPart(part: Part, options: TranscriptOptions): string {
   if (part.type === "text" && !part.synthetic) {
-    let text = part.text
-    if (text.trim().startsWith("</think>")) {
-      text = text.trim().slice(8).trim()
-    }
-    return `${text}\n\n`
+    return `${part.text}\n\n`
   }
 
   if (part.type === "reasoning") {

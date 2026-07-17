@@ -19,10 +19,10 @@ body:
       required: false
 
   - type: input
-    id: banyancode-version
+    id: opencode-version
     attributes:
-      label: BanyanCode version
-      description: What version of BanyanCode are you using?
+      label: OpenCode version
+      description: What version of OpenCode are you using?
     validations:
       required: false
 

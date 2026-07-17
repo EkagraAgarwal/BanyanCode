@@ -250,10 +250,9 @@ export function RunPromptBody(props: {
   })
 
   return (
-    <box id="run-direct-footer-prompt" width="100%">
-      <box id="run-direct-footer-input-shell" paddingTop={1} paddingBottom={1} paddingRight={2}>
+    <box width="100%">
+      <box paddingTop={1} paddingBottom={1} paddingRight={2}>
         <textarea
-          id="run-direct-footer-composer"
           width="100%"
           minHeight={TEXTAREA_MIN_ROWS}
           maxHeight={TEXTAREA_MAX_ROWS}
@@ -419,24 +418,6 @@ export function createPromptState(input: PromptInput): PromptState {
       } satisfies SlashOption,
       { kind: "slash", name: "new", display: "/new", description: "start a new session" } satisfies SlashOption,
       { kind: "slash", name: "exit", display: "/exit", description: "close OpenCode" } satisfies SlashOption,
-      {
-        kind: "slash",
-        name: "variant",
-        display: "/variant",
-        description: "choose reasoning variant level (e.g. low, medium, high, off)",
-      } satisfies SlashOption,
-      {
-        kind: "slash",
-        name: "thinking",
-        display: "/thinking",
-        description: "choose reasoning thinking budget/effort (e.g. low, high, off)",
-      } satisfies SlashOption,
-      {
-        kind: "slash",
-        name: "reasoning",
-        display: "/reasoning",
-        description: "choose reasoning effort (e.g. low, medium, high, off)",
-      } satisfies SlashOption,
     ]
     const hidden = new Set(builtins.map((item) => item.name))
     const showSkillMenu = !shell() && skillCommands().length > 0 && !hasSkillsCommand()

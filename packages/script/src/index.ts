@@ -23,33 +23,28 @@ const env = {
   OPENCODE_VERSION: process.env["OPENCODE_VERSION"],
   OPENCODE_RELEASE: process.env["OPENCODE_RELEASE"],
 }
-
-const stripV = (v: string) => v.replace(/^v/, "").trim()
-
-const BANYAN_VERSION = await (async () => {
-  const file = Bun.file(path.resolve(import.meta.dir, "../../opencode/package.json"))
-  const pkg = JSON.parse(await file.text()) as { version?: string }
-  return pkg.version?.trim() ?? "0.0.0"
-})()
-
 const CHANNEL = await (async () => {
   if (env.OPENCODE_CHANNEL) return env.OPENCODE_CHANNEL
   if (env.OPENCODE_BUMP) return "latest"
-  if (env.OPENCODE_VERSION && stripV(env.OPENCODE_VERSION) === BANYAN_VERSION) return "latest"
+  if (env.OPENCODE_VERSION && !env.OPENCODE_VERSION.startsWith("0.0.0-")) return "latest"
   return await $`git branch --show-current`.text().then((x) => x.trim())
 })()
 const IS_PREVIEW = CHANNEL !== "latest"
 
 const VERSION = await (async () => {
-  if (env.OPENCODE_VERSION) {
-    const trimmed = stripV(env.OPENCODE_VERSION)
-    if (!trimmed) throw new Error("OPENCODE_VERSION is empty after stripping leading 'v'")
-    return trimmed
-  }
-  if (IS_PREVIEW) {
-    return `0.0.0-${CHANNEL}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`
-  }
-  return BANYAN_VERSION
+  if (env.OPENCODE_VERSION) return env.OPENCODE_VERSION
+  if (IS_PREVIEW) return `0.0.0-${CHANNEL}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`
+  const version = await fetch("https://registry.npmjs.org/opencode-ai/latest")
+    .then((res) => {
+      if (!res.ok) throw new Error(res.statusText)
+      return res.json()
+    })
+    .then((data: any) => data.version)
+  const [major, minor, patch] = version.split(".").map((x: string) => Number(x) || 0)
+  const t = env.OPENCODE_BUMP?.toLowerCase()
+  if (t === "major") return `${major + 1}.0.0`
+  if (t === "minor") return `${major}.${minor + 1}.0`
+  return `${major}.${minor}.${patch + 1}`
 })()
 
 const bot = ["actions-user", "opencode", "opencode-agent[bot]"]
@@ -73,7 +68,7 @@ export const Script = {
     return IS_PREVIEW
   },
   get release(): boolean {
-    return env.OPENCODE_RELEASE === "true" || env.OPENCODE_RELEASE === "1"
+    return !!env.OPENCODE_RELEASE
   },
   get team() {
     return team

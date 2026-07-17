@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { batch, createContext, createEffect, onCleanup, Show, useContext, type JSX, type ParentProps } from "solid-js"
 import { useTheme } from "../context/theme"
@@ -46,10 +45,13 @@ export function Dialog(
       paddingTop={dimensions().height / 4}
       left={0}
       top={0}
-      backgroundColor={theme.background}
+      backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
     >
       <box
         onMouseUp={(e: { stopPropagation(): void }) => {
+          // A selection release must bubble up to the copy-on-select handler in
+          // DialogProvider; the backdrop's dismiss flag keeps it from closing the dialog.
+          if (renderer.getSelection()?.getSelectedText()) return
           dismiss = false
           e.stopPropagation()
         }}

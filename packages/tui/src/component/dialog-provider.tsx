@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { createMemo, createSignal, onMount, Show } from "solid-js"
 import { useSync } from "../context/sync"
 import { map, pipe, sortBy } from "remeda"
@@ -285,7 +284,7 @@ function AutoMethod(props: AutoMethodProps) {
   })
 
   return (
-    <box paddingLeft={1} paddingRight={1} gap={1} paddingBottom={1}>
+    <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
       <box flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
           {props.title}
@@ -367,8 +366,8 @@ function ApiMethod(props: ApiMethodProps) {
     <DialogPrompt
       title={props.title}
       placeholder="API key"
-      description={
-        {
+      description={() =>
+        ({
           opencode: (
             <box gap={1}>
               <text fg={theme.textMuted}>
@@ -391,7 +390,7 @@ function ApiMethod(props: ApiMethodProps) {
               </text>
             </box>
           ),
-        }[props.providerID] ?? undefined
+        })[props.providerID] ?? undefined
       }
       onConfirm={async (value) => {
         if (!value) return

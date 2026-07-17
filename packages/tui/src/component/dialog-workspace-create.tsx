@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import type { ExperimentalWorkspaceAdapterListResponse, Workspace } from "@opencode-ai/sdk/v2"
 import { useDialog } from "../ui/dialog"
 import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
@@ -133,7 +132,7 @@ export async function warpWorkspaceSession(input: {
 
   input.project.workspace.set(input.workspaceID)
 
-  await input.sync.bootstrap()
+  await input.sync.bootstrap({ fatal: false }).catch(() => undefined)
 
   const dir = input.project.instance.directory() || input.sync.path.directory
   if (dir) {

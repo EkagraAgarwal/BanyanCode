@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { createContext, Show, useContext, type ParentProps } from "solid-js"
 
 export function createSimpleContext<T, Props extends Record<string, any>>(input: {

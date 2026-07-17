@@ -1,9 +1,10 @@
-import { ProviderHelper, CommonRequest, CommonResponse, CommonChunk, CommonContentPart } from "./provider"
+import { ProviderHelper, CommonRequest, CommonResponse, CommonChunk } from "./provider"
 
 type Usage = {
   input_tokens?: number
   input_tokens_details?: {
     cached_tokens?: number
+    cache_write_tokens?: number
   }
   output_tokens?: number
   output_tokens_details?: {
@@ -20,7 +21,6 @@ export const openaiHelper: ProviderHelper = ({ workspaceID }) => ({
   },
   modifyBody: (body: Record<string, any>) => body,
   createBinaryStreamDecoder: () => undefined,
-  streamSeparator: "\n\n",
   createUsageParser: () => {
     let usage: Usage
 
@@ -49,12 +49,13 @@ export const openaiHelper: ProviderHelper = ({ workspaceID }) => ({
     const outputTokens = usage.output_tokens ?? 0
     const reasoningTokens = usage.output_tokens_details?.reasoning_tokens ?? undefined
     const cacheReadTokens = usage.input_tokens_details?.cached_tokens ?? undefined
+    const cacheWriteTokens = usage.input_tokens_details?.cache_write_tokens ?? undefined
     return {
       inputTokens: inputTokens - (cacheReadTokens ?? 0),
       outputTokens,
       reasoningTokens,
       cacheReadTokens,
-      cacheWrite5mTokens: undefined,
+      cacheWrite5mTokens: cacheWriteTokens,
       cacheWrite1hTokens: undefined,
     }
   },
@@ -63,36 +64,24 @@ export const openaiHelper: ProviderHelper = ({ workspaceID }) => ({
 export function fromOpenaiRequest(body: any): CommonRequest {
   if (!body || typeof body !== "object") return body
 
-  interface OpenaiImagePart {
-    type?: string
-    image_url?: { url: string }
-    source?: {
-      type?: string
-      url?: string
-      media_type?: string
-      data?: string
-    }
-  }
-
-  const toImg = (p: any): CommonContentPart | undefined => {
+  const toImg = (p: any) => {
     if (!p || typeof p !== "object") return undefined
-    const img = p as OpenaiImagePart
-    if (img.type === "image_url" && img.image_url)
-      return { type: "image_url", image_url: img.image_url }
-    if (img.type === "input_image" && img.image_url)
-      return { type: "image_url", image_url: img.image_url }
-    const s = img.source
+    if ((p as any).type === "image_url" && (p as any).image_url)
+      return { type: "image_url", image_url: (p as any).image_url }
+    if ((p as any).type === "input_image" && (p as any).image_url)
+      return { type: "image_url", image_url: (p as any).image_url }
+    const s = (p as any).source
     if (!s || typeof s !== "object") return undefined
-    if (s.type === "url" && typeof s.url === "string")
-      return { type: "image_url", image_url: { url: s.url } }
+    if ((s as any).type === "url" && typeof (s as any).url === "string")
+      return { type: "image_url", image_url: { url: (s as any).url } }
     if (
-      s.type === "base64" &&
-      typeof s.media_type === "string" &&
-      typeof s.data === "string"
+      (s as any).type === "base64" &&
+      typeof (s as any).media_type === "string" &&
+      typeof (s as any).data === "string"
     )
       return {
         type: "image_url",
-        image_url: { url: `data:${s.media_type};base64,${s.data}` },
+        image_url: { url: `data:${(s as any).media_type};base64,${(s as any).data}` },
       }
     return undefined
   }

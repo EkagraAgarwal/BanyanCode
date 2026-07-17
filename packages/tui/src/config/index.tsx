@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 export * as TuiConfig from "."
 
 import { createBindingLookup } from "@opentui/keymap/extras"
@@ -64,11 +63,10 @@ export const Info = Schema.Struct({
   scroll_acceleration: Schema.optional(ScrollAcceleration),
   diff_style: Schema.optional(DiffStyle),
   mouse: Schema.optional(Schema.Boolean).annotate({ description: "Enable or disable mouse capture (default: true)" }),
-  meshSidebar: Schema.optional(Schema.Boolean).annotate({ description: "Show the BanyanCode mesh sidebar in the TUI" }),
 })
 export type Info = Schema.Schema.Type<typeof Info>
 
-export type Resolved = Omit<Info, "attention" | "keybinds" | "leader_timeout" | "mouse" | "meshSidebar"> & {
+export type Resolved = Omit<Info, "attention" | "keybinds" | "leader_timeout" | "mouse"> & {
   attention: {
     enabled: boolean
     notifications: boolean
@@ -80,7 +78,6 @@ export type Resolved = Omit<Info, "attention" | "keybinds" | "leader_timeout" | 
   keybinds: TuiKeybind.BindingLookupView
   leader_timeout: number
   mouse: boolean
-  meshSidebar: boolean
 }
 
 export const ResolveOptions = Schema.Struct({
@@ -116,7 +113,6 @@ export function resolve(input: Info, options: ResolveOptions): Resolved {
     }),
     leader_timeout: input.leader_timeout ?? LeaderTimeoutDefault,
     mouse: input.mouse ?? true,
-    meshSidebar: input.meshSidebar ?? false,
   }
 }
 

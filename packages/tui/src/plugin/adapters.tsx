@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import type { TuiDialogSelectOption, TuiPluginApi, TuiSlotProps } from "@opencode-ai/plugin/tui"
 import type { TuiConfig } from "../config"
 import type { useEvent } from "../context/event"
@@ -114,6 +113,7 @@ function stateApi(sync: ReturnType<typeof useSync>): TuiPluginApi["state"] {
       if (!sync.data.vcs) return
       return {
         branch: sync.data.vcs.branch,
+        default_branch: sync.data.vcs.default_branch,
       }
     },
     session: {

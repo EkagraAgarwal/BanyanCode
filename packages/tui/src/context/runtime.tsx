@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { createComponent, createContext, type JSX, useContext } from "solid-js"
 
 export type TuiPaths = Readonly<{

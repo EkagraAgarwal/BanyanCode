@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { createMemo, createSignal } from "solid-js"
 import { useLocal } from "../context/local"
 import { useSync } from "../context/sync"

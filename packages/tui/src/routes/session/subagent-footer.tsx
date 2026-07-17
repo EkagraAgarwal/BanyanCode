@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { createMemo, createSignal, Show } from "solid-js"
 import { useRouteData } from "../../context/route"
 import { useSync } from "../../context/sync"
@@ -71,7 +70,7 @@ export function SubagentFooter() {
         paddingLeft={2}
         paddingRight={1}
         {...SplitBorder}
-        border={["left", "right", "top", "bottom"]}
+        border={["left"]}
         borderColor={theme.border}
         flexShrink={0}
         backgroundColor={theme.backgroundPanel}

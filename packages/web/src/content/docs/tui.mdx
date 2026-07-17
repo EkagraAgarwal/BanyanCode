@@ -240,21 +240,17 @@ List available themes.
 
 ---
 
-### thinking / reasoning / variant
+### thinking
 
-Configure the model's reasoning mode (on/off) or set its reasoning effort/thinking level (using standard OpenAI or Anthropic values).
-
-Accepts values like `low`, `medium`, `high`, `xhigh`, `max`, `on` (enables reasoning with a default/high level), and `off` / `none` / `disabled` (disables reasoning). If run without arguments, it prints the current active variant and all available variants for the active model.
-
-```bash frame="none"
-/variant high
-/thinking off
-/reasoning low
-```
+Toggle the visibility of thinking/reasoning blocks in the conversation. When enabled, you can see the model's reasoning process for models that support extended thinking.
 
 :::note
-These commands configure the model's reasoning level/budget for the current session. To cycle through model variants using a keybind, you can also press `ctrl+t`.
+This command only controls whether thinking blocks are **displayed** - it does not enable or disable the model's reasoning capabilities. To toggle actual reasoning capabilities, use `ctrl+t` to cycle through model variants.
 :::
+
+```bash frame="none"
+/thinking
+```
 
 ---
 

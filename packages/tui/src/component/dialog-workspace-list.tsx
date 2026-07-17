@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import type { Workspace } from "@opencode-ai/sdk/v2"
 import { useDialog } from "../ui/dialog"
 import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
@@ -83,7 +82,7 @@ export function DialogWorkspaceList() {
       route.navigate({ type: "home" })
     }
     await project.workspace.sync()
-    await sync.bootstrap()
+    await sync.bootstrap({ fatal: false }).catch(() => undefined)
     setRemoving(undefined)
   }
 

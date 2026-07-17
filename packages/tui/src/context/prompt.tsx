@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { createSimpleContext } from "./helper"
 import type { PromptRef } from "../component/prompt"
 

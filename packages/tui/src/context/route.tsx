@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { createStore, reconcile } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import type { PromptInfo } from "../prompt/history"

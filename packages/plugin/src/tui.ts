@@ -315,7 +315,6 @@ export type TuiThemeCurrent = {
   readonly backgroundPanel: RGBA
   readonly backgroundElement: RGBA
   readonly backgroundMenu: RGBA
-  readonly overlay: RGBA
   readonly border: RGBA
   readonly borderActive: RGBA
   readonly borderSubtle: RGBA
@@ -383,7 +382,7 @@ export type TuiState = {
     worktree: string
     directory: string
   }
-  readonly vcs: { branch?: string } | undefined
+  readonly vcs: { branch?: string; default_branch?: string } | undefined
   session: {
     count: () => number
     get: (sessionID: string) => Session | undefined

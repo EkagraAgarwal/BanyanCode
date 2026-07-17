@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { useTheme } from "../context/theme"
 
 export type WorkspaceStatus = "connected" | "connecting" | "disconnected" | "error"

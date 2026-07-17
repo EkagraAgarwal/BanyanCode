@@ -2,6 +2,8 @@ export * as TuiConfig from "./tui"
 
 import path from "path"
 import { mergeDeep, unique } from "remeda"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Cause, Context, Effect, Fiber, Layer } from "effect"
 import { ConfigParse } from "@/config/parse"
 import * as ConfigPaths from "@/config/paths"
@@ -190,27 +192,18 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
     yield* Effect.logDebug("loaded custom tui config", { path: configFile })
   }
 
-  // 2a. Explicit BANYANCODE_TUI_CONFIG override, if set.
-  if (Flag.BANYANCODE_TUI_CONFIG) {
-    const configFile = Flag.BANYANCODE_TUI_CONFIG
-    yield* mergeFile(acc, configFile)
-    yield* Effect.logDebug("loaded custom banyancode tui config", { path: configFile })
-  }
-
   // 3. Project tui files, applied root-first so the closest file wins.
   for (const file of projectFiles) {
     yield* mergeFile(acc, file)
   }
 
-  // 4. `.opencode` and `.banyancode` directories (and config dirs) discovered while
+  // 4. `.opencode` directories (and OPENCODE_CONFIG_DIR) discovered while
   // walking up the tree. Also returned below so callers can install plugin
   // dependencies from each location.
-  const dirs = unique(directories).filter(
-    (dir) => dir.endsWith(".opencode") || dir.endsWith(".banyancode") || dir === Flag.OPENCODE_CONFIG_DIR || dir === Flag.BANYANCODE_CONFIG_DIR,
-  )
+  const dirs = unique(directories).filter((dir) => dir.endsWith(".opencode") || dir === Flag.OPENCODE_CONFIG_DIR)
 
   for (const dir of dirs) {
-    if (!dir.endsWith(".opencode") && !dir.endsWith(".banyancode") && dir !== Flag.OPENCODE_CONFIG_DIR && dir !== Flag.BANYANCODE_CONFIG_DIR) continue
+    if (!dir.endsWith(".opencode") && dir !== Flag.OPENCODE_CONFIG_DIR) continue
     for (const file of ConfigPaths.fileInDirectory(dir, "tui")) {
       yield* mergeFile(acc, file)
     }
@@ -232,7 +225,7 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
   }
 })
 
-export const layer = Layer.effect(
+const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const directory = yield* CurrentWorkingDirectory
@@ -266,9 +259,9 @@ export const layer = Layer.effect(
   }).pipe(Effect.withSpan("TuiConfig.layer")),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(Npm.defaultLayer), Layer.provide(FSUtil.defaultLayer))
+export const node = LayerNode.make({ service: Service, layer, deps: [Npm.node, FSUtil.node] })
 
-const { runPromise } = makeRuntime(Service, defaultLayer)
+const { runPromise } = makeRuntime(Service, AppNodeBuilder.build(node))
 
 export async function waitForDependencies() {
   await runPromise((svc) => svc.waitForDependencies())

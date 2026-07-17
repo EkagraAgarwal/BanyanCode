@@ -1,5 +1,4 @@
-import { EventV2 } from "@opencode-ai/core/event"
-import { SessionID, MessageID, PartID } from "./schema"
+import { SessionID, MessageID } from "./schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import {
@@ -12,16 +11,15 @@ import {
   Info,
   OutputLengthError,
   Part,
-  StructuredOutputError,
   SubtaskPart,
   User,
   WithParts,
-  type ToolPart,
 } from "@opencode-ai/core/v1/session"
 
 import { NamedError } from "@opencode-ai/core/util/error"
 import { APICallError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
 import { Database } from "@opencode-ai/core/database/database"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { NotFoundError } from "@/storage/storage"
 import { and } from "drizzle-orm"
 import { desc } from "drizzle-orm"
@@ -58,16 +56,7 @@ export const Event = {
   Updated: SessionV1.Event.MessageUpdated,
   Removed: SessionV1.Event.MessageRemoved,
   PartUpdated: SessionV1.Event.PartUpdated,
-  PartDelta: EventV2.define({
-    type: "message.part.delta",
-    schema: {
-      sessionID: SessionID,
-      messageID: MessageID,
-      partID: PartID,
-      field: Schema.String,
-      delta: Schema.String,
-    },
-  }),
+  PartDelta: SessionV1.Event.PartDelta,
   PartRemoved: SessionV1.Event.PartRemoved,
 }
 
@@ -625,21 +614,6 @@ export function fromError(
       ).toObject()
     case OutputLengthError.isInstance(e):
       return e
-    case e instanceof Error &&
-      ((e as { _tag?: string })._tag === "ModelNotFoundError" ||
-        (e as { _tag?: string })._tag === "ProviderModelNotFoundError"):
-      // Surface as AuthError so the TUI's "model not found" toast matches and
-      // the error is treated as a permanent (non-retryable) failure. Without
-      // this case the error falls through to NamedError.Unknown, which masks
-      // the cause and lets runLoop keep re-iterating (the OOM path).
-      const modelErr = e as unknown as { providerID: string; modelID: string }
-      return new AuthError(
-        {
-          providerID: modelErr.providerID ?? ctx.providerID,
-          message: `Model not found: ${modelErr.providerID ?? ctx.providerID}/${modelErr.modelID}`,
-        },
-        { cause: e },
-      ).toObject()
     case LoadAPIKeyError.isInstance(e):
       return new AuthError(
         {
@@ -757,3 +731,4 @@ export function fromError(
 }
 
 export * as MessageV2 from "./message-v2"
+export const node = LayerNode.group([Database.node])

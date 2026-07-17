@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
@@ -52,7 +51,7 @@ export function DialogSessionDeleteFailed(props: {
   }))
 
   return (
-    <box paddingLeft={1} paddingRight={1} gap={1}>
+    <box paddingLeft={2} paddingRight={2} gap={1}>
       <box flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
           Failed to Delete Session

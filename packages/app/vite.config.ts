@@ -30,8 +30,4 @@ export default defineConfig({
     target: "esnext",
     sourcemap: true,
   },
-  esbuild: {
-    jsx: "automatic",
-    jsxImportSource: "solid-js",
-  },
 })

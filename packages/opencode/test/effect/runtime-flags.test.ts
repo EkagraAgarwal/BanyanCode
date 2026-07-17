@@ -1,15 +1,16 @@
 import { describe, expect } from "bun:test"
 import { ConfigProvider, Effect, Layer } from "effect"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { it } from "../lib/effect"
 
 const fromConfig = (input: Record<string, unknown>) =>
-  RuntimeFlags.defaultLayer.pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(input))))
+  AppNodeBuilder.build(RuntimeFlags.node).pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(input))))
 
 const readFlags = RuntimeFlags.Service.useSync((flags) => flags)
 
 describe("RuntimeFlags", () => {
-  it.effect("defaultLayer defaults autoShare to false", () =>
+  it.effect("layer defaults autoShare to false", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
 
@@ -17,7 +18,7 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-  it.effect("defaultLayer parses plugin flags from the active ConfigProvider", () =>
+  it.effect("layer parses plugin flags from the active ConfigProvider", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(
         Effect.provide(
@@ -64,7 +65,7 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-  it.effect("defaultLayer parses OPENCODE_EXPERIMENTAL_LSP_TY", () =>
+  it.effect("layer parses OPENCODE_EXPERIMENTAL_LSP_TY", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(
         Effect.provide(
@@ -370,75 +371,4 @@ describe("RuntimeFlags", () => {
       expect(flags.disableClaudeCodeSkills).toBe(true)
     }),
   )
-
-  describe("experimentalBackgroundSubagents defaults", () => {
-    it.effect("defaults to true when no env is set (BanyanCode install)", () =>
-      Effect.gen(function* () {
-        const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
-
-        expect(flags.experimentalBackgroundSubagents).toBe(true)
-      }),
-    )
-
-    it.effect("respects explicit OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=false", () =>
-      Effect.gen(function* () {
-        const flags = yield* readFlags.pipe(
-          Effect.provide(fromConfig({ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "false" })),
-        )
-
-        expect(flags.experimentalBackgroundSubagents).toBe(false)
-      }),
-    )
-
-    it.effect("respects explicit OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true", () =>
-      Effect.gen(function* () {
-        const flags = yield* readFlags.pipe(
-          Effect.provide(fromConfig({ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "true" })),
-        )
-
-        expect(flags.experimentalBackgroundSubagents).toBe(true)
-      }),
-    )
-
-    it.effect("umbrella OPENCODE_EXPERIMENTAL enables it", () =>
-      Effect.gen(function* () {
-        const flags = yield* readFlags.pipe(Effect.provide(fromConfig({ OPENCODE_EXPERIMENTAL: "true" })))
-
-        expect(flags.experimentalBackgroundSubagents).toBe(true)
-      }),
-    )
-
-    it.effect("explicit false overrides default-on", () =>
-      Effect.gen(function* () {
-        const flags = yield* readFlags.pipe(
-          Effect.provide(
-            fromConfig({
-              BANYANCODE_ENABLE: "true",
-              OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "false",
-            }),
-          ),
-        )
-
-        expect(flags.experimentalBackgroundSubagents).toBe(false)
-      }),
-    )
-
-    it.effect("layer overrides bypass the active ConfigProvider", () =>
-      Effect.gen(function* () {
-        const flags = yield* readFlags.pipe(
-          Effect.provide(RuntimeFlags.layer({ experimentalBackgroundSubagents: false })),
-          Effect.provide(
-            ConfigProvider.layer(
-              ConfigProvider.fromUnknown({
-                OPENCODE_EXPERIMENTAL: "true",
-                BANYANCODE_ENABLE: "true",
-              }),
-            ),
-          ),
-        )
-
-        expect(flags.experimentalBackgroundSubagents).toBe(false)
-      }),
-    )
-  })
 })

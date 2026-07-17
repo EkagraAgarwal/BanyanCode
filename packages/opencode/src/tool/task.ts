@@ -10,21 +10,10 @@ import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
-import { Effect, Exit, Option, Schema, Scope } from "effect"
+import { Effect, Exit, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
-import { Banyan } from "@opencode-ai/core/banyancode"
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import { ModelV2 } from "@opencode-ai/core/model"
-import { Service as SubagentBusService } from "@opencode-ai/core/banyancode/subagent-bus"
-import { Service as SubagentPlansService, type PlanStep } from "@opencode-ai/core/banyancode/subagent-plans-repo"
-import { Service as SubagentConsumerService } from "@opencode-ai/core/banyancode/subagent-consumer"
-import { Service as NestedSpawnRegistryService, NestedSpawnBudgetExceededError } from "@opencode-ai/core/banyancode/nested-spawn-registry"
-import {
-  MAX_NESTED_EXPLORE_LIFETIME_PER_CODER,
-  MAX_NESTED_EXPLORE_PER_CODER,
-} from "@opencode-ai/core/banyancode/max-subagents"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -60,18 +49,6 @@ const BaseParameterFields = {
       "This should only be set if you mean to resume a previous task (you can pass a prior task_id and the task will continue the same subagent session as before instead of creating a fresh one)",
   }),
   command: Schema.optional(Schema.String).annotate({ description: "The command that triggered this task" }),
-  plan: Schema.optional(
-    Schema.Struct({
-      title: Schema.String,
-      steps: Schema.Array(
-        Schema.Struct({
-          content: Schema.String,
-          status: Schema.Literals(["pending", "in_progress", "completed", "cancelled"]),
-        }),
-      ),
-      exitCriteria: Schema.String,
-    }),
-  ).annotate({ description: "An optional plan to send to the subagent at session start" }),
 }
 
 const BaseParameters = Schema.Struct(BaseParameterFields)
@@ -120,8 +97,21 @@ export const TaskTool = Tool.define(
       const runInBackground = params.background === true
       if (runInBackground && !flags.experimentalBackgroundSubagents) {
         return yield* Effect.fail(
+          new Error("Background subagents require OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true"),
+        )
+      }
+
+      const parent = yield* sessions.get(ctx.sessionID)
+      let current = parent
+      let depth = 0
+      while (current.parentID) {
+        depth++
+        current = yield* sessions.get(current.parentID)
+      }
+      if (depth >= (cfg.subagent_depth ?? 1)) {
+        return yield* Effect.fail(
           new Error(
-            "Background subagents are disabled. Set OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true (env) or set BANYANCODE_ENABLE=true to re-enable.",
+            `Subagent depth limit reached (${cfg.subagent_depth ?? 1}). Increase "subagent_depth" to allow nested subagents.`,
           ),
         )
       }
@@ -143,28 +133,9 @@ export const TaskTool = Tool.define(
         return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))
       }
 
-      // Nested explore budget: only relevant when a coder is spawning a fresh explore.
-      // The cap is enforced at spawn time (not at continuation/resume time) because
-      // it tracks how many explores a coder has launched, not how many are alive.
-      const isNewCoderExploreSpawn = !params.task_id && ctx.agent === "coder" && next.name === "explore"
-      if (isNewCoderExploreSpawn) {
-        const registryOpt = yield* Effect.serviceOption(NestedSpawnRegistryService)
-        if (Option.isSome(registryOpt)) {
-          const reserve = yield* registryOpt.value.tryReserveSlot(ctx.sessionID)
-          if (!reserve.ok) {
-            return yield* Effect.fail(
-              new NestedSpawnBudgetExceededError({
-                error: reserve.error,
-              }),
-            )
-          }
-        }
-      }
-
       const session = params.task_id
         ? yield* sessions.get(SessionID.make(params.task_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
-      const parent = yield* sessions.get(ctx.sessionID)
       const childPermission = deriveSubagentSessionPermission({
         parentSessionPermission: parent.permission ?? [],
         subagent: next,
@@ -200,49 +171,6 @@ export const TaskTool = Tool.define(
           ],
         }))
 
-      // Start a SubagentConsumer for this new subagent session so it can
-      // receive peer messages addressed to it (replies, kills, plans, etc).
-      // Only when this is a fresh spawn — resuming an existing task via
-      // task_id should NOT restart the consumer (it was started on first
-      // spawn and is already forkDetached).
-      if (!params.task_id) {
-        const consumerOpt = yield* Effect.serviceOption(SubagentConsumerService)
-        if (Option.isSome(consumerOpt)) {
-          yield* consumerOpt.value.start({ sessionID: nextSession.id, agent: next.name })
-        }
-      }
-
-      if (params.plan) {
-        const plan = params.plan
-        const busOption = yield* Effect.serviceOption(SubagentBusService)
-        const plansOption = yield* Effect.serviceOption(SubagentPlansService)
-        if (Option.isSome(busOption)) {
-          yield* busOption.value.publish({
-            id: crypto.randomUUID(),
-            parentSessionID: ctx.sessionID,
-            fromSession: ctx.sessionID,
-            fromAgent: ctx.agent,
-            toAgent: next.name,
-            kind: "plan",
-            payload: plan,
-            createdAt: Date.now(),
-          })
-        }
-        if (Option.isSome(plansOption)) {
-          yield* plansOption.value.put({
-            id: crypto.randomUUID(),
-            parentSessionID: ctx.sessionID,
-            agent: next.name,
-            sessionID: nextSession.id,
-            title: plan.title,
-            steps: [...plan.steps],
-            exitCriteria: plan.exitCriteria,
-            status: "active",
-            createdAt: Date.now(),
-          })
-        }
-      }
-
       const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
         Effect.provideService(Database.Service, database),
         Effect.orDie,
@@ -250,23 +178,9 @@ export const TaskTool = Tool.define(
       if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
       const variant = msg.info.variant
 
-      const banyanCfgOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
-      const banyanAgentMap = Option.isSome(banyanCfgOpt)
-        ? yield* banyanCfgOpt.value.getAgentOverrides()
-        : undefined
-      const entry = banyanAgentMap ? banyanAgentMap[next.name] : undefined
-      let model: { providerID: string; modelID: string } | undefined = undefined
-      if (entry?.model) {
-        const parts = entry.model.split("/")
-        model = {
-          providerID: parts[0],
-          modelID: parts.slice(1).join("/"),
-        }
-      } else {
-        model = next.model ?? {
-          modelID: msg.info.modelID,
-          providerID: msg.info.providerID,
-        }
+      const model = next.model ?? {
+        modelID: msg.info.modelID,
+        providerID: msg.info.providerID,
       }
       const metadata = {
         parentSessionId: ctx.sessionID,
@@ -289,8 +203,8 @@ export const TaskTool = Tool.define(
           messageID: MessageID.ascending(),
           sessionID: nextSession.id,
           model: {
-            modelID: ModelV2.ID.make(model.modelID),
-            providerID: ProviderV2.ID.make(model.providerID),
+            modelID: model.modelID,
+            providerID: model.providerID,
           },
           variant: next.model ? undefined : variant,
           agent: next.name,
@@ -328,14 +242,6 @@ export const TaskTool = Tool.define(
           .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
       })
 
-      const unregisterNested = () =>
-        Effect.gen(function* () {
-          const registryOpt = yield* Effect.serviceOption(NestedSpawnRegistryService)
-          if (Option.isSome(registryOpt)) {
-            yield* registryOpt.value.unregisterFiber(ctx.sessionID, nextSession.id)
-          }
-        })
-
       const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {
         yield* background.wait({ id: jobID }).pipe(
           Effect.flatMap((result) => {
@@ -343,7 +249,6 @@ export const TaskTool = Tool.define(
             if (result.info?.status === "error") return inject("error", result.info.error ?? "")
             return Effect.void
           }),
-          Effect.flatMap(() => unregisterNested()),
           Effect.forkIn(scope, { startImmediately: true }),
         )
       })
@@ -419,20 +324,13 @@ export const TaskTool = Tool.define(
               background.wait({ id: nextSession.id }).pipe(Effect.map((waited) => waited.info)),
               background.waitForPromotion(nextSession.id),
             )
-            if (!result) {
-              return {
-                title: params.description,
-                metadata,
-                output: renderOutput({ sessionID: nextSession.id, state: "completed", text: "" }),
-              }
-            }
-            if (result.metadata?.background === true) return backgroundResult()
-            if (result.status === "error") return yield* Effect.fail(new Error(result.error ?? "Task failed"))
-            if (result.status === "cancelled") return yield* Effect.fail(new Error("Task cancelled"))
+            if (result?.metadata?.background === true) return backgroundResult()
+            if (result?.status === "error") return yield* Effect.fail(new Error(result.error ?? "Task failed"))
+            if (result?.status === "cancelled") return yield* Effect.fail(new Error("Task cancelled"))
             return {
               title: params.description,
               metadata,
-              output: renderOutput({ sessionID: nextSession.id, state: "completed", text: result.output ?? "" }),
+              output: renderOutput({ sessionID: nextSession.id, state: "completed", text: result?.output ?? "" }),
             }
           }),
         (_, exit) =>
@@ -441,11 +339,8 @@ export const TaskTool = Tool.define(
               yield* Effect.all([cancel, background.cancel(nextSession.id)], { discard: true })
           }).pipe(
             Effect.ensuring(
-              Effect.gen(function* () {
-                yield* unregisterNested()
-                yield* Effect.sync(() => {
-                  ctx.abort.removeEventListener("abort", onAbort)
-                })
+              Effect.sync(() => {
+                ctx.abort.removeEventListener("abort", onAbort)
               }),
             ),
           ),

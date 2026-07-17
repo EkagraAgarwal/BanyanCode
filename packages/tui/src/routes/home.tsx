@@ -1,11 +1,8 @@
-/** @jsxImportSource @opentui/solid */
 import { Prompt, type PromptRef } from "../component/prompt"
 import { createEffect, createMemo, createSignal, onMount } from "solid-js"
 import { Logo } from "../component/logo"
 import { useSync } from "../context/sync"
-import { useTheme } from "../context/theme"
 import { Toast } from "../ui/toast"
-import { CodegraphProgress } from "../component/codegraph-progress"
 import { useArgs } from "../context/args"
 import { useRouteData } from "../context/route"
 import { usePromptRef } from "../context/prompt"
@@ -25,7 +22,6 @@ const placeholder = {
 export function Home() {
   const pluginRuntime = usePluginRuntime()
   const sync = useSync()
-  const { theme } = useTheme()
   const route = useRouteData("home")
   const promptRef = usePromptRef()
   const [ref, setRef] = createSignal<PromptRef | undefined>()
@@ -87,15 +83,9 @@ export function Home() {
             <Prompt ref={bind} right={<pluginRuntime.Slot name="home_prompt_right" />} placeholders={placeholder} />
           </pluginRuntime.Slot>
         </box>
-        <box width="100%" maxWidth={promptMaxWidth()} paddingTop={1} flexShrink={0}>
-          <text fg={theme.textMuted}>
-            Codegraph: Type /codegraph-build to index your code.
-          </text>
-        </box>
         <pluginRuntime.Slot name="home_bottom" />
         <box flexGrow={1} minHeight={0} />
         <Toast />
-        <CodegraphProgress />
       </box>
       <box width="100%" flexShrink={0}>
         <pluginRuntime.Slot name="home_footer" mode="single_winner" />

@@ -9,15 +9,9 @@ import { Truncate } from "@/tool/truncate"
 import { Auth } from "../auth"
 import { ProviderTransform } from "@/provider/transform"
 
-import PROMPT_ORCHESTRATOR from "./prompt/orchestrator.txt"
-import PROMPT_RESEARCHER from "./prompt/researcher.txt"
-import PROMPT_GENERAL from "./prompt/general.txt"
-
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
-import PROMPT_CODER from "./prompt/coder.txt"
-import PROMPT_SCOUT from "./prompt/scout.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
 import { Permission } from "@/permission"
@@ -33,16 +27,10 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { AbsolutePath, type DeepMutable } from "@opencode-ai/core/schema"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
-import { LocationServiceMap } from "@opencode-ai/core/location-layer"
-import { PluginBoot } from "@opencode-ai/core/plugin/boot"
+import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
 import { Reference } from "@opencode-ai/core/reference"
 import { Location } from "@opencode-ai/core/location"
-import { Banyan } from "@opencode-ai/core/banyancode"
-import { DEFAULT_MAX_SUBAGENTS } from "@opencode-ai/core/v1/config/banyan-config"
-
-function renderTemplate(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? `{{${key}}}`)
-}
+import { PluginV2 } from "@opencode-ai/core/plugin"
 
 export const Info = Schema.Struct({
   name: Schema.String,
@@ -74,7 +62,7 @@ const GeneratedAgent = Schema.Struct({
 })
 
 export interface Interface {
-  readonly get: (agent: string) => Effect.Effect<Info | undefined>
+  readonly get: (agent: string) => Effect.Effect<Info>
   readonly list: () => Effect.Effect<Info[]>
   readonly defaultInfo: () => Effect.Effect<Info>
   readonly defaultAgent: () => Effect.Effect<string>
@@ -97,7 +85,7 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Ag
 
 export const use = serviceUse(Service)
 
-export const layer = Layer.effect(
+const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
@@ -105,16 +93,18 @@ export const layer = Layer.effect(
     const plugin = yield* Plugin.Service
     const skill = yield* Skill.Service
     const provider = yield* Provider.Service
-    const locations = yield* LocationServiceMap
+    const locations = yield* LocationServiceMap.Service
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Agent.state")(function* (ctx) {
         const cfg = yield* config.get()
         const skillDirs = yield* skill.dirs()
-        const referenceDirs = yield* Effect.gen(function* () {
-          yield* (yield* PluginBoot.Service).wait()
-          return (yield* (yield* Reference.Service).list()).map((reference) => reference.path)
-        }).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) }))))
+        const referenceDirs = Object.keys(cfg.references ?? cfg.reference ?? {}).length
+          ? yield* Effect.gen(function* () {
+              yield* (yield* PluginV2.Service).wait(PluginV2.ID.make("core/config-reference"))
+              return (yield* (yield* Reference.Service).list()).map((reference) => reference.path)
+            }).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) }))))
+          : []
         const whitelistedDirs = [
           Truncate.GLOB,
           path.join(Global.Path.tmp, "*"),
@@ -122,15 +112,15 @@ export const layer = Layer.effect(
           ...referenceDirs.map((dir) => path.join(dir, "*")),
         ]
         const readonlyExternalDirectory = {
-          "*": "allow",
+          "*": "ask",
           ...Object.fromEntries(whitelistedDirs.map((dir) => [dir, "allow"])),
         } satisfies Record<string, "allow" | "ask" | "deny">
 
         const defaults = Permission.fromConfig({
           "*": "allow",
-          doom_loop: "allow",
+          doom_loop: "ask",
           external_directory: {
-            "*": "allow",
+            "*": "ask",
             ...Object.fromEntries(whitelistedDirs.map((dir) => [dir, "allow"])),
           },
           question: "deny",
@@ -139,34 +129,13 @@ export const layer = Layer.effect(
           // mirrors github.com/github/gitignore Node.gitignore pattern for .env files
           read: {
             "*": "allow",
-            "*.env": "allow",
-            "*.env.*": "allow",
+            "*.env": "ask",
+            "*.env.*": "ask",
             "*.env.example": "allow",
           },
-          codegraph_build: "allow",
-          codegraph_remove: "allow",
-          code_find: "allow",
-          repository_query: "allow",
-          repository_explain: "allow",
-          repository_trace: "allow",
-          repository_tests: "allow",
-          blast_radius: "allow",
-          preflight: "allow",
-          safe_rename: "allow",
-          edit_plan: "allow",
-          websearch_free: "allow",
         })
 
         const user = Permission.fromConfig(cfg.permission ?? {})
-
-        // Render orchestrator prompt with maxSubagents from BanyanConfig
-        const banyanConfigOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
-        const maxSubagents = banyanConfigOpt._tag === "Some"
-          ? ((yield* banyanConfigOpt.value.get()).banyancode_max_subagents ?? DEFAULT_MAX_SUBAGENTS)
-          : DEFAULT_MAX_SUBAGENTS
-        const renderedOrchestratorPrompt = renderTemplate(PROMPT_ORCHESTRATOR, {
-          maxSubagents: String(maxSubagents),
-        })
 
         const agents: Record<string, Info> = {
           build: {
@@ -178,17 +147,6 @@ export const layer = Layer.effect(
               Permission.fromConfig({
                 question: "allow",
                 plan_enter: "allow",
-                task: {
-                  "*": "deny",
-                  explore: "allow",
-                  scout: "allow",
-                  general: "allow",
-                  coder: "allow",
-                  researcher: "allow",
-                },
-                subagent_message: "allow",
-                mesh_control: "deny",
-                mesh_subscribe: "allow",
               }),
               user,
             ),
@@ -210,25 +168,9 @@ export const layer = Layer.effect(
                 external_directory: {
                   [path.join(Global.Path.data, "plans", "*")]: "allow",
                 },
-                codegraph_query: "allow",
-                codegraph_search: "allow",
-                codegraph_callers: "allow",
-                codegraph_dependents: "allow",
-                codegraph_impact: "allow",
-                codegraph_find_async: "allow",
-                codegraph_find_recursive: "allow",
-                codegraph_find_http_routes: "allow",
-                codegraph_find_overrides: "allow",
-                codegraph_find_implementations: "allow",
-                repository_impact: "allow",
-                repository_symbols: "allow",
-                repository_relationships: "allow",
-
-                repository_ownership: "allow",
                 edit: {
                   "*": "deny",
                   [path.join(".opencode", "plans", "*.md")]: "allow",
-                  [path.join(".banyancode", "plans", "*.md")]: "allow",
                   [path.relative(ctx.worktree, path.join(Global.Path.data, path.join("plans", "*.md")))]: "allow",
                 },
               }),
@@ -240,21 +182,10 @@ export const layer = Layer.effect(
           general: {
             name: "general",
             description: `General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.`,
-            prompt: PROMPT_GENERAL,
             permission: Permission.merge(
               defaults,
               Permission.fromConfig({
                 todowrite: "deny",
-                systeminfo: "allow",
-                task: {
-                  "*": "deny",
-                  explore: "allow",
-                  scout: "allow",
-                  researcher: "allow",
-                },
-                subagent_message: "allow",
-                mesh_control: "deny",
-                mesh_subscribe: "allow",
               }),
               user,
             ),
@@ -275,41 +206,7 @@ export const layer = Layer.effect(
                 webfetch: "allow",
                 websearch: "allow",
                 read: "allow",
-                codegraph_build: "allow",
-                codegraph_remove: "allow",
-                blast_radius: "allow",
-                preflight: "allow",
-                safe_rename: "allow",
-                code_find: "allow",
-                repository_query: "allow",
-                repository_explain: "allow",
-                repository_trace: "allow",
-                repository_tests: "allow",
-                edit_plan: "allow",
-                websearch_free: "allow",
-                codegraph_query: "allow",
-                codegraph_search: "allow",
-                codegraph_callers: "allow",
-                codegraph_dependents: "allow",
-                codegraph_impact: "allow",
-                codegraph_find_async: "allow",
-                codegraph_find_recursive: "allow",
-                codegraph_find_http_routes: "allow",
-                codegraph_find_overrides: "allow",
-                codegraph_find_implementations: "allow",
-                repository_impact: "allow",
-                repository_symbols: "allow",
-                repository_relationships: "allow",
-
-                repository_ownership: "allow",
                 external_directory: readonlyExternalDirectory,
-                task: {
-                  "*": "deny",
-                  scout: "allow",
-                },
-                subagent_message: "allow",
-                mesh_control: "deny",
-                mesh_subscribe: "allow",
               }),
               user,
             ),
@@ -318,92 +215,6 @@ export const layer = Layer.effect(
             options: {},
             mode: "subagent",
             native: true,
-          },
-          coder: {
-            name: "coder",
-            description: `Focused executor agent. Makes targeted code changes using codegraph-first analysis. Single task, no delegation.`,
-            mode: "subagent",
-            native: true,
-            prompt: PROMPT_CODER,
-            permission: Permission.merge(
-              defaults,
-              Permission.fromConfig({
-                edit: "allow",
-                write: "allow",
-                bash: "allow",
-                read: "allow",
-                grep: "allow",
-                glob: "allow",
-                list: "allow",
-                webfetch: "allow",
-                codegraph_query: "allow",
-                codegraph_callers: "allow",
-                codegraph_dependents: "allow",
-                codegraph_impact: "allow",
-                codegraph_search: "allow",
-                codegraph_find_async: "allow",
-                codegraph_find_recursive: "allow",
-                codegraph_find_http_routes: "allow",
-                codegraph_find_overrides: "allow",
-                codegraph_find_implementations: "allow",
-                repository_impact: "allow",
-                repository_symbols: "allow",
-                repository_relationships: "allow",
-
-                repository_ownership: "allow",
-                todowrite: "allow",
-                question: "allow",
-                task: {
-                  "*": "deny",
-                  explore: "allow",
-                  scout: "allow",
-                },
-                subagent_message: "allow",
-                mesh_control: "deny",
-                mesh_subscribe: "allow",
-              }),
-              user,
-            ),
-            options: {},
-          },
-          scout: {
-            name: "scout",
-            description: `Fast reconnaissance agent. Single shot, return within 3 tool calls. Read-only exploration.`,
-            mode: "subagent",
-            native: true,
-            prompt: PROMPT_SCOUT,
-            permission: Permission.merge(
-              defaults,
-              Permission.fromConfig({
-                read: "allow",
-                grep: "allow",
-                glob: "allow",
-                list: "allow",
-                webfetch: "allow",
-                codegraph_query: "allow",
-                codegraph_callers: "allow",
-                codegraph_dependents: "allow",
-                codegraph_impact: "allow",
-                codegraph_search: "allow",
-                codegraph_find_async: "allow",
-                codegraph_find_recursive: "allow",
-                codegraph_find_http_routes: "allow",
-                codegraph_find_overrides: "allow",
-                codegraph_find_implementations: "allow",
-                repository_impact: "allow",
-                repository_symbols: "allow",
-                repository_relationships: "allow",
-
-                repository_ownership: "allow",
-                todowrite: "deny",
-                task: "deny",
-                subagent_message: "allow",
-                mesh_control: "deny",
-                mesh_subscribe: "allow",
-              }),
-              user,
-            ),
-            options: {},
           },
           compaction: {
             name: "compaction",
@@ -450,79 +261,6 @@ export const layer = Layer.effect(
               user,
             ),
             prompt: PROMPT_SUMMARY,
-          },
-          orchestrator: {
-            name: "orchestrator",
-            description: "Decomposes complex tasks, fans out to parallel subagents, coordinates via shared memory and peer messages.",
-            mode: "primary",
-            native: true,
-            prompt: renderedOrchestratorPrompt,
-            permission: Permission.merge(
-              defaults,
-              Permission.fromConfig({
-                task: {
-                  "*": "deny",
-                  researcher: "allow",
-                  coder: "allow",
-                  explore: "allow",
-                  general: "allow",
-                  scout: "allow",
-                },
-                shared_memory: "allow",
-                subagent_message: "allow",
-                mesh_control: "allow",
-                mesh_subscribe: "allow",
-                todowrite: "allow",
-                question: "allow",
-                systeminfo: "allow",
-              }),
-              user,
-            ),
-            options: {},
-          },
-          researcher: {
-            name: "researcher",
-            description: "Read-only subagent. Performs free web search via DuckDuckGo and reads external docs. Writes findings to shared_memory.",
-            mode: "subagent",
-            native: true,
-            prompt: PROMPT_RESEARCHER,
-            permission: Permission.merge(
-              defaults,
-              Permission.fromConfig({
-                edit: "deny",
-                bash: "deny",
-                websearch: "allow",
-                webfetch: "allow",
-                read: "allow",
-                grep: "allow",
-                glob: "allow",
-                codegraph_query: "allow",
-                codegraph_search: "allow",
-                codegraph_callers: "allow",
-                codegraph_dependents: "allow",
-                codegraph_impact: "allow",
-                codegraph_find_async: "allow",
-                codegraph_find_recursive: "allow",
-                codegraph_find_http_routes: "allow",
-                codegraph_find_overrides: "allow",
-                codegraph_find_implementations: "allow",
-                repository_impact: "allow",
-                repository_symbols: "allow",
-                repository_relationships: "allow",
-
-                repository_ownership: "allow",
-                shared_memory: "allow",
-                subagent_message: "allow",
-                task: {
-                  "*": "deny",
-                  scout: "allow",
-                },
-                mesh_control: "deny",
-                mesh_subscribe: "allow",
-              }),
-              user,
-            ),
-            options: {},
           },
         }
 
@@ -572,62 +310,19 @@ export const layer = Layer.effect(
         }
 
         const get = Effect.fnUntraced(function* (agent: string) {
-          const overrideMap = new Map<string, { enabled?: boolean; model?: { providerID: string; modelID: string } }>()
-          if (banyanConfigOpt._tag === "Some") {
-            const agentRecord = yield* banyanConfigOpt.value.getAgentOverrides()
-            for (const [name, conf] of Object.entries(agentRecord ?? {})) {
-              let model: { providerID: string; modelID: string } | undefined = undefined
-              if (conf.model) {
-                const parts = conf.model.split("/")
-                model = {
-                  providerID: parts[0],
-                  modelID: parts.slice(1).join("/"),
-                }
-              }
-              overrideMap.set(name, { enabled: conf.enabled, model })
-            }
-          }
-          const override = overrideMap.get(agent)
-          const info = agents[agent]
-          if (!info) return undefined
-          // Disabled subagents are not resolvable (return undefined like non-existent)
-          if (override?.enabled === false && info.mode === "subagent") {
-            return undefined
-          }
-          if (override?.model) {
-            return { ...info, model: Provider.parseModel(`${override.model.providerID}/${override.model.modelID}`) as Info["model"] }
-          }
-          return info
+          return agents[agent]
         })
 
         const list = Effect.fnUntraced(function* () {
           const cfg = yield* config.get()
-          const overrideMap = new Map<string, { enabled?: boolean; model?: { providerID: string; modelID: string } }>()
-          if (banyanConfigOpt._tag === "Some") {
-            const agentRecord = yield* banyanConfigOpt.value.getAgentOverrides()
-            for (const [name, conf] of Object.entries(agentRecord ?? {})) {
-              let model: { providerID: string; modelID: string } | undefined = undefined
-              if (conf.model) {
-                const parts = conf.model.split("/")
-                model = {
-                  providerID: parts[0],
-                  modelID: parts.slice(1).join("/"),
-                }
-              }
-              overrideMap.set(name, { enabled: conf.enabled, model })
-            }
-          }
-          const disabledNames = new Set<string>()
-          for (const [name, override] of overrideMap) {
-            if (override.enabled === false) disabledNames.add(name)
-          }
-          const filtered = values(agents).filter((a) => !(a.mode === "subagent" && disabledNames.has(a.name)))
-          const allAgents = sortBy(
-            filtered,
-            [(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "build"), "desc"],
-            [(x) => x.name, "asc"],
+          return pipe(
+            agents,
+            values(),
+            sortBy(
+              [(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "build"), "desc"],
+              [(x) => x.name, "asc"],
+            ),
           )
-          return allAgents
         })
 
         const defaultInfo = Effect.fnUntraced(function* () {
@@ -743,25 +438,16 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(
-  Layer.provide(Plugin.defaultLayer),
-  Layer.provide(Provider.defaultLayer),
-  Layer.provide(Auth.defaultLayer),
-  Layer.provide(Config.defaultLayer),
-  Layer.provide(Skill.defaultLayer),
-  Layer.provide(LocationServiceMap.layer),
-  Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
-)
+const locationServiceMapNode = LayerNode.make({
+  service: LocationServiceMap.Service,
+  layer: locationServiceMapLayer,
+  deps: [],
+})
 
-const locationServiceMapNode = LayerNode.make(LocationServiceMap.layer, [])
-
-export const node = LayerNode.make(layer, [
-  Config.node,
-  Auth.node,
-  Plugin.node,
-  Skill.node,
-  Provider.node,
-  locationServiceMapNode,
-])
+export const node = LayerNode.make({
+  service: Service,
+  layer: layer,
+  deps: [Config.node, Auth.node, Plugin.node, Skill.node, Provider.node, locationServiceMapNode],
+})
 
 export * as Agent from "./agent"

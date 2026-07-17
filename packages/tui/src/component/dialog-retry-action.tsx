@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { RGBA, TextAttributes } from "@opentui/core"
 import open from "open"
 import { createSignal } from "solid-js"

@@ -1,4 +1,3 @@
-/** @jsxImportSource @opentui/solid */
 import { DialogSelect, type DialogSelectRef } from "../ui/dialog-select"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
