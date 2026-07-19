@@ -8,13 +8,15 @@ import { errorMessage } from "@/util/error"
 import { ChildProcess } from "effect/unstable/process"
 import { AppProcess } from "@opencode-ai/core/process"
 import path from "path"
+import fs from "fs/promises"
+import { findAllBanyanCodeInstalls } from "./probe"
 import { EventV2 } from "@opencode-ai/core/event"
 import { makeRuntime } from "@opencode-ai/core/effect/runtime"
 import semver from "semver"
 import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { NpmConfig } from "@opencode-ai/core/npm-config"
 
-export type Method = "curl" | "npm" | "yarn" | "pnpm" | "bun" | "brew" | "scoop" | "choco" | "unknown"
+export type Method = "curl" | "npm" | "yarn" | "pnpm" | "bun" | "brew" | "scoop" | "choco" | "snap" | "unknown"
 
 export type ReleaseType = "patch" | "minor" | "major"
 
@@ -186,9 +188,19 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         }
       }),
       method: Effect.fn("Installation.method")(function* () {
-        if (process.execPath.includes(path.join(".banyancode", "bin"))) return "curl" as Method
-        if (process.execPath.includes(path.join(".local", "bin"))) return "curl" as Method
         const exec = process.execPath.toLowerCase()
+        const detected = yield* Effect.promise(async () => {
+          const execPath = await fs.realpath(process.execPath).catch(() => path.resolve(process.execPath))
+          const installs = await findAllBanyanCodeInstalls()
+          const matches = await Promise.all(
+            installs.map(async (install) => ({
+              install,
+              resolved: await fs.realpath(install.path).catch(() => path.resolve(install.path)),
+            })),
+          )
+          return matches.find((item) => item.resolved.toLowerCase() === execPath.toLowerCase())?.install.method
+        })
+        if (detected) return detected
 
         const checks: Array<{ name: Method; command: () => Effect.Effect<string> }> = [
           { name: "npm", command: () => text(["npm", "list", "-g", "--depth=0"]) },
@@ -198,6 +210,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
           { name: "brew", command: () => text(["brew", "list", "--formula", "banyancode"]) },
           { name: "scoop", command: () => text(["scoop", "list", "banyancode"]) },
           { name: "choco", command: () => text(["choco", "list", "--limit-output", "banyancode"]) },
+          { name: "snap", command: () => text(["snap", "list", "banyancode"]) },
         ]
 
         checks.sort((a, b) => {
@@ -240,9 +253,9 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
 
         if (detectedMethod === "npm" || detectedMethod === "bun" || detectedMethod === "pnpm") {
           const response = yield* httpOk.execute(
-            HttpClientRequest.get(
-              `${yield* NpmConfig.registry(process.cwd())}/banyancode/${InstallationChannel}`,
-            ).pipe(HttpClientRequest.acceptJson),
+            HttpClientRequest.get(`${yield* NpmConfig.registry(process.cwd())}/banyancode/${InstallationChannel}`).pipe(
+              HttpClientRequest.acceptJson,
+            ),
           )
           const data = yield* HttpClientResponse.schemaBodyJson(NpmPackage)(response)
           return data.version

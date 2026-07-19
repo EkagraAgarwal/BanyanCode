@@ -43,15 +43,29 @@ export const UpgradeCommand = {
       }
     }
     prompts.log.info("Using method: " + method)
-    const target = args.target ? args.target.replace(/^v/, "") : await Installation.latest()
+    const latest = await Installation.latest(method)
+    const target = args.target ? args.target.replace(/^v/, "") : latest
 
     if (InstallationVersion === target) {
-      prompts.log.warn(`banyancode upgrade skipped: ${target} is already installed`)
+      prompts.log.warn(
+        InstallationVersion === latest
+          ? `You are on ${InstallationVersion}; latest on this channel is also ${latest}. Skipping.`
+          : `You are on ${InstallationVersion}; latest on this channel is ${latest}. Requested target is already installed. Skipping.`,
+      )
       prompts.outro("Done")
       return
     }
 
-    prompts.log.info(`From ${InstallationVersion} → ${target}`)
+    if (!args.target) {
+      if (InstallationVersion.localeCompare(latest, undefined, { numeric: true }) > 0) {
+        prompts.log.warn(`You are on ${InstallationVersion}; latest on this channel is ${latest}. Skipping.`)
+        prompts.outro("Done")
+        return
+      }
+      prompts.log.warn(`Upgrade available: ${InstallationVersion} → ${latest}. Proceeding...`)
+    } else {
+      prompts.log.info(`From ${InstallationVersion} → ${target}`)
+    }
     const spinner = prompts.spinner()
     spinner.start("Upgrading...")
     const err = await Installation.upgrade(method, target).catch((err) => err)
