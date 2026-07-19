@@ -9,7 +9,14 @@ function View(props: { api: TuiPluginApi }) {
   const [open, setOpen] = createSignal(true)
   const theme = () => props.api.theme.current
   const list = createMemo(() => props.api.state.lsp())
-  const off = createMemo(() => !props.api.state.config.lsp)
+  // BanyanCode owns LSP config (banyancode_lsp in banyancode.json). When the
+  // BanyanConfig service is unavailable or the field is unset, treat LSP as
+  // off — matches the previous opencode default of `cfg.lsp === undefined`.
+  const off = createMemo(() => {
+    const cfg = (props.api.state as { banyanConfig?: { banyancode_lsp?: unknown } }).banyanConfig
+    const v = cfg?.banyancode_lsp
+    return !(v === true || (typeof v === "object" && v !== null))
+  })
 
   return (
     <box>

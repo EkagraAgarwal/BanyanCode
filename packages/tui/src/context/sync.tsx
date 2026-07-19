@@ -20,6 +20,7 @@ import type {
   VcsInfo,
   SnapshotFileDiff,
   ConsoleState,
+  BanyanConfig,
 } from "@opencode-ai/sdk/v2"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
@@ -101,6 +102,7 @@ export const {
       }
       formatter: FormatterStatus[]
       vcs: VcsInfo | undefined
+      banyanConfig: BanyanConfig | undefined
     }>({
       provider_next: {
         all: [],
@@ -128,6 +130,7 @@ export const {
       mcp_resource: {},
       formatter: [],
       vcs: undefined,
+      banyanConfig: undefined,
     })
 
     const event = useEvent()
@@ -429,6 +432,14 @@ export const {
           break
         }
 
+        case ("banyancode.config.updated" as never): {
+          sdk.client.global.banyanConfig
+            .get({})
+            .then((x) => setStore("banyanConfig", reconcile(x.data)))
+            .catch(() => {})
+          break
+        }
+
         case "vcs.branch.updated": {
           if (workspace === project.workspace.current()) {
             setStore("vcs", { branch: event.properties.branch })
@@ -516,6 +527,10 @@ export const {
             }),
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
+            sdk.client.global.banyanConfig
+              .get({})
+              .then((x) => setStore("banyanConfig", reconcile(x.data)))
+              .catch(() => {}),
             project.workspace.sync(),
           ]).then(() => {
             setStore("status", "complete")

@@ -93,6 +93,7 @@ export const Default = {
   YOLO: "yolo",
   MAX_SUBAGENTS: "max-subagents",
   REFRESH_MODELS: "refresh-models",
+  LSP: "lsp",
 } as const
 
 export interface Interface {
@@ -197,31 +198,6 @@ export const layer = Layer.effect(
             return `Codegraph build ${status.status} for ${root}.`
           }),
         hints: hints(PROMPT_CODEGRAPH_BUILD),
-      }
-      commands[Default.CODEGRAPH_REMOVE] = {
-        name: Default.CODEGRAPH_REMOVE,
-        description: "remove the current codegraph index",
-        source: "command",
-        get template() {
-          return "Remove the current codegraph index."
-        },
-        execute: () =>
-          Effect.gen(function* () {
-            const repoOpt = yield* Effect.serviceOption(Banyan.CodegraphRepo)
-            if (Option.isNone(repoOpt)) {
-              yield* Effect.logWarning("codegraph-remove invoked but CodegraphRepo is unavailable in scope")
-              return "Codegraph remove skipped: CodegraphRepo is unavailable in this session."
-            }
-            // default dropFile is false: banyancode.db is shared with sessions/memory/projects,
-            // so wiping the file would also wipe unrelated state.
-            const { sizeBefore, sizeAfter } = yield* repoOpt.value.clearAll({ dropFile: false })
-            if (sizeBefore === 0) {
-              return `Codegraph index removed (DB size unknown).`
-            }
-            const freedBytes = Math.max(0, sizeBefore - sizeAfter)
-            return `Codegraph index removed. Freed ${formatBytes(freedBytes)} (${formatBytes(sizeBefore)} -> ${formatBytes(sizeAfter)}).`
-          }).pipe(Effect.provide(Banyan.codegraphRepoDefaultLayer)),
-        hints: [],
       }
       commands[Default.REPOSITORY_QUERY] = {
         name: Default.REPOSITORY_QUERY,
@@ -375,6 +351,52 @@ export const layer = Layer.effect(
           ),
         hints: [],
       }
+      commands[Default.LSP] = {
+        name: Default.LSP,
+        description: "toggle BanyanCode LSP servers (banyancode_lsp); with no arg, prints the current value",
+        source: "command",
+        get template() {
+          return "Toggle BanyanCode's LSP servers on or off."
+        },
+        execute: (input) =>
+          Effect.gen(function* () {
+            const opt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+            if (Option.isNone(opt)) return "LSP toggle disabled (BanyanCode off)."
+            const svc = opt.value
+            const trimmed = input.arguments.trim()
+            const current = yield* svc.get()
+            const currentValue = (current as Banyan.BanyanConfigInfo).banyancode_lsp
+            const isOn = currentValue === true || (typeof currentValue === "object" && currentValue !== null)
+            const arg = trimmed.toLowerCase()
+            if (arg === "") {
+              return `BanyanCode LSP is ${isOn ? "on" : "off"}. Usage: /lsp <on|off|toggle>`
+            }
+            let next: typeof currentValue
+            if (arg === "on" || arg === "true" || arg === "enable" || arg === "enabled") {
+              next = true
+            } else if (arg === "off" || arg === "false" || arg === "disable" || arg === "disabled") {
+              next = undefined
+            } else if (arg === "toggle") {
+              next = isOn ? undefined : true
+            } else {
+              return `Unknown argument "${trimmed}". Usage: /lsp <on|off|toggle>`
+            }
+            const updated = yield* svc.update({ banyancode_lsp: next })
+            const finalIsOn =
+              (updated as Banyan.BanyanConfigInfo).banyancode_lsp === true ||
+              (typeof (updated as Banyan.BanyanConfigInfo).banyancode_lsp === "object" &&
+                (updated as Banyan.BanyanConfigInfo).banyancode_lsp !== null)
+            GlobalBus.emit("event", {
+              directory: "global",
+              payload: {
+                type: "banyancode.config.updated" as any,
+                properties: { scope: "global" },
+              },
+            })
+            return `BanyanCode LSP is now ${finalIsOn ? "on" : "off"}. Restart the session for built-in servers to attach.`
+          }),
+        hints: [],
+      }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {
         commands[name] = {
@@ -461,17 +483,5 @@ export const defaultLayer = layer.pipe(
 )
 
 export const node = LayerNode.make(layer, [Config.node, MCP.node, Skill.node])
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  const units = ["KB", "MB", "GB", "TB"]
-  let value = bytes / 1024
-  let unitIndex = 0
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024
-    unitIndex++
-  }
-  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[unitIndex]}`
-}
 
 export * as Command from "."
