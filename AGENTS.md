@@ -6,7 +6,7 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md) for repo layout, runtime layers, and th
 
 ## Branch, commit, and PR conventions
 
-- Default branch is `dev`; use `dev` or `origin/dev` for diffs. Local `main` ref may not exist.
+- Default branch is `main`; use `main` or `origin/main` for diffs and as the base for PRs. Tags ship from `main` directly.
 - Branch names: ≤ three words, hyphen-separated, no type prefixes (`feat/`, `fix/`). Examples: `session-recovery`, `fix-scroll-state`, `regenerate-sdk`.
 - Commits and PR titles: `type(scope): summary`. Valid types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`. Useful scopes: `core`, `opencode`, `tui`, `sdk`, `plugin`.
 - One logical change per commit. Run `bun typecheck` and the relevant `bun test` between commits.
