@@ -533,43 +533,7 @@ export function Prompt(props: PromptProps) {
           move.open()
         },
       },
-      {
-        title: "Choose reasoning variant",
-        desc: "Choose reasoning variant level (e.g. low, medium, high, off)",
-        name: "prompt.variant",
-        category: "Prompt",
-        slashName: "variant",
-        run: () => {
-          input.setText("/variant ")
-          setStore("prompt", { input: "/variant ", parts: [] })
-          input.gotoBufferEnd()
-        },
-      },
-      {
-        title: "Choose reasoning thinking budget",
-        desc: "Choose reasoning thinking budget/effort (e.g. low, high, off)",
-        name: "prompt.thinking",
-        category: "Prompt",
-        slashName: "thinking",
-        run: () => {
-          input.setText("/thinking ")
-          setStore("prompt", { input: "/thinking ", parts: [] })
-          input.gotoBufferEnd()
-        },
-      },
-      {
-        title: "Choose reasoning effort",
-        desc: "Choose reasoning effort (e.g. low, medium, high, off)",
-        name: "prompt.reasoning",
-        category: "Prompt",
-        slashName: "reasoning",
-        run: () => {
-          input.setText("/reasoning ")
-          setStore("prompt", { input: "/reasoning ", parts: [] })
-          input.gotoBufferEnd()
-        },
-      },
-    ].map((entry) => ({
+      ].map((entry) => ({
       namespace: "palette",
       ...entry,
     })),
