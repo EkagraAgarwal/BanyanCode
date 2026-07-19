@@ -52,7 +52,7 @@ const makeMockRepo = (options: {
       deleteFile: () => Effect.void,
       deleteDerivedEdgesForFiles: () => Effect.void,
     writeFileGraph: () => Effect.void,
-      clearAll: () => Effect.succeed({ sizeBefore: 0, sizeAfter: 0 }),
+      clearAll: () => Effect.succeed({ sizeBefore: 0, sizeAfter: 0, droppedFile: false }),
       setMeta: () => Effect.void,
       bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1 }),
       nodesByIDs: (ids) => Effect.succeed(options.nodes?.filter((n) => ids.includes(n.id)) ?? []),
@@ -68,6 +68,9 @@ const makeMockRepo = (options: {
       searchNodesLight: () => Effect.succeed([]),
       ftsSearchNodes: () => Effect.succeed([]),
       nodesByFileIDs: () => Effect.succeed([]),
+      filesByIDs: () => Effect.succeed([]),
+      edgesFromBatch: () => Effect.succeed([]),
+      edgesToBatch: () => Effect.succeed([]),
     }),
   )
 }

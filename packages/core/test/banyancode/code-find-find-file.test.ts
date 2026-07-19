@@ -69,7 +69,7 @@ const mockCodegraphRepoLayer = Layer.succeed(
     deleteFile: () => Effect.void,
     deleteDerivedEdgesForFiles: () => Effect.void,
     writeFileGraph: () => Effect.void,
-    clearAll: () => Effect.succeed({ sizeBefore: 0, sizeAfter: 0 }),
+    clearAll: () => Effect.succeed({ sizeBefore: 0, sizeAfter: 0, droppedFile: false }),
     recordParseError: () => Effect.void,
     listParseErrors: () => Effect.succeed([]),
     clearParseErrors: () => Effect.void,
@@ -85,6 +85,9 @@ const mockCodegraphRepoLayer = Layer.succeed(
     searchNodesLight: () => Effect.succeed([]),
     ftsSearchNodes: () => Effect.succeed([]),
     nodesByFileIDs: () => Effect.succeed([]),
+    filesByIDs: () => Effect.succeed([]),
+    edgesFromBatch: () => Effect.succeed([]),
+    edgesToBatch: () => Effect.succeed([]),
   }),
 )
 

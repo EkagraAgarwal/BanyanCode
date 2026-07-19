@@ -46,7 +46,7 @@ describe("focusDirs filtering", () => {
     )
   })
 
-  test("focusDirs fallback when zero candidates match", async () => {
+  test("focusDirs with no scoped candidate returns empty + outside-focus-dirs diagnostic", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.db")
     const dbLayer = Database.layerFromPath(dbPath)
@@ -67,11 +67,12 @@ describe("focusDirs filtering", () => {
         })
 
         expect(result.status).toBe("success")
-        expect(result.symbols.length).toBe(1)
-        expect(result.symbols[0]!.id).toBe("node-opencode")
+        expect(result.symbols.length).toBe(0)
         expect(result.ambiguity).toEqual({ total: 1, kept: 0 })
-        const focusDiag = result.diagnostics?.find((d) => d.kind === "ambiguous-symbol")
+        const focusDiag = result.diagnostics?.find((d) => d.kind === "outside-focus-dirs")
         expect(focusDiag).toBeDefined()
+        expect(focusDiag!.message).toContain("focusDirs")
+        expect(result.degraded).toBe(false)
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })

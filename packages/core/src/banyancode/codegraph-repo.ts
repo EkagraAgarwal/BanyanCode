@@ -7,6 +7,7 @@ import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from ".
 import { CodegraphMetaTable } from "./codegraph-meta.sql"
 import { CodegraphParseErrorsTable } from "./codegraph-parse-errors.sql"
 import { CodegraphServiceTagsTable } from "./codegraph-service-tags.sql"
+import { CodegraphTracesTable } from "./codegraph-traces.sql"
 import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from "./types"
 
 export type FTSResult = CodegraphNode & { readonly bm25: number }
@@ -58,6 +59,21 @@ const safeSize = (path: string): number => {
   }
 }
 
+// FK-safe deletion order for `clearAll`. Tables with no FK references are
+// listed first; tables that hold foreign keys to other codegraph tables come
+// last so the cascade has nothing left to reference. Single source of truth
+// for `codegraph_*` tables — add new schema tables here and `clearAll` will
+// pick them up automatically.
+const codegraphSchemaTables = [
+  CodegraphServiceTagsTable,
+  CodegraphTracesTable,
+  CodegraphParseErrorsTable,
+  CodegraphMetaTable,
+  CodegraphEdgesTable,
+  CodegraphNodesTable,
+  CodegraphFilesTable,
+] as const
+
 export interface Interface {
   readonly putFile: (file: CodegraphFile) => Effect.Effect<void, never, never>
   readonly getFile: (id: string) => Effect.Effect<CodegraphFile | undefined, never, never>
@@ -79,6 +95,7 @@ export interface Interface {
   readonly ftsSearchNodes: (input: { query: string; limit?: number }) => Effect.Effect<FTSResult[], never, never>
   /** Fetch nodes for a specific set of files. Used by incremental rebuildDerivedGraph. */
   readonly nodesByFileIDs: (input: { fileIDs: string[] }) => Effect.Effect<CodegraphNode[], never, never>
+  readonly filesByIDs: (ids: ReadonlyArray<string>) => Effect.Effect<CodegraphFile[], never, never>
   readonly countNodes: () => Effect.Effect<number, never, never>
   readonly countEdges: () => Effect.Effect<number, never, never>
   readonly countFiles: () => Effect.Effect<number, never, never>
@@ -89,6 +106,8 @@ export interface Interface {
   readonly listEdgesByNode: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesFrom: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesTo: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
+  readonly edgesFromBatch: (ids: ReadonlyArray<string>) => Effect.Effect<CodegraphEdge[], never, never>
+  readonly edgesToBatch: (ids: ReadonlyArray<string>) => Effect.Effect<CodegraphEdge[], never, never>
   readonly deleteFile: (id: string) => Effect.Effect<void, never, never>
   readonly deleteDerivedEdgesForFiles: (input: { fileIDs: string[] }) => Effect.Effect<void, never, never>
   /**
@@ -107,7 +126,7 @@ export interface Interface {
   }) => Effect.Effect<void, never, never>
   readonly clearAll: (
     input?: { dropFile?: boolean },
-  ) => Effect.Effect<{ sizeBefore: number; sizeAfter: number }, never, never>
+  ) => Effect.Effect<{ sizeBefore: number; sizeAfter: number; droppedFile: boolean }, never, never>
   // Phase 3: recompute `codegraph_nodes.in_degree` from
   // `codegraph_edges.to_node_id`. Called by the indexer after the parse
   // pass writes all edges, so the ranker can read the column instead of
@@ -577,6 +596,29 @@ export const layer = Layer.effect(
       return rows.map(rowToNode)
     })
 
+    const filesByIDs = Effect.fn("CodegraphRepo.filesByIDs")(function* (ids: ReadonlyArray<string>) {
+      if (ids.length === 0) return []
+      const chunkSize = 900
+      const allRows: typeof CodegraphFilesTable.$inferSelect[] = []
+      for (let i = 0; i < ids.length; i += chunkSize) {
+        const chunk = ids.slice(i, i + chunkSize)
+        const rows = yield* db
+          .select()
+          .from(CodegraphFilesTable)
+          .where(inArray(CodegraphFilesTable.id, chunk))
+          .all()
+          .pipe(Effect.orDie)
+        allRows.push(...rows)
+      }
+      return allRows.map((row) => ({
+        id: row.id,
+        path: row.path,
+        contentHash: row.content_hash,
+        language: row.language,
+        indexedAt: row.indexed_at,
+      }))
+    })
+
     const countNodes = Effect.fn("CodegraphRepo.countNodes")(function* () {
       const row = yield* db
         .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_nodes`)
@@ -617,6 +659,50 @@ export const layer = Layer.effect(
       }))
     })
 
+    const edgesFromBatch = Effect.fn("CodegraphRepo.edgesFromBatch")(function* (ids: ReadonlyArray<string>) {
+      if (ids.length === 0) return []
+      const chunkSize = 900
+      const allRows: typeof CodegraphEdgesTable.$inferSelect[] = []
+      for (let i = 0; i < ids.length; i += chunkSize) {
+        const chunk = ids.slice(i, i + chunkSize)
+        const rows = yield* db
+          .select()
+          .from(CodegraphEdgesTable)
+          .where(inArray(CodegraphEdgesTable.from_node_id, chunk))
+          .all()
+          .pipe(Effect.orDie)
+        allRows.push(...rows)
+      }
+      return allRows.map((row) => ({
+        id: row.id,
+        fromNodeID: row.from_node_id,
+        toNodeID: row.to_node_id,
+        kind: row.kind as CodegraphEdge["kind"],
+      }))
+    })
+
+    const edgesToBatch = Effect.fn("CodegraphRepo.edgesToBatch")(function* (ids: ReadonlyArray<string>) {
+      if (ids.length === 0) return []
+      const chunkSize = 900
+      const allRows: typeof CodegraphEdgesTable.$inferSelect[] = []
+      for (let i = 0; i < ids.length; i += chunkSize) {
+        const chunk = ids.slice(i, i + chunkSize)
+        const rows = yield* db
+          .select()
+          .from(CodegraphEdgesTable)
+          .where(inArray(CodegraphEdgesTable.to_node_id, chunk))
+          .all()
+          .pipe(Effect.orDie)
+        allRows.push(...rows)
+      }
+      return allRows.map((row) => ({
+        id: row.id,
+        fromNodeID: row.from_node_id,
+        toNodeID: row.to_node_id,
+        kind: row.kind as CodegraphEdge["kind"],
+      }))
+    })
+
     const clearAll = Effect.fn("CodegraphRepo.clearAll")(function* (input?: { dropFile?: boolean }) {
       const filePath = Database.path()
       const sizeBefore = filePath !== ":memory:" ? safeSize(filePath) : 0
@@ -624,12 +710,9 @@ export const layer = Layer.effect(
       yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
-            yield* tx.delete(CodegraphServiceTagsTable).run().pipe(Effect.orDie)
-            yield* tx.delete(CodegraphEdgesTable).run().pipe(Effect.orDie)
-            yield* tx.delete(CodegraphNodesTable).run().pipe(Effect.orDie)
-            yield* tx.delete(CodegraphFilesTable).run().pipe(Effect.orDie)
-            yield* tx.delete(CodegraphMetaTable).run().pipe(Effect.orDie)
-            yield* tx.delete(CodegraphParseErrorsTable).run().pipe(Effect.orDie)
+            for (const table of codegraphSchemaTables) {
+              yield* tx.delete(table).run().pipe(Effect.orDie)
+            }
           }),
         )
         .pipe(Effect.orDie)
@@ -652,27 +735,38 @@ export const layer = Layer.effect(
       // Default `dropFile` to false: the shared `banyancode.db` also holds
       // sessions/memory/projects, so wiping the file would wipe unrelated
       // state. Callers that explicitly want file removal pass dropFile: true.
+      let droppedFile = false
       if (input?.dropFile ?? false) {
         if (filePath !== ":memory:") {
           // SQLite holds the DB file open via the live connection. On Windows
           // the unlink fails with EBUSY while that handle is alive; on POSIX
           // unlinking an open file succeeds (the inode stays alive until the
-          // last FD closes). We treat EBUSY as best-effort: the data is wiped
-          // which is the main goal, and the file will be removed when the app
-          // restarts or the DB connection closes. ENOENT means already gone.
-          yield* Effect.tryPromise({
-            try: () =>
-              Bun.file(filePath).delete().catch((err: unknown) => {
-                const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : ""
-                if (code === "ENOENT" || code === "EBUSY") return
-                throw err
-              }),
-            catch: (err) => err,
-          }).pipe(Effect.orDie)
+          // last FD closes, so writes continue against the unlinked inode —
+          // data loss from the user's perspective). We surface the actual
+          // outcome in `droppedFile` instead of swallowing errors silently.
+          // ENOENT means the file was already removed; any other error (notably
+          // EBUSY on Windows) leaves droppedFile=false and logs a warning.
+          let outcome: boolean
+          try {
+            outcome = yield* Effect.tryPromise({
+              try: () => Bun.file(filePath).delete().then(() => true as const),
+              catch: () => undefined as never,
+            })
+          } catch {
+            outcome = false
+          }
+          if (!outcome) {
+            droppedFile = false
+            yield* Effect.logWarning(
+              `codegraph-remove: failed to unlink ${filePath} (Windows EBUSY or other unlink error; the DB file remains on disk until the running app exits)`,
+            )
+          } else {
+            droppedFile = true
+          }
         }
       }
 
-      return { sizeBefore, sizeAfter }
+      return { sizeBefore, sizeAfter, droppedFile }
     })
 
     const getMeta = Effect.fn("CodegraphRepo.getMeta")(function* () {
@@ -1067,7 +1161,14 @@ export const layer = Layer.effect(
               // @banyancode/X tag would otherwise collide and roll back the
               // entire writeFileGraph transaction. Conflict target = tag means
               // the latest indexer pass wins for the canonical service.
-              for (const entry of serviceTagEntries) {
+              //
+              // Plan Phase B B3 (bonus): collapse the per-entry upsert loop
+              // into a single multi-row upsert when more than one tag is
+              // present. With many Context.Service classes per file (we
+              // sometimes see 5+) the per-row writes inside the transaction
+              // were the dominant cost — one round trip replaces N.
+              if (serviceTagEntries.length === 1) {
+                const entry = serviceTagEntries[0]!
                 yield* tx
                   .insert(CodegraphServiceTagsTable)
                   .values(entry)
@@ -1079,6 +1180,22 @@ export const layer = Layer.effect(
                       node_id: entry.node_id,
                       class_name: entry.class_name,
                       indexed_at: entry.indexed_at,
+                    },
+                  })
+                  .run()
+                  .pipe(Effect.orDie)
+              } else if (serviceTagEntries.length > 1) {
+                yield* tx
+                  .insert(CodegraphServiceTagsTable)
+                  .values(serviceTagEntries)
+                  .onConflictDoUpdate({
+                    target: CodegraphServiceTagsTable.tag,
+                    set: {
+                      service_name: sql`excluded.service_name`,
+                      file_id: sql`excluded.file_id`,
+                      node_id: sql`excluded.node_id`,
+                      class_name: sql`excluded.class_name`,
+                      indexed_at: sql`excluded.indexed_at`,
                     },
                   })
                   .run()
@@ -1126,6 +1243,7 @@ export const layer = Layer.effect(
       searchNodesLight,
       ftsSearchNodes,
       nodesByFileIDs,
+      filesByIDs,
       countNodes,
       countEdges,
       countFiles,
@@ -1136,6 +1254,8 @@ export const layer = Layer.effect(
       listEdgesByNode,
       edgesFrom,
       edgesTo,
+      edgesFromBatch,
+      edgesToBatch,
       deleteFile,
       deleteDerivedEdgesForFiles,
       writeFileGraph,

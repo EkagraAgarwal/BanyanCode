@@ -10,6 +10,7 @@ import type { CodegraphEdge, CodegraphFile, CodegraphNode, CodegraphNodeKind } f
 import { getParserForPath } from "./langs/registry"
 import type { ParseResult } from "./langs/types"
 import {
+  ensureQuerySourcesLoaded,
   parseTypeScriptWithTreeSitterIncremental,
   parsePythonWithTreeSitterIncremental,
 } from "./langs/query-executor"
@@ -133,6 +134,12 @@ const DEFAULT_PRODUCT_EXCLUDES = [
   "packages/storybook",
 ]
 
+// Plan Phase 5: cap the tree-sitter cache so a long-lived indexer cannot
+// retain hundreds of MB of native parse trees. Trees past the cap are
+// dropped (treated as cold on next access). 1000 trees ≈ a few hundred MB
+// at typical sizes, well below any reasonable memory budget.
+const TREE_CACHE_CAP = 1000
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -141,6 +148,29 @@ export const layer = Layer.effect(
     const database = yield* Database.Service
     const cancelled = yield* Ref.make(false)
     const treeCacheRef = yield* Ref.make(new Map<string, Tree>())
+
+    // Warm the grammar cache so per-file parses never read `.scm` from disk.
+    yield* Effect.promise(() => ensureQuerySourcesLoaded())
+
+    const pruneTreeCache = Effect.fn("CodegraphIndexer.pruneTreeCache")(function* () {
+      yield* Ref.update(treeCacheRef, (m) => {
+        if (m.size <= TREE_CACHE_CAP) return m
+        const overflow = m.size - TREE_CACHE_CAP
+        const keysToDelete: string[] = []
+        for (const key of m.keys()) {
+          keysToDelete.push(key)
+          if (keysToDelete.length >= overflow) break
+        }
+        for (const key of keysToDelete) m.delete(key)
+        return m
+      })
+    })
+
+    const dropTreeCacheFor = (filePath: string) =>
+      Ref.update(treeCacheRef, (m) => {
+        m.delete(filePath)
+        return m
+      })
     const walkDirectory = (
       dir: string,
       maxFileSizeBytes: number,
@@ -436,6 +466,7 @@ const indexCandidateFileCore = (
           m.set(filePath, capturedTree)
           return m
         })
+        yield* pruneTreeCache()
       }
     } else if (PY_LIKE_EXTS.has(ext)) {
       const cached = yield* Ref.get(cfg.treeCacheRef)
@@ -449,6 +480,7 @@ const indexCandidateFileCore = (
           m.set(filePath, capturedTree)
           return m
         })
+        yield* pruneTreeCache()
       }
     } else {
       result = parser.parse(content, filePath)
@@ -974,8 +1006,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           drainParsedQueue,
         ],
         { concurrency: 2, discard: true },
-      )
-      yield* Queue.shutdown(parsedQueue)
+      ).pipe(Effect.ensuring(Queue.shutdown(parsedQueue)))
       yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
 
       yield* rebuildDerivedGraph(undefined)
@@ -1038,6 +1069,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       excludePatterns?: readonly string[]
       onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
     }) {
+      yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
       const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root, input.excludePatterns)
 
@@ -1089,79 +1121,90 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         skipped: true,
       })
 
-      yield* Effect.forEach(filteredPaths, (filePath) => {
-        const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
-        return indexCandidateFileCore(filePath, relativePath, {
-          input,
-          maxFileSizeBytes,
-          total,
-          parsedQueue,
-          skippedParsed: skippedParsedFn,
-          skippedRef,
-          skippedTooLargeParseRef,
-          skippedMinifiedRef,
-          skippedArtifactRef,
-          skippedReadErrorRef,
-          skippedParseFailureRef,
-          skippedCachedRef,
-          cancelled,
-          currentlyParsingRef,
-          progressCounter,
-          treeCacheRef,
-        })
-      }, { concurrency: 8, discard: true })
+      // Plan Phase 5 fix: run the producer pool and the drain concurrently
+// instead of sequentially. The previous code drained only after every
+// parse had finished, which deadlocked the bounded queue at 128 entries
+// once the input exceeded that cap (the 129-file case).
+const drainParsedQueue = Effect.gen(function* () {
+        let processed = 0
+        while (processed < total) {
+          const parsed = yield* Queue.take(parsedQueue)
+          processed++
+          if (parsed.skipped) continue
+          if (parsed.previousFileID) {
+            yield* Ref.update(changedFileIDsRef, (s) => {
+              s.add(parsed.previousFileID!)
+              return s
+            })
+          }
+          if (parsed.file.id) {
+            yield* Ref.update(changedFileIDsRef, (s) => {
+              s.add(parsed.file.id)
+              return s
+            })
+          }
+          yield* repo.writeFileGraph({
+            file: parsed.file,
+            nodes: parsed.nodes,
+            edges: parsed.edges,
+            ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
+                  cause: Cause.pretty(cause),
+                })
+                yield* repo
+                  .recordParseError({ path: parsed.relativePath, cause: Cause.pretty(cause), indexedAt: Date.now() })
+                  .pipe(
+                    Effect.catchCause((innerCause) =>
+                      Effect.logWarning(`recordParseError insert failed for ${parsed.relativePath}`, {
+                        cause: Cause.pretty(innerCause),
+                      }),
+                    ),
+                  )
+                yield* Ref.update(skippedRef, (n) => n + 1)
+                yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
+              }),
+            ),
+          )
+          if (parsed.nodes.length > 0) {
+            yield* Ref.update(indexedRef, (n) => n + 1)
+          }
+          if (processed % CHECKPOINT_EVERY === 0) {
+            yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
+          }
+        }
+      })
 
-      let processed = 0
-      while (processed < total) {
-        const parsed = yield* Queue.take(parsedQueue)
-        processed++
-        if (parsed.skipped) continue
-        if (parsed.previousFileID) {
-          yield* Ref.update(changedFileIDsRef, (s) => {
-            s.add(parsed.previousFileID!)
-            return s
-          })
-        }
-        if (parsed.file.id) {
-          yield* Ref.update(changedFileIDsRef, (s) => {
-            s.add(parsed.file.id)
-            return s
-          })
-        }
-        yield* repo.writeFileGraph({
-          file: parsed.file,
-          nodes: parsed.nodes,
-          edges: parsed.edges,
-          ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
-                cause: Cause.pretty(cause),
-              })
-              yield* repo
-                .recordParseError({ path: parsed.relativePath, cause: Cause.pretty(cause), indexedAt: Date.now() })
-                .pipe(
-                  Effect.catchCause((innerCause) =>
-                    Effect.logWarning(`recordParseError insert failed for ${parsed.relativePath}`, {
-                      cause: Cause.pretty(innerCause),
-                    }),
-                  ),
-                )
-              yield* Ref.update(skippedRef, (n) => n + 1)
-              yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
-            }),
-          ),
-        )
-        if (parsed.nodes.length > 0) {
-          yield* Ref.update(indexedRef, (n) => n + 1)
-        }
-        if (processed % CHECKPOINT_EVERY === 0) {
-          yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
-        }
-      }
+      yield* Effect.all(
+        [
+          Effect.forEach(filteredPaths, (filePath) => {
+            const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
+            return indexCandidateFileCore(filePath, relativePath, {
+              input,
+              maxFileSizeBytes,
+              total,
+              parsedQueue,
+              skippedParsed: skippedParsedFn,
+              skippedRef,
+              skippedTooLargeParseRef,
+              skippedMinifiedRef,
+              skippedArtifactRef,
+              skippedReadErrorRef,
+              skippedParseFailureRef,
+              skippedCachedRef,
+              cancelled,
+              currentlyParsingRef,
+              progressCounter,
+              treeCacheRef,
+            })
+          }, { concurrency: 8, discard: true }),
+          drainParsedQueue,
+        ],
+        { concurrency: 2, discard: true },
+      ).pipe(Effect.ensuring(Queue.shutdown(parsedQueue)))
 
-      yield* Queue.shutdown(parsedQueue)
       yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
 
       const changedFileIDs = Array.from(yield* Ref.get(changedFileIDsRef))
@@ -1195,6 +1238,9 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           removedFileIDs.push(existing.id)
           yield* repo.deleteFile(existing.id)
         }
+        // Plan Phase 5: drop cached parse trees for removed files so the
+        // tree cache reflects the current set of indexed paths.
+        yield* dropTreeCacheFor(filePath)
       }
       if (removedFileIDs.length === 0) return
       yield* rebuildDerivedGraph(removedFileIDs)

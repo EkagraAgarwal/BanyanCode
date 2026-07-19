@@ -32,6 +32,39 @@ const readQuerySource = async (ext: string): Promise<string | null> => {
   return fs.readFile(path.join(QUERIES_DIR, file), "utf8")
 }
 
+// Plan Phase 5: cache query grammar sources at module load time so the
+// indexer never reads `.scm` files from disk during a parse pass.
+let QUERY_SOURCE_CACHE: ReadonlyMap<string, string> | null = null
+
+const loadQuerySourcesFromDisk = async (): Promise<ReadonlyMap<string, string>> => {
+  const map = new Map<string, string>()
+  for (const ext of QUERY_FILE_BY_EXT.keys()) {
+    try {
+      const source = await readQuerySource(ext)
+      if (source !== null) map.set(ext, source)
+    } catch {
+      // Swallow individual read failures — the caller falls back to regex.
+    }
+  }
+  return map
+}
+
+export const ensureQuerySourcesLoaded = async (): Promise<ReadonlyMap<string, string>> => {
+  if (QUERY_SOURCE_CACHE) return QUERY_SOURCE_CACHE
+  QUERY_SOURCE_CACHE = await loadQuerySourcesFromDisk()
+  return QUERY_SOURCE_CACHE
+}
+
+// Synchronous lookup against the cache. Returns "" when the grammar is not
+// available; callers fall back to the regex parser in that case.
+const querySourceCached = (ext: string): string => {
+  const cache = QUERY_SOURCE_CACHE
+  if (!cache) return ""
+  return cache.get(ext) ?? ""
+}
+
+// Kept for tests + the legacy `validateQueryFile` API that needs the raw
+// source for the synchronous validation path.
 const loadQuerySourceOrEmpty = (ext: string): Effect.Effect<string, never, never> =>
   Effect.gen(function* () {
     const value = yield* Effect.tryPromise({
@@ -204,7 +237,7 @@ export const parseTypeScriptWithTreeSitter = (
   fileID: string,
 ): Effect.Effect<ParseResult, TreeSitterUnavailableError, never> =>
   Effect.gen(function* () {
-    const querySource = yield* loadQuerySourceOrEmpty(".ts")
+    const querySource = querySourceCached(".ts")
     if (querySource === "") return parseTypeScript(content, fileID)
     return yield* withTreeSitter((state) => {
       const parser = state.parser.parsersByExt.get(".ts")
@@ -222,7 +255,7 @@ export const parsePythonWithTreeSitter = (
   fileID: string,
 ): Effect.Effect<ParseResult, TreeSitterUnavailableError, never> =>
   Effect.gen(function* () {
-    const querySource = yield* loadQuerySourceOrEmpty(".py")
+    const querySource = querySourceCached(".py")
     if (querySource === "") return parsePython(content, fileID)
     return yield* withTreeSitter((state) => {
       const parser = state.parser.parsersByExt.get(".py")
@@ -241,7 +274,7 @@ export const parseTypeScriptWithTreeSitterIncremental = (
   oldTree: Tree | undefined,
 ): Effect.Effect<IncrementalParseResult, never, never> =>
   Effect.gen(function* () {
-    const querySource = yield* loadQuerySourceOrEmpty(".ts")
+    const querySource = querySourceCached(".ts")
     if (querySource === "") return { result: parseTypeScript(content, fileID), tree: undefined }
     return yield* withTreeSitter((state) => {
       const Parser = state.parser.Parser
@@ -273,7 +306,7 @@ export const parsePythonWithTreeSitterIncremental = (
   oldTree: Tree | undefined,
 ): Effect.Effect<IncrementalParseResult, never, never> =>
   Effect.gen(function* () {
-    const querySource = yield* loadQuerySourceOrEmpty(".py")
+    const querySource = querySourceCached(".py")
     if (querySource === "") return { result: parsePython(content, fileID), tree: undefined }
     return yield* withTreeSitter((state) => {
       const Parser = state.parser.Parser

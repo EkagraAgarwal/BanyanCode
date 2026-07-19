@@ -1,6 +1,7 @@
 import { Effect, Layer } from "effect"
 import { CodegraphRepo } from "../codegraph-repo"
 import { resolveGraphTargetPure } from "../symbol-resolver"
+import { bfsPure } from "./bfs"
 import { Service } from "./service"
 import type { Interface } from "./service"
 import type {
@@ -108,9 +109,39 @@ const DEPENDENCY_EDGE_KINDS: ReadonlySet<CodegraphEdge["kind"]> = new Set([
   "imports",
   "extends",
 ])
+const RELATED_EDGE_KINDS: ReadonlySet<CodegraphEdge["kind"]> = new Set([
+  "calls",
+  "references",
+  "imports",
+  "extends",
+])
 
 function isDocPath(path: string): boolean {
   return DOC_PATH_PATTERNS.some((p) => p.test(path))
+}
+
+// Reduce focusDirs to graph-relative, slash-normalized paths so callers can
+// compare them against `codegraph_files.path` directly. When `indexedRoot`
+// is provided, prefixes that match it are stripped to avoid double-prefixing
+// (e.g. `C:/repo/packages/opencode` → `packages/opencode`).
+const normalizeFocusDirs = (focusDirs: readonly string[], indexedRoot?: string): readonly string[] => {
+  if (focusDirs.length === 0) return focusDirs
+  const root = indexedRoot ? indexedRoot.replace(/\\/g, "/").replace(/\/+$/, "") : undefined
+  return focusDirs.map((d) => {
+    const cleaned = d.replace(/\\/g, "/").trim()
+    if (!cleaned) return cleaned
+    if (root && cleaned === root) return ""
+    if (root && cleaned.startsWith(root + "/")) return cleaned.slice(root.length + 1)
+    return cleaned
+  })
+}
+
+const pathMatchesFocusDirs = (normalizedPath: string, normalizedFocusDirs: readonly string[]): boolean => {
+  if (normalizedFocusDirs.length === 0) return true
+  return normalizedFocusDirs.some((prefix) => {
+    if (!prefix) return true
+    return normalizedPath === prefix || normalizedPath.startsWith(prefix + "/")
+  })
 }
 
 // Normalize a caller-provided path against the indexed graph's root so
@@ -151,7 +182,9 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         let fileID: string | undefined
         if (input.file) {
-          const file = yield* repo.getFileByPath(input.file)
+          const meta = yield* repo.getMeta()
+          const normalizedInput = normalizePathForLookup(input.file, meta?.indexedRoot)
+          const file = yield* repo.getFileByPath(normalizedInput)
           fileID = file?.id
           if (!fileID) return { nodes: [], usedFallback: false }
         }
@@ -166,46 +199,52 @@ export const layer = Layer.effect(
 
         let nodes = [...result.value.candidates]
         const derivation = result.value.derivation
-        const hasFocusDirs = input.workspace?.focusDirs && input.workspace.focusDirs.length > 0
+        const rawFocusDirs = input.workspace?.focusDirs ?? []
+        const hasFocusDirs = rawFocusDirs.length > 0
 
         if (input.exact) {
           nodes = nodes.filter((n) => n.name === input.name)
         }
 
-        if (hasFocusDirs) {
-          const focusSet = new Set(
-            input.workspace!.focusDirs.map((d) => d.replace(/\\/g, "/")),
-          )
-          const focused: CodegraphNode[] = []
-          const unfocused: CodegraphNode[] = []
+        // Resolve graph-relative focusDirs once. Pull indexedRoot from the
+        // graph metadata so a caller-supplied worktree path can never
+        // double-prefix the comparison.
+        const meta = hasFocusDirs ? yield* repo.getMeta() : undefined
+        const normalizedFocusDirs = hasFocusDirs
+          ? normalizeFocusDirs(rawFocusDirs, meta?.indexedRoot)
+          : rawFocusDirs
 
+        if (hasFocusDirs) {
+          // Batch-fetch every candidate file in one query instead of N.
+          // The previous implementation issued a `getFile` per candidate,
+          // turning resolution into O(N) round-trips on cold DBs.
+          const candidateFileIDs = Array.from(new Set(nodes.map((n) => n.fileID)))
+          const files = yield* repo.filesByIDs(candidateFileIDs)
+          const filePathByID = new Map<string, string>()
+          for (const f of files) filePathByID.set(f.id, f.path.replace(/\\/g, "/"))
+
+          const focused: CodegraphNode[] = []
           for (const node of nodes) {
-            const file = yield* repo.getFile(node.fileID)
-            if (!file) {
-              unfocused.push(node)
-              continue
-            }
-            const normalizedPath = file.path.replace(/\\/g, "/")
-            const isFocused = [...focusSet].some(
-              (prefix) =>
-                normalizedPath === prefix ||
-                normalizedPath.startsWith(prefix + "/"),
-            )
-            if (isFocused) {
-              focused.push(node)
-            } else {
-              unfocused.push(node)
-            }
+            const path = filePathByID.get(node.fileID) ?? ""
+            if (pathMatchesFocusDirs(path, normalizedFocusDirs)) focused.push(node)
           }
 
           if (focused.length > 0) {
             return {
               nodes: focused,
               usedFallback: derivation === "tag-fallback",
+              ...(focused.length > 1
+                ? { ambiguity: { total: nodes.length, kept: focused.length } }
+                : {}),
             }
           }
+
+          // Plan: do not silently fall back when focusDirs was specified
+          // and no candidate matches. Surface an explicit
+          // `outside-focus-dirs` diagnostic from the caller rather than
+          // smuggling an out-of-scope node into the result.
           return {
-            nodes: [...focused, ...unfocused],
+            nodes: [],
             usedFallback: derivation === "tag-fallback",
             ambiguity: { total: nodes.length, kept: 0 },
           }
@@ -219,26 +258,21 @@ export const layer = Layer.effect(
             "packages/core",
             "packages/tui",
           ]
-          const UI_EXCLUDED = [
-            "packages/web",
-            "packages/app",
-            "packages/desktop",
-            "packages/storybook",
-          ]
 
+          // Batch file lookup for the product-package tie-breaker so the
+          // unscoped path stops issuing one query per node too.
+          const candidateFileIDs = Array.from(new Set(nodes.map((n) => n.fileID)))
+          const files = yield* repo.filesByIDs(candidateFileIDs)
           const filePathByNodeID = new Map<string, string>()
-          for (const node of nodes) {
-            const file = yield* repo.getFile(node.fileID)
-            if (file) filePathByNodeID.set(node.id, file.path.replace(/\\/g, "/"))
+          for (const f of files) {
+            for (const node of nodes) {
+              if (node.fileID === f.id) filePathByNodeID.set(node.id, f.path.replace(/\\/g, "/"))
+            }
           }
 
           const productNodes = nodes.filter((n) => {
             const path = filePathByNodeID.get(n.id) ?? ""
             return PRODUCT_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))
-          })
-          const uiNodes = nodes.filter((n) => {
-            const path = filePathByNodeID.get(n.id) ?? ""
-            return UI_EXCLUDED.some((p) => path === p || path.startsWith(p + "/"))
           })
 
           if (productNodes.length > 0) {
@@ -301,137 +335,123 @@ export const layer = Layer.effect(
 
     const walkSubsystem = (nodeID: string, maxDepth: number): Effect.Effect<CodegraphNode[], never, never> =>
       Effect.gen(function* () {
-        const visited = new Set<string>([nodeID])
-        const result: CodegraphNode[] = []
-        const queue: Array<{ id: string; depth: number }> = [{ id: nodeID, depth: 0 }]
-
-        while (queue.length > 0) {
-          const current = queue.shift()!
-          if (current.depth >= maxDepth) continue
-
-          const outgoing = yield* repo.edgesFrom(current.id)
-          const incomingRaw = yield* repo.edgesTo(current.id)
-          const incoming = incomingRaw.filter((e) => e.kind !== "imports" && e.kind !== "extends")
-
-          const nextIDs: string[] = []
-          for (const edge of [...outgoing, ...incoming]) {
-            const nextID = edge.fromNodeID === current.id ? edge.toNodeID : edge.fromNodeID
-            if (!visited.has(nextID)) {
-              visited.add(nextID)
-              nextIDs.push(nextID)
-            }
-          }
-
-          if (nextIDs.length > 0) {
-            const nodes = yield* repo.nodesByIDs(nextIDs)
-            result.push(...nodes)
-            for (const id of nextIDs) {
-              queue.push({ id, depth: current.depth + 1 })
-            }
-          }
-        }
-
-        return result
-      })
-
-    const findEntrypoints = (input: {
-      feature: string
-    }): Effect.Effect<CodegraphNode[], never, never> =>
-      Effect.gen(function* () {
-        const allFiles = yield* repo.listAllFiles()
-        const featureLower = input.feature.toLowerCase()
-
-        const matchingFiles = allFiles.filter((f) => f.path.toLowerCase().includes(featureLower))
-        if (matchingFiles.length === 0) return []
-
-        const fileIDs = new Set(matchingFiles.map((f) => f.id))
-        const allNodes = yield* repo.listAllNodes()
-
-        const entrypoints = allNodes.filter(
-          (n) => fileIDs.has(n.fileID) && (n.kind === "function" || n.kind === "class" || n.kind === "method" || n.kind === "type"),
-        )
-
-        return entrypoints
+        const edgeKinds = new Set<CodegraphEdge["kind"]>([
+          "calls",
+          "references",
+          "extends",
+          "imports",
+        ])
+        const run = yield* bfsPure(repo, {
+          start: [nodeID],
+          direction: "both",
+          edgeKinds,
+          maxDepth,
+        })
+        return run.results.map((r) => r.node)
       })
 
     const findTests = (input: {
       symbol: string
       symbolID?: string
-    }): Effect.Effect<{ nodes: CodegraphNode[]; notFound: boolean }, never, never> =>
+    }): Effect.Effect<
+      { tests: readonly CodegraphNode[]; notFound: boolean; derivation: "tested_by" | "references" | "import" | "substring" | "none" },
+      never,
+      never
+    > =>
       Effect.gen(function* () {
-        const allTestNodes = yield* repo.listNodesByKind("test")
+        // Phase 4: rank test matches by evidence. tested_by edges are
+        // exact; references/calls edges are strong; import + substring
+        // matches are explicitly low-confidence and only surface when no
+        // graph edge connects the test to the target.
+        // Discover test files by either `kind = "test"` OR a `.test/.spec`
+        // path pattern so we cover fixtures that omit the kind field.
+        const testFilePatterns = [".test.ts", ".spec.ts", "test_", "_test.go", "_test.py", ".test.tsx", ".spec.tsx"]
+        const allFiles = yield* repo.listAllFiles()
+        const testFileIDs = new Set(
+          allFiles
+            .filter((f) => testFilePatterns.some((p) => f.path.toLowerCase().includes(p.toLowerCase())))
+            .map((f) => f.id),
+        )
+        const allNodes = yield* repo.listAllNodes()
+        const testNodesFromKind = yield* repo.listNodesByKind("test")
+        const testNodeIDs = new Set(testNodesFromKind.map((n) => n.id))
+        const candidateTestNodes = allNodes.filter(
+          (n) => testNodeIDs.has(n.id) || testFileIDs.has(n.fileID),
+        )
 
-        const doImportMatch = (symbolModule: string, symbolName: string) => {
+        const doImportMatch = (symbolModule: string, symbolName: string): CodegraphNode[] => {
+          const moduleBase = symbolModule.replace(/\.ts$/, "")
           const matching: CodegraphNode[] = []
-          for (const testNode of allTestNodes) {
+          for (const testNode of candidateTestNodes) {
             if (!testNode.code) continue
-            const importsTarget = testNode.code.includes(symbolModule.replace(/\.ts$/, "")) ||
-                                testNode.code.includes(symbolName)
-            if (importsTarget) {
+            if (testNode.code.includes(moduleBase) || testNode.code.includes(symbolName)) {
               matching.push(testNode)
             }
           }
           return matching
         }
 
-        const doFallbackMatch = (symbolID: string): Effect.Effect<CodegraphNode[], never, never> =>
+        const doEvidenceMatch = (
+          symbolID: string,
+        ): Effect.Effect<{ tests: CodegraphNode[]; derivation: "tested_by" | "references" | "none" }, never, never> =>
           Effect.gen(function* () {
-            const allFiles = yield* repo.listAllFiles()
-            const allNodes = yield* repo.listAllNodes()
-            const testFilePatterns = [".test.ts", ".spec.ts", "test_", "_test.go", "_test.py", ".test.tsx", ".spec.tsx"]
-            const testFiles = allFiles.filter((f) => {
-              const lower = f.path.toLowerCase()
-              return testFilePatterns.some((p) => lower.includes(p.toLowerCase()))
-            })
-            if (testFiles.length === 0) return []
+            if (candidateTestNodes.length === 0) return { tests: [], derivation: "none" }
 
-            const testFileIDs = new Set(testFiles.map((f) => f.id))
-            const testNodesFromFiles = allNodes.filter((n) => testFileIDs.has(n.fileID))
-            if (testNodesFromFiles.length === 0) return []
+            const candidateIDs = candidateTestNodes.map((t) => t.id)
 
-            const relevantTests: CodegraphNode[] = []
-            const outgoing = yield* repo.edgesFrom(symbolID)
-            const testedBy = new Set(outgoing.filter((e) => e.kind === "tested_by").map((e) => e.toNodeID))
-
-            for (const node of testNodesFromFiles) {
-              if (testedBy.has(node.id)) {
-                relevantTests.push(node)
-                continue
-              }
-              const edges = yield* repo.edgesFrom(node.id)
-              const references = edges.filter(
-                (e) => e.toNodeID === symbolID && (e.kind === "calls" || e.kind === "references"),
-              )
-              if (references.length > 0) relevantTests.push(node)
+            // 1) tested_by edges pointing AT a test node FROM the symbol —
+            // strongest evidence. One batched query for all candidates'
+            // incoming edges.
+            const incomingToCandidates = yield* repo.edgesToBatch(candidateIDs)
+            const testedBy: CodegraphNode[] = []
+            for (const edge of incomingToCandidates) {
+              if (edge.kind !== "tested_by") continue
+              if (edge.fromNodeID !== symbolID) continue
+              const testNode = candidateTestNodes.find((t) => t.id === edge.toNodeID)
+              if (testNode) testedBy.push(testNode)
             }
+            if (testedBy.length > 0) return { tests: testedBy, derivation: "tested_by" }
 
-            return relevantTests
+            // 2) calls/references edges FROM each test node TO the symbol —
+            // strong evidence, batched per the same frontier model.
+            const outgoingFromCandidates = yield* repo.edgesFromBatch(candidateIDs)
+            const edgeByCandidate = new Map<string, CodegraphEdge[]>()
+            for (const edge of outgoingFromCandidates) {
+              if (edge.kind !== "calls" && edge.kind !== "references") continue
+              if (edge.toNodeID !== symbolID) continue
+              const list = edgeByCandidate.get(edge.fromNodeID) ?? []
+              list.push(edge)
+              edgeByCandidate.set(edge.fromNodeID, list)
+            }
+            const references: CodegraphNode[] = []
+            for (const testNode of candidateTestNodes) {
+              if ((edgeByCandidate.get(testNode.id) ?? []).length > 0) references.push(testNode)
+            }
+            if (references.length > 0) return { tests: references, derivation: "references" }
+
+            return { tests: [], derivation: "none" }
           })
 
         if (input.symbolID) {
           const targetNode = yield* repo.nodeByID(input.symbolID)
-          if (!targetNode) return { nodes: [], notFound: true }
+          if (!targetNode) return { tests: [], notFound: true, derivation: "none" }
           const targetFile = yield* repo.getFile(targetNode.fileID)
-          if (!targetFile) return { nodes: [], notFound: true }
+          if (!targetFile) return { tests: [], notFound: true, derivation: "none" }
 
-          // Edge-based match wins over substring match when we already have a
-          // nodeID — substring is only useful when there's no graph to lean on.
-          const edgeBased = yield* doFallbackMatch(input.symbolID)
-          if (edgeBased.length > 0) {
-            return { nodes: edgeBased, notFound: false }
+          const evidence = yield* doEvidenceMatch(input.symbolID)
+          if (evidence.tests.length > 0) {
+            return { tests: evidence.tests, notFound: false, derivation: evidence.derivation }
           }
-
-          const symbolModule = targetFile.path
-          const importMatching = doImportMatch(symbolModule, input.symbol)
+          const importMatching = doImportMatch(targetFile.path, input.symbol)
           if (importMatching.length > 0) {
-            return { nodes: importMatching, notFound: false }
+            return { tests: importMatching, notFound: false, derivation: "import" }
           }
-          return { nodes: [], notFound: false }
+          return { tests: [], notFound: false, derivation: "none" }
         }
 
         const symbolResult = yield* findSymbol({ name: input.symbol })
         if (symbolResult.nodes.length === 0) {
-          return { nodes: [], notFound: true }
+          return { tests: [], notFound: true, derivation: "none" }
         }
 
         const searchName = input.symbol.includes(".") ? input.symbol.split(".").pop()! : input.symbol
@@ -439,22 +459,19 @@ export const layer = Layer.effect(
         const symbolID = (exactMatch ?? symbolResult.nodes[0])!.id
 
         const targetNode = yield* repo.nodeByID(symbolID)
-        if (!targetNode) return { nodes: [], notFound: true }
+        if (!targetNode) return { tests: [], notFound: true, derivation: "none" }
         const targetFile = yield* repo.getFile(targetNode.fileID)
-        if (!targetFile) return { nodes: [], notFound: true }
+        if (!targetFile) return { tests: [], notFound: true, derivation: "none" }
 
-        // Same ordering for the resolved path: edge-based first.
-        const edgeBased = yield* doFallbackMatch(symbolID)
-        if (edgeBased.length > 0) {
-          return { nodes: edgeBased, notFound: false }
+        const evidence = yield* doEvidenceMatch(symbolID)
+        if (evidence.tests.length > 0) {
+          return { tests: evidence.tests, notFound: false, derivation: evidence.derivation }
         }
-
-        const symbolModule = targetFile.path
-        const importMatching = doImportMatch(symbolModule, input.symbol)
+        const importMatching = doImportMatch(targetFile.path, input.symbol)
         if (importMatching.length > 0) {
-          return { nodes: importMatching, notFound: false }
+          return { tests: importMatching, notFound: false, derivation: "import" }
         }
-        return { nodes: [], notFound: false }
+        return { tests: [], notFound: false, derivation: "none" }
       })
 
     const findRelated = (input: {
@@ -462,49 +479,19 @@ export const layer = Layer.effect(
       depth?: number
     }): Effect.Effect<CodegraphNode[], never, never> =>
       Effect.gen(function* () {
-        const maxDepth = input.depth ?? 2
-        const visited = new Set<string>([input.nodeID])
-        const result: CodegraphNode[] = []
-        const queue: Array<{ id: string; depth: number }> = [{ id: input.nodeID, depth: 0 }]
-
-        while (queue.length > 0) {
-          const current = queue.shift()!
-          if (current.depth >= maxDepth) continue
-
-          const outgoing = yield* repo.edgesFrom(current.id)
-          const incoming = yield* repo.edgesTo(current.id)
-
-          const nextIDs: string[] = []
-          for (const edge of outgoing) {
-            if (!DEPENDENCY_EDGE_KINDS.has(edge.kind)) continue
-            if (!visited.has(edge.toNodeID)) {
-              visited.add(edge.toNodeID)
-              nextIDs.push(edge.toNodeID)
-            }
-          }
-          for (const edge of incoming) {
-            if (!CALLER_EDGE_KINDS.has(edge.kind)) continue
-            if (!visited.has(edge.fromNodeID)) {
-              visited.add(edge.fromNodeID)
-              nextIDs.push(edge.fromNodeID)
-            }
-          }
-
-          if (nextIDs.length > 0) {
-            const nodes = yield* repo.nodesByIDs(nextIDs)
-            result.push(...nodes)
-            for (const id of nextIDs) {
-              queue.push({ id, depth: current.depth + 1 })
-            }
-          }
-        }
-
-        return result
+        const run = yield* bfsPure(repo, {
+          start: [input.nodeID],
+          direction: "both",
+          edgeKinds: RELATED_EDGE_KINDS,
+          outgoingEdgeKinds: DEPENDENCY_EDGE_KINDS,
+          incomingEdgeKinds: CALLER_EDGE_KINDS,
+          maxDepth: input.depth ?? 2,
+        })
+        return run.results.map((r) => r.node)
       })
 
     // Depth-tagged BFS. Each discovered node carries the per-node hop distance
     // from the anchor (depth=1 means the anchor calls/touches it directly).
-    // Phase 2 ranking consumes these depths to score transitive dependents.
     // Directional-but-tolerant: outgoing uses all dependency kinds, incoming
     // uses only caller kinds (calls/references).
     const findRelatedWithDepth = (input: {
@@ -512,46 +499,15 @@ export const layer = Layer.effect(
       depth?: number
     }): Effect.Effect<Array<{ readonly node: CodegraphNode; readonly depth: number }>, never, never> =>
       Effect.gen(function* () {
-        const maxDepth = input.depth ?? 2
-        const visited = new Set<string>([input.nodeID])
-        const result: Array<{ node: CodegraphNode; depth: number }> = []
-        const queue: Array<{ id: string; depth: number }> = [{ id: input.nodeID, depth: 0 }]
-
-        while (queue.length > 0) {
-          const current = queue.shift()!
-          if (current.depth >= maxDepth) continue
-
-          const outgoing = yield* repo.edgesFrom(current.id)
-          const incoming = yield* repo.edgesTo(current.id)
-
-          const nextIDs: string[] = []
-          for (const edge of outgoing) {
-            if (!DEPENDENCY_EDGE_KINDS.has(edge.kind)) continue
-            if (!visited.has(edge.toNodeID)) {
-              visited.add(edge.toNodeID)
-              nextIDs.push(edge.toNodeID)
-            }
-          }
-          for (const edge of incoming) {
-            if (!CALLER_EDGE_KINDS.has(edge.kind)) continue
-            if (!visited.has(edge.fromNodeID)) {
-              visited.add(edge.fromNodeID)
-              nextIDs.push(edge.fromNodeID)
-            }
-          }
-
-          if (nextIDs.length > 0) {
-            const nodes = yield* repo.nodesByIDs(nextIDs)
-            for (const node of nodes) {
-              result.push({ node, depth: current.depth + 1 })
-            }
-            for (const id of nextIDs) {
-              queue.push({ id, depth: current.depth + 1 })
-            }
-          }
-        }
-
-        return result
+        const run = yield* bfsPure(repo, {
+          start: [input.nodeID],
+          direction: "both",
+          edgeKinds: RELATED_EDGE_KINDS,
+          outgoingEdgeKinds: DEPENDENCY_EDGE_KINDS,
+          incomingEdgeKinds: CALLER_EDGE_KINDS,
+          maxDepth: input.depth ?? 2,
+        })
+        return run.results.map((r) => ({ node: r.node, depth: r.depth }))
       })
 
     // Strict directional BFS: incoming calls/references only.
@@ -560,36 +516,13 @@ export const layer = Layer.effect(
       depth?: number
     }): Effect.Effect<CodegraphNode[], never, never> =>
       Effect.gen(function* () {
-        const maxDepth = input.depth ?? 2
-        const visited = new Set<string>([input.nodeID])
-        const result: CodegraphNode[] = []
-        const queue: Array<{ id: string; depth: number }> = [{ id: input.nodeID, depth: 0 }]
-
-        while (queue.length > 0) {
-          const current = queue.shift()!
-          if (current.depth >= maxDepth) continue
-
-          const incoming = yield* repo.edgesTo(current.id)
-          const nextIDs: string[] = []
-          for (const edge of incoming) {
-            if (!CALLER_EDGE_KINDS.has(edge.kind)) continue
-            const nextID = edge.fromNodeID
-            if (!visited.has(nextID)) {
-              visited.add(nextID)
-              nextIDs.push(nextID)
-            }
-          }
-
-          if (nextIDs.length > 0) {
-            const nodes = yield* repo.nodesByIDs(nextIDs)
-            result.push(...nodes)
-            for (const id of nextIDs) {
-              queue.push({ id, depth: current.depth + 1 })
-            }
-          }
-        }
-
-        return result
+        const run = yield* bfsPure(repo, {
+          start: [input.nodeID],
+          direction: "incoming",
+          edgeKinds: CALLER_EDGE_KINDS,
+          maxDepth: input.depth ?? 2,
+        })
+        return run.results.map((r) => r.node)
       })
 
     // Strict directional BFS: outgoing calls/references/imports/extends only.
@@ -598,36 +531,13 @@ export const layer = Layer.effect(
       depth?: number
     }): Effect.Effect<CodegraphNode[], never, never> =>
       Effect.gen(function* () {
-        const maxDepth = input.depth ?? 2
-        const visited = new Set<string>([input.nodeID])
-        const result: CodegraphNode[] = []
-        const queue: Array<{ id: string; depth: number }> = [{ id: input.nodeID, depth: 0 }]
-
-        while (queue.length > 0) {
-          const current = queue.shift()!
-          if (current.depth >= maxDepth) continue
-
-          const outgoing = yield* repo.edgesFrom(current.id)
-          const nextIDs: string[] = []
-          for (const edge of outgoing) {
-            if (!DEPENDENCY_EDGE_KINDS.has(edge.kind)) continue
-            const nextID = edge.toNodeID
-            if (!visited.has(nextID)) {
-              visited.add(nextID)
-              nextIDs.push(nextID)
-            }
-          }
-
-          if (nextIDs.length > 0) {
-            const nodes = yield* repo.nodesByIDs(nextIDs)
-            result.push(...nodes)
-            for (const id of nextIDs) {
-              queue.push({ id, depth: current.depth + 1 })
-            }
-          }
-        }
-
-        return result
+        const run = yield* bfsPure(repo, {
+          start: [input.nodeID],
+          direction: "outgoing",
+          edgeKinds: DEPENDENCY_EDGE_KINDS,
+          maxDepth: input.depth ?? 2,
+        })
+        return run.results.map((r) => r.node)
       })
 
     const query = (input: {
@@ -669,7 +579,7 @@ export const layer = Layer.effect(
           }
         }
 
-        const testsResult = symbols.length > 0 ? yield* findTests({ symbol: input.query }) : { nodes: [] as CodegraphNode[], notFound: true }
+        const testsResult = symbols.length > 0 ? yield* findTests({ symbol: input.query }) : { tests: [] as readonly CodegraphNode[], notFound: true, derivation: "none" as const }
 
         const relatedNodes: CodegraphNode[] = []
         for (const sym of symbols) {
@@ -684,32 +594,59 @@ export const layer = Layer.effect(
 
         const graphNodeIDs = new Set<string>([...seen])
         const graphEdges: CodegraphEdge[] = []
-        for (const sym of [...symbols, ...relatedNodes]) {
-          const outgoing = yield* repo.edgesFrom(sym.id)
-          const incoming = yield* repo.edgesTo(sym.id)
-          for (const edge of outgoing) {
+        const allIDs = [...new Set([...symbols, ...relatedNodes].map((node) => node.id))]
+        const outgoingEdges = yield* repo.edgesFromBatch(allIDs)
+        const incomingEdges = yield* repo.edgesToBatch(allIDs)
+        const outgoingByNode = new Map<string, CodegraphEdge[]>()
+        const incomingByNode = new Map<string, CodegraphEdge[]>()
+        for (const edge of outgoingEdges) {
+          const edges = outgoingByNode.get(edge.fromNodeID) ?? []
+          edges.push(edge)
+          outgoingByNode.set(edge.fromNodeID, edges)
+        }
+        for (const edge of incomingEdges) {
+          const edges = incomingByNode.get(edge.toNodeID) ?? []
+          edges.push(edge)
+          incomingByNode.set(edge.toNodeID, edges)
+        }
+        for (const id of allIDs) {
+          for (const edge of outgoingByNode.get(id) ?? []) {
             graphEdges.push(edge)
             graphNodeIDs.add(edge.toNodeID)
           }
-          for (const edge of incoming) {
+          for (const edge of incomingByNode.get(id) ?? []) {
             graphEdges.push(edge)
             graphNodeIDs.add(edge.fromNodeID)
           }
         }
         const graphNodesList = graphNodeIDs.size > 0 ? yield* repo.nodesByIDs([...graphNodeIDs]) : []
 
-        const isDegraded = symbols.length === 0
+        const isOutsideFocusDirs =
+          symbols.length === 0 &&
+          symbolResult.ambiguity !== undefined &&
+          symbolResult.ambiguity.kept === 0 &&
+          (input.workspace?.focusDirs?.length ?? 0) > 0
+        const isDegraded = symbols.length === 0 && !isOutsideFocusDirs
         const diagnostics: { kind: string; message: string; candidates?: readonly CodegraphNode[] }[] = []
-        if (isDegraded) {
+        if (isOutsideFocusDirs) {
+          diagnostics.push({
+            kind: "outside-focus-dirs",
+            message: `No candidate for "${input.query}" is inside the requested focusDirs (${(input.workspace?.focusDirs ?? []).join(", ")}). Loosen focusDirs or pass none.`,
+          })
+        } else if (isDegraded) {
           diagnostics.push({
             kind: "symbol-not-found",
             message: `No symbol matched "${input.query}". The graph may be stale — run /codegraph-build --force.`,
           })
         } else if (symbolResult.ambiguity) {
           const candidateFiles: CodegraphNode[] = []
-          for (const n of symbolResult.nodes) {
-            const file = yield* repo.getFile(n.fileID)
-            if (file) candidateFiles.push(n)
+          const candidateFileIDs = Array.from(new Set(symbolResult.nodes.map((n) => n.fileID)))
+          if (candidateFileIDs.length > 0) {
+            const files = yield* repo.filesByIDs(candidateFileIDs)
+            const known = new Set(files.map((f) => f.id))
+            for (const n of symbolResult.nodes) {
+              if (known.has(n.fileID)) candidateFiles.push(n)
+            }
           }
           diagnostics.push({
             kind: "ambiguous-symbol",
@@ -754,10 +691,22 @@ export const layer = Layer.effect(
         })
         const ownership = new Map<string, number>()
 
+        const status: RepositoryContext["status"] = isDegraded ? "failed" : "success"
+        const reason = isDegraded
+          ? `No matching symbols found for query "${input.query}"`
+          : isOutsideFocusDirs
+            ? `No candidate for "${input.query}" is inside the requested focusDirs.`
+            : undefined
+        const recoveryHint = isDegraded
+          ? `Run /codegraph-build --force to refresh the index, or use code_find with intent='definition' to search broadly.`
+          : isOutsideFocusDirs
+            ? `Loosen focusDirs or pass none to search the whole graph.`
+            : undefined
+
         return {
-          status: isDegraded ? "failed" : "success",
-          reason: isDegraded ? `No matching symbols found for query "${input.query}"` : undefined,
-          recoveryHint: isDegraded ? `Run /codegraph-build --force to refresh the index, or use code_find with intent='definition' to search broadly.` : undefined,
+          status,
+          reason,
+          recoveryHint,
           degraded: isDegraded,
           fallbackUsed: symbolResult.usedFallback,
           query: input.query,
@@ -765,7 +714,7 @@ export const layer = Layer.effect(
           symbols,
           files,
           graph: { nodes: graphNodesList, edges: graphEdges },
-          tests: testsResult.nodes.filter((n) => bucketFileIDs.has(n.fileID)),
+          tests: testsResult.tests.filter((n) => bucketFileIDs.has(n.fileID)),
           docs,
           configs,
           git: { recentCommits, ownership },
@@ -874,22 +823,57 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const meta = yield* repo.getMeta()
         const normalizedPath = normalizePathForLookup(input.path, meta?.indexedRoot)
+        const file = yield* repo.getFileByPath(normalizedPath)
+        if (!file) {
+          const ctx = yield* query({ query: input.path, workspace: input.workspace })
+          return yield* slice(ctx)
+        }
+
+        const fileNodes = yield* repo.listNodesByFile(file.id)
+        const resultLimit = 25
+        const [dependentsRun, dependenciesRun] = yield* Effect.all([
+          bfsPure(repo, {
+            start: fileNodes.map((node) => node.id),
+            direction: "incoming",
+            edgeKinds: CALLER_EDGE_KINDS,
+            maxDepth: 3,
+            resultLimit,
+          }),
+          bfsPure(repo, {
+            start: fileNodes.map((node) => node.id),
+            direction: "outgoing",
+            edgeKinds: DEPENDENCY_EDGE_KINDS,
+            maxDepth: 3,
+            resultLimit,
+          }),
+        ])
         const ctx = yield* query({ query: input.path, workspace: input.workspace })
         const slc = yield* slice(ctx)
-        const file = yield* repo.getFileByPath(normalizedPath)
-        if (file) {
-          const dependents = yield* findEntrypoints({ feature: file.path.split("/").pop() ?? file.path })
-          const seen = new Set(slc.importantSymbols.map((n) => n.id))
-          const expanded = [...slc.importantSymbols]
-          for (const dep of dependents) {
-            if (!seen.has(dep.id)) {
-              seen.add(dep.id)
-              expanded.push(dep)
-            }
+        const importantSymbols = new Map<string, CodegraphNode>()
+        for (const node of fileNodes) {
+          if (node.kind !== "variable" && node.kind !== "type" && node.kind !== "file" && node.kind !== "generated") {
+            importantSymbols.set(node.id, node)
           }
-          return { ...slc, importantSymbols: expanded }
         }
-        return slc
+        for (const result of dependentsRun.results) {
+          if (result.node.kind !== "variable" && result.node.kind !== "type" && result.node.kind !== "file" && result.node.kind !== "generated") {
+            importantSymbols.set(result.node.id, result.node)
+          }
+        }
+        const dependencies = new Map<string, { name: string; version?: string }>()
+        for (const result of dependenciesRun.results) {
+          if (result.node.kind === "function" || result.node.kind === "class" || result.node.kind === "method" || result.node.kind === "type") {
+            dependencies.set(result.node.name, { name: result.node.name })
+          }
+        }
+
+        return {
+          ...slc,
+          importantSymbols: [...importantSymbols.values()],
+          dependencies: [...dependencies.values()],
+          directCallers: dependentsRun.results.filter((result) => result.depth === 1).map((result) => result.node),
+          transitiveDependents: dependentsRun.results.filter((result) => result.depth > 1).map((result) => result.node),
+        } satisfies ArchitecturalSlice
       })
 
     const trace = (input: {
@@ -936,10 +920,8 @@ export const layer = Layer.effect(
         const fileIDs = new Set<string>()
         for (const t of transitiveTagged) fileIDs.add(t.node.fileID)
         const filePathByID = new Map<string, string>()
-        for (const id of fileIDs) {
-          const file = yield* repo.getFile(id)
-          if (file) filePathByID.set(id, file.path)
-        }
+        const files = yield* repo.filesByIDs([...fileIDs])
+        for (const file of files) filePathByID.set(file.id, file.path)
 
         const rankedTransitive = rankTransitiveDependents(transitiveTagged, filePathByID)
         let moreDependents = 0
@@ -961,7 +943,7 @@ export const layer = Layer.effect(
     const tests = (input: { symbol: string }): Effect.Effect<{ tests: readonly CodegraphNode[]; notFound: boolean }, never, never> =>
       Effect.gen(function* () {
         const result = yield* findTests(input)
-        return { tests: result.nodes, notFound: result.notFound }
+        return { tests: result.tests, notFound: result.notFound }
       })
 
     const symbols = (input: { query: string; limit?: number }): Effect.Effect<readonly CodegraphNode[], never, never> =>

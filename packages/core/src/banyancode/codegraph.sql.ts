@@ -31,6 +31,15 @@ export const CodegraphNodesTable = sqliteTable(
   (table) => [
     index("codegraph_node_file_name_idx").on(table.file_id, table.name),
     index("codegraph_node_kind_name_idx").on(table.kind, table.name),
+    // Plan Phase B B1: the `codegraph_node_name_idx` is the runtime source
+    // of truth for the leading-column `WHERE name = ?` lookup. It is
+    // created by the migration `20260719000000_codegraph_node_name_idx`
+    // (registered in `database/migration.gen.ts`). The Drizzle declaration
+    // here is kept for `drizzle-kit generate` schema introspection (see
+    // `drizzle.config.ts`); it is NOT executed at runtime by Drizzle ORM
+    // and the migration uses `CREATE INDEX IF NOT EXISTS`, so the two are
+    // safe to coexist.
+    index("codegraph_node_name_idx").on(table.name),
     index("codegraph_nodes_is_entrypoint_idx").on(table.is_entrypoint),
     index("codegraph_nodes_in_degree_idx").on(table.in_degree),
   ],
