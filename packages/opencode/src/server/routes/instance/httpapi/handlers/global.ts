@@ -15,10 +15,10 @@ import path from "path"
 import * as Stream from "effect/Stream"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, GlobalUpgradeInput, PreflightInput, SafeRenameInput, WebSearchFreeInput } from "../groups/global"
+import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, PreflightInput, SafeRenameInput, WebSearchFreeInput } from "../groups/global"
 import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
@@ -252,6 +252,25 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
         return { ok: false, message: "CodegraphBuildService not available" }
       }
       return yield* buildService.value.forceKill()
+    })
+
+    const codegraphRemoveHandler = Effect.fn("GlobalHttpApi.codegraphRemove")(function* (ctx: {
+      payload: typeof CodegraphRemoveInput.Type
+    }) {
+      const repoOpt = yield* Effect.serviceOption(Banyan.CodegraphRepo)
+      if (Option.isNone(repoOpt)) {
+        yield* Effect.logInfo("BanyanCode is disabled; /global/codegraph-remove returning 503.")
+        return yield* Effect.fail(new HttpApiError.ServiceUnavailable())
+      }
+      const result = yield* repoOpt.value.clearAll(ctx.payload.dropFile ? { dropFile: true } : undefined)
+      const response: typeof CodegraphRemoveResult.Type = {
+        sizeBefore: result.sizeBefore,
+        sizeAfter: result.sizeAfter,
+        // `droppedFile` reflects the actual outcome (POSIX unlink succeeds,
+        // Windows EBUSY is reported as false), not the caller-requested flag.
+        droppedFile: result.droppedFile,
+      }
+      return response
     })
 
 const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function* (ctx: {
@@ -628,6 +647,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       .handle("updateBanyanAgentPrompt", banyanAgentPromptUpdateHandler)
       .handle("codegraphCancel", codegraphCancelHandler)
       .handle("codegraphForceKill", codegraphForceKillHandler)
+      .handle("codegraphRemove", codegraphRemoveHandler)
       .handle("codegraphBuild", codegraphBuildHandler)
       .handle("codegraphNodes", codegraphNodesHandler)
       .handle("codegraphEdges", codegraphEdgesHandler)

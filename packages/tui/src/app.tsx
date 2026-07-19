@@ -872,24 +872,20 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "BanyanCode",
         slashName: "codegraph-remove",
         run: () => {
-          if (route.data.type !== "session") {
-            toast.show({ message: "Start a session first to remove the code graph", variant: "warning" })
-            dialog.clear()
-            return
-          }
           toast.show({ message: "Removing code graph index...", variant: "info" })
           dialog.clear()
-          sdk.client.session
-            .command({
-              sessionID: route.data.sessionID,
-              command: "codegraph-remove",
-              arguments: "",
-            })
+          void sdk.client.global.codegraph
+            .remove({ dropFile: false })
             .then((res) => {
-              const parts = (res.data?.parts ?? []) as Array<{ type?: string; text?: string }>
-              const completion = parts.find((p) => p.type === "text" && typeof p.text === "string")?.text
+              const data = res.data as { sizeBefore?: number; sizeAfter?: number; droppedFile?: boolean } | undefined
+              const freed = Math.max(0, (data?.sizeBefore ?? 0) - (data?.sizeAfter ?? 0))
+              const formatBytes = (n: number) =>
+                n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`
+              const freedLabel =
+                freed === 0 ? "" : ` Freed ${formatBytes(freed)} (${formatBytes(data?.sizeBefore ?? 0)} -> ${formatBytes(data?.sizeAfter ?? 0)}).`
+              const droppedNote = data?.droppedFile ? " DB file removed." : ""
               toast.show({
-                message: completion ?? "Codegraph index removed.",
+                message: `Codegraph index removed.${freedLabel}${droppedNote}`,
                 variant: "success",
               })
             })

@@ -122,6 +122,8 @@ import type {
   GlobalCodegraphForceKillResponses,
   GlobalCodegraphNodesErrors,
   GlobalCodegraphNodesResponses,
+  GlobalCodegraphRemoveErrors,
+  GlobalCodegraphRemoveResponses,
   GlobalConfigGetErrors,
   GlobalConfigGetResponses,
   GlobalConfigUpdateErrors,
@@ -1554,6 +1556,34 @@ export class Codegraph extends HeyApiClient {
       GlobalCodegraphForceKillErrors,
       ThrowOnError
     >({ url: "/global/codegraph-force-kill", ...options })
+  }
+
+  /**
+   * Clear the codegraph index for the current instance
+   *
+   * Removes every row from `codegraph_*` tables (or, with `dropFile: true`, deletes the underlying `banyancode.db`). Equivalent to the slash command `/codegraph-remove`.
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters?: {
+      dropFile?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "dropFile" }] }])
+    return (options?.client ?? this.client).post<
+      GlobalCodegraphRemoveResponses,
+      GlobalCodegraphRemoveErrors,
+      ThrowOnError
+    >({
+      url: "/global/codegraph-remove",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 
   /**

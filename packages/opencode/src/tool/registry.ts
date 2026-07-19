@@ -375,7 +375,6 @@ const baseBanyanToolLayers = Layer.mergeAll(
   CodeFindTool.locationLayer,
   CodegraphSearchTool.locationLayer,
   RepositoryWave2.locationLayer,
-  RepositoryWave2.locationLayer,
   StructuralQueriesTool.locationLayer,
   EditPlanTool.locationLayer,
   PreflightTool.locationLayer,

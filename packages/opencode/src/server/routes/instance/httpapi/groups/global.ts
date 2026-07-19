@@ -154,6 +154,16 @@ export const CodegraphBuildResult = Schema.Struct({
   reason: Schema.optional(Schema.String),
 })
 
+export const CodegraphRemoveInput = Schema.Struct({
+  dropFile: Schema.optional(Schema.Boolean),
+})
+
+export const CodegraphRemoveResult = Schema.Struct({
+  sizeBefore: Schema.Number,
+  sizeAfter: Schema.Number,
+  droppedFile: Schema.Boolean,
+})
+
 export const WebSearchFreeInput = WebSearchFreeTool.Input
 export const WebSearchFreeResult = WebSearchFreeTool.Output
 
@@ -195,6 +205,7 @@ export const GlobalPaths = {
   codegraphCancel: "/global/codegraph-cancel",
   codegraphForceKill: "/global/codegraph-force-kill",
   codegraphBuild: "/global/codegraph-build",
+  codegraphRemove: "/global/codegraph-remove",
   startup: "/global/startup",
   banyanConfig: "/global/banyan-config",
   codegraphNodes: "/global/codegraph-nodes",
@@ -334,6 +345,18 @@ export const GlobalApi = HttpApi.make("global").add(
           summary: "Force-kill the opencode server hosting a wedged codegraph build",
           description:
             "Last-resort escape hatch for a hung codegraph build. First tries a normal Fiber.interrupt, then on Windows spawns an elevated `taskkill /F /PID <pid> /T` against the opencode server process. Kills the whole bun process — the user will need to restart the TUI.",
+        }),
+      ),
+      HttpApiEndpoint.post("codegraphRemove", GlobalPaths.codegraphRemove, {
+        payload: CodegraphRemoveInput,
+        success: described(CodegraphRemoveResult, "Codegraph remove result"),
+        error: HttpApiError.ServiceUnavailable,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.codegraph.remove",
+          summary: "Clear the codegraph index for the current instance",
+          description:
+            "Removes every row from `codegraph_*` tables (or, with `dropFile: true`, deletes the underlying `banyancode.db`). Equivalent to the slash command `/codegraph-remove`.",
         }),
       ),
       HttpApiEndpoint.post("codegraphBuild", GlobalPaths.codegraphBuild, {

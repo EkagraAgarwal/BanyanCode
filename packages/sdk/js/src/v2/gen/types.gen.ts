@@ -2260,6 +2260,10 @@ export type BanyanConfig = {
   }
 }
 
+export type EffectHttpApiErrorServiceUnavailable = {
+  _tag: "ServiceUnavailable"
+}
+
 export type BanyanCodegraphNode = {
   id: string
   fileID: string
@@ -6473,6 +6477,41 @@ export type GlobalCodegraphForceKillResponses = {
 
 export type GlobalCodegraphForceKillResponse =
   GlobalCodegraphForceKillResponses[keyof GlobalCodegraphForceKillResponses]
+
+export type GlobalCodegraphRemoveData = {
+  body?: {
+    dropFile?: boolean
+  }
+  path?: never
+  query?: never
+  url: "/global/codegraph-remove"
+}
+
+export type GlobalCodegraphRemoveErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * ServiceUnavailable
+   */
+  503: EffectHttpApiErrorServiceUnavailable
+}
+
+export type GlobalCodegraphRemoveError = GlobalCodegraphRemoveErrors[keyof GlobalCodegraphRemoveErrors]
+
+export type GlobalCodegraphRemoveResponses = {
+  /**
+   * Codegraph remove result
+   */
+  200: {
+    sizeBefore: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    sizeAfter: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    droppedFile: boolean
+  }
+}
+
+export type GlobalCodegraphRemoveResponse = GlobalCodegraphRemoveResponses[keyof GlobalCodegraphRemoveResponses]
 
 export type GlobalCodegraphBuildData = {
   body?: {
