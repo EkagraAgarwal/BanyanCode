@@ -1,6 +1,7 @@
 export * as SystemMonitor from "./system-monitor"
 
 import { Context, Effect, Duration, Layer, Queue, Ref, Stream } from "effect"
+import fs from "node:fs"
 import os from "node:os"
 import { ChildProcess } from "effect/unstable/process"
 import { AppProcess } from "../process"
@@ -43,43 +44,26 @@ export const Updated = EventV2.define({
   },
 })
 
-const readDisk = (
-  proc: AppProcess.Interface,
-): Effect.Effect<{ diskUsedBytes?: number; diskTotalBytes?: number }, never, never> => {
-  if (process.platform === "darwin") return Effect.succeed({})
-  if (process.platform === "win32") {
-    return Effect.flatMap(proc.run(
-      ChildProcess.make(
-        "wmic",
-        ["logicaldisk", "where", "DeviceID='C:'", "get", "Size,FreeSpace", "/format:csv,noheader"],
-        { extendEnv: true, stdin: "ignore" },
-      ),
-      { maxOutputBytes: 1024, maxErrorBytes: 256 },
-    ), (result) => {
-      if (result.exitCode !== 0) return Effect.succeed({})
-      const cells = result.stdout.toString().trim().split(",")
-      if (cells.length < 2) return Effect.succeed({})
-      const freeSpace = Number(cells[0])
-      const size = Number(cells[1])
-      if (!Number.isFinite(freeSpace) || !Number.isFinite(size)) return Effect.succeed({})
-      return Effect.succeed({ diskTotalBytes: size, diskUsedBytes: size - freeSpace })
-    }).pipe(Effect.orDie)
-  }
-  return Effect.flatMap(proc.run(
-    ChildProcess.make("df", ["-k", "/"], { extendEnv: true, stdin: "ignore" }),
-    { maxOutputBytes: 1024, maxErrorBytes: 256 },
-  ), (result) => {
-    if (result.exitCode !== 0) return Effect.succeed({})
-    const lines = result.stdout.toString().trim().split("\n")
-    if (lines.length < 2) return Effect.succeed({})
-    const cells = lines[1].split(/\s+/)
-    if (cells.length < 3) return Effect.succeed({})
-    const total = Number(cells[1]) * 1024
-    const used = Number(cells[2]) * 1024
-    if (!Number.isFinite(total) || !Number.isFinite(used)) return Effect.succeed({})
-    return Effect.succeed({ diskTotalBytes: total, diskUsedBytes: used })
-  }).pipe(Effect.orDie)
-}
+const defaultDiskPath = (): string =>
+  process.platform === "win32" ? process.cwd() : "/"
+
+export const readDisk = (
+  path: string = defaultDiskPath(),
+): Effect.Effect<{ diskUsedBytes?: number; diskTotalBytes?: number }, never, never> =>
+  Effect.gen(function* () {
+    const stats = yield* Effect.tryPromise({
+      try: () => fs.promises.statfs(path),
+      catch: () => new Error("statfs failed"),
+    }).pipe(Effect.catch(() => Effect.succeed(undefined as fs.StatsFs | undefined)))
+    if (!stats) return {}
+    const { bsize, blocks, bavail } = stats
+    if (!Number.isFinite(bsize) || !Number.isFinite(blocks) || !Number.isFinite(bavail)) return {}
+    if (bsize <= 0 || blocks <= 0 || bavail < 0) return {}
+    const total = bsize * blocks
+    const used = total - bsize * bavail
+    if (!Number.isFinite(total) || !Number.isFinite(used) || total <= 0 || used < 0) return {}
+    return { diskTotalBytes: total, diskUsedBytes: used }
+  })
 
 const detectPlatform = (): "windows" | "linux" | "darwin" => {
   const p = process.platform
@@ -146,7 +130,7 @@ export const layer = Layer.effect(
                 ["--query-gpu=utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
                 { extendEnv: true, stdin: "ignore" },
               ),
-              { maxOutputBytes: 1024, maxErrorBytes: 256 },
+              { maxOutputBytes: 1024, maxErrorBytes: 256, timeout: "2 seconds" },
             ),
           ).pipe(Effect.catch(() => Effect.succeed({ exitCode: -1, stdout: { toString: () => "" } } as const)))
           if (runResult.exitCode === 0) {
@@ -165,7 +149,7 @@ export const layer = Layer.effect(
         if (snapshot.disk && now - snapshot.diskAt < DISK_CACHE_TTL_MS) {
           disk = snapshot.disk
         } else {
-          const result = yield* readDisk(proc as AppProcess.Interface)
+          const result = yield* readDisk()
           if (Object.keys(result).length > 0) {
             disk = result
           }

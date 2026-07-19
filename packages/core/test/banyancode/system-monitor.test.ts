@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Duration, Layer, Stream } from "effect"
-import { SystemMonitor } from "../../src/banyancode/system-monitor"
+import os from "node:os"
+import path from "node:path"
+import { SystemMonitor, readDisk } from "../../src/banyancode/system-monitor"
 
 process.env.BANYANCODE_ENABLE = "1"
 
@@ -125,5 +127,46 @@ describe("SystemMonitor", () => {
         }
       }).pipe(Effect.provide(layer)),
     )
+  })
+
+  describe("readDisk (fs.statfs)", () => {
+    test("returns valid disk data on real path", async () => {
+      const result = await Effect.runPromise(readDisk())
+      expect(result.diskTotalBytes).toBeGreaterThan(0)
+      expect(result.diskUsedBytes).toBeGreaterThanOrEqual(0)
+      expect(result.diskUsedBytes!).toBeLessThanOrEqual(result.diskTotalBytes!)
+    })
+
+    test("returns empty for non-existent path", async () => {
+      const fakePath = path.join(os.tmpdir(), `does-not-exist-${Date.now()}-${Math.random()}`)
+      const result = await Effect.runPromise(readDisk(fakePath))
+      expect(result).toEqual({})
+    })
+
+    test("readDisk works on the host platform's expected root", async () => {
+      const expectedPath = process.platform === "win32" ? process.cwd() : "/"
+      const result = await Effect.runPromise(readDisk(expectedPath))
+      expect(result.diskTotalBytes).toBeGreaterThan(0)
+    })
+
+    test("watch() keeps emitting regardless of disk probe outcome", async () => {
+      const values: SystemMonitor.SystemStatus[] = []
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const monitor = yield* SystemMonitor.Service
+          const stream = yield* monitor.watch(50)
+          yield* stream.pipe(
+            Stream.take(3),
+            Stream.runForEach((s) => Effect.sync(() => values.push(s))),
+          )
+        }).pipe(Effect.provide(layer), Effect.timeout(Duration.seconds(8))),
+      )
+      expect(values.length).toBe(3)
+      for (const v of values) {
+        expect(typeof v.memoryUsedBytes).toBe("number")
+        expect(v.memoryTotalBytes).toBeGreaterThan(0)
+        expect(v.platform).toMatch(/^(windows|linux|darwin)$/)
+      }
+    })
   })
 })
