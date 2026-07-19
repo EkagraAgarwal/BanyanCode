@@ -1,6 +1,7 @@
 export * as BanyanConfig from "./banyan-config"
 
 import { Schema } from "effect"
+import { ConfigLSPV1 } from "./lsp"
 
 export const Schema_URL = "https://banyan.dev/schema/banyancode.json"
 
@@ -13,6 +14,13 @@ export const OpenAICompatibleEndpoint = Schema.Struct({
 
 export const DEFAULT_MAX_SUBAGENTS = 5
 export const MAX_SUBAGENTS_LIMIT = 20
+
+// BanyanCode-owned LSP config. Mirrors the opencode `lsp` shape (boolean for
+// built-in enable, record for per-server overrides) so users can disable,
+// enable-all, or customize any built-in LSP from `banyancode.json` without
+// touching opencode's config. BanyanCode is its own product identity and does
+// not read `opencode.json`; LSP settings belong here.
+export const LSP = ConfigLSPV1.Info
 
 export const Info = Schema.Struct({
   $schema: Schema.optional(Schema.String),
@@ -47,6 +55,14 @@ export const Info = Schema.Struct({
   banyancode_mesh_default_provider: Schema.optional(Schema.String),
   banyancode_mesh_default_model: Schema.optional(Schema.String),
   banyancode_mesh_subagent_cooldown: Schema.optional(Schema.Number),
+  // BanyanCode-owned LSP config. True = enable all built-in LSP servers; a
+  // record = enable built-ins with per-server overrides (disabled / custom
+  // command / env / extensions / initialization). BanyanCode does not read
+  // opencode's `lsp` field; users configure LSPs in `banyancode.json`.
+  banyancode_lsp: Schema.optional(LSP).annotate({
+    description:
+      "Enable or configure BanyanCode's LSP servers. Omit or set to false to disable, true to enable built-ins, or an object to enable built-ins with overrides.",
+  }),
   // List of custom subagent definitions stored as markdown files in
   // .banyancode/agent/<name>.md. This field is metadata only —
   // actual agent configs are file-based (managed via dialog-agent-config).

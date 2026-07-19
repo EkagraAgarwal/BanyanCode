@@ -6,10 +6,10 @@ import * as LSPClient from "./client"
 import path from "path"
 import { pathToFileURL, fileURLToPath } from "url"
 import * as LSPServer from "./server"
-import { Config } from "@/config/config"
+import { Banyan } from "@opencode-ai/core/banyancode"
 import { Process } from "@/util/process"
 import { spawn as lspspawn } from "./launch"
-import { Effect, Layer, Context, Schema } from "effect"
+import { Effect, Layer, Context, Schema, Option } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { containsPath } from "@/project/instance-context"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
@@ -140,17 +140,23 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/LS
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const config = yield* Config.Service
     const flags = yield* RuntimeFlags.Service
     const events = yield* EventV2Bridge.Service
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("LSP.state")(function* (ctx) {
-        const cfg = yield* config.get()
+        // BanyanCode is its own product identity and does not read
+        // opencode.json. LSP config lives in banyancode.json under
+        // `banyancode_lsp`. When BanyanCode is disabled (BanyanConfigService
+        // not in scope) or the field is unset, all LSPs are off — matching
+        // the previous opencode default of `cfg.lsp === undefined`.
+        const banyanOption = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+        const banyanConfig = Option.isSome(banyanOption) ? yield* banyanOption.value.get() : ({} as Banyan.BanyanConfigInfo)
+        const lsp = banyanConfig.banyancode_lsp
 
         const servers: Record<string, LSPServer.Info> = {}
 
-        if (!cfg.lsp) {
+        if (!lsp) {
           yield* Effect.logInfo("all LSPs are disabled")
         } else {
           for (const server of Object.values(LSPServer)) {
@@ -159,8 +165,8 @@ export const layer = Layer.effect(
 
           filterExperimentalServers(servers, flags)
 
-          if (cfg.lsp !== true) {
-            for (const [name, item] of Object.entries(cfg.lsp)) {
+          if (lsp !== true) {
+            for (const [name, item] of Object.entries(lsp)) {
               const existing = servers[name]
               if (item.disabled) {
                 yield* Effect.logInfo(`LSP server ${name} is disabled`)
@@ -499,13 +505,12 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer.pipe(
-  Layer.provide(Config.defaultLayer),
   Layer.provide(RuntimeFlags.defaultLayer),
   Layer.provide(EventV2Bridge.defaultLayer),
 )
 
 export * as Diagnostic from "./diagnostic"
 
-export const node = LayerNode.make(layer, [Config.node, RuntimeFlags.node, FSUtil.node, EventV2Bridge.node])
+export const node = LayerNode.make(layer, [RuntimeFlags.node, FSUtil.node, EventV2Bridge.node])
 
 export * as LSP from "./lsp"

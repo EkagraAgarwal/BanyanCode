@@ -32,4 +32,34 @@ describe("BanyanConfig", () => {
     const result = Schema.decodeSync(BanyanConfig.Info)({})
     expect(result).toEqual({})
   })
+
+  test("accepts banyancode_lsp: true", () => {
+    const result = Schema.decodeSync(BanyanConfig.Info)({ banyancode_lsp: true })
+    expect(result.banyancode_lsp).toBe(true)
+  })
+
+  test("accepts banyancode_lsp as a per-server record", () => {
+    const result = Schema.decodeSync(BanyanConfig.Info)({
+      banyancode_lsp: {
+        typescript: { disabled: true },
+        custom: { command: ["my-lsp", "--stdio"], extensions: [".my"] },
+      },
+    })
+    const lsp = result.banyancode_lsp as {
+      typescript: { disabled: boolean }
+      custom: { command: string[]; extensions: string[] }
+    }
+    expect(lsp.typescript.disabled).toBe(true)
+    expect(lsp.custom.command).toEqual(["my-lsp", "--stdio"])
+  })
+
+  test("rejects banyancode_lsp custom server missing extensions", () => {
+    expect(() =>
+      Schema.decodeSync(BanyanConfig.Info)({
+        banyancode_lsp: {
+          notabuiltin: { command: ["my-lsp", "--stdio"] },
+        },
+      }),
+    ).toThrow()
+  })
 })
