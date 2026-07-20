@@ -53,7 +53,10 @@ export const Status = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
   root: Schema.String,
-  status: Schema.Literals(["connected", "error"]),
+  status: Schema.Literals(["configured", "connected", "error"]),
+  // True when the server downloads + manages its own binary (clangd,
+  // jdtls, kotlin-ls, ...). Lets the TUI show "auto-downloaded" badges.
+  autoDownload: Schema.Boolean,
 }).annotate({ identifier: "LSPStatus" })
 export type Status = typeof Status.Type
 
@@ -322,12 +325,30 @@ export const layer = Layer.effect(
       const ctx = yield* InstanceState.context
       const s = yield* InstanceState.get(state)
       const result: Status[] = []
+      const seen = new Set<string>()
+      // Currently-attached clients first (status: connected/error).
       for (const client of s.clients) {
+        const server = s.servers[client.serverID]
+        seen.add(client.serverID)
         result.push({
           id: client.serverID,
-          name: s.servers[client.serverID].id,
+          name: server.id,
           root: path.relative(ctx.directory, client.root),
           status: "connected",
+          autoDownload: server.autoDownload ?? false,
+        })
+      }
+      // Then every other configured server that has not yet attached. This
+      // is what lets the TUI show "LSP: 0/14 connected, 1 auto-download"
+      // even when no file has been opened in the workspace yet.
+      for (const server of Object.values(s.servers)) {
+        if (seen.has(server.id)) continue
+        result.push({
+          id: server.id,
+          name: server.id,
+          root: "",
+          status: "configured",
+          autoDownload: server.autoDownload ?? false,
         })
       }
       return result

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createMemo, createSignal, onCleanup, Show } from "solid-js"
+import { createMemo, createSignal, onCleanup, Show, For } from "solid-js"
 import { useSync } from "../../context/sync"
 import { toHex } from "../../util/color"
 import { DialogAgentModel } from "../../component/dialog-agent-model"
@@ -185,6 +185,70 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
           <text fg={toHex(theme().textMuted)}>Last:</text>
           <text fg={toHex(theme().text)}>{lastActivity()}</text>
         </box>
+      </Show>
+      <LspList api={props.api} />
+    </box>
+  )
+}
+
+interface LspEntry {
+  id: string
+  name: string
+  root: string
+  status: "configured" | "connected" | "error"
+  autoDownload: boolean
+}
+
+function LspList(props: { api: TuiPluginApi }) {
+  const theme = () => props.api.theme.current
+  const list = createMemo(() => props.api.state.lsp() as LspEntry[])
+  const lspEnabled = createMemo(() => {
+    const cfg = (props.api.state as { banyanConfig?: { banyancode_lsp?: unknown } }).banyanConfig
+    const v = cfg?.banyancode_lsp
+    return v === true || (typeof v === "object" && v !== null)
+  })
+
+  return (
+    <box flexDirection="column" marginTop={1} gap={0}>
+      <text fg={toHex(theme().primary)} marginBottom={0}>
+        <b>LSP</b>
+      </text>
+      <Show
+        when={lspEnabled()}
+        fallback={
+          <text fg={toHex(theme().textMuted)}>
+            Disabled. Run /lsp or set banyancode_lsp: true in banyancode.json.
+          </text>
+        }
+      >
+        <Show
+          when={list().length > 0}
+          fallback={<text fg={toHex(theme().textMuted)}>No LSP servers registered.</text>}
+        >
+          <For each={list()}>
+            {(entry) => {
+              const t = theme()
+              const dot =
+                entry.status === "connected"
+                  ? toHex(t.success)
+                  : entry.status === "error"
+                    ? toHex(t.error)
+                    : toHex(t.textMuted)
+              const label =
+                entry.status === "connected" ? "on" : entry.status === "error" ? "err" : "idle"
+              return (
+                <box flexDirection="row" gap={1}>
+                  <text fg={dot}>●</text>
+                  <text fg={toHex(t.text)}>{entry.name}</text>
+                  <text fg={dot}>[{label}]</text>
+                  <Show when={entry.autoDownload}>
+                    <text fg={toHex(t.info)}>↓ auto</text>
+                  </Show>
+                </box>
+              )
+            }}
+          </For>
+        </Show>
       </Show>
     </box>
   )

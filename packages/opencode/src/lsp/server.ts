@@ -81,6 +81,10 @@ export interface Info {
   id: string
   extensions: string[]
   global?: boolean
+  // True when this server downloads and manages its own binary at runtime
+  // (e.g. clangd fetches a release tarball on first use). Distinguishes
+  // "needs install" LSPs from ones that expect a system PATH binary.
+  autoDownload?: boolean
   root: RootFunction
   spawn(root: string, ctx: InstanceContext, flags: RuntimeFlags.Info): Promise<Handle | undefined>
 }
@@ -174,6 +178,7 @@ export const ESLint: Info = {
   id: "eslint",
   root: NearestRoot(["package-lock.json", "bun.lockb", "bun.lock", "pnpm-lock.yaml", "yarn.lock"]),
   extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".vue"],
+  autoDownload: true,
   async spawn(root, ctx, flags) {
     const eslint = Module.resolve("eslint", ctx.directory)
     if (!eslint) return
@@ -530,6 +535,7 @@ export const ElixirLS: Info = {
   id: "elixir-ls",
   extensions: [".ex", ".exs"],
   root: NearestRoot(["mix.exs", "mix.lock"]),
+  autoDownload: true,
   async spawn(root, _ctx, flags) {
     let binary = which("elixir-ls")
     if (!binary) {
@@ -586,6 +592,7 @@ export const Zls: Info = {
   id: "zls",
   extensions: [".zig", ".zon"],
   root: NearestRoot(["build.zig"]),
+  autoDownload: true,
   async spawn(root, _ctx, flags) {
     let bin = which("zls")
 
@@ -688,6 +695,7 @@ export const CSharp: Info = {
   id: "csharp",
   root: NearestRoot([".slnx", ".sln", ".csproj", "global.json"]),
   extensions: [".cs", ".csx"],
+  autoDownload: true,
   async spawn(root, _ctx, flags) {
     const bin = await getRoslynLanguageServer(flags.disableLspDownload)
     if (!bin) return
@@ -824,6 +832,7 @@ export const FSharp: Info = {
   id: "fsharp",
   root: NearestRoot([".slnx", ".sln", ".fsproj", "global.json"]),
   extensions: [".fs", ".fsi", ".fsx", ".fsscript"],
+  autoDownload: true,
   async spawn(root, _ctx, flags) {
     let bin = which("fsautocomplete")
     if (!bin) {
@@ -935,6 +944,7 @@ export const RustAnalyzer: Info = {
 export const Clangd: Info = {
   id: "clangd",
   root: NearestRoot(["compile_commands.json", "compile_flags.txt", ".clangd"]),
+  autoDownload: true,
   extensions: [".c", ".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".hh", ".hxx", ".h++"],
   async spawn(root, _ctx, flags) {
     const args = ["--background-index", "--clang-tidy"]
@@ -1146,6 +1156,7 @@ function isModuleOf(pomContent: string, modulePath: string): boolean {
 
 export const JDTLS: Info = {
   id: "jdtls",
+  autoDownload: true,
   root: async (file, ctx) => {
     const settingsMarkers = ["settings.gradle", "settings.gradle.kts"]
     const gradleMarkers = ["gradlew", "gradlew.bat"]
@@ -1273,6 +1284,7 @@ export const JDTLS: Info = {
 export const KotlinLS: Info = {
   id: "kotlin-ls",
   extensions: [".kt", ".kts"],
+  autoDownload: true,
   root: async (file, ctx) => {
     // 1) Nearest Gradle root (multi-project or included build)
     const settingsRoot = await NearestRoot(["settings.gradle.kts", "settings.gradle"])(file, ctx)

@@ -2230,6 +2230,28 @@ export type BanyanConfig = {
   banyancode_mesh_default_provider?: string
   banyancode_mesh_default_model?: string
   banyancode_mesh_subagent_cooldown?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  /**
+   * Enable or configure BanyanCode's LSP servers. Omit or set to false to disable, true to enable built-ins, or an object to enable built-ins with overrides.
+   */
+  banyancode_lsp?:
+    | boolean
+    | {
+        [key: string]:
+          | {
+              disabled: true
+            }
+          | {
+              command: Array<string>
+              extensions?: Array<string>
+              disabled?: boolean
+              env?: {
+                [key: string]: string
+              }
+              initialization?: {
+                [key: string]: unknown
+              }
+            }
+      }
   banyancode_subagents?: Array<{
     name: string
     description?: string
@@ -3013,7 +3035,8 @@ export type LspStatus = {
   id: string
   name: string
   root: string
-  status: "connected" | "error"
+  status: "configured" | "connected" | "error"
+  autoDownload: boolean
 }
 
 export type FormatterStatus = {

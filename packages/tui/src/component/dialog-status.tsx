@@ -106,6 +106,7 @@ export function DialogStatus() {
                     fg: {
                       connected: theme.success,
                       error: theme.error,
+                      configured: theme.textMuted,
                     }[item.status],
                   }}
                 >

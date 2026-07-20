@@ -61,16 +61,46 @@ function View(props: { api: TuiPluginApi }) {
   const mcpConnectedCount = createMemo(() => mcpList().filter((m) => m.status === "connected").length)
   const mcpFirstConnected = createMemo(() => mcpList().find((m: any) => m.status === "connected")?.name ?? "")
 
-  const lspCount = createMemo(() => props.api.state.lsp().length)
+const lspList = createMemo(() => props.api.state.lsp() as Array<{
+    id: string
+    name: string
+    root: string
+    status: "configured" | "connected" | "error"
+    autoDownload: boolean
+  }>)
+  const lspConnectedCount = createMemo(() => lspList().filter((l) => l.status === "connected").length)
+  const lspConfiguredCount = createMemo(() => lspList().length)
+  const lspAutoDownloadedCount = createMemo(() => lspList().filter((l) => l.autoDownload).length)
+  // Configured via banyancode_lsp in banyancode.json. When the service is
+  // unavailable (BanyanCode off) or the field is unset, treat LSP as off.
+  const lspEnabled = createMemo(() => {
+    const cfg = (props.api.state as { banyanConfig?: { banyancode_lsp?: unknown } }).banyanConfig
+    const v = cfg?.banyancode_lsp
+    return v === true || (typeof v === "object" && v !== null)
+  })
 
   const agentsLabel = () => `${activeSessionCount()} active`
   const mcpLabel = () => (mcpConnectedCount() > 0 ? `MCP: ${mcpFirstConnected()}` : "MCP: —")
-  const lspLabel = () => (lspCount() > 0 ? `LSP: ${lspCount()}` : "LSP: off")
+  // Show three states: off (config disabled), on-but-nothing-connected
+  // (config enabled, no file opened), and active (≥1 server attached).
+  const lspLabel = () => {
+    if (!lspEnabled()) return "LSP: off"
+    if (lspConnectedCount() === 0)
+      return `LSP: 0/${lspConfiguredCount()} (idle) · ${lspAutoDownloadedCount()} auto`
+    return `LSP: ${lspConnectedCount()}/${lspConfiguredCount()} · ${lspAutoDownloadedCount()} auto`
+  }
   const graphLabel = () => (graphBuilt() ? "Graph: built" : "Graph: off")
 
   const agentsDotColor = () => (activeSessionCount() > 0 ? toHex(theme().success) : toHex(theme().textMuted))
   const mcpDotColor = () => (mcpConnectedCount() > 0 ? toHex(theme().success) : toHex(theme().error))
-  const lspDotColor = () => (lspCount() > 0 ? toHex(theme().success) : toHex(theme().error))
+  // Yellow = config enabled but no servers connected (waiting on a file).
+  // Green = at least one server attached. Red = config disabled.
+  const lspDotColor = () =>
+    !lspEnabled()
+      ? toHex(theme().error)
+      : lspConnectedCount() > 0
+        ? toHex(theme().success)
+        : toHex(theme().warning)
   const graphDotColor = () => (graphBuilt() ? toHex(theme().success) : toHex(theme().error))
 
   return (
