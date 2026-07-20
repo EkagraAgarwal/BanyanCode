@@ -1301,6 +1301,72 @@ export function Prompt(props: PromptProps) {
               })
             })
         }
+      } else if (command === "/import") {
+        // /import <path> reads a Markdown transcript and creates a new
+        // session from it. Works alongside /export so sessions can round
+        // trip between machines. Mirrors the /lsp pattern: handle here so
+        // the user sees toasts immediately instead of waiting for the
+        // session command round-trip.
+        const pathArg = firstLine.split(" ").slice(1).join(" ").trim()
+        const run = async (input: string) => {
+          if (!input) {
+            toast.show({
+              message: "Usage: /import <path-to-transcript.md>",
+              variant: "error",
+            })
+            return
+          }
+          try {
+            const content = await (window as any).Bun?.file
+              ? await Bun.file(input).text()
+              : await (await import("node:fs/promises")).readFile(input, "utf8")
+            toast.show({ message: `Importing ${input}…`, variant: "info" })
+            const result = await sdk.client.global.session.import({
+              content,
+              title: undefined,
+              agent: undefined,
+              parentID: undefined,
+            })
+            const data = result.data as
+              | {
+                  sessionID: string
+                  title: string
+                  messageCount: number
+                  startedFromParsedSessionID?: string
+                }
+              | undefined
+            if (!data) {
+              toast.show({
+                message: "Import failed: empty response from server.",
+                variant: "error",
+              })
+              return
+            }
+            toast.show({
+              message: `Imported ${data.messageCount} messages into "${data.title}". Switch with /sessions.`,
+              variant: "success",
+            })
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err)
+            toast.show({
+              message: `Import failed: ${msg}`,
+              variant: "error",
+            })
+          }
+        }
+        if (pathArg) {
+          void run(pathArg)
+        } else {
+          // Open a prompt dialog asking for the file path.
+          import("../../ui/dialog-prompt").then(({ DialogPrompt }) => {
+            DialogPrompt.show(dialog, "Path to transcript", {
+              placeholder: "/path/to/session-xxxx.md",
+              onConfirm: (value) => {
+                void run(value ?? "")
+              },
+            })
+          })
+        }
       } else {
         move.startSubmit()
         const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)

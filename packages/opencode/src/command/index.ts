@@ -94,6 +94,7 @@ export const Default = {
   MAX_SUBAGENTS: "max-subagents",
   REFRESH_MODELS: "refresh-models",
   LSP: "lsp",
+  IMPORT: "import",
 } as const
 
 export interface Interface {
@@ -394,6 +395,28 @@ export const layer = Layer.effect(
               },
             })
             return `BanyanCode LSP is now ${finalIsOn ? "on" : "off"}. Restart the session for built-in servers to attach.`
+          }),
+        hints: [],
+      }
+      commands[Default.IMPORT] = {
+        name: Default.IMPORT,
+        description: "import a session from a Markdown transcript file (the format produced by /export); with no arg, prompts for a path",
+        source: "command",
+        get template() {
+          return "Import a session from a Markdown transcript file."
+        },
+        execute: (input) =>
+          Effect.gen(function* () {
+            const arg = input.arguments.trim()
+            if (arg === "") {
+              return "Usage: /import <path-to-transcript.md>. Reads the file, parses it, and creates a new session containing the parsed messages."
+            }
+            // The TUI intercepts /import and shows the import result as a
+            // toast. From a non-TUI context (CLI session, scripted run), the
+            // user can call the same /global/session/import endpoint via the
+            // SDK, but the simplest portable path here is to return the
+            // usage hint and let the TUI handler take over once available.
+            return `Run /import from the TUI to read ${arg} and create a new session, or POST {content} to /global/session/import directly.`
           }),
         hints: [],
       }

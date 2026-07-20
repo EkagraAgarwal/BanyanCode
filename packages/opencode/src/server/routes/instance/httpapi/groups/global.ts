@@ -15,6 +15,22 @@ import * as WebSearchFreeTool from "@opencode-ai/core/tool/websearch-free"
 import * as PreflightTool from "@opencode-ai/core/tool/preflight"
 import * as BlastRadiusTool from "@opencode-ai/core/tool/blast-radius"
 import * as SafeRenameTool from "@opencode-ai/core/tool/safe-rename"
+import { parseTranscript } from "@opencode-ai/core/util/transcript"
+import { SessionSchema } from "@opencode-ai/core/session/schema"
+
+const SessionImportInput = Schema.Struct({
+  content: Schema.String,
+  title: Schema.optional(Schema.String),
+  agent: Schema.optional(Schema.String),
+  parentID: Schema.optional(SessionSchema.ID),
+})
+
+const SessionImportResult = Schema.Struct({
+  sessionID: SessionSchema.ID,
+  title: Schema.String,
+  messageCount: Schema.Finite,
+  startedFromParsedSessionID: Schema.optional(Schema.String),
+})
 
 const CodegraphEdgesQuery = Schema.Struct({
   nodeID: Schema.optional(Schema.String),
@@ -218,6 +234,7 @@ export const GlobalPaths = {
   blastRadius: "/global/blast-radius",
   safeRename: "/global/safe-rename",
   meshStatus: "/global/mesh/status",
+  sessionImport: "/global/session/import",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -496,6 +513,18 @@ export const GlobalApi = HttpApi.make("global").add(
           summary: "Get mesh status",
           description:
             "Read the orchestrator mesh status (peers, pending messages, recent activity) for a given parent session. Works whether or not the session is currently active.",
+        }),
+      ),
+      HttpApiEndpoint.post("sessionImport", GlobalPaths.sessionImport, {
+        payload: SessionImportInput,
+        success: described(SessionImportResult, "Imported session"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.session.import",
+          summary: "Import session from transcript",
+          description:
+            "Parse a Markdown transcript (the format produced by /export) and create a new session containing the parsed messages. Useful for sharing or transferring sessions between machines. The original session ID from the transcript is preserved in the response but the new session gets a fresh ID.",
         }),
       ),
     )

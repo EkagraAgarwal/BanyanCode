@@ -140,6 +140,8 @@ import type {
   GlobalPreflightResponses,
   GlobalSafeRenameErrors,
   GlobalSafeRenameResponses,
+  GlobalSessionImportErrors,
+  GlobalSessionImportResponses,
   GlobalStartupErrors,
   GlobalStartupResponses,
   GlobalUpgradeErrors,
@@ -1741,6 +1743,49 @@ export class Mesh extends HeyApiClient {
   }
 }
 
+export class Session2 extends HeyApiClient {
+  /**
+   * Import session from transcript
+   *
+   * Parse a Markdown transcript (the format produced by /export) and create a new session containing the parsed messages. Useful for sharing or transferring sessions between machines. The original session ID from the transcript is preserved in the response but the new session gets a fresh ID.
+   */
+  public import<ThrowOnError extends boolean = false>(
+    parameters?: {
+      content?: string
+      title?: string
+      agent?: string
+      parentID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "content" },
+            { in: "body", key: "title" },
+            { in: "body", key: "agent" },
+            { in: "body", key: "parentID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<GlobalSessionImportResponses, GlobalSessionImportErrors, ThrowOnError>(
+      {
+        url: "/global/session/import",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+}
+
 export class Global extends HeyApiClient {
   /**
    * Get health
@@ -2001,6 +2046,11 @@ export class Global extends HeyApiClient {
   private _mesh?: Mesh
   get mesh(): Mesh {
     return (this._mesh ??= new Mesh({ client: this.client }))
+  }
+
+  private _session?: Session2
+  get session(): Session2 {
+    return (this._session ??= new Session2({ client: this.client }))
   }
 }
 
@@ -4515,7 +4565,7 @@ export class Provider extends HeyApiClient {
   }
 }
 
-export class Session2 extends HeyApiClient {
+export class Session3 extends HeyApiClient {
   /**
    * List sessions
    *
@@ -6439,7 +6489,7 @@ export class Question2 extends HeyApiClient {
   }
 }
 
-export class Session3 extends HeyApiClient {
+export class Session4 extends HeyApiClient {
   /**
    * List sessions
    *
@@ -7108,9 +7158,9 @@ export class V2 extends HeyApiClient {
     return (this._agent ??= new Agent({ client: this.client }))
   }
 
-  private _session?: Session3
-  get session(): Session3 {
-    return (this._session ??= new Session3({ client: this.client }))
+  private _session?: Session4
+  get session(): Session4 {
+    return (this._session ??= new Session4({ client: this.client }))
   }
 
   private _model?: Model
@@ -7287,9 +7337,9 @@ export class OpencodeClient extends HeyApiClient {
     return (this._provider ??= new Provider({ client: this.client }))
   }
 
-  private _session?: Session2
-  get session(): Session2 {
-    return (this._session ??= new Session2({ client: this.client }))
+  private _session?: Session3
+  get session(): Session3 {
+    return (this._session ??= new Session3({ client: this.client }))
   }
 
   private _part?: Part

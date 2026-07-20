@@ -6,6 +6,9 @@ export type ClientOptions = {
 
 export type Event =
   | EventModelsDevRefreshed
+  | EventAccountAdded
+  | EventAccountRemoved
+  | EventAccountSwitched
   | EventPluginAdded
   | EventCatalogModelUpdated
   | EventSessionCreated
@@ -52,9 +55,6 @@ export type Event =
   | EventInstallationUpdated
   | EventInstallationUpdateAvailable
   | EventFileEdited
-  | EventAccountAdded
-  | EventAccountRemoved
-  | EventAccountSwitched
   | EventPermissionV2Asked
   | EventPermissionV2Replied
   | EventReferenceUpdated
@@ -740,6 +740,29 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "account.added"
+        properties: {
+          account: AuthInfo
+        }
+      }
+    | {
+        id: string
+        type: "account.removed"
+        properties: {
+          account: AuthInfo
+        }
+      }
+    | {
+        id: string
+        type: "account.switched"
+        properties: {
+          serviceID: string
+          from?: string
+          to?: string
+        }
+      }
+    | {
+        id: string
         type: "plugin.added"
         properties: {
           id: string
@@ -1257,29 +1280,6 @@ export type GlobalEvent = {
         type: "file.edited"
         properties: {
           file: string
-        }
-      }
-    | {
-        id: string
-        type: "account.added"
-        properties: {
-          account: AuthInfo
-        }
-      }
-    | {
-        id: string
-        type: "account.removed"
-        properties: {
-          account: AuthInfo
-        }
-      }
-    | {
-        id: string
-        type: "account.switched"
-        properties: {
-          serviceID: string
-          from?: string
-          to?: string
         }
       }
     | {
@@ -3480,6 +3480,30 @@ export type MoveSessionDestination = {
   directory: string
 }
 
+export type AuthOAuthCredential = {
+  type: "oauth"
+  refresh: string
+  access: string
+  expires: number
+}
+
+export type AuthApiKeyCredential = {
+  type: "api"
+  key: string
+  metadata?: {
+    [key: string]: string
+  }
+}
+
+export type AuthCredential = AuthOAuthCredential | AuthApiKeyCredential
+
+export type AuthInfo = {
+  id: string
+  serviceID: string
+  description: string
+  credential: AuthCredential
+}
+
 export type ModelV2Info = {
   id: string
   providerID: string
@@ -3628,30 +3652,6 @@ export type SessionNextRetryError = {
   metadata?: {
     [key: string]: string
   }
-}
-
-export type AuthOAuthCredential = {
-  type: "oauth"
-  refresh: string
-  access: string
-  expires: number
-}
-
-export type AuthApiKeyCredential = {
-  type: "api"
-  key: string
-  metadata?: {
-    [key: string]: string
-  }
-}
-
-export type AuthCredential = AuthOAuthCredential | AuthApiKeyCredential
-
-export type AuthInfo = {
-  id: string
-  serviceID: string
-  description: string
-  credential: AuthCredential
 }
 
 export type PermissionV2Source = {
@@ -4844,6 +4844,32 @@ export type EventModelsDevRefreshed = {
   }
 }
 
+export type EventAccountAdded = {
+  id: string
+  type: "account.added"
+  properties: {
+    account: AuthInfo
+  }
+}
+
+export type EventAccountRemoved = {
+  id: string
+  type: "account.removed"
+  properties: {
+    account: AuthInfo
+  }
+}
+
+export type EventAccountSwitched = {
+  id: string
+  type: "account.switched"
+  properties: {
+    serviceID: string
+    from?: string
+    to?: string
+  }
+}
+
 export type EventPluginAdded = {
   id: string
   type: "plugin.added"
@@ -5504,32 +5530,6 @@ export type EventFileEdited = {
   type: "file.edited"
   properties: {
     file: string
-  }
-}
-
-export type EventAccountAdded = {
-  id: string
-  type: "account.added"
-  properties: {
-    account: AuthInfo
-  }
-}
-
-export type EventAccountRemoved = {
-  id: string
-  type: "account.removed"
-  properties: {
-    account: AuthInfo
-  }
-}
-
-export type EventAccountSwitched = {
-  id: string
-  type: "account.switched"
-  properties: {
-    serviceID: string
-    from?: string
-    to?: string
   }
 }
 
@@ -6997,6 +6997,41 @@ export type GlobalMeshStatusResponses = {
 }
 
 export type GlobalMeshStatusResponse = GlobalMeshStatusResponses[keyof GlobalMeshStatusResponses]
+
+export type GlobalSessionImportData = {
+  body?: {
+    content: string
+    title?: string
+    agent?: string
+    parentID?: string
+  }
+  path?: never
+  query?: never
+  url: "/global/session/import"
+}
+
+export type GlobalSessionImportErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalSessionImportError = GlobalSessionImportErrors[keyof GlobalSessionImportErrors]
+
+export type GlobalSessionImportResponses = {
+  /**
+   * Imported session
+   */
+  200: {
+    sessionID: string
+    title: string
+    messageCount: number
+    startedFromParsedSessionID?: string
+  }
+}
+
+export type GlobalSessionImportResponse = GlobalSessionImportResponses[keyof GlobalSessionImportResponses]
 
 export type RepositoryIntelQueryData = {
   body?: BanyanQueryInput
