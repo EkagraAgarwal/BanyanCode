@@ -139,13 +139,25 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const peers = createMemo(() => meshStatus()?.peers ?? [])
   const activeCount = createMemo(() => peers().filter((p) => p.status === "active").length)
 
+  // Visibility rule: when any agent is active, show only the active ones.
+  // When nothing is active, show the 5 most recently seen (idle + disconnected)
+  // so the sidebar isn't blank but doesn't list 20 stale rows.
+  const visiblePeers = createMemo(() => {
+    const all = peers()
+    const active = all.filter((p) => p.status === "active")
+    if (active.length > 0) return active
+    return [...all]
+      .sort((a, b) => (b.lastActivityAt ?? b.lastSeenAt ?? 0) - (a.lastActivityAt ?? a.lastSeenAt ?? 0))
+      .slice(0, 5)
+  })
+
   return (
     <box>
       <text fg={toHex(theme().primary)}>
         AGENTS {activeCount()}/{maxSubagents()} active
       </text>
       <Show
-        when={peers().length > 0}
+        when={visiblePeers().length > 0}
         fallback={
           <text fg={toHex(theme().textMuted)} marginTop={0}>
             No active agents
@@ -153,7 +165,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
         }
       >
         <box flexDirection="column" marginTop={0} gap={0}>
-          <For each={peers()}>{(peer) => <PeerRow peer={peer} theme={theme()} api={props.api} />}</For>
+          <For each={visiblePeers()}>{(peer) => <PeerRow peer={peer} theme={theme()} api={props.api} />}</For>
         </box>
       </Show>
     </box>
