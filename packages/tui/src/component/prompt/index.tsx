@@ -1249,6 +1249,58 @@ export function Prompt(props: PromptProps) {
               variant: "error",
             }),
           )
+      } else if (command === "/lsp") {
+        // Handle /lsp in the TUI so the user sees an immediate top-right toast
+        // instead of waiting for the server-side command round-trip (which
+        // would only surface the result as a chat-part text after the session
+        // command endpoint completes). The server-side /lsp command still
+        // exists as the canonical implementation; this intercept is purely
+        // a UI shortcut for instant feedback.
+        const lspArgs = firstLine.split(" ").slice(1).join(" ").trim().toLowerCase()
+        const currentCfg = (sync.data as { banyanConfig?: { banyancode_lsp?: unknown } }).banyanConfig
+        const currentLsp = currentCfg?.banyancode_lsp
+        const isOn = currentLsp === true || (typeof currentLsp === "object" && currentLsp !== null)
+        let next: boolean | undefined = undefined
+        let intent: "enabling" | "disabling" | "unknown" = "unknown"
+        if (lspArgs === "" || lspArgs === "toggle") {
+          intent = isOn ? "disabling" : "enabling"
+          next = isOn ? undefined : true
+        } else if (lspArgs === "on" || lspArgs === "true" || lspArgs === "enable" || lspArgs === "enabled") {
+          intent = "enabling"
+          next = true
+        } else if (lspArgs === "off" || lspArgs === "false" || lspArgs === "disable" || lspArgs === "disabled") {
+          intent = "disabling"
+          next = undefined
+        }
+        if (intent === "unknown") {
+          toast.show({
+            message: `Unknown /lsp argument "${lspArgs}". Usage: /lsp <on|off|toggle>`,
+            variant: "error",
+          })
+        } else {
+          toast.show({
+            message:
+              intent === "enabling" ? "Enabling BanyanCode LSP servers..." : "Disabling BanyanCode LSP servers...",
+            variant: "info",
+          })
+          ;(sdk.client as any).global.banyanConfig
+            .update({ config: { banyancode_lsp: next } })
+            .then(() => {
+              const finalIsOn = next === true
+              toast.show({
+                message: finalIsOn
+                  ? "BanyanCode LSP enabled. Built-in servers will attach on next file open."
+                  : "BanyanCode LSP disabled.",
+                variant: "success",
+              })
+            })
+            .catch((err: unknown) => {
+              toast.show({
+                message: `Failed to ${intent === "enabling" ? "enable" : "disable"} LSP: ${err instanceof Error ? err.message : String(err)}`,
+                variant: "error",
+              })
+            })
+        }
       } else {
         move.startSubmit()
         const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
