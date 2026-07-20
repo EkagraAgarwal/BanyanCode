@@ -74,7 +74,17 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     })
 
     const getCommand = Effect.fn("InstanceHttpApi.command")(function* () {
-      return yield* command.list()
+      // Strip server-only fields before sending to the client. The `execute`
+      // function is non-serializable (would JSON.stringify to its source
+      // string and break schema validation), and `template` may be a getter
+      // returning a Promise<string> for builtin prompts — both are resolved
+      // server-side at execution time. The TUI only needs name/description/
+      // agent/model/source/subtask/hints for slash autocomplete.
+      const list = yield* command.list()
+      return list.map(({ execute: _execute, template, ...rest }) => ({
+        ...rest,
+        template: typeof template === "string" ? template : typeof template === "function" ? "" : "",
+      }))
     })
 
     const getAgent = Effect.fn("InstanceHttpApi.agent")(function* () {
