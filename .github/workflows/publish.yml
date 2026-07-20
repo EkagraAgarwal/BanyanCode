@@ -132,7 +132,7 @@ jobs:
         if: matrix.os-suffix == 'windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: temp-banyancode-${{ matrix.target }}
+          name: banyancode-${{ matrix.target }}
           path: |
             packages/opencode/dist/banyancode-${{ matrix.target }}
             packages/opencode/dist/banyancode-${{ matrix.target }}.zip
@@ -152,7 +152,7 @@ jobs:
       - name: Download Windows CLI artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: temp-banyancode-windows-x64
+          name: banyancode-windows-x64
           path: packages/opencode/dist
 
       - name: Decide signing path

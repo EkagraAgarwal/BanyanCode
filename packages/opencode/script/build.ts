@@ -179,16 +179,17 @@ const targetArg = process.argv.find((arg) => arg.startsWith("--target="))?.split
 
 const targets = targetArg
   ? allTargets.filter((item) => {
-      // Match the public target name (e.g. "linux-x64", "linux-x64-musl",
-      // "linux-x64-baseline-musl", "darwin-x64-baseline", "windows-x64-baseline").
-      // The per-platform package name (build.ts below) and the publish.yml
-      // matrix target string use the same convention.
+      // Match the public target name (e.g. "linux-x64", "linux-x64-baseline",
+      // "linux-x64-musl", "linux-x64-baseline-musl", "darwin-x64-baseline",
+      // "windows-x64-baseline"). The order matters: the per-platform package
+      // name is built with -baseline BEFORE -musl (build.ts:215-225), and the
+      // publish.yml matrix uses the same convention. Keep them in sync.
       const itemTarget =
         (item.os === "win32" ? "windows" : item.os) +
         "-" +
         item.arch +
-        (item.abi === "musl" ? "-musl" : "") +
-        (item.avx2 === false ? "-baseline" : "")
+        (item.avx2 === false ? "-baseline" : "") +
+        (item.abi === "musl" ? "-musl" : "")
       return itemTarget === targetArg
     })
   : (singleFlag
