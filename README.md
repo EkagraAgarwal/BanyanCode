@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/Home.png" alt="BanyanCode home screen — ASCII logo" width="800" />
+</p>
+
 <div align="center">
 
 # BanyanCode
@@ -11,8 +15,6 @@
 <a href="https://effect.website"><img src="https://img.shields.io/badge/Effect-v4-blueviolet?style=flat-square" alt="Effect v4" /></a>
 
 </div>
-
-A single tool that replaces manual multi-agent orchestration, ad-hoc memory, grep-as-graph, and ChatGPT-for-research — built on top of [OpenCode](https://github.com/anomalyco/opencode), in your terminal.
 
 ```mermaid
 flowchart LR
@@ -29,14 +31,6 @@ flowchart LR
     CG --> Orch
     Orch --> Result(["merged answer"])
 ```
-
-*Four concurrent subagents, three data sources, one final answer.*
-
-<p align="center">
-  <img src="assets/Home.png" alt="BanyanCode home screen" width="800" />
-  <br />
-  <em>Home screen — the BanyanCode prompt and command surface.</em>
-</p>
 
 <p align="center">
   <img src="assets/Agent.png" alt="BanyanCode running with parallel subagents" width="800" />
