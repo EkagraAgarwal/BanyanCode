@@ -275,21 +275,7 @@ function SessionCard(props: {
         </text>
         <text fg={toHex(props.theme.textMuted)}>{props.timeAgo(props.session.time?.updated)}</text>
       </box>
-      <Show when={props.children.length > 0}>
-        <box flexDirection="column" paddingLeft={3} marginTop={0}>
-          <For each={props.children}>
-            {(child) => (
-              <box flexDirection="row" gap={1} alignItems="center">
-                <text fg={toHex(props.theme.textMuted)}>└─</text>
-                <text fg={toHex(props.theme.textMuted)}>{child.agent ?? "subagent"}</text>
-                <text fg={toHex(props.theme.textMuted)}>·</text>
-                <text fg={toHex(props.theme.text)} flexGrow={1}>{child.title || "(untitled)"}</text>
-                <text fg={toHex(props.theme.textMuted)}>{props.timeAgo(child.time?.updated)}</text>
-              </box>
-            )}
-          </For>
-        </box>
-      </Show>
+
       <box flexDirection="row" gap={2} paddingTop={0}>
         <text fg={toHex(props.theme.success)} onMouseUp={props.onContinue}>continue</text>
         <text fg={toHex(props.theme.info)} onMouseUp={props.onRename}>rename</text>

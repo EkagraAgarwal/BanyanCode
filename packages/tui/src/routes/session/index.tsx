@@ -1305,6 +1305,11 @@ export function Session() {
                     <pluginRuntime.Slot name="session_tab_agents" />
                   </box>
                 </Match>
+                <Match when={activeTab() === "config"}>
+                  <box flexGrow={1} minHeight={0} flexDirection="column">
+                    <pluginRuntime.Slot name="session_tab_config" />
+                  </box>
+                </Match>
               </Switch>
               <box flexShrink={0}>
                 <Show when={session()?.parentID}>
@@ -1864,7 +1869,7 @@ function GenericTool(props: ToolProps) {
   const ctx = use()
   const output = createMemo(() => props.output?.trim() ?? "")
   const [expanded, setExpanded] = createSignal(false)
-  const maxLines = 3
+  const maxLines = 2
   const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6))
   const collapsed = createMemo(() => collapseToolOutput(output(), maxLines, maxChars()))
   const limited = createMemo(() => {
@@ -2127,7 +2132,7 @@ function Shell(props: ToolProps) {
   const isRunning = createMemo(() => props.part.state.status === "running")
   const output = createMemo(() => stripAnsi(stringValue(props.metadata.output)?.trim() ?? ""))
   const [expanded, setExpanded] = createSignal(false)
-  const maxLines = 10
+  const maxLines = 2
   const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6))
   const collapsed = createMemo(() => collapseToolOutput(output(), maxLines, maxChars()))
   const limited = createMemo(() => {

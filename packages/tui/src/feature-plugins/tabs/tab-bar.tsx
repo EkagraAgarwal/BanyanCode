@@ -10,6 +10,7 @@ const TABS: { key: ActiveTab; label: string }[] = [
   { key: "chat", label: "CHAT" },
   { key: "sessions", label: "SESSIONS" },
   { key: "agents", label: "AGENTS" },
+  { key: "config", label: "CONFIG" },
   { key: "memory", label: "MEMORY" },
 ] 
 

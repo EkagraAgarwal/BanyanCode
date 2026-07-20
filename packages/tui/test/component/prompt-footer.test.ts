@@ -17,9 +17,8 @@ describe("prompt footer", () => {
       require("path").resolve(__dirname, "../../src/component/prompt/index.tsx"),
       "utf8",
     )
-    expect(source).toContain("agents")
+    expect(source).toContain("mode")
     expect(source).toContain("commands")
-    expect(source).toContain("/agents  /graph  /memory  /theme")
     expect(source).toContain("switch tab")
   })
 })

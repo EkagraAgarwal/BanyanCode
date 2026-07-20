@@ -461,7 +461,7 @@ const tui: TuiPlugin = async (api) => {
   api.slots.register({
     order: 75,
     slots: {
-      session_tab_agents() {
+      session_tab_config() {
         return <View api={api} />
       },
     },

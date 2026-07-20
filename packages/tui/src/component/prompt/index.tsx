@@ -1836,8 +1836,6 @@ export function Prompt(props: PromptProps) {
                     {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
                   </text>
                   <text fg={theme.textMuted}>·</text>
-                  <text fg={theme.textMuted}>/mode  /graph  /memory  /theme</text>
-                  <text fg={theme.textMuted}>·</text>
                   <text fg={theme.text}>{tabShortcut()} <span style={{ fg: theme.textMuted }}>switch tab</span></text>
                 </Match>
                 <Match when={store.mode === "shell"}>

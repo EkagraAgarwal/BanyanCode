@@ -50,13 +50,13 @@ test("agents sidebar: peer list block remains inside the Show (it should still t
     "utf8",
   )
 
-  const peersShowStart = source.indexOf('<Show\n        when={peers().length > 0}')
+  const peersShowStart = source.indexOf('<Show\n        when={visiblePeers().length > 0}')
   expect(peersShowStart).toBeGreaterThan(-1)
   const tail = source.slice(peersShowStart)
   const closingShowIdx = tail.indexOf("</Show>")
   expect(closingShowIdx).toBeGreaterThan(-1)
 
-  const peerForIdx = tail.indexOf("<For each={peers()}>")
+  const peerForIdx = tail.indexOf("<For each={visiblePeers()}>")
   expect(peerForIdx).toBeGreaterThan(-1)
 
   // Peer list is INSIDE the Show (before </Show>).
