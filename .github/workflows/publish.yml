@@ -270,7 +270,7 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG exists; uploading new assets."
           else
-            gh release create "$TAG" --draft --prerelease --generate-notes --title "BanyanCode ${{ needs.version.outputs.version }}" --repo "${{ github.repository }}"
+            gh release create "$TAG" --draft --generate-notes --title "BanyanCode ${{ needs.version.outputs.version }}" --repo "${{ github.repository }}"
           fi
           shopt -s nullglob
           files=(packages/opencode/dist/banyancode-*.*)
