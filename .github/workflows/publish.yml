@@ -64,16 +64,34 @@ jobs:
             target: linux-x64
             os-suffix: linux
           - runs-on: ubuntu-latest
+            target: linux-x64-baseline
+            os-suffix: linux
+          - runs-on: ubuntu-latest
+            target: linux-x64-musl
+            os-suffix: linux
+          - runs-on: ubuntu-latest
+            target: linux-x64-baseline-musl
+            os-suffix: linux
+          - runs-on: ubuntu-latest
             target: linux-arm64
+            os-suffix: linux
+          - runs-on: ubuntu-latest
+            target: linux-arm64-musl
             os-suffix: linux
           - runs-on: macos-14
             target: darwin-x64
+            os-suffix: darwin
+          - runs-on: macos-14
+            target: darwin-x64-baseline
             os-suffix: darwin
           - runs-on: macos-latest
             target: darwin-arm64
             os-suffix: darwin
           - runs-on: windows-latest
             target: windows-x64
+            os-suffix: windows
+          - runs-on: windows-latest
+            target: windows-x64-baseline
             os-suffix: windows
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
