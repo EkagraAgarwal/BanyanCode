@@ -422,6 +422,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "reference.updated":
           void result.location.reference.refresh()
           break
+        case "account.added":
+        case "account.removed":
+        case "account.switched":
+          void result.location.provider.refresh()
+          void result.location.model.refresh()
+          break
       }
     })
 

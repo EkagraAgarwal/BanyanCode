@@ -138,6 +138,90 @@ test("refreshes references after updates", async () => {
   }
 })
 
+test("refreshes providers and models on auth lifecycle events", async () => {
+  const events = createEventSource()
+  const refresh = { provider: 0, model: 0 }
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/provider") {
+      refresh.provider++
+      return json({ location: { directory, project: { id: "proj_test", directory } }, data: [] })
+    }
+    if (url.pathname === "/api/model") {
+      refresh.model++
+      return json({ location: { directory, project: { id: "proj_test", directory } }, data: [] })
+    }
+    return undefined
+  })
+  let data!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    data = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    await wait(() => refresh.provider === 1 && refresh.model === 1)
+
+    emitEvent(events, {
+      id: "evt_account_added_1",
+      type: "account.added",
+      properties: {
+        account: {
+          id: "acc_test",
+          serviceID: "provider",
+          description: "default",
+          credential: { type: "api", key: "secret" },
+        },
+      },
+    })
+    await wait(() => refresh.provider === 2 && refresh.model === 2)
+
+    emitEvent(events, {
+      id: "evt_account_removed_1",
+      type: "account.removed",
+      properties: {
+        account: {
+          id: "acc_test",
+          serviceID: "provider",
+          description: "default",
+          credential: { type: "api", key: "secret" },
+        },
+      },
+    })
+    await wait(() => refresh.provider === 3 && refresh.model === 3)
+
+    emitEvent(events, {
+      id: "evt_account_switched_1",
+      type: "account.switched",
+      properties: { serviceID: "provider", from: "acc_test", to: "acc_other" },
+    })
+    await wait(() => refresh.provider === 4 && refresh.model === 4)
+
+    expect(refresh.provider).toBe(4)
+    expect(refresh.model).toBe(4)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("settles pending tools when a live failure arrives", async () => {
   const events = createEventSource()
   const calls = createFetch()

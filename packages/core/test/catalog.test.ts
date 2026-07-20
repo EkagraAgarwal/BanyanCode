@@ -1,15 +1,21 @@
+import path from "path"
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Layer, Option } from "effect"
+import { Auth } from "@opencode-ai/core/auth"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { EventV2 } from "@opencode-ai/core/event"
+import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Global } from "@opencode-ai/core/global"
 import { Location } from "@opencode-ai/core/location"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { PluginV2 } from "@opencode-ai/core/plugin"
+import { AccountPlugin } from "@opencode-ai/core/plugin/account"
 import { Policy } from "@opencode-ai/core/policy"
 import { Project } from "@opencode-ai/core/project"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "./fixture/location"
+import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
 const locationLayer = Layer.succeed(
@@ -356,5 +362,89 @@ describe("CatalogV2", () => {
       expect(yield* catalog.model.all()).toEqual([])
       expect(yield* catalog.provider.get(providerID).pipe(Effect.option)).toEqual(Option.none())
     }),
+  )
+})
+
+function authTestLayer(dir: string) {
+  return Auth.layer.pipe(
+    Layer.provide(FSUtil.defaultLayer),
+    Layer.provideMerge(EventV2.defaultLayer),
+    Layer.provide(
+      Global.layerWith({
+        data: dir,
+        cache: path.join(dir, "cache"),
+        config: path.join(dir, "config"),
+        state: path.join(dir, "state"),
+        tmp: path.join(dir, "tmp"),
+        bin: path.join(dir, "bin"),
+        log: path.join(dir, "log"),
+        repos: path.join(dir, "repos"),
+      }),
+    ),
+  )
+}
+
+describe("CatalogV2 auth refresh", () => {
+  it.live(
+    "enables a provider when an account is added without restarting",
+    Effect.acquireRelease(Effect.promise(() => tmpdir()), (tmp) =>
+      Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const accounts = yield* Auth.Service
+          const catalog = yield* Catalog.Service
+          const plugin = yield* PluginV2.Service
+          const events = yield* EventV2.Service
+          const providerID = ProviderV2.ID.make("test-provider")
+          const serviceID = Auth.ServiceID.make("test-provider")
+
+          yield* plugin.add({
+            ...AccountPlugin,
+            effect: AccountPlugin.effect.pipe(
+              Effect.provideService(Auth.Service, accounts),
+              Effect.provideService(EventV2.Service, events),
+              Effect.provideService(PluginV2.Service, plugin),
+            ),
+          })
+          yield* plugin.add({
+            id: PluginV2.ID.make("test-provider"),
+            effect: Effect.succeed({
+              "catalog.transform": (evt) =>
+                Effect.sync(() => evt.provider.update(providerID, () => {})),
+            }),
+          })
+          yield* Effect.yieldNow
+
+          expect((yield* catalog.provider.get(providerID)).enabled).toBe(false)
+          expect(yield* catalog.provider.available()).toEqual([])
+
+          yield* accounts.create({
+            serviceID,
+            credential: new Auth.ApiKeyCredential({ type: "api", key: "secret-key" }),
+          })
+          yield* Effect.yieldNow
+
+          const provider = yield* catalog.provider.get(providerID)
+          expect(provider.enabled).toEqual({
+            via: "account",
+            service: serviceID,
+          })
+          expect(provider.request.body.apiKey).toBe("secret-key")
+          expect(yield* catalog.provider.available()).toEqual([
+            expect.objectContaining({ id: providerID, enabled: provider.enabled }),
+          ])
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            Catalog.locationLayer.pipe(
+              Layer.provideMerge(EventV2.defaultLayer),
+              Layer.provideMerge(locationLayer),
+              Layer.provideMerge(authTestLayer(tmp.path)),
+            ),
+          ),
+        ),
+      ),
+    ),
   )
 })

@@ -2,6 +2,7 @@ export * as Catalog from "./catalog"
 
 import { Context, Effect, Layer, Option, Order, pipe, Schema, Array, Scope, Stream } from "effect"
 import { castDraft, enableMapSet, type Draft } from "immer"
+import { Auth } from "./auth"
 import { ModelV2 } from "./model"
 import { ModelRequest } from "./model-request"
 import { PluginV2 } from "./plugin"
@@ -205,6 +206,28 @@ export const layer = Layer.effect(
       Stream.runForEach((event) =>
         state.mutate((catalog) => plugin.triggerFor(event.data.id, "catalog.transform", catalog, {}), "plugin.added"),
       ),
+      Effect.forkIn(scope, { startImmediately: true }),
+    )
+
+    // Accounts are process-scoped, so any auth change must re-run every plugin's
+    // catalog.transform so AccountPlugin can re-evaluate provider.enabled +
+    // apiKey from the freshly loaded account.json. No location filter: events
+    // auto-stamped by the calling location (e.g. V1 auth.set handler) and
+    // events without a location stamp (e.g. process-level Auth writes) all
+    // need to refresh every location's catalog.
+    const refresh = Effect.fn("CatalogV2.refresh")(function* () {
+      yield* state.mutate(() => Effect.void, "auth.changed")
+    })
+    yield* events.subscribe(Auth.Event.Added).pipe(
+      Stream.runForEach(() => refresh()),
+      Effect.forkIn(scope, { startImmediately: true }),
+    )
+    yield* events.subscribe(Auth.Event.Removed).pipe(
+      Stream.runForEach(() => refresh()),
+      Effect.forkIn(scope, { startImmediately: true }),
+    )
+    yield* events.subscribe(Auth.Event.Switched).pipe(
+      Stream.runForEach(() => refresh()),
       Effect.forkIn(scope, { startImmediately: true }),
     )
 
