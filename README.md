@@ -32,6 +32,18 @@ flowchart LR
 
 *Four concurrent subagents, three data sources, one final answer.*
 
+<p align="center">
+  <img src="assets/Home.png" alt="BanyanCode home screen" width="800" />
+  <br />
+  <em>Home screen — the BanyanCode prompt and command surface.</em>
+</p>
+
+<p align="center">
+  <img src="assets/Agent.png" alt="BanyanCode running with parallel subagents" width="800" />
+  <br />
+  <em>Active session — orchestrator, subagent mesh, todos, and live agent details.</em>
+</p>
+
 ---
 
 ## Highlights
