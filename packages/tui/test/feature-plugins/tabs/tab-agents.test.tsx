@@ -140,7 +140,7 @@ describe("tab-agents agent override persistence", () => {
       "utf8",
     )
     // The toggle function should call updateBanyanAgentOverride with name and enabled
-    expect(source).toContain("updateBanyanAgentOverride")
+    expect(source).toContain("banyanAgentOverride")
     expect(source).toContain("toggle")
     expect(source).toContain("name, enabled: nextEnabled")
   })
@@ -162,7 +162,7 @@ describe("tab-agents agent override persistence", () => {
     const toggleBody = toggleMatch![0]
     // Optimistic update should come before the API call
     const optimisticIdx = toggleBody.indexOf("// Optimistic update")
-    const apiCallIdx = toggleBody.indexOf("updateBanyanAgentOverride")
+    const apiCallIdx = toggleBody.indexOf("banyanAgentOverride")
     expect(optimisticIdx).toBeLessThan(apiCallIdx)
   })
 
@@ -189,7 +189,7 @@ describe("tab-agents agent override persistence", () => {
       "utf8",
     )
     // The openModelPicker should call updateBanyanAgentOverride with model
-    expect(source).toContain("updateBanyanAgentOverride")
+    expect(source).toContain("banyanAgentOverride")
     expect(source).toMatch(/name, model/)
   })
 
@@ -214,6 +214,6 @@ describe("tab-agents agent override persistence", () => {
       path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-agents.tsx"),
       "utf8",
     )
-    expect(source).toContain("updateBanyanAgentPrompt")
+    expect(source).toContain("banyanAgentPrompt")
   })
 })

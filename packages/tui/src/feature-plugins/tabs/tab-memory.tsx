@@ -623,14 +623,6 @@ function MemoryCard(props: {
           <text fg={toHex(props.theme.info)} onMouseUp={show}>
             open
           </text>
-          <Show when={isPending()}>
-            <text fg={toHex(props.theme.success)} onMouseUp={() => props.onPromote(props.entry)}>
-              promote
-            </text>
-            <text fg={toHex(props.theme.error)} onMouseUp={() => props.onReject(props.entry)}>
-              reject
-            </text>
-          </Show>
           <text fg={toHex(props.theme.error)} onMouseUp={() => props.onForget(props.entry)}>
             forget
           </text>

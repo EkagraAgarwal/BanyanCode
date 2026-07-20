@@ -22,6 +22,7 @@ import WhichKey from "./system/which-key"
 import TabBar from "./tabs/tab-bar"
 import TabMemory from "./tabs/tab-memory"
 import TabAgents from "./tabs/tab-agents"
+import TabAgentTree from "./tabs/tab-agent-tree"
 import TabSessions from "./tabs/tab-sessions"
 
 export type BuiltinTuiPlugin = Omit<TuiPluginModule, "id"> & {
@@ -55,6 +56,7 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     TabBar,
     TabMemory,
     TabAgents,
+    TabAgentTree,
     TabSessions,
   ]
 }
