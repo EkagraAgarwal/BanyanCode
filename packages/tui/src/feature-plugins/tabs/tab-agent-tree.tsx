@@ -6,11 +6,14 @@ import { useRouteData } from "../../context/route"
 import { useEvent } from "../../context/event"
 import { useSync } from "../../context/sync"
 import { toHex } from "../../util/color"
-import { activeTab } from "./state"
 
 const id = "internal:tab-agent-tree"
+export const AGENT_TREE_COLLAPSE_THRESHOLD = 5
+const BAR_WIDTH = 10
 
-interface SessionItem {
+type AgentStatus = "done" | "running" | "queued" | "error"
+
+export interface SessionItem {
   id: string
   parentID?: string
   title: string
@@ -18,41 +21,135 @@ interface SessionItem {
   time?: { created: number; updated: number }
   cost?: number
   tokens?: {
-    input: number
-    output: number
-    reasoning: number
-    cache: { read: number; write: number }
+    input?: number
+    output?: number
+    reasoning?: number
+    cache?: { read?: number; write?: number }
   }
 }
 
-interface TreeNode {
+export interface AgentTreeNode {
   session: SessionItem
-  children: TreeNode[]
-  depth: number
+  children: AgentTreeNode[]
   totalCost: number
   totalTokens: number
-  isRunning: boolean
+  status: AgentStatus
   isPathToRunning: boolean
 }
 
-const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
+export interface AgentTreeNodeRow {
+  kind: "node"
+  node: AgentTreeNode
+  depth: number
+  isLast: boolean
+  continuation: boolean[]
+}
 
-function formatTokens(n: number): string {
+export interface AgentTreeGroupRow {
+  kind: "group"
+  key: string
+  agentName: string
+  nodes: AgentTreeNode[]
+  depth: number
+  isLast: boolean
+  continuation: boolean[]
+}
+
+export type AgentTreeRow = AgentTreeNodeRow | AgentTreeGroupRow
+
+type AgentTreeChildEntry =
+  | { kind: "node"; node: AgentTreeNode }
+  | { kind: "group"; key: string; agentName: string; nodes: AgentTreeNode[] }
+
+const sparkChars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+
+export function agentName(session: SessionItem): string {
+  return session.agent ?? "orchestrator"
+}
+
+export function agentTreeGroupKey(parentID: string, name: string, firstChildID: string): string {
+  return `${parentID}:${name}:${firstChildID}`
+}
+
+export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
   return String(n)
 }
 
-function getRootSessionId(currentId: string, sessions: SessionItem[]): string {
-  const byId = new Map(sessions.map((s) => [s.id, s]))
-  let rootId = currentId
-  while (true) {
-    const parent = byId.get(rootId)?.parentID
-    if (parent && byId.has(parent)) {
-      rootId = parent
-    } else {
-      break
+export function agentTreeSparkline(values: readonly number[]): string {
+  if (values.length === 0) return ""
+  const max = Math.max(...values, 1)
+  return values
+    .map((value) => sparkChars[Math.min(sparkChars.length - 1, Math.floor((value / max) * sparkChars.length))] ?? sparkChars[0])
+    .join("")
+}
+
+export function flattenAgentTree(root: AgentTreeNode, expandedGroups: ReadonlySet<string> = new Set()): AgentTreeRow[] {
+  const rows: AgentTreeRow[] = []
+
+  const visit = (node: AgentTreeNode, depth: number, continuation: boolean[], isLast: boolean) => {
+    rows.push({ kind: "node", node, depth, continuation, isLast })
+
+    const entries = groupAgentTreeChildren(node.children).flatMap((entry) => {
+      if (entry.kind === "group" && (expandedGroups.has(entry.key) || entry.nodes.some((child) => child.isPathToRunning))) {
+        return entry.nodes.map((child) => ({ kind: "node" as const, node: child }))
+      }
+      return [entry]
+    })
+
+    entries.forEach((entry, index) => {
+      const childIsLast = index === entries.length - 1
+      const childContinuation = depth === 0 ? continuation : [...continuation, !isLast]
+      if (entry.kind === "group") {
+        rows.push({
+          kind: "group",
+          key: entry.key,
+          agentName: entry.agentName,
+          nodes: entry.nodes,
+          depth: depth + 1,
+          continuation: childContinuation,
+          isLast: childIsLast,
+        })
+        return
+      }
+      visit(entry.node, depth + 1, childContinuation, childIsLast)
+    })
+  }
+
+  visit(root, 0, [], true)
+  return rows
+}
+
+export function groupAgentTreeChildren(children: readonly AgentTreeNode[]): AgentTreeChildEntry[] {
+  const result: AgentTreeChildEntry[] = []
+  let index = 0
+  while (index < children.length) {
+    const first = children[index]!
+    const name = agentName(first.session)
+    const nodes = [first]
+    while (index + nodes.length < children.length && agentName(children[index + nodes.length]!.session) === name) {
+      nodes.push(children[index + nodes.length]!)
     }
+    if (nodes.length >= AGENT_TREE_COLLAPSE_THRESHOLD) {
+      result.push({ kind: "group", key: agentTreeGroupKey(first.session.parentID ?? "", name, first.session.id), agentName: name, nodes })
+    } else {
+      result.push(...nodes.map((node) => ({ kind: "node" as const, node })))
+    }
+    index += nodes.length
+  }
+  return result
+}
+
+function getRootSessionId(currentId: string, sessions: SessionItem[]): string {
+  const byId = new Map(sessions.map((session) => [session.id, session]))
+  const seen = new Set<string>()
+  let rootId = currentId
+  while (!seen.has(rootId)) {
+    seen.add(rootId)
+    const parent = byId.get(rootId)?.parentID
+    if (!parent || !byId.has(parent)) break
+    rootId = parent
   }
   return rootId
 }
@@ -62,10 +159,10 @@ function View(props: { api: TuiPluginApi }) {
   const event = useEvent()
   const sync = useSync()
   const route = useRouteData("session")
-
   const [refreshTrigger, setRefreshTrigger] = createSignal(0)
+  const [expandedGroups, setExpandedGroups] = createSignal<ReadonlySet<string>>(new Set())
 
-  const [sessions, { refetch }] = createResource(refreshTrigger, async () => {
+  const [sessions] = createResource(refreshTrigger, async () => {
     try {
       const result = await props.api.client.session.list({})
       return (result.data ?? []) as SessionItem[]
@@ -81,9 +178,7 @@ function View(props: { api: TuiPluginApi }) {
     const rootId = getRootSessionId(route.sessionID, mergedSessions())
     try {
       const result = await props.api.client.session.mesh({ sessionID: rootId })
-      if (result?.data) {
-        setMeshStatus(result.data)
-      }
+      if (result?.data) setMeshStatus(result.data)
     } catch {}
   }
 
@@ -91,9 +186,7 @@ function View(props: { api: TuiPluginApi }) {
     void fetchMesh()
     const unsubMesh = event.on("banyancode.mesh.status" as any, (ev: any) => {
       const rootId = getRootSessionId(route.sessionID, mergedSessions())
-      if (ev.properties?.parentSessionID === rootId) {
-        setMeshStatus(ev.properties)
-      }
+      if (ev.properties?.parentSessionID === rootId) setMeshStatus(ev.properties)
     })
     onCleanup(unsubMesh)
   })
@@ -102,90 +195,88 @@ function View(props: { api: TuiPluginApi }) {
     const live = sync.data.session
     if (!live || live.length === 0) return sessions() ?? []
     const byID = new Map<string, SessionItem>()
-    for (const s of live) byID.set(s.id, s as SessionItem)
-    for (const s of sessions() ?? []) if (!byID.has(s.id)) byID.set(s.id, s)
+    for (const session of live) byID.set(session.id, session as SessionItem)
+    for (const session of sessions() ?? []) if (!byID.has(session.id)) byID.set(session.id, session)
     return Array.from(byID.values())
   })
 
-  const isSessionRunning = (sessionID: string, meshPeers: any[]) => {
-    const meshPeer = meshPeers.find((p) => p.sessionID === sessionID)
-    if (meshPeer) return meshPeer.status === "active"
-    const live = sync.data.session_status?.[sessionID]
-    if (live) return live.type === "busy" || live.type === "retry"
+  const statusOf = (sessionID: string, meshPeers: any[]): AgentStatus => {
+    const meshStatus = meshPeers.find((peer) => peer.sessionID === sessionID)?.status
+    if (meshStatus === "active") return "running"
+    if (meshStatus === "queued" || meshStatus === "pending") return "queued"
+    if (meshStatus === "error" || meshStatus === "failed" || meshStatus === "disconnected") return "error"
+
+    const live = sync.data.session_status?.[sessionID] as { type?: string } | undefined
+    if (live?.type === "busy" || live?.type === "retry" || live?.type === "working") return "running"
+    if (live?.type === "queued" || live?.type === "pending") return "queued"
+    if (live?.type === "error" || live?.type === "failed") return "error"
+
     const session = sync.session.get(sessionID)
-    if (!session || !session.time) return false
-    return sync.session.status(sessionID) === "working"
+    if (!session?.time || !("compacting" in session.time)) return "done"
+    return sync.session.status(sessionID) === "working" ? "running" : "done"
   }
 
   const childMap = createMemo(() => {
     const map = new Map<string, SessionItem[]>()
-    for (const s of mergedSessions()) {
-      if (s.parentID) {
-        const list = map.get(s.parentID) ?? []
-        list.push(s)
-        map.set(s.parentID, list)
-      }
+    for (const session of mergedSessions()) {
+      if (!session.parentID) continue
+      const list = map.get(session.parentID) ?? []
+      list.push(session)
+      map.set(session.parentID, list)
     }
     return map
   })
 
-  const buildNode = (
-    session: SessionItem,
-    depth: number,
-    meshPeers: any[],
-  ): TreeNode => {
-    const kids = childMap().get(session.id) ?? []
-    const sortedKids = [...kids].sort((a, b) => (a.time?.created ?? 0) - (b.time?.created ?? 0))
-    const childrenNodes = sortedKids.map((child) => buildNode(child, depth + 1, meshPeers))
-
-    const nodeIsRunning = isSessionRunning(session.id, meshPeers)
-    const childIsPathToRunning = childrenNodes.some((c) => c.isRunning || c.isPathToRunning)
+  const buildNode = (session: SessionItem, meshPeers: any[], path: ReadonlySet<string>): AgentTreeNode => {
+    const children = (childMap().get(session.id) ?? [])
+      .filter((child) => !path.has(child.id))
+      .sort((a, b) => (a.time?.created ?? 0) - (b.time?.created ?? 0))
+    const nextPath = new Set(path)
+    nextPath.add(session.id)
+    const childrenNodes = children.map((child) => buildNode(child, meshPeers, nextPath))
+    const status = statusOf(session.id, meshPeers)
     const selfCost = session.cost ?? 0
-    const selfTokens = session.tokens
-      ? session.tokens.input +
-        session.tokens.output +
-        session.tokens.reasoning +
-        session.tokens.cache.read +
-        session.tokens.cache.write
-      : 0
-    const totalCost = selfCost + childrenNodes.reduce((sum, c) => sum + c.totalCost, 0)
-    const totalTokens = selfTokens + childrenNodes.reduce((sum, c) => sum + c.totalTokens, 0)
+    const selfTokens =
+      (session.tokens?.input ?? 0) +
+      (session.tokens?.output ?? 0) +
+      (session.tokens?.reasoning ?? 0) +
+      (session.tokens?.cache?.read ?? 0) +
+      (session.tokens?.cache?.write ?? 0)
+    const totalCost = selfCost + childrenNodes.reduce((sum, child) => sum + child.totalCost, 0)
+    const totalTokens = selfTokens + childrenNodes.reduce((sum, child) => sum + child.totalTokens, 0)
+    const isPathToRunning = status === "running" || childrenNodes.some((child) => child.isPathToRunning)
 
-    return {
-      session,
-      children: childrenNodes,
-      depth,
-      totalCost,
-      totalTokens,
-      isRunning: nodeIsRunning,
-      isPathToRunning: nodeIsRunning || childIsPathToRunning,
-    }
+    return { session, children: childrenNodes, totalCost, totalTokens, status, isPathToRunning }
   }
 
   const rootSessionId = createMemo(() => getRootSessionId(route.sessionID, mergedSessions()))
 
   const renderedRootNode = createMemo(() => {
-    const sessionsList = mergedSessions()
-    if (sessionsList.length === 0) return null
-    const rootSession = sessionsList.find((s) => s.id === rootSessionId())
+    const list = mergedSessions()
+    if (list.length === 0) return null
+    const rootSession = list.find((session) => session.id === rootSessionId())
     if (!rootSession) return null
-    const peers = meshStatus()?.peers ?? []
-    return buildNode(rootSession, 0, peers)
+    return buildNode(rootSession, meshStatus()?.peers ?? [], new Set())
   })
 
-  // Always fully expanded. Flatten by depth-first traversal so the user can
-  // see every parent-child relationship at a glance without toggle buttons.
-  const flatNodes = createMemo(() => {
+  const rows = createMemo(() => {
     const root = renderedRootNode()
-    if (!root) return []
-    const list: TreeNode[] = []
-    const walk = (node: TreeNode) => {
-      list.push(node)
-      node.children.forEach(walk)
-    }
-    walk(root)
-    return list
+    return root ? flattenAgentTree(root, expandedGroups()) : []
   })
+
+  const sessionCount = createMemo(() => {
+    const root = renderedRootNode()
+    if (!root) return 0
+    const count = (node: AgentTreeNode): number => 1 + node.children.reduce((sum, child) => sum + count(child), 0)
+    return count(root)
+  })
+
+  const toggleGroup = (key: string) => {
+    const next = new Set(expandedGroups())
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    setExpandedGroups(next)
+  }
 
   return (
     <box flexDirection="column" flexGrow={1} minHeight={0}>
@@ -200,63 +291,69 @@ function View(props: { api: TuiPluginApi }) {
         border={["bottom"]}
         borderColor={toHex(theme().borderSubtle)}
       >
-        <text fg={toHex(theme().text)}>
-          <b>Agent Tree</b>
-        </text>
-        <text fg={toHex(theme().textMuted)}>{flatNodes().length} sessions</text>
+        <text fg={toHex(theme().text)}><b>Agent Tree</b></text>
+        <text fg={toHex(theme().textMuted)}>{sessionCount()} sessions</text>
       </box>
 
       <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
         <box flexDirection="column" paddingTop={1} gap={0}>
           <Show
-            when={flatNodes().length > 0}
-            fallback={
-              <text fg={toHex(theme().textMuted)} paddingLeft={2} paddingTop={2}>
-                No sessions yet.
-              </text>
-            }
+            when={rows().length > 0}
+            fallback={<text fg={toHex(theme().textMuted)} paddingLeft={2} paddingTop={2}>No sessions yet.</text>}
           >
-            <For each={flatNodes()}>
-              {(item) => {
-                const indent = "  ".repeat(item.depth)
-                const agentName = () => item.session.agent ?? "orchestrator"
-                const statusDot = () =>
-                  item.isRunning ? toHex(theme().success) : toHex(theme().textMuted)
-                const statusChar = () => (item.isRunning ? "●" : "✓")
-                const childSummary = () =>
-                  item.children.length === 0
-                    ? ""
-                    : `  ${item.children.length} ${item.children.length === 1 ? "sub" : "subs"}`
+            <For each={rows()}>
+              {(row) => {
+                const connector = () => row.depth === 0
+                  ? ""
+                  : `${row.continuation.map((hasNext) => hasNext ? "│  " : "   ").join("")}${row.isLast ? "└─ " : "├─ "}`
+                if (row.kind === "group") {
+                  const color = agentType(row.agentName, theme()).color
+                  return (
+                    <box
+                      flexDirection="row"
+                      alignItems="center"
+                      width="100%"
+                      paddingLeft={1}
+                      paddingRight={1}
+                      onMouseUp={() => toggleGroup(row.key)}
+                    >
+                      <text fg={toHex(theme().textMuted)} flexShrink={0}>{connector()}</text>
+                      <text fg={toHex(theme().textMuted)} flexShrink={0}><i>{row.nodes.length} {plural(row.agentName)} collapsed</i></text>
+                      <text fg={color} flexShrink={0} paddingLeft={2}>{agentTreeSparkline(row.nodes.map((node) => node.totalTokens))}</text>
+                      <box flexGrow={1} />
+                      <text fg={toHex(theme().textMuted)} flexShrink={0}><u>expand ▶</u></text>
+                    </box>
+                  )
+                }
 
+                const node = row.node
+                const style = agentType(agentName(node.session), theme())
+                const status = statusGlyph(node.status, theme())
+                const childSummary = node.children.length === 0 ? "" : `${node.children.length} ${node.children.length === 1 ? "sub" : "subs"}`
                 return (
                   <box
                     flexDirection="row"
-                    gap={1}
                     alignItems="center"
                     width="100%"
                     paddingLeft={1}
                     paddingRight={1}
                   >
-                    <text fg={toHex(theme().textMuted)} flexShrink={0}>
-                      {indent}
-                    </text>
-                    <text fg={statusDot()} flexShrink={0}>
-                      {statusChar()}
-                    </text>
-                    <text fg={item.depth === 0 ? toHex(theme().primary) : toHex(theme().text)} flexShrink={0}>
-                      <b>{agentName()}</b>
-                    </text>
-                    <Show when={item.children.length > 0}>
-                      <text fg={toHex(theme().info)} flexShrink={0}>
-                        {childSummary()}
-                      </text>
+                    <text fg={toHex(theme().textMuted)} flexShrink={0}>{connector()}</text>
+                    <text fg={style.color} flexShrink={0} width={2}>{style.icon}</text>
+                    <text fg={toHex(theme().text)} flexShrink={0}><b>{agentName(node.session)}</b></text>
+                    <Show when={status.glyph}>
+                      <text fg={status.color} paddingLeft={1} flexShrink={0}>{status.glyph}</text>
                     </Show>
-                    <text fg={toHex(theme().textMuted)} flexShrink={0}>
-                      ·
-                    </text>
-                    <text fg={toHex(theme().textMuted)} flexShrink={0}>
-                      {money.format(item.totalCost)} · {formatTokens(item.totalTokens)} tok
-                    </text>
+                    <Show when={childSummary}>
+                      <text fg={toHex(theme().textMuted)} flexShrink={0}> {childSummary}</text>
+                    </Show>
+                    <box flexGrow={1} />
+                    <Show when={row.depth > 0}>
+                      <MagnitudeBar value={node.totalTokens} max={renderedRootNode()?.totalTokens ?? 0} color={style.color} theme={theme()} />
+                    </Show>
+                    <box flexDirection="row" justifyContent="flex-end" width={12} flexShrink={0}>
+                      <text fg={node.isPathToRunning ? toHex(theme().text) : toHex(theme().textMuted)}>{formatTokens(node.totalTokens)} tok</text>
+                    </box>
                   </box>
                 )
               }}
@@ -264,6 +361,42 @@ function View(props: { api: TuiPluginApi }) {
           </Show>
         </box>
       </scrollbox>
+    </box>
+  )
+}
+
+function agentType(name: string, theme: any) {
+  const normalized = name.toLowerCase()
+  if (normalized === "build" || normalized === "orchestrator") return { icon: "▣", color: toHex(theme.primary) }
+  if (normalized === "general") return { icon: "◆", color: toHex(theme.accent) }
+  if (normalized === "explore") return { icon: "◇", color: toHex(theme.info) }
+  if (normalized === "scout") return { icon: "•", color: toHex(theme.secondary) }
+  return { icon: "•", color: toHex(theme.textMuted) }
+}
+
+function plural(name: string): string {
+  if (name.endsWith("s")) return name
+  if (name.endsWith("y")) return `${name.slice(0, -1)}ies`
+  return `${name}s`
+}
+
+export function agentTreeStatusGlyph(status: AgentStatus): string {
+  return status === "done" ? "" : "●"
+}
+
+function statusGlyph(status: AgentStatus, theme: any) {
+  if (status === "running") return { glyph: agentTreeStatusGlyph(status), color: toHex(theme.success) }
+  if (status === "queued") return { glyph: agentTreeStatusGlyph(status), color: toHex(theme.warning) }
+  if (status === "error") return { glyph: agentTreeStatusGlyph(status), color: toHex(theme.error) }
+  return { glyph: agentTreeStatusGlyph(status), color: toHex(theme.textMuted) }
+}
+
+function MagnitudeBar(props: { value: number; max: number; color: string; theme: any }) {
+  const percent = () => props.max > 0 ? Math.max(0, Math.min(100, (props.value / props.max) * 100)) : 0
+  return (
+    <box flexDirection="row" width={BAR_WIDTH} height={1} flexShrink={0} marginRight={1}>
+      <box backgroundColor={props.color} width={`${percent()}%`} height={1} />
+      <box backgroundColor={toHex(props.theme.backgroundElement)} width={`${100 - percent()}%`} height={1} />
     </box>
   )
 }

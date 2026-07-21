@@ -62,33 +62,60 @@ function View(props: { api: TuiPluginApi }) {
   const mcpFirstConnected = createMemo(() => mcpList().find((m: any) => m.status === "connected")?.name ?? "")
 
 const lspList = createMemo(() => props.api.state.lsp() as Array<{
-    id: string
-    name: string
-    root: string
-    status: "configured" | "connected" | "error"
-    autoDownload: boolean
-  }>)
-  const lspConnectedCount = createMemo(() => lspList().filter((l) => l.status === "connected").length)
-  const lspConfiguredCount = createMemo(() => lspList().length)
-  const lspAutoDownloadedCount = createMemo(() => lspList().filter((l) => l.autoDownload).length)
-  // Configured via banyancode_lsp in banyancode.json. When the service is
-  // unavailable (BanyanCode off) or the field is unset, treat LSP as off.
-  const lspEnabled = createMemo(() => {
-    const cfg = (props.api.state as { banyanConfig?: { banyancode_lsp?: unknown } }).banyanConfig
-    const v = cfg?.banyancode_lsp
-    return v === true || (typeof v === "object" && v !== null)
-  })
-
-  const agentsLabel = () => `${activeSessionCount()} active`
-  const mcpLabel = () => (mcpConnectedCount() > 0 ? `MCP: ${mcpFirstConnected()}` : "MCP: —")
-  // Show three states: off (config disabled), on-but-nothing-connected
-  // (config enabled, no file opened), and active (≥1 server attached).
-  const lspLabel = () => {
-    if (!lspEnabled()) return "LSP: off"
-    if (lspConnectedCount() === 0)
-      return `LSP: 0/${lspConfiguredCount()} (idle) · ${lspAutoDownloadedCount()} auto`
-    return `LSP: ${lspConnectedCount()}/${lspConfiguredCount()} · ${lspAutoDownloadedCount()} auto`
+  id: string
+  name: string
+  root: string
+  status: "configured" | "connected" | "error"
+  autoDownload: boolean
+  languages: string[]
+  inert: boolean
+  disabled: boolean
+}>)
+const lspConnectedCount = createMemo(() => lspList().filter((l) => l.status === "connected" && !l.disabled).length)
+const lspConfiguredCount = createMemo(() => lspList().filter((l) => !l.disabled).length)
+const lspAutoDownloadedCount = createMemo(() => lspList().filter((l) => l.autoDownload).length)
+const lspLanguages = createMemo<string[]>(() => {
+  const out: string[] = []
+  for (const entry of lspList()) {
+    if (entry.disabled) continue
+    if (entry.status !== "connected") continue
+    for (const lang of entry.languages) {
+      if (!out.includes(lang)) out.push(lang)
+      if (out.length >= 3) break
+    }
+    if (out.length >= 3) break
   }
+  if (out.length === 0) {
+    for (const entry of lspList()) {
+      if (entry.disabled) continue
+      for (const lang of entry.languages) {
+        if (!out.includes(lang)) out.push(lang)
+        if (out.length >= 3) break
+      }
+      if (out.length >= 3) break
+    }
+  }
+  return out
+})
+// Configured via banyancode_lsp in banyancode.json. When the service is
+// unavailable (BanyanCode off) or the field is unset, treat LSP as off.
+const lspEnabled = createMemo(() => {
+  const cfg = (props.api.state as { banyanConfig?: { banyancode_lsp?: unknown } }).banyanConfig
+  const v = cfg?.banyancode_lsp
+  return v === true || (typeof v === "object" && v !== null)
+})
+
+const agentsLabel = () => `${activeSessionCount()} active`
+const mcpLabel = () => (mcpConnectedCount() > 0 ? `MCP: ${mcpFirstConnected()}` : "MCP: —")
+// Show four states: off (config disabled), inactive (config on, no server
+// attached yet), active (≥1 server attached), and the leading language
+// summary so the user can tell at a glance which stack is wired.
+const lspLabel = () => {
+  if (!lspEnabled()) return "LSP: off"
+  const langs = lspLanguages()
+  if (langs.length === 0) return `LSP: 0/${lspConfiguredCount()} (idle) · ${lspAutoDownloadedCount()} auto`
+  return `LSP: ${langs.join(" · ")} · ${lspConnectedCount()}/${lspConfiguredCount()}`
+}
   const graphLabel = () => (graphBuilt() ? "Graph: built" : "Graph: off")
 
   const agentsDotColor = () => (activeSessionCount() > 0 ? toHex(theme().success) : toHex(theme().textMuted))
