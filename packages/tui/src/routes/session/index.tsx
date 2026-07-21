@@ -1869,12 +1869,18 @@ function GenericTool(props: ToolProps) {
   const ctx = use()
   const output = createMemo(() => props.output?.trim() ?? "")
   const [expanded, setExpanded] = createSignal(false)
-  const maxLines = 2
-  const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6))
-  const collapsed = createMemo(() => collapseToolOutput(output(), maxLines, maxChars()))
-  const limited = createMemo(() => {
-    if (expanded() || !collapsed().overflow) return output()
-    return collapsed().output
+  // Single-line collapsed view: show the first line + an inline pill
+  // indicating how many more lines are hidden. Click toggles expand.
+  const allLines = createMemo(() => output().split("\n"))
+  const overflowCount = createMemo(() => Math.max(0, allLines().length - 1))
+  const hasOverflow = createMemo(() => overflowCount() > 0)
+  const preview = createMemo(() => allLines()[0] ?? "")
+  const titleText = createMemo(() => input(props.input))
+  // Title should fit on one line. If it's too long, truncate with an ellipsis.
+  const truncatedTitle = createMemo(() => {
+    const max = Math.max(40, ctx.width - 14)
+    const t = titleText()
+    return t.length > max ? t.slice(0, Math.max(0, max - 1)) + "…" : t
   })
 
   return (
@@ -1888,18 +1894,30 @@ function GenericTool(props: ToolProps) {
     >
       <MessageBlock mode="tool" label={`TOOL · ${props.tool}`} compact>
         <BlockTool
-          title={input(props.input)}
+          title={truncatedTitle()}
           part={props.part}
-          onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
+          onClick={hasOverflow() ? () => setExpanded((prev) => !prev) : undefined}
         >
-          <box gap={0}>
-            <text fg={theme.text} wrapMode="word">
-              {limited()}
-            </text>
-            <Show when={collapsed().overflow}>
-              <text fg={theme.textMuted} marginTop={0}>
-                {expanded() ? "Click to collapse" : "Click to expand"}
+          <box flexDirection="column" gap={0}>
+            <Show
+              when={expanded() || !hasOverflow()}
+              fallback={
+                <box flexDirection="row" gap={1} alignItems="center">
+                  <text fg={theme.text} wrapMode="word" flexGrow={1}>
+                    {preview()}
+                  </text>
+                  <text fg={theme.textMuted}>{"↕ " + overflowCount() + " more line" + (overflowCount() === 1 ? "" : "s")}</text>
+                </box>
+              }
+            >
+              <text fg={theme.text} wrapMode="word">
+                {output()}
               </text>
+              <Show when={hasOverflow()}>
+                <text fg={theme.textMuted} marginTop={0}>
+                  {"↕ click to collapse"}
+                </text>
+              </Show>
             </Show>
           </box>
         </BlockTool>
@@ -2132,13 +2150,12 @@ function Shell(props: ToolProps) {
   const isRunning = createMemo(() => props.part.state.status === "running")
   const output = createMemo(() => stripAnsi(stringValue(props.metadata.output)?.trim() ?? ""))
   const [expanded, setExpanded] = createSignal(false)
-  const maxLines = 2
-  const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6))
-  const collapsed = createMemo(() => collapseToolOutput(output(), maxLines, maxChars()))
-  const limited = createMemo(() => {
-    if (expanded() || !collapsed().overflow) return output()
-    return collapsed().output
-  })
+  // Same 1-line collapsed layout as GenericTool: first line + inline pill
+  // showing the remaining line count. Click toggles expand.
+  const allLines = createMemo(() => output().split("\n"))
+  const overflowCount = createMemo(() => Math.max(0, allLines().length - 1))
+  const hasOverflow = createMemo(() => overflowCount() > 0)
+  const preview = createMemo(() => allLines()[0] ?? "")
 
   const workdirDisplay = createMemo(() => {
     const workdir = stringValue(props.input.workdir)
@@ -2154,26 +2171,44 @@ function Shell(props: ToolProps) {
     return `# ${desc} in ${wd}`
   })
 
+  const truncatedCommand = createMemo(() => {
+    const cmd = stringValue(props.input.command) ?? ""
+    const max = Math.max(40, ctx.width - 14)
+    return cmd.length > max ? cmd.slice(0, Math.max(0, max - 1)) + "…" : cmd
+  })
+
   return (
     <Switch>
       <Match when={stringValue(props.metadata.output) !== undefined}>
         <MessageBlock mode="tool" label={`TOOL · ${title().replace(/^# /, "")}`} compact>
           <BlockTool
-            title={"$ " + stringValue(props.input.command)}
+            title={"$ " + truncatedCommand()}
             part={props.part}
             spinner={isRunning()}
-            onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
+            onClick={hasOverflow() ? () => setExpanded((prev) => !prev) : undefined}
           >
-            <box gap={0}>
-              <Show when={output()}>
+            <box flexDirection="column" gap={0}>
+              <Show
+                when={expanded() || !hasOverflow()}
+                fallback={
+                  <box flexDirection="row" gap={1} alignItems="center">
+                    <text fg={theme.text} wrapMode="word" flexGrow={1}>
+                      {preview()}
+                    </text>
+                    <text fg={theme.textMuted}>
+                      {"↕ " + overflowCount() + " more line" + (overflowCount() === 1 ? "" : "s")}
+                    </text>
+                  </box>
+                }
+              >
                 <text fg={theme.text} wrapMode="word">
-                  {limited()}
+                  {output()}
                 </text>
-              </Show>
-              <Show when={collapsed().overflow}>
-                <text fg={theme.textMuted} marginTop={0}>
-                  {expanded() ? "Click to collapse" : "Click to expand"}
-                </text>
+                <Show when={hasOverflow()}>
+                  <text fg={theme.textMuted} marginTop={0}>
+                    {"↕ click to collapse"}
+                  </text>
+                </Show>
               </Show>
             </box>
           </BlockTool>

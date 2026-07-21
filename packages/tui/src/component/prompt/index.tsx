@@ -1317,8 +1317,16 @@ export function Prompt(props: PromptProps) {
             return
           }
           try {
-            const content = await (window as any).Bun?.file
-              ? await Bun.file(input).text()
+            // Detect Bun at runtime without referencing `window` (TUI runs
+            // in Node.js where `window` is undefined). Falls back to
+            // node:fs/promises when Bun.file is unavailable.
+            const bunFile =
+              typeof (globalThis as { Bun?: { file: (p: string) => { text: () => Promise<string> } } }).Bun?.file ===
+              "function"
+                ? (globalThis as { Bun: { file: (p: string) => { text: () => Promise<string> } } }).Bun
+                : undefined
+            const content = bunFile
+              ? await bunFile.file(input).text()
               : await (await import("node:fs/promises")).readFile(input, "utf8")
             toast.show({ message: `Importing ${input}…`, variant: "info" })
             const result = await sdk.client.global.session.import({
