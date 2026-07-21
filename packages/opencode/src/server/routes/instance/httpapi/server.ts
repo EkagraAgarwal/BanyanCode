@@ -80,6 +80,7 @@ import { controlPlaneHandlers } from "./handlers/control-plane"
 import { experimentalHandlers } from "./handlers/experimental"
 import { fileHandlers } from "./handlers/file"
 import { globalHandlers } from "./handlers/global"
+import { importHandlers } from "./handlers/import"
 import { repositoryIntelHandlers } from "./handlers/repository-intel"
 import { memoryHandlers } from "./handlers/memory"
 import { instanceHandlers } from "./handlers/instance"
@@ -155,6 +156,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     permissionHandlers,
     providerHandlers,
     sessionHandlers,
+    importHandlers,
     syncHandlers,
     tuiHandlers,
     workspaceHandlers,

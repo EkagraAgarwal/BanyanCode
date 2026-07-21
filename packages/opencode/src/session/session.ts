@@ -486,6 +486,7 @@ export interface Interface {
   readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
   readonly setShare: (input: { sessionID: SessionID; share: Info["share"] }) => Effect.Effect<void>
   readonly setWorkspace: (input: { sessionID: SessionID; workspaceID: Info["workspaceID"] }) => Effect.Effect<void>
+  readonly patchTime: (input: { sessionID: SessionID; created: number; updated: number }) => Effect.Effect<void>
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<SessionV1.WithParts[], NotFound>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
@@ -849,6 +850,21 @@ export const layer: Layer.Layer<
       )
     })
 
+    const patchTime: Interface["patchTime"] = Effect.fnUntraced(function* (input: {
+      sessionID: SessionID
+      created: number
+      updated: number
+    }) {
+      const safeCreated = Math.max(0, Math.floor(input.created))
+      const safeUpdated = Math.max(safeCreated, Math.floor(input.updated))
+      yield* db
+        .update(SessionTable)
+        .set({ time_created: safeCreated, time_updated: safeUpdated })
+        .where(eq(SessionTable.id, input.sessionID))
+        .run()
+        .pipe(Effect.orDie)
+    })
+
     const diff = Effect.fn("Session.diff")(function* (sessionID: SessionID) {
       void sessionID
       return [] as Snapshot.FileDiff[]
@@ -948,6 +964,7 @@ export const layer: Layer.Layer<
       setSummary,
       setShare,
       setWorkspace,
+      patchTime,
       diff,
       messages,
       children,

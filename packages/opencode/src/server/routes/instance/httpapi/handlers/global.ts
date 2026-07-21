@@ -38,60 +38,8 @@ import type { Interface as PermissionV2Interface } from "@opencode-ai/core/permi
 import { Tool as ToolNS } from "@opencode-ai/core/tool/tool"
 import { ToolCall } from "@opencode-ai/llm"
 import { randomUUID } from "node:crypto"
-import { Session } from "@/session/session"
-import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { MessageID, PartID } from "@opencode-ai/core/v1/session"
-import { SessionSchema } from "@opencode-ai/core/session"
-import { parseTranscript, type TranscriptMessage } from "@opencode-ai/core/util/transcript"
 
 const websearchFreeDisabled = () => process.env.BANYANCODE_DISABLE_WEBSEARCH === "1"
-
-function buildImportedToolPart(
-  sessionID: string,
-  messageID: string,
-  tool: NonNullable<TranscriptMessage["tools"]>[number],
-): SessionV1.ToolPart {
-  const callID = randomUUID()
-  const now = Date.now()
-  const inputRecord = (tool.input && typeof tool.input === "object" ? (tool.input as Record<string, unknown>) : {}) as Record<
-    string,
-    unknown
-  >
-  const input = Object.keys(inputRecord).length > 0 ? inputRecord : {}
-  let state: SessionV1.ToolState
-  if (tool.error !== undefined) {
-    state = {
-      status: "error",
-      input,
-      error: tool.error,
-      time: { start: now, end: now },
-    } as SessionV1.ToolStateError
-  } else if (tool.output !== undefined) {
-    state = {
-      status: "completed",
-      input,
-      output: tool.output,
-      title: tool.name,
-      metadata: {},
-      time: { start: now, end: now },
-    } as SessionV1.ToolStateCompleted
-  } else {
-    state = {
-      status: "pending",
-      input,
-      raw: "",
-    } as SessionV1.ToolStatePending
-  }
-  return {
-    id: PartID.ascending(),
-    sessionID: sessionID as never,
-    messageID: messageID as never,
-    type: "tool",
-    callID,
-    tool: tool.name,
-    state,
-  } as SessionV1.ToolPart
-}
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -698,115 +646,6 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       return yield* opt.value.status(ctx.query.parentSessionID as never)
     })
 
-    const sessionImportHandler = Effect.fn("GlobalHttpApi.sessionImport")(function* (ctx: {
-      payload: {
-        content: string
-        title?: string
-        agent?: string
-        parentID?: SessionSchema.ID
-      }
-    }) {
-      const sessions = yield* Session.Service
-      const parsed = parseTranscript(ctx.payload.content)
-      if (parsed.messages.length === 0) {
-        return yield* Effect.fail(
-          new InvalidRequestError({
-            message: "Transcript contained no user/assistant messages to import.",
-          }),
-        )
-      }
-
-      const title = ctx.payload.title?.trim() || parsed.title?.trim() || `Imported · ${new Date().toLocaleString()}`
-      const agent = ctx.payload.agent?.trim() || parsed.messages.find((m) => m.role === "assistant")?.agent || "build"
-      const created = sessions.create({
-        title,
-        agent,
-        parentID: ctx.payload.parentID,
-      })
-      const sessionInfo = yield* created
-
-      // Walk the parsed messages and write them into the new session.
-      // We use the Session service directly (bypassing the LLM) so the
-      // import is instant and deterministic - re-running an old transcript
-      // through the model would consume tokens and re-execute tool calls.
-      let messageCount = 0
-      let parentMsgID: MessageID | undefined
-      const now = Date.now()
-      for (const msg of parsed.messages) {
-        if (msg.role === "user") {
-          const id = MessageID.ascending()
-          yield* sessions.updateMessage({
-            id,
-            sessionID: sessionInfo.id,
-            role: "user",
-            time: { created: now },
-            agent,
-            model: { providerID: "import", modelID: "import", variant: "" },
-          } as SessionV1.User)
-          yield* sessions.updatePart({
-            id: PartID.ascending(),
-            sessionID: sessionInfo.id,
-            messageID: id,
-            type: "text",
-            text: msg.text,
-            synthetic: true,
-          } as SessionV1.TextPart)
-          parentMsgID = id
-          messageCount++
-          continue
-        }
-        // assistant
-        const id = MessageID.ascending()
-        const providerID = msg.providerID ?? "import"
-        const modelID = msg.modelID ?? "import"
-        const assistantAgent = msg.agent ?? agent
-        yield* sessions.updateMessage({
-          id,
-          sessionID: sessionInfo.id,
-          role: "assistant",
-          parentID: parentMsgID ?? id,
-          time: { created: now },
-          agent: assistantAgent,
-          mode: assistantAgent,
-          modelID,
-          providerID,
-          path: { cwd: "", root: "" },
-          cost: 0,
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        } as SessionV1.Assistant)
-        if (msg.reasoning) {
-          yield* sessions.updatePart({
-            id: PartID.ascending(),
-            sessionID: sessionInfo.id,
-            messageID: id,
-            type: "reasoning",
-            text: msg.reasoning,
-            time: { start: now, end: now },
-          } as SessionV1.ReasoningPart)
-        }
-        for (const tool of msg.tools ?? []) {
-          yield* sessions.updatePart(buildImportedToolPart(sessionInfo.id, id, tool))
-        }
-        if (msg.text) {
-          yield* sessions.updatePart({
-            id: PartID.ascending(),
-            sessionID: sessionInfo.id,
-            messageID: id,
-            type: "text",
-            text: msg.text,
-          } as SessionV1.TextPart)
-        }
-        messageCount++
-      }
-
-      return {
-        sessionID: sessionInfo.id,
-        title,
-        messageCount,
-        startedFromParsedSessionID: parsed.sessionID,
-      }
-    })
-
     return handlers
       .handle("health", health)
       .handleRaw("event", event)
@@ -831,6 +670,5 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       .handle("blastRadius", blastRadiusHandler)
       .handle("safeRename", safeRenameHandler)
       .handle("meshStatus", meshStatusHandler)
-      .handle("sessionImport", sessionImportHandler)
   }),
 )

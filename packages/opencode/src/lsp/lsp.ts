@@ -57,8 +57,67 @@ export const Status = Schema.Struct({
   // True when the server downloads + manages its own binary (clangd,
   // jdtls, kotlin-ls, ...). Lets the TUI show "auto-downloaded" badges.
   autoDownload: Schema.Boolean,
+  languages: Schema.Array(Schema.String).annotate({
+    description: "Languages served by this LSP, derived from its file extensions.",
+  }),
+  inert: Schema.Boolean.annotate({
+    description: "True when configured but currently attached to zero open files.",
+  }),
+  disabled: Schema.Boolean.annotate({
+    description: "True when the user explicitly disabled this server in banyancode_lsp.",
+  }),
+  disabledReason: Schema.optional(Schema.String).annotate({
+    description: "Human-readable reason the server is disabled (omitted when enabled).",
+  }),
 }).annotate({ identifier: "LSPStatus" })
 export type Status = typeof Status.Type
+
+const LSP_LANGUAGE_MAP: Record<string, readonly string[]> = {
+  deno: ["TypeScript", "JavaScript"],
+  typescript: ["TypeScript", "JavaScript"],
+  vue: ["Vue", "TypeScript", "JavaScript"],
+  eslint: ["JavaScript", "TypeScript", "CSS", "JSON"],
+  oxlint: ["TypeScript", "JavaScript"],
+  biome: ["TypeScript", "JavaScript", "JSON", "CSS"],
+  gopls: ["Go"],
+  rubocop: ["Ruby"],
+  ty: ["Python"],
+  pyright: ["Python"],
+  elixir_ls: ["Elixir"],
+  zls: ["Zig"],
+  csharp: ["C#"],
+  razor: ["Razor", "C#"],
+  fsharp: ["F#"],
+  sourcekit_lsp: ["Swift"],
+  rust_analyzer: ["Rust"],
+  clangd: ["C", "C++", "Objective-C"],
+  svelte: ["Svelte", "TypeScript", "JavaScript"],
+  astro: ["Astro", "TypeScript", "JavaScript"],
+  jdtls: ["Java"],
+  kotlin_ls: ["Kotlin"],
+  yaml_ls: ["YAML"],
+  lua_ls: ["Lua"],
+  intelephense: ["PHP"],
+  prisma: ["Prisma"],
+  dart: ["Dart"],
+  ocaml: ["OCaml"],
+  bashls: ["Shell"],
+  terraformls: ["Terraform", "HCL"],
+  texlab: ["LaTeX"],
+  dockerfilels: ["Dockerfile"],
+  gleam: ["Gleam"],
+  clojure: ["Clojure"],
+  nixd: ["Nix"],
+  tinymist: ["Typst"],
+  hls: ["Haskell"],
+  julials: ["Julia"],
+}
+
+function languagesForServer(server: LSPServer.Info): string[] {
+  const mapped = LSP_LANGUAGE_MAP[server.id]
+  if (mapped) return [...mapped]
+  return Array.from(new Set(server.extensions.map((ext) => ext.replace(/^\./, "").toLowerCase()))).slice(0, 6)
+}
 
 enum SymbolKind {
   File = 1,
@@ -112,14 +171,23 @@ const filterExperimentalServers = (servers: Record<string, LSPServer.Info>, flag
   }
 }
 
-type LocInput = { file: string; line: number; character: number }
-
 interface State {
   clients: LSPClient.Info[]
   servers: Record<string, LSPServer.Info>
   broken: Set<string>
   spawning: Map<string, Promise<LSPClient.Info | undefined>>
+  // Per-server disabled reasons harvested from `banyancode_lsp`. Allows the
+  // TUI sidebar to surface "typescript: disabled" without the user having
+  // to dig through the global banyancode config dialog.
+  disabled: Map<string, string>
+  // `banyancode_lsp` resolved truthy / falsey. Lets the TUI distinguish
+  // "disabled because the user set banyancode_lsp to false" from
+  // "disabled because the field is unset" (both should look "off", but the
+  // latter should still be re-readable as a config nudge).
+  configEnabled: boolean
 }
+
+type LocInput = { file: string; line: number; character: number }
 
 export interface Interface {
   readonly init: () => Effect.Effect<void>
@@ -151,7 +219,7 @@ export const layer = Layer.effect(
         // BanyanCode is its own product identity and does not read
         // opencode.json. LSP config lives in banyancode.json under
         // `banyancode_lsp`. When BanyanCode is disabled (BanyanConfigService
-        // not in scope) or the field is unset, all LSPs are off — matching
+        // not in scope) or the field is unset, all LSPs are off â€” matching
         // the previous opencode default of `cfg.lsp === undefined`.
         const banyanOption = yield* Effect.serviceOption(Banyan.BanyanConfigService)
         const banyanConfig = Option.isSome(banyanOption) ? yield* banyanOption.value.get() : ({} as Banyan.BanyanConfigInfo)
@@ -199,11 +267,22 @@ export const layer = Layer.effect(
           })
         }
 
+        const disabled = new Map<string, string>()
+        if (lsp && typeof lsp === "object") {
+          for (const [name, item] of Object.entries(lsp)) {
+            if (item && typeof item === "object" && "disabled" in item && item.disabled) {
+              disabled.set(name, "disabled in banyancode.json")
+            }
+          }
+        }
+
         const s: State = {
           clients: [],
           servers,
           broken: new Set(),
           spawning: new Map(),
+          disabled,
+          configEnabled: Boolean(lsp),
         }
 
         yield* Effect.addFinalizer(() =>
@@ -336,6 +415,9 @@ export const layer = Layer.effect(
           root: path.relative(ctx.directory, client.root),
           status: "connected",
           autoDownload: server.autoDownload ?? false,
+          languages: languagesForServer(server),
+          inert: false,
+          disabled: false,
         })
       }
       // Then every other configured server that has not yet attached. This
@@ -349,6 +431,26 @@ export const layer = Layer.effect(
           root: "",
           status: "configured",
           autoDownload: server.autoDownload ?? false,
+          languages: languagesForServer(server),
+          inert: true,
+          disabled: false,
+        })
+      }
+      // Then any server the user explicitly disabled in banyancode_lsp so
+      // the TUI can still report "typescript: disabled" even though it was
+      // stripped from the live server map.
+      for (const [name, reason] of s.disabled.entries()) {
+        if (seen.has(name)) continue
+        result.push({
+          id: name,
+          name,
+          root: "",
+          status: "configured",
+          autoDownload: false,
+          languages: LSP_LANGUAGE_MAP[name] ?? [],
+          inert: true,
+          disabled: true,
+          disabledReason: reason,
         })
       }
       return result

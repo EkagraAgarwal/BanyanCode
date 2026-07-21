@@ -67,4 +67,11 @@ describe("global HttpApi", () => {
       expect(yield* response.json).toEqual({ success: false, error: "Invalid request body" })
     }),
   )
+
+  it.live("no longer registers sessionImport on the global root group", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClient.post("/global/session/import")
+      expect(response.status).not.toBe(200)
+    }),
+  )
 })
