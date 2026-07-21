@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { formatAssistantHeader, formatMessage, formatPart, formatTranscript } from "../../src/util/transcript"
+import { parseTranscript } from "@opencode-ai/core/util/transcript"
 import type { AssistantMessage, Part, Provider, UserMessage } from "@opencode-ai/sdk/v2"
 
 const providers: Provider[] = [
@@ -409,13 +410,101 @@ describe("transcript", () => {
           parts: [{ id: "p1", sessionID: "ses_abc123", messageID: "msg_1", type: "text" as const, text: "Response" }],
         },
       ]
-      const options = { thinking: false, toolDetails: false, assistantMetadata: false }
-
-      const result = formatTranscript(session, messages, options)
+      const result = formatTranscript(session, messages, { thinking: false, toolDetails: false, assistantMetadata: false })
 
       expect(result).toContain("## Assistant\n\n")
       expect(result).not.toContain("Build")
       expect(result).not.toContain("claude-sonnet-4-20250514")
+    })
+
+    test("round-trips machine metadata with message and tool state", () => {
+      const session = {
+        id: "ses_roundtrip",
+        title: "Round trip",
+        agent: "build",
+        model: { providerID: "anthropic", id: "claude-sonnet-4-20250514", variant: "high" },
+        time: { created: 1000000000000, updated: 1000000001000 },
+      }
+      const user: UserMessage = {
+        id: "msg_user",
+        sessionID: session.id,
+        role: "user",
+        agent: "build",
+        model: { providerID: "anthropic", modelID: "claude-sonnet-4-20250514", variant: "high" },
+        time: { created: 1000000000000 },
+      }
+      const assistant: AssistantMessage = {
+        id: "msg_assistant",
+        sessionID: session.id,
+        role: "assistant",
+        agent: "build",
+        modelID: "claude-sonnet-4-20250514",
+        providerID: "anthropic",
+        mode: "",
+        parentID: user.id,
+        path: { cwd: "/test", root: "/test" },
+        cost: 0,
+        tokens: { input: 1, output: 2, reasoning: 3, cache: { read: 4, write: 5 } },
+        time: { created: 1000000000100, completed: 1000000000200 },
+        variant: "high",
+      }
+      const result = parseTranscript(
+        formatTranscript(
+          session,
+          [
+            {
+              info: user,
+              parts: [{ id: "p_user", sessionID: session.id, messageID: user.id, type: "text", text: "hello\nworld" }],
+            },
+            {
+              info: assistant,
+              parts: [
+                {
+                  id: "p_reasoning",
+                  sessionID: session.id,
+                  messageID: assistant.id,
+                  type: "reasoning",
+                  text: "reasoning\nwith lines",
+                  time: { start: 1000000000100, end: 1000000000150 },
+                },
+                {
+                  id: "p_tool",
+                  sessionID: session.id,
+                  messageID: assistant.id,
+                  type: "tool",
+                  callID: "call_1",
+                  tool: "bash",
+                  state: {
+                    status: "error",
+                    input: { command: "echo x" },
+                    error: "failed\nwith details",
+                    time: { start: 1000000000150, end: 1000000000160 },
+                  },
+                },
+                { id: "p_text", sessionID: session.id, messageID: assistant.id, type: "text", text: "answer" },
+              ],
+            },
+          ],
+          { thinking: false, toolDetails: false, assistantMetadata: false },
+        ),
+      )
+
+      expect(result.sessionID).toBe(session.id)
+      expect(result.agent).toBe("build")
+      expect(result.providerID).toBe("anthropic")
+      expect(result.modelID).toBe("claude-sonnet-4-20250514")
+      expect(result.messages.map((message) => message.role)).toEqual(["user", "assistant"])
+      expect(result.messages[0].text).toBe("hello\nworld")
+      expect(result.messages[1].id).toBe(assistant.id)
+      expect(result.messages[1].parentID).toBe(user.id)
+      expect(result.messages[1].reasoning).toContain("reasoning")
+      expect(result.messages[1].parts?.[1]).toMatchObject({
+        type: "tool",
+        name: "bash",
+        callID: "call_1",
+        status: "error",
+        error: "failed\nwith details",
+      })
     })
   })
 })

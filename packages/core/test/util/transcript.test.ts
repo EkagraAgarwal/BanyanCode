@@ -157,6 +157,34 @@ describe("parseTranscript", () => {
     expect(parsed.messages[1].tools?.length).toBe(2)
   })
 
+  test("parses legacy assistant-only exports", () => {
+    const parsed = parseTranscript(`# Available tools overview
+
+**Session ID:** ses_legacy
+
+---
+
+## Assistant (Build · MiniMax-M3 · 8.2s)
+
+**Tool: bash**
+
+**Input:**
+\`\`\`json
+{ "command": "pwd" }
+\`\`\`
+
+**Output:**
+\`\`\`
+D:\\OpenCode
+\`\`\`
+`)
+
+    expect(parsed.sessionID).toBe("ses_legacy")
+    expect(parsed.messages).toHaveLength(1)
+    expect(parsed.messages[0].role).toBe("assistant")
+    expect(parsed.messages[0].tools?.[0]).toMatchObject({ name: "bash", input: { command: "pwd" } })
+  })
+
   test("treats tool input that is not valid JSON as a string", () => {
     const body = `## Assistant (coder · anthropic/claude-sonnet-4-6 · 0.1s)
 

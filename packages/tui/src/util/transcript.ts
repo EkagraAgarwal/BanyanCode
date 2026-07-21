@@ -1,4 +1,5 @@
 import type { AssistantMessage, Part, Provider, UserMessage } from "@opencode-ai/sdk/v2"
+import { base64Encode } from "@opencode-ai/core/util/encode"
 import { Locale } from "./locale"
 import * as Model from "./model"
 
@@ -12,6 +13,12 @@ export type TranscriptOptions = {
 export type SessionInfo = {
   id: string
   title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
   time: {
     created: number
     updated: number
@@ -33,6 +40,20 @@ export function formatTranscript(
   transcript += `**Session ID:** ${session.id}\n`
   transcript += `**Created:** ${new Date(session.time.created).toLocaleString()}\n`
   transcript += `**Updated:** ${new Date(session.time.updated).toLocaleString()}\n\n`
+  transcript += `<!-- banyancode-transcript:v1\n${base64Encode(
+    JSON.stringify({
+      version: 1,
+      sessionID: session.id,
+      title: session.title,
+      createdAt: session.time.created,
+      updatedAt: session.time.updated,
+      agent: session.agent,
+      providerID: session.model?.providerID,
+      modelID: session.model?.id,
+      variant: session.model?.variant,
+      messages: messages.map((msg) => formatMachineMessage(msg.info, msg.parts)),
+    }),
+  )}\n-->\n\n`
   transcript += `---\n\n`
 
   for (const msg of messages) {
@@ -41,6 +62,87 @@ export function formatTranscript(
   }
 
   return transcript
+}
+
+type MachinePart =
+  | {
+      type: "text"
+      text: string
+      synthetic?: boolean
+      ignored?: boolean
+      time?: { start: number; end?: number }
+    }
+  | {
+      type: "reasoning"
+      text: string
+      time: { start: number; end?: number }
+    }
+  | {
+      type: "tool"
+      name: string
+      callID: string
+      status: string
+      input: Record<string, unknown>
+      output?: string
+      error?: string
+      raw?: string
+      title?: string
+      time?: { start: number; end?: number; compacted?: number }
+    }
+
+function formatMachineMessage(msg: UserMessage | AssistantMessage, parts: Part[]) {
+  const machineParts: MachinePart[] = parts.flatMap<MachinePart>((part) => {
+    if (part.type === "text") {
+      return [{ type: "text", text: part.text, synthetic: part.synthetic, ignored: part.ignored, time: part.time }]
+    }
+    if (part.type === "reasoning") return [{ type: "reasoning", text: part.text, time: part.time }]
+    if (part.type !== "tool") return []
+    return [
+      {
+        type: "tool",
+        name: part.tool,
+        callID: part.callID,
+        status: part.state.status,
+        input: part.state.input,
+        output: part.state.status === "completed" ? part.state.output : undefined,
+        error: part.state.status === "error" ? part.state.error : undefined,
+        raw: part.state.status === "pending" ? part.state.raw : undefined,
+        title: "title" in part.state ? part.state.title : undefined,
+        time: "time" in part.state ? part.state.time : undefined,
+      },
+    ]
+  })
+  const text = machineParts.filter((part) => part.type === "text").map((part) => part.text).join("\n")
+  const reasoning = machineParts.filter((part) => part.type === "reasoning").map((part) => part.text).join("\n")
+  const tools = machineParts
+    .filter((part) => part.type === "tool")
+    .map((part) => ({
+      name: part.name,
+      callID: part.callID,
+      status: part.status,
+      input: part.input,
+      output: part.output,
+      error: part.error,
+      raw: part.raw,
+      title: part.title,
+      time: part.time,
+    }))
+
+  return {
+    id: msg.id,
+    role: msg.role,
+    parentID: msg.role === "assistant" ? msg.parentID : undefined,
+    createdAt: msg.time.created,
+    completedAt: msg.role === "assistant" ? msg.time.completed : undefined,
+    agent: msg.agent,
+    providerID: msg.role === "assistant" ? msg.providerID : msg.model.providerID,
+    modelID: msg.role === "assistant" ? msg.modelID : msg.model.modelID,
+    variant: msg.role === "user" ? msg.model.variant : msg.variant,
+    text,
+    reasoning: reasoning || undefined,
+    tools: tools.length > 0 ? tools : undefined,
+    parts: machineParts,
+  }
 }
 
 export function formatMessage(

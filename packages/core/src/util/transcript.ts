@@ -1,33 +1,82 @@
 import { Schema } from "effect"
+import { base64Decode } from "./encode"
+
+const TranscriptTimeSchema = Schema.Struct({
+  start: Schema.Number,
+  end: Schema.optional(Schema.Number),
+  compacted: Schema.optional(Schema.Number),
+})
+
+const TranscriptToolSchema = Schema.Struct({
+  name: Schema.String,
+  callID: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.Literals(["pending", "running", "completed", "error"])),
+  input: Schema.optional(Schema.Unknown),
+  output: Schema.optional(Schema.String),
+  error: Schema.optional(Schema.String),
+  raw: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
+  time: Schema.optional(TranscriptTimeSchema),
+})
+
+const TranscriptPartSchema = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("text"),
+    text: Schema.String,
+    synthetic: Schema.optional(Schema.Boolean),
+    ignored: Schema.optional(Schema.Boolean),
+    time: Schema.optional(TranscriptTimeSchema),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("reasoning"),
+    text: Schema.String,
+    time: Schema.optional(TranscriptTimeSchema),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("tool"),
+    name: Schema.String,
+    callID: Schema.optional(Schema.String),
+    status: Schema.optional(Schema.Literals(["pending", "running", "completed", "error"])),
+    input: Schema.optional(Schema.Unknown),
+    output: Schema.optional(Schema.String),
+    error: Schema.optional(Schema.String),
+    raw: Schema.optional(Schema.String),
+    title: Schema.optional(Schema.String),
+    time: Schema.optional(TranscriptTimeSchema),
+  }),
+])
 
 export const TranscriptMessageSchema = Schema.Struct({
+  id: Schema.optional(Schema.String),
+  parentID: Schema.optional(Schema.String),
   role: Schema.Literals(["user", "assistant"]),
   agent: Schema.optional(Schema.String),
   modelID: Schema.optional(Schema.String),
   providerID: Schema.optional(Schema.String),
+  variant: Schema.optional(Schema.String),
+  createdAt: Schema.optional(Schema.Number),
+  completedAt: Schema.optional(Schema.Number),
   text: Schema.String,
   reasoning: Schema.optional(Schema.String),
-  tools: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        name: Schema.String,
-        input: Schema.optional(Schema.Unknown),
-        output: Schema.optional(Schema.String),
-        error: Schema.optional(Schema.String),
-      }),
-    ),
-  ),
+  tools: Schema.optional(Schema.Array(TranscriptToolSchema)),
+  parts: Schema.optional(Schema.Array(TranscriptPartSchema)),
 })
 
 export const ParsedTranscriptSchema = Schema.Struct({
+  version: Schema.optional(Schema.Number),
   sessionID: Schema.optional(Schema.String),
   title: Schema.optional(Schema.String),
   createdAt: Schema.optional(Schema.Number),
   updatedAt: Schema.optional(Schema.Number),
+  agent: Schema.optional(Schema.String),
+  providerID: Schema.optional(Schema.String),
+  modelID: Schema.optional(Schema.String),
+  variant: Schema.optional(Schema.String),
   messages: Schema.Array(TranscriptMessageSchema),
 })
 
 export type TranscriptMessage = typeof TranscriptMessageSchema.Type
+export type TranscriptPart = typeof TranscriptPartSchema.Type
 export type ParsedTranscript = typeof ParsedTranscriptSchema.Type
 
 const TOOL_LINE = /^\*\*Tool:\s*(.+?)\*\*\s*$/
@@ -36,6 +85,7 @@ const OUTPUT_HEADING = /^\*\*Output:\*\*\s*$/
 const ERROR_HEADING = /^\*\*Error:\*\*\s*$/
 const FENCE_START = /^```(\w+)?\s*$/
 const SECTION_RULE = /^---\s*$/
+const MACHINE_METADATA = /<!--\s*banyancode-transcript:v1\s*\n([A-Za-z0-9_-]+)\s*\n\s*-->/
 
 // Reverses `formatTranscript`. Accepts the Markdown the TUI produces via
 // /export and any file produced by a third-party exporter that follows
@@ -46,6 +96,8 @@ const SECTION_RULE = /^---\s*$/
 // title / timestamps are left undefined and the caller picks defaults).
 export function parseTranscript(input: string): ParsedTranscript {
   const normalized = input.replace(/\r\n/g, "\n")
+  const machine = parseMachineMetadata(normalized)
+  if (machine) return machine
   const blocks = splitOnHorizontalRule(normalized)
 
   let sessionID: string | undefined
@@ -83,6 +135,16 @@ export function parseTranscript(input: string): ParsedTranscript {
     createdAt,
     updatedAt,
     messages,
+  }
+}
+
+function parseMachineMetadata(input: string): ParsedTranscript | undefined {
+  const encoded = input.match(MACHINE_METADATA)?.[1]
+  if (!encoded) return
+  try {
+    return Schema.decodeUnknownSync(ParsedTranscriptSchema)(JSON.parse(base64Decode(encoded)))
+  } catch {
+    return
   }
 }
 
