@@ -60,10 +60,23 @@ if ($args -contains "-h" -or $args -contains "--help") {
 Print-Message info "BanyanCode Installer" "Cyan"
 Print-Message info "Repo: $Repo / Install dir: $INSTALL_DIR" "DarkGray"
 
-# Resolve target arch + asset
-$arch = if ([Environment]::Is64BitOperatingSystem) {
-    [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLower()
-} else { "x86" }
+# Resolve target arch + asset. .NET Framework 4.x (used by Windows
+# PowerShell 5.1) has no System.Runtime.InteropServices.RuntimeInformation
+# type, so reflectively probe for it and fall back to PROCESSOR_ARCHITECTURE
+# when missing. This keeps the installer working on every PS 5.1+ runtime
+# the user might have installed.
+$arch = if (-not [Environment]::Is64BitOperatingSystem) {
+    "x86"
+} elseif ([System.Type]::GetType("System.Runtime.InteropServices.RuntimeInformation") -ne $null) {
+    ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture).ToString().ToLower()
+} else {
+    switch -Regex ($env:PROCESSOR_ARCHITECTURE) {
+        '^ARM'   { "arm64" }
+        '^AMD64' { "x64" }
+        '^X86'   { "x86" }
+        default  { "x64" }
+    }
+}
 
 # Normalize values PowerShell may emit
 $arch = switch -Regex ($arch) {
@@ -112,20 +125,23 @@ if ($Binary) {
 } else {
     Print-Message info "Downloading from $downloadUrl" "Cyan"
 
-    $tmp = New-TemporaryFile
+    # New-TemporaryFile creates a .tmp path, which Expand-Archive rejects
+    # because it expects .zip. Use a .zip suffix from the start.
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("$APP-$PID-$([System.Guid]::NewGuid().ToString('N').Substring(0, 8)).zip")
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $wc = New-Object System.Net.WebClient
-        $wc.DownloadFile($downloadUrl, $tmp.FullName)
+        $wc.DownloadFile($downloadUrl, $tmp)
     } catch {
         Print-Message error "Download failed: $_" "Red"
         exit 1
     }
 
     Print-Message info "Extracting..." "Cyan"
-    $extractDir = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "$APP-install-$PID") -Force
-    Expand-Archive -Path $tmp.FullName -DestinationPath $extractDir.FullName -Force
-    $binaryPath = Join-Path $extractDir.FullName "$APP.exe"
+    $extractDir = Join-Path ([System.IO.Path]::GetTempPath()) ("$APP-install-$PID")
+    New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+    Expand-Archive -Path $tmp -DestinationPath $extractDir -Force
+    $binaryPath = Join-Path $extractDir "$APP.exe"
     if (-not (Test-Path $binaryPath)) {
         Print-Message error "Expected binary not found at $binaryPath" "Red"
         exit 1
