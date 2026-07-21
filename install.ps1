@@ -67,14 +67,21 @@ Print-Message info "Repo: $Repo / Install dir: $INSTALL_DIR" "DarkGray"
 # the user might have installed.
 $arch = if (-not [Environment]::Is64BitOperatingSystem) {
     "x86"
-} elseif ([System.Type]::GetType("System.Runtime.InteropServices.RuntimeInformation") -ne $null) {
-    ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture).ToString().ToLower()
 } else {
-    switch -Regex ($env:PROCESSOR_ARCHITECTURE) {
-        '^ARM'   { "arm64" }
-        '^AMD64' { "x64" }
-        '^X86'   { "x86" }
-        default  { "x64" }
+    try {
+        $val = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+        if ($null -ne $val) {
+            $val.ToString().ToLower()
+        } else {
+            throw "OSArchitecture is null"
+        }
+    } catch {
+        switch -Regex ($env:PROCESSOR_ARCHITECTURE) {
+            '^ARM'   { "arm64" }
+            '^AMD64' { "x64" }
+            '^X86'   { "x86" }
+            default  { "x64" }
+        }
     }
 }
 
