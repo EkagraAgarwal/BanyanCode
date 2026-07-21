@@ -119,7 +119,15 @@ DialogPrompt.show = (dialog: DialogContext, title: string, options?: Omit<Dialog
   return new Promise<string | null>((resolve) => {
     dialog.replace(
       () => (
-        <DialogPrompt title={title} {...options} onConfirm={(value) => resolve(value)} onCancel={() => resolve(null)} />
+        <DialogPrompt
+          title={title}
+          {...options}
+          onConfirm={(value) => {
+            resolve(value)
+            dialog.clear()
+          }}
+          onCancel={() => resolve(null)}
+        />
       ),
       () => resolve(null),
     )
