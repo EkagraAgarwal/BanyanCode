@@ -1,4 +1,5 @@
 import { Config } from "@/config/config"
+import { Agent } from "@/agent/agent"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppRuntime } from "@/effect/app-runtime"
 import { InstanceState } from "@/effect/instance-state"
@@ -260,6 +261,9 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
         ...modelPatch,
       })
 
+      const agentSvc = yield* Agent.Service
+      yield* agentSvc.invalidate()
+
       GlobalBus.emit("event", {
         directory: "global",
         payload: {
@@ -278,6 +282,9 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     }) {
       const svc = yield* Banyan.BanyanConfigService
       const updated = yield* svc.updateAgentPrompt(payload.name, payload.prompt)
+
+      const agentSvc = yield* Agent.Service
+      yield* agentSvc.invalidate()
 
       GlobalBus.emit("event", {
         directory: "global",
@@ -439,6 +446,12 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       yield* fs.writeFileString(filePath, content).pipe(
         Effect.mapError((e) => new InvalidRequestError({ message: String(e) })),
       )
+
+      const configSvc = yield* Config.Service
+      yield* configSvc.invalidate()
+
+      const agentSvc = yield* Agent.Service
+      yield* agentSvc.invalidate()
 
       // Emit a config.updated event so the TUI refreshes the agents list immediately.
       GlobalBus.emit("event", {
