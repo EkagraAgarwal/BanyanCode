@@ -96,7 +96,7 @@ function mapOptionCb<Value>(cb?: (item: TuiDialogSelectOption<Value>) => void) {
   return (item: SelectOption<Value>) => cb(pickOption(item))
 }
 
-function stateApi(sync: ReturnType<typeof useSync>): TuiPluginApi["state"] {
+export function stateApi(sync: ReturnType<typeof useSync>): TuiPluginApi["state"] {
   return {
     get ready() {
       return sync.ready
@@ -148,7 +148,17 @@ function stateApi(sync: ReturnType<typeof useSync>): TuiPluginApi["state"] {
       return sync.data.part[messageID] ?? []
     },
     lsp() {
-      return sync.data.lsp.map((item) => ({ id: item.id, root: item.root, status: item.status }))
+      return sync.data.lsp.map((item) => ({
+        id: item.id,
+        name: item.name,
+        root: item.root,
+        status: item.status,
+        autoDownload: item.autoDownload,
+        languages: item.languages,
+        inert: item.inert,
+        disabled: item.disabled,
+        disabledReason: item.disabledReason,
+      }))
     },
     mcp() {
       return Object.entries(sync.data.mcp)

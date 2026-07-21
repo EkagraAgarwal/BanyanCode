@@ -519,7 +519,18 @@ export default {
             },
           },
           lsp() {
-            return [{ id: "ts", root: "/tmp/project", status: "connected" }]
+            return [
+              {
+                id: "ts",
+                name: "typescript",
+                root: "/tmp/project",
+                status: "connected",
+                autoDownload: false,
+                languages: ["TypeScript"],
+                inert: false,
+                disabled: false,
+              },
+            ]
           },
           mcp() {
             return [{ name: "github", status: "connected" }]

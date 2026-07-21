@@ -443,7 +443,12 @@ export type TuiSidebarMcpItem = {
   error?: string
 }
 
-export type TuiSidebarLspItem = Pick<LspStatus, "id" | "root" | "status">
+export type TuiSidebarLspItem = Pick<
+  LspStatus,
+  "id" | "name" | "root" | "status" | "autoDownload" | "languages" | "inert" | "disabled"
+> & {
+  disabledReason?: string
+}
 
 export type TuiSidebarTodoItem = Pick<Todo, "content" | "status">
 

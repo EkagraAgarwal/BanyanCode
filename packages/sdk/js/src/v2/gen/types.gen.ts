@@ -3037,6 +3037,19 @@ export type LspStatus = {
   root: string
   status: "configured" | "connected" | "error"
   autoDownload: boolean
+  /**
+   * Languages served by this LSP, derived from its file extensions.
+   */
+  languages: Array<string>
+  /**
+   * True when configured but currently attached to zero open files.
+   */
+  inert: boolean
+  /**
+   * True when the user explicitly disabled this server in banyancode_lsp.
+   */
+  disabled: boolean
+  disabledReason?: string
 }
 
 export type FormatterStatus = {
@@ -6998,41 +7011,6 @@ export type GlobalMeshStatusResponses = {
 
 export type GlobalMeshStatusResponse = GlobalMeshStatusResponses[keyof GlobalMeshStatusResponses]
 
-export type GlobalSessionImportData = {
-  body?: {
-    content: string
-    title?: string
-    agent?: string
-    parentID?: string
-  }
-  path?: never
-  query?: never
-  url: "/global/session/import"
-}
-
-export type GlobalSessionImportErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-}
-
-export type GlobalSessionImportError = GlobalSessionImportErrors[keyof GlobalSessionImportErrors]
-
-export type GlobalSessionImportResponses = {
-  /**
-   * Imported session
-   */
-  200: {
-    sessionID: string
-    title: string
-    messageCount: number
-    startedFromParsedSessionID?: string
-  }
-}
-
-export type GlobalSessionImportResponse = GlobalSessionImportResponses[keyof GlobalSessionImportResponses]
-
 export type RepositoryIntelQueryData = {
   body?: BanyanQueryInput
   path?: never
@@ -10746,6 +10724,41 @@ export type PartUpdateResponses = {
 }
 
 export type PartUpdateResponse = PartUpdateResponses[keyof PartUpdateResponses]
+
+export type GlobalSessionImportData = {
+  body?: {
+    content: string
+    title?: string
+    agent?: string
+    parentID?: string
+  }
+  path?: never
+  query?: never
+  url: "/global/session/import"
+}
+
+export type GlobalSessionImportErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalSessionImportError = GlobalSessionImportErrors[keyof GlobalSessionImportErrors]
+
+export type GlobalSessionImportResponses = {
+  /**
+   * Imported session
+   */
+  200: {
+    sessionID: string
+    title: string
+    messageCount: number
+    startedFromParsedSessionID?: string
+  }
+}
+
+export type GlobalSessionImportResponse = GlobalSessionImportResponses[keyof GlobalSessionImportResponses]
 
 export type SyncStartData = {
   body?: never
