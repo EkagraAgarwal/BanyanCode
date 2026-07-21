@@ -63,6 +63,16 @@ BanyanCode ships to npm (`banyancode`) and a GitHub release (`v<version>`) throu
 - Single source of truth: `packages/opencode/package.json:3` `version` field. The version-bump commit (`chore(opencode): bump version to <version>`) touches that file plus `bun.lock`.
 - Tags are **annotated**: `git tag -a v<version> -m "BanyanCode <version>" <bump-sha>`. Lightweight tags work but lose tagger info — match the existing `v26.07.0`–`v26.07.4` pattern.
 
+### Release channel
+
+**Every release goes to the npm `latest` dist-tag by default.** `OPENCODE_CHANNEL` defaults to `latest` in both `.github/workflows/publish.yml:112` and `preflight.yml:65`, and `packages/opencode/script/publish.ts:23` runs `npm publish --tag ${Script.channel}` against that value. Operators do not need to set anything to land on `latest`:
+
+- `git tag -a v<version> -m "BanyanCode <version>" <bump-sha> && git push origin v<version>` → `npm install banyancode@<version>` for everyone on the next dep resolution, and `npm install banyancode` (no version) returns the same `latest`.
+- The GitHub release is cut as `--prerelease` so you can sanity-check assets before finalizing (the workflow flips `--prerelease=false` automatically after the `publish` job succeeds). If you want to delay the GA promotion, edit the release: `gh release edit v<version> --prerelease=true --repo EkagraAgarwal/BanyanCode` — `npm` users will not see the version until you flip it back.
+- To cut a **prerelease** (e.g. `banyancode@26.8.0-rc.1` for a hotfix trial), set `OPENCODE_CHANNEL=next` either via `workflow_dispatch` → `Actions → publish → Run workflow` (no version input override) or by editing the publish workflow's env on a fork. `banyancode@latest` will NOT pick up the prerelease until you re-run with `OPENCODE_CHANNEL=latest` and a fresh tag.
+
+The `Script.channel` indirection lives in `packages/opencode/script/publish.ts` and `build.ts`; both read `OPENCODE_CHANNEL` and fall back to `latest` when unset, so the "default latest" rule survives partial CI failures.
+
 ### Cutting a release
 
 ```bash
