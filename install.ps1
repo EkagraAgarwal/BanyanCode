@@ -57,8 +57,8 @@ if ($args -contains "-h" -or $args -contains "--help") {
     exit 0
 }
 
-Print-Message info "" "BanyanCode Installer" "Cyan"
-Print-Message info "" "Repo: $Repo / Install dir: $INSTALL_DIR" "DarkGray"
+Print-Message info "BanyanCode Installer" "Cyan"
+Print-Message info "Repo: $Repo / Install dir: $INSTALL_DIR" "DarkGray"
 
 # Resolve target arch + asset
 $arch = if ([Environment]::Is64BitOperatingSystem) {
@@ -100,17 +100,17 @@ $downloadUrl = if ($Version) {
     "https://github.com/$Repo/releases/latest/download/$filename"
 }
 
-Print-Message info "" "Target: $filename" "DarkGray"
+Print-Message info "Target: $filename" "DarkGray"
 
 if ($Binary) {
-    Print-Message info "" "Installing from local binary: $Binary" "Yellow"
+    Print-Message info "Installing from local binary: $Binary" "Yellow"
     if (-not (Test-Path $Binary)) {
-        Print-Message error "" "Binary not found: $Binary" "Red"
+        Print-Message error "Binary not found: $Binary" "Red"
         exit 1
     }
     $specificVersion = "local"
 } else {
-    Print-Message info "" "Downloading from $downloadUrl" "Cyan"
+    Print-Message info "Downloading from $downloadUrl" "Cyan"
 
     $tmp = New-TemporaryFile
     try {
@@ -118,16 +118,16 @@ if ($Binary) {
         $wc = New-Object System.Net.WebClient
         $wc.DownloadFile($downloadUrl, $tmp.FullName)
     } catch {
-        Print-Message error "" "Download failed: $_" "Red"
+        Print-Message error "Download failed: $_" "Red"
         exit 1
     }
 
-    Print-Message info "" "Extracting..." "Cyan"
+    Print-Message info "Extracting..." "Cyan"
     $extractDir = New-Item -ItemType Directory -Path (Join-Path $env:TEMP "$APP-install-$PID") -Force
     Expand-Archive -Path $tmp.FullName -DestinationPath $extractDir.FullName -Force
     $binaryPath = Join-Path $extractDir.FullName "$APP.exe"
     if (-not (Test-Path $binaryPath)) {
-        Print-Message error "" "Expected binary not found at $binaryPath" "Red"
+        Print-Message error "Expected binary not found at $binaryPath" "Red"
         exit 1
     }
     $Binary = $binaryPath
@@ -139,13 +139,13 @@ Copy-Item -Path $Binary -Destination (Join-Path $INSTALL_DIR "$APP.exe") -Force
 
 # Verify
 & "$INSTALL_DIR\$APP.exe" --version | Out-Null
-Print-Message info "" "Installed $APP $specificVersion to $INSTALL_DIR\$APP.exe" "Green"
+Print-Message info "Installed $APP $specificVersion to $INSTALL_DIR\$APP.exe" "Green"
 
 # PATH modification
 if (-not $NoModifyPath) {
     $current = [Environment]::GetEnvironmentVariable("Path", "User")
     if ($current -notlike "*$INSTALL_DIR*") {
-        Print-Message info "" "Adding $INSTALL_DIR to user PATH..." "Yellow"
+        Print-Message info "Adding $INSTALL_DIR to user PATH..." "Yellow"
         [Environment]::SetEnvironmentVariable(
             "Path",
             "$current;$INSTALL_DIR",
@@ -153,7 +153,7 @@ if (-not $NoModifyPath) {
         )
         # Refresh current shell PATH
         $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")
-        Print-Message info "" "PATH updated. Restart your shell for changes to take effect." "Yellow"
+        Print-Message info "PATH updated. Restart your shell for changes to take effect." "Yellow"
     }
 }
 
