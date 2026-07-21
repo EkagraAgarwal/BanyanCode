@@ -437,6 +437,10 @@ export const {
             .get({})
             .then((x) => setStore("banyanConfig", reconcile(x.data)))
             .catch(() => {})
+          const workspace = project.workspace.current()
+          sdk.client.app.agents({ workspace })
+            .then((x) => setStore("agent", reconcile(x.data ?? [])))
+            .catch(() => {})
           break
         }
 
