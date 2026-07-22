@@ -4,10 +4,11 @@
  * Renders the policy + tool-guide block that is appended to the model-facing
  * system prompt when BanyanCode is enabled. The block has two parts:
  *
- *   1. The `## Codegraph-first search policy (PREFERRED)` section — a static,
- *      model-facing paragraph that tells the LLM to prefer graph + repository
- *      tools over grep/glob/bash in this workspace. Always emitted when
- *      BanyanCode is enabled (gated on `process.env.BANYANCODE_ENABLE !== "0"`).
+ *   1. The `## Codegraph-first search policy (ALWAYS)` section — a static,
+ *      model-facing paragraph that tells the LLM to always reach for graph +
+ *      repository tools first, and to bootstrap a code graph before any other
+ *      action if one does not exist. Always emitted when BanyanCode is enabled
+ *      (gated on `process.env.BANYANCODE_ENABLE !== "0"`).
  *   2. The `## BanyanCode tool guide` section — a per-session list of the
  *      LLM-visible BanyanCode tools that have been materialized for the
  *      agent+model pair. Only emitted when the caller supplies a `tools` array.
@@ -47,26 +48,31 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphSystemSource") {}
 
 const POLICY_TEXT = [
-  "## Codegraph-first search policy (PREFERRED)",
+  "## Codegraph-first search policy (ALWAYS)",
   "",
-  "Prefer BanyanCode graph + repository tools over grep/glob/bash for any code",
-  "question in this workspace. The complete tool catalog with descriptions",
+  "ALWAYS use BanyanCode graph + repository tools first for any code",
+  "question in this workspace. Grep / glob / bash and raw file reads are",
+  "last resorts, not defaults. The complete tool catalog with descriptions",
   "follows in this prompt.",
   "",
-  "Defaults:",
-  "1. Run `codegraph_build` once at the start of any multi-step task in a new",
-  "   workspace. If you don't, `repository_query` will return `degraded: true`.",
-  "2. For symbol/file lookup, start with `code_find` (five intents: definition,",
-  "   callers, dependents, impact, find_file).",
+  "Bootstrap rule (do this BEFORE any other action):",
+  "1. If no code graph exists for this workspace, run `codegraph_build` as",
+  "   your very first action. Do not assume one is present. Until the build",
+  "   finishes, `repository_query` returns `degraded: true` and most graph",
+  "   tools are unreliable.",
+  "2. After the build, always reach for graph tools first. For symbol/file",
+  "   lookup, start with `code_find` (five intents: definition, callers,",
+  "   dependents, impact, find_file).",
   "3. For semantic/architectural context, escalate to `repository_query`,",
   "   `repository_explain`, `repository_trace`, `repository_tests`.",
-  "4. Before any non-trivial edit, run `blast_radius` (summary) or `preflight`",
-  "   (decision-ready: callers, tests, docs, configs, event bridges, HTTP routes).",
+  "4. Before any non-trivial edit, run `blast_radius` (summary) or",
+  "   `preflight` (decision-ready: callers, tests, docs, configs, event",
+  "   bridges, HTTP routes).",
   "5. After edits, run `edit_plan(phase=\"after\")` to re-verify blast radius.",
   "",
   "Only fall back to grep / glob / bash when:",
   "- a graph tool explicitly reports empty / stale / not-found,",
-  "- the user asks for regex or filename-pattern matching specifically,",
+  "- the user explicitly asks for regex or filename-pattern matching,",
   "- you're searching non-code artifacts (configs, JSON, docs, build outputs).",
 ].join("\n")
 

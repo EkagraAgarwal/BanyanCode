@@ -44,6 +44,9 @@ describe("CodegraphSystemSource.register (V2 wiring)", () => {
         const context = yield* registry.load()
         const initialized = yield* SystemContext.initialize(context)
         expect(initialized.baseline).toContain("Codegraph-first search policy")
+        expect(initialized.baseline).toContain("ALWAYS")
+        expect(initialized.baseline).toContain("codegraph_build")
+        expect(initialized.baseline).toContain("last resort")
         expect(initialized.baseline.length).toBeGreaterThan(0)
         // The snapshot must carry the namespaced key the source uses.
         expect(initialized.snapshot["banyancode/codegraph-policy"]).toBeDefined()

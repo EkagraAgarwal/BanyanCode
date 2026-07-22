@@ -85,6 +85,10 @@ describe("Banyan.CodegraphSystemSource.Service", () => {
       const svc = yield* Banyan.CodegraphSystemSource
       const text = yield* svc.load({ tools: [{ id: "code_find", description: "find a symbol" }] })
       expect(text).toMatch(/graph.{0,3}first|repository.{0,3}first/i)
+      // Pin the strengthened policy: must always-bootstrap and always-prioritize
+      expect(text).toContain("ALWAYS")
+      expect(text).toContain("codegraph_build")
+      expect(text).toContain("last resort")
     }),
   )
 

@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BanyanCode — Chat</title>
+<style>
+  :root{
+    --bg:#050505;
+    --border:#2e2e2e;
+    --text:#d6d6d6;
+    --muted:#8a8a8a;
+    --dim:#5a5a5a;
+    --orange:#e8934a;
+    --green:#7ec699;
+    --blue:#6fa8ff;
+    --red:#d9737a;
+    --yellow:#d7b45a;
+    --purple:#b58cff;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; margin:0; }
+  body{
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 13px;
+    overflow:hidden;
+  }
+  .app{ height:100vh; display:grid; grid-template-rows: 46px 34px 1fr 26px; }
+
+  .topbar{ display:flex; align-items:center; gap:16px; padding:0 16px; border-bottom:1px solid var(--border); }
+  .brand{ color: var(--orange); font-weight:800; letter-spacing:.5px; font-size:14px; }
+  .proj{ color:#9a9a9a; }
+  .spacer{ flex:1; }
+  .pill{ display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#bdbdbd; white-space:nowrap; }
+  .dot{ width:7px; height:7px; border-radius:50%; background: var(--muted); }
+  .dot.on{ background: var(--green); }
+  .dot.off{ background: var(--dim); }
+  .dot.crit{ background: var(--red); }
+  .hotkey{ color:#9a9a9a; font-size:11.5px; }
+
+  .tabs{ display:flex; align-items:center; gap:26px; padding:0 16px; border-bottom:1px solid var(--border); }
+  .tab{ padding:9px 2px; color:#9a9a9a; font-size:13px; cursor:pointer; position:relative; user-select:none; }
+  .tab.active{ color:#f0b273; font-weight:700; }
+  .tab.active::after{ content:''; position:absolute; left:0; right:0; bottom:-1px; height:2px; background:var(--orange); }
+
+  .workspace{ display:grid; grid-template-columns: 290px 1fr 320px; min-height:0; }
+  .col{ min-height:0; overflow:hidden; border-right:1px solid var(--border); }
+  .col:last-child{ border-right:none; }
+  .col.center{ display:flex; flex-direction:column; }
+  .scroll{ overflow-y:auto; }
+  .scroll::-webkit-scrollbar{ width:8px; }
+  .scroll::-webkit-scrollbar-thumb{ background:rgba(255,255,255,.08); border-radius:8px; }
+
+  .sidebar-title{ padding:14px 14px 10px; font-weight:700; color:#e5e5e5; border-bottom:1px solid var(--border); line-height:1.4; }
+  .section{ border-bottom:1px solid var(--border); padding:12px 14px; }
+  .section:last-child{ border-bottom:none; }
+  .section-header{ color:var(--orange); font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:.3px; margin-bottom:8px; }
+  .muted{ color:var(--muted); }
+  .dim{ color:var(--dim); }
+  .green{ color:var(--green); }
+  .blue{ color:var(--blue); }
+  .orange{ color:var(--orange); }
+  .yellow{ color:var(--yellow); }
+  .red{ color:var(--red); }
+  .purple{ color:var(--purple); }
+
+  .ctx-bar{ height:10px; border:1px solid var(--border); overflow:hidden; margin:8px 0 6px; display:flex; border-radius:3px; }
+  .ctx-seg{ height:100%; }
+  .bar-row{ display:flex; justify-content:space-between; font-size:11.5px; color:#b0b0b0; }
+  .barmini{ height:9px; border:1px solid var(--border); overflow:hidden; margin-top:5px; border-radius:3px; }
+  .barmini > div{ height:100%; }
+
+  /* ============ CHAT STREAM ============ */
+  .chat-scroll{ flex:1; padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
+
+  .user-msg{
+    align-self:flex-start; max-width:80%;
+    border-left:2px solid var(--orange); padding:4px 0 4px 12px; color:#eaeaea; font-weight:600;
+  }
+
+  /* thought block: collapsed by default, muted, italic */
+  .thought-block{
+    border:1px solid var(--border); border-radius:6px; overflow:hidden;
+  }
+  .thought-head{
+    display:flex; align-items:center; gap:8px; padding:6px 10px; cursor:pointer;
+    color: var(--purple); font-size:11.5px;
+  }
+  .thought-head .chev{ color:var(--dim); font-size:10px; transition: transform .1s ease; }
+  .thought-head.open .chev{ transform: rotate(90deg); }
+  .thought-body{ display:none; padding:0 12px 10px; color:#a99ccf; font-style:italic; font-size:12.5px; line-height:1.5; }
+  .thought-body.open{ display:block; }
+  .thought-preview{ color:#8a7fa8; font-size:11.5px; font-style:italic; }
+
+  /* tool block */
+  .tool-block{ border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+  .tool-block.error{ border-color: rgba(217,115,122,.5); }
+  .tool-block.running{ border-color: rgba(215,180,90,.5); }
+  .tool-head{
+    display:flex; align-items:center; gap:9px; padding:7px 10px; border-bottom:1px solid var(--border);
+  }
+  .tool-block.error .tool-head{ border-bottom-color: rgba(217,115,122,.3); background: rgba(217,115,122,.05); }
+  .tool-block.running .tool-head{ border-bottom-color: rgba(215,180,90,.3); background: rgba(215,180,90,.05); }
+  .status-icon{ font-size:11px; width:14px; text-align:center; }
+  .status-icon.ok{ color: var(--green); }
+  .status-icon.err{ color: var(--red); }
+  .status-icon.run{ color: var(--yellow); }
+  .tool-tag{
+    font-size:10px; padding:1px 7px; border-radius:4px; border:1px solid rgba(111,168,255,.4);
+    color: var(--blue); text-transform:uppercase; letter-spacing:.3px; flex:0 0 auto;
+  }
+  .tool-desc{ color:#d0d0d0; font-size:12.5px; flex:1; min-width:0; }
+  .tool-meta{ color:var(--dim); font-size:11px; flex:0 0 auto; }
+
+  .tool-body{ padding:10px 12px; display:flex; flex-direction:column; gap:8px; }
+  .cmd-line{
+    background: rgba(255,255,255,.02); border:1px solid var(--border); border-radius:5px;
+    padding:7px 10px; color:#b9c9e0; font-size:12px; white-space:pre-wrap; word-break:break-word;
+  }
+  .cmd-line .prompt-char{ color: var(--green); margin-right:6px; }
+
+  .out-block{
+    color:#c4c4c4; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word;
+    max-height:110px; overflow:hidden; position:relative;
+  }
+  .out-block.expanded{ max-height:none; }
+  .out-fade{
+    position:absolute; left:0; right:0; bottom:0; height:34px;
+    background: linear-gradient(rgba(13,13,13,0), rgba(13,13,13,.95));
+    display:flex; align-items:flex-end; justify-content:center; padding-bottom:4px;
+  }
+  .out-fade.hidden{ display:none; }
+  .expand-link{ font-size:11px; color:var(--blue); cursor:pointer; background:rgba(13,13,13,.9); padding:1px 8px; border-radius:999px; }
+
+  .out-table{ width:100%; border-collapse:collapse; font-size:11.5px; margin-top:2px; }
+  .out-table th{ text-align:left; color:var(--dim); font-weight:600; padding:3px 10px 5px 0; border-bottom:1px solid var(--border); }
+  .out-table td{ padding:3px 10px 3px 0; color:#c8c8c8; white-space:nowrap; }
+
+  .out-filelist{ display:flex; flex-direction:column; gap:2px; font-size:12px; }
+  .out-filelist .fp{ color:#a9c9ff; }
+  .out-filelist .fp .fdim{ color:var(--dim); }
+
+  .err-summary{ color:#e5b3b3; font-size:12.5px; }
+  .err-detail-link{ font-size:11px; color:var(--red); cursor:pointer; margin-top:4px; display:inline-block; }
+  .err-detail{ display:none; margin-top:6px; }
+  .err-detail.open{ display:block; }
+  .err-detail pre{
+    margin:0; color:#c99; font-size:11px; background:rgba(217,115,122,.06); border:1px solid rgba(217,115,122,.25);
+    border-radius:5px; padding:8px; white-space:pre-wrap; word-break:break-word;
+  }
+
+  /* grouped compact reads */
+  .group-block{ border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+  .group-head{
+    display:flex; align-items:center; gap:8px; padding:7px 10px; cursor:pointer; color:var(--muted); font-size:12px;
+  }
+  .group-head .chev{ color:var(--dim); font-size:10px; }
+  .group-body{ display:none; padding:2px 12px 8px 30px; border-top:1px solid var(--border); }
+  .group-body.open{ display:block; }
+  .group-item{ color:#a9a9a9; font-size:12px; padding:2px 0; }
+  .group-item .arrow{ color:var(--dim); margin-right:6px; }
+
+  .streaming-indicator{
+    display:flex; align-items:center; gap:10px; padding:6px 16px; font-size:11.5px; color:var(--dim);
+  }
+  .streaming-indicator .dots{ letter-spacing:2px; color: var(--yellow); }
+  .streaming-indicator .esc{ color:var(--muted); }
+
+  .composer{ border-top:1px solid var(--border); padding:10px 16px 12px; }
+  .input-box{
+    border:1px solid var(--border); border-radius:8px; padding:10px 12px; display:flex; align-items:center; gap:10px;
+  }
+  .cursor-blink{ width:7px; height:15px; background:#e5e5e5; display:inline-block; }
+  .composer-meta{ display:flex; justify-content:space-between; font-size:11px; color:var(--dim); margin-top:6px; padding:0 2px; }
+  .composer-meta .agent{ color:var(--blue); }
+
+  .bottombar{ display:flex; align-items:center; justify-content:space-between; padding:0 14px; border-top:1px solid var(--border); font-size:11px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="topbar">
+    <div class="brand">BANYANCODE</div>
+    <div class="proj">OpenCode</div>
+    <div class="spacer"></div>
+    <div class="pill"><span class="dot on"></span>0 active</div>
+    <div class="pill"><span class="dot on"></span>MCP: MiniMax</div>
+    <div class="pill"><span class="dot on"></span>LSP: 1</div>
+    <div class="pill"><span class="dot crit"></span>Graph: off</div>
+    <div class="spacer"></div>
+    <div class="hotkey">? help  q quit  ctrl+k menu</div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active">CHAT</div>
+    <div class="tab">SESSIONS</div>
+    <div class="tab">AGENTS</div>
+    <div class="tab">MEMORY</div>
+    <div class="tab">SETTINGS</div>
+  </div>
+
+  <div class="workspace">
+    <!-- LEFT SIDEBAR -->
+    <div class="col scroll">
+      <div class="sidebar-title">Vite esbuild JSX import<br/>source error</div>
+      <div class="section">
+        <div class="section-header">Agents <span class="dim" style="text-transform:none;font-weight:400;">0/5 active</span></div>
+        <div class="dim">No active agents</div>
+      </div>
+      <div class="section">
+        <div class="section-header">Context <span class="dim" style="text-transform:none;font-weight:400;">32.5k / 1M (3%)</span></div>
+        <div class="ctx-bar">
+          <div class="ctx-seg" style="background:#6fa8ff; width:3%;"></div>
+          <div class="ctx-seg" style="background:#e8934a; width:.2%;"></div>
+        </div>
+        <div class="bar-row"><span>Prompt</span><span>32,476 · 99.8%</span></div>
+        <div class="bar-row"><span>Memory</span><span>71 · 0.2%</span></div>
+      </div>
+      <div class="section">
+        <div class="section-header">Performance</div>
+        <div class="bar-row"><span>Tokens/sec</span><span>17.2</span></div>
+        <div class="barmini"><div style="background:var(--green); width:26%;"></div></div>
+      </div>
+      <div class="section">
+        <div class="section-header">System</div>
+        <div class="bar-row"><span>CPU</span><span>39%</span></div>
+        <div class="barmini"><div style="background:var(--green); width:39%;"></div></div>
+        <div class="bar-row" style="margin-top:8px;"><span>Memory</span><span class="orange">10.6 GB / 15.2 GB</span></div>
+        <div class="barmini"><div style="background:var(--orange); width:70%;"></div></div>
+      </div>
+      <div class="section">
+        <div class="section-header">MCP</div>
+        <div class="bar-row"><span><span class="dot on" style="display:inline-block;"></span> MiniMax</span><span class="dim">Connected</span></div>
+      </div>
+      <div class="section">
+        <div class="dim">D:/OpenCode:sync/<br/><span style="color:#c2c2c2;">upstream-providers</span></div>
+        <div class="green" style="margin-top:8px;">● BanyanCode 0.0.0-sync/<br/>upstream-providers-202607131823</div>
+      </div>
+    </div>
+
+    <!-- CENTER: CHAT -->
+    <div class="col center">
+      <div class="scroll" style="flex:1;">
+        <div class="chat-scroll">
+
+          <div class="user-msg">Vite esbuild JSX import source error</div>
+
+          <div class="thought-block">
+            <div class="thought-head" onclick="toggleThought(this)">
+              <span class="chev">▶</span>
+              <span>Thought · 5.2s</span>
+              <span class="thought-preview" style="margin-left:4px;">— Let me check the desktop vite plugin and the local vite config…</span>
+            </div>
+            <div class="thought-body">Let me check the desktop vite plugin and the local vite config. The error mentions jsxImportSource resolution, which usually means either the plugin isn't picking up the right JSX runtime, or there's a version mismatch between the app's vite config and what solid-js expects.</div>
+          </div>
+
+          <div class="tool-block">
+            <div class="tool-head">
+              <span class="status-icon ok">✓</span>
+              <span class="tool-tag">tool</span>
+              <span class="tool-desc">List vite files in app</span>
+              <span class="tool-meta">0.4s</span>
+            </div>
+            <div class="tool-body">
+              <div class="cmd-line"><span class="prompt-char">$</span>cd D:\OpenCode\packages\app; ls vite*</div>
+              <table class="out-table">
+                <tr><th>Mode</th><th>LastWriteTime</th><th>Length</th><th>Name</th></tr>
+                <tr><td>-a----</td><td>24-06-2026 11:47 PM</td><td>876</td><td>vite.config.ts</td></tr>
+                <tr><td>-a----</td><td>24-06-2026 11:47 PM</td><td>1248</td><td>vite.js</td></tr>
+              </table>
+            </div>
+          </div>
+
+          <div class="group-block">
+            <div class="group-head" onclick="toggleGroup(this)">
+              <span class="chev">▶</span>
+              <span>3 files read</span>
+            </div>
+            <div class="group-body">
+              <div class="group-item"><span class="arrow">→</span>packages\app\tsconfig.json</div>
+              <div class="group-item"><span class="arrow">→</span>packages\ui\tsconfig.json</div>
+              <div class="group-item"><span class="arrow">→</span>packages\app\vite.js</div>
+            </div>
+          </div>
+
+          <div class="thought-block">
+            <div class="thought-head" onclick="toggleThought(this)">
+              <span class="chev">▶</span>
+              <span>Thought · 6.2s</span>
+              <span class="thought-preview" style="margin-left:4px;">— Checking jsxImportSource pattern and catalog versions…</span>
+            </div>
+            <div class="thought-body">The tsconfig files don't show anything unusual. Let me grep for jsxImportSource or esbuild.*jsx across the packages to see where it's actually configured, and cross-check against the versions pinned in the root package.json catalog.</div>
+          </div>
+
+          <div class="tool-block">
+            <div class="tool-head">
+              <span class="status-icon ok">✓</span>
+              <span class="tool-tag">tool</span>
+              <span class="tool-desc">Grep "jsxImportSource|esbuild.*jsx" in packages</span>
+              <span class="tool-meta">0.6s</span>
+            </div>
+            <div class="tool-body">
+              <div class="out-block">2 matches in packages/app/vite.config.ts, packages/ui/vite.config.ts</div>
+            </div>
+          </div>
+
+          <div class="tool-block">
+            <div class="tool-head">
+              <span class="status-icon ok">✓</span>
+              <span class="tool-tag">tool</span>
+              <span class="tool-desc">Check catalog versions</span>
+              <span class="tool-meta">0.3s</span>
+            </div>
+            <div class="tool-body">
+              <div class="cmd-line"><span class="prompt-char">$</span>cd D:\OpenCode; cat package.json | Select-String -Pattern "virtua|vite-plugin-solid|solid-js"</div>
+              <div class="out-block">"virtua": "0.49.1",</div>
+            </div>
+          </div>
+
+          <div class="tool-block error">
+            <div class="tool-head">
+              <span class="status-icon err">✕</span>
+              <span class="tool-tag" style="border-color:rgba(217,115,122,.4); color:var(--red);">tool · failed</span>
+              <span class="tool-desc">Find vite-plugin-solid package</span>
+              <span class="tool-meta">1.1s</span>
+            </div>
+            <div class="tool-body">
+              <div class="cmd-line"><span class="prompt-char">$</span>cd D:\OpenCode; find node_modules -path "*vite-plugin-solid*package.json" 2>/dev/null | Select-Object -First 3</div>
+              <div class="err-summary">PowerShell couldn't redirect stderr to /dev/null on Windows — the file path doesn't resolve, so the command failed before it could search.</div>
+              <span class="err-detail-link" onclick="toggleErr(this)">show raw error ▸</span>
+              <div class="err-detail">
+                <pre>out-file : The process cannot access the file 'D:\dev\null' because it is being used by another process.
+At line:1 char:17
++ ... :\OpenCode; find node_modules -path "*vite-plugin-solid*package.json" ...
++                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OpenError: (:) [Out-File], IOException
+    + FullyQualifiedErrorId : FileOpenFailure,Microsoft.PowerShell.Commands.OutFileCommand</pre>
+              </div>
+              <div style="margin-top:6px; color:var(--dim); font-size:11px;">✱ Glob "node_modules/vite-plugin-solid/package.json" in .</div>
+              <div style="color:var(--dim); font-size:11px;">✱ Glob "**/vite-plugin-solid/package.json" in .</div>
+            </div>
+          </div>
+
+          <div class="tool-block">
+            <div class="tool-head">
+              <span class="status-icon ok">✓</span>
+              <span class="tool-tag">tool</span>
+              <span class="tool-desc">Find vite-plugin-solid in node_modules</span>
+              <span class="tool-meta">0.8s</span>
+            </div>
+            <div class="tool-body">
+              <div class="cmd-line"><span class="prompt-char">$</span>cd D:\OpenCode; Get-ChildItem -Path node_modules -Filter "vite-plugin-solid" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 3 FullName</div>
+              <div class="out-filelist">
+                <div class="fp"><span class="fdim">D:\OpenCode\node_modules\.bun\@astrojs+solid-js@5.1.0+0bae00abe29821f6\node_modules\</span>vite-plugin-solid</div>
+                <div class="fp"><span class="fdim">D:\OpenCode\node_modules\.bun\@solidjs+start@https+++pkg.pr.new+@solidjs+start@dfb2020+2b098a3bdeb4a8dc\node_modules\</span>vite-plugin-solid</div>
+                <div class="fp"><span class="fdim">D:\OpenCode\node_modules\.bun\node_modules\</span>vite-plugin-solid</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="tool-block running">
+            <div class="tool-head">
+              <span class="status-icon run">●</span>
+              <span class="tool-tag" style="border-color:rgba(215,180,90,.4); color:var(--yellow);">tool · running</span>
+              <span class="tool-desc">List vite-plugin-solid directory</span>
+              <span class="tool-meta">…</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="streaming-indicator">
+        <span class="dots">••••••••••</span>
+        <span class="esc">esc interrupt</span>
+      </div>
+
+      <div class="composer">
+        <div class="input-box">
+          <span class="cursor-blink"></span>
+        </div>
+        <div class="composer-meta">
+          <span><span class="agent">Build</span> · MiniMax-M3 MiniMax Token Plan (minimax.io)</span>
+          <span>tab mode · ctrl+p command · /mode /graph /memory /theme · switch tab</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: AGENT DETAILS -->
+    <div class="col scroll">
+      <div class="section">
+        <div class="section-header">Agent Details <span class="green" style="text-transform:none; font-weight:400; font-size:11px;">◉ ACTIVE</span></div>
+        <div><span class="orange" style="font-weight:700;">build</span></div>
+        <div class="muted" style="margin-top:6px;">Task: Vite esbuild JSX import source error</div>
+        <div class="muted">Started: 23:56:36</div>
+        <div class="muted">Model: <span class="blue">MiniMax-M3 ▾</span></div>
+        <div class="muted">Tools: bash, read, grep +1</div>
+        <div class="muted">Cost: $0.00</div>
+        <div class="muted">Tokens: 34,207</div>
+      </div>
+      <div class="section">
+        <div class="section-header">Todo <span class="dim" style="text-transform:none;font-weight:400;">0/0</span></div>
+        <div class="dim">No tasks</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottombar">
+    <div>OpenCode · Git: sync/upstream-providers</div>
+    <div class="green">▲ 0 need attention</div>
+    <div>^p cmd · ^m memory · / search · ^t tab · ^q quit</div>
+  </div>
+</div>
+
+<script>
+  function toggleThought(el){
+    el.classList.toggle('open');
+    el.nextElementSibling.classList.toggle('open');
+    const preview = el.querySelector('.thought-preview');
+    if (preview) preview.style.display = el.classList.contains('open') ? 'none' : '';
+  }
+  function toggleGroup(el){
+    el.classList.toggle('open');
+    el.nextElementSibling.classList.toggle('open');
+  }
+  function toggleErr(el){
+    el.nextElementSibling.classList.toggle('open');
+    el.textContent = el.nextElementSibling.classList.contains('open') ? 'hide raw error ▾' : 'show raw error ▸';
+  }
+</script>
+</body>
+</html>

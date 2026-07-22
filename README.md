@@ -1,52 +1,93 @@
+<div align="center">
+
 # BanyanCode
 
-**The agent harness for loop engineering.** BanyanCode turns one prompt into a coordinated coding system: parallel agents, persistent memory, codebase intelligence, and verification-ready workflows in a fast terminal UI.
+**The agent harness for loop engineering.**
+
+Turn one prompt into a coordinated coding system — parallel agents, persistent memory, codebase intelligence, and verification-ready workflows, all in a fast terminal UI.
+
+[![npm version](https://img.shields.io/npm/v/banyancode?style=flat-square&color=cb3837)](https://www.npmjs.com/package/banyancode)
+[![GitHub release](https://img.shields.io/github/v/release/EkagraAgarwal/BanyanCode?style=flat-square&color=blue)](https://github.com/EkagraAgarwal/BanyanCode/releases/latest)
+[![License](https://img.shields.io/github/license/EkagraAgarwal/BanyanCode?style=flat-square)](https://github.com/EkagraAgarwal/BanyanCode/blob/main/LICENSE)
+
+</div>
+
+---
+
+## Installation
+
+```bash
+# YOLO
+curl -fsSL https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install | bash
+
+# Windows
+irm https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install.ps1 | iex
+
+# Package managers
+npm i -g banyancode@latest          # or bun/pnpm/yarn
+bun add -g banyancode                # Bun (fastest)
+```
+
+Run `banyancode` from any project directory — it opens in the current workspace and starts building an incremental code graph as you work.
+
+---
+
+## Why BanyanCode
+
+Most coding agents give you a conversation. BanyanCode gives you a **system**.
+
+- One prompt can launch a coordinated team of agents.
+- Every agent gets the context and tools it needs, automatically.
+- Your repository becomes searchable structure, not a pile of files.
+- Memory compounds across sessions instead of vanishing with the chat.
+- Verification is built into the loop, not bolted on afterward.
+
+Use it for refactors, migrations, debugging, codebase onboarding, research-heavy implementation, and autonomous software engineering.
+
+---
+
+## Core Features
+
+### Parallel Subagent Mesh
+Dispatch `scout`, `coder`, and `researcher` agents concurrently from a single prompt. A primary orchestrator decomposes the task and fans work out across the mesh, governed by a configurable concurrency cap and an oldest-ended eviction policy — so nothing runs away with your resources.
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/banyancode"><img src="https://img.shields.io/npm/v/banyancode?style=flat-square&color=cb3837" alt="npm version" /></a>
-  <a href="https://github.com/EkagraAgarwal/BanyanCode/releases/latest"><img src="https://img.shields.io/github/v/release/EkagraAgarwal/BanyanCode?style=flat-square&color=blue" alt="GitHub release" /></a>
-  <a href="https://github.com/EkagraAgarwal/BanyanCode/blob/main/LICENSE"><img src="https://img.shields.io/github/license/EkagraAgarwal/BanyanCode?style=flat-square" alt="License" /></a>
+  <img src="./assets/subagent.png" alt="BanyanCode agent tree showing nested parent and child subagents with token usage" width="850" />
+  <br />
+  <sub>The Agent Tree view — full visibility into every subagent, nested subagent, and its token spend.</sub>
 </p>
 
-## Install
+### Loop Engineering
+Build repeatable agent loops with goals, actions, verification, retries, and memory — instead of manually driving every turn yourself. The core workflow is always:
 
-Bun is the fastest way to get started:
-
-```bash
-bun add -g banyancode
-banyancode
+```text
+trigger → context → plan → execute → verify → remember → repeat
 ```
 
-Or use the platform installer:
+<p align="center">
+  <img src="./assets/agent.png" alt="BanyanCode chat view showing an agent plan, live todo tracking, and system stats" width="850" />
+  <br />
+  <sub>Live plans, todo tracking, and system stats — right inside the chat.</sub>
+</p>
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install | bash
-```
+### Persistent Cross-Session Memory
+A multi-tiered memory engine that actually remembers your codebase between sessions: candidate extraction, intent classification, hybrid FTS5/tag retrieval, and automated hygiene sweeps (expire → reconcile → prune) keep memory useful instead of stale.
 
-```powershell
-irm https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install.ps1 | iex
-```
+### Codebase Intelligence (Tree-Sitter Code Graph)
+`/codegraph-build` indexes your repository into a live, queryable graph of symbols, callers, dependents, tests, impact, and ownership — powered by Tree-Sitter parsing with regex fallbacks for anything it doesn't natively understand.
 
-You can also install with npm:
+### Verification Hooks
+Repository context, blast-radius analysis, preflight checks, tests, and review loops keep every agent change grounded in reality before it lands.
 
-```bash
-npm install --global banyancode
-```
+### Free Research Loop
+A `researcher` subagent backed by DuckDuckGo HTML search — no API key required, no rate-limit bill.
 
-Run BanyanCode from any project directory. It opens in the current workspace and builds an incremental code graph as you work.
+### Terminal-Native UX
+A fast TUI with a command palette, built-in LSP support, model switching, execution traces, and full keyboard control.
 
-## Highlights
+---
 
-- **Loop engineering** — build repeatable agent loops with goals, actions, verification, retries, and memory instead of manually driving every turn.
-- **Agentic coding** — plan, edit, search, test, and iterate through a terminal-native coding workflow.
-- **Parallel subagent mesh** — dispatch `scout`, `coder`, and `researcher` agents concurrently from one prompt, with runtime caps and permission boundaries.
-- **Persistent context engineering** — keep useful knowledge across sessions with versioned local memory, BM25 retrieval, and structured references.
-- **Codebase intelligence** — tree-sitter creates a live code graph for symbols, callers, dependents, tests, impact, and ownership.
-- **Verification hooks** — use repository context, blast-radius analysis, preflight checks, tests, and review loops to keep agent work grounded.
-- **Free research loop** — a DuckDuckGo-backed researcher agent searches the web without an API key.
-- **Terminal-native UX** — a fast TUI, command palette, LSP support, model switching, traces, and full control from your keyboard.
-
-## The workflow
+## The Workflow
 
 ```text
 Prompt
@@ -59,11 +100,7 @@ Prompt
                     └─► merged, reviewable result
 ```
 
-BanyanCode is designed for the full agentic loop:
-
-```text
-trigger → context → plan → execute → verify → remember → repeat
-```
+---
 
 ## Commands
 
@@ -84,21 +121,11 @@ Type `/` in the TUI to browse every command. The core workflow includes:
 | `/lsp` | Toggle built-in language servers. |
 | `/yolo` | Enable automatic permission approval for sandboxed workflows. |
 
-## Why BanyanCode
-
-Most coding agents give you a conversation. BanyanCode gives you a system.
-
-- One prompt can launch a coordinated team.
-- Every agent gets the context and tools it needs.
-- The repository becomes searchable structure, not a pile of files.
-- Memory compounds across sessions instead of disappearing with the chat.
-- Verification is part of the loop, not an afterthought.
-
-Use it for refactors, migrations, debugging, codebase onboarding, research-heavy implementation, and autonomous software engineering workflows.
+---
 
 ## Configuration
 
-BanyanCode is its own product and uses `banyancode.json`, never `opencode.json`.
+BanyanCode is its own product and uses `banyancode.json` — never `opencode.json`.
 
 ```json
 {
@@ -112,8 +139,6 @@ BanyanCode is its own product and uses `banyancode.json`, never `opencode.json`.
 }
 ```
 
-Useful settings include:
-
 | Key | Default | Purpose |
 |---|---:|---|
 | `banyancode_lsp` | `false` | Enable built-in language servers. |
@@ -122,7 +147,9 @@ Useful settings include:
 | `banyancode_disable_websearch` | `false` | Disable the free researcher agent. |
 | `banyancode_codegraph_watch_enabled` | `true` | Update the code graph as files change. |
 
-## Data and privacy
+---
+
+## Data & Privacy
 
 Project data stays local by default:
 
@@ -133,7 +160,9 @@ Project data stays local by default:
 └── trace/
 ```
 
-BanyanCode does not read or write OpenCode configuration or data. Global BanyanCode data lives under `~/.config/banyancode/` and `~/.local/share/banyancode/`.
+BanyanCode never reads or writes OpenCode configuration or data. Global BanyanCode data lives under `~/.config/banyancode/` and `~/.local/share/banyancode/`.
+
+---
 
 ## Development
 
@@ -152,7 +181,9 @@ cd packages/core
 bun test
 ```
 
-## Built on
+---
+
+## Built On
 
 - [OpenCode](https://github.com/anomalyco/opencode) — the TUI / CLI runtime BanyanCode forks from
 - [Effect](https://effect.website) — type-safe service architecture
