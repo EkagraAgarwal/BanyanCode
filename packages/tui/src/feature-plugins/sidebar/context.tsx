@@ -8,12 +8,33 @@ import { RoundedBorder } from "../../ui/border"
 
 const id = "internal:sidebar-context"
 
-const FILES_TOOLS = new Set(["read", "glob", "grep", "ls", "list"])
+const FILES_TOOLS = new Set([
+  "read",
+  "read_file",
+  "read-filesystem",
+  "glob",
+  "grep",
+  "ls",
+  "list",
+  "edit",
+  "write",
+  "write_file",
+  "apply-patch",
+  "code-find",
+  "code_find",
+  "structural-queries",
+])
 // Subagent coordination tool names registered in packages/core/src/tool/*.
-// Every parent → subagent dispatch goes through one of these; the JSON-
-// serialized input approximates the prompt the parent spent addressing the
-// subagent, which is what the user asked us to surface.
-const SUBAGENT_TOOLS = new Set(["mesh_control", "mesh_subscribe", "subagent_message", "plan", "task"])
+const SUBAGENT_TOOLS = new Set([
+  "mesh_control",
+  "mesh-control",
+  "mesh_subscribe",
+  "mesh-subscribe",
+  "subagent_message",
+  "subagent-message",
+  "plan",
+  "task",
+])
 const TOKEN_HEURISTIC_CHARS_PER_TOKEN = 4
 
 const estimateTokens = (s: string): number =>
@@ -66,13 +87,6 @@ const sumToolTokens = (tool: ToolPart): number => {
 }
 
 const categorizeTokens = (messages: ReadonlyArray<Message>) => {
-  // Heuristic attribution: tool-name → category, text-length/4 token
-  // estimate. Not exact — the AI SDK reports only aggregate tokens per
-  // message. Treated as illustrative. The five LLM-attributed buckets
-  // (thinking, prompt, files, tools, agent-responses) come from the most
-  // recent assistant message. The two session-cumulative buckets
-  // (user-messages, subagent-instructions) come from every message up to
-  // and including the last assistant message.
   let filesTokens = 0
   let toolsTokens = 0
   let subagentTokens = 0
@@ -83,14 +97,22 @@ const categorizeTokens = (messages: ReadonlyArray<Message>) => {
 
   for (const m of messages) {
     if (m.role === "user") {
-      const text = (m as UserMessage as unknown as { text?: string }).text
-      if (typeof text === "string") userTokens += estimateTokens(text)
+      const u = m as any
+      let text = ""
+      if (typeof u.text === "string") text = u.text
+      else if (typeof u.prompt === "string") text = u.prompt
+      else if (Array.isArray(u.content)) {
+        text = u.content.map((p: any) => (typeof p === "string" ? p : (p?.text ?? ""))).join(" ")
+      } else if (Array.isArray(u.parts)) {
+        text = u.parts.map((p: any) => (typeof p === "string" ? p : (p?.text ?? ""))).join(" ")
+      }
+      if (text) userTokens += estimateTokens(text)
       continue
     }
     if (m.role !== "assistant") continue
     const a = m as AssistantMessage
     lastAssistant = a
-    const parts = (a as any).content ?? []
+    const parts = (a as any).content ?? (a as any).parts ?? []
     for (const part of parts) {
       if (part?.type !== "tool") continue
       const t = part as ToolPart
@@ -106,9 +128,8 @@ const categorizeTokens = (messages: ReadonlyArray<Message>) => {
   if (!lastAssistant) return null
 
   const tokens = lastAssistant.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
-  const cacheTotal = (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0)
   const inputTotal = tokens.input ?? 0
-  const prompt = Math.max(0, inputTotal + cacheTotal - filesTokens - toolsTokens - subagentTokens)
+  const prompt = Math.max(0, inputTotal - filesTokens - toolsTokens - subagentTokens - userTokens)
   return {
     thinking: reasoning,
     files: filesTokens,
@@ -117,7 +138,7 @@ const categorizeTokens = (messages: ReadonlyArray<Message>) => {
     prompt,
     userMessages: userTokens,
     subagents: subagentTokens,
-    total: reasoning + output + filesTokens + toolsTokens + subagentTokens + userTokens + prompt,
+    total: inputTotal + output + reasoning,
   }
 }
 
@@ -241,12 +262,14 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                   height={1}
                 />
               </box>
-              <box flexDirection="row" justifyContent="space-between" marginTop={1} width="100%">
-                <text fg={toHex(theme().text)}>Used {tb().total.toLocaleString()}</text>
-                <text fg={toHex(theme().textMuted)}>/ {formatTokensCompact(limit)} in context</text>
+              <box flexDirection="row" marginTop={1} width="100%">
+                <text>
+                  <text fg={toHex(theme().text)}>Used {tb().total.toLocaleString()} </text>
+                  <text fg={toHex(theme().textMuted)}>/ {formatTokensCompact(limit)} in context</text>
+                </text>
               </box>
               <box flexDirection="column" marginTop={1} gap={0} width="100%">
-                <For each={segments()}>
+                <For each={segments().filter((s) => s.tokens > 0)}>
                   {(seg) => {
                     const pct = () => {
                       if (tb().total === 0) return "0.0"

@@ -161,18 +161,14 @@ test("context widget no longer uses the old 'Memory' label", () => {
   expect(source).not.toMatch(/label:\s*"Memory"/)
 })
 
-test("context widget shows every category in the breakdown rows", () => {
+test("context widget filters zero-token categories for compact display", () => {
   const source = require("fs").readFileSync(
     require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
     "utf8",
   )
-  // The progress bar may still filter to skip zero-width colored blocks, but
-  // the row list at the bottom must render every category (with 0.0% for empty
-  // ones) so the user sees the full breakdown at a glance. We locate the row
-  // For by looking for the "Used {tb().total.toLocaleString()}" marker that
-  // precedes it, then assert no zero-filter appears in that range.
+  // To keep the sidebar compact as requested, zero-token categories are hidden.
   const usedIdx = source.indexOf("Used {tb().total.toLocaleString()}")
   expect(usedIdx).toBeGreaterThan(-1)
   const afterUsed = source.slice(usedIdx)
-  expect(afterUsed).not.toMatch(/filter\(\(s\)\s*=>\s*s\.tokens\s*>\s*0\)/)
+  expect(afterUsed).toMatch(/filter\(\(s\)\s*=>\s*s\.tokens\s*>\s*0\)/)
 })
