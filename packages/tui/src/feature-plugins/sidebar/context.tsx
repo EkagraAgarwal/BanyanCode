@@ -20,19 +20,10 @@ const FILES_TOOLS = new Set([
   "write",
   "write_file",
   "apply-patch",
+  "apply_patch",
   "code-find",
   "code_find",
   "structural-queries",
-])
-const SUBAGENT_TOOLS = new Set([
-  "mesh_control",
-  "mesh-control",
-  "mesh_subscribe",
-  "mesh-subscribe",
-  "subagent_message",
-  "subagent-message",
-  "plan",
-  "task",
 ])
 const TOKEN_HEURISTIC_CHARS_PER_TOKEN = 4
 
@@ -45,21 +36,35 @@ function formatTokensCompact(n: number): string {
   return String(n)
 }
 
-const sumToolTokens = (tool: any): number => {
-  let total = 0
+const taskSpawnPromptTokens = (tool: any): number => {
   const s = tool?.state ?? tool
   if (!s) return 0
-  if (s.status === "pending") {
-    total += estimateTokens(String(s.input ?? ""))
-    return total
+  const input = s.input
+  if (input && typeof input === "object" && typeof input.prompt === "string") {
+    return estimateTokens(input.prompt)
   }
+  if (typeof input === "string") return estimateTokens(input)
+  return 0
+}
+
+const sumToolTokens = (tool: any): number => {
+  const s = tool?.state ?? tool
+  if (!s) return 0
+  if (s.status === "pending" || s.status === "running") {
+    if (s.input) {
+      return estimateTokens(typeof s.input === "string" ? s.input : JSON.stringify(s.input))
+    }
+    return 0
+  }
+  let total = 0
   if (s.input) {
     total += estimateTokens(typeof s.input === "string" ? s.input : JSON.stringify(s.input))
   }
-  if (s.output && typeof s.output === "string") {
+  const hasOutput = s.output && typeof s.output === "string"
+  if (hasOutput) {
     total += estimateTokens(s.output)
   }
-  if (Array.isArray(s.content)) {
+  if (Array.isArray(s.content) && !hasOutput) {
     for (const item of s.content) {
       if (typeof item === "string") total += estimateTokens(item)
       else if (typeof item?.text === "string") total += estimateTokens(item.text)
@@ -96,67 +101,114 @@ const textFromUserPart = (p: any): string => {
   return ""
 }
 
-type PartMap = ReadonlyMap<string, ReadonlyArray<Part>>
+const isAssistant = (m: Message): m is AssistantMessage =>
+  (m as any).role === "assistant" || (m as any).type === "assistant"
+
+const allocateBarWidths = (
+  segments: ReadonlyArray<{ tokens: number }>,
+  totalTokens: number,
+  denom: number,
+  barWidth: number,
+): number[] => {
+  const active = segments.filter((s) => s.tokens > 0)
+  if (active.length === 0 || totalTokens === 0 || denom <= 0) {
+    return active.map(() => 0)
+  }
+  const targetUsed = Math.min(barWidth, Math.max(0, Math.round((totalTokens / denom) * barWidth)))
+  if (targetUsed === 0) return active.map(() => 0)
+
+  const fractions = active.map((s) => (s.tokens / totalTokens) * targetUsed)
+  const floors = fractions.map((f) => Math.floor(f))
+  let leftover = targetUsed - floors.reduce((sum, w) => sum + w, 0)
+  const remainders = fractions
+    .map((f, i) => ({ i, rem: f - floors[i] }))
+    .sort((a, b) => b.rem - a.rem)
+  const widths = [...floors]
+  for (let r = 0; r < leftover; r++) {
+    widths[remainders[r % remainders.length].i]++
+  }
+  return widths
+}
 
 const categorizeTokens = (
   messages: ReadonlyArray<Message>,
   partsGetter: (messageID: string) => ReadonlyArray<Part>,
 ) => {
+  const assistants: AssistantMessage[] = []
+  for (const m of messages) {
+    if (isAssistant(m)) assistants.push(m)
+  }
+  if (assistants.length === 0) return null
+
+  const billingAssistant =
+    assistants.findLast((a) => (a.tokens?.input ?? 0) > 0) ?? assistants[assistants.length - 1]
+  const billingIdx = messages.findIndex((m) => isAssistant(m) && m.id === billingAssistant.id)
+
   let filesTokens = 0
   let toolsTokens = 0
   let subagentTokens = 0
   let userTokens = 0
   let reasoning = 0
   let output = 0
-  let lastAssistant: AssistantMessage | undefined
 
-  for (const m of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]
     const role = (m as any).role ?? (m as any).type
+
     if (role === "user") {
-      const u = m as any
-      const parts = partsGetter(u.id)
-      let text = ""
-      for (const p of parts) {
-        if (!p) continue
-        if ((p as any).type === "text" && !isSyntheticText(p)) {
-          text += text ? " " + textFromUserPart(p) : textFromUserPart(p)
+      if (i < billingIdx) {
+        const u = m as any
+        const parts = partsGetter(u.id)
+        let text = ""
+        for (const p of parts) {
+          if (!p) continue
+          if ((p as any).type === "text" && !isSyntheticText(p)) {
+            text += text ? " " + textFromUserPart(p) : textFromUserPart(p)
+          }
         }
+        if (!text) {
+          if (typeof u.text === "string") text = u.text
+          else if (typeof u.prompt === "string") text = u.prompt
+        }
+        if (text) userTokens += estimateTokens(text)
       }
-      if (!text) {
-        // Fallback for older message shapes that still carry a text field.
-        if (typeof u.text === "string") text = u.text
-        else if (typeof u.prompt === "string") text = u.prompt
-      }
-      if (text) userTokens += estimateTokens(text)
       continue
     }
-    if (role !== "assistant") continue
-    const a = m as AssistantMessage
-    lastAssistant = a
+
+    if (!isAssistant(m)) continue
+    const a = m
+
+    reasoning += a.tokens?.reasoning ?? 0
+    output += a.tokens?.output ?? 0
+
+    if (i > billingIdx) continue
+
     const parts = partsGetter(a.id)
     for (const part of parts) {
       if (!part || (part as any).type !== "tool") continue
       const t = part as any
       const toolName = t.name ?? t.tool ?? ""
+      if (!toolName) continue
+      if (toolName === "task") {
+        subagentTokens += taskSpawnPromptTokens(t)
+        continue
+      }
       const est = sumToolTokens(t)
-      if (SUBAGENT_TOOLS.has(toolName)) subagentTokens += est
-      else if (FILES_TOOLS.has(toolName)) filesTokens += est
-      else if (toolName) toolsTokens += est
+      if (FILES_TOOLS.has(toolName)) filesTokens += est
+      else toolsTokens += est
     }
-    reasoning += a.tokens?.reasoning ?? 0
-    output += a.tokens?.output ?? 0
   }
 
-  if (!lastAssistant) return null
-
-  const tokens = lastAssistant.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  const tokens = billingAssistant.tokens ?? {
+    input: 0,
+    output: 0,
+    reasoning: 0,
+    cache: { read: 0, write: 0 },
+  }
   const inputTotal = tokens.input ?? 0
   const cacheRead = tokens.cache?.read ?? 0
   const cacheWrite = tokens.cache?.write ?? 0
 
-  // Last-turn input only (the request the provider just billed).
-  // Heuristic slices can overcount — clamp them to last-turn input so the
-  // breakdown never exceeds what was actually charged.
   const heuristicBuckets = filesTokens + toolsTokens + subagentTokens + userTokens
   const prompt = Math.max(0, inputTotal - Math.min(heuristicBuckets, inputTotal))
   const files = Math.min(filesTokens, inputTotal)
@@ -179,7 +231,7 @@ const categorizeTokens = (
 }
 
 // Exported for unit testing — not part of the public API.
-export const __test = { categorizeTokens, sumToolTokens, estimateTokens }
+export const __test = { categorizeTokens, sumToolTokens, estimateTokens, allocateBarWidths, taskSpawnPromptTokens }
 
 interface Segment {
   key: string
@@ -193,14 +245,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
 
   const messages = createMemo(() => props.api.state.session.messages(props.session_id))
 
-  // Keep part lookup referentially cheap: this memo is invalidated whenever the
-  // session's part map changes (Solid's store equality is shallow on arrays, but
-  // the user/assistant walks iterate `partsGetter` per message so we do not
-  // eagerly materialise a per-message copy here).
   const partsGetter = createMemo(() => {
-    // Subscribe by reading session + part map references. We do not memoise the
-    // returned function — it just delegates to `api.state.part`, which already
-    // returns the latest array from the sync store.
     void props.api.state.session.messages(props.session_id)
     return (messageID: string) => props.api.state.part(messageID)
   })
@@ -208,7 +253,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const lastAssistant = createMemo(() => {
     return messages().findLast(
       (item): item is AssistantMessage =>
-        ((item as any).role === "assistant" || (item as any).type === "assistant") &&
+        isAssistant(item) &&
         "tokens" in item &&
         !!(item as any).tokens &&
         (((item as any).tokens.output ?? 0) > 0 || ((item as any).tokens.input ?? 0) > 0),
@@ -224,9 +269,6 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     return provider?.models[last.modelID]?.limit?.context ?? null
   })
 
-  // Null when the provider/model lookup failed or the limit is missing/zero.
-  // The display path uses this to decide whether to render the "/ X" and
-  // "(Y%)" decorations — we never want a fabricated `?? 1` to leak through.
   const limit = createMemo(() => {
     const l = modelContextLimit()
     return l && l > 0 ? l : null
@@ -241,10 +283,6 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     return Math.round((tb.total / l) * 100)
   })
 
-  // Bar denominator: when the context limit is known, segments fill the bar
-  // proportionally to context consumption (with background fill for the rest).
-  // When the limit is unknown, fall back to tb.total so the bar still shows
-  // the segment proportions without claiming a percentage of context.
   const barDenominator = createMemo(() => {
     const l = limit()
     if (l) return l
@@ -263,7 +301,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
       { key: "files", label: "Files", tokens: cat.files, color: "success" },
       { key: "tools", label: "Tools", tokens: cat.tools, color: "warning" },
       { key: "subagents", label: "Subagents", tokens: cat.subagents, color: "muted" },
-      { key: "output", label: "Agent", tokens: cat.output, color: "primary" },
+      { key: "output", label: "Output", tokens: cat.output, color: "primary" },
       { key: "cache", label: "Cache", tokens: cache, color: "info" },
     ]
   })
@@ -280,6 +318,20 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   }
 
   const BAR_WIDTH = 24
+
+  const barLayout = createMemo(() => {
+    const tb = categorization()
+    const active = segments().filter((s) => s.tokens > 0)
+    if (!tb || active.length === 0) {
+      return { segments: [] as Array<Segment & { width: number }>, empty: BAR_WIDTH }
+    }
+    const widths = allocateBarWidths(active, tb.total, barDenominator(), BAR_WIDTH)
+    const used = widths.reduce((sum, w) => sum + w, 0)
+    return {
+      segments: active.map((seg, i) => ({ ...seg, width: widths[i] ?? 0 })),
+      empty: Math.max(0, BAR_WIDTH - used),
+    }
+  })
 
   return (
     <box flexDirection="column" gap={0}>
@@ -299,82 +351,74 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
         </Show>
       </box>
       <Show when={categorization()}>
-        {(tb) => {
-          const denom = barDenominator()
-          const usedWidthTotal = () =>
-            segments()
-              .filter((s) => s.tokens > 0)
-              .reduce(
-                (sum, seg) => sum + Math.max(0, Math.round((seg.tokens / denom) * BAR_WIDTH)),
-                0,
-              )
-          return (
-            <box flexDirection="column" gap={0}>
-              <box
-                width={BAR_WIDTH + 2}
-                height={3}
-                marginTop={0}
-                customBorderChars={RoundedBorder.customBorderChars}
-                border={["left", "right", "top", "bottom"]}
-                borderColor={theme().borderSubtle}
-                flexDirection="row"
-              >
-                <Show when={tb().total > 0}>
-                  <For each={segments().filter((s) => s.tokens > 0)}>
-                    {(seg) => (
-                      <box
-                        width={Math.max(0, Math.round((seg.tokens / denom) * BAR_WIDTH))}
-                        backgroundColor={segColor(seg.color)}
-                        height={1}
-                      />
-                    )}
-                  </For>
-                </Show>
-                <box
-                  width={Math.max(0, BAR_WIDTH - usedWidthTotal())}
-                  backgroundColor={toHex(theme().backgroundElement)}
-                  height={1}
-                />
-              </box>
-              <box flexDirection="row" marginTop={0} width="100%">
-                <text>
-                  <span style={{ fg: toHex(theme().text) }}>Used {formatTokensCompact(tb().total)}</span>
-                  <Show when={hasLimit()}>
-                    <span style={{ fg: toHex(theme().textMuted) }}>
-                      {" "}/ {formatTokensCompact(limit()!)} in context
-                    </span>
-                  </Show>
-                </text>
-              </box>
-              <box flexDirection="column" marginTop={0} gap={0} width="100%">
-                <For each={segments().filter((s) => s.tokens > 0)}>
-                  {(seg) => {
-                    const pct = () => {
-                      if (tb().total === 0) return "0.0"
-                      return ((seg.tokens / tb().total) * 100).toFixed(1)
-                    }
-                    return (
-                      <box flexDirection="row" justifyContent="space-between" width="100%">
-                        <box flexDirection="row" gap={1}>
-                          <text fg={segColor(seg.color)}>■</text>
-                          <text fg={toHex(theme().text)}>{seg.label}</text>
-                        </box>
-                        <box flexDirection="row" gap={1}>
-                          <text fg={toHex(theme().text)}>
-                            {formatTokensCompact(seg.tokens)}
-                          </text>
-                          <text fg={toHex(theme().textMuted)}>
-                            {`${pct()}%`}
-                          </text>
-                        </box>
-                      </box>
-                    )
-                  }}
+        {(tb) => (
+          <box flexDirection="column" gap={0}>
+            <box
+              width={BAR_WIDTH + 2}
+              height={3}
+              marginTop={0}
+              customBorderChars={RoundedBorder.customBorderChars}
+              border={["left", "right", "top", "bottom"]}
+              borderColor={theme().borderSubtle}
+              flexDirection="row"
+            >
+              <Show when={tb().total > 0}>
+                <For each={barLayout().segments}>
+                  {(seg) => (
+                    <box
+                      width={seg.width}
+                      flexShrink={0}
+                      backgroundColor={segColor(seg.color)}
+                      height={1}
+                    />
+                  )}
                 </For>
-              </box>
+              </Show>
+              <box
+                width={barLayout().empty}
+                flexShrink={0}
+                backgroundColor={toHex(theme().backgroundElement)}
+                height={1}
+              />
             </box>
-          )
-        }}
+            <box flexDirection="row" marginTop={0} width="100%">
+              <text>
+                <span style={{ fg: toHex(theme().text) }}>Used {formatTokensCompact(tb().total)}</span>
+                <Show when={hasLimit()}>
+                  <span style={{ fg: toHex(theme().textMuted) }}>
+                    {" "}/ {formatTokensCompact(limit()!)} in context
+                  </span>
+                </Show>
+              </text>
+            </box>
+            <box flexDirection="column" marginTop={0} gap={0} width="100%">
+              <For each={segments().filter((s) => s.tokens > 0)}>
+                {(seg) => {
+                  const pct = () => {
+                    if (tb().total === 0) return "0.0"
+                    return ((seg.tokens / tb().total) * 100).toFixed(1)
+                  }
+                  return (
+                    <box flexDirection="row" justifyContent="space-between" width="100%">
+                      <box flexDirection="row" gap={1}>
+                        <text fg={segColor(seg.color)}>■</text>
+                        <text fg={toHex(theme().text)}>{seg.label}</text>
+                      </box>
+                      <box flexDirection="row" gap={1}>
+                        <text fg={toHex(theme().text)}>
+                          {formatTokensCompact(seg.tokens)}
+                        </text>
+                        <text fg={toHex(theme().textMuted)}>
+                          {`${pct()}%`}
+                        </text>
+                      </box>
+                    </box>
+                  )
+                }}
+              </For>
+            </box>
+          </box>
+        )}
       </Show>
     </box>
   )

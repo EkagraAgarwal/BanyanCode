@@ -28,10 +28,19 @@ const stubTheme = {
   info: { r: 100, g: 100, b: 100, a: 1 },
 }
 
-// Categorize uses internal helpers; access via the test export.
 const ctxModule = await import("../../../src/feature-plugins/sidebar/context" as any)
-const { categorizeTokens } = (ctxModule.__test ?? ctxModule.default?.__test) as {
+const {
+  categorizeTokens,
+  sumToolTokens,
+  allocateBarWidths,
+  taskSpawnPromptTokens,
+  estimateTokens,
+} = (ctxModule.__test ?? ctxModule.default?.__test) as {
   categorizeTokens: any
+  sumToolTokens: any
+  allocateBarWidths: any
+  taskSpawnPromptTokens: any
+  estimateTokens: any
 }
 
 const fixtureUser = {
@@ -51,6 +60,21 @@ const fixtureUserParts = [
     text: "this is a user prompt",
   },
 ]
+
+const fixtureTaskPart = {
+  id: "part-task",
+  sessionID: "session_test",
+  messageID: "msg-1",
+  type: "tool" as const,
+  callID: "call-task",
+  tool: "task",
+  state: {
+    status: "completed",
+    input: { prompt: "investigate the auth module", subagent_type: "explore" },
+    output: "<task_result>" + "x".repeat(10_000) + "</task_result>",
+    content: [{ type: "text" as const, text: "<task_result>" + "x".repeat(10_000) + "</task_result>" }],
+  },
+}
 
 const fixtureAssistantParts = [
   {
@@ -80,6 +104,7 @@ const fixtureAssistantParts = [
       content: [{ type: "text" as const, text: "ok" }],
     },
   },
+  fixtureTaskPart,
 ]
 
 const fixtureAssistant = {
@@ -173,9 +198,10 @@ test("context widget source contains concise single-line category labels", () =>
     require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
     "utf8",
   )
-  for (const label of ["User", "Subagents", "Agent", "Tools", "Files", "Prompt", "Thinking", "Cache"]) {
+  for (const label of ["User", "Subagents", "Output", "Tools", "Files", "Prompt", "Thinking", "Cache"]) {
     expect(source).toContain(label)
   }
+  expect(source).not.toMatch(/label:\s*"Agent"/)
 })
 
 test("context widget no longer uses the old 'Memory' label", () => {
@@ -220,11 +246,6 @@ test("context widget does not fabricate a `?? 1` context limit when the lookup i
     require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
     "utf8",
   )
-  // The pre-fix code used `modelContextLimit() ?? 1` in JSX, which rendered
-  // "/ 1" / "(0%)" and filled the bar completely when the provider lookup
-  // failed. The fix replaces those with a `limit` memo that returns null,
-  // gates display on `hasLimit()`, and lets the bar denominator fall back to
-  // tb.total so segments remain proportional.
   expect(source).not.toMatch(/modelContextLimit\(\)\s*\?\?\s*1/)
   expect(source).toContain("hasLimit")
   expect(source).toContain("barDenominator")
@@ -236,24 +257,57 @@ test("context widget gates the `/ X` decorations on hasLimit()", () => {
     "utf8",
   )
   const matches = source.match(/<Show when=\{hasLimit\(\)\}>/g) ?? []
-  // Both the header "/ X (Y%)" decoration and the body "/ X in context"
-  // suffix should be wrapped in hasLimit() guards.
   expect(matches.length).toBeGreaterThanOrEqual(2)
 })
 
-test("context widget bar widths use barDenominator, not a hardcoded limit", () => {
+test("context widget bar layout uses reactive barDenominator via createMemo", () => {
   const source = require("fs").readFileSync(
     require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
     "utf8",
   )
-  const denomIdx = source.indexOf("barDenominator()")
-  expect(denomIdx).toBeGreaterThan(-1)
-  const afterDenom = source.slice(denomIdx)
-  // Both the per-segment width and the usedWidthTotal sum should reference
-  // the denominator, not the raw limit.
-  expect(afterDenom).toMatch(/\(seg\.tokens\s*\/\s*denom\)\s*\*\s*BAR_WIDTH/)
-  // And the old "seg.tokens / limit" path must be gone.
-  expect(source).not.toMatch(/\(seg\.tokens\s*\/\s*limit\)\s*\*\s*BAR_WIDTH/)
+  expect(source).toContain("const barLayout = createMemo")
+  expect(source).toContain("allocateBarWidths(active, tb.total, barDenominator()")
+  expect(source).not.toMatch(/const denom = barDenominator\(\)/)
+})
+
+test("context widget bar segments use flexShrink={0}", () => {
+  const source = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
+    "utf8",
+  )
+  expect(source).toContain("flexShrink={0}")
+})
+
+describe("allocateBarWidths", () => {
+  test("segment widths plus empty always equal BAR_WIDTH", () => {
+    const BAR_WIDTH = 24
+    const denom = 1_000_000
+    const cases = [
+      [{ tokens: 7600 }],
+      [
+        { tokens: 1100 },
+        { tokens: 8800 },
+        { tokens: 43900 },
+      ],
+      [
+        { tokens: 117 },
+        { tokens: 29700 },
+        { tokens: 455900 },
+      ],
+    ]
+    for (const segs of cases) {
+      const total = segs.reduce((sum: number, s) => sum + s.tokens, 0)
+      const widths = allocateBarWidths(segs, total, denom, BAR_WIDTH)
+      const used = widths.reduce((sum: number, w: number) => sum + w, 0)
+      expect(used + Math.max(0, BAR_WIDTH - used)).toBe(BAR_WIDTH)
+      expect(used).toBeLessThanOrEqual(BAR_WIDTH)
+    }
+  })
+
+  test("low usage yields zero-width colored segments", () => {
+    const widths = allocateBarWidths([{ tokens: 7600 }], 7600, 1_000_000, 24)
+    expect(widths.reduce((sum: number, w: number) => sum + w, 0)).toBe(0)
+  })
 })
 
 describe("categorizeTokens", () => {
@@ -263,9 +317,8 @@ describe("categorizeTokens", () => {
   })
 
   test("user text is read from parts, not message.text", () => {
-    const cat = categorizeTokens([fixtureAssistant as any, fixtureUser as any], partsGetter)
+    const cat = categorizeTokens([fixtureUser as any, fixtureAssistant as any], partsGetter)
     expect(cat).not.toBeNull()
-    // fixtureUser text = 21 chars; ceil(21/4) = 6 tokens
     expect(cat!.userMessages).toBeGreaterThan(0)
   })
 
@@ -280,21 +333,20 @@ describe("categorizeTokens", () => {
         synthetic: true,
       },
     ]
-    // Strip the legacy fallback `text` field so the synthetic part is the
-    // only thing the user row could possibly pick up.
     const userNoLegacy = { ...fixtureUser, text: undefined as unknown as string }
     const cat = categorizeTokens(
-      [fixtureAssistant as any, userNoLegacy as any],
+      [userNoLegacy as any, fixtureAssistant as any],
       (id: string) => (id === "msg-u1" ? parts : fixtureAssistantParts),
     )
     expect(cat!.userMessages).toBe(0)
   })
 
-  test("file tools go to files; subagent tools go to subagents", () => {
-    const cat = categorizeTokens([fixtureAssistant as any, fixtureUser as any], partsGetter)
+  test("file tools go to files; task spawn prompt goes to subagents; mesh tools go to tools", () => {
+    const cat = categorizeTokens([fixtureUser as any, fixtureAssistant as any], partsGetter)
     expect(cat!.files).toBeGreaterThan(0)
     expect(cat!.subagents).toBeGreaterThan(0)
-    expect(cat!.tools).toBe(0)
+    expect(cat!.tools).toBeGreaterThan(0)
+    expect(cat!.subagents).toBe(estimateTokens("investigate the auth module"))
   })
 
   test("non-file non-subagent tools go to tools", () => {
@@ -313,7 +365,7 @@ describe("categorizeTokens", () => {
       },
     }
     const cat = categorizeTokens(
-      [fixtureAssistant as any, fixtureUser as any],
+      [fixtureUser as any, fixtureAssistant as any],
       (id: string) => (id === "msg-1" ? [bashPart] : fixtureUserParts),
     )
     expect(cat!.tools).toBeGreaterThan(0)
@@ -321,13 +373,30 @@ describe("categorizeTokens", () => {
     expect(cat!.subagents).toBe(0)
   })
 
+  test("task output does not inflate subagents bucket", () => {
+    const cat = categorizeTokens([fixtureUser as any, fixtureAssistant as any], partsGetter)
+    expect(cat!.subagents).toBeLessThan(100)
+    expect(taskSpawnPromptTokens(fixtureTaskPart)).toBe(estimateTokens("investigate the auth module"))
+  })
+
+  test("sumToolTokens does not double-count identical output and content text", () => {
+    const tool = {
+      state: {
+        status: "completed",
+        input: { cmd: "ls" },
+        output: "hello world",
+        content: [{ type: "text", text: "hello world" }],
+      },
+    }
+    expect(sumToolTokens(tool)).toBe(estimateTokens(JSON.stringify({ cmd: "ls" })) + estimateTokens("hello world"))
+  })
+
   test("total = input + output + reasoning + cache.read + cache.write", () => {
-    const cat = categorizeTokens([fixtureAssistant as any, fixtureUser as any], partsGetter)
+    const cat = categorizeTokens([fixtureUser as any, fixtureAssistant as any], partsGetter)
     expect(cat!.total).toBe(5000 + 3000 + 1000 + 250 + 75)
   })
 
   test("heuristic buckets are clamped so breakdown never exceeds last-turn input", () => {
-    // Force heuristics to exceed input via a giant tool output.
     const hugeParts = [
       {
         id: "huge",
@@ -344,7 +413,7 @@ describe("categorizeTokens", () => {
       },
     ]
     const cat = categorizeTokens(
-      [fixtureAssistant as any, fixtureUser as any],
+      [fixtureUser as any, fixtureAssistant as any],
       (id: string) => (id === "msg-1" ? hugeParts : fixtureUserParts),
     )
     expect(cat!.files).toBeLessThanOrEqual(cat!.total)
@@ -353,15 +422,13 @@ describe("categorizeTokens", () => {
     )
   })
 
-  test("Agent reflects only the last assistant's tokens.output", () => {
+  test("Output sums tokens.output across all assistant messages", () => {
     const older = {
       ...fixtureAssistant,
       id: "msg-old",
       tokens: { ...fixtureAssistant.tokens, output: 9999 },
     }
-    const cat = categorizeTokens([older as any, fixtureAssistant as any, fixtureUser as any], partsGetter)
-    // Categorization sums output across assistants (session-level agent cost).
-    // Both fixture messages contribute — assert output equals sum.
+    const cat = categorizeTokens([fixtureUser as any, older as any, fixtureAssistant as any], partsGetter)
     expect(cat!.output).toBe(fixtureAssistant.tokens.output + 9999)
   })
 
@@ -371,12 +438,30 @@ describe("categorizeTokens", () => {
       id: "msg-old",
       tokens: { ...fixtureAssistant.tokens, reasoning: 250 },
     }
-    const cat = categorizeTokens([older as any, fixtureAssistant as any, fixtureUser as any], partsGetter)
+    const cat = categorizeTokens([fixtureUser as any, older as any, fixtureAssistant as any], partsGetter)
     expect(cat!.thinking).toBe(250 + 1000)
   })
 
+  test("streaming assistant with zero input keeps prior turn input breakdown", () => {
+    const streaming = {
+      ...fixtureAssistant,
+      id: "msg-stream",
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: 2000 },
+    }
+    const cat = categorizeTokens(
+      [fixtureUser as any, fixtureAssistant as any, streaming as any],
+      (id: string) => partMap[id] ?? [],
+    )
+    expect(cat!.files).toBeGreaterThan(0)
+    expect(cat!.cacheRead).toBe(250)
+    expect(cat!.cacheWrite).toBe(75)
+    expect(cat!.prompt).toBeGreaterThan(0)
+    expect(cat!.output).toBe(3000)
+  })
+
   test("Prompt residual never goes negative", () => {
-    const cat = categorizeTokens([fixtureAssistant as any, fixtureUser as any], partsGetter)
+    const cat = categorizeTokens([fixtureUser as any, fixtureAssistant as any], partsGetter)
     expect(cat!.prompt).toBeGreaterThanOrEqual(0)
   })
 })
