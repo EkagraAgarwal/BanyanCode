@@ -123,16 +123,18 @@ export const layer = Layer.effect(
         if (snapshot.gpu && now - snapshot.gpuAt < GPU_CACHE_TTL_MS) {
           gpu = snapshot.gpu
         } else if (process.platform !== "darwin") {
-          const runResult = yield* Effect.orDie(
-            proc.run(
-              ChildProcess.make(
-                "nvidia-smi",
-                ["--query-gpu=utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
-                { extendEnv: true, stdin: "ignore" },
-              ),
-              { maxOutputBytes: 1024, maxErrorBytes: 256, timeout: "2 seconds" },
+          const runResult = yield* proc.run(
+            ChildProcess.make(
+              "nvidia-smi",
+              ["--query-gpu=utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
+              { extendEnv: true, stdin: "ignore" },
             ),
-          ).pipe(Effect.catch(() => Effect.succeed({ exitCode: -1, stdout: { toString: () => "" } } as const)))
+            { maxOutputBytes: 1024, maxErrorBytes: 256, timeout: "2 seconds" },
+          ).pipe(
+            Effect.catchCause(() =>
+              Effect.succeed({ exitCode: -1, stdout: { toString: () => "" } } as const),
+            ),
+          )
           if (runResult.exitCode === 0) {
             const text = runResult.stdout.toString()
             const line = text.trim().split("\n")[0]
