@@ -28,13 +28,37 @@ const stubTheme = {
   info: { r: 100, g: 100, b: 100, a: 1 },
 }
 
+const fixtureUser = {
+  id: "msg-u1",
+  type: "user" as const,
+  role: "user" as const,
+  text: "this is a user prompt",
+  time: { created: 0 },
+}
+
 const fixtureAssistant = {
   id: "msg-1",
   type: "assistant" as const,
   role: "assistant" as const,
   content: [
-    { type: "tool" as const, tool: "read", state: { status: "completed", output: "file content here", content: [{ type: "text" as const, text: "file content here" }] } },
-    { type: "tool" as const, tool: "bash", state: { status: "completed", output: "done", content: [{ type: "text" as const, text: "done" }] } },
+    {
+      type: "tool" as const,
+      tool: "read",
+      state: {
+        status: "completed",
+        output: "file content here",
+        content: [{ type: "text" as const, text: "file content here" }],
+      },
+    },
+    {
+      type: "tool" as const,
+      tool: "mesh_control",
+      state: {
+        status: "completed",
+        input: { action: "planFor", target: "explore", plan: { title: "Investigate" } },
+        content: [{ type: "text" as const, text: "ok" }],
+      },
+    },
   ],
   tokens: { input: 5000, output: 3000, reasoning: 1000, cache: { read: 0, write: 0 } },
   modelID: "test-model",
@@ -47,6 +71,7 @@ test("sidebar context sidebar_content slot renders with categorized tokens", asy
   const calls = createFetch()
   const config = createTuiResolvedConfig()
   const [slotContent, setSlotContent] = createSignal<any>(null)
+  const [rendered, setRendered] = createSignal<string>("")
 
   function Inner() {
     const api: any = {
@@ -55,7 +80,7 @@ test("sidebar context sidebar_content slot renders with categorized tokens", asy
       state: {
         session: {
           get: () => undefined,
-          messages: (sessionID: string) => [fixtureAssistant],
+          messages: (sessionID: string) => [fixtureAssistant, fixtureUser],
         },
         provider: { find: () => ({ models: { "test-model": { limit: { context: 100000 } } } }) },
         path: { directory: "/test/workspace" },
@@ -97,19 +122,57 @@ test("sidebar context sidebar_content slot renders with categorized tokens", asy
         </ArgsProvider>
       </TestTuiContexts>
     </ExitProvider>
-  ), { width: 40, height: 50 })
+  ), { width: 80, height: 40 })
   await testSetup.renderOnce()
   await new Promise((r) => setTimeout(r, 0))
   await testSetup.renderOnce()
-  const snapshot = testSetup
-    .captureCharFrame()
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .join("\n")
-    .trimEnd()
+  setRendered(
+    testSetup
+      .captureCharFrame()
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .join("\n")
+      .trimEnd(),
+  )
   try {
-    expect(snapshot).toMatchSnapshot()
+    expect(rendered()).toMatchSnapshot()
   } finally {
     testSetup.renderer.destroy()
   }
+})
+
+test("context widget source contains all expanded category labels", () => {
+  const source = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
+    "utf8",
+  )
+  for (const label of ["User messages", "Subagents", "Agent responses", "Tool Calls", "Files Read", "Prompt", "Thinking"]) {
+    expect(source).toContain(label)
+  }
+})
+
+test("context widget no longer uses the old 'Memory' label", () => {
+  const source = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
+    "utf8",
+  )
+  // The old label "Memory" was a misnomer — it actually showed
+  // assistant output tokens. The new "Agent responses" is what users see now.
+  expect(source).not.toMatch(/label:\s*"Memory"/)
+})
+
+test("context widget shows every category in the breakdown rows", () => {
+  const source = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
+    "utf8",
+  )
+  // The progress bar may still filter to skip zero-width colored blocks, but
+  // the row list at the bottom must render every category (with 0.0% for empty
+  // ones) so the user sees the full breakdown at a glance. We locate the row
+  // For by looking for the "Used {tb().total.toLocaleString()}" marker that
+  // precedes it, then assert no zero-filter appears in that range.
+  const usedIdx = source.indexOf("Used {tb().total.toLocaleString()}")
+  expect(usedIdx).toBeGreaterThan(-1)
+  const afterUsed = source.slice(usedIdx)
+  expect(afterUsed).not.toMatch(/filter\(\(s\)\s*=>\s*s\.tokens\s*>\s*0\)/)
 })

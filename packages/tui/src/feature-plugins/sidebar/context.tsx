@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import type { AssistantMessage } from "@opencode-ai/sdk/v2"
+import type { AssistantMessage, Message, UserMessage } from "@opencode-ai/sdk/v2"
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, For, Show } from "solid-js"
@@ -9,6 +9,11 @@ import { RoundedBorder } from "../../ui/border"
 const id = "internal:sidebar-context"
 
 const FILES_TOOLS = new Set(["read", "glob", "grep", "ls", "list"])
+// Subagent coordination tool names registered in packages/core/src/tool/*.
+// Every parent → subagent dispatch goes through one of these; the JSON-
+// serialized input approximates the prompt the parent spent addressing the
+// subagent, which is what the user asked us to surface.
+const SUBAGENT_TOOLS = new Set(["mesh_control", "mesh_subscribe", "subagent_message", "plan", "task"])
 const TOKEN_HEURISTIC_CHARS_PER_TOKEN = 4
 
 const estimateTokens = (s: string): number =>
@@ -60,34 +65,59 @@ const sumToolTokens = (tool: ToolPart): number => {
   return total
 }
 
-const categorizeTokens = (assistant: AssistantMessage) => {
+const categorizeTokens = (messages: ReadonlyArray<Message>) => {
   // Heuristic attribution: tool-name → category, text-length/4 token
   // estimate. Not exact — the AI SDK reports only aggregate tokens per
-  // message. Treated as illustrative.
+  // message. Treated as illustrative. The five LLM-attributed buckets
+  // (thinking, prompt, files, tools, agent-responses) come from the most
+  // recent assistant message. The two session-cumulative buckets
+  // (user-messages, subagent-instructions) come from every message up to
+  // and including the last assistant message.
   let filesTokens = 0
   let toolsTokens = 0
-  const parts = (assistant as any).content ?? []
-  for (const part of parts) {
-    if (part?.type === "tool") {
+  let subagentTokens = 0
+  let userTokens = 0
+  let reasoning = 0
+  let output = 0
+  let lastAssistant: AssistantMessage | undefined
+
+  for (const m of messages) {
+    if (m.role === "user") {
+      const text = (m as UserMessage as unknown as { text?: string }).text
+      if (typeof text === "string") userTokens += estimateTokens(text)
+      continue
+    }
+    if (m.role !== "assistant") continue
+    const a = m as AssistantMessage
+    lastAssistant = a
+    const parts = (a as any).content ?? []
+    for (const part of parts) {
+      if (part?.type !== "tool") continue
       const t = part as ToolPart
       const est = sumToolTokens(t)
-      if (FILES_TOOLS.has(t.tool)) filesTokens += est
+      if (SUBAGENT_TOOLS.has(t.tool)) subagentTokens += est
+      else if (FILES_TOOLS.has(t.tool)) filesTokens += est
       else toolsTokens += est
     }
+    reasoning = a.tokens?.reasoning ?? 0
+    output = a.tokens?.output ?? 0
   }
-  const tokens = assistant.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
-  const reasoning = tokens.reasoning ?? 0
-  const output = tokens.output ?? 0
+
+  if (!lastAssistant) return null
+
+  const tokens = lastAssistant.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
   const cacheTotal = (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0)
   const inputTotal = tokens.input ?? 0
-  const prompt = Math.max(0, inputTotal + cacheTotal - filesTokens - toolsTokens)
+  const prompt = Math.max(0, inputTotal + cacheTotal - filesTokens - toolsTokens - subagentTokens)
   return {
     thinking: reasoning,
     files: filesTokens,
     tools: toolsTokens,
     output,
     prompt,
-    total: reasoning + output + filesTokens + toolsTokens + prompt,
+    userMessages: userTokens,
+    subagents: subagentTokens,
+    total: reasoning + output + filesTokens + toolsTokens + subagentTokens + userTokens + prompt,
   }
 }
 
@@ -101,18 +131,15 @@ interface Segment {
 function View(props: { api: TuiPluginApi; session_id: string }) {
   const theme = () => props.api.theme.current
 
+  const messages = createMemo(() => props.api.state.session.messages(props.session_id))
+
   const lastAssistant = createMemo(() => {
-    const messages = props.api.state.session.messages(props.session_id)
-    return messages.findLast((item): item is AssistantMessage => 
-      item.role === "assistant" && item.tokens && (item.tokens.output ?? 0) > 0
+    return messages().findLast(
+      (item): item is AssistantMessage => item.role === "assistant" && !!item.tokens && (item.tokens.output ?? 0) > 0,
     )
   })
 
-  const categorization = createMemo(() => {
-    const a = lastAssistant()
-    if (!a) return null
-    return categorizeTokens(a)
-  })
+  const categorization = createMemo(() => categorizeTokens(messages()))
 
   const modelContextLimit = createMemo(() => {
     const last = lastAssistant()
@@ -132,11 +159,13 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     const cat = categorization()
     if (!cat) return []
     return [
+      { key: "user", label: "User messages", tokens: cat.userMessages, color: "muted" },
       { key: "thinking", label: "Thinking", tokens: cat.thinking, color: "accent" },
       { key: "prompt", label: "Prompt", tokens: cat.prompt, color: "info" },
       { key: "files", label: "Files Read", tokens: cat.files, color: "success" },
       { key: "tools", label: "Tool Calls", tokens: cat.tools, color: "warning" },
-      { key: "output", label: "Memory", tokens: cat.output, color: "primary" },
+      { key: "subagents", label: "Subagents", tokens: cat.subagents, color: "muted" },
+      { key: "output", label: "Agent responses", tokens: cat.output, color: "primary" },
     ]
   })
 
@@ -181,7 +210,9 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
         {(tb) => {
           const limit = modelContextLimit() ?? 1
           const usedWidthTotal = () =>
-            segments().filter((s) => s.tokens > 0).reduce((sum, seg) => sum + Math.max(0, Math.round((seg.tokens / limit) * BAR_WIDTH)), 0)
+            segments()
+              .filter((s) => s.tokens > 0)
+              .reduce((sum, seg) => sum + Math.max(0, Math.round((seg.tokens / limit) * BAR_WIDTH)), 0)
           return (
             <>
               <box
@@ -215,7 +246,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                 <text fg={toHex(theme().textMuted)}>/ {formatTokensCompact(limit)} in context</text>
               </box>
               <box flexDirection="column" marginTop={1} gap={0} width="100%">
-                <For each={segments().filter((s) => s.tokens > 0)}>
+                <For each={segments()}>
                   {(seg) => {
                     const pct = () => {
                       if (tb().total === 0) return "0.0"
@@ -265,3 +296,4 @@ const plugin: BuiltinTuiPlugin = {
 }
 
 export default plugin
+
