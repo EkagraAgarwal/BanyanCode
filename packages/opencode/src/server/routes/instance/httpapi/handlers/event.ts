@@ -34,8 +34,9 @@ function eventResponse(events: EventV2.Interface) {
     const stream = Stream.fromQueue(queue).pipe(
       Stream.filter(
         (event) =>
-          event.location?.directory === instance.directory &&
-          (event.location.workspaceID === undefined || event.location.workspaceID === workspaceID),
+          event.location === undefined ||
+          (event.location.directory === instance.directory &&
+            (event.location.workspaceID === undefined || event.location.workspaceID === workspaceID)),
       ),
       Stream.map((event) => ({ id: event.id, type: event.type, properties: event.data })),
     )
