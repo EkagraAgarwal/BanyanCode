@@ -170,3 +170,20 @@ test("context widget filters zero-token categories for compact display", () => {
   const afterUsed = source.slice(usedIdx)
   expect(afterUsed).toMatch(/filter\(\(s\)\s*=>\s*s\.tokens\s*>\s*0\)/)
 })
+
+test("context widget does not nest <text> elements inside another <text> (TextNodeRenderable.add crash)", () => {
+  // <text> is a TextNodeRenderable whose add() only accepts strings, TextNodeRenderable
+  // instances, or StyledText. Solid children of <text> must be <span> elements (StyledText),
+  // NOT another <text> renderable — nested <text> renders as a child box that add() rejects
+  // at runtime with "TextNodeRenderable only accepts strings, TextNodeRenderable instances,
+  // or StyledText instances", killing the TUI.
+  const source = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
+    "utf8",
+  )
+  // Walk through the file and assert no `<text>...<text>` nesting exists.
+  // The pattern matches a `<text>` JSX opening tag whose immediate children include
+  // another `<text>` opening tag (allowing whitespace between).
+  const nestedTextPattern = /<text\b[^>]*>\s*\n\s*<text\b/g
+  expect(source).not.toMatch(nestedTextPattern)
+})

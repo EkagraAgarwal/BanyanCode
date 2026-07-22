@@ -260,8 +260,8 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
               </box>
               <box flexDirection="row" marginTop={0} width="100%">
                 <text>
-                  <text fg={toHex(theme().text)}>Used {formatTokensCompact(tb().total)} </text>
-                  <text fg={toHex(theme().textMuted)}>/ {formatTokensCompact(limit)} in context</text>
+                  <span style={{ fg: toHex(theme().text) }}>Used {formatTokensCompact(tb().total)} </span>
+                  <span style={{ fg: toHex(theme().textMuted) }}>/ {formatTokensCompact(limit)} in context</span>
                 </text>
               </box>
               <box flexDirection="column" marginTop={0} gap={0} width="100%">
