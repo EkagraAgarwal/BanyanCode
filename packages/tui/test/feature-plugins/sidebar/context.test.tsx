@@ -141,12 +141,12 @@ test("sidebar context sidebar_content slot renders with categorized tokens", asy
   }
 })
 
-test("context widget source contains all expanded category labels", () => {
+test("context widget source contains concise single-line category labels", () => {
   const source = require("fs").readFileSync(
     require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
     "utf8",
   )
-  for (const label of ["User messages", "Subagents", "Agent responses", "Tool Calls", "Files Read", "Prompt", "Thinking"]) {
+  for (const label of ["User", "Subagents", "Agent", "Tools", "Files", "Prompt", "Thinking"]) {
     expect(source).toContain(label)
   }
 })
@@ -156,8 +156,6 @@ test("context widget no longer uses the old 'Memory' label", () => {
     require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
     "utf8",
   )
-  // The old label "Memory" was a misnomer — it actually showed
-  // assistant output tokens. The new "Agent responses" is what users see now.
   expect(source).not.toMatch(/label:\s*"Memory"/)
 })
 
@@ -167,7 +165,7 @@ test("context widget filters zero-token categories for compact display", () => {
     "utf8",
   )
   // To keep the sidebar compact as requested, zero-token categories are hidden.
-  const usedIdx = source.indexOf("Used {tb().total.toLocaleString()}")
+  const usedIdx = source.indexOf("Used {formatTokensCompact(tb().total)}")
   expect(usedIdx).toBeGreaterThan(-1)
   const afterUsed = source.slice(usedIdx)
   expect(afterUsed).toMatch(/filter\(\(s\)\s*=>\s*s\.tokens\s*>\s*0\)/)

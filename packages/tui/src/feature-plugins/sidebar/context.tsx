@@ -24,7 +24,6 @@ const FILES_TOOLS = new Set([
   "code_find",
   "structural-queries",
 ])
-// Subagent coordination tool names registered in packages/core/src/tool/*.
 const SUBAGENT_TOOLS = new Set([
   "mesh_control",
   "mesh-control",
@@ -46,42 +45,40 @@ function formatTokensCompact(n: number): string {
   return String(n)
 }
 
-interface ToolPart {
-  type: "tool"
-  tool: string
-  state: {
-    status: string
-    input?: unknown
-    output?: string
-    content?: Array<{ type: string; text?: string }>
-    attachments?: Array<{ text?: string }>
-    error?: string
-    [key: string]: unknown
-  }
-}
-
-const sumToolTokens = (tool: ToolPart): number => {
+const sumToolTokens = (tool: any): number => {
   let total = 0
-  const s = tool.state
+  const s = tool?.state ?? tool
+  if (!s) return 0
   if (s.status === "pending") {
     total += estimateTokens(String(s.input ?? ""))
     return total
   }
-  if (s.input && typeof s.input === "object") {
-    total += estimateTokens(JSON.stringify(s.input))
+  if (s.input) {
+    total += estimateTokens(typeof s.input === "string" ? s.input : JSON.stringify(s.input))
+  }
+  if (s.output && typeof s.output === "string") {
+    total += estimateTokens(s.output)
   }
   if (Array.isArray(s.content)) {
     for (const item of s.content) {
-      if (typeof item?.text === "string") total += estimateTokens(item.text)
+      if (typeof item === "string") total += estimateTokens(item)
+      else if (typeof item?.text === "string") total += estimateTokens(item.text)
+      else if (typeof item?.value === "string") total += estimateTokens(item.value)
     }
   }
   if (Array.isArray(s.attachments)) {
     for (const att of s.attachments) {
       if (typeof att?.text === "string") total += estimateTokens(att.text)
+      else if (typeof att?.value === "string") total += estimateTokens(att.value)
     }
   }
   if (typeof s.error === "string") {
     total += estimateTokens(s.error)
+  } else if (s.error && typeof s.error === "object") {
+    total += estimateTokens(JSON.stringify(s.error))
+  }
+  if (s.result) {
+    total += estimateTokens(typeof s.result === "string" ? s.result : JSON.stringify(s.result))
   }
   return total
 }
@@ -96,7 +93,8 @@ const categorizeTokens = (messages: ReadonlyArray<Message>) => {
   let lastAssistant: AssistantMessage | undefined
 
   for (const m of messages) {
-    if (m.role === "user") {
+    const role = (m as any).role ?? (m as any).type
+    if (role === "user") {
       const u = m as any
       let text = ""
       if (typeof u.text === "string") text = u.text
@@ -109,20 +107,21 @@ const categorizeTokens = (messages: ReadonlyArray<Message>) => {
       if (text) userTokens += estimateTokens(text)
       continue
     }
-    if (m.role !== "assistant") continue
+    if (role !== "assistant") continue
     const a = m as AssistantMessage
     lastAssistant = a
     const parts = (a as any).content ?? (a as any).parts ?? []
     for (const part of parts) {
       if (part?.type !== "tool") continue
-      const t = part as ToolPart
+      const t = part as any
+      const toolName = t.name ?? t.tool ?? ""
       const est = sumToolTokens(t)
-      if (SUBAGENT_TOOLS.has(t.tool)) subagentTokens += est
-      else if (FILES_TOOLS.has(t.tool)) filesTokens += est
-      else toolsTokens += est
+      if (SUBAGENT_TOOLS.has(toolName)) subagentTokens += est
+      else if (FILES_TOOLS.has(toolName)) filesTokens += est
+      else if (toolName) toolsTokens += est
     }
-    reasoning = a.tokens?.reasoning ?? 0
-    output = a.tokens?.output ?? 0
+    reasoning += a.tokens?.reasoning ?? 0
+    output += a.tokens?.output ?? 0
   }
 
   if (!lastAssistant) return null
@@ -156,7 +155,11 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
 
   const lastAssistant = createMemo(() => {
     return messages().findLast(
-      (item): item is AssistantMessage => item.role === "assistant" && !!item.tokens && (item.tokens.output ?? 0) > 0,
+      (item): item is AssistantMessage =>
+        ((item as any).role === "assistant" || (item as any).type === "assistant") &&
+        "tokens" in item &&
+        !!(item as any).tokens &&
+        (((item as any).tokens.output ?? 0) > 0 || ((item as any).tokens.input ?? 0) > 0),
     )
   })
 
@@ -180,13 +183,13 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     const cat = categorization()
     if (!cat) return []
     return [
-      { key: "user", label: "User messages", tokens: cat.userMessages, color: "muted" },
+      { key: "user", label: "User", tokens: cat.userMessages, color: "muted" },
       { key: "thinking", label: "Thinking", tokens: cat.thinking, color: "accent" },
       { key: "prompt", label: "Prompt", tokens: cat.prompt, color: "info" },
-      { key: "files", label: "Files Read", tokens: cat.files, color: "success" },
-      { key: "tools", label: "Tool Calls", tokens: cat.tools, color: "warning" },
+      { key: "files", label: "Files", tokens: cat.files, color: "success" },
+      { key: "tools", label: "Tools", tokens: cat.tools, color: "warning" },
       { key: "subagents", label: "Subagents", tokens: cat.subagents, color: "muted" },
-      { key: "output", label: "Agent responses", tokens: cat.output, color: "primary" },
+      { key: "output", label: "Agent", tokens: cat.output, color: "primary" },
     ]
   })
 
@@ -204,7 +207,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const BAR_WIDTH = 24
 
   return (
-    <box>
+    <box flexDirection="column" gap={0}>
       <box flexDirection="row" gap={1} alignItems="center">
         <text fg={toHex(theme().primary)}>
           <b>CONTEXT</b>
@@ -220,14 +223,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
           }}
         </Show>
       </box>
-      <Show
-        when={categorization()}
-        fallback={
-          <text fg={toHex(theme().textMuted)} marginTop={0}>
-            no data
-          </text>
-        }
-      >
+      <Show when={categorization()}>
         {(tb) => {
           const limit = modelContextLimit() ?? 1
           const usedWidthTotal = () =>
@@ -235,7 +231,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
               .filter((s) => s.tokens > 0)
               .reduce((sum, seg) => sum + Math.max(0, Math.round((seg.tokens / limit) * BAR_WIDTH)), 0)
           return (
-            <>
+            <box flexDirection="column" gap={0}>
               <box
                 width={BAR_WIDTH + 2}
                 height={3}
@@ -262,13 +258,13 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                   height={1}
                 />
               </box>
-              <box flexDirection="row" marginTop={1} width="100%">
+              <box flexDirection="row" marginTop={0} width="100%">
                 <text>
-                  <text fg={toHex(theme().text)}>Used {tb().total.toLocaleString()} </text>
+                  <text fg={toHex(theme().text)}>Used {formatTokensCompact(tb().total)} </text>
                   <text fg={toHex(theme().textMuted)}>/ {formatTokensCompact(limit)} in context</text>
                 </text>
               </box>
-              <box flexDirection="column" marginTop={1} gap={0} width="100%">
+              <box flexDirection="column" marginTop={0} gap={0} width="100%">
                 <For each={segments().filter((s) => s.tokens > 0)}>
                   {(seg) => {
                     const pct = () => {
@@ -281,12 +277,12 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                           <text fg={segColor(seg.color)}>■</text>
                           <text fg={toHex(theme().text)}>{seg.label}</text>
                         </box>
-                        <box flexDirection="row" gap={2}>
+                        <box flexDirection="row" gap={1}>
                           <text fg={toHex(theme().text)}>
-                            {seg.tokens.toLocaleString().padStart(8)}
+                            {formatTokensCompact(seg.tokens)}
                           </text>
                           <text fg={toHex(theme().textMuted)}>
-                            {`${pct()}%`.padStart(6)}
+                            {`${pct()}%`}
                           </text>
                         </box>
                       </box>
@@ -294,7 +290,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                   }}
                 </For>
               </box>
-            </>
+            </box>
           )
         }}
       </Show>
