@@ -842,7 +842,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         name: "codegraph.build",
         title: "Build code graph index",
         category: "BanyanCode",
-        slashName: "codegraph-build",
         run: () => {
           const worktree = project.data.instance.path.worktree
           void sdk.client.global.codegraph
@@ -901,7 +900,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         name: "models.refresh",
         title: "Refresh models catalog",
         category: "BanyanCode",
-        slashName: "refresh-models",
         run: () => {
           void sdk.client.session.command({
             sessionID: route.data.type === "session" ? route.data.sessionID : "",
@@ -931,7 +929,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         name: "subagents.max_subagents",
         title: "Set max concurrent subagents",
         category: "BanyanCode",
-        slashName: "max-subagents",
         run: () => {
           dialog.replace(() => <DialogMaxSubagents />)
         },
