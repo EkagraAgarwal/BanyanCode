@@ -55,6 +55,13 @@ describe("orchestrator agent", () => {
         expect(prompt).toContain("fanout")
         expect(prompt).toContain("PREFER 2-3 parallel subagents")
         expect(prompt).toContain("maximum is 5")
+        expect(prompt).toContain("Codegraph-first search policy")
+        expect(prompt).toContain("codegraph_build")
+        expect(prompt).toContain("code_find")
+        expect(prompt).toContain("repository_query")
+        expect(prompt).toContain("blast_radius")
+        expect(prompt).toContain("preflight")
+        expect(prompt).toContain("edit_plan")
       }),
   )
 })
