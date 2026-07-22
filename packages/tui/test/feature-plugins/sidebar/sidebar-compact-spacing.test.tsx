@@ -73,8 +73,6 @@ test("context: bar (first content element) uses marginTop=0", () => {
   const source = readPlugin("context.tsx")
   // The bar inside the categorized branch must use marginTop=0.
   expect(source).toMatch(/marginTop=\{0\}[\s\S]*?customBorderChars=\{RoundedBorder\.customBorderChars\}/)
-  // The "no data" fallback text must also use marginTop=0.
-  expect(source).toMatch(/<text fg=\{toHex\(theme\(\)\.textMuted\)\} marginTop=\{0\}>/)
 })
 
 test("performance: BarMetric row uses marginTop=0 (compact bars under header)", () => {

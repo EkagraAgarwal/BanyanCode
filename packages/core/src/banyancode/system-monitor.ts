@@ -156,6 +156,20 @@ export const layer = Layer.effect(
         }
 
         if (snapshot.cached && now - snapshot.cached.at < 1000) {
+          // Persist refreshed disk/gpu cache timestamps even on the warm
+          // early-return path — otherwise the next spin would re-probe
+          // statfs/nvidia-smi as soon as TTL expires (instead of every TTL
+          // window). Disk and GPU are unchanged here, so just bump `at`.
+          if (
+            (snapshot.disk && disk === snapshot.disk && snapshot.diskAt !== now) ||
+            (snapshot.gpu && gpu === snapshot.gpu && snapshot.gpuAt !== now)
+          ) {
+            yield* Ref.set(cache, {
+              ...snapshot,
+              diskAt: snapshot.disk && disk === snapshot.disk ? now : snapshot.diskAt,
+              gpuAt: snapshot.gpu && gpu === snapshot.gpu ? now : snapshot.gpuAt,
+            })
+          }
           return {
             ...snapshot.cached.value,
             ...(gpu
@@ -201,8 +215,12 @@ export const layer = Layer.effect(
 
     const queue = yield* Queue.bounded<SystemStatus>(60)
     yield* Effect.addFinalizer(() => Queue.shutdown(queue))
+    // The producer tick. `Effect.forever` never completes, so wrapping it in
+    // `Schedule.spaced` did nothing — iterations ran back-to-back and
+    // busy-spun the sampler. Use `repeat(spaced)` on the per-tick effect so
+    // the schedule actually paces iterations.
     yield* Effect.forkScoped(
-      Effect.forever(tick(queue)).pipe(Effect.schedule(Schedule.spaced(Duration.millis(100)))),
+      tick(queue).pipe(Effect.repeat(Schedule.spaced(Duration.millis(100)))),
     )
 
     const events = (): Effect.Effect<Queue.Dequeue<SystemStatus>, never, never> => Effect.succeed(queue)

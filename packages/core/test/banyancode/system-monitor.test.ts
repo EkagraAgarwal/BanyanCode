@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Duration, Layer, Stream } from "effect"
+import { Effect, Duration, Fiber, Layer, Queue, Stream } from "effect"
 import os from "node:os"
 import path from "node:path"
 import { SystemMonitor, readDisk } from "../../src/banyancode/system-monitor"
@@ -167,6 +167,38 @@ describe("SystemMonitor", () => {
         expect(v.memoryTotalBytes).toBeGreaterThan(0)
         expect(v.platform).toMatch(/^(windows|linux|darwin)$/)
       }
+    })
+  })
+
+  describe("producer tick pacing (regression)", () => {
+    // The internal sampler used to be `Effect.forever(tick).pipe(Schedule.spaced(...))`
+    // which busy-spun because `forever` never completes. We assert the queue
+    // receives a paced number of samples in ~500ms (the intended ~100ms
+    // spacing) rather than tens of thousands.
+    test("events queue receives a paced number of samples (no busy-spin)", async () => {
+      const collected = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const monitor = yield* SystemMonitor.Service
+            const queue = yield* monitor.events()
+            let count = 0
+            yield* Effect.forkScoped(
+              Effect.forever(
+                Effect.gen(function* () {
+                  yield* Queue.take(queue)
+                  count++
+                }),
+              ),
+            )
+            yield* Effect.sleep(Duration.millis(500))
+            return count
+          }),
+        ).pipe(Effect.provide(layer)),
+      )
+      // 100ms spacing → ~5 samples in 500ms (allow generous slack to avoid
+      // flakiness on busy CI). The old busy-spin produced tens of thousands.
+      expect(collected).toBeGreaterThanOrEqual(2)
+      expect(collected).toBeLessThan(20)
     })
   })
 })

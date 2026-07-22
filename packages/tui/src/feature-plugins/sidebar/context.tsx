@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import type { AssistantMessage, Message, UserMessage } from "@opencode-ai/sdk/v2"
+import type { AssistantMessage, Message, Part } from "@opencode-ai/sdk/v2"
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, For, Show } from "solid-js"
@@ -83,7 +83,25 @@ const sumToolTokens = (tool: any): number => {
   return total
 }
 
-const categorizeTokens = (messages: ReadonlyArray<Message>) => {
+const isSyntheticText = (p: any): boolean =>
+  p?.synthetic === true || p?.ignored === true
+
+const textFromUserPart = (p: any): string => {
+  if (typeof p?.text === "string") return p.text
+  if (Array.isArray(p?.content)) {
+    return p.content
+      .map((c: any) => (typeof c === "string" ? c : c?.text ?? ""))
+      .join(" ")
+  }
+  return ""
+}
+
+type PartMap = ReadonlyMap<string, ReadonlyArray<Part>>
+
+const categorizeTokens = (
+  messages: ReadonlyArray<Message>,
+  partsGetter: (messageID: string) => ReadonlyArray<Part>,
+) => {
   let filesTokens = 0
   let toolsTokens = 0
   let subagentTokens = 0
@@ -96,13 +114,18 @@ const categorizeTokens = (messages: ReadonlyArray<Message>) => {
     const role = (m as any).role ?? (m as any).type
     if (role === "user") {
       const u = m as any
+      const parts = partsGetter(u.id)
       let text = ""
-      if (typeof u.text === "string") text = u.text
-      else if (typeof u.prompt === "string") text = u.prompt
-      else if (Array.isArray(u.content)) {
-        text = u.content.map((p: any) => (typeof p === "string" ? p : (p?.text ?? ""))).join(" ")
-      } else if (Array.isArray(u.parts)) {
-        text = u.parts.map((p: any) => (typeof p === "string" ? p : (p?.text ?? ""))).join(" ")
+      for (const p of parts) {
+        if (!p) continue
+        if ((p as any).type === "text" && !isSyntheticText(p)) {
+          text += text ? " " + textFromUserPart(p) : textFromUserPart(p)
+        }
+      }
+      if (!text) {
+        // Fallback for older message shapes that still carry a text field.
+        if (typeof u.text === "string") text = u.text
+        else if (typeof u.prompt === "string") text = u.prompt
       }
       if (text) userTokens += estimateTokens(text)
       continue
@@ -110,9 +133,9 @@ const categorizeTokens = (messages: ReadonlyArray<Message>) => {
     if (role !== "assistant") continue
     const a = m as AssistantMessage
     lastAssistant = a
-    const parts = (a as any).content ?? (a as any).parts ?? []
+    const parts = partsGetter(a.id)
     for (const part of parts) {
-      if (part?.type !== "tool") continue
+      if (!part || (part as any).type !== "tool") continue
       const t = part as any
       const toolName = t.name ?? t.tool ?? ""
       const est = sumToolTokens(t)
@@ -128,18 +151,35 @@ const categorizeTokens = (messages: ReadonlyArray<Message>) => {
 
   const tokens = lastAssistant.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
   const inputTotal = tokens.input ?? 0
-  const prompt = Math.max(0, inputTotal - filesTokens - toolsTokens - subagentTokens - userTokens)
+  const cacheRead = tokens.cache?.read ?? 0
+  const cacheWrite = tokens.cache?.write ?? 0
+
+  // Last-turn input only (the request the provider just billed).
+  // Heuristic slices can overcount — clamp them to last-turn input so the
+  // breakdown never exceeds what was actually charged.
+  const heuristicBuckets = filesTokens + toolsTokens + subagentTokens + userTokens
+  const prompt = Math.max(0, inputTotal - Math.min(heuristicBuckets, inputTotal))
+  const files = Math.min(filesTokens, inputTotal)
+  const tools = Math.min(toolsTokens, Math.max(0, inputTotal - files))
+  const subagents = Math.min(subagentTokens, Math.max(0, inputTotal - files - tools))
+  const users = Math.min(userTokens, Math.max(0, inputTotal - files - tools - subagents))
+
   return {
     thinking: reasoning,
-    files: filesTokens,
-    tools: toolsTokens,
+    files,
+    tools,
     output,
     prompt,
-    userMessages: userTokens,
-    subagents: subagentTokens,
-    total: inputTotal + output + reasoning,
+    userMessages: users,
+    subagents,
+    cacheRead,
+    cacheWrite,
+    total: inputTotal + output + reasoning + cacheRead + cacheWrite,
   }
 }
+
+// Exported for unit testing — not part of the public API.
+export const __test = { categorizeTokens, sumToolTokens, estimateTokens }
 
 interface Segment {
   key: string
@@ -153,6 +193,18 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
 
   const messages = createMemo(() => props.api.state.session.messages(props.session_id))
 
+  // Keep part lookup referentially cheap: this memo is invalidated whenever the
+  // session's part map changes (Solid's store equality is shallow on arrays, but
+  // the user/assistant walks iterate `partsGetter` per message so we do not
+  // eagerly materialise a per-message copy here).
+  const partsGetter = createMemo(() => {
+    // Subscribe by reading session + part map references. We do not memoise the
+    // returned function — it just delegates to `api.state.part`, which already
+    // returns the latest array from the sync store.
+    void props.api.state.session.messages(props.session_id)
+    return (messageID: string) => props.api.state.part(messageID)
+  })
+
   const lastAssistant = createMemo(() => {
     return messages().findLast(
       (item): item is AssistantMessage =>
@@ -163,7 +215,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     )
   })
 
-  const categorization = createMemo(() => categorizeTokens(messages()))
+  const categorization = createMemo(() => categorizeTokens(messages(), partsGetter()))
 
   const modelContextLimit = createMemo(() => {
     const last = lastAssistant()
@@ -172,16 +224,38 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     return provider?.models[last.modelID]?.limit?.context ?? null
   })
 
+  // Null when the provider/model lookup failed or the limit is missing/zero.
+  // The display path uses this to decide whether to render the "/ X" and
+  // "(Y%)" decorations — we never want a fabricated `?? 1` to leak through.
+  const limit = createMemo(() => {
+    const l = modelContextLimit()
+    return l && l > 0 ? l : null
+  })
+
+  const hasLimit = createMemo(() => limit() !== null)
+
   const contextPercent = createMemo(() => {
     const tb = categorization()
-    const limit = modelContextLimit()
-    if (!tb || !limit || limit === 0) return null
-    return Math.round((tb.total / limit) * 100)
+    const l = limit()
+    if (!tb || !l) return null
+    return Math.round((tb.total / l) * 100)
+  })
+
+  // Bar denominator: when the context limit is known, segments fill the bar
+  // proportionally to context consumption (with background fill for the rest).
+  // When the limit is unknown, fall back to tb.total so the bar still shows
+  // the segment proportions without claiming a percentage of context.
+  const barDenominator = createMemo(() => {
+    const l = limit()
+    if (l) return l
+    const tb = categorization()
+    return tb?.total && tb.total > 0 ? tb.total : 1
   })
 
   const segments = createMemo<Segment[]>(() => {
     const cat = categorization()
     if (!cat) return []
+    const cache = cat.cacheRead + cat.cacheWrite
     return [
       { key: "user", label: "User", tokens: cat.userMessages, color: "muted" },
       { key: "thinking", label: "Thinking", tokens: cat.thinking, color: "accent" },
@@ -190,6 +264,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
       { key: "tools", label: "Tools", tokens: cat.tools, color: "warning" },
       { key: "subagents", label: "Subagents", tokens: cat.subagents, color: "muted" },
       { key: "output", label: "Agent", tokens: cat.output, color: "primary" },
+      { key: "cache", label: "Cache", tokens: cache, color: "info" },
     ]
   })
 
@@ -213,23 +288,26 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
           <b>CONTEXT</b>
         </text>
         <Show when={categorization()}>
-          {(tb) => {
-            const limit = modelContextLimit() ?? 1
-            return (
-              <text fg={toHex(theme().textMuted)}>
-                {" "}{formatTokensCompact(tb().total)} / {formatTokensCompact(limit)} ({contextPercent() ?? 0}%)
-              </text>
-            )
-          }}
+          {(tb) => (
+            <text fg={toHex(theme().textMuted)}>
+              {" "}{formatTokensCompact(tb().total)}
+              <Show when={hasLimit()}>
+                {" "} / {formatTokensCompact(limit()!)} ({contextPercent() ?? 0}%)
+              </Show>
+            </text>
+          )}
         </Show>
       </box>
       <Show when={categorization()}>
         {(tb) => {
-          const limit = modelContextLimit() ?? 1
+          const denom = barDenominator()
           const usedWidthTotal = () =>
             segments()
               .filter((s) => s.tokens > 0)
-              .reduce((sum, seg) => sum + Math.max(0, Math.round((seg.tokens / limit) * BAR_WIDTH)), 0)
+              .reduce(
+                (sum, seg) => sum + Math.max(0, Math.round((seg.tokens / denom) * BAR_WIDTH)),
+                0,
+              )
           return (
             <box flexDirection="column" gap={0}>
               <box
@@ -245,7 +323,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                   <For each={segments().filter((s) => s.tokens > 0)}>
                     {(seg) => (
                       <box
-                        width={Math.max(0, Math.round((seg.tokens / limit) * BAR_WIDTH))}
+                        width={Math.max(0, Math.round((seg.tokens / denom) * BAR_WIDTH))}
                         backgroundColor={segColor(seg.color)}
                         height={1}
                       />
@@ -260,8 +338,12 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
               </box>
               <box flexDirection="row" marginTop={0} width="100%">
                 <text>
-                  <span style={{ fg: toHex(theme().text) }}>Used {formatTokensCompact(tb().total)} </span>
-                  <span style={{ fg: toHex(theme().textMuted) }}>/ {formatTokensCompact(limit)} in context</span>
+                  <span style={{ fg: toHex(theme().text) }}>Used {formatTokensCompact(tb().total)}</span>
+                  <Show when={hasLimit()}>
+                    <span style={{ fg: toHex(theme().textMuted) }}>
+                      {" "}/ {formatTokensCompact(limit()!)} in context
+                    </span>
+                  </Show>
                 </text>
               </box>
               <box flexDirection="column" marginTop={0} gap={0} width="100%">
@@ -315,4 +397,3 @@ const plugin: BuiltinTuiPlugin = {
 }
 
 export default plugin
-

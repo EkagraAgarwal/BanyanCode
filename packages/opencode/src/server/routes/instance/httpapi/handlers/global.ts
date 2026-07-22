@@ -20,7 +20,6 @@ import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, PreflightInput, SafeRenameInput, WebSearchFreeInput } from "../groups/global"
-import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
 import { GraphMeta } from "@opencode-ai/core/banyancode/types"
@@ -174,7 +173,11 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     const startupHandler = Effect.fn("GlobalHttpApi.startup")(function* () {
-      yield* applySystemMonitorBridge
+      // The SystemMonitor bridge is forked once at process start by
+      // AppRuntime (see packages/opencode/src/effect/app-runtime.ts). Calling
+      // it again on every TUI reconnect would spawn additional drain fibers
+      // against the same Queue.bounded(60), leaking consumers across
+      // reconnects. The bridge is therefore not invoked here.
       return true
     })
 

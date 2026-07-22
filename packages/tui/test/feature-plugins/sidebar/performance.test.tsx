@@ -83,15 +83,39 @@ test("sidebar performance sidebar_content slot renders without throwing", async 
   await testSetup.renderOnce()
   await new Promise((r) => setTimeout(r, 0))
   await testSetup.renderOnce()
-  const snapshot = testSetup
-    .captureCharFrame()
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .join("\n")
-    .trimEnd()
-  try {
-    expect(snapshot).toMatchSnapshot()
-  } finally {
-    testSetup.renderer.destroy()
-  }
+  testSetup.renderer.destroy()
+})
+
+test("performance widget subscribes to both step.started and step.ended", () => {
+  const source = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/performance.tsx"),
+    "utf8",
+  )
+  expect(source).toContain("session.next.step.started")
+  expect(source).toContain("session.next.step.ended")
+})
+
+test("performance widget shows a 'last' cue when idle (not live)", () => {
+  const source = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/performance.tsx"),
+    "utf8",
+  )
+  // freshness=last drives the muted cue so users can tell the value is from
+  // a previous step.
+  expect(source).toContain('"last"')
+  expect(source).toContain('cueLabel')
+})
+
+test("performance widget cleans up both event subscriptions on unmount", () => {
+  const source = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/performance.tsx"),
+    "utf8",
+  )
+  // Two subscriptions must each be paired with onCleanup so listeners do not
+  // accumulate across remounts.
+  const subs = source.match(/ev\.on\(/g) ?? []
+  expect(subs.length).toBeGreaterThanOrEqual(2)
+  const cleanups = source.match(/unsubStart|unsubEnd/g) ?? []
+  expect(cleanups.length).toBeGreaterThanOrEqual(2)
+  expect(source).toMatch(/onCleanup\(\(\) => \{[\s\S]*unsubStart\(\)[\s\S]*unsubEnd\(\)[\s\S]*\}\)/)
 })

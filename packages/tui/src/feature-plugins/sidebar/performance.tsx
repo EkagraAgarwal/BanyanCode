@@ -15,6 +15,11 @@ interface StepMetrics {
   tokensOut: number | undefined
 }
 
+// TUI-side classification of step freshness. Drives the visual cue so a
+// reader can tell at a glance whether TPS is from the current in-flight step
+// or just the last completed one.
+type StepFreshness = "live" | "last" | "pending"
+
 function numeric(v: number | "NaN" | "Infinity" | "-Infinity" | undefined): number | undefined {
   if (v === undefined || v === "NaN" || !Number.isFinite(v as number)) return undefined
   return v as number
@@ -53,11 +58,29 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const ev = useEvent()
   const sync = useSync()
 
+  // The last completed step's metrics. May be from a previous turn.
   const [step, setStep] = createSignal<StepMetrics | undefined>(undefined)
+  // The assistantMessageID of the step currently being generated (set on
+  // step.started). Drives the live/last distinction.
+  const [liveSource, setLiveSource] = createSignal<string | undefined>(undefined)
+  // When the most recent step was the live one — meaning it ended during this
+  // step. Cleared on the next step.started.
+  const [liveFresh, setLiveFresh] = createSignal<boolean>(false)
 
   const lastAssistant = createMemo(() => {
     const messages = sync.data.message[props.session_id] ?? []
-    return messages.findLast((m: any) => ((m as any).type === "assistant" || m.role === "assistant") && (m as any).time?.completed)
+    return messages.findLast(
+      (m: any) =>
+        ((m as any).type === "assistant" || m.role === "assistant") && (m as any).time?.completed,
+    )
+  })
+
+  const lastAssistantInProgress = createMemo(() => {
+    const messages = sync.data.message[props.session_id] ?? []
+    return messages.findLast(
+      (m: any) =>
+        ((m as any).type === "assistant" || m.role === "assistant") && !(m as any).time?.completed,
+    )
   })
 
   const tokensPerSecondFallback = createMemo(() => {
@@ -89,23 +112,64 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     return undefined
   })
 
-  const unsub = ev.on("session.next.step.ended", (event: any) => {
-    if (event.properties.sessionID === props.session_id) {
-      setStep({
-        source: event.properties.assistantMessageID,
-        ttftMs: numeric(event.properties.ttftMs),
-        tokensPerSecond: numeric(event.properties.tokensPerSecond),
-        tokensOut: event.properties.tokens?.output,
-      })
+  // Freshness:
+  //   live    — an assistant is currently in-flight and we have NOT yet
+  //             received a step.ended for it (TPS not yet known, but bar
+  //             still shows the previous step's value with a "pending" cue).
+  //   live    — the most recent step.ended arrived during the current step.
+  //   last    — the agent is idle and we are showing the previous step.
+  //   pending — no completed assistant yet (initial state).
+  const freshness = createMemo<StepFreshness>(() => {
+    const s = step()
+    const live = liveSource()
+    const inFlight = lastAssistantInProgress()
+    if (!s) return inFlight ? "pending" : "pending"
+    if (inFlight && live && live !== s.source) return "pending"
+    if (liveFresh()) return "live"
+    return "last"
+  })
+
+  const unsubStart = ev.on("session.next.step.started", (event: any) => {
+    if (event.properties.sessionID !== props.session_id) return
+    setLiveSource(event.properties.assistantMessageID)
+    setLiveFresh(false)
+  })
+  const unsubEnd = ev.on("session.next.step.ended", (event: any) => {
+    if (event.properties.sessionID !== props.session_id) return
+    const aid = event.properties.assistantMessageID
+    setStep({
+      source: aid,
+      ttftMs: numeric(event.properties.ttftMs),
+      tokensPerSecond: numeric(event.properties.tokensPerSecond),
+      tokensOut: event.properties.tokens?.output,
+    })
+    if (liveSource() === aid) {
+      setLiveFresh(true)
+      setLiveSource(undefined)
     }
   })
-  onCleanup(unsub)
+  onCleanup(() => {
+    unsubStart()
+    unsubEnd()
+  })
+
+  const cueLabel = () => {
+    const f = freshness()
+    if (f === "live") return "now"
+    if (f === "last") return "last"
+    return "—"
+  }
 
   return (
     <box>
-      <text fg={toHex(theme().primary)}>
-        <b>PERFORMANCE</b>
-      </text>
+      <box flexDirection="row" gap={1} alignItems="center" marginTop={0}>
+        <text fg={toHex(theme().primary)}>
+          <b>PERFORMANCE</b>
+        </text>
+        <Show when={activeStep() && freshness() !== "pending"}>
+          <text fg={toHex(theme().textMuted)}>{cueLabel()}</text>
+        </Show>
+      </box>
       <Show
         when={activeStep()}
         fallback={
@@ -137,7 +201,9 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
               />
             </Show>
             <Show when={s().ttftMs === undefined && s().tokensPerSecond === undefined}>
-              <text fg={toHex(theme().textMuted)}>tool-only step · {(s().tokensOut ?? 0).toLocaleString()} tokens</text>
+              <text fg={toHex(theme().textMuted)}>
+                tool-only step · {(s().tokensOut ?? 0).toLocaleString()} tokens
+              </text>
             </Show>
           </box>
         )}
