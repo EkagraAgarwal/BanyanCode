@@ -65,7 +65,7 @@ trigger → context → plan → execute → verify → remember → repeat
 ```
 
 <p align="center">
-  <img src="./assets/agent.png" alt="BanyanCode chat view showing an agent plan, live todo tracking, and system stats" width="850" />
+  <img src="./assets/agents.png" alt="BanyanCode chat view showing an agent plan, live todo tracking, and system stats" width="850" />
   <br />
   <sub>Live plans, todo tracking, and system stats — right inside the chat.</sub>
 </p>
