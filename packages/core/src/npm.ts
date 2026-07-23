@@ -196,10 +196,22 @@ export const layer = Layer.effect(
       const pick = Effect.fnUntraced(function* () {
         const files = yield* fs.readDirectory(binDir).pipe(Effect.catch(() => Effect.succeed([] as string[])))
 
+        const matchBin = (name: string) => {
+          if (files.includes(name)) return name
+          if (process.platform === "win32") {
+            const winName = files.find((f: string) => f === `${name}.cmd` || f === `${name}.exe` || f === `${name}.bat`)
+            if (winName) return winName
+          }
+          return undefined
+        }
+
         if (files.length === 0) return Option.none<string>()
         // Caller picked a specific bin (e.g. pyright exposes both `pyright` and
         // `pyright-langserver`); trust the hint if the package provides it.
-        if (bin) return files.includes(bin) ? Option.some(bin) : Option.none<string>()
+        if (bin) {
+          const matched = matchBin(bin)
+          return matched ? Option.some(matched) : Option.none<string>()
+        }
         if (files.length === 1) return Option.some(files[0])
 
         const pkgJson = yield* afs.readJson(path.join(dir, "node_modules", pkg, "package.json")).pipe(Effect.option)
@@ -209,10 +221,18 @@ export const layer = Layer.effect(
           if (parsed?.bin) {
             const unscoped = pkg.startsWith("@") ? pkg.split("/")[1] : pkg
             const parsedBin = parsed.bin
-            if (typeof parsedBin === "string") return Option.some(unscoped)
+            if (typeof parsedBin === "string") {
+              const matched = matchBin(unscoped)
+              return matched ? Option.some(matched) : Option.some(files[0])
+            }
             const keys = Object.keys(parsedBin)
-            if (keys.length === 1) return Option.some(keys[0])
-            return parsedBin[unscoped] ? Option.some(unscoped) : Option.some(keys[0])
+            if (keys.length === 1) {
+              const matched = matchBin(keys[0])
+              return matched ? Option.some(matched) : Option.some(files[0])
+            }
+            const preferred = parsedBin[unscoped] ? unscoped : keys[0]
+            const matched = matchBin(preferred)
+            return matched ? Option.some(matched) : Option.some(files[0])
           }
         }
 

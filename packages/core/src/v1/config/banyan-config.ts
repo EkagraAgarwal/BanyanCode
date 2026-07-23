@@ -2,6 +2,16 @@ export * as BanyanConfig from "./banyan-config"
 
 import { Schema } from "effect"
 import { ConfigLSPV1 } from "./lsp"
+import { EventV2 } from "../../event"
+
+export const Event = {
+  Updated: EventV2.define({
+    type: "banyancode.config.updated",
+    schema: {
+      scope: Schema.optional(Schema.String),
+    },
+  }),
+}
 
 export const Schema_URL = "https://banyan.dev/schema/banyancode.json"
 

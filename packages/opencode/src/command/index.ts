@@ -11,6 +11,7 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { Database } from "@opencode-ai/core/database/database"
 import { GlobalBus } from "@/bus/global"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
@@ -376,9 +377,9 @@ export const layer = Layer.effect(
             if (arg === "on" || arg === "true" || arg === "enable" || arg === "enabled") {
               next = true
             } else if (arg === "off" || arg === "false" || arg === "disable" || arg === "disabled") {
-              next = undefined
+              next = false as any
             } else if (arg === "toggle") {
-              next = isOn ? undefined : true
+              next = (isOn ? false : true) as any
             } else {
               return `Unknown argument "${trimmed}". Usage: /lsp <on|off|toggle>`
             }
@@ -387,6 +388,10 @@ export const layer = Layer.effect(
               (updated as Banyan.BanyanConfigInfo).banyancode_lsp === true ||
               (typeof (updated as Banyan.BanyanConfigInfo).banyancode_lsp === "object" &&
                 (updated as Banyan.BanyanConfigInfo).banyancode_lsp !== null)
+            const eventsOpt = yield* Effect.serviceOption(EventV2Bridge.Service)
+            if (Option.isSome(eventsOpt)) {
+              yield* eventsOpt.value.publish(Banyan.BanyanConfig.Event.Updated, { scope: "global" })
+            }
             GlobalBus.emit("event", {
               directory: "global",
               payload: {
@@ -394,7 +399,7 @@ export const layer = Layer.effect(
                 properties: { scope: "global" },
               },
             })
-            return `BanyanCode LSP is now ${finalIsOn ? "on" : "off"}. Restart the session for built-in servers to attach.`
+            return `BanyanCode LSP is now ${finalIsOn ? "on" : "off"}. Built-in servers will attach as files are opened.`
           }),
         hints: [],
       }

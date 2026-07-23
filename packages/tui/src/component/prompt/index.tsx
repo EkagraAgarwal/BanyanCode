@@ -1331,17 +1331,17 @@ export function Prompt(props: PromptProps) {
         const currentCfg = (sync.data as { banyanConfig?: { banyancode_lsp?: unknown } }).banyanConfig
         const currentLsp = currentCfg?.banyancode_lsp
         const isOn = currentLsp === true || (typeof currentLsp === "object" && currentLsp !== null)
-        let next: boolean | undefined = undefined
+        let next: boolean = false
         let intent: "enabling" | "disabling" | "unknown" = "unknown"
         if (lspArgs === "" || lspArgs === "toggle") {
           intent = isOn ? "disabling" : "enabling"
-          next = isOn ? undefined : true
+          next = !isOn
         } else if (lspArgs === "on" || lspArgs === "true" || lspArgs === "enable" || lspArgs === "enabled") {
           intent = "enabling"
           next = true
         } else if (lspArgs === "off" || lspArgs === "false" || lspArgs === "disable" || lspArgs === "disabled") {
           intent = "disabling"
-          next = undefined
+          next = false
         }
         if (intent === "unknown") {
           toast.show({

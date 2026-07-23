@@ -6,6 +6,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@opencode-ai/core/event"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Global } from "@opencode-ai/core/global"
 import { Installation } from "@/installation"
@@ -193,6 +194,8 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     }) {
       const svc = yield* Banyan.BanyanConfigService
       const updated = yield* svc.update(payload.config)
+      const events = yield* EventV2Bridge.Service
+      yield* events.publish(Banyan.BanyanConfig.Event.Updated, { scope: "global" }).pipe(Effect.orDie)
       GlobalBus.emit("event", {
         directory: "global",
         payload: {
@@ -223,6 +226,8 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       const agentSvc = yield* Agent.Service
       yield* agentSvc.invalidate()
 
+      const events = yield* EventV2Bridge.Service
+      yield* events.publish(Banyan.BanyanConfig.Event.Updated, { scope: "global" }).pipe(Effect.orDie)
       GlobalBus.emit("event", {
         directory: "global",
         payload: {
@@ -245,6 +250,8 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       const agentSvc = yield* Agent.Service
       yield* agentSvc.invalidate()
 
+      const events = yield* EventV2Bridge.Service
+      yield* events.publish(Banyan.BanyanConfig.Event.Updated, { scope: "global" }).pipe(Effect.orDie)
       GlobalBus.emit("event", {
         directory: "global",
         payload: {
