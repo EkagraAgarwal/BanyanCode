@@ -116,6 +116,9 @@ export function stateApi(sync: ReturnType<typeof useSync>): TuiPluginApi["state"
         branch: sync.data.vcs.branch,
       }
     },
+    get banyanConfig() {
+      return sync.data.banyanConfig
+    },
     session: {
       count() {
         return sync.data.session.length

@@ -246,3 +246,57 @@ describe("LSP widgets render with populated LspStatus items", () => {
   })
 })
 
+// Regression for the 26.07.23 silent bug. The LSP sidebar / status-pills /
+// inspector widgets decide the "off" / "active" label by reading
+// `state.banyanConfig.banyancode_lsp`. The TUI plugin adapter at
+// `packages/tui/src/plugin/adapters.tsx` was previously returning a state
+// object that did NOT expose `banyanConfig`, so the widgets' `as { banyanConfig?: ... }`
+// casts evaluated to `undefined` at runtime and the panel always rendered
+// "LSP: off" regardless of `/lsp enable`. The fix exposes `banyanConfig`
+// from the sync store and declares it on `TuiState` so the casts can be
+// dropped. These tests assert the read-through in isolation so the bug
+// cannot regress without a typecheck failure.
+describe("stateApi exposes banyanConfig from the sync store", () => {
+  function makeSync(data: Record<string, unknown>) {
+    return {
+      ready: true,
+      data,
+      path: { home: "", state: "", config: "", worktree: "", directory: "" },
+      session: { get: () => undefined },
+    } as any
+  }
+
+  test("returns the populated config when banyancode_lsp is true", () => {
+    const sync = makeSync({ banyanConfig: { banyancode_lsp: true } })
+    const state = stateApi(sync)
+    expect(state.banyanConfig).toEqual({ banyancode_lsp: true })
+    expect(state.banyanConfig?.banyancode_lsp).toBe(true)
+  })
+
+  test("returns the populated config when banyancode_lsp is a record", () => {
+    const sync = makeSync({
+      banyanConfig: { banyancode_lsp: { typescript: { disabled: true } } },
+    })
+    const state = stateApi(sync)
+    expect(state.banyanConfig?.banyancode_lsp).toEqual({ typescript: { disabled: true } })
+  })
+
+  test("returns undefined when banyanConfig has not been fetched yet", () => {
+    const sync = makeSync({ banyanConfig: undefined })
+    const state = stateApi(sync)
+    expect(state.banyanConfig).toBeUndefined()
+  })
+
+  test("reflects updates from the sync store without manual override", () => {
+    const stored: { banyanConfig: { banyancode_lsp: boolean } | undefined } = {
+      banyanConfig: undefined,
+    }
+    const sync = makeSync(stored)
+    const state = stateApi(sync)
+    expect(state.banyanConfig).toBeUndefined()
+    stored.banyanConfig = { banyancode_lsp: true }
+    expect(state.banyanConfig).toEqual({ banyancode_lsp: true })
+  })
+})
+
+

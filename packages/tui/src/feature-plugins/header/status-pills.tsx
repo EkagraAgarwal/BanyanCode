@@ -100,8 +100,7 @@ const lspLanguages = createMemo<string[]>(() => {
 // Configured via banyancode_lsp in banyancode.json. When the service is
 // unavailable (BanyanCode off) or the field is unset, treat LSP as off.
 const lspEnabled = createMemo(() => {
-  const cfg = (props.api.state as { banyanConfig?: { banyancode_lsp?: unknown } }).banyanConfig
-  const v = cfg?.banyancode_lsp
+  const v = props.api.state.banyanConfig?.banyancode_lsp
   return v === true || (typeof v === "object" && v !== null)
 })
 

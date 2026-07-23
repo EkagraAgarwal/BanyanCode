@@ -26,8 +26,7 @@ function View(props: { api: TuiPluginApi }) {
   // BanyanConfig service is unavailable or the field is unset, treat LSP as
   // off — matches the previous opencode default of `cfg.lsp === undefined`.
   const off = createMemo(() => {
-    const cfg = (props.api.state as { banyanConfig?: { banyancode_lsp?: unknown } }).banyanConfig
-    const v = cfg?.banyancode_lsp
+    const v = props.api.state.banyanConfig?.banyancode_lsp
     return !(v === true || (typeof v === "object" && v !== null))
   })
   const config = createMemo<LspEntry[]>(() => list().filter((entry) => !entry.disabled))

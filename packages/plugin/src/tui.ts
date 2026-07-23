@@ -1,5 +1,6 @@
 import type {
   AgentPart,
+  BanyanConfig,
   OpencodeClient,
   Event,
   FilePart,
@@ -397,6 +398,7 @@ export type TuiState = {
   part: (messageID: string) => ReadonlyArray<Part>
   lsp: () => ReadonlyArray<TuiSidebarLspItem>
   mcp: () => ReadonlyArray<TuiSidebarMcpItem>
+  banyanConfig: BanyanConfig | undefined
 }
 
 type TuiBindingLookupView = {

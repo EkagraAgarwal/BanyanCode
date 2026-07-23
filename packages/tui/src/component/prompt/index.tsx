@@ -1328,8 +1328,7 @@ export function Prompt(props: PromptProps) {
         // exists as the canonical implementation; this intercept is purely
         // a UI shortcut for instant feedback.
         const lspArgs = firstLine.split(" ").slice(1).join(" ").trim().toLowerCase()
-        const currentCfg = (sync.data as { banyanConfig?: { banyancode_lsp?: unknown } }).banyanConfig
-        const currentLsp = currentCfg?.banyancode_lsp
+        const currentLsp = sync.data.banyanConfig?.banyancode_lsp
         const isOn = currentLsp === true || (typeof currentLsp === "object" && currentLsp !== null)
         let next: boolean = false
         let intent: "enabling" | "disabling" | "unknown" = "unknown"

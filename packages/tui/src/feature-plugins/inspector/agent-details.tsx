@@ -203,8 +203,7 @@ function LspList(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
   const list = createMemo(() => props.api.state.lsp() as unknown as LspEntry[])
   const lspEnabled = createMemo(() => {
-    const cfg = (props.api.state as { banyanConfig?: { banyancode_lsp?: unknown } }).banyanConfig
-    const v = cfg?.banyancode_lsp
+    const v = props.api.state.banyanConfig?.banyancode_lsp
     return v === true || (typeof v === "object" && v !== null)
   })
 

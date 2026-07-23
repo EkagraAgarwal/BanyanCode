@@ -105,6 +105,7 @@ type Opts = {
     part?: HostPluginApi["state"]["part"]
     lsp?: HostPluginApi["state"]["lsp"]
     mcp?: HostPluginApi["state"]["mcp"]
+    banyanConfig?: HostPluginApi["state"]["banyanConfig"]
   }
   theme?: {
     selected?: string
@@ -326,6 +327,9 @@ export function createTuiPluginApi(opts: Opts = {}): HostPluginApi {
       part: opts.state?.part ?? (() => []),
       lsp: opts.state?.lsp ?? (() => []),
       mcp: opts.state?.mcp ?? (() => []),
+      get banyanConfig() {
+        return opts.state?.banyanConfig
+      },
     },
     theme: {
       get current() {
