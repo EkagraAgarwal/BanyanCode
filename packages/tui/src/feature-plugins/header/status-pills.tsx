@@ -137,7 +137,6 @@ const lspLabel = () => {
       </box>
       <box flexDirection="row" flexShrink={0} gap={1}>
         <text fg={lspDotColor()}>●</text>
-        <text fg={toHex(theme().textMuted)}>{lspLabel()}</text>
       </box>
       <box flexDirection="row" flexShrink={0} gap={1}>
         <text fg={graphDotColor()}>●</text>

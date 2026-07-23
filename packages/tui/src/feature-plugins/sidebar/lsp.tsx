@@ -30,9 +30,7 @@ function View(props: { api: TuiPluginApi }) {
     return !(v === true || (typeof v === "object" && v !== null))
   })
   const config = createMemo<LspEntry[]>(() => list().filter((entry) => !entry.disabled))
-  const disabled = createMemo<LspEntry[]>(() => list().filter((entry) => entry.disabled))
   const connected = createMemo(() => config().filter((entry) => entry.status === "connected"))
-  const inert = createMemo(() => config().filter((entry) => entry.inert))
   const primaryLangs = createMemo<string[]>(() => {
     const out: string[] = []
     for (const entry of connected()) {
@@ -40,14 +38,6 @@ function View(props: { api: TuiPluginApi }) {
         if (!out.includes(lang)) out.push(lang)
       }
       if (out.length >= 3) break
-    }
-    if (out.length === 0) {
-      for (const entry of inert()) {
-        for (const lang of entry.languages) {
-          if (!out.includes(lang)) out.push(lang)
-        }
-        if (out.length >= 3) break
-      }
     }
     return out
   })
@@ -65,8 +55,8 @@ function View(props: { api: TuiPluginApi }) {
 
   return (
     <box>
-      <box flexDirection="row" gap={1} onMouseDown={() => list().length > 2 && setOpen((x) => !x)}>
-        <Show when={list().length > 2}>
+      <box flexDirection="row" gap={1} onMouseDown={() => connected().length > 2 && setOpen((x) => !x)}>
+        <Show when={connected().length > 2}>
           <text fg={theme().text}>{open() ? "▼" : "▶"}</text>
         </Show>
         <text fg={theme().text}>
@@ -77,16 +67,16 @@ function View(props: { api: TuiPluginApi }) {
         </text>
         <text fg={toHex(theme().textMuted)}>{languageLabel()}</text>
       </box>
-      <Show when={list().length <= 2 || open()}>
+      <Show when={connected().length <= 2 || open()}>
         <Show
-          when={list().length > 0}
+          when={connected().length > 0}
           fallback={
             <text fg={toHex(theme().textMuted)}>
               {off() ? "LSPs are disabled" : "LSPs will activate as files are read"}
             </text>
           }
         >
-          <For each={config()}>
+          <For each={connected()}>
             {(item) => (
               <box flexDirection="row" gap={1}>
                 <text
@@ -109,21 +99,6 @@ function View(props: { api: TuiPluginApi }) {
               </box>
             )}
           </For>
-          <Show when={disabled().length > 0}>
-            <For each={disabled()}>
-              {(item) => (
-                <box flexDirection="row" gap={1}>
-                  <text flexShrink={0} style={{ fg: theme().textMuted }}>
-                    ◌
-                  </text>
-                  <text fg={toHex(theme().textMuted)}>{item.id}</text>
-                  <text fg={toHex(theme().textMuted)}>
-                    {item.disabledReason ?? "disabled"}
-                  </text>
-                </box>
-              )}
-            </For>
-          </Show>
         </Show>
       </Show>
     </box>
