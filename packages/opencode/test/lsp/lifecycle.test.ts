@@ -7,7 +7,10 @@ import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
-const it = testEffect(Layer.mergeAll(LSP.defaultLayer, CrossSpawnSpawner.defaultLayer))
+import { Banyan } from "@opencode-ai/core/banyancode"
+import fs from "fs/promises"
+
+const it = testEffect(Layer.mergeAll(LSP.defaultLayer, CrossSpawnSpawner.defaultLayer, Banyan.banyanConfigServiceDefaultLayer))
 
 describe("LSP service lifecycle", () => {
   let spawnSpy: ReturnType<typeof spyOn>
@@ -52,15 +55,18 @@ describe("LSP service lifecycle", () => {
   )
 
   it.instance(
-    "hasClients() returns true for .ts files in instance when lsp is true",
+    "hasClients() returns true for .ts files in instance when banyancode_lsp is true",
     () =>
       LSP.Service.use((lsp) =>
         Effect.gen(function* () {
-          const result = yield* lsp.hasClients(path.join((yield* TestInstance).directory, "test.ts"))
+          const dir = (yield* TestInstance).directory
+          const banyanConfig = yield* Banyan.BanyanConfigService
+          yield* banyanConfig.update({ banyancode_lsp: true })
+          yield* lsp.reload()
+          const result = yield* lsp.hasClients(path.join(dir, "test.ts"))
           expect(result).toBe(true)
         }),
       ),
-    { config: { lsp: true } },
   )
 
   it.instance(
@@ -68,11 +74,14 @@ describe("LSP service lifecycle", () => {
     () =>
       LSP.Service.use((lsp) =>
         Effect.gen(function* () {
-          const result = yield* lsp.hasClients(path.join((yield* TestInstance).directory, "test.ts"))
+          const dir = (yield* TestInstance).directory
+          const banyanConfig = yield* Banyan.BanyanConfigService
+          yield* banyanConfig.update({ banyancode_lsp: { eslint: { disabled: true } } })
+          yield* lsp.reload()
+          const result = yield* lsp.hasClients(path.join(dir, "test.ts"))
           expect(result).toBe(true)
         }),
       ),
-    { config: { lsp: { eslint: { disabled: true } } } },
   )
 
   it.instance("hasClients() returns false for files outside instance", () =>

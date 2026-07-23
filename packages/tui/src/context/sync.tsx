@@ -441,6 +441,9 @@ export const {
           sdk.client.app.agents({ workspace })
             .then((x) => setStore("agent", reconcile(x.data ?? [])))
             .catch(() => {})
+          sdk.client.lsp.status({ workspace })
+            .then((x) => setStore("lsp", reconcile(x.data ?? [])))
+            .catch(() => {})
           break
         }
 

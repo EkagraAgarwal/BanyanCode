@@ -192,7 +192,15 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       payload: typeof BanyanConfigUpdateInput.Type
     }) {
       const svc = yield* Banyan.BanyanConfigService
-      return yield* svc.update(payload.config)
+      const updated = yield* svc.update(payload.config)
+      GlobalBus.emit("event", {
+        directory: "global",
+        payload: {
+          type: "banyancode.config.updated" as any,
+          properties: { scope: "global" },
+        },
+      })
+      return updated
     })
 
     const banyanAgentOverrideUpdateHandler = Effect.fn("GlobalHttpApi.banyanAgentOverrideUpdate")(function* ({

@@ -31,10 +31,23 @@ export const layer = Layer.effect(
 
     const readConfig = Effect.fn("BanyanConfig.readConfig")(function* () {
       const text = yield* fs.readFileStringSafe(configFile)
-      if (!text) return {} as BanyanConfig.Info
-      return yield* Schema.decodeEffect(Schema.fromJsonString(BanyanConfig.Info))(text).pipe(
+      let globalConfig = {} as BanyanConfig.Info
+      if (text) {
+        globalConfig = yield* Schema.decodeEffect(Schema.fromJsonString(BanyanConfig.Info))(text).pipe(
+          Effect.catch(() => Effect.succeed({} as BanyanConfig.Info)),
+        )
+      }
+      const localPath = path.join(process.cwd(), "banyancode.json")
+      const localDotPath = path.join(process.cwd(), ".banyancode", "banyancode.json")
+      let localText = yield* fs.readFileStringSafe(localPath)
+      if (!localText) {
+        localText = yield* fs.readFileStringSafe(localDotPath)
+      }
+      if (!localText) return globalConfig
+      const localConfig = yield* Schema.decodeEffect(Schema.fromJsonString(BanyanConfig.Info))(localText).pipe(
         Effect.catch(() => Effect.succeed({} as BanyanConfig.Info)),
       )
+      return { ...globalConfig, ...localConfig }
     })
 
     const doWriteConfig = Effect.fn("BanyanConfig.doWriteConfig")(function* (config: BanyanConfig.Info) {

@@ -1,5 +1,6 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { GlobalBus, type GlobalEvent } from "@/bus/global"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import * as LSPClient from "./client"
@@ -191,6 +192,7 @@ type LocInput = { file: string; line: number; character: number }
 
 export interface Interface {
   readonly init: () => Effect.Effect<void>
+  readonly reload: () => Effect.Effect<void>
   readonly status: () => Effect.Effect<Status[]>
   readonly hasClients: (file: string) => Effect.Effect<boolean>
   readonly touchFile: (input: string, diagnostics?: "document" | "full") => Effect.Effect<void>
@@ -249,13 +251,24 @@ export const layer = Layer.effect(
                 id: name,
                 root: existing?.root ?? (async (_file, ctx) => ctx.directory),
                 extensions: item.extensions ?? existing?.extensions ?? [],
-                spawn: async (root) => ({
-                  process: lspspawn(item.command[0], item.command.slice(1), {
-                    cwd: root,
-                    env: { ...process.env, ...item.env },
-                  }),
-                  initialization: item.initialization,
-                }),
+                spawn: item.command
+                  ? async (root) => ({
+                      process: lspspawn(item.command![0], item.command!.slice(1), {
+                        cwd: root,
+                        env: { ...process.env, ...item.env },
+                      }),
+                      initialization: item.initialization,
+                    })
+                  : existing?.spawn
+                    ? async (root, ctx, flags) => {
+                        const handle = await existing.spawn(root, ctx, flags)
+                        if (!handle) return undefined
+                        return {
+                          ...handle,
+                          initialization: item.initialization ?? handle.initialization,
+                        }
+                      }
+                    : async () => undefined,
               }
             }
           }
@@ -400,29 +413,132 @@ export const layer = Layer.effect(
       yield* InstanceState.get(state)
     })
 
+    const reload = Effect.fn("LSP.reload")(function* () {
+      const s = yield* InstanceState.get(state)
+      const banyanOption = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+      const banyanConfig = Option.isSome(banyanOption) ? yield* banyanOption.value.get() : ({} as Banyan.BanyanConfigInfo)
+      const lsp = banyanConfig.banyancode_lsp
+
+      const newServers: Record<string, LSPServer.Info> = {}
+
+      if (lsp) {
+        for (const server of Object.values(LSPServer)) {
+          newServers[server.id] = server
+        }
+
+        filterExperimentalServers(newServers, flags)
+
+        if (lsp !== true) {
+          for (const [name, item] of Object.entries(lsp)) {
+            const existing = newServers[name]
+            if (item.disabled) {
+              delete newServers[name]
+              continue
+            }
+            newServers[name] = {
+              ...existing,
+              id: name,
+              root: existing?.root ?? (async (_file, ctx) => ctx.directory),
+              extensions: item.extensions ?? existing?.extensions ?? [],
+              spawn: item.command
+                ? async (root) => ({
+                    process: lspspawn(item.command![0], item.command!.slice(1), {
+                      cwd: root,
+                      env: { ...process.env, ...item.env },
+                    }),
+                    initialization: item.initialization,
+                  })
+                : existing?.spawn
+                  ? async (root, ctx, flags) => {
+                      const handle = await existing.spawn(root, ctx, flags)
+                      if (!handle) return undefined
+                      return {
+                        ...handle,
+                        initialization: item.initialization ?? handle.initialization,
+                      }
+                    }
+                  : async () => undefined,
+            }
+          }
+        }
+      }
+
+      const disabled = new Map<string, string>()
+      if (lsp && typeof lsp === "object") {
+        for (const [name, item] of Object.entries(lsp)) {
+          if (item && typeof item === "object" && "disabled" in item && item.disabled) {
+            disabled.set(name, "disabled in banyancode.json")
+          }
+        }
+      }
+
+      s.servers = newServers
+      s.disabled = disabled
+      s.configEnabled = Boolean(lsp)
+      s.broken.clear()
+
+      // Shutdown any clients that are no longer configured
+      const toRemove: LSPClient.Info[] = []
+      for (const client of s.clients) {
+        if (!newServers[client.serverID]) {
+          toRemove.push(client)
+        }
+      }
+      if (toRemove.length > 0) {
+        s.clients = s.clients.filter((c) => !toRemove.includes(c))
+        yield* Effect.promise(() => Promise.all(toRemove.map((c) => c.shutdown())))
+      }
+
+      yield* events.publish(Event.Updated, {})
+    })
+
+    const onGlobalEvent = (evt: GlobalEvent) => {
+      if (evt.payload?.type === "banyancode.config.updated") {
+        Effect.runFork(reload().pipe(Effect.catchCause(() => Effect.void)))
+      }
+    }
+    GlobalBus.on("event", onGlobalEvent)
+    yield* Effect.addFinalizer(() => Effect.sync(() => { GlobalBus.off("event", onGlobalEvent) }))
+
     const status = Effect.fn("LSP.status")(function* () {
       const ctx = yield* InstanceState.context
       const s = yield* InstanceState.get(state)
       const result: Status[] = []
       const seen = new Set<string>()
-      // Currently-attached clients first (status: connected/error).
+      // Currently-attached clients first (status: connected).
       for (const client of s.clients) {
         const server = s.servers[client.serverID]
         seen.add(client.serverID)
         result.push({
           id: client.serverID,
-          name: server.id,
+          name: server?.id ?? client.serverID,
           root: path.relative(ctx.directory, client.root),
           status: "connected",
-          autoDownload: server.autoDownload ?? false,
-          languages: languagesForServer(server),
+          autoDownload: server?.autoDownload ?? false,
+          languages: server ? languagesForServer(server) : [],
           inert: false,
           disabled: false,
         })
       }
-      // Then every other configured server that has not yet attached. This
-      // is what lets the TUI show "LSP: 0/14 connected, 1 auto-download"
-      // even when no file has been opened in the workspace yet.
+      // Then configured servers that failed to spawn (status: error)
+      for (const server of Object.values(s.servers)) {
+        if (seen.has(server.id)) continue
+        const isBroken = Array.from(s.broken).some((k) => k.endsWith(server.id))
+        if (isBroken) {
+          seen.add(server.id)
+          result.push({
+            id: server.id,
+            name: server.id,
+            root: "",
+            status: "error",
+            autoDownload: server.autoDownload ?? false,
+            languages: languagesForServer(server),
+            inert: false,
+            disabled: false,
+          })
+        }
+      }
+      // Then every other configured server that has not yet attached.
       for (const server of Object.values(s.servers)) {
         if (seen.has(server.id)) continue
         result.push({
@@ -436,9 +552,7 @@ export const layer = Layer.effect(
           disabled: false,
         })
       }
-      // Then any server the user explicitly disabled in banyancode_lsp so
-      // the TUI can still report "typescript: disabled" even though it was
-      // stripped from the live server map.
+      // Then any server the user explicitly disabled in banyancode_lsp
       for (const [name, reason] of s.disabled.entries()) {
         if (seen.has(name)) continue
         result.push({
@@ -610,6 +724,7 @@ export const layer = Layer.effect(
 
     return Service.of({
       init,
+      reload,
       status,
       hasClients,
       touchFile,
@@ -630,6 +745,7 @@ export const layer = Layer.effect(
 export const defaultLayer = layer.pipe(
   Layer.provide(RuntimeFlags.defaultLayer),
   Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
 )
 
 export * as Diagnostic from "./diagnostic"
