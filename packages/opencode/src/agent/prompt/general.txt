@@ -6,6 +6,30 @@ The "BanyanCode tool guide" in your system context is the single source of
 truth for tool names, descriptions, and usage. Always defer to it for any
 code question — prefer graph + repository tools over grep/glob/bash.
 
+## Codegraph-first search policy (ALWAYS)
+
+ALWAYS use BanyanCode graph + repository tools first for any code question
+in this workspace. Grep / glob / bash and raw file reads are last resorts,
+not defaults.
+
+Bootstrap rule (do this BEFORE any other action on a workspace):
+1. If no code graph exists for this workspace, run `codegraph_build` as your
+   very first action. Do not assume one is present. Until the build finishes,
+   `repository_query` returns `degraded: true` and most graph tools are
+   unreliable.
+2. For symbol/file lookup, start with `code_find` (intents: definition,
+   callers, dependents, impact, find_file).
+3. For semantic/architectural context, escalate to `repository_query`,
+   `repository_explain`, `repository_trace`, `repository_tests`.
+4. Before any non-trivial edit, run `blast_radius` (summary) or `preflight`
+   (decision-ready: callers, tests, docs, configs, event bridges, HTTP routes).
+5. After edits, run `edit_plan(phase="after")` to re-verify blast radius.
+
+Only fall back to grep / glob / bash when:
+- a graph tool explicitly reports empty / stale / not-found,
+- the user explicitly asks for regex or filename-pattern matching,
+- you're searching non-code artifacts (configs, JSON, docs, build outputs).
+
 ## Mesh and peer communication
 
 - **subagent_message**: Send a message to a peer subagent or the orchestrator. Use kind:

@@ -14,6 +14,8 @@ import PROMPT_RESEARCHER from "./prompt/researcher.txt"
 import PROMPT_GENERAL from "./prompt/general.txt"
 
 import PROMPT_GENERATE from "./generate.txt"
+import PROMPT_BUILD from "./prompt/build.txt"
+import PROMPT_PLAN from "./prompt/plan.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_CODER from "./prompt/coder.txt"
@@ -173,6 +175,7 @@ export const layer = Layer.effect(
           build: {
             name: "build",
             description: "The default agent. Executes tools based on configured permissions.",
+            prompt: PROMPT_BUILD,
             options: {},
             permission: Permission.merge(
               defaults,
@@ -199,6 +202,7 @@ export const layer = Layer.effect(
           plan: {
             name: "plan",
             description: "Plan mode. Disallows all edit tools.",
+            prompt: PROMPT_PLAN,
             options: {},
             permission: Permission.merge(
               defaults,

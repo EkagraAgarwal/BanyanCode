@@ -19,10 +19,14 @@ ALWAYS use BanyanCode graph + repository tools first for any code question
 in this workspace. Grep / glob / bash and raw file reads are last resorts,
 not defaults.
 
-Bootstrap rule (do this BEFORE any other action on a workspace):
+Bootstrap rule (do this BEFORE any other action on a workspace, including
+before delegating to subagents):
 1. If no code graph exists for this workspace, run `codegraph_build` as
-   your very first action. Until the build finishes, `repository_query`
-   returns `degraded: true` and most graph tools are unreliable.
+   your very first action. Do not assume one is present. Until the build
+   finishes, `repository_query` returns `degraded: true` and most graph
+   tools are unreliable. Do NOT delegate to subagents until the graph is
+   built — subagents will give you worse answers from grep/glob than the
+   graph can give you.
 2. For symbol/file lookup, start with `code_find` (intents: definition,
    callers, dependents, impact, find_file).
 3. For semantic/architectural context, escalate to `repository_query`,

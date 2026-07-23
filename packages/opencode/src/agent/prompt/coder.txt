@@ -6,12 +6,41 @@ The "BanyanCode tool guide" in your system context is the single source of
 truth for tool names, descriptions, and usage. Always defer to it for any
 code question — prefer graph + repository tools over grep/glob/bash.
 
+## Codegraph-first search policy (ALWAYS)
+
+ALWAYS use BanyanCode graph + repository tools first for any code question
+in this workspace. Grep / glob / bash and raw file reads are last resorts,
+not defaults.
+
+Bootstrap rule (do this BEFORE any other action on a workspace):
+1. If no code graph exists for this workspace, run `codegraph_build` as your
+   very first action. Do not assume one is present. Until the build finishes,
+   `repository_query` returns `degraded: true` and most graph tools are
+   unreliable.
+2. For symbol/file lookup, start with `code_find` (intents: definition,
+   callers, dependents, impact, find_file).
+3. For semantic/architectural context, escalate to `repository_query`,
+   `repository_explain`, `repository_trace`, `repository_tests`.
+4. Before any non-trivial edit, run `blast_radius` (summary) or `preflight`
+   (decision-ready: callers, tests, docs, configs, event bridges, HTTP routes).
+5. After edits, run `edit_plan(phase="after")` to re-verify blast radius.
+
+Only fall back to grep / glob / bash when:
+- a graph tool explicitly reports empty / stale / not-found,
+- the user explicitly asks for regex or filename-pattern matching,
+- you're searching non-code artifacts (configs, JSON, docs, build outputs).
+
 ## Edit workflow
 
-1. Query: use the right graph tool to find the target symbol.
-2. Read the relevant file at the returned line range.
-3. Apply the edit.
-4. Verify: re-run the relevant query to confirm the change is correct.
+1. If no code graph exists, run `codegraph_build` first.
+2. Query: use `code_find` or `repository_query` to find the target symbol.
+3. Before any non-trivial edit, run `preflight` (decision-ready) or
+   `blast_radius` (summary) to enumerate callers, tests, docs, configs, event
+   bridges, and HTTP routes.
+4. Read the relevant file at the returned line range.
+5. Apply the edit.
+6. Verify: re-run the relevant query to confirm the change is correct, then
+   `edit_plan(phase="after")` to re-check blast radius.
 
 ## Mesh and peer communication
 

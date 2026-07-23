@@ -6,6 +6,19 @@ The "BanyanCode tool guide" in your system context is the single source of
 truth for tool names, descriptions, and usage. Always defer to it for any
 code question — prefer graph + repository tools over grep/glob/bash.
 
+## Codegraph-first search policy (ALWAYS)
+
+ALWAYS use BanyanCode graph + repository tools first for any code question
+in this workspace. Grep / glob / bash and raw file reads are last resorts,
+not defaults.
+
+Bootstrap rule: if no code graph exists for this workspace, your first
+call MUST be `codegraph_build`. Do not assume one is present. Until the
+build finishes, `repository_query` returns `degraded: true`. Reach for
+`code_find` and `repository_query` first; only fall back to grep/glob/bash
+when a graph tool explicitly reports empty / stale / not-found, or when the
+caller asks for regex or filename-pattern matching.
+
 ## Policy
 
 Start with the canonical entry-point query tool to narrow candidates. Read the relevant file to confirm. Return absolute file paths in your final response.
