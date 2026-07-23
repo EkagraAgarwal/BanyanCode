@@ -25,16 +25,24 @@ test("sidebar LSP shows per-server language chips", () => {
   expect(source).toMatch(/item\.languages\.slice\(/)
 })
 
-test("sidebar LSP shows the configured disabled reason", () => {
+test("sidebar LSP filters to connected entries only", () => {
+  // The sidebar only renders active LSPs (status === "connected" && !disabled);
+  // disabled / inert / error entries are intentionally hidden. The interface
+  // still carries disabledReason so the cast doesn't lose the field.
   expect(source).toContain("disabledReason")
-  expect(source).toContain('item.disabledReason ?? "disabled"')
+  expect(source).toMatch(/entry\.status === "connected"/)
+  expect(source).toMatch(/!entry\.disabled/)
+  expect(source).not.toContain('item.disabledReason ?? "disabled"')
 })
 
-test("header status pills include the LSP language summary", () => {
+test("header status-pills renders a colored dot and literal 'LSP' label", () => {
   const header = readFileSync(
     resolve(__dirname, "../../../src/feature-plugins/header/status-pills.tsx"),
     "utf8",
   )
-  expect(header).toContain("lspLanguages")
-  expect(header).toContain("langs.join")
+  expect(header).toMatch(/<text[^>]*>●<\/text>/)
+  expect(header).toMatch(/<text[^>]*>LSP<\/text>/)
+  expect(header).not.toContain("lspLanguages")
+  expect(header).not.toContain("lspLabel")
+  expect(header).not.toContain("LSP:")
 })

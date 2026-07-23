@@ -1,3 +1,17 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
-exports[`inspector agent-details session_inspector slot renders with session data 1`] = `""`;
+exports[`inspector agent-details renders only connected, enabled LSPs 1`] = `
+"AGENT DETAILS
+
+coder                                                 ◉ IDLE
+Task: Inspector LSP regression
+Started: <time>
+Model: model ▾
+Tools: read
+Cost: $0.25
+Tokens: 130
+Last: <elapsed>
+
+LSP
+● typescript [on]"
+`;

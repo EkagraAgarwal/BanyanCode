@@ -5,7 +5,6 @@ import { createMemo, createSignal, onCleanup, Show, For } from "solid-js"
 import { useSync } from "../../context/sync"
 import { toHex } from "../../util/color"
 import { DialogAgentModel } from "../../component/dialog-agent-model"
-import { useDialog } from "../../ui/dialog"
 
 const id = "internal:inspector-agent-details"
 
@@ -56,7 +55,7 @@ function StatusDot(props: { status: "active" | "idle" | "disconnected"; theme: (
 function View(props: { api: TuiPluginApi; sessionID: string }) {
   const sync = useSync()
   const theme = () => props.api.theme.current
-  const dialog = useDialog()
+  const dialog = props.api.ui.dialog
 
   const [tick, setTick] = createSignal(0)
   const timerRef: { current?: ReturnType<typeof setTimeout> } = {}
@@ -148,11 +147,10 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
     return formatElapsed((lastAssistant as any).time.completed)
   })
 
-  const gridRow = (label: string, value: () => string) => (
-    <box flexDirection="row" gap={1}>
-      <text fg={toHex(theme().textMuted)}>{label}</text>
-      <text fg={toHex(theme().text)}>{value()}</text>
-    </box>
+  const metaRow = (label: string, value: () => string) => (
+    <text fg={toHex(theme().text)}>
+      {label} {value()}
+    </text>
   )
 
   return (
@@ -166,26 +164,18 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
         </text>
         <StatusDot status={statusType()} theme={theme} />
       </box>
-      {gridRow("Task:", task)}
-      {gridRow("Started:", startedTime)}
-      <box flexDirection="row" gap={1}>
-        <text fg={toHex(theme().textMuted)}>Model:</text>
-        <text
-          fg={toHex(theme().info)}
-          onMouseDown={() => dialog.replace(() => <DialogAgentModel agentName={agentName()} />)}
-        >
-          {modelName()} ▾
-        </text>
-      </box>
-      {gridRow("Tools:", toolsDisplay)}
-      {gridRow("Cost:", () => formatCost(cost()))}
-      {gridRow("Tokens:", () => formatTokens(tokens()))}
-      <Show when={lastActivity() !== null}>
-        <box flexDirection="row" gap={1}>
-          <text fg={toHex(theme().textMuted)}>Last:</text>
-          <text fg={toHex(theme().text)}>{lastActivity()}</text>
-        </box>
-      </Show>
+      {metaRow("Task:", task)}
+      {metaRow("Started:", startedTime)}
+      <text
+        fg={toHex(theme().info)}
+        onMouseDown={() => dialog.replace(() => <DialogAgentModel agentName={agentName()} />)}
+      >
+        Model: {modelName()} ▾
+      </text>
+      {metaRow("Tools:", toolsDisplay)}
+      {metaRow("Cost:", () => formatCost(cost()))}
+      {metaRow("Tokens:", () => formatTokens(tokens()))}
+      <Show when={lastActivity() !== null}>{metaRow("Last:", () => lastActivity() ?? "")}</Show>
       <LspList api={props.api} />
     </box>
   )
@@ -197,11 +187,17 @@ interface LspEntry {
   root: string
   status: "configured" | "connected" | "error"
   autoDownload: boolean
+  languages: Array<string>
+  inert: boolean
+  disabled: boolean
+  disabledReason?: string
 }
 
 function LspList(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
-  const list = createMemo(() => props.api.state.lsp() as unknown as LspEntry[])
+  const active = createMemo(() =>
+    (props.api.state.lsp() as LspEntry[]).filter((entry) => entry.status === "connected" && !entry.disabled),
+  )
   const lspEnabled = createMemo(() => {
     const v = props.api.state.banyanConfig?.banyancode_lsp
     return v === true || (typeof v === "object" && v !== null)
@@ -221,25 +217,20 @@ function LspList(props: { api: TuiPluginApi }) {
         }
       >
         <Show
-          when={list().length > 0}
-          fallback={<text fg={toHex(theme().textMuted)}>No LSP servers registered.</text>}
+          when={active().length > 0}
+          fallback={
+            <text fg={toHex(theme().textMuted)}>No active LSPs yet; they activate as files are read.</text>
+          }
         >
-          <For each={list()}>
+          <For each={active()}>
             {(entry) => {
               const t = theme()
-              const dot =
-                entry.status === "connected"
-                  ? toHex(t.success)
-                  : entry.status === "error"
-                    ? toHex(t.error)
-                    : toHex(t.textMuted)
-              const label =
-                entry.status === "connected" ? "on" : entry.status === "error" ? "err" : "idle"
+              const dot = toHex(t.success)
               return (
                 <box flexDirection="row" gap={1}>
                   <text fg={dot}>●</text>
                   <text fg={toHex(t.text)}>{entry.name}</text>
-                  <text fg={dot}>[{label}]</text>
+                  <text fg={dot}>[on]</text>
                   <Show when={entry.autoDownload}>
                     <text fg={toHex(t.info)}>↓ auto</text>
                   </Show>

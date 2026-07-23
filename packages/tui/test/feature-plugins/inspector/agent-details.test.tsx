@@ -1,20 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import { onMount } from "solid-js"
 import InspectorAgentDetails from "../../../src/feature-plugins/inspector/agent-details"
+import { SyncContext } from "../../../src/context/sync"
+import { stateApi } from "../../../src/plugin/adapters"
 import { createTuiPluginApi } from "../../fixture/tui-plugin"
-import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
-import { TestTuiContexts } from "../../fixture/tui-environment"
-import { ThemeProvider } from "../../../src/context/theme"
-import { KVProvider } from "../../../src/context/kv"
-import { TuiConfigProvider } from "../../../src/config"
-import { SDKProvider } from "../../../src/context/sdk"
-import { createEventSource, createFetch, directory } from "../../fixture/tui-sdk"
-import { SyncProvider } from "../../../src/context/sync"
-import { ProjectProvider } from "../../../src/context/project"
-import { ExitProvider } from "../../../src/context/exit"
-import { ArgsProvider } from "../../../src/context/args"
 
 const stubTheme = {
   text: { r: 200, g: 200, b: 200, a: 1 },
@@ -28,65 +18,172 @@ const stubTheme = {
   info: { r: 100, g: 100, b: 100, a: 1 },
 }
 
-test("inspector agent-details session_inspector slot renders with session data", async () => {
-  const events = createEventSource()
-  const calls = createFetch()
-  const config = createTuiResolvedConfig()
-  let done: () => void
-  const ready = new Promise<void>((r) => { done = r })
+type LspFixture = {
+  id: string
+  name: string
+  root: string
+  status: "configured" | "connected" | "error"
+  autoDownload: boolean
+  languages: Array<string>
+  inert: boolean
+  disabled: boolean
+  disabledReason?: string
+}
+
+const populatedLsp: Array<LspFixture> = [
+  {
+    id: "typescript",
+    name: "typescript",
+    root: "/tmp/project",
+    status: "connected",
+    autoDownload: false,
+    languages: ["TypeScript", "JavaScript"],
+    inert: false,
+    disabled: false,
+  },
+  {
+    id: "gopls",
+    name: "gopls",
+    root: "",
+    status: "configured",
+    autoDownload: false,
+    languages: ["Go"],
+    inert: true,
+    disabled: false,
+  },
+  {
+    id: "ruby-lsp",
+    name: "ruby-lsp",
+    root: "",
+    status: "configured",
+    autoDownload: false,
+    languages: ["Ruby"],
+    inert: true,
+    disabled: true,
+    disabledReason: "disabled in banyancode.json",
+  },
+  {
+    id: "eslint-error",
+    name: "eslint-error",
+    root: "/tmp/project",
+    status: "error",
+    autoDownload: false,
+    languages: ["JavaScript"],
+    inert: false,
+    disabled: false,
+  },
+]
+
+function makeSync(lsp: Array<LspFixture>, banyancodeLsp: true | undefined) {
+  const session = {
+    id: "session_test",
+    title: "Inspector LSP regression",
+    agent: "coder",
+    model: { id: "test/model" },
+    time: { created: Date.parse("2026-07-23T12:00:00Z") },
+  }
+  const message = {
+    id: "message_test",
+    role: "assistant",
+    cost: 0.25,
+    tokens: { input: 100, output: 25, reasoning: 5 },
+    time: { completed: Date.now() - 6 * 60 * 1000 },
+  }
+  return {
+    ready: true,
+    data: {
+      config: {},
+      provider: [],
+      session: [session],
+      session_status: { session_test: { type: "idle" } },
+      session_diff: {},
+      todo: {},
+      permission: {},
+      question: {},
+      message: { session_test: [message] },
+      part: { message_test: [{ id: "part_test", type: "tool", tool: "read" }] },
+      lsp,
+      mcp: {},
+      banyanConfig: { banyancode_lsp: banyancodeLsp },
+    },
+    path: { home: "", state: "", config: "", worktree: "", directory: "" },
+    session: { get: () => session },
+  }
+}
+
+async function renderAgentDetails(lsp: Array<LspFixture>, banyancodeLsp: true | undefined) {
+  const sync = makeSync(lsp, banyancodeLsp)
 
   function Inner() {
+    let slot: any
     const api: any = {
       ...createTuiPluginApi({}),
       theme: { current: stubTheme },
+      state: {
+        ...stateApi(sync as any),
+        banyanConfig: { banyancode_lsp: banyancodeLsp },
+      },
       slots: {
         register(plugin: any) {
-          if (!plugin?.slots?.session_inspector) return () => {}
-          void plugin.tui(api, undefined as any, { id: "test" } as any)
-          plugin.slots.session_inspector({}, { session_id: "session_test" })
+          slot = plugin.slots.session_inspector
           return () => {}
         },
       },
     }
-    onMount(done)
-    return <box />
+    void InspectorAgentDetails.tui(api, undefined as any, { id: "test" } as any)
+    return <box flexDirection="column">{slot({}, { session_id: "session_test" })}</box>
   }
 
-  const testSetup = await testRender(() => (
-    <ExitProvider exit={console.error}>
-      <TestTuiContexts>
-        <ArgsProvider>
-          <KVProvider>
-            <SDKProvider url="http://test" directory={directory} fetch={calls.fetch} events={events.source}>
-              <ProjectProvider>
-                <SyncProvider>
-                  <TuiConfigProvider config={config}>
-                    <ThemeProvider mode="dark">
-                      <Inner />
-                    </ThemeProvider>
-                  </TuiConfigProvider>
-                </SyncProvider>
-              </ProjectProvider>
-            </SDKProvider>
-          </KVProvider>
-        </ArgsProvider>
-      </TestTuiContexts>
-    </ExitProvider>
-  ), { width: 40, height: 50 })
+  const setup = await testRender(
+    () => (
+      <SyncContext.Provider value={sync as any}>
+        <Inner />
+      </SyncContext.Provider>
+    ),
+    { width: 60, height: 50 },
+  )
 
-  await ready
-  await testSetup.renderOnce()
-  await new Promise((r) => setTimeout(r, 0))
-  await testSetup.renderOnce()
-  const snapshot = testSetup
-    .captureCharFrame()
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .join("\n")
-    .trimEnd()
   try {
-    expect(snapshot).toMatchSnapshot()
+    await setup.renderOnce()
+    return setup
+      .captureCharFrame()
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .join("\n")
+      .trimEnd()
   } finally {
-    testSetup.renderer.destroy()
+    setup.renderer.destroy()
   }
+}
+
+test("inspector agent-details renders only connected, enabled LSPs", async () => {
+  const frame = await renderAgentDetails(populatedLsp, true)
+
+  expect(frame).toContain("typescript")
+  expect(frame).not.toContain("gopls")
+  expect(frame).not.toContain("ruby-lsp")
+  expect(frame).not.toContain("eslint-error")
+  expect(frame).toContain("Task: Inspector LSP regression")
+  expect(frame).toContain("Model: model ▾")
+  expect(frame).toMatch(/Last: \d+[smh] ago/)
+  expect(frame).not.toContain("Task:Inspector")
+  expect(frame).not.toContain("Last:6m ago")
+  expect(
+    frame.replace(/Started: \d{2}:\d{2}:\d{2}/, "Started: <time>").replace(/Last: \d+[smh] ago/, "Last: <elapsed>"),
+  ).toMatchSnapshot()
+})
+
+test("inspector agent-details shows the empty LSP note when no active server is connected", async () => {
+  const frame = await renderAgentDetails(populatedLsp.filter((entry) => entry.status !== "connected"), true)
+
+  expect(frame).toContain("No active LSPs yet")
+  expect(frame).not.toContain("gopls")
+  expect(frame).not.toContain("ruby-lsp")
+  expect(frame).not.toContain("eslint-error")
+})
+
+test("inspector agent-details shows the disabled fallback when banyancode_lsp is falsy", async () => {
+  const frame = await renderAgentDetails([], undefined)
+
+  expect(frame).toContain("Disabled. Run /lsp or set banyancode_lsp: true")
 })

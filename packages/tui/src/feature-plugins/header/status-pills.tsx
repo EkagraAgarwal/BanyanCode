@@ -72,33 +72,6 @@ const lspList = createMemo(() => props.api.state.lsp() as Array<{
   disabled: boolean
 }>)
 const lspConnectedCount = createMemo(() => lspList().filter((l) => l.status === "connected" && !l.disabled).length)
-const lspConfiguredCount = createMemo(() => lspList().filter((l) => !l.disabled).length)
-const lspAutoDownloadedCount = createMemo(() => lspList().filter((l) => l.autoDownload).length)
-const lspLanguages = createMemo<string[]>(() => {
-  const out: string[] = []
-  for (const entry of lspList()) {
-    if (entry.disabled) continue
-    if (entry.status !== "connected") continue
-    for (const lang of entry.languages) {
-      if (!out.includes(lang)) out.push(lang)
-      if (out.length >= 3) break
-    }
-    if (out.length >= 3) break
-  }
-  if (out.length === 0) {
-    for (const entry of lspList()) {
-      if (entry.disabled) continue
-      for (const lang of entry.languages) {
-        if (!out.includes(lang)) out.push(lang)
-        if (out.length >= 3) break
-      }
-      if (out.length >= 3) break
-    }
-  }
-  return out
-})
-// Configured via banyancode_lsp in banyancode.json. When the service is
-// unavailable (BanyanCode off) or the field is unset, treat LSP as off.
 const lspEnabled = createMemo(() => {
   const v = props.api.state.banyanConfig?.banyancode_lsp
   return v === true || (typeof v === "object" && v !== null)
@@ -106,16 +79,7 @@ const lspEnabled = createMemo(() => {
 
 const agentsLabel = () => `${activeSessionCount()} active`
 const mcpLabel = () => (mcpConnectedCount() > 0 ? `MCP: ${mcpFirstConnected()}` : "MCP: —")
-// Show four states: off (config disabled), inactive (config on, no server
-// attached yet), active (≥1 server attached), and the leading language
-// summary so the user can tell at a glance which stack is wired.
-const lspLabel = () => {
-  if (!lspEnabled()) return "LSP: off"
-  const langs = lspLanguages()
-  if (langs.length === 0) return `LSP: 0/${lspConfiguredCount()} (idle) · ${lspAutoDownloadedCount()} auto`
-  return `LSP: ${langs.join(" · ")} · ${lspConnectedCount()}/${lspConfiguredCount()}`
-}
-  const graphLabel = () => (graphBuilt() ? "Graph: built" : "Graph: off")
+const graphLabel = () => (graphBuilt() ? "Graph: built" : "Graph: off")
 
   const agentsDotColor = () => (activeSessionCount() > 0 ? toHex(theme().success) : toHex(theme().textMuted))
   const mcpDotColor = () => (mcpConnectedCount() > 0 ? toHex(theme().success) : toHex(theme().error))
@@ -137,6 +101,7 @@ const lspLabel = () => {
       </box>
       <box flexDirection="row" flexShrink={0} gap={1}>
         <text fg={lspDotColor()}>●</text>
+        <text fg={toHex(theme().textMuted)}>LSP</text>
       </box>
       <box flexDirection="row" flexShrink={0} gap={1}>
         <text fg={graphDotColor()}>●</text>
