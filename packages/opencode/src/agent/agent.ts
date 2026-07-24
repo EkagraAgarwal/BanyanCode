@@ -20,6 +20,7 @@ import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_CODER from "./prompt/coder.txt"
 import PROMPT_SCOUT from "./prompt/scout.txt"
+import PROMPT_REVIEWER from "./prompt/reviewer.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
 import { Permission } from "@/permission"
@@ -410,6 +411,52 @@ export const layer = Layer.effect(
             ),
             options: {},
           },
+          reviewer: {
+            name: "reviewer",
+            description:
+              "Reviews code changes with a clean context. Read-only — does not edit, write, or execute. Returns pass / fail / blocked with reasoning.",
+            mode: "subagent",
+            native: true,
+            prompt: PROMPT_REVIEWER,
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                read: "allow",
+                grep: "allow",
+                glob: "allow",
+                list: "allow",
+                webfetch: "allow",
+                codegraph_query: "allow",
+                codegraph_callers: "allow",
+                codegraph_dependents: "allow",
+                codegraph_impact: "allow",
+                codegraph_search: "allow",
+                codegraph_find_async: "allow",
+                codegraph_find_recursive: "allow",
+                codegraph_find_http_routes: "allow",
+                codegraph_find_overrides: "allow",
+                codegraph_find_implementations: "allow",
+                repository_impact: "allow",
+                repository_symbols: "allow",
+                repository_relationships: "allow",
+                repository_ownership: "allow",
+                subagent_message: "allow",
+                mesh_subscribe: "allow",
+                mesh_control: "deny",
+                edit: "deny",
+                write: "deny",
+                apply_patch: "deny",
+                bash: "deny",
+                websearch: "deny",
+                task: "deny",
+                todowrite: "deny",
+                question: "deny",
+                shared_memory: "deny",
+              }),
+              user,
+            ),
+            options: {},
+          },
           compaction: {
             name: "compaction",
             mode: "primary",
@@ -472,6 +519,7 @@ export const layer = Layer.effect(
                   explore: "allow",
                   general: "allow",
                   scout: "allow",
+                  reviewer: "allow",
                 },
                 shared_memory: "allow",
                 subagent_message: "allow",

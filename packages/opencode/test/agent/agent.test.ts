@@ -1,4 +1,4 @@
-import { afterEach, expect } from "bun:test"
+import { afterEach, describe, expect } from "bun:test"
 import { Cause, Effect, Exit, Layer } from "effect"
 import path from "path"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
@@ -758,3 +758,72 @@ it.instance(
     },
   },
 )
+
+describe("reviewer agent", () => {
+  it.instance("reviewer is a built-in subagent with mode=subagent", () =>
+    Effect.gen(function* () {
+      const agents = yield* load((svc) => svc.list())
+      const reviewer = agents.find((a) => a.name === "reviewer")
+      expect(reviewer).toBeDefined()
+      expect(reviewer?.mode).toBe("subagent")
+      expect(reviewer?.native).toBe(true)
+    }),
+  )
+
+  it.instance("reviewer is read-only — denies mutation, shell, recursion", () =>
+    Effect.gen(function* () {
+      const reviewer = yield* load((svc) => svc.get("reviewer"))
+      expect(reviewer).toBeDefined()
+      // Denied: mutation, shell, recursion, recurse-into-subagent
+      expect(evalPerm(reviewer, "edit")).toBe("deny")
+      expect(evalPerm(reviewer, "write")).toBe("deny")
+      expect(evalPerm(reviewer, "apply_patch")).toBe("deny")
+      expect(evalPerm(reviewer, "bash")).toBe("deny")
+      expect(evalPerm(reviewer, "websearch")).toBe("deny")
+      expect(evalPerm(reviewer, "task")).toBe("deny")
+      expect(evalPerm(reviewer, "todowrite")).toBe("deny")
+      expect(evalPerm(reviewer, "question")).toBe("deny")
+      expect(evalPerm(reviewer, "shared_memory")).toBe("deny")
+      expect(evalPerm(reviewer, "mesh_control")).toBe("deny")
+      // Allowed: read + graph + repository + mesh publish
+      expect(evalPerm(reviewer, "read")).toBe("allow")
+      expect(evalPerm(reviewer, "grep")).toBe("allow")
+      expect(evalPerm(reviewer, "glob")).toBe("allow")
+      expect(evalPerm(reviewer, "codegraph_query")).toBe("allow")
+      expect(evalPerm(reviewer, "codegraph_callers")).toBe("allow")
+      expect(evalPerm(reviewer, "codegraph_impact")).toBe("allow")
+      expect(evalPerm(reviewer, "repository_impact")).toBe("allow")
+      expect(evalPerm(reviewer, "repository_symbols")).toBe("allow")
+      expect(evalPerm(reviewer, "subagent_message")).toBe("allow")
+      expect(evalPerm(reviewer, "mesh_subscribe")).toBe("allow")
+    }),
+  )
+
+  it.instance("orchestrator can spawn reviewer", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* load((svc) => svc.get("orchestrator"))
+      expect(orchestrator).toBeDefined()
+      const result = Permission.evaluate("task", "reviewer", orchestrator!.permission)
+      expect(result.action).toBe("allow")
+    }),
+  )
+
+  it.instance("agents with task: { '*': deny } cannot spawn reviewer", () =>
+    Effect.gen(function* () {
+      const coder = yield* load((svc) => svc.get("coder"))
+      expect(coder).toBeDefined()
+      const result = Permission.evaluate("task", "reviewer", coder!.permission)
+      expect(result.action).toBe("deny")
+    }),
+  )
+
+  it.instance("reviewer prompt contains VERDICT markers", () =>
+    Effect.gen(function* () {
+      const reviewer = yield* load((svc) => svc.get("reviewer"))
+      expect(reviewer).toBeDefined()
+      expect(reviewer?.prompt).toContain("VERDICT: pass")
+      expect(reviewer?.prompt).toContain("VERDICT: fail")
+      expect(reviewer?.prompt).toContain("VERDICT: blocked")
+    }),
+  )
+})

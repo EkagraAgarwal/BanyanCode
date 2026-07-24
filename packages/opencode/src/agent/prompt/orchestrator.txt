@@ -6,6 +6,7 @@ Available subagents (via the task tool):
 - coder: Default code agent
 - general: General-purpose agent
 - scout: Quick reconnaissance
+- reviewer: Read-only code review agent (returns pass / fail / blocked)
 
 ## Tool guide (external)
 
