@@ -378,17 +378,33 @@ export const layer = Layer.effect(
 
     const planFor = Effect.fn("MeshCoordinator.planFor")(function* (input: {
       parentSessionID: SessionSchema.ID
+      // Optional: the child session the plan is bound to. planFor is normally
+      // called BEFORE the child is spawned (the orchestrator announces the
+      // plan first), so this is unset in that path. When present, it wins
+      // over `parentSessionID` as the canonical plan owner — child-session
+      // is the canonical owner per Phase 1A sessionID standardization.
+      childSessionID?: SessionSchema.ID
       targetAgent: string
       plan: { title: string; steps: Array<{ content: string; status: "pending" | "in_progress" | "completed" | "cancelled" }>; exitCriteria: string }
     }) {
       const planID = crypto.randomUUID()
       const now = Date.now()
 
+      // Phase 1A: child session is the canonical plan owner. If a child
+      // session was provided, use it. Otherwise fall back to parentSessionID
+      // and document the asymmetry: this codepath publishes the plan BEFORE
+      // the child session exists (orchestrator announce-then-spawn), so we
+      // cannot yet resolve a child id. The child task publisher
+      // (`opencode/src/tool/task.ts:215`) will spawn first and re-write
+      // `sessionID` to the child id when it publishes the same plan from
+      // its own context — see `task.ts` for the canonical path.
+      const ownerSessionID = input.childSessionID ?? input.parentSessionID
+
       yield* plans.put({
         id: planID,
         parentSessionID: input.parentSessionID,
         agent: input.targetAgent,
-        sessionID: input.parentSessionID,
+        sessionID: ownerSessionID,
         title: input.plan.title,
         steps: input.plan.steps,
         exitCriteria: input.plan.exitCriteria,
@@ -397,6 +413,14 @@ export const layer = Layer.effect(
         updatedAt: now,
       })
 
+      // Phase 1A G3: plumb planID through the published payload so
+      // downstream consumers can correlate the `kind: "plan"` message with
+      // the persisted SubagentPlans row. Envelope = `{ planID, ...plan }`
+      // (spread of PlanDefinition) so existing payload readers see the same
+      // PlanDefinition fields plus planID at the top level. SubagentMessage
+      // also carries the canonical `planID` field for consumers that prefer
+      // the top-level correlation; the payload envelope is the primary
+      // contract for in-flight delivery.
       const message: SubagentMessage = {
         id: crypto.randomUUID(),
         parentSessionID: input.parentSessionID,
@@ -404,7 +428,8 @@ export const layer = Layer.effect(
         fromAgent: "orchestrator",
         toAgent: input.targetAgent,
         kind: "plan",
-        payload: input.plan,
+        planID,
+        payload: { planID, ...input.plan },
         createdAt: Date.now(),
       }
       yield* bus.publish(message)

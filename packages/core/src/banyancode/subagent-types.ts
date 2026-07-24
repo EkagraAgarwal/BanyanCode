@@ -1,9 +1,13 @@
 /**
- * Subagent types — Phase 0 G1/G2.
+ * Subagent types — Phase 0 G1/G2, Phase 1A G3.
  *
  * G1: idempotent retry mechanism via `idempotencyKey` + `createdAt`.
  * G2: versioned JSONB envelope on `subagent_messages.payload` and
  *     `subagent_plans.steps`.
+ * G3: `plan_update` message kind + `planID` correlation invariant. A
+ *     `plan_update` message MUST carry `planID` matching a row in the
+ *     subagent_plans table; the consumer treats absence as "mark delivered"
+ *     and the repo treats unknown planID as a no-op (returns undefined).
  */
 
 import { Schema } from "effect"
@@ -11,7 +15,7 @@ import { Schema } from "effect"
 // Re-export from types.ts for consumers
 export type { SubagentMessage } from "./types"
 
-export type MessageKind = "request" | "inform" | "answer" | "poll" | "steer" | "checkpoint" | "plan" | "kill"
+export type MessageKind = "request" | "inform" | "answer" | "poll" | "steer" | "checkpoint" | "plan" | "plan_update" | "kill"
 
 /** Branded string for idempotency keys. */
 export type IdempotencyKey = string & { readonly _brand: unique symbol }

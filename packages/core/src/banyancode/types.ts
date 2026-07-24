@@ -143,7 +143,11 @@ export type SubagentMessage = {
   fromAgent: string
   toSession?: string
   toAgent?: string
-  kind: "request" | "inform" | "answer" | "poll" | "steer" | "checkpoint" | "plan" | "kill"
+  kind: "request" | "inform" | "answer" | "poll" | "steer" | "checkpoint" | "plan" | "plan_update" | "kill"
+  // G3: planID correlation invariant — present on plan_update messages to bind
+  // the update to a SubagentPlans row. Optional for legacy read compatibility;
+  // required for plan_update kind.
+  planID?: string
   payload: unknown
   deliveredAt?: number
   createdAt: number
@@ -156,6 +160,12 @@ export type PlanDefinition = {
     status: "pending" | "in_progress" | "completed" | "cancelled"
   }>
   exitCriteria: string
+}
+
+export interface PlanStepStatusUpdate {
+  planID: string
+  stepIndex: number
+  status: "pending" | "in_progress" | "completed" | "cancelled"
 }
 
 export interface WorkspaceContext {

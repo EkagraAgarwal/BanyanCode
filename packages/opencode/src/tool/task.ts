@@ -216,6 +216,17 @@ export const TaskTool = Tool.define(
         const plan = params.plan
         const busOption = yield* Effect.serviceOption(SubagentBusService)
         const plansOption = yield* Effect.serviceOption(SubagentPlansService)
+        // Phase 1A G3: a single planID is shared between the persisted row
+        // and the published message so consumers can correlate the two.
+        // Previously the two `crypto.randomUUID()` calls produced different
+        // ids and the bus payload `planID` field was never populated,
+        // leaving `kind: "plan"` messages uncorrelatable. The payload is
+        // wrapped as `{ planID, ...plan }` (PlanDefinition + planID) so
+        // existing payload readers see the same PlanDefinition fields plus
+        // planID at the top level — see mesh-coordinator.ts:planFor for
+        // the same envelope contract. We also stamp the canonical
+        // `SubagentMessage.planID` field for top-level correlation.
+        const planID = crypto.randomUUID()
         if (Option.isSome(busOption)) {
           yield* busOption.value.publish({
             id: crypto.randomUUID(),
@@ -224,13 +235,14 @@ export const TaskTool = Tool.define(
             fromAgent: ctx.agent,
             toAgent: next.name,
             kind: "plan",
-            payload: plan,
+            planID,
+            payload: { planID, ...plan },
             createdAt: Date.now(),
           })
         }
         if (Option.isSome(plansOption)) {
           yield* plansOption.value.put({
-            id: crypto.randomUUID(),
+            id: planID,
             parentSessionID: ctx.sessionID,
             agent: next.name,
             sessionID: nextSession.id,

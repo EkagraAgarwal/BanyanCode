@@ -58,6 +58,7 @@ const buildLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>) => {
       listBySession: () => Effect.succeed([]),
       markCompleted: () => Effect.void,
       markCancelled: () => Effect.void,
+      setStepStatus: () => Effect.succeed(undefined),
     }),
   )
 

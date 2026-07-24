@@ -36,6 +36,7 @@ const buildServiceLayer = (dbPath: string) => {
       listBySession: () => Effect.succeed([]),
       markCompleted: () => Effect.void,
       markCancelled: () => Effect.void,
+      setStepStatus: () => Effect.succeed(undefined),
     }),
   )
 

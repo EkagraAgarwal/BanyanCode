@@ -31,6 +31,11 @@ export interface Interface {
   readonly listBySession: (sessionID: string) => Effect.Effect<SubagentPlan[], never, never>
   readonly markCompleted: (id: string) => Effect.Effect<void, never, never>
   readonly markCancelled: (id: string) => Effect.Effect<void, never, never>
+  readonly setStepStatus: (
+    planID: string,
+    stepIndex: number,
+    status: "pending" | "in_progress" | "completed" | "cancelled",
+  ) => Effect.Effect<SubagentPlan | undefined, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Banyan/SubagentPlansRepo") {}
@@ -181,7 +186,69 @@ export const layer = Layer.effect(
       })
     })
 
-    return Service.of({ put, getByID, listByParent, listBySession, markCompleted, markCancelled })
+    const setStepStatus = Effect.fn("SubagentPlansRepo.setStepStatus")(function* (
+      planID: string,
+      stepIndex: number,
+      status: "pending" | "in_progress" | "completed" | "cancelled",
+    ) {
+      const updated = yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          const row = yield* tx
+            .select()
+            .from(SubagentPlansTable)
+            .where(eq(SubagentPlansTable.id, planID))
+            .get()
+            .pipe(Effect.orDie)
+
+          if (!row) return undefined as SubagentPlan | undefined
+
+          const steps = unwrapPayload(row.steps) as PlanStep[]
+          if (stepIndex < 0 || stepIndex >= steps.length) {
+            return {
+              id: row.id,
+              parentSessionID: row.parent_session_id,
+              agent: row.agent,
+              sessionID: row.session_id,
+              title: row.title,
+              steps,
+              exitCriteria: row.exit_criteria,
+              status: row.status as SubagentPlan["status"],
+              createdAt: row.created_at,
+              updatedAt: row.updated_at,
+            }
+          }
+
+          const newSteps = steps.map((step, i) => (i === stepIndex ? { ...step, status } : step))
+          const now = Date.now()
+          yield* tx
+            .update(SubagentPlansTable)
+            .set({ steps: wrapPayload(newSteps) as any, updated_at: now })
+            .where(eq(SubagentPlansTable.id, planID))
+            .run()
+            .pipe(Effect.orDie)
+
+          return {
+            id: row.id,
+            parentSessionID: row.parent_session_id,
+            agent: row.agent,
+            sessionID: row.session_id,
+            title: row.title,
+            steps: newSteps,
+            exitCriteria: row.exit_criteria,
+            status: row.status as SubagentPlan["status"],
+            createdAt: row.created_at,
+            updatedAt: now,
+          }
+        }),
+      ).pipe(Effect.orDie)
+
+      if (updated) {
+        yield* Ref.update(cache, (c) => ({ ...c, [planID]: updated }))
+      }
+      return updated
+    })
+
+    return Service.of({ put, getByID, listByParent, listBySession, markCompleted, markCancelled, setStepStatus })
   }),
 )
 

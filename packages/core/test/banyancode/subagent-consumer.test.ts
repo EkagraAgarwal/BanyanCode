@@ -8,6 +8,7 @@ import { MeshCoordinator } from "../../src/banyancode/mesh-coordinator"
 import { SubagentPlans } from "../../src/banyancode/subagent-plans-repo"
 import { EventV2 } from "../../src/event"
 import { Database } from "../../src/database/database"
+import { DatabaseMigration } from "../../src/database/migration"
 import { tmpdir } from "../fixture/tmpdir"
 import path from "path"
 import type { MemoryEntry, SubagentMessage } from "../../src/banyancode/types"
@@ -63,6 +64,7 @@ const buildServiceLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>, 
       listBySession: () => Effect.succeed([]),
       markCompleted: () => Effect.void,
       markCancelled: () => Effect.void,
+      setStepStatus: () => Effect.succeed(undefined),
     }),
   )
 
@@ -177,6 +179,202 @@ describe("SubagentConsumer", () => {
         const result = yield* consumer.start({ sessionID: "ses_voidtest" as any, agent: "coder" })
         expect(result).toBeUndefined()
       }).pipe(Effect.provide(serviceLayer), Effect.scoped),
+    )
+  })
+
+  // Phase 1A G3: plan_update handling on the consumer. These tests verify
+  // that a `kind: "plan_update"` message drives `SubagentPlansRepo.setStepStatus`
+  // and that the consumer does not crash on unknown planIDs or out-of-bounds
+  // step indices. Uses a real DB-backed SubagentPlans layer for test 1 so
+  // `getByID` actually reads back the persisted update.
+  test("plan_update advances a step in the persisted plan", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "plan-update-step.sqlite")
+    const queue = await Effect.runPromise(Queue.unbounded<SubagentMessage>())
+    const captured: MemoryEntry[] = []
+    const dbLayer = Database.layerFromPath(dbPath)
+    const plansLayer = SubagentPlans.defaultLayer.pipe(Layer.provide(dbLayer))
+    // Provide the real SubagentPlans via Layer.merge so the consumer's
+    // serviceOption lookup finds it at runtime. buildServiceLayerWithRealPlans
+    // composes it via Layer.provide which can't satisfy a service the
+    // consumer's layer doesn't declare as input — merge keeps both layers
+    // independent and feeds their outputs into the same context.
+    const serviceLayer = Layer.merge(buildServiceLayer(dbPath, queue, captured), plansLayer)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+
+        const consumer = yield* SubagentConsumer.Service
+        const plans = yield* SubagentPlans.Service
+        const planID = "plan-update-step"
+
+        yield* plans.put({
+          id: planID,
+          parentSessionID: "ses_parent" as any,
+          agent: "coder",
+          sessionID: "ses_child" as any,
+          title: "Advance step",
+          steps: [
+            { content: "Step 0", status: "pending" },
+            { content: "Step 1", status: "pending" },
+          ],
+          exitCriteria: "Done",
+          status: "active",
+          createdAt: Date.now(),
+        })
+
+        yield* consumer.start({ sessionID: "ses_child" as any, agent: "coder" })
+        yield* Queue.offer(queue, {
+          id: "msg-plan-update-1",
+          parentSessionID: "ses_parent" as any,
+          fromSession: "ses_parent" as any,
+          fromAgent: "orchestrator",
+          kind: "plan_update",
+          planID,
+          payload: { planID, stepIndex: 0, status: "in_progress" },
+          createdAt: Date.now(),
+        })
+        yield* Effect.sleep(80)
+
+        const updated = yield* plans.getByID(planID)
+        expect(updated).toBeDefined()
+        expect(updated?.steps[0]).toEqual({ content: "Step 0", status: "in_progress" })
+        expect(updated?.steps[1]).toEqual({ content: "Step 1", status: "pending" })
+      }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped) as Effect.Effect<
+        void,
+        never,
+        never
+      >,
+    )
+  })
+
+  test("plan_update with unknown planID is delivered without crashing", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "plan-update-unknown.sqlite")
+    const queue = await Effect.runPromise(Queue.unbounded<SubagentMessage>())
+    const captured: MemoryEntry[] = []
+    const serviceLayer = buildServiceLayer(dbPath, queue, captured)
+    const dbLayer = Database.layerFromPath(dbPath)
+    const messagesLayer = SubagentMessagesRepo.defaultLayer.pipe(Layer.provide(dbLayer))
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const consumer = yield* SubagentConsumer.Service
+        const messages = yield* SubagentMessagesRepo.Service
+
+        yield* messages.put({
+          id: "msg-plan-update-unknown",
+          parentSessionID: "ses_unknown_parent" as any,
+          fromSession: "ses_unknown_parent" as any,
+          fromAgent: "orchestrator",
+          kind: "plan_update",
+          payload: { planID: "nonexistent", stepIndex: 0, status: "completed" },
+          createdAt: Date.now(),
+        })
+
+        yield* consumer.start({ sessionID: "ses_unknown_parent" as any, agent: "coder" })
+        yield* Queue.offer(queue, {
+          id: "msg-plan-update-unknown",
+          parentSessionID: "ses_unknown_parent" as any,
+          fromSession: "ses_unknown_parent" as any,
+          fromAgent: "orchestrator",
+          kind: "plan_update",
+          payload: { planID: "nonexistent", stepIndex: 0, status: "completed" },
+          createdAt: Date.now(),
+        })
+        yield* Effect.sleep(80)
+
+        const row = yield* messages.get("msg-plan-update-unknown")
+        expect(row?.deliveredAt).toBeDefined()
+        // Memory is unaffected — plan_update never writes to memory.
+        expect(captured).toHaveLength(0)
+      }).pipe(Effect.provide(serviceLayer), Effect.provide(messagesLayer), Effect.scoped),
+    )
+  })
+
+  test("plan_update with out-of-bounds stepIndex is delivered and the plan is unchanged", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "plan-update-oob.sqlite")
+    const queue = await Effect.runPromise(Queue.unbounded<SubagentMessage>())
+    const captured: MemoryEntry[] = []
+    const dbLayer = Database.layerFromPath(dbPath)
+    const plansLayer = SubagentPlans.defaultLayer.pipe(Layer.provide(dbLayer))
+    const messagesLayer = SubagentMessagesRepo.defaultLayer.pipe(Layer.provide(dbLayer))
+    // Provide the real SubagentPlans and SubagentMessagesRepo via
+    // Layer.merge so the consumer's serviceOption lookup finds them at
+    // runtime. buildServiceLayer internally satisfies both via its
+    // `mockPlans` and `messagesLayer` provides, but Layer.merge only
+    // exposes the top-level outputs of each layer — and buildServiceLayer's
+    // top-level output is only `SubagentConsumer.Service`. We re-export
+    // messagesLayer here so the test can yield* SubagentMessagesRepo.Service
+    // to insert the message into the DB before the consumer reads it.
+    const serviceLayer = Layer.mergeAll(
+      buildServiceLayer(dbPath, queue, captured),
+      plansLayer,
+      messagesLayer,
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+
+        const consumer = yield* SubagentConsumer.Service
+        const plans = yield* SubagentPlans.Service
+        const messages = yield* SubagentMessagesRepo.Service
+        const planID = "plan-update-oob"
+        const createdAt = Date.now()
+
+        yield* plans.put({
+          id: planID,
+          parentSessionID: "ses_oob_parent" as any,
+          agent: "coder",
+          sessionID: "ses_oob_child" as any,
+          title: "OOB test",
+          steps: [{ content: "Only step", status: "pending" }],
+          exitCriteria: "Done",
+          status: "active",
+          createdAt,
+        })
+        const before = yield* plans.getByID(planID)
+        expect(before?.steps.length).toBe(1)
+
+        yield* messages.put({
+          id: "msg-plan-update-oob",
+          parentSessionID: "ses_oob_parent" as any,
+          fromSession: "ses_oob_parent" as any,
+          fromAgent: "orchestrator",
+          kind: "plan_update",
+          payload: { planID, stepIndex: 5, status: "completed" },
+          createdAt: Date.now(),
+        })
+
+        yield* consumer.start({ sessionID: "ses_oob_child" as any, agent: "coder" })
+        yield* Queue.offer(queue, {
+          id: "msg-plan-update-oob",
+          parentSessionID: "ses_oob_parent" as any,
+          fromSession: "ses_oob_parent" as any,
+          fromAgent: "orchestrator",
+          kind: "plan_update",
+          payload: { planID, stepIndex: 5, status: "completed" },
+          createdAt: Date.now(),
+        })
+        yield* Effect.sleep(80)
+
+        const after = yield* plans.getByID(planID)
+        expect(after).toBeDefined()
+        expect(after?.steps).toEqual([{ content: "Only step", status: "pending" }])
+        expect(after?.updatedAt).toBe(before?.updatedAt)
+
+        const row = yield* messages.get("msg-plan-update-oob")
+        expect(row?.deliveredAt).toBeDefined()
+      }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped) as Effect.Effect<
+        void,
+        never,
+        never
+      >,
     )
   })
 })

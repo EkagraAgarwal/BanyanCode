@@ -57,6 +57,7 @@ describe("MeshCoordinator", () => {
         listBySession: () => Effect.succeed([]),
         markCompleted: () => Effect.void,
         markCancelled: () => Effect.void,
+        setStepStatus: () => Effect.succeed(undefined),
       }),
     )
 
@@ -107,6 +108,7 @@ describe("MeshCoordinator", () => {
         listBySession: () => Effect.succeed([]),
         markCompleted: () => Effect.void,
         markCancelled: () => Effect.void,
+        setStepStatus: () => Effect.succeed(undefined),
       }),
     )
 
@@ -162,6 +164,7 @@ describe("MeshCoordinator", () => {
         listBySession: () => Effect.succeed([]),
         markCompleted: () => Effect.void,
         markCancelled: () => Effect.void,
+        setStepStatus: () => Effect.succeed(undefined),
       }),
     )
 
@@ -217,6 +220,7 @@ describe("MeshCoordinator", () => {
         listBySession: () => Effect.succeed([]),
         markCompleted: () => Effect.void,
         markCancelled: () => Effect.void,
+        setStepStatus: () => Effect.succeed(undefined),
       }),
     )
 
@@ -246,9 +250,19 @@ describe("MeshCoordinator", () => {
         expect(publishedMessage).not.toBeNull()
         expect(publishedMessage.kind).toBe("plan")
         expect(publishedMessage.toAgent).toBe("coder")
-        expect(publishedMessage.payload).toEqual(testPlan)
-
+        // Phase 1A G3: payload wraps the PlanDefinition with `{ planID, ...plan }`
+        // so the consumer can correlate the bus message with the persisted row.
         expect(persistedPlan).not.toBeNull()
+        expect(publishedMessage.payload.planID).toBe(persistedPlan.id)
+        // PlanDefinition fields stay at the top level alongside planID.
+        expect(publishedMessage.payload).toEqual({
+          planID: persistedPlan.id,
+          ...testPlan,
+        })
+        // Top-level SubagentMessage.planID is also stamped for consumers that
+        // prefer the canonical correlation field.
+        expect(publishedMessage.planID).toBe(persistedPlan.id)
+
         expect(persistedPlan.title).toBe("Implement feature X")
         expect(persistedPlan.agent).toBe("coder")
         expect(persistedPlan.status).toBe("active")
@@ -283,6 +297,7 @@ describe("MeshCoordinator", () => {
         listBySession: () => Effect.succeed([]),
         markCompleted: () => Effect.void,
         markCancelled: () => Effect.void,
+        setStepStatus: () => Effect.succeed(undefined),
       }),
     )
 
@@ -369,6 +384,7 @@ describe("MeshCoordinator", () => {
         listBySession: () => Effect.succeed([]),
         markCompleted: () => Effect.void,
         markCancelled: () => Effect.void,
+        setStepStatus: () => Effect.succeed(undefined),
       }),
     )
 

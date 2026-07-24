@@ -18,7 +18,7 @@ const SubagentMessageSchema = Schema.Struct({
   fromAgent: Schema.String,
   toSession: Schema.optional(Schema.String),
   toAgent: Schema.optional(Schema.String),
-  kind: Schema.Literals(["request", "inform", "answer", "poll", "steer", "checkpoint", "plan", "kill"]),
+  kind: Schema.Literals(["request", "inform", "answer", "poll", "steer", "checkpoint", "plan", "plan_update", "kill"]),
   payload: Schema.Unknown,
   deliveredAt: Schema.optional(Schema.Number),
   createdAt: Schema.Number,

@@ -40,6 +40,7 @@ describe("MeshCoordinator.subscribe", () => {
         listBySession: () => Effect.succeed([]),
         markCompleted: () => Effect.void,
         markCancelled: () => Effect.void,
+        setStepStatus: () => Effect.succeed(undefined),
       }),
     )
 
@@ -111,6 +112,7 @@ describe("MeshCoordinator.subscribe", () => {
         listBySession: () => Effect.succeed([]),
         markCompleted: () => Effect.void,
         markCancelled: () => Effect.void,
+        setStepStatus: () => Effect.succeed(undefined),
       }),
     )
 
