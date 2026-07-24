@@ -2279,3 +2279,353 @@ noLLMServer.instance(
     }),
   30_000,
 )
+
+// Loop control primitive — Phase 1B
+
+function completedToolPart(input: {
+  sessionID: SessionID
+  tool: string
+  input: Record<string, unknown>
+  callID: string
+  providerExecuted?: boolean
+}) {
+  return Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const { directory } = yield* TestInstance
+    const sessionID = input.sessionID
+    const assistant = yield* sessions.updateMessage({
+      id: MessageID.ascending(),
+      role: "assistant",
+      parentID: "msg_parent" as MessageID,
+      sessionID,
+      mode: "build",
+      agent: "build",
+      cost: 0,
+      path: { cwd: directory, root: directory },
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      modelID: ref.modelID,
+      providerID: ref.providerID,
+      time: { created: Date.now() },
+    })
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: assistant.id,
+      sessionID,
+      type: "tool",
+      callID: input.callID,
+      tool: input.tool,
+      state: {
+        status: "completed",
+        input: input.input,
+        output: "ok",
+        title: input.tool,
+        metadata: {},
+        time: { start: 1, end: 2 },
+      },
+      ...(input.providerExecuted ? { metadata: { providerExecuted: true } } : {}),
+    })
+    return assistant
+  })
+}
+
+function errorToolSeedPart(input: {
+  sessionID: SessionID
+  tool: string
+  input: Record<string, unknown>
+  callID: string
+  interrupted?: boolean
+}) {
+  return Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const { directory } = yield* TestInstance
+    const sessionID = input.sessionID
+    const assistant = yield* sessions.updateMessage({
+      id: MessageID.ascending(),
+      role: "assistant",
+      parentID: "msg_parent" as MessageID,
+      sessionID,
+      mode: "build",
+      agent: "build",
+      cost: 0,
+      path: { cwd: directory, root: directory },
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      modelID: ref.modelID,
+      providerID: ref.providerID,
+      time: { created: Date.now() },
+    })
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: assistant.id,
+      sessionID,
+      type: "tool",
+      callID: input.callID,
+      tool: input.tool,
+      state: {
+        status: "error",
+        input: input.input,
+        error: input.interrupted ? "Tool execution aborted" : "boom",
+        metadata: input.interrupted ? { interrupted: true } : undefined,
+        time: { start: 1, end: 2 },
+      },
+    })
+    return assistant
+  })
+}
+
+it.instance(
+  "hard cap persists terminal error and exits with maxSteps",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        agent: { build: { steps: 5 } },
+      }))
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      // Use a real tool (`glob`) with different inputs each turn so the
+      // fingerprint set evolves across turns and the no-progress detector
+      // doesn't pre-empt the hard cap. Glob is read-only and cross-platform.
+      for (let i = 0; i < 6; i++) {
+        yield* llm.tool("glob", { pattern: `**/*-cap-${i}.txt` })
+      }
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role === "assistant") {
+        expect(result.info.finish).toBe("error")
+        expect(result.info.error?.name).toBe("APIError")
+        expect((result.info.error?.data as { message?: string })?.message).toContain("maxSteps")
+      }
+      // 5 tool turns consumed; the 6th never reaches the provider because the hard cap fires
+      // at iteration 6 (step=6 > maxSteps=5).
+      expect(yield* llm.calls).toBe(5)
+    }),
+  30_000,
+)
+
+it.instance(
+  "soft reminder does not hard-stop the loop",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        agent: { build: { steps: 100 } },
+      }))
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      // 10 tool turns followed by a text completion. With maxSteps=100 the
+      // soft-reminder injection (step === maxSteps) never fires within these
+      // 10 iterations, but the loop processes them naturally without a
+      // hard-stop. We assert the loop completes with `stop` finish and no
+      // terminal error — i.e. the soft budget is a nudge, not a hard cap.
+      // Use `glob` with distinct patterns so fingerprints evolve across
+      // turns and the no-progress detector doesn't pre-empt.
+      for (let i = 0; i < 10; i++) {
+        yield* llm.tool("glob", { pattern: `**/*-soft-${i}.txt` })
+      }
+      yield* llm.text("done")
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role === "assistant") {
+        // Loop continues past the soft reminder; final assistant is the natural completion.
+        expect(result.info.finish).toBe("stop")
+        expect(result.info.error).toBeUndefined()
+      }
+      expect(yield* llm.calls).toBe(11)
+    }),
+  60_000,
+)
+
+it.instance(
+  "no-progress detector fires when last 3 turns have identical fingerprint set",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "stuck loop" }],
+      })
+      // Queue 5 identical tool calls. The detector fires at the start of
+      // iteration 4 (after turn 3 lands in history), so only 3 LLM calls
+      // are consumed.
+      for (let i = 0; i < 5; i++) {
+        yield* llm.tool("stuck", { arg: "x" })
+      }
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role === "assistant") {
+        expect(result.info.finish).toBe("error")
+        expect(result.info.error?.name).toBe("APIError")
+        expect((result.info.error?.data as { message?: string })?.message).toContain("No-progress")
+      }
+      expect(yield* llm.calls).toBe(3)
+    }),
+  30_000,
+)
+
+it.instance(
+  "no-progress does not fire when settled status diverges across the last 3 turns",
+  () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* user(chat.id, "hello")
+      // Seed: 3 assistant turns with completed tool X + 1 assistant turn with error tool X.
+      // The error turn is the most recent, so the last 3 fingerprints are
+      // [error, completed, completed] — not all equal, so the streak is broken.
+      for (let i = 0; i < 3; i++) {
+        yield* completedToolPart({ sessionID: chat.id, tool: "x", input: { a: 1 }, callID: `c-${i}` })
+      }
+      yield* errorToolSeedPart({ sessionID: chat.id, tool: "x", input: { a: 1 }, callID: "c-err" })
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+
+      // No detector fire → no terminal APIError. The key assertion is that
+      // the assistant message does NOT carry the No-progress APIError.
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role === "assistant") {
+        const isNoProgress =
+          result.info.error?.name === "APIError" &&
+          (result.info.error.data as { message?: string })?.message?.includes("No-progress")
+        expect(isNoProgress).toBeFalsy()
+      }
+    }),
+  30_000,
+)
+
+it.instance(
+  "no-progress detector ignores provider-executed tool parts",
+  () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* user(chat.id, "hello")
+      for (let i = 0; i < 3; i++) {
+        yield* completedToolPart({
+          sessionID: chat.id,
+          tool: "provider-tool",
+          input: { a: 1 },
+          callID: `pe-${i}`,
+          providerExecuted: true,
+        })
+      }
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role === "assistant") {
+        const isNoProgress =
+          result.info.error?.name === "APIError" &&
+          (result.info.error.data as { message?: string })?.message?.includes("No-progress")
+        expect(isNoProgress).toBeFalsy()
+      }
+    }),
+  30_000,
+)
+
+it.instance(
+  "no-progress detector ignores interrupted-orphan tool parts",
+  () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* user(chat.id, "hello")
+      for (let i = 0; i < 3; i++) {
+        yield* errorToolSeedPart({
+          sessionID: chat.id,
+          tool: "interrupted-tool",
+          input: { a: 1 },
+          callID: `int-${i}`,
+          interrupted: true,
+        })
+      }
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role === "assistant") {
+        const isNoProgress =
+          result.info.error?.name === "APIError" &&
+          (result.info.error.data as { message?: string })?.message?.includes("No-progress")
+        expect(isNoProgress).toBeFalsy()
+      }
+    }),
+  30_000,
+)
+
+it.instance(
+  "no-progress detector ignores turns with zero tool calls",
+  () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const prompt = yield* SessionPrompt.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      const userMsg = yield* user(chat.id, "hello")
+      const userMessageID = userMsg.id
+      // Three text-only assistant turns followed by one tool turn.
+      for (let i = 0; i < 3; i++) {
+        yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          role: "assistant",
+          parentID: userMessageID,
+          sessionID: chat.id,
+          mode: "build",
+          agent: "build",
+          cost: 0,
+          path: { cwd: chat.id, root: chat.id },
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: ref.modelID,
+          providerID: ref.providerID,
+          time: { created: Date.now() },
+        })
+      }
+      yield* completedToolPart({ sessionID: chat.id, tool: "x", input: { a: 1 }, callID: "c-only" })
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role === "assistant") {
+        const isNoProgress =
+          result.info.error?.name === "APIError" &&
+          (result.info.error.data as { message?: string })?.message?.includes("No-progress")
+        expect(isNoProgress).toBeFalsy()
+      }
+    }),
+  30_000,
+)

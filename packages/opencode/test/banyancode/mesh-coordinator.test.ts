@@ -35,6 +35,7 @@ const mockPlansLayer = Layer.succeed(SubagentPlans.Service, SubagentPlans.Servic
   listBySession: () => Effect.succeed([]),
   markCompleted: () => Effect.void,
   markCancelled: () => Effect.void,
+  setStepStatus: () => Effect.succeed(undefined),
 }))
 
 const mockEventsLayer = Layer.succeed(EventV2.Service, {} as any)
