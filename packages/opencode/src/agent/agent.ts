@@ -158,15 +158,27 @@ export const layer = Layer.effect(
           safe_rename: "allow",
           edit_plan: "allow",
           websearch_free: "allow",
+          memory_store: "allow",
+          memory_recall: "allow",
+          memory_list: "allow",
+          memory_search: "allow",
+          memory_forget: "allow",
+          memory_candidate_emit: "allow",
+          shared_memory: "allow",
+          mesh_control: "allow",
+          mesh_subscribe: "allow",
+          subagent_message: "allow",
+          system_status: "allow",
         })
 
         const user = Permission.fromConfig(cfg.permission ?? {})
 
         // Render orchestrator prompt with maxSubagents from BanyanConfig
         const banyanConfigOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
-        const maxSubagents = banyanConfigOpt._tag === "Some"
-          ? ((yield* banyanConfigOpt.value.get()).banyancode_max_subagents ?? DEFAULT_MAX_SUBAGENTS)
-          : DEFAULT_MAX_SUBAGENTS
+        const maxSubagents =
+          banyanConfigOpt._tag === "Some"
+            ? ((yield* banyanConfigOpt.value.get()).banyancode_max_subagents ?? DEFAULT_MAX_SUBAGENTS)
+            : DEFAULT_MAX_SUBAGENTS
         const renderedOrchestratorPrompt = renderTemplate(PROMPT_ORCHESTRATOR, {
           maxSubagents: String(maxSubagents),
         })
@@ -190,7 +202,7 @@ export const layer = Layer.effect(
                   researcher: "allow",
                 },
                 subagent_message: "allow",
-                mesh_control: "deny",
+                mesh_control: "allow",
                 mesh_subscribe: "allow",
               }),
               user,
@@ -263,6 +275,17 @@ export const layer = Layer.effect(
                 repository_tests: "allow",
                 edit_plan: "allow",
                 websearch_free: "allow",
+                memory_store: "allow",
+                memory_recall: "allow",
+                memory_list: "allow",
+                memory_search: "allow",
+                memory_forget: "allow",
+                memory_candidate_emit: "allow",
+                shared_memory: "allow",
+                mesh_control: "allow",
+                mesh_subscribe: "allow",
+                subagent_message: "allow",
+                system_status: "allow",
                 codegraph_query: "allow",
                 codegraph_search: "allow",
                 codegraph_callers: "allow",
@@ -283,9 +306,6 @@ export const layer = Layer.effect(
                   "*": "deny",
                   scout: "allow",
                 },
-                subagent_message: "allow",
-                mesh_control: "deny",
-                mesh_subscribe: "allow",
               }),
               user,
             ),
@@ -329,14 +349,22 @@ export const layer = Layer.effect(
                 repository_ownership: "allow",
                 todowrite: "allow",
                 question: "allow",
+                memory_store: "allow",
+                memory_recall: "allow",
+                memory_list: "allow",
+                memory_search: "allow",
+                memory_forget: "allow",
+                memory_candidate_emit: "allow",
+                shared_memory: "allow",
+                mesh_control: "allow",
+                mesh_subscribe: "allow",
+                subagent_message: "allow",
+                system_status: "allow",
                 task: {
                   "*": "deny",
                   explore: "allow",
                   scout: "allow",
                 },
-                subagent_message: "allow",
-                mesh_control: "deny",
-                mesh_subscribe: "allow",
               }),
               user,
             ),
@@ -356,6 +384,17 @@ export const layer = Layer.effect(
                 glob: "allow",
                 list: "allow",
                 webfetch: "allow",
+                memory_store: "allow",
+                memory_recall: "allow",
+                memory_list: "allow",
+                memory_search: "allow",
+                memory_forget: "allow",
+                memory_candidate_emit: "allow",
+                shared_memory: "allow",
+                mesh_control: "allow",
+                mesh_subscribe: "allow",
+                subagent_message: "allow",
+                system_status: "allow",
                 codegraph_query: "allow",
                 codegraph_callers: "allow",
                 codegraph_dependents: "allow",
@@ -373,9 +412,6 @@ export const layer = Layer.effect(
                 repository_ownership: "allow",
                 todowrite: "deny",
                 task: "deny",
-                subagent_message: "allow",
-                mesh_control: "deny",
-                mesh_subscribe: "allow",
               }),
               user,
             ),
@@ -410,9 +446,17 @@ export const layer = Layer.effect(
                 repository_symbols: "allow",
                 repository_relationships: "allow",
                 repository_ownership: "allow",
-                subagent_message: "allow",
+                memory_store: "allow",
+                memory_recall: "allow",
+                memory_list: "allow",
+                memory_search: "allow",
+                memory_forget: "allow",
+                memory_candidate_emit: "allow",
+                shared_memory: "allow",
+                mesh_control: "allow",
                 mesh_subscribe: "allow",
-                mesh_control: "deny",
+                subagent_message: "allow",
+                system_status: "allow",
                 edit: "deny",
                 write: "deny",
                 apply_patch: "deny",
@@ -421,7 +465,6 @@ export const layer = Layer.effect(
                 task: "deny",
                 todowrite: "deny",
                 question: "deny",
-                shared_memory: "deny",
               }),
               user,
             ),
@@ -475,7 +518,8 @@ export const layer = Layer.effect(
           },
           orchestrator: {
             name: "orchestrator",
-            description: "Decomposes complex tasks, fans out to parallel subagents, coordinates via shared memory and peer messages.",
+            description:
+              "Decomposes complex tasks, fans out to parallel subagents, coordinates via shared memory and peer messages.",
             mode: "primary",
             native: true,
             prompt: renderedOrchestratorPrompt,
@@ -504,7 +548,8 @@ export const layer = Layer.effect(
           },
           researcher: {
             name: "researcher",
-            description: "Read-only subagent. Performs free web search via DuckDuckGo and reads external docs. Writes findings to shared_memory.",
+            description:
+              "Read-only subagent. Performs free web search via DuckDuckGo and reads external docs. Writes findings to shared_memory.",
             mode: "subagent",
             native: true,
             prompt: PROMPT_RESEARCHER,
@@ -533,14 +578,21 @@ export const layer = Layer.effect(
                 repository_relationships: "allow",
 
                 repository_ownership: "allow",
+                memory_store: "allow",
+                memory_recall: "allow",
+                memory_list: "allow",
+                memory_search: "allow",
+                memory_forget: "allow",
+                memory_candidate_emit: "allow",
                 shared_memory: "allow",
+                mesh_control: "allow",
+                mesh_subscribe: "allow",
                 subagent_message: "allow",
+                system_status: "allow",
                 task: {
                   "*": "deny",
                   scout: "allow",
                 },
-                mesh_control: "deny",
-                mesh_subscribe: "allow",
               }),
               user,
             ),
@@ -617,7 +669,10 @@ export const layer = Layer.effect(
             return undefined
           }
           if (override?.model) {
-            return { ...info, model: Provider.parseModel(`${override.model.providerID}/${override.model.modelID}`) as Info["model"] }
+            return {
+              ...info,
+              model: Provider.parseModel(`${override.model.providerID}/${override.model.modelID}`) as Info["model"],
+            }
           }
           return info
         })

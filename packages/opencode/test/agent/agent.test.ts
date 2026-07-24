@@ -55,7 +55,7 @@ it.instance("returns default native agents when no config", () =>
     const names = agents.map((a) => a.name)
     expect(names).toContain("build")
     expect(names).toContain("plan")
-    expect(names).toContain("general")
+    expect(names).toContain("orchestrator")
     expect(names).toContain("explore")
     expect(names).toContain("compaction")
     expect(names).toContain("title")
@@ -734,6 +734,7 @@ it.instance(
       agent: {
         build: { disable: true },
         plan: { disable: true },
+        orchestrator: { disable: true },
       },
     },
   },
@@ -763,9 +764,9 @@ describe("reviewer agent", () => {
       expect(evalPerm(reviewer, "task")).toBe("deny")
       expect(evalPerm(reviewer, "todowrite")).toBe("deny")
       expect(evalPerm(reviewer, "question")).toBe("deny")
-      expect(evalPerm(reviewer, "shared_memory")).toBe("deny")
-      expect(evalPerm(reviewer, "mesh_control")).toBe("deny")
-      // Allowed: read + graph + repository + mesh publish
+      // Allowed: read + graph + repository + Banyan coordination tools
+      // (per user directive "All BanyanCode tools": reviewer can use shared_memory
+      // and mesh_control to coordinate with peers, but cannot mutate files or shell out).
       expect(evalPerm(reviewer, "read")).toBe("allow")
       expect(evalPerm(reviewer, "grep")).toBe("allow")
       expect(evalPerm(reviewer, "glob")).toBe("allow")
@@ -776,6 +777,8 @@ describe("reviewer agent", () => {
       expect(evalPerm(reviewer, "repository_symbols")).toBe("allow")
       expect(evalPerm(reviewer, "subagent_message")).toBe("allow")
       expect(evalPerm(reviewer, "mesh_subscribe")).toBe("allow")
+      expect(evalPerm(reviewer, "shared_memory")).toBe("allow")
+      expect(evalPerm(reviewer, "mesh_control")).toBe("allow")
     }),
   )
 

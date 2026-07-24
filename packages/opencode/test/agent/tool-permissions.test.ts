@@ -6,7 +6,7 @@
  * requiring user approval.
  *
  * Agents tested: build, plan, general, orchestrator, researcher, coder,
- * scout, explore.
+ * scout, explore, reviewer.
  * Tools verified (must all be `allow` in every agent):
  *   - codegraph tools: codegraph_build, codegraph_query, codegraph_search,
  *     codegraph_callers, codegraph_dependents, codegraph_impact,
@@ -73,7 +73,21 @@ const REPOSITORY_TOOLS = [
 
 const OTHER_TOOLS = ["websearch_free", "code_find", "edit_plan"] as const
 
-const ALL_BANYANCODE_TOOLS = [...CODEGRAPH_TOOLS, ...REPOSITORY_TOOLS, ...OTHER_TOOLS]
+const MEMORY_TOOLS = [
+  "memory_store",
+  "memory_recall",
+  "memory_list",
+  "memory_search",
+  "memory_forget",
+  "memory_candidate_emit",
+  "shared_memory",
+  "mesh_control",
+  "mesh_subscribe",
+  "subagent_message",
+  "system_status",
+] as const
+
+const ALL_BANYANCODE_TOOLS = [...CODEGRAPH_TOOLS, ...REPOSITORY_TOOLS, ...OTHER_TOOLS, ...MEMORY_TOOLS]
 
 function evalPerm(ruleset: PermissionV1.Ruleset, tool: string): PermissionV1.Action {
   return Permission.evaluate(tool, "*", ruleset).action
@@ -84,7 +98,16 @@ afterEach(async () => {
 })
 
 describe("tool permissions — all agents get all banyancode tools", () => {
-  for (const agentName of ["build", "plan", "orchestrator", "researcher", "coder", "scout", "explore"] as const) {
+  for (const agentName of [
+    "build",
+    "plan",
+    "orchestrator",
+    "researcher",
+    "coder",
+    "scout",
+    "explore",
+    "reviewer",
+  ] as const) {
     it.instance(`${agentName} agent allows every banyancode tool`, () =>
       Effect.gen(function* () {
         const agent = yield* Agent.Service.use((svc) => svc.get(agentName))
