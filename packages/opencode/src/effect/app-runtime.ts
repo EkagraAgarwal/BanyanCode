@@ -95,6 +95,7 @@ export const AppLayer = Layer.mergeAll(
   EventV2Bridge.defaultLayer,
   EventV2.defaultLayer,
   Banyan.subagentBusDefaultLayer,
+  Banyan.subagentMessagesRepoDefaultLayer,
   Banyan.subagentPlansRepoDefaultLayer,
   Banyan.subagentConsumerDefaultLayer,
   Banyan.systemMonitorDefaultLayer,

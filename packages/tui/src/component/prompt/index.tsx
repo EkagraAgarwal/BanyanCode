@@ -1403,7 +1403,12 @@ export function Prompt(props: PromptProps) {
             ...nonTextParts,
           ],
         })
-        .catch(() => {})
+        .catch((error) => {
+          toast.show({
+            message: `Prompt failed: ${errorMessage(error)}`,
+            variant: "error",
+          })
+        })
       if (editorParts.length > 0) editor.markSelectionSent()
     }
     history.append({

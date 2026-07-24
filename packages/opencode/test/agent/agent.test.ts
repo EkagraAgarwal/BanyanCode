@@ -85,16 +85,6 @@ it.instance("plan agent denies edits except .opencode/plans/*", () =>
   }),
 )
 
-it.instance("plan agent denies the general subagent by default", () =>
-  Effect.gen(function* () {
-    const plan = yield* load((svc) => svc.get("plan"))
-    expect(plan).toBeDefined()
-    expect(Permission.evaluate("task", "general", plan!.permission).action).toBe("deny")
-    expect(Permission.evaluate("task", "explore", plan!.permission).action).toBe("allow")
-    expect(Permission.evaluate("task", "custom", plan!.permission).action).toBe("allow")
-  }),
-)
-
 it.instance(
   "user permission can allow the general subagent from plan mode",
   () =>

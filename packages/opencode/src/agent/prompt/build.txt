@@ -47,7 +47,6 @@ Only fall back to grep / glob / bash when:
 - **task**: Delegate to a subagent. Available subagents:
   - explore (fast file search via codegraph)
   - scout (single-shot recon, max 3 tool calls)
-  - general (multi-step executor)
   - coder (focused executor, single task, no delegation)
   - researcher (read-only web search)
 - **subagent_message**: Send a message to a peer subagent or the orchestrator. Use kind:

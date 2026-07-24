@@ -424,6 +424,8 @@ const withBanyanDeps = Layer.unwrap(
     const memoryService = yield* Effect.serviceOption(Banyan.MemoryService)
     const meshCoordinator = yield* Effect.serviceOption(Banyan.MeshCoordinator)
     const systemMonitor = yield* Effect.serviceOption(Banyan.SystemMonitorService)
+    const subagentBus = yield* Effect.serviceOption(Banyan.SubagentBus)
+    const subagentMessagesRepo = yield* Effect.serviceOption(Banyan.SubagentMessagesRepo)
     const httpClient = yield* Effect.serviceOption(HttpClient.HttpClient)
     const worktreeAccessor: () => Effect.Effect<string | undefined> = () =>
       Effect.gen(function* () {
@@ -470,11 +472,29 @@ const withBanyanDeps = Layer.unwrap(
       ...(Option.isSome(systemMonitor) ? [Layer.succeed(Banyan.SystemMonitorService, systemMonitor.value)] : [
         Layer.empty as unknown as Layer.Layer<never, never, never>,
       ]),
+      ...(Option.isSome(subagentBus) ? [Layer.succeed(Banyan.SubagentBus, subagentBus.value)] : [
+        Layer.empty as unknown as Layer.Layer<never, never, never>,
+      ]),
+      ...(Option.isSome(subagentMessagesRepo)
+        ? [Layer.succeed(Banyan.SubagentMessagesRepo, subagentMessagesRepo.value)]
+        : [Layer.empty as unknown as Layer.Layer<never, never, never>]),
       ...(Option.isSome(httpClient) ? [Layer.succeed(HttpClient.HttpClient, httpClient.value)] : [
         Layer.empty as unknown as Layer.Layer<never, never, never>,
       ]),
     ) as unknown as Layer.Layer<never, never, never>
-    return baseBanyanToolLayers.pipe(Layer.provide(depsLayer)) as unknown as Layer.Layer<never, never, never>
+    // Prefer AppLayer instances via depsLayer when serviceOption finds them.
+    // Always also provide bus+repo as a fallback: the InstanceState fiber that
+    // builds ToolRegistry.state often does not see AppLayer's SubagentBus
+    // (serviceOption → None), and without these provides SubagentMessageTool.layer
+    // dies inside Layer.build(...).orDie.
+    // Use bus layer + provideMerge(repo) so both tags come from one shared repo
+    // instance (bus defaultLayer's plain Layer.provide hides the repo).
+    return baseBanyanToolLayers.pipe(
+      Layer.provide(depsLayer),
+      Layer.provide(
+        Banyan.subagentBusLayer.pipe(Layer.provideMerge(Banyan.subagentMessagesRepoDefaultLayer)),
+      ),
+    ) as unknown as Layer.Layer<never, never, never>
   }),
 )
 

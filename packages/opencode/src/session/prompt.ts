@@ -1431,6 +1431,17 @@ export const layer = Layer.effect(
               Effect.provideService(ToolRegistry.Service, registry),
               Effect.provideService(MCP.Service, mcp),
               Effect.provideService(Truncate.Service, truncate),
+              Effect.catchCause((cause) =>
+                Effect.gen(function* () {
+                  const error = Cause.squash(cause)
+                  handle.message.error = new SessionV1.APIError({
+                    message: error instanceof Error ? error.message : String(error),
+                    isRetryable: false,
+                  }).toObject()
+                  yield* sessions.updateMessage(handle.message)
+                  throw error
+                })
+              ),
             )
 
             if (lastUser.format?.type === "json_schema") {

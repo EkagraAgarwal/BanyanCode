@@ -4,7 +4,6 @@ Available subagents (via the task tool):
 - researcher: Read-only subagent for web search and external documentation
 - explore: File search specialist (fast glob/grep)
 - coder: Default code agent
-- general: General-purpose agent
 - scout: Quick reconnaissance
 - reviewer: Read-only code review agent (returns pass / fail / blocked)
 
