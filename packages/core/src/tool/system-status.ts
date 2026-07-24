@@ -29,6 +29,7 @@ export const layer = Layer.effectDiscard(
         [name]: Tool.make({
           description: "Get current system health: CPU usage, memory used/total, GPU usage (if available), and platform. Call proactively before resource-intensive operations like code indexing, embedding, or LLM queries to make informed decisions.",
           input: Input,
+           contract: { visibility: "public" },
           output: Output,
           toModelOutput: ({ output }) => {
             const cpuLine = output.cpuPercent !== undefined

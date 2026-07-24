@@ -1,4 +1,5 @@
 export * as Banyan from "."
+export * as BanyanToolsManifest from "./banyan-tools-manifest"
 
 export { MemoryEntriesTable } from "./memory.sql"
 export { CodegraphFilesTable, CodegraphNodesTable, CodegraphEdgesTable } from "./codegraph.sql"

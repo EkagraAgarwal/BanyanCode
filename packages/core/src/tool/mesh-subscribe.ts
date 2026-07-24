@@ -61,6 +61,7 @@ export const locationLayer = Layer.effectDiscard(
           "remains active for the session lifetime. Use this in place of " +
           "polling mesh_control.status to wait for specific subagent results.",
         input: Input,
+         contract: { visibility: "public" },
         output: Output,
         toModelOutput: ({ output }) => [
           { type: "text", text: `messages=${output.messages.length} streamActive=${output.streamActive}` },

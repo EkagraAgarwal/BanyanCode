@@ -27,6 +27,7 @@ import { Location } from "../location"
 import { ModelV2 } from "../model"
 import { SystemContext } from "../system-context"
 import { SystemContextRegistry } from "../system-context/registry"
+import { BanyanToolsManifest } from "./banyan-tools-manifest"
 
 export interface CodegraphToolDescription {
   readonly id: string
@@ -76,29 +77,18 @@ const POLICY_TEXT = [
   "- you're searching non-code artifacts (configs, JSON, docs, build outputs).",
 ].join("\n")
 
-const BANYAN_TOOL_IDS = [
-  "codegraph_build",
-  "codegraph_remove",
-  "code_find",
-  "repository_query",
-  "repository_explain",
-  "repository_trace",
-  "repository_tests",
-  "blast_radius",
-  "preflight",
-  "safe_rename",
-  "edit_plan",
-  "websearch_free",
-] as const
+const BANYAN_TOOL_IDS = BanyanToolsManifest.BANYAN_PUBLIC_TOOL_IDS
 
 const TOOL_FAMILIES = [
   { title: "Code graph", ids: ["codegraph_build", "codegraph_remove", "code_find"] },
-  {
-    title: "Repository intelligence",
-    ids: ["repository_query", "repository_explain", "repository_trace", "repository_tests"],
-  },
+  { title: "Repository intelligence", ids: ["repository_query", "repository_explain", "repository_trace", "repository_tests"] },
   { title: "Edit decision support", ids: ["blast_radius", "preflight", "safe_rename", "edit_plan"] },
   { title: "External research", ids: ["websearch_free"] },
+  { title: "Memory", ids: ["memory_store", "memory_recall", "memory_list", "memory_search", "memory_forget", "memory_candidate_emit"] },
+  { title: "Mesh coordination", ids: ["mesh_control", "mesh_subscribe"] },
+  { title: "Peer messaging", ids: ["subagent_message"] },
+  { title: "Shared memory", ids: ["shared_memory"] },
+  { title: "System status", ids: ["system_status"] },
 ] as const
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"

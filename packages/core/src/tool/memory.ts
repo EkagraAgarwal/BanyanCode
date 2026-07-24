@@ -121,7 +121,8 @@ export const locationLayer = Layer.effectDiscard(
         [name_store]: Tool.make({
           description:
             "Store a memory entry with key-value pair, optional context, tags, scope, and TTL. scope=global is only allowed for build / orchestrator; other agents should use memory_candidate_emit for durable facts.",
-          input: InputStore,
+input: InputStore,
+           contract: { visibility: "public" },
           output: OutputStore,
           toModelOutput: ({ output }) => [
             { type: "text", text: `stored id=${output.id} createdAt=${output.createdAt}` },
@@ -200,6 +201,7 @@ export const locationLayer = Layer.effectDiscard(
         [name_recall]: Tool.make({
           description: "Recall a memory entry by key",
           input: InputRecall,
+           contract: { visibility: "public" },
           output: OutputRecall,
           toModelOutput: ({ output }) => [
             { type: "text", text: JSON.stringify(output.entry) },
@@ -231,6 +233,7 @@ export const locationLayer = Layer.effectDiscard(
         [name_list]: Tool.make({
           description: "List memory entries with optional prefix filter, tag filter, scope, and sessionID",
           input: InputList,
+           contract: { visibility: "public" },
           output: OutputList,
           toModelOutput: ({ output }) => [
             { type: "text", text: `found ${output.entries.length} entries` },
@@ -269,6 +272,7 @@ export const locationLayer = Layer.effectDiscard(
         [name_forget]: Tool.make({
           description: "Delete a memory entry by key",
           input: InputForget,
+           contract: { visibility: "public" },
           output: OutputForget,
           toModelOutput: ({ output }) => [
             { type: "text", text: output.ok ? "deleted" : "not found" },
@@ -303,6 +307,7 @@ export const locationLayer = Layer.effectDiscard(
           description:
             "Search memory entries using BM25-ranked FTS5 across keys, titles, bodies, and kinds.",
           input: InputSearch,
+           contract: { visibility: "public" },
           output: OutputSearch,
           toModelOutput: ({ output }) => [
             { type: "text", text: `found ${output.entries.length} entries` },

@@ -41,6 +41,7 @@ export const layer = Layer.effectDiscard(
           description:
             "Emit a candidate memory entry (status: pending). Use this for durable, behavior-changing facts you want the main agent to consider promoting. Read-only operations should use memory_recall/memory_list/memory_search.",
           input: Input,
+           contract: { visibility: "public" },
           output: Output,
           toModelOutput: ({ output }) => [
             { type: "text", text: `candidate emitted id=${output.id} status=${output.status}` },

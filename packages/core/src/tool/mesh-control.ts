@@ -68,6 +68,7 @@ export const locationLayer = Layer.effectDiscard(
           description:
             "Control subagents in the orchestrator's mesh. Actions: checkin (get status of all subagents), steer (inject an instruction into a subagent's current plan), kill (terminate a subagent gracefully), plan_for (hand a subagent its initial plan).",
           input: Input,
+           contract: { visibility: "public" },
           output: Output,
           toModelOutput: ({ output }) => [
             { type: "text", text: typeof output.result === "string" ? output.result : JSON.stringify(output.result) },

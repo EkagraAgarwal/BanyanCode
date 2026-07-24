@@ -2,25 +2,9 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/layer-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Banyan } from "@opencode-ai/core/banyancode"
-import { CodegraphTools } from "@opencode-ai/core/tool/codegraph"
-import { CodeFindTool } from "@opencode-ai/core/tool/code-find"
-import { WebSearchFreeTool } from "@opencode-ai/core/tool/websearch-free"
-import { CodegraphSearchTool } from "@opencode-ai/core/tool/codegraph-search-tool"
-import { RepositoryWave2 } from "@opencode-ai/core/tool/repository-wave2"
-import { StructuralQueriesTool } from "@opencode-ai/core/tool/structural-queries-tool"
-import { EditPlanTool } from "@opencode-ai/core/tool/edit-plan"
-import { PreflightTool } from "@opencode-ai/core/tool/preflight"
-import { BlastRadiusTool } from "@opencode-ai/core/tool/blast-radius"
-import { SafeRenameTool } from "@opencode-ai/core/tool/safe-rename"
+import { BanyanToolsManifest } from "@opencode-ai/core/banyancode/banyan-tools-manifest"
 import { Tools } from "@opencode-ai/core/tool/tools"
 import { PermissionV2 } from "@opencode-ai/core/permission"
-import { MemoryTools } from "@opencode-ai/core/tool/memory"
-import { MemoryCandidateTool } from "@opencode-ai/core/tool/memory-candidate"
-import { SharedMemoryTool } from "@opencode-ai/core/tool/shared-memory"
-import { MeshControlTool } from "@opencode-ai/core/tool/mesh-control"
-import { MeshSubscribeTool } from "@opencode-ai/core/tool/mesh-subscribe"
-import { SubagentMessageTool } from "@opencode-ai/core/tool/subagent-message"
-import { SystemStatusTool } from "@opencode-ai/core/tool/system-status"
 import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
@@ -374,25 +358,7 @@ export const layer = Layer.effect(
 // branch below) using `withBanyanDeps` and `Layer.build`. That keeps the
 // registrations on the workspace lifetime scope and avoids touching
 // `ToolRegistry.defaultLayer` or its consumer's app layer.
-const baseBanyanToolLayers = Layer.mergeAll(
-  CodegraphTools.locationLayer,
-  CodeFindTool.locationLayer,
-  CodegraphSearchTool.locationLayer,
-  RepositoryWave2.locationLayer,
-  StructuralQueriesTool.locationLayer,
-  EditPlanTool.locationLayer,
-  PreflightTool.locationLayer,
-  BlastRadiusTool.locationLayer,
-  SafeRenameTool.locationLayer,
-  WebSearchFreeTool.layer,
-  MemoryTools.locationLayer,
-  MemoryCandidateTool.layer,
-  SharedMemoryTool.layer,
-  MeshControlTool.locationLayer,
-  MeshSubscribeTool.locationLayer,
-  SubagentMessageTool.layer,
-  SystemStatusTool.layer,
-)
+const baseBanyanToolLayers = BanyanToolsManifest.banyanToolLayer()
 
 // `withBanyanDeps` wraps `baseBanyanToolLayers` in a `Layer.unwrap` that,
 // at runtime, looks up each optional dependency via `Effect.serviceOption`

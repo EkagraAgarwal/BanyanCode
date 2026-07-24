@@ -9,8 +9,7 @@
  * `packages/opencode/src/agent/agent.ts`.
  */
 
-// LLM-facing tools that MUST appear in every rendered guide (the 12 public
-// tool ids that the model can call directly).
+// LLM-facing tools that MUST appear in every rendered guide.
 export const REQUIRED_TOOLS = [
   "codegraph_build",
   "codegraph_remove",
@@ -24,6 +23,17 @@ export const REQUIRED_TOOLS = [
   "safe_rename",
   "edit_plan",
   "websearch_free",
+  "memory_store",
+  "memory_recall",
+  "memory_list",
+  "memory_search",
+  "memory_forget",
+  "memory_candidate_emit",
+  "shared_memory",
+  "mesh_control",
+  "mesh_subscribe",
+  "subagent_message",
+  "system_status",
 ] as const
 
 // Internal-only helpers that MUST NEVER appear in the rendered guide.
@@ -75,12 +85,4 @@ export const PROVIDER_PROMPT_FILES = [
 ] as const
 
 // 7 built-in agents that the BanyanCode tool guide policy must cover.
-export const BUILTIN_AGENT_NAMES = [
-  "build",
-  "plan",
-  "explore",
-  "coder",
-  "scout",
-  "researcher",
-  "orchestrator",
-] as const
+export const BUILTIN_AGENT_NAMES = ["build", "plan", "explore", "coder", "scout", "researcher", "orchestrator"] as const

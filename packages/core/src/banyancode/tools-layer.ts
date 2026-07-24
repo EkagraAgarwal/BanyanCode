@@ -1,20 +1,7 @@
 export * as BanyanTools from "./tools-layer"
 
 import { Layer } from "effect"
-import { CodegraphTools } from "../tool/codegraph"
-import { CodeFindTool } from "../tool/code-find"
-import { CodegraphSearchTool } from "../tool/codegraph-search-tool"
-import { RepositoryWave2 } from "../tool/repository-wave2"
-import { StructuralQueriesTool } from "../tool/structural-queries-tool"
-import { EditPlanTool } from "../tool/edit-plan"
-import { MeshControlTool } from "../tool/mesh-control"
-import { MeshSubscribeTool } from "../tool/mesh-subscribe"
-import { MemoryTools } from "../tool/memory"
-import { MemoryCandidateTool } from "../tool/memory-candidate"
-import { SharedMemoryTool } from "../tool/shared-memory"
-import { SubagentMessageTool } from "../tool/subagent-message"
-import { SystemStatusTool } from "../tool/system-status"
-import { WebSearchFreeTool } from "../tool/websearch-free"
+import { BanyanToolsManifest } from "./banyan-tools-manifest"
 import { defaultLayer as memoryRepoLayer } from "./memory-repo"
 import { defaultLayer as memoryServiceLayer } from "./memory-service"
 import { defaultLayer as subagentBusLayer } from "./subagent-bus"
@@ -26,22 +13,7 @@ import { defaultLayer as systemMonitorLayer } from "./system-monitor"
 import { defaultLayer as subagentPlansRepoLayer } from "./subagent-plans-repo"
 import { defaultLayer as meshCoordinatorLayer } from "./mesh-coordinator"
 
-export const locationLayer = Layer.mergeAll(
-  SharedMemoryTool.layer,
-  SubagentMessageTool.layer,
-  MeshControlTool.locationLayer,
-  MeshSubscribeTool.locationLayer,
-  MemoryTools.locationLayer,
-  MemoryCandidateTool.layer,
-  CodegraphTools.locationLayer,
-  CodeFindTool.locationLayer,
-  RepositoryWave2.locationLayer,
-  CodegraphSearchTool.locationLayer,
-  StructuralQueriesTool.locationLayer,
-  EditPlanTool.locationLayer,
-  SystemStatusTool.layer,
-  WebSearchFreeTool.layer,
-).pipe(
+export const locationLayer = BanyanToolsManifest.banyanToolLayer().pipe(
   Layer.provide(subagentBusLayer),
   Layer.provide(memoryRepoLayer),
   Layer.provide(memoryServiceLayer),

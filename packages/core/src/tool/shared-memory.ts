@@ -63,6 +63,7 @@ export const layer = Layer.effectDiscard(
         [name]: Tool.make({
           description: "Read, write, list, or delete entries in shared memory accessible across subagents.",
           input: Input,
+           contract: { visibility: "public" },
           output: Output,
           toModelOutput: ({ output }) => [{ type: "text", text: JSON.stringify(output) }],
           execute: (input, context) => {

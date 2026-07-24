@@ -576,7 +576,7 @@ export const locationLayer = Layer.effectDiscard(
           "Visibility: advanced (use sparingly).\n" +
           "After this, often: edit_plan — to plan the change.\n" +
           "Before this: codegraph_build (if not built).",
-        contract: { visibility: "advanced" },
+        contract: { visibility: "public" },
         input: InputImpact,
         output: OutputImpact,
         toModelOutput: ({ output }) => [{ type: "text", text: formatArchitecturalSlice(output) }],

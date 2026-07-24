@@ -69,6 +69,7 @@ omitted on the first call, the tool generates a fallback key
 \\\`lk_\\\${"$"}{sessionID}_\\\${"$"}{callID}\\\`. For any retry, you MUST echo back both
 \`idempotencyKey\` and \`createdAt\` from the first call's response.`,
           input: Input,
+           contract: { visibility: "public" },
           output: Output,
           toModelOutput: ({ output }) => [
             { type: "text", text: `delivered=${output.delivered}, pending=${output.pending}, idempotencyKey=${output.idempotencyKey}` },
