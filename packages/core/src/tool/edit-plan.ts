@@ -3,6 +3,7 @@ export * as EditPlanTool from "./edit-plan"
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { Banyan } from "../banyancode"
+import { EditPlan } from "../banyancode/edit-planner"
 import { traced } from "../observability/trace"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
@@ -51,7 +52,7 @@ export const Input = Schema.Struct({
 })
 
 export const Output = Schema.Struct({
-  plan: Banyan.EditPlan,
+  plan: EditPlan,
 })
 
 export const locationLayer = Layer.effectDiscard(
