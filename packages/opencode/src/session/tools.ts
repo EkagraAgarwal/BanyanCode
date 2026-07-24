@@ -23,6 +23,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import * as AiSdkTransportModule from "@/effect/transport-ai-sdk"
 import { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
 import type { ToolMaterializationContext } from "@/effect/tool-transport"
+import { BanyanToolsManifest } from "@opencode-ai/core/banyancode/banyan-tools-manifest"
 
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
@@ -117,16 +118,19 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     })
   }
 
+  const banyanEnabled = process.env.BANYANCODE_ENABLE !== "0"
   const transportOption = yield* Effect.serviceOption(AiSdkTransportModule.Service)
   const catalogOption = yield* Effect.serviceOption(ToolCatalog.Service)
-  if (Option.isNone(transportOption) || Option.isNone(catalogOption)) {
-    yield* Effect.logWarning("SessionTools.resolve: ToolCatalog or AiSdkTransport services not in layer; V2 catalog tools will be missing").pipe(
-      Effect.annotateLogs({
-        "session.id": input.session.id,
-        agent: input.agent.name,
-        hasTransport: Option.isSome(transportOption),
-        hasCatalog: Option.isSome(catalogOption),
-      }),
+  if (banyanEnabled && (Option.isNone(transportOption) || Option.isNone(catalogOption))) {
+    const missing: string[] = []
+    if (Option.isNone(transportOption)) missing.push("AiSdkTransport")
+    if (Option.isNone(catalogOption)) missing.push("ToolCatalog")
+    return yield* Effect.die(
+      new Error(
+        `SessionTools.resolve: BanyanCode is enabled but [${missing.join(", ")}] service(s) are missing from the AppRuntime. ` +
+          `Refusing to send an LLM request without the canonical tool catalog. ` +
+          `Set BANYANCODE_ENABLE=0 to disable BanyanCode, or check the AppLayer composition.`,
+      ),
     )
   }
   if (Option.isSome(transportOption) && Option.isSome(catalogOption)) {
@@ -157,6 +161,19 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       completeToolCall: (callID: string, output: unknown) =>
         input.processor.completeToolCall(callID, output as never),
     })
+    if (banyanEnabled) {
+      const materializedIds = new Set(materializations.map((m) => m.id))
+      const missingPublic = BanyanToolsManifest.BANYAN_PUBLIC_TOOL_IDS.filter((id: string) => !materializedIds.has(id))
+      if (missingPublic.length > 0) {
+        return yield* Effect.die(
+          new Error(
+            `SessionTools.resolve: BanyanCode is enabled but the following public Banyan tools are missing from the materialized catalog: [${missingPublic.join(", ")}]. ` +
+              `Refusing to send an LLM request with an incomplete tool list. ` +
+              `Check that the Banyan tool layers are included in the AppLayer and that each tool is registered.`,
+          ),
+        )
+      }
+    }
     for (const { id, tool: v2Tool } of materializations) {
       if (tools[id]) continue
       tools[id] = v2Tool
