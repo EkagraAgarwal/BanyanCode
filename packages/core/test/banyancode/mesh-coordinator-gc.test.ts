@@ -3,6 +3,7 @@ import { Effect, Layer, Queue } from "effect"
 import { MeshCoordinator, layer } from "../../src/banyancode/mesh-coordinator"
 import { SubagentBus } from "../../src/banyancode/subagent-bus"
 import { SubagentPlans } from "../../src/banyancode/subagent-plans-repo"
+import { SubagentReviewRequests } from "../../src/banyancode/subagent-review-requests-repo"
 import { EventV2 } from "../../src/event"
 import { Database } from "../../src/database/database"
 import type { SubagentMessage } from "../../src/banyancode/types"
@@ -23,6 +24,7 @@ const buildServiceLayer = (dbPath: string) => {
       publish: () => Effect.void,
       publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
       subscribe: () => Effect.succeed({} as unknown as Queue.Dequeue<SubagentMessage>),
+      subscribeAll: () => Effect.succeed({} as unknown as Queue.Dequeue<SubagentMessage>),
       peers: () => Effect.succeed([]),
     }),
   )
@@ -40,9 +42,22 @@ const buildServiceLayer = (dbPath: string) => {
     }),
   )
 
-  const meshLayer = layer.pipe(
+  const mockReviews = Layer.succeed(
+    SubagentReviewRequests.Service,
+    SubagentReviewRequests.Service.of({
+      put: () => Effect.void,
+      getByID: () => Effect.succeed(undefined),
+      listByParent: () => Effect.succeed([]),
+      markDispatched: () => Effect.void,
+      markCompleted: () => Effect.void,
+      markFailed: () => Effect.void,
+    }),
+  )
+
+const meshLayer = layer.pipe(
     Layer.provide(mockBus),
     Layer.provide(mockPlans),
+    Layer.provide(mockReviews),
     Layer.provide(EventV2.defaultLayer),
     Layer.provide(dbLayer),
   )

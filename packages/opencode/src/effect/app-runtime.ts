@@ -65,6 +65,7 @@ import { applyCodegraphAutoUpdateBridge } from "./banyancode-codegraph-auto-upda
 import { applyFilesystemBridge } from "./banyancode-filesystem-bridge"
 import { applyMeshBridge } from "./banyancode-mesh-bridge"
 import { applyMemoryBridge } from "./banyancode-memory-bridge"
+import { applyReviewBridge } from "./banyancode-review-bridge"
 import { applySystemMonitorBridge } from "./banyancode-system-bridge"
 
 export const AppLayer = Layer.mergeAll(
@@ -277,6 +278,7 @@ AppRuntime.runFork(applyCodegraphAutoUpdateBridge as never)
 AppRuntime.runFork(applyFilesystemBridge as never)
 AppRuntime.runFork(applyMemoryBridge as never)
 AppRuntime.runFork(applyMeshBridge as never)
+AppRuntime.runFork(applyReviewBridge as never)
 AppRuntime.runFork(applySystemMonitorBridge as never)
 
 /**

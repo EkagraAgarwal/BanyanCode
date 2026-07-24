@@ -8,6 +8,7 @@ import { SessionSchema } from "../session/schema"
 import { SessionTable } from "../session/sql"
 import { SubagentBus } from "./subagent-bus"
 import { SubagentPlans } from "./subagent-plans-repo"
+import { SubagentReviewRequests } from "./subagent-review-requests-repo"
 import { SubagentMessagesTable } from "./subagent-messages.sql"
 import { MaxSubagents } from "./max-subagents"
 import { DEFAULT_MAX_SUBAGENTS } from "../v1/config/banyan-config"
@@ -78,6 +79,17 @@ export interface Interface {
     targetAgent: string
     plan: { title: string; steps: Array<{ content: string; status: "pending" | "in_progress" | "completed" | "cancelled" }>; exitCriteria: string }
   }) => Effect.Effect<void, never, never>
+  readonly review: (input: {
+    parentSessionID: SessionSchema.ID
+    reviewSpec: {
+      targetAgent: "reviewer"
+      diff?: string
+      description?: string
+      paths?: ReadonlyArray<string>
+      priority?: "low" | "normal" | "high"
+      reason?: string
+    }
+  }) => Effect.Effect<{ reviewID: string; status: "dispatched" }, never, never>
   readonly tryReserveSubagentSlot: (
     parentSessionID: SessionSchema.ID,
   ) => Effect.Effect<{ ok: true; killed: string | null } | { ok: false; error: string }, never, never>
@@ -176,6 +188,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const bus = yield* SubagentBus.Service
     const plans = yield* SubagentPlans.Service
+    const reviews = yield* SubagentReviewRequests.Service
     const events = yield* EventV2.Service
     const { db } = yield* Database.Service
     const activityRef = yield* Ref.make(new Map<string, Array<{ from: string; at: number }>>())
@@ -435,6 +448,76 @@ export const layer = Layer.effect(
       yield* bus.publish(message)
     })
 
+    // Phase 1D G4: explicit reviewer dispatch via `mesh_control.review`.
+    //
+    // Reserves a subagent slot via the existing `tryReserveSubagentSlot`
+    // (evicts idle agents at limit; same path as `planFor`-induced spawns).
+    // Persists a row in `subagent_review_requests` so the opencode-side
+    // review-bridge can correlate the bus message with the request, write
+    // back the reviewer subagent result via `markCompleted` /
+    // `markFailed`, and survive restarts.
+    //
+    // The `targetAgent` field is locked to `"reviewer"` for Phase 1D — the
+    // orchestrator review contract assumes a read-only reviewer subagent.
+    // Future expansions (e.g. dispatching to a "security" reviewer) widen
+    // the literal here AND in `mesh-control.ts:Input.reviewSpec.targetAgent`.
+    //
+    // The published `kind: "review"` SubagentMessage carries `reviewID` both
+    // at the top level (canonical correlation field, mirrors `planID`) and in
+    // the payload envelope (`{ reviewID, ...reviewSpec }`) for consumers
+    // that prefer envelope-style access. The opencode review-bridge is the
+    // sole consumer of this message kind; it drains the SubagentBus global
+    // queue (`subscribeAll`) and dispatches a fresh reviewer child session.
+    const review = Effect.fn("MeshCoordinator.review")(function* (input: {
+      parentSessionID: SessionSchema.ID
+      reviewSpec: {
+        targetAgent: "reviewer"
+        diff?: string
+        description?: string
+        paths?: ReadonlyArray<string>
+        priority?: "low" | "normal" | "high"
+        reason?: string
+      }
+    }) {
+      const reservation = yield* tryReserveSubagentSlot(input.parentSessionID)
+      if (!reservation.ok) {
+        return yield* Effect.die(new Error(reservation.error))
+      }
+
+      const reviewID = crypto.randomUUID()
+      const now = Date.now()
+
+      yield* reviews.put({
+        id: reviewID,
+        parentSessionID: input.parentSessionID,
+        targetAgent: input.reviewSpec.targetAgent,
+        diff: input.reviewSpec.diff ?? null,
+        description: input.reviewSpec.description ?? null,
+        paths: input.reviewSpec.paths ? [...input.reviewSpec.paths] : null,
+        priority: input.reviewSpec.priority ?? null,
+        reason: input.reviewSpec.reason ?? null,
+        status: "pending",
+        createdAt: now,
+        updatedAt: now,
+        result: null,
+      })
+
+      const message: SubagentMessage = {
+        id: crypto.randomUUID(),
+        parentSessionID: input.parentSessionID,
+        fromSession: input.parentSessionID,
+        fromAgent: "orchestrator",
+        toAgent: input.reviewSpec.targetAgent,
+        kind: "review",
+        reviewID,
+        payload: { reviewID, ...input.reviewSpec },
+        createdAt: Date.now(),
+      }
+      yield* bus.publish(message)
+
+      return { reviewID, status: "dispatched" as const }
+    })
+
     const tryReserveSubagentSlot = Effect.fn("MeshCoordinator.tryReserveSubagentSlot")(function* (
       parentSessionID: SessionSchema.ID,
     ) {
@@ -590,6 +673,7 @@ export const layer = Layer.effect(
       steer,
       kill,
       planFor,
+      review,
       tryReserveSubagentSlot,
       trackParent,
       listTrackedParents,
@@ -604,5 +688,6 @@ export const layer = Layer.effect(
 export const defaultLayer = layer.pipe(
   Layer.provide(SubagentBus.defaultLayer),
   Layer.provide(SubagentPlans.defaultLayer),
+  Layer.provide(SubagentReviewRequests.defaultLayer),
   Layer.provide(Database.defaultLayer),
 )

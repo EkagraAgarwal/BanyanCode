@@ -143,11 +143,15 @@ export type SubagentMessage = {
   fromAgent: string
   toSession?: string
   toAgent?: string
-  kind: "request" | "inform" | "answer" | "poll" | "steer" | "checkpoint" | "plan" | "plan_update" | "kill"
+  kind: "request" | "inform" | "answer" | "poll" | "steer" | "checkpoint" | "plan" | "plan_update" | "kill" | "review"
   // G3: planID correlation invariant — present on plan_update messages to bind
   // the update to a SubagentPlans row. Optional for legacy read compatibility;
   // required for plan_update kind.
   planID?: string
+  // G4 (Phase 1D): reviewID correlation invariant — present on `review`
+  // messages to bind the dispatch to a `subagent_review_requests` row.
+  // Optional for legacy read compatibility; required for `review` kind.
+  reviewID?: string
   payload: unknown
   deliveredAt?: number
   createdAt: number

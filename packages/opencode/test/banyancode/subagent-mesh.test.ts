@@ -44,6 +44,7 @@ const mockBusLayer = Layer.succeed(SubagentBus.Service, SubagentBus.Service.of({
       return { id: msg.id, createdAt: msg.createdAt, created: true }
     }),
   subscribe: () => Effect.succeed({} as any),
+  subscribeAll: () => Effect.succeed({} as any),
   peers: () => Effect.succeed([]),
 }))
 

@@ -21,6 +21,15 @@ export interface Interface {
    * whether this call created the row (true) or fetched an existing one (false). */
   readonly publishOrFetch: (msg: SubagentMessage) => Effect.Effect<PublishResult>
   readonly subscribe: (sessionID: string) => Effect.Effect<Queue.Dequeue<SubagentMessage>>
+  /**
+   * Subscribe to a single global stream of all published messages across every
+   * parent session. Single-consumer — see AGENTS.md "Service events queue
+   * ownership". Phase 1D review-bridge is the only consumer. Each `publish`
+   * also offers to the global queue (drops on back-pressure).
+   *
+   * Returns the same Dequeue handle so the bridge can drain it via `take`.
+   */
+  readonly subscribeAll: () => Effect.Effect<Queue.Dequeue<SubagentMessage>>
   readonly peers: (parentSessionID: string) => Effect.Effect<PeerInfo[]>
 }
 
@@ -34,8 +43,15 @@ export const layer = Layer.effect(
     const repo = yield* SubagentMessagesRepo.Service
     const { db } = yield* Database.Service
 
+    // Phase 1D: a single global Dequeue for cross-session subscribers (the
+    // review-bridge). Bounded; offers drop on back-pressure rather than
+    // blocking the producer. The per-session `subscribe()` path is unchanged.
+    const allQueue = yield* Queue.bounded<SubagentMessage>(100)
+    yield* Effect.addFinalizer(() => Queue.shutdown(allQueue))
+
     const publish = Effect.fn("SubagentBus.publish")(function* (msg: SubagentMessage) {
       yield* repo.put(msg)
+      yield* Queue.offer(allQueue, msg).pipe(Effect.ignore)
     })
 
     /**
@@ -112,7 +128,11 @@ export const layer = Layer.effect(
       return Array.from(seen.values())
     })
 
-    return Service.of({ publish, publishOrFetch, subscribe, peers })
+    const subscribeAll = Effect.fn("SubagentBus.subscribeAll")(function* () {
+      return allQueue
+    })
+
+    return Service.of({ publish, publishOrFetch, subscribe, subscribeAll, peers })
   }),
 )
 

@@ -24,6 +24,7 @@ const buildServiceLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>) 
       publish: () => Effect.void,
       publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
       subscribe: () => Effect.succeed(queue),
+      subscribeAll: () => Effect.succeed({} as any),
       peers: () => Effect.succeed([]),
     }),
   )
@@ -68,6 +69,7 @@ const buildServiceLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>) 
       steer: () => Effect.void,
       kill: () => Effect.void,
       planFor: () => Effect.void,
+        review: () => Effect.succeed({ reviewID: "test-review", status: "dispatched" as const }),
       tryReserveSubagentSlot: () => Effect.succeed({ ok: true, killed: null }),
       registerConsumer: () => Effect.void,
       unregisterConsumer: () => Effect.void,
@@ -108,6 +110,7 @@ describe("SubagentConsumer lifecycle", () => {
         steer: () => Effect.void,
         kill: () => Effect.void,
         planFor: () => Effect.void,
+        review: () => Effect.succeed({ reviewID: "test-review", status: "dispatched" as const }),
         tryReserveSubagentSlot: () => Effect.succeed({ ok: true, killed: null }),
         registerConsumer: (sessionID: any, agent: string, fiber: Fiber.Fiber<unknown, unknown>) =>
           Effect.sync(() => {
@@ -127,6 +130,7 @@ describe("SubagentConsumer lifecycle", () => {
             publish: () => Effect.void,
             publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
             subscribe: () => Effect.succeed(queue),
+            subscribeAll: () => Effect.succeed(queue),
             peers: () => Effect.succeed([]),
           }),
         ),
@@ -183,6 +187,7 @@ describe("SubagentConsumer lifecycle", () => {
         steer: () => Effect.void,
         kill: () => Effect.void,
         planFor: () => Effect.void,
+        review: () => Effect.succeed({ reviewID: "test-review", status: "dispatched" as const }),
         tryReserveSubagentSlot: () => Effect.succeed({ ok: true, killed: null }),
         registerConsumer: () => Effect.void,
         unregisterConsumer: () => Effect.sync(() => { unregistered = true }),
@@ -199,6 +204,7 @@ describe("SubagentConsumer lifecycle", () => {
             publish: () => Effect.void,
             publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
             subscribe: () => Effect.succeed(queue),
+            subscribeAll: () => Effect.succeed(queue),
             peers: () => Effect.succeed([]),
           }),
         ),
@@ -263,6 +269,7 @@ describe("SubagentConsumer lifecycle", () => {
         steer: () => Effect.void,
         kill: () => Effect.void,
         planFor: () => Effect.void,
+        review: () => Effect.succeed({ reviewID: "test-review", status: "dispatched" as const }),
         tryReserveSubagentSlot: () => Effect.succeed({ ok: true, killed: null }),
         registerConsumer: (_sessionID: any, _agent: string, fiber: Fiber.Fiber<unknown, unknown>) =>
           Effect.sync(() => { interruptedFiber = fiber }),
@@ -280,6 +287,7 @@ describe("SubagentConsumer lifecycle", () => {
             publish: () => Effect.void,
             publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
             subscribe: () => Effect.succeed(queue),
+            subscribeAll: () => Effect.succeed(queue),
             peers: () => Effect.succeed([]),
           }),
         ),

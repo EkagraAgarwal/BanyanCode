@@ -7,6 +7,7 @@ export { CodegraphTracesTable } from "./codegraph-traces.sql"
 export { CodegraphMetaTable } from "./codegraph-meta.sql"
 export { SubagentMessagesTable } from "./subagent-messages.sql"
 export { SubagentPlansTable } from "./subagent-plans.sql"
+export { SubagentReviewRequestsTable } from "./subagent-review-requests.sql"
 export type {
   MemoryEntry,
   CodegraphFile,
@@ -196,6 +197,13 @@ export {
   defaultLayer as subagentPlansRepoDefaultLayer,
   SubagentPlans,
 } from "./subagent-plans-repo"
+export {
+  Service as SubagentReviewRequestsRepo,
+  layer as subagentReviewRequestsRepoLayer,
+  defaultLayer as subagentReviewRequestsRepoDefaultLayer,
+  SubagentReviewRequests,
+} from "./subagent-review-requests-repo"
+export type { SubagentReviewRequest, ReviewStatus } from "./subagent-review-requests-repo"
 export { Service as SubagentBus, layer as subagentBusLayer, defaultLayer as subagentBusDefaultLayer } from "./subagent-bus"
 export { Service as MeshCoordinator, layer as meshCoordinatorLayer, defaultLayer as meshCoordinatorDefaultLayer } from "./mesh-coordinator"
 export { Service as SystemMonitorService, defaultLayer as systemMonitorDefaultLayer } from "./system-monitor"

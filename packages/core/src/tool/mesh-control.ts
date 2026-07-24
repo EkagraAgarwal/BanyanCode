@@ -11,7 +11,7 @@ const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 export const name = "mesh_control"
 
-export const Action = Schema.Literals(["checkin", "steer", "kill", "plan_for"])
+export const Action = Schema.Literals(["checkin", "steer", "kill", "plan_for", "review"])
 export const Input = Schema.Struct({
   action: Action,
   targetAgent: Schema.optional(Schema.String),
@@ -28,6 +28,24 @@ export const Input = Schema.Struct({
         }),
       ),
       exitCriteria: Schema.String,
+    }),
+  ),
+  // Phase 1D (G4): explicit reviewer dispatch. `mesh_control.review` reserves
+  // a subagent slot, persists a `subagent_review_requests` row, and emits a
+  // `kind: "review"` SubagentBus message. The opencode-side review-bridge
+  // consumes the message, spawns a `reviewer` subagent session, and writes
+  // the result back via `markCompleted` / `markFailed`.
+  reviewSpec: Schema.optional(
+    Schema.Struct({
+      // Locked to "reviewer" in Phase 1D — widening this literal requires
+      // also widening `MeshCoordinator.review.input.reviewSpec.targetAgent`
+      // and registering a new agent in `src/agent/agent.ts`.
+      targetAgent: Schema.Literals(["reviewer"]),
+      diff: Schema.optional(Schema.String),
+      description: Schema.optional(Schema.String),
+      paths: Schema.optional(Schema.Array(Schema.String)),
+      priority: Schema.optional(Schema.Literals(["low", "normal", "high"])),
+      reason: Schema.optional(Schema.String),
     }),
   ),
 })
@@ -105,6 +123,27 @@ export const locationLayer = Layer.effectDiscard(
                     },
                   })
                   return { result: `planned for ${input.targetAgent}` }
+                }
+                case "review": {
+                  if (!input.reviewSpec) {
+                    return yield* new ToolFailure({ message: "reviewSpec is required for review" })
+                  }
+                  // Phase 1D: targetAgent is locked to "reviewer" via the schema
+                  // literal. The cast is a no-op at runtime — the literal
+                  // guarantees it. We pass it through to MeshCoordinator for
+                  // correlation with the bridge.
+                  const reviewResult = yield* mesh.review({
+                    parentSessionID: context.sessionID as any,
+                    reviewSpec: {
+                      targetAgent: input.reviewSpec.targetAgent,
+                      diff: input.reviewSpec.diff,
+                      description: input.reviewSpec.description,
+                      paths: input.reviewSpec.paths,
+                      priority: input.reviewSpec.priority,
+                      reason: input.reviewSpec.reason,
+                    },
+                  })
+                  return { result: reviewResult }
                 }
               }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `mesh_control failed` })))

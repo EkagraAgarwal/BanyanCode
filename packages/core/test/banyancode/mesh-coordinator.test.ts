@@ -7,6 +7,7 @@ import { tmpdir } from "../fixture/tmpdir"
 import path from "path"
 import { SubagentBus } from "../../src/banyancode/subagent-bus"
 import { SubagentPlans } from "../../src/banyancode/subagent-plans-repo"
+import { SubagentReviewRequests } from "../../src/banyancode/subagent-review-requests-repo"
 import { MeshCoordinator, layer } from "../../src/banyancode/mesh-coordinator"
 import type { SubagentMessage } from "../../src/banyancode/types"
 
@@ -43,6 +44,7 @@ describe("MeshCoordinator", () => {
           publish: () => Effect.void,
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(q),
+          subscribeAll: () => Effect.succeed(q),
           peers: () => Effect.succeed(mockPeers),
         })
       }),
@@ -60,11 +62,24 @@ describe("MeshCoordinator", () => {
         setStepStatus: () => Effect.succeed(undefined),
       }),
     )
+    const mockReviews = Layer.succeed(
+      SubagentReviewRequests.Service,
+      SubagentReviewRequests.Service.of({
+        put: () => Effect.void,
+        getByID: () => Effect.succeed(undefined),
+        listByParent: () => Effect.succeed([]),
+        markDispatched: () => Effect.void,
+        markCompleted: () => Effect.void,
+        markFailed: () => Effect.void,
+      }),
+    )
+
+
 
     const serviceLayer = layer.pipe(
       Layer.provide(mockBus),
       Layer.provide(mockPlans),
-      Layer.provide(EventV2.defaultLayer),
+      Layer.provide(mockReviews),      Layer.provide(EventV2.defaultLayer),
     )
 
     await Effect.runPromise(
@@ -94,6 +109,7 @@ describe("MeshCoordinator", () => {
           publish: (msg: any) => Effect.sync(() => { publishedMessage = msg }),
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(q),
+          subscribeAll: () => Effect.succeed(q),
           peers: () => Effect.succeed([]),
         })
       }),
@@ -111,11 +127,22 @@ describe("MeshCoordinator", () => {
         setStepStatus: () => Effect.succeed(undefined),
       }),
     )
+    const mockReviews = Layer.succeed(
+      SubagentReviewRequests.Service,
+      SubagentReviewRequests.Service.of({
+        put: () => Effect.void,
+        getByID: () => Effect.succeed(undefined),
+        listByParent: () => Effect.succeed([]),
+        markDispatched: () => Effect.void,
+        markCompleted: () => Effect.void,
+        markFailed: () => Effect.void,
+      }),
+    )
 
     const serviceLayer = layer.pipe(
       Layer.provide(mockBus),
       Layer.provide(mockPlans),
-      Layer.provide(EventV2.defaultLayer),
+      Layer.provide(mockReviews),      Layer.provide(EventV2.defaultLayer),
     )
 
     await Effect.runPromise(
@@ -150,6 +177,7 @@ describe("MeshCoordinator", () => {
           publish: (msg: any) => Effect.sync(() => { publishedMessage = msg }),
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(q),
+          subscribeAll: () => Effect.succeed(q),
           peers: () => Effect.succeed([]),
         })
       }),
@@ -167,11 +195,22 @@ describe("MeshCoordinator", () => {
         setStepStatus: () => Effect.succeed(undefined),
       }),
     )
+    const mockReviews = Layer.succeed(
+      SubagentReviewRequests.Service,
+      SubagentReviewRequests.Service.of({
+        put: () => Effect.void,
+        getByID: () => Effect.succeed(undefined),
+        listByParent: () => Effect.succeed([]),
+        markDispatched: () => Effect.void,
+        markCompleted: () => Effect.void,
+        markFailed: () => Effect.void,
+      }),
+    )
 
     const serviceLayer = layer.pipe(
       Layer.provide(mockBus),
       Layer.provide(mockPlans),
-      Layer.provide(EventV2.defaultLayer),
+      Layer.provide(mockReviews),      Layer.provide(EventV2.defaultLayer),
     )
 
     await Effect.runPromise(
@@ -206,6 +245,7 @@ describe("MeshCoordinator", () => {
           publish: (msg: any) => Effect.sync(() => { publishedMessage = msg }),
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(q),
+          subscribeAll: () => Effect.succeed(q),
           peers: () => Effect.succeed([]),
         })
       }),
@@ -223,11 +263,22 @@ describe("MeshCoordinator", () => {
         setStepStatus: () => Effect.succeed(undefined),
       }),
     )
+    const mockReviews = Layer.succeed(
+      SubagentReviewRequests.Service,
+      SubagentReviewRequests.Service.of({
+        put: () => Effect.void,
+        getByID: () => Effect.succeed(undefined),
+        listByParent: () => Effect.succeed([]),
+        markDispatched: () => Effect.void,
+        markCompleted: () => Effect.void,
+        markFailed: () => Effect.void,
+      }),
+    )
 
     const serviceLayer = layer.pipe(
       Layer.provide(mockBus),
       Layer.provide(mockPlans),
-      Layer.provide(EventV2.defaultLayer),
+      Layer.provide(mockReviews),      Layer.provide(EventV2.defaultLayer),
     )
 
     const testPlan = {
@@ -283,6 +334,7 @@ describe("MeshCoordinator", () => {
           publish: () => Effect.void,
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(q),
+          subscribeAll: () => Effect.succeed(q),
           peers: () => Effect.succeed([]),
         })
       }),
@@ -300,11 +352,22 @@ describe("MeshCoordinator", () => {
         setStepStatus: () => Effect.succeed(undefined),
       }),
     )
+    const mockReviews = Layer.succeed(
+      SubagentReviewRequests.Service,
+      SubagentReviewRequests.Service.of({
+        put: () => Effect.void,
+        getByID: () => Effect.succeed(undefined),
+        listByParent: () => Effect.succeed([]),
+        markDispatched: () => Effect.void,
+        markCompleted: () => Effect.void,
+        markFailed: () => Effect.void,
+      }),
+    )
 
     const serviceLayer = layer.pipe(
       Layer.provide(mockBus),
       Layer.provide(mockPlans),
-      Layer.provide(EventV2.defaultLayer),
+      Layer.provide(mockReviews),      Layer.provide(EventV2.defaultLayer),
     )
 
     await Effect.runPromise(
@@ -362,6 +425,7 @@ describe("MeshCoordinator", () => {
           publish: () => Effect.void,
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           subscribe: () => Effect.succeed(q),
+          subscribeAll: () => Effect.succeed(q),
           peers: () =>
             Effect.succeed([
               {
@@ -387,11 +451,22 @@ describe("MeshCoordinator", () => {
         setStepStatus: () => Effect.succeed(undefined),
       }),
     )
+    const mockReviews = Layer.succeed(
+      SubagentReviewRequests.Service,
+      SubagentReviewRequests.Service.of({
+        put: () => Effect.void,
+        getByID: () => Effect.succeed(undefined),
+        listByParent: () => Effect.succeed([]),
+        markDispatched: () => Effect.void,
+        markCompleted: () => Effect.void,
+        markFailed: () => Effect.void,
+      }),
+    )
 
     const serviceLayer = layer.pipe(
       Layer.provide(mockBus),
       Layer.provide(mockPlans),
-      Layer.provide(EventV2.defaultLayer),
+      Layer.provide(mockReviews),      Layer.provide(EventV2.defaultLayer),
     )
 
     await Effect.runPromise(

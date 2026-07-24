@@ -1,5 +1,5 @@
 /**
- * Subagent types — Phase 0 G1/G2, Phase 1A G3.
+ * Subagent types — Phase 0 G1/G2, Phase 1A G3, Phase 1D G4.
  *
  * G1: idempotent retry mechanism via `idempotencyKey` + `createdAt`.
  * G2: versioned JSONB envelope on `subagent_messages.payload` and
@@ -8,6 +8,13 @@
  *     `plan_update` message MUST carry `planID` matching a row in the
  *     subagent_plans table; the consumer treats absence as "mark delivered"
  *     and the repo treats unknown planID as a no-op (returns undefined).
+ * G4: `review` message kind + `reviewID` correlation invariant. A `review`
+ *     message MUST carry `reviewID` matching a row in the
+ *     `subagent_review_requests` table. The Phase 1D opencode-side review
+ *     bridge (`packages/opencode/src/effect/banyancode-review-bridge.ts`)
+ *     drains the SubagentBus global queue and dispatches a `reviewer`
+ *     subagent session for each message; the bridge persists the result
+ *     back to the row keyed by `reviewID`.
  */
 
 import { Schema } from "effect"
@@ -15,7 +22,7 @@ import { Schema } from "effect"
 // Re-export from types.ts for consumers
 export type { SubagentMessage } from "./types"
 
-export type MessageKind = "request" | "inform" | "answer" | "poll" | "steer" | "checkpoint" | "plan" | "plan_update" | "kill"
+export type MessageKind = "request" | "inform" | "answer" | "poll" | "steer" | "checkpoint" | "plan" | "plan_update" | "kill" | "review"
 
 /** Branded string for idempotency keys. */
 export type IdempotencyKey = string & { readonly _brand: unique symbol }

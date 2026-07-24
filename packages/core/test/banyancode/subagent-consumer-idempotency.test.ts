@@ -25,6 +25,7 @@ const buildLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>) => {
       publish: () => Effect.void,
       publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
       subscribe: () => Effect.succeed(queue),
+      subscribeAll: () => Effect.succeed({} as any),
       peers: () => Effect.succeed([]),
     }),
   )
@@ -41,6 +42,7 @@ const buildLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>) => {
       steer: () => Effect.void,
       kill: () => Effect.void,
       planFor: () => Effect.void,
+        review: () => Effect.succeed({ reviewID: "test-review", status: "dispatched" as const }),
       tryReserveSubagentSlot: () => Effect.succeed({ ok: true, killed: null }),
       registerConsumer: () => Effect.void,
       unregisterConsumer: () => Effect.void,
