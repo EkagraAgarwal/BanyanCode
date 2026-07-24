@@ -46,7 +46,6 @@ const AGENTS_WITH_PROMPT = [
   "scout",
   "researcher",
   "orchestrator",
-  "general",
 ] as const
 
 // Models that dispatch to provider prompts carrying the pointer phrase

@@ -74,11 +74,10 @@ export const PROVIDER_PROMPT_FILES = [
   ["trinity", "trinity.txt"],
 ] as const
 
-// 8 built-in agents that the BanyanCode tool guide policy must cover.
+// 7 built-in agents that the BanyanCode tool guide policy must cover.
 export const BUILTIN_AGENT_NAMES = [
   "build",
   "plan",
-  "general",
   "explore",
   "coder",
   "scout",

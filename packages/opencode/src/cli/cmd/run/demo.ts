@@ -889,7 +889,7 @@ function emitPermission(state: State, kind: PermissionKind = "edit"): void {
   if (kind === "doom") {
     const ref = make(state, "task", {
       description: "Retry the formatter after repeated failures",
-      subagent_type: "general",
+      subagent_type: "scout",
     })
     askPermission(state, {
       ref,

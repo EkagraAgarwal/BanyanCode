@@ -84,7 +84,7 @@ afterEach(async () => {
 })
 
 describe("tool permissions — all agents get all banyancode tools", () => {
-  for (const agentName of ["build", "plan", "general", "orchestrator", "researcher", "coder", "scout", "explore"] as const) {
+  for (const agentName of ["build", "plan", "orchestrator", "researcher", "coder", "scout", "explore"] as const) {
     it.instance(`${agentName} agent allows every banyancode tool`, () =>
       Effect.gen(function* () {
         const agent = yield* Agent.Service.use((svc) => svc.get(agentName))

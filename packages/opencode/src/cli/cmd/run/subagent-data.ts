@@ -309,7 +309,7 @@ function taskStatus(part: ToolPart): FooterSubagentTab["status"] {
 }
 
 function taskTab(part: ToolPart, sessionID: string): FooterSubagentTab {
-  const label = Locale.titlecase(text(part.state.input.subagent_type) ?? "general")
+  const label = Locale.titlecase(text(part.state.input.subagent_type) ?? "subagent")
   const description = text(part.state.input.description) ?? stateTitle(part) ?? inputLabel(part.state.input) ?? ""
 
   return {

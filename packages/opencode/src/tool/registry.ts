@@ -17,6 +17,10 @@ import { PermissionV2 } from "@opencode-ai/core/permission"
 import { MemoryTools } from "@opencode-ai/core/tool/memory"
 import { MemoryCandidateTool } from "@opencode-ai/core/tool/memory-candidate"
 import { SharedMemoryTool } from "@opencode-ai/core/tool/shared-memory"
+import { MeshControlTool } from "@opencode-ai/core/tool/mesh-control"
+import { MeshSubscribeTool } from "@opencode-ai/core/tool/mesh-subscribe"
+import { SubagentMessageTool } from "@opencode-ai/core/tool/subagent-message"
+import { SystemStatusTool } from "@opencode-ai/core/tool/system-status"
 import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
@@ -384,6 +388,10 @@ const baseBanyanToolLayers = Layer.mergeAll(
   MemoryTools.locationLayer,
   MemoryCandidateTool.layer,
   SharedMemoryTool.layer,
+  MeshControlTool.locationLayer,
+  MeshSubscribeTool.locationLayer,
+  SubagentMessageTool.layer,
+  SystemStatusTool.layer,
 )
 
 // `withBanyanDeps` wraps `baseBanyanToolLayers` in a `Layer.unwrap` that,
@@ -414,6 +422,9 @@ const withBanyanDeps = Layer.unwrap(
     const telemetry = yield* Effect.serviceOption(Banyan.ToolTelemetry)
     const memoryRepo = yield* Effect.serviceOption(Banyan.MemoryRepo)
     const memoryService = yield* Effect.serviceOption(Banyan.MemoryService)
+    const meshCoordinator = yield* Effect.serviceOption(Banyan.MeshCoordinator)
+    const systemMonitor = yield* Effect.serviceOption(Banyan.SystemMonitorService)
+    const httpClient = yield* Effect.serviceOption(HttpClient.HttpClient)
     const worktreeAccessor: () => Effect.Effect<string | undefined> = () =>
       Effect.gen(function* () {
         const inst = yield* InstanceRef
@@ -451,6 +462,15 @@ const withBanyanDeps = Layer.unwrap(
         Layer.empty as unknown as Layer.Layer<never, never, never>,
       ]),
       ...(Option.isSome(memoryService) ? [Layer.succeed(Banyan.MemoryService, memoryService.value)] : [
+        Layer.empty as unknown as Layer.Layer<never, never, never>,
+      ]),
+      ...(Option.isSome(meshCoordinator) ? [Layer.succeed(Banyan.MeshCoordinator, meshCoordinator.value)] : [
+        Layer.empty as unknown as Layer.Layer<never, never, never>,
+      ]),
+      ...(Option.isSome(systemMonitor) ? [Layer.succeed(Banyan.SystemMonitorService, systemMonitor.value)] : [
+        Layer.empty as unknown as Layer.Layer<never, never, never>,
+      ]),
+      ...(Option.isSome(httpClient) ? [Layer.succeed(HttpClient.HttpClient, httpClient.value)] : [
         Layer.empty as unknown as Layer.Layer<never, never, never>,
       ]),
     ) as unknown as Layer.Layer<never, never, never>

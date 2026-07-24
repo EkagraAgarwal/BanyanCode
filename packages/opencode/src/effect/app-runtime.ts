@@ -193,6 +193,7 @@ Banyan.systemMonitorDefaultLayer,
   ),
   Layer.provideMerge(
     Banyan.meshCoordinatorDefaultLayer.pipe(
+      Layer.provide(Banyan.subagentReviewRequestsRepoDefaultLayer),
       Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
       Layer.provide(Banyan.maxSubagentsLayer.pipe(Layer.provide(Banyan.banyanConfigServiceDefaultLayer))),
       Layer.provide(EventV2.defaultLayer),

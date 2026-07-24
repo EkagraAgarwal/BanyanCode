@@ -569,7 +569,7 @@ function snapPatch(p: ToolProps<typeof ApplyPatchTool>): ToolSnapshot | undefine
 }
 
 function snapTask(p: ToolProps<typeof TaskTool>): ToolSnapshot {
-  const kind = Locale.titlecase(p.input.subagent_type || "general")
+  const kind = Locale.titlecase(p.input.subagent_type || "subagent")
   const desc = p.input.description
   const title = text(p.frame.state.title)
   const rows = [desc || title].filter((item): item is string => Boolean(item))
@@ -781,7 +781,7 @@ function scrollTaskFinal(p: ToolProps<typeof TaskTool>): string {
     return fail(p.frame)
   }
 
-  const kind = Locale.titlecase(p.input.subagent_type || "general")
+  const kind = Locale.titlecase(p.input.subagent_type || "subagent")
   const row = p.input.description || text(p.frame.state.title)
   if (!row) {
     return `# ${kind} Task`
@@ -978,7 +978,7 @@ function permBash(p: ToolPermissionProps<typeof BashTool>): ToolPermissionInfo {
 }
 
 function permTask(p: ToolPermissionProps<typeof TaskTool>): ToolPermissionInfo {
-  const type = p.input.subagent_type || "general"
+  const type = p.input.subagent_type || "subagent"
   const desc = p.input.description
   return {
     icon: "#",

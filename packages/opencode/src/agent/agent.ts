@@ -11,7 +11,6 @@ import { ProviderTransform } from "@/provider/transform"
 
 import PROMPT_ORCHESTRATOR from "./prompt/orchestrator.txt"
 import PROMPT_RESEARCHER from "./prompt/researcher.txt"
-import PROMPT_GENERAL from "./prompt/general.txt"
 
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_BUILD from "./prompt/build.txt"
@@ -187,7 +186,6 @@ export const layer = Layer.effect(
                   "*": "deny",
                   explore: "allow",
                   scout: "allow",
-                  general: "allow",
                   coder: "allow",
                   researcher: "allow",
                 },
@@ -241,31 +239,6 @@ export const layer = Layer.effect(
               user,
             ),
             mode: "primary",
-            native: true,
-          },
-          general: {
-            name: "general",
-            description: `General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.`,
-            prompt: PROMPT_GENERAL,
-            permission: Permission.merge(
-              defaults,
-              Permission.fromConfig({
-                todowrite: "deny",
-                systeminfo: "allow",
-                task: {
-                  "*": "deny",
-                  explore: "allow",
-                  scout: "allow",
-                  researcher: "allow",
-                },
-                subagent_message: "allow",
-                mesh_control: "deny",
-                mesh_subscribe: "allow",
-              }),
-              user,
-            ),
-            options: {},
-            mode: "subagent",
             native: true,
           },
           explore: {
@@ -517,7 +490,6 @@ export const layer = Layer.effect(
                   researcher: "allow",
                   coder: "allow",
                   explore: "allow",
-                  general: "allow",
                   scout: "allow",
                   reviewer: "allow",
                 },
