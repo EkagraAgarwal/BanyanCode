@@ -217,10 +217,14 @@ test("context widget filters zero-token categories for compact display", () => {
     require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
     "utf8",
   )
-  const usedIdx = source.indexOf("Used {formatTokensCompact(tb().total)}")
-  expect(usedIdx).toBeGreaterThan(-1)
-  const afterUsed = source.slice(usedIdx)
-  expect(afterUsed).toMatch(/filter\(\(s\)\s*=>\s*s\.tokens\s*>\s*0\)/)
+  // The segments list filters out zero-token categories so the per-line
+  // breakdown stays compact even when several buckets are empty.
+  expect(source).toMatch(/filter\(\(s\)\s*=>\s*s\.tokens\s*>\s*0\)/)
+  // The header row (above the bar) is the single source of truth for the
+  // context total — there is no longer a redundant "Used ... in context"
+  // line below the bar.
+  expect(source).not.toContain("Used {formatTokensCompact(tb().total)}")
+  expect(source).not.toContain("in context")
 })
 
 test("context widget does not nest <text> elements inside another <text>", () => {
@@ -257,7 +261,7 @@ test("context widget gates the `/ X` decorations on hasLimit()", () => {
     "utf8",
   )
   const matches = source.match(/<Show when=\{hasLimit\(\)\}>/g) ?? []
-  expect(matches.length).toBeGreaterThanOrEqual(2)
+  expect(matches.length).toBeGreaterThanOrEqual(1)
 })
 
 test("context widget bar layout uses reactive barDenominator via createMemo", () => {

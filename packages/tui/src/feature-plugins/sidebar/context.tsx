@@ -381,16 +381,6 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                 height={1}
               />
             </box>
-            <box flexDirection="row" marginTop={0} width="100%">
-              <text>
-                <span style={{ fg: toHex(theme().text) }}>Used {formatTokensCompact(tb().total)}</span>
-                <Show when={hasLimit()}>
-                  <span style={{ fg: toHex(theme().textMuted) }}>
-                    {" "}/ {formatTokensCompact(limit()!)} in context
-                  </span>
-                </Show>
-              </text>
-            </box>
             <box flexDirection="column" marginTop={0} gap={0} width="100%">
               <For each={segments().filter((s) => s.tokens > 0)}>
                 {(seg) => {
