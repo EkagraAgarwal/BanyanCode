@@ -208,13 +208,21 @@ const categorizeTokens = (
   const inputTotal = tokens.input ?? 0
   const cacheRead = tokens.cache?.read ?? 0
   const cacheWrite = tokens.cache?.write ?? 0
+  const totalCache = cacheRead + cacheWrite
+
+  // Clamp heuristic buckets to basis (input + cache), not just input. This
+  // prevents the categories from collapsing when the conversation is
+  // cache-heavy and inputTotal is small. Cache is implicit in basis; the
+  // cacheRead/cacheWrite return fields are zeroed out to avoid double-counting
+  // in the legend/bar.
+  const basis = inputTotal + totalCache
 
   const heuristicBuckets = filesTokens + toolsTokens + subagentTokens + userTokens
-  const prompt = Math.max(0, inputTotal - Math.min(heuristicBuckets, inputTotal))
-  const files = Math.min(filesTokens, inputTotal)
-  const tools = Math.min(toolsTokens, Math.max(0, inputTotal - files))
-  const subagents = Math.min(subagentTokens, Math.max(0, inputTotal - files - tools))
-  const users = Math.min(userTokens, Math.max(0, inputTotal - files - tools - subagents))
+  const prompt = Math.max(0, basis - heuristicBuckets)
+  const files = Math.min(filesTokens, basis)
+  const tools = Math.min(toolsTokens, Math.max(0, basis - files))
+  const subagents = Math.min(subagentTokens, Math.max(0, basis - files - tools))
+  const users = Math.min(userTokens, Math.max(0, basis - files - tools - subagents))
 
   return {
     thinking: reasoning,
@@ -224,8 +232,8 @@ const categorizeTokens = (
     prompt,
     userMessages: users,
     subagents,
-    cacheRead,
-    cacheWrite,
+    cacheRead: 0,
+    cacheWrite: 0,
     total: inputTotal + output + reasoning + cacheRead + cacheWrite,
   }
 }

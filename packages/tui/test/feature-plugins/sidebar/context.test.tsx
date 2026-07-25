@@ -400,7 +400,7 @@ describe("categorizeTokens", () => {
     expect(cat!.total).toBe(5000 + 3000 + 1000 + 250 + 75)
   })
 
-  test("heuristic buckets are clamped so breakdown never exceeds last-turn input", () => {
+  test("heuristic buckets are clamped to basis (input + cache)", () => {
     const hugeParts = [
       {
         id: "huge",
@@ -420,10 +420,14 @@ describe("categorizeTokens", () => {
       [fixtureUser as any, fixtureAssistant as any],
       (id: string) => (id === "msg-1" ? hugeParts : fixtureUserParts),
     )
-    expect(cat!.files).toBeLessThanOrEqual(cat!.total)
+    const basis = 5000 + 250 + 75 // input + cache.read + cache.write
+    expect(cat!.files).toBeLessThanOrEqual(basis)
     expect(cat!.files + cat!.tools + cat!.subagents + cat!.userMessages + cat!.prompt).toBeLessThanOrEqual(
-      cat!.total,
+      basis,
     )
+    // cacheRead/cacheWrite are zeroed in the return; cache is implicit in basis.
+    expect(cat!.cacheRead).toBe(0)
+    expect(cat!.cacheWrite).toBe(0)
   })
 
   test("Output sums tokens.output across all assistant messages", () => {
@@ -458,8 +462,9 @@ describe("categorizeTokens", () => {
       (id: string) => partMap[id] ?? [],
     )
     expect(cat!.files).toBeGreaterThan(0)
-    expect(cat!.cacheRead).toBe(250)
-    expect(cat!.cacheWrite).toBe(75)
+    // cacheRead/cacheWrite are zeroed in the return; cache is implicit in basis.
+    expect(cat!.cacheRead).toBe(0)
+    expect(cat!.cacheWrite).toBe(0)
     expect(cat!.prompt).toBeGreaterThan(0)
     expect(cat!.output).toBe(3000)
   })
@@ -467,5 +472,48 @@ describe("categorizeTokens", () => {
   test("Prompt residual never goes negative", () => {
     const cat = categorizeTokens([fixtureUser as any, fixtureAssistant as any], partsGetter)
     expect(cat!.prompt).toBeGreaterThanOrEqual(0)
+  })
+
+  test("context widget does not collapse heuristic buckets when cache dominates", () => {
+    const cacheHeavyAssistant = {
+      id: "msg-1",
+      type: "assistant" as const,
+      role: "assistant" as const,
+      tokens: {
+        input: 100,
+        output: 200,
+        reasoning: 0,
+        cache: { read: 5000, write: 0 },
+      },
+      modelID: "test-model",
+      providerID: "test-provider",
+      time: { created: 0, completed: 1000 },
+    }
+    // 20_000 chars / 4 chars-per-token = 5000 estimated tokens for the file bucket.
+    const fileHeavyParts = [
+      {
+        id: "file-heavy",
+        sessionID: "session_test",
+        messageID: "msg-1",
+        type: "tool" as const,
+        callID: "file-heavy",
+        tool: "read",
+        state: {
+          status: "completed" as const,
+          output: "x".repeat(20_000),
+          content: [{ type: "text" as const, text: "x".repeat(20_000) }],
+        },
+      },
+    ]
+    const cat = categorizeTokens(
+      [fixtureUser as any, cacheHeavyAssistant as any],
+      (id: string) => (id === "msg-1" ? fileHeavyParts : fixtureUserParts),
+    )
+    // The bug was: files clamped to inputTotal (100). With basis = input + cache,
+    // files keep their true magnitude (5000).
+    expect(cat!.files).toBe(5000)
+    expect(cat!.cacheRead).toBe(0)
+    expect(cat!.cacheWrite).toBe(0)
+    expect(cat!.total).toBe(5300)
   })
 })
