@@ -33,6 +33,9 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md) for repo layout, runtime layers, and th
 - Tests cannot run from repo root (guard: `do-not-run-tests-from-root`). Run from package directories, e.g. `packages/opencode` or `packages/core`.
 - Avoid mocks. Test actual implementation. Use `tmpdir()` + `Database.layerFromPath(tmpDbPath)` for any BanyanCode repo test that hits a real DB.
 - Always run `bun typecheck` from a package directory; never `tsc` directly.
+- `bun typecheck` runs `tsgo` (the TypeScript 7 native compiler, `@typescript/native-preview`), NOT the legacy JS `tsc`. This is a 4-5x speedup over the prior `tsc 5.8` pipeline and is already the default for every workspace package (`packages/*/package.json` → `scripts.typecheck: "tsgo --noEmit"`). The `typescript@5.8.2` package stays in the catalog only because `@typescript-eslint`, `@volar/typescript`, `tsconfck`, and a few codegen tools (`@hey-api/openapi-ts`, `@bufbuild/protoplugin`, `@protobuf-ts/plugin`) still require the JS `typescript` API to import — `typescript-eslint`'s peer dep is `<5.9.0` and the TS 7 `typescript` package API is officially "not ready" per [microsoft/typescript-go README](https://github.com/microsoft/typescript-go#what-works-so-far). The repository is therefore on TS 7 for typechecking but TS 5.8 for tooling imports; this is intentional and should be left alone until upstream releases a typescript-eslint version that supports TS 7.
+- To force a full uncached re-run (e.g. after a `tsconfig.json` change), use `bunx turbo typecheck --force`. The pre-push hook runs the cached variant.
+- To verify the per-package baseline numbers documented above, time a single package directly: `Measure-Command { bunx tsgo -p packages/core/tsconfig.json --noEmit --extendedDiagnostics }` should report ~7-8s with `Memory used: ~1.7G` for 2,557 files / 603K LOC; same command with `bunx tsc` instead of `bunx tsgo` is ~33s with ~1.3G.
 
 ## BanyanCode product identity
 
