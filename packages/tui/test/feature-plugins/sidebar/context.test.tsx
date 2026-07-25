@@ -198,7 +198,7 @@ test("context widget source contains concise single-line category labels", () =>
     require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
     "utf8",
   )
-  for (const label of ["User", "Subagents", "Output", "Tools", "Files", "Prompt", "Thinking", "Cache"]) {
+  for (const label of ["User", "Subagents", "Output", "Tools", "Files", "Other", "Thinking", "Cache"]) {
     expect(source).toContain(label)
   }
   expect(source).not.toMatch(/label:\s*"Agent"/)

@@ -305,7 +305,13 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     return [
       { key: "user", label: "User", tokens: cat.userMessages, color: "muted" },
       { key: "thinking", label: "Thinking", tokens: cat.thinking, color: "accent" },
-      { key: "prompt", label: "Prompt", tokens: cat.prompt, color: "info" },
+      // Residual bucket: system prompt + tool definitions + agent prompt +
+      // memory attachments + codegraph summary + anything the heuristic
+      // (files/tools/subagents/user) couldn't attribute to a named call.
+      // For a long session with memory recall this can easily run 100-300k;
+      // "Other" is honest about the catch-all nature without misleading users
+      // about a single component.
+      { key: "prompt", label: "Other", tokens: cat.prompt, color: "info" },
       { key: "files", label: "Files", tokens: cat.files, color: "success" },
       { key: "tools", label: "Tools", tokens: cat.tools, color: "warning" },
       { key: "subagents", label: "Subagents", tokens: cat.subagents, color: "muted" },
