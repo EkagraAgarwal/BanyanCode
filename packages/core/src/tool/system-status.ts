@@ -8,7 +8,12 @@ import { Banyan } from "../banyancode"
 
 export const name = "system_status"
 
-export const Input = Schema.Struct({})
+// `Schema.Struct({})` projects to `{ anyOf: [{type:"object"}, {type:"array"}] }`,
+// which strict tool-schema validators (OpenAI Responses, GPT-5 family, etc.)
+// reject with `schema must be a JSON Schema of 'type: "object"', got 'type: "None"'`.
+// `Schema.Record(Schema.String, Schema.Unknown)` projects to a bare
+// `{ type: "object" }`, which all major providers accept.
+export const Input = Schema.Record(Schema.String, Schema.Unknown)
 export const Output = Schema.Struct({
   cpuPercent: Schema.optional(Schema.Number),
   memoryUsedBytes: Schema.Number,
