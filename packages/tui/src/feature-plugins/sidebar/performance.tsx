@@ -192,7 +192,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
             </Show>
             <Show when={s().tokensPerSecond !== undefined}>
               <BarMetric
-                label="Tokens / sec"
+                label="Tokens/s"
                 value={s().tokensPerSecond!.toFixed(1)}
                 filled={Math.min(8, Math.max(1, Math.round(s().tokensPerSecond! / 10)))}
                 width={8}
