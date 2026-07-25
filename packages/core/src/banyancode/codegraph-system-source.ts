@@ -77,7 +77,12 @@ const POLICY_TEXT = [
   "- you're searching non-code artifacts (configs, JSON, docs, build outputs).",
 ].join("\n")
 
-const BANYAN_TOOL_IDS = BanyanToolsManifest.BANYAN_PUBLIC_TOOL_IDS
+// Lookup the public tool ids lazily: reading BanyanToolsManifest.* at module
+// load would re-enter the still-initializing manifest (its own module
+// imports tool files that import the banyancode barrel, which re-enters
+// this namespace). At runtime the manifest is fully loaded.
+const getBanyanToolIds = (): ReadonlySet<string> =>
+  new Set<string>(BanyanToolsManifest.BANYAN_PUBLIC_TOOL_IDS)
 
 const TOOL_FAMILIES = [
   { title: "Code graph", ids: ["codegraph_build", "codegraph_remove", "code_find"] },
@@ -94,7 +99,7 @@ const TOOL_FAMILIES = [
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 function renderToolGuide(tools: ReadonlyArray<CodegraphToolDescription>): string {
-  const allowed = new Set<string>(BANYAN_TOOL_IDS)
+  const allowed = getBanyanToolIds()
   const visible = tools.filter((tool) => allowed.has(tool.id))
   if (visible.length === 0) return ""
   const byId = new Map<string, CodegraphToolDescription>(visible.map((tool) => [tool.id, tool]))
