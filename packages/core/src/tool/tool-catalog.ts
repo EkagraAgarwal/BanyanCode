@@ -39,6 +39,6 @@ export const layer = Layer.effect(
 
     return Service.of({ register, list, materialize })
   }),
-).pipe(Layer.provide(registryDefaultLayer))
+).pipe(Layer.provideMerge(registryDefaultLayer))
 
 export const defaultLayer = layer

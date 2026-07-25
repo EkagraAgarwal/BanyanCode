@@ -67,6 +67,15 @@ import { applyMeshBridge } from "./banyancode-mesh-bridge"
 import { applyMemoryBridge } from "./banyancode-memory-bridge"
 import { applyReviewBridge } from "./banyancode-review-bridge"
 import { applySystemMonitorBridge } from "./banyancode-system-bridge"
+import { BanyanToolsMount } from "./banyan-tools-mount"
+
+const coreToolCatalogLayer = BanyanToolsMount.attachToCatalog(
+  Banyan.toolCatalogDefaultLayer.pipe(
+    Layer.provide(Permission.defaultLayer),
+    Layer.provide(Database.defaultLayer),
+    Layer.provide(FSUtil.defaultLayer),
+  ),
+)
 
 export const AppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -149,20 +158,7 @@ export const AppLayer = Layer.mergeAll(
       Layer.provide(Database.defaultLayer),
     ),
   ),
-  Layer.provideMerge(
-    Banyan.toolRegistryDefaultLayer.pipe(
-      Layer.provide(Permission.defaultLayer),
-      Layer.provide(Database.defaultLayer),
-      Layer.provide(FSUtil.defaultLayer),
-    ),
-  ),
-  Layer.provideMerge(
-    Banyan.toolCatalogDefaultLayer.pipe(
-      Layer.provide(Permission.defaultLayer),
-      Layer.provide(Database.defaultLayer),
-      Layer.provide(FSUtil.defaultLayer),
-    ),
-  ),
+  Layer.provideMerge(coreToolCatalogLayer),
   Layer.provideMerge(
     Layer.mergeAll(
       Banyan.codegraphAnalyzerDefaultLayer,
@@ -186,19 +182,18 @@ Banyan.systemMonitorDefaultLayer,
     ) as unknown as Layer.Layer<never, never, never>,
   ),
   Layer.provideMerge(
-    AiSdkTransportModule.layer as unknown as Layer.Layer<never, never, never>,
-  ),
-  Layer.provideMerge(
-    PermissionBridge.layer
-      .pipe(Layer.provide(Permission.defaultLayer)) as unknown as Layer.Layer<never, never, never>,
-  ),
-  Layer.provideMerge(
-    Banyan.meshCoordinatorDefaultLayer.pipe(
-      Layer.provide(Banyan.subagentReviewRequestsRepoDefaultLayer),
-      Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
-      Layer.provide(Banyan.maxSubagentsLayer.pipe(Layer.provide(Banyan.banyanConfigServiceDefaultLayer))),
-      Layer.provide(EventV2.defaultLayer),
+    Layer.mergeAll(
+      PermissionBridge.layer.pipe(Layer.provide(Permission.defaultLayer)),
+      Banyan.meshCoordinatorDefaultLayer.pipe(
+        Layer.provide(Banyan.subagentReviewRequestsRepoDefaultLayer),
+        Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+        Layer.provide(Banyan.maxSubagentsLayer.pipe(Layer.provide(Banyan.banyanConfigServiceDefaultLayer))),
+        Layer.provide(EventV2.defaultLayer),
+      ),
     ) as unknown as Layer.Layer<never, never, never>,
+  ),
+  Layer.provideMerge(
+    AiSdkTransportModule.layer as unknown as Layer.Layer<never, never, never>,
   ),
   Layer.provideMerge(
     Banyan.codegraphAutoUpdateDefaultLayer.pipe(

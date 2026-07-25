@@ -16,8 +16,6 @@ import { CodegraphNodeSchema } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
-import { defaultLayer as repositoryIntelligenceLayer } from "../banyancode/repository-intelligence"
-import { defaultLayer as codegraphAnalyzerLayer } from "../banyancode/codegraph-analyzer"
 import { optionalNumber, optionalString } from "./tool-schema"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
@@ -480,4 +478,4 @@ export const locationLayer = Layer.effectDiscard(
       })
       .pipe(Effect.orDie)
   }),
-).pipe(Layer.provide(repositoryIntelligenceLayer), Layer.provide(codegraphAnalyzerLayer))
+)

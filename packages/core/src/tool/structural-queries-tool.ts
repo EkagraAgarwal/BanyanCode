@@ -8,7 +8,6 @@ import { CodegraphNodeSchema } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
-import { defaultLayer as structuralQueriesLayer } from "../banyancode/structural-queries"
 import { formatNodes } from "./codegraph-format"
 import { optionalString } from "./tool-schema"
 
@@ -251,4 +250,4 @@ export const locationLayer = Layer.effectDiscard(
       }),
     })
   }),
-).pipe(Layer.provide(structuralQueriesLayer))
+)

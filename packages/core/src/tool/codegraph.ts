@@ -12,8 +12,6 @@ import type { Interface as PermissionV2Interface } from "../permission"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
-import { defaultLayer as codegraphAnalyzerLayer } from "../banyancode/codegraph-analyzer"
-import { defaultLayer as codegraphBuildServiceLayer } from "../banyancode/codegraph-build-service"
 import { formatNodes } from "./codegraph-format"
 import { optionalBoolean, optionalNumber, optionalString } from "./tool-schema"
 
@@ -723,4 +721,4 @@ export const locationLayer = Layer.effectDiscard(
       })
       .pipe(Effect.orDie)
   }),
-).pipe(Layer.provide(codegraphAnalyzerLayer), Layer.provide(codegraphBuildServiceLayer))
+)

@@ -179,8 +179,10 @@ describe("Manual codegraph build - progress reporting", () => {
     expect(runningEvents.length).toBeGreaterThan(0)
     const lastRunning = runningEvents[runningEvents.length - 1]
     expect(lastRunning.total).toBe(10)
-    expect(lastRunning.done).toBe(10)
+    expect(Math.max(...runningEvents.map((event) => event.done))).toBe(10)
     expect(completedEvent).toBeDefined()
+    expect(completedEvent?.done).toBe(10)
+    expect(completedEvent?.total).toBe(10)
   }, 60000)
 })
 

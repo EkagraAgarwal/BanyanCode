@@ -12,9 +12,8 @@
  *   - The internal ids never leak into the system-prompt source
  *     output.
  *
- * The full integration (every tool actually registers through
- * AppRuntime) is covered by transport-ai-sdk.test.ts and the
- * per-tool test files. The exact id list IS the contract this test
+ * Integration coverage for the real mount pipeline lives in
+ * banyan-tools-mount.test.ts. The exact id list IS the contract this test
  * protects.
  */
 

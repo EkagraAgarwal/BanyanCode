@@ -9,8 +9,6 @@ import type { CodegraphNode } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
-import { defaultLayer as codegraphAnalyzerLayer } from "../banyancode/codegraph-analyzer"
-import { defaultLayer as symbolResolverLayer } from "../banyancode/symbol-resolver"
 import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
 import type { ResolutionDerivation } from "../banyancode/symbol-resolver"
 import { formatNodes } from "./codegraph-format"
@@ -426,4 +424,4 @@ export const locationLayer = Layer.effectDiscard(
       }),
     })
   }),
-).pipe(Layer.provide(codegraphAnalyzerLayer), Layer.provide(symbolResolverLayer))
+)

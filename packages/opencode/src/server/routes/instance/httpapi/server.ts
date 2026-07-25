@@ -63,6 +63,8 @@ import { InstanceHttpApi, RootHttpApi } from "./api"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { MeshCoordinator } from "@opencode-ai/core/banyancode/mesh-coordinator"
 import * as AiSdkTransportModule from "@/effect/transport-ai-sdk"
+import { PermissionBridge } from "@/effect/permission-bridge"
+import { BanyanToolsMount } from "@/effect/banyan-tools-mount"
 import { Api } from "@opencode-ai/server/api"
 import { PublicApi } from "./public"
 import {
@@ -289,18 +291,20 @@ export function createRoutes(
       ).pipe(Layer.provide(Banyan.codegraphRepoDefaultLayer), Layer.provide(Database.defaultLayer)),
     ),
     Layer.provideMerge(
-      Banyan.toolRegistryDefaultLayer.pipe(
-        Layer.provide(Permission.defaultLayer),
-        Layer.provide(Database.defaultLayer),
-        Layer.provide(FSUtil.defaultLayer),
-      ),
+      BanyanToolsMount.attachToCatalog(
+        Banyan.toolCatalogDefaultLayer.pipe(
+          Layer.provide(Permission.defaultLayer),
+          Layer.provide(Database.defaultLayer),
+          Layer.provide(FSUtil.defaultLayer),
+        ),
+      ) as unknown as Layer.Layer<never, never, never>,
     ),
     Layer.provideMerge(
-      Banyan.toolCatalogDefaultLayer.pipe(
-        Layer.provide(Permission.defaultLayer),
-        Layer.provide(Database.defaultLayer),
-        Layer.provide(FSUtil.defaultLayer),
-      ),
+      PermissionBridge.layer.pipe(Layer.provide(Permission.defaultLayer)) as unknown as Layer.Layer<
+        never,
+        never,
+        never
+      >,
     ),
     Layer.provideMerge(
       AiSdkTransportModule.layer as unknown as Layer.Layer<never, never, never>,

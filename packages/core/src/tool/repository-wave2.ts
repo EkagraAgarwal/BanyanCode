@@ -10,7 +10,6 @@ import {
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
-import { defaultLayer as repositoryIntelligenceLayer } from "../banyancode/repository-intelligence"
 import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
 import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import {
@@ -864,6 +863,6 @@ export const locationLayer = Layer.effectDiscard(
       }),
     })
   }),
-).pipe(Layer.provide(repositoryIntelligenceLayer))
+)
 
 export * as RepositoryWave2 from "./repository-wave2"

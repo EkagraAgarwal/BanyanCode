@@ -1,10 +1,6 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/layer-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
-import { Banyan } from "@opencode-ai/core/banyancode"
-import { BanyanToolsManifest } from "@opencode-ai/core/banyancode/banyan-tools-manifest"
-import { Tools } from "@opencode-ai/core/tool/tools"
-import { PermissionV2 } from "@opencode-ai/core/permission"
 import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
@@ -38,12 +34,11 @@ import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
 import { Effect, Layer, Context, Option } from "effect"
-import { FetchHttpClient, HttpClient } from "effect/unstable/http"
+import { FetchHttpClient } from "effect/unstable/http"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
-import { InstanceRef } from "@/effect/instance-ref"
 import { EffectBridge } from "@/effect/bridge"
 import { Question } from "../question"
 import { Todo } from "../session/todo"
@@ -241,8 +236,6 @@ export const layer = Layer.effect(
           systeminfo: Tool.init(systeminfo),
         })
 
-        if (process.env.BANYANCODE_ENABLE !== "0") yield* Layer.build(withBanyanDeps).pipe(Effect.orDie)
-
         return {
           custom,
           builtin: [
@@ -342,125 +335,6 @@ export const layer = Layer.effect(
     })
 
     return Service.of({ ids, all, named, tools })
-  }),
-)
-
-// `baseBanyanToolLayers` aggregates every BanyanCode Tool `locationLayer`
-// (one per `Tools.Service.register({...})` factory). Each location layer
-// requires `Tools.Service` (CORE) at registration time and
-// `PermissionV2.Service` (CORE) at execution time, plus per-tool BanyanCode
-// services (e.g. `Banyan.CodegraphAnalyzer`, `Banyan.Search`,
-// `Banyan.RepositoryIntelligence`, `Banyan.StructuralQueries`). The
-// previous attempts to wire this through `ToolRegistry.defaultLayer` and
-// through a dedicated `LayerNode` either leaked the core deps into R or
-// required `as never` casts that bypassed the dependency check, so we
-// mount it inline from `ToolRegistry.state` (see the `if (env !== "0")`
-// branch below) using `withBanyanDeps` and `Layer.build`. That keeps the
-// registrations on the workspace lifetime scope and avoids touching
-// `ToolRegistry.defaultLayer` or its consumer's app layer.
-const baseBanyanToolLayers = BanyanToolsManifest.banyanToolLayer()
-
-// `withBanyanDeps` wraps `baseBanyanToolLayers` in a `Layer.unwrap` that,
-// at runtime, looks up each optional dependency via `Effect.serviceOption`
-// and feeds it to a `Layer.succeed(...)` so the merged deps layer has R =
-// `never`. We then `Layer.provide(baseBanyanToolLayers, depsLayer)` so
-// every tool gets `Tools.Service`, `PermissionV2.Service`, and the
-// per-tool BanyanCode services it captured. The resulting layer's R is
-// empty (the only inputs are the `Layer.succeed` outputs we already
-// provide, plus the omitted `Banyan.codegraphBuildServiceDefaultLayer` —
-// which we provide via its own `Layer.succeed`/`Layer.provide` step so
-// `Layer.build` doesn't need any services in scope). If either of the
-// mandatory pair (`Tools.Service` / `PermissionV2.Service`) is missing
-// (e.g. in test contexts) we return `Layer.empty` so the registration
-// is a graceful no-op rather than failing at build time.
-const withBanyanDeps = Layer.unwrap(
-  Effect.gen(function* () {
-    const tools = yield* Effect.serviceOption(Tools.Service)
-    const permission = yield* Effect.serviceOption(PermissionV2.Service)
-    if (Option.isNone(tools) || Option.isNone(permission)) return Layer.empty
-    const codegraphBuildService = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
-    const codegraphRepo = yield* Effect.serviceOption(Banyan.CodegraphRepo)
-    const analyzer = yield* Effect.serviceOption(Banyan.CodegraphAnalyzer)
-    const search = yield* Effect.serviceOption(Banyan.Search)
-    const intel = yield* Effect.serviceOption(Banyan.RepositoryIntelligence)
-    const structural = yield* Effect.serviceOption(Banyan.StructuralQueries)
-    const editPlanner = yield* Effect.serviceOption(Banyan.EditPlanner)
-    const telemetry = yield* Effect.serviceOption(Banyan.ToolTelemetry)
-    const memoryRepo = yield* Effect.serviceOption(Banyan.MemoryRepo)
-    const memoryService = yield* Effect.serviceOption(Banyan.MemoryService)
-    const meshCoordinator = yield* Effect.serviceOption(Banyan.MeshCoordinator)
-    const systemMonitor = yield* Effect.serviceOption(Banyan.SystemMonitorService)
-    const subagentBus = yield* Effect.serviceOption(Banyan.SubagentBus)
-    const subagentMessagesRepo = yield* Effect.serviceOption(Banyan.SubagentMessagesRepo)
-    const httpClient = yield* Effect.serviceOption(HttpClient.HttpClient)
-    const worktreeAccessor: () => Effect.Effect<string | undefined> = () =>
-      Effect.gen(function* () {
-        const inst = yield* InstanceRef
-        return inst?.worktree
-      })
-    const depsLayer = Layer.mergeAll(
-      Layer.succeed(Tools.Service, tools.value),
-      Layer.succeed(PermissionV2.Service, permission.value),
-      Layer.succeed(Banyan.WorktreeContext, worktreeAccessor),
-      ...(Option.isSome(codegraphBuildService)
-        ? [Layer.succeed(Banyan.CodegraphBuildService, codegraphBuildService.value)]
-        : [Layer.empty as unknown as Layer.Layer<never, never, never>]),
-      ...(Option.isSome(codegraphRepo) ? [Layer.succeed(Banyan.CodegraphRepo, codegraphRepo.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(analyzer) ? [Layer.succeed(Banyan.CodegraphAnalyzer, analyzer.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(search) ? [Layer.succeed(Banyan.Search, search.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(intel) ? [Layer.succeed(Banyan.RepositoryIntelligence, intel.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(structural) ? [Layer.succeed(Banyan.StructuralQueries, structural.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(editPlanner) ? [Layer.succeed(Banyan.EditPlanner, editPlanner.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(telemetry) ? [Layer.succeed(Banyan.ToolTelemetry, telemetry.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(memoryRepo) ? [Layer.succeed(Banyan.MemoryRepo, memoryRepo.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(memoryService) ? [Layer.succeed(Banyan.MemoryService, memoryService.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(meshCoordinator) ? [Layer.succeed(Banyan.MeshCoordinator, meshCoordinator.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(systemMonitor) ? [Layer.succeed(Banyan.SystemMonitorService, systemMonitor.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(subagentBus) ? [Layer.succeed(Banyan.SubagentBus, subagentBus.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-      ...(Option.isSome(subagentMessagesRepo)
-        ? [Layer.succeed(Banyan.SubagentMessagesRepo, subagentMessagesRepo.value)]
-        : [Layer.empty as unknown as Layer.Layer<never, never, never>]),
-      ...(Option.isSome(httpClient) ? [Layer.succeed(HttpClient.HttpClient, httpClient.value)] : [
-        Layer.empty as unknown as Layer.Layer<never, never, never>,
-      ]),
-    ) as unknown as Layer.Layer<never, never, never>
-    // Prefer AppLayer instances via depsLayer when serviceOption finds them.
-    // Always also provide bus+repo as a fallback: the InstanceState fiber that
-    // builds ToolRegistry.state often does not see AppLayer's SubagentBus
-    // (serviceOption → None), and without these provides SubagentMessageTool.layer
-    // dies inside Layer.build(...).orDie.
-    // Use bus layer + provideMerge(repo) so both tags come from one shared repo
-    // instance (bus defaultLayer's plain Layer.provide hides the repo).
-    return baseBanyanToolLayers.pipe(
-      Layer.provide(depsLayer),
-      Layer.provide(
-        Banyan.subagentBusLayer.pipe(Layer.provideMerge(Banyan.subagentMessagesRepoDefaultLayer)),
-      ),
-    ) as unknown as Layer.Layer<never, never, never>
   }),
 )
 

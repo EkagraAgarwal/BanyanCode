@@ -11,7 +11,6 @@ import { traced } from "../observability/trace"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
-import { defaultLayer as codegraphAnalyzerLayer } from "../banyancode/codegraph-analyzer"
 import { optionalNumber } from "./tool-schema"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
@@ -193,4 +192,4 @@ export const locationLayer = Layer.effectDiscard(
       })
       .pipe(Effect.orDie)
   }),
-).pipe(Layer.provide(codegraphAnalyzerLayer))
+)

@@ -19,6 +19,8 @@ export const DDG_URL = "https://html.duckduckgo.com/html/"
 export const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
 
+const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
+
 export const description =
   "Use when:\n" +
   "  free web search via DuckDuckGo (no API key, no quota).\n" +
@@ -70,6 +72,7 @@ const buildUrl = (query: string, numResults?: number, region?: string, time?: st
 
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
+    if (!banyancodeEnabled()) return
     const tools = yield* Tools.Service
     const http = yield* HttpClient.HttpClient
     const permission = yield* PermissionV2.Service

@@ -19,8 +19,11 @@ export const Output = Schema.Struct({
   platform: Schema.Literals(["windows", "linux", "darwin"]),
 })
 
+const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
+
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
+    if (!banyancodeEnabled()) return
     const tools = yield* Tools.Service
     const monitor = yield* Banyan.SystemMonitorService
 

@@ -8,9 +8,6 @@ import { CodegraphNodeSchema } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
-import { defaultLayer as searchLayer } from "../banyancode/search"
-import { defaultLayer as repositoryIntelligenceLayer } from "../banyancode/repository-intelligence"
-import { defaultLayer as structuralQueriesLayer } from "../banyancode/structural-queries"
 import type { SearchMode, SearchResult } from "../banyancode/search/search"
 import { formatCodegraphSearchResults } from "./codegraph-format"
 import { optionalBoolean, optionalNumber } from "./tool-schema"
@@ -197,8 +194,4 @@ export const locationLayer = Layer.effectDiscard(
       }),
     })
   }),
-).pipe(
-  Layer.provide(searchLayer),
-  Layer.provide(repositoryIntelligenceLayer),
-  Layer.provide(structuralQueriesLayer),
 )
