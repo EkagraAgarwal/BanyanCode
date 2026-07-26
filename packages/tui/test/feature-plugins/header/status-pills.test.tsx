@@ -31,76 +31,111 @@ const stubTheme = {
   borderActive: RGBA.fromInts(100, 100, 100),
 }
 
-test("header status-pills app_top slot renders without throwing", async () => {
-  const events = createEventSource()
-  const calls = createFetch()
-  const config = createTuiResolvedConfig()
-  const [slotContent, setSlotContent] = createSignal<any>(null)
+describe("header status-pills", () => {
+  test("updates the graph label from build and auto-update events", async () => {
+    const events = createEventSource()
+    const calls = createFetch()
+    const config = createTuiResolvedConfig()
+    const [slotContent, setSlotContent] = createSignal<any>(null)
+    let graphNodes: Array<{ id: string }> = []
 
-  const Inner = () => {
-    const api: any = {
-      ...createTuiPluginApi({}),
-      theme: { current: stubTheme },
-      state: {
-        session: { get: () => undefined },
-        session_status: {},
-        path: { directory: "/test/workspace" },
-        mcp: () => [{ name: "test-mcp", status: "connected" }],
-        lsp: () => [],
-      },
-      client: {
-        session: {
-          list: async () => ({ data: [{ id: "1" }, { id: "2" }] }),
+    const Inner = () => {
+      const api: any = {
+        ...createTuiPluginApi({}),
+        theme: { current: stubTheme },
+        state: {
+          session: { get: () => undefined },
+          session_status: {},
+          path: { directory: "/test/workspace" },
+          mcp: () => [{ name: "test-mcp", status: "connected" }],
+          lsp: () => [],
         },
-      },
-    }
-    api.slots = {
-      register: (plugin: any) => {
-        if (!plugin?.slots?.app_top) return () => {}
-        const el = plugin.slots.app_top()
-        setSlotContent(() => el)
-        return () => {}
-      },
-    }
-    void HeaderStatusPills.tui(api as any, undefined as any, { id: "test" } as any)
+        client: {
+          session: {
+            list: async () => ({ data: [{ id: "1" }, { id: "2" }] }),
+          },
+          global: {
+            codegraph: {
+              nodes: async () => ({ data: { nodes: graphNodes } }),
+            },
+          },
+        },
+      }
+      api.slots = {
+        register: (plugin: any) => {
+          if (!plugin?.slots?.app_top) return () => {}
+          setSlotContent(() => plugin.slots.app_top())
+          return () => {}
+        },
+      }
+      void HeaderStatusPills.tui(api as any, undefined as any, { id: "test" } as any)
 
-    queueMicrotask(() => {
+      return <box>{slotContent()}</box>
+    }
+
+    const Harness = () => (
+      <TestTuiContexts>
+        <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+          <TuiConfigProvider config={config}>
+            <KVProvider>
+              <ThemeProvider mode="dark">
+                <Inner />
+              </ThemeProvider>
+            </KVProvider>
+          </TuiConfigProvider>
+        </SDKProvider>
+      </TestTuiContexts>
+    )
+
+    const app = await testRender(() => <Harness />, { width: 100, height: 4 })
+    let eventID = 0
+    const emit = (type: string, properties: Record<string, unknown>) => {
+      eventID += 1
       events.emit({
         directory,
         payload: {
-          id: "evt_test_staleness",
-          type: "banyancode.codegraph.staleness",
-          properties: {
-            isStale: false,
-            lastChecked: Date.now() - 120000,
-          },
+          id: `evt_graph_status_${eventID}`,
+          type,
+          properties,
         } as any,
       })
-    })
+    }
+    const expectLabel = async (label: string) => {
+      let frame = ""
+      for (let i = 0; i < 50; i++) {
+        await app.renderOnce()
+        frame = app.captureCharFrame()
+        if (frame.includes(label)) break
+        await Bun.sleep(10)
+      }
+      expect(frame).toContain(label)
+    }
 
-    return <box>{slotContent()}</box>
-  }
+    try {
+      await Bun.sleep(20)
+      await expectLabel("Graph: off")
 
-  const Harness = () => (
-    <TestTuiContexts>
-      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
-        <TuiConfigProvider config={config}>
-          <KVProvider>
-            <ThemeProvider mode="dark">
-              <Inner />
-            </ThemeProvider>
-          </KVProvider>
-        </TuiConfigProvider>
-      </SDKProvider>
-    </TestTuiContexts>
-  )
+      emit("banyancode.codegraph.build", { status: "running", done: 0, total: 10 })
+      await expectLabel("Graph: building")
 
-  const app = await testRender(() => <Harness />)
-  await new Promise((r) => setTimeout(r, 200))
-  await app.renderOnce()
-  try {
-    expect(true).toBe(true)
-  } finally {
-    app.renderer.destroy()
-  }
+      emit("banyancode.codegraph.build", { status: "failed", done: 4, total: 10 })
+      await expectLabel("Graph: build failed")
+
+      emit("banyancode.codegraph.build", { status: "idle", done: 0, total: 0 })
+      emit("banyancode.codegraph.auto-update", { status: "draining", pending: 5 })
+      await expectLabel("Graph: syncing (5)")
+
+      emit("banyancode.codegraph.auto-update", { status: "paused", pending: 0 })
+      await expectLabel("Graph: paused")
+
+      emit("banyancode.codegraph.auto-update", { status: "watching", pending: 0 })
+      graphNodes = [{ id: "node_test" }]
+      emit("banyancode.codegraph.build", { status: "completed", done: 10, total: 10 })
+      await Bun.sleep(200)
+      await app.renderOnce()
+      expect(app.captureCharFrame()).toContain("Graph: built")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 })

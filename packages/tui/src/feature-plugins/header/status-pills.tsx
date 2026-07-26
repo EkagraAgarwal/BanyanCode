@@ -4,8 +4,7 @@ import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { useEvent } from "../../context/event"
 import { toHex } from "../../util/color"
-import { pillFill, type Severity } from "../../util/palette"
-import { RoundedBorder } from "../../ui/border"
+import type { Severity } from "../../util/palette"
 
 export * as HeaderStatusPills from "./status-pills"
 
@@ -15,17 +14,33 @@ function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
   const [activeSessionCount, setActiveSessionCount] = createSignal<number>(0)
   const [graphBuilt, setGraphBuilt] = createSignal<boolean>(false)
+  const [buildStatus, setBuildStatus] = createSignal<"idle" | "running" | "completed" | "failed">("idle")
+  const [syncStatus, setSyncStatus] = createSignal<"idle" | "watching" | "draining" | "paused">("idle")
+  const [syncPending, setSyncPending] = createSignal<number>(0)
 
   const ev = useEvent()
   const unsubSession = ev.on("session.updated" as any, () => refreshSessionCount())
   onCleanup(unsubSession)
 
   const unsubGraph = ev.on("banyancode.codegraph.build" as any, (evt: any) => {
-    if (evt.properties?.status === "completed") {
-      setGraphBuilt(true)
+    const status = evt.properties?.status
+    if (status === "idle" || status === "running" || status === "completed" || status === "failed") {
+      setBuildStatus(status)
     }
+    if (status === "cancelled") setBuildStatus("idle")
+    if (status === "stuck") setBuildStatus("running")
+    if (status === "completed") void checkGraph()
   })
   onCleanup(unsubGraph)
+
+  const unsubSync = ev.on("banyancode.codegraph.auto-update" as any, (evt: any) => {
+    const status = evt.properties?.status
+    if (status === "idle" || status === "watching" || status === "draining" || status === "paused") {
+      setSyncStatus(status)
+    }
+    setSyncPending(typeof evt.properties?.pending === "number" ? evt.properties.pending : 0)
+  })
+  onCleanup(unsubSync)
 
   const checkGraph = async () => {
     try {
@@ -79,7 +94,15 @@ const lspEnabled = createMemo(() => {
 
 const agentsLabel = () => `${activeSessionCount()} active`
 const mcpLabel = () => (mcpConnectedCount() > 0 ? `MCP: ${mcpFirstConnected()}` : "MCP: —")
-const graphLabel = () => (graphBuilt() ? "Graph: built" : "Graph: off")
+const graphState = createMemo<{ label: string; severity: Exclude<Severity, "neutral"> }>(() => {
+  if (buildStatus() === "running") return { label: "Graph: building", severity: "info" }
+  if (buildStatus() === "failed") return { label: "Graph: build failed", severity: "error" }
+  if (syncStatus() === "draining") return { label: `Graph: syncing (${syncPending()})`, severity: "info" }
+  if (syncStatus() === "paused") return { label: "Graph: paused", severity: "warning" }
+  if (syncStatus() === "watching" && graphBuilt()) return { label: "Graph: built", severity: "success" }
+  return { label: "Graph: off", severity: "error" }
+})
+const graphLabel = () => graphState().label
 
   const agentsDotColor = () => (activeSessionCount() > 0 ? toHex(theme().success) : toHex(theme().textMuted))
   const mcpDotColor = () => (mcpConnectedCount() > 0 ? toHex(theme().success) : toHex(theme().error))
@@ -91,7 +114,7 @@ const graphLabel = () => (graphBuilt() ? "Graph: built" : "Graph: off")
       : lspConnectedCount() > 0
         ? toHex(theme().success)
         : toHex(theme().warning)
-  const graphDotColor = () => (graphBuilt() ? toHex(theme().success) : toHex(theme().error))
+  const graphDotColor = () => toHex(theme()[graphState().severity])
 
   return (
     <box flexDirection="row" gap={2} alignItems="center">
