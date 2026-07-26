@@ -125,7 +125,15 @@ export function path() {
     // project tree never share a single banyancode.db (the singleton
     // codegraph_meta row would otherwise let the second workspace's
     // indexed_root overwrite the first's, breaking auto-update isolation).
-    const workspaceTag = shortHash(process.cwd())
+    const workspaceTag = shortHash(
+      (() => {
+        try {
+          return fs.realpathSync.native(process.cwd())
+        } catch {
+          return process.cwd()
+        }
+      })(),
+    )
     const channelSuffix =
       ["latest", "beta", "prod"].includes(InstallationChannel) ||
       process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" ||

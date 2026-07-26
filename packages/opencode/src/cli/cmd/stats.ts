@@ -1,4 +1,6 @@
 import { Effect } from "effect"
+import fs from "node:fs"
+import path from "node:path"
 import { effectCmd } from "../effect-cmd"
 import { Session } from "@/session/session"
 import { NotFoundError } from "@/storage/storage"
@@ -7,7 +9,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { Project } from "@/project/project"
 import { InstanceRef } from "@/effect/instance-ref"
 
-interface SessionStats {
+export interface SessionStats {
   totalSessions: number
   totalMessages: number
   totalCost: number
@@ -46,6 +48,240 @@ interface SessionStats {
   medianTokensPerSession: number
 }
 
+/** Default heatmap window: 12 months. */
+export const HEATMAP_DEFAULT_DAYS = 365
+/** ANSI 24-bit color levels: blank → light gray → light red → medium red → dark red. */
+const HEATMAP_COLORS = [
+  null,
+  [211, 211, 211],
+  [244, 168, 168],
+  [232, 84, 84],
+  [185, 28, 28],
+] as const
+/** Block characters per intensity level (0 = blank). */
+const HEATMAP_GLYPHS = [" ", "░", "▒", "▓", "█"] as const
+/** Local-date key in ISO YYYY-MM-DD form (uses the host's local timezone). */
+export function dateKey(epochMs: number): string {
+  const d = new Date(epochMs)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
+
+/**
+ * Group sessions into per-day token totals, applying the same days/project
+ * filters as `aggregateSessionStats`. Returns a Map keyed by local-date
+ * (`YYYY-MM-DD`) so callers can render the activity heatmap directly.
+ */
+export function computeHeatmapBuckets(
+  sessions: ReadonlyArray<Session.Info>,
+  days?: number,
+  projectFilter?: string,
+  currentProject?: Project.Info,
+): Map<string, number> {
+  const MS_IN_DAY = 86_400_000
+  const cutoffTime = (() => {
+    if (days === undefined) return 0
+    if (days === 0) {
+      const now = new Date()
+      now.setHours(0, 0, 0, 0)
+      return now.getTime()
+    }
+    return Date.now() - days * MS_IN_DAY
+  })()
+
+  const timeFiltered = cutoffTime > 0 ? sessions.filter((s) => s.time.updated >= cutoffTime) : sessions
+  const filtered = filterByProject(timeFiltered, projectFilter, currentProject)
+
+  const buckets = new Map<string, number>()
+  for (const s of filtered) {
+    const tokens = s.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+    const total =
+      tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
+    const key = dateKey(s.time.updated)
+    buckets.set(key, (buckets.get(key) ?? 0) + total)
+  }
+  return buckets
+}
+
+function filterByProject(
+  sessions: ReadonlyArray<Session.Info>,
+  projectFilter: string | undefined,
+  currentProject: Project.Info | undefined,
+): ReadonlyArray<Session.Info> {
+  if (projectFilter === undefined) return sessions
+  if (projectFilter === "") {
+    if (!currentProject) throw new Error("currentProject required when projectFilter is empty string")
+    return sessions.filter((s) => s.projectID === currentProject.id)
+  }
+  return sessions.filter((s) => s.projectID === projectFilter)
+}
+
+interface HeatmapGrid {
+  /** Ordered lines: [monthLabelRow, monRow, tueRow, wedRow, thuRow, friRow, satRow, sunRow]. */
+  lines: string[]
+  totalTokens: number
+  peakTokens: number
+  /** ISO local-date key for the peak day, or null when no activity. */
+  peakDate: string | null
+  activeDays: number
+  /** Window length in days actually rendered (clamped to `days`). */
+  days: number
+  /** ISO local-date key for the first rendered column. */
+  startDate: string
+  /** ISO local-date key for the last rendered column. */
+  endDate: string
+}
+
+/**
+ * Build a 7-row × N-column ASCII heatmap from a bucket map. Pure: no I/O, no
+ * clock. Inject `today` for deterministic tests. The default window is
+ * `HEATMAP_DEFAULT_DAYS` days ending on `today` (local time).
+ */
+export function buildHeatmapGrid(
+  buckets: ReadonlyMap<string, number>,
+  options?: { today?: Date; days?: number },
+): HeatmapGrid {
+  const today = options?.today ?? new Date()
+  const days = options?.days ?? HEATMAP_DEFAULT_DAYS
+  const todayKey = dateKey(today.getTime())
+
+  const start = new Date(today)
+  start.setHours(0, 0, 0, 0)
+  start.setDate(start.getDate() - (days - 1))
+
+  // First-column alignment: pad with blanks until the first rendered day
+  // falls on its day-of-week row. 0 = Mon, 6 = Sun, matching the row order below.
+  const leadingPad = (start.getDay() + 6) % 7
+
+  // Peak across the window so intensity scaling is stable regardless of
+  // whether the user's peak day actually appears in the supplied buckets.
+  let peak = 0
+  let total = 0
+  let activeDays = 0
+  let peakDate: string | null = null
+  for (const [key, value] of buckets) {
+    if (key < dateKey(start.getTime()) || key > todayKey) continue
+    total += value
+    if (value > 0) activeDays++
+    if (value > peak) {
+      peak = value
+      peakDate = key
+    }
+  }
+
+  const rowLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+  const totalCols = leadingPad + days
+  const rows: string[][] = Array.from({ length: 7 }, () => new Array(totalCols).fill(" "))
+
+  const cursor = new Date(start)
+  for (let i = 0; i < days; i++) {
+    const key = dateKey(cursor.getTime())
+    const value = buckets.get(key) ?? 0
+    const dayOfWeek = (cursor.getDay() + 6) % 7
+    rows[dayOfWeek][leadingPad + i] = intensityGlyph(value, peak)
+    cursor.setDate(cursor.getDate() + 1)
+  }
+
+  // Build month-label row aligned to the same column count as the data rows.
+  // Each label is centered above its month's columns, with empty cells between months.
+  const cursor2 = new Date(start)
+  const monthSpans: Array<{ startCol: number; endCol: number; name: string }> = []
+  let lastMonthCursor = -1
+  for (let i = 0; i < days; i++) {
+    const m = cursor2.getMonth()
+    if (m !== lastMonthCursor) {
+      monthSpans.push({
+        startCol: leadingPad + i,
+        endCol: 0,
+        name: cursor2.toLocaleString("en-US", { month: "short" }),
+      })
+      lastMonthCursor = m
+    }
+    cursor2.setDate(cursor2.getDate() + 1)
+  }
+  for (let i = 0; i < monthSpans.length; i++) {
+    monthSpans[i].endCol = i + 1 < monthSpans.length ? monthSpans[i + 1].startCol : totalCols
+  }
+  const labelChars = new Array(totalCols).fill(" ")
+  for (const { startCol, endCol, name } of monthSpans) {
+    const span = endCol - startCol
+    const offset = Math.max(0, Math.floor((span - name.length) / 2))
+    for (let i = 0; i < name.length && startCol + offset + i < totalCols; i++) {
+      labelChars[startCol + offset + i] = name[i]
+    }
+  }
+  const monthLabelRow = labelChars.join("")
+
+  const coloredRows = rows.map((cells, rowIdx) => {
+    const label = (rowLabels[rowIdx] + " ").padEnd(4)
+    return label + cells.map((cell) => colorCell(cell)).join("")
+  })
+
+  return {
+    lines: [monthLabelRow, ...coloredRows],
+    totalTokens: total,
+    peakTokens: peak,
+    peakDate,
+    activeDays,
+    days,
+    startDate: dateKey(start.getTime()),
+    endDate: todayKey,
+  }
+}
+
+/** Map a bucket value to a 5-level intensity glyph. Tiers use `>=` so the
+ *  boundary values land in the higher tier — a day equal to peak renders full. */
+function intensityGlyph(value: number, peak: number): string {
+  if (value <= 0) return HEATMAP_GLYPHS[0]
+  if (peak <= 0) return HEATMAP_GLYPHS[0]
+  const ratio = value / peak
+  if (ratio >= 0.75) return HEATMAP_GLYPHS[4]
+  if (ratio >= 0.5) return HEATMAP_GLYPHS[3]
+  if (ratio >= 0.25) return HEATMAP_GLYPHS[2]
+  return HEATMAP_GLYPHS[1]
+}
+
+/** Wrap a cell with its 24-bit ANSI color; blanks pass through. */
+function colorCell(glyph: string): string {
+  if (glyph === " ") return " "
+  const idx = HEATMAP_GLYPHS.indexOf(glyph as (typeof HEATMAP_GLYPHS)[number])
+  const rgb = HEATMAP_COLORS[idx]
+  if (!rgb) return glyph
+  return `\x1b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m${glyph}\x1b[0m`
+}
+
+function renderHeatmap(buckets: Map<string, number>, days: number) {
+  const grid = buildHeatmapGrid(buckets, { days })
+  const innerWidth = Math.max(56, ...grid.lines.map((l) => stripAnsi(l).length)) + 2
+  const hbar = "─".repeat(innerWidth)
+  console.log(`┌${hbar}┐`)
+  console.log(`│${"ACTIVITY HEATMAP".padStart(Math.floor((innerWidth + 15) / 2)).padEnd(innerWidth)}│`)
+  console.log(`├${hbar}┤`)
+  for (const row of grid.lines) {
+    const visibleLen = stripAnsi(row).length
+    const pad = Math.max(0, innerWidth - visibleLen)
+    process.stdout.write(`│ ${row}${" ".repeat(pad)} │\n`)
+  }
+  console.log(`├${hbar}┤`)
+  const renderRow = (label: string, value: string) => {
+    const content = `${label}${" ".repeat(Math.max(1, 16 - label.length))}${value}`
+    const padding = Math.max(0, innerWidth - content.length - 1)
+    console.log(`│ ${content}${" ".repeat(padding)} │`)
+  }
+  renderRow("Window", `${grid.days} days (${grid.startDate} → ${grid.endDate})`)
+  renderRow("Total tokens", formatNumber(grid.totalTokens))
+  renderRow("Peak tokens", grid.peakDate ? `${formatNumber(grid.peakTokens)} (${grid.peakDate})` : "0")
+  renderRow("Active days", `${grid.activeDays.toLocaleString()} / ${grid.days}`)
+  console.log(`└${hbar}┘`)
+}
+
+const ANSI_PATTERN = /\x1b\[[0-9;]*m/g
+function stripAnsi(s: string): string {
+  return s.replace(ANSI_PATTERN, "")
+}
+
 export const StatsCommand = effectCmd({
   command: "stats",
   describe: "show token usage and cost statistics",
@@ -65,6 +301,10 @@ export const StatsCommand = effectCmd({
       .option("project", {
         describe: "filter by project (default: all projects, empty string: current project)",
         type: "string",
+      })
+      .option("heatmap", {
+        describe: `render per-day token usage as an ASCII heatmap (last ${HEATMAP_DEFAULT_DAYS} days or --days window)`,
+        type: "boolean",
       }),
   handler: Effect.fn("Cli.stats")(function* (args) {
     const ctx = yield* InstanceRef
@@ -77,21 +317,91 @@ export const StatsCommand = effectCmd({
       modelLimit = args.models
     }
     displayStats(stats, args.tools, modelLimit)
+    if (args.heatmap === true) {
+      const sessions = yield* getAllSessions()
+      const heatmapDays = args.days ?? HEATMAP_DEFAULT_DAYS
+      const buckets = computeHeatmapBuckets(sessions, args.days, args.project, ctx.project)
+      renderHeatmap(buckets, heatmapDays)
+    }
   }),
 })
 
-const getAllSessions = Effect.fnUntraced(function* () {
-  const { db } = yield* Database.Service
-  return (yield* db.select().from(SessionTable).all().pipe(Effect.orDie)).map((row) => Session.fromRow(row))
+const getAllSessions = Effect.fnUntraced(function* (cwd: string = process.cwd()) {
+  const paths = findAllBanyanDbPaths(cwd)
+  if (paths.length === 0) return []
+
+  const out: Session.Info[] = []
+  for (const dbPath of paths) {
+    const sessions = yield* readSessionsFromDb(dbPath)
+    out.push(...sessions)
+  }
+  return out
 })
 
-const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
+function readSessionsFromDb(dbPath: string): Effect.Effect<Session.Info[], never, never> {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    return (yield* db.select().from(SessionTable).all().pipe(Effect.orDie)).map((row) =>
+      Session.fromRow(row),
+    )
+  }).pipe(
+    Effect.provide(Database.layerFromPath(dbPath)),
+    // A single corrupt / unreadable workspace DB should not kill the whole
+    // stats report. Skip the bad file and keep aggregating the rest.
+    Effect.catchCause((cause) =>
+      Effect.logWarning(`stats: skipping unreadable db ${dbPath}`, cause).pipe(
+        Effect.as([] as Session.Info[]),
+      ),
+    ),
+  )
+}
+
+/**
+ * Find every `banyancode*.db` file in the project's `.banyancode/` directory
+ * (excluding `-shm` / `-wal` siblings). Stats aggregate across all of them so
+ * the report covers every workspace the user has touched in this project, not
+ * just the single DB the active workspace's `Database.Service` resolves to.
+ */
+function findAllBanyanDbPaths(cwd: string = process.cwd()): string[] {
+  const dir = findBanyanProjectDir(cwd)
+  if (!dir) return []
+
+  let entries: string[]
+  try {
+    entries = fs.readdirSync(dir)
+  } catch {
+    return []
+  }
+
+  return entries
+    .filter((name) => /^banyancode.*\.db$/.test(name))
+    .filter((name) => !name.endsWith("-shm") && !name.endsWith("-wal"))
+    .map((name) => path.join(dir, name))
+}
+
+function findBanyanProjectDir(startDir: string): string | undefined {
+  let dir = startDir
+  while (true) {
+    const candidate = path.join(dir, ".banyancode")
+    try {
+      if (fs.statSync(candidate).isDirectory()) return candidate
+    } catch {
+      // keep walking up
+    }
+    const parent = path.dirname(dir)
+    if (parent === dir) return undefined
+    dir = parent
+  }
+}
+
+export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
   days?: number,
   projectFilter?: string,
   currentProject?: Project.Info,
+  cwd: string = process.cwd(),
 ) {
   const svc = yield* Session.Service
-  const sessions = yield* getAllSessions()
+  const sessions = yield* getAllSessions(cwd)
   const MS_IN_DAY = 24 * 60 * 60 * 1000
 
   const cutoffTime = (() => {
@@ -110,16 +420,8 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
     return days
   })()
 
-  let filteredSessions = cutoffTime > 0 ? sessions.filter((session) => session.time.updated >= cutoffTime) : sessions
-
-  if (projectFilter !== undefined) {
-    if (projectFilter === "") {
-      if (!currentProject) throw new Error("currentProject required when projectFilter is empty string")
-      filteredSessions = filteredSessions.filter((session) => session.projectID === currentProject.id)
-    } else {
-      filteredSessions = filteredSessions.filter((session) => session.projectID === projectFilter)
-    }
-  }
+  const timeFiltered = cutoffTime > 0 ? sessions.filter((s) => s.time.updated >= cutoffTime) : sessions
+  const filteredSessions = filterByProject(timeFiltered, projectFilter, currentProject)
 
   const stats: SessionStats = {
     totalSessions: filteredSessions.length,
@@ -289,7 +591,7 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
   return stats
 })
 
-export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit?: number) {
+function displayStats(stats: SessionStats, toolLimit?: number, modelLimit?: number) {
   const width = 56
 
   function renderRow(label: string, value: string): string {
