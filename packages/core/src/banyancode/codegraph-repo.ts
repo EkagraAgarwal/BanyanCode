@@ -95,6 +95,10 @@ export interface Interface {
   readonly ftsSearchNodes: (input: { query: string; limit?: number }) => Effect.Effect<FTSResult[], never, never>
   /** Fetch nodes for a specific set of files. Used by incremental rebuildDerivedGraph. */
   readonly nodesByFileIDs: (input: { fileIDs: string[] }) => Effect.Effect<CodegraphNode[], never, never>
+  readonly dependentsOfFiles: (input: {
+    fileIDs: readonly string[]
+    limit?: number
+  }) => Effect.Effect<readonly string[], never, never>
   readonly filesByIDs: (ids: ReadonlyArray<string>) => Effect.Effect<CodegraphFile[], never, never>
   readonly countNodes: () => Effect.Effect<number, never, never>
   readonly countEdges: () => Effect.Effect<number, never, never>
@@ -703,6 +707,43 @@ export const layer = Layer.effect(
       }))
     })
 
+    const dependentsOfFiles = Effect.fn("CodegraphRepo.dependentsOfFiles")(function* (input: {
+      fileIDs: readonly string[]
+      limit?: number
+    }) {
+      const fileIDs = [...new Set(input.fileIDs)]
+      const limit = input.limit === undefined ? undefined : Math.max(0, Math.floor(input.limit))
+      if (fileIDs.length === 0 || limit === 0) return []
+
+      const changedNodes: CodegraphNode[] = []
+      for (let i = 0; i < fileIDs.length; i += 900) {
+        const nodes = yield* nodesByFileIDs({ fileIDs: fileIDs.slice(i, i + 900) })
+        changedNodes.push(...nodes)
+      }
+      if (changedNodes.length === 0) return []
+
+      const changedNodeIDs = changedNodes.map((node) => node.id)
+      const [edgesFromChanged, edgesToChanged] = yield* Effect.all([
+        edgesFromBatch(changedNodeIDs),
+        edgesToBatch(changedNodeIDs),
+      ])
+      const otherNodeIDs = new Set<string>()
+      for (const edge of edgesFromChanged) otherNodeIDs.add(edge.toNodeID)
+      for (const edge of edgesToChanged) otherNodeIDs.add(edge.fromNodeID)
+      if (otherNodeIDs.size === 0) return []
+
+      const changedFileIDs = new Set(fileIDs)
+      const otherNodes = yield* nodesByIDs([...otherNodeIDs])
+      const dependentFileIDs = new Set<string>()
+      for (const node of otherNodes) {
+        if (changedFileIDs.has(node.fileID)) continue
+        dependentFileIDs.add(node.fileID)
+      }
+
+      const result = [...dependentFileIDs].sort()
+      return limit === undefined ? result : result.slice(0, limit)
+    })
+
     const clearAll = Effect.fn("CodegraphRepo.clearAll")(function* (input?: { dropFile?: boolean }) {
       const filePath = Database.path()
       const sizeBefore = filePath !== ":memory:" ? safeSize(filePath) : 0
@@ -1243,6 +1284,7 @@ export const layer = Layer.effect(
       searchNodesLight,
       ftsSearchNodes,
       nodesByFileIDs,
+      dependentsOfFiles,
       filesByIDs,
       countNodes,
       countEdges,
