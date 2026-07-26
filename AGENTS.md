@@ -134,6 +134,8 @@ gh release view v<version> --repo EkagraAgarwal/BanyanCode \
 
 If the release was cut as `--prerelease` and you want to promote it to GA: `gh release edit v<version> --prerelease=false --repo EkagraAgarwal/BanyanCode`.
 
+**`npm install <pkg>` from inside the source repo fails with `EUNSUPPORTEDPROTOCOL Unsupported URL Type "catalog:"`.** The repo uses Bun catalogs — root `package.json` defines a `catalog` block, and ~20 sub-package `package.json`s reference deps as `"typescript": "catalog:"`, `"effect": "catalog:"`, etc. `npm` (not bun/pnpm) has no `catalog:` protocol and rejects the whole install the moment it scans the first workspace `package.json`. The error has nothing to do with the package being installed: a bare `npm install banyancode@26.7.41` in a directory outside this repo succeeds. Workarounds inside the repo: (a) `bun add banyancode@26.7.41` (native catalog support), (b) `npm install -g banyancode@26.7.41` (the global flag skips the workspace scan; this is what `banyancode upgrade` already does), (c) `npm install --prefix <elsewhere> banyancode@26.7.41` (installs into a foreign dir; workspace not consulted), or (d) `cd` out of the repo first. Don't "fix" this by replacing `catalog:` with concrete versions in the workspace `package.json`s — that breaks the Bun-catalog contract and forces every release to churn the catalog entries by hand. The published `banyancode@26.7.41` tarball itself is clean (umbrella `package.json` uses plain semver `optionalDependencies`; only the workspace source uses `catalog:`).
+
 ## Parallel subagent work
 
 When dispatching multiple `@coder` subagents in parallel, expect git index.lock races and commit content races (one subagent's `git add` can pick up files meant for another). Pattern:

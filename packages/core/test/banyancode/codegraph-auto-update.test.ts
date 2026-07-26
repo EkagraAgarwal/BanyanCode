@@ -191,4 +191,49 @@ describe("CodegraphAutoUpdate", () => {
       }).pipe(Effect.provide(testLayer({ starts, config: { banyancode_codegraph_watch_debounce_ms: 100 } })), Effect.provide(dbLayer), Effect.scoped) as any,
     )
   })
+
+  test("converges to watching when the indexer reports skipped paths (no requeue spin)", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "workspace")
+    const dbLayer = Database.layerFromPath(path.join(tmp.path, "auto.sqlite"))
+    const filteredIndexer = Layer.succeed(
+      CodegraphIndexer.Service,
+      CodegraphIndexer.Service.of({
+        index: () => Effect.die("not used") as never,
+        applyChanges: () => Effect.die("not used") as never,
+        indexFiles: (input) =>
+          Effect.sync(() => ({
+            indexed: 0,
+            skipped: input.paths.length,
+            parseErrors: [],
+          })),
+        removeFiles: () => Effect.void,
+        cancel: () => Effect.void,
+      }),
+    )
+    const layer = CodegraphAutoUpdate.layer.pipe(
+      Layer.provideMerge(EventV2.defaultLayer),
+      Layer.provideMerge(filteredIndexer),
+      Layer.provideMerge(makeRepo(root)),
+      Layer.provideMerge(makeBuildService([])),
+      Layer.provideMerge(makeConfig({ banyancode_codegraph_watch_debounce_ms: 100 })),
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const events = yield* EventV2.Service
+        const svc = yield* CodegraphAutoUpdate.Service
+        for (const file of ["a.ts", "b.ts", "c.ts"]) {
+          yield* events.publish(
+            Watcher.Event.Updated,
+            { file: path.join(root, file), event: "change" },
+            { location: { directory: root as never } },
+          )
+        }
+        yield* Effect.sleep(400)
+        const state = yield* svc.state()
+        expect(state.status).toBe("watching")
+        expect(state.pending).toBe(0)
+      }).pipe(Effect.provide(layer), Effect.provide(dbLayer), Effect.scoped) as any,
+    )
+  })
 })

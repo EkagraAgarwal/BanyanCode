@@ -58,7 +58,6 @@ const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 const DEBOUNCE_MS = 500
 const POLL_MS = 2000
 const DELETE_GRACE_MS = 200
-const RETRY_MS = 500
 const MAX_BATCH_PATHS = 200
 
 type PendingChange = "add" | "change" | "unlink"
@@ -297,10 +296,13 @@ export const layer: Layer.Layer<
         )
         yield* publishProgress({ phase: "indexing", completed: result.indexed, total: paths.length, currentFile: paths[paths.length - 1] })
         yield* publishProgress({ phase: "done", completed: result.indexed, total: paths.length })
-        if (result.skipped > 0) {
-          yield* Effect.sleep(Duration.millis(RETRY_MS))
-          yield* requeue(additions)
-        }
+        // NOTE: do NOT requeue on `result.skipped > 0`. The indexer's `skipped` count
+        // is a deterministic aggregate — it includes files filtered out as ignored,
+        // oversize, artifact, cached, or genuinely skipped. Requeueing any of those
+        // causes the drain loop to spin forever, the state stays "draining", and the
+        // header pill is stuck on "Graph: syncing (N)" with a blue dot. Transient
+        // read errors are recovered by the next watcher event if the file is touched
+        // again, so the watcher is the right source of truth for re-indexing.
       }
 
       yield* requeue(overflowEntries)
