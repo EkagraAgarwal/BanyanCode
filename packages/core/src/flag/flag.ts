@@ -33,9 +33,12 @@ export const Flag = {
   OPENCODE_SERVER_USERNAME: process.env["OPENCODE_SERVER_USERNAME"],
   OPENCODE_DISABLE_FFF: fff === undefined ? process.platform === "win32" : truthy("OPENCODE_DISABLE_FFF"),
 
-  // Experimental
+  // Experimental — recursive workspace watcher is now on by default so the
+  // codegraph auto-update pipeline receives external IDE save events without
+  // a manual opt-in. Set OPENCODE_EXPERIMENTAL_FILEWATCHER=false (or
+  // OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER=true) to opt out.
   OPENCODE_EXPERIMENTAL_FILEWATCHER: Config.boolean("OPENCODE_EXPERIMENTAL_FILEWATCHER").pipe(
-    Config.withDefault(false),
+    Config.withDefault(true),
   ),
   OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: Config.boolean("OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER").pipe(
     Config.withDefault(false),

@@ -3,7 +3,7 @@ export * as Watcher from "./watcher"
 // @ts-ignore
 import { createWrapper } from "@parcel/watcher/wrapper"
 import type ParcelWatcher from "@parcel/watcher"
-import { Cause, Context, Effect, Layer, Schema } from "effect"
+import { Cause, Context, Effect, Fiber, Layer, Queue, Schema, Stream } from "effect"
 import path from "path"
 import { Config } from "../config"
 import { EventV2 } from "../event"
@@ -18,6 +18,7 @@ import { Protected } from "./protected"
 declare const OPENCODE_LIBC: string | undefined
 
 const SUBSCRIBE_TIMEOUT_MS = 10_000
+const WATCH_QUEUE_CAPACITY = 1024
 
 export const Event = {
   Updated: EventV2.define({
@@ -28,6 +29,8 @@ export const Event = {
     },
   }),
 }
+
+type FileChange = { file: string; event: "add" | "change" | "unlink" }
 
 const watcher = lazy((): typeof import("@parcel/watcher") | undefined => {
   try {
@@ -82,19 +85,48 @@ export const layer = Layer.effect(
     const events = yield* EventV2.Service
     const fs = yield* FSUtil.Service
     const git = yield* Git.Service
-    const context = yield* Effect.context()
-    const runFork = Effect.runForkWith(context)
+
+    // Queue + bounded drain fiber pattern. Parcel callbacks fire on a native
+    // thread and cannot await Effect — we offer each batch into a bounded
+    // queue (one short fiber per Parcel callback batch, not per event) and a
+    // single forkScoped drain fiber publishes through EventV2 in the layer's
+    // Effect context, which gives the publish call access to Location.Service
+    // for event stamping. Replaces the per-event `Effect.runForkWith` that
+    // spawned one fiber per Parcel update (banned per AGENTS.md lesson
+    // "Hot-path callbacks that need Effect queue handoff").
+    const queue = yield* Queue.bounded<FileChange>(WATCH_QUEUE_CAPACITY)
     const subscriptions: ParcelWatcher.AsyncSubscription[] = []
+    const drainFiber = yield* Effect.forkScoped(
+      Stream.fromQueue(queue).pipe(
+        Stream.mapEffect((change) => events.publish(Event.Updated, change), { concurrency: 1 }),
+        Stream.runDrain,
+      ),
+    )
     yield* Effect.addFinalizer(() =>
-      Effect.promise(() => Promise.allSettled(subscriptions.map((subscription) => subscription.unsubscribe()))),
+      Effect.gen(function* () {
+        yield* Fiber.interrupt(drainFiber).pipe(Effect.ignore)
+        yield* Queue.shutdown(queue)
+        yield* Effect.promise(() => Promise.allSettled(subscriptions.map((subscription) => subscription.unsubscribe())))
+      }),
     )
 
-    const callback: ParcelWatcher.SubscribeCallback = (_error, updates) => {
-      for (const update of updates) {
-        if (update.type === "create") runFork(events.publish(Event.Updated, { file: update.path, event: "add" }))
-        if (update.type === "update") runFork(events.publish(Event.Updated, { file: update.path, event: "change" }))
-        if (update.type === "delete") runFork(events.publish(Event.Updated, { file: update.path, event: "unlink" }))
+    const callback: ParcelWatcher.SubscribeCallback = (error, updates) => {
+      if (error) {
+        Effect.runFork(Effect.logWarning("watcher parcel callback error", { cause: Cause.pretty(Cause.fail(error)) }))
+        return
       }
+      // One short fiber per Parcel batch (NOT per event). All updates from this
+      // batch are offered sequentially inside the fiber; bounded Queue is the
+      // backpressure window so a flood can't spawn unbounded fibers.
+      Effect.runFork(
+        Effect.gen(function* () {
+          for (const update of updates) {
+            const event: "add" | "change" | "unlink" =
+              update.type === "create" ? "add" : update.type === "delete" ? "unlink" : "change"
+            yield* Queue.offer(queue, { file: update.path, event }).pipe(Effect.ignore)
+          }
+        }),
+      )
     }
 
     const subscribe = (directory: string, ignore: string[]) => {
@@ -112,11 +144,9 @@ export const layer = Layer.effect(
     const config = (yield* (yield* Config.Service).entries())
       .filter((entry): entry is Config.Document => entry.type === "document")
       .flatMap((item) => item.info.watcher?.ignore ?? [])
-    if (yield* Flag.OPENCODE_EXPERIMENTAL_FILEWATCHER) {
-      yield* Effect.forkScoped(
-        subscribe(location.directory, [...Ignore.PATTERNS, ...config, ...protecteds(location.directory)]),
-      )
-    }
+    yield* Effect.forkScoped(
+      subscribe(location.directory, [...Ignore.PATTERNS, ...config, ...protecteds(location.directory)]),
+    )
 
     if (location.vcs?.type === "git") {
       const resolved = yield* git.dir(location.directory)

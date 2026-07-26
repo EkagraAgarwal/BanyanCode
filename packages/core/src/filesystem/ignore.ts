@@ -45,7 +45,13 @@ const FILES = [
   "**/.nyc_output/**",
 ]
 
-export const PATTERNS = [...FILES, ...FOLDERS]
+// Recursive globs so the Parcel watcher ignore list catches `node_modules/`
+// nested inside subprojects (e.g. `packages/web/node_modules/**`), not just
+// the top-level entry. The bare dirname entries are kept for the indexer's
+// `FOLDERS.has(part)` fast path.
+const RECURSIVE_FOLDERS = [...FOLDERS].map((dir) => `**/${dir}/**`)
+
+export const PATTERNS = [...FILES, ...FOLDERS, ...RECURSIVE_FOLDERS]
 
 export function match(filepath: string, opts?: { extra?: string[]; whitelist?: string[] }) {
   for (const pattern of opts?.whitelist || []) {
