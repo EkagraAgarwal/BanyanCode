@@ -186,6 +186,7 @@ const buildCountingRepoLayer = (counters: PushdownCounters, panicOnListAllNodes:
           }),
         ftsSearchNodes: inner.ftsSearchNodes,
         nodesByFileIDs: inner.nodesByFileIDs,
+        dependentsOfFiles: inner.dependentsOfFiles,
         filesByIDs: inner.filesByIDs,
         countNodes: inner.countNodes,
         countEdges: inner.countEdges,

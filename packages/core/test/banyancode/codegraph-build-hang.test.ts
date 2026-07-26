@@ -77,6 +77,7 @@ describe("codegraph-build hang regression", () => {
                 parseErrors: [],
               }
             }),
+          applyChanges: () => Effect.succeed({ indexed: 0, removed: 0, skipped: 0, parseErrors: [] }),
           indexFiles: () => Effect.succeed({ indexed: 0, skipped: 0, parseErrors: [] }),
           removeFiles: () => Effect.void,
           cancel: () => Effect.void,

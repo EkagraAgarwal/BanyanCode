@@ -215,4 +215,224 @@ describe("CodegraphIndexer.indexFiles", () => {
       ),
     )
   })
+
+  test("applyChanges rebuilds existing dependents when a changed endpoint is replaced", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const helperPath = path.join(tmp.path, "helper.ts")
+    const consumerPath = path.join(tmp.path, "consumer.ts")
+    await fs.writeFile(helperPath, "export function helper() { return 42 }\n")
+    // Keep the future symbol in the persisted consumer code. It is not a
+    // target until helper.ts is changed, which makes the dependent-source
+    // rebuild observable without re-indexing consumer.ts.
+    await fs.writeFile(
+      consumerPath,
+      "export function useHelper(flag: boolean) { return flag ? helper() : helper_v2() }\n",
+    )
+
+    const serviceLayer = CodegraphIndexer.layer.pipe(
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(codegraphRepoDefaultLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* CodegraphIndexer.Service
+        const repo = yield* CodegraphRepo.Service
+
+        yield* indexer.indexFiles({ root: tmp.path, paths: [helperPath, consumerPath] })
+
+        const helperFile = yield* repo.getFileByPath(helperPath)
+        const consumerFile = yield* repo.getFileByPath(consumerPath)
+        expect(helperFile).toBeDefined()
+        expect(consumerFile).toBeDefined()
+        if (!helperFile || !consumerFile) return
+
+        const dependentsBefore = yield* repo.dependentsOfFiles({ fileIDs: [helperFile.id] })
+        expect(dependentsBefore).toEqual([consumerFile.id])
+
+        const consumerNodes = yield* repo.listNodesByFile(consumerFile.id)
+        const useHelper = consumerNodes.find((node) => node.kind === "function" && node.name === "useHelper")
+        expect(useHelper).toBeDefined()
+        const helperNodes = yield* repo.listNodesByFile(helperFile.id)
+        const oldHelper = helperNodes.find((node) => node.kind === "function" && node.name === "helper")
+        expect(oldHelper).toBeDefined()
+        if (!useHelper || !oldHelper) return
+
+        const initialEdges = yield* repo.listAllEdges()
+        expect(
+          initialEdges.some(
+            (edge) => edge.kind === "calls" && edge.fromNodeID === useHelper.id && edge.toNodeID === oldHelper.id,
+          ),
+        ).toBe(true)
+
+        yield* Effect.promise(() => fs.writeFile(helperPath, "export function helper_v2() { return 43 }\n"))
+        const result = yield* indexer.applyChanges({
+          root: tmp.path,
+          addedOrChanged: [helperPath],
+          removed: [],
+        })
+        expect(result.indexed).toBe(1)
+
+        const updatedHelperFile = yield* repo.getFileByPath(helperPath)
+        expect(updatedHelperFile).toBeDefined()
+        if (!updatedHelperFile) return
+        const updatedHelperNodes = yield* repo.listNodesByFile(updatedHelperFile.id)
+        const newHelper = updatedHelperNodes.find((node) => node.kind === "function" && node.name === "helper_v2")
+        expect(newHelper).toBeDefined()
+        if (!newHelper) return
+
+        const edgesAfter = yield* repo.listAllEdges()
+        expect(
+          edgesAfter.some(
+            (edge) => edge.kind === "calls" && edge.fromNodeID === useHelper.id && edge.toNodeID === newHelper.id,
+          ),
+        ).toBe(true)
+        expect(
+          edgesAfter.some(
+            (edge) => edge.kind === "calls" && edge.fromNodeID === useHelper.id && edge.toNodeID === oldHelper.id,
+          ),
+        ).toBe(false)
+      }).pipe(
+        Effect.provide(serviceLayer),
+        Effect.provide(codegraphRepoDefaultLayer),
+        Effect.provide(dbLayer),
+        Effect.scoped,
+      ),
+    )
+  })
+
+  test("applyChanges batches added and removed paths into one graph update", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const consumerPath = path.join(tmp.path, "consumer.ts")
+    const oldHelperPath = path.join(tmp.path, "old-helper.ts")
+    const newHelperPath = path.join(tmp.path, "new-helper.ts")
+
+    await fs.writeFile(consumerPath, "export function useHelper() { return oldHelper() }\n")
+    await fs.writeFile(oldHelperPath, "export function oldHelper() { return 1 }\n")
+
+    const serviceLayer = CodegraphIndexer.layer.pipe(
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(codegraphRepoDefaultLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* CodegraphIndexer.Service
+        const repo = yield* CodegraphRepo.Service
+
+        yield* indexer.indexFiles({ root: tmp.path, paths: [consumerPath, oldHelperPath] })
+
+        const oldFile = yield* repo.getFileByPath(oldHelperPath)
+        expect(oldFile).toBeDefined()
+        const oldNodes = oldFile ? yield* repo.listNodesByFile(oldFile.id) : []
+        const oldNodeIDs = new Set(oldNodes.map((node) => node.id))
+        const edgeCountBefore = yield* repo.countEdges()
+        expect(edgeCountBefore).toBeGreaterThan(0)
+        const versionBefore = (yield* repo.getMeta())?.graphVersion ?? -1
+        expect(versionBefore).toBeGreaterThanOrEqual(0)
+
+        yield* Effect.promise(() => fs.writeFile(consumerPath, "export function useHelper() { return newHelper() }\n"))
+        yield* Effect.promise(() => fs.writeFile(newHelperPath, "export function newHelper() { return 2 }\n"))
+        yield* Effect.promise(() => fs.unlink(oldHelperPath))
+
+        const result = yield* indexer.applyChanges({
+          root: tmp.path,
+          addedOrChanged: [consumerPath, newHelperPath],
+          removed: [oldHelperPath],
+        })
+
+        expect(result.indexed).toBe(2)
+        expect(result.removed).toBe(1)
+        expect(result.skipped).toBe(0)
+        expect((yield* repo.getMeta())?.graphVersion).toBe(versionBefore + 1)
+        expect(yield* repo.getFileByPath(oldHelperPath)).toBeUndefined()
+
+        const newFile = yield* repo.getFileByPath(newHelperPath)
+        const consumerFile = yield* repo.getFileByPath(consumerPath)
+        expect(newFile).toBeDefined()
+        expect(consumerFile).toBeDefined()
+        const newNodes = newFile ? yield* repo.listNodesByFile(newFile.id) : []
+        const consumerNodes = consumerFile ? yield* repo.listNodesByFile(consumerFile.id) : []
+        const newHelper = newNodes.find((node) => node.kind === "function" && node.name === "newHelper")
+        const useHelper = consumerNodes.find((node) => node.kind === "function" && node.name === "useHelper")
+        expect(newHelper).toBeDefined()
+        expect(useHelper).toBeDefined()
+
+        const edgesAfter = yield* repo.listAllEdges()
+        expect(edgesAfter.length).toBe(edgeCountBefore)
+        expect(edgesAfter.some((edge) => oldNodeIDs.has(edge.fromNodeID) || oldNodeIDs.has(edge.toNodeID))).toBe(false)
+        expect(
+          edgesAfter.some(
+            (edge) => edge.kind === "calls" && edge.fromNodeID === useHelper?.id && edge.toNodeID === newHelper?.id,
+          ),
+        ).toBe(true)
+      }).pipe(
+        Effect.provide(serviceLayer),
+        Effect.provide(codegraphRepoDefaultLayer),
+        Effect.provide(dbLayer),
+        Effect.scoped,
+      ),
+    )
+  })
+
+  test("applyChanges skips ignored and oversized paths in a mixed batch", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const ignoredPath = path.join(tmp.path, "ignored.ts")
+    const oversizedPath = path.join(tmp.path, "oversized.ts")
+    const keepPath = path.join(tmp.path, "keep.ts")
+    await fs.writeFile(ignoredPath, "export const ignored = 1\n")
+    await fs.writeFile(oversizedPath, `export const oversized = "${"x".repeat(256)}"\n`)
+    await fs.writeFile(keepPath, "export const keep = 1\n")
+
+    const serviceLayer = CodegraphIndexer.layer.pipe(
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(codegraphRepoDefaultLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* CodegraphIndexer.Service
+        const repo = yield* CodegraphRepo.Service
+
+        const initial = yield* indexer.indexFiles({
+          root: tmp.path,
+          paths: [ignoredPath, oversizedPath],
+          maxFileSizeBytes: 1024,
+        })
+        expect(initial.indexed).toBe(2)
+        const versionBefore = (yield* repo.getMeta())?.graphVersion ?? -1
+        yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, ".gitignore"), "ignored.ts\n"))
+
+        const result = yield* indexer.applyChanges({
+          root: tmp.path,
+          addedOrChanged: [keepPath, oversizedPath],
+          removed: [ignoredPath],
+          maxFileSizeBytes: 64,
+        })
+
+        expect(result.indexed).toBe(1)
+        expect(result.removed).toBe(0)
+        expect(result.skipped).toBe(2)
+        expect((yield* repo.getMeta())?.graphVersion).toBe(versionBefore + 1)
+        expect(yield* repo.getFileByPath(ignoredPath)).toBeUndefined()
+        expect(yield* repo.getFileByPath(oversizedPath)).toBeUndefined()
+        expect(yield* repo.getFileByPath(keepPath)).toBeDefined()
+        expect(yield* repo.countFiles()).toBe(1)
+      }).pipe(
+        Effect.provide(serviceLayer),
+        Effect.provide(codegraphRepoDefaultLayer),
+        Effect.provide(dbLayer),
+        Effect.scoped,
+      ),
+    )
+  })
 })

@@ -84,6 +84,7 @@ describe("CodegraphAutoUpdate batch cap", () => {
               skippedByReason: emptyReasons(),
               parseErrors: [],
             }),
+          applyChanges: () => Effect.succeed({ indexed: 0, removed: 0, skipped: 0, parseErrors: [] }),
           indexFiles: ({ paths }) =>
             Effect.sync(() => {
               capturedCallCount++
