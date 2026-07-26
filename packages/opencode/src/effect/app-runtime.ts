@@ -62,6 +62,7 @@ import { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
 import * as AiSdkTransportModule from "./transport-ai-sdk"
 import { applyCodegraphBuildBridge } from "./banyancode-codegraph-bridge"
 import { applyCodegraphAutoUpdateBridge } from "./banyancode-codegraph-auto-update-bridge"
+import { applyCodegraphAutoUpdateProgressBridge } from "./banyancode-codegraph-auto-update-progress-bridge"
 import { applyFilesystemBridge } from "./banyancode-filesystem-bridge"
 import { applyMeshBridge } from "./banyancode-mesh-bridge"
 import { applyMemoryBridge } from "./banyancode-memory-bridge"
@@ -272,6 +273,7 @@ AppRuntime.runFork(
 
 AppRuntime.runFork(applyCodegraphBuildBridge as never)
 AppRuntime.runFork(applyCodegraphAutoUpdateBridge as never)
+AppRuntime.runFork(applyCodegraphAutoUpdateProgressBridge as never)
 AppRuntime.runFork(applyFilesystemBridge as never)
 AppRuntime.runFork(applyMemoryBridge as never)
 AppRuntime.runFork(applyMeshBridge as never)

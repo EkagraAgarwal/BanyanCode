@@ -1,6 +1,8 @@
 export * as CodegraphAutoUpdate from "./codegraph-auto-update"
 
-import { Cause, Context, Duration, Effect, Layer, Option, Queue, Ref, Schema } from "effect"
+import { Cause, Context, Duration, Effect, Fiber, Layer, Option, Queue, Ref, Schema } from "effect"
+import os from "os"
+import path from "path"
 import { EventV2 } from "../event"
 import { Watcher } from "../filesystem/watcher"
 import { BanyanConfigService } from "./banyan-config"
@@ -8,10 +10,6 @@ import { CodegraphBuildService } from "./codegraph-build-service"
 import { CodegraphIndexer } from "./codegraph-indexer"
 import { CodegraphRepo } from "./codegraph-repo"
 
-// Public event shape published by this service. Consumers (e.g. a future TUI
-// badge) subscribe via the codegraph auto-update bridge, identical to how
-// CodegraphBuildService events are drained. Keeping this minimal for v1 — no
-// detailed per-file state, just a coarse busy/pending summary.
 export const State = Schema.Struct({
   status: Schema.Literals(["idle", "watching", "draining", "paused"]),
   pending: Schema.Number,
@@ -25,9 +23,30 @@ export const Event = EventV2.define({
   schema: State.fields,
 })
 
+export const ProgressState = Schema.Struct({
+  status: Schema.Literals(["idle", "watching", "draining", "paused"]),
+  pending: Schema.Number,
+  lastChangeAt: Schema.optional(Schema.Number),
+  phase: Schema.optional(Schema.Literals(["preparing", "indexing", "removing", "done"])),
+  completed: Schema.optional(Schema.Number),
+  total: Schema.optional(Schema.Number),
+  currentFile: Schema.optional(Schema.String),
+})
+
+export type ProgressState = typeof ProgressState.Type
+
+export const ProgressEvent = EventV2.define({
+  type: "banyancode.codegraph.auto-update.progress",
+  schema: ProgressState.fields,
+})
+
 export interface Interface {
   readonly state: () => Effect.Effect<State, never, never>
   readonly events: () => Queue.Dequeue<{ type: "banyancode.codegraph.auto-update"; properties: State }>
+  readonly progressEvents: () => Queue.Dequeue<{
+    type: "banyancode.codegraph.auto-update.progress"
+    properties: ProgressState
+  }>
   readonly pause: () => Effect.Effect<void, never, never>
   readonly resume: () => Effect.Effect<void, never, never>
 }
@@ -38,7 +57,13 @@ const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 const DEBOUNCE_MS = 500
 const POLL_MS = 2000
+const DELETE_GRACE_MS = 200
+const RETRY_MS = 500
 const MAX_BATCH_PATHS = 200
+
+type PendingChange = "add" | "change" | "unlink"
+type PendingEntry = readonly [string, PendingChange]
+type ProgressExtras = Pick<ProgressState, "phase" | "completed" | "total" | "currentFile">
 
 export const layer: Layer.Layer<
   Service,
@@ -52,10 +77,15 @@ export const layer: Layer.Layer<
       const events = yield* Queue.dropping<{ type: "banyancode.codegraph.auto-update"; properties: State }>(64).pipe(
         Effect.orDie,
       )
-      yield* Effect.addFinalizer(() => Queue.shutdown(events))
+      const progressEvents = yield* Queue.dropping<{
+        type: "banyancode.codegraph.auto-update.progress"
+        properties: ProgressState
+      }>(64).pipe(Effect.orDie)
+      yield* Effect.addFinalizer(() => Effect.all([Queue.shutdown(events), Queue.shutdown(progressEvents)], { discard: true }))
       return Service.of({
         state: () => Ref.get(stateRef),
         events: () => events,
+        progressEvents: () => progressEvents,
         pause: () => Effect.void,
         resume: () => Effect.void,
       })
@@ -66,253 +96,261 @@ export const layer: Layer.Layer<
     const buildService = yield* CodegraphBuildService.Service
     const configOpt = yield* Effect.serviceOption(BanyanConfigService.Service)
 
-    const configDebounce = (): number => {
-      if (Option.isNone(configOpt)) return DEBOUNCE_MS
-      const svc = configOpt.value
-      const v = svc as unknown as { get: () => Promise<{ banyancode_codegraph_watch_debounce_ms?: number }> }
-      // Synchronous best-effort read; BanyanConfigService.get returns a Promise
-      // but for debounce we just use the default. Real async config reads happen
-      // lazily before each batch.
-      return DEBOUNCE_MS
-    }
-
     const enabledRef = yield* Ref.make(true)
     const debounceRef = yield* Ref.make(DEBOUNCE_MS)
+    const excludePatternsRef = yield* Ref.make<readonly string[]>([])
 
     const refreshConfig = Effect.fn("CodegraphAutoUpdate.refreshConfig")(function* () {
       if (Option.isNone(configOpt)) return
       const cfg = yield* configOpt.value.get()
       yield* Ref.set(enabledRef, cfg.banyancode_codegraph_watch_enabled ?? true)
       const debounce = cfg.banyancode_codegraph_watch_debounce_ms ?? DEBOUNCE_MS
-      const clamped = Math.max(100, Math.min(5000, debounce))
-      yield* Ref.set(debounceRef, clamped)
+      yield* Ref.set(debounceRef, Math.max(100, Math.min(5000, debounce)))
+      yield* Ref.set(excludePatternsRef, cfg.banyancode_codegraph_exclude_patterns ?? [])
     })
     yield* refreshConfig()
 
-    const stateRef = yield* Ref.make<State>({ status: "idle" as const, pending: 0 })
+    const stateRef = yield* Ref.make<State>({ status: "idle", pending: 0 })
     const pausedRef = yield* Ref.make(false)
     const wakeQueue = yield* Queue.dropping<void>(1).pipe(Effect.orDie)
-    const pendingAddRef = yield* Ref.make<Map<string, true>>(new Map())
-    const pendingRemoveRef = yield* Ref.make<Set<string>>(new Set())
+    const pendingRef = yield* Ref.make<Map<string, PendingChange>>(new Map())
+    const graceSeenRef = yield* Ref.make<Set<string>>(new Set())
     const eventsQueue = yield* Queue.dropping<{ type: "banyancode.codegraph.auto-update"; properties: State }>(64).pipe(
       Effect.orDie,
     )
-    yield* Effect.addFinalizer(() => Queue.shutdown(eventsQueue))
-
-    const publish = (s: State): Effect.Effect<void, never, never> =>
+    const progressEventsQueue = yield* Queue.dropping<{
+      type: "banyancode.codegraph.auto-update.progress"
+      properties: ProgressState
+    }>(64).pipe(Effect.orDie)
+    const drainFiberRef = yield* Ref.make<Fiber.Fiber<void, never> | undefined>(undefined)
+    yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
-        yield* Ref.set(stateRef, s)
-        yield* Queue.offer(eventsQueue, { type: "banyancode.codegraph.auto-update" as const, properties: s }).pipe(
-          Effect.ignore,
-        )
-      })
+        const fiber = yield* Ref.get(drainFiberRef)
+        if (fiber) yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
+        yield* Queue.shutdown(wakeQueue)
+        yield* Queue.shutdown(eventsQueue)
+        yield* Queue.shutdown(progressEventsQueue)
+      }),
+    )
 
-    const snapshot = (overrides: Partial<State> = {}): State => {
-      return {
-        status: overrides.status ?? "watching",
-        pending: overrides.pending ?? 0,
-        ...(overrides.lastChangeAt !== undefined ? { lastChangeAt: overrides.lastChangeAt } : {}),
-      }
-    }
+    const publish = Effect.fn("CodegraphAutoUpdate.publish")(function* (s: State) {
+      yield* Ref.set(stateRef, s)
+      yield* Queue.offer(eventsQueue, { type: "banyancode.codegraph.auto-update" as const, properties: s }).pipe(Effect.ignore)
+    })
 
     const recomputeStatus = Effect.fn("CodegraphAutoUpdate.recomputeStatus")(function* () {
       const paused = yield* Ref.get(pausedRef)
       if (paused) return yield* publish({ status: "paused", pending: 0 })
-      const adds = yield* Ref.get(pendingAddRef)
-      const removes = yield* Ref.get(pendingRemoveRef)
-      const total = adds.size + removes.size
-      const next: State = {
-        status: total > 0 ? "draining" : "watching",
-        pending: total,
+      const pending = (yield* Ref.get(pendingRef)).size
+      yield* publish({
+        status: pending > 0 ? "draining" : "watching",
+        pending,
         lastChangeAt: Date.now(),
-      }
-      yield* publish(next)
+      })
     })
 
-    // Helper: derive the longest common prefix path from a list of file paths.
-    // Simple approach: start with the first path, walk up with dirname until all paths share the prefix.
+    const publishProgress = Effect.fn("CodegraphAutoUpdate.publishProgress")(function* (extras: ProgressExtras) {
+      const state = yield* Ref.get(stateRef)
+      const progress: ProgressState = {
+        status: state.status,
+        pending: state.pending,
+        ...(state.lastChangeAt !== undefined ? { lastChangeAt: state.lastChangeAt } : {}),
+        ...(extras.phase !== undefined ? { phase: extras.phase } : {}),
+        ...(extras.completed !== undefined ? { completed: extras.completed } : {}),
+        ...(extras.total !== undefined ? { total: extras.total } : {}),
+        ...(extras.currentFile !== undefined ? { currentFile: extras.currentFile } : {}),
+      }
+      yield* Queue.offer(progressEventsQueue, {
+        type: "banyancode.codegraph.auto-update.progress" as const,
+        properties: progress,
+      }).pipe(Effect.ignore)
+    })
+
     const deriveRootFromPending = (paths: string[]): string | undefined => {
       if (paths.length === 0) return undefined
-      let candidate = paths[0]
-      const isPrefix = (p: string) => candidate === p || p.startsWith(candidate + "/") || candidate.startsWith(p + "/")
-      while (candidate && !paths.every(isPrefix)) {
-        candidate = candidate.split("/").slice(0, -1).join("/")
+      const separator = os.platform() === "win32" ? path.win32.sep : path.posix.sep
+      let candidate = path.resolve(path.dirname(paths[0]))
+      for (const filePath of paths.slice(1)) {
+        const target = path.resolve(path.dirname(filePath))
+        while (candidate !== target && !target.startsWith(candidate + separator)) {
+          const parent = path.dirname(candidate)
+          if (parent === candidate) break
+          candidate = parent
+        }
       }
-      return candidate || undefined
+      return candidate
     }
 
     const initialBuildTriggeredRef = yield* Ref.make(false)
 
-    // Re-read graph metadata lazily before each batch so a fresh full build
-    // that changed indexed_root steers subsequent events to the new root.
     const processBatch = Effect.fn("CodegraphAutoUpdate.processBatch")(function* () {
-      const collected = yield* Effect.gen(function* () {
-        const adds = yield* Ref.getAndUpdate(pendingAddRef, () => new Map())
-        const removes = yield* Ref.getAndUpdate(pendingRemoveRef, () => new Set())
-        return { adds, removes }
-      })
+      const collected = yield* Ref.getAndUpdate(pendingRef, () => new Map())
+      if (collected.size === 0) return
 
-      // Cap the batch to prevent OOM on a 10K-file event storm.
-      let batchAdds = collected.adds
-      let batchRemoves = collected.removes
-      let overflowAdds: Array<string> = []
-      let overflowRemoves: Array<string> = []
+      const entries = [...collected.entries()]
+      const batchEntries = entries.slice(0, MAX_BATCH_PATHS)
+      const overflowEntries = entries.slice(MAX_BATCH_PATHS)
+      const batch = new Map<string, PendingChange>(batchEntries)
 
-      const total = collected.adds.size + collected.removes.size
-      if (total > MAX_BATCH_PATHS) {
-        const addEntries = [...collected.adds.entries()]
-        const removeArr = [...collected.removes]
-
-        const splitAdd = Math.min(addEntries.length, MAX_BATCH_PATHS)
-        batchAdds = new Map(addEntries.slice(0, splitAdd))
-        overflowAdds = addEntries.slice(splitAdd).map(([k]) => k)
-
-        const remaining = MAX_BATCH_PATHS - splitAdd
-        if (remaining > 0) {
-          batchRemoves = new Set(removeArr.slice(0, remaining))
-          overflowRemoves = removeArr.slice(remaining)
-        } else {
-          batchRemoves = new Set()
-          overflowRemoves = removeArr
-        }
+      // Give atomic-save rename sequences a short window to deliver their add/change.
+      for (const [filePath, change] of batchEntries) {
+        if (change !== "unlink") continue
+        const seen = yield* Ref.getAndUpdate(graceSeenRef, (paths) => {
+          if (paths.has(filePath)) return paths
+          const next = new Set(paths)
+          next.add(filePath)
+          return next
+        })
+        if (seen.has(filePath)) continue
+        yield* Effect.sleep(Duration.millis(DELETE_GRACE_MS))
+        const latest = yield* Ref.getAndUpdate(pendingRef, (pending) => {
+          const next = new Map(pending)
+          next.delete(filePath)
+          return next
+        })
+        if (latest.get(filePath) === "add" || latest.get(filePath) === "change") batch.set(filePath, "change")
       }
 
-      if (batchAdds.size === 0 && batchRemoves.size === 0) return
+      yield* publish({
+        status: "draining",
+        pending: batch.size + (yield* Ref.get(pendingRef)).size,
+        lastChangeAt: Date.now(),
+      })
 
-      yield* recomputeStatus()
+      const requeue = Effect.fn("CodegraphAutoUpdate.requeue")(function* (items: readonly PendingEntry[]) {
+        if (items.length === 0) return
+        yield* Ref.update(pendingRef, (pending) => {
+          const next = new Map(pending)
+          for (const [filePath, change] of items) {
+            if (!next.has(filePath)) next.set(filePath, change)
+          }
+          return next
+        })
+        yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
+      })
 
       const buildState = yield* buildService.status()
       if (buildState.status === "running") {
         yield* Effect.logDebug("codegraph auto-update: deferring until build completes")
+        yield* requeue(batchEntries)
+        yield* requeue(overflowEntries)
         yield* Effect.sleep(Duration.millis(POLL_MS))
-        yield* Ref.update(pendingAddRef, (m) => {
-          for (const k of batchAdds.keys()) m.set(k, true)
-          return m
-        })
-        yield* Ref.update(pendingRemoveRef, (s) => {
-          for (const k of batchRemoves) s.add(k)
-          return s
-        })
-        yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
         return
       }
 
       const meta = yield* repo.getMeta()
       if (!meta || !meta.indexedRoot) {
-        // Fresh workspace: derive root from pending files and trigger initial build
-        const pendingPaths = [...batchAdds.keys(), ...batchRemoves]
-        if (pendingPaths.length > 0) {
-          const derived = deriveRootFromPending(pendingPaths)
-          if (derived) {
-            const alreadyTriggered = yield* Ref.get(initialBuildTriggeredRef)
-            if (!alreadyTriggered) {
-              yield* Ref.set(initialBuildTriggeredRef, true)
-              yield* Effect.logInfo(`codegraph auto-update: no indexedRoot, triggering initial build for ${derived}`)
-              yield* buildService.start({ root: derived, force: false }).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("codegraph auto-update: initial build failed", { cause: Cause.pretty(cause) }),
-                ),
-              )
-            }
-          } else {
-            yield* Effect.logWarning("codegraph auto-update: could not derive root from pending paths, skipping")
+        const derived = deriveRootFromPending([...batch.keys()])
+        if (derived) {
+          const alreadyTriggered = yield* Ref.get(initialBuildTriggeredRef)
+          if (!alreadyTriggered) {
+            yield* Ref.set(initialBuildTriggeredRef, true)
+            yield* Effect.logInfo(`codegraph auto-update: no indexedRoot, triggering initial build for ${derived}`)
+            const excludePatterns = yield* Ref.get(excludePatternsRef)
+            yield* buildService.start({ root: derived, force: false, excludePatterns }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("codegraph auto-update: initial build failed", { cause: Cause.pretty(cause) }),
+              ),
+            )
           }
+        } else {
+          yield* Effect.logWarning("codegraph auto-update: could not derive root from pending paths, skipping")
         }
-        // Re-queue overflow into the refs for the next batch.
-        if (overflowAdds.length > 0 || overflowRemoves.length > 0) {
-          yield* Ref.update(pendingAddRef, (m) => {
-            for (const p of overflowAdds) m.set(p, true)
-            return m
-          })
-          yield* Ref.update(pendingRemoveRef, (s) => {
-            for (const p of overflowRemoves) s.add(p)
-            return s
-          })
-          yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
-        }
+        yield* requeue(overflowEntries)
         return
       }
-      const root = meta.indexedRoot
 
-      if (batchRemoves.size > 0) {
-        yield* indexer.removeFiles({ root, paths: [...batchRemoves] }).pipe(
+      const root = meta.indexedRoot
+      const removals = [...batch].filter(([, change]) => change === "unlink").map(([filePath]) => filePath)
+      const additions = [...batch].filter(([, change]) => change !== "unlink").map(([filePath, change]) => [filePath, change] as const)
+      const excludePatterns = yield* Ref.get(excludePatternsRef)
+
+      if (removals.length > 0) {
+        yield* publishProgress({ phase: "preparing", total: removals.length })
+        yield* publishProgress({ phase: "removing", completed: 0, total: removals.length, currentFile: removals[0] })
+        yield* indexer.removeFiles({ root, paths: removals }).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("codegraph auto-update: removeFiles failed", { cause: Cause.pretty(cause) }),
           ),
         )
+        yield* publishProgress({ phase: "removing", completed: removals.length, total: removals.length, currentFile: removals[removals.length - 1] })
+        yield* publishProgress({ phase: "done", completed: removals.length, total: removals.length })
       }
-      if (batchAdds.size > 0) {
-        yield* indexer.indexFiles({ root, paths: [...batchAdds.keys()] }).pipe(
+
+      if (additions.length > 0) {
+        const paths = additions.map(([filePath]) => filePath)
+        yield* publishProgress({ phase: "preparing", total: paths.length })
+        const result = yield* indexer.indexFiles({
+          root,
+          paths,
+          excludePatterns,
+          onProgress: Effect.fn("CodegraphAutoUpdate.indexProgress")(function* ({ file, done, total, currentFile }) {
+            yield* publishProgress({ phase: "indexing", completed: done, total, currentFile: currentFile ?? file })
+          }),
+        }).pipe(
           Effect.catchCause((cause) =>
-            Effect.logWarning("codegraph auto-update: indexFiles failed", { cause: Cause.pretty(cause) }),
+            Effect.gen(function* () {
+              yield* Effect.logWarning("codegraph auto-update: indexFiles failed", { cause: Cause.pretty(cause) })
+              return { indexed: 0, skipped: 0, parseErrors: [] }
+            }),
           ),
         )
+        yield* publishProgress({ phase: "indexing", completed: result.indexed, total: paths.length, currentFile: paths[paths.length - 1] })
+        yield* publishProgress({ phase: "done", completed: result.indexed, total: paths.length })
+        if (result.skipped > 0) {
+          yield* Effect.sleep(Duration.millis(RETRY_MS))
+          yield* requeue(additions)
+        }
       }
 
-      // Re-queue overflow into the refs for the next batch.
-      if (overflowAdds.length > 0 || overflowRemoves.length > 0) {
-        yield* Ref.update(pendingAddRef, (m) => {
-          for (const p of overflowAdds) m.set(p, true)
-          return m
-        })
-        yield* Ref.update(pendingRemoveRef, (s) => {
-          for (const p of overflowRemoves) s.add(p)
-          return s
-        })
-        yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
-      }
-
+      yield* requeue(overflowEntries)
       yield* recomputeStatus()
     })
 
-    // Drain worker: wait for next wake signal, sleep a quiet window so bursts
-    // collapse, then process whatever accumulated. Loop until pending empties.
-    yield* Effect.forkDetach(
+    const drainFiber = yield* Effect.forkDetach(
       Effect.gen(function* () {
         while (true) {
           yield* Queue.take(wakeQueue).pipe(Effect.catchCause(() => Effect.void))
-          const debounce = yield* Ref.get(debounceRef)
-          yield* Effect.sleep(Duration.millis(debounce))
-          while (true) {
-            const adds = yield* Ref.get(pendingAddRef)
-            const removes = yield* Ref.get(pendingRemoveRef)
-            if (adds.size === 0 && removes.size === 0) break
-            yield* processBatch()
+          let quiet = false
+          while (!quiet) {
+            const debounce = yield* Ref.get(debounceRef)
+            yield* Effect.sleep(Duration.millis(debounce))
+            const signal = yield* Queue.poll(wakeQueue)
+            quiet = Option.isNone(signal)
           }
+          while ((yield* Ref.get(pendingRef)).size > 0) yield* processBatch()
         }
       }).pipe(Effect.catchCause((cause) => Effect.logError("codegraph auto-update drain loop failed", { cause: Cause.pretty(cause) }))),
     )
+    yield* Ref.set(drainFiberRef, drainFiber)
 
-    // Initial state: idle until a watcher event arrives. The watcher
-    // publishes Watcher.Event.Updated with `event.location.directory`; we
-    // filter against the current graph's indexed_root so the same global
-    // listener ignores events for unrelated workspaces.
-    yield* publish(snapshot({ status: "idle", pending: 0 }))
+    yield* publish({ status: "idle", pending: 0 })
 
-    const events = yield* EventV2.Service
-    const unsubscribe = yield* events.listen((event) =>
+    const eventService = yield* EventV2.Service
+    const unsubscribe = yield* eventService.listen((event) =>
       Effect.gen(function* () {
         if (event.type !== Watcher.Event.Updated.type) return
         if (yield* Ref.get(pausedRef)) return
         if (!(yield* Ref.get(enabledRef))) return
         yield* refreshConfig()
 
-        const data = event.data as { file: string; event: "add" | "change" | "unlink" }
+        const data = event.data as { file: string; event: PendingChange }
         const meta = yield* repo.getMeta()
-        if (!meta || !meta.indexedRoot) return
-        if (event.location?.directory !== meta.indexedRoot) return
-
-        if (data.event === "unlink") {
-          yield* Ref.update(pendingRemoveRef, (s) => {
-            s.add(data.file)
-            return s
-          })
-        } else {
-          yield* Ref.update(pendingAddRef, (m) => {
-            m.set(data.file, true)
-            return m
-          })
+        if (meta?.indexedRoot) {
+          const norm = (p: string) => process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p)
+          if (!event.location?.directory || norm(event.location.directory) !== norm(meta.indexedRoot)) return
         }
+
+        yield* Ref.update(pendingRef, (pending) => {
+          const next = new Map(pending)
+          next.set(data.file, data.event)
+          return next
+        })
+        if (data.event !== "unlink") yield* Ref.update(graceSeenRef, (seen) => {
+          const next = new Set(seen)
+          next.delete(data.file)
+          return next
+        })
         yield* recomputeStatus()
         yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
       }).pipe(
@@ -326,7 +364,7 @@ export const layer: Layer.Layer<
     const pause: Interface["pause"] = () =>
       Effect.gen(function* () {
         yield* Ref.set(pausedRef, true)
-        yield* publish(snapshot({ status: "paused", pending: 0 }))
+        yield* publish({ status: "paused", pending: 0 })
       })
 
     const resume: Interface["resume"] = () =>
@@ -336,10 +374,13 @@ export const layer: Layer.Layer<
         yield* recomputeStatus()
       })
 
-    const state: Interface["state"] = () => Ref.get(stateRef)
-    const eventsDequeue: Interface["events"] = () => eventsQueue
-
-    return Service.of({ state, events: eventsDequeue, pause, resume })
+    return Service.of({
+      state: () => Ref.get(stateRef),
+      events: () => eventsQueue,
+      progressEvents: () => progressEventsQueue,
+      pause,
+      resume,
+    })
   }),
 )
 

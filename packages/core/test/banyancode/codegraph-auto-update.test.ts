@@ -1,30 +1,19 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Queue } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
-import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Watcher } from "@opencode-ai/core/filesystem/watcher"
+import { CodegraphAutoUpdate } from "@opencode-ai/core/banyancode/codegraph-auto-update"
+import { BanyanConfigService } from "@opencode-ai/core/banyancode/banyan-config"
+import { CodegraphBuildService } from "@opencode-ai/core/banyancode/codegraph-build-service"
+import { CodegraphIndexer } from "@opencode-ai/core/banyancode/codegraph-indexer"
+import { CodegraphRepo } from "@opencode-ai/core/banyancode/codegraph-repo"
 import { tmpdir } from "../fixture/tmpdir"
 import path from "path"
-import { CodegraphAutoUpdate } from "../../src/banyancode/codegraph-auto-update"
-import { CodegraphBuildService } from "../../src/banyancode/codegraph-build-service"
-import { CodegraphIndexer } from "../../src/banyancode/codegraph-indexer"
-import { CodegraphRepo, defaultLayer as codegraphRepoDefaultLayer } from "../../src/banyancode/codegraph-repo"
 
 process.env.BANYANCODE_ENABLE = "1"
 
-const emptyReasons = () => ({
-  gitignored: 0,
-  banyanignored: 0,
-  artifact: 0,
-  tooLarge: 0,
-  minified: 0,
-  tooLargeParse: 0,
-  cached: 0,
-  readError: 0,
-  parseFailure: 0,
-})
-
-const makeMockIndexer = (): Layer.Layer<CodegraphIndexer.Service> =>
+const makeMockIndexer = (calls?: { index: Array<{ paths: string[] }>; remove: Array<{ paths: string[] }> }): Layer.Layer<CodegraphIndexer.Service> =>
   Layer.succeed(
     CodegraphIndexer.Service,
     CodegraphIndexer.Service.of({
@@ -34,97 +23,172 @@ const makeMockIndexer = (): Layer.Layer<CodegraphIndexer.Service> =>
           skipped: 0,
           scannedFiles: 0,
           symbolsIndexed: 0,
-          skippedByReason: emptyReasons(),
+          skippedByReason: {
+            gitignored: 0,
+            banyanignored: 0,
+            artifact: 0,
+            tooLarge: 0,
+            minified: 0,
+            tooLargeParse: 0,
+            cached: 0,
+            readError: 0,
+            parseFailure: 0,
+          },
           parseErrors: [],
         }),
-      indexFiles: () => Effect.succeed({ indexed: 0, skipped: 0, parseErrors: [] }),
-      removeFiles: () => Effect.void,
+      applyChanges: () => Effect.succeed({ indexed: 0, removed: 0, skipped: 0, parseErrors: [] }),
+      indexFiles: (input) =>
+        Effect.sync(() => {
+          calls?.index.push({ paths: input.paths })
+          return { indexed: input.paths.length, skipped: 0, parseErrors: [] }
+        }),
+      removeFiles: (input) =>
+        Effect.sync(() => {
+          calls?.remove.push({ paths: input.paths })
+        }),
       cancel: () => Effect.void,
     }),
   )
 
-const makeBuildService = (running: boolean): Layer.Layer<CodegraphBuildService.Service> =>
+const makeBuildService = (starts: Array<{ root: string; excludePatterns?: readonly string[] }>, running = false): Layer.Layer<CodegraphBuildService.Service> =>
   Layer.succeed(
     CodegraphBuildService.Service,
     CodegraphBuildService.Service.of({
-      status: () =>
-        Effect.succeed({
-          status: running ? "running" : "idle",
-          done: 0,
-          total: 0,
-        } as CodegraphBuildService.State),
-      start: () => Effect.void,
+      status: () => Effect.succeed({ status: running ? "running" : "idle", done: 0, total: 0 } as CodegraphBuildService.State),
+      start: (input) =>
+        Effect.sync(() => {
+          starts.push({ root: input.root, ...(input.excludePatterns ? { excludePatterns: input.excludePatterns } : {}) })
+        }),
       cancel: () => Effect.void,
       forceKill: () => Effect.succeed({ ok: true, message: "noop" }),
       events: () => Effect.die("not used") as never,
     }),
   )
 
-describe("CodegraphAutoUpdate (state-only)", () => {
-  test("starts in idle status and reports idle when build service is idle", async () => {
+const makeRepo = (indexedRoot?: string): Layer.Layer<CodegraphRepo.Service> =>
+  Layer.succeed(
+    CodegraphRepo.Service,
+    CodegraphRepo.Service.of({ getMeta: () => Effect.succeed(indexedRoot ? ({ indexedRoot } as never) : undefined) } as CodegraphRepo.Interface),
+  )
+
+const makeConfig = (config: {
+  banyancode_codegraph_watch_debounce_ms?: number
+  banyancode_codegraph_exclude_patterns?: readonly string[]
+}): Layer.Layer<BanyanConfigService.Service> =>
+  Layer.succeed(
+    BanyanConfigService.Service,
+    BanyanConfigService.Service.of({ get: () => Effect.succeed(config as never) } as unknown as BanyanConfigService.Interface),
+  )
+
+const testLayer = (input: {
+  indexedRoot?: string
+  calls?: { index: Array<{ paths: string[] }>; remove: Array<{ paths: string[] }> }
+  starts?: Array<{ root: string; excludePatterns?: readonly string[] }>
+  config?: { banyancode_codegraph_watch_debounce_ms?: number; banyancode_codegraph_exclude_patterns?: readonly string[] }
+}) =>
+  CodegraphAutoUpdate.layer.pipe(
+    Layer.provideMerge(EventV2.defaultLayer),
+    Layer.provideMerge(makeMockIndexer(input.calls)),
+    Layer.provideMerge(makeRepo(input.indexedRoot)),
+    Layer.provideMerge(makeBuildService(input.starts ?? [])),
+    Layer.provideMerge(makeConfig(input.config ?? {})),
+  )
+
+describe("CodegraphAutoUpdate", () => {
+  test("starts in idle status and supports pause/resume", async () => {
     await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "auto.sqlite")
-    const dbLayer = Database.layerFromPath(dbPath)
-
-    const harnessLayer = Layer.mergeAll(makeMockIndexer(), makeBuildService(false))
-
-    const testLayer = CodegraphAutoUpdate.defaultLayer.pipe(
-      Layer.provide(EventV2.defaultLayer),
-      Layer.provide(codegraphRepoDefaultLayer),
-      Layer.provide(FSUtil.defaultLayer),
-      Layer.provide(harnessLayer),
-    )
-
+    const dbLayer = Database.layerFromPath(path.join(tmp.path, "auto.sqlite"))
     await Effect.runPromise(
       Effect.gen(function* () {
         const svc = yield* CodegraphAutoUpdate.Service
-        const initial = yield* svc.state()
-        expect(initial.status === "idle" || initial.status === "watching").toBe(true)
-        expect(initial.pending).toBe(0)
-
+        expect((yield* svc.state()).status).toBe("idle")
         yield* svc.resume()
-        yield* Effect.yieldNow
-        const afterResume = yield* svc.state()
-        expect(afterResume.pending).toBe(0)
-
+        expect((yield* svc.state()).pending).toBe(0)
         yield* svc.pause()
-        yield* Effect.yieldNow
-        const afterPause = yield* svc.state()
-        expect(afterPause.status).toBe("paused")
-      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped) as any,
+        expect((yield* svc.state()).status).toBe("paused")
+      }).pipe(Effect.provide(testLayer({})), Effect.provide(dbLayer), Effect.scoped) as any,
     )
   })
 
-  test("respects disable flag from config — no events processed when disabled", async () => {
+  test("publishes a matching synthetic watcher event and enters draining", async () => {
     await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "auto.sqlite")
-    const dbLayer = Database.layerFromPath(dbPath)
-
-    const harnessLayer = Layer.mergeAll(makeMockIndexer(), makeBuildService(false))
-
-    const testLayer = CodegraphAutoUpdate.defaultLayer.pipe(
-      Layer.provide(EventV2.defaultLayer),
-      Layer.provide(codegraphRepoDefaultLayer),
-      Layer.provide(FSUtil.defaultLayer),
-      Layer.provide(harnessLayer),
-    )
-
+    const root = path.join(tmp.path, "workspace")
+    const dbLayer = Database.layerFromPath(path.join(tmp.path, "auto.sqlite"))
+    const calls = { index: [], remove: [] } as { index: Array<{ paths: string[] }>; remove: Array<{ paths: string[] }> }
     await Effect.runPromise(
       Effect.gen(function* () {
-        const autoUpdate = yield* CodegraphAutoUpdate.Service
-        const state = yield* autoUpdate.state()
-        expect(state).toBeDefined()
-      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped) as any,
+        const svc = yield* CodegraphAutoUpdate.Service
+        const events = yield* EventV2.Service
+        yield* events.publish(
+          Watcher.Event.Updated,
+          { file: path.join(root, "src", "foo.ts"), event: "change" },
+          { location: { directory: root as never } },
+        )
+        yield* Effect.yieldNow
+        const state = yield* svc.state()
+        expect(state.status).toBe("draining")
+        expect(state.pending).toBe(1)
+        yield* Queue.take(svc.events())
+        const event = yield* Queue.take(svc.events())
+        expect(event.properties.pending).toBe(1)
+      }).pipe(Effect.provide(testLayer({ indexedRoot: root, calls, config: { banyancode_codegraph_watch_debounce_ms: 100 } })), Effect.provide(dbLayer), Effect.scoped) as any,
     )
   })
-})
 
-describe("CodegraphAutoUpdate (integration)", () => {
-  // Integration test omitted in v1: Watcher.locationLayer subscribes to Parcel
-  // which fires NodeFileSystem callbacks during test setup. Those callbacks
-  // resolve a Service that is not in scope at Parcel's invocation time,
-  // causing a runtime "Service not found" error. The auto-update layer is
-  // exercised through the state API above, and the watcher → indexer pipeline
-  // is exercised by codegraph-incremental.test.ts for indexer-level behavior.
-  test.skip("coalesces a burst of changes for the matching workspace into one indexFiles call", () => {})
+  test("trailing debounce coalesces events arriving 100ms apart", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "workspace")
+    const dbLayer = Database.layerFromPath(path.join(tmp.path, "auto.sqlite"))
+    const calls = { index: [], remove: [] } as { index: Array<{ paths: string[] }>; remove: Array<{ paths: string[] }> }
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const events = yield* EventV2.Service
+        const svc = yield* CodegraphAutoUpdate.Service
+        for (const file of ["a.ts", "b.ts"]) {
+          yield* events.publish(Watcher.Event.Updated, { file: path.join(root, file), event: "change" }, { location: { directory: root as never } })
+          yield* Effect.sleep(100)
+        }
+        yield* Effect.sleep(250)
+        expect(calls.index).toHaveLength(1)
+        expect(calls.index[0].paths).toHaveLength(2)
+        expect((yield* svc.state()).pending).toBe(0)
+      }).pipe(Effect.provide(testLayer({ indexedRoot: root, calls, config: { banyancode_codegraph_watch_debounce_ms: 100 } })), Effect.provide(dbLayer), Effect.scoped) as any,
+    )
+  })
+
+  test("delete grace turns unlink followed by add into one reindex", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "workspace")
+    const file = path.join(root, "atomic.ts")
+    const dbLayer = Database.layerFromPath(path.join(tmp.path, "auto.sqlite"))
+    const calls = { index: [], remove: [] } as { index: Array<{ paths: string[] }>; remove: Array<{ paths: string[] }> }
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const events = yield* EventV2.Service
+        yield* events.publish(Watcher.Event.Updated, { file, event: "unlink" }, { location: { directory: root as never } })
+        yield* Effect.sleep(120)
+        yield* events.publish(Watcher.Event.Updated, { file, event: "add" }, { location: { directory: root as never } })
+        yield* Effect.sleep(350)
+        expect(calls.remove).toHaveLength(0)
+        expect(calls.index).toHaveLength(1)
+        expect(calls.index[0].paths).toEqual([file])
+      }).pipe(Effect.provide(testLayer({ indexedRoot: root, calls, config: { banyancode_codegraph_watch_debounce_ms: 100 } })), Effect.provide(dbLayer), Effect.scoped) as any,
+    )
+  })
+
+  test("triggers an initial build when indexedRoot is absent", async () => {
+    await using tmp = await tmpdir()
+    const file = path.join(tmp.path, "foo", "bar.ts")
+    const starts: Array<{ root: string; excludePatterns?: readonly string[] }> = []
+    const dbLayer = Database.layerFromPath(path.join(tmp.path, "auto.sqlite"))
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const events = yield* EventV2.Service
+        yield* events.publish(Watcher.Event.Updated, { file, event: "add" }, { location: { directory: tmp.path as never } })
+        yield* Effect.sleep(150)
+        expect(starts).toHaveLength(1)
+        expect(starts[0].root).toBe(path.join(tmp.path, "foo"))
+      }).pipe(Effect.provide(testLayer({ starts, config: { banyancode_codegraph_watch_debounce_ms: 100 } })), Effect.provide(dbLayer), Effect.scoped) as any,
+    )
+  })
 })
