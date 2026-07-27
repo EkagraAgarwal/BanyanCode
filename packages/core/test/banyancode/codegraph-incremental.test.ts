@@ -33,6 +33,7 @@ describe("CodegraphIndexer.indexFiles", () => {
         const result1 = yield* indexer.indexFiles({ root: tmp.path, paths: [filePath] })
         expect(result1.indexed).toBe(1)
         expect(result1.skipped).toBe(0)
+        const versionAfterFirst = (yield* repo.getMeta())?.graphVersion ?? 0
 
         // Verify file is in the repo
         const file1 = yield* repo.getFileByPath(filePath)
@@ -43,6 +44,7 @@ describe("CodegraphIndexer.indexFiles", () => {
         const result2 = yield* indexer.indexFiles({ root: tmp.path, paths: [filePath] })
         expect(result2.indexed).toBe(0)
         expect(result2.skipped).toBe(1)
+        expect((yield* repo.getMeta())?.graphVersion ?? 0).toBe(versionAfterFirst)
 
         // Verify content_hash is unchanged (cache hit)
         const file2 = yield* repo.getFileByPath(filePath)
@@ -427,6 +429,111 @@ describe("CodegraphIndexer.indexFiles", () => {
         expect(yield* repo.getFileByPath(oversizedPath)).toBeUndefined()
         expect(yield* repo.getFileByPath(keepPath)).toBeDefined()
         expect(yield* repo.countFiles()).toBe(1)
+      }).pipe(
+        Effect.provide(serviceLayer),
+        Effect.provide(codegraphRepoDefaultLayer),
+        Effect.provide(dbLayer),
+        Effect.scoped,
+      ),
+    )
+  })
+
+  test("deleteDerivedEdgesForFiles preserves structural imports edges", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const utilPath = path.join(tmp.path, "util.ts")
+    await fs.writeFile(utilPath, "export function util() { return 1 }\n")
+
+    const serviceLayer = CodegraphIndexer.layer.pipe(
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(codegraphRepoDefaultLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo.Service
+
+        yield* repo.writeFileGraph({
+          file: { id: "f-util", path: utilPath, contentHash: "h", language: "typescript", indexedAt: Date.now() },
+          nodes: [
+            { id: "f-util:file", fileID: "f-util", kind: "file", name: "util.ts", startLine: 1, endLine: 1 },
+            { id: "f-util:function:util:1", fileID: "f-util", kind: "function", name: "util", startLine: 1, endLine: 1 },
+          ],
+          edges: [
+            { id: "f-util:file->f-util:function:util:1:imports", fromNodeID: "f-util:file", toNodeID: "f-util:function:util:1", kind: "imports" },
+            { id: "f-util:function:util:1->f-util:file:calls", fromNodeID: "f-util:function:util:1", toNodeID: "f-util:file", kind: "calls" },
+          ],
+        })
+        const utilFile = yield* repo.getFileByPath(utilPath)
+        expect(utilFile).toBeDefined()
+        if (!utilFile) return
+
+        yield* repo.deleteDerivedEdgesForFiles({ fileIDs: [utilFile.id] })
+        const edgesAfter = yield* repo.listAllEdges()
+        const importsAfter = edgesAfter.filter(
+          (edge) => edge.kind === "imports" && edge.fromNodeID === "f-util:file",
+        )
+        const callsAfter = edgesAfter.filter(
+          (edge) => edge.kind === "calls" && edge.fromNodeID === "f-util:function:util:1",
+        )
+        expect(importsAfter.length).toBeGreaterThan(0)
+        expect(callsAfter.length).toBe(0)
+      }).pipe(
+        Effect.provide(serviceLayer),
+        Effect.provide(codegraphRepoDefaultLayer),
+        Effect.provide(dbLayer),
+        Effect.scoped,
+      ),
+    )
+  })
+
+  test("derived references remain import-scoped", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const alphaPath = path.join(tmp.path, "alpha.ts")
+    const betaPath = path.join(tmp.path, "beta.ts")
+    const mainPath = path.join(tmp.path, "main.ts")
+    await fs.writeFile(alphaPath, "export function helper() { return 1 }\n")
+    await fs.writeFile(betaPath, "export function helper() { return 2 }\n")
+    await fs.writeFile(mainPath, "import { helper } from './alpha'\nexport function run() { return helper() }\n")
+
+    const serviceLayer = CodegraphIndexer.layer.pipe(
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(codegraphRepoDefaultLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* CodegraphIndexer.Service
+        const repo = yield* CodegraphRepo.Service
+
+        yield* indexer.indexFiles({ root: tmp.path, paths: [alphaPath, betaPath, mainPath] })
+        const mainFile = yield* repo.getFileByPath(mainPath)
+        const alphaFile = yield* repo.getFileByPath(alphaPath)
+        const betaFile = yield* repo.getFileByPath(betaPath)
+        expect(mainFile).toBeDefined()
+        expect(alphaFile).toBeDefined()
+        expect(betaFile).toBeDefined()
+        if (!mainFile || !alphaFile || !betaFile) return
+
+        const mainNodes = yield* repo.listNodesByFile(mainFile.id)
+        const alphaNodes = yield* repo.listNodesByFile(alphaFile.id)
+        const betaNodes = yield* repo.listNodesByFile(betaFile.id)
+        const run = mainNodes.find((node) => node.kind === "function" && node.name === "run")
+        const alphaHelper = alphaNodes.find((node) => node.kind === "function" && node.name === "helper")
+        const betaHelper = betaNodes.find((node) => node.kind === "function" && node.name === "helper")
+        expect(run).toBeDefined()
+        expect(alphaHelper).toBeDefined()
+        expect(betaHelper).toBeDefined()
+        if (!run || !alphaHelper || !betaHelper) return
+
+        const allEdges = yield* repo.listAllEdges()
+        expect(allEdges.some((edge) => edge.kind === "calls" && edge.fromNodeID === run.id && edge.toNodeID === alphaHelper.id)).toBe(true)
+        expect(allEdges.some((edge) => edge.kind === "calls" && edge.fromNodeID === run.id && edge.toNodeID === betaHelper.id)).toBe(false)
       }).pipe(
         Effect.provide(serviceLayer),
         Effect.provide(codegraphRepoDefaultLayer),

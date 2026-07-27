@@ -50,7 +50,7 @@ const makeMockRepo = (options: {
       listAllEdges: () => Effect.succeed([]),
       listEdgesByNode: () => Effect.succeed([]),
       deleteFile: () => Effect.void,
-      deleteDerivedEdgesForFiles: () => Effect.void,
+      deleteDerivedEdgesForFiles: () => Effect.succeed([]),
     writeFileGraph: () => Effect.void,
       clearAll: () => Effect.succeed({ sizeBefore: 0, sizeAfter: 0, droppedFile: false }),
       setMeta: () => Effect.void,
@@ -156,6 +156,45 @@ describe("EditPlanner", () => {
         expect(plan.expectedImpact.directDependents).toBe(1)
         expect(plan.expectedImpact.transitiveDependents).toBe(1)
         expect(plan.risks.length).toBeGreaterThanOrEqual(0)
+      }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("planBeforeEdit skips code_find when target is pre-resolved and filePath is provided", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const nodes = [targetNode]
+    const mockRepo = makeMockRepo({ nodes, files })
+    const mockAnalyzer = makeMockAnalyzer({
+      impactResult: {
+        dependents: [testFileNode],
+        transitive: [testFileNode],
+      },
+    })
+
+    const serviceLayer = editPlannerLayer.pipe(
+      Layer.provideMerge(mockRepo),
+      Layer.provideMerge(mockAnalyzer),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const planner = yield* EditPlanner.Service
+        const plan = yield* planner.planBeforeEdit({
+          targetSymbol: "myFunction",
+          changeKind: "modify",
+          filePath: "/src/myFunction.ts",
+          preResolvedTarget: targetNode,
+        })
+
+        expect(
+          plan.steps.some(
+            (step) => step.tool === "code_find" && (step.args as { intent?: string }).intent === "definition",
+          ),
+        ).toBe(false)
+        expect(plan.steps.some((step) => step.tool === "read")).toBe(true)
       }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
