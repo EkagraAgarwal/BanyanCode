@@ -90,10 +90,10 @@ async function setupHarness() {
 }
 
 describe("header status-pills (graph meta truth)", () => {
-  test("Graph: off when no build event has been seen", async () => {
+  test("Graph: not built when no build event has been seen", async () => {
     const { app, expectLabel } = await setupHarness()
     try {
-      await expectLabel("Graph: off")
+      await expectLabel("Graph: not built")
     } finally {
       app.renderer.destroy()
     }
@@ -148,6 +148,30 @@ describe("header status-pills (graph meta truth)", () => {
         graphCoverage: 0.9,
         graphBuiltAt: Date.now(),
         totalFiles: 10,
+      })
+      await expectLabel("Graph: built")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("Graph: built (green) on a fresh healthy completed build", async () => {
+    const { app, emit, expectLabel } = await setupHarness()
+    try {
+      // Phase 1: pin the success-side invariant with explicit healthy
+      // numbers. graphVersion=5 (not 1) + coverage=0.97 (well above the 0.5
+      // stale threshold) + totalFiles=100 + a fresh graphBuiltAt (within
+      // the 24h stale window) means the pill must land on `Graph: built`
+      // with the `success` (green) severity dot. If any of the new fields
+      // (`totalFiles`, `graphBuiltAt`) regresses out of the State schema
+      // and the build event payload, this test fails back to "not built"
+      // — exactly the bug we fixed.
+      emit("banyancode.codegraph.build", {
+        status: "completed",
+        graphVersion: 5,
+        graphCoverage: 0.97,
+        graphBuiltAt: Date.now(),
+        totalFiles: 100,
       })
       await expectLabel("Graph: built")
     } finally {

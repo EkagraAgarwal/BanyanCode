@@ -136,6 +136,14 @@ export interface Interface {
   // pass writes all edges, so the ranker can read the column instead of
   // running COUNT(*) per candidate.
   readonly recomputeInDegree: () => Effect.Effect<void, never, never>
+  /**
+   * Phase 2: refresh `indexed_at` on a batch of files in one update.
+   * Called by the indexer after the drain loop completes so cache-hit
+   * files get an updated `indexed_at` (without this, downstream time
+   * heuristics that compare mtime to indexed_at would fire forever on
+   * those files even though their content was unchanged).
+   */
+  readonly bumpIndexedAt: (input: { fileIDs: readonly string[]; indexedAt: number }) => Effect.Effect<void, never, never>
   readonly getMeta: () => Effect.Effect<CodegraphMeta | undefined, never, never>
   readonly setMeta: (m: CodegraphMeta) => Effect.Effect<void, never, never>
   readonly bumpVersion: (input: {
@@ -160,7 +168,18 @@ export interface Interface {
     /** Ignored. Kept for backward-compat with build-service callers. */
     totalEdges?: number
     indexedRoot?: string
-  }) => Effect.Effect<{ graphVersion: number; coverage: number; totalNodes: number; totalEdges: number }, never, never>
+  }) => Effect.Effect<
+    {
+      graphVersion: number
+      coverage: number
+      totalNodes: number
+      totalEdges: number
+      totalFiles: number
+      graphBuiltAt: number
+    },
+    never,
+    never
+  >
   readonly recordParseError: (input: { path: string; cause: string; indexedAt: number }) => Effect.Effect<void, unknown, never>
   readonly listParseErrors: () => Effect.Effect<Array<{ path: string; cause: string; indexedAt: number }>, never, never>
   readonly clearParseErrors: () => Effect.Effect<void, never, never>
@@ -917,6 +936,31 @@ export const layer = Layer.effect(
       `).pipe(Effect.orDie)
     })
 
+    // Phase 2: refresh `indexed_at` on a batch of files. Used by the
+    // indexer after the parse loop so cache-hit files stop looking "stale"
+    // to any consumer that compares mtime to indexed_at. One batched
+    // UPDATE avoids per-file round trips.
+    const bumpIndexedAt = Effect.fn("CodegraphRepo.bumpIndexedAt")(function* (input: {
+      fileIDs: readonly string[]
+      indexedAt: number
+    }) {
+      if (input.fileIDs.length === 0) return
+      const chunkSize = 900
+      yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          for (let i = 0; i < input.fileIDs.length; i += chunkSize) {
+            const chunk = input.fileIDs.slice(i, i + chunkSize)
+            yield* tx
+              .update(CodegraphFilesTable)
+              .set({ indexed_at: input.indexedAt })
+              .where(inArray(CodegraphFilesTable.id, chunk))
+              .run()
+              .pipe(Effect.orDie)
+          }
+        }),
+      ).pipe(Effect.orDie)
+    })
+
     const bumpVersion = Effect.fn("CodegraphRepo.bumpVersion")(function* (input: {
       eligibleFiles?: number
       scannedFiles?: number
@@ -1008,7 +1052,18 @@ export const layer = Layer.effect(
             .run()
             .pipe(Effect.orDie)
 
-          return { graphVersion: nextVersion, coverage, totalNodes, totalEdges }
+          return {
+            graphVersion: nextVersion,
+            coverage,
+            totalNodes,
+            totalEdges,
+            // Phase 1: surface the meta row fields the status pill needs so the
+            // terminal publish doesn't have to re-read them from the DB. The
+            // build event already knows totalFiles/graphBuiltAt at this point
+            // because they were just written into `CodegraphMeta` above.
+            totalFiles: totalFilesInGraph,
+            graphBuiltAt: meta.graphBuiltAt,
+          }
         })
       ).pipe(Effect.orDie)
     })
@@ -1344,6 +1399,7 @@ export const layer = Layer.effect(
       lookupByServiceTag,
       rebuildFtsIndex,
       recomputeInDegree,
+      bumpIndexedAt,
     })
   }),
 )

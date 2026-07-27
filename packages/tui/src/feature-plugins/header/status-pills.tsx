@@ -70,8 +70,38 @@ export function View(props: { api: TuiPluginApi }) {
     }
   }
 
+  // Phase 1: hydrate the graph meta signals on mount so a TUI restart shows
+  // the real pill state instead of falling through to "Graph: not built"
+  // until the next build event lands. The same codegraph.nodes endpoint
+  // that the sidebar/inspector/tab-graph views already use returns the
+  // CodegraphMeta alongside the node list, so we piggyback on it.
+  const refreshGraphMeta = async () => {
+    try {
+      const result = await props.api.client.global.codegraph.nodes()
+      const meta = result?.data?.meta
+      if (!meta) return
+      setLastBuildStatus("completed")
+      setLastBuildMeta((current) => ({
+        graphVersion:
+          typeof meta.graphVersion === "number" ? meta.graphVersion : current.graphVersion,
+        graphCoverage:
+          typeof meta.graphCoverage === "number" ? meta.graphCoverage : current.graphCoverage,
+        graphBuiltAt:
+          typeof meta.graphBuiltAt === "number" ? meta.graphBuiltAt : current.graphBuiltAt,
+        totalFiles:
+          typeof meta.totalFiles === "number" ? meta.totalFiles : current.totalFiles,
+      }))
+    } catch {
+      // Codegraph disabled / no DB yet / server not ready — leave the
+      // pill in its default "not built" state. We do NOT mark this as
+      // a failure because `banyancode_codegraph_enabled === false` is
+      // handled by the explicit disabled branch above.
+    }
+  }
+
   onMount(() => {
     refreshSessionCount()
+    refreshGraphMeta()
   })
 
   const mcpList = createMemo(() => props.api.state.mcp())
@@ -116,7 +146,13 @@ const graphState = createMemo<{ label: string; severity: Exclude<Severity, "neut
   if (hasGraph && meta.graphCoverage >= 0.5 && lastBuildStatus() === "completed") {
     return { label: "Graph: built", severity: "success" }
   }
-  return { label: "Graph: off", severity: "error" }
+  // Phase 1: rename "off" → "not built". The pill never claims the feature is
+  // missing; it just hasn't been built yet. Both `graphVersion === 0` (no
+  // build has ever run) and `totalFiles === 0` (a build wrote nothing to
+  // the file table) fall through here. Distinct from "disabled", which is
+  // reserved for the explicit `banyancode_codegraph_enabled === false` case
+  // checked above.
+  return { label: "Graph: not built", severity: "error" }
 })
 const graphLabel = () => graphState().label
 

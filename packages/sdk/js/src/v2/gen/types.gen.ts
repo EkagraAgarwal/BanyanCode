@@ -63,13 +63,15 @@ export type Event =
   | EventPtyUpdated
   | EventPtyExited
   | EventPtyDeleted
+  | EventBanyancodeConfigUpdated
+  | EventBanyancodeMeshStatus
   | EventBanyancodeMemoryCommitted
   | EventBanyancodeMemoryCandidateEmitted
   | EventBanyancodeMemoryPromoted
   | EventBanyancodeMemoryRejected
   | EventBanyancodeCodegraphBuild
   | EventBanyancodeCodegraphAutoUpdate
-  | EventBanyancodeMeshStatus
+  | EventBanyancodeCodegraphAutoUpdateProgress
   | EventBanyancodeSystemUpdated
   | EventQuestionV2Asked
   | EventQuestionV2Replied
@@ -1352,6 +1354,43 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "banyancode.config.updated"
+        properties: {
+          scope?: string
+        }
+      }
+    | {
+        id: string
+        type: "banyancode.mesh.status"
+        properties: {
+          parentSessionID: string
+          peers: Array<{
+            sessionID: string
+            agent: string
+            status: "active" | "idle" | "disconnected"
+            lastSeenAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            tokens?: {
+              input: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              output: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              reasoning: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              cache: {
+                read: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                write: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              }
+            }
+            lastActivityAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            blockedReason?: string
+          }>
+          pendingMessages: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          recentActivity: Array<{
+            from: string
+            at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }>
+        }
+      }
+    | {
+        id: string
         type: "banyancode.memory.committed"
         properties: {
           id: string
@@ -1410,6 +1449,8 @@ export type GlobalEvent = {
           currentlyParsing?: string
           graphVersion?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           graphCoverage?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          totalFiles?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          graphBuiltAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           result?: {
             indexed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
             skipped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -1446,32 +1487,15 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "banyancode.mesh.status"
+        type: "banyancode.codegraph.auto-update.progress"
         properties: {
-          parentSessionID: string
-          peers: Array<{
-            sessionID: string
-            agent: string
-            status: "active" | "idle" | "disconnected"
-            lastSeenAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            tokens?: {
-              input: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-              output: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-              reasoning: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-              cache: {
-                read: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-                write: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-              }
-            }
-            lastActivityAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            blockedReason?: string
-          }>
-          pendingMessages: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          recentActivity: Array<{
-            from: string
-            at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          }>
+          status: "idle" | "watching" | "draining" | "paused"
+          pending: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          lastChangeAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          phase?: "preparing" | "indexing" | "removing" | "done"
+          completed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          total?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          currentFile?: string
         }
       }
     | {
@@ -5622,6 +5646,45 @@ export type EventPtyDeleted = {
   }
 }
 
+export type EventBanyancodeConfigUpdated = {
+  id: string
+  type: "banyancode.config.updated"
+  properties: {
+    scope?: string
+  }
+}
+
+export type EventBanyancodeMeshStatus = {
+  id: string
+  type: "banyancode.mesh.status"
+  properties: {
+    parentSessionID: string
+    peers: Array<{
+      sessionID: string
+      agent: string
+      status: "active" | "idle" | "disconnected"
+      lastSeenAt: number | "NaN" | "Infinity" | "-Infinity"
+      cost?: number | "NaN" | "Infinity" | "-Infinity"
+      tokens?: {
+        input: number | "NaN" | "Infinity" | "-Infinity"
+        output: number | "NaN" | "Infinity" | "-Infinity"
+        reasoning: number | "NaN" | "Infinity" | "-Infinity"
+        cache: {
+          read: number | "NaN" | "Infinity" | "-Infinity"
+          write: number | "NaN" | "Infinity" | "-Infinity"
+        }
+      }
+      lastActivityAt?: number | "NaN" | "Infinity" | "-Infinity"
+      blockedReason?: string
+    }>
+    pendingMessages: number | "NaN" | "Infinity" | "-Infinity"
+    recentActivity: Array<{
+      from: string
+      at: number | "NaN" | "Infinity" | "-Infinity"
+    }>
+  }
+}
+
 export type EventBanyancodeMemoryCommitted = {
   id: string
   type: "banyancode.memory.committed"
@@ -5686,6 +5749,8 @@ export type EventBanyancodeCodegraphBuild = {
     currentlyParsing?: string
     graphVersion?: number | "NaN" | "Infinity" | "-Infinity"
     graphCoverage?: number | "NaN" | "Infinity" | "-Infinity"
+    totalFiles?: number | "NaN" | "Infinity" | "-Infinity"
+    graphBuiltAt?: number | "NaN" | "Infinity" | "-Infinity"
     result?: {
       indexed: number | "NaN" | "Infinity" | "-Infinity"
       skipped: number | "NaN" | "Infinity" | "-Infinity"
@@ -5722,34 +5787,17 @@ export type EventBanyancodeCodegraphAutoUpdate = {
   }
 }
 
-export type EventBanyancodeMeshStatus = {
+export type EventBanyancodeCodegraphAutoUpdateProgress = {
   id: string
-  type: "banyancode.mesh.status"
+  type: "banyancode.codegraph.auto-update.progress"
   properties: {
-    parentSessionID: string
-    peers: Array<{
-      sessionID: string
-      agent: string
-      status: "active" | "idle" | "disconnected"
-      lastSeenAt: number | "NaN" | "Infinity" | "-Infinity"
-      cost?: number | "NaN" | "Infinity" | "-Infinity"
-      tokens?: {
-        input: number | "NaN" | "Infinity" | "-Infinity"
-        output: number | "NaN" | "Infinity" | "-Infinity"
-        reasoning: number | "NaN" | "Infinity" | "-Infinity"
-        cache: {
-          read: number | "NaN" | "Infinity" | "-Infinity"
-          write: number | "NaN" | "Infinity" | "-Infinity"
-        }
-      }
-      lastActivityAt?: number | "NaN" | "Infinity" | "-Infinity"
-      blockedReason?: string
-    }>
-    pendingMessages: number | "NaN" | "Infinity" | "-Infinity"
-    recentActivity: Array<{
-      from: string
-      at: number | "NaN" | "Infinity" | "-Infinity"
-    }>
+    status: "idle" | "watching" | "draining" | "paused"
+    pending: number | "NaN" | "Infinity" | "-Infinity"
+    lastChangeAt?: number | "NaN" | "Infinity" | "-Infinity"
+    phase?: "preparing" | "indexing" | "removing" | "done"
+    completed?: number | "NaN" | "Infinity" | "-Infinity"
+    total?: number | "NaN" | "Infinity" | "-Infinity"
+    currentFile?: string
   }
 }
 
@@ -6896,8 +6944,16 @@ export type GlobalBlastRadiusResponses = {
     transitiveCallers: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     filesAffected: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     testsToRun: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    risk: "low" | "medium" | "high"
+    risk: "low" | "medium" | "high" | "unknown"
     graphStale?: boolean
+    resolved: boolean
+    resolutionDerivation?:
+      | "tag-fallback"
+      | "name-exact"
+      | "qualified-split"
+      | "code-substring"
+      | "name-like"
+      | "fts-bm25"
   }
 }
 

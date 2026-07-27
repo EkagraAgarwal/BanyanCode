@@ -19,6 +19,13 @@ export const State = Schema.Struct({
   currentlyParsing: Schema.optional(Schema.String),
   graphVersion: Schema.optional(Schema.Number),
   graphCoverage: Schema.optional(Schema.Number),
+  // Phase 1: the status pill needs both fields to decide between
+  // "Graph: not built" and "Graph: built". `totalFiles` is the numerator for
+  // the pill's `hasGraph` check; `graphBuiltAt` powers the staleness window.
+  // Both come from the `CodegraphMeta` row that `bumpVersion` writes and the
+  // sequencing fiber re-reads via `repo.getMeta()` after the build completes.
+  totalFiles: Schema.optional(Schema.Number),
+  graphBuiltAt: Schema.optional(Schema.Number),
   result: Schema.optional(
     Schema.Struct({
       indexed: Schema.Number,
@@ -156,13 +163,17 @@ export const layer = Layer.effect(
           // eligibleFiles so graphCoverage uses the same formula on both
           // the full build path here and the incremental applyChanges
           // path. bumpVersion derives totalNodes/totalEdges internally.
-          const { graphVersion, coverage, totalNodes, totalEdges } = yield* repo.bumpVersion({
-            eligibleFiles: result.eligibleFiles,
-            scannedFiles: result.scannedFiles,
-            indexedRoot: input.root,
-          })
+          // Phase 1: also surface totalFiles and graphBuiltAt so the
+          // terminal publish can populate the status pill's `hasGraph`
+          // check without re-reading `repo.getMeta()` after the bump.
+          const { graphVersion, coverage, totalNodes, totalEdges, totalFiles, graphBuiltAt } =
+            yield* repo.bumpVersion({
+              eligibleFiles: result.eligibleFiles,
+              scannedFiles: result.scannedFiles,
+              indexedRoot: input.root,
+            })
 
-          return { result, graphVersion, coverage, totalNodes, totalEdges }
+          return { result, graphVersion, coverage, totalNodes, totalEdges, totalFiles, graphBuiltAt }
         })
 
         // Fork into the runtime's global scope (not the request scope). The fork
@@ -199,6 +210,13 @@ export const layer = Layer.effect(
             // Read state from Ref to preserve lastCompletedFile / currentlyParsing /
             // lastProgressAt set by the last onProgress callback. Spreading
             // `current` first means those fields survive into the terminal state.
+            // Phase 1: totalFiles / graphBuiltAt come from the worker's
+            // `bumpVersion` return value (which is exactly the CodegraphMeta
+            // row it just wrote). Setting them AFTER the `...current` spread
+            // is deliberate: an earlier `onProgress` snapshot may have an
+            // undefined or stale value for these fields, and the freshest
+            // truth lives on `outcome`. Per AGENTS.md: success-only — the
+            // failed branch deliberately leaves them unset.
             const terminal: State = outcome.kind === "completed"
               ? {
                   ...current,
@@ -207,6 +225,8 @@ export const layer = Layer.effect(
                   total: outcome.result.indexed + outcome.result.skipped,
                   graphVersion: outcome.graphVersion,
                   graphCoverage: outcome.coverage,
+                  totalFiles: outcome.totalFiles,
+                  graphBuiltAt: outcome.graphBuiltAt,
                   result: {
                     indexed: outcome.result.indexed,
                     skipped: outcome.result.skipped,
