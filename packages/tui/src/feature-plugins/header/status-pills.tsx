@@ -10,11 +10,16 @@ export * as HeaderStatusPills from "./status-pills"
 
 const id = "internal:header-status-pills"
 
-function View(props: { api: TuiPluginApi }) {
+export function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
   const [activeSessionCount, setActiveSessionCount] = createSignal<number>(0)
-  const [graphBuilt, setGraphBuilt] = createSignal<boolean>(false)
-  const [buildStatus, setBuildStatus] = createSignal<"idle" | "running" | "completed" | "failed">("idle")
+  const [lastBuildStatus, setLastBuildStatus] = createSignal<"idle" | "running" | "completed" | "failed">("idle")
+  const [lastBuildMeta, setLastBuildMeta] = createSignal({
+    graphVersion: 0,
+    graphCoverage: 0,
+    graphBuiltAt: 0,
+    totalFiles: 0,
+  })
   const [syncStatus, setSyncStatus] = createSignal<"idle" | "watching" | "draining" | "paused">("idle")
   const [syncPending, setSyncPending] = createSignal<number>(0)
 
@@ -25,11 +30,19 @@ function View(props: { api: TuiPluginApi }) {
   const unsubGraph = ev.on("banyancode.codegraph.build" as any, (evt: any) => {
     const status = evt.properties?.status
     if (status === "idle" || status === "running" || status === "completed" || status === "failed") {
-      setBuildStatus(status)
+      setLastBuildStatus(status)
     }
-    if (status === "cancelled") setBuildStatus("idle")
-    if (status === "stuck") setBuildStatus("running")
-    if (status === "completed") void checkGraph()
+    if (status === "cancelled") setLastBuildStatus("idle")
+    if (status === "stuck") setLastBuildStatus("running")
+    setLastBuildMeta((meta) => ({
+      graphVersion: typeof evt.properties?.graphVersion === "number" ? evt.properties.graphVersion : meta.graphVersion,
+      graphCoverage: typeof evt.properties?.graphCoverage === "number" ? evt.properties.graphCoverage : meta.graphCoverage,
+      graphBuiltAt:
+        typeof evt.properties?.graphBuiltAt === "number" || typeof evt.properties?.graphBuiltAt === "string"
+          ? new Date(evt.properties.graphBuiltAt).getTime()
+          : meta.graphBuiltAt,
+      totalFiles: typeof evt.properties?.totalFiles === "number" ? evt.properties.totalFiles : meta.totalFiles,
+    }))
   })
   onCleanup(unsubGraph)
 
@@ -41,16 +54,6 @@ function View(props: { api: TuiPluginApi }) {
     setSyncPending(typeof evt.properties?.pending === "number" ? evt.properties.pending : 0)
   })
   onCleanup(unsubSync)
-
-  const checkGraph = async () => {
-    try {
-      const nodesResult = await props.api.client.global.codegraph.nodes()
-      const hasNodes = (nodesResult.data?.nodes?.length ?? 0) > 0
-      setGraphBuilt(hasNodes)
-    } catch {
-      setGraphBuilt(false)
-    }
-  }
 
   const refreshSessionCount = async () => {
     try {
@@ -69,7 +72,6 @@ function View(props: { api: TuiPluginApi }) {
 
   onMount(() => {
     refreshSessionCount()
-    checkGraph()
   })
 
   const mcpList = createMemo(() => props.api.state.mcp())
@@ -95,11 +97,25 @@ const lspEnabled = createMemo(() => {
 const agentsLabel = () => `${activeSessionCount()} active`
 const mcpLabel = () => (mcpConnectedCount() > 0 ? `MCP: ${mcpFirstConnected()}` : "MCP: —")
 const graphState = createMemo<{ label: string; severity: Exclude<Severity, "neutral"> }>(() => {
-  if (buildStatus() === "running") return { label: "Graph: building", severity: "info" }
-  if (buildStatus() === "failed") return { label: "Graph: build failed", severity: "error" }
-  if (syncStatus() === "draining") return { label: `Graph: syncing (${syncPending()})`, severity: "info" }
+  if ((props.api.state.banyanConfig as any)?.banyancode_codegraph_enabled === false) {
+    return { label: "Graph: disabled", severity: "error" }
+  }
+  if (lastBuildStatus() === "running") return { label: "Graph: building", severity: "info" }
+  if (lastBuildStatus() === "failed") return { label: "Graph: build failed", severity: "error" }
+  if (syncStatus() === "draining" && syncPending() > 0) {
+    return { label: `Graph: syncing (${syncPending()})`, severity: "info" }
+  }
   if (syncStatus() === "paused") return { label: "Graph: paused", severity: "warning" }
-  if (syncStatus() === "watching" && graphBuilt()) return { label: "Graph: built", severity: "success" }
+  const meta = lastBuildMeta()
+  const hasGraph = meta.graphVersion > 0 && meta.totalFiles > 0
+  const oldAndIdle =
+    meta.graphBuiltAt > 0 && Date.now() - meta.graphBuiltAt > 24 * 60 * 60 * 1000 && syncStatus() === "idle"
+  if (hasGraph && (meta.graphCoverage < 0.5 || oldAndIdle)) {
+    return { label: "Graph: stale", severity: "warning" }
+  }
+  if (hasGraph && meta.graphCoverage >= 0.5 && lastBuildStatus() === "completed") {
+    return { label: "Graph: built", severity: "success" }
+  }
   return { label: "Graph: off", severity: "error" }
 })
 const graphLabel = () => graphState().label
