@@ -1,8 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import { createSignal } from "solid-js"
-import HeaderStatusPills from "../../../src/feature-plugins/header/status-pills"
+import { View } from "../../../src/feature-plugins/header/status-pills"
 import { createTuiPluginApi } from "../../fixture/tui-plugin"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { TestTuiContexts } from "../../fixture/tui-environment"
@@ -31,109 +30,162 @@ const stubTheme = {
   borderActive: RGBA.fromInts(100, 100, 100),
 }
 
-describe("header status-pills", () => {
-  test("updates the graph label from build and auto-update events", async () => {
-    const events = createEventSource()
-    const calls = createFetch()
-    const config = createTuiResolvedConfig()
-    const [slotContent, setSlotContent] = createSignal<any>(null)
-    let graphNodes: Array<{ id: string }> = []
+async function setupHarness() {
+  const events = createEventSource()
+  const calls = createFetch()
+  const baseApi = createTuiPluginApi({}) as any
+  const api: any = {
+    ...baseApi,
+    theme: { current: stubTheme },
+    state: {
+      ...(baseApi.state ?? {}),
+      session: { get: () => undefined },
+      session_status: {},
+      path: { directory: "/test/workspace" },
+      mcp: () => [{ name: "test-mcp", status: "connected" }],
+      lsp: () => [],
+    },
+    client: {
+      session: { list: async () => ({ data: [] }) },
+    },
+  }
 
-    const Inner = () => {
-      const api: any = {
-        ...createTuiPluginApi({}),
-        theme: { current: stubTheme },
-        state: {
-          session: { get: () => undefined },
-          session_status: {},
-          path: { directory: "/test/workspace" },
-          mcp: () => [{ name: "test-mcp", status: "connected" }],
-          lsp: () => [],
-        },
-        client: {
-          session: {
-            list: async () => ({ data: [{ id: "1" }, { id: "2" }] }),
-          },
-          global: {
-            codegraph: {
-              nodes: async () => ({ data: { nodes: graphNodes } }),
-            },
-          },
-        },
-      }
-      api.slots = {
-        register: (plugin: any) => {
-          if (!plugin?.slots?.app_top) return () => {}
-          setSlotContent(() => plugin.slots.app_top())
-          return () => {}
-        },
-      }
-      void HeaderStatusPills.tui(api as any, undefined as any, { id: "test" } as any)
+  const Harness = () => (
+    <TestTuiContexts>
+      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+        <TuiConfigProvider config={createTuiResolvedConfig()}>
+          <KVProvider>
+            <ThemeProvider mode="dark">
+              <box width={120} height={4}>
+                <View api={api} />
+              </box>
+            </ThemeProvider>
+          </KVProvider>
+        </TuiConfigProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  )
 
-      return <box>{slotContent()}</box>
+  const app = await testRender(() => <Harness />, { width: 120, height: 4 })
+  let eventID = 0
+  const emit = (type: string, properties: Record<string, unknown>) => {
+    eventID += 1
+    events.emit({
+      directory,
+      payload: { id: `evt_${eventID}`, type, properties },
+    } as any)
+  }
+  const expectLabel = async (label: string) => {
+    let frame = ""
+    for (let i = 0; i < 100; i++) {
+      await app.renderOnce()
+      frame = app.captureCharFrame()
+      if (frame.includes(label)) break
+      await Bun.sleep(25)
     }
+    expect(frame).toContain(label)
+  }
+  await Bun.sleep(100)
+  return { app, emit, expectLabel }
+}
 
-    const Harness = () => (
-      <TestTuiContexts>
-        <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
-          <TuiConfigProvider config={config}>
-            <KVProvider>
-              <ThemeProvider mode="dark">
-                <Inner />
-              </ThemeProvider>
-            </KVProvider>
-          </TuiConfigProvider>
-        </SDKProvider>
-      </TestTuiContexts>
-    )
-
-    const app = await testRender(() => <Harness />, { width: 100, height: 4 })
-    let eventID = 0
-    const emit = (type: string, properties: Record<string, unknown>) => {
-      eventID += 1
-      events.emit({
-        directory,
-        payload: {
-          id: `evt_graph_status_${eventID}`,
-          type,
-          properties,
-        } as any,
-      })
-    }
-    const expectLabel = async (label: string) => {
-      let frame = ""
-      for (let i = 0; i < 50; i++) {
-        await app.renderOnce()
-        frame = app.captureCharFrame()
-        if (frame.includes(label)) break
-        await Bun.sleep(10)
-      }
-      expect(frame).toContain(label)
-    }
-
+describe("header status-pills (graph meta truth)", () => {
+  test("Graph: off when no build event has been seen", async () => {
+    const { app, expectLabel } = await setupHarness()
     try {
-      await Bun.sleep(20)
       await expectLabel("Graph: off")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 
-      emit("banyancode.codegraph.build", { status: "running", done: 0, total: 10 })
+  test("Graph: building during a running build", async () => {
+    const { app, emit, expectLabel } = await setupHarness()
+    try {
+      emit("banyancode.codegraph.build", { status: "running", done: 4, total: 10 })
       await expectLabel("Graph: building")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 
-      emit("banyancode.codegraph.build", { status: "failed", done: 4, total: 10 })
+  test("Graph: build failed after a failed build", async () => {
+    const { app, emit, expectLabel } = await setupHarness()
+    try {
+      emit("banyancode.codegraph.build", { status: "failed", done: 4, total: 10, error: "boom" })
       await expectLabel("Graph: build failed")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 
-      emit("banyancode.codegraph.build", { status: "idle", done: 0, total: 0 })
-      emit("banyancode.codegraph.auto-update", { status: "draining", pending: 5 })
-      await expectLabel("Graph: syncing (5)")
+  test("Graph: syncing (3) during a draining auto-update with pending=3", async () => {
+    const { app, emit, expectLabel } = await setupHarness()
+    try {
+      emit("banyancode.codegraph.auto-update", { status: "draining", pending: 3 })
+      await expectLabel("Graph: syncing (3)")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 
+  test("Graph: paused when auto-update is paused", async () => {
+    const { app, emit, expectLabel } = await setupHarness()
+    try {
       emit("banyancode.codegraph.auto-update", { status: "paused", pending: 0 })
       await expectLabel("Graph: paused")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 
-      emit("banyancode.codegraph.auto-update", { status: "watching", pending: 0 })
-      graphNodes = [{ id: "node_test" }]
-      emit("banyancode.codegraph.build", { status: "completed", done: 10, total: 10 })
-      await Bun.sleep(200)
-      await app.renderOnce()
-      expect(app.captureCharFrame()).toContain("Graph: built")
+  test("regression: Graph: built from meta truth even when auto-update is idle", async () => {
+    const { app, emit, expectLabel } = await setupHarness()
+    try {
+      emit("banyancode.codegraph.build", {
+        status: "completed",
+        graphVersion: 1,
+        graphCoverage: 0.9,
+        graphBuiltAt: Date.now(),
+        totalFiles: 10,
+      })
+      await expectLabel("Graph: built")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("Graph: stale when graphBuiltAt is > 24h old and auto-update is idle", async () => {
+    const { app, emit, expectLabel } = await setupHarness()
+    try {
+      const oldTimestamp = Date.now() - 25 * 60 * 60 * 1000
+      emit("banyancode.codegraph.build", {
+        status: "completed",
+        graphVersion: 1,
+        graphCoverage: 0.9,
+        graphBuiltAt: oldTimestamp,
+        totalFiles: 10,
+      })
+      emit("banyancode.codegraph.auto-update", { status: "idle", pending: 0 })
+      await expectLabel("Graph: stale")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("priority: a running build event overrides a previous completed state", async () => {
+    const { app, emit, expectLabel } = await setupHarness()
+    try {
+      emit("banyancode.codegraph.build", {
+        status: "completed",
+        graphVersion: 1,
+        graphCoverage: 0.9,
+        graphBuiltAt: Date.now(),
+        totalFiles: 10,
+      })
+      await expectLabel("Graph: built")
+      emit("banyancode.codegraph.build", { status: "running" })
+      await expectLabel("Graph: building")
     } finally {
       app.renderer.destroy()
     }
