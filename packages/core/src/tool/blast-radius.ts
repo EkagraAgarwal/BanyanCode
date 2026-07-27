@@ -6,6 +6,7 @@ import path from "path"
 import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import type { Interface as CodegraphAnalyzerInterface } from "../banyancode/codegraph-analyzer"
 import type { Interface as CodegraphReadinessInterface } from "../banyancode/codegraph-readiness"
+import type { Interface as RepositoryIntelligenceInterface } from "../banyancode/repository-intelligence/service"
 import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan, isStale } from "../banyancode"
 import { GraphMeta } from "../banyancode/types"
@@ -70,6 +71,7 @@ export const computeBlastRadius = (
   deps: {
     readonly repo: CodegraphRepoInterface
     readonly analyzer: CodegraphAnalyzerInterface
+    readonly intel: RepositoryIntelligenceInterface
   },
   input: typeof Input.Type,
 ): Effect.Effect<typeof Output.Type, never, never> =>
@@ -83,6 +85,7 @@ export const computeBlastRadius = (
     const resolved = yield* resolveGraphTargetPure(deps.repo, { target: input.target })
     const isResolved = resolved._tag === "Ok"
     const resolvedNodeID = isResolved ? resolved.value.nodeID : undefined
+    const resolvedPrimaryName = isResolved ? resolved.value.node.name : undefined
     const resolutionDerivation = isResolved ? resolved.value.derivation : undefined
 
     const impact = yield* deps.analyzer
@@ -108,7 +111,23 @@ export const computeBlastRadius = (
       if (p) filePaths.push(p)
     }
 
-    const testsToRun = filePaths.filter((p) => TEST_PATH.test(p)).length
+    // Phase 2: align `testsToRun` with preflight. Caller-path tests alone
+    // undercount when the resolver found a symbol with sparse edges
+    // (Issue #2: blast_radius=0 vs preflight=181 on the same target).
+    // Union in the broader `intel.tests({ symbol })` result so the two
+    // tools agree for the same target.
+    const testFileIDs = new Set<string>()
+    for (const p of filePaths) {
+      if (TEST_PATH.test(p)) {
+        const id = [...filePathByID.entries()].find(([, path]) => path === p)?.[0]
+        if (id) testFileIDs.add(id)
+      }
+    }
+    if (resolvedPrimaryName) {
+      const testsList = yield* deps.intel.tests({ symbol: resolvedPrimaryName })
+      for (const t of testsList.tests) testFileIDs.add(t.fileID)
+    }
+    const testsToRun = testFileIDs.size
     const transitiveCount = input.maxDepth ? Math.min(impact.transitive.length, BFS_MAX) : impact.transitive.length
 
     const metaRow = yield* deps.repo.getMeta()
@@ -140,13 +159,15 @@ export const makeBlastRadiusTool = (deps: {
   readonly permission: PermissionV2Interface
   readonly repo: CodegraphRepoInterface
   readonly analyzer: CodegraphAnalyzerInterface
+  readonly intel: RepositoryIntelligenceInterface
   readonly readiness: CodegraphReadinessInterface
 }) =>
   Tool.make({
     description:
       "Use when:\n" +
       "  a lightweight, count-only blast-radius read of a symbol — direct + transitive\n" +
-      "  dependents, files touched, tests to run, and a single-word risk verdict.\n" +
+      "  dependents, files touched, tests referencing the target by name/import OR\n" +
+      "  living in the caller file set, and a single-word risk verdict.\n" +
       "Examples\n" +
       '  - "How risky is changing MemoryRepo?"\n' +
       '  - "Rough blast radius of Permission.evaluate"\n' +
@@ -190,7 +211,7 @@ export const makeBlastRadiusTool = (deps: {
           if (ready.reason === "failed") {
             yield* Effect.logWarning(`blast_radius: readiness failed: ${ready.error ?? "unknown"}`)
           }
-          return yield* computeBlastRadius({ repo: deps.repo, analyzer: deps.analyzer }, input)
+          return yield* computeBlastRadius({ repo: deps.repo, analyzer: deps.analyzer, intel: deps.intel }, input)
         }),
       ).pipe(
         Effect.mapError((err) =>
@@ -206,6 +227,7 @@ export const locationLayer = Layer.effectDiscard(
     const permission = yield* PermissionV2.Service
     const repo = yield* Banyan.CodegraphRepo
     const analyzer = yield* Banyan.CodegraphAnalyzer
+    const intel = yield* Banyan.RepositoryIntelligence
     const readiness = yield* Banyan.CodegraphReadiness
 
     yield* tools
@@ -214,6 +236,7 @@ export const locationLayer = Layer.effectDiscard(
           permission: permission as PermissionV2Interface,
           repo: repo as CodegraphRepoInterface,
           analyzer: analyzer as CodegraphAnalyzerInterface,
+          intel: intel as RepositoryIntelligenceInterface,
           readiness: readiness as CodegraphReadinessInterface,
         }),
       })

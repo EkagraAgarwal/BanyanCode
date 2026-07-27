@@ -4,6 +4,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import { CodegraphRepo, defaultLayer as codegraphRepoDefaultLayer } from "../../src/banyancode/codegraph-repo"
 import { CodegraphAnalyzer, defaultLayer as codegraphAnalyzerDefaultLayer } from "../../src/banyancode/codegraph-analyzer"
+import type { Interface as RepositoryIntelligenceInterface } from "../../src/banyancode/repository-intelligence/service"
 import { RepositoryIntelligence, defaultLayer as repositoryIntelligenceDefaultLayer } from "../../src/banyancode/repository-intelligence"
 import { computeBlastRadius } from "../../src/tool/blast-radius"
 import { computePreflight } from "../../src/tool/preflight"
@@ -161,7 +162,18 @@ describe("stale-graph signal integration with tools", () => {
     const testEff = Effect.gen(function* () {
       const repo = yield* CodegraphRepo.Service
       const analyzer = yield* CodegraphAnalyzer.Service
-      const result = yield* computeBlastRadius({ repo, analyzer }, { target: "helper" })
+      const intel = {
+        query: () => Effect.die("not used"),
+        slice: () => Effect.die("not used"),
+        explain: () => Effect.die("not used"),
+        impact: () => Effect.die("not used"),
+        trace: () => Effect.die("not used"),
+        tests: () => Effect.succeed({ tests: [], notFound: false, derivation: "none" as const }),
+        symbols: () => Effect.succeed([]),
+        relationships: () => Effect.succeed([]),
+        findOwner: () => Effect.succeed({ count: 0 }),
+      } as unknown as RepositoryIntelligenceInterface
+      const result = yield* computeBlastRadius({ repo, analyzer, intel }, { target: "helper" })
       expect((result as any).graphStale).toBe(true)
     })
     await runWithSeed(seed, testEff)

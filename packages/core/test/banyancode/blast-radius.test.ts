@@ -23,7 +23,9 @@ import type { CodegraphFile, CodegraphNode } from "../../src/banyancode/types"
 import type { Interface as CodegraphRepoInterface } from "../../src/banyancode/codegraph-repo"
 import type { Interface as CodegraphAnalyzerInterface } from "../../src/banyancode/codegraph-analyzer"
 import type { Interface as CodegraphReadinessInterface } from "../../src/banyancode/codegraph-readiness"
+import type { Interface as RepositoryIntelligenceInterface } from "../../src/banyancode/repository-intelligence/service"
 import type { Interface as PermissionV2Interface } from "../../src/permission"
+import { computePreflight } from "../../src/tool/preflight"
 
 process.env.BANYANCODE_ENABLE = "1"
 
@@ -46,7 +48,42 @@ const buildProvider = (
   repo: CodegraphRepoInterface,
   analyzer: CodegraphAnalyzerInterface,
   permission: PermissionV2Interface,
-) => makeBlastRadiusTool({ permission, repo, analyzer, readiness: mockReadiness })
+  intel: RepositoryIntelligenceInterface,
+) => makeBlastRadiusTool({ permission, repo, analyzer, intel, readiness: mockReadiness })
+
+// `intel.tests()` consults per-file imports/edges in the seeded graph. The
+// `alpha` symbol here has both a `.test.ts` caller AND a non-test caller, so
+// `tests({ symbol: "alpha" })` should pick up the test node we seeded.
+const buildIntel = (repo: CodegraphRepoInterface): RepositoryIntelligenceInterface => {
+  const testsCallsInRepo = (symbol: string) =>
+    Effect.gen(function* () {
+      const allNodes = yield* repo.listAllNodes()
+      const allEdges = yield* repo.listAllEdges()
+      const targetIDs = new Set(
+        allNodes.filter((n) => n.name === symbol).map((n) => n.id),
+      )
+      const seen = new Set<string>()
+      for (const e of allEdges) {
+        if (targetIDs.has(e.toNodeID)) {
+          const from = allNodes.find((n) => n.id === e.fromNodeID)
+          if (from) seen.add(from.id)
+        }
+      }
+      const tests = allNodes.filter((n) => seen.has(n.id) && n.kind === "test")
+      return { tests, notFound: tests.length === 0, derivation: "import" as const }
+    })
+  return {
+    query: () => Effect.die("not used"),
+    slice: () => Effect.die("not used"),
+    explain: () => Effect.die("not used"),
+    impact: () => Effect.die("not used"),
+    trace: () => Effect.die("not used"),
+    tests: (input) => testsCallsInRepo(input.symbol),
+    symbols: () => Effect.succeed([]),
+    relationships: () => Effect.succeed([]),
+    findOwner: () => Effect.succeed({ count: 0 }),
+  }
+}
 
 const seedCallerGraph = (repo: CodegraphRepoInterface) =>
   Effect.gen(function* () {
@@ -137,11 +174,13 @@ describe("blast_radius tool", () => {
         const repo = yield* CodegraphRepo.Service
         const analyzer = yield* CodegraphAnalyzer.Service
         yield* seedCallerGraph(repo as unknown as CodegraphRepoInterface)
+        const intel = buildIntel(repo as unknown as CodegraphRepoInterface)
 
         const result = yield* computeBlastRadius(
           {
             repo: repo as unknown as CodegraphRepoInterface,
             analyzer: analyzer as unknown as CodegraphAnalyzerInterface,
+            intel,
           },
           { target: "alpha" },
         )
@@ -167,11 +206,13 @@ describe("blast_radius tool", () => {
         const repo = yield* CodegraphRepo.Service
         const analyzer = yield* CodegraphAnalyzer.Service
         yield* seedCallerGraph(repo as unknown as CodegraphRepoInterface)
+        const intel = buildIntel(repo as unknown as CodegraphRepoInterface)
 
         const result = yield* computeBlastRadius(
           {
             repo: repo as unknown as CodegraphRepoInterface,
             analyzer: analyzer as unknown as CodegraphAnalyzerInterface,
+            intel,
           },
           { target: "noSuchSymbol_xyz123" },
         )
@@ -199,11 +240,13 @@ describe("blast_radius tool", () => {
         const repo = yield* CodegraphRepo.Service
         const analyzer = yield* CodegraphAnalyzer.Service
         yield* seedCallerGraph(repo as unknown as CodegraphRepoInterface)
+        const intel = buildIntel(repo as unknown as CodegraphRepoInterface)
 
         const result = yield* computeBlastRadius(
           {
             repo: repo as unknown as CodegraphRepoInterface,
             analyzer: analyzer as unknown as CodegraphAnalyzerInterface,
+            intel,
           },
           { target: "alpha" },
         )
@@ -229,11 +272,52 @@ describe("blast_radius tool", () => {
     const repoStub: CodegraphRepoInterface = {
       listAllFiles: () => Effect.succeed([]),
     } as unknown as CodegraphRepoInterface
+    const intelStub = buildIntel(repoStub)
 
-    const toolA = buildProvider(repoStub, analyzerStub, mockPermission)
-    const toolB = buildProvider(repoStub, analyzerStub, mockPermission)
+    const toolA = buildProvider(repoStub, analyzerStub, mockPermission, intelStub)
+    const toolB = buildProvider(repoStub, analyzerStub, mockPermission, intelStub)
     expect(toolA).toBeDefined()
     expect(toolB).toBeDefined()
     expect(toolA).not.toBe(toolB)
+  })
+
+  test("blast_radius.testsToRun agrees with preflight.testsToRun.length for target with caller + test files", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+        const analyzer = yield* CodegraphAnalyzer.Service
+        yield* seedCallerGraph(repo as unknown as CodegraphRepoInterface)
+        const intel = buildIntel(repo as unknown as CodegraphRepoInterface)
+
+        const blast = yield* computeBlastRadius(
+          {
+            repo: repo as unknown as CodegraphRepoInterface,
+            analyzer: analyzer as unknown as CodegraphAnalyzerInterface,
+            intel,
+          },
+          { target: "alpha" },
+        )
+
+        // Mirror preflight's testsToRun shape: union caller-path test files
+        // with `intel.tests({ symbol })`. Both counts must agree.
+        const preflight = yield* computePreflight(
+          {
+            repo: repo as unknown as CodegraphRepoInterface,
+            analyzer: analyzer as unknown as CodegraphAnalyzerInterface,
+            intel,
+          },
+          { action: "modify", target: "alpha" },
+        )
+
+        expect(blast.testsToRun).toBeGreaterThanOrEqual(1)
+        expect(blast.testsToRun).toBe(preflight.testsToRun.length)
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
   })
 })
