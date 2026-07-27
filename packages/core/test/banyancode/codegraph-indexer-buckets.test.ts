@@ -64,6 +64,43 @@ describe("CodegraphIndexer buckets", () => {
     expect(Array.isArray(result.parseErrors)).toBe(true)
   })
 
+  test("codegraph runtime artifacts (*.db, *.db-wal, *.db-shm) are excluded by DEFAULT_IGNORED", async () => {
+    // Stray codegraph DBs (left at workspace root from previous builds or
+    // earlier tooling) used to trip the size filter and emit a noisy
+    // `Skipping file exceeding size limit` warning every build. The fix
+    // adds `*.db` / `*.db-wal` / `*.db-shm` to DEFAULT_IGNORED so they
+    // are excluded as gitignore-style artifacts before the size check.
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    // Plant fake artifact files at the workspace root.
+    await fs.writeFile(path.join(tmp.path, "codegraph-build.db"), "fake")
+    await fs.writeFile(path.join(tmp.path, "codegraph-build.db-wal"), "x".repeat(3_000_000))
+    await fs.writeFile(path.join(tmp.path, "codegraph-build.db-shm"), "fake")
+
+    const serviceLayer = CodegraphIndexer.layer.pipe(
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(codegraphRepoDefaultLayer),
+    )
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* CodegraphIndexer.Service
+        return yield* indexer.index({ root: tmp.path, force: true })
+      }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+
+    // *.db* files are caught by the gitignore-pattern path (DEFAULT_IGNORED),
+    // not by the size filter. None of the artifact files should hit the
+    // tooLarge bucket or the readError bucket.
+    expect(result.skippedByReason.tooLarge).toBe(0)
+    expect(result.skippedByReason.readError).toBe(0)
+    // And no parse errors from the artifact files.
+    expect(result.parseErrors.length).toBe(0)
+    expect(result.indexed).toBe(0)
+  })
+
   test("artifact path with no fileKind is skipped", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.sqlite")

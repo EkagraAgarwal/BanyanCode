@@ -151,6 +151,14 @@ const DEFAULT_IGNORED = [
   ".git",
   ".opencode",
   ".banyancode",
+  // BanyanCode runtime artifacts left at a workspace root. A *.db is the
+  // indexer's own DB (codegraph.sql.ts, memory.sql.ts, subagent-*.sql.ts);
+  // *.db-wal / *.db-shm are SQLite sidecars. Always exclude — they are
+  // never legitimate source code, and walking them just logs noisy
+  // "exceeding size limit" warnings on every build.
+  "*.db",
+  "*.db-wal",
+  "*.db-shm",
 ]
 
 // Out-of-product UI packages that the codegraph never needs to index.

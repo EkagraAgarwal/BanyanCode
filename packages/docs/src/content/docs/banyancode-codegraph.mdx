@@ -11,9 +11,11 @@ BanyanCode builds a polyglot code graph using tree-sitter (TypeScript, JavaScrip
 
 The indexer skips:
 
-- Default patterns: `node_modules`, `.git`, `dist`, `build`, `.sst`, `.opencode/`, `.banyancode/`
+- Default patterns: `node_modules`, `.git`, `dist`, `build`, `.sst`, `.opencode/`, `.banyancode/`, `*.db`, `*.db-wal`, `*.db-shm`
 - `.gitignore` patterns from the project root
 - `.banyancode/ignore` patterns (if present)
+
+For workspace-specific exclusions — large scratch files, planning artifacts, vendored mirrors — drop a `.banyancode/ignore` at the workspace root listing one glob per line (gitignore syntax). Anything larger than the size cap, or that doesn't look like source code, is also skipped automatically and tallied in the build report's skip reasons.
 
 ## Building the code graph
 
