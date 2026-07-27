@@ -107,6 +107,11 @@ export const TuiThreadCommand = cmd({
   handler: async (args) => {
     const unguard = win32InstallCtrlCGuard()
     try {
+      // The full-screen TUI uses OpenTUI's `externalOutputMode: "passthrough"`,
+      // so any stderr writes from background services corrupt the rendered chat
+      // frame. Disable the stderr logger before any service can emit. File
+      // logging continues to record all warnings.
+      process.env.OPENCODE_DISABLE_STDERR_LOGGER = "1"
       const { TuiConfig } = await import("@/config/tui")
       if (args.fork && !args.continue && !args.session) {
         UI.error("--fork requires --continue or --session")
