@@ -104,5 +104,18 @@ describe("tree-sitter init hardening (Phase 2a)", () => {
 
     setWasmEnv(undefined)
   })
+
+  test("regression: runtime does NOT use path.resolve(import.meta.dir) for wasm (compiled-binary safety)", async () => {
+    // The bundle root of a `bun build --compile` binary virtualizes
+    // `import.meta.dir` so `path.resolve(import.meta.dir, …)` resolves to the
+    // drive root and the runtime reads a non-existent file. The new init
+    // imports each wasm asset via `import("…/*.wasm", { with: { type: "wasm" } })`
+    // which Bun resolves correctly inside compiled binaries.
+    const source = await Bun.file(
+      new URL("../../src/banyancode/langs/tree-sitter.ts", import.meta.url),
+    ).text()
+    expect(source).not.toMatch(/path\.resolve\(import\.meta\.dir[^)]*node_modules/)
+    expect(source).toMatch(/with:\s*\{\s*type:\s*"wasm"\s*\}/)
+  })
 })
 

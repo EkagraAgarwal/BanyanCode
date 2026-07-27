@@ -4,11 +4,13 @@ import { Effect, Layer, Logger } from "effect"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { fileLogger } from "../../src/observability/logging"
+import { fileLogger, loggers } from "../../src/observability/logging"
 import { resource } from "../../src/observability/otlp"
 
 const otelResourceAttributes = process.env.OTEL_RESOURCE_ATTRIBUTES
 const opencodeClient = process.env.OPENCODE_CLIENT
+const printLogs = process.env.OPENCODE_PRINT_LOGS
+const disableStderrLogger = process.env.OPENCODE_DISABLE_STDERR_LOGGER
 
 afterEach(() => {
   if (otelResourceAttributes === undefined) delete process.env.OTEL_RESOURCE_ATTRIBUTES
@@ -16,6 +18,12 @@ afterEach(() => {
 
   if (opencodeClient === undefined) delete process.env.OPENCODE_CLIENT
   else process.env.OPENCODE_CLIENT = opencodeClient
+
+  if (printLogs === undefined) delete process.env.OPENCODE_PRINT_LOGS
+  else process.env.OPENCODE_PRINT_LOGS = printLogs
+
+  if (disableStderrLogger === undefined) delete process.env.OPENCODE_DISABLE_STDERR_LOGGER
+  else process.env.OPENCODE_DISABLE_STDERR_LOGGER = disableStderrLogger
 })
 
 describe("resource", () => {
@@ -106,4 +114,24 @@ test("file logger flattens nested objects", async () => {
   expect(line).toContain('tags="[\\\"api\\\",\\\"test\\\"]"')
   expect(line).toContain("session.id=session-1")
   expect(line).not.toContain("request={")
+})
+
+describe("loggers() routing", () => {
+  test("returns file logger only when OPENCODE_PRINT_LOGS is unset", () => {
+    delete process.env.OPENCODE_PRINT_LOGS
+    delete process.env.OPENCODE_DISABLE_STDERR_LOGGER
+    expect(loggers()).toHaveLength(1)
+  })
+
+  test("returns file logger only when OPENCODE_DISABLE_STDERR_LOGGER is set, even with PRINT_LOGS", () => {
+    process.env.OPENCODE_PRINT_LOGS = "1"
+    process.env.OPENCODE_DISABLE_STDERR_LOGGER = "1"
+    expect(loggers()).toHaveLength(1)
+  })
+
+  test("returns file + stderr logger when OPENCODE_PRINT_LOGS=1 and stderr not suppressed", () => {
+    process.env.OPENCODE_PRINT_LOGS = "1"
+    delete process.env.OPENCODE_DISABLE_STDERR_LOGGER
+    expect(loggers()).toHaveLength(2)
+  })
 })
