@@ -59,7 +59,12 @@ export class Service extends Context.Service<Service, Interface>()("@banyancode/
  */
 export type ResolveRepo = Pick<
   CodegraphRepoInterface,
-  "findSymbolsByServiceTag" | "queryNodes" | "searchNodes" | "listAllNodes" | "nodeByID"
+  | "findSymbolsByServiceTag"
+  | "queryNodes"
+  | "searchNodes"
+  | "listAllNodes"
+  | "nodeByID"
+  | "fileIDsByServiceName"
 >
 
 export const resolveGraphTargetPure = (
@@ -136,6 +141,11 @@ export const resolveGraphTargetStrict = (
     }
 
     // 3) Qualified split: `Namespace.method` → method + parent-file scoping.
+    //    `parentName` can match either a node literally named that (most
+    //    symbols) OR a file whose `codegraph_service_tags.service_name` equals
+    //    `parentName` — the latter is how `extends Context.Service<…>("…/MemoryRepo")`
+    //    indexed classes resolve under a `MemoryRepo.leaf` lookup despite the
+    //    class node being `name: "Service"`.
     if (target.includes(".")) {
       const parts = target.split(".")
       const leaf = parts[parts.length - 1] ?? ""
@@ -143,6 +153,9 @@ export const resolveGraphTargetStrict = (
       if (leaf && parentName) {
         const allNodes = yield* repo.listAllNodes()
         const validFileIDs = new Set(allNodes.filter((n) => n.name === parentName).map((n) => n.fileID))
+        for (const fileID of yield* repo.fileIDsByServiceName(parentName)) {
+          validFileIDs.add(fileID)
+        }
         const splitHits = allNodes.filter(
           (n) => n.name === leaf && validFileIDs.has(n.fileID) && (input.kind ? n.kind === input.kind : true),
         )

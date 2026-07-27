@@ -52,6 +52,7 @@ const makeMockRepo = (options: {
       deleteFile: () => Effect.void,
       deleteDerivedEdgesForFiles: () => Effect.succeed([]),
       deleteAllDerivedEdges: () => Effect.succeed([]),
+      fileIDsByServiceName: () => Effect.succeed([]),
     writeFileGraph: () => Effect.void,
       clearAll: () => Effect.succeed({ sizeBefore: 0, sizeAfter: 0, droppedFile: false }),
       setMeta: () => Effect.void,

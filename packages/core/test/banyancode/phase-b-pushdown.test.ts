@@ -163,6 +163,7 @@ const buildCountingRepoLayer = (counters: PushdownCounters, panicOnListAllNodes:
         getFileByPath: inner.getFileByPath,
         listAllFiles: inner.listAllFiles,
         deleteAllDerivedEdges: inner.deleteAllDerivedEdges,
+        fileIDsByServiceName: inner.fileIDsByServiceName,
         putNode: inner.putNode,
         putNodes: inner.putNodes,
         getNode: inner.getNode,

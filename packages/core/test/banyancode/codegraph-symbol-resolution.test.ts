@@ -311,6 +311,93 @@ describe("code-substring short-name bypass", () => {
     expect(ok.value.node.name).toBe("update")
     expect(ok.value.node.fileID).toBe("fA")
   })
+
+  test("MemoryRepo.update → resolves via qualified-split for Context.Service-shaped class", async () => {
+    // Production shape: `class Service extends Context.Service<…>("…/MemoryRepo")`
+    // is indexed under `name: "Service"` with a `codegraph_service_tags` row
+    // carrying `service_name: "MemoryRepo"`. Before Phase 1, qualified-split
+    // looked for a node literally named "MemoryRepo" and missed, dropping to
+    // code-substring and picking an arbitrary `update` node. Phase 1 widens
+    // qualified-split to also accept service-tag matches so this resolves via
+    // `qualified-split` to the right file.
+    const seedContextService = Effect.gen(function* () {
+      yield* seedEffect
+      const repo = yield* CodegraphRepo.Service
+      yield* repo.writeFileGraph({
+        file: { id: "fMem", path: "src/banyancode/memory-repo.ts", contentHash: "h", language: "typescript", indexedAt: 1 },
+        nodes: [
+          {
+            id: "fMem:file",
+            fileID: "fMem",
+            kind: "file",
+            name: "memory-repo.ts",
+            startLine: 1,
+            endLine: 1,
+          },
+          {
+            id: "fMem:service",
+            fileID: "fMem",
+            kind: "class",
+            name: "Service",
+            signature: "class Service extends Context.Service<…>(\"…/MemoryRepo\")",
+            startLine: 1,
+            endLine: 5,
+            code:
+              'export class Service extends Context.Service<Interface>()("@opencode/v2/Banyan/MemoryRepo") {}',
+          },
+          {
+            id: "fMem:update:1",
+            fileID: "fMem",
+            kind: "function",
+            name: "update",
+            signature: "const update = (input) => …",
+            startLine: 7,
+            endLine: 20,
+            code: "const update: Interface[\"update\"] = (input) => { /* … */ }",
+          },
+        ],
+        edges: [],
+      })
+      // A competing `update` in a totally different file that would be
+      // selected by code-substring without the service-name widening.
+      yield* repo.writeFileGraph({
+        file: {
+          id: "fOther",
+          path: "src/elsewhere/session.ts",
+          contentHash: "h2",
+          language: "typescript",
+          indexedAt: 1,
+        },
+        nodes: [
+          {
+            id: "fOther:update:1",
+            fileID: "fOther",
+            kind: "function",
+            name: "update",
+            signature: "function update()",
+            startLine: 1,
+            endLine: 2,
+            code: "function update() { return 1 }",
+          },
+        ],
+        edges: [],
+      })
+    })
+    const result = await withTmpDb((dbLayer) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* seedContextService
+          const repo = yield* CodegraphRepo.Service
+          return yield* resolveGraphTargetPure(repo as never, { target: "MemoryRepo.update" })
+        }),
+      ),
+    )
+    const ok = result as Extract<typeof result, { _tag: "Ok" }>
+    expect(ok._tag).toBe("Ok")
+    expect(ok.value.node.name).toBe("update")
+    expect(ok.value.node.fileID).toBe("fMem")
+    expect(ok.value.derivation).toBe("qualified-split")
+  })
 })
 
 describe("regression: tool resolution consistency (PR D)", () => {

@@ -199,6 +199,14 @@ export interface Interface {
   readonly clearParseErrors: () => Effect.Effect<void, never, never>
   readonly findSymbolsByServiceTag: (tag: string) => Effect.Effect<CodegraphNode[], never, never>
   readonly lookupByServiceTag: (tag: string) => Effect.Effect<CodegraphNode | null, never, never>
+  /**
+   * Resolver support: distinct file_ids whose `codegraph_service_tags.service_name`
+   * matches the given symbol name. Lets qualified-split (`Namespace.leaf`) find
+   * the file even when the class is `extends Context.Service<...>` and indexed
+   * under `name: "Service"` — the tag's `service_name` carries the namespace.
+   * Returns an empty array if no match.
+   */
+  readonly fileIDsByServiceName: (serviceName: string) => Effect.Effect<readonly string[], never, never>
   readonly rebuildFtsIndex: () => Effect.Effect<{ rowsIndexed: number }, never, never>
 }
 
@@ -1246,6 +1254,18 @@ export const layer = Layer.effect(
       })
     })
 
+    const fileIDsByServiceName = Effect.fn("CodegraphRepo.fileIDsByServiceName")(function* (serviceName: string) {
+      const rows = yield* db
+        .select({ file_id: CodegraphServiceTagsTable.file_id })
+        .from(CodegraphServiceTagsTable)
+        .where(eq(CodegraphServiceTagsTable.service_name, serviceName))
+        .all()
+        .pipe(Effect.orDie)
+      const ids = new Set<string>()
+      for (const row of rows) ids.add(row.file_id)
+      return [...ids]
+    })
+
     const rebuildFtsIndex = Effect.fn("CodegraphRepo.rebuildFtsIndex")(function* () {
       return yield* db.transaction((tx) =>
         Effect.gen(function* () {
@@ -1503,6 +1523,7 @@ export const layer = Layer.effect(
       clearParseErrors,
       findSymbolsByServiceTag,
       lookupByServiceTag,
+      fileIDsByServiceName,
       rebuildFtsIndex,
       recomputeInDegree,
       bumpIndexedAt,
