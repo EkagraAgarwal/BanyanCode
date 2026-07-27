@@ -1,5 +1,6 @@
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
+import path from "path"
 import { Banyan, isStale } from "../banyancode"
 import { traced } from "../observability/trace"
 import {
@@ -443,6 +444,24 @@ export const locationLayer = Layer.effectDiscard(
     const permission = yield* PermissionV2.Service
     const intel = yield* Banyan.RepositoryIntelligence
     const repo = yield* Banyan.CodegraphRepo
+    const readiness = yield* Banyan.CodegraphReadiness
+
+    // Phase: auto-trigger a full or incremental codegraph build whenever a
+    // graph-backed repository tool is invoked against an unbuilt or stale
+    // graph. Dedupe is handled inside the readiness service per workspace
+    // root. Git-only tools (e.g. repository_ownership) intentionally skip
+    // this gate to avoid an expensive build for cheap git queries.
+    const ensureGraphReady = (input: { readonly [key: string]: unknown }, toolLabel: string) =>
+      Effect.gen(function* () {
+        const ws = input.workspace as { worktree?: string } | undefined
+        const rootHint = typeof ws?.worktree === "string" ? ws.worktree : undefined
+        const resolvedRoot = rootHint ?? process.cwd()
+        const ready = yield* readiness.ensureReady({ root: path.resolve(resolvedRoot) })
+        if (ready.reason === "failed") {
+          yield* Effect.logWarning(`${toolLabel}: readiness failed: ${ready.error ?? "unknown"}`)
+        }
+        return ready
+      })
 
     yield* tools.register({
       [name_query]: Tool.make({
@@ -487,6 +506,8 @@ export const locationLayer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
+
+              yield* ensureGraphReady(input, name_query)
 
               const ws = workspaceFromInput(input)
               const ctx = yield* intel.query({
@@ -544,6 +565,8 @@ export const locationLayer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
+              yield* ensureGraphReady(input, name_explain)
+
               const ws = workspaceFromInput(input)
               const slc = yield* intel.explain({
                 symbol: input.symbol,
@@ -598,6 +621,8 @@ export const locationLayer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
+              yield* ensureGraphReady(input, name_impact)
+
               const ws = workspaceFromInput(input)
               const slc = yield* intel.impact({
                 path: input.path,
@@ -642,6 +667,8 @@ export const locationLayer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
+
+              yield* ensureGraphReady(input, name_trace)
 
               const ws = workspaceFromInput(input)
               const slc = yield* intel.trace({
@@ -688,6 +715,8 @@ export const locationLayer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
+
+              yield* ensureGraphReady(input, name_tests)
 
               // Resolve the symbol so we can scope the returned tests to the
               // symbol's own file (and a small set of directly related files)
@@ -765,6 +794,8 @@ export const locationLayer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
+              yield* ensureGraphReady(input, name_symbols)
+
               const symbols = yield* intel.symbols({
                 query: input.query,
                 ...(input.limit ? { limit: input.limit } : {}),
@@ -808,6 +839,8 @@ export const locationLayer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
+
+              yield* ensureGraphReady(input, name_relationships)
 
               const nodes = yield* intel.relationships({
                 ...(input.nodeID ? { nodeID: input.nodeID } : {}),

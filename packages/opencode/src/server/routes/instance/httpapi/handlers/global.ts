@@ -524,6 +524,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
         repo: CodegraphRepoInterface
         analyzer: CodegraphAnalyzerInterface
         intel: RepositoryIntelligenceInterface
+        readiness: Banyan.CodegraphReadinessInterface
       },
     ): Effect.Effect<typeof PreflightTool.Output.Type, InvalidRequestError, never> =>
       Effect.gen(function* () {
@@ -552,6 +553,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
         permission: PermissionV2Interface
         repo: CodegraphRepoInterface
         analyzer: CodegraphAnalyzerInterface
+        readiness: Banyan.CodegraphReadinessInterface
       },
     ): Effect.Effect<typeof BlastRadiusTool.Output.Type, InvalidRequestError, never> =>
       Effect.gen(function* () {
@@ -610,12 +612,14 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       const repo = yield* Banyan.CodegraphRepo
       const analyzer = yield* Banyan.CodegraphAnalyzer
       const intel = yield* Banyan.RepositoryIntelligence
+      const readiness = yield* Banyan.CodegraphReadiness
       const permission = yield* PermissionV2.Service
       return yield* settlePreflightHandler(ctx.payload, {
         permission: permission as PermissionV2Interface,
         repo: repo as CodegraphRepoInterface,
         analyzer: analyzer as CodegraphAnalyzerInterface,
         intel: intel as RepositoryIntelligenceInterface,
+        readiness,
       })
     })
 
@@ -624,11 +628,13 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
     }) {
       const repo = yield* Banyan.CodegraphRepo
       const analyzer = yield* Banyan.CodegraphAnalyzer
+      const readiness = yield* Banyan.CodegraphReadiness
       const permission = yield* PermissionV2.Service
       return yield* settleBlastRadiusHandler(ctx.payload, {
         permission: permission as PermissionV2Interface,
         repo: repo as CodegraphRepoInterface,
         analyzer: analyzer as CodegraphAnalyzerInterface,
+        readiness,
       })
     })
 

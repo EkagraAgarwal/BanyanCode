@@ -7,6 +7,7 @@ import * as fs from "node:fs/promises"
 import path from "node:path"
 import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import type { Interface as CodegraphAnalyzerInterface } from "../banyancode/codegraph-analyzer"
+import type { Interface as CodegraphReadinessInterface } from "../banyancode/codegraph-readiness"
 import type { Interface as RepositoryIntelligenceInterface } from "../banyancode/repository-intelligence/service"
 import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan, isStale } from "../banyancode"
@@ -387,6 +388,7 @@ export const makePreflightTool = (deps: {
   readonly repo: CodegraphRepoInterface
   readonly analyzer: CodegraphAnalyzerInterface
   readonly intel: RepositoryIntelligenceInterface
+  readonly readiness: CodegraphReadinessInterface
 }) =>
   Tool.make({
     description:
@@ -446,6 +448,11 @@ export const makePreflightTool = (deps: {
             agent: context.agent,
             source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
           })
+          const root = input.root ?? findRepoRoot(process.cwd()) ?? process.cwd()
+          const ready = yield* deps.readiness.ensureReady({ root: path.resolve(root) })
+          if (ready.reason === "failed") {
+            yield* Effect.logWarning(`preflight: readiness failed: ${ready.error ?? "unknown"}`)
+          }
           return yield* computePreflight(
             { repo: deps.repo, analyzer: deps.analyzer, intel: deps.intel },
             input,
@@ -466,6 +473,7 @@ export const locationLayer = Layer.effectDiscard(
     const repo = yield* Banyan.CodegraphRepo
     const analyzer = yield* Banyan.CodegraphAnalyzer
     const intel = yield* Banyan.RepositoryIntelligence
+    const readiness = yield* Banyan.CodegraphReadiness
 
     yield* tools
       .register({
@@ -474,6 +482,7 @@ export const locationLayer = Layer.effectDiscard(
           repo: repo as CodegraphRepoInterface,
           analyzer: analyzer as CodegraphAnalyzerInterface,
           intel: intel as RepositoryIntelligenceInterface,
+          readiness: readiness as CodegraphReadinessInterface,
         }),
       })
       .pipe(Effect.orDie)

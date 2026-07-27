@@ -2,6 +2,7 @@ export * as CodeFindTool from "./code-find"
 
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
+import path from "path"
 import { Banyan, isStale } from "../banyancode"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
@@ -95,6 +96,18 @@ export const locationLayer = Layer.effectDiscard(
     const permission = yield* PermissionV2.Service
     const repo = yield* Banyan.CodegraphRepo
     const analyzer = yield* Banyan.CodegraphAnalyzer
+    const readiness = yield* Banyan.CodegraphReadiness
+
+    // Phase: auto-trigger a full or incremental codegraph build whenever the
+    // code-find tool runs against an unbuilt or stale graph, so the agent
+    // does not waste a turn on empty/incorrect data.
+    const ensureGraphReady = Effect.gen(function* () {
+      const ready = yield* readiness.ensureReady({ root: path.resolve(process.cwd()) })
+      if (ready.reason === "failed") {
+        yield* Effect.logWarning(`code_find: readiness failed: ${ready.error ?? "unknown"}`)
+      }
+      return ready
+    })
 
     yield* tools.register({
       [name]: Tool.make({
@@ -159,6 +172,8 @@ export const locationLayer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
+
+              yield* ensureGraphReady
 
               const metaRow = yield* repo.getMeta()
               const meta = metaRow

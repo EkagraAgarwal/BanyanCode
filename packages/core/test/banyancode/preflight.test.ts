@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
+import type { Interface as CodegraphReadinessInterface } from "../../src/banyancode/codegraph-readiness"
 import { Database } from "@opencode-ai/core/database/database"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import { tmpdir } from "../fixture/tmpdir"
@@ -203,17 +204,24 @@ describe("preflight tool", () => {
       findOwner: () => Effect.succeed({ count: 0 }),
     } as unknown as RepositoryIntelligenceInterface
 
+    const mockReadiness: CodegraphReadinessInterface = {
+      ensureReady: () => Effect.succeed({ reason: "ready", autoBuilt: false }),
+      status: () => Effect.succeed({ reason: "ready", autoBuilt: false }),
+    }
+
     const toolA = makePreflightTool({
       permission: mockPermission,
       repo: repoStub,
       analyzer: analyzerStub,
       intel: intelStub,
+      readiness: mockReadiness,
     })
     const toolB = makePreflightTool({
       permission: mockPermission,
       repo: repoStub,
       analyzer: analyzerStub,
       intel: intelStub,
+      readiness: mockReadiness,
     })
     expect(toolA).toBeDefined()
     expect(toolB).toBeDefined()

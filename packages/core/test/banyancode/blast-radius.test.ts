@@ -22,6 +22,7 @@ import {
 import type { CodegraphFile, CodegraphNode } from "../../src/banyancode/types"
 import type { Interface as CodegraphRepoInterface } from "../../src/banyancode/codegraph-repo"
 import type { Interface as CodegraphAnalyzerInterface } from "../../src/banyancode/codegraph-analyzer"
+import type { Interface as CodegraphReadinessInterface } from "../../src/banyancode/codegraph-readiness"
 import type { Interface as PermissionV2Interface } from "../../src/permission"
 
 process.env.BANYANCODE_ENABLE = "1"
@@ -36,11 +37,16 @@ const mockPermission = {
   forSession: () => Effect.void,
 } as unknown as PermissionV2Interface
 
+const mockReadiness: CodegraphReadinessInterface = {
+  ensureReady: () => Effect.succeed({ reason: "ready", autoBuilt: false }),
+  status: () => Effect.succeed({ reason: "ready", autoBuilt: false }),
+}
+
 const buildProvider = (
   repo: CodegraphRepoInterface,
   analyzer: CodegraphAnalyzerInterface,
   permission: PermissionV2Interface,
-) => makeBlastRadiusTool({ permission, repo, analyzer })
+) => makeBlastRadiusTool({ permission, repo, analyzer, readiness: mockReadiness })
 
 const seedCallerGraph = (repo: CodegraphRepoInterface) =>
   Effect.gen(function* () {

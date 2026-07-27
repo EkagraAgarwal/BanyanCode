@@ -304,8 +304,24 @@ export const locationLayer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const permission = yield* PermissionV2.Service
     const buildService = yield* Banyan.CodegraphBuildService
+    const readiness = yield* Banyan.CodegraphReadiness
     const repo = yield* Banyan.CodegraphRepo
     const analyzer = yield* Banyan.CodegraphAnalyzer
+
+    // Phase: auto-trigger a full or incremental codegraph build whenever a
+    // graph-backed tool is invoked against an unbuilt or stale graph, so the
+    // agent does not waste a turn on empty/incorrect data. Dedupe is handled
+    // inside the readiness service per workspace root.
+    const ensureGraphReady = (input: { readonly [key: string]: unknown }, toolLabel: string) =>
+      Effect.gen(function* () {
+        const rootHint = typeof input.root === "string" ? input.root : undefined
+        const resolvedRoot = rootHint ?? findRepoRoot(process.cwd()) ?? process.cwd()
+        const ready = yield* readiness.ensureReady({ root: path.resolve(resolvedRoot) })
+        if (ready.reason === "failed") {
+          yield* Effect.logWarning(`${toolLabel}: readiness failed: ${ready.error ?? "unknown"}`)
+        }
+        return ready
+      })
 
     yield* tools
       .register({
@@ -504,6 +520,8 @@ export const locationLayer = Layer.effectDiscard(
                   source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
                 })
 
+                yield* ensureGraphReady(input, name_query)
+
                 let nodes: Banyan.CodegraphNode[] = []
 
                 if (input.function) {
@@ -580,6 +598,8 @@ export const locationLayer = Layer.effectDiscard(
                   source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
                 })
 
+                yield* ensureGraphReady(input, name_impact)
+
                 const result = yield* analyzer.impact({
                   nodeID: input.nodeID,
                   function: input.function,
@@ -641,6 +661,8 @@ export const locationLayer = Layer.effectDiscard(
                   source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
                 })
 
+                yield* ensureGraphReady(input, name_dependents)
+
                 const result = yield* analyzer.dependents({ nodeID: input.nodeID, function: input.function })
                 const meta = yield* repo.getMeta()
                 return {
@@ -697,6 +719,8 @@ export const locationLayer = Layer.effectDiscard(
                   agent: context.agent,
                   source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
                 })
+
+                yield* ensureGraphReady(input, name_callers)
 
                 const result = yield* analyzer.callers({ nodeID: input.nodeID, function: input.function })
                 const meta = yield* repo.getMeta()

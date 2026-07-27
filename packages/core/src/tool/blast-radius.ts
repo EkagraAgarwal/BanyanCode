@@ -2,8 +2,10 @@ export * as BlastRadiusTool from "./blast-radius"
 
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
+import path from "path"
 import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import type { Interface as CodegraphAnalyzerInterface } from "../banyancode/codegraph-analyzer"
+import type { Interface as CodegraphReadinessInterface } from "../banyancode/codegraph-readiness"
 import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan, isStale } from "../banyancode"
 import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
@@ -120,6 +122,7 @@ export const makeBlastRadiusTool = (deps: {
   readonly permission: PermissionV2Interface
   readonly repo: CodegraphRepoInterface
   readonly analyzer: CodegraphAnalyzerInterface
+  readonly readiness: CodegraphReadinessInterface
 }) =>
   Tool.make({
     description:
@@ -165,6 +168,10 @@ export const makeBlastRadiusTool = (deps: {
             agent: context.agent,
             source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
           })
+          const ready = yield* deps.readiness.ensureReady({ root: path.resolve(process.cwd()) })
+          if (ready.reason === "failed") {
+            yield* Effect.logWarning(`blast_radius: readiness failed: ${ready.error ?? "unknown"}`)
+          }
           return yield* computeBlastRadius({ repo: deps.repo, analyzer: deps.analyzer }, input)
         }),
       ).pipe(
@@ -181,6 +188,7 @@ export const locationLayer = Layer.effectDiscard(
     const permission = yield* PermissionV2.Service
     const repo = yield* Banyan.CodegraphRepo
     const analyzer = yield* Banyan.CodegraphAnalyzer
+    const readiness = yield* Banyan.CodegraphReadiness
 
     yield* tools
       .register({
@@ -188,6 +196,7 @@ export const locationLayer = Layer.effectDiscard(
           permission: permission as PermissionV2Interface,
           repo: repo as CodegraphRepoInterface,
           analyzer: analyzer as CodegraphAnalyzerInterface,
+          readiness: readiness as CodegraphReadinessInterface,
         }),
       })
       .pipe(Effect.orDie)
