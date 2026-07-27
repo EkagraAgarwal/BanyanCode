@@ -8,9 +8,11 @@ import type { Interface as RepositoryIntelligenceInterface } from "../banyancode
 import type { Interface as EditPlannerInterface } from "../banyancode/edit-planner"
 import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan } from "../banyancode"
+import { GraphMeta } from "../banyancode/types"
 import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
 import { traced } from "../observability/trace"
 import { PermissionV2 } from "../permission"
+import { toGraphMeta } from "./graph-meta"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { computePreflight } from "./preflight"
@@ -66,6 +68,7 @@ export const Output = Schema.Struct({
   testsToRun: Schema.Array(Schema.String),
   risks: Schema.Array(RenameRiskSchema),
   preflight: Schema.Unknown,
+  meta: Schema.optional(GraphMeta),
 })
 
 function splitQualified(name: string): { root: string; leaf: string } | undefined {
@@ -212,11 +215,15 @@ export const computeSafeRename = (
     const isDryRun = input.dryRun === true
     const emittedEdits = isDryRun ? [] : edits
 
+    const metaRow = yield* deps.repo.getMeta()
+    const graphMeta = toGraphMeta(metaRow)
+
     return {
       edits: emittedEdits,
       testsToRun: Array.from(testPaths),
       risks: risksFromPlanner,
       preflight,
+      ...(graphMeta ? { meta: graphMeta } : {}),
     }
   })
 

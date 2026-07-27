@@ -3,9 +3,7 @@ import { Effect, Layer, Schema } from "effect"
 import path from "path"
 import { Banyan, isStale } from "../banyancode"
 import { traced } from "../observability/trace"
-import {
-  CodegraphNodeSchema,
-  type ArchitecturalSlice as ArchitecturalSliceT,
+import { CodegraphNodeSchema, GraphMeta, type ArchitecturalSlice as ArchitecturalSliceT,
   type RepositoryContext as RepositoryContextT,
 } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
@@ -20,6 +18,7 @@ import {
   formatRepositoryContext,
 } from "./repository-format"
 import { optionalNumber, optionalString } from "./tool-schema"
+import { staleInputFromMeta, toGraphMeta } from "./graph-meta"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
@@ -110,6 +109,7 @@ const ArchitecturalSliceSchema = Schema.Struct({
       message: Schema.String,
     }),
   )),
+  meta: Schema.optional(GraphMeta),
 })
 
 const RepositoryContextSchema = Schema.Struct({
@@ -151,6 +151,7 @@ const RepositoryContextSchema = Schema.Struct({
       message: Schema.String,
     }),
   )),
+  meta: Schema.optional(GraphMeta),
 })
 
 const OwnershipResultSchema = Schema.Struct({
@@ -245,6 +246,11 @@ const TestsInput = Schema.Struct({
     description:
       "REQUIRED. The symbol to find tests for (e.g. 'MemoryRepo.update').",
   }),
+  limit: optionalNumber.annotate({
+    description:
+      "Maximum number of tests to return. Defaults to 50 when omitted. " +
+      "Allowed range: 1-500.",
+  }),
 }).annotate({
   description:
     "List tests that reference or exercise a given symbol.",
@@ -303,7 +309,20 @@ const QueryOutput = RepositoryContextSchema
 const ExplainOutput = ArchitecturalSliceSchema
 const ImpactOutput = ArchitecturalSliceSchema
 const TraceOutput = ArchitecturalSliceSchema
-const TestsOutput = Schema.Struct({ tests: CodegraphNodeSchemaArray, notFound: Schema.Boolean })
+const TestDerivationSchema = Schema.Literals(["tested_by", "references", "import", "substring", "none"])
+const TestsOutput = Schema.Struct({
+  tests: CodegraphNodeSchemaArray,
+  testsDetailed: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        node: CodegraphNodeSchema,
+        derivation: TestDerivationSchema,
+      }),
+    ),
+  ),
+  notFound: Schema.Boolean,
+  meta: Schema.optional(GraphMeta),
+})
 const SymbolsOutput = Schema.Struct({ symbols: CodegraphNodeSchemaArray })
 const RelationshipsOutput = Schema.Struct({ nodes: CodegraphNodeSchemaArray })
 const OwnershipOutput = OwnershipResultSchema
@@ -333,6 +352,7 @@ const contextToOutput = (
     degraded?: boolean
     diagnostics?: readonly { kind: string; message: string }[]
   },
+  graphMeta?: ReturnType<typeof toGraphMeta>,
 ) => ({
   status: ctx.status,
   reason: ctx.reason,
@@ -375,6 +395,7 @@ const contextToOutput = (
       : {}),
   },
   ...(ctx.diagnostics ? { diagnostics: [...ctx.diagnostics] } : {}),
+  ...(graphMeta ? { meta: graphMeta } : {}),
 })
 
 const sliceToOutput = (
@@ -386,6 +407,7 @@ const sliceToOutput = (
     degraded?: boolean
     diagnostics?: readonly { kind: string; message: string }[]
   },
+  graphMeta?: ReturnType<typeof toGraphMeta>,
 ) => ({
   status: slc.status,
   reason: slc.reason,
@@ -414,6 +436,7 @@ const sliceToOutput = (
     ...(d.version ? { version: d.version } : {}),
   })),
   ...(slc.diagnostics ? { diagnostics: [...slc.diagnostics] } : {}),
+  ...(graphMeta ? { meta: graphMeta } : {}),
 })
 
 export const InputQuery = QueryInput
@@ -516,15 +539,12 @@ export const locationLayer = Layer.effectDiscard(
                 ...(ws ? { workspace: ws } : {}),
               })
               const metaRow = yield* repo.getMeta()
-              const meta = metaRow
-                ? { graphBuiltAt: metaRow.graphBuiltAt, graphCoverage: metaRow.graphCoverage }
-                : undefined
-              const staleResult = isStale(meta)
+              const staleResult = isStale(staleInputFromMeta(metaRow))
               if (staleResult.stale && staleResult.reason && !ctx.reason) {
                 ;(ctx as { reason?: string; degraded?: boolean }).reason = `${staleResult.reason}; results may be incomplete`
                 ;(ctx as { reason?: string; degraded?: boolean }).degraded = true
               }
-              return contextToOutput(ctx)
+              return contextToOutput(ctx, toGraphMeta(metaRow))
             }),
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_query failed" }))),
       }),
@@ -573,15 +593,12 @@ export const locationLayer = Layer.effectDiscard(
                 ...(ws ? { workspace: ws } : {}),
               })
               const metaRow = yield* repo.getMeta()
-              const meta = metaRow
-                ? { graphBuiltAt: metaRow.graphBuiltAt, graphCoverage: metaRow.graphCoverage }
-                : undefined
-              const staleResult = isStale(meta)
+              const staleResult = isStale(staleInputFromMeta(metaRow))
               if (staleResult.stale && staleResult.reason && !slc.reason) {
                 ;(slc as { reason?: string; degraded?: boolean }).reason = `${staleResult.reason}; results may be incomplete`
                 ;(slc as { reason?: string; degraded?: boolean }).degraded = true
               }
-              return sliceToOutput(slc)
+              return sliceToOutput(slc, toGraphMeta(metaRow))
             }),
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_explain failed" }))),
       }),
@@ -628,7 +645,8 @@ export const locationLayer = Layer.effectDiscard(
                 path: input.path,
                 ...(ws ? { workspace: ws } : {}),
               })
-              return sliceToOutput(slc)
+              const metaRow = yield* repo.getMeta()
+              return sliceToOutput(slc, toGraphMeta(metaRow))
             }),
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_impact failed" }))),
       }),
@@ -677,7 +695,8 @@ export const locationLayer = Layer.effectDiscard(
                 ...(input.limit !== undefined ? { limit: input.limit } : {}),
                 ...(ws ? { workspace: ws } : {}),
               })
-              return sliceToOutput(slc)
+              const metaRow = yield* repo.getMeta()
+              return sliceToOutput(slc, toGraphMeta(metaRow))
             }),
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_trace failed" }))),
       }),
@@ -726,9 +745,11 @@ export const locationLayer = Layer.effectDiscard(
                 { target: input.symbol },
               )
 
-              const tests = yield* intel.tests({ symbol: input.symbol })
+              const metaRow = yield* repo.getMeta()
+              const graphMeta = toGraphMeta(metaRow)
+              const tests = yield* intel.tests({ symbol: input.symbol, limit: input.limit })
               if (resolved._tag === "Miss") {
-                return { tests: [...tests.tests], notFound: tests.notFound }
+                return { tests: [], testsDetailed: [], notFound: true, ...(graphMeta ? { meta: graphMeta } : {}) }
               }
 
               // bucketFileIDs: the resolved node's file plus files of its
@@ -756,7 +777,24 @@ export const locationLayer = Layer.effectDiscard(
                 if (seen.has(n.id)) bucketFileIDs.add(n.fileID)
               }
               const scoped = tests.tests.filter((t) => bucketFileIDs.has(t.fileID))
-              return { tests: [...scoped], notFound: tests.notFound && scoped.length === 0 }
+              const rank: Record<typeof tests.derivation, number> = {
+                tested_by: 0,
+                references: 1,
+                import: 2,
+                substring: 3,
+                none: 4,
+              }
+              const limit = Math.max(1, Math.min(500, input.limit ?? 50))
+              const testsDetailed = scoped
+                .map((node) => ({ node, derivation: tests.derivation as typeof tests.derivation }))
+                .sort((a, b) => rank[a.derivation] - rank[b.derivation] || a.node.name.localeCompare(b.node.name))
+                .slice(0, limit)
+              return {
+                tests: testsDetailed.map((entry) => entry.node),
+                testsDetailed,
+                notFound: tests.notFound && testsDetailed.length === 0,
+                ...(graphMeta ? { meta: graphMeta } : {}),
+              }
             }),
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_tests failed" }))),
       }),

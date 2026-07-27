@@ -8,9 +8,11 @@ import type { Interface as CodegraphAnalyzerInterface } from "../banyancode/code
 import type { Interface as CodegraphReadinessInterface } from "../banyancode/codegraph-readiness"
 import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan, isStale } from "../banyancode"
+import { GraphMeta } from "../banyancode/types"
 import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
 import { traced } from "../observability/trace"
 import { PermissionV2 } from "../permission"
+import { toGraphMeta, staleInputFromMeta } from "./graph-meta"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { optionalNumber } from "./tool-schema"
@@ -46,6 +48,7 @@ export const Output = Schema.Struct({
   testsToRun: Schema.Number,
   risk: Schema.Literals(["low", "medium", "high", "unknown"]),
   graphStale: Schema.optional(Schema.Boolean),
+  meta: Schema.optional(GraphMeta),
   resolved: Schema.Boolean,
   resolutionDerivation: Schema.optional(
     Schema.Literals(["tag-fallback", "name-exact", "qualified-split", "code-substring", "name-like", "fts-bm25"]),
@@ -109,10 +112,8 @@ export const computeBlastRadius = (
     const transitiveCount = input.maxDepth ? Math.min(impact.transitive.length, BFS_MAX) : impact.transitive.length
 
     const metaRow = yield* deps.repo.getMeta()
-    const meta = metaRow
-      ? { graphBuiltAt: metaRow.graphBuiltAt, graphCoverage: metaRow.graphCoverage }
-      : undefined
-    const stale = isStale(meta)
+    const stale = isStale(staleInputFromMeta(metaRow))
+    const metaOut = toGraphMeta(metaRow)
 
     // When the resolver fails to map the input to an indexed node we cannot
     // trust the count — `analyzer.impact` returns 0/0 for both "safe" and
@@ -129,6 +130,7 @@ export const computeBlastRadius = (
       testsToRun,
       risk: isResolved ? score(impact.dependents.length, transitiveCount) : "unknown",
       resolved: isResolved,
+      ...(metaOut ? { meta: metaOut } : {}),
       ...(resolutionDerivation ? { resolutionDerivation } : {}),
       ...(stale.stale ? { graphStale: true } : {}),
     }

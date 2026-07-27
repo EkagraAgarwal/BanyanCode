@@ -4,8 +4,12 @@ import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { Banyan } from "../banyancode"
 import { EditPlan } from "../banyancode/edit-planner"
+import { GraphMeta } from "../banyancode/types"
+import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
+import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import { traced } from "../observability/trace"
 import { PermissionV2 } from "../permission"
+import { toGraphMeta } from "./graph-meta"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -53,6 +57,7 @@ export const Input = Schema.Struct({
 
 export const Output = Schema.Struct({
   plan: EditPlan,
+  meta: Schema.optional(GraphMeta),
 })
 
 export const locationLayer = Layer.effectDiscard(
@@ -61,6 +66,7 @@ export const locationLayer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const permission = yield* PermissionV2.Service
     const planner = yield* Banyan.EditPlanner
+    const repo = yield* Banyan.CodegraphRepo
 
     yield* tools
       .register({
@@ -118,11 +124,25 @@ export const locationLayer = Layer.effectDiscard(
                 })
                 const plan =
                   input.phase === "before"
-                    ? yield* planner.planBeforeEdit({
-                        targetSymbol: input.targetSymbol,
-                        changeKind: input.changeKind ?? "modify",
-                        filePath: input.filePath,
-                        root: input.root,
+                    ? yield* Effect.gen(function* () {
+                        const preResolved =
+                          input.filePath
+                            ? yield* resolveGraphTargetPure(
+                                repo as CodegraphRepoInterface,
+                                { target: input.targetSymbol },
+                              ).pipe(
+                                Effect.map((resolved) =>
+                                  resolved._tag === "Ok" ? resolved.value.node : undefined,
+                                ),
+                              )
+                            : undefined
+                        return yield* planner.planBeforeEdit({
+                          targetSymbol: input.targetSymbol,
+                          changeKind: input.changeKind ?? "modify",
+                          filePath: input.filePath,
+                          root: input.root,
+                          ...(preResolved ? { preResolvedTarget: preResolved } : {}),
+                        })
                       })
                     : yield* planner.planAfterEdit({
                         targetSymbol: input.targetSymbol,
@@ -130,7 +150,9 @@ export const locationLayer = Layer.effectDiscard(
                         root: input.root,
                         diff: input.diff,
                       })
-                return { plan }
+                const metaRow = yield* repo.getMeta()
+                const graphMeta = toGraphMeta(metaRow)
+                return { plan, ...(graphMeta ? { meta: graphMeta } : {}) }
               }),
             ).pipe(
               Effect.mapError((err) => {

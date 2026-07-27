@@ -13,8 +13,9 @@ import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan, isStale } from "../banyancode"
 import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
 import { traced } from "../observability/trace"
-import { CodegraphNodeSchema } from "../banyancode/types"
+import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
+import { toGraphMeta } from "./graph-meta"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { optionalNumber, optionalString } from "./tool-schema"
@@ -94,6 +95,7 @@ export const Output = Schema.Struct({
   httpRoutesAffected: Schema.Array(Schema.Struct({ method: Schema.String, path: Schema.String, file: Schema.String })),
   risks: Schema.Array(RiskSchema),
   derivation: DerivationLiterals,
+  meta: Schema.optional(GraphMeta),
   generatedAt: Schema.Number,
 })
 
@@ -283,7 +285,7 @@ export const computePreflight = (
 
     const allFiles = yield* deps.repo.listAllFiles()
     const metaRow = yield* deps.repo.getMeta()
-    const meta = metaRow
+    const staleInput = metaRow
       ? { graphBuiltAt: metaRow.graphBuiltAt, graphCoverage: metaRow.graphCoverage }
       : undefined
     const filePathByID = new Map(allFiles.map((f) => [f.id, f.path]))
@@ -359,7 +361,7 @@ export const computePreflight = (
         message: `${httpRoutes.length} HTTP route${httpRoutes.length === 1 ? "" : "s"} defined in files referencing this symbol; API contract may shift`,
       })
     }
-    const stale = isStale(meta)
+    const stale = isStale(staleInput)
     if (stale.stale && stale.reason) {
       risks.push({
         kind: "stale-graph",
@@ -368,6 +370,7 @@ export const computePreflight = (
       })
     }
 
+    const graphMetaOut = toGraphMeta(metaRow)
     return {
       target: { resolved, node: primary, candidates },
       directCallers,
@@ -379,6 +382,7 @@ export const computePreflight = (
       httpRoutesAffected: httpRoutes,
       risks,
       derivation: "regex-v1" as const,
+      ...(graphMetaOut ? { meta: graphMetaOut } : {}),
       generatedAt: now,
     }
   })

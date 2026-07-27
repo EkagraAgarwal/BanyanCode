@@ -940,10 +940,16 @@ export const layer = Layer.effect(
         } satisfies ArchitecturalSlice
       })
 
-    const tests = (input: { symbol: string }): Effect.Effect<{ tests: readonly CodegraphNode[]; notFound: boolean }, never, never> =>
+    const tests = (
+      input: { symbol: string; limit?: number },
+    ): Effect.Effect<{
+      tests: readonly CodegraphNode[]
+      notFound: boolean
+      derivation: "tested_by" | "references" | "import" | "substring" | "none"
+    }, never, never> =>
       Effect.gen(function* () {
         const result = yield* findTests(input)
-        return { tests: result.tests, notFound: result.notFound }
+        return result
       })
 
     const symbols = (input: { query: string; limit?: number }): Effect.Effect<readonly CodegraphNode[], never, never> =>

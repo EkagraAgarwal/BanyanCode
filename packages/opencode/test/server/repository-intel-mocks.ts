@@ -45,7 +45,12 @@ export const repositoryIntelServiceMocks = Layer.mergeAll(
       explain: () => Effect.succeed(emptySlice),
       impact: () => Effect.succeed(emptySlice),
       trace: () => Effect.succeed(emptySlice),
-      tests: () => Effect.succeed({ tests: [] as readonly CodegraphNode[], notFound: false }),
+      tests: () =>
+        Effect.succeed({
+          tests: [] as readonly CodegraphNode[],
+          notFound: false,
+          derivation: "none" as const,
+        }),
       symbols: () => Effect.succeed([] as readonly CodegraphNode[]),
       relationships: () => Effect.succeed([] as readonly CodegraphNode[]),
       findOwner: () => Effect.succeed({ owner: undefined, count: 0 }),

@@ -40,6 +40,7 @@ export interface Interface {
     changeKind: "rename" | "modify" | "delete" | "add"
     filePath?: string
     root?: string
+    preResolvedTarget?: CodegraphNode
   }) => Effect.Effect<EditPlan, never, never>
 
   readonly planAfterEdit: (input: {
@@ -158,7 +159,7 @@ export const layer = Layer.effect(
         }
 
         const allNodes = yield* repo.listAllNodes()
-        const target = yield* resolveTarget(repo, input.targetSymbol)
+        const target = input.preResolvedTarget ?? (yield* resolveTarget(repo, input.targetSymbol))
         const graphMeta = yield* repo.getMeta()
 
         if (!target) {
@@ -201,11 +202,13 @@ export const layer = Layer.effect(
         })
 
         const steps: Array<{ tool: string; args: Record<string, unknown>; rationale: string }> = []
-        steps.push({
-          tool: "code_find",
-          args: { intent: "definition", target: input.targetSymbol },
-          rationale: "locate the exact symbol",
-        })
+        if (!(input.filePath && input.preResolvedTarget)) {
+          steps.push({
+            tool: "code_find",
+            args: { intent: "definition", target: input.targetSymbol },
+            rationale: "locate the exact symbol",
+          })
+        }
         if (input.changeKind === "rename") {
           steps.push({ tool: "code_find", args: { intent: "impact", target: input.targetSymbol }, rationale: "blast-radius before rename" })
         } else if (input.changeKind === "modify" || input.changeKind === "delete") {
