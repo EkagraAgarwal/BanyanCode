@@ -1383,9 +1383,24 @@ export function Session() {
                   backgroundColor={theme.backgroundPanel}
                   width="100%"
                   height="100%"
+                  paddingLeft={1}
+                  paddingRight={1}
                   flexDirection="column"
                 >
-                  <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
+                  <scrollbox
+                    flexGrow={1}
+                    scrollAcceleration={scrollAcceleration()}
+                    verticalScrollbarOptions={{
+                      trackOptions: {
+                        backgroundColor: theme.background,
+                        foregroundColor: theme.borderActive,
+                      },
+                    }}
+                  >
+                    <box flexDirection="column" flexShrink={0} gap={1} paddingRight={1}>
+                      <pluginRuntime.Slot name="session_inspector" session_id={route.sessionID} />
+                    </box>
+                  </scrollbox>
                 </box>
               </box>
             </Show>
