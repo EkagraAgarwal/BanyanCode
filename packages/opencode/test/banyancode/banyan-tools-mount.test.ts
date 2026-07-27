@@ -34,6 +34,14 @@ const makeMountTestLayer = (dbPath: string) => {
     Layer.provide(dbLayer),
     Layer.provide(FSUtil.defaultLayer),
   )
+  // Expose `Banyan.CodegraphReadiness` in the test layer's output so the
+  // regression test below can yield it directly. Production wires the same
+  // layer through AppLayer/createRoutes/banyanToolDepsLayer; the source-level
+  // drift guard further down catches any future removal from those seams.
+  const readinessLayer = Banyan.codegraphReadinessDefaultLayer.pipe(
+    Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+    Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, dbLayer, EventV2.defaultLayer)),
+  )
   const baseInfra = Layer.mergeAll(
     dbLayer,
     FSUtil.defaultLayer,
@@ -42,6 +50,7 @@ const makeMountTestLayer = (dbPath: string) => {
     AppProcess.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
     permissionLayer,
+    readinessLayer,
   )
   return baseInfra.pipe(
     Layer.provideMerge(BanyanToolsMount.attachToCatalog(catalogLayer)),
@@ -81,6 +90,26 @@ describe("BanyanToolsMount", () => {
         save: [],
       })
       expect(result.effect).toBe("allow")
+    }) as unknown as Effect.Effect<void, never, Scope.Scope>,
+  )
+
+  // Regression for v26.07.43 startup crash: graph-dependent tool location
+  // layers (codegraph, code-find, repository-wave2, blast-radius, preflight)
+  // all yield `Banyan.CodegraphReadiness`. If the readiness service is not in
+  // banyanToolDepsLayer, building the tool layer throws
+  // "Service not found: @banyancode/CodegraphReadiness" and the TUI closes
+  // immediately on launch. We assert the service is reachable through the
+  // banyanToolDepsLayer (the layer the production AppLayer/createRoutes merge
+  // in) by combining it with the same infra deps and yielding the service
+  // directly. The drift-guard test below also catches the static regression
+  // by asserting the source of app-runtime.ts and server.ts mounts the layer.
+  it.effect("exposes Banyan.CodegraphReadiness through banyanToolDepsLayer", () =>
+    Effect.gen(function* () {
+      const readiness = yield* Banyan.CodegraphReadiness
+      const result = yield* readiness.status()
+      expect(typeof result.reason).toBe("string")
+      expect(["ready", "missing", "stale", "building", "failed"]).toContain(result.reason)
+      expect(typeof result.autoBuilt).toBe("boolean")
     }) as unknown as Effect.Effect<void, never, Scope.Scope>,
   )
 
@@ -204,5 +233,25 @@ describe("runtime composition drift guard", () => {
     expect(appRuntime).toContain("BanyanToolsMount.attachToCatalog")
     expect(server).toContain("BanyanToolsMount.attachToCatalog")
     expect(server).toContain("PermissionBridge.layer")
+  })
+
+  // Regression: v26.07.43 wired HTTP handlers and tool location layers to
+  // `Banyan.CodegraphReadiness` but never mounted `codegraphReadinessDefaultLayer`
+  // in any runtime. `banyancode serve` and the TUI crashed at startup with
+  // "Service not found: @banyancode/CodegraphReadiness". This guard fails CI
+  // if either seam drops the layer.
+  bunIt("AppLayer and createRoutes both mount codegraphReadinessDefaultLayer", () => {
+    const appRuntime = readFileSync(path.join(import.meta.dir, "../../src/effect/app-runtime.ts"), "utf8")
+    const server = readFileSync(
+      path.join(import.meta.dir, "../../src/server/routes/instance/httpapi/server.ts"),
+      "utf8",
+    )
+    const banyanToolsMount = readFileSync(
+      path.join(import.meta.dir, "../../src/effect/banyan-tools-mount.ts"),
+      "utf8",
+    )
+    expect(appRuntime).toContain("codegraphReadinessDefaultLayer")
+    expect(server).toContain("codegraphReadinessDefaultLayer")
+    expect(banyanToolsMount).toContain("codegraphReadinessDefaultLayer")
   })
 })

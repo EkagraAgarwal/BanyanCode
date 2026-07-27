@@ -277,6 +277,13 @@ export function createRoutes(
           Layer.provide(Banyan.codegraphAnalyzerDefaultLayer),
           Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
         ),
+        Banyan.codegraphReadinessDefaultLayer.pipe(
+          Layer.provide(Banyan.codegraphStalenessDefaultLayer),
+          Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+          Layer.provide(Banyan.editPlannerDefaultLayer),
+          Layer.provide(Banyan.codegraphAnalyzerDefaultLayer),
+          Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
+        ),
         Banyan.banyanFilesystemDefaultLayer,
       ),
     ),
