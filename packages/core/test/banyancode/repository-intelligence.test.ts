@@ -613,4 +613,39 @@ describe("RepositoryIntelligence", () => {
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
+
+  // Regression for Issue #1 from codegraph_reader_fixes_0c320485: `trace`
+  // was overwriting `slc.directCallers` with a depth-1 BFS filtered by
+  // `isCodeLike`, wiping callers for symbols whose reachable callers
+  // included non-code-kind nodes. `explain` returned the same callers fine
+  // because it shares `slice`. After Phase 3, `trace` preserves `slc.directCallers`.
+  test("trace preserves directCallers from slice (does not wipe them with a depth-1 BFS)", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        yield* repo.putFile({ id: "f-target", path: "src/target.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putFile({ id: "f-caller", path: "src/caller.ts", contentHash: "h", language: "typescript", indexedAt: 1 })
+        yield* repo.putNode({ id: "n-target", fileID: "f-target", kind: "function", name: "rememberedMethod", signature: "rememberedMethod()", startLine: 1, endLine: 2, code: "function rememberedMethod() {}" })
+        yield* repo.putNode({ id: "n-caller", fileID: "f-caller", kind: "function", name: "usesIt", signature: "usesIt()", startLine: 1, endLine: 2, code: "function usesIt() { rememberedMethod() }" })
+        yield* repo.putEdge({ id: "e-caller-target", fromNodeID: "n-caller", toNodeID: "n-target", kind: "calls" })
+
+        const ri = yield* RepositoryIntelligence.Service
+        const explained = yield* ri.explain({ symbol: "rememberedMethod" })
+        const traced = yield* ri.trace({ symbol: "rememberedMethod", depth: 2 })
+
+        expect(explained.directCallers.length).toBeGreaterThan(0)
+        expect(explained.directCallers.map((n) => n.id)).toContain("n-caller")
+        expect(traced.directCallers.length).toBeGreaterThan(0)
+        expect(traced.directCallers.map((n) => n.id)).toContain("n-caller")
+        expect(traced.entrypoints.map((n) => n.id)).toContain("n-caller")
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
 })

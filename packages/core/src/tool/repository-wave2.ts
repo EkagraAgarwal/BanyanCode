@@ -737,9 +737,13 @@ export const locationLayer = Layer.effectDiscard(
 
               yield* ensureGraphReady(input, name_tests)
 
-              // Resolve the symbol so we can scope the returned tests to the
-              // symbol's own file (and a small set of directly related files)
-              // instead of returning every test that contains the substring.
+              // Keep the resolver call so we can short-circuit on a hard
+              // Miss (genuinely unknown symbol) and surface `notFound: true`
+              // to the caller. We do NOT use the resolver to bucket tests
+              // any more — `intel.tests` already does derivation ranking
+              // (tested_by → references → import → substring) and is the
+              // single source of truth. Previously a depth-1 BFS around the
+              // resolved node's file was excluding valid tests (Issue #4).
               const resolved = yield* resolveGraphTargetPure(
                 repo as CodegraphRepoInterface,
                 { target: input.symbol },
@@ -752,31 +756,6 @@ export const locationLayer = Layer.effectDiscard(
                 return { tests: [], testsDetailed: [], notFound: true, ...(graphMeta ? { meta: graphMeta } : {}) }
               }
 
-              // bucketFileIDs: the resolved node's file plus files of its
-              // direct (depth=1) related nodes. Anything outside that set is
-              // dropped — the old behavior returned every test in the repo.
-              const bucketFileIDs = new Set<string>([resolved.value.node.fileID])
-              const allNodes = yield* repo.listAllNodes()
-              const seen = new Set<string>([resolved.value.node.id])
-              const queue: Array<{ id: string; depth: number }> = [
-                { id: resolved.value.node.id, depth: 0 },
-              ]
-              while (queue.length > 0) {
-                const cur = queue.shift()!
-                if (cur.depth >= 1) continue
-                const out = yield* repo.edgesFrom(cur.id)
-                const inc = yield* repo.edgesTo(cur.id)
-                for (const e of [...out, ...inc]) {
-                  const next = e.fromNodeID === cur.id ? e.toNodeID : e.fromNodeID
-                  if (seen.has(next)) continue
-                  seen.add(next)
-                  queue.push({ id: next, depth: cur.depth + 1 })
-                }
-              }
-              for (const n of allNodes) {
-                if (seen.has(n.id)) bucketFileIDs.add(n.fileID)
-              }
-              const scoped = tests.tests.filter((t) => bucketFileIDs.has(t.fileID))
               const rank: Record<typeof tests.derivation, number> = {
                 tested_by: 0,
                 references: 1,
@@ -785,7 +764,7 @@ export const locationLayer = Layer.effectDiscard(
                 none: 4,
               }
               const limit = Math.max(1, Math.min(500, input.limit ?? 50))
-              const testsDetailed = scoped
+              const testsDetailed = tests.tests
                 .map((node) => ({ node, derivation: tests.derivation as typeof tests.derivation }))
                 .sort((a, b) => rank[a.derivation] - rank[b.derivation] || a.node.name.localeCompare(b.node.name))
                 .slice(0, limit)

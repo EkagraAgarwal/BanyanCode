@@ -903,15 +903,15 @@ export const layer = Layer.effect(
         const isCodeLike = (k: CodegraphNode["kind"]) =>
           k === "function" || k === "class" || k === "method"
 
-        const directCallers: CodegraphNode[] = []
+        const bfsCallers: CodegraphNode[] = []
         const transitiveTagged: Array<{ node: CodegraphNode; depth: number }> = []
 
         for (const t of tagged) {
           if (!isCodeLike(t.node.kind)) continue
           if (t.depth === 1) {
-            directCallers.push(t.node)
+            bfsCallers.push(t.node)
           } else {
-            transitiveTagged.push(t)
+            transitiveTagged.push({ node: t.node, depth: t.depth })
           }
         }
 
@@ -930,6 +930,12 @@ export const layer = Layer.effect(
           visibleTransitive = rankedTransitive.slice(0, limit)
           moreDependents = rankedTransitive.length - limit
         }
+
+        // Preserve the slice-derived callers (rich; from dependents() in
+        // `slice`); only fall back to the BFS findings when the slice had
+        // nothing. Issue #1: trace was wiping callers under sparse-edge
+        // symbols despite `intel.explain` returning the same callers fine.
+        const directCallers = slc.directCallers.length > 0 ? [...slc.directCallers] : bfsCallers
 
         return {
           ...slc,

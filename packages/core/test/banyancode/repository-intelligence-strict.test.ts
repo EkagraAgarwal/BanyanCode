@@ -191,4 +191,109 @@ describe("RepositoryIntelligence Strict Diagnostic Policy", () => {
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
+
+  // Regression for Issue #4: after the qualified-split widens to consult
+  // service tags (Phase 1) AND the depth-1 bucket is dropped here (Phase 4),
+  // `repository_tests` for a `Service`-shaped symbol resolves to the right
+  // file and surfaces the test nodes that reference the leaf method.
+  test("repository_tests returns ≥1 test for a Service-shaped symbol after Phase 1 resolver widening", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        // Production-like shape: Service class extends Context.Service<MemoRepo>()
+        // ("…/MemoryRepo"); the actual `update` method is a sibling in the
+        // same file. A separate test file references it via name. Phase 1
+        // extracts the service_tag from the class `code` field; Phase 4
+        // drops the depth-1 file bucket so the test in fMemTest shows up.
+        yield* repo.writeFileGraph({
+          file: {
+            id: "fMem",
+            path: "src/banyancode/memory-repo.ts",
+            contentHash: "h",
+            language: "typescript",
+            indexedAt: 1,
+          },
+          nodes: [
+            {
+              id: "fMem:file",
+              fileID: "fMem",
+              kind: "file",
+              name: "memory-repo.ts",
+              startLine: 1,
+              endLine: 1,
+            },
+            {
+              id: "fMem:Service",
+              fileID: "fMem",
+              kind: "class",
+              name: "Service",
+              startLine: 1,
+              endLine: 5,
+              code: 'export class Service extends Context.Service<Interface>()("@opencode/v2/Banyan/MemoryRepo") {}',
+            },
+            {
+              id: "fMem:update",
+              fileID: "fMem",
+              kind: "function",
+              name: "update",
+              startLine: 7,
+              endLine: 20,
+              code: "const update: Interface['update'] = (input) => { /* … */ }",
+            },
+          ],
+          edges: [],
+        })
+        yield* repo.writeFileGraph({
+          file: {
+            id: "fMemTest",
+            path: "test/memory-repo.test.ts",
+            contentHash: "h",
+            language: "typescript",
+            indexedAt: 2,
+          },
+          nodes: [
+            {
+              id: "fMemTest:file",
+              fileID: "fMemTest",
+              kind: "file",
+              name: "memory-repo.test.ts",
+              startLine: 1,
+              endLine: 1,
+            },
+            {
+              id: "fMemTest:case",
+              fileID: "fMemTest",
+              kind: "function",
+              name: "memoryRepoUpdateSpec",
+              startLine: 1,
+              endLine: 25,
+              code: "test('updates', () => update({ key: 'k', value: 'v' }))",
+            },
+          ],
+          edges: [
+            {
+              id: "e-test-update",
+              fromNodeID: "fMemTest:case",
+              toNodeID: "fMem:update",
+              kind: "references",
+            },
+          ],
+        })
+
+        const ri = yield* RepositoryIntelligence.Service
+        const result = yield* ri.tests({ symbol: "MemoryRepo.update" })
+
+        expect(result.tests.length).toBeGreaterThanOrEqual(1)
+        const ids = result.tests.map((t) => t.id)
+        expect(ids).toContain("fMemTest:case")
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
 })
