@@ -66,11 +66,20 @@ export interface Interface {
       skipped: number
       scannedFiles: number
       /**
-       * Phase 0: files the walker considered eligible for indexing (total
-       * walked minus gitignored / banyanignored). Cached, tooLarge, etc.
-       * still count as eligible because the indexer can reach them. Used as
-       * the denominator for graphCoverage so a fully-cached rebuild scores
-       * near 1.0 instead of `indexed / scanned`.
+       * Phase 0+2: files the indexer considered eligible for indexing.
+       * This is the union of (a) code/artifact candidates the walker
+       * reached and passed extension/artifact filters, plus (b) code
+       * candidates excluded only for size budget. Gitignored /
+       * banyanignored files are NOT eligible (the indexer never sees
+       * them). Cached files remain eligible.
+       *
+       * Important: previously this counted `allFiles.length` (every
+       * walked file including non-code extensions like `.json`, `.lock`,
+       * images). For a monorepo whose non-code files dominate, that
+       * cap pushed coverage to ~0.62 and made the `STALENESS_COVERAGE_HIGH
+       * = 0.5` cliff reachable. Denominator now counts only files the
+       * indexer would actually attempt so a fully-cached rebuild scores
+       * near 1.0.
        */
       eligibleFiles: number
       symbolsIndexed: number
@@ -1015,12 +1024,25 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   if (changedSet) {
     const deletedTouched = yield* repo.deleteDerivedEdgesForFiles({ fileIDs: changedFileIDs! })
     for (const nodeID of deletedTouched) touchedNodeIDs.add(nodeID)
+  } else {
+    // Full-rebuild derived-edge purge. Pre-Phase-3a rebuilds inserted with
+    // onConflictDoNothing without ever deleting, which let stale derived edges
+    // accumulate across builds (~166K stale edges on this repo before the fix).
+    // Deleting them here and re-inserting via putEdges gives a reproducible
+    // import-scoped count.
+    const deletedTouchedFull = yield* repo.deleteAllDerivedEdges()
+    for (const nodeID of deletedTouchedFull) touchedNodeIDs.add(nodeID)
   }
   if (edgesToWrite.length > 0) {
     yield* repo.putEdges(edgesToWrite)
   }
   if (touchedNodeIDs.size > 0) {
     yield* repo.recomputeInDegree({ nodeIDs: [...touchedNodeIDs] }).pipe(Effect.orDie)
+  } else if (!changedSet) {
+    // Full-rebuild purge may have driven in-degree to zero on many nodes that
+    // were never re-touched by the new derived pass. Recompute over the whole
+    // graph so downstream readers see accurate ranker scores.
+    yield* repo.recomputeInDegree().pipe(Effect.orDie)
   }
 })
 
@@ -1192,6 +1214,25 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       ).pipe(Effect.ensuring(Queue.shutdown(parsedQueue)))
       yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
 
+      // Phase 3: prune files that disappeared between walks. Before this,
+      // a `full rebuild` left orphan rows in `codegraph_files` and their
+      // edges + nodes behind, inflating `totalFiles` and the `totalEdges`
+      // baseline in `meta`. The diff is `existingFilesByPath - walked`.
+      const walkedPaths = new Set(allFiles.map((f) => f.path))
+      const orphanFileRows: Array<{ id: string; path: string }> = []
+      for (const [path, row] of existingFilesByPath) {
+        if (!walkedPaths.has(path)) orphanFileRows.push({ id: row.id, path })
+      }
+      for (const orphan of orphanFileRows) {
+        yield* repo.deleteFile(orphan.id).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(`Pruning orphaned file row failed for ${orphan.path}`, {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        )
+      }
+
       // Phase 2: refresh `indexed_at` on every file that hit the content
       // cache in this build. One batched update per 900-id chunk —
       // cheaper than touching each row in the drain loop and, more
@@ -1237,11 +1278,15 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
 
       const parseErrors = yield* repo.listParseErrors()
 
-      // Phase 0: eligibleFiles is the graphCoverage denominator — files
-      // the walker passed over, minus only the gitignored / banyanignored
-      // skip classes. Files that were too-large per the walker's size cap
-      // still count as eligible (the size budget is ours, not the repo's).
-      const eligibleFiles = allFiles.length + walkResult.skippedBySize
+      // Phase 2: eligibleFiles is the graphCoverage denominator. It counts
+      // only files the indexer would actually attempt: code/artifact
+      // candidates the walker reached, plus code candidates excluded
+      // only by the size budget (which is ours, not the repo's).
+      // Non-code files (`.json`, `.lock`, images, fonts, etc.) are
+      // excluded because the indexer will never emit a graph row for
+      // them — counting them capped coverage on monorepos and brought it
+      // close to the 0.5 staleness cliff.
+      const eligibleFiles = codeFiles.length + walkResult.skippedBySize
 
       return {
         indexed,

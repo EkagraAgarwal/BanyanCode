@@ -157,11 +157,12 @@ const buildCountingRepoLayer = (counters: PushdownCounters, panicOnListAllNodes:
     CodegraphRepo.Service,
     Effect.gen(function* () {
       const inner = yield* CodegraphRepo.Service
-      return CodegraphRepo.Service.of({
+        return CodegraphRepo.Service.of({
         putFile: inner.putFile,
         getFile: inner.getFile,
         getFileByPath: inner.getFileByPath,
         listAllFiles: inner.listAllFiles,
+        deleteAllDerivedEdges: inner.deleteAllDerivedEdges,
         putNode: inner.putNode,
         putNodes: inner.putNodes,
         getNode: inner.getNode,

@@ -115,6 +115,20 @@ export interface Interface {
   readonly deleteFile: (id: string) => Effect.Effect<void, never, never>
   readonly deleteDerivedEdgesForFiles: (input: { fileIDs: string[] }) => Effect.Effect<readonly string[], never, never>
   /**
+   * Phase 3d-followup: full-rebuild derived-edge purge. Wipes every edge whose
+   * `kind` is in the derived set (`calls`, `extends`, `references`, `tested_by`,
+   * `configured_by`, `built_by`, `mounts`, `generated_from`) regardless of
+   * which file it came from, leaving parser edges (`imports`, `contains`)
+   * intact. Required because pre-Phase-3a full rebuilds inserted edges
+   * with `onConflictDoNothing` without ever purging; the warm-graph
+   * edge-count drift (18,971 vs 185,012) was ~90% stale accumulation.
+   *
+   * Full-mode callers must follow up with `recomputeInDegree` over EVERY
+   * node in the graph — not just the touched subset — because in-degree
+   * counts for nodes with no remaining derived edges become zero.
+   */
+  readonly deleteAllDerivedEdges: () => Effect.Effect<readonly string[], never, never>
+  /**
    * Atomically replace one file's worth of graph data: if `previousFileID`
    * is set, delete that file (cascade-removes its nodes/edges); then insert
    * the new file row, all its nodes, and all its per-file edges in a single
@@ -493,6 +507,40 @@ export const layer = Layer.effect(
             .run()
             .pipe(Effect.orDie)
           const touched = new Set<string>(nodeIDs)
+          for (const row of deletedRows) {
+            touched.add(row.from)
+            touched.add(row.to)
+          }
+          return [...touched]
+        }),
+      ).pipe(Effect.orDie)
+    })
+
+    const deleteAllDerivedEdges = Effect.fn("CodegraphRepo.deleteAllDerivedEdges")(function* () {
+      return yield* db.transaction((tx) =>
+        Effect.gen(function* () {
+          const derivedKinds = [
+            "calls",
+            "extends",
+            "references",
+            "tested_by",
+            "configured_by",
+            "built_by",
+            "mounts",
+            "generated_from",
+          ]
+          const deletedRows = yield* tx
+            .select({ from: CodegraphEdgesTable.from_node_id, to: CodegraphEdgesTable.to_node_id })
+            .from(CodegraphEdgesTable)
+            .where(inArray(CodegraphEdgesTable.kind, derivedKinds))
+            .all()
+            .pipe(Effect.orDie)
+          yield* tx
+            .delete(CodegraphEdgesTable)
+            .where(inArray(CodegraphEdgesTable.kind, derivedKinds))
+            .run()
+            .pipe(Effect.orDie)
+          const touched = new Set<string>()
           for (const row of deletedRows) {
             touched.add(row.from)
             touched.add(row.to)
@@ -1444,6 +1492,7 @@ export const layer = Layer.effect(
       edgesToBatch,
       deleteFile,
       deleteDerivedEdgesForFiles,
+      deleteAllDerivedEdges,
       writeFileGraph,
       clearAll,
       getMeta,
