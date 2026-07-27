@@ -40,6 +40,8 @@ export type CodegraphFile = {
   contentHash: string
   language: string
   indexedAt: number
+  sizeBytes?: number
+  mtimeMs?: number
 }
 
 export type CodegraphNodeKind =

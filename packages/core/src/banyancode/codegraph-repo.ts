@@ -113,7 +113,7 @@ export interface Interface {
   readonly edgesFromBatch: (ids: ReadonlyArray<string>) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesToBatch: (ids: ReadonlyArray<string>) => Effect.Effect<CodegraphEdge[], never, never>
   readonly deleteFile: (id: string) => Effect.Effect<void, never, never>
-  readonly deleteDerivedEdgesForFiles: (input: { fileIDs: string[] }) => Effect.Effect<void, never, never>
+  readonly deleteDerivedEdgesForFiles: (input: { fileIDs: string[] }) => Effect.Effect<readonly string[], never, never>
   /**
    * Atomically replace one file's worth of graph data: if `previousFileID`
    * is set, delete that file (cascade-removes its nodes/edges); then insert
@@ -135,7 +135,7 @@ export interface Interface {
   // `codegraph_edges.to_node_id`. Called by the indexer after the parse
   // pass writes all edges, so the ranker can read the column instead of
   // running COUNT(*) per candidate.
-  readonly recomputeInDegree: () => Effect.Effect<void, never, never>
+  readonly recomputeInDegree: (input?: { nodeIDs?: readonly string[] }) => Effect.Effect<void, never, never>
   /**
    * Phase 2: refresh `indexed_at` on a batch of files in one update.
    * Called by the indexer after the drain loop completes so cache-hit
@@ -204,6 +204,8 @@ export const layer = Layer.effect(
           content_hash: file.contentHash,
           language: file.language,
           indexed_at: file.indexedAt,
+          size_bytes: file.sizeBytes ?? 0,
+          mtime_ms: file.mtimeMs ?? 0,
         })
         .onConflictDoUpdate({
           target: CodegraphFilesTable.path,
@@ -211,6 +213,8 @@ export const layer = Layer.effect(
             content_hash: file.contentHash,
             language: file.language,
             indexed_at: file.indexedAt,
+            size_bytes: file.sizeBytes ?? 0,
+            mtime_ms: file.mtimeMs ?? 0,
           },
         })
         .run()
@@ -231,6 +235,8 @@ export const layer = Layer.effect(
         contentHash: row.content_hash,
         language: row.language,
         indexedAt: row.indexed_at,
+        sizeBytes: row.size_bytes,
+        mtimeMs: row.mtime_ms,
       }
     })
 
@@ -248,6 +254,8 @@ export const layer = Layer.effect(
         contentHash: row.content_hash,
         language: row.language,
         indexedAt: row.indexed_at,
+        sizeBytes: row.size_bytes,
+        mtimeMs: row.mtime_ms,
       }
     })
 
@@ -259,6 +267,8 @@ export const layer = Layer.effect(
         contentHash: row.content_hash,
         language: row.language,
         indexedAt: row.indexed_at,
+        sizeBytes: row.size_bytes,
+        mtimeMs: row.mtime_ms,
       }))
     })
 
@@ -444,8 +454,8 @@ export const layer = Layer.effect(
 
     // Clears edges that became invalid because their endpoints' files were re-indexed.
     const deleteDerivedEdgesForFiles = Effect.fn("CodegraphRepo.deleteDerivedEdgesForFiles")(function* (input: { fileIDs: string[] }) {
-      if (input.fileIDs.length === 0) return
-      yield* db.transaction((tx) =>
+      if (input.fileIDs.length === 0) return []
+      return yield* db.transaction((tx) =>
         Effect.gen(function* () {
           const nodeIDRows = yield* tx
             .select({ id: CodegraphNodesTable.id })
@@ -454,17 +464,40 @@ export const layer = Layer.effect(
             .all()
             .pipe(Effect.orDie)
           const nodeIDs = nodeIDRows.map((r) => r.id)
-          if (nodeIDs.length === 0) return
+          if (nodeIDs.length === 0) return []
+          const derivedWhere = and(
+            or(
+              inArray(CodegraphEdgesTable.from_node_id, nodeIDs),
+              inArray(CodegraphEdgesTable.to_node_id, nodeIDs),
+            ),
+            or(
+              eq(CodegraphEdgesTable.kind, "calls"),
+              eq(CodegraphEdgesTable.kind, "extends"),
+              eq(CodegraphEdgesTable.kind, "references"),
+              eq(CodegraphEdgesTable.kind, "tested_by"),
+              eq(CodegraphEdgesTable.kind, "configured_by"),
+              eq(CodegraphEdgesTable.kind, "built_by"),
+              eq(CodegraphEdgesTable.kind, "mounts"),
+              eq(CodegraphEdgesTable.kind, "generated_from"),
+            ),
+          )
+          const deletedRows = yield* tx
+            .select({ from: CodegraphEdgesTable.from_node_id, to: CodegraphEdgesTable.to_node_id })
+            .from(CodegraphEdgesTable)
+            .where(derivedWhere)
+            .all()
+            .pipe(Effect.orDie)
           yield* tx
             .delete(CodegraphEdgesTable)
-            .where(
-              or(
-                inArray(CodegraphEdgesTable.from_node_id, nodeIDs),
-                inArray(CodegraphEdgesTable.to_node_id, nodeIDs),
-              ),
-            )
+            .where(derivedWhere)
             .run()
             .pipe(Effect.orDie)
+          const touched = new Set<string>(nodeIDs)
+          for (const row of deletedRows) {
+            touched.add(row.from)
+            touched.add(row.to)
+          }
+          return [...touched]
         }),
       ).pipe(Effect.orDie)
     })
@@ -654,6 +687,8 @@ export const layer = Layer.effect(
         contentHash: row.content_hash,
         language: row.language,
         indexedAt: row.indexed_at,
+        sizeBytes: row.size_bytes,
+        mtimeMs: row.mtime_ms,
       }))
     })
 
@@ -926,14 +961,32 @@ export const layer = Layer.effect(
     // One UPDATE-with-correlated-subquery is cheap (one full pass) and the
     // ranker can then read the column directly without a COUNT(*) per
     // candidate during trace().
-    const recomputeInDegree = Effect.fn("CodegraphRepo.recomputeInDegree")(function* () {
-      yield* db.run(sql`
-        UPDATE \`codegraph_nodes\`
-        SET \`in_degree\` = (
-          SELECT COUNT(*) FROM \`codegraph_edges\`
-          WHERE \`codegraph_edges\`.\`to_node_id\` = \`codegraph_nodes\`.\`id\`
-        )
-      `).pipe(Effect.orDie)
+    const recomputeInDegree = Effect.fn("CodegraphRepo.recomputeInDegree")(function* (input?: { nodeIDs?: readonly string[] }) {
+      const nodeIDs = input?.nodeIDs ? [...new Set(input.nodeIDs)] : []
+      if (nodeIDs.length === 0) {
+        yield* db.run(sql`
+          UPDATE \`codegraph_nodes\`
+          SET \`in_degree\` = (
+            SELECT COUNT(*) FROM \`codegraph_edges\`
+            WHERE \`codegraph_edges\`.\`to_node_id\` = \`codegraph_nodes\`.\`id\`
+          )
+        `).pipe(Effect.orDie)
+        return
+      }
+      for (let i = 0; i < nodeIDs.length; i += 900) {
+        const chunk = nodeIDs.slice(i, i + 900)
+        yield* db
+          .update(CodegraphNodesTable)
+          .set({
+            in_degree: sql`(
+              SELECT COUNT(*) FROM \`codegraph_edges\`
+              WHERE \`codegraph_edges\`.\`to_node_id\` = \`codegraph_nodes\`.\`id\`
+            )`,
+          })
+          .where(inArray(CodegraphNodesTable.id, chunk))
+          .run()
+          .pipe(Effect.orDie)
+      }
     })
 
     // Phase 2: refresh `indexed_at` on a batch of files. Used by the
@@ -1233,6 +1286,8 @@ export const layer = Layer.effect(
                 content_hash: input.file.contentHash,
                 language: input.file.language,
                 indexed_at: input.file.indexedAt,
+                size_bytes: input.file.sizeBytes ?? 0,
+                mtime_ms: input.file.mtimeMs ?? 0,
               })
               .onConflictDoUpdate({
                 target: CodegraphFilesTable.path,
@@ -1240,6 +1295,8 @@ export const layer = Layer.effect(
                   content_hash: input.file.contentHash,
                   language: input.file.language,
                   indexed_at: input.file.indexedAt,
+                  size_bytes: input.file.sizeBytes ?? 0,
+                  mtime_ms: input.file.mtimeMs ?? 0,
                 },
               })
               .run()

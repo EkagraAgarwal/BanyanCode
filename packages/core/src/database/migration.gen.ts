@@ -14,5 +14,6 @@ export const migrations = (
     import("./migration/20260712000000_codegraph_indexed_root"),
     import("./migration/20260719000000_codegraph_node_name_idx"),
     import("./migration/20260724000000_subagent_review_requests"),
+    import("./migration/20260727161000_codegraph_file_stat_cache"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

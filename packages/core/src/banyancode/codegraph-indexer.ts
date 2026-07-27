@@ -14,6 +14,7 @@ import {
   parseTypeScriptWithTreeSitterIncremental,
   parsePythonWithTreeSitterIncremental,
 } from "./langs/query-executor"
+import { ensureWebTreeSitterReady } from "./langs/tree-sitter"
 import type { Tree } from "web-tree-sitter"
 import { extractTestFileImports } from "./codegraph-helpers"
 
@@ -173,6 +174,8 @@ export const layer = Layer.effect(
 
     // Warm the grammar cache so per-file parses never read `.scm` from disk.
     yield* Effect.promise(() => ensureQuerySourcesLoaded())
+    // Initialize tree-sitter state, but never fail layer construction.
+    yield* ensureWebTreeSitterReady()
 
     const pruneTreeCache = Effect.fn("CodegraphIndexer.pruneTreeCache")(function* () {
       yield* Ref.update(treeCacheRef, (m) => {
@@ -199,10 +202,10 @@ export const layer = Layer.effect(
       root: string,
       gitignorePatterns: string[],
       banyanignorePatterns: string[],
-    ): Effect.Effect<{ files: string[]; skippedBySize: number; skippedByGitignore: number; skippedByBanyanignore: number }> => {
+    ): Effect.Effect<{ files: CandidateFile[]; skippedBySize: number; skippedByGitignore: number; skippedByBanyanignore: number }> => {
       return Effect.gen(function* () {
         const entries = yield* fs.readDirectoryEntries(dir).pipe(Effect.orDie)
-        const files: string[] = []
+        const files: CandidateFile[] = []
         let skippedBySize = 0
         let skippedByGitignore = 0
         let skippedByBanyanignore = 0
@@ -245,7 +248,11 @@ export const layer = Layer.effect(
             skippedBySize++
             continue
           }
-          files.push(fullPath)
+          files.push({
+            path: fullPath,
+            sizeBytes: Number(stats.size),
+            mtimeMs: "value" in stats.mtime ? Math.floor(stats.mtime.value.getTime()) : 0,
+          })
         }
         return { files, skippedBySize, skippedByGitignore, skippedByBanyanignore }
       })
@@ -362,9 +369,14 @@ type ParsedFile = {
   readonly previousFileID?: string
 }
 const CHECKPOINT_EVERY = 1000
+type CandidateFile = {
+  readonly path: string
+  readonly sizeBytes: number
+  readonly mtimeMs: number
+}
 
 const indexCandidateFileCore = (
-  filePath: string,
+  candidate: CandidateFile,
   relativePath: string,
   cfg: {
     input: {
@@ -393,6 +405,7 @@ const indexCandidateFileCore = (
     // downstream consumer that compares mtime to indexed_at doesn't get
     // stuck on a cached file forever.
     cachedFileIDsRef: Ref.Ref<Set<string>>
+    existingFilesByPath: ReadonlyMap<string, CodegraphFile>
   },
 ): Effect.Effect<void, never, never> => {
   return Effect.gen(function* () {
@@ -402,7 +415,27 @@ const indexCandidateFileCore = (
       return
     }
 
+    const filePath = candidate.path
     const ext = path.extname(filePath).toLowerCase()
+    const existing = cfg.existingFilesByPath.get(filePath)
+    if (
+      existing &&
+      !cfg.input.force &&
+      existing.sizeBytes === candidate.sizeBytes &&
+      existing.mtimeMs === candidate.mtimeMs
+    ) {
+      yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+      yield* Ref.update(cfg.skippedCachedRef, (n) => n + 1)
+      yield* Ref.update(cfg.cachedFileIDsRef, (s) => {
+        if (s.has(existing.id)) return s
+        const next = new Set(s)
+        next.add(existing.id)
+        return next
+      })
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
+      return
+    }
+
     const content = yield* fs.readFileStringSafe(filePath)
     if (content === undefined) {
       yield* Ref.update(cfg.skippedRef, (n) => n + 1)
@@ -419,7 +452,6 @@ const indexCandidateFileCore = (
       return
     }
 
-    const existing = yield* repo.getFileByPath(filePath)
     const contentHash = hashContent(content)
     if (existing && existing.contentHash === contentHash && !cfg.input.force) {
       yield* Ref.update(cfg.skippedRef, (n) => n + 1)
@@ -538,7 +570,15 @@ const indexCandidateFileCore = (
     else if (ext === ".md") language = "markdown"
 
     const indexedAt = Date.now()
-    const file: CodegraphFile = { id: fileID, path: filePath, contentHash, language, indexedAt }
+    const file: CodegraphFile = {
+      id: fileID,
+      path: filePath,
+      contentHash,
+      language,
+      indexedAt,
+      sizeBytes: candidate.sizeBytes,
+      mtimeMs: candidate.mtimeMs,
+    }
     const fileLevelNode: CodegraphNode = {
       id: `${fileID}:file`,
       fileID,
@@ -547,7 +587,7 @@ const indexCandidateFileCore = (
       signature: relativePath,
       startLine: 1,
       endLine: content.split("\n").length,
-      code: content,
+      code: content.slice(0, 4000),
       derivation: "regex-v1",
     }
     const nodes: CodegraphNode[] = [fileLevelNode, ...result.nodes.map((n) => {
@@ -643,12 +683,6 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   ])
   const sourceSet = sourceFileIDs.size > 0 ? sourceFileIDs : null
 
-  if (changedSet) {
-    // Incremental invalidation only removes edges touching changed files.
-    // Dependent files are rebuilt as sources below without being invalidated.
-    yield* repo.deleteDerivedEdgesForFiles({ fileIDs: changedFileIDs! })
-  }
-
   // For incremental mode, fetch source nodes WITH code and all other nodes
   // WITHOUT code. The source set includes dependents so their persisted code
   // can regenerate edges after a changed endpoint is replaced.
@@ -676,6 +710,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   const fileDir = (filePath: string) => path.dirname(filePath).replace(/\\/g, "/")
 
   const nodeMap = new Map<string, CodegraphNode[]>()
+  const nodeByID = new Map<string, CodegraphNode>()
   const nodesByFileID = new Map<string, CodegraphNode[]>()
   const BATCH_SIZE = 500
 
@@ -688,10 +723,43 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       const list = nodeMap.get(node.name) ?? []
       list.push(node)
       nodeMap.set(node.name, list)
+      nodeByID.set(node.id, node)
       const fileList = nodesByFileID.get(node.fileID) ?? []
       fileList.push(node)
       nodesByFileID.set(node.fileID, fileList)
     }
+  }
+
+  const fileByPath = new Map(allFiles.map((f) => [f.path.replace(/\\/g, "/"), f]))
+  const deriveModuleCandidates = (sourcePath: string, specifier: string): ReadonlyArray<CodegraphFile> => {
+    if (!specifier) return []
+    if (!specifier.startsWith(".") && !specifier.startsWith("/")) return []
+    const sourceDir = path.dirname(sourcePath)
+    const resolvedBase = path.resolve(sourceDir, specifier).replace(/\\/g, "/")
+    const direct = fileByPath.get(resolvedBase)
+    if (direct) return [direct]
+    const candidates = [
+      `${resolvedBase}.ts`,
+      `${resolvedBase}.tsx`,
+      `${resolvedBase}.js`,
+      `${resolvedBase}.jsx`,
+      `${resolvedBase}.mts`,
+      `${resolvedBase}.cts`,
+      `${resolvedBase}.mjs`,
+      `${resolvedBase}.cjs`,
+      `${resolvedBase}.py`,
+      `${resolvedBase}.pyw`,
+      `${resolvedBase}/index.ts`,
+      `${resolvedBase}/index.tsx`,
+      `${resolvedBase}/index.js`,
+      `${resolvedBase}/index.jsx`,
+      `${resolvedBase}/index.mts`,
+      `${resolvedBase}/index.cts`,
+      `${resolvedBase}/index.py`,
+    ]
+    return candidates
+      .map((candidate) => fileByPath.get(candidate))
+      .filter((file): file is CodegraphFile => file !== undefined)
   }
 
   const referenceEdges: { fromNodeID: string; toNodeID: string; kind: "imports" | "calls" | "extends" | "references" }[] = []
@@ -700,6 +768,27 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
 
   // For referenceEdges: iterate only nodes that have code and are NOT skipped kinds.
   // In incremental mode, iterate changed files plus dependent files as edge sources.
+  const importScopesByFileID = new Map<string, Set<string>>()
+  for (const [fileID, nodes] of nodesByFileID) {
+    const fileNode = nodes.find((node) => node.kind === "file")
+    const owner = fileByID.get(fileID)
+    if (!fileNode?.code || !owner) continue
+    const scope = new Set<string>()
+    for (const match of fileNode.code.matchAll(/import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["']([^"']+)["']/g)) {
+      const specifier = match[1]
+      if (!specifier) continue
+      const importedFiles = deriveModuleCandidates(owner.path, specifier)
+      for (const imported of importedFiles) {
+        const importedNodes = nodesByFileID.get(imported.id) ?? []
+        for (const node of importedNodes) {
+          if (node.kind === "file") continue
+          scope.add(node.id)
+        }
+      }
+    }
+    importScopesByFileID.set(fileID, scope)
+  }
+
   for (const nodeA of allNodesForIndex) {
     if (
       !nodeA.code ||
@@ -721,14 +810,44 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     // Incremental: skip nodeA if its file is neither changed nor a dependent source
     if (sourceSet && !sourceSet.has(nodeA.fileID)) continue
 
+    const inScopeNodeIDs = new Set<string>()
+    const sameFileNodes = nodesByFileID.get(nodeA.fileID) ?? []
+    for (const n of sameFileNodes) {
+      if (n.id !== nodeA.id && n.kind !== "file") inScopeNodeIDs.add(n.id)
+    }
+    const importedScope = importScopesByFileID.get(nodeA.fileID)
+    if (importedScope) {
+      for (const importedID of importedScope) inScopeNodeIDs.add(importedID)
+    }
+    if (!importedScope || importedScope.size === 0) {
+      const owner = fileByID.get(nodeA.fileID)
+      if (owner) {
+        const ownerDir = fileDir(owner.path)
+        for (const file of allFiles) {
+          if (file.id === owner.id || fileDir(file.path) !== ownerDir) continue
+          const peerNodes = nodesByFileID.get(file.id) ?? []
+          for (const node of peerNodes) {
+            if (node.kind !== "file") inScopeNodeIDs.add(node.id)
+          }
+        }
+      }
+    }
+    const inScopeByName = new Map<string, CodegraphNode[]>()
+    for (const nodeID of inScopeNodeIDs) {
+      const scopedNode = nodeByID.get(nodeID)
+      if (!scopedNode) continue
+      const scoped = inScopeByName.get(scopedNode.name) ?? []
+      scoped.push(scopedNode)
+      inScopeByName.set(scopedNode.name, scoped)
+    }
     const identifiers = new Set<string>()
     for (const m of nodeA.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
-      if (m[0].length >= 3 && nodeMap.has(m[0])) identifiers.add(m[0])
+      if (m[0].length >= 3 && inScopeByName.has(m[0])) identifiers.add(m[0])
     }
 
     for (const name of identifiers) {
-      const targets = nodeMap.get(name)
-      if (!targets || targets.length > 10) continue
+      const targets = inScopeByName.get(name)
+      if (!targets || targets.length === 0) continue
 
       for (const nodeB of targets) {
         if (nodeB.id === nodeA.id) continue
@@ -888,8 +1007,21 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       kind: e.kind,
     })),
   ]
-  yield* repo.putEdges(edgesToWrite)
-  yield* repo.recomputeInDegree().pipe(Effect.orDie)
+  const touchedNodeIDs = new Set<string>()
+  for (const edge of edgesToWrite) {
+    touchedNodeIDs.add(edge.fromNodeID)
+    touchedNodeIDs.add(edge.toNodeID)
+  }
+  if (changedSet) {
+    const deletedTouched = yield* repo.deleteDerivedEdgesForFiles({ fileIDs: changedFileIDs! })
+    for (const nodeID of deletedTouched) touchedNodeIDs.add(nodeID)
+  }
+  if (edgesToWrite.length > 0) {
+    yield* repo.putEdges(edgesToWrite)
+  }
+  if (touchedNodeIDs.size > 0) {
+    yield* repo.recomputeInDegree({ nodeIDs: [...touchedNodeIDs] }).pipe(Effect.orDie)
+  }
 })
 
     const index = Effect.fn("CodegraphIndexer.index")(function* (input: {
@@ -947,9 +1079,10 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         return false
       }
       const codeFiles = allFiles.filter((f) => {
-        const ext = path.extname(f).toLowerCase()
-        return codeExtensions.has(ext) || isArtifactPath(f)
+        const ext = path.extname(f.path).toLowerCase()
+        return codeExtensions.has(ext) || isArtifactPath(f.path)
       })
+      const existingFilesByPath = new Map((yield* repo.listAllFiles()).map((f) => [f.path, f]))
 
       const indexedRef = yield* Ref.make(0)
       const skippedRef = yield* Ref.make(0)
@@ -985,9 +1118,9 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         skipped: true,
       })
 
-      const parseFiber = (filePath: string): Effect.Effect<void, never, never> => {
-        const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
-        return indexCandidateFileCore(filePath, relativePath, {
+      const parseFiber = (candidate: CandidateFile): Effect.Effect<void, never, never> => {
+        const relativePath = path.relative(input.root, candidate.path).replace(/\\/g, "/")
+        return indexCandidateFileCore(candidate, relativePath, {
           input,
           maxFileSizeBytes,
           total,
@@ -1005,6 +1138,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           progressCounter,
           treeCacheRef,
           cachedFileIDsRef,
+          existingFilesByPath,
         })
       }
 
@@ -1074,9 +1208,10 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         )
       }
 
-      yield* rebuildDerivedGraph(undefined)
-
       const indexed = yield* Ref.get(indexedRef)
+      if (indexed > 0) {
+        yield* rebuildDerivedGraph(undefined)
+      }
       const skipped = yield* Ref.get(skippedRef)
       const symbolsIndexed = yield* Ref.get(symbolsIndexedRef)
       const skippedGitignored = yield* Ref.get(skippedGitignoredRef)
@@ -1147,15 +1282,16 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root, input.excludePatterns)
       const removedFileIDs = new Set<string>()
       const filteredRemoved: string[] = []
-      const filteredAddedOrChanged: string[] = []
+      const filteredAddedOrChanged: CandidateFile[] = []
       let skippedInputs = 0
+      const existingFilesByPath = new Map((yield* repo.listAllFiles()).map((f) => [f.path, f]))
 
       // Capture the pre-mutation file IDs before delete/write cascades remove
       // their endpoint nodes and edges. This lets removed and replaced files
       // contribute their existing dependents to the later source rebuild.
       const dependencySeedFileIDs = new Set<string>()
       for (const filePath of new Set([...input.removed, ...input.addedOrChanged])) {
-        const existing = yield* repo.getFileByPath(filePath)
+        const existing = existingFilesByPath.get(filePath)
         if (existing) dependencySeedFileIDs.add(existing.id)
       }
       const dependentFileIDs = dependencySeedFileIDs.size > 0
@@ -1164,10 +1300,11 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
 
       for (const filePath of input.removed) {
         if (isIgnoredByPatterns(gitignore, input.root, filePath) || isIgnoredByPatterns(banyanignore, input.root, filePath)) {
-          const existing = yield* repo.getFileByPath(filePath)
+          const existing = existingFilesByPath.get(filePath)
           if (existing) {
             removedFileIDs.add(existing.id)
             yield* repo.deleteFile(existing.id)
+            existingFilesByPath.delete(filePath)
           }
           yield* dropTreeCacheFor(filePath)
           skippedInputs++
@@ -1178,10 +1315,11 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
 
       let removed = 0
       for (const filePath of filteredRemoved) {
-        const existing = yield* repo.getFileByPath(filePath)
+        const existing = existingFilesByPath.get(filePath)
         if (existing) {
           removedFileIDs.add(existing.id)
           yield* repo.deleteFile(existing.id)
+          existingFilesByPath.delete(filePath)
           removed++
         } else {
           skippedInputs++
@@ -1192,10 +1330,11 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       for (const filePath of input.addedOrChanged) {
         const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
         if (isIgnoredByPatterns(gitignore, input.root, filePath) || isIgnoredByPatterns(banyanignore, input.root, filePath)) {
-          const existing = yield* repo.getFileByPath(filePath)
+          const existing = existingFilesByPath.get(filePath)
           if (existing) {
             removedFileIDs.add(existing.id)
             yield* repo.deleteFile(existing.id)
+            existingFilesByPath.delete(filePath)
           }
           yield* dropTreeCacheFor(filePath)
           skippedInputs++
@@ -1204,16 +1343,21 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         const stats = yield* fs.stat(filePath).pipe(Effect.orDie)
         if (stats.size > maxFileSizeBytes) {
           yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${stats.size} bytes, limit: ${maxFileSizeBytes})`)
-          const existing = yield* repo.getFileByPath(filePath)
+          const existing = existingFilesByPath.get(filePath)
           if (existing) {
             removedFileIDs.add(existing.id)
             yield* repo.deleteFile(existing.id)
+            existingFilesByPath.delete(filePath)
           }
           yield* dropTreeCacheFor(filePath)
           skippedInputs++
           continue
         }
-        filteredAddedOrChanged.push(filePath)
+        filteredAddedOrChanged.push({
+          path: filePath,
+          sizeBytes: Number(stats.size),
+          mtimeMs: "value" in stats.mtime ? Math.floor(stats.mtime.value.getTime()) : 0,
+        })
       }
 
       if (filteredRemoved.length === 0 && filteredAddedOrChanged.length === 0 && removedFileIDs.size === 0) {
@@ -1313,9 +1457,9 @@ const drainParsedQueue = Effect.gen(function* () {
 
       yield* Effect.all(
         [
-          Effect.forEach(filteredAddedOrChanged, (filePath) => {
-            const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
-            return indexCandidateFileCore(filePath, relativePath, {
+          Effect.forEach(filteredAddedOrChanged, (candidate) => {
+            const relativePath = path.relative(input.root, candidate.path).replace(/\\/g, "/")
+            return indexCandidateFileCore(candidate, relativePath, {
               input,
               maxFileSizeBytes,
               total,
@@ -1333,6 +1477,7 @@ const drainParsedQueue = Effect.gen(function* () {
               progressCounter,
               treeCacheRef,
               cachedFileIDsRef,
+              existingFilesByPath,
             })
           }, { concurrency: 8, discard: true }),
           drainParsedQueue,
@@ -1358,9 +1503,11 @@ const drainParsedQueue = Effect.gen(function* () {
       }
 
       const changedFileIDs = Array.from(yield* Ref.get(changedFileIDsRef))
-      const changedSet = new Set(changedFileIDs)
-      const dependentSourceFileIDs = dependentFileIDs.filter((fileID) => !changedSet.has(fileID))
-      yield* rebuildDerivedGraph(changedFileIDs, dependentSourceFileIDs)
+      if (changedFileIDs.length > 0) {
+        const changedSet = new Set(changedFileIDs)
+        const dependentSourceFileIDs = dependentFileIDs.filter((fileID) => !changedSet.has(fileID))
+        yield* rebuildDerivedGraph(changedFileIDs, dependentSourceFileIDs)
+      }
 
       const fileCount = yield* repo.countFiles()
       // Phase 0: the incremental path doesn't run a full directory walk,
@@ -1370,10 +1517,12 @@ const drainParsedQueue = Effect.gen(function* () {
       // build when the change set IS the entire repo.
       const listingCount = filteredAddedOrChanged.length + filteredRemoved.length
       const eligibleForCoverage = listingCount > 0 ? listingCount : fileCount
-      yield* repo.bumpVersion({
-        eligibleFiles: eligibleForCoverage,
-        indexedRoot: input.root,
-      })
+      if (changedFileIDs.length > 0) {
+        yield* repo.bumpVersion({
+          eligibleFiles: eligibleForCoverage,
+          indexedRoot: input.root,
+        })
+      }
 
       const indexed = yield* Ref.get(indexedRef)
       const parsedSkipped = yield* Ref.get(skippedRef)

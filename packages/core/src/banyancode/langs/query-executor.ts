@@ -5,7 +5,6 @@ import type { ParseResult, ParsedEdge } from "./types"
 import { parseTypeScript } from "./typescript"
 import { parsePython } from "./python"
 import {
-  parseIncremental,
   TreeSitterUnavailableError,
   withTreeSitter,
 } from "./tree-sitter"
@@ -178,8 +177,7 @@ const extractServiceRegistrationEdges = (matches: readonly QueryMatch[], fileID:
 
 interface BundleRefs {
   readonly parser: Parser
-  readonly language: Language
-  readonly Query: typeof Query
+  readonly query: Query
 }
 
 const extractEdgesFromMatches = (
@@ -202,29 +200,34 @@ const extractEdgesFromMatches = (
 
 const buildQueryOnTree = (
   tree: Tree,
-  language: Language,
-  queryCtor: typeof Query,
-  querySource: string,
+  query: Query,
   fileID: string,
 ): ParsedEdge[] => {
-  let query: Query
-  try {
-    query = new queryCtor(language, querySource)
-  } catch {
-    return []
-  }
   return extractEdgesFromMatches(query.matches(tree.rootNode), fileID)
 }
 
 const runQueryAndExtract = (
   refs: BundleRefs,
-  querySource: string,
   content: string,
   fileID: string,
 ): ParsedEdge[] => {
   const tree = refs.parser.parse(content)
   if (!tree) return []
-  return buildQueryOnTree(tree, refs.language, refs.Query, querySource, fileID)
+  return buildQueryOnTree(tree, refs.query, fileID)
+}
+
+const QUERY_CACHE = new Map<string, Query>()
+const getCachedQuery = (ext: string, language: Language, QueryCtor: typeof Query, querySource: string): Query | null => {
+  const key = `${ext}:${querySource}`
+  const cached = QUERY_CACHE.get(key)
+  if (cached) return cached
+  try {
+    const compiled = new QueryCtor(language, querySource)
+    QUERY_CACHE.set(key, compiled)
+    return compiled
+  } catch {
+    return null
+  }
 }
 
 export interface IncrementalParseResult {
@@ -244,7 +247,9 @@ export const parseTypeScriptWithTreeSitter = (
       const language = state.parser.languagesByExt.get(".ts") as Language | undefined
       const Query = state.parser.Query
       if (!parser || !language) return parseTypeScript(content, fileID)
-      const tsEdges = runQueryAndExtract({ parser, language, Query }, querySource, content, fileID)
+      const query = getCachedQuery(".ts", language, Query, querySource)
+      if (!query) return parseTypeScript(content, fileID)
+      const tsEdges = runQueryAndExtract({ parser, query }, content, fileID)
       const regex = parseTypeScript(content, fileID)
       return { ...regex, edges: [...regex.edges, ...tsEdges] }
     })
@@ -262,7 +267,9 @@ export const parsePythonWithTreeSitter = (
       const language = state.parser.languagesByExt.get(".py") as Language | undefined
       const Query = state.parser.Query
       if (!parser || !language) return parsePython(content, fileID)
-      const tsEdges = runQueryAndExtract({ parser, language, Query }, querySource, content, fileID)
+      const query = getCachedQuery(".py", language, Query, querySource)
+      if (!query) return parsePython(content, fileID)
+      const tsEdges = runQueryAndExtract({ parser, query }, content, fileID)
       const regex = parsePython(content, fileID)
       return { ...regex, edges: [...regex.edges, ...tsEdges] }
     })
@@ -277,17 +284,17 @@ export const parseTypeScriptWithTreeSitterIncremental = (
     const querySource = querySourceCached(".ts")
     if (querySource === "") return { result: parseTypeScript(content, fileID), tree: undefined }
     return yield* withTreeSitter((state) => {
-      const Parser = state.parser.Parser
+      const parser = state.parser.parsersByExt.get(".ts")
       const language = state.parser.languagesByExt.get(".ts") as Language | undefined
       const Query = state.parser.Query
-      if (!language) return { result: parseTypeScript(content, fileID), tree: undefined }
-      const parser = new Parser()
-      parser.setLanguage(language)
+      if (!parser || !language) return { result: parseTypeScript(content, fileID), tree: undefined }
+      const query = getCachedQuery(".ts", language, Query, querySource)
+      if (!query) return { result: parseTypeScript(content, fileID), tree: undefined }
       const tree = (oldTree
         ? parser.parse(content, oldTree)
         : parser.parse(content)) as Tree | null
       if (!tree) return { result: parseTypeScript(content, fileID), tree: undefined }
-      const tsEdges = buildQueryOnTree(tree, language, Query, querySource, fileID)
+      const tsEdges = buildQueryOnTree(tree, query, fileID)
       const regex = parseTypeScript(content, fileID)
       return { result: { ...regex, edges: [...regex.edges, ...tsEdges] }, tree }
     }).pipe(
@@ -309,17 +316,17 @@ export const parsePythonWithTreeSitterIncremental = (
     const querySource = querySourceCached(".py")
     if (querySource === "") return { result: parsePython(content, fileID), tree: undefined }
     return yield* withTreeSitter((state) => {
-      const Parser = state.parser.Parser
+      const parser = state.parser.parsersByExt.get(".py")
       const language = state.parser.languagesByExt.get(".py") as Language | undefined
       const Query = state.parser.Query
-      if (!language) return { result: parsePython(content, fileID), tree: undefined }
-      const parser = new Parser()
-      parser.setLanguage(language)
+      if (!parser || !language) return { result: parsePython(content, fileID), tree: undefined }
+      const query = getCachedQuery(".py", language, Query, querySource)
+      if (!query) return { result: parsePython(content, fileID), tree: undefined }
       const tree = (oldTree
         ? parser.parse(content, oldTree)
         : parser.parse(content)) as Tree | null
       if (!tree) return { result: parsePython(content, fileID), tree: undefined }
-      const tsEdges = buildQueryOnTree(tree, language, Query, querySource, fileID)
+      const tsEdges = buildQueryOnTree(tree, query, fileID)
       const regex = parsePython(content, fileID)
       return { result: { ...regex, edges: [...regex.edges, ...tsEdges] }, tree }
     }).pipe(

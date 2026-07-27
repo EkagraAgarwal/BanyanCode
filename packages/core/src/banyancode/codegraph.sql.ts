@@ -6,6 +6,8 @@ export const CodegraphFilesTable = sqliteTable("codegraph_files", {
   content_hash: text().notNull(),
   language: text().notNull(),
   indexed_at: integer().notNull(),
+  size_bytes: integer().notNull().default(0),
+  mtime_ms: integer().notNull().default(0),
 })
 
 export const CodegraphNodesTable = sqliteTable(
