@@ -53,6 +53,13 @@ export function fileLogger(file = path.join(Global.Path.log, "opencode.log"), id
 
 const stderrLogger = Logger.make((options) => process.stderr.write(formatter().log(options) + "\n"))
 
+// The interactive full-screen TUI runs OpenTUI in `externalOutputMode: "passthrough"`,
+// which means any direct `process.stderr.write` overwrites the rendered chat frame
+// mid-draw. Honor `OPENCODE_DISABLE_STDERR_LOGGER` (set by the TUI command) so the
+// file logger is the only channel that surfaces during interactive use.
+const stderrLoggerEnabled = (): boolean =>
+  process.env.OPENCODE_DISABLE_STDERR_LOGGER !== "1" && process.env.OPENCODE_PRINT_LOGS === "1"
+
 export function minimumLogLevel() {
   const value = process.env.OPENCODE_LOG_LEVEL?.toUpperCase()
   const levels = {
@@ -65,7 +72,7 @@ export function minimumLogLevel() {
 }
 
 export function loggers() {
-  return process.env.OPENCODE_PRINT_LOGS === "1" ? [fileLogger(), stderrLogger] : [fileLogger()]
+  return stderrLoggerEnabled() ? [fileLogger(), stderrLogger] : [fileLogger()]
 }
 
 export * as Logging from "./logging"

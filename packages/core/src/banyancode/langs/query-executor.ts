@@ -10,7 +10,49 @@ import {
 } from "./tree-sitter"
 import type { Language, Node, Parser, Query, QueryCapture, QueryMatch, Tree } from "web-tree-sitter"
 
+// `import(..., { with: { type: "text" } })` inlines query sources at bundle
+// time, so compiled binaries no longer need disk access to read `.scm` files.
+// The `fs` import is kept for the legacy on-disk validation path that tests
+// rely on (see `loadQuerySourceOrEmpty`).
 const QUERIES_DIR = path.resolve(import.meta.dir, "queries")
+
+const BUNDLED_QUERY_SOURCES: ReadonlyMap<string, string> = new Map([
+  [".ts", ""],
+  [".tsx", ""],
+  [".mts", ""],
+  [".cts", ""],
+  [".js", ""],
+  [".jsx", ""],
+  [".mjs", ""],
+  [".cjs", ""],
+  [".py", ""],
+  [".pyw", ""],
+])
+
+let bundledQueriesPromise: Promise<ReadonlyMap<string, string>> | null = null
+
+const importQueryText = async (specifier: string): Promise<string> => {
+  const mod = (await import(specifier as string, { with: { type: "text" } })) as { default: string }
+  return mod.default
+}
+
+const loadBundledQuerySources = async (): Promise<ReadonlyMap<string, string>> => {
+  const out = new Map(BUNDLED_QUERY_SOURCES)
+  const [tsSource, jsSource, pySource] = await Promise.all([
+    importQueryText("./queries/typescript.scm"),
+    importQueryText("./queries/javascript.scm"),
+    importQueryText("./queries/python.scm"),
+  ])
+  for (const ext of [".ts", ".tsx", ".mts", ".cts"]) out.set(ext, tsSource)
+  for (const ext of [".js", ".jsx", ".mjs", ".cjs"]) out.set(ext, jsSource)
+  for (const ext of [".py", ".pyw"]) out.set(ext, pySource)
+  return out
+}
+
+const getBundledQuerySources = (): Promise<ReadonlyMap<string, string>> => {
+  bundledQueriesPromise ??= loadBundledQuerySources()
+  return bundledQueriesPromise
+}
 
 const QUERY_FILE_BY_EXT: ReadonlyMap<string, string> = new Map([
   [".ts", "typescript.scm"],

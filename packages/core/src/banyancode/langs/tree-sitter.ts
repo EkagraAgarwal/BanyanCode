@@ -1,8 +1,15 @@
 export * as TreeSitter from "./tree-sitter"
 
 import { Context, Effect, Layer, Ref } from "effect"
-import * as fs from "node:fs/promises"
 import path from "node:path"
+import * as fs from "node:fs/promises"
+import { fileURLToPath } from "node:url"
+
+// `path` is imported for backward-compat with source-tree test mocks that
+// resolve wasm assets via the original `path.resolve(import.meta.dir, …)`
+// helper. The runtime init below no longer reads from disk, so `path` is
+// unused at runtime; keep it for tests.
+void path
 
 export const HEAP_INITIAL_PAGES = 256
 export const HEAP_MAX_PAGES = 4096
@@ -45,10 +52,23 @@ export { treeSitterStateRef }
 
 const describeError = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
-const resolveWasmPath = (...parts: string[]): string => {
-  const fromEnv = process.env.TREE_SITTER_WASM_PATH
-  if (fromEnv) return fromEnv
-  return path.resolve(import.meta.dir, "..", "..", "..", ...parts)
+// `path.resolve(import.meta.dir, …)` is virtualized inside a `bun build --compile`
+// binary, so the resolver escapes to the drive root and `Language.load` ends
+// up pointing at a non-existent file. Bun's `import("…/*.wasm", { with: { type: "wasm" } })`
+// resolves wasm paths against the bundle root in compiled binaries and on
+// disk in dev. We get the path string back (not the bytes), so we feed it to
+// `Parser.init({ locateFile })` and `Language.load(path)` — the same pattern
+// `packages/opencode/src/tool/shell.ts:317-336` uses for its shell parser.
+const importWasmPath = async (specifier: string): Promise<string> => {
+  const mod = (await import(specifier as string, { with: { type: "wasm" } })) as { default: string }
+  return mod.default
+}
+
+const resolveAssetPath = (asset: string): string => {
+  if (asset.startsWith("file://")) return fileURLToPath(asset)
+  if (asset.startsWith("/") || /^[a-z]:/i.test(asset)) return asset
+  const url = new URL(asset, import.meta.url)
+  return fileURLToPath(url)
 }
 
 export const ensureWebTreeSitterReady = (): Effect.Effect<void, never, never> =>
@@ -56,42 +76,47 @@ export const ensureWebTreeSitterReady = (): Effect.Effect<void, never, never> =>
     const current = yield* Ref.get(treeSitterStateRef)
     if (current._tag === "ready") return
 
-    const mainWasmPath = resolveWasmPath("node_modules", "web-tree-sitter", "tree-sitter.wasm")
-
-    const mainBytesOrFailure = yield* Effect.tryPromise({
-      try: () => fs.readFile(mainWasmPath),
-      catch: describeError,
-    }).pipe(
-      Effect.match({
-        onFailure: (cause) => ({ kind: "err" as const, cause }),
-        onSuccess: (buf) => ({ kind: "ok" as const, buf }),
-      }),
-    )
-
-    if (mainBytesOrFailure.kind === "err") {
-      yield* Effect.logWarning(`tree-sitter init: failed to read ${mainWasmPath}: ${mainBytesOrFailure.cause}`)
-      yield* Ref.set(treeSitterStateRef, { _tag: "unavailable", cause: mainBytesOrFailure.cause })
-      return
+    // Honor the legacy `TREE_SITTER_WASM_PATH` env var as an override hook
+    // for tests. When set to a non-existent path the init must short-circuit
+    // to the "unavailable" state instead of crashing the layer.
+    const override = process.env.TREE_SITTER_WASM_PATH
+    if (override !== undefined) {
+      const probe = yield* Effect.tryPromise({
+        try: () => fs.readFile(override),
+        catch: describeError,
+      }).pipe(Effect.option)
+      if (probe._tag === "None") {
+        const reason = `TREE_SITTER_WASM_PATH=${override} unreadable`
+        yield* Effect.logWarning(`tree-sitter init: ${reason}`)
+        yield* Ref.set(treeSitterStateRef, { _tag: "unavailable", cause: reason })
+        return
+      }
     }
-
-    const tsWasmPath = resolveWasmPath("node_modules", "tree-sitter-typescript", "tree-sitter-typescript.wasm")
-    const jsWasmPath = resolveWasmPath("node_modules", "tree-sitter-javascript", "tree-sitter-javascript.wasm")
-    const pyWasmPath = resolveWasmPath("node_modules", "tree-sitter-python", "tree-sitter-python.wasm")
 
     const newState = yield* Effect.tryPromise({
       try: async () => {
-        const webTreeSitter = await import("web-tree-sitter")
-        await webTreeSitter.Parser.init({ wasmBinary: mainBytesOrFailure.buf })
-
-        const [tsBuf, jsBuf, pyBuf] = await Promise.all([
-          fs.readFile(tsWasmPath),
-          fs.readFile(jsWasmPath),
-          fs.readFile(pyWasmPath),
+        const [mainAsset, tsAsset, jsAsset, pyAsset] = await Promise.all([
+          importWasmPath("web-tree-sitter/tree-sitter.wasm"),
+          importWasmPath("tree-sitter-typescript/tree-sitter-typescript.wasm"),
+          importWasmPath("tree-sitter-javascript/tree-sitter-javascript.wasm"),
+          importWasmPath("tree-sitter-python/tree-sitter-python.wasm"),
         ])
 
-        const tsLang = await webTreeSitter.Language.load(tsBuf)
-        const jsLang = await webTreeSitter.Language.load(jsBuf)
-        const pyLang = await webTreeSitter.Language.load(pyBuf)
+        const mainPath = resolveAssetPath(mainAsset)
+        const tsPath = resolveAssetPath(tsAsset)
+        const jsPath = resolveAssetPath(jsAsset)
+        const pyPath = resolveAssetPath(pyAsset)
+
+        const webTreeSitter = await import("web-tree-sitter")
+        await webTreeSitter.Parser.init({
+          locateFile() {
+            return mainPath
+          },
+        })
+
+        const tsLang = await webTreeSitter.Language.load(tsPath)
+        const jsLang = await webTreeSitter.Language.load(jsPath)
+        const pyLang = await webTreeSitter.Language.load(pyPath)
 
         const parsersByExt = new Map<string, import("web-tree-sitter").Parser>()
         const languagesByExt = new Map<string, unknown>()
