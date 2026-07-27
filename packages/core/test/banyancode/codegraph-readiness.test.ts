@@ -14,6 +14,7 @@ const idleIndexer = Layer.succeed(
         indexed: 1,
         skipped: 0,
         scannedFiles: 1,
+        eligibleFiles: 1,
         symbolsIndexed: 0,
         skippedByReason: {
           gitignored: 0,

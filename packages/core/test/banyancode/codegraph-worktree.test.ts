@@ -28,6 +28,7 @@ describe("codegraph-worktree", () => {
             indexed: 0,
             skipped: 0,
             scannedFiles: 0,
+            eligibleFiles: 0,
             symbolsIndexed: 0,
             skippedByReason: {
               gitignored: 0,
@@ -121,6 +122,7 @@ describe("codegraph-worktree", () => {
             indexed: 0,
             skipped: 0,
             scannedFiles: 0,
+            eligibleFiles: 0,
             symbolsIndexed: 0,
             skippedByReason: {
               gitignored: 0,
@@ -198,6 +200,7 @@ describe("codegraph-worktree", () => {
             indexed: 0,
             skipped: 0,
             scannedFiles: 0,
+            eligibleFiles: 0,
             symbolsIndexed: 0,
             skippedByReason: {
               gitignored: 0,

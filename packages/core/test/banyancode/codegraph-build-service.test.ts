@@ -16,6 +16,7 @@ const makeMockIndexer = (options: {
     indexed: number
     skipped: number
     scannedFiles: number
+    eligibleFiles: number
     symbolsIndexed?: number
     skippedByReason?: {
       gitignored: number
@@ -64,6 +65,7 @@ const makeMockIndexer = (options: {
             indexed: 0,
             skipped: 0,
             scannedFiles: 0,
+            eligibleFiles: 0,
             symbolsIndexed: 0,
             skippedByReason: {
               gitignored: 0,
@@ -99,7 +101,7 @@ describe("CodegraphBuildService", () => {
         { file: "a.ts", done: 1, total: 2 },
         { file: "b.ts", done: 2, total: 2 },
       ],
-      indexResult: { indexed: 5, skipped: 2, scannedFiles: 7 },
+      indexResult: { indexed: 5, skipped: 2, scannedFiles: 7, eligibleFiles: 7 },
     })
 
     const serviceLayer = layer.pipe(Layer.provide(mockIndexer), Layer.provide(EventV2.defaultLayer), Layer.provide(CodegraphRepo.defaultLayer))
@@ -172,7 +174,7 @@ describe("CodegraphBuildService", () => {
     const dbLayer = Database.layerFromPath(dbPath)
 
     const mockIndexer = makeMockIndexer({
-      indexResult: { indexed: 5, skipped: 2, scannedFiles: 7 },
+      indexResult: { indexed: 5, skipped: 2, scannedFiles: 7, eligibleFiles: 7 },
     })
 
     const serviceLayer = layer.pipe(Layer.provide(mockIndexer), Layer.provide(EventV2.defaultLayer), Layer.provide(CodegraphRepo.defaultLayer))
@@ -198,7 +200,7 @@ describe("CodegraphBuildService", () => {
     const dbLayer = Database.layerFromPath(dbPath)
 
     const mockIndexer = makeMockIndexer({
-      indexResult: { indexed: 5, skipped: 2, scannedFiles: 7 },
+      indexResult: { indexed: 5, skipped: 2, scannedFiles: 7, eligibleFiles: 7 },
     })
 
     const serviceLayer = layer.pipe(
@@ -216,14 +218,19 @@ describe("CodegraphBuildService", () => {
 
         yield* Effect.sleep(100)
 
+        // Phase 0: graphCoverage is derived from `codegraph_files` row count
+        // over `eligibleFiles`. The mock writes no rows, so numerator is 0
+        // and coverage is 0 even though the caller passed indexedFiles=5.
+        // The test pins the success-side invariant (graphVersion bumps,
+        // state is populated) and the new numerator contract.
         const state = yield* service.status()
         expect(state.status).toBe("completed")
         expect(state.graphVersion).toBe(1)
-        expect(state.graphCoverage).toBeCloseTo(5 / 7, 5)
+        expect(state.graphCoverage).toBe(0)
 
         const meta = yield* repo.getMeta()
         expect(meta?.graphVersion).toBe(1)
-        expect(meta?.graphCoverage).toBeCloseTo(5 / 7, 5)
+        expect(meta?.graphCoverage).toBe(0)
       }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
@@ -274,6 +281,7 @@ describe("CodegraphBuildService", () => {
         indexed: 5,
         skipped: 10,
         scannedFiles: 15,
+        eligibleFiles: 12,
         symbolsIndexed: 20,
         skippedByReason: {
           gitignored: 2,

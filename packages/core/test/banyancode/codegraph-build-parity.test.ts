@@ -71,6 +71,7 @@ describe("codegraph_build parity", () => {
                 indexed: 4,
                 skipped: 2,
                 scannedFiles: 6,
+                eligibleFiles: 4,
                 symbolsIndexed: 10,
                 skippedByReason: {
                   gitignored: 1,

@@ -64,6 +64,14 @@ export interface Interface {
       indexed: number
       skipped: number
       scannedFiles: number
+      /**
+       * Phase 0: files the walker considered eligible for indexing (total
+       * walked minus gitignored / banyanignored). Cached, tooLarge, etc.
+       * still count as eligible because the indexer can reach them. Used as
+       * the denominator for graphCoverage so a fully-cached rebuild scores
+       * near 1.0 instead of `indexed / scanned`.
+       */
+      eligibleFiles: number
       symbolsIndexed: number
       skippedByReason: {
         gitignored: number
@@ -1059,10 +1067,17 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
 
       const parseErrors = yield* repo.listParseErrors()
 
+      // Phase 0: eligibleFiles is the graphCoverage denominator — files
+      // the walker passed over, minus only the gitignored / banyanignored
+      // skip classes. Files that were too-large per the walker's size cap
+      // still count as eligible (the size budget is ours, not the repo's).
+      const eligibleFiles = allFiles.length + walkResult.skippedBySize
+
       return {
         indexed,
         skipped: totalSkipped,
         scannedFiles: indexed + totalSkipped,
+        eligibleFiles,
         symbolsIndexed,
         skippedByReason: {
           gitignored: skippedGitignored,
@@ -1293,14 +1308,15 @@ const drainParsedQueue = Effect.gen(function* () {
       yield* rebuildDerivedGraph(changedFileIDs, dependentSourceFileIDs)
 
       const fileCount = yield* repo.countFiles()
-      const nodeCount = yield* repo.countNodes()
-      const edgeCount = yield* repo.countEdges()
+      // Phase 0: the incremental path doesn't run a full directory walk,
+      // so the eligible denominator is just the file count from the
+      // caller-supplied change set (plus any previously-known files not
+      // yet seen by the walker). This keeps coverage comparable to a full
+      // build when the change set IS the entire repo.
+      const listingCount = filteredAddedOrChanged.length + filteredRemoved.length
+      const eligibleForCoverage = listingCount > 0 ? listingCount : fileCount
       yield* repo.bumpVersion({
-        scannedFiles: fileCount,
-        indexedFiles: fileCount,
-        totalFiles: fileCount,
-        totalNodes: nodeCount,
-        totalEdges: edgeCount,
+        eligibleFiles: eligibleForCoverage,
         indexedRoot: input.root,
       })
 

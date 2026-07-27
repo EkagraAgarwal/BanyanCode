@@ -22,6 +22,7 @@ const makeMockIndexer = (calls?: { index: Array<{ paths: string[] }>; remove: Ar
           indexed: 0,
           skipped: 0,
           scannedFiles: 0,
+          eligibleFiles: 0,
           symbolsIndexed: 0,
           skippedByReason: {
             gitignored: 0,

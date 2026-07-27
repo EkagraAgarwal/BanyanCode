@@ -152,17 +152,17 @@ export const layer = Layer.effect(
             }),
           })
 
-          // Only bump version on successful completion
-          const { graphVersion, coverage } = yield* repo.bumpVersion({
+          // Only bump version on successful completion. Phase 0: pass
+          // eligibleFiles so graphCoverage uses the same formula on both
+          // the full build path here and the incremental applyChanges
+          // path. bumpVersion derives totalNodes/totalEdges internally.
+          const { graphVersion, coverage, totalNodes, totalEdges } = yield* repo.bumpVersion({
+            eligibleFiles: result.eligibleFiles,
             scannedFiles: result.scannedFiles,
-            indexedFiles: result.indexed,
-            totalFiles: result.indexed + result.skipped,
-            totalNodes: result.indexed + result.skipped,
-            totalEdges: 0,
             indexedRoot: input.root,
           })
 
-          return { result, graphVersion, coverage }
+          return { result, graphVersion, coverage, totalNodes, totalEdges }
         })
 
         // Fork into the runtime's global scope (not the request scope). The fork

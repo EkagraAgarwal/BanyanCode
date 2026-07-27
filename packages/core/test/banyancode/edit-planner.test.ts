@@ -54,7 +54,7 @@ const makeMockRepo = (options: {
     writeFileGraph: () => Effect.void,
       clearAll: () => Effect.succeed({ sizeBefore: 0, sizeAfter: 0, droppedFile: false }),
       setMeta: () => Effect.void,
-      bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1 }),
+      bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1, totalNodes: 0, totalEdges: 0 }),
       nodesByIDs: (ids) => Effect.succeed(options.nodes?.filter((n) => ids.includes(n.id)) ?? []),
       putEdges: () => Effect.void,
     rebuildFtsIndex: () => Effect.succeed({ rowsIndexed: 0 }),

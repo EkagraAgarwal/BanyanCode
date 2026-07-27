@@ -33,17 +33,43 @@ describe("codegraph-meta", () => {
           schemaVersion: SCHEMA_VERSION,
         })
 
-        // Bump version (simulating successful build)
+        // Bump version (simulating successful build). Phase 0: the
+        // numerator is the row count of codegraph_files, not whatever
+        // the caller passes as `indexedFiles` — so we seed the DB with
+        // 8 files first and pass eligibleFiles=10 to get 8/10 = 0.8.
+        yield* repo.putFile({
+          id: "f-1",
+          path: "/a.ts",
+          contentHash: "h",
+          language: "typescript",
+          indexedAt: Date.now(),
+        })
+        yield* repo.putFile({
+          id: "f-2",
+          path: "/b.ts",
+          contentHash: "h",
+          language: "typescript",
+          indexedAt: Date.now(),
+        })
+        for (let i = 3; i <= 8; i++) {
+          yield* repo.putFile({
+            id: `f-${i}`,
+            path: `/x${i}.ts`,
+            contentHash: "h",
+            language: "typescript",
+            indexedAt: Date.now(),
+          })
+        }
+
         const result = yield* repo.bumpVersion({
-          scannedFiles: 10,
+          eligibleFiles: 10,
           indexedFiles: 8,
-          totalFiles: 10,
-          totalNodes: 20,
-          totalEdges: 30,
         })
 
         expect(result.graphVersion).toBe(6)
         expect(result.coverage).toBe(0.8)
+        expect(result.totalNodes).toBe(0)
+        expect(result.totalEdges).toBe(0)
 
         // Simulate a failed build that does NOT call bumpVersion
         // Reset to version 5 to simulate "failed build didn't bump"
@@ -65,7 +91,7 @@ describe("codegraph-meta", () => {
     )
   })
 
-  test("graphCoverage is computed from scannedFiles / indexedFiles", async () => {
+  test("graphCoverage is computed from codegraph_files rows / eligibleFiles", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.sqlite")
 
@@ -75,35 +101,59 @@ describe("codegraph-meta", () => {
       Effect.gen(function* () {
         const repo = yield* CodegraphRepo.Service
 
-        // 5 indexed out of 10 scanned = 0.5 coverage
+        // Seed 5 file rows; eligibleFiles=10 -> 5/10 = 0.5 coverage.
+        for (let i = 0; i < 5; i++) {
+          yield* repo.putFile({
+            id: `f-${i}`,
+            path: `/f${i}.ts`,
+            contentHash: "h",
+            language: "typescript",
+            indexedAt: Date.now(),
+          })
+        }
         const result1 = yield* repo.bumpVersion({
-          scannedFiles: 10,
+          eligibleFiles: 10,
           indexedFiles: 5,
-          totalFiles: 10,
-          totalNodes: 5,
-          totalEdges: 0,
         })
         expect(result1.coverage).toBe(0.5)
 
-        // 4 indexed out of 4 scanned = 1.0 coverage
-        const result2 = yield* repo.bumpVersion({
-          scannedFiles: 4,
-          indexedFiles: 4,
-          totalFiles: 4,
-          totalNodes: 4,
-          totalEdges: 0,
-        })
-        expect(result2.coverage).toBe(1.0)
-
-        // 0 scanned = 0 coverage (avoid division by zero)
+        // 0 / 0 = 0 (avoid division by zero) — wipe the rows first so
+        // the existing 5 don't keep the count above the denominator.
+        yield* repo.clearAll({ dropFile: true })
         const result3 = yield* repo.bumpVersion({
-          scannedFiles: 0,
+          eligibleFiles: 0,
           indexedFiles: 0,
-          totalFiles: 0,
-          totalNodes: 0,
-          totalEdges: 0,
         })
         expect(result3.coverage).toBe(0)
+      }).pipe(Effect.provide(repoLayer), Effect.scoped),
+    )
+  })
+
+  test("graphCoverage clamps at 1.0 — when rows >= eligible, coverage is 1.0", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+
+    const repoLayer = CodegraphRepo.layer.pipe(Layer.provide(Database.layerFromPath(dbPath)))
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo.Service
+
+        // 4 indexed rows, eligible = 4 -> 1.0
+        for (let i = 0; i < 4; i++) {
+          yield* repo.putFile({
+            id: `f-${i}`,
+            path: `/g${i}.ts`,
+            contentHash: "h",
+            language: "typescript",
+            indexedAt: Date.now(),
+          })
+        }
+        const result2 = yield* repo.bumpVersion({
+          eligibleFiles: 4,
+          indexedFiles: 4,
+        })
+        expect(result2.coverage).toBe(1.0)
       }).pipe(Effect.provide(repoLayer), Effect.scoped),
     )
   })

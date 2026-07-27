@@ -139,13 +139,28 @@ export interface Interface {
   readonly getMeta: () => Effect.Effect<CodegraphMeta | undefined, never, never>
   readonly setMeta: (m: CodegraphMeta) => Effect.Effect<void, never, never>
   readonly bumpVersion: (input: {
-    scannedFiles: number
-    indexedFiles: number
-    totalFiles: number
-    totalNodes: number
-    totalEdges: number
+    /**
+     * Files the walker considered eligible for indexing (total walked minus
+     * gitignored / banyanignored). The denominator for graphCoverage. If
+     * omitted, falls back to `scannedFiles` for backward-compat with
+     * callers that haven't been updated yet.
+     */
+    eligibleFiles?: number
+    /**
+     * Backward-compat: legacy denominator. Used only when `eligibleFiles`
+     * is undefined.
+     */
+    scannedFiles?: number
+    /** Ignored. Kept for backward-compat with build-service callers. */
+    indexedFiles?: number
+    /** Ignored. Kept for backward-compat with build-service callers. */
+    totalFiles?: number
+    /** Ignored. Kept for backward-compat with build-service callers. */
+    totalNodes?: number
+    /** Ignored. Kept for backward-compat with build-service callers. */
+    totalEdges?: number
     indexedRoot?: string
-  }) => Effect.Effect<{ graphVersion: number; coverage: number }, never, never>
+  }) => Effect.Effect<{ graphVersion: number; coverage: number; totalNodes: number; totalEdges: number }, never, never>
   readonly recordParseError: (input: { path: string; cause: string; indexedAt: number }) => Effect.Effect<void, unknown, never>
   readonly listParseErrors: () => Effect.Effect<Array<{ path: string; cause: string; indexedAt: number }>, never, never>
   readonly clearParseErrors: () => Effect.Effect<void, never, never>
@@ -903,17 +918,16 @@ export const layer = Layer.effect(
     })
 
     const bumpVersion = Effect.fn("CodegraphRepo.bumpVersion")(function* (input: {
-      scannedFiles: number
-      indexedFiles: number
-      totalFiles: number
-      totalNodes: number
-      totalEdges: number
+      eligibleFiles?: number
+      scannedFiles?: number
+      indexedFiles?: number
+      totalFiles?: number
+      totalNodes?: number
+      totalEdges?: number
       indexedRoot?: string
     }) {
       return yield* db.transaction((tx) =>
         Effect.gen(function* () {
-          const coverage = input.scannedFiles > 0 ? input.indexedFiles / input.scannedFiles : 0
-
           const row = yield* tx
             .select()
             .from(CodegraphMetaTable)
@@ -922,6 +936,10 @@ export const layer = Layer.effect(
             .pipe(Effect.orDie)
           const nextVersion = (row?.graph_version ?? 0) + 1
 
+          // Phase 0: derive every count from the database directly rather
+          // than trust caller-supplied numbers. The previous shape let the
+          // build service pass a file count into a node field; we close
+          // that hole here and only honor what SQL `COUNT(*)` reports.
           const nodeRow = yield* tx
             .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_nodes`)
             .pipe(Effect.orDie)
@@ -932,12 +950,26 @@ export const layer = Layer.effect(
             .pipe(Effect.orDie)
           const totalEdges = edgeRow?.c ?? 0
 
+          const fileRow = yield* tx
+            .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_files`)
+            .pipe(Effect.orDie)
+          const totalFilesInGraph = fileRow?.c ?? 0
+
+          // Phase 0: graphCoverage measures "fraction of the repo's
+          // eligible candidate files that are present in the graph". The
+          // numerator is rows in `codegraph_files` (so a fully-cached rebuild
+          // scores 1.0), the denominator is the walker-eligible count, with
+          // a guard for empty repos.
+          const denominator = input.eligibleFiles ?? input.scannedFiles ?? 0
+          const rawCoverage = denominator > 0 ? totalFilesInGraph / denominator : 0
+          const coverage = Math.round(rawCoverage * 10000) / 10000
+
           const meta: CodegraphMeta = {
             id: "singleton",
             graphBuiltAt: Date.now(),
             graphVersion: nextVersion,
             graphCoverage: coverage,
-            totalFiles: input.totalFiles,
+            totalFiles: totalFilesInGraph,
             totalNodes,
             totalEdges,
             // Phase 3: the schema gained `is_entrypoint` and `in_degree`
@@ -976,7 +1008,7 @@ export const layer = Layer.effect(
             .run()
             .pipe(Effect.orDie)
 
-          return { graphVersion: nextVersion, coverage }
+          return { graphVersion: nextVersion, coverage, totalNodes, totalEdges }
         })
       ).pipe(Effect.orDie)
     })

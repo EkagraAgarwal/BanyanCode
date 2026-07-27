@@ -62,6 +62,7 @@ describe("codegraph-build hang regression", () => {
                 indexed: 3,
                 skipped: 2,
                 scannedFiles: 5,
+                eligibleFiles: 5,
                 symbolsIndexed: 10,
                 skippedByReason: {
                   gitignored: 0,

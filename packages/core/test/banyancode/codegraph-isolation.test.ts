@@ -80,6 +80,7 @@ describe("CodegraphAutoUpdate batch cap", () => {
               indexed: 0,
               skipped: 0,
               scannedFiles: 0,
+              eligibleFiles: 0,
               symbolsIndexed: 0,
               skippedByReason: emptyReasons(),
               parseErrors: [],
