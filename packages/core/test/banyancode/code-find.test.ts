@@ -82,7 +82,9 @@ const mockCodegraphRepoLayer = Layer.succeed(
     listNodesByKind: () => Effect.succeed([]),
     lookupByServiceTag: () => Effect.succeed(null),
     setMeta: () => Effect.void,
-    bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 0.9, totalNodes: 0, totalEdges: 0 }),
+    bumpVersion: () =>
+      Effect.succeed({ graphVersion: 1, coverage: 0.9, totalNodes: 0, totalEdges: 0, totalFiles: 0, graphBuiltAt: 0 }),
+    bumpIndexedAt: () => Effect.void,
     nodesByIDs: () => Effect.succeed([]),
     putEdges: () => Effect.void,
     rebuildFtsIndex: () => Effect.succeed({ rowsIndexed: 0 }),
@@ -310,7 +312,9 @@ describe("code_find", () => {
         listNodesByKind: () => Effect.succeed([]),
         lookupByServiceTag: () => Effect.succeed(null),
         setMeta: () => Effect.void,
-        bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1, totalNodes: 0, totalEdges: 0 }),
+        bumpVersion: () =>
+          Effect.succeed({ graphVersion: 1, coverage: 1, totalNodes: 0, totalEdges: 0, totalFiles: 0, graphBuiltAt: 0 }),
+        bumpIndexedAt: () => Effect.void,
         nodesByIDs: () => Effect.succeed([]),
         putEdges: () => Effect.void,
         rebuildFtsIndex: () => Effect.succeed({ rowsIndexed: 0 }),
@@ -399,7 +403,9 @@ describe("code_find", () => {
         listNodesByKind: () => Effect.succeed([]),
         lookupByServiceTag: () => Effect.succeed(null),
         setMeta: () => Effect.void,
-        bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1, totalNodes: 0, totalEdges: 0 }),
+        bumpVersion: () =>
+          Effect.succeed({ graphVersion: 1, coverage: 1, totalNodes: 0, totalEdges: 0, totalFiles: 0, graphBuiltAt: 0 }),
+        bumpIndexedAt: () => Effect.void,
         nodesByIDs: () => Effect.succeed([]),
         putEdges: () => Effect.void,
         rebuildFtsIndex: () => Effect.succeed({ rowsIndexed: 0 }),
@@ -506,7 +512,9 @@ describe("code_find", () => {
         listNodesByKind: () => Effect.succeed([]),
         lookupByServiceTag: () => Effect.succeed(null),
         setMeta: () => Effect.void,
-        bumpVersion: () => Effect.succeed({ graphVersion: 1, coverage: 1, totalNodes: 0, totalEdges: 0 }),
+        bumpVersion: () =>
+          Effect.succeed({ graphVersion: 1, coverage: 1, totalNodes: 0, totalEdges: 0, totalFiles: 0, graphBuiltAt: 0 }),
+        bumpIndexedAt: () => Effect.void,
         nodesByIDs: () => Effect.succeed([]),
         putEdges: () => Effect.void,
         rebuildFtsIndex: () => Effect.succeed({ rowsIndexed: 0 }),

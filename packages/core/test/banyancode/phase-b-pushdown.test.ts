@@ -208,6 +208,7 @@ const buildCountingRepoLayer = (counters: PushdownCounters, panicOnListAllNodes:
         getMeta: inner.getMeta,
         setMeta: inner.setMeta,
         bumpVersion: inner.bumpVersion,
+        bumpIndexedAt: inner.bumpIndexedAt,
         recordParseError: inner.recordParseError,
         listParseErrors: inner.listParseErrors,
         clearParseErrors: inner.clearParseErrors,
