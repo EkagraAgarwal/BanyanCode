@@ -388,6 +388,11 @@ const indexCandidateFileCore = (
     currentlyParsingRef: Ref.Ref<string | undefined>
     progressCounter: Ref.Ref<number>
     treeCacheRef: Ref.Ref<Map<string, Tree>>
+    // Phase 2: fileIDs that hit the content-hash cache in this build.
+    // After the drain loop we batch-update `indexed_at` on these so any
+    // downstream consumer that compares mtime to indexed_at doesn't get
+    // stuck on a cached file forever.
+    cachedFileIDsRef: Ref.Ref<Set<string>>
   },
 ): Effect.Effect<void, never, never> => {
   return Effect.gen(function* () {
@@ -419,6 +424,14 @@ const indexCandidateFileCore = (
     if (existing && existing.contentHash === contentHash && !cfg.input.force) {
       yield* Ref.update(cfg.skippedRef, (n) => n + 1)
       yield* Ref.update(cfg.skippedCachedRef, (n) => n + 1)
+      // Phase 2: track cached fileIDs so the drain loop can refresh
+      // `indexed_at` in one batched UPDATE after the parse pass.
+      yield* Ref.update(cfg.cachedFileIDsRef, (s) => {
+        if (s.has(existing.id)) return s
+        const next = new Set(s)
+        next.add(existing.id)
+        return next
+      })
       yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
       return
     }
@@ -953,6 +966,11 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       const total = codeFiles.length
       const progressCounter = yield* Ref.make(0)
       const currentlyParsingRef = yield* Ref.make<string | undefined>(undefined)
+      // Phase 2: fileIDs that hit the cache this build. After the drain
+      // loop completes we batch-write `indexed_at = now` so the next
+      // run's ready-check sees a fresh timestamp and doesn't keep
+      // tripping on files whose content is unchanged.
+      const cachedFileIDsRef = yield* Ref.make<Set<string>>(new Set())
 
       if (input.onProgress) {
         yield* input.onProgress({ file: "", done: 0, total })
@@ -986,6 +1004,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           currentlyParsingRef,
           progressCounter,
           treeCacheRef,
+          cachedFileIDsRef,
         })
       }
 
@@ -1038,6 +1057,22 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         { concurrency: 2, discard: true },
       ).pipe(Effect.ensuring(Queue.shutdown(parsedQueue)))
       yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
+
+      // Phase 2: refresh `indexed_at` on every file that hit the content
+      // cache in this build. One batched update per 900-id chunk —
+      // cheaper than touching each row in the drain loop and, more
+      // importantly, fixes the readiness trap where a cached file's
+      // never-refreshed timestamp made it look "changed" forever.
+      const cachedFileIDs = yield* Ref.get(cachedFileIDsRef)
+      if (cachedFileIDs.size > 0) {
+        yield* repo.bumpIndexedAt({ fileIDs: [...cachedFileIDs], indexedAt: Date.now() }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("bumpIndexedAt failed; cached files may look stale until next build", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        )
+      }
 
       yield* rebuildDerivedGraph(undefined)
 
@@ -1201,6 +1236,10 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       const progressCounter = yield* Ref.make(0)
       const currentlyParsingRef = yield* Ref.make<string | undefined>(undefined)
       const changedFileIDsRef = yield* Ref.make<Set<string>>(new Set(removedFileIDs))
+      // Phase 2: track fileIDs that hit the content-hash cache in this
+      // incremental build so we can refresh `indexed_at` in one batched
+      // UPDATE after the drain (see `bumpIndexedAt`).
+      const cachedFileIDsRef = yield* Ref.make<Set<string>>(new Set())
       const total = filteredAddedOrChanged.length
 
       if (input.onProgress) {
@@ -1293,6 +1332,7 @@ const drainParsedQueue = Effect.gen(function* () {
               currentlyParsingRef,
               progressCounter,
               treeCacheRef,
+              cachedFileIDsRef,
             })
           }, { concurrency: 8, discard: true }),
           drainParsedQueue,
@@ -1301,6 +1341,21 @@ const drainParsedQueue = Effect.gen(function* () {
       ).pipe(Effect.ensuring(Queue.shutdown(parsedQueue)))
 
       yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
+
+      // Phase 2: refresh `indexed_at` on every file that hit the cache
+      // in this incremental build. Same logic as the full-build path —
+      // keeps downstream time-based heuristics from getting stuck on
+      // cached files.
+      const cachedFileIDs = yield* Ref.get(cachedFileIDsRef)
+      if (cachedFileIDs.size > 0) {
+        yield* repo.bumpIndexedAt({ fileIDs: [...cachedFileIDs], indexedAt: Date.now() }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("bumpIndexedAt failed on incremental; cached files may look stale", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        )
+      }
 
       const changedFileIDs = Array.from(yield* Ref.get(changedFileIDsRef))
       const changedSet = new Set(changedFileIDs)

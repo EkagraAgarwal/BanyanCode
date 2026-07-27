@@ -225,8 +225,6 @@ export { Service as BanyanConfigService, layer as banyanConfigServiceLayer, defa
 export { Service as MaxSubagentsService, layer as maxSubagentsLayer, defaultLayer as maxSubagentsDefaultLayer } from "./max-subagents"
 export * as MaxSubagents from "./max-subagents"
 export { Schema_URL as BanyanConfigSchemaURL, Info as BanyanConfigInfo, BanyanConfig } from "../v1/config/banyan-config"
-export { Service as CodegraphStaleness, layer as codegraphStalenessLayer, defaultLayer as codegraphStalenessDefaultLayer } from "./codegraph-staleness"
-export { StaleCheck } from "./codegraph-staleness"
 export { isStale, type StaleResult } from "./graph-staleness"
 export * as CodeFindTool from "../tool/code-find"
 export {

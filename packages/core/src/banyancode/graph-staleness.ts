@@ -1,5 +1,6 @@
 /**
- * Pure staleness helper — thresholds match the existing edit-planner logic:
+ * Pure staleness helper — thresholds match the existing edit-planner logic
+ * and codegraph-readiness.ts:
  * age > 1 day = med, age > 7 days = high, coverage < 0.5 = high regardless of age.
  * meta === undefined (never built) is always high.
  */
@@ -12,6 +13,10 @@ export interface StaleResult {
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 const SEVEN_DAYS_MS = 7 * ONE_DAY_MS
 
+export const STALENESS_AGE_MED_MS = ONE_DAY_MS
+export const STALENESS_AGE_HIGH_MS = SEVEN_DAYS_MS
+export const STALENESS_COVERAGE_HIGH = 0.5
+
 export function isStale(
   meta: { graphBuiltAt: number; graphCoverage: number } | undefined,
   now = Date.now(),
@@ -20,7 +25,7 @@ export function isStale(
     return { stale: true, severity: "high", reason: "graph has not been built" }
   }
   const ageMs = now - meta.graphBuiltAt
-  if (meta.graphCoverage < 0.5) {
+  if (meta.graphCoverage < STALENESS_COVERAGE_HIGH) {
     return {
       stale: true,
       severity: "high",
