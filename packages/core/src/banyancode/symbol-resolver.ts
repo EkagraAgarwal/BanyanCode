@@ -70,6 +70,26 @@ export const resolveGraphTargetPure = (
     fileID?: string
     limit?: number
   },
+): Effect.Effect<ResolutionResult, never, never> => {
+  return resolveGraphTargetStrict(repo, { ...input, allowKeywordFallback: true })
+}
+
+/**
+ * Strict resolver that mirrors `resolveGraphTargetPure` but stops after step 3
+ * (qualified-split). Used when the caller passes `includeKeywordFallback: false`
+ * to `code_find` so the resolver returns "target-not-resolved" instead of
+ * fuzzy substring matches. Sharing the step 1-3 implementation avoids drift
+ * between the two strategies.
+ */
+export const resolveGraphTargetStrict = (
+  repo: ResolveRepo,
+  input: {
+    target: string
+    kind?: CodegraphNode["kind"]
+    fileID?: string
+    limit?: number
+    allowKeywordFallback?: boolean
+  },
 ): Effect.Effect<ResolutionResult, never, never> =>
   Effect.gen(function* () {
     const target = input.target.trim()
@@ -82,6 +102,7 @@ export const resolveGraphTargetPure = (
 
     const tried: ResolutionDerivation[] = []
     const limit = input.limit ?? 25
+    const allowKeywordFallback = input.allowKeywordFallback ?? false
 
     const filterByKind = (nodes: CodegraphNode[]): CodegraphNode[] =>
       input.kind ? nodes.filter((n) => n.kind === input.kind) : nodes
@@ -131,6 +152,10 @@ export const resolveGraphTargetPure = (
           return toResult(dedupeByID(filtered).slice(0, limit), "qualified-split")
         }
       }
+    }
+
+    if (!allowKeywordFallback) {
+      return { _tag: "Miss" as const, value: { target, tried } }
     }
 
     // 4) Code-substring + last-segment fallback (mirrors code_find definition).

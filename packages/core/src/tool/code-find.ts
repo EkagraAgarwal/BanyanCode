@@ -10,7 +10,7 @@ import type { CodegraphNode } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
-import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
+import { resolveGraphTargetPure, resolveGraphTargetStrict } from "../banyancode/symbol-resolver"
 import type { ResolutionDerivation } from "../banyancode/symbol-resolver"
 import { formatNodes } from "./codegraph-format"
 import { optionalNumber } from "./tool-schema"
@@ -127,7 +127,9 @@ export const locationLayer = Layer.effectDiscard(
           "  the resolved node.\n" +
           "Before this: codegraph_build (if not built).\n" +
           "Note: includeKeywordFallback defaults to true — content-substring matching\n" +
-          "  is enabled when the symbol is not found by name. Set to false to opt out.",
+          "  is enabled when the symbol is not found by name. Set to false to opt out.\n" +
+          "  Strict mode returns _diagnostic='target-not-resolved' on miss instead of\n" +
+          "  falling back to fuzzy matches.",
         contract: { visibility: "public" },
         input: Input,
         output: Output,
@@ -201,7 +203,13 @@ export const locationLayer = Layer.effectDiscard(
                 | { _tag: "Miss" }
               > =>
                 Effect.gen(function* () {
-                  const result = yield* resolveGraphTargetPure(repo, { target, limit })
+                  const result = input.includeKeywordFallback === false
+                    ? yield* resolveGraphTargetStrict(repo, {
+                        target,
+                        limit,
+                        allowKeywordFallback: false,
+                      })
+                    : yield* resolveGraphTargetPure(repo, { target, limit })
                   return result._tag === "Ok" ? result.value : { _tag: "Miss" as const }
                 })
 
