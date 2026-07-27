@@ -44,8 +44,12 @@ export const Output = Schema.Struct({
   transitiveCallers: Schema.Number,
   filesAffected: Schema.Number,
   testsToRun: Schema.Number,
-  risk: Schema.Literals(["low", "medium", "high"]),
+  risk: Schema.Literals(["low", "medium", "high", "unknown"]),
   graphStale: Schema.optional(Schema.Boolean),
+  resolved: Schema.Boolean,
+  resolutionDerivation: Schema.optional(
+    Schema.Literals(["tag-fallback", "name-exact", "qualified-split", "code-substring", "name-like", "fts-bm25"]),
+  ),
 })
 
 const BFS_MAX = 64
@@ -74,7 +78,9 @@ export const computeBlastRadius = (
     // did exact-name lookups and returned 0 for everything except top-level
     // class names.
     const resolved = yield* resolveGraphTargetPure(deps.repo, { target: input.target })
-    const resolvedNodeID = resolved._tag === "Ok" ? resolved.value.nodeID : undefined
+    const isResolved = resolved._tag === "Ok"
+    const resolvedNodeID = isResolved ? resolved.value.nodeID : undefined
+    const resolutionDerivation = isResolved ? resolved.value.derivation : undefined
 
     const impact = yield* deps.analyzer
       .impact(resolvedNodeID ? { nodeID: resolvedNodeID } : { function: input.target })
@@ -108,12 +114,22 @@ export const computeBlastRadius = (
       : undefined
     const stale = isStale(meta)
 
+    // When the resolver fails to map the input to an indexed node we cannot
+    // trust the count — `analyzer.impact` returns 0/0 for both "safe" and
+    // "not found". Surface that ambiguity as `resolved: false` + `risk:
+    // "unknown"` so an agent can't read a near-zero blast radius as proof of
+    // safety. Counts are still reported (they may be useful for partial
+    // overlap when the resolver missed via `name-like` but something was
+    // resolved by `code-substring`), but the risk verdict is always "unknown"
+    // on a miss so it cannot be misinterpreted.
     return {
       directCallers: impact.dependents.length,
       transitiveCallers: transitiveCount,
       filesAffected: seenFileIDs.size,
       testsToRun,
-      risk: score(impact.dependents.length, transitiveCount),
+      risk: isResolved ? score(impact.dependents.length, transitiveCount) : "unknown",
+      resolved: isResolved,
+      ...(resolutionDerivation ? { resolutionDerivation } : {}),
       ...(stale.stale ? { graphStale: true } : {}),
     }
   })

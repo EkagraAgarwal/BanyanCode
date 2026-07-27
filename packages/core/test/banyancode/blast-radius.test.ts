@@ -122,6 +122,7 @@ describe("blast_radius tool", () => {
     expect(Input.fields).toHaveProperty("target")
     expect(Input.fields).toHaveProperty("maxDepth")
     expect((Output as unknown as { fields: Record<string, unknown> }).fields).toHaveProperty("risk")
+    expect((Output as unknown as { fields: Record<string, unknown> }).fields).toHaveProperty("resolved")
   })
 
   test("computeBlastRadius returns 2 direct callers + tests when seeded graph has two callers", async () => {
@@ -154,7 +155,7 @@ describe("blast_radius tool", () => {
     )
   })
 
-  test("computeBlastRadius returns zero counts and 'low' risk when target has no callers", async () => {
+  test("computeBlastRadius returns zero counts and 'unknown' risk when target is not in graph", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.db")
     const dbLayer = Database.layerFromPath(dbPath)
@@ -179,7 +180,37 @@ describe("blast_radius tool", () => {
         expect(result.transitiveCallers).toBe(0)
         expect(result.filesAffected).toBe(0)
         expect(result.testsToRun).toBe(0)
-        expect(result.risk).toBe("low")
+        expect(result.risk).toBe("unknown")
+        expect(result.resolved).toBe(false)
+        expect(result.resolutionDerivation).toBeUndefined()
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("computeBlastRadius returns resolved=true with derivation when target exists", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+        const analyzer = yield* CodegraphAnalyzer.Service
+        yield* seedCallerGraph(repo as unknown as CodegraphRepoInterface)
+
+        const result = yield* computeBlastRadius(
+          {
+            repo: repo as unknown as CodegraphRepoInterface,
+            analyzer: analyzer as unknown as CodegraphAnalyzerInterface,
+          },
+          { target: "alpha" },
+        )
+
+        expect(result.resolved).toBe(true)
+        expect(result.resolutionDerivation).toBe("name-exact")
+        expect(["low", "medium", "high"]).toContain(result.risk)
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
