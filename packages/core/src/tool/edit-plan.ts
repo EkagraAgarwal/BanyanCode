@@ -4,7 +4,7 @@ import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { Banyan } from "../banyancode"
 import { EditPlan } from "../banyancode/edit-planner"
-import { GraphMeta } from "../banyancode/types"
+import { GraphMeta, type CodegraphNode } from "../banyancode/types"
 import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
 import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import { traced } from "../observability/trace"
@@ -125,16 +125,32 @@ export const locationLayer = Layer.effectDiscard(
                 const plan =
                   input.phase === "before"
                     ? yield* Effect.gen(function* () {
-                        const preResolved =
+                        // When a `filePath` hint is provided, scope
+                        // resolution to that file so a targetSymbol like
+                        // `MemoryRepo.update` (which would otherwise
+                        // fall through to a repo-wide code-substring
+                        // match on every `update` node in the codebase
+                        // with indeterminate ordering) resolves against
+                        // the hint's file. The hint is also passed to
+                        // the planner, but the planner used to prefer
+                        // `input.filePath` over the resolved node's
+                        // file, so scoping the resolver here gives both
+                        // consistent results.
+                        const preResolved: CodegraphNode | undefined =
                           input.filePath
-                            ? yield* resolveGraphTargetPure(
-                                repo as CodegraphRepoInterface,
-                                { target: input.targetSymbol },
-                              ).pipe(
-                                Effect.map((resolved) =>
-                                  resolved._tag === "Ok" ? resolved.value.node : undefined,
-                                ),
-                              )
+                            ? yield* Effect.gen(function* () {
+                                const allFiles = yield* repo.listAllFiles()
+                                const match = allFiles.find((f) => f.path === input.filePath)
+                                const fileID = match?.id
+                                const resolved = yield* resolveGraphTargetPure(
+                                  repo as CodegraphRepoInterface,
+                                  {
+                                    target: input.targetSymbol,
+                                    ...(fileID ? { fileID } : {}),
+                                  },
+                                )
+                                return resolved._tag === "Ok" ? resolved.value.node : undefined
+                              })
                             : undefined
                         return yield* planner.planBeforeEdit({
                           targetSymbol: input.targetSymbol,

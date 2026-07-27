@@ -223,7 +223,17 @@ const sortBySpecificity = (nodes: CodegraphNode[], lowerTarget: string): Codegra
     if (n.name.toLowerCase() === lowerTarget) s -= 100
     return s
   }
-  return nodes.slice().sort((a, b) => score(a) - score(b))
+  // Final tiebreak: `node.id`. Without this, ties fall back to SQLite
+  // row order which is non-deterministic across rebuilds (a wiped DB
+  // returns rows in a different order than one built up over many
+  // incremental updates). Two callers resolving the same
+  // `MemoryRepo.update` symbol several minutes apart would otherwise be
+  // free to pick different primary nodes.
+  return nodes.slice().sort((a, b) => {
+    const scoreDelta = score(a) - score(b)
+    if (scoreDelta !== 0) return scoreDelta
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  })
 }
 
 export const layer = Layer.effect(

@@ -218,9 +218,15 @@ export const layer = Layer.effect(
             rationale: "find every caller before modifying/deleting",
           })
         }
+        // Prefer the resolved target's file so the read step can never
+        // disagree with the node the impact numbers came from. Fall
+        // back to `input.filePath` only when the target has no file row
+        // (resolver miss).
+        const readPath =
+          filePathMap.get(target.fileID) ?? input.filePath ?? target.fileID
         steps.push({
           tool: "read",
-          args: { path: input.filePath ?? filePathMap.get(target.fileID) ?? target.fileID },
+          args: { path: readPath },
           rationale: "read the current implementation",
         })
         steps.push({ tool: "edit", args: { symbol: input.targetSymbol, kind: input.changeKind }, rationale: "perform the edit" })
