@@ -140,10 +140,9 @@ const make = (options: Config) =>
 const nativeLayer = (config: Config) =>
   Layer.effect(
     Sqlite.Native,
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       // @libsql/client requires file: URL for local files
       const url = config.filename.startsWith("file:") ? config.filename : `file:${config.filename}`
-      yield* Effect.logDebug(`[turso.driver] opening ${url}`)
       const client = createClient({
         url,
       })

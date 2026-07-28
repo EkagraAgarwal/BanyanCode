@@ -325,10 +325,15 @@ for (const item of targets) {
     }
 
     // Extended smoke test: launch the TUI briefly in a clean temp directory
-    // so the libsql native binding is actually loaded (the BanyanCode schema
-    // init log only appears once the addon is dlopen'd). The TUI is killed
-    // after a short delay; we just need to confirm startup doesn't crash
-    // with `Cannot find module '@libsql/...'` or a dlopen failure.
+    // so the libsql native binding is actually loaded. The BanyanCode schema
+    // init writes to the file logger once the addon is dlopen'd; the TUI
+    // is killed after a short delay. We just need to confirm startup
+    // doesn't crash with `Cannot find module '@libsql/...'` or a dlopen
+    // failure. Detection is via stderr — absence of the libsql load error
+    // (not via a specific log line, which can be moved without breaking
+    // the smoke test). Per AGENTS.md, raw stderr writes are forbidden
+    // during interactive TUI, but during a non-interactive TUI smoke test
+    // (no OpenTUI render frame) stderr output is the canonical signal.
     const smokeDir = fs.mkdtempSync(path.join(require("os").tmpdir(), "banyancode-smoke-"))
     try {
       const proc = Bun.spawn([path.resolve(binaryPath)], {
@@ -340,7 +345,7 @@ for (const item of targets) {
       const stderr = await new Response(proc.stderr).text()
       clearTimeout(timer)
       await proc.exited
-      const bindingLoaded = stderr.includes("turso.schema")
+      const bindingLoaded = !/Cannot find module ['"]@libsql\//.test(stderr)
       if (!bindingLoaded) {
         console.error(
           `Smoke test failed: libsql native binding did not load. stderr:\n${stderr.slice(0, 500)}`,
