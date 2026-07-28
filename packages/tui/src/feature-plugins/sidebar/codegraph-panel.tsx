@@ -4,6 +4,7 @@ import type { BuiltinTuiPlugin } from "../builtins"
 import { createSignal, createMemo, createResource, onCleanup } from "solid-js"
 import { toHex } from "../../util/color"
 import { useEvent } from "../../context/event"
+import { TuiLogger } from "../../util/logger"
 
 const id = "internal:sidebar-codegraph-panel"
 
@@ -68,7 +69,10 @@ function View(props: { api: TuiPluginApi }) {
       }))
       return { meta, nodes, edges }
     } catch (e) {
-      console.error(e)
+      // Sidebar graph fetch is best-effort; the file logger captures it
+      // without writing to stderr (which would corrupt the OpenTUI frame).
+      const message = e instanceof Error ? e.message : String(e)
+      TuiLogger.warn(`[tui.codegraph-panel] fetch failed`, { message })
       return null
     }
   })
