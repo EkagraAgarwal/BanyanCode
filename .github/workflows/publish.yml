@@ -273,7 +273,25 @@ jobs:
             gh release create "$TAG" --draft --generate-notes --title "BanyanCode ${{ needs.version.outputs.version }}" --repo "${{ github.repository }}"
           fi
           shopt -s nullglob
-          files=(packages/opencode/dist/banyancode-*.*)
+          # Explicit 10-target allowlist. The wildcard `banyancode-*.*`
+          # previously picked up banyancode-windows-x64-baseline-*.zip
+          # (the downstream signing/triage build per AGENTS.md, which
+          # must NOT ship to users). Per the release-readiness review,
+          # this shipped the baseline artifact in past releases. Now
+          # enumerated explicitly: 6 linux .tar.gz targets, 3 darwin
+          # .zip targets, 1 windows .zip target (windows-x64 only).
+          files=(
+            packages/opencode/dist/banyancode-linux-x64-*.tar.gz
+            packages/opencode/dist/banyancode-linux-x64-baseline-*.tar.gz
+            packages/opencode/dist/banyancode-linux-x64-musl-*.tar.gz
+            packages/opencode/dist/banyancode-linux-x64-baseline-musl-*.tar.gz
+            packages/opencode/dist/banyancode-linux-arm64-*.tar.gz
+            packages/opencode/dist/banyancode-linux-arm64-musl-*.tar.gz
+            packages/opencode/dist/banyancode-darwin-x64-*.zip
+            packages/opencode/dist/banyancode-darwin-x64-baseline-*.zip
+            packages/opencode/dist/banyancode-darwin-arm64-*.zip
+            packages/opencode/dist/banyancode-windows-x64-*.zip
+          )
           if (( ${#files[@]} > 0 )); then
             gh release upload "$TAG" "${files[@]}" --clobber --repo "${{ github.repository }}"
           fi
