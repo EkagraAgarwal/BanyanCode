@@ -9,6 +9,7 @@ import { Database } from "../../src/database/database"
 import type { SubagentMessage } from "../../src/banyancode/types"
 import { SessionSchema } from "../../src/session/schema"
 import { tmpdir } from "../fixture/tmpdir"
+import { makeSubagentBusMockLayer } from "../lib/subagent-bus"
 import path from "path"
 
 process.env.BANYANCODE_ENABLE = "1"
@@ -18,16 +19,7 @@ const sid = (s: string) => SessionSchema.ID.make(s) as SessionSchema.ID
 const buildServiceLayer = (dbPath: string) => {
   const dbLayer = Database.layerFromPath(dbPath)
 
-  const mockBus = Layer.succeed(
-    SubagentBus.Service,
-    SubagentBus.Service.of({
-      publish: () => Effect.void,
-      publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-      subscribe: () => Effect.succeed({} as unknown as Queue.Dequeue<SubagentMessage>),
-      subscribeAll: () => Effect.succeed({} as unknown as Queue.Dequeue<SubagentMessage>),
-      peers: () => Effect.succeed([]),
-    }),
-  )
+  const mockBus = makeSubagentBusMockLayer({} as unknown as Queue.Dequeue<SubagentMessage>)
 
   const mockPlans = Layer.succeed(
     SubagentPlans.Service,

@@ -9,6 +9,7 @@ import { SubagentPlans } from "../../src/banyancode/subagent-plans-repo"
 import { EventV2 } from "../../src/event"
 import { Database } from "../../src/database/database"
 import { tmpdir } from "../fixture/tmpdir"
+import { makeSubagentBusMockLayer } from "../lib/subagent-bus"
 import path from "path"
 import type { SubagentMessage } from "../../src/banyancode/types"
 
@@ -18,16 +19,7 @@ const buildServiceLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>) 
   const dbLayer = Database.layerFromPath(dbPath)
   const messagesLayer = SubagentMessagesRepo.defaultLayer.pipe(Layer.provide(dbLayer))
 
-  const mockBus = Layer.succeed(
-    SubagentBus.Service,
-    SubagentBus.Service.of({
-      publish: () => Effect.void,
-      publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-      subscribe: () => Effect.succeed(queue),
-      subscribeAll: () => Effect.succeed({} as any),
-      peers: () => Effect.succeed([]),
-    }),
-  )
+  const mockBus = makeSubagentBusMockLayer(queue)
 
   const mockMemory = Layer.succeed(
     MemoryRepo.Service,
@@ -124,16 +116,7 @@ describe("SubagentConsumer lifecycle", () => {
 
     const testLayer = layer.pipe(
       Layer.provide(
-        Layer.succeed(
-          SubagentBus.Service,
-          SubagentBus.Service.of({
-            publish: () => Effect.void,
-            publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-            subscribe: () => Effect.succeed(queue),
-            subscribeAll: () => Effect.succeed(queue),
-            peers: () => Effect.succeed([]),
-          }),
-        ),
+        makeSubagentBusMockLayer(queue),
       ),
       Layer.provide(
         Layer.succeed(MemoryRepo.Service, MemoryRepo.Service.of({
@@ -198,16 +181,7 @@ describe("SubagentConsumer lifecycle", () => {
 
     const testLayer = layer.pipe(
       Layer.provide(
-        Layer.succeed(
-          SubagentBus.Service,
-          SubagentBus.Service.of({
-            publish: () => Effect.void,
-            publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-            subscribe: () => Effect.succeed(queue),
-            subscribeAll: () => Effect.succeed(queue),
-            peers: () => Effect.succeed([]),
-          }),
-        ),
+        makeSubagentBusMockLayer(queue),
       ),
       Layer.provide(
         Layer.succeed(MemoryRepo.Service, MemoryRepo.Service.of({
@@ -281,16 +255,7 @@ describe("SubagentConsumer lifecycle", () => {
 
     const testLayer = layer.pipe(
       Layer.provide(
-        Layer.succeed(
-          SubagentBus.Service,
-          SubagentBus.Service.of({
-            publish: () => Effect.void,
-            publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-            subscribe: () => Effect.succeed(queue),
-            subscribeAll: () => Effect.succeed(queue),
-            peers: () => Effect.succeed([]),
-          }),
-        ),
+        makeSubagentBusMockLayer(queue),
       ),
       Layer.provide(
         Layer.succeed(MemoryRepo.Service, MemoryRepo.Service.of({

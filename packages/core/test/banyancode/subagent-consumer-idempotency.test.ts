@@ -12,6 +12,7 @@ import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import type { SubagentMessage } from "@opencode-ai/core/banyancode/types"
 import { tmpdir } from "../fixture/tmpdir"
+import { makeSubagentBusMockLayer } from "../lib/subagent-bus"
 import path from "path"
 
 process.env.BANYANCODE_ENABLE = "1"
@@ -19,16 +20,7 @@ process.env.BANYANCODE_ENABLE = "1"
 const buildLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>) => {
   const dbLayer = Database.layerFromPath(dbPath)
 
-  const mockBus = Layer.succeed(
-    SubagentBus.Service,
-    SubagentBus.Service.of({
-      publish: () => Effect.void,
-      publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-      subscribe: () => Effect.succeed(queue),
-      subscribeAll: () => Effect.succeed({} as any),
-      peers: () => Effect.succeed([]),
-    }),
-  )
+  const mockBus = makeSubagentBusMockLayer(queue)
 
   const mockMesh = Layer.succeed(
     MeshCoordinator.Service,

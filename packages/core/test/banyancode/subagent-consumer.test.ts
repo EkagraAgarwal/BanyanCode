@@ -10,6 +10,7 @@ import { EventV2 } from "../../src/event"
 import { Database } from "../../src/database/database"
 import { DatabaseMigration } from "../../src/database/migration"
 import { tmpdir } from "../fixture/tmpdir"
+import { makeSubagentBusMockLayer } from "../lib/subagent-bus"
 import path from "path"
 import type { MemoryEntry, SubagentMessage } from "../../src/banyancode/types"
 
@@ -19,16 +20,7 @@ const buildServiceLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>, 
   const dbLayer = Database.layerFromPath(dbPath)
   const messagesLayer = SubagentMessagesRepo.defaultLayer.pipe(Layer.provide(dbLayer))
 
-  const mockBus = Layer.succeed(
-    SubagentBus.Service,
-    SubagentBus.Service.of({
-      publish: () => Effect.void,
-      publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-      subscribe: () => Effect.succeed(queue),
-      subscribeAll: () => Effect.succeed({} as any),
-      peers: () => Effect.succeed([]),
-    }),
-  )
+  const mockBus = makeSubagentBusMockLayer(queue)
 
   const mockMemory = Layer.succeed(
     MemoryRepo.Service,

@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Queue, Scope } from "effect"
 import { SubagentMessageTool } from "../../../core/src/tool/subagent-message"
 import { SharedMemoryTool } from "../../../core/src/tool/shared-memory"
 import { ToolRegistry } from "../../../core/src/tool/registry"
@@ -43,8 +43,19 @@ const mockBusLayer = Layer.succeed(SubagentBus.Service, SubagentBus.Service.of({
       mockMessages.push(msg)
       return { id: msg.id, createdAt: msg.createdAt, created: true }
     }),
-  subscribe: () => Effect.succeed({} as any),
-  subscribeAll: () => Effect.succeed({} as any),
+  parentSessionExists: () => Effect.succeed(true),
+  subscribe: () =>
+    Effect.succeed({} as any) as Effect.Effect<
+      Queue.Dequeue<any>,
+      SubagentBus.SubagentSessionNotFoundError,
+      Scope.Scope
+    >,
+  subscribeAll: () =>
+    Effect.succeed({} as any) as Effect.Effect<
+      Queue.Dequeue<any>,
+      never,
+      Scope.Scope
+    >,
   peers: () => Effect.succeed([]),
 }))
 

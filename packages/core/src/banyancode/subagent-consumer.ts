@@ -152,7 +152,32 @@ export const layer = Layer.effect(
     // returns the fiber is interrupted and peer messages pile up undelivered.
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
-        const queue = yield* bus.subscribe(input.sessionID)
+        // Defensive guard: if the parent session doesn't exist (rare — the
+        // orchestrator normally spawns consumers only for live sessions),
+        // log and skip without erroring. The orchestrator surfaces missing
+        // parents through its own paths. We wrap in Effect.scoped so the bus
+        // queue's Scope requirement is localized; if subscribe fails (e.g.
+        // session deleted between check and subscribe — race), we die the
+        // fiber so the caller doesn't see a typed error.
+        const exists = yield* bus.parentSessionExists(input.sessionID)
+        if (!exists) {
+          yield* Effect.logWarning("subagent-consumer: parent session not found, skipping", {
+            sessionID: input.sessionID,
+            agent: input.agent,
+          })
+          return
+        }
+        const queue = yield* Effect.scoped(
+          bus.subscribe(input.sessionID).pipe(
+            Effect.catchTag("Banyan/SubagentSessionNotFoundError", (e) =>
+              Effect.die(
+                new Error(
+                  `subagent-consumer: parent session ${e.parentSessionID} disappeared between check and subscribe (race)`,
+                ),
+              ),
+            ),
+          ),
+        )
         const fiber = yield* Effect.forkDetach(loop(input, queue))
         yield* mesh.registerConsumer(input.sessionID, input.agent, fiber)
       })

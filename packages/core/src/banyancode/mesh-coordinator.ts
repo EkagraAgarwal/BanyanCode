@@ -1,6 +1,6 @@
 export * as MeshCoordinator from "./mesh-coordinator"
 
-import { Cause, Context, Duration, Effect, Fiber, Layer, Queue, Ref, Schedule, Schema, Stream } from "effect"
+import { Cause, Context, Duration, Effect, Fiber, Layer, Option, Queue, Ref, Schedule, Schema, Scope, Stream } from "effect"
 import { and, eq, isNull, sql } from "drizzle-orm"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -63,7 +63,13 @@ export type MeshStatus = typeof MeshStatus.Type
 export interface Interface {
   readonly status: (parentSessionID: SessionSchema.ID) => Effect.Effect<MeshStatus, never, never>
   readonly watch: (parentSessionID: SessionSchema.ID) => Effect.Effect<Stream.Stream<MeshStatus>, never, never>
-  readonly subscribe: (input: { parentSessionID: SessionSchema.ID; agentName?: string }) => Effect.Effect<Stream.Stream<SubagentMessage, never, never>, never, never>
+  readonly subscribe: (
+    input: { parentSessionID: SessionSchema.ID; agentName?: string },
+  ) => Effect.Effect<
+    Stream.Stream<SubagentMessage, never, never>,
+    SubagentBus.SubagentSessionNotFoundError,
+    never
+  >
   readonly checkin: (
     parentSessionID: SessionSchema.ID,
   ) => Effect.Effect<Array<{ agent: string; sessionID: string; lastSeenAt: number; lastCheckpoint?: { summary: string; todos: unknown } }>, never, never>
@@ -326,13 +332,29 @@ export const layer = Layer.effect(
       parentSessionID: SessionSchema.ID,
     ) {
       const peers = yield* bus.peers(parentSessionID)
-      const queue = yield* bus.subscribe(parentSessionID)
-      const allMessages: SubagentMessage[] = []
-      let item = yield* Queue.poll(queue)
-      while (item._tag === "Some") {
-        allMessages.push(item.value)
-        item = yield* Queue.poll(queue)
-      }
+
+      // Drain pending messages. If the parent session doesn't exist (defense
+      // in depth — checkin is normally called with the caller's own sessionID,
+      // which is guaranteed to exist), treat as no pending messages.
+      const allMessages: SubagentMessage[] = yield* Effect.scoped(
+        bus.subscribe(parentSessionID).pipe(
+          Effect.option,
+          Effect.flatMap((opt) =>
+            Option.isNone(opt)
+              ? Effect.succeed([] as SubagentMessage[])
+              : Effect.gen(function* () {
+                  const queue = opt.value
+                  const collected: SubagentMessage[] = []
+                  let item = yield* Queue.poll(queue)
+                  while (item._tag === "Some") {
+                    collected.push(item.value)
+                    item = yield* Queue.poll(queue)
+                  }
+                  return collected
+                }),
+          ),
+        ),
+      )
 
       const checkpointBySession = new Map<string, SubagentMessage>()
       for (const msg of allMessages) {
@@ -654,16 +676,18 @@ export const layer = Layer.effect(
     })
 
     const subscribe: Interface["subscribe"] = (input) =>
-      Effect.gen(function* () {
-        const queue = yield* bus.subscribe(input.parentSessionID)
-        const stream = Stream.fromQueue(queue)
-        if (input.agentName) {
-          return stream.pipe(
-            Stream.filter((m) => m.fromAgent === input.agentName || m.toAgent === input.agentName),
-          )
-        }
-        return stream
-      })
+      Effect.scoped(
+        Effect.gen(function* () {
+          const queue = yield* bus.subscribe(input.parentSessionID)
+          const stream = Stream.fromQueue(queue)
+          if (input.agentName) {
+            return stream.pipe(
+              Stream.filter((m) => m.fromAgent === input.agentName || m.toAgent === input.agentName),
+            )
+          }
+          return stream
+        }),
+      )
 
     return Service.of({
       status,

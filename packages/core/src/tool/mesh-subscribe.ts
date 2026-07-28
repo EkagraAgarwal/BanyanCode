@@ -3,11 +3,15 @@ export * as MeshSubscribeTool from "./mesh-subscribe"
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema, Stream } from "effect"
 import { MeshCoordinator } from "../banyancode/mesh-coordinator"
+import { SubagentBus } from "../banyancode/subagent-bus"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
+
+/** Default wait for the initial batch of messages before returning empty. */
+const DEFAULT_TIMEOUT_MS = 30_000
 
 export const name = "mesh_subscribe"
 
@@ -39,6 +43,14 @@ export const Input = Schema.Struct({
   parentSessionID: Schema.String,
   agentName: Schema.optional(Schema.String),
   maxMessages: Schema.optional(Schema.Number),
+  /**
+   * Maximum time (milliseconds) to wait for `maxMessages` messages before
+   * returning whatever is in the buffer. Defaults to 30s. The safety net
+   * prevents indefinite hangs on a quiet-but-valid session; the primary
+   * fix for an invalid parentSessionID is the upstream `SubagentSessionNotFoundError`
+   * which fires immediately on a session that does not exist.
+   */
+  timeoutMs: Schema.optional(Schema.Number),
 })
 
 export const Output = Schema.Struct({
@@ -59,7 +71,9 @@ export const locationLayer = Layer.effectDiscard(
           "Subscribe to peer subagent activity for this parent session. " +
           "Returns the first N messages as an initial batch; the stream " +
           "remains active for the session lifetime. Use this in place of " +
-          "polling mesh_control.status to wait for specific subagent results.",
+          "polling mesh_control.status to wait for specific subagent results. " +
+          "If the parent session does not exist, the tool fails fast with a " +
+          "ToolFailure rather than blocking indefinitely.",
         input: Input,
          contract: { visibility: "public" },
         output: Output,
@@ -82,9 +96,28 @@ export const locationLayer = Layer.effectDiscard(
               agentName: input.agentName,
             })
             const maxMessages = input.maxMessages ?? 10
-            const messages = yield* stream.pipe(Stream.take(maxMessages), Stream.runCollect)
-            return { messages: [...messages], streamActive: true }
+            const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS
+            const messages = yield* stream
+              .pipe(Stream.take(maxMessages), Stream.runCollect)
+              .pipe(
+                Effect.timeoutOrElse({
+                  duration: `${timeoutMs} millis`,
+                  orElse: () => Effect.succeed([] as ReadonlyArray<unknown>),
+                }),
+              )
+            return { messages: [...messages] as never, streamActive: true }
           }).pipe(
+            // Translate only the typed SubagentSessionNotFoundError to a
+            // ToolFailure so the model sees a clear error and the test
+            // suite can assert on it. Other unexpected errors are wrapped
+            // with the generic ToolFailure for the same reason.
+            Effect.catchTag("Banyan/SubagentSessionNotFoundError", (e) =>
+              Effect.fail(
+                new ToolFailure({
+                  message: `mesh_subscribe: parent session ${e.parentSessionID} not found`,
+                }),
+              ),
+            ),
             Effect.mapError((e) =>
               e instanceof ToolFailure
                 ? e

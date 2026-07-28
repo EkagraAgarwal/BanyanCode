@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Queue, Stream } from "effect"
+import { Effect, Layer, Queue, Scope, Stream } from "effect"
 import { sql } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "../../src/event"
@@ -43,8 +43,19 @@ describe("MeshCoordinator", () => {
         return SubagentBus.Service.of({
           publish: () => Effect.void,
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-          subscribe: () => Effect.succeed(q),
-          subscribeAll: () => Effect.succeed(q),
+          parentSessionExists: () => Effect.succeed(true),
+          subscribe: () =>
+            Effect.succeed(q) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              SubagentBus.SubagentSessionNotFoundError,
+              Scope.Scope
+            >,
+          subscribeAll: () =>
+            Effect.succeed(q) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              never,
+              Scope.Scope
+            >,
           peers: () => Effect.succeed(mockPeers),
         })
       }),
@@ -108,8 +119,19 @@ describe("MeshCoordinator", () => {
         return SubagentBus.Service.of({
           publish: (msg: any) => Effect.sync(() => { publishedMessage = msg }),
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-          subscribe: () => Effect.succeed(q),
-          subscribeAll: () => Effect.succeed(q),
+          parentSessionExists: () => Effect.succeed(true),
+          subscribe: () =>
+            Effect.succeed(q) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              SubagentBus.SubagentSessionNotFoundError,
+              Scope.Scope
+            >,
+          subscribeAll: () =>
+            Effect.succeed(q) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              never,
+              Scope.Scope
+            >,
           peers: () => Effect.succeed([]),
         })
       }),
@@ -176,8 +198,19 @@ describe("MeshCoordinator", () => {
         return SubagentBus.Service.of({
           publish: (msg: any) => Effect.sync(() => { publishedMessage = msg }),
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-          subscribe: () => Effect.succeed(q),
-          subscribeAll: () => Effect.succeed(q),
+          parentSessionExists: () => Effect.succeed(true),
+          subscribe: () =>
+            Effect.succeed(q) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              SubagentBus.SubagentSessionNotFoundError,
+              Scope.Scope
+            >,
+          subscribeAll: () =>
+            Effect.succeed(q) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              never,
+              Scope.Scope
+            >,
           peers: () => Effect.succeed([]),
         })
       }),
@@ -244,8 +277,19 @@ describe("MeshCoordinator", () => {
         return SubagentBus.Service.of({
           publish: (msg: any) => Effect.sync(() => { publishedMessage = msg }),
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-          subscribe: () => Effect.succeed(q),
-          subscribeAll: () => Effect.succeed(q),
+          parentSessionExists: () => Effect.succeed(true),
+          subscribe: () =>
+            Effect.succeed(q) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              SubagentBus.SubagentSessionNotFoundError,
+              Scope.Scope
+            >,
+          subscribeAll: () =>
+            Effect.succeed(q) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              never,
+              Scope.Scope
+            >,
           peers: () => Effect.succeed([]),
         })
       }),
@@ -333,8 +377,19 @@ describe("MeshCoordinator", () => {
         return SubagentBus.Service.of({
           publish: () => Effect.void,
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-          subscribe: () => Effect.succeed(q),
-          subscribeAll: () => Effect.succeed(q),
+          parentSessionExists: () => Effect.succeed(true),
+          subscribe: () =>
+            Effect.succeed(q) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              SubagentBus.SubagentSessionNotFoundError,
+              Scope.Scope
+            >,
+          subscribeAll: () =>
+            Effect.succeed(q) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              never,
+              Scope.Scope
+            >,
           peers: () => Effect.succeed([]),
         })
       }),
@@ -424,8 +479,19 @@ describe("MeshCoordinator", () => {
         return SubagentBus.Service.of({
           publish: () => Effect.void,
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-          subscribe: () => Effect.succeed(q),
-          subscribeAll: () => Effect.succeed(q),
+          parentSessionExists: () => Effect.succeed(true),
+          subscribe: () =>
+            Effect.succeed(q) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              SubagentBus.SubagentSessionNotFoundError,
+              Scope.Scope
+            >,
+          subscribeAll: () =>
+            Effect.succeed(q) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              never,
+              Scope.Scope
+            >,
           peers: () =>
             Effect.succeed([
               {

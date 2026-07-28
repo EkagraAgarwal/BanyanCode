@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Queue, Stream } from "effect"
+import { Effect, Exit, Layer, Queue, Scope, Stream } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "../../src/event"
 import { tmpdir } from "../fixture/tmpdir"
 import path from "path"
 import { SubagentBus } from "../../src/banyancode/subagent-bus"
+import { SubagentMessagesRepo } from "../../src/banyancode/subagent-messages-repo"
 import { SubagentPlans } from "../../src/banyancode/subagent-plans-repo"
 import { SubagentReviewRequests } from "../../src/banyancode/subagent-review-requests-repo"
 import { MeshCoordinator, layer } from "../../src/banyancode/mesh-coordinator"
@@ -26,8 +27,19 @@ describe("MeshCoordinator.subscribe", () => {
         return SubagentBus.Service.of({
           publish: () => Effect.void,
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-          subscribe: () => Effect.succeed(mockQueue),
-          subscribeAll: () => Effect.succeed(mockQueue),
+          parentSessionExists: () => Effect.succeed(true),
+          subscribe: () =>
+            Effect.succeed(mockQueue) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              SubagentBus.SubagentSessionNotFoundError,
+              Scope.Scope
+            >,
+          subscribeAll: () =>
+            Effect.succeed(mockQueue) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              never,
+              Scope.Scope
+            >,
           peers: () => Effect.succeed([]),
         })
       }),
@@ -112,8 +124,19 @@ describe("MeshCoordinator.subscribe", () => {
         return SubagentBus.Service.of({
           publish: () => Effect.void,
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
-          subscribe: () => Effect.succeed(mockQueue),
-          subscribeAll: () => Effect.succeed(mockQueue),
+          parentSessionExists: () => Effect.succeed(true),
+          subscribe: () =>
+            Effect.succeed(mockQueue) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              SubagentBus.SubagentSessionNotFoundError,
+              Scope.Scope
+            >,
+          subscribeAll: () =>
+            Effect.succeed(mockQueue) as Effect.Effect<
+              Queue.Dequeue<SubagentMessage>,
+              never,
+              Scope.Scope
+            >,
           peers: () => Effect.succeed([]),
         })
       }),
@@ -194,5 +217,64 @@ describe("MeshCoordinator.subscribe", () => {
         expect(messages[1].id).toBe("msg_3")
       }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
     )
+  })
+
+  /**
+   * Regression: pre-fix, `mesh_subscribe` would hang indefinitely on an
+   * invalid `parentSessionID` because `Stream.take(N)` on an empty queue
+   * never resolves. The fix adds a `SubagentSessionNotFoundError` that the
+   * bus fires fast when the parent session does not exist in the session
+   * table. This test uses the REAL `SubagentBus` and `MeshCoordinator`
+   * (no mocks) against an empty DB to assert the error fires within a few
+   * hundred ms rather than hanging.
+   */
+  test("subscribe fails fast with SubagentSessionNotFoundError on invalid parentSessionID", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "invalid_parent.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    // Real layers all the way down — no mocks. The parentSessionExists
+    // lookup against SessionTable will return false (no sessions exist in
+    // a fresh tmpdir DB) and the bus will fail fast.
+    const serviceLayer = layer.pipe(
+      Layer.provide(SubagentBus.defaultLayer),
+      Layer.provide(SubagentPlans.defaultLayer),
+      Layer.provide(SubagentReviewRequests.defaultLayer),
+      Layer.provide(SubagentMessagesRepo.defaultLayer),
+      Layer.provide(dbLayer),
+      Layer.provide(EventV2.defaultLayer),
+    )
+
+    const start = Date.now()
+    // catchTag extracts the typed error as a value rather than letting
+    // it propagate as a defect. The result is a discriminated union
+    // we can assert on directly.
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const mesh = yield* MeshCoordinator.Service
+        return yield* mesh
+          .subscribe({ parentSessionID: "ses_does_not_exist" as any })
+          .pipe(
+            Effect.map((stream) => ({ _tag: "ok" as const, stream })),
+            Effect.catchTag("Banyan/SubagentSessionNotFoundError", (e) =>
+              Effect.succeed({ _tag: "not_found" as const, error: e }),
+            ),
+          )
+      }).pipe(Effect.provide(serviceLayer), Effect.scoped),
+    )
+    const elapsedMs = Date.now() - start
+
+    // The call should fail fast (not hang) and the failure should be the
+    // typed SubagentSessionNotFoundError carrying the invalid parentSessionID.
+    expect(result._tag).toBe("not_found")
+    if (result._tag === "not_found") {
+      expect(result.error).toBeInstanceOf(SubagentBus.SubagentSessionNotFoundError)
+      expect(result.error.parentSessionID).toBe("ses_does_not_exist")
+    }
+    // And it should fail FAST — well under the 30s default timeout.
+    // We give it a generous 5s upper bound to avoid CI flakes while
+    // still catching the infinite-hang regression (which would never
+    // return).
+    expect(elapsedMs).toBeLessThan(5000)
   })
 })

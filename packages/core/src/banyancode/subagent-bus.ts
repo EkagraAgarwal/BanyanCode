@@ -1,8 +1,10 @@
 export * as SubagentBus from "./subagent-bus"
 
-import { sql } from "drizzle-orm"
-import { Context, Effect, Layer, Queue } from "effect"
+import { sql, eq } from "drizzle-orm"
+import { Context, Effect, Layer, Queue, Schema, Scope } from "effect"
 import { Database } from "../database/database"
+import { SessionSchema } from "../session/schema"
+import { SessionTable } from "../session/sql"
 import { SubagentMessagesTable } from "./subagent-messages.sql"
 import { SubagentMessagesRepo } from "./subagent-messages-repo"
 import { wrapPayload } from "./subagent-types"
@@ -15,12 +17,22 @@ export interface PublishResult {
   created: boolean
 }
 
+export class SubagentSessionNotFoundError extends Schema.TaggedErrorClass<SubagentSessionNotFoundError>()(
+  "Banyan/SubagentSessionNotFoundError",
+  {
+    parentSessionID: Schema.String,
+  },
+) {}
+
 export interface Interface {
   readonly publish: (msg: SubagentMessage) => Effect.Effect<void>
   /** Insert-or-conflict for idempotent retry. Returns the row's id, createdAt, and
    * whether this call created the row (true) or fetched an existing one (false). */
   readonly publishOrFetch: (msg: SubagentMessage) => Effect.Effect<PublishResult>
-  readonly subscribe: (sessionID: string) => Effect.Effect<Queue.Dequeue<SubagentMessage>>
+  readonly parentSessionExists: (sessionID: string) => Effect.Effect<boolean, never, never>
+  readonly subscribe: (
+    sessionID: string,
+  ) => Effect.Effect<Queue.Dequeue<SubagentMessage>, SubagentSessionNotFoundError, Scope.Scope>
   /**
    * Subscribe to a single global stream of all published messages across every
    * parent session. Single-consumer — see AGENTS.md "Service events queue
@@ -29,8 +41,8 @@ export interface Interface {
    *
    * Returns the same Dequeue handle so the bridge can drain it via `take`.
    */
-  readonly subscribeAll: () => Effect.Effect<Queue.Dequeue<SubagentMessage>>
-  readonly peers: (parentSessionID: string) => Effect.Effect<PeerInfo[]>
+  readonly subscribeAll: () => Effect.Effect<Queue.Dequeue<SubagentMessage>, never, Scope.Scope>
+  readonly peers: (parentSessionID: string) => Effect.Effect<PeerInfo[], never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/SubagentBus") {}
@@ -97,8 +109,20 @@ export const layer = Layer.effect(
       }
     })
 
+    const parentSessionExists = (sessionID: string) =>
+      db
+        .select({ id: SessionTable.id })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID as SessionSchema.ID))
+        .get()
+        .pipe(Effect.orDie, Effect.map((row) => row !== undefined))
+
     const subscribe = (sessionID: string) =>
       Effect.gen(function* () {
+        const exists = yield* parentSessionExists(sessionID)
+        if (!exists) {
+          return yield* Effect.fail(new SubagentSessionNotFoundError({ parentSessionID: sessionID }))
+        }
         const pending = yield* repo.listByParent(sessionID, false)
         const queue = yield* Queue.bounded<SubagentMessage>(100)
         ;(yield* Effect.addFinalizer(() => Queue.shutdown(queue))) as unknown as void
@@ -106,7 +130,7 @@ export const layer = Layer.effect(
           yield* Queue.offer(queue, msg)
         }
         return queue
-      }) as unknown as Effect.Effect<Queue.Dequeue<SubagentMessage>, never, never>
+      })
 
     const peers = Effect.fn("SubagentBus.peers")(function* (parentSessionID: string) {
       const cutoff = Date.now() - PEER_WINDOW_MS
@@ -132,7 +156,7 @@ export const layer = Layer.effect(
       return allQueue
     })
 
-    return Service.of({ publish, publishOrFetch, subscribe, subscribeAll, peers })
+    return Service.of({ publish, publishOrFetch, parentSessionExists, subscribe, subscribeAll, peers })
   }),
 )
 
