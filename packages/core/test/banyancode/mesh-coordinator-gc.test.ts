@@ -19,7 +19,7 @@ const sid = (s: string) => SessionSchema.ID.make(s) as SessionSchema.ID
 const buildServiceLayer = (dbPath: string) => {
   const dbLayer = Database.layerFromPath(dbPath)
 
-  const mockBus = makeSubagentBusMockLayer({} as unknown as Queue.Dequeue<SubagentMessage>)
+  const mockBus = makeSubagentBusMockLayer({} as unknown as Queue.Queue<SubagentMessage>)
 
   const mockPlans = Layer.succeed(
     SubagentPlans.Service,

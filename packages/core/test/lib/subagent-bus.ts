@@ -1,4 +1,4 @@
-import { Effect, Layer, Queue, Scope } from "effect"
+import { Effect, Layer, Queue } from "effect"
 import { SubagentBus } from "../../src/banyancode/subagent-bus"
 import type { PeerInfo, SubagentMessage } from "../../src/banyancode/types"
 
@@ -7,12 +7,12 @@ import type { PeerInfo, SubagentMessage } from "../../src/banyancode/types"
  * `subscribe` and `subscribeAll`, treats every parent session as existing, and
  * leaves `publish` / `publishOrFetch` / `peers` as permissive defaults.
  *
- * Centralizes the casts required to satisfy the `Interface` after the
- * `SubagentSessionNotFoundError` change (E channel: `SubagentSessionNotFoundError`,
- * R channel: `Scope.Scope`).
+ * The Interface signatures dropped the Scope requirement for subscribe (R=never)
+ * after the per-session queue lifetime moved to the caller scope, so no
+ * type-casts are needed here.
  */
 export const makeSubagentBusMockLayer = (
-  queue: Queue.Dequeue<SubagentMessage>,
+  queue: Queue.Queue<SubagentMessage>,
   opts: { readonly peers?: ReadonlyArray<PeerInfo> } = {},
 ) =>
   Layer.succeed(
@@ -21,18 +21,8 @@ export const makeSubagentBusMockLayer = (
       publish: () => Effect.void,
       publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
       parentSessionExists: () => Effect.succeed(true),
-      subscribe: () =>
-        Effect.succeed(queue) as Effect.Effect<
-          Queue.Dequeue<SubagentMessage>,
-          SubagentBus.SubagentSessionNotFoundError,
-          Scope.Scope
-        >,
-      subscribeAll: () =>
-        Effect.succeed(queue) as Effect.Effect<
-          Queue.Dequeue<SubagentMessage>,
-          never,
-          Scope.Scope
-        >,
+      subscribe: () => Effect.succeed(queue),
+      subscribeAll: () => Effect.succeed(queue),
       peers: () => Effect.succeed([...(opts.peers ?? [])]),
     }),
   )

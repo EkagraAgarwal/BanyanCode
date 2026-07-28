@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Exit, Layer, Queue, Scope, Stream } from "effect"
+import { Effect, Exit, Layer, Queue, Stream } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "../../src/event"
 import { tmpdir } from "../fixture/tmpdir"
@@ -28,18 +28,8 @@ describe("MeshCoordinator.subscribe", () => {
           publish: () => Effect.void,
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           parentSessionExists: () => Effect.succeed(true),
-          subscribe: () =>
-            Effect.succeed(mockQueue) as Effect.Effect<
-              Queue.Dequeue<SubagentMessage>,
-              SubagentBus.SubagentSessionNotFoundError,
-              Scope.Scope
-            >,
-          subscribeAll: () =>
-            Effect.succeed(mockQueue) as Effect.Effect<
-              Queue.Dequeue<SubagentMessage>,
-              never,
-              Scope.Scope
-            >,
+          subscribe: () => Effect.succeed(mockQueue),
+          subscribeAll: () => Effect.succeed(mockQueue),
           peers: () => Effect.succeed([]),
         })
       }),
@@ -101,7 +91,7 @@ describe("MeshCoordinator.subscribe", () => {
           createdAt: Date.now(),
         }))
 
-        const stream = yield* mesh.subscribe({ parentSessionID: "ses_parent" as any })
+        const { stream } = yield* mesh.subscribe({ parentSessionID: "ses_parent" as any })
         const messages = yield* stream.pipe(Stream.take(2), Stream.runCollect)
 
         expect(messages).toHaveLength(2)
@@ -125,18 +115,8 @@ describe("MeshCoordinator.subscribe", () => {
           publish: () => Effect.void,
           publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
           parentSessionExists: () => Effect.succeed(true),
-          subscribe: () =>
-            Effect.succeed(mockQueue) as Effect.Effect<
-              Queue.Dequeue<SubagentMessage>,
-              SubagentBus.SubagentSessionNotFoundError,
-              Scope.Scope
-            >,
-          subscribeAll: () =>
-            Effect.succeed(mockQueue) as Effect.Effect<
-              Queue.Dequeue<SubagentMessage>,
-              never,
-              Scope.Scope
-            >,
+          subscribe: () => Effect.succeed(mockQueue),
+          subscribeAll: () => Effect.succeed(mockQueue),
           peers: () => Effect.succeed([]),
         })
       }),
@@ -209,7 +189,7 @@ describe("MeshCoordinator.subscribe", () => {
         }))
 
         // Subscribe with agentName="coder" — should get msg_1 (from coder) and msg_3 (to coder)
-        const stream = yield* mesh.subscribe({ parentSessionID: "ses_parent" as any, agentName: "coder" })
+        const { stream } = yield* mesh.subscribe({ parentSessionID: "ses_parent" as any, agentName: "coder" })
         const messages = yield* stream.pipe(Stream.take(2), Stream.runCollect)
 
         expect(messages).toHaveLength(2)

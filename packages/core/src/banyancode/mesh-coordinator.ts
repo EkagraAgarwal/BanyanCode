@@ -60,13 +60,24 @@ export const MeshStatus = Schema.Struct({
 
 export type MeshStatus = typeof MeshStatus.Type
 
+/**
+ * `subscribe` exposes the underlying Queue so callers can register cleanup
+ * at the right scope (caller-scoped, not local-scoped). Pre-fix, the producer
+ * wrapped itself in `Effect.scoped` which closed the inner scope on return
+ * and shut the queue before any consumer could read from it.
+ */
+export interface SubscribePair {
+  readonly queue: Queue.Queue<SubagentMessage>
+  readonly stream: Stream.Stream<SubagentMessage, never, never>
+}
+
 export interface Interface {
   readonly status: (parentSessionID: SessionSchema.ID) => Effect.Effect<MeshStatus, never, never>
   readonly watch: (parentSessionID: SessionSchema.ID) => Effect.Effect<Stream.Stream<MeshStatus>, never, never>
   readonly subscribe: (
     input: { parentSessionID: SessionSchema.ID; agentName?: string },
   ) => Effect.Effect<
-    Stream.Stream<SubagentMessage, never, never>,
+    SubscribePair,
     SubagentBus.SubagentSessionNotFoundError,
     never
   >
@@ -336,6 +347,11 @@ export const layer = Layer.effect(
       // Drain pending messages. If the parent session doesn't exist (defense
       // in depth — checkin is normally called with the caller's own sessionID,
       // which is guaranteed to exist), treat as no pending messages.
+      //
+      // bus.subscribe now returns a queue whose lifetime is owned by the
+      // caller. We bind it to the surrounding Effect.scoped scope so the queue
+      // shuts down when this gen completes (preserving the previous behavior
+      // of draining-then-shutting in one step).
       const allMessages: SubagentMessage[] = yield* Effect.scoped(
         bus.subscribe(parentSessionID).pipe(
           Effect.option,
@@ -344,6 +360,7 @@ export const layer = Layer.effect(
               ? Effect.succeed([] as SubagentMessage[])
               : Effect.gen(function* () {
                   const queue = opt.value
+                  yield* Effect.addFinalizer(() => Queue.shutdown(queue))
                   const collected: SubagentMessage[] = []
                   let item = yield* Queue.poll(queue)
                   while (item._tag === "Some") {
@@ -676,18 +693,24 @@ export const layer = Layer.effect(
     })
 
     const subscribe: Interface["subscribe"] = (input) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const queue = yield* bus.subscribe(input.parentSessionID)
-          const stream = Stream.fromQueue(queue)
-          if (input.agentName) {
-            return stream.pipe(
-              Stream.filter((m) => m.fromAgent === input.agentName || m.toAgent === input.agentName),
-            )
-          }
-          return stream
-        }),
-      )
+      Effect.gen(function* () {
+        // `bus.subscribe` returns a queue whose cleanup is the caller's job
+        // (the per-session queue must outlive this gen's return so the
+        // caller can drain it via `Stream.runCollect`). We expose both the
+        // queue and the (optionally-filtered) stream so the caller can wrap
+        // the consume-lifetime in `Effect.scoped` and register
+        // `Effect.addFinalizer(() => Queue.shutdown(queue))`. Previously
+        // this function did `Effect.scoped(...)` here which shut the
+        // queue before any consumer could read it.
+        const queue = yield* bus.subscribe(input.parentSessionID)
+        const stream = Stream.fromQueue(queue)
+        if (input.agentName) {
+          return { queue, stream: stream.pipe(
+            Stream.filter((m) => m.fromAgent === input.agentName || m.toAgent === input.agentName),
+          ) }
+        }
+        return { queue, stream }
+      })
 
     return Service.of({
       status,

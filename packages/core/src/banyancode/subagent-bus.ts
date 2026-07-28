@@ -1,7 +1,7 @@
 export * as SubagentBus from "./subagent-bus"
 
 import { sql, eq } from "drizzle-orm"
-import { Context, Effect, Layer, Queue, Schema, Scope } from "effect"
+import { Context, Effect, Layer, Queue, Schema } from "effect"
 import { Database } from "../database/database"
 import { SessionSchema } from "../session/schema"
 import { SessionTable } from "../session/sql"
@@ -30,9 +30,24 @@ export interface Interface {
    * whether this call created the row (true) or fetched an existing one (false). */
   readonly publishOrFetch: (msg: SubagentMessage) => Effect.Effect<PublishResult>
   readonly parentSessionExists: (sessionID: string) => Effect.Effect<boolean, never, never>
+  /**
+   * Subscribe to messages for a session. Returns a queue handle whose
+   * lifetime is owned by the caller — register cleanup at the appropriate
+   * scope:
+   *  - Short-lived (tool call): wrap the consumer in Effect.scoped so the
+   *    closing of the inner scope drives Queue.shutdown.
+   *  - Long-lived (subagent consumer fiber): invoke
+   *    Effect.addFinalizer(Queue.shutdown) in the consumer's own scope, or
+   *    call Queue.shutdown explicitly from the finally block of the
+   *    consumer loop.
+   *
+   * Returns Exit.Done from each Queue.take after the queue is shut.
+   * Fails fast with SubagentSessionNotFoundError if the session does not
+   * exist in the SessionTable.
+   */
   readonly subscribe: (
     sessionID: string,
-  ) => Effect.Effect<Queue.Dequeue<SubagentMessage>, SubagentSessionNotFoundError, Scope.Scope>
+  ) => Effect.Effect<Queue.Queue<SubagentMessage>, SubagentSessionNotFoundError>
   /**
    * Subscribe to a single global stream of all published messages across every
    * parent session. Single-consumer — see AGENTS.md "Service events queue
@@ -40,8 +55,10 @@ export interface Interface {
    * also offers to the global queue (drops on back-pressure).
    *
    * Returns the same Dequeue handle so the bridge can drain it via `take`.
+   * The queue's finalizer is bound to the layer scope (long-lived); the
+   * bridge owns drainage.
    */
-  readonly subscribeAll: () => Effect.Effect<Queue.Dequeue<SubagentMessage>, never, Scope.Scope>
+  readonly subscribeAll: () => Effect.Effect<Queue.Dequeue<SubagentMessage>, never, never>
   readonly peers: (parentSessionID: string) => Effect.Effect<PeerInfo[], never, never>
 }
 
@@ -125,7 +142,6 @@ export const layer = Layer.effect(
         }
         const pending = yield* repo.listByParent(sessionID, false)
         const queue = yield* Queue.bounded<SubagentMessage>(100)
-        ;(yield* Effect.addFinalizer(() => Queue.shutdown(queue))) as unknown as void
         for (const msg of pending) {
           yield* Queue.offer(queue, msg)
         }

@@ -52,7 +52,7 @@ export const layer = Layer.effect(
 
     const loop = (
       input: { sessionID: SessionSchema.ID; agent: string; plan?: PlanDefinition },
-      queue: Queue.Dequeue<SubagentMessage>,
+      queue: Queue.Queue<SubagentMessage>,
     ) =>
       Effect.gen(function* () {
         // Phase 1A G3: SubagentPlans is optional. The consumer only requires
@@ -141,6 +141,12 @@ export const layer = Layer.effect(
             yield* messages.markDelivered(msg.id, Date.now())
           }
         } finally {
+          // Shut the per-session queue down explicitly so the bus's
+          // subscribe() cleanup (which was moved out of `bus.subscribe`
+          // because it needed a scope) still runs when the consumer
+          // fiber exits. Safe to call repeatedly — Queue.shutdown is
+          // idempotent.
+          yield* Queue.shutdown(queue)
           yield* mesh.unregisterConsumer(input.sessionID, input.agent)
         }
       })
@@ -167,13 +173,18 @@ export const layer = Layer.effect(
           })
           return
         }
-        const queue = yield* Effect.scoped(
-          bus.subscribe(input.sessionID).pipe(
-            Effect.catchTag("Banyan/SubagentSessionNotFoundError", (e) =>
-              Effect.die(
-                new Error(
-                  `subagent-consumer: parent session ${e.parentSessionID} disappeared between check and subscribe (race)`,
-                ),
+        // bus.subscribe no longer requires Scope (the per-session queue's
+        // lifetime is owned by the consumer). We shut the queue down
+        // explicitly from the loop's `finally` block so a kill, error, or
+        // interrupt on the detached fiber releases the queue. Previously
+        // this used `Effect.scoped(bus.subscribe(...))` which closed the
+        // scope immediately and shut the queue before the detached fiber
+        // could read from it — every consumer was a no-op.
+        const queue = yield* bus.subscribe(input.sessionID).pipe(
+          Effect.catchTag("Banyan/SubagentSessionNotFoundError", (e) =>
+            Effect.die(
+              new Error(
+                `subagent-consumer: parent session ${e.parentSessionID} disappeared between check and subscribe (race)`,
               ),
             ),
           ),

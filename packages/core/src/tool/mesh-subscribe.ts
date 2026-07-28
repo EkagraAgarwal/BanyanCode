@@ -1,7 +1,7 @@
 export * as MeshSubscribeTool from "./mesh-subscribe"
 
 import { ToolFailure } from "@opencode-ai/llm"
-import { Effect, Layer, Schema, Stream } from "effect"
+import { Effect, Layer, Queue, Schema, Stream } from "effect"
 import { MeshCoordinator } from "../banyancode/mesh-coordinator"
 import { SubagentBus } from "../banyancode/subagent-bus"
 import { PermissionV2 } from "../permission"
@@ -81,32 +81,40 @@ export const locationLayer = Layer.effectDiscard(
           { type: "text", text: `messages=${output.messages.length} streamActive=${output.streamActive}` },
         ],
         execute: (input, context) => {
-          return Effect.gen(function* () {
-            yield* permission.assert({
-              action: name,
-              resources: [input.parentSessionID],
-              save: ["*"],
-              metadata: input,
-              sessionID: context.sessionID,
-              agent: context.agent,
-              source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-            })
-            const stream = yield* coordinator.subscribe({
-              parentSessionID: input.parentSessionID as any,
-              agentName: input.agentName,
-            })
-            const maxMessages = input.maxMessages ?? 10
-            const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS
-            const messages = yield* stream
-              .pipe(Stream.take(maxMessages), Stream.runCollect)
-              .pipe(
-                Effect.timeoutOrElse({
-                  duration: `${timeoutMs} millis`,
-                  orElse: () => Effect.succeed([] as ReadonlyArray<unknown>),
-                }),
-              )
-            return { messages: [...messages] as never, streamActive: true }
-          }).pipe(
+          return Effect.scoped(
+            Effect.gen(function* () {
+              yield* permission.assert({
+                action: name,
+                resources: [input.parentSessionID],
+                save: ["*"],
+                metadata: input,
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
+              // coordinator.subscribe returns { queue, stream } so the tool
+              // can register queue cleanup in this scoped block. The previous
+              // implementation relied on the coordinator's internal
+              // Effect.scoped, which closed the scope on return and shut the
+              // queue before any consumer could read it.
+              const { queue, stream } = yield* coordinator.subscribe({
+                parentSessionID: input.parentSessionID as any,
+                agentName: input.agentName,
+              })
+              yield* Effect.addFinalizer(() => Queue.shutdown(queue))
+              const maxMessages = input.maxMessages ?? 10
+              const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS
+              const messages = yield* stream
+                .pipe(Stream.take(maxMessages), Stream.runCollect)
+                .pipe(
+                  Effect.timeoutOrElse({
+                    duration: `${timeoutMs} millis`,
+                    orElse: () => Effect.succeed([] as ReadonlyArray<unknown>),
+                  }),
+                )
+              return { messages: [...messages] as never, streamActive: true }
+            }),
+          ).pipe(
             // Translate only the typed SubagentSessionNotFoundError to a
             // ToolFailure so the model sees a clear error and the test
             // suite can assert on it. Other unexpected errors are wrapped
