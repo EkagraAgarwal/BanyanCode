@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   tag:
-    name: Tag and push ${{ steps.version.outputs.current }}
+    name: Tag release version
     runs-on: ubuntu-latest
     # The job needs the full history to list existing tags with ordering.
     steps:
