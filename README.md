@@ -17,7 +17,7 @@ One coordinated TUI for agentic coding — built on [OpenCode](https://github.co
 ---
 
 <p align="center">
-  <img src="./assets/subagent.png" alt="BanyanCode agent mesh — orchestrator dispatching scout, coder, researcher, and reviewer subagents in parallel with live token usage" width="100%" />
+  <img src="./assets/front.png" alt="BanyanCode — multi-agent orchestration, cross-session memory, and a tree-sitter code graph in one terminal-native TUI" width="100%" />
 </p>
 
 <p align="center">
