@@ -274,24 +274,32 @@ jobs:
           fi
           shopt -s nullglob
           # Explicit 10-target allowlist. The wildcard `banyancode-*.*`
-          # previously picked up banyancode-windows-x64-baseline-*.zip
+          # previously picked up banyancode-windows-x64-baseline.zip
           # (the downstream signing/triage build per AGENTS.md, which
-          # must NOT ship to users). Per the release-readiness review,
-          # this shipped the baseline artifact in past releases. Now
-          # enumerated explicitly: 6 linux .tar.gz targets, 3 darwin
-          # .zip targets, 1 windows .zip target (windows-x64 only).
+          # must NOT ship to users), so per the release-readiness
+          # review we enumerate the 10 shipping targets explicitly.
+          # Filenames are UNVERSIONED — build.ts packs linux as
+          # `<target>.tar.gz` and publish.yml packs mac/windows as
+          # `<target>.zip`, so the previous pattern with a trailing
+          # version segment (`banyancode-linux-x64-*.tar.gz`) matched
+          # nothing on disk and the upload step produced an empty
+          # array, failing the workflow.
           files=(
-            packages/opencode/dist/banyancode-linux-x64-*.tar.gz
-            packages/opencode/dist/banyancode-linux-x64-baseline-*.tar.gz
-            packages/opencode/dist/banyancode-linux-x64-musl-*.tar.gz
-            packages/opencode/dist/banyancode-linux-x64-baseline-musl-*.tar.gz
-            packages/opencode/dist/banyancode-linux-arm64-*.tar.gz
-            packages/opencode/dist/banyancode-linux-arm64-musl-*.tar.gz
-            packages/opencode/dist/banyancode-darwin-x64-*.zip
-            packages/opencode/dist/banyancode-darwin-x64-baseline-*.zip
-            packages/opencode/dist/banyancode-darwin-arm64-*.zip
-            packages/opencode/dist/banyancode-windows-x64-*.zip
+            packages/opencode/dist/banyancode-linux-x64.tar.gz
+            packages/opencode/dist/banyancode-linux-x64-baseline.tar.gz
+            packages/opencode/dist/banyancode-linux-x64-musl.tar.gz
+            packages/opencode/dist/banyancode-linux-x64-baseline-musl.tar.gz
+            packages/opencode/dist/banyancode-linux-arm64.tar.gz
+            packages/opencode/dist/banyancode-linux-arm64-musl.tar.gz
+            packages/opencode/dist/banyancode-darwin-x64.zip
+            packages/opencode/dist/banyancode-darwin-x64-baseline.zip
+            packages/opencode/dist/banyancode-darwin-arm64.zip
+            packages/opencode/dist/banyancode-windows-x64.zip
           )
+          echo "Uploading ${#files[@]} shipping assets for $TAG"
+          for f in "${files[@]}"; do
+            [ -f "$f" ] || echo "::warning::missing $f"
+          done
           if (( ${#files[@]} > 0 )); then
             gh release upload "$TAG" "${files[@]}" --clobber --repo "${{ github.repository }}"
           fi
