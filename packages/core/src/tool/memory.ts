@@ -206,20 +206,21 @@ input: InputStore,
           toModelOutput: ({ output }) => [
             { type: "text", text: JSON.stringify(output.entry) },
           ],
-          execute: (input) => {
+          execute: (input, context) => {
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_recall,
                 resources: [input.key],
                 save: ["*"],
                 metadata: input,
-                sessionID: (input.sessionID ?? "") as any,
-                agent: "" as any,
-                source: { type: "tool", messageID: "" as any, callID: "" },
-              } as any)
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
 
               const scope = (input.scope ?? "global") as "global" | "session"
-              const results = yield* repo.search(scope, input.sessionID, input.key)
+              const sessionID = input.sessionID ?? context.sessionID
+              const results = yield* repo.search(scope, sessionID, input.key)
 
               if (results.length === 0) {
                 return { entry: null }
@@ -238,20 +239,21 @@ input: InputStore,
           toModelOutput: ({ output }) => [
             { type: "text", text: `found ${output.entries.length} entries` },
           ],
-          execute: (input) => {
+          execute: (input, context) => {
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_list,
                 resources: ["*"],
                 save: ["*"],
                 metadata: input,
-                sessionID: (input.sessionID ?? "") as any,
-                agent: "" as any,
-                source: { type: "tool", messageID: "" as any, callID: "" },
-              } as any)
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
 
               const scope = (input.scope ?? "global") as "global" | "session"
-              let entries = yield* repo.list(scope, input.sessionID)
+              const sessionID = input.sessionID ?? context.sessionID
+              let entries = yield* repo.list(scope, sessionID)
 
               if (input.prefix) {
                 entries = entries.filter((e) => e.key.startsWith(input.prefix!))
@@ -277,20 +279,21 @@ input: InputStore,
           toModelOutput: ({ output }) => [
             { type: "text", text: output.ok ? "deleted" : "not found" },
           ],
-          execute: (input) => {
+          execute: (input, context) => {
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_forget,
                 resources: [input.key],
                 save: ["*"],
                 metadata: input,
-                sessionID: (input.sessionID ?? "") as any,
-                agent: "" as any,
-                source: { type: "tool", messageID: "" as any, callID: "" },
-              } as any)
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
 
               const scope = (input.scope ?? "global") as "global" | "session"
-              const results = yield* repo.search(scope, input.sessionID, input.key)
+              const sessionID = input.sessionID ?? context.sessionID
+              const results = yield* repo.search(scope, sessionID, input.key)
 
               if (results.length === 0) {
                 return { ok: false }
@@ -312,24 +315,25 @@ input: InputStore,
           toModelOutput: ({ output }) => [
             { type: "text", text: `found ${output.entries.length} entries` },
           ],
-          execute: (input) => {
+          execute: (input, context) => {
             return Effect.gen(function* () {
               yield* permission.assert({
                 action: name_search,
                 resources: [input.query],
                 save: ["*"],
                 metadata: input,
-                sessionID: (input.sessionID ?? "") as any,
-                agent: "" as any,
-                source: { type: "tool", messageID: "" as any, callID: "" },
-              } as any)
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+              })
 
               const scope = (input.scope ?? "global") as "global" | "session"
+              const sessionID = input.sessionID ?? context.sessionID
               const ranked = yield* repo.searchRanked({
                 query: input.query,
                 limit: input.limit ?? 10,
                 scope,
-                sessionID: input.sessionID,
+                sessionID,
               })
               return { entries: ranked.entries, degraded: false }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `memory_search failed` })))
