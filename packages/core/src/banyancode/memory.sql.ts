@@ -38,5 +38,3 @@ export const MemoryEntriesTable = sqliteTable(
     index("memory_kind_status_idx").on(table.kind, table.status),
   ],
 )
-
-console.error("[turso.schema] memory_entries with jsonb columns + denorm payload columns configured")
