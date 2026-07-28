@@ -108,14 +108,53 @@ describe("tree-sitter init hardening (Phase 2a)", () => {
   test("regression: runtime does NOT use path.resolve(import.meta.dir) for wasm (compiled-binary safety)", async () => {
     // The bundle root of a `bun build --compile` binary virtualizes
     // `import.meta.dir` so `path.resolve(import.meta.dir, …)` resolves to the
-    // drive root and the runtime reads a non-existent file. The new init
-    // imports each wasm asset via `import("…/*.wasm", { with: { type: "wasm" } })`
+    // drive root and the runtime reads a non-existent file. The init
+    // imports each wasm asset via literal `import("…/*.wasm", { with: { type: "wasm" } })`
     // which Bun resolves correctly inside compiled binaries.
     const source = await Bun.file(
       new URL("../../src/banyancode/langs/tree-sitter.ts", import.meta.url),
     ).text()
     expect(source).not.toMatch(/path\.resolve\(import\.meta\.dir[^)]*node_modules/)
     expect(source).toMatch(/with:\s*\{\s*type:\s*"wasm"\s*\}/)
+  })
+
+  test("regression: source declares every required wasm asset as a literal import", async () => {
+    // A variable-specifier `import(variable, { with: { type: "wasm" } })` is
+    // not statically analyzable and Bun's `bun build --compile` therefore
+    // omits the asset from the binary. Verify the source enumerates every
+    // required asset as a literal top-level import so the bundler can pick
+    // them up.
+    const source = await Bun.file(
+      new URL("../../src/banyancode/langs/tree-sitter.ts", import.meta.url),
+    ).text()
+    const requiredAssets = [
+      /import\s+\w+\s+from\s+["']web-tree-sitter\/tree-sitter\.wasm["']/,
+      /import\s+\w+\s+from\s+["']tree-sitter-typescript\/tree-sitter-typescript\.wasm["']/,
+      /import\s+\w+\s+from\s+["']tree-sitter-javascript\/tree-sitter-javascript\.wasm["']/,
+      /import\s+\w+\s+from\s+["']tree-sitter-python\/tree-sitter-python\.wasm["']/,
+    ]
+    for (const pattern of requiredAssets) {
+      expect(source).toMatch(pattern)
+    }
+    expect(source).not.toMatch(/async\s*\(\s*specifier:\s*string\s*\)/)
+  })
+
+  test("regression: scanner reports every required wasm asset as a static import", async () => {
+    // Even literal imports are useless if Bun's static scanner cannot see
+    // them — re-confirm by scanning the source file with `Bun.Transpiler`.
+    const file = new URL("../../src/banyancode/langs/tree-sitter.ts", import.meta.url)
+    const transpiler = new Bun.Transpiler({ loader: "ts" })
+    const imports = transpiler.scanImports(await Bun.file(file).text())
+    const required = [
+      "web-tree-sitter/tree-sitter.wasm",
+      "tree-sitter-typescript/tree-sitter-typescript.wasm",
+      "tree-sitter-javascript/tree-sitter-javascript.wasm",
+      "tree-sitter-python/tree-sitter-python.wasm",
+    ]
+    const specifiers = imports.map((entry) => entry.path)
+    for (const asset of required) {
+      expect(specifiers).toContain(asset)
+    }
   })
 })
 

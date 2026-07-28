@@ -11,6 +11,30 @@ import { fileURLToPath } from "node:url"
 // unused at runtime; keep it for tests.
 void path
 
+// Static, literal wasm imports so Bun's bundler can include the assets in
+// `bun build --compile` binaries. Variable-specifier dynamic imports
+// (`import(variable, { with: ... })`) are not statically analyzable and
+// therefore not embeddable — they fall back to runtime resolution and fail
+// inside compiled binaries. The module loader still returns a path string
+// (not raw bytes) because we ask for `type: "wasm"`; see
+// `resolveAssetPath` for the absolute-path conversion.
+// @ts-ignore Bun's `with: { type: "wasm" }` import attribute is not part of
+// the typescript module declaration surface for these npm packages.
+import treeSitterMainWasm from "web-tree-sitter/tree-sitter.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterTypescriptWasm from "tree-sitter-typescript/tree-sitter-typescript.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterJavascriptWasm from "tree-sitter-javascript/tree-sitter-javascript.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterPythonWasm from "tree-sitter-python/tree-sitter-python.wasm" with { type: "wasm" }
+
+export const TREE_SITTER_WASM_SOURCES = Object.freeze({
+  main: treeSitterMainWasm,
+  typescript: treeSitterTypescriptWasm,
+  javascript: treeSitterJavascriptWasm,
+  python: treeSitterPythonWasm,
+})
+
 export const HEAP_INITIAL_PAGES = 256
 export const HEAP_MAX_PAGES = 4096
 
@@ -56,14 +80,10 @@ const describeError = (err: unknown): string => (err instanceof Error ? err.mess
 // binary, so the resolver escapes to the drive root and `Language.load` ends
 // up pointing at a non-existent file. Bun's `import("…/*.wasm", { with: { type: "wasm" } })`
 // resolves wasm paths against the bundle root in compiled binaries and on
-// disk in dev. We get the path string back (not the bytes), so we feed it to
+// disk in dev. The static literal imports at the top of this file give Bun a
+// discoverable edge so the assets are bundled; we feed the resulting path to
 // `Parser.init({ locateFile })` and `Language.load(path)` — the same pattern
 // `packages/opencode/src/tool/shell.ts:317-336` uses for its shell parser.
-const importWasmPath = async (specifier: string): Promise<string> => {
-  const mod = (await import(specifier as string, { with: { type: "wasm" } })) as { default: string }
-  return mod.default
-}
-
 const resolveAssetPath = (asset: string): string => {
   if (asset.startsWith("file://")) return fileURLToPath(asset)
   if (asset.startsWith("/") || /^[a-z]:/i.test(asset)) return asset
@@ -96,10 +116,10 @@ export const ensureWebTreeSitterReady = (): Effect.Effect<void, never, never> =>
     const newState = yield* Effect.tryPromise({
       try: async () => {
         const [mainAsset, tsAsset, jsAsset, pyAsset] = await Promise.all([
-          importWasmPath("web-tree-sitter/tree-sitter.wasm"),
-          importWasmPath("tree-sitter-typescript/tree-sitter-typescript.wasm"),
-          importWasmPath("tree-sitter-javascript/tree-sitter-javascript.wasm"),
-          importWasmPath("tree-sitter-python/tree-sitter-python.wasm"),
+          Promise.resolve(TREE_SITTER_WASM_SOURCES.main),
+          Promise.resolve(TREE_SITTER_WASM_SOURCES.typescript),
+          Promise.resolve(TREE_SITTER_WASM_SOURCES.javascript),
+          Promise.resolve(TREE_SITTER_WASM_SOURCES.python),
         ])
 
         const mainPath = resolveAssetPath(mainAsset)

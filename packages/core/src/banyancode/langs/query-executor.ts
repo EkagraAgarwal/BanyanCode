@@ -10,49 +10,29 @@ import {
 } from "./tree-sitter"
 import type { Language, Node, Parser, Query, QueryCapture, QueryMatch, Tree } from "web-tree-sitter"
 
-// `import(..., { with: { type: "text" } })` inlines query sources at bundle
-// time, so compiled binaries no longer need disk access to read `.scm` files.
-// The `fs` import is kept for the legacy on-disk validation path that tests
-// rely on (see `loadQuerySourceOrEmpty`).
+// Static, literal imports so Bun's bundler can inline the `.scm` grammar
+// sources at bundle time. Variable-specifier dynamic imports
+// (`import(variable, { with: { type: "text" } })`) are not statically
+// analyzable, so the resulting compiled binary would have no query assets
+// and Tree-sitter would silently fall back to regex-only parsing.
+// @ts-ignore the npm packages don't declare text-import declarations.
+import typescriptScm from "./queries/typescript.scm" with { type: "text" }
+// @ts-ignore same rationale as the typescript scm import.
+import javascriptScm from "./queries/javascript.scm" with { type: "text" }
+// @ts-ignore same rationale as the typescript scm import.
+import pythonScm from "./queries/python.scm" with { type: "text" }
+
+export const BUNDLED_QUERY_SOURCES = Object.freeze({
+  typescript: typescriptScm,
+  javascript: javascriptScm,
+  python: pythonScm,
+} as const)
+
+// `fs` + `path` are kept for the legacy on-disk validation path that tests
+// rely on (see `loadQuerySourceOrEmpty`). Compiled binaries should use
+// `ensureQuerySourcesLoaded` which prefers the inlined bundle and only
+// touches disk when the inlined bundle is unavailable.
 const QUERIES_DIR = path.resolve(import.meta.dir, "queries")
-
-const BUNDLED_QUERY_SOURCES: ReadonlyMap<string, string> = new Map([
-  [".ts", ""],
-  [".tsx", ""],
-  [".mts", ""],
-  [".cts", ""],
-  [".js", ""],
-  [".jsx", ""],
-  [".mjs", ""],
-  [".cjs", ""],
-  [".py", ""],
-  [".pyw", ""],
-])
-
-let bundledQueriesPromise: Promise<ReadonlyMap<string, string>> | null = null
-
-const importQueryText = async (specifier: string): Promise<string> => {
-  const mod = (await import(specifier as string, { with: { type: "text" } })) as { default: string }
-  return mod.default
-}
-
-const loadBundledQuerySources = async (): Promise<ReadonlyMap<string, string>> => {
-  const out = new Map(BUNDLED_QUERY_SOURCES)
-  const [tsSource, jsSource, pySource] = await Promise.all([
-    importQueryText("./queries/typescript.scm"),
-    importQueryText("./queries/javascript.scm"),
-    importQueryText("./queries/python.scm"),
-  ])
-  for (const ext of [".ts", ".tsx", ".mts", ".cts"]) out.set(ext, tsSource)
-  for (const ext of [".js", ".jsx", ".mjs", ".cjs"]) out.set(ext, jsSource)
-  for (const ext of [".py", ".pyw"]) out.set(ext, pySource)
-  return out
-}
-
-const getBundledQuerySources = (): Promise<ReadonlyMap<string, string>> => {
-  bundledQueriesPromise ??= loadBundledQuerySources()
-  return bundledQueriesPromise
-}
 
 const QUERY_FILE_BY_EXT: ReadonlyMap<string, string> = new Map([
   [".ts", "typescript.scm"],
@@ -77,6 +57,26 @@ const readQuerySource = async (ext: string): Promise<string | null> => {
 // indexer never reads `.scm` files from disk during a parse pass.
 let QUERY_SOURCE_CACHE: ReadonlyMap<string, string> | null = null
 
+const buildBundledQueryMap = (): ReadonlyMap<string, string> => {
+  const map = new Map<string, string>()
+  for (const ext of [".ts", ".tsx", ".mts", ".cts"]) map.set(ext, BUNDLED_QUERY_SOURCES.typescript)
+  for (const ext of [".js", ".jsx", ".mjs", ".cjs"]) map.set(ext, BUNDLED_QUERY_SOURCES.javascript)
+  for (const ext of [".py", ".pyw"]) map.set(ext, BUNDLED_QUERY_SOURCES.python)
+  return map
+}
+
+const bundledQuerySourcesAvailable = (): boolean => {
+  const sources = BUNDLED_QUERY_SOURCES
+  return (
+    typeof sources.typescript === "string" &&
+    sources.typescript.length > 0 &&
+    typeof sources.javascript === "string" &&
+    sources.javascript.length > 0 &&
+    typeof sources.python === "string" &&
+    sources.python.length > 0
+  )
+}
+
 const loadQuerySourcesFromDisk = async (): Promise<ReadonlyMap<string, string>> => {
   const map = new Map<string, string>()
   for (const ext of QUERY_FILE_BY_EXT.keys()) {
@@ -92,6 +92,10 @@ const loadQuerySourcesFromDisk = async (): Promise<ReadonlyMap<string, string>> 
 
 export const ensureQuerySourcesLoaded = async (): Promise<ReadonlyMap<string, string>> => {
   if (QUERY_SOURCE_CACHE) return QUERY_SOURCE_CACHE
+  if (bundledQuerySourcesAvailable()) {
+    QUERY_SOURCE_CACHE = buildBundledQueryMap()
+    return QUERY_SOURCE_CACHE
+  }
   QUERY_SOURCE_CACHE = await loadQuerySourcesFromDisk()
   return QUERY_SOURCE_CACHE
 }

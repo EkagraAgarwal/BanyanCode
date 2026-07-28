@@ -250,7 +250,7 @@ for (const item of targets) {
     throw new Error(`No libsql native binding available for compile target ${compileTarget}`)
   }
 
-  await Bun.build({
+  const result = await Bun.build({
     conditions: ["bun", "node"],
     tsconfig: "./tsconfig.json",
     plugins: [plugin, createLibsqlPlugin(libsqlTarget) as any],
@@ -259,6 +259,7 @@ for (const item of targets) {
     minify: true,
     sourcemap: sourcemapsFlag ? "linked" : "none",
     splitting: true,
+    metafile: true,
     compile: {
       autoloadBunfig: false,
       autoloadDotenv: false,
@@ -282,6 +283,34 @@ for (const item of targets) {
       ...(item.os === "linux" ? { "process.env.OPENTUI_LIBC": JSON.stringify(item.abi ?? "glibc") } : {}),
     },
   })
+  // Build-time guard: tree-sitter's runtime init relies on four wasm assets
+  // and three query grammars being available inside the compiled binary.
+  // Variable-specifier dynamic imports would silently drop them and degrade
+  // the indexer to regex-only parsing — fail fast instead so the regression
+  // never reaches production.
+  //
+  // Match by basename so the check survives workspace-relative vs absolute
+  // path differences across OSes and Bun versions.
+  const inputBasenames = new Set(
+    Object.keys(result.metafile?.inputs ?? {}).map((input) => path.basename(input)),
+  )
+  const requiredAssets = [
+    "tree-sitter.wasm",
+    "tree-sitter-typescript.wasm",
+    "tree-sitter-javascript.wasm",
+    "tree-sitter-python.wasm",
+    "typescript.scm",
+    "javascript.scm",
+    "python.scm",
+  ]
+  const missing = requiredAssets.filter((asset) => !inputBasenames.has(asset))
+  if (missing.length > 0) {
+    throw new Error(
+      `Build failed: missing bundled assets for ${name}. ` +
+        `These are required for Tree-sitter parsing in compiled binaries. ` +
+        `Missing: ${missing.join(", ")}`,
+    )
+  }
 
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
