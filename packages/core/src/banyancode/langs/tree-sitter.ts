@@ -233,7 +233,19 @@ export class Service extends Context.Service<Service, Interface>()("@banyancode/
 export const layer: Layer.Layer<Service, never, never> = Layer.effect(
   Service,
   Effect.gen(function* () {
-    yield* ensureWebTreeSitterReady()
+    // Defensive catchCause: per AGENTS.md "Tree-sitter layer wasm imports
+    // must tolerate runtime module-load failure" — even if
+    // ensureWebTreeSitterReady throws a defect (e.g. an unexpected sync
+    // throw inside the wasm-loader try callback), the layer must
+    // construct successfully. parse() then surfaces
+    // TreeSitterUnavailableError at use time. catchCause (not catchAll)
+    // because effect-smol has no catchAll — and catchCause also catches
+    // defects, which is what we want here: the layer must NOT surface a
+    // defect on construction. The state ref is left in its prior state
+    // (typically "unavailable") and re-attempts are idempotent.
+    yield* ensureWebTreeSitterReady().pipe(
+      Effect.catchCause(() => Effect.void),
+    )
 
     const getLanguage = (ext: string): Effect.Effect<unknown, TreeSitterUnavailableError, never> =>
       withTreeSitter((state) => {
