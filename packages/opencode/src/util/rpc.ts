@@ -2,11 +2,25 @@ type Definition = {
   [method: string]: (input: any) => any
 }
 
+// Try to parse an inbound RPC payload; return null on malformed data so the
+// worker/client socket stays alive instead of throwing on bad JSON.
+function safeParse(data: unknown): any | null {
+  if (typeof data !== "string") return null
+  try {
+    return JSON.parse(data)
+  } catch {
+    return null
+  }
+}
+
 export function listen(rpc: Definition) {
   onmessage = async (evt) => {
-    const parsed = JSON.parse(evt.data)
-    if (parsed.type === "rpc.request") {
-      const result = await rpc[parsed.method](parsed.input)
+    const parsed = safeParse(evt.data)
+    if (!parsed || typeof parsed !== "object") return
+    if (parsed.type === "rpc.request" && typeof parsed.method === "string") {
+      const handler = rpc[parsed.method]
+      if (typeof handler !== "function") return
+      const result = await handler(parsed.input)
       postMessage(JSON.stringify({ type: "rpc.result", result, id: parsed.id }))
     }
   }
@@ -24,15 +38,16 @@ export function client<T extends Definition>(target: {
   const listeners = new Map<string, Set<(data: any) => void>>()
   let id = 0
   target.onmessage = async (evt) => {
-    const parsed = JSON.parse(evt.data)
-    if (parsed.type === "rpc.result") {
+    const parsed = safeParse(evt.data)
+    if (!parsed || typeof parsed !== "object") return
+    if (parsed.type === "rpc.result" && typeof parsed.id === "number") {
       const resolve = pending.get(parsed.id)
       if (resolve) {
         resolve(parsed.result)
         pending.delete(parsed.id)
       }
     }
-    if (parsed.type === "rpc.event") {
+    if (parsed.type === "rpc.event" && typeof parsed.event === "string") {
       const handlers = listeners.get(parsed.event)
       if (handlers) {
         for (const handler of handlers) {

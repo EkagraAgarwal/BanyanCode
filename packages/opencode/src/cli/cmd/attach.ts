@@ -79,6 +79,10 @@ export const AttachCommand = cmd({
     const { Effect } = await import("effect")
     const { run } = await import("../tui/layer")
     const { createLegacyTuiPluginHost } = await import("@/plugin/tui/runtime")
+    const { TuiLogger } = await import("@opencode-ai/tui/util/logger")
+    TuiLogger.setLoggerRuntime({
+      runFork: (eff) => Effect.runFork(eff),
+    })
     await Effect.runPromise(
       run({
         url: args.url,
