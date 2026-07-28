@@ -103,56 +103,77 @@ export const layer = Layer.effectDiscard(
               switch (input.op) {
                 case "write": {
                   if (input.expectedVersion !== undefined) {
-                    // Use conditional update - first check if row exists and version matches
-                    const existing = yield* memoryRepo.get(effectiveID)
-
-                    if (!existing) {
-                      // Row doesn't exist, fall back to put
-                      yield* memoryRepo.put({
+                    // Conditional update: rely on MemoryRepo's atomic CAS
+                    // (it wraps the version check + update in a single
+                    // db.transaction with `WHERE id=? AND version=?, then
+                    // bumps version`). Pre-fix, the tool did a non-atomic
+                    // `get` then `update` — the version check passed against
+                    // a stale read and a concurrent writer could slip in
+                    // between, leading to a lost update (or a typed
+                    // StaleWriteError that the tool silently swallowed as a
+                    // generic ToolFailure). Now we let the repo be the
+                    // authority and translate the typed errors to the
+                    // structured `ok: false` response shape the API
+                    // contract defines.
+                    return yield* memoryRepo
+                      .update({
                         id: effectiveID,
-                        key: effectiveKey,
-                        value: input.value ?? null,
-                        tags: input.tags ? [...input.tags] : [],
-                        scope: effectiveScope,
-                        sessionID: effectiveSessionID,
+                        expectedVersion: input.expectedVersion,
+                        value: input.value,
                         agentID: effectiveAgentID,
+                        tags: input.tags ? [...input.tags] : undefined,
                       })
-                      const created = yield* memoryRepo.get(effectiveID)
-                      return {
-                        ok: true,
-                        entries: [] as unknown[],
-                        version: created?.version,
-                        updatedAt: created?.updatedAt,
-                      }
-                    }
-
-                    if (existing.version !== input.expectedVersion) {
-                      return {
-                        ok: false,
-                        entries: [] as unknown[],
-                        error: "stale_write",
-                        staleWrite: {
-                          expectedVersion: input.expectedVersion,
-                          currentVersion: existing.version,
-                        },
-                      }
-                    }
-
-                    // Versions match, perform update
-                    const updated = yield* memoryRepo.update({
-                      id: effectiveID,
-                      expectedVersion: input.expectedVersion,
-                      value: input.value,
-                      agentID: effectiveAgentID,
-                      tags: input.tags ? [...input.tags] : undefined,
-                    })
-
-                    return {
-                      ok: true,
-                      entries: [] as unknown[],
-                      version: updated.version,
-                      updatedAt: updated.updatedAt,
-                    }
+                      .pipe(
+                        // NotFoundError → row didn't exist; fall through to
+                        // put. The put uses onConflictDoUpdate so a
+                        // concurrent insert by another writer wins
+                        // cleanly. We re-read to surface the canonical
+                        // version in the response.
+                        Effect.catchTag("NotFoundError", () =>
+                          memoryRepo
+                            .put({
+                              id: effectiveID,
+                              key: effectiveKey,
+                              value: input.value ?? null,
+                              tags: input.tags ? [...input.tags] : [],
+                              scope: effectiveScope,
+                              sessionID: effectiveSessionID,
+                              agentID: effectiveAgentID,
+                            })
+                            .pipe(
+                              Effect.flatMap(() => memoryRepo.get(effectiveID)),
+                              Effect.map((created) => ({
+                                ok: true as const,
+                                entries: [] as unknown[],
+                                version: created?.version,
+                                updatedAt: created?.updatedAt,
+                              })),
+                            ),
+                        ),
+                        // After catchTag handled NotFoundError, the only
+                        // remaining typed failure is StaleWriteError.
+                        // matchEffect splits success/failure into a single
+                        // response shape so the API contract is uniform.
+                        Effect.matchEffect({
+                          onFailure: (err) =>
+                            Effect.succeed({
+                              ok: false as const,
+                              entries: [] as unknown[],
+                              error: "stale_write",
+                              staleWrite: {
+                                expectedVersion: err.expectedVersion,
+                                currentVersion: err.currentVersion,
+                              },
+                            }),
+                          onSuccess: (updated) =>
+                            Effect.succeed({
+                              ok: true as const,
+                              entries: [] as unknown[],
+                              version: updated.version,
+                              updatedAt: updated.updatedAt,
+                            }),
+                        }),
+                      )
                   }
 
                   // Regular put
