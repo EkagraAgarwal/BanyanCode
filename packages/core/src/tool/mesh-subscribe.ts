@@ -56,6 +56,12 @@ export const Input = Schema.Struct({
 export const Output = Schema.Struct({
   messages: Schema.Array(SubagentMessageSchema),
   streamActive: Schema.Boolean,
+  /**
+   * True when the wait timed out (no messages arrived in `timeoutMs`).
+   * Optional for backward compatibility with callers that pre-date
+   * the timeout-path fix; new callers should always inspect this.
+   */
+  timedOut: Schema.optional(Schema.Boolean),
 })
 
 export const locationLayer = Layer.effectDiscard(
@@ -104,15 +110,37 @@ export const locationLayer = Layer.effectDiscard(
               yield* Effect.addFinalizer(() => Queue.shutdown(queue))
               const maxMessages = input.maxMessages ?? 10
               const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS
-              const messages = yield* stream
+
+              // Race the take-N-collect against a deadline. Pre-fix we
+              // used Effect.timeoutOrElse which returns the orElse value
+              // when the timer fires but leaves the inner
+              // Stream.take(N).runCollect fiber running until the
+              // surrounding scope closes — a leak every time the
+              // consumer timed out. Effect.race interleaves the two
+              // fibers and INTERRUPTS the loser when the winner
+              // completes, so the empty queue path cancels its own
+              // subscription. The CC-001 addFinalizer still shuts the
+              // queue as this scoped block exits.
+              const collect = stream
                 .pipe(Stream.take(maxMessages), Stream.runCollect)
                 .pipe(
-                  Effect.timeoutOrElse({
-                    duration: `${timeoutMs} millis`,
-                    orElse: () => Effect.succeed([] as ReadonlyArray<unknown>),
-                  }),
+                  Effect.map((chunk) => ({
+                    timedOut: false,
+                    messages: Array.from(chunk) as ReadonlyArray<unknown>,
+                  })),
                 )
-              return { messages: [...messages] as never, streamActive: true }
+              const deadline = Effect.sleep(`${timeoutMs} millis`).pipe(
+                Effect.map(() => ({
+                  timedOut: true,
+                  messages: [] as ReadonlyArray<unknown>,
+                })),
+              )
+              const result = yield* collect.pipe(Effect.race(deadline))
+              return {
+                messages: [...result.messages] as never,
+                streamActive: !result.timedOut,
+                timedOut: result.timedOut,
+              }
             }),
           ).pipe(
             // Translate only the typed SubagentSessionNotFoundError to a
