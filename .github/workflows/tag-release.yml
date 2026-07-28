@@ -2,6 +2,11 @@
 # packages/opencode/package.json changed. Creates an annotated tag `vX.Y.Z`
 # from the current version and pushes it, which then triggers the publish
 # workflow. Idempotent — re-runs with no version change are no-ops.
+#
+# `workflow_dispatch` is enabled so operators can manually re-tag HEAD after
+# a fixup commit (e.g. after a hotfix landed before the tag push completed)
+# via `gh workflow run tag-release` without first needing to revert and
+# re-bump the version file.
 name: Tag release
 
 on:
@@ -9,6 +14,7 @@ on:
     branches: [main]
     paths:
       - 'packages/opencode/package.json'
+  workflow_dispatch:
 
 # Without this the default GITHUB_TOKEN cannot push refs. The workflow
 # only needs contents:write to push a single annotated tag.
