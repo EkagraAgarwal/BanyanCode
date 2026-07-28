@@ -1,0 +1,104 @@
+# Auto-tag release versions. Triggers on push to main when
+# packages/opencode/package.json changed. Creates an annotated tag `vX.Y.Z`
+# from the current version and pushes it, which then triggers the publish
+# workflow. Idempotent — re-runs with no version change are no-ops.
+name: Tag release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/opencode/package.json'
+
+# Without this the default GITHUB_TOKEN cannot push refs. The workflow
+# only needs contents:write to push a single annotated tag.
+permissions:
+  contents: write
+
+# Avoid concurrent runs of the same workflow (e.g. a fast push followed
+# by a fixup push within seconds). Each run is idempotent so we could
+# safely allow concurrency, but the lock keeps the run log clean.
+concurrency:
+  group: tag-release-main
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag and push ${{ steps.version.outputs.current }}
+    runs-on: ubuntu-latest
+    # The job needs the full history to list existing tags with ordering.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # Read the version from package.json — single source of truth.
+      # We deliberately re-parse on each run; trusting a previous
+      # artifact would be a hazard if the file format ever drifted.
+      - name: Read current version
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./packages/opencode/package.json').version")"
+          if [ -z "${VERSION}" ]; then
+            echo "::error::could not read version from packages/opencode/package.json"
+            exit 1
+          fi
+          echo "current=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      # Find the most recent v* tag. `git tag --sort=-v:refname` orders by
+      # version per the vX.Y.Z convention; for the CalVer range we ship
+      # lexical order matches calendar order. We strip the leading "v"
+      # so we can compare apples-to-apples in the next step.
+      - name: Find latest v* tag
+        id: latest
+        shell: bash
+        run: |
+          LATEST_TAG="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+          if [ -n "${LATEST_TAG}" ]; then
+            LATEST_VERSION="${LATEST_TAG#v}"
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+            echo "tag=${LATEST_TAG}" >> "${GITHUB_OUTPUT}"
+            echo "version=${LATEST_VERSION}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+            echo "tag=" >> "${GITHUB_OUTPUT}"
+            echo "version=" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Tag and push if newer
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT="${{ steps.version.outputs.current }}"
+          EXISTS="${{ steps.latest.outputs.exists }}"
+          LATEST_VERSION="${{ steps.latest.outputs.version }}"
+          WANTED_TAG="v${CURRENT}"
+
+          if [ "${EXISTS}" = "true" ] && [ "${CURRENT}" = "${LATEST_VERSION}" ]; then
+            echo "Tag ${WANTED_TAG} already exists; nothing to do."
+            exit 0
+          fi
+
+          if [ "${EXISTS}" = "true" ]; then
+            # Compare CalVer lexically (works inside a year; cross-year
+            # monotonicity also holds because YY is 2 digits).
+            if [ "${CURRENT}" \< "${LATEST_VERSION}" ]; then
+              echo "::warning::current version ${CURRENT} is lower than existing tag v${LATEST_VERSION}; refusing to overwrite published release."
+              exit 1
+            fi
+            if [ "${CURRENT}" = "${LATEST_VERSION}" ]; then
+              echo "Tag v${LATEST_VERSION} already on the remote; idempotent skip."
+              exit 0
+            fi
+          fi
+
+          echo "Creating tag ${WANTED_TAG} at HEAD (current version ${CURRENT})"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${WANTED_TAG}" -m "BanyanCode ${CURRENT}" HEAD
+          git push origin "${WANTED_TAG}"
+
+          echo "Pushed ${WANTED_TAG}; publish.yml will run automatically on the tag push event."

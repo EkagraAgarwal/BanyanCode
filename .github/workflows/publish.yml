@@ -261,7 +261,7 @@ jobs:
           merge-multiple: true
           path: packages/opencode/dist
 
-      - name: Upload all release artifacts to GitHub release (draft, prerelease)
+      - name: Upload all release artifacts to GitHub release (draft)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -270,6 +270,10 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG exists; uploading new assets."
           else
+            # Note: not flagged as prerelease. Every shipping version is
+            # treated as `latest` (the npm dist-tag defaults to Script.channel
+            # `latest` in publish.ts). The repo release follows the same
+            # rule — see release/AGENTS.md "latest, not prerelease".
             gh release create "$TAG" --draft --generate-notes --title "BanyanCode ${{ needs.version.outputs.version }}" --repo "${{ github.repository }}"
           fi
           shopt -s nullglob
@@ -319,4 +323,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release edit "v${{ needs.version.outputs.version }}" --draft=false --repo "${{ github.repository }}" || true
+          # Finalize: not a draft, not a prerelease. Per release/AGENTS.md,
+          # every shipping release is `latest` on both npm dist-tag (the
+          # default Script.channel) and the GitHub release `isPrerelease`
+          # flag. Explicit `--prerelease=false` so future AGENTS.md or
+          # workflow changes that introduce `--prerelease` upstream are
+          # overridden here.
+          gh release edit "v${{ needs.version.outputs.version }}" --draft=false --prerelease=false --repo "${{ github.repository }}" || true
