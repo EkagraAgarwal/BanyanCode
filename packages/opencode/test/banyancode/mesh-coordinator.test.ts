@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer, Queue, Scope } from "effect"
+import { Effect, Layer, Queue } from "effect"
 import { MeshCoordinator } from "../../../core/src/banyancode/mesh-coordinator"
 import { SubagentBus } from "../../../core/src/banyancode/subagent-bus"
 import { SubagentMessagesRepo } from "../../../core/src/banyancode/subagent-messages-repo"
@@ -25,18 +25,8 @@ const mockBusLayer = Layer.succeed(SubagentBus.Service, SubagentBus.Service.of({
   publish: (msg) => Effect.sync(() => mockMessages.push(msg)),
   publishOrFetch: (msg) => Effect.succeed({ id: msg.id, createdAt: msg.createdAt, created: true }),
   parentSessionExists: () => Effect.succeed(true),
-  subscribe: () =>
-    Queue.unbounded<any>() as Effect.Effect<
-      Queue.Dequeue<any>,
-      SubagentBus.SubagentSessionNotFoundError,
-      Scope.Scope
-    >,
-  subscribeAll: () =>
-    Queue.unbounded<any>() as Effect.Effect<
-      Queue.Dequeue<any>,
-      never,
-      Scope.Scope
-    >,
+  subscribe: () => Queue.unbounded<any>(),
+  subscribeAll: () => Queue.unbounded<any>(),
   peers: () => Effect.succeed([]),
 }))
 
