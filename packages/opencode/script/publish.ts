@@ -55,6 +55,7 @@ await Bun.file(`./dist/${WRAPPER_NAME}/package.json`).write(
   JSON.stringify(
     {
       name: WRAPPER_NAME,
+      description: pkg.description,
       bin: {
         [WRAPPER_NAME]: `./bin/${WRAPPER_NAME}.exe`,
       },
