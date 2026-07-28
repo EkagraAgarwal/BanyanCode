@@ -1334,18 +1334,33 @@ export const layer = Layer.effect(
       yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
-            if (input.previousFileID) {
-              yield* tx
-                .delete(CodegraphServiceTagsTable)
-                .where(eq(CodegraphServiceTagsTable.file_id, input.previousFileID))
-                .run()
-                .pipe(Effect.orDie)
-              yield* tx
-                .delete(CodegraphFilesTable)
-                .where(eq(CodegraphFilesTable.id, input.previousFileID))
-                .run()
-                .pipe(Effect.orDie)
-            }
+            // Identity-mismatch defense: `codegraph_files.path` is UNIQUE
+            // and the conflict target for the file insert below. Deleting
+            // by `previousFileID` alone is unsafe if the row at this path
+            // already has a different `id` (e.g. after `clearAll({ dropFile:
+            // false })` or a re-index pass that regenerated ids): the
+            // subsequent upsert would keep the old id and a node insert
+            // with `file_id = input.file.id` would FK-fail. Delete by path
+            // so the file row's `ON DELETE CASCADE` wipes any stale edges
+            // and nodes regardless of which id was attached.
+            //
+            // The first delete below only matches service-tag rows whose
+            // `file_id` already equals `input.file.id`; it does NOT clean
+            // up tags whose `file_id` points at the OLD (mismatched) id.
+            // Those stale-tag rows are reconciled below by the
+            // `ON CONFLICT (tag) DO UPDATE` upsert, which rewrites the
+            // canonical tag row to point at the new node + file id.
+            yield* tx
+              .delete(CodegraphServiceTagsTable)
+              .where(eq(CodegraphServiceTagsTable.file_id, input.file.id))
+              .run()
+              .pipe(Effect.orDie)
+            yield* tx
+              .delete(CodegraphFilesTable)
+              .where(eq(CodegraphFilesTable.path, input.file.path))
+              .run()
+              .pipe(Effect.orDie)
+
             yield* tx
               .insert(CodegraphFilesTable)
               .values({
@@ -1360,6 +1375,10 @@ export const layer = Layer.effect(
               .onConflictDoUpdate({
                 target: CodegraphFilesTable.path,
                 set: {
+                  // Force the row's `id` to match the new file_id; otherwise
+                  // a stale row from a previous pass would retain its old
+                  // id and the subsequent node inserts would FK-fail.
+                  id: input.file.id,
                   content_hash: input.file.contentHash,
                   language: input.file.language,
                   indexed_at: input.file.indexedAt,
