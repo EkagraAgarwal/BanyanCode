@@ -62,7 +62,13 @@ jobs:
         id: latest
         shell: bash
         run: |
-          LATEST_TAG="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+          # Use `git describe --tags --abbrev=0` (no pipe, no SIGPIPE).
+          # Avoids the classic `git tag --list ... | head -n1` race where
+          # `head` closes the pipe after one line, `git` writes more, and
+          # the resulting SIGPIPE exits the script with 141. `|| echo ""`
+          # makes the empty-repo case (first ever release) produce an empty
+          # string instead of erroring.
+          LATEST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo "")"
           if [ -n "${LATEST_TAG}" ]; then
             LATEST_VERSION="${LATEST_TAG#v}"
             echo "exists=true" >> "${GITHUB_OUTPUT}"
