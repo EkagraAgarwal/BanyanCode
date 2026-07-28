@@ -2,130 +2,176 @@
 
 # BanyanCode
 
-**The agent harness for loop engineering.**
+### A coding agent with a team, a memory, and a map.
 
-Turn one prompt into a coordinated coding system — parallel agents, persistent memory, codebase intelligence, and verification-ready workflows, all in a fast terminal UI.
+**Parallel subagents. Cross-session memory. Tree-sitter code graph. Free web research.**
+One coordinated TUI for agentic coding — built on [OpenCode](https://github.com/anomalyco/opencode).
 
 [![npm version](https://img.shields.io/npm/v/banyancode?style=flat-square&color=cb3837)](https://www.npmjs.com/package/banyancode)
 [![GitHub release](https://img.shields.io/github/v/release/EkagraAgarwal/BanyanCode?style=flat-square&color=blue)](https://github.com/EkagraAgarwal/BanyanCode/releases/latest)
 [![License](https://img.shields.io/github/license/EkagraAgarwal/BanyanCode?style=flat-square)](https://github.com/EkagraAgarwal/BanyanCode/blob/main/LICENSE)
+[![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20windows-blue?style=flat-square)](#installation)
 
 </div>
 
 ---
 
-## Installation
+<p align="center">
+  <img src="./assets/subagent.png" alt="BanyanCode agent mesh — orchestrator dispatching scout, coder, researcher, and reviewer subagents in parallel with live token usage" width="100%" />
+</p>
 
-```bash
-# YOLO
-curl -fsSL https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install | bash
+<p align="center">
+  <sub>The <b>Agent Tree</b> view — every subagent, every nested spawn, every token, live in one terminal.</sub>
+</p>
 
-# Windows
-irm https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install.ps1 | iex
+---
 
-# Package managers
-npm i -g banyancode@latest          # or bun/pnpm/yarn
-bun add -g banyancode                # Bun (fastest)
-```
+## What is BanyanCode?
 
-Run `banyancode` from any project directory — it opens in the current workspace and starts building an incremental code graph as you work.
+BanyanCode is an **open-source terminal coding agent** for serious software engineering. It's built on [OpenCode](https://github.com/anomalyco/opencode) and extends it with an **orchestrator-led subagent mesh**, a **cross-session memory engine**, a **Tree-sitter code graph**, and a **free web researcher** — all wired into one fast, keyboard-driven TUI.
+
+You ask for a refactor, migration, debug, or research-heavy implementation. BanyanCode decomposes it, fans work out to **specialist subagents in parallel**, gives every agent the context it needs from the code graph and memory, watches them work in real time, **verifies** the result, and remembers what it learned for next time.
+
+> **One prompt. A coordinated engineering team.**
+
+---
+
+## The Four Pillars
+
+### 1. Parallel Subagent Mesh
+
+The orchestrator decomposes your task and dispatches specialist agents — `scout`, `coder`, `explore`, `researcher`, `reviewer` — **concurrently**. They share state over a typed message bus, request help from each other, report progress, and surface results in a unified agent tree. A user-configurable cap with **oldest-ended eviction** keeps concurrency bounded so nothing runs away with your resources.
+
+<p align="center">
+  <img src="./assets/subagent.png" alt="Live subagent mesh showing orchestrator dispatching multiple subagents in parallel" width="100%" />
+</p>
+
+<p align="center">
+  <sub>Orchestrator at the root, specialists branching below — every status, every token, in real time.</sub>
+</p>
+
+### 2. Cross-Session Memory
+
+Most agents forget between chats. BanyanCode has a **persistent memory engine**: structured JSONB payloads, versioned for non-destructive evolution, hybrid FTS5 + tag retrieval, automated hygiene (expire → reconcile → prune). Subagents emit **candidates**; the orchestrator **promotes** the durable ones. Your decisions, conventions, and hard-won lessons **survive the chat** and feed the next session automatically.
+
+> **Stop re-explaining your project.**
+
+### 3. Tree-Sitter Code Graph
+
+`/codegraph-build` indexes your repository into a **queryable graph of symbols, callers, dependents, tests, configs, routes, and impact**. Every agent gets structural context, not just file names. Before any edit, agents run `preflight`, `blast_radius`, `repository_trace`, and `repository_tests` to **know what breaks before they touch the code**.
+
+<p align="center">
+  <img src="./assets/agents.png" alt="BanyanCode chat view showing a live agent plan, todo tracking, and the code-graph tools in action" width="100%" />
+</p>
+
+<p align="center">
+  <sub>The <b>Chat</b> view — live plan, live todos, live tool calls, live synthesis.</sub>
+</p>
+
+> **See the system, not just the file.**
+
+### 4. Free Web Researcher
+
+When the answer isn't in the repo, a `researcher` subagent hits the web through **DuckDuckGo HTML** — **no API key, no rate-limit bill**. Findings return with citations your agents can act on, inside the same loop as the implementation work.
+
+> **Research the web without leaving the terminal.**
 
 ---
 
 ## Why BanyanCode
 
-Most coding agents give you a conversation. BanyanCode gives you a **system**.
+| The problem with single-agent coding | What BanyanCode does instead |
+|---|---|
+| One model is a bottleneck on every task | **Fan work out to specialists** — explore, implement, research, review in parallel |
+| Parallel sessions don't coordinate | **Orchestrator-led mesh** with typed peer messaging and live progress |
+| Chats forget prior decisions | **Cross-session memory** with candidate promotion and durable recall |
+| Grep misses structural impact | **Tree-sitter code graph** with callers, dependents, tests, blast radius |
+| Research breaks the coding flow | **Built-in cited web researcher** that runs as a subagent |
+| Parallel work becomes opaque | **Live TUI activity** with agent tree, status pills, and review hooks |
 
-- One prompt can launch a coordinated team of agents.
-- Every agent gets the context and tools it needs, automatically.
-- Your repository becomes searchable structure, not a pile of files.
-- Memory compounds across sessions instead of vanishing with the chat.
-- Verification is built into the loop, not bolted on afterward.
-
-Use it for refactors, migrations, debugging, codebase onboarding, research-heavy implementation, and autonomous software engineering.
-
----
-
-## Core Features
-
-### Parallel Subagent Mesh
-Dispatch `scout`, `coder`, and `researcher` agents concurrently from a single prompt. A primary orchestrator decomposes the task and fans work out across the mesh, governed by a configurable concurrency cap and an oldest-ended eviction policy — so nothing runs away with your resources.
-
-<p align="center">
-  <img src="./assets/subagent.png" alt="BanyanCode agent tree showing nested parent and child subagents with token usage" width="850" />
-  <br />
-  <sub>The Agent Tree view — full visibility into every subagent, nested subagent, and its token spend.</sub>
-</p>
-
-### Loop Engineering
-Build repeatable agent loops with goals, actions, verification, retries, and memory — instead of manually driving every turn yourself. The core workflow is always:
-
-```text
-trigger → context → plan → execute → verify → remember → repeat
-```
-
-<p align="center">
-  <img src="./assets/agents.png" alt="BanyanCode chat view showing an agent plan, live todo tracking, and system stats" width="850" />
-  <br />
-  <sub>Live plans, todo tracking, and system stats — right inside the chat.</sub>
-</p>
-
-### Persistent Cross-Session Memory
-A multi-tiered memory engine that actually remembers your codebase between sessions: candidate extraction, intent classification, hybrid FTS5/tag retrieval, and automated hygiene sweeps (expire → reconcile → prune) keep memory useful instead of stale.
-
-### Codebase Intelligence (Tree-Sitter Code Graph)
-`/codegraph-build` indexes your repository into a live, queryable graph of symbols, callers, dependents, tests, impact, and ownership — powered by Tree-Sitter parsing with regex fallbacks for anything it doesn't natively understand.
-
-### Verification Hooks
-Repository context, blast-radius analysis, preflight checks, tests, and review loops keep every agent change grounded in reality before it lands.
-
-### Free Research Loop
-A `researcher` subagent backed by DuckDuckGo HTML search — no API key required, no rate-limit bill.
-
-### Terminal-Native UX
-A fast TUI with a command palette, built-in LSP support, model switching, execution traces, and full keyboard control.
+Use it for **refactors, migrations, debugging, codebase onboarding, research-heavy implementation, and autonomous software engineering** — anywhere one conversation isn't enough.
 
 ---
 
 ## The Workflow
 
 ```text
-Prompt
-  └─► Orchestrator
-       ├─► Scout       explores the repository
-       ├─► Coder       implements the change
-       ├─► Researcher  checks external knowledge
-       ├─► Memory      carries context across sessions
-       └─► Code graph  verifies structure and impact
-                    └─► merged, reviewable result
+┌─────────────────────────────────────────────────────────────┐
+│  Prompt                                                     │
+│    └─► Orchestrator                                         │
+│         ├─► Scout       explores the repository             │
+│         ├─► Explore     maps the architecture               │
+│         ├─► Researcher  checks external knowledge           │
+│         ├─► Coder       implements the change               │
+│         ├─► Reviewer    inspects the diff                   │
+│         ├─► Memory      carries context across sessions     │
+│         └─► Code graph  verifies structure and impact       │
+│                      └─► merged, reviewable result          │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+Every loop is: **trigger → context → plan → execute → verify → remember → repeat**.
+
+---
+
+## The TUI
+
+Built on **Solid.js + OpenTUI** — fast, keyboard-driven, terminal-native. Five tabs, a sidebar full of live widgets, and a command palette that puts every action one keystroke away.
+
+- **`CHAT`** — prompt, conversation, live tool calls, live synthesis
+- **`AGENTS`** — visual hierarchy tree of the entire mesh with parent-child edges, status, token use, and magnitude bars
+- **`SESSIONS`** — root and subagent sessions with rename, continue, delete
+- **`MEMORY`** — entry manager across global/session scope with promote/reject/forget actions
+- **`CONFIG`** — subagent management and per-agent prompt editor
+
+**Sidebar widgets**: active agents, performance (TTFT, tokens/sec), context, system status (CPU/RAM/GPU/VRAM with health bars), MCP connections, attached files.
+
+---
+
+## Installation
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install | bash
+
+# Windows
+irm https://raw.githubusercontent.com/EkagraAgarwal/BanyanCode/main/install.ps1 | iex
+
+# Package managers
+npm i -g banyancode@latest          # npm
+bun add -g banyancode                # Bun (fastest)
+pnpm add -g banyancode               # pnpm
+yarn global add banyancode           # yarn
+```
+
+Runs on **Linux, macOS, and Windows** across **11 platform targets** (x64/arm64, glibc/musl, baseline variants). Run `banyancode` from any project directory — it opens in the current workspace and starts building an incremental code graph as you work.
 
 ---
 
 ## Commands
 
-Type `/` in the TUI to browse every command. The core workflow includes:
+Type `/` in the TUI to browse every command. The core workflow:
 
 | Command | Purpose |
 |---|---|
 | `/init` | Set up `AGENTS.md` for the workspace. |
 | `/review` | Review uncommitted changes, commits, branches, or pull requests. |
-| `/codegraph-build` | Build or refresh the tree-sitter code graph. |
-| `/repository-query` | Search symbols, tests, docs, configs, and relationships together. |
-| `/repository-explain` | Understand a symbol through an architectural slice. |
+| `/codegraph-build` | Build or refresh the Tree-sitter code graph. |
+| `/repository-query` | Unified repository search across symbols, tests, docs, configs. |
+| `/repository-explain` | Architectural slice for any symbol. |
 | `/repository-trace` | Trace downstream dependents through the graph. |
-| `/repository-impact` | See the blast radius of a change. |
-| `/repository-tests` | Find tests connected to a symbol. |
-| `/websearch-free` | Search the web with the researcher agent. |
-| `/max-subagents` | Set the concurrency ceiling for the mesh. |
+| `/repository-impact` | Blast radius of a change. |
+| `/repository-tests` | Tests connected to a symbol. |
+| `/websearch-free` | Run the free DuckDuckGo researcher agent. |
+| `/max-subagents` | Set the mesh concurrency ceiling (1–20). |
 | `/lsp` | Toggle built-in language servers. |
-| `/yolo` | Enable automatic permission approval for sandboxed workflows. |
+| `/yolo` | Toggle automatic permission approval. |
 
 ---
 
 ## Configuration
 
-BanyanCode is its own product and uses `banyancode.json` — never `opencode.json`.
+BanyanCode is its **own product** — it uses `banyancode.json`, never `opencode.json`. Both products can install side by side and never read or write each other's files.
 
 ```json
 {
@@ -142,8 +188,8 @@ BanyanCode is its own product and uses `banyancode.json` — never `opencode.jso
 | Key | Default | Purpose |
 |---|---:|---|
 | `banyancode_lsp` | `false` | Enable built-in language servers. |
-| `banyancode_max_subagents` | `5` | Cap concurrent subagents from 1 to 20. |
-| `banyancode_yolo_mode` | `false` | Automatically approve permissions. |
+| `banyancode_max_subagents` | `5` | Cap concurrent subagents (1–20). |
+| `banyancode_yolo_mode` | `false` | Auto-approve all permissions (including dangerous). |
 | `banyancode_disable_websearch` | `false` | Disable the free researcher agent. |
 | `banyancode_codegraph_watch_enabled` | `true` | Update the code graph as files change. |
 
@@ -155,41 +201,42 @@ Project data stays local by default:
 
 ```text
 .banyancode/
-├── banyancode.db
-├── ignore
+├── banyancode-<workspaceTag>.db   # libSQL/Turso: memory, code graph, mesh, traces
+├── ignore                         # code graph ignore patterns
 └── trace/
+    └── <sessionID>.jsonl          # per-session tool-call audit log
 ```
 
-BanyanCode never reads or writes OpenCode configuration or data. Global BanyanCode data lives under `~/.config/banyancode/` and `~/.local/share/banyancode/`.
+Global BanyanCode data lives under `~/.config/banyancode/` and `~/.local/share/banyancode/`. BanyanCode **never reads or writes OpenCode configuration or data.**
 
 ---
 
 ## Development
 
-BanyanCode uses Bun and a monorepo workspace.
+BanyanCode uses Bun and a Turborepo monorepo. **Tests must be run from a package directory, never the repo root.**
 
 ```bash
 bun install
 bun run lint
 bun typecheck
+
+# run package tests (never from root)
+cd packages/core && bun test
+cd packages/opencode && bun test
+cd packages/tui && bun test
 ```
 
-Run package tests from the package directory, not the repository root:
-
-```bash
-cd packages/core
-bun test
-```
+See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full service topology, package layout, and runtime composition.
 
 ---
 
 ## Built On
 
-- [OpenCode](https://github.com/anomalyco/opencode) — the TUI / CLI runtime BanyanCode forks from
-- [Effect](https://effect.website) — type-safe service architecture
-- [tree-sitter](https://tree-sitter.github.io) — incremental parsing
+- [OpenCode](https://github.com/anomalyco/opencode) — the TUI / CLI runtime BanyanCode is built on
+- [Effect](https://effect.website) — type-safe service architecture (`@opencode-ai/core`)
+- [Tree-Sitter](https://tree-sitter.github.io) — incremental code parsing
 - [DuckDuckGo HTML](https://duckduckgo.com/html/) — free web search
-- [libSQL](https://turso.tech) — embedded SQL storage
+- [libSQL / Turso](https://turso.tech) — embedded SQL storage
 
 ## License
 
