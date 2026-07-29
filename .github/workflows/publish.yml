@@ -108,7 +108,13 @@ jobs:
         run: bun ./packages/opencode/script/build.ts --target=${{ matrix.target }} --skip-install
         env:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
-          OPENCODE_RELEASE: ${{ github.event_name == 'push' }}
+          # OPENCODE_RELEASE must be true on every shipping build, regardless
+          # of trigger. The build script's `tar -czf` step is gated on this
+          # flag and would skip Linux tarball creation on a workflow_dispatch
+          # run otherwise (the release script downstream expects those
+          # `.tar.gz` files to exist; without them the upload step fails
+          # with "no matches found" and the release ships empty).
+          OPENCODE_RELEASE: 'true'
           OPENCODE_CHANNEL: latest
 
       - name: Package macOS binaries
