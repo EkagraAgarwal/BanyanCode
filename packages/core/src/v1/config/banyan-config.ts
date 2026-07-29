@@ -50,6 +50,14 @@ export const Info = Schema.Struct({
   // Used as both a prompt hint AND a hard runtime limit in MeshCoordinator.
   // Default: 5, max: 20
   banyancode_max_subagents: Schema.optional(Schema.Number),
+  /** Default evaluator model for /goal: a cheap/fast small model the reviewer is graded against. Format: "provider/model-id" e.g. "anthropic/claude-haiku-4-5". */
+  banyancode_goal_evaluator_model: Schema.optional(Schema.String),
+  /** Maximum number of reviewer-fail iterations before the goal is auto-blocked and surfaced to the user. Default 5. */
+  banyancode_max_goal_iterations: Schema.optional(Schema.Number),
+  /** Wall-clock budget for a single /goal run, in milliseconds. Default 45 minutes (2_700_000). 0 = no cap. */
+  banyancode_goal_max_time_ms: Schema.optional(Schema.Number),
+  /** Auto-retry the goal loop on reviewer `blocked` verdicts? Default true. If false, the first `blocked` verdict surfaces to the user. */
+  banyancode_goal_auto_retry_on_block: Schema.optional(Schema.Boolean),
   banyancode_git_author_email: Schema.optional(Schema.String),
   banyancode_codegraph_exclude_patterns: Schema.optional(Schema.Array(Schema.String)),
   banyancode_codegraph_concurrency: Schema.optional(Schema.Number),
