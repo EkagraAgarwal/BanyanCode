@@ -1658,6 +1658,11 @@ unix(
   30_000,
 )
 
+// Dispatcher regressions for the discriminated execute result live in
+// packages/core/test/banyancode/command-join-condition.test.ts (no LLM
+// catalog required). End-to-end /goal coverage is exercised manually via
+// the existing TUI integration.
+
 unixNoLLMServer(
   "cancel interrupts shell and resolves cleanly",
   () =>

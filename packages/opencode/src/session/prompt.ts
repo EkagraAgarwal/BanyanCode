@@ -1590,47 +1590,57 @@ export const layer = Layer.effect(
       }
 
       if (cmd.execute) {
-        const messageID = MessageID.ascending()
-        const ctx = yield* InstanceState.context
         const result = yield* cmd.execute({ command: input.command, arguments: input.arguments, sessionID: input.sessionID })
-        yield* events.publish(Command.Event.Executed, {
-          name: input.command,
-          sessionID: input.sessionID,
-          arguments: input.arguments,
-          messageID,
-        })
-        // If the command returned a status string (e.g. "Codegraph index
-        // removed. Freed 12.3 MB (45.1 MB -> 32.8 MB)."), surface it as a
-        // synthetic text part so the user sees the real completion message
-        // instead of an empty assistant turn.
-        const parts: SessionV1.Part[] = []
-        if (typeof result === "string" && result.length > 0) {
-          const part = yield* sessions.updatePart({
-            id: PartID.ascending(),
+
+        if (result.kind === "continue") {
+          // Setup executor finished; fall through to the normal template
+          // expansion + prompt(...) path. The Executed event is emitted
+          // below after the real prompt completes.
+          yield* Effect.logInfo("command.execute.continue", {
+            "session.id": input.sessionID,
+            command: input.command,
+          })
+        } else {
+          // Terminal: synthetic assistant text part with the executor's
+          // status string, then return so no template expansion happens.
+          const messageID = MessageID.ascending()
+          const ctx = yield* InstanceState.context
+          yield* events.publish(Command.Event.Executed, {
+            name: input.command,
+            sessionID: input.sessionID,
+            arguments: input.arguments,
             messageID,
-            sessionID: input.sessionID,
-            type: "text",
-            synthetic: true,
-            text: result,
-          } satisfies SessionV1.TextPart)
-          parts.push(part)
-        }
-        return {
-          info: {
-            id: messageID,
-            role: "assistant" as const,
-            sessionID: input.sessionID,
-            time: { created: Date.now() },
-            parentID: MessageID.ascending(),
-            modelID: "" as ModelV2.ID,
-            providerID: "" as ProviderV2.ID,
-            mode: "",
-            agent: "",
-            path: { cwd: ctx.directory, root: ctx.worktree },
-            cost: 0,
-            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-          },
-          parts,
+          })
+          const parts: SessionV1.Part[] = []
+          const message = result.message
+          if (typeof message === "string" && message.length > 0) {
+            const part = yield* sessions.updatePart({
+              id: PartID.ascending(),
+              messageID,
+              sessionID: input.sessionID,
+              type: "text",
+              synthetic: true,
+              text: message,
+            } satisfies SessionV1.TextPart)
+            parts.push(part)
+          }
+          return {
+            info: {
+              id: messageID,
+              role: "assistant" as const,
+              sessionID: input.sessionID,
+              time: { created: Date.now() },
+              parentID: MessageID.ascending(),
+              modelID: "" as ModelV2.ID,
+              providerID: "" as ProviderV2.ID,
+              mode: "",
+              agent: "",
+              path: { cwd: ctx.directory, root: ctx.worktree },
+              cost: 0,
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            },
+            parts,
+          }
         }
       }
 

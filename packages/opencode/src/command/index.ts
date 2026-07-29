@@ -58,18 +58,26 @@ export const Info = Schema.Struct({
 export type Info = Omit<Schema.Schema.Type<typeof Info>, "template" | "execute"> & {
   template: Promise<string> | string
   /**
-   * Optional side-effecting executor for slash-commands that don't need the
-   * LLM in the loop (e.g. /codegraph-build, /codegraph-remove,
-   * /refresh-models, /yolo). The returned string (if any) is rendered as a
-   * synthetic assistant text part on the command response, so the user sees
-   * the real completion message (e.g. "Codegraph index removed. Freed 12.3
-   * MB (45.1 MB -> 32.8 MB).") instead of an empty parts array.
+   * Discriminated executor return. Handlers that finish the slash command
+   * without needing the LLM (e.g. /codegraph-build, /refresh-models, /yolo)
+   * return `{ kind: "terminal", message? }`; the optional `message` is
+   * rendered as a synthetic assistant text part so the user sees the real
+   * completion. Handlers that perform setup work and want the command's
+   * template to continue into the agent loop (e.g. /goal, which persists a
+   * goal row and then asks the orchestrator to drive it) return
+   * `{ kind: "continue" }`; `SessionPrompt.command` then proceeds with the
+   * normal template + `prompt(...)` path.
    *
    * `sessionID` is the session that issued the slash command and is required
    * by per-session tools like /goal. Handlers that don't need it (e.g.
    * /yolo, /max-subagents, /refresh-models) may ignore it via destructuring.
    */
-  execute?: (input: { command: string; arguments: string; sessionID: SessionID }) => Effect.Effect<string | void, never, any>
+  execute?: (input: { command: string; arguments: string; sessionID: SessionID }) => Effect.Effect<
+    | { kind: "terminal"; message?: string }
+    | { kind: "continue" },
+    never,
+    any
+  >
 }
 
 export function hints(template: string) {
@@ -133,6 +141,34 @@ function parseArgs(input: string): { positional: string[]; flags: Record<string,
   return { positional, flags }
 }
 
+/**
+ * Re-join the user-provided goal condition from the parsed args, dropping
+ * recognized flags. `/goal build a feature --priority high` yields
+ * "build a feature". Without this, `positional[0]` would silently truncate
+ * multi-word conditions.
+ *
+ * `parseArgs` already strips recognized `--flag value` and `--flag=value`
+ * pairs into `flags`, so positional is mostly free of flag tokens. We
+ * only drop the rare leftover `--` sentinel and the `--flag[=value]` form
+ * for the recognized keys (defensive — should not happen in practice).
+ *
+ * Exported for testing — do not use elsewhere.
+ */
+export const joinCondition = (args: {
+  positional: string[]
+  flags: Record<string, string | boolean>
+}): string => {
+  const FLAG_KEYS = new Set(["plan", "priority"])
+  const trimmed: string[] = []
+  for (const part of args.positional) {
+    if (part === "--") continue
+    const match = part.match(/^--([a-zA-Z][\w-]*)=(.*)$/)
+    if (match && FLAG_KEYS.has(match[1])) continue
+    trimmed.push(part)
+  }
+  return trimmed.join(" ").trim()
+}
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -176,7 +212,7 @@ export const layer = Layer.effect(
             const buildServiceOpt = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
             if (Option.isNone(buildServiceOpt)) {
               yield* Effect.logWarning("codegraph-build invoked but CodegraphBuildService is unavailable in scope")
-              return "Codegraph build skipped: CodegraphBuildService is unavailable in this session."
+              return { kind: "terminal" as const, message: "Codegraph build skipped: CodegraphBuildService is unavailable in this session." }
             }
             const args = parseArgs(input.arguments)
             const root = args.positional[0] ?? ctx.worktree
@@ -194,16 +230,19 @@ export const layer = Layer.effect(
             }
 
             if (status.status === "failed") {
-              return `Codegraph build failed: ${status.error ?? "unknown error"}`
+              return { kind: "terminal" as const, message: `Codegraph build failed: ${status.error ?? "unknown error"}` }
             }
             if (status.status === "cancelled") {
-              return "Codegraph build cancelled."
+              return { kind: "terminal" as const, message: "Codegraph build cancelled." }
             }
             if (status.status === "completed" && status.result) {
               const r = status.result
-              return `Codegraph build complete. indexed=${r.indexed} skipped=${r.skipped} (cached=${r.skippedByReason.cached}) symbols=${r.symbolsIndexed} duration_ms=${r.duration_ms} root=${root}`
+              return {
+                kind: "terminal" as const,
+                message: `Codegraph build complete. indexed=${r.indexed} skipped=${r.skipped} (cached=${r.skippedByReason.cached}) symbols=${r.symbolsIndexed} duration_ms=${r.duration_ms} root=${root}`,
+              }
             }
-            return `Codegraph build ${status.status} for ${root}.`
+            return { kind: "terminal" as const, message: `Codegraph build ${status.status} for ${root}.` }
           }),
         hints: hints(PROMPT_CODEGRAPH_BUILD),
       }
@@ -211,6 +250,7 @@ export const layer = Layer.effect(
         name: Default.GOAL,
         description: "drive the orchestrator loop until a stated goal is achieved",
         source: "command",
+        agent: "orchestrator",
         get template() {
           return PROMPT_GOAL
         },
@@ -218,61 +258,103 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             const goalServiceOpt = yield* Effect.serviceOption(Banyan.GoalService)
             if (Option.isNone(goalServiceOpt)) {
-              return "Goal commands skipped: GoalService is unavailable in this session."
+              return {
+                kind: "terminal" as const,
+                message: "Goal commands skipped: GoalService is unavailable in this session.",
+              }
             }
             const svc = goalServiceOpt.value
             const args = parseArgs(input.arguments)
-            const condition = args.positional[0]
+            // The full condition is everything after /goal (excluding flags).
+            // Re-stitch by removing recognized flags rather than relying on
+            // positional[0], which truncates at the first whitespace.
+            const condition = joinCondition(args)
             const sessionID = input.sessionID
 
             if (condition === "status") {
               const active = yield* svc.getActiveGoal(sessionID)
-              if (!active) return `No active goal for session ${sessionID}.`
+              if (!active) return { kind: "terminal" as const, message: `No active goal for session ${sessionID}.` }
               const cond = active.condition.length > 80 ? active.condition.slice(0, 80) + "…" : active.condition
-              return [
-                `Active goal ${active.id} for session ${sessionID}:`,
-                `  condition:     ${cond}`,
-                `  plan:          ${active.planPath ?? "(none)"}`,
-                `  priority:      ${active.priority ?? "(default)"}`,
-                `  iteration:     ${active.iterationCount}`,
-                `  last verdict:  ${active.lastReviewVerdict ?? "(none)"}`,
-                `  last reason:   ${active.lastReviewReason ?? "(none)"}`,
-                `  created:       ${new Date(active.createdAt).toISOString()}`,
-              ].join("\n")
+              return {
+                kind: "terminal" as const,
+                message: [
+                  `Active goal ${active.id} for session ${sessionID}:`,
+                  `  condition:     ${cond}`,
+                  `  plan:          ${active.planPath ?? "(none)"}`,
+                  `  priority:      ${active.priority ?? "(default)"}`,
+                  `  iteration:     ${active.iterationCount}`,
+                  `  last verdict:  ${active.lastReviewVerdict ?? "(none)"}`,
+                  `  last reason:   ${active.lastReviewReason ?? "(none)"}`,
+                  `  created:       ${new Date(active.createdAt).toISOString()}`,
+                ].join("\n"),
+              }
             }
 
             if (condition === "cancel" || condition === "clear") {
               const active = yield* svc.getActiveGoal(sessionID)
-              if (!active) return `No active goal to cancel for session ${sessionID}.`
+              if (!active) return { kind: "terminal" as const, message: `No active goal to cancel for session ${sessionID}.` }
               const updated = yield* svc.cancel(active.id, "user-cancelled")
-              return `Goal ${updated.id} cancelled for session ${sessionID}.`
+              return { kind: "terminal" as const, message: `Goal ${updated.id} cancelled for session ${sessionID}.` }
             }
 
             if (!condition) {
-              return "Usage: /goal <condition> [--plan <path>] [--priority low|normal|high] | /goal status | /goal cancel"
+              // Bare `/goal` with no active goal -> show usage. With an
+              // active goal, fall through to status (the user is asking
+              // "what's the current goal?").
+              const active = yield* svc.getActiveGoal(sessionID)
+              if (active) {
+                const cond = active.condition.length > 80 ? active.condition.slice(0, 80) + "…" : active.condition
+                return {
+                  kind: "terminal" as const,
+                  message: [
+                    `Active goal ${active.id} for session ${sessionID}:`,
+                    `  condition:     ${cond}`,
+                    `  plan:          ${active.planPath ?? "(none)"}`,
+                    `  priority:      ${active.priority ?? "(default)"}`,
+                    `  iteration:     ${active.iterationCount}`,
+                    `  last verdict:  ${active.lastReviewVerdict ?? "(none)"}`,
+                  ].join("\n"),
+                }
+              }
+              return {
+                kind: "terminal" as const,
+                message: "Usage: /goal <condition> [--plan <path>] [--priority low|normal|high] | /goal status | /goal cancel",
+              }
             }
 
-            const goal = yield* svc
+            const conflictMessage = yield* svc
               .setGoal({
                 parentSessionID: sessionID,
                 condition,
                 planPath: typeof args.flags.plan === "string" ? args.flags.plan : "./plan.md",
-                priority: typeof args.flags.priority === "string" ? (args.flags.priority as "low" | "normal" | "high") : "normal",
+                priority:
+                  typeof args.flags.priority === "string"
+                    ? (args.flags.priority as "low" | "normal" | "high")
+                    : "normal",
               })
               .pipe(
+                Effect.map((goal) => ({ kind: "ok" as const, goal })),
                 Effect.catchTag("Banyan/GoalConflictError", (e: Banyan.GoalConflictError) =>
-                  Effect.succeed(`An active goal already exists for session ${sessionID}: ${e.existingGoalID}. Run /goal cancel first.`),
+                  Effect.succeed({
+                    kind: "conflict" as const,
+                    message: `An active goal already exists for session ${sessionID}: ${e.existingGoalID}. Run /goal cancel first.`,
+                  }),
                 ),
               )
 
-            if (typeof goal === "string") return goal
+            if (conflictMessage.kind === "conflict") {
+              return { kind: "terminal" as const, message: conflictMessage.message }
+            }
 
-            return [
-              `Goal ${goal.id} set for session ${sessionID}.`,
-              `  condition: ${goal.condition}`,
-              `  plan:      ${goal.planPath ?? "(none)"}`,
-              `  priority:  ${goal.priority ?? "(default)"}`,
-            ].join("\n")
+            // Persisted. Hand off to the orchestrator via the template path.
+            // The synthetic summary lives on the message itself; the template
+            // expansion in SessionPrompt.command also runs, then prompt(...)
+            // fires.
+            yield* Effect.logInfo("goal set; continuing into orchestrator prompt", {
+              "session.id": sessionID,
+              goalID: conflictMessage.goal.id,
+            })
+            return { kind: "continue" as const }
           }),
         hints: hints(PROMPT_GOAL),
       }
@@ -367,7 +449,9 @@ export const layer = Layer.effect(
         execute: () =>
           Effect.gen(function* () {
             const banyanOption = yield* Effect.serviceOption(Banyan.BanyanConfigService)
-            if (Option.isNone(banyanOption)) return Effect.succeed({ toggled: false }) as any
+            if (Option.isNone(banyanOption)) {
+              return { kind: "terminal" as const, message: "YOLO toggle skipped: BanyanConfigService is unavailable." }
+            }
             const banyan = banyanOption.value
             const current = yield* banyan.get()
             const newValue = !current.banyancode_yolo_mode
@@ -379,7 +463,7 @@ export const layer = Layer.effect(
                 properties: { scope: "global" },
               },
             })
-            return Effect.succeed({ toggled: newValue }) as any
+            return { kind: "terminal" as const, message: `YOLO mode is now ${newValue ? "on" : "off"}.` }
           }),
         hints: [],
       }
@@ -393,25 +477,35 @@ export const layer = Layer.effect(
         execute: (input) =>
           Effect.gen(function* () {
             const opt = yield* Effect.serviceOption(Banyan.MaxSubagentsService)
-            if (Option.isNone(opt)) return "Max-subagents disabled (BanyanCode off)."
+            if (Option.isNone(opt)) return { kind: "terminal" as const, message: "Max-subagents disabled (BanyanCode off)." }
             const svc = opt.value
             const trimmed = input.arguments.trim()
             if (trimmed === "") {
               const cur = yield* svc.current()
-              return `Max subagents is ${cur}. Usage: /max-subagents <1-20>`
+              return { kind: "terminal" as const, message: `Max subagents is ${cur}. Usage: /max-subagents <1-20>` }
             }
             const n = Number(trimmed)
             if (!Number.isFinite(n) || !Number.isInteger(n)) {
-              return `Max subagents must be an integer; got "${trimmed}".`
+              return { kind: "terminal" as const, message: `Max subagents must be an integer; got "${trimmed}".` }
             }
             const validated = yield* svc.validate(n).pipe(
-              Effect.catchTag("Banyan/MaxSubagentsError", (e) => Effect.succeed(e.message)),
+              Effect.catchTag("Banyan/MaxSubagentsError", (e) =>
+                Effect.succeed<number | { error: string }>({ error: e.message }),
+              ),
             )
-            if (typeof validated === "string") return validated
+            if (typeof validated === "object" && "error" in validated) {
+              return { kind: "terminal" as const, message: validated.error }
+            }
+            const validatedNumber = validated as number
             const banyanOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
-            if (Option.isNone(banyanOpt)) return `Max subagents set to ${validated} (BanyanCode disabled; not persisted).`
-            yield* banyanOpt.value.update({ banyancode_max_subagents: validated })
-            return `Max subagents set to ${validated}.`
+            if (Option.isNone(banyanOpt)) {
+              return {
+                kind: "terminal" as const,
+                message: `Max subagents set to ${validatedNumber} (BanyanCode disabled; not persisted).`,
+              }
+            }
+            yield* banyanOpt.value.update({ banyancode_max_subagents: validatedNumber })
+            return { kind: "terminal" as const, message: `Max subagents set to ${validatedNumber}.` }
           }),
         hints: [],
       }
@@ -423,9 +517,14 @@ export const layer = Layer.effect(
           return "Refresh the models catalog."
         },
         execute: () =>
-          Effect.flatMap(Effect.serviceOption(ModelsDev.Service), (option) =>
-            option._tag === "Some" ? option.value.refresh(true) : Effect.void,
-          ),
+          Effect.gen(function* () {
+            const option = yield* Effect.serviceOption(ModelsDev.Service)
+            if (option._tag === "Some") {
+              yield* option.value.refresh(true)
+              return { kind: "terminal" as const, message: "Models catalog refreshed." }
+            }
+            return { kind: "terminal" as const, message: "ModelsDev service unavailable." }
+          }),
         hints: [],
       }
       commands[Default.LSP] = {
@@ -438,7 +537,7 @@ export const layer = Layer.effect(
         execute: (input) =>
           Effect.gen(function* () {
             const opt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
-            if (Option.isNone(opt)) return "LSP toggle disabled (BanyanCode off)."
+            if (Option.isNone(opt)) return { kind: "terminal" as const, message: "LSP toggle disabled (BanyanCode off)." }
             const svc = opt.value
             const trimmed = input.arguments.trim()
             const current = yield* svc.get()
@@ -446,7 +545,7 @@ export const layer = Layer.effect(
             const isOn = currentValue === true || (typeof currentValue === "object" && currentValue !== null)
             const arg = trimmed.toLowerCase()
             if (arg === "") {
-              return `BanyanCode LSP is ${isOn ? "on" : "off"}. Usage: /lsp <on|off|toggle>`
+              return { kind: "terminal" as const, message: `BanyanCode LSP is ${isOn ? "on" : "off"}. Usage: /lsp <on|off|toggle>` }
             }
             let next: typeof currentValue
             if (arg === "on" || arg === "true" || arg === "enable" || arg === "enabled") {
@@ -456,7 +555,7 @@ export const layer = Layer.effect(
             } else if (arg === "toggle") {
               next = (isOn ? false : true) as any
             } else {
-              return `Unknown argument "${trimmed}". Usage: /lsp <on|off|toggle>`
+              return { kind: "terminal" as const, message: `Unknown argument "${trimmed}". Usage: /lsp <on|off|toggle>` }
             }
             const updated = yield* svc.update({ banyancode_lsp: next })
             const finalIsOn =
@@ -474,7 +573,10 @@ export const layer = Layer.effect(
                 properties: { scope: "global" },
               },
             })
-            return `BanyanCode LSP is now ${finalIsOn ? "on" : "off"}. Built-in servers will attach as files are opened.`
+            return {
+              kind: "terminal" as const,
+              message: `BanyanCode LSP is now ${finalIsOn ? "on" : "off"}. Built-in servers will attach as files are opened.`,
+            }
           }),
         hints: [],
       }
@@ -489,14 +591,20 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             const arg = input.arguments.trim()
             if (arg === "") {
-              return "Usage: /import <path-to-transcript.md>. Reads the file, parses it, and creates a new session containing the parsed messages."
+              return {
+                kind: "terminal" as const,
+                message: "Usage: /import <path-to-transcript.md>. Reads the file, parses it, and creates a new session containing the parsed messages.",
+              }
             }
             // The TUI intercepts /import and shows the import result as a
             // toast. From a non-TUI context (CLI session, scripted run), the
             // user can call the same /global/session/import endpoint via the
             // SDK, but the simplest portable path here is to return the
             // usage hint and let the TUI handler take over once available.
-            return `Run /import from the TUI to read ${arg} and create a new session, or POST {content} to /global/session/import directly.`
+            return {
+              kind: "terminal" as const,
+              message: `Run /import from the TUI to read ${arg} and create a new session, or POST {content} to /global/session/import directly.`,
+            }
           }),
         hints: [],
       }
