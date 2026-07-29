@@ -27,6 +27,7 @@ import { PrCommand } from "./cli/cmd/pr"
 import { SessionCommand } from "./cli/cmd/session"
 import { DbCommand } from "./cli/cmd/db"
 import { CodegraphCommand } from "./cli/cmd/codegraph"
+import { GoalCommand } from "./cli/cmd/goal"
 import { RepositoryCommand } from "./cli/cmd/repository"
 import { MemoryCommand } from "./cli/cmd/memory"
 import { WebsearchFreeCommand } from "./cli/cmd/websearch-free"
@@ -107,6 +108,7 @@ const cli = yargs(args)
   .command(PluginCommand)
   .command(DbCommand)
   .command(CodegraphCommand)
+  .command(GoalCommand)
   .command(RepositoryCommand)
   .command(MemoryCommand)
   .command(WebsearchFreeCommand)

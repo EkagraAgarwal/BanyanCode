@@ -16,6 +16,7 @@ import { ModelsDev } from "@opencode-ai/core/models-dev"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_CODEGRAPH_BUILD from "./template/codegraph-build.txt"
+import PROMPT_GOAL from "./template/goal.txt"
 import PROMPT_REPOSITORY_QUERY from "./template/repository-query.txt"
 import PROMPT_REPOSITORY_EXPLAIN from "./template/repository-explain.txt"
 import PROMPT_REPOSITORY_TRACE from "./template/repository-trace.txt"
@@ -63,8 +64,12 @@ export type Info = Omit<Schema.Schema.Type<typeof Info>, "template" | "execute">
    * synthetic assistant text part on the command response, so the user sees
    * the real completion message (e.g. "Codegraph index removed. Freed 12.3
    * MB (45.1 MB -> 32.8 MB).") instead of an empty parts array.
+   *
+   * `sessionID` is the session that issued the slash command and is required
+   * by per-session tools like /goal. Handlers that don't need it (e.g.
+   * /yolo, /max-subagents, /refresh-models) may ignore it via destructuring.
    */
-  execute?: (input: { command: string; arguments: string }) => Effect.Effect<string | void, never, any>
+  execute?: (input: { command: string; arguments: string; sessionID: SessionID }) => Effect.Effect<string | void, never, any>
 }
 
 export function hints(template: string) {
@@ -82,6 +87,7 @@ export const Default = {
   REVIEW: "review",
   CODEGRAPH_BUILD: "codegraph-build",
   CODEGRAPH_REMOVE: "codegraph-remove",
+  GOAL: "goal",
   REPOSITORY_QUERY: "repository-query",
   REPOSITORY_EXPLAIN: "repository-explain",
   REPOSITORY_TRACE: "repository-trace",
@@ -200,6 +206,75 @@ export const layer = Layer.effect(
             return `Codegraph build ${status.status} for ${root}.`
           }),
         hints: hints(PROMPT_CODEGRAPH_BUILD),
+      }
+      commands[Default.GOAL] = {
+        name: Default.GOAL,
+        description: "drive the orchestrator loop until a stated goal is achieved",
+        source: "command",
+        get template() {
+          return PROMPT_GOAL
+        },
+        execute: (input) =>
+          Effect.gen(function* () {
+            const goalServiceOpt = yield* Effect.serviceOption(Banyan.GoalService)
+            if (Option.isNone(goalServiceOpt)) {
+              return "Goal commands skipped: GoalService is unavailable in this session."
+            }
+            const svc = goalServiceOpt.value
+            const args = parseArgs(input.arguments)
+            const condition = args.positional[0]
+            const sessionID = input.sessionID
+
+            if (condition === "status") {
+              const active = yield* svc.getActiveGoal(sessionID)
+              if (!active) return `No active goal for session ${sessionID}.`
+              const cond = active.condition.length > 80 ? active.condition.slice(0, 80) + "…" : active.condition
+              return [
+                `Active goal ${active.id} for session ${sessionID}:`,
+                `  condition:     ${cond}`,
+                `  plan:          ${active.planPath ?? "(none)"}`,
+                `  priority:      ${active.priority ?? "(default)"}`,
+                `  iteration:     ${active.iterationCount}`,
+                `  last verdict:  ${active.lastReviewVerdict ?? "(none)"}`,
+                `  last reason:   ${active.lastReviewReason ?? "(none)"}`,
+                `  created:       ${new Date(active.createdAt).toISOString()}`,
+              ].join("\n")
+            }
+
+            if (condition === "cancel" || condition === "clear") {
+              const active = yield* svc.getActiveGoal(sessionID)
+              if (!active) return `No active goal to cancel for session ${sessionID}.`
+              const updated = yield* svc.cancel(active.id, "user-cancelled")
+              return `Goal ${updated.id} cancelled for session ${sessionID}.`
+            }
+
+            if (!condition) {
+              return "Usage: /goal <condition> [--plan <path>] [--priority low|normal|high] | /goal status | /goal cancel"
+            }
+
+            const goal = yield* svc
+              .setGoal({
+                parentSessionID: sessionID,
+                condition,
+                planPath: typeof args.flags.plan === "string" ? args.flags.plan : "./plan.md",
+                priority: typeof args.flags.priority === "string" ? (args.flags.priority as "low" | "normal" | "high") : "normal",
+              })
+              .pipe(
+                Effect.catchTag("Banyan/GoalConflictError", (e: Banyan.GoalConflictError) =>
+                  Effect.succeed(`An active goal already exists for session ${sessionID}: ${e.existingGoalID}. Run /goal cancel first.`),
+                ),
+              )
+
+            if (typeof goal === "string") return goal
+
+            return [
+              `Goal ${goal.id} set for session ${sessionID}.`,
+              `  condition: ${goal.condition}`,
+              `  plan:      ${goal.planPath ?? "(none)"}`,
+              `  priority:  ${goal.priority ?? "(default)"}`,
+            ].join("\n")
+          }),
+        hints: hints(PROMPT_GOAL),
       }
       commands[Default.REPOSITORY_QUERY] = {
         name: Default.REPOSITORY_QUERY,
