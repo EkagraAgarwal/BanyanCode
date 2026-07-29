@@ -1394,6 +1394,16 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           continue
         }
         const stats = yield* fs.stat(filePath).pipe(Effect.orDie)
+        if (stats.type === "Directory") {
+          // The watcher (Windows/Parcel) can deliver directory paths — sometimes
+          // with a trailing separator — as a side effect of atomic-save rename
+          // sequences or parent-directory updates. Stat-and-skip them here so
+          // parseFile never reaches fs.readFileStringSafe with a directory
+          // (which would raise PlatformError: BadResource, EISDIR).
+          yield* Effect.logDebug(`Skipping directory path delivered by watcher: ${relativePath}`)
+          skippedInputs++
+          continue
+        }
         if (stats.size > maxFileSizeBytes) {
           yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${stats.size} bytes, limit: ${maxFileSizeBytes})`)
           const existing = existingFilesByPath.get(filePath)

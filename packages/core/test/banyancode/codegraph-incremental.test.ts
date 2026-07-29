@@ -438,6 +438,49 @@ describe("CodegraphIndexer.indexFiles", () => {
     )
   })
 
+  test("applyChanges skips directories that arrive via the watcher", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const keepPath = path.join(tmp.path, "keep.ts")
+    const directoryPath = path.join(tmp.path, "note.d")
+    await fs.writeFile(keepPath, "export const keep = 1\n")
+    await fs.mkdir(directoryPath, { recursive: true })
+
+    const directoryStat = await fs.stat(directoryPath)
+    expect(directoryStat.isDirectory()).toBe(true)
+
+    const serviceLayer = CodegraphIndexer.layer.pipe(
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(codegraphRepoDefaultLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* CodegraphIndexer.Service
+        const repo = yield* CodegraphRepo.Service
+
+        const result = yield* indexer.applyChanges({
+          root: tmp.path,
+          addedOrChanged: [directoryPath, keepPath],
+          removed: [],
+        })
+
+        expect(result.indexed).toBe(1)
+        expect(result.skipped).toBe(1)
+        expect(result.parseErrors.length).toBe(0)
+        expect((yield* repo.listParseErrors()).length).toBe(0)
+        expect(yield* repo.getFileByPath(keepPath)).toBeDefined()
+      }).pipe(
+        Effect.provide(serviceLayer),
+        Effect.provide(codegraphRepoDefaultLayer),
+        Effect.provide(dbLayer),
+        Effect.scoped,
+      ),
+    )
+  })
+
   test("deleteDerivedEdgesForFiles preserves structural imports edges", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.sqlite")
