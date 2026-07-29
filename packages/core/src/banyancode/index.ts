@@ -7,6 +7,7 @@ export { CodegraphServiceTagsTable } from "./codegraph-service-tags.sql"
 export { CodegraphTracesTable } from "./codegraph-traces.sql"
 export { CodegraphMetaTable } from "./codegraph-meta.sql"
 export { SubagentMessagesTable } from "./subagent-messages.sql"
+export { SubagentGoalsTable } from "./subagent-goals.sql"
 export { SubagentPlansTable } from "./subagent-plans.sql"
 export { SubagentReviewRequestsTable } from "./subagent-review-requests.sql"
 export type {
@@ -123,6 +124,20 @@ export type {
   MemorySource,
   MemorySourceType,
 } from "./memory-payload"
+export {
+  GoalPayloadV1Schema,
+  GoalEnvelopeV1Schema,
+  GoalStatusSchema,
+  GoalReviewVerdictSchema,
+  encodeGoalValue,
+  unwrapGoalValue,
+} from "./goal-payload"
+export type {
+  GoalPayloadV1,
+  GoalEnvelopeV1,
+  GoalStatus,
+  GoalReviewVerdict,
+} from "./goal-payload"
 export { Service as CodegraphRepo, layer as codegraphRepoLayer, defaultLayer as codegraphRepoDefaultLayer } from "./codegraph-repo"
 export { Service as CodegraphIndexer, layer as codegraphIndexerLayer, defaultLayer as codegraphIndexerDefaultLayer } from "./codegraph-indexer"
 export {
@@ -205,6 +220,23 @@ export {
   defaultLayer as subagentPlansRepoDefaultLayer,
   SubagentPlans,
 } from "./subagent-plans-repo"
+export {
+  Service as GoalRepo,
+  layer as goalRepoLayer,
+  defaultLayer as goalRepoDefaultLayer,
+} from "./goal-repo"
+export type { Goal } from "./goal-repo"
+export {
+  Service as GoalService,
+  layer as goalServiceLayer,
+  defaultLayer as goalServiceDefaultLayer,
+} from "./goal-service"
+export type {
+  SetGoalInput,
+  GoalEventEnvelope,
+  GoalConflictError,
+  Interface as GoalServiceInterface,
+} from "./goal-service"
 export {
   Service as SubagentReviewRequestsRepo,
   layer as subagentReviewRequestsRepoLayer,
