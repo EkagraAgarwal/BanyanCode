@@ -177,6 +177,8 @@ Banyan.systemMonitorDefaultLayer,
       Banyan.memoryRepoDefaultLayer,
       Banyan.memoryServiceDefaultLayer,
       Banyan.memoryProjectionDefaultLayer,
+      Banyan.goalRepoDefaultLayer,
+      Banyan.goalServiceDefaultLayer,
     ).pipe(
       Layer.provide(AppProcess.defaultLayer as Layer.Layer<unknown, unknown, never>),
       Layer.provide(

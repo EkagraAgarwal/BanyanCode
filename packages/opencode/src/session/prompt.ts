@@ -1592,7 +1592,7 @@ export const layer = Layer.effect(
       if (cmd.execute) {
         const messageID = MessageID.ascending()
         const ctx = yield* InstanceState.context
-        const result = yield* cmd.execute({ command: input.command, arguments: input.arguments })
+        const result = yield* cmd.execute({ command: input.command, arguments: input.arguments, sessionID: input.sessionID })
         yield* events.publish(Command.Event.Executed, {
           name: input.command,
           sessionID: input.sessionID,

@@ -77,6 +77,8 @@ export const banyanToolDepsLayer = Layer.mergeAll(
   ),
   Banyan.memoryRepoDefaultLayer.pipe(Layer.provide(databaseLayer)),
   Banyan.memoryServiceDefaultLayer.pipe(Layer.provide(databaseLayer)),
+  Banyan.goalRepoDefaultLayer.pipe(Layer.provide(databaseLayer)),
+  Banyan.goalServiceDefaultLayer.pipe(Layer.provide(databaseLayer)),
   meshCoordinatorLayer,
   systemMonitorLayer,
   subagentBusLayer,
