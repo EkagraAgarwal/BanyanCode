@@ -94,6 +94,13 @@ export function CodegraphProgress() {
         build.set({ status: "idle", done: 0, total: 0 })
       }, 5000)
       onCleanup(() => clearTimeout(timer))
+    } else if (buildStatus === "failed" || buildStatus === "stuck") {
+      // Give the user longer to read the error / stuck-state diagnostics
+      // before the notification disappears.
+      const timer = setTimeout(() => {
+        build.set({ status: "idle", done: 0, total: 0 })
+      }, 12000)
+      onCleanup(() => clearTimeout(timer))
     }
   })
 
@@ -187,9 +194,14 @@ export function CodegraphProgress() {
                 </text>
               )}
             </Show>
-            <Show when={build.state.status === "running" || derivedStatus() === "stuck"}>
+            <Show when={build.state.status === "running"}>
               <text fg={theme.textMuted} marginTop={1}>
                 Press Ctrl+C to cancel
+              </text>
+            </Show>
+            <Show when={derivedStatus() === "stuck"}>
+              <text fg={theme.warning} marginTop={1}>
+                Build stuck — press Ctrl+C to cancel
               </text>
             </Show>
           </Show>
