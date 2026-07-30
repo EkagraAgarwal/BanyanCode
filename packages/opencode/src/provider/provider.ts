@@ -1030,7 +1030,7 @@ export const Info = Schema.Struct({
 }).annotate({ identifier: "Provider" })
 export type Info = Types.DeepMutable<Schema.Schema.Type<typeof Info>>
 
-const DefaultModelIDs = Schema.Record(Schema.String, Schema.String)
+const DefaultModelIDs = Schema.Record(Schema.String, Schema.UndefinedOr(Schema.String))
 
 export const ListResult = Schema.Struct({
   all: Schema.Array(Info),
@@ -1062,7 +1062,10 @@ export function toPublicInfo(provider: Info): Info {
 }
 
 export function defaultModelIDs<T extends { models: Record<string, { id: string }> }>(providers: Record<string, T>) {
-  return mapValues(providers, (item) => sort(Object.values(item.models))[0].id)
+  return mapValues(providers, (item) => {
+    const ids = sort(Object.values(item.models))
+    return ids.length > 0 ? ids[0].id : undefined
+  })
 }
 
 export class ModelNotFoundError extends Schema.TaggedErrorClass<ModelNotFoundError>()("ProviderModelNotFoundError", {

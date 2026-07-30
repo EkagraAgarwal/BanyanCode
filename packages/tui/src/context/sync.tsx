@@ -64,7 +64,7 @@ export const {
     const [store, setStore] = createStore<{
       status: "loading" | "partial" | "complete"
       provider: Provider[]
-      provider_default: Record<string, string>
+      provider_default: Record<string, string | undefined>
       provider_next: ProviderListResponse
       console_state: ConsoleState
       provider_auth: Record<string, ProviderAuthMethod[]>
