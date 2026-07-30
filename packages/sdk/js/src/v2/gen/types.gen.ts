@@ -2243,6 +2243,10 @@ export type BanyanConfig = {
   banyancode_telegram_webhook_secret?: string
   banyancode_telegram_default_session?: string
   banyancode_max_subagents?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_goal_evaluator_model?: string
+  banyancode_max_goal_iterations?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_goal_max_time_ms?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_goal_auto_retry_on_block?: boolean
   banyancode_git_author_email?: string
   banyancode_codegraph_exclude_patterns?: Array<string>
   banyancode_codegraph_concurrency?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -6901,6 +6905,14 @@ export type GlobalPreflightResponses = {
       message: string
     }>
     derivation: "regex-v1" | "tree-sitter-v1" | "runtime-v1"
+    meta?: {
+      graphBuiltAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      graphVersion: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      graphCoverage: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalFiles: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalNodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalEdges: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
     generatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   }
 }
@@ -6946,6 +6958,14 @@ export type GlobalBlastRadiusResponses = {
     testsToRun: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     risk: "low" | "medium" | "high" | "unknown"
     graphStale?: boolean
+    meta?: {
+      graphBuiltAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      graphVersion: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      graphCoverage: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalFiles: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalNodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalEdges: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
     resolved: boolean
     resolutionDerivation?:
       | "tag-fallback"
@@ -7010,6 +7030,14 @@ export type GlobalSafeRenameResponses = {
       message: string
     }>
     preflight: unknown
+    meta?: {
+      graphBuiltAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      graphVersion: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      graphCoverage: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalFiles: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalNodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalEdges: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
   }
 }
 
