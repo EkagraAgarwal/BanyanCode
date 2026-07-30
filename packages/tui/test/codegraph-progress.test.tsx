@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import { CodegraphBuildProvider, CodegraphProgress, useCodegraphBuild } from "../src/component/codegraph-progress"
+import {
+  CodegraphBuildProvider,
+  CodegraphProgress,
+  deriveBuildStatus,
+  isBuildActive,
+  useCodegraphBuild,
+  type CodegraphBuildState,
+} from "../src/component/codegraph-progress"
 import { ThemeProvider } from "../src/context/theme"
 import { TuiConfigProvider } from "../src/config"
 import { KVProvider } from "../src/context/kv"
@@ -163,5 +170,38 @@ describe("CodegraphProgress", () => {
     } finally {
       app.renderer.destroy()
     }
+  })
+})
+
+describe("CodegraphProgress.isBuildActive", () => {
+  const baseState: CodegraphBuildState = { status: "idle", done: 0, total: 0 }
+
+  test("idle is not active", () => {
+    expect(isBuildActive(baseState, Date.now())).toBe(false)
+  })
+
+  test("running is active", () => {
+    expect(isBuildActive({ ...baseState, status: "running", lastProgressAt: Date.now() }, Date.now())).toBe(true)
+  })
+
+  test("running with stale lastProgressAt becomes stuck (active)", () => {
+    const stale = Date.now() - 60_000
+    expect(isBuildActive({ ...baseState, status: "running", lastProgressAt: stale }, Date.now())).toBe(true)
+  })
+
+  test("completed, failed, cancelled are not active; stuck IS active so the user can cancel it", () => {
+    const now = Date.now()
+    for (const status of ["completed", "failed", "cancelled"] as const) {
+      expect(isBuildActive({ ...baseState, status }, now)).toBe(false)
+    }
+    // stuck is a stuck running build: keep Ctrl+C bound to cancel it.
+    expect(isBuildActive({ ...baseState, status: "stuck" }, now)).toBe(true)
+  })
+
+  test("deriveBuildStatus maps running+stale to stuck", () => {
+    const now = Date.now()
+    expect(deriveBuildStatus({ ...baseState, status: "running", lastProgressAt: now - 31_000 }, now)).toBe("stuck")
+    expect(deriveBuildStatus({ ...baseState, status: "running", lastProgressAt: now - 5_000 }, now)).toBe("running")
+    expect(deriveBuildStatus({ ...baseState, status: "completed" }, now)).toBe("completed")
   })
 })

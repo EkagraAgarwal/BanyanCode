@@ -36,6 +36,25 @@ function init() {
 export type CodegraphBuildContext = ReturnType<typeof init>
 const ctx = createContext<CodegraphBuildContext>()
 
+const STUCK_THRESHOLD_MS = 30_000
+
+/** Derive the user-visible status from raw build state and current time. */
+export function deriveBuildStatus(
+  state: CodegraphBuildState,
+  now: number,
+): CodegraphBuildState["status"] {
+  if (state.status === "running" && state.lastProgressAt && now - state.lastProgressAt > STUCK_THRESHOLD_MS) {
+    return "stuck"
+  }
+  return state.status
+}
+
+/** True when a build is actively running or visibly stuck. */
+export function isBuildActive(state: CodegraphBuildState, now: number): boolean {
+  const status = deriveBuildStatus(state, now)
+  return status === "running" || status === "stuck"
+}
+
 export function CodegraphBuildProvider(props: ParentProps) {
   const value = init()
   return <ctx.Provider value={value}>{props.children}</ctx.Provider>
@@ -80,12 +99,7 @@ export function CodegraphProgress() {
     onCleanup(() => clearInterval(id))
   })
 
-  const derivedStatus = createMemo(() => {
-    if (build.state.status === "running" && build.state.lastProgressAt && now() - build.state.lastProgressAt > 30000) {
-      return "stuck" as const
-    }
-    return build.state.status
-  })
+  const derivedStatus = createMemo(() => deriveBuildStatus(build.state, now()))
 
   createEffect(() => {
     const buildStatus = derivedStatus()

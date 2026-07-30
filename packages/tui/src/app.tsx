@@ -60,7 +60,7 @@ import { PromptStashProvider } from "./component/prompt/stash"
 import { DialogAlert } from "./ui/dialog-alert"
 import { DialogConfirm } from "./ui/dialog-confirm"
 import { ToastProvider, useToast } from "./ui/toast"
-import { CodegraphBuildProvider, useCodegraphBuild, CodegraphProgress, type CodegraphBuildState } from "./component/codegraph-progress"
+import { CodegraphBuildProvider, useCodegraphBuild, CodegraphProgress, isBuildActive, type CodegraphBuildState } from "./component/codegraph-progress"
 import { isDefaultTitle } from "./util/session"
 import { KVProvider, useKV } from "./context/kv"
 import * as Model from "./util/model"
@@ -1076,6 +1076,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     })),
   )
 
+  const build = useCodegraphBuild()
+
   useBindings(() => ({
     commands: appCommands(),
   }))
@@ -1092,11 +1094,22 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   useBindings(() => ({
     mode: OPENCODE_BASE_MODE,
     enabled: () => {
+      // While a codegraph build is active or stuck, reserve Ctrl+C for the
+      // cancel keybind (see codegraph_build_cancel below). The cancel
+      // binding has its own enablement gate; this predicate only suppresses
+      // the app_exit path so Ctrl+C does not also fire app.exit.
+      if (isBuildActive(build.state, Date.now())) return false
       const current = promptRef.current
       if (!current?.focused) return true
       return current.current.input === ""
     },
     bindings: tuiConfig.keybinds.gather("app_exit", ["app.exit"]),
+  }))
+
+  useBindings(() => ({
+    mode: OPENCODE_BASE_MODE,
+    enabled: () => isBuildActive(build.state, Date.now()),
+    bindings: tuiConfig.keybinds.gather("codegraph_build_cancel", ["codegraph.cancel"]),
   }))
 
   event.on("tui.command.execute", (evt, { workspace }) => {
@@ -1145,7 +1158,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     })
   })
 
-  const build = useCodegraphBuild()
   event.subscribe((evt, { workspace }) => {
     if ((evt.type as string) !== "banyancode.codegraph.build") return
     // Accept events stamped with the current workspace, OR unscoped/global
