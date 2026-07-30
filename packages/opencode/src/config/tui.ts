@@ -166,12 +166,14 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
       acc.plugin_origins = plugins
     })
 
-  // Every config dir we may read from: global config dir, any `.opencode`
-  // folders between cwd and home, and OPENCODE_CONFIG_DIR.
-  const directories = yield* ConfigPaths.directories(ctx.directory)
-  yield* Effect.promise(() => migrateTuiConfig({ directories, cwd: ctx.directory }))
+  // Every config dir we may read from: BanyanCode's global config dir, any
+  // `.banyancode` folders between cwd and home, and BANYANCODE_CONFIG_DIR.
+  // BanyanCode never reads OpenCode's `.opencode/` / `~/.config/opencode/` —
+  // see AGENTS.md product-identity table.
+  const banyanDirs = yield* ConfigPaths.banyanDirectories(ctx.directory)
+  yield* Effect.promise(() => migrateTuiConfig({ directories: banyanDirs, cwd: ctx.directory }))
 
-  const projectFiles = Flag.OPENCODE_DISABLE_PROJECT_CONFIG ? [] : yield* ConfigPaths.files("tui", ctx.directory)
+  const projectFiles = Flag.BANYANCODE_DISABLE_PROJECT_CONFIG ? [] : yield* ConfigPaths.files("tui", ctx.directory)
 
   const acc: Acc = {
     result: {},
@@ -179,7 +181,7 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
   }
 
   // 1. Global tui config (lowest precedence).
-  for (const file of ConfigPaths.fileInDirectory(Global.Path.config, "tui")) {
+  for (const file of ConfigPaths.fileInDirectory(Global.Path.banyan.config, "tui")) {
     yield* mergeFile(acc, file)
   }
 
@@ -202,15 +204,17 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
     yield* mergeFile(acc, file)
   }
 
-  // 4. `.opencode` and `.banyancode` directories (and config dirs) discovered while
-  // walking up the tree. Also returned below so callers can install plugin
-  // dependencies from each location.
-  const dirs = unique(directories).filter(
-    (dir) => dir.endsWith(".opencode") || dir.endsWith(".banyancode") || dir === Flag.OPENCODE_CONFIG_DIR || dir === Flag.BANYANCODE_CONFIG_DIR,
+  // 4. `.banyancode` directories discovered while walking up the tree.
+  // Skip the global config dir (already loaded in step 1) so its settings
+  // don't overwrite closer project overrides. The full `banyanDirs` list is
+  // still returned below so callers can install plugin dependencies from
+  // each location.
+  const dirs = unique(banyanDirs)
+  const dirsForMerge = dirs.filter(
+    (dir) => dir !== Global.Path.banyan.config && dir !== Flag.BANYANCODE_CONFIG_DIR,
   )
 
-  for (const dir of dirs) {
-    if (!dir.endsWith(".opencode") && !dir.endsWith(".banyancode") && dir !== Flag.OPENCODE_CONFIG_DIR && dir !== Flag.BANYANCODE_CONFIG_DIR) continue
+  for (const dir of dirsForMerge) {
     for (const file of ConfigPaths.fileInDirectory(dir, "tui")) {
       yield* mergeFile(acc, file)
     }
