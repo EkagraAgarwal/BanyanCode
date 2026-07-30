@@ -1658,6 +1658,7 @@ export function Prompt(props: PromptProps) {
           >
             <textarea
               width="100%"
+              wrapMode="word"
               placeholder={placeholderText()}
               placeholderColor={theme.textMuted}
               textColor={leader() ? theme.textMuted : theme.text}

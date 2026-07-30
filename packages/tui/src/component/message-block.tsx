@@ -47,6 +47,7 @@ export function MessageBlock(props: MessageBlockProps) {
         paddingTop={compact() ? 0 : 1}
         paddingBottom={compact() ? 0 : 1}
         paddingLeft={2}
+        paddingRight={2}
         flexDirection="column"
         gap={compact() ? 0 : 1}
       >

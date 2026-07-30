@@ -296,6 +296,9 @@ export function Session() {
   const providers = createMemo(() => Model.index(sync.data.provider))
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
+  const scrollboxMinHeight = createMemo(() =>
+    Math.max(8, Math.floor(dimensions().height / 4)),
+  )
   const toast = useToast()
   const sdk = useSDK()
   const editor = useEditorContext()
@@ -1191,6 +1194,7 @@ export function Session() {
                     stickyScroll={true}
                     stickyStart="bottom"
                     flexGrow={1}
+                    minHeight={scrollboxMinHeight()}
                     scrollAcceleration={scrollAcceleration()}
                   >
                     <box height={1} />
