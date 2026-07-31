@@ -6,7 +6,7 @@ import path from "path"
 import { Banyan, isStale } from "../banyancode"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
-import type { CodegraphNode } from "../banyancode/types"
+import type { CodegraphFile, CodegraphNode } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -98,6 +98,13 @@ export const locationLayer = Layer.effectDiscard(
     const analyzer = yield* Banyan.CodegraphAnalyzer
     const readiness = yield* Banyan.CodegraphReadiness
 
+    // Closure-captured file index — `execute` populates it via `repo.listAllFiles()`
+    // and `toModelOutput` reads it. Single-fiber sequencing guarantees the setter
+    // runs before the reader (Effect's settlement pipeline runs execute → encode
+    // → toModelOutput sequentially within a fiber). Avoids lifting toModelOutput
+    // to Effect just to thread one map through.
+    const fileIndex: { byID?: ReadonlyMap<string, CodegraphFile> } = {}
+
     // Phase: auto-trigger a full or incremental codegraph build whenever the
     // code-find tool runs against an unbuilt or stale graph, so the agent
     // does not waste a turn on empty/incorrect data.
@@ -134,12 +141,15 @@ export const locationLayer = Layer.effectDiscard(
         input: Input,
         output: Output,
         toModelOutput: ({ output }) => {
-          const fallbackDerivation = output.resolvedDerivation
-            && !["name-exact", "qualified-split"].includes(output.resolvedDerivation)
+          // Only flag derivations that are actually fuzzy matches. tag-fallback
+          // is the resolver's step 1 (Context.Service tag lookup) — the
+          // highest-precision strategy, not a fallback.
+          const fuzzyDerivation = output.resolvedDerivation
+            && ["code-substring", "name-like", "fts-bm25"].includes(output.resolvedDerivation)
             ? output.resolvedDerivation
             : undefined
           const headerParts = [
-            fallbackDerivation ? `FALLBACK MATCH (derivation=${fallbackDerivation}) -- verify before treating as the exact symbol` : null,
+            fuzzyDerivation ? `FALLBACK MATCH (derivation=${fuzzyDerivation}) -- verify before treating as the exact symbol` : null,
             `intent=${output.intent}`,
             `dispatched=${output.dispatchedTo ?? "n/a"}`,
             `matches=${output.matches.length}`,
@@ -150,11 +160,22 @@ export const locationLayer = Layer.effectDiscard(
           if (output._diagnostic) headerParts.push(`diagnostic=${output._diagnostic}`)
           const header = headerParts.filter((p): p is string => p !== null).join(" ")
           const nodeList = output.matches.map((m) => m.node)
-          const matchesBlock = output.matches.length > 0 ? formatNodes(nodeList, "Matches") : "Matches: none."
-          const filesBlock = output.files.length > 0
-            ? `Files (${output.files.length}):\n${output.files.map((f) => `  ${f.path}`).join("\n")}`
-            : "Files: none."
-          return [{ type: "text", text: `${header}\n\n${matchesBlock}\n\n${filesBlock}` }]
+          const matchesBlock = output.matches.length > 0
+            ? formatNodes(nodeList, "Matches", fileIndex.byID)
+            : "Matches: none."
+          // Hide the Files block for non-find_file intents with no files —
+          // those intents don't try to populate files; printing "Files: none."
+          // makes a successful result look partial.
+          const showFiles = output.intent === "find_file" || output.files.length > 0
+          const filesBlock = !showFiles
+            ? ""
+            : output.files.length > 0
+              ? `Files (${output.files.length}):\n${output.files.map((f) => `  ${f.path}`).join("\n")}`
+              : "Files: none."
+          return [{
+            type: "text",
+            text: filesBlock ? `${header}\n\n${matchesBlock}\n\n${filesBlock}` : `${header}\n\n${matchesBlock}`,
+          }]
         },
         execute: (input, context) => {
           const limit = input.limit ?? 50
@@ -176,6 +197,13 @@ export const locationLayer = Layer.effectDiscard(
               })
 
               yield* ensureGraphReady
+
+              // Populate the file-index closure so toModelOutput can render
+              // real file paths (not fileID UUIDs) in match lines. Done once
+              // per execute; find_file reuses this list instead of calling
+              // listAllFiles() a second time.
+              const allFiles = yield* repo.listAllFiles()
+              fileIndex.byID = new Map(allFiles.map((f) => [f.id, f]))
 
               const metaRow = yield* repo.getMeta()
               const meta = metaRow
@@ -389,7 +417,8 @@ export const locationLayer = Layer.effectDiscard(
                 case "find_file": {
                   const target = input.target ?? ""
                   if (!target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_query", _diagnostic: "empty-target" as const }
-                  const allFiles = yield* repo.listAllFiles()
+                  // Reuses the `allFiles` closure populated at the top of
+                  // execute — avoids a second repo roundtrip.
                   const allNodes = yield* repo.listAllNodes()
 
                   const looksLikeFilename = /\.(md|mdx|ts|tsx|js|jsx|mjs|cjs|json|yaml|yml|toml|sql|py|pyw|go|rs|java|kt|c|cpp|cc|cxx|h|hpp|hh|css|html|sh|ps1|vue|svelte|mdx)$/i.test(target)
