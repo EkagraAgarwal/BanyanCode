@@ -196,37 +196,45 @@ export const TuiThreadCommand = cmd({
       }, 1000).unref?.()
 
       try {
-        const { Effect } = await import("effect")
+        const { Effect, ManagedRuntime } = await import("effect")
         type Runtime = Parameters<typeof TuiLogger.setLoggerRuntime>[0]
         const { run } = await import("../tui/layer")
         const { createLegacyTuiPluginHost } = await import("@/plugin/tui/runtime")
         const { TuiLogger } = await import("@opencode-ai/tui/util/logger")
+        const { Observability } = await import("@opencode-ai/core/observability")
+        const { memoMap } = await import("@opencode-ai/core/effect/memo-map")
+        const obsRt = ManagedRuntime.make(Observability.layer, { memoMap })
         TuiLogger.setLoggerRuntime({
-          runFork: (eff) => Effect.runFork(eff),
+          runFork: (eff) => obsRt.runFork(eff),
         } as Runtime)
-        await Effect.runPromise(
-          run({
-            url: transport.url,
-            async onSnapshot() {
-              const tui = writeHeapSnapshot("tui.heapsnapshot")
-              const server = await client.call("snapshot", undefined)
-              return [tui, server]
-            },
-            config,
-            pluginHost: createLegacyTuiPluginHost(),
-            directory: cwd,
-            fetch: transport.fetch,
-            events: transport.events,
-            args: {
-              continue: args.continue,
-              sessionID: args.session,
-              agent: args.agent,
-              model: args.model,
-              prompt,
-              fork: args.fork,
-            },
-          }),
-        )
+        try {
+          await Effect.runPromise(
+            run({
+              url: transport.url,
+              async onSnapshot() {
+                const tui = writeHeapSnapshot("tui.heapsnapshot")
+                const server = await client.call("snapshot", undefined)
+                return [tui, server]
+              },
+              config,
+              pluginHost: createLegacyTuiPluginHost(),
+              directory: cwd,
+              fetch: transport.fetch,
+              events: transport.events,
+              args: {
+                continue: args.continue,
+                sessionID: args.session,
+                agent: args.agent,
+                model: args.model,
+                prompt,
+                fork: args.fork,
+              },
+            }),
+          )
+        } finally {
+          await obsRt.dispose()
+          TuiLogger.setLoggerRuntime(undefined)
+        }
       } finally {
         await stop()
       }
