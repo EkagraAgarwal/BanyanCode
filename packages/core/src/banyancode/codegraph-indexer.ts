@@ -1,6 +1,6 @@
 export * as CodegraphIndexer from "./codegraph-indexer"
 
-import { Cause, Context, Effect, Layer, Queue, Ref, Schema } from "effect"
+import { Cause, Context, Effect, FileSystem, Layer, Queue, Ref, Schema } from "effect"
 import { createHash, randomUUID } from "node:crypto"
 import path from "path"
 import { FSUtil } from "../fs-util"
@@ -233,7 +233,7 @@ export const layer = Layer.effect(
       banyanignorePatterns: string[],
     ): Effect.Effect<{ files: CandidateFile[]; skippedBySize: number; skippedByGitignore: number; skippedByBanyanignore: number }> => {
       return Effect.gen(function* () {
-        const entries = yield* fs.readDirectoryEntries(dir).pipe(Effect.orDie)
+        const entries = yield* fs.readDirectoryEntries(dir).pipe(Effect.catch(() => Effect.succeed<FSUtil.DirEntry[]>([])))
         const files: CandidateFile[] = []
         let skippedBySize = 0
         let skippedByGitignore = 0
@@ -271,9 +271,11 @@ export const layer = Layer.effect(
             skippedByBanyanignore++
             continue
           }
-          const stats = yield* fs.stat(fullPath).pipe(Effect.orDie)
+          const statOpt = yield* fs.stat(fullPath).pipe(Effect.option)
+          if (statOpt._tag === "None") continue
+          const stats = statOpt.value
           if (stats.size > maxFileSizeBytes) {
-            yield* Effect.logWarning(`Skipping file exceeding size limit: ${path.relative(root, fullPath).replace(/\\/g, "/")} (${stats.size} bytes)`)
+            yield* Effect.logDebug(`Skipping file exceeding size limit: ${path.relative(root, fullPath).replace(/\\/g, "/")} (${stats.size} bytes)`)
             skippedBySize++
             continue
           }
@@ -403,6 +405,7 @@ type CandidateFile = {
   readonly sizeBytes: number
   readonly mtimeMs: number
 }
+type StatOutcome = { kind: "ok"; stats: FileSystem.File.Info } | { kind: "vanished" } | { kind: "unreadable" }
 
 const indexCandidateFileCore = (
   candidate: CandidateFile,
@@ -474,7 +477,7 @@ const indexCandidateFileCore = (
     }
 
     if (content.length > cfg.maxFileSizeBytes) {
-      yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars, limit: ${cfg.maxFileSizeBytes})`)
+      yield* Effect.logDebug(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars, limit: ${cfg.maxFileSizeBytes})`)
       yield* Ref.update(cfg.skippedRef, (n) => n + 1)
       yield* Ref.update(cfg.skippedTooLargeParseRef, (n) => n + 1)
       yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
@@ -498,7 +501,7 @@ const indexCandidateFileCore = (
     }
 
     if (content.split("\n").some((line) => line.length > 5000)) {
-      yield* Effect.logWarning(`Skipping minified/compiled file: ${relativePath}`)
+      yield* Effect.logDebug(`Skipping minified/compiled file: ${relativePath}`)
       yield* Ref.update(cfg.skippedRef, (n) => n + 1)
       yield* Ref.update(cfg.skippedMinifiedRef, (n) => n + 1)
       yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
@@ -1405,7 +1408,34 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           skippedInputs++
           continue
         }
-        const stats = yield* fs.stat(filePath).pipe(Effect.orDie)
+        const statOutcome = yield* fs.stat(filePath).pipe(
+          Effect.map((stats) => ({ kind: "ok", stats }) as const),
+          Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed({ kind: "vanished" } as const)),
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logDebug(`codegraph: stat failed, skipping ${relativePath}`, {
+                cause: Cause.pretty(cause),
+              })
+              return { kind: "unreadable" } as const
+            }),
+          ),
+        )
+        if (statOutcome.kind === "vanished") {
+          const existing = existingFilesByPath.get(filePath)
+          if (existing) {
+            removedFileIDs.add(existing.id)
+            yield* repo.deleteFile(existing.id)
+            existingFilesByPath.delete(filePath)
+          }
+          yield* dropTreeCacheFor(filePath)
+          skippedInputs++
+          continue
+        }
+        if (statOutcome.kind === "unreadable") {
+          skippedInputs++
+          continue
+        }
+        const stats = statOutcome.stats
         if (stats.type === "Directory") {
           // The watcher (Windows/Parcel) can deliver directory paths — sometimes
           // with a trailing separator — as a side effect of atomic-save rename
@@ -1417,7 +1447,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           continue
         }
         if (stats.size > maxFileSizeBytes) {
-          yield* Effect.logWarning(`Skipping large file (potential bundle): ${relativePath} (${stats.size} bytes, limit: ${maxFileSizeBytes})`)
+          yield* Effect.logDebug(`Skipping large file (potential bundle): ${relativePath} (${stats.size} bytes, limit: ${maxFileSizeBytes})`)
           const existing = existingFilesByPath.get(filePath)
           if (existing) {
             removedFileIDs.add(existing.id)
