@@ -135,7 +135,6 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(Ripgrep.defaultLayer),
   Layer.provideMerge(FetchHttpClient.layer),
   Layer.provideMerge(InstanceLayer.layer),
-  Layer.provideMerge(Observability.layer),
   Layer.provideMerge(Banyan.codegraphRepoDefaultLayer),
   Layer.provideMerge(Banyan.editPlannerDefaultLayer),
   Layer.provideMerge(Banyan.codegraphAnalyzerDefaultLayer),
@@ -209,6 +208,13 @@ Banyan.systemMonitorDefaultLayer,
       Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
     ) as unknown as Layer.Layer<never, never, never>,
   ),
+  // Observability MUST be the outermost dependency so Logger.CurrentLoggers is
+  // resolved before any BanyanCode or tool layer is constructed. Everything
+  // piped in via provideMerge above is built in the outer context, so placing
+  // Observability last means those builds see the file logger instead of
+  // Effect's defaultLogger — without it, log lines painted over the TUI frame
+  // because OpenTUI runs in externalOutputMode: "passthrough".
+  Layer.provideMerge(Observability.layer),
 )
 
 const rt = ManagedRuntime.make(AppLayer as never, { memoMap })
