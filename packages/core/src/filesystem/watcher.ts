@@ -31,6 +31,7 @@ export const Event = {
 }
 
 type FileChange = { file: string; event: "add" | "change" | "unlink" }
+type QueueEvent = { kind: "change"; change: FileChange } | { kind: "error"; cause: unknown }
 
 const watcher = lazy((): typeof import("@parcel/watcher") | undefined => {
   try {
@@ -94,11 +95,18 @@ export const layer = Layer.effect(
     // for event stamping. Replaces the per-event `Effect.runForkWith` that
     // spawned one fiber per Parcel update (banned per AGENTS.md lesson
     // "Hot-path callbacks that need Effect queue handoff").
-    const queue = yield* Queue.bounded<FileChange>(WATCH_QUEUE_CAPACITY)
+    const queue = yield* Queue.bounded<QueueEvent>(WATCH_QUEUE_CAPACITY)
     const subscriptions: ParcelWatcher.AsyncSubscription[] = []
     const drainFiber = yield* Effect.forkScoped(
       Stream.fromQueue(queue).pipe(
-        Stream.mapEffect((change) => events.publish(Event.Updated, change), { concurrency: 1 }),
+        Stream.mapEffect((event) => {
+          switch (event.kind) {
+            case "change":
+              return events.publish(Event.Updated, event.change)
+            case "error":
+              return Effect.logWarning("watcher parcel callback error", { cause: Cause.pretty(Cause.fail(event.cause)) })
+          }
+        }, { concurrency: 1 }),
         Stream.runDrain,
       ),
     )
@@ -112,7 +120,7 @@ export const layer = Layer.effect(
 
     const callback: ParcelWatcher.SubscribeCallback = (error, updates) => {
       if (error) {
-        Effect.runFork(Effect.logWarning("watcher parcel callback error", { cause: Cause.pretty(Cause.fail(error)) }))
+        Effect.runFork(Queue.offer(queue, { kind: "error", cause: error }).pipe(Effect.ignore))
         return
       }
       // One short fiber per Parcel batch (NOT per event). All updates from this
@@ -123,7 +131,7 @@ export const layer = Layer.effect(
           for (const update of updates) {
             const event: "add" | "change" | "unlink" =
               update.type === "create" ? "add" : update.type === "delete" ? "unlink" : "change"
-            yield* Queue.offer(queue, { file: update.path, event }).pipe(Effect.ignore)
+            yield* Queue.offer(queue, { kind: "change", change: { file: update.path, event } }).pipe(Effect.ignore)
           }
         }),
       )
