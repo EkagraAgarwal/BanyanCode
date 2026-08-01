@@ -22,6 +22,11 @@ describe("BanyanConfigService.updateAgentPrompt", () => {
     } catch {
       backupExists = false
     }
+    // Clear the global config so each test starts with a clean slate.
+    // afterEach restores the backup taken above.
+    try {
+      await fs.unlink(CONFIG_PATH)
+    } catch {}
     dbPath = path.join(os.tmpdir(), "banyan-config-prompts-test-" + Math.random().toString(36).slice(2) + ".sqlite")
   })
 
