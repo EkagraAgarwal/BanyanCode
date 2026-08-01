@@ -32,6 +32,20 @@ export const MAX_SUBAGENTS_LIMIT = 20
 // not read `opencode.json`; LSP settings belong here.
 export const LSP = ConfigLSPV1.Info
 
+// Phase 6 (Verifier): per-project shell-command overrides for the verifier
+// tools. All four slots default to a `bun run <name>` invocation that matches
+// the project's package.json scripts; the override is only consulted when the
+// user explicitly sets it. Commands run with the resolved projectRoot as cwd
+// — path traversal is checked at the tool boundary (see verifier-service.ts).
+export const Commands = Schema.Struct({
+  typecheck: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  test: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  lint: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  compile: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+}).annotate({ identifier: "BanyanCommands" })
+
+export type Commands = typeof Commands.Type
+
 export const Info = Schema.Struct({
   $schema: Schema.optional(Schema.String),
   banyancode_openai_compatible_endpoints: Schema.optional(Schema.Array(OpenAICompatibleEndpoint)),
@@ -80,6 +94,15 @@ export const Info = Schema.Struct({
   banyancode_lsp: Schema.optional(LSP).annotate({
     description:
       "Enable or configure BanyanCode's LSP servers. Omit or set to false to disable, true to enable built-ins, or an object to enable built-ins with overrides.",
+  }),
+  // Phase 6 (Verifier): per-project overrides for the typecheck/test/lint/
+  // compile shell commands the verifier tools invoke. When unset, each tool
+  // falls back to its default command (e.g. `bunx tsc --noEmit`). Commands
+  // are validated to be shell command strings; path traversal is checked at
+  // the tool boundary.
+  commands: Schema.optional(Commands).annotate({
+    description:
+      "Override the shell command each verifier tool runs. Each entry replaces the default (`bunx tsc --noEmit`, `bun test`, `bun run lint`, `bun build`); omit to keep the default.",
   }),
   // List of custom subagent definitions stored as markdown files in
   // .banyancode/agent/<name>.md. This field is metadata only —
