@@ -2,6 +2,7 @@ import { Effect, Layer } from "effect"
 import { CodegraphRepo } from "../codegraph-repo"
 import type { Interface as CodegraphRepoInterface } from "../codegraph-repo"
 import { resolveGraphTargetPure } from "../symbol-resolver"
+import { isTestFilePath } from "../codegraph-paths"
 import { bfsPure } from "./bfs"
 import { Service } from "./service"
 import type { Interface } from "./service"
@@ -833,6 +834,29 @@ export const layer = Layer.effect(
               }
             }
           }
+        }
+
+        // Caveat from v2 probes: test doubles (mock services, `makeMockRepo`,
+        // `Service` classes in `*.test.ts`) were polluting the entrypoints
+        // and direct callers list. Re-rank by file path so test files drop
+        // out of source-intent fields while remaining visible inside
+        // `relatedTests`. The path lookup is one round-trip over the union of
+        // fileIDs from both BFS result sets — bounded by `defaultLimit`.
+        const filterFileIDs = new Set<string>()
+        for (const n of directCallersSet.values()) filterFileIDs.add(n.fileID)
+        for (const n of transitiveSet.values()) filterFileIDs.add(n.fileID)
+        const filterFiles = yield* (repo as CodegraphRepoInterface).filesByIDs([...filterFileIDs])
+        const pathByID = new Map(filterFiles.map((f) => [f.id, f.path]))
+        const isTestFile = (id: string): boolean => {
+          const p = pathByID.get(id)
+          return p ? isTestFilePath(p) : false
+        }
+        const isSource = (n: CodegraphNode): boolean => !isTestFile(n.fileID)
+        for (const [id, node] of [...directCallersSet.entries()]) {
+          if (!isSource(node)) directCallersSet.delete(id)
+        }
+        for (const [id, node] of [...transitiveSet.entries()]) {
+          if (!isSource(node)) transitiveSet.delete(id)
         }
 
         const directCallers = [...directCallersSet.values()].slice(0, defaultLimit)
