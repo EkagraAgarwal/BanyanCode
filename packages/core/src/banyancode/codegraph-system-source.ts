@@ -116,6 +116,43 @@ function renderToolGuide(tools: ReadonlyArray<CodegraphToolDescription>): string
     sections.push(`### ${family.title}\n\n${entries.join("\n")}`)
   }
   if (sections.length === 0) return ""
+  const catalogFamilies: ReadonlyArray<{ readonly title: string; readonly lead: string; readonly ids: ReadonlyArray<string> }> = [
+    {
+      title: "Repo map",
+      lead:
+        "banyan_repo_map — token-budgeted outline of packages, entry points, and per-file symbols. " +
+        "Use this before reading files; pass `root`, `path`, or `query` to scope the call.",
+      ids: ["banyan_repo_map"],
+    },
+    {
+      title: "Tool search",
+      lead:
+        "banyan_tool_search — search the adapted catalog (hot / warm / cold). " +
+        "Use this to discover cold tools that are not mounted in the system prompt; " +
+        "default `tier='all'` also refreshes the hot tool view.",
+      ids: ["banyan_tool_search"],
+    },
+  ]
+  const catalogEntries: string[] = []
+  for (const family of catalogFamilies) {
+    for (const id of family.ids) {
+      const tool = byId.get(id)
+      if (!tool) continue
+      const description = tool.description.replace(/\s+/g, " ").trim()
+      catalogEntries.push(`- **${tool.id}** — ${description}`)
+    }
+  }
+  const catalogSection = catalogEntries.length === 0
+    ? ""
+    : [
+        "### Hot tool catalog",
+        "",
+        "These tools are mounted in the system prompt. Reach for them directly " +
+          "without calling `banyan_tool_search`. Cold tools (advanced/internal) are " +
+          "NOT inlined here — discover them with `banyan_tool_search(query)`.",
+        "",
+        catalogEntries.join("\n"),
+      ].join("\n")
   return [
     "## BanyanCode tool guide",
     "",
@@ -123,7 +160,7 @@ function renderToolGuide(tools: ReadonlyArray<CodegraphToolDescription>): string
     "match the registry; consult the tool list the model receives for full",
     "input/output schemas.",
     "",
-    sections.join("\n\n"),
+    [sections.join("\n\n"), catalogSection].filter((part) => part.length > 0).join("\n\n"),
   ].join("\n")
 }
 

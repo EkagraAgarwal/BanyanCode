@@ -124,6 +124,7 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
     settle: (call, context) =>
       Effect.gen(function* () {
         const telemetryOpt = yield* Effect.serviceOption(Banyan.ToolTelemetry)
+        const adaptedCatalogOpt = yield* Effect.serviceOption(Banyan.AdaptedCatalog)
         const toolID = call.name
         const sessionID = context.sessionID
         const agent = context.agent
@@ -234,31 +235,36 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
             ),
           ),
           Effect.tap((output) => {
+            const usage = adaptedCatalogOpt._tag === "Some" ? adaptedCatalogOpt.value.recordUsage(toolID) : Effect.void
             const outputStr = JSON.stringify(output)
             const outputSize = outputStr.length
             const fallbackUsed = (output && typeof output === "object" && "fallbackUsed" in output) ? !!(output as any).fallbackUsed : undefined
             const degraded = (output && typeof output === "object" && "degraded" in output) ? !!(output as any).degraded : undefined
-            return record({
-              kind: "executed",
-              toolID,
-              sessionID,
-              agent,
-              modelID,
-              toolCallID,
-              rawInput,
-              normalizedInput: decoded,
-              validatedInput: decoded,
-              repairs,
-              warnings,
-              startedAt,
-              finishedAt: Date.now(),
-              latencyMs: Date.now() - startedAt,
-              success: true,
-              outputSize,
-              fallbackUsed,
-              degraded,
-              retryNeeded,
-            })
+            return usage.pipe(
+              Effect.flatMap(() =>
+                record({
+                  kind: "executed",
+                  toolID,
+                  sessionID,
+                  agent,
+                  modelID,
+                  toolCallID,
+                  rawInput,
+                  normalizedInput: decoded,
+                  validatedInput: decoded,
+                  repairs,
+                  warnings,
+                  startedAt,
+                  finishedAt: Date.now(),
+                  latencyMs: Date.now() - startedAt,
+                  success: true,
+                  outputSize,
+                  fallbackUsed,
+                  degraded,
+                  retryNeeded,
+                }),
+              ),
+            )
           }),
           Effect.tapError((error) =>
             record({

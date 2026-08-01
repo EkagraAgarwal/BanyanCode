@@ -5,6 +5,7 @@ import { CodegraphSearchTool } from "../tool/codegraph-search-tool"
 import { CodegraphTools } from "../tool/codegraph"
 import { EditPlanTool } from "../tool/edit-plan"
 import { GoalTool } from "../tool/goal"
+import { LintTool } from "../tool/lint"
 import { MemoryCandidateTool } from "../tool/memory-candidate"
 import { MemoryTools } from "../tool/memory"
 import { MeshControlTool } from "../tool/mesh-control"
@@ -16,6 +17,10 @@ import { SharedMemoryTool } from "../tool/shared-memory"
 import { StructuralQueriesTool } from "../tool/structural-queries-tool"
 import { SubagentMessageTool } from "../tool/subagent-message"
 import { SystemStatusTool } from "../tool/system-status"
+import { TestTool } from "../tool/test"
+import { ToolSearchTool } from "../tool/tool-search"
+import { TypecheckTool } from "../tool/typecheck"
+import { RepoMapTool } from "../tool/repo-map"
 import { WebSearchFreeTool } from "../tool/websearch-free"
 
 export const BANYAN_PUBLIC_TOOL_IDS = [
@@ -24,6 +29,8 @@ export const BANYAN_PUBLIC_TOOL_IDS = [
   "blast_radius", "preflight", "safe_rename", "edit_plan", "websearch_free",
   "memory_store", "memory_recall", "memory_list", "memory_search", "memory_forget", "memory_candidate_emit",
   "shared_memory", "mesh_control", "mesh_subscribe", "subagent_message", "system_status", "goal",
+  "banyan_repo_map", "banyan_tool_search",
+  "banyan_typecheck", "banyan_test", "banyan_lint",
 ] as const
 
 export const BANYAN_INTERNAL_TOOL_IDS = [
@@ -39,6 +46,8 @@ export const banyanToolLayer = () => Layer.mergeAll(
   WebSearchFreeTool.layer, MemoryTools.locationLayer, MemoryCandidateTool.layer,
   SharedMemoryTool.layer, MeshControlTool.locationLayer, MeshSubscribeTool.locationLayer,
   SubagentMessageTool.layer, SystemStatusTool.layer, GoalTool.locationLayer,
+  RepoMapTool.locationLayer, ToolSearchTool.locationLayer,
+  TypecheckTool.locationLayer, TestTool.locationLayer, LintTool.locationLayer,
 )
 
 export * as BanyanToolsManifest from "./banyan-tools-manifest"

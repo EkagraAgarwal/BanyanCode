@@ -55,6 +55,25 @@ const repositoryIntelligenceLayer = Banyan.repositoryIntelligenceDefaultLayer.pi
   Layer.provide(databaseLayer),
 )
 
+const repoMapLayer = Banyan.repoMapServiceDefaultLayer.pipe(
+  Layer.provide(codegraphRepoLayer),
+)
+
+const adaptedCatalogLayer = Banyan.adaptedCatalogDefaultLayer.pipe(
+  Layer.provide(databaseLayer),
+)
+
+// Phase 6 (Verifier): the verifier service shell-outs to bun/bunx + reads
+// banyancode.json for command overrides + writes to verification_runs. Wire
+// the AppProcess + BanyanConfig + VerificationRepo deps here so the new
+// `banyan_typecheck` / `banyan_test` / `banyan_lint` tools register cleanly
+// alongside the rest of the BanyanToolCatalog.
+const verifierLayer = Banyan.verifierServiceDefaultLayer.pipe(
+  Layer.provide(AppProcess.defaultLayer),
+  Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+  Layer.provide(Banyan.verificationRepoDefaultLayer.pipe(Layer.provide(databaseLayer))),
+)
+
 export const banyanToolDepsLayer = Layer.mergeAll(
   PermissionBridge.layer.pipe(Layer.provide(Permission.defaultLayer)),
   FetchHttpClient.layer,
@@ -84,6 +103,9 @@ export const banyanToolDepsLayer = Layer.mergeAll(
   subagentBusLayer,
   codegraphBuildServiceLayer,
   codegraphReadinessLayer,
+  repoMapLayer,
+  adaptedCatalogLayer,
+  verifierLayer,
 )
 
 const registrationLayer = BanyanToolsManifest.banyanToolLayer().pipe(Layer.provide(banyanToolDepsLayer))

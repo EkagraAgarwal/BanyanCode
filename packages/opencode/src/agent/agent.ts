@@ -169,6 +169,8 @@ export const layer = Layer.effect(
           mesh_subscribe: "allow",
           subagent_message: "allow",
           system_status: "allow",
+          banyan_repo_map: "allow",
+          banyan_tool_search: "allow",
         })
 
         const user = Permission.fromConfig(cfg.permission ?? {})
@@ -286,6 +288,8 @@ export const layer = Layer.effect(
                 mesh_subscribe: "allow",
                 subagent_message: "allow",
                 system_status: "allow",
+                banyan_repo_map: "allow",
+                banyan_tool_search: "allow",
                 codegraph_query: "allow",
                 codegraph_search: "allow",
                 codegraph_callers: "allow",
@@ -395,6 +399,8 @@ export const layer = Layer.effect(
                 mesh_subscribe: "allow",
                 subagent_message: "allow",
                 system_status: "allow",
+                banyan_repo_map: "allow",
+                banyan_tool_search: "allow",
                 codegraph_query: "allow",
                 codegraph_callers: "allow",
                 codegraph_dependents: "allow",
@@ -589,6 +595,8 @@ export const layer = Layer.effect(
                 mesh_subscribe: "allow",
                 subagent_message: "allow",
                 system_status: "allow",
+                banyan_repo_map: "allow",
+                banyan_tool_search: "allow",
                 task: {
                   "*": "deny",
                   scout: "allow",
