@@ -374,6 +374,73 @@ export const locationLayer = Layer.effectDiscard(
                       dispatchedTo: "codegraph_impact",
                       _diagnostic: "empty-target" as const,
                     }
+                  // File-level impact: when the target looks like a filename or
+                  // contains a path separator, aggregate impact across every
+                  // symbol in that file. Previously the resolver tried to find
+                  // a single symbol whose name equals the filename, missed, and
+                  // returned `no-edges-found` even when the file had plenty of
+                  // callers (caveat #2 from the v2 probes).
+                  const looksLikeFilePath =
+                    /\.[a-z0-9]+$/i.test(input.target) || /[\\/]/.test(input.target)
+                  if (looksLikeFilePath) {
+                    const allFiles = yield* repo.listAllFiles()
+                    const allNodes = yield* repo.listAllNodes()
+                    const sep = /[\\/]/.test(input.target) ? `[\\${"/"}]` : ""
+                    const fileHits = allFiles.filter((f) => f.path.endsWith(`${sep}${input.target}`))
+                    const fileIDs = new Set(fileHits.map((f) => f.id))
+                    const symbolNodes = allNodes.filter(
+                      (n) => fileIDs.has(n.fileID) && n.kind !== "file",
+                    )
+                    if (symbolNodes.length === 0) {
+                      return {
+                        matches: [],
+                        files: [],
+                        meta,
+                        intent: input.intent,
+                        dispatchedTo: "codegraph_impact",
+                        _diagnostic: "target-not-resolved" as const,
+                      }
+                    }
+                    const aggregated = yield* Effect.gen(function* () {
+                      const seen = new Set<string>()
+                      const dependents: CodegraphNode[] = []
+                      const transitive: CodegraphNode[] = []
+                      for (const sym of symbolNodes) {
+                        const r = yield* analyzer.impact({ nodeID: sym.id }).pipe(
+                          Effect.matchEffect({
+                            onFailure: () =>
+                              Effect.succeed<{ dependents: CodegraphNode[]; transitive: CodegraphNode[] }>({
+                                dependents: [],
+                                transitive: [],
+                              }),
+                            onSuccess: (i) => Effect.succeed(i),
+                          }),
+                        )
+                        for (const n of [...r.dependents, ...r.transitive]) {
+                          if (!seen.has(n.id)) {
+                            seen.add(n.id)
+                            (dependents.length < limit ? dependents : transitive).push(n)
+                          }
+                        }
+                      }
+                      return { dependents, transitive }
+                    })
+                    const matches: { node: CodegraphNode; derivation: ResolutionDerivation }[] = [
+                      ...aggregated.dependents.map((n) => ({ node: n, derivation: "name-exact" as const })),
+                      ...aggregated.transitive.map((n) => ({ node: n, derivation: "name-exact" as const })),
+                    ].slice(0, limit)
+                    const isEmpty = matches.length === 0
+                    const _diagnostic = isEmpty ? ("no-edges-found" as const) : staleDiagnostic ?? undefined
+                    return {
+                      matches,
+                      files: [],
+                      meta,
+                      intent: input.intent,
+                      dispatchedTo: "codegraph_impact",
+                      resolvedDerivation: "name-exact" as const,
+                      ...(_diagnostic ? { _diagnostic } : {}),
+                    }
+                  }
                   const resolved = yield* resolveTarget(input.target)
                   if ("_tag" in resolved) {
                     return {
