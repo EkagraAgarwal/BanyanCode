@@ -4,12 +4,27 @@ const IMPORTS_REGEX = /import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["
 const EXPORT_CLASS_REGEX = /export\s+class\s+(\w+)(?:\s+extends\s+(\w+))?/g
 const CLASS_REGEX = /(?:^|\n)(?!export\s+)class\s+(\w+)(?:\s+extends\s+(\w+))?/g
 const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(/g
-const ARROW_CONST_REGEX = /(?:^|\n)(?:export\s+)?const\s+(\w+)\s*=\s*(async\s+)?(?:\([^)]*\)|[^=>\n]+)\s*=>/g
+// Allow leading whitespace so layer-internal `const start = ...` (4-space indented
+// inside `Layer.effect(...)`) is indexed. Previously anchored on `(?:^|\n)const`
+// which silently dropped every indented layer const.
+const ARROW_CONST_REGEX = /(?:^|\n)\s*(?:export\s+)?const\s+(\w+)\s*=\s*(async\s+)?(?:\([^)]*\)|[^=>\n]+)\s*=>/g
 const FACTORY_EXPORT_REGEX = /(?:^|\n)export\s+const\s+(\w+)\s*=\s*((?:Tool\.define|Layer\.effect|Layer\.succeed|Layer\.scoped|Context\.Service|Context\.Tag|Layer\.mergeAll)(?:<[^>]+>)?)\s*\(/g
-const INTERFACE_REGEX = /(?:^|\n)interface\s+(\w+)/g
+// Allow optional `export ` and indentation between the newline and the
+// `interface` keyword. Real BanyanCode services use
+// `export interface Interface { ... }` as the sibling type of
+// `Context.Service<Service, Interface>()`. Previously the anchored
+// `(?:^|\n)interface` regex silently skipped these declarations.
+const INTERFACE_REGEX = /(?:^|\n)\s*(?:export\s+)?interface\s+(\w+)/g
 const TYPE_REGEX = /(?:^|\n)type\s+(\w+)\s*=/g
 const EFFECT_FN_REGEX = /Effect\.fn\s*\(\s*["']([^"']+)["']\s*\)/
 const EFFECT_FN_CONST_REGEX = /const\s+(\w+)\s*=\s*Effect\.fn\s*\(\s*["']([^"']+)["']\s*\)/g
+// Match a single `readonly name(args): ReturnType` member line inside an
+// `interface { ... }` block. The Context.Service<Service, Interface>() pattern
+// puts all callable members in a sibling interface, so a regex pass on each
+// interface body produces the method nodes the analyzer needs. Allow `:`
+// before the `(` so signatures like `put: (key: string) => Effect.Effect<void>`
+// match (the `:` is required by the TS interface body syntax, not optional).
+const INTERFACE_MEMBER_REGEX = /(?:^|\n)\s*(?:readonly\s+)?(\w+)\s*[:\s]\s*\(([^)]*)\)\s*[:=]\s*([^\n;]+)/g
 
 function getTSNodeBody(content: string, matchIndex: number, matchText: string): { code: string; endLine: number } {
   const startLine = content.substring(0, matchIndex).split("\n").length
@@ -114,6 +129,46 @@ function extractClassMethods(classCode: string, classStartLine: number, fileID: 
   return methods
 }
 
+// Extract members of an `interface Interface { ... }` block. These become
+// callable nodes qualified by the enclosing Context.Service<Service, Interface>
+// class so blast_radius / preflight / code_find callers on
+// `CodegraphBuildService.start` resolve to a real method graph node instead
+// of returning 0 callers against the empty class body.
+function extractInterfaceMembers(
+  interfaceCode: string,
+  interfaceStartLine: number,
+  fileID: string,
+  interfaceName: string,
+): ParsedNode[] {
+  const members: ParsedNode[] = []
+  const seen = new Set<string>()
+  for (const match of interfaceCode.matchAll(INTERFACE_MEMBER_REGEX)) {
+    const name = match[1]
+    if (!name || name === interfaceName) continue
+    const params = match[2] ?? ""
+    const returnType = (match[3] ?? "").trim().replace(/\s*\{$/, "")
+    const localStart = interfaceCode.substring(0, match.index).split("\n").length
+    const startLine = interfaceStartLine + localStart - 1
+    const signature = `${name}(${params.trim()}): ${returnType}`.replace(/\s+/g, " ").trim()
+    // Members live on one line in real BanyanCode code; treat the line range
+    // as the same line. Multi-line signatures fall back to a 1-line window
+    // until tree-sitter migration lands.
+    const endLine = startLine
+    const id = `${fileID}:method:${interfaceName}:${name}:${startLine}`
+    if (seen.has(id)) continue
+    seen.add(id)
+    members.push({
+      id,
+      kind: "method",
+      name,
+      startLine,
+      endLine,
+      signature,
+    })
+  }
+  return members
+}
+
 export function parseTypeScript(content: string, fileID: string): ParseResult {
   const nodes: ParsedNode[] = []
   const edges: ParsedEdge[] = []
@@ -210,6 +265,7 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     const startLine = content.substring(0, match.index).split("\n").length
     const { code, endLine } = getTSNodeBody(content, match.index, match[0])
     nodes.push({ id: `${fileID}:type:${name}:${startLine}`, kind: "type", name, startLine, endLine, code })
+    nodes.push(...extractInterfaceMembers(code, startLine, fileID, name))
   }
 
   for (const match of content.matchAll(TYPE_REGEX)) {
