@@ -165,6 +165,7 @@ export const AppLayer = Layer.mergeAll(
     ),
   ),
   Layer.provideMerge(coreToolCatalogLayer),
+  Layer.provideMerge(Banyan.lspFreshnessServiceDefaultLayer),
   Layer.provideMerge(
     Layer.mergeAll(
       Banyan.codegraphAnalyzerDefaultLayer,

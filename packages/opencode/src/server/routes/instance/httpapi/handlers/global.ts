@@ -20,7 +20,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, PreflightInput, SafeRenameInput, WebSearchFreeInput } from "../groups/global"
+import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, LspStartInput, PreflightInput, SafeRenameInput, WebSearchFreeInput } from "../groups/global"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
 import { GraphMeta } from "@opencode-ai/core/banyancode/types"
@@ -328,6 +328,63 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       )
       return { started: true, root, dbPath }
     })
+
+const lspStartHandler = Effect.fn("GlobalHttpApi.lspStart")(function* (ctx: {
+  payload: typeof LspStartInput.Type
+}) {
+  // Defense in depth (per AGENTS.md "Path traversal in HTTP schemas"): the
+  // schema regex already constrains the input to absolute paths, but we also
+  // verify the resolved root does not escape the workspace root before
+  // starting the subscription. The Parcel watcher receives a long-lived
+  // filesystem handle, so a malicious root would otherwise pin the process
+  // to attacker-chosen paths for the lifetime of the session.
+  const worktree = (yield* InstanceState.context).worktree
+  const resolvedRoot = path.resolve(ctx.payload.root)
+  const resolvedWorktree = path.resolve(worktree)
+  const inside =
+    resolvedRoot === resolvedWorktree ||
+    resolvedRoot.startsWith(resolvedWorktree + path.sep) ||
+    resolvedRoot.startsWith(resolvedWorktree + "/")
+  if (!inside) {
+    return yield* Effect.fail(
+      new InvalidRequestError({
+        message: `lsp-start: root '${ctx.payload.root}' is outside the workspace root '${worktree}'`,
+      }),
+    )
+  }
+
+  // The subscription is long-lived. Run the kickoff in AppRuntime.runFork so
+  // the start call lives in the AppRuntime fiber (not the request scope).
+  // Without this the request teardown would interrupt the watcher before it
+  // ever emits a single event (per AGENTS.md "When wiring a new HTTP route
+  // that kicks off a long-running task").
+  AppRuntime.runFork(
+    Effect.gen(function* () {
+      const opt = yield* Effect.serviceOption(Banyan.LspFreshnessService)
+      if (Option.isNone(opt)) {
+        yield* Effect.logWarning("lsp-start: LspFreshnessService not in app runtime; check BANYANCODE_ENABLE")
+        return
+      }
+      yield* opt.value.start(resolvedRoot).pipe(
+        Effect.catchCause((cause) => Effect.logError("lsp-start: start() failed", { cause: Cause.pretty(cause) })),
+      )
+    }),
+  )
+  return { started: true, root: resolvedRoot }
+})
+
+const lspStopHandler = Effect.fn("GlobalHttpApi.lspStop")(function* () {
+  const opt = yield* Effect.serviceOption(Banyan.LspFreshnessService)
+  if (Option.isNone(opt)) {
+    return { stopped: false, reason: "LspFreshnessService not in app runtime" } as const
+  }
+  const running = yield* opt.value.isRunning()
+  if (!running) {
+    return { stopped: true, reason: "not_running" } as const
+  }
+  yield* opt.value.stop()
+  return { stopped: true } as const
+})
 
     const codegraphNodesHandler = Effect.fn("GlobalHttpApi.codegraphNodes")(function* () {
       const repo = yield* Banyan.CodegraphRepo
@@ -689,6 +746,8 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       .handle("codegraphForceKill", codegraphForceKillHandler)
       .handle("codegraphRemove", codegraphRemoveHandler)
       .handle("codegraphBuild", codegraphBuildHandler)
+      .handle("lspStart", lspStartHandler)
+      .handle("lspStop", lspStopHandler)
       .handle("codegraphNodes", codegraphNodesHandler)
       .handle("codegraphEdges", codegraphEdgesHandler)
       .handle("banyanAgentSave", banyanAgentSaveHandler)

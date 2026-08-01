@@ -3,6 +3,7 @@ export * as BanyanToolsManifest from "./banyan-tools-manifest"
 
 export { MemoryEntriesTable } from "./memory.sql"
 export { CodegraphFilesTable, CodegraphNodesTable, CodegraphEdgesTable } from "./codegraph.sql"
+export { CodegraphToolUsageTable } from "./codegraph-tool-usage.sql"
 export { CodegraphServiceTagsTable } from "./codegraph-service-tags.sql"
 export { CodegraphTracesTable } from "./codegraph-traces.sql"
 export { CodegraphMetaTable } from "./codegraph-meta.sql"
@@ -139,6 +140,10 @@ export type {
   GoalReviewVerdict,
 } from "./goal-payload"
 export { Service as CodegraphRepo, layer as codegraphRepoLayer, defaultLayer as codegraphRepoDefaultLayer } from "./codegraph-repo"
+export { Service as RepoMapService, layer as repoMapServiceLayer, defaultLayer as repoMapServiceDefaultLayer } from "./repo-map-service"
+export type { Interface as RepoMapServiceInterface, OverviewResult as RepoMapOverview, DetailResult as RepoMapDetail, SearchResult as RepoMapSearchResult } from "./repo-map-service"
+export { Service as AdaptedCatalog, layer as adaptedCatalogLayer, defaultLayer as adaptedCatalogDefaultLayer } from "./adapted-catalog"
+export type { Interface as AdaptedCatalogInterface, AdaptedTool, Tier as AdaptedToolTier } from "./adapted-catalog"
 export { Service as CodegraphIndexer, layer as codegraphIndexerLayer, defaultLayer as codegraphIndexerDefaultLayer } from "./codegraph-indexer"
 export {
   Service as CodegraphBuildService,
@@ -248,6 +253,23 @@ export { Service as SubagentBus, layer as subagentBusLayer, defaultLayer as suba
 export { Service as MeshCoordinator, layer as meshCoordinatorLayer, defaultLayer as meshCoordinatorDefaultLayer } from "./mesh-coordinator"
 export { Service as SystemMonitorService, defaultLayer as systemMonitorDefaultLayer } from "./system-monitor"
 export * as SystemMonitor from "./system-monitor"
+export { Service as VerificationRepo, layer as verificationRepoLayer, defaultLayer as verificationRepoDefaultLayer } from "./verification-repo"
+export type { VerificationRun, VerificationKind, VerificationStatus, VerificationSummary, RecordStartInput, RecordCompleteInput, FindRecentInput, FindByCacheKeyInput } from "./verification-repo"
+export { VerificationRunsTable } from "./verification.sql"
+export {
+  Service as VerifierService,
+  layer as verifierServiceLayer,
+  defaultLayer as verifierServiceDefaultLayer,
+} from "./verifier-service"
+export type {
+  VerifierResult,
+  VerifierResultStatus,
+  TypecheckInput,
+  TestInput,
+  LintInput,
+  CompileInput,
+  Interface as VerifierServiceInterface,
+} from "./verifier-service"
 export {
   Service as SubagentConsumer,
   layer as subagentConsumerLayer,
@@ -291,3 +313,37 @@ export type {
   Interface as CodegraphSystemSourceInterface,
 } from "./codegraph-system-source"
 export * as CodegraphSystemSourceNS from "./codegraph-system-source"
+export {
+  Service as LspInvalidationRepo,
+  layer as lspInvalidationRepoLayer,
+  defaultLayer as lspInvalidationRepoDefaultLayer,
+} from "./lsp-invalidation-repo"
+export type {
+  LspInvalidationKind,
+  InvalidationEvent,
+  RecordEventInput,
+  ClaimUnconsumedInput,
+  Interface as LspInvalidationRepoInterface,
+} from "./lsp-invalidation-repo"
+export * as LspFreshnessWatcher from "../lsp/lsp-freshness-watcher"
+export {
+  Service as LspFreshnessService,
+  layer as lspFreshnessServiceLayer,
+  defaultLayer as lspFreshnessServiceDefaultLayer,
+  LspFreshnessEvent,
+} from "../lsp/lsp-freshness-service"
+export type {
+  LspFreshnessStatus,
+  LspFreshnessStreamEvent,
+  Interface as LspFreshnessServiceInterface,
+} from "../lsp/lsp-freshness-service"
+export {
+  Service as LspFreshnessSystemSource,
+  layer as lspFreshnessSystemSourceLayer,
+  defaultLayer as lspFreshnessSystemSourceDefaultLayer,
+  register as registerLspFreshnessSystemSource,
+} from "../lsp/lsp-freshness-system-source"
+export type {
+  LspFreshnessSystemInput,
+  Interface as LspFreshnessSystemSourceInterface,
+} from "../lsp/lsp-freshness-system-source"
