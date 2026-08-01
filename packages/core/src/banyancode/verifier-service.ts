@@ -46,6 +46,8 @@ export interface VerifierResult {
   readonly cacheHit: boolean
   /** Last `RAW_OUTPUT_BYTE_LIMIT` bytes of stdout+stderr. May be empty. */
   readonly rawOutput: string | undefined
+  /** Exact shell command that was (or would be) executed for this run. */
+  readonly command: string
 }
 
 export interface TypecheckInput {
@@ -273,6 +275,7 @@ export const layer = Layer.effect(
             durationMs: cached.durationMs ?? 0,
             cacheHit: true,
             rawOutput: cached.rawOutput,
+            command: commandDescription,
           }
         }
 
@@ -292,13 +295,22 @@ export const layer = Layer.effect(
           rawOutput,
         })
 
-        return { kind, target, status, summary, durationMs: result.durationMs, cacheHit: false, rawOutput }
+        return {
+          kind,
+          target,
+          status,
+          summary,
+          durationMs: result.durationMs,
+          cacheHit: false,
+          rawOutput,
+          command: commandDescription,
+        }
       })
 
     const typecheck: Interface["typecheck"] = (input) =>
       Effect.gen(function* () {
         const projectRoot = path.resolve(input.projectRoot)
-        const target = input.path ?? projectRoot
+        const target = input.path !== undefined ? path.resolve(projectRoot, input.path) : projectRoot
         const { command, args, cacheKeySalt } = yield* Effect.promise(() => resolveTypecheckCommand(projectRoot))
         const timeoutMs: Duration.Input =
           input.timeoutMs !== undefined ? Duration.millis(input.timeoutMs) : DEFAULT_TYPECHECK_TIMEOUT_MS
@@ -308,7 +320,11 @@ export const layer = Layer.effect(
     const test: Interface["test"] = (input) =>
       Effect.gen(function* () {
         const projectRoot = path.resolve(input.projectRoot)
-        const resolvedPath = path.resolve(input.path)
+        // Resolve against projectRoot, not cwd — the tool layer's containment
+        // check validated path.resolve(projectRoot, input.path). Resolving
+        // against process.cwd() here would execute a different file whenever
+        // projectRoot !== cwd, bypassing that check.
+        const resolvedPath = path.resolve(projectRoot, input.path)
         const { command, args } = resolveTestCommand({ ...input, path: resolvedPath })
         const timeoutMs: Duration.Input =
           input.timeoutMs !== undefined ? Duration.millis(input.timeoutMs) : DEFAULT_TEST_TIMEOUT_MS
@@ -318,7 +334,7 @@ export const layer = Layer.effect(
     const lint: Interface["lint"] = (input) =>
       Effect.gen(function* () {
         const projectRoot = path.resolve(input.projectRoot)
-        const target = input.path ?? projectRoot
+        const target = input.path !== undefined ? path.resolve(projectRoot, input.path) : projectRoot
         const cfg = yield* config.get()
         const override = cfg.commands?.lint
         const { command, args } = yield* Effect.promise(() => resolveLintCommand(projectRoot, override))
@@ -330,7 +346,9 @@ export const layer = Layer.effect(
     const compile: Interface["compile"] = (input) =>
       Effect.gen(function* () {
         const projectRoot = path.resolve(input.projectRoot)
-        const resolvedPath = path.resolve(input.path)
+        // Same as test: resolve against projectRoot so the tool-layer
+        // containment check and the executed path agree.
+        const resolvedPath = path.resolve(projectRoot, input.path)
         const { command, args } = resolveCompileCommand({ ...input, path: resolvedPath })
         const timeoutMs: Duration.Input =
           input.timeoutMs !== undefined ? Duration.millis(input.timeoutMs) : DEFAULT_COMPILE_TIMEOUT_MS

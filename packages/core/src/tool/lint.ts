@@ -129,7 +129,7 @@ export const makeLintTool = (deps: {
             projectRoot,
             ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
           })
-          const limit = input.limit ?? 0
+          const limit = input.limit ?? 65536
           const rawOutput =
             limit === 0
               ? undefined
@@ -142,7 +142,7 @@ export const makeLintTool = (deps: {
             durationMs: result.durationMs,
             cacheHit: result.cacheHit,
             ...(rawOutput !== undefined ? { rawOutput } : {}),
-            command: "bun run lint",
+            command: result.command,
           }
         }),
       ).pipe(

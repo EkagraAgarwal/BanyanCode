@@ -139,7 +139,7 @@ export const makeTestTool = (deps: {
             ...(input.framework !== undefined ? { framework: input.framework } : {}),
             ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
           })
-          const limit = input.limit ?? 0
+          const limit = input.limit ?? 65536
           const rawOutput =
             limit === 0
               ? undefined

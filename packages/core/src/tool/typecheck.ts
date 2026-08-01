@@ -137,7 +137,7 @@ export const makeTypecheckTool = (deps: {
             projectRoot,
             ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
           })
-          const limit = input.limit ?? 0
+          const limit = input.limit ?? 65536
           const rawOutput =
             limit === 0
               ? undefined
