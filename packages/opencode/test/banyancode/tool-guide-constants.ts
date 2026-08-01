@@ -34,6 +34,15 @@ export const REQUIRED_TOOLS = [
   "mesh_subscribe",
   "subagent_message",
   "system_status",
+  "banyan_repo_map",
+  "banyan_tool_search",
+  "banyan_typecheck",
+  "banyan_test",
+  "banyan_lint",
+  "lsp_definition",
+  "lsp_references",
+  "lsp_hover",
+  "lsp_diagnostics",
 ] as const
 
 // Internal-only helpers that MUST NEVER appear in the rendered guide.
