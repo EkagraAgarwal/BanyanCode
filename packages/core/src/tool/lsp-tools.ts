@@ -125,7 +125,7 @@ const lookupFileBySuffix = (
     return files.find((f) => f.path === target || f.path.endsWith(`/${target}`))
   })
 
-const lookupSymbolAtPosition = (
+export const lookupSymbolAtPosition = (
   repo: CodegraphRepoInterface,
   target: string,
   line: number,
