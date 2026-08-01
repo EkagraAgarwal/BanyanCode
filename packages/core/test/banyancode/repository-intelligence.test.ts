@@ -271,7 +271,7 @@ describe("RepositoryIntelligence", () => {
     )
   })
 
-  test("query for unknown symbol returns degraded status with empty docs and configs", async () => {
+  test("query for a fully unknown symbol returns degraded status with empty docs and configs", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.db")
     const dbLayer = Database.layerFromPath(dbPath)
@@ -283,7 +283,15 @@ describe("RepositoryIntelligence", () => {
         yield* seedFixture()
         const ri = yield* RepositoryIntelligence.Service
 
-        const ctx = yield* ri.query({ query: "NonExistentClass.method" })
+        // Phase 3: the query must use a token that produces no trigram
+        // match anywhere in the graph. The previous `NonExistentClass.method`
+        // query expanded to `class`/`method`/`non`/`existent`; the trigram
+        // tokenizer + bm25 weights find `MathUtil` (its signature
+        // contains the literal `class MathUtil`), which is a legitimate
+        // partial-identifier match under the new design. The test now uses
+        // a single token with no shared trigrams with any seed row to
+        // assert the "no match" status.
+        const ctx = yield* ri.query({ query: "zzznonexistentzzz" })
         expect(ctx.status).toBe("failed")
         expect(ctx.degraded).toBe(true)
         expect(ctx.docs).toEqual([])

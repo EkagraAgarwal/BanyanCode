@@ -18,6 +18,54 @@ export type FTSResult = CodegraphNode & { readonly bm25: number }
 export const MAX_NODES_PER_INSERT = 1000
 const MAX_EDGES_PER_INSERT = 5000
 
+// Phase 3 query expansion: split an identifier-style query into its
+// constituent lowercase tokens so a single user query like
+// `CodegraphBuildService` (or `codegraph-build-service`, or `codegraph
+// build service`) maps to FTS5 OR-terms that match either the full
+// identifier or any of its sub-tokens. The trigram tokenizer on the FTS5
+// table will already partial-match on 3-character substrings; this
+// expansion is what makes `query: codegraph` find the row whose name is
+// `CodegraphBuildService` even when the user types each word separately
+// (e.g. `codegraph build service`).
+//
+// Splits applied (in order):
+//   1. Whitespace — natural word boundary.
+//   2. camelCase / PascalCase — `[A-Z][a-z]` and `[^A-Za-z0-9][A-Z]`
+//      boundaries. The first regex covers `BuildService` → `Build Service`.
+//      The second covers `XMLParser` → `XML Parser` and `codegraphBuild`
+//      → `codegraph Build`.
+//   3. Non-alphanumeric runs (`_`, `-`, `.`, etc.) — they all become
+//      separators, matching how engineers mentally parse snake_case and
+//      kebab-case.
+//
+// Output is lowercased, de-duped, and short tokens (< 3 chars) are
+// dropped to align with trigram's 3-character minimum token length.
+export const expandQueryToTokens = (query: string): string[] => {
+  const out: string[] = []
+  const seen = new Set<string>()
+  // Step 1: whitespace split. Subsequent splits operate on each piece.
+  const whitespacePieces = query.split(/\s+/).filter(Boolean)
+  for (const piece of whitespacePieces) {
+    // Step 2: camelCase boundary split. Insert a space between a lowercase
+    // or digit and an uppercase, and between two uppercase letters when
+    // followed by a lowercase (handles `XMLParser` → `XML Parser`).
+    const camelSplit = piece
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    // Step 3: non-alphanumeric runs become separators. `_-./:` etc. all
+    // drop out; alphanumerics remain.
+    const tokens = camelSplit.split(/[^A-Za-z0-9]+/).filter(Boolean)
+    for (const t of tokens) {
+      const lower = t.toLowerCase()
+      if (lower.length < 3) continue
+      if (seen.has(lower)) continue
+      seen.add(lower)
+      out.push(lower)
+    }
+  }
+  return out
+}
+
 const extractServiceTag = (code: string, nodeID: string, fileID: string): typeof CodegraphServiceTagsTable.$inferInsert | null => {
   // Match Context.Service<...>()("tag") or Context.Service<...>( ) ( "tag" ).
   // The non-greedy match for the generic argument list is bounded by a balanced
@@ -674,9 +722,15 @@ export const layer = Layer.effect(
       limit?: number
     }) {
       const limit = input.limit ?? 50
-      const sanitized = input.query.replace(/['"]/g, " ").trim()
+      // FTS5 reserved chars that would either terminate the MATCH expression
+      // (`"`, `'`) or are operators in the FTS5 mini-language (`(`, `)`, `*`,
+      // `:`, `^`, `-`, `+`, `NEAR`, `AND`, `OR`, `NOT`). Strip them defensively
+      // so a query like `function 'drop table' --` cannot corrupt the FTS5
+      // parser and cannot be used as a probe for unindexed columns.
+      const sanitized = input.query.replace(/["'()*:\-]/g, " ").trim()
       if (!sanitized) return []
-      const tokens = sanitized.split(/\s+/).filter(Boolean)
+      const tokens = expandQueryToTokens(sanitized)
+      if (tokens.length === 0) return []
       const ftsQuery = tokens.map((t) => `"${t}"`).join(" OR ")
       if (!ftsQuery) return []
       type FTSRow = {
@@ -690,9 +744,38 @@ export const layer = Layer.effect(
         code: string | null
         bm25: number
       }
+      // Phase 3: column-weighted bm25 ranking. In FTS5's `bm25(table, w1, w2, ...)`
+      // each `wi` is the weight of the i-th column in the BM25 sum; higher
+      // weights produce a more-negative bm25 (= better rank) when a term
+      // matches that column. The chosen triple (name=10.0, signature=3.0,
+      // code=1.0) gives a name-only hit the strongest boost, a signature-
+      // only hit a moderate boost, and a code-only hit the smallest boost.
+      //
+      // Why the Plan-3 weights are reversed from a naive "lower weight =
+      // better" reading: FTS5's bm25() returns the NEGATIVE of the weighted
+      // TF-IDF sum, so multiplying a column by 10 makes its matches more
+      // negative (better) by 10x, not worse. Verified empirically against
+      // the bundled libsql FTS5 build (see test/banyancode/fts-bm25-weights.test.ts).
+      //
+      // Rationale:
+      //   - `name` is the most authoritative signal — when an identifier
+      //     string appears in `codegraph_nodes.name`, the user almost
+      //     certainly means that symbol. weight=10.0 (strongest boost).
+      //   - `signature` is the second most authoritative — method
+      //     declarations live in the signature column when the indexer
+      //     strips the body. weight=3.0 keeps signature-only hits well ahead
+      //     of code-only hits but well behind a real name match.
+      //   - `code` is the noisiest — a word like "function" or "return" is
+      //     in every code body. weight=1.0 makes code-only hits the weakest
+      //     signal so they don't drown the symbol hits.
+      //
+      // ORDER BY bm25 ASC because FTS5's bm25() returns more-negative values
+      // for better matches (negated sum of term-frequency / inverse-document-
+      // frequency contributions, per the SQLite docs).
       const rows: FTSRow[] = yield* db
         .all<FTSRow>(sql`
-          SELECT n.id, n.file_id, n.kind, n.name, n.signature, n.start_line, n.end_line, n.code, bm25(codegraph_fts) AS bm25
+          SELECT n.id, n.file_id, n.kind, n.name, n.signature, n.start_line, n.end_line, n.code,
+                 bm25(codegraph_fts, 10.0, 3.0, 1.0) AS bm25
           FROM codegraph_fts
           INNER JOIN codegraph_nodes n ON n.rowid = codegraph_fts.rowid
           WHERE codegraph_fts MATCH ${ftsQuery}
@@ -1273,8 +1356,9 @@ export const layer = Layer.effect(
           yield* tx.run(sql`DELETE FROM \`codegraph_fts\``)
 
           yield* tx.run(sql`
-            INSERT INTO \`codegraph_fts\`(\`rowid\`, \`name\`, \`code\`)
-            SELECT \`rowid\`, \`name\`, \`code\` FROM \`codegraph_nodes\` WHERE \`code\` IS NOT NULL
+            INSERT INTO \`codegraph_fts\`(\`rowid\`, \`name\`, \`signature\`, \`code\`)
+            SELECT \`rowid\`, \`name\`, COALESCE(\`signature\`, ''), COALESCE(\`code\`, '')
+            FROM \`codegraph_nodes\`
           `)
 
           const countResult = yield* tx.get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM \`codegraph_fts\``)

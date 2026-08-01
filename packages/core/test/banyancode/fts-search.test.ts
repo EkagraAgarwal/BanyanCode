@@ -24,7 +24,7 @@ const testLayer = Layer.mergeAll(
 )
 
 describe("fts-search", () => {
-  test("single-token exact match does NOT use FTS (no fts-fallback diagnostic)", async () => {
+  test("single-token exact match uses FTS (Phase 3: no isMultiToken gate)", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.db")
     const dbLayer = Database.layerFromPath(dbPath)
@@ -41,9 +41,14 @@ describe("fts-search", () => {
         const ri = yield* RepositoryIntelligence.Service
         const ctx = yield* ri.query({ query: "helper" })
 
+        // Phase 3: FTS runs for ALL queries (single + multi-token). The
+        // trigram tokenizer + bm25 column weights added in
+        // 20260801120000_codegraph_fts_tokenize make single-word queries
+        // rank the right symbol without the old noise floor, so the
+        // pre-Phase-3 `isMultiToken` gate is gone.
         const ftsDiag = ctx.diagnostics?.find((d) => d.kind === "fts-fallback")
-        expect(ftsDiag).toBeUndefined()
-        expect(ctx.searchDerivation).toBeUndefined()
+        expect(ftsDiag).toBeDefined()
+        expect(ctx.searchDerivation).toBe("fts-bm25")
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })

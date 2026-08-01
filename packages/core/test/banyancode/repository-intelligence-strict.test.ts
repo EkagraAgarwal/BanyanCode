@@ -70,7 +70,13 @@ describe("RepositoryIntelligence Strict Diagnostic Policy", () => {
         expect(ctx.fallbackUsed).toBe(true)
         expect(ctx.symbols.length).toBe(1)
         expect(ctx.symbols[0]!.name).toBe("Service")
-        expect(ctx.diagnostics).toEqual([])
+        // Phase 3: FTS now runs for ALL queries (no isMultiToken gate),
+        // so the `MemoryRepo` query emits an `fts-fallback` diagnostic
+        // even though the resolver's tag-fallback path also matched.
+        // The diagnostic is informational; the symbol result and
+        // fallbackUsed flag are still the contract under test.
+        const ftsDiag = ctx.diagnostics?.find((d) => d.kind === "fts-fallback")
+        expect(ftsDiag).toBeDefined()
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })

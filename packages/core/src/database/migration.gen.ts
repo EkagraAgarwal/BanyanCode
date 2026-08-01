@@ -16,5 +16,6 @@ export const migrations = (
     import("./migration/20260724000000_subagent_review_requests"),
     import("./migration/20260727161000_codegraph_file_stat_cache"),
     import("./migration/20260729000000_subagent_goals"),
+    import("./migration/20260801120000_codegraph_fts_tokenize"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

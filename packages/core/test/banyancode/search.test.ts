@@ -239,7 +239,14 @@ describe("Search service", () => {
         const search = yield* Search.Service
         const results = yield* search.searchBM25("build", 10)
         expect(results.length).toBeGreaterThan(0)
-        expect(results[0]?.node.name).toBe("buildService")
+        // Phase 3: bm25 weights (10, 3, 1) + document-length normalization
+        // can promote a shorter name (buildInfo, 9 chars) over a longer one
+        // (buildService, 12 chars) when both contain the query trigrams in
+        // their name column. We only assert that BOTH rank (bm25 returns
+        // the trigram hits) and that bm25 signals are populated.
+        const names = results.map((r) => r.node.name)
+        expect(names).toContain("buildService")
+        expect(names).toContain("buildInfo")
         expect(results[0]?.signals.bm25).toBeDefined()
         expect((results[0]?.score ?? 0) > 0).toBe(true)
       }).pipe(Effect.provide(SearchLayer), Effect.provide(CodegraphRepo.defaultLayer), Effect.provide(dbLayer), Effect.scoped),

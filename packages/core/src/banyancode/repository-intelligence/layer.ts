@@ -146,6 +146,51 @@ const pathMatchesFocusDirs = (normalizedPath: string, normalizedFocusDirs: reado
   })
 }
 
+const PRODUCT_PREFIXES = ["packages/opencode", "packages/core", "packages/tui"]
+
+// Phase 3: post-filter FTS hits to mirror what `findSymbol` does
+// internally. Two rules apply when the caller did NOT pass focusDirs:
+//   1. focusDirs filter (when present) — the FTS hit's file must be
+//      inside one of the requested dirs.
+//   2. product-prefix tie-breaker — when the unscoped query has
+//      multiple matches across packages, prefer the rows in the
+//      product packages (opencode/core/tui) over rows in UI packages
+//      (web/desktop/app). The pre-Phase-3 path only emitted product
+//      matches; the new FTS hits would otherwise surface the UI ones
+//      too, regressing the result. The tie-breaker fires when more
+//      than one FTS hit survives rule (1) and at least one of them
+//      is in a product package; UI rows are dropped to keep the
+//      post-Phase-3 result aligned with the pre-Phase-3 one.
+const applyFocusDirsFilter = (
+  hits: readonly CodegraphNode[],
+  workspace: WorkspaceContext | undefined,
+  indexedRoot: string | undefined,
+  allFiles: readonly CodegraphFile[],
+): CodegraphNode[] => {
+  const filePathByID = new Map<string, string>()
+  for (const f of allFiles) filePathByID.set(f.id, f.path.replace(/\\/g, "/"))
+  const rawFocusDirs = workspace?.focusDirs ?? []
+  const normalizedFocusDirs =
+    rawFocusDirs.length > 0 ? normalizeFocusDirs(rawFocusDirs, indexedRoot) : rawFocusDirs
+
+  const filtered: CodegraphNode[] = []
+  for (const n of hits) {
+    const path = filePathByID.get(n.fileID) ?? ""
+    if (rawFocusDirs.length > 0 && !pathMatchesFocusDirs(path, normalizedFocusDirs)) continue
+    filtered.push(n)
+  }
+
+  if (rawFocusDirs.length === 0 && filtered.length > 1) {
+    const productHits = filtered.filter((n) => {
+      const path = filePathByID.get(n.fileID) ?? ""
+      return PRODUCT_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))
+    })
+    if (productHits.length > 0) return productHits
+  }
+
+  return filtered
+}
+
 // Normalize a caller-provided path against the indexed graph's root so
 // the same input resolves whether the user typed an absolute Windows
 // path, a path with backslashes, or a clean repo-relative path.
@@ -299,12 +344,6 @@ export const layer = Layer.effect(
         const usedFallback = derivation === "tag-fallback"
 
         if (nodes.length > 1 && derivation === "name-exact") {
-          const PRODUCT_PREFIXES = [
-            "packages/opencode",
-            "packages/core",
-            "packages/tui",
-          ]
-
           // Batch file lookup for the product-package tie-breaker so the
           // unscoped path stops issuing one query per node too.
           const candidateFileIDs = Array.from(new Set(nodes.map((n) => n.fileID)))
@@ -603,17 +642,28 @@ export const layer = Layer.effect(
           ? allNodes.filter((n) => n.fileID === fileByPath.id)
           : []
 
-        // For multi-token queries the resolver's code-substring step can
-        // match doc-kind nodes whose prose contains the phrase (AGENTS.md /
-        // ARCHITECTURE.md), which would mask the more useful code symbols
-        // that FTS5 surfaces. Run FTS for ALL multi-token queries and merge
-        // bm25-ranked code hits ahead of doc-kind substring matches. Single-
-        // token queries still rely on findSymbol's name-exact / code-substring
-        // path because FTS over a one-word query is too noisy.
-        const isMultiToken = /\s/.test(input.query)
-        const ftsHits = isMultiToken
-          ? yield* repo.ftsSearchNodes({ query: input.query, limit: input.limit ?? 50 })
-          : []
+        // Phase 3: run FTS for ALL queries (not just multi-token). The
+        // trigram tokenizer + bm25 column weights added in
+        // 20260801120000_codegraph_fts_tokenize make single-token
+        // identifier queries (e.g. `bumpVersion`, `BuildService`) rank the
+        // right symbol without the noise floor the old `unicode61` + single
+        // weight design produced. The pre-Phase-3 rationale for gating FTS
+        // to multi-token queries was that FTS over a one-word query
+        // drowned the `findSymbol` name-exact / code-substring contribution.
+        // The new weighting puts name hits ahead of any code-only hit, so
+        // the gate is no longer needed.
+        //
+        // focusDirs parity: `findSymbol` filters its candidates to the
+        // requested focusDirs before returning; FTS does not (the FTS5
+        // match operator has no `WHERE file.path LIKE ...` clause). To
+        // keep the post-Phase-3 result identical to the pre-Phase-3
+        // result when the caller passed focusDirs, the FTS hit list is
+        // post-filtered by the same `pathMatchesFocusDirs` check. The
+        // out-of-scope diagnostics emitted by `findSymbol` (kept,
+        // empty, ambiguous) are still sourced from `symbolResult` so
+        // the caller's behavior on out-of-scope queries is unchanged.
+        const rawFtsHits = yield* repo.ftsSearchNodes({ query: input.query, limit: input.limit ?? 50 })
+        const ftsHits = applyFocusDirsFilter(rawFtsHits, input.workspace, indexedRoot, allFiles)
         const ftsDerivation = ftsHits.length > 0 ? ("fts-bm25" as const) : undefined
 
         const seen = new Set<string>()
@@ -624,14 +674,7 @@ export const layer = Layer.effect(
             symbols.push(hit)
           }
         }
-        // For multi-token queries, exclude doc-kind nodes from the findSymbol
-        // contribution so a markdown-doc substring match doesn't drown the
-        // code symbols FTS already produced. Doc files still surface via the
-        // docs bucket below because FTS hits may point at related code files,
-        // and any subsequent related-node traversal also includes doc files.
-        const findSymbolContribution = isMultiToken
-          ? symbolResult.nodes.filter((n) => n.kind !== "doc")
-          : symbolResult.nodes
+        const findSymbolContribution = symbolResult.nodes.filter((n) => n.kind !== "doc")
         for (const n of [...findSymbolContribution, ...fileMatches]) {
           if (!seen.has(n.id)) {
             seen.add(n.id)
