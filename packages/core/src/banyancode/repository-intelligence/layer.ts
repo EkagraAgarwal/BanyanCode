@@ -1,5 +1,6 @@
 import { Effect, Layer } from "effect"
 import { CodegraphRepo } from "../codegraph-repo"
+import type { Interface as CodegraphRepoInterface } from "../codegraph-repo"
 import { resolveGraphTargetPure } from "../symbol-resolver"
 import { bfsPure } from "./bfs"
 import { Service } from "./service"
@@ -146,21 +147,66 @@ const pathMatchesFocusDirs = (normalizedPath: string, normalizedFocusDirs: reado
 
 // Normalize a caller-provided path against the indexed graph's root so
 // the same input resolves whether the user typed an absolute Windows
-// path, a path with backslashes, or a clean repo-relative path. The
-// graph stores paths relative to `codegraph_meta.indexed_root`, so any
-// incoming path must be reduced to the same form before being looked
-// up via `getFileByPath`.
-const normalizePathForLookup = (input: string, indexedRoot?: string): string => {
+// path, a path with backslashes, or a clean repo-relative path.
+//
+// NOTE: The original `normalizePathForLookup` only stripped the indexed
+// root from absolute inputs and relied on `getFileByPath`'s exact match
+// against the stored form. In practice the graph stores ABSOLUTE paths on
+// Windows (`D:\OpenCode\packages\core\…`), so the stripped relative form
+// never matched. The new `resolveFileByPath` tries multiple candidate
+// forms (exact, root-prefixed, root-suffixed) before falling back to a
+// single suffix match so the call works for legacy relative rows and
+// current absolute rows alike.
+//
+// Replaces the previous one-way normalizer for `findSymbol`, `query`,
+// `impact`, and `relationships`.
+const buildPathCandidates = (input: string, indexedRoot?: string): string[] => {
   const cleaned = input.replace(/\\/g, "/").trim()
-  if (!cleaned) return cleaned
-  if (!indexedRoot) return cleaned
-  const root = indexedRoot.replace(/\\/g, "/").replace(/\/+$/, "")
-  if (cleaned === root) return ""
-  if (cleaned.startsWith(root + "/")) {
-    return cleaned.slice(root.length + 1)
+  if (!cleaned) return []
+  const root = indexedRoot ? indexedRoot.replace(/\\/g, "/").replace(/\/+$/, "") : undefined
+  const out: string[] = []
+  // Always try the cleaned form first (handles current-absolute rows).
+  out.push(cleaned)
+  if (root) {
+    // Root-prefixed form: root + cleaned if cleaned was repo-relative.
+    if (root && !cleaned.startsWith(root + "/") && cleaned !== root) {
+      out.push(`${root}/${cleaned}`)
+      out.push(`${root}${cleaned.startsWith("/") ? "" : "/"}${cleaned}`)
+    }
+    // Root-stripped form: legacy-relative rows stored before the indexer
+    // migrated to absolute paths.
+    if (cleaned === root) {
+      out.push("")
+    } else if (cleaned.startsWith(root + "/")) {
+      out.push(cleaned.slice(root.length + 1))
+    }
   }
-  return cleaned
+  return out
 }
+
+const resolveFileByPath = (
+  repo: CodegraphRepoInterface,
+  input: string,
+  indexedRoot: string | undefined,
+): Effect.Effect<CodegraphFile | undefined, never, never> =>
+  Effect.gen(function* () {
+    const candidates = buildPathCandidates(input, indexedRoot)
+    for (const candidate of candidates) {
+      if (!candidate) continue
+      const file = yield* repo.getFileByPath(candidate)
+      if (file) return file
+    }
+    // Suffix fallback: only if exactly one match (avoid picking an arbitrary
+    // file when two absolute paths end with the same suffix).
+    const allFiles = yield* repo.listAllFiles()
+    const normInput = input.replace(/\\/g, "/").replace(/^\.\//, "")
+    const matches = allFiles.filter((f: CodegraphFile) => {
+      const p = f.path.replace(/\\/g, "/")
+      return p === normInput || p.endsWith("/" + normInput) || p.endsWith(normInput)
+    })
+    if (matches.length === 1) return matches[0]
+    return undefined
+  })
 
 function isConfigPath(path: string): boolean {
   return CONFIG_PATH_PATTERNS.some((p) => p.test(path))
@@ -183,8 +229,7 @@ export const layer = Layer.effect(
         let fileID: string | undefined
         if (input.file) {
           const meta = yield* repo.getMeta()
-          const normalizedInput = normalizePathForLookup(input.file, meta?.indexedRoot)
-          const file = yield* repo.getFileByPath(normalizedInput)
+          const file = yield* resolveFileByPath(repo as never, input.file, meta?.indexedRoot)
           fileID = file?.id
           if (!fileID) return { nodes: [], usedFallback: false }
         }
@@ -551,15 +596,21 @@ export const layer = Layer.effect(
         const meta = yield* repo.getMeta()
         const indexedRoot = meta?.indexedRoot
 
-        const normalizedQuery = normalizePathForLookup(input.query, indexedRoot)
+        const fileByPath = yield* resolveFileByPath(repo as never, input.query, indexedRoot)
         const symbolResult = yield* findSymbol({ name: input.query, workspace: input.workspace })
-        const fileByPath = yield* repo.getFileByPath(normalizedQuery)
         const fileMatches: CodegraphNode[] = fileByPath
           ? allNodes.filter((n) => n.fileID === fileByPath.id)
           : []
 
+        // For multi-token queries the resolver's code-substring step can
+        // match doc-kind nodes whose prose contains the phrase (AGENTS.md /
+        // ARCHITECTURE.md), which would mask the more useful code symbols
+        // that FTS5 surfaces. Run FTS for ALL multi-token queries and merge
+        // bm25-ranked code hits ahead of doc-kind substring matches. Single-
+        // token queries still rely on findSymbol's name-exact / code-substring
+        // path because FTS over a one-word query is too noisy.
         const isMultiToken = /\s/.test(input.query)
-        const ftsHits = isMultiToken && symbolResult.nodes.length === 0
+        const ftsHits = isMultiToken
           ? yield* repo.ftsSearchNodes({ query: input.query, limit: input.limit ?? 50 })
           : []
         const ftsDerivation = ftsHits.length > 0 ? ("fts-bm25" as const) : undefined
@@ -572,7 +623,15 @@ export const layer = Layer.effect(
             symbols.push(hit)
           }
         }
-        for (const n of [...symbolResult.nodes, ...fileMatches]) {
+        // For multi-token queries, exclude doc-kind nodes from the findSymbol
+        // contribution so a markdown-doc substring match doesn't drown the
+        // code symbols FTS already produced. Doc files still surface via the
+        // docs bucket below because FTS hits may point at related code files,
+        // and any subsequent related-node traversal also includes doc files.
+        const findSymbolContribution = isMultiToken
+          ? symbolResult.nodes.filter((n) => n.kind !== "doc")
+          : symbolResult.nodes
+        for (const n of [...findSymbolContribution, ...fileMatches]) {
           if (!seen.has(n.id)) {
             seen.add(n.id)
             symbols.push(n)
@@ -822,8 +881,7 @@ export const layer = Layer.effect(
     }): Effect.Effect<ArchitecturalSlice, never, never> =>
       Effect.gen(function* () {
         const meta = yield* repo.getMeta()
-        const normalizedPath = normalizePathForLookup(input.path, meta?.indexedRoot)
-        const file = yield* repo.getFileByPath(normalizedPath)
+        const file = yield* resolveFileByPath(repo as never, input.path, meta?.indexedRoot)
         if (!file) {
           const ctx = yield* query({ query: input.path, workspace: input.workspace })
           return yield* slice(ctx)
@@ -975,8 +1033,7 @@ export const layer = Layer.effect(
           // node belonging to that file. This is the path-based fallback for
           // tools that don't have an exact codegraph nodeID handy.
           const meta = yield* repo.getMeta()
-          const normalizedPath = normalizePathForLookup(input.path, meta?.indexedRoot)
-          const file = yield* repo.getFileByPath(normalizedPath)
+          const file = yield* resolveFileByPath(repo as never, input.path, meta?.indexedRoot)
           if (!file) return []
           const fileNodes = yield* repo.listNodesByFile(file.id)
           const seen = new Set<string>()
