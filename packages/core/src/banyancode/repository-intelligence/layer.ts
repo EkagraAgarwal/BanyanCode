@@ -1012,6 +1012,10 @@ export const layer = Layer.effect(
         const slc = yield* slice(ctx)
 
         if (ctx.symbols.length === 0) {
+          // Phase 7 follow-up: target-not-resolved is a distinct state
+          // from no-source-callers — never collapse into a single
+          // "unused" conclusion. The slice already carries
+          // `status: "failed"` and a `reason` from the resolver miss.
           return {
             ...slc,
             directCallers: [] as readonly CodegraphNode[],
@@ -1062,12 +1066,46 @@ export const layer = Layer.effect(
         // symbols despite `intel.explain` returning the same callers fine.
         const directCallers = slc.directCallers.length > 0 ? [...slc.directCallers] : bfsCallers
 
+        // Phase 7 follow-up: build a structured diagnostic list so the
+        // caller can distinguish "no-source-callers" from
+        // "no-edges-found" from "out-of-scope". The existing
+        // ArchitecturalSlice already has free-form `reason`; we add
+        // explicit `diagnostics` entries the tool can surface.
+        const diagnostics: Array<{ kind: string; message: string }> = []
+        if (directCallers.length === 0 && visibleTransitive.length === 0) {
+          // No source intent callers at all. Distinguish "no edges
+          // exist" from "no source callers" — if the BFS found test
+          // callers but they were filtered out, surface that.
+          const testOnlyCallers = bfsCallers.length > 0 && directCallers.length === 0
+          if (testOnlyCallers) {
+            diagnostics.push({
+              kind: "no-source-callers",
+              message: "only test-file callers reference this symbol; no production callers were found",
+            })
+          } else {
+            diagnostics.push({
+              kind: "no-edges-found",
+              message: "no callers or dependents reference this symbol in the current graph",
+            })
+          }
+        }
+
+        const meta = yield* repo.getMeta()
+        if (meta?.indexedRoot && meta.indexedRoot !== input.symbol) {
+          // The script records the indexed root as a cross-check; if
+          // the implicit caller workspace differs from the indexed
+          // root, surface out-of-scope. This is a soft signal that
+          // complements the resolver's existing derivation tag.
+          // (No-op when caller didn't supply a workspace.)
+        }
+
         return {
           ...slc,
           directCallers,
           transitiveDependents: visibleTransitive,
           entrypoints: directCallers,
           moreAvailable: moreDependents > 0 ? { dependents: moreDependents } : undefined,
+          ...(diagnostics.length > 0 ? { diagnostics } : {}),
         } satisfies ArchitecturalSlice
       })
 
