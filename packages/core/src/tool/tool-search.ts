@@ -6,7 +6,7 @@ import { traced } from "../observability/trace"
 import { PermissionV2 } from "../permission"
 import { type Interface as AdaptedCatalogInterface } from "../banyancode/adapted-catalog"
 import { Service as ToolRegistryService, type Interface as ToolRegistryInterface } from "../tool/registry"
-import { Service as AgentV2Service, Info as AgentV2Info, ID as AgentV2ID } from "../agent"
+import type { AgentV2 } from "../agent"
 import { ModelV2 } from "../model"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -79,7 +79,6 @@ const renderOutput = (output: Schema.Schema.Type<typeof Output>): string => {
   return `${header}\n\n${lines.join("\n")}`
 }
 
-const emptyAgent = (id: string) => AgentV2Info.empty(AgentV2ID.make(id))
 const emptyModel = () => ModelV2.Info.empty("stub" as never, "stub" as never)
 const toolCapableModel = () => {
   const base = emptyModel()
@@ -93,7 +92,8 @@ export const makeToolSearchTool = (deps: {
   readonly permission: PermissionV2.Interface
   readonly catalog: AdaptedCatalogInterface
   readonly registry: ToolRegistryInterface
-  readonly resolveAgent: (id: string) => Effect.Effect<AgentV2Info | undefined, never, never>
+  readonly resolveAgent: (id: string) => Effect.Effect<AgentV2.Info | undefined, never, never>
+  readonly emptyAgent: (id: string) => AgentV2.Info
 }) =>
   Tool.make({
     description:
@@ -147,7 +147,7 @@ export const makeToolSearchTool = (deps: {
             source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
           }).pipe(Effect.orDie)
 
-          const agent = (yield* deps.resolveAgent(context.agent)) ?? emptyAgent(context.agent)
+          const agent = (yield* deps.resolveAgent(context.agent)) ?? deps.emptyAgent(context.agent)
           const model = toolCapableModel()
           const materialization = yield* deps.catalog.materialize({
             registry: deps.registry,
@@ -193,14 +193,24 @@ export const locationLayer = Layer.effectDiscard(
     const permission = yield* PermissionV2.Service
     const catalog = yield* Banyan.AdaptedCatalog
     const registry = yield* ToolRegistryService
-    const agents = yield* AgentV2Service
+    const agentMod = yield* Effect.promise(() => import("../agent"))
+
+    const resolveAgent = (id: string): Effect.Effect<AgentV2.Info | undefined, never, never> =>
+      Effect.gen(function* () {
+        const opt = yield* Effect.serviceOption(agentMod.Service)
+        if (opt._tag === "None") return undefined
+        return yield* opt.value.resolve(id as never)
+      }) as Effect.Effect<AgentV2.Info | undefined, never, never>
+
+    const emptyAgent = (id: string): AgentV2.Info => agentMod.Info.empty(agentMod.ID.make(id))
 
     yield* tools.register({
       [name]: makeToolSearchTool({
         permission,
         catalog,
         registry,
-        resolveAgent: (id) => agents.resolve(id as never) as Effect.Effect<AgentV2Info | undefined, never, never>,
+        resolveAgent,
+        emptyAgent,
       }),
     })
   }),

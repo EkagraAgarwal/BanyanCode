@@ -3,7 +3,9 @@ export * as Tool from "./tool"
 import { ToolDefinition, ToolFailure, ToolOutput, type ToolCall } from "@opencode-ai/llm"
 import { Effect, JsonSchema, Schema } from "effect"
 import type { AgentV2 } from "../agent"
-import { Banyan } from "../banyancode"
+import { Service as AdaptedCatalog } from "../banyancode/adapted-catalog"
+import { Service as ToolTelemetry } from "../banyancode/tool-telemetry"
+import type { ToolRuntimeEvent } from "../banyancode/tool-telemetry"
 import type { SessionMessage } from "../session/message"
 import type { SessionSchema } from "../session/schema"
 import { runOnce, type RepairRecord, type LintRecord } from "./tool-runtime"
@@ -123,8 +125,8 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
     },
     settle: (call, context) =>
       Effect.gen(function* () {
-        const telemetryOpt = yield* Effect.serviceOption(Banyan.ToolTelemetry)
-        const adaptedCatalogOpt = yield* Effect.serviceOption(Banyan.AdaptedCatalog)
+        const telemetryOpt = yield* Effect.serviceOption(ToolTelemetry)
+        const adaptedCatalogOpt = yield* Effect.serviceOption(AdaptedCatalog)
         const toolID = call.name
         const sessionID = context.sessionID
         const agent = context.agent
@@ -137,7 +139,7 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
         const repairs: readonly string[] = runtimeResult.repairs
         const warnings: readonly LintRecord[] = runtimeResult.warnings
 
-        const record = (event: Banyan.ToolRuntimeEvent) =>
+        const record = (event: ToolRuntimeEvent) =>
           telemetryOpt._tag === "Some"
             ? telemetryOpt.value.recordEvent(event)
             : Effect.void

@@ -119,6 +119,7 @@ describe("banyan_tool_search tool", () => {
           catalog,
           registry,
           resolveAgent: () => Effect.succeed(agentWithPermission as AgentV2.Info | undefined),
+          emptyAgent: (id) => AgentV2.Info.empty(AgentV2.ID.make(id)),
         })
         const result = yield* Tool.settle(tool, makeCall({ query: "search" }), makeContext())
         return result.structured
@@ -181,6 +182,7 @@ describe("banyan_tool_search tool", () => {
           catalog,
           registry,
           resolveAgent: () => Effect.succeed(agentWithPermission as AgentV2.Info | undefined),
+          emptyAgent: (id) => AgentV2.Info.empty(AgentV2.ID.make(id)),
         })
         const result = yield* Tool.settle(tool, makeCall({ query: "search", tier: "cold" }), makeContext())
         return result.structured
@@ -214,6 +216,7 @@ describe("banyan_tool_search tool", () => {
           catalog,
           registry,
           resolveAgent: () => Effect.succeed(agent as AgentV2.Info | undefined),
+          emptyAgent: (id) => AgentV2.Info.empty(AgentV2.ID.make(id)),
         })
         const result = yield* Tool.settle(tool, makeCall({ query: "   " }), makeContext())
         return result.structured
