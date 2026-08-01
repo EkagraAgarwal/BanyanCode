@@ -2,6 +2,7 @@ export * as BanyanTools from "./tools-layer"
 
 import { Layer } from "effect"
 import { BanyanToolsManifest } from "./banyan-tools-manifest"
+import { RepositoryWave2 } from "../tool/repository-wave2"
 import { defaultLayer as memoryRepoLayer } from "./memory-repo"
 import { defaultLayer as memoryServiceLayer } from "./memory-service"
 import { defaultLayer as subagentBusLayer } from "./subagent-bus"
