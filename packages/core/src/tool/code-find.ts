@@ -417,10 +417,11 @@ export const locationLayer = Layer.effectDiscard(
                           }),
                         )
                         for (const n of [...r.dependents, ...r.transitive]) {
-                          if (!seen.has(n.id)) {
-                            seen.add(n.id)
-                            (dependents.length < limit ? dependents : transitive).push(n)
-                          }
+                          if (seen.has(n.id)) continue
+                          seen.add(n.id)
+                          const bucket: CodegraphNode[] =
+                            dependents.length < limit ? dependents : transitive
+                          bucket.push(n)
                         }
                       }
                       return { dependents, transitive }

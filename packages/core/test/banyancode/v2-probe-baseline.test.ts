@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import { CodegraphRepo } from "@opencode-ai/core/banyancode/codegraph-repo"
+import type { CodegraphNode } from "@opencode-ai/core/banyancode/types"
 import { RepositoryIntelligence, defaultLayer as repositoryIntelligenceDefaultLayer } from "../../src/banyancode/repository-intelligence"
 import { CodegraphAnalyzer, defaultLayer as codegraphAnalyzerDefaultLayer } from "../../src/banyancode/codegraph-analyzer"
 import { tmpdir } from "../fixture/tmpdir"
@@ -23,17 +24,6 @@ process.env.BANYANCODE_ENABLE = "1"
  * Keep tests focused on shape/invariants — do NOT hard-code volatile counts
  * from any single probe run (graph_version, coverage, etc.).
  */
-
-type CodegraphNode = {
-  id: string
-  fileID: string
-  kind: "function" | "class" | "method" | "test" | "doc" | "file" | "interface"
-  name: string
-  startLine: number
-  endLine: number
-  signature?: string
-  code?: string
-}
 
 const seedFixture = () =>
   Effect.gen(function* () {
@@ -215,7 +205,7 @@ describe("v2 probe baseline — anti-slop tool contract", () => {
         const analyzer = yield* CodegraphAnalyzer.Service
         const repo = yield* CodegraphRepo.Service
         const allNodes = yield* repo.listAllNodes()
-        const target = allNodes.find((n: CodegraphNode) => n.name === "CodegraphRepo" && n.kind === "class")
+        const target = allNodes.find((n) => n.name === "CodegraphRepo" && n.kind === "class")
         expect(target).toBeDefined()
 
         const result = yield* analyzer.impact({ nodeID: target!.id }).pipe(

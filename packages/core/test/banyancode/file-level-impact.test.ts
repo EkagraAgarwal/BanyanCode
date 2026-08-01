@@ -10,7 +10,7 @@ import path from "path"
 
 process.env.BANYANCODE_ENABLE = "1"
 
-const seedGraph = (repo: CodegraphRepo.Service) =>
+const seedGraph = (repo: CodegraphRepo.Interface) =>
   Effect.gen(function* () {
     const fileA: CodegraphFile = {
       id: "file-target",
@@ -92,7 +92,8 @@ describe("code_find intent=impact — file-level aggregation", () => {
       Effect.gen(function* () {
         const { db } = yield* Database.Service
         yield* DatabaseMigration.apply(db)
-        const repo = yield* CodegraphRepo.Service
+        const tag = yield* CodegraphRepo.Service
+        const repo = tag as unknown as CodegraphRepo.Interface
         const analyzer = yield* CodegraphAnalyzer.Service
         yield* seedGraph(repo)
 
@@ -154,7 +155,8 @@ describe("code_find intent=impact — file-level aggregation", () => {
       Effect.gen(function* () {
         const { db } = yield* Database.Service
         yield* DatabaseMigration.apply(db)
-        const repo = yield* CodegraphRepo.Service
+        const tag = yield* CodegraphRepo.Service
+        const repo = tag as unknown as CodegraphRepo.Interface
         yield* seedGraph(repo)
 
         const target = "nonexistent-file.ts"

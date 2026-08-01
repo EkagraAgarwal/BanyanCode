@@ -9,7 +9,7 @@ import path from "path"
 
 process.env.BANYANCODE_ENABLE = "1"
 
-const seedGraph = (repo: CodegraphRepo.Service) =>
+const seedGraph = (repo: CodegraphRepo.Interface) =>
   Effect.gen(function* () {
     // Source file: Context.Service<Service, Interface>() with a sibling
     // interface declaring member methods. With the parser fix, the interface
@@ -97,7 +97,8 @@ describe("resolver — qualified Namespace.method with interface member nodes", 
       Effect.gen(function* () {
         const { db } = yield* Database.Service
         yield* DatabaseMigration.apply(db)
-        const repo = yield* CodegraphRepo.Service
+        const tag = yield* CodegraphRepo.Service
+        const repo = tag as unknown as CodegraphRepo.Interface
         yield* seedGraph(repo)
 
         const result = yield* resolveGraphTargetPure(repo, { target: "CodegraphBuildService.start" })
@@ -120,7 +121,8 @@ describe("resolver — qualified Namespace.method with interface member nodes", 
       Effect.gen(function* () {
         const { db } = yield* Database.Service
         yield* DatabaseMigration.apply(db)
-        const repo = yield* CodegraphRepo.Service
+        const tag = yield* CodegraphRepo.Service
+        const repo = tag as unknown as CodegraphRepo.Interface
         yield* seedGraph(repo)
 
         const result = yield* resolveGraphTargetPure(repo, { target: "CodegraphBuildService.cancel" })
@@ -142,7 +144,8 @@ describe("resolver — qualified Namespace.method with interface member nodes", 
       Effect.gen(function* () {
         const { db } = yield* Database.Service
         yield* DatabaseMigration.apply(db)
-        const repo = yield* CodegraphRepo.Service
+        const tag = yield* CodegraphRepo.Service
+        const repo = tag as unknown as CodegraphRepo.Interface
         yield* seedGraph(repo)
 
         const result = yield* resolveGraphTargetPure(repo, { target: "CodegraphBuildService" })
