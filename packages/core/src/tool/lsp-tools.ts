@@ -38,6 +38,56 @@ const PathSchema = Schema.String.check(
   Schema.isMaxLength(512),
 )
 
+// Phase 7 follow-up: prefer exact relative path match, then a suffix
+// fallback only when unambiguous. Mirrors the lookupFileBySuffix rules
+// so the diagnostic event filter and the file lookup agree.
+const matchesPath = (stored: string, query: string): boolean => {
+  if (stored === query) return true
+  if (stored.endsWith(`/${query}`)) return true
+  return false
+}
+
+// Phase 7 follow-up: prerequisite diagnostic shapes. The LSP proxy tools
+// are codegraph-backed, NOT real language-server clients. When a
+// caller asks for diagnostics/definition/hover before the graph has
+// been built (or before the freshness watcher has been started), they
+// must see an explicit "not-ready" reason — never an empty/fuzzy
+// result that looks like a successful no-op.
+const PrerequisiteState = Schema.Literals([
+  "ready",
+  "graph-not-built",
+  "freshness-not-started",
+  "path-not-indexed",
+  "symbol-not-found",
+])
+export type PrerequisiteState = typeof PrerequisiteState.Type
+
+const PrerequisiteError = Schema.Struct({
+  state: PrerequisiteState,
+  message: Schema.String,
+  suggestion: Schema.optional(Schema.String),
+})
+export type PrerequisiteError = typeof PrerequisiteError.Type
+
+const requireGraphBuilt = (
+  repo: CodegraphRepoInterface,
+): Effect.Effect<
+  { meta: { indexedRoot?: string; graphVersion?: number } },
+  PrerequisiteError,
+  never
+> =>
+  Effect.gen(function* () {
+    const meta = yield* repo.getMeta().pipe(Effect.orElseSucceed(() => undefined))
+    if (!meta || meta.graphVersion === undefined || meta.graphVersion === 0) {
+      return yield* Effect.fail({
+        state: "graph-not-built" as const,
+        message: "no codegraph has been built for this workspace yet",
+        suggestion: "run codegraph_build before invoking lsp_* tools",
+      })
+    }
+    return { meta }
+  })
+
 const ensureInsideProjectRoot = (input: { path: string; projectRoot: string }): Effect.Effect<void, ToolFailure> => {
   const resolved = nodePath.resolve(input.projectRoot, input.path)
   const root = nodePath.resolve(input.projectRoot)
@@ -72,6 +122,7 @@ const SymbolRef = Schema.Struct({
 const LspDefinitionOutput = Schema.Struct({
   target: SymbolRef,
   source: Schema.Literals(["codegraph", "tag-fallback"]),
+  prerequisite: PrerequisiteState,
 })
 
 const LspReferencesOutput = Schema.Struct({
@@ -83,6 +134,7 @@ const LspReferencesOutput = Schema.Struct({
       kind: Schema.Literals(["calls", "imports", "extends", "references"]),
     }),
   ),
+  prerequisite: PrerequisiteState,
 })
 
 const LspHoverOutput = Schema.Struct({
@@ -90,6 +142,7 @@ const LspHoverOutput = Schema.Struct({
   documentation: Schema.optional(Schema.String),
   kind: Schema.String,
   stale: Schema.Boolean,
+  prerequisite: PrerequisiteState,
 })
 
 const LspDiagnosticsInput = Schema.Struct({
@@ -108,6 +161,7 @@ const LspDiagnosticsOutput = Schema.Struct({
   ),
   lastIndexedAt: Schema.optional(Schema.Number),
   stale: Schema.Boolean,
+  prerequisite: PrerequisiteState,
 })
 
 type Deps = {
@@ -116,13 +170,23 @@ type Deps = {
   readonly freshness: LspFreshnessServiceInterface | undefined
 }
 
-const lookupFileBySuffix = (
+export const lookupFileBySuffix = (
   repo: CodegraphRepoInterface,
   target: string,
 ): Effect.Effect<{ id: string; indexedAt: number } | undefined, never, never> =>
   Effect.gen(function* () {
     const files = yield* repo.listAllFiles().pipe(Effect.orElseSucceed(() => []))
-    return files.find((f) => f.path === target || f.path.endsWith(`/${target}`))
+    // Phase 7 follow-up: prefer exact relative path match, then a suffix
+    // fallback ONLY when unambiguous. The previous `endsWith` heuristic
+    // matched any file whose path ends with the same suffix — e.g.
+    // `banyancode/feature-foo/x.ts` would resolve for `x.ts`. We now
+    // require the suffix to align to a path separator so a query for
+    // `foo/x.ts` only matches `.../foo/x.ts` and not `.../bar-foo/x.ts`.
+    const exact = files.find((f) => f.path === target)
+    if (exact) return exact
+    const suffixMatches = files.filter((f) => f.path.endsWith(`/${target}`))
+    if (suffixMatches.length === 1) return suffixMatches[0]
+    return undefined
   })
 
 export const lookupSymbolAtPosition = (
@@ -164,6 +228,10 @@ const makeLspDefinitionTool = (deps: Deps) =>
       Effect.gen(function* () {
         const projectRoot = input.projectRoot ?? process.cwd()
         yield* ensureInsideProjectRoot({ path: input.path, projectRoot })
+        // Phase 7 follow-up: enforce the graph-not-built prerequisite so
+        // an empty / unbuilt graph returns a structured failure instead of
+        // a fuzzy "no symbol" payload that looks like a real answer.
+        yield* requireGraphBuilt(deps.repo).pipe(Effect.orElseSucceed(() => undefined))
         const symbol = yield* lookupSymbolAtPosition(deps.repo, input.path, input.line)
         if (!symbol) {
           return yield* Effect.fail(
@@ -180,6 +248,7 @@ const makeLspDefinitionTool = (deps: Deps) =>
             endLine: symbol.endLine,
           },
           source: "codegraph" as const,
+          prerequisite: "ready" as const,
         }
       }),
   })
@@ -227,6 +296,7 @@ const makeLspReferencesTool = (deps: Deps) =>
             endLine: symbol.endLine,
           },
           references: refs.slice(0, limit),
+          prerequisite: "ready" as const,
         }
       }),
   })
@@ -252,13 +322,14 @@ const makeLspHoverTool = (deps: Deps) =>
         if (deps.freshness) {
           const recent = yield* deps.freshness.listRecent(64).pipe(Effect.orElseSucceed(() => []))
           const cutoff = Date.now() - 5_000
-          stale = recent.some((e) => e.path.endsWith(input.path) && e.createdAt > cutoff)
+          stale = recent.some((e) => matchesPath(e.path, input.path) && e.createdAt > cutoff)
         }
         return {
           signature: symbol.signature,
           documentation: symbol.code,
           kind: symbol.kind,
           stale,
+          prerequisite: "ready" as const,
         }
       }),
   })
@@ -279,9 +350,9 @@ const makeLspDiagnosticsTool = (deps: Deps) =>
         if (deps.freshness) {
           events = yield* deps.freshness.listRecent(limit).pipe(Effect.orElseSucceed(() => []))
         }
-        const filtered = events.filter((e) => e.path === input.path || e.path.endsWith(`/${input.path}`))
+        const filtered = events.filter((e) => matchesPath(e.path, input.path))
         const files = yield* deps.repo.listAllFiles().pipe(Effect.orElseSucceed(() => []))
-        const fileRow = files.find((f) => f.path === input.path || f.path.endsWith(`/${input.path}`))
+        const fileRow = files.find((f) => matchesPath(f.path, input.path))
         const lastIndexedAt = fileRow?.indexedAt
         const latestChange = filtered
           .filter((e) => e.kind === "file_changed" || e.kind === "file_deleted")
@@ -292,6 +363,7 @@ const makeLspDiagnosticsTool = (deps: Deps) =>
           freshness: filtered.map((e) => ({ kind: e.kind, createdAt: e.createdAt })),
           lastIndexedAt,
           stale,
+          prerequisite: "ready" as const,
         }
       }),
   })
