@@ -15,6 +15,9 @@ import * as WebSearchFreeTool from "@opencode-ai/core/tool/websearch-free"
 import * as PreflightTool from "@opencode-ai/core/tool/preflight"
 import * as BlastRadiusTool from "@opencode-ai/core/tool/blast-radius"
 import * as SafeRenameTool from "@opencode-ai/core/tool/safe-rename"
+import * as TypecheckTool from "@opencode-ai/core/tool/typecheck"
+import * as TestTool from "@opencode-ai/core/tool/test"
+import * as LintTool from "@opencode-ai/core/tool/lint"
 
 const CodegraphEdgesQuery = Schema.Struct({
   nodeID: Schema.optional(Schema.String),
@@ -197,6 +200,15 @@ export const BlastRadiusResult = BlastRadiusTool.Output
 export const SafeRenameInput = SafeRenameTool.Input
 export const SafeRenameResult = SafeRenameTool.Output
 
+export const TypecheckInput = TypecheckTool.Input
+export const TypecheckResult = TypecheckTool.Output
+
+export const TestRunInput = TestTool.Input
+export const TestRunResult = TestTool.Output
+
+export const LintInput = LintTool.Input
+export const LintResult = LintTool.Output
+
 const MeshStatusQuery = Schema.Struct({
   parentSessionID: Schema.String.check(
     Schema.isPattern(/^ses_[a-zA-Z0-9]{16,64}$/, {
@@ -241,6 +253,9 @@ export const GlobalPaths = {
   blastRadius: "/global/blast-radius",
   safeRename: "/global/safe-rename",
   meshStatus: "/global/mesh/status",
+  typecheck: "/global/typecheck",
+  testRun: "/global/test-run",
+  lint: "/global/lint",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
@@ -530,6 +545,41 @@ export const GlobalApi = HttpApi.make("global").add(
           summary: "Propose safe rename edits",
           description:
             "Compute the edit list for safely renaming a symbol, plus tests to run and risk list. Returns a preflight-shaped report so the caller can apply edits one at a time via the existing edit tool.",
+        }),
+      ),
+      HttpApiEndpoint.post("typecheck", GlobalPaths.typecheck, {
+        payload: TypecheckInput,
+        success: described(TypecheckResult, "Typecheck result"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.typecheck",
+          summary: "Run typecheck",
+          description:
+            "Run the project's type checker (`bunx tsc --noEmit` by default, or `tsgo --noEmit` if the project uses the TypeScript 7 native compiler). Caches results by (path, package.json hash, tsconfig.json hash) for 1 hour.",
+        }),
+      ),
+      HttpApiEndpoint.post("testRun", GlobalPaths.testRun, {
+        payload: TestRunInput,
+        success: described(TestRunResult, "Test run result"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.testRun",
+          summary: "Run tests",
+          description: "Run `bun test <path>` for the given file. Caches results for 1 hour.",
+        }),
+      ),
+      HttpApiEndpoint.post("lint", GlobalPaths.lint, {
+        payload: LintInput,
+        success: described(LintResult, "Lint result"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.lint",
+          summary: "Run lint",
+          description:
+            "Run the project's lint command (per `.banyancode.json` → `commands.lint`, falling back to `bun run lint`). Caches results for 1 hour.",
         }),
       ),
       HttpApiEndpoint.get("meshStatus", GlobalPaths.meshStatus, {

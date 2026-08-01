@@ -20,7 +20,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, LspStartInput, PreflightInput, SafeRenameInput, WebSearchFreeInput } from "../groups/global"
+import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, LintInput, LspStartInput, PreflightInput, SafeRenameInput, TestRunInput, TypecheckInput, WebSearchFreeInput } from "../groups/global"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
 import { GraphMeta } from "@opencode-ai/core/banyancode/types"
@@ -730,6 +730,65 @@ const lspStopHandler = Effect.fn("GlobalHttpApi.lspStop")(function* () {
       return yield* opt.value.status(ctx.query.parentSessionID as never)
     })
 
+    const typecheckHandler = Effect.fn("GlobalHttpApi.typecheck")(function* (ctx: {
+      payload: typeof TypecheckInput.Type
+    }) {
+      const verifier = yield* Banyan.VerifierService
+      const projectRoot = ctx.payload.projectRoot ?? process.cwd()
+      const result = yield* verifier.typecheck({
+        ...(ctx.payload.path !== undefined ? { path: ctx.payload.path } : {}),
+        projectRoot,
+        ...(ctx.payload.timeoutMs !== undefined ? { timeoutMs: ctx.payload.timeoutMs } : {}),
+      })
+      return {
+        status: result.status,
+        summary: result.summary as Record<string, unknown>,
+        durationMs: result.durationMs,
+        cacheHit: result.cacheHit,
+        ...(result.rawOutput !== undefined ? { rawOutput: result.rawOutput } : {}),
+      }
+    })
+
+    const testRunHandler = Effect.fn("GlobalHttpApi.testRun")(function* (ctx: {
+      payload: typeof TestRunInput.Type
+    }) {
+      const verifier = yield* Banyan.VerifierService
+      const projectRoot = ctx.payload.projectRoot ?? process.cwd()
+      const result = yield* verifier.test({
+        path: ctx.payload.path,
+        projectRoot,
+        ...(ctx.payload.framework !== undefined ? { framework: ctx.payload.framework } : {}),
+        ...(ctx.payload.timeoutMs !== undefined ? { timeoutMs: ctx.payload.timeoutMs } : {}),
+      })
+      return {
+        status: result.status,
+        summary: result.summary as Record<string, unknown>,
+        durationMs: result.durationMs,
+        cacheHit: result.cacheHit,
+        ...(result.rawOutput !== undefined ? { rawOutput: result.rawOutput } : {}),
+      }
+    })
+
+    const lintHandler = Effect.fn("GlobalHttpApi.lint")(function* (ctx: {
+      payload: typeof LintInput.Type
+    }) {
+      const verifier = yield* Banyan.VerifierService
+      const projectRoot = ctx.payload.projectRoot ?? process.cwd()
+      const result = yield* verifier.lint({
+        ...(ctx.payload.path !== undefined ? { path: ctx.payload.path } : {}),
+        projectRoot,
+        ...(ctx.payload.timeoutMs !== undefined ? { timeoutMs: ctx.payload.timeoutMs } : {}),
+      })
+      return {
+        status: result.status,
+        summary: result.summary as Record<string, unknown>,
+        durationMs: result.durationMs,
+        cacheHit: result.cacheHit,
+        ...(result.rawOutput !== undefined ? { rawOutput: result.rawOutput } : {}),
+        command: `bun run lint (target=${result.target})`,
+      }
+    })
+
     return handlers
       .handle("health", health)
       .handleRaw("event", event)
@@ -756,5 +815,8 @@ const lspStopHandler = Effect.fn("GlobalHttpApi.lspStop")(function* () {
       .handle("blastRadius", blastRadiusHandler)
       .handle("safeRename", safeRenameHandler)
       .handle("meshStatus", meshStatusHandler)
+      .handle("typecheck", typecheckHandler)
+      .handle("testRun", testRunHandler)
+      .handle("lint", lintHandler)
   }),
 )
