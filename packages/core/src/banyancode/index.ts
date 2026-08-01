@@ -347,3 +347,5 @@ export type {
   LspFreshnessSystemInput,
   Interface as LspFreshnessSystemSourceInterface,
 } from "../lsp/lsp-freshness-system-source"
+export * as WorkspaceIdentity from "./workspace-identity"
+export type { WorkspaceIdentity as WorkspaceIdentityInterface } from "./workspace-identity"

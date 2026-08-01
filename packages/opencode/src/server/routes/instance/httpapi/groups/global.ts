@@ -147,6 +147,11 @@ export const BanyanAgentPromptUpdateInput = Schema.Struct({
 export const CodegraphBuildInput = Schema.Struct({
   root: Schema.optional(Schema.String),
   force: Schema.optional(Schema.Boolean),
+  // dbPath was removed in the Phase 7 follow-up: storage is canonical per
+  // workspace root. The build handler derives the effective DB path from
+  // the resolved root via WorkspaceIdentity.identityForRoot and returns
+  // it on the result so the client never has to guess where the graph
+  // actually went.
   dbPath: Schema.optional(Schema.String),
 })
 
@@ -175,6 +180,10 @@ export const CodegraphBuildResult = Schema.Struct({
   started: Schema.Boolean,
   root: Schema.optional(Schema.String),
   dbPath: Schema.optional(Schema.String),
+  // Phase 7 follow-up: banyanDir is the canonical .banyancode directory
+  // that derived the built DB. Together with `dbPath` this gives the
+  // client a single source of truth for "where my graph went".
+  banyanDir: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.String),
 })
 

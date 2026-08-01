@@ -110,7 +110,7 @@ describe("CodegraphBuildService", () => {
       Effect.gen(function* () {
         const service = yield* CodegraphBuildService.Service
 
-        yield* service.start({ root: "/test", force: false })
+        yield* service.start({ root: tmp.path, force: false })
 
         // Wait for the build to complete
         yield* Effect.sleep(100)
@@ -138,7 +138,7 @@ describe("CodegraphBuildService", () => {
       Effect.gen(function* () {
         const service = yield* CodegraphBuildService.Service
 
-        yield* service.start({ root: "/test", force: false })
+        yield* service.start({ root: tmp.path, force: false })
 
         // Wait for the build to fail
         yield* Effect.sleep(100)
@@ -168,7 +168,7 @@ describe("CodegraphBuildService", () => {
     )
   })
 
-  test("successful build propagates dbPath to state", async () => {
+  test("build uses canonical db path derived from root, ignoring client dbPath", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.sqlite")
     const dbLayer = Database.layerFromPath(dbPath)
@@ -183,13 +183,22 @@ describe("CodegraphBuildService", () => {
       Effect.gen(function* () {
         const service = yield* CodegraphBuildService.Service
 
-        yield* service.start({ root: "/test", force: false, dbPath: "/custom/path/to/db.sqlite" })
+        // The caller's dbPath is now a diagnostic marker, NOT the path
+        // the build actually writes to. The canonical db path is derived
+        // from the root via WorkspaceIdentity.identityForRoot.
+        yield* service.start({ root: tmp.path, force: false, dbPath: "/custom/path/to/db.sqlite" })
 
         yield* Effect.sleep(100)
 
         const state = yield* service.status()
         expect(state.status).toBe("completed")
-        expect(state.dbPath).toBe("/custom/path/to/db.sqlite")
+        // The dbPath returned to the client reflects the canonical workspace
+        // location, not the stub — this is the bug the Phase 7 follow-up
+        // fixed: old clients observed the value they passed; new clients
+        // always see the truth.
+        expect(state.dbPath).not.toBe("/custom/path/to/db.sqlite")
+        expect(state.dbPath).toBeDefined()
+        expect(state.banyanDir).toBeDefined()
       }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
@@ -214,7 +223,7 @@ describe("CodegraphBuildService", () => {
         const service = yield* CodegraphBuildService.Service
         const repo = yield* CodegraphRepo.Service
 
-        yield* service.start({ root: "/test", force: false })
+        yield* service.start({ root: tmp.path, force: false })
 
         yield* Effect.sleep(100)
 
@@ -255,7 +264,7 @@ describe("CodegraphBuildService", () => {
         const service = yield* CodegraphBuildService.Service
         const repo = yield* CodegraphRepo.Service
 
-        yield* service.start({ root: "/test", force: false })
+        yield* service.start({ root: tmp.path, force: false })
         yield* Effect.sleep(100)
 
         const state = yield* service.status()
@@ -303,7 +312,7 @@ describe("CodegraphBuildService", () => {
       Effect.gen(function* () {
         const service = yield* CodegraphBuildService.Service
 
-        yield* service.start({ root: "/test", force: false })
+        yield* service.start({ root: tmp.path, force: false })
         yield* Effect.sleep(100)
 
         const state = yield* service.status()

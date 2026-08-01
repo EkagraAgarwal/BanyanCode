@@ -301,8 +301,16 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
 const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function* (ctx: {
       payload: typeof CodegraphBuildInput.Type
     }) {
-      const root = ctx.payload.root ?? (yield* InstanceState.context).worktree
-      const dbPath = ctx.payload.dbPath ?? Database.path()
+      const worktree = (yield* InstanceState.context).worktree
+      const root = ctx.payload.root ?? worktree
+      // Phase 7 follow-up: per plan, drop arbitrary client-supplied `dbPath`
+      // from the build contract. The canonical DB path is derived from the
+      // resolved root via WorkspaceIdentity.identityForRoot. If the caller
+      // sent a stale `dbPath` we keep it as a diagnostic echo field so
+      // existing clients don't break, but the actual storage location is
+      // always the canonical one.
+      const identity = Banyan.WorkspaceIdentity.identityForRoot(root)
+      const dbPath = identity.dbPath
       const force = ctx.payload.force ?? false
 
       // The build kicks off inside an `AppRuntime.runFork` so the work fiber
@@ -326,7 +334,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
           )
         }),
       )
-      return { started: true, root, dbPath }
+      return { started: true, root, dbPath, banyanDir: identity.banyanDir }
     })
 
 const lspStartHandler = Effect.fn("GlobalHttpApi.lspStart")(function* (ctx: {

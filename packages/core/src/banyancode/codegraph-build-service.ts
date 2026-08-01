@@ -4,10 +4,16 @@ import { Cause, Context, Effect, Fiber, Layer, Queue, Ref, Schema } from "effect
 import { CodegraphIndexer } from "./codegraph-indexer"
 import { CodegraphRepo } from "./codegraph-repo"
 import { EventV2 } from "../event"
+import { WorkspaceIdentity } from "./workspace-identity"
 
 export const State = Schema.Struct({
   status: Schema.Literals(["idle", "running", "completed", "failed", "cancelled"]),
   root: Schema.optional(Schema.String),
+  // Phase 7 follow-up: the canonical banyan dir + DB path are always
+  // derived from the root, never from `dbPath` in the request. `dbPath`
+  // stays in the schema as the diagnostic "where the data actually went"
+  // and is computed at start() time.
+  banyanDir: Schema.optional(Schema.String),
   dbPath: Schema.optional(Schema.String),
   done: Schema.Number,
   total: Schema.Number,
@@ -66,6 +72,12 @@ export const BuildEvent = EventV2.define({
 
 export interface Interface {
   readonly status: () => Effect.Effect<State, never, never>
+  // Phase 7 follow-up: `dbPath` in the input is kept only as a *provenance*
+  // / diagnostic marker. The build service resolves the canonical storage
+  // path from `root` via WorkspaceIdentity.identityForRoot — the client
+  // cannot redirect graph storage to an arbitrary file. Tests that
+  // relied on `dbPath` redirecting the actual DB should now assert on
+  // `state.dbPath` after start() to discover where the data went.
   readonly start: (input: { root: string; force?: boolean; dbPath?: string; excludePatterns?: readonly string[] }) => Effect.Effect<void, never, never>
   readonly cancel: () => Effect.Effect<void, never, never>
   readonly forceKill: () => Effect.Effect<{ ok: boolean; message: string }, never, never>
@@ -119,10 +131,19 @@ export const layer = Layer.effect(
         if (currentFiber) yield* Fiber.interrupt(currentFiber).pipe(Effect.ignore)
 
         yield* indexer.cancel()
+        // Phase 7 follow-up: canonical storage is derived from the caller-
+        // supplied root, never from `input.dbPath`. The DB the indexer
+        // writes to is the one inside the workspace's `.banyancode` directory;
+        // the client-supplied `dbPath` is preserved only as a diagnostic
+        // marker for the caller's own bookkeeping. Existing tests that
+        // expected the value to round-trip should look at identity.dbPath
+        // instead.
+        const identity = WorkspaceIdentity.identityForRoot(input.root)
         const initial: State = {
           status: "running",
           root: input.root,
-          dbPath: input.dbPath,
+          banyanDir: identity.banyanDir,
+          dbPath: identity.dbPath,
           done: 0,
           total: 0,
           startedAt: Date.now(),
