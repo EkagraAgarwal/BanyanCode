@@ -31,9 +31,9 @@ function makeTestLayer(dbPath: string) {
   )
 }
 
-describe("repository_trace end-to-end (Permission.evaluate)", () => {
+describe("repository_trace end-to-end (CodegraphBuildService.start)", () => {
   test(
-    "traces Permission.evaluate on the real BanyanCode workspace: snapshot directCallers + transitiveDependents",
+    "traces CodegraphBuildService.start on the real BanyanCode workspace: snapshot directCallers + transitiveDependents",
     async () => {
       const workspaceRoot = "D:\\OpenCode"
       const dbPath = path.join(
@@ -60,15 +60,18 @@ describe("repository_trace end-to-end (Permission.evaluate)", () => {
             "5 minutes",
           )
 
-          // Now trace Permission.evaluate.
-          const slice = yield* intel.trace({ symbol: "Permission.evaluate", depth: 2 })
+          // Prefer a production symbol whose callers live outside *.test.ts —
+          // Permission.evaluate's graph callers were almost entirely test-file
+          // call sites, which the Phase-2 test-double filter correctly drops.
+          const slice = yield* intel.trace({ symbol: "CodegraphBuildService.start", depth: 2 })
           return slice
         }).pipe(Effect.provide(layer), Effect.scoped),
       )
 
       // Snapshot sanity checks:
       // (a) the call did not throw, (b) both arrays populated, (c) every node
-      // in directCallers is exactly 1-hop from the anchor.
+      // in directCallers is exactly 1-hop from the anchor, (d) no test-file
+      // nodes leaked into the source-intent lists.
       console.log(
         `directCallers=${result.directCallers.length} transitiveDependents=${result.transitiveDependents.length}`,
       )
