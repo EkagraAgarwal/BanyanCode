@@ -288,4 +288,99 @@ describe("codegraph_service_tags integrity", () => {
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
+
+  // P1 regression: a *.test.ts file declaring the same tag as a source file
+  // must NOT own the canonical tag row. The test file's writeFileGraph call
+  // skips service-tag extraction entirely (codegraph-repo.ts:writeFileGraph),
+  // so the source's tag row remains authoritative regardless of index order.
+  test("test double in *.test.ts cannot steal the canonical tag from source", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* DatabaseMigration.apply((yield* Database.Service).db)
+          const repo = yield* CodegraphRepo.Service
+
+          // Source first — establishes the canonical tag row.
+          yield* repo.writeFileGraph({
+            file: { id: "fSrc", path: "src/memory.ts", contentHash: "h1", language: "typescript", indexedAt: 1 },
+            nodes: [
+              {
+                id: "fSrc:n1",
+                fileID: "fSrc",
+                kind: "class",
+                name: "Service",
+                signature: "class Service",
+                startLine: 1,
+                endLine: 10,
+                code: "export class Service extends Context.Service<Service, Interface>()('@banyancode/MemoryRepo') {}",
+              },
+            ],
+            edges: [],
+          })
+
+          // Test double seeded AFTER the source — historically this would
+          // steal the tag via ON CONFLICT(tag) DO UPDATE.
+          yield* repo.writeFileGraph({
+            file: { id: "fTest", path: "src/memory.test.ts", contentHash: "h2", language: "typescript", indexedAt: 2 },
+            nodes: [
+              {
+                id: "fTest:n1",
+                fileID: "fTest",
+                kind: "class",
+                name: "MemoryRepo",
+                signature: "test double",
+                startLine: 1,
+                endLine: 10,
+                code: "export class MemoryRepo extends Context.Service<MemoryRepo, Interface>()('@banyancode/MemoryRepo') {}",
+              },
+            ],
+            edges: [],
+          })
+
+          const hit = yield* repo.lookupByServiceTag("@banyancode/MemoryRepo")
+          expect(hit?.id).toBe("fSrc:n1")
+          expect(hit?.fileID).toBe("fSrc")
+        }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer)),
+      ),
+    )
+  })
+
+  // P1 regression: a *.test.ts file is the ONLY file declaring a tag —
+  // the canonical row must NOT be created (test doubles are not canonical).
+  test("test-only tag is NOT indexed as canonical", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* DatabaseMigration.apply((yield* Database.Service).db)
+          const repo = yield* CodegraphRepo.Service
+
+          yield* repo.writeFileGraph({
+            file: { id: "fTest", path: "src/something.test.ts", contentHash: "h1", language: "typescript", indexedAt: 1 },
+            nodes: [
+              {
+                id: "fTest:n1",
+                fileID: "fTest",
+                kind: "class",
+                name: "SomeClass",
+                signature: "test double",
+                startLine: 1,
+                endLine: 10,
+                code: "export class SomeClass extends Context.Service<SomeClass, Interface>()('@banyancode/TestOnly') {}",
+              },
+            ],
+            edges: [],
+          })
+
+          const hit = yield* repo.lookupByServiceTag("@banyancode/TestOnly")
+          expect(hit).toBeNull()
+        }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer)),
+      ),
+    )
+  })
 })

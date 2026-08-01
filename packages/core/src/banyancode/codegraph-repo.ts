@@ -8,6 +8,7 @@ import { CodegraphMetaTable } from "./codegraph-meta.sql"
 import { CodegraphParseErrorsTable } from "./codegraph-parse-errors.sql"
 import { CodegraphServiceTagsTable } from "./codegraph-service-tags.sql"
 import { CodegraphTracesTable } from "./codegraph-traces.sql"
+import { isTestFilePath } from "./codegraph-paths"
 import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from "./types"
 
 export type FTSResult = CodegraphNode & { readonly bm25: number }
@@ -1409,13 +1410,25 @@ export const layer = Layer.effect(
                 .run()
                 .pipe(Effect.orDie)
 
-              const serviceTagEntries = input.nodes
-                .map((n) =>
-                  n.kind === "class" && !n.id.includes(":artifact:") && n.code
-                    ? extractServiceTag(n.code, n.id, n.fileID)
-                    : null,
-                )
-                .filter((e): e is NonNullable<typeof e> => e !== null)
+              // Skip service-tag extraction entirely for files under test
+              // paths. A `*.test.ts` that declares `class MemoryRepo extends
+              // Context.Service<…>("@banyancode/MemoryRepo")` is a TEST DOUBLE
+              // and must not own the canonical tag — the source `Service` in
+              // `memory-repo.ts` should own it. Without this gate, incremental
+              // per-file indexing plus the unique `tag` index + last-writer-wins
+              // upsert would let whichever test file was reindexed most recently
+              // steal the tag row from the source (see P1 in
+              // `.banyancode/plans/fix-weak-codegraph-repository-tools.md`).
+              const fileIsTest = isTestFilePath(input.file.path)
+              const serviceTagEntries = fileIsTest
+                ? []
+                : input.nodes
+                    .map((n) =>
+                      n.kind === "class" && !n.id.includes(":artifact:") && n.code
+                        ? extractServiceTag(n.code, n.id, n.fileID)
+                        : null,
+                    )
+                    .filter((e): e is NonNullable<typeof e> => e !== null)
 
               // Wipe any tags already pointing at this file id (e.g. from a
               // previous indexer pass that succeeded partially) so the upsert

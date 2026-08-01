@@ -457,3 +457,181 @@ describe("regression: tool resolution consistency (PR D)", () => {
     expect(result._tag).toBe("Ok")
   })
 })
+
+describe("regression: weak-tool fixes (P0/P1)", () => {
+  // 1) Source-class tag must win over a test double declaring the same tag,
+  //    even when the test double is seeded first (last-writer-wins is the only
+  //    guarantee for ON CONFLICT, but the new P0 ranking also promotes non-
+  //    test candidates to the front of the tag-fallback list).
+  const seedSourceVsTestDouble = Effect.gen(function* () {
+    const repo = yield* CodegraphRepo.Service
+    yield* repo.writeFileGraph({
+      file: { id: "fSource", path: "src/memory.ts", contentHash: "h1", language: "typescript", indexedAt: 1 },
+      nodes: [
+        {
+          id: "fSource:n1",
+          fileID: "fSource",
+          kind: "class",
+          name: "Service",
+          signature: "class Service extends Context.Service<Service, Interface>()",
+          startLine: 1,
+          endLine: 30,
+          code: "export class Service extends Context.Service<Service, Interface>()('@banyancode/MemoryRepo') {}",
+        },
+      ],
+      edges: [],
+    })
+    yield* repo.writeFileGraph({
+      file: { id: "fTest", path: "src/memory.test.ts", contentHash: "h2", language: "typescript", indexedAt: 2 },
+      nodes: [
+        {
+          id: "fTest:n1",
+          fileID: "fTest",
+          kind: "class",
+          name: "MemoryRepo",
+          signature: "test double for MemoryRepo",
+          startLine: 1,
+          endLine: 10,
+          code: "export class MemoryRepo extends Context.Service<MemoryRepo, Interface>()('@banyancode/MemoryRepo') {}",
+        },
+      ],
+      edges: [],
+    })
+  })
+
+  test("MemoryRepo definition resolves to the source Service, not the test double", async () => {
+    const result = await withTmpDb((dbLayer) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* seedSourceVsTestDouble
+          const repo = yield* CodegraphRepo.Service
+          return yield* resolveGraphTargetPure(repo as never, { target: "MemoryRepo" })
+        }),
+      ),
+    )
+    expect(result._tag).toBe("Ok")
+    if (result._tag !== "Ok") return
+    // The primary node must be the source `Service` in src/memory.ts. The
+    // test double `MemoryRepo` in src/memory.test.ts may also appear in
+    // candidates but must not be the head.
+    expect(result.value.node.fileID).toBe("fSource")
+    expect(result.value.node.name).toBe("Service")
+  })
+
+  // 2) Qualified lookup `Foo.put` must scope to Foo's file even when an
+  //    unrelated `put` exists elsewhere in the graph — without this scoping,
+  //    the old step-4 substring tied between `put:144` and the `layer`
+  //    wrapper and the wrapper won by UUID string order.
+  const seedQualifiedScope = Effect.gen(function* () {
+    const repo = yield* CodegraphRepo.Service
+    yield* repo.writeFileGraph({
+      file: { id: "fMem", path: "src/memory.ts", contentHash: "h1", language: "typescript", indexedAt: 1 },
+      nodes: [
+        {
+          id: "fMem:n1",
+          fileID: "fMem",
+          kind: "class",
+          name: "Service",
+          signature: "class Service extends Context.Service<Service, Interface>()",
+          startLine: 1,
+          endLine: 50,
+          code: "export class Service extends Context.Service<Service, Interface>()('@banyancode/MemoryRepo') {}",
+        },
+        {
+          id: "fMem:n2",
+          fileID: "fMem",
+          kind: "function",
+          name: "put",
+          signature: "put(): Effect<void>",
+          startLine: 10,
+          endLine: 12,
+          code: "put() {}",
+        },
+      ],
+      edges: [],
+    })
+    yield* repo.writeFileGraph({
+      file: { id: "fLayer", path: "src/memory-layer.ts", contentHash: "h2", language: "typescript", indexedAt: 2 },
+      nodes: [
+        {
+          id: "fLayer:n1",
+          fileID: "fLayer",
+          kind: "function",
+          name: "layer",
+          signature: "export const layer = Layer.effect(...)",
+          startLine: 1,
+          endLine: 30,
+          code: "export const layer = Layer.effect(Service, Effect.gen(function*() { /* references MemoryRepo.put */ }))",
+        },
+      ],
+      edges: [],
+    })
+  })
+
+  test("MemoryRepo.put resolves to the src put, not the unrelated layer wrapper", async () => {
+    const result = await withTmpDb((dbLayer) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* seedQualifiedScope
+          const repo = yield* CodegraphRepo.Service
+          return yield* resolveGraphTargetPure(repo as never, { target: "MemoryRepo.put" })
+        }),
+      ),
+    )
+    expect(result._tag).toBe("Ok")
+    if (result._tag !== "Ok") return
+    expect(result.value.node.fileID).toBe("fMem")
+    expect(result.value.node.name).toBe("put")
+  })
+
+  // 3) Nonexistent qualified target with an unrelated same-name symbol
+  //    elsewhere must return Miss, not a random same-named node.
+  const seedUnrelatedSameName = Effect.gen(function* () {
+    const repo = yield* CodegraphRepo.Service
+    yield* repo.writeFileGraph({
+      file: { id: "fSource", path: "src/memory.ts", contentHash: "h1", language: "typescript", indexedAt: 1 },
+      nodes: [
+        {
+          id: "fSource:n1",
+          fileID: "fSource",
+          kind: "class",
+          name: "Service",
+          signature: "class Service",
+          startLine: 1,
+          endLine: 5,
+          code: "export class Service extends Context.Service<Service, Interface>()('@banyancode/MemoryRepo') {}",
+        },
+      ],
+      edges: [],
+    })
+    yield* repo.writeFileGraph({
+      file: { id: "fOther", path: "src/other.ts", contentHash: "h2", language: "typescript", indexedAt: 2 },
+      nodes: [
+        {
+          id: "fOther:n1",
+          fileID: "fOther",
+          kind: "function",
+          name: "update",
+          signature: "function update()",
+          startLine: 1,
+          endLine: 3,
+          code: "function update() {}",
+        },
+      ],
+      edges: [],
+    })
+  })
+
+  test("MemoryRepo.update (nonexistent) returns Miss even though src/memory.ts has no update", async () => {
+    const result = await withTmpDb((dbLayer) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* seedUnrelatedSameName
+          const repo = yield* CodegraphRepo.Service
+          return yield* resolveGraphTargetPure(repo as never, { target: "MemoryRepo.update" })
+        }),
+      ),
+    )
+    expect(result._tag).toBe("Miss")
+  })
+})
