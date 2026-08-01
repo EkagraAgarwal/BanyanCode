@@ -73,6 +73,7 @@ export type Event =
   | EventBanyancodeCodegraphAutoUpdate
   | EventBanyancodeCodegraphAutoUpdateProgress
   | EventBanyancodeSystemUpdated
+  | EventBanyancodeLspFreshness
   | EventQuestionV2Asked
   | EventQuestionV2Replied
   | EventQuestionV2Rejected
@@ -1515,6 +1516,14 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "banyancode.lsp.freshness"
+        properties: {
+          path: string
+          kind: "file_changed" | "file_deleted" | "indexed" | "rebuilt"
+        }
+      }
+    | {
+        id: string
         type: "question.v2.asked"
         properties: {
           id: string
@@ -2227,6 +2236,13 @@ export type Config = {
   }
 }
 
+export type BanyanCommands = {
+  typecheck?: string
+  test?: string
+  lint?: string
+  compile?: string
+}
+
 export type BanyanConfig = {
   $schema?: string
   banyancode_openai_compatible_endpoints?: Array<{
@@ -2280,6 +2296,7 @@ export type BanyanConfig = {
               }
             }
       }
+  commands?: BanyanCommands
   banyancode_subagents?: Array<{
     name: string
     description?: string
@@ -5821,6 +5838,15 @@ export type EventBanyancodeSystemUpdated = {
   }
 }
 
+export type EventBanyancodeLspFreshness = {
+  id: string
+  type: "banyancode.lsp.freshness"
+  properties: {
+    path: string
+    kind: "file_changed" | "file_deleted" | "indexed" | "rebuilt"
+  }
+}
+
 export type EventQuestionV2Asked = {
   id: string
   type: "question.v2.asked"
@@ -6635,6 +6661,68 @@ export type GlobalCodegraphBuildResponses = {
 
 export type GlobalCodegraphBuildResponse = GlobalCodegraphBuildResponses[keyof GlobalCodegraphBuildResponses]
 
+export type GlobalLspStartData = {
+  body?: {
+    /**
+     * Absolute filesystem path to watch (must start with '/' or a Windows drive prefix like 'C:\' or 'C:/')
+     */
+    root: string
+  }
+  path?: never
+  query?: never
+  url: "/global/lsp-start"
+}
+
+export type GlobalLspStartErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalLspStartError = GlobalLspStartErrors[keyof GlobalLspStartErrors]
+
+export type GlobalLspStartResponses = {
+  /**
+   * LSP freshness start result
+   */
+  200: {
+    started: boolean
+    root: string
+    reason?: string
+  }
+}
+
+export type GlobalLspStartResponse = GlobalLspStartResponses[keyof GlobalLspStartResponses]
+
+export type GlobalLspStopData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/lsp-stop"
+}
+
+export type GlobalLspStopErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalLspStopError = GlobalLspStopErrors[keyof GlobalLspStopErrors]
+
+export type GlobalLspStopResponses = {
+  /**
+   * LSP freshness stop result
+   */
+  200: {
+    stopped: boolean
+    reason?: string
+  }
+}
+
+export type GlobalLspStopResponse = GlobalLspStopResponses[keyof GlobalLspStopResponses]
+
 export type GlobalCodegraphNodesData = {
   body?: never
   path?: never
@@ -7042,6 +7130,158 @@ export type GlobalSafeRenameResponses = {
 }
 
 export type GlobalSafeRenameResponse = GlobalSafeRenameResponses[keyof GlobalSafeRenameResponses]
+
+export type GlobalTypecheckData = {
+  /**
+   * Run the project's type checker (`bunx tsc --noEmit` by default, or `tsgo --noEmit` if the project uses the TypeScript 7 native compiler). Returns a structured pass/fail with the last 64 KB of stdout+stderr. Caches results by (path, package.json hash, tsconfig.json hash) for 1 hour.
+   */
+  body?: {
+    /**
+     * File path (relative to project root; letters, digits, '.', '_', '-', '/' only)
+     */
+    path?: string
+    projectRoot?: string
+    /**
+     * Override the default 5-minute timeout in milliseconds. Useful for fast-feedback loops on small projects.
+     */
+    timeoutMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    /**
+     * Cap the size of the returned `rawOutput` (in bytes). Defaults to 65536 (64 KB). 0 = no output.
+     */
+    limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path?: never
+  query?: never
+  url: "/global/typecheck"
+}
+
+export type GlobalTypecheckErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalTypecheckError = GlobalTypecheckErrors[keyof GlobalTypecheckErrors]
+
+export type GlobalTypecheckResponses = {
+  /**
+   * Typecheck result
+   */
+  200: {
+    status: "passed" | "failed" | "errored"
+    summary: {
+      [key: string]: unknown
+    }
+    durationMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    cacheHit: boolean
+    rawOutput?: string
+  }
+}
+
+export type GlobalTypecheckResponse = GlobalTypecheckResponses[keyof GlobalTypecheckResponses]
+
+export type GlobalTestRunData = {
+  /**
+   * Run the project's test runner (`bun test <path>` by default) and return parsed pass/fail/skip counters. Returns a structured result so the agent does not have to grep a raw stdout stream.
+   */
+  body?: {
+    /**
+     * REQUIRED. Path to a test file or glob (e.g. 'src/foo.test.ts') relative to the project root. The resolved absolute path MUST stay inside the project root; paths that escape are rejected.
+     */
+    path: string
+    framework?: "bun" | "jest" | "vitest" | "mocha"
+    projectRoot?: string
+    /**
+     * Override the default 5-minute timeout in milliseconds.
+     */
+    timeoutMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    /**
+     * Cap the size of the returned `rawOutput` (in bytes). Defaults to 65536 (64 KB). 0 = no output.
+     */
+    limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path?: never
+  query?: never
+  url: "/global/test-run"
+}
+
+export type GlobalTestRunErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalTestRunError = GlobalTestRunErrors[keyof GlobalTestRunErrors]
+
+export type GlobalTestRunResponses = {
+  /**
+   * Test run result
+   */
+  200: {
+    status: "passed" | "failed" | "errored"
+    summary: {
+      [key: string]: unknown
+    }
+    durationMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    cacheHit: boolean
+    rawOutput?: string
+  }
+}
+
+export type GlobalTestRunResponse = GlobalTestRunResponses[keyof GlobalTestRunResponses]
+
+export type GlobalLintData = {
+  /**
+   * Run the project's lint command (`bun run lint` by default, or whatever is configured in `banyancode.json` → `commands.lint`). Returns a structured pass/fail with the last 64 KB of output.
+   */
+  body?: {
+    /**
+     * File or directory path (relative to project root; letters, digits, '.', '_', '-', '/' only)
+     */
+    path?: string
+    projectRoot?: string
+    /**
+     * Override the default 2-minute timeout in milliseconds.
+     */
+    timeoutMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    /**
+     * Cap the size of the returned `rawOutput` (in bytes). Defaults to 65536 (64 KB). 0 = no output.
+     */
+    limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path?: never
+  query?: never
+  url: "/global/lint"
+}
+
+export type GlobalLintErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalLintError = GlobalLintErrors[keyof GlobalLintErrors]
+
+export type GlobalLintResponses = {
+  /**
+   * Lint result
+   */
+  200: {
+    status: "passed" | "failed" | "errored"
+    summary: {
+      [key: string]: unknown
+    }
+    durationMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    cacheHit: boolean
+    rawOutput?: string
+    command: string
+  }
+}
+
+export type GlobalLintResponse = GlobalLintResponses[keyof GlobalLintResponses]
 
 export type GlobalMeshStatusData = {
   body?: never

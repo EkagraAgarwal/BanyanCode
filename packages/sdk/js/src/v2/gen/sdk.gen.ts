@@ -134,6 +134,12 @@ import type {
   GlobalEventResponses,
   GlobalHealthErrors,
   GlobalHealthResponses,
+  GlobalLintErrors,
+  GlobalLintResponses,
+  GlobalLspStartErrors,
+  GlobalLspStartResponses,
+  GlobalLspStopErrors,
+  GlobalLspStopResponses,
   GlobalMeshStatusErrors,
   GlobalMeshStatusResponses,
   GlobalPreflightErrors,
@@ -144,6 +150,10 @@ import type {
   GlobalSessionImportResponses,
   GlobalStartupErrors,
   GlobalStartupResponses,
+  GlobalTestRunErrors,
+  GlobalTestRunResponses,
+  GlobalTypecheckErrors,
+  GlobalTypecheckResponses,
   GlobalUpgradeErrors,
   GlobalUpgradeResponses,
   GlobalWebsearchFreeErrors,
@@ -1666,6 +1676,44 @@ export class Codegraph extends HeyApiClient {
   }
 }
 
+export class Lsp extends HeyApiClient {
+  /**
+   * Start LSP freshness watcher
+   *
+   * Subscribe the LSP freshness service to file changes under the given workspace root. Long-running; the kickoff runs in the AppRuntime fiber so the subscription outlives the request. Records a `file_changed` or `file_deleted` row in `lsp_invalidation_events` per OS event, and exposes the live event stream on `Banyan.LspFreshnessService.events()`. Path is validated server-side against the workspace root to prevent traversal.
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters?: {
+      root?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "root" }] }])
+    return (options?.client ?? this.client).post<GlobalLspStartResponses, GlobalLspStartErrors, ThrowOnError>({
+      url: "/global/lsp-start",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Stop LSP freshness watcher
+   *
+   * Unsubscribe the LSP freshness service and shut down the in-memory event queue. Idempotent — calling when no subscription is active returns `stopped: true` with `reason: 'not_running'`.
+   */
+  public stop<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<GlobalLspStopResponses, GlobalLspStopErrors, ThrowOnError>({
+      url: "/global/lsp-stop",
+      ...options,
+    })
+  }
+}
+
 export class BanyanAgent extends HeyApiClient {
   /**
    * Save custom agent
@@ -2013,6 +2061,125 @@ export class Global extends HeyApiClient {
     })
   }
 
+  /**
+   * Run typecheck
+   *
+   * Run the project's type checker (`bunx tsc --noEmit` by default, or `tsgo --noEmit` if the project uses the TypeScript 7 native compiler). Caches results by (path, package.json hash, tsconfig.json hash) for 1 hour.
+   */
+  public typecheck<ThrowOnError extends boolean = false>(
+    parameters?: {
+      path?: string
+      projectRoot?: string
+      timeoutMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "path" },
+            { in: "body", key: "projectRoot" },
+            { in: "body", key: "timeoutMs" },
+            { in: "body", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<GlobalTypecheckResponses, GlobalTypecheckErrors, ThrowOnError>({
+      url: "/global/typecheck",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Run tests
+   *
+   * Run `bun test <path>` for the given file. Caches results for 1 hour.
+   */
+  public testRun<ThrowOnError extends boolean = false>(
+    parameters?: {
+      path?: string
+      framework?: "bun" | "jest" | "vitest" | "mocha"
+      projectRoot?: string
+      timeoutMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "path" },
+            { in: "body", key: "framework" },
+            { in: "body", key: "projectRoot" },
+            { in: "body", key: "timeoutMs" },
+            { in: "body", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<GlobalTestRunResponses, GlobalTestRunErrors, ThrowOnError>({
+      url: "/global/test-run",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Run lint
+   *
+   * Run the project's lint command (per `.banyancode.json` → `commands.lint`, falling back to `bun run lint`). Caches results for 1 hour.
+   */
+  public lint<ThrowOnError extends boolean = false>(
+    parameters?: {
+      path?: string
+      projectRoot?: string
+      timeoutMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "path" },
+            { in: "body", key: "projectRoot" },
+            { in: "body", key: "timeoutMs" },
+            { in: "body", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<GlobalLintResponses, GlobalLintErrors, ThrowOnError>({
+      url: "/global/lint",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
   private _config?: Config
   get config(): Config {
     return (this._config ??= new Config({ client: this.client }))
@@ -2036,6 +2203,11 @@ export class Global extends HeyApiClient {
   private _codegraph?: Codegraph
   get codegraph(): Codegraph {
     return (this._codegraph ??= new Codegraph({ client: this.client }))
+  }
+
+  private _lsp?: Lsp
+  get lsp(): Lsp {
+    return (this._lsp ??= new Lsp({ client: this.client }))
   }
 
   private _banyanAgent?: BanyanAgent
@@ -3385,7 +3557,7 @@ export class Command extends HeyApiClient {
   }
 }
 
-export class Lsp extends HeyApiClient {
+export class Lsp2 extends HeyApiClient {
   /**
    * Get LSP status
    *
@@ -7297,9 +7469,9 @@ export class OpencodeClient extends HeyApiClient {
     return (this._command ??= new Command({ client: this.client }))
   }
 
-  private _lsp?: Lsp
-  get lsp(): Lsp {
-    return (this._lsp ??= new Lsp({ client: this.client }))
+  private _lsp?: Lsp2
+  get lsp(): Lsp2 {
+    return (this._lsp ??= new Lsp2({ client: this.client }))
   }
 
   private _formatter?: Formatter
