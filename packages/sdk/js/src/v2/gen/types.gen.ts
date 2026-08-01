@@ -1439,6 +1439,7 @@ export type GlobalEvent = {
         properties: {
           status: "idle" | "running" | "completed" | "failed" | "cancelled"
           root?: string
+          banyanDir?: string
           dbPath?: string
           done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -5759,6 +5760,7 @@ export type EventBanyancodeCodegraphBuild = {
   properties: {
     status: "idle" | "running" | "completed" | "failed" | "cancelled"
     root?: string
+    banyanDir?: string
     dbPath?: string
     done: number | "NaN" | "Infinity" | "-Infinity"
     total: number | "NaN" | "Infinity" | "-Infinity"
@@ -6655,6 +6657,7 @@ export type GlobalCodegraphBuildResponses = {
     started: boolean
     root?: string
     dbPath?: string
+    banyanDir?: string
     reason?: string
   }
 }
