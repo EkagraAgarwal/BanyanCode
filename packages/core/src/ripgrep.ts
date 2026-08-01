@@ -164,7 +164,14 @@ export const layer = Layer.effect(
             ...(input.hidden ? ["--hidden"] : []),
             ...(input.follow ? ["--follow"] : []),
             `--glob=${input.pattern}`,
+            // Phase 7 follow-up: exclude generated cache trees by default
+            // so a broken symlink under `.bun-cache` (or `node_modules`)
+            // cannot turn a partial search into a total outage. Users
+            // who explicitly opt in to those paths can pass an
+            // absolute glob or set `hidden: true` + a manual include.
             "--glob=!**/.git/**",
+            "--glob=!**/.bun-cache/**",
+            "--glob=!**/node_modules/**",
             ".",
           ],
           parse: (line) =>
@@ -199,6 +206,8 @@ export const layer = Layer.effect(
             ...(input.follow ? ["--follow"] : []),
             ...(input.pattern === "*" ? [] : [`--glob=${input.pattern}`]),
             "--glob=!**/.git/**",
+            "--glob=!**/.bun-cache/**",
+            "--glob=!**/node_modules/**",
             ".",
           ],
           parse: (line) => {
@@ -229,6 +238,8 @@ export const layer = Layer.effect(
             "--no-messages",
             ...(input.include ? [`--glob=${input.include}`] : []),
             "--glob=!**/.git/**",
+            "--glob=!**/.bun-cache/**",
+            "--glob=!**/node_modules/**",
             "--",
             input.pattern,
             input.file ?? ".",

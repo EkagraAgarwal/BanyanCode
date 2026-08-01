@@ -213,6 +213,10 @@ export interface ArchitecturalSlice {
   readonly directCallers: readonly CodegraphNode[]
   readonly transitiveDependents: readonly CodegraphNode[]
   readonly moreAvailable?: { readonly callers?: number; readonly dependents?: number }
+  // Phase 7 follow-up: explicit diagnostic states so callers can
+  // distinguish "no-source-callers" / "no-edges-found" / "out-of-scope"
+  // instead of inferring state from empty arrays.
+  readonly diagnostics?: readonly Diagnostic[]
 }
 
 export interface RepositoryContext {
