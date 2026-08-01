@@ -3,6 +3,7 @@ export * as SymbolResolver from "./symbol-resolver"
 import { Context, Effect, Layer } from "effect"
 import { CodegraphRepo } from "./codegraph-repo"
 import type { Interface as CodegraphRepoInterface } from "./codegraph-repo"
+import { isTestFilePath } from "./codegraph-paths"
 import type { CodegraphNode } from "./types"
 
 /**
@@ -65,6 +66,7 @@ export type ResolveRepo = Pick<
   | "listAllNodes"
   | "nodeByID"
   | "fileIDsByServiceName"
+  | "filesByIDs"
 >
 
 export const resolveGraphTargetPure = (
@@ -125,12 +127,36 @@ export const resolveGraphTargetStrict = (
       }
     }
 
+    // Re-order tag-fallback candidates so non-test files rank ahead of test
+    // doubles (P0 step 3). Test classes that happen to declare the same tag as
+    // the source `Service` (e.g. `class MemoryRepo extends Context.Service<…>("…/MemoryRepo")`
+    // in a `*.test.ts`) must not win canonical resolution when both match. We
+    // batch-load the candidate files in one query so the test-path check is
+    // local and doesn't repeat N path lookups.
+    const reorderNonTestFirst = (
+      nodes: readonly CodegraphNode[],
+    ): Effect.Effect<CodegraphNode[], never, never> =>
+      Effect.gen(function* () {
+        if (nodes.length <= 1) return [...nodes]
+        const fileIDs = [...new Set(nodes.map((n) => n.fileID))]
+        const files = yield* repo.filesByIDs(fileIDs)
+        const pathByID = new Map(files.map((f) => [f.id, f.path]))
+        const isTestFile = (n: CodegraphNode): boolean => {
+          const p = pathByID.get(n.fileID)
+          return p ? isTestFilePath(p) : false
+        }
+        const nonTest = nodes.filter((n) => !isTestFile(n))
+        const test = nodes.filter(isTestFile)
+        return [...nonTest, ...test]
+      })
+
     // 1) Context.Service tag lookup — covers BanyanCode's dominant pattern.
-    const tagHits = filterByKind(filterByFile(yield* repo.findSymbolsByServiceTag(target)))
+    const tagHitsRaw = filterByKind(filterByFile(yield* repo.findSymbolsByServiceTag(target)))
+    const tagHits = dedupeByID(tagHitsRaw)
     tried.push("tag-fallback")
     if (tagHits.length > 0) {
-      const dedup = dedupeByID(tagHits)
-      return toResult(dedup.slice(0, limit), "tag-fallback")
+      const ordered = yield* reorderNonTestFirst(tagHits)
+      return toResult(ordered.slice(0, limit), "tag-fallback")
     }
 
     // 2) Exact name match (Drizzle `name = ?`).
@@ -146,6 +172,12 @@ export const resolveGraphTargetStrict = (
     //    `parentName` — the latter is how `extends Context.Service<…>("…/MemoryRepo")`
     //    indexed classes resolve under a `MemoryRepo.leaf` lookup despite the
     //    class node being `name: "Service"`.
+    //    The computed `validFileIDs` is hoisted to the surrounding scope so
+    //    step 4 can reuse it as a fallback scope when this step finds no
+    //    exact `leaf` match — without that, a `Foo.put` lookup that misses
+    //    here would fall through to step 4 unscoped and pick an arbitrary
+    //    `put` across the whole graph.
+    let parentFileIDs: ReadonlySet<string> | undefined
     if (target.includes(".")) {
       const parts = target.split(".")
       const leaf = parts[parts.length - 1] ?? ""
@@ -156,6 +188,15 @@ export const resolveGraphTargetStrict = (
         for (const fileID of yield* repo.fileIDsByServiceName(parentName)) {
           validFileIDs.add(fileID)
         }
+        // Rank non-test files first so test doubles of the same parent don't
+        // widen the scope to bogus paths. Capture for step 4 reuse.
+        const validFiles = yield* repo.filesByIDs([...validFileIDs])
+        const pathByID = new Map(validFiles.map((f) => [f.id, f.path]))
+        for (const id of [...validFileIDs]) {
+          const p = pathByID.get(id)
+          if (p && isTestFilePath(p)) validFileIDs.delete(id)
+        }
+        parentFileIDs = validFileIDs
         const splitHits = allNodes.filter(
           (n) => n.name === leaf && validFileIDs.has(n.fileID) && (input.kind ? n.kind === input.kind : true),
         )
@@ -172,16 +213,21 @@ export const resolveGraphTargetStrict = (
     }
 
     // 4) Code-substring + last-segment fallback (mirrors code_find definition).
-    //    Code-substring uses the FULL lowerTarget (e.g. "Effect.gen"), which is
-    //    safe even for short leaves because it's specific enough not to
-    //    false-positive on unrelated source. Name-based matching is still gated
-    //    by isShortLeaf since short names like "gen" are too generic.
+    //    When the target was qualified and step 3 computed a parent file scope,
+    //    restrict code-substring hits to that scope AND allow name equality
+    //    even for short leaves — a 3-char `put` inside the right file is not
+    //    generic. Outside a scope, the original `isShortLeaf` gate stands so
+    //    unscoped short targets like bare `put` still fail over to name-like
+    //    rather than matching every `put` repo-wide.
     const lowerTarget = target.toLowerCase()
     const leaf = target.includes(".") ? target.split(".").pop()!.toLowerCase() : lowerTarget
+    const scoped = parentFileIDs !== undefined && parentFileIDs.size > 0
     const isShortLeaf = leaf.length < 6
     const allNodes = yield* repo.listAllNodes()
     const nameMatches = (n: CodegraphNode): boolean => {
-      if (isShortLeaf) return false
+      // Scoped lookups trust the leaf name even when short — the parent file
+      // scope is the disambiguator. Unscoped lookups keep the gate.
+      if (isShortLeaf && !scoped) return false
       return n.name.toLowerCase() === lowerTarget || n.name.toLowerCase() === leaf
     }
     const codeHitsRaw = allNodes.filter(
@@ -189,6 +235,7 @@ export const resolveGraphTargetStrict = (
         n.kind !== "file" &&
         (input.kind ? n.kind === input.kind : true) &&
         (!input.fileID || n.fileID === input.fileID) &&
+        (scoped ? parentFileIDs!.has(n.fileID) : true) &&
         (nameMatches(n) || n.code?.toLowerCase().includes(lowerTarget) === true),
     )
     const codeHits = sortBySpecificity(codeHitsRaw, lowerTarget)
