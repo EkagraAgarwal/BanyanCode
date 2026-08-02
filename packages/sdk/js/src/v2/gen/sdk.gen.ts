@@ -136,10 +136,6 @@ import type {
   GlobalHealthResponses,
   GlobalLintErrors,
   GlobalLintResponses,
-  GlobalLspStartErrors,
-  GlobalLspStartResponses,
-  GlobalLspStopErrors,
-  GlobalLspStopResponses,
   GlobalMeshStatusErrors,
   GlobalMeshStatusResponses,
   GlobalPreflightErrors,
@@ -1676,44 +1672,6 @@ export class Codegraph extends HeyApiClient {
   }
 }
 
-export class Lsp extends HeyApiClient {
-  /**
-   * Start LSP freshness watcher
-   *
-   * Subscribe the LSP freshness service to file changes under the given workspace root. Long-running; the kickoff runs in the AppRuntime fiber so the subscription outlives the request. Records a `file_changed` or `file_deleted` row in `lsp_invalidation_events` per OS event, and exposes the live event stream on `Banyan.LspFreshnessService.events()`. Path is validated server-side against the workspace root to prevent traversal.
-   */
-  public start<ThrowOnError extends boolean = false>(
-    parameters?: {
-      root?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "root" }] }])
-    return (options?.client ?? this.client).post<GlobalLspStartResponses, GlobalLspStartErrors, ThrowOnError>({
-      url: "/global/lsp-start",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Stop LSP freshness watcher
-   *
-   * Unsubscribe the LSP freshness service and shut down the in-memory event queue. Idempotent — calling when no subscription is active returns `stopped: true` with `reason: 'not_running'`.
-   */
-  public stop<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
-    return (options?.client ?? this.client).post<GlobalLspStopResponses, GlobalLspStopErrors, ThrowOnError>({
-      url: "/global/lsp-stop",
-      ...options,
-    })
-  }
-}
-
 export class BanyanAgent extends HeyApiClient {
   /**
    * Save custom agent
@@ -2203,11 +2161,6 @@ export class Global extends HeyApiClient {
   private _codegraph?: Codegraph
   get codegraph(): Codegraph {
     return (this._codegraph ??= new Codegraph({ client: this.client }))
-  }
-
-  private _lsp?: Lsp
-  get lsp(): Lsp {
-    return (this._lsp ??= new Lsp({ client: this.client }))
   }
 
   private _banyanAgent?: BanyanAgent
@@ -3557,7 +3510,7 @@ export class Command extends HeyApiClient {
   }
 }
 
-export class Lsp2 extends HeyApiClient {
+export class Lsp extends HeyApiClient {
   /**
    * Get LSP status
    *
@@ -7469,9 +7422,9 @@ export class OpencodeClient extends HeyApiClient {
     return (this._command ??= new Command({ client: this.client }))
   }
 
-  private _lsp?: Lsp2
-  get lsp(): Lsp2 {
-    return (this._lsp ??= new Lsp2({ client: this.client }))
+  private _lsp?: Lsp
+  get lsp(): Lsp {
+    return (this._lsp ??= new Lsp({ client: this.client }))
   }
 
   private _formatter?: Formatter

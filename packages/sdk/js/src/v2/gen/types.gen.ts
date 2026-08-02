@@ -63,6 +63,10 @@ export type Event =
   | EventPtyUpdated
   | EventPtyExited
   | EventPtyDeleted
+  | EventQuestionV2Asked
+  | EventQuestionV2Replied
+  | EventQuestionV2Rejected
+  | EventTodoUpdated
   | EventBanyancodeConfigUpdated
   | EventBanyancodeMeshStatus
   | EventBanyancodeMemoryCommitted
@@ -73,11 +77,6 @@ export type Event =
   | EventBanyancodeCodegraphAutoUpdate
   | EventBanyancodeCodegraphAutoUpdateProgress
   | EventBanyancodeSystemUpdated
-  | EventBanyancodeLspFreshness
-  | EventQuestionV2Asked
-  | EventQuestionV2Replied
-  | EventQuestionV2Rejected
-  | EventTodoUpdated
   | EventLspUpdated
   | EventPermissionAsked
   | EventPermissionReplied
@@ -1355,6 +1354,44 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "question.v2.asked"
+        properties: {
+          id: string
+          sessionID: string
+          /**
+           * Questions to ask
+           */
+          questions: Array<QuestionV2Info>
+          tool?: QuestionV2Tool
+        }
+      }
+    | {
+        id: string
+        type: "question.v2.replied"
+        properties: {
+          sessionID: string
+          requestID: string
+          answers: Array<QuestionV2Answer>
+        }
+      }
+    | {
+        id: string
+        type: "question.v2.rejected"
+        properties: {
+          sessionID: string
+          requestID: string
+        }
+      }
+    | {
+        id: string
+        type: "todo.updated"
+        properties: {
+          sessionID: string
+          todos: Array<Todo>
+        }
+      }
+    | {
+        id: string
         type: "banyancode.config.updated"
         properties: {
           scope?: string
@@ -1513,52 +1550,6 @@ export type GlobalEvent = {
           diskUsedBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           diskTotalBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           platform: "windows" | "linux" | "darwin"
-        }
-      }
-    | {
-        id: string
-        type: "banyancode.lsp.freshness"
-        properties: {
-          path: string
-          kind: "file_changed" | "file_deleted" | "indexed" | "rebuilt"
-        }
-      }
-    | {
-        id: string
-        type: "question.v2.asked"
-        properties: {
-          id: string
-          sessionID: string
-          /**
-           * Questions to ask
-           */
-          questions: Array<QuestionV2Info>
-          tool?: QuestionV2Tool
-        }
-      }
-    | {
-        id: string
-        type: "question.v2.replied"
-        properties: {
-          sessionID: string
-          requestID: string
-          answers: Array<QuestionV2Answer>
-        }
-      }
-    | {
-        id: string
-        type: "question.v2.rejected"
-        properties: {
-          sessionID: string
-          requestID: string
-        }
-      }
-    | {
-        id: string
-        type: "todo.updated"
-        properties: {
-          sessionID: string
-          todos: Array<Todo>
         }
       }
     | {
@@ -5668,6 +5659,48 @@ export type EventPtyDeleted = {
   }
 }
 
+export type EventQuestionV2Asked = {
+  id: string
+  type: "question.v2.asked"
+  properties: {
+    id: string
+    sessionID: string
+    /**
+     * Questions to ask
+     */
+    questions: Array<QuestionV2Info>
+    tool?: QuestionV2Tool
+  }
+}
+
+export type EventQuestionV2Replied = {
+  id: string
+  type: "question.v2.replied"
+  properties: {
+    sessionID: string
+    requestID: string
+    answers: Array<QuestionV2Answer>
+  }
+}
+
+export type EventQuestionV2Rejected = {
+  id: string
+  type: "question.v2.rejected"
+  properties: {
+    sessionID: string
+    requestID: string
+  }
+}
+
+export type EventTodoUpdated = {
+  id: string
+  type: "todo.updated"
+  properties: {
+    sessionID: string
+    todos: Array<Todo>
+  }
+}
+
 export type EventBanyancodeConfigUpdated = {
   id: string
   type: "banyancode.config.updated"
@@ -5837,57 +5870,6 @@ export type EventBanyancodeSystemUpdated = {
     diskUsedBytes?: number | "NaN" | "Infinity" | "-Infinity"
     diskTotalBytes?: number | "NaN" | "Infinity" | "-Infinity"
     platform: "windows" | "linux" | "darwin"
-  }
-}
-
-export type EventBanyancodeLspFreshness = {
-  id: string
-  type: "banyancode.lsp.freshness"
-  properties: {
-    path: string
-    kind: "file_changed" | "file_deleted" | "indexed" | "rebuilt"
-  }
-}
-
-export type EventQuestionV2Asked = {
-  id: string
-  type: "question.v2.asked"
-  properties: {
-    id: string
-    sessionID: string
-    /**
-     * Questions to ask
-     */
-    questions: Array<QuestionV2Info>
-    tool?: QuestionV2Tool
-  }
-}
-
-export type EventQuestionV2Replied = {
-  id: string
-  type: "question.v2.replied"
-  properties: {
-    sessionID: string
-    requestID: string
-    answers: Array<QuestionV2Answer>
-  }
-}
-
-export type EventQuestionV2Rejected = {
-  id: string
-  type: "question.v2.rejected"
-  properties: {
-    sessionID: string
-    requestID: string
-  }
-}
-
-export type EventTodoUpdated = {
-  id: string
-  type: "todo.updated"
-  properties: {
-    sessionID: string
-    todos: Array<Todo>
   }
 }
 
@@ -6663,68 +6645,6 @@ export type GlobalCodegraphBuildResponses = {
 }
 
 export type GlobalCodegraphBuildResponse = GlobalCodegraphBuildResponses[keyof GlobalCodegraphBuildResponses]
-
-export type GlobalLspStartData = {
-  body?: {
-    /**
-     * Absolute filesystem path to watch (must start with '/' or a Windows drive prefix like 'C:\' or 'C:/')
-     */
-    root: string
-  }
-  path?: never
-  query?: never
-  url: "/global/lsp-start"
-}
-
-export type GlobalLspStartErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-}
-
-export type GlobalLspStartError = GlobalLspStartErrors[keyof GlobalLspStartErrors]
-
-export type GlobalLspStartResponses = {
-  /**
-   * LSP freshness start result
-   */
-  200: {
-    started: boolean
-    root: string
-    reason?: string
-  }
-}
-
-export type GlobalLspStartResponse = GlobalLspStartResponses[keyof GlobalLspStartResponses]
-
-export type GlobalLspStopData = {
-  body?: never
-  path?: never
-  query?: never
-  url: "/global/lsp-stop"
-}
-
-export type GlobalLspStopErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type GlobalLspStopError = GlobalLspStopErrors[keyof GlobalLspStopErrors]
-
-export type GlobalLspStopResponses = {
-  /**
-   * LSP freshness stop result
-   */
-  200: {
-    stopped: boolean
-    reason?: string
-  }
-}
-
-export type GlobalLspStopResponse = GlobalLspStopResponses[keyof GlobalLspStopResponses]
 
 export type GlobalCodegraphNodesData = {
   body?: never

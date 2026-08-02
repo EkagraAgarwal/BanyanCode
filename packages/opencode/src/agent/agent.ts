@@ -174,10 +174,6 @@ export const layer = Layer.effect(
           banyan_typecheck: "allow",
           banyan_test: "allow",
           banyan_lint: "allow",
-          lsp_definition: "allow",
-          lsp_references: "allow",
-          lsp_hover: "allow",
-          lsp_diagnostics: "allow",
         })
 
         const user = Permission.fromConfig(cfg.permission ?? {})
@@ -300,10 +296,6 @@ export const layer = Layer.effect(
                 banyan_typecheck: "allow",
                 banyan_test: "allow",
                 banyan_lint: "allow",
-                lsp_definition: "allow",
-                lsp_references: "allow",
-                lsp_hover: "allow",
-                lsp_diagnostics: "allow",
                 codegraph_query: "allow",
                 codegraph_search: "allow",
                 codegraph_callers: "allow",
@@ -418,10 +410,6 @@ export const layer = Layer.effect(
                 banyan_typecheck: "allow",
                 banyan_test: "allow",
                 banyan_lint: "allow",
-                lsp_definition: "allow",
-                lsp_references: "allow",
-                lsp_hover: "allow",
-                lsp_diagnostics: "allow",
                 codegraph_query: "allow",
                 codegraph_callers: "allow",
                 codegraph_dependents: "allow",
@@ -621,10 +609,6 @@ export const layer = Layer.effect(
                 banyan_typecheck: "allow",
                 banyan_test: "allow",
                 banyan_lint: "allow",
-                lsp_definition: "allow",
-                lsp_references: "allow",
-                lsp_hover: "allow",
-                lsp_diagnostics: "allow",
                 task: {
                   "*": "deny",
                   scout: "allow",

@@ -39,10 +39,6 @@ export const REQUIRED_TOOLS = [
   "banyan_typecheck",
   "banyan_test",
   "banyan_lint",
-  "lsp_definition",
-  "lsp_references",
-  "lsp_hover",
-  "lsp_diagnostics",
 ] as const
 
 // Internal-only helpers that MUST NEVER appear in the rendered guide.

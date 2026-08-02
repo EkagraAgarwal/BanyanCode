@@ -155,27 +155,6 @@ export const CodegraphBuildInput = Schema.Struct({
   dbPath: Schema.optional(Schema.String),
 })
 
-export const LspStartInput = Schema.Struct({
-  root: Schema.String.check(
-    Schema.isPattern(/^(\/|[A-Z]:[\\/])/, {
-      identifier: "LspStartRoot",
-      description: "Absolute filesystem path to watch (must start with '/' or a Windows drive prefix like 'C:\\' or 'C:/')",
-    }),
-    Schema.isMaxLength(4096),
-  ),
-})
-
-export const LspStartResult = Schema.Struct({
-  started: Schema.Boolean,
-  root: Schema.String,
-  reason: Schema.optional(Schema.String),
-})
-
-export const LspStopResult = Schema.Struct({
-  stopped: Schema.Boolean,
-  reason: Schema.optional(Schema.String),
-})
-
 export const CodegraphBuildResult = Schema.Struct({
   started: Schema.Boolean,
   root: Schema.optional(Schema.String),
@@ -252,8 +231,6 @@ export const GlobalPaths = {
   banyanConfig: "/global/banyan-config",
   codegraphNodes: "/global/codegraph-nodes",
   codegraphEdges: "/global/codegraph-edges",
-  lspStart: "/global/lsp-start",
-  lspStop: "/global/lsp-stop",
   banyanAgentSave: "/global/banyan-agent/save",
   banyanAgentOverride: "/global/banyan-agent-override",
   banyanAgentPrompt: "/global/banyan-agent-prompt",
@@ -415,28 +392,6 @@ export const GlobalApi = HttpApi.make("global").add(
           summary: "Build code graph index",
           description:
             "Kick off a codegraph build for the given root (defaults to the current workspace). Runs in the background; progress is published via the banyancode.codegraph.build event.",
-        }),
-      ),
-      HttpApiEndpoint.post("lspStart", GlobalPaths.lspStart, {
-        payload: LspStartInput,
-        success: described(LspStartResult, "LSP freshness start result"),
-        error: HttpApiError.BadRequest,
-      }).annotateMerge(
-        OpenApi.annotations({
-          identifier: "global.lsp.start",
-          summary: "Start LSP freshness watcher",
-          description:
-            "Subscribe the LSP freshness service to file changes under the given workspace root. Long-running; the kickoff runs in the AppRuntime fiber so the subscription outlives the request. Records a `file_changed` or `file_deleted` row in `lsp_invalidation_events` per OS event, and exposes the live event stream on `Banyan.LspFreshnessService.events()`. Path is validated server-side against the workspace root to prevent traversal.",
-        }),
-      ),
-      HttpApiEndpoint.post("lspStop", GlobalPaths.lspStop, {
-        success: described(LspStopResult, "LSP freshness stop result"),
-      }).annotateMerge(
-        OpenApi.annotations({
-          identifier: "global.lsp.stop",
-          summary: "Stop LSP freshness watcher",
-          description:
-            "Unsubscribe the LSP freshness service and shut down the in-memory event queue. Idempotent — calling when no subscription is active returns `stopped: true` with `reason: 'not_running'`.",
         }),
       ),
       HttpApiEndpoint.get("codegraphNodes", GlobalPaths.codegraphNodes, {
