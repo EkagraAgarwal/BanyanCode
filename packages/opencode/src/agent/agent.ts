@@ -184,9 +184,11 @@ export const layer = Layer.effect(
           banyanConfigOpt._tag === "Some"
             ? ((yield* banyanConfigOpt.value.get()).banyancode_max_subagents ?? DEFAULT_MAX_SUBAGENTS)
             : DEFAULT_MAX_SUBAGENTS
-        const renderedOrchestratorPrompt = renderTemplate(PROMPT_ORCHESTRATOR, {
-          maxSubagents: String(maxSubagents),
-        })
+        const subagentVars: Record<string, string> = { maxSubagents: String(maxSubagents) }
+        const renderedOrchestratorPrompt = renderTemplate(PROMPT_ORCHESTRATOR, subagentVars)
+        const renderedExplorePrompt = renderTemplate(PROMPT_EXPLORE, subagentVars)
+        const renderedResearcherPrompt = renderTemplate(PROMPT_RESEARCHER, subagentVars)
+        const renderedScoutPrompt = renderTemplate(PROMPT_SCOUT, subagentVars)
 
         const agents: Record<string, Info> = {
           build: {
@@ -243,6 +245,10 @@ export const layer = Layer.effect(
                 repository_relationships: "allow",
 
                 repository_ownership: "allow",
+                task: {
+                  "*": "deny",
+                  scout: "allow",
+                },
                 edit: {
                   "*": "deny",
                   [path.join(".opencode", "plans", "*.md")]: "allow",
@@ -320,7 +326,7 @@ export const layer = Layer.effect(
               user,
             ),
             description: `Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.`,
-            prompt: PROMPT_EXPLORE,
+            prompt: renderedExplorePrompt,
             options: {},
             mode: "subagent",
             native: true,
@@ -385,7 +391,7 @@ export const layer = Layer.effect(
             description: `Fast reconnaissance agent. Single shot, return within 3 tool calls. Read-only exploration.`,
             mode: "subagent",
             native: true,
-            prompt: PROMPT_SCOUT,
+            prompt: renderedScoutPrompt,
             permission: Permission.merge(
               defaults,
               Permission.fromConfig({
@@ -567,7 +573,7 @@ export const layer = Layer.effect(
               "Read-only subagent. Performs free web search via DuckDuckGo and reads external docs. Writes findings to shared_memory.",
             mode: "subagent",
             native: true,
-            prompt: PROMPT_RESEARCHER,
+            prompt: renderedResearcherPrompt,
             permission: Permission.merge(
               defaults,
               Permission.fromConfig({

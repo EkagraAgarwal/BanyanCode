@@ -1,6 +1,7 @@
 import { afterEach, describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import path from "path"
+import { Banyan } from "@opencode-ai/core/banyancode"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { Agent } from "../../src/agent/agent"
@@ -11,6 +12,8 @@ import { Global } from "@opencode-ai/core/global"
 import { Plugin } from "../../src/plugin"
 import { Provider } from "../../src/provider/provider"
 import { Skill } from "../../src/skill"
+import { SystemPrompt } from "../../src/session/system"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 
 process.env.BANYANCODE_ENABLE = "1"
@@ -27,6 +30,16 @@ const agentLayer = () =>
   )
 
 const it = testEffect(agentLayer())
+
+const policyLayer = Layer.mergeAll(
+  Banyan.CodegraphSystemSourceNS.defaultLayer,
+  SystemPrompt.defaultLayer,
+  Skill.defaultLayer,
+  FSUtil.defaultLayer,
+  LocationServiceMap.layer,
+)
+
+const itPolicy = testEffect(policyLayer)
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -55,14 +68,31 @@ describe("orchestrator agent", () => {
         expect(prompt).toContain("fanout")
         expect(prompt).toContain("PREFER 2-3 parallel subagents")
         expect(prompt).toContain("maximum is 5")
+        // The orchestrator prompt now DELEGATES to the system context for
+        // the codegraph policy rather than inlining it. The full tool list
+        // (codegraph_build, code_find, ...) lives in the SystemPrompt
+        // block, asserted below in the policy-contains-tools suite.
         expect(prompt).toContain("Codegraph-first search policy")
-        expect(prompt).toContain("codegraph_build")
-        expect(prompt).toContain("code_find")
-        expect(prompt).toContain("repository_query")
-        expect(prompt).toContain("blast_radius")
-        expect(prompt).toContain("preflight")
-        expect(prompt).toContain("edit_plan")
+        expect(prompt).toContain("system context")
+        expect(prompt).toContain("Background subagents")
       }),
+  )
+})
+
+describe("orchestrator agent — system-context policy still carries the tool list", () => {
+  itPolicy.effect("Codegraph-first policy block names every required tool", () =>
+    Effect.gen(function* () {
+      const block = yield* SystemPrompt.Service.use((svc) => svc.codegraph())
+      expect(block).toBeDefined()
+      expect(block).toContain("codegraph_build")
+      expect(block).toContain("code_find")
+      expect(block).toContain("repository_query")
+      expect(block).toContain("blast_radius")
+      expect(block).toContain("preflight")
+      expect(block).toContain("edit_plan")
+      // New policy section shipped by Phase 1.
+      expect(block).toContain("Background subagents")
+    }),
   )
 })
 
