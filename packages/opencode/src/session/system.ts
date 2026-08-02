@@ -113,13 +113,13 @@ export const layer = Layer.effect(
 
         // Prefer the BanyanCode source module when it is in scope (e.g. tests
         // that provide the layer, or future wiring via `defaultLayer`). Falls
-        // back to the policy-only block when the service is not available so
-        // the V1 prompt still ships a model-facing preference for graph +
-        // repository tools over grep/glob/bash.
+        // back to the exported `POLICY_TEXT` constant when the service is not
+        // available so the V1 prompt still ships the model-facing preference
+        // for graph + repository tools over grep/glob/bash.
         const source = yield* Effect.serviceOption(Banyan.CodegraphSystemSource)
         return yield* Option.match(source, {
           onSome: (svc) => svc.load(),
-          onNone: () => Effect.succeed(legacyCodegraphPolicy()),
+          onNone: () => Effect.succeed(Banyan.CodegraphSystemSourceNS.POLICY_TEXT),
         })
       }),
     })
@@ -131,41 +131,5 @@ export const defaultLayer = layer.pipe(Layer.provide(Skill.defaultLayer), Layer.
 const locationServiceMapNode = LayerNode.make(LocationServiceMap.layer, [])
 
 export const node = LayerNode.make(layer, [Skill.node, locationServiceMapNode])
-
-/**
- * Policy-only fallback rendered when the BanyanCode `CodegraphSystemSource`
- * service is not in scope. Mirrors the section header the V2 source emits so
- * V1 always carries at least the section heading; the per-tool guide is added
- * by the V2 path or by tests/calling layers that provide
- * `Banyan.CodegraphSystemSource` to the layer graph.
- */
-function legacyCodegraphPolicy(): string {
-  return [
-    "## Codegraph-first search policy (ALWAYS)",
-    "",
-    "ALWAYS use BanyanCode graph + repository tools first for any code",
-    "question in this workspace. Grep / glob / bash and raw file reads are",
-    "last resorts, not defaults.",
-    "",
-    "Bootstrap rule (do this BEFORE any other action):",
-    "1. If no code graph exists for this workspace, run `codegraph_build` as",
-    "   your very first action. Do not assume one is present. Until the build",
-    "   finishes, `repository_query` returns `degraded: true` and most graph",
-    "   tools are unreliable.",
-    "2. For symbol/file lookup, start with `code_find` (five intents:",
-    "   definition, callers, dependents, impact, find_file).",
-    "3. For semantic/architectural context, escalate to `repository_query`,",
-    "   `repository_explain`, `repository_trace`, `repository_tests`.",
-    "4. Before any non-trivial edit, run `blast_radius` (summary) or",
-    "   `preflight` (decision-ready: callers, tests, docs, configs, event",
-    "   bridges, HTTP routes).",
-    "5. After edits, run `edit_plan(phase=\"after\")` to re-verify blast radius.",
-    "",
-    "Only fall back to grep / glob / bash when:",
-    "- a graph tool explicitly reports empty / stale / not-found,",
-    "- the user explicitly asks for regex or filename-pattern matching,",
-    "- you're searching non-code artifacts (configs, JSON, docs, build outputs).",
-  ].join("\n")
-}
 
 export * as SystemPrompt from "./system"

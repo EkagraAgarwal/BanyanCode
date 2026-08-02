@@ -48,7 +48,7 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphSystemSource") {}
 
-const POLICY_TEXT = [
+export const POLICY_TEXT = [
   "## Codegraph-first search policy (ALWAYS)",
   "",
   "ALWAYS use BanyanCode graph + repository tools first for any code",
@@ -78,6 +78,21 @@ const POLICY_TEXT = [
   "- a graph tool explicitly reports empty / stale / not-found,",
   "- the user explicitly asks for regex or filename-pattern matching,",
   "- you're searching non-code artifacts (configs, JSON, docs, build outputs).",
+  "",
+  "## Background subagents (ALWAYS)",
+  "",
+  "When delegating via the `task` tool, prefer `background: true`. Sync",
+  "(foreground) delegation blocks your context and wastes tokens. Sync is",
+  "acceptable ONLY for a trivial single-tool-call lookup where waiting is",
+  "faster than polling — otherwise always background.",
+  "",
+  "Always background:",
+  "- multi-step subagents (researcher, orchestrator, coder, explore, reviewer)",
+  "- subagents that fan out to multiple tools",
+  "- any subagent expected to take more than one second",
+  "",
+  "Sync only: a single grep/glob for confirmation before proceeding, or any",
+  "case where you genuinely need the result inline to make your next decision.",
 ].join("\n")
 
 // Lookup the public tool ids lazily: reading BanyanToolsManifest.* at module
