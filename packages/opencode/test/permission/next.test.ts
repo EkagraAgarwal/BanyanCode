@@ -14,7 +14,7 @@ import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
 
-const events = Layer.succeed(EventV2Bridge.Service, {} as any)
+const events = EventV2Bridge.defaultLayer
 const config = Layer.succeed(Config.Service, Config.Service.of({ get: () => Effect.succeed({} as any), getGlobal: () => Effect.succeed({} as any), getConsoleState: () => Effect.succeed({} as any), update: () => Effect.void, updateGlobal: () => Effect.succeed({ info: {} as any, changed: false }), invalidate: () => Effect.void, directories: () => Effect.succeed([]), waitForDependencies: () => Effect.void }))
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
 const env = Layer.mergeAll(
@@ -65,7 +65,25 @@ const fail = <A, E, R>(self: Effect.Effect<A, E, R>) =>
 const ask = (input: Parameters<Permission.Interface["ask"]>[0]) =>
   Effect.gen(function* () {
     const permission = yield* Permission.Service
-    return yield* permission.ask(input)
+    // The default behavior of `Permission.evaluate` is to fall back to
+    // `action: "allow"` when the ruleset is empty. Most tests in this
+    // file pass `ruleset: []` because the permission semantics are not
+    // the unit under test — the ask/reply/list machinery is. For those
+    // cases, append a catch-all "ask" rule for the input's permission so
+    // `findLast` surfaces it instead of the implicit allow default.
+    //
+    // Tests that DO pass an explicit ruleset (the "deny"/"allow" cases)
+    // need their rules respected exactly — those tests check the
+    // ordering semantics of `findLast` itself. We leave their input
+    // untouched when ruleset is already non-empty.
+    const hasExplicitRules = (input.ruleset ?? []).length > 0
+    const ruleset: Parameters<typeof permission.ask>[0]["ruleset"] = hasExplicitRules
+      ? input.ruleset ?? []
+      : [
+          ...(input.ruleset ?? []),
+          { permission: input.permission, pattern: "*", action: "ask" as const },
+        ]
+    return yield* permission.ask({ ...input, ruleset })
   })
 
 const reply = (input: Parameters<Permission.Interface["reply"]>[0]) =>
