@@ -15,6 +15,7 @@ import {
   parsePythonWithTreeSitterIncremental,
 } from "./langs/query-executor"
 import { CodegraphRustParser } from "./codegraph-rust-parser"
+import { BanyanConfigService } from "./banyan-config"
 import { ensureWebTreeSitterReady } from "./langs/tree-sitter"
 import type { Tree } from "web-tree-sitter"
 import { extractTestFileImports } from "./codegraph-helpers"
@@ -1087,12 +1088,19 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
 
-      // Codegraph parse backend selection. When BANYANCODE_CODEGRAPH_BACKEND=rust
-      // and a CodegraphRustParser service is in scope (provided by a consumer
-      // layer when the codegraph-rs binary is resolvable), route TS/PY through
-      // it; otherwise fall back to the existing tree-sitter/regex pipeline.
-      // No required service here — serviceOption keeps R unchanged.
-      const rustBackendOpt = process.env.BANYANCODE_CODEGRAPH_BACKEND === "rust"
+      // Codegraph parse backend selection. Activated when either the env
+      // var BANYANCODE_CODEGRAPH_BACKEND=rust or BanyanConfig.banyancode_codegraph_backend
+      // === "rust" is set. When active AND a CodegraphRustParser service is
+      // in scope (provided by a consumer layer when the codegraph-rs binary
+      // is resolvable), TS/PY route through it; otherwise fall back to the
+      // existing tree-sitter/regex pipeline. serviceOption keeps R unchanged.
+      const configOpt = yield* Effect.serviceOption(BanyanConfigService.Service)
+      const configBackend = configOpt._tag === "Some"
+        ? (yield* configOpt.value.get()).banyancode_codegraph_backend
+        : undefined
+      const wantRust =
+        process.env.BANYANCODE_CODEGRAPH_BACKEND === "rust" || configBackend === "rust"
+      const rustBackendOpt = wantRust
         ? yield* Effect.serviceOption(CodegraphRustParser.Service)
         : undefined
       const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root, input.excludePatterns)
@@ -1365,7 +1373,13 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
-      const rustBackendOpt = process.env.BANYANCODE_CODEGRAPH_BACKEND === "rust"
+      const configOpt = yield* Effect.serviceOption(BanyanConfigService.Service)
+      const configBackend = configOpt._tag === "Some"
+        ? (yield* configOpt.value.get()).banyancode_codegraph_backend
+        : undefined
+      const wantRust =
+        process.env.BANYANCODE_CODEGRAPH_BACKEND === "rust" || configBackend === "rust"
+      const rustBackendOpt = wantRust
         ? yield* Effect.serviceOption(CodegraphRustParser.Service)
         : undefined
       const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root, input.excludePatterns)
