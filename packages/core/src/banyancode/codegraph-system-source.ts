@@ -114,7 +114,7 @@ const TOOL_FAMILIES = [
   { title: "System status", ids: ["system_status"] },
   { title: "Goals", ids: ["goal"] },
   { title: "Repository map", ids: ["banyan_repo_map", "banyan_tool_search"] },
-  { title: "Verification", ids: ["banyan_typecheck", "banyan_test", "banyan_lint"] },
+  { title: "Verification", ids: ["banyan_test"] },
 ] as const
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"

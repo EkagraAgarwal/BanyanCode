@@ -36,9 +36,7 @@ export const REQUIRED_TOOLS = [
   "system_status",
   "banyan_repo_map",
   "banyan_tool_search",
-  "banyan_typecheck",
   "banyan_test",
-  "banyan_lint",
 ] as const
 
 // Internal-only helpers that MUST NEVER appear in the rendered guide.
