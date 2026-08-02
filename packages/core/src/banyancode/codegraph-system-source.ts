@@ -97,7 +97,6 @@ const TOOL_FAMILIES = [
   { title: "Goals", ids: ["goal"] },
   { title: "Repository map", ids: ["banyan_repo_map", "banyan_tool_search"] },
   { title: "Verification", ids: ["banyan_typecheck", "banyan_test", "banyan_lint"] },
-  { title: "LSP operations", ids: ["lsp_definition", "lsp_references", "lsp_hover", "lsp_diagnostics"] },
 ] as const
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"

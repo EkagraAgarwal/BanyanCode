@@ -423,10 +423,6 @@ describe("v2 probe baseline — anti-slop tool contract", () => {
       "banyan_typecheck",
       "banyan_test",
       "banyan_lint",
-      "lsp_definition",
-      "lsp_references",
-      "lsp_hover",
-      "lsp_diagnostics",
     ] as const
 
     const mod = await import("../../src/banyancode/banyan-tools-manifest")

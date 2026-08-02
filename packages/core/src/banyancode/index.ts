@@ -313,39 +313,5 @@ export type {
   Interface as CodegraphSystemSourceInterface,
 } from "./codegraph-system-source"
 export * as CodegraphSystemSourceNS from "./codegraph-system-source"
-export {
-  Service as LspInvalidationRepo,
-  layer as lspInvalidationRepoLayer,
-  defaultLayer as lspInvalidationRepoDefaultLayer,
-} from "./lsp-invalidation-repo"
-export type {
-  LspInvalidationKind,
-  InvalidationEvent,
-  RecordEventInput,
-  ClaimUnconsumedInput,
-  Interface as LspInvalidationRepoInterface,
-} from "./lsp-invalidation-repo"
-export * as LspFreshnessWatcher from "../lsp/lsp-freshness-watcher"
-export {
-  Service as LspFreshnessService,
-  layer as lspFreshnessServiceLayer,
-  defaultLayer as lspFreshnessServiceDefaultLayer,
-  LspFreshnessEvent,
-} from "../lsp/lsp-freshness-service"
-export type {
-  LspFreshnessStatus,
-  LspFreshnessStreamEvent,
-  Interface as LspFreshnessServiceInterface,
-} from "../lsp/lsp-freshness-service"
-export {
-  Service as LspFreshnessSystemSource,
-  layer as lspFreshnessSystemSourceLayer,
-  defaultLayer as lspFreshnessSystemSourceDefaultLayer,
-  register as registerLspFreshnessSystemSource,
-} from "../lsp/lsp-freshness-system-source"
-export type {
-  LspFreshnessSystemInput,
-  Interface as LspFreshnessSystemSourceInterface,
-} from "../lsp/lsp-freshness-system-source"
 export * as WorkspaceIdentity from "./workspace-identity"
 export type { WorkspaceIdentity as WorkspaceIdentityInterface } from "./workspace-identity"
