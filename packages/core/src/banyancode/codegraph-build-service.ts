@@ -138,6 +138,11 @@ export const layer = Layer.effect(
         // marker for the caller's own bookkeeping. Existing tests that
         // expected the value to round-trip should look at identity.dbPath
         // instead.
+        // Phase 8 follow-up (auto-build false triggers): the indexer and the
+        // persisted `indexed_root` receive the CANONICAL root (realpath'd via
+        // WorkspaceIdentity), not the raw caller spelling, so CodegraphReadiness
+        // comparing `meta.indexedRoot` against a tool-passed root never sees a
+        // spurious root change from casing / symlink / separator drift.
         const identity = WorkspaceIdentity.identityForRoot(input.root)
         const initial: State = {
           status: "running",
@@ -160,7 +165,7 @@ export const layer = Layer.effect(
         // events queue and the build would never reach a terminal state.
         const worker = Effect.gen(function* () {
           const result = yield* indexer.index({
-            root: input.root,
+            root: identity.root,
             force: input.force ?? false,
             ...(input.excludePatterns ? { excludePatterns: input.excludePatterns } : {}),
             onProgress: Effect.fn("CodegraphBuildService.onProgress")(function* ({ file, done, total, currentFile }) {
@@ -191,7 +196,7 @@ export const layer = Layer.effect(
             yield* repo.bumpVersion({
               eligibleFiles: result.eligibleFiles,
               scannedFiles: result.scannedFiles,
-              indexedRoot: input.root,
+              indexedRoot: identity.root,
             })
 
           return { result, graphVersion, coverage, totalNodes, totalEdges, totalFiles, graphBuiltAt }

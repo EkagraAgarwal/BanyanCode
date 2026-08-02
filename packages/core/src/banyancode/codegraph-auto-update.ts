@@ -1,6 +1,7 @@
 export * as CodegraphAutoUpdate from "./codegraph-auto-update"
 
 import { Cause, Context, Duration, Effect, Fiber, Layer, Option, Queue, Ref, Schema } from "effect"
+import fs from "node:fs"
 import os from "os"
 import path from "path"
 import { EventV2 } from "../event"
@@ -165,10 +166,47 @@ export const layer: Layer.Layer<
       }).pipe(Effect.ignore)
     })
 
+    // Phase 8 follow-up (auto-build false triggers): derive the workspace root
+    // from the changed paths by walking UP for a workspace marker (`.banyancode`)
+    // instead of returning the common parent of the changed files. The old
+    // common-parent behavior made the first edit under `packages/opencode/`
+    // produce `indexedRoot = <root>/packages/opencode`, and every subsequent
+    // workspace-root tool call then saw a root change and forced a full rebuild
+    // on each call.
+    //
+    // The walk is deliberately bounded: only `.banyancode` counts as a marker
+    // (a `.git` boundary inside a vendored/nested subrepo would wrongly stop the
+    // walk at the subrepo root), and the walk never climbs into the user's home
+    // directory (the home dir commonly carries `.banyancode` / `.git`, which
+    // would otherwise hijack the derived root for temp-dir fixtures and
+    // deep-tree edits). The common-parent fallback handles marker-less trees.
+    const WORKSPACE_ROOT_MARKERS = [".banyancode"]
+    const homeDir = os.homedir()
+    const normHome = process.platform === "win32" ? homeDir.toLowerCase() : homeDir
+
     const deriveRootFromPending = (paths: string[]): string | undefined => {
       if (paths.length === 0) return undefined
+
+      const first = path.resolve(path.dirname(paths[0]))
+      let dir = first
+      while (true) {
+        const norm = process.platform === "win32" ? dir.toLowerCase() : dir
+        if (norm === normHome) break
+        for (const marker of WORKSPACE_ROOT_MARKERS) {
+          try {
+            if (fs.existsSync(path.join(dir, marker))) return dir
+          } catch {
+            // unreachable marker — keep walking
+          }
+        }
+        const parent = path.dirname(dir)
+        if (parent === dir) break
+        dir = parent
+      }
+
+      // Fall back to the common parent of all changed paths.
       const separator = os.platform() === "win32" ? path.win32.sep : path.posix.sep
-      let candidate = path.resolve(path.dirname(paths[0]))
+      let candidate = first
       for (const filePath of paths.slice(1)) {
         const target = path.resolve(path.dirname(filePath))
         while (candidate !== target && !target.startsWith(candidate + separator)) {

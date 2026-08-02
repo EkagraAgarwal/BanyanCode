@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Exit, Layer } from "effect"
 import { CodegraphIndexer } from "@opencode-ai/core/banyancode/codegraph-indexer"
 import { CodegraphReadiness } from "@opencode-ai/core/banyancode/codegraph-readiness"
-import { CodegraphRepo } from "@opencode-ai/core/banyancode/codegraph-repo"
+import { CodegraphRepo, CODEGRAPH_SCHEMA_VERSION } from "@opencode-ai/core/banyancode/codegraph-repo"
 import { CodegraphBuildService } from "@opencode-ai/core/banyancode/codegraph-build-service"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Database } from "@opencode-ai/core/database/database"
@@ -304,6 +304,150 @@ describe("CodegraphReadiness", () => {
     expect(Exit.isSuccess(exit)).toBe(true)
     if (Exit.isSuccess(exit)) {
       expect(exit.value.autoBuilt).toBe(true)
+    }
+  })
+
+  // Phase 8 follow-up (auto-build false triggers): a caller passing the SAME
+  // workspace under a different spelling (win32 case variant, or a symlink/
+  // junction on POSIX) must NOT be treated as a root change. Before the fix
+  // `rootChanged` compared `meta.indexedRoot !== root` after a plain
+  // `path.resolve`, so a case/symlink drift forced a full rebuild on EVERY
+  // tool call. Now both sides are canonicalized (realpath + win32 case fold).
+  test("ensureReady does NOT rebuild when the same root is spelled differently", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "readiness-root-spelling.db")
+    const repoDir = path.join(tmp.path, "src")
+    const filePath = path.join(repoDir, "a.ts")
+    fs.mkdirSync(repoDir, { recursive: true })
+    fs.writeFileSync(filePath, "export const a = 1\n")
+
+    const layer = buildReadinessLayer(dbPath)
+    const { CodegraphRepo } = await import("@opencode-ai/core/banyancode/codegraph-repo")
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          yield* repo.putFile({
+            id: "f1",
+            path: filePath,
+            contentHash: "h1",
+            language: "typescript",
+            indexedAt: Date.now(),
+          })
+          yield* repo.setMeta({
+            id: "singleton",
+            graphBuiltAt: Date.now(),
+            graphVersion: 1,
+            graphCoverage: 1,
+            totalFiles: 1,
+            totalNodes: 0,
+            totalEdges: 0,
+            schemaVersion: CODEGRAPH_SCHEMA_VERSION,
+            indexedRoot: repoDir,
+          })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    // Alternate spelling of the SAME directory: win32 drive-case swap,
+    // otherwise a symlink alias.
+    let altSpelling: string
+    if (process.platform === "win32") {
+      const drive = repoDir.charAt(0)
+      const swapped = drive === drive.toUpperCase() ? drive.toLowerCase() : drive.toUpperCase()
+      altSpelling = swapped + repoDir.slice(1)
+    } else {
+      const link = path.join(tmp.path, "src-link")
+      try {
+        fs.symlinkSync(repoDir, link, "dir")
+      } catch {
+        fs.symlinkSync(repoDir, link)
+      }
+      altSpelling = link
+    }
+
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* CodegraphReadiness.Service
+          return yield* svc.ensureReady({ root: altSpelling })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    expect(Exit.isSuccess(exit)).toBe(true)
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.reason).toBe("ready")
+      expect(exit.value.autoBuilt).toBe(false)
+    }
+  })
+
+  // Phase 8 follow-up (auto-build false triggers): a stale schema version
+  // rebuilds exactly ONCE, then converges to `ready`. The version literal is
+  // shared between the writer (CodegraphRepo.bumpVersion) and the reader
+  // (CodegraphReadiness) via CODEGRAPH_SCHEMA_VERSION so the two can never
+  // drift into a perpetual-rebuild loop.
+  test("ensureReady rebuilds once on a stale schema version, then converges", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "readiness-schema.db")
+    const repoDir = path.join(tmp.path, "src")
+    fs.mkdirSync(repoDir, { recursive: true })
+
+    const layer = buildReadinessLayer(dbPath)
+    const { CodegraphRepo } = await import("@opencode-ai/core/banyancode/codegraph-repo")
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          yield* repo.putFile({
+            id: "f1",
+            path: path.join(repoDir, "a.ts"),
+            contentHash: "h1",
+            language: "typescript",
+            indexedAt: Date.now(),
+          })
+          yield* repo.setMeta({
+            id: "singleton",
+            graphBuiltAt: Date.now(),
+            graphVersion: 1,
+            graphCoverage: 1,
+            totalFiles: 1,
+            totalNodes: 0,
+            totalEdges: 0,
+            schemaVersion: CODEGRAPH_SCHEMA_VERSION - 1,
+            indexedRoot: repoDir,
+          })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    const first = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* CodegraphReadiness.Service
+          return yield* svc.ensureReady({ root: repoDir })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+    expect(Exit.isSuccess(first)).toBe(true)
+    if (Exit.isSuccess(first)) {
+      expect(first.value.autoBuilt).toBe(true)
+    }
+
+    const second = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* CodegraphReadiness.Service
+          return yield* svc.ensureReady({ root: repoDir })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+    expect(Exit.isSuccess(second)).toBe(true)
+    if (Exit.isSuccess(second)) {
+      expect(second.value.reason).toBe("ready")
+      expect(second.value.autoBuilt).toBe(false)
     }
   })
 })

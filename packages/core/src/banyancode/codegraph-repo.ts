@@ -18,6 +18,13 @@ export type FTSResult = CodegraphNode & { readonly bm25: number }
 export const MAX_NODES_PER_INSERT = 1000
 const MAX_EDGES_PER_INSERT = 5000
 
+// Single source of truth for the codegraph meta schema version. Written into
+// `codegraph_meta.schema_version` by bumpVersion and compared by
+// CodegraphReadiness to detect structural staleness. Keep in sync with the
+// readiness consumer (codegraph-readiness.ts imports this constant — do NOT
+// hardcode the literal in both files).
+export const CODEGRAPH_SCHEMA_VERSION = 3
+
 // Phase 3 query expansion: split an identifier-style query into its
 // constituent lowercase tokens so a single user query like
 // `CodegraphBuildService` (or `codegraph-build-service`, or `codegraph
@@ -1212,7 +1219,7 @@ export const layer = Layer.effect(
             // Phase 3: the schema gained `is_entrypoint` and `in_degree`
             // columns on codegraph_nodes. Bump the schemaVersion so
             // consumers that compare against it can detect stale graphs.
-            schemaVersion: 3,
+            schemaVersion: CODEGRAPH_SCHEMA_VERSION,
             indexedRoot: input.indexedRoot ?? row?.indexed_root ?? undefined,
           }
 

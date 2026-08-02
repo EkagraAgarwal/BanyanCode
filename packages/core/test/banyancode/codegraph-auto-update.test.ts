@@ -9,6 +9,7 @@ import { CodegraphBuildService } from "@opencode-ai/core/banyancode/codegraph-bu
 import { CodegraphIndexer } from "@opencode-ai/core/banyancode/codegraph-indexer"
 import { CodegraphRepo } from "@opencode-ai/core/banyancode/codegraph-repo"
 import { tmpdir } from "../fixture/tmpdir"
+import fs from "node:fs"
 import path from "path"
 
 process.env.BANYANCODE_ENABLE = "1"
@@ -189,6 +190,33 @@ describe("CodegraphAutoUpdate", () => {
         yield* Effect.sleep(150)
         expect(starts).toHaveLength(1)
         expect(starts[0].root).toBe(path.join(tmp.path, "foo"))
+      }).pipe(Effect.provide(testLayer({ starts, config: { banyancode_codegraph_watch_debounce_ms: 100 } })), Effect.provide(dbLayer), Effect.scoped) as any,
+    )
+  })
+
+  // Phase 8 follow-up (auto-build false triggers): when a workspace marker
+  // (e.g. `.banyancode`) exists, the derived root must be the marker's
+  // directory — NOT the common parent of the changed files. The old
+  // common-parent behavior made the first edit under `packages/opencode/`
+  // produce `indexedRoot = <root>/packages/opencode`, and every subsequent
+  // workspace-root tool call then saw a root change and forced a full
+  // rebuild.
+  test("derives the workspace root from a marker dir, not the common parent", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "workspace")
+    fs.mkdirSync(path.join(root, ".banyancode"), { recursive: true })
+    const file = path.join(root, "packages", "opencode", "x.ts")
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, "export const x = 1\n")
+    const starts: Array<{ root: string; excludePatterns?: readonly string[] }> = []
+    const dbLayer = Database.layerFromPath(path.join(tmp.path, "auto.sqlite"))
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const events = yield* EventV2.Service
+        yield* events.publish(Watcher.Event.Updated, { file, event: "add" }, { location: { directory: root as never } })
+        yield* Effect.sleep(150)
+        expect(starts).toHaveLength(1)
+        expect(starts[0].root).toBe(root)
       }).pipe(Effect.provide(testLayer({ starts, config: { banyancode_codegraph_watch_debounce_ms: 100 } })), Effect.provide(dbLayer), Effect.scoped) as any,
     )
   })

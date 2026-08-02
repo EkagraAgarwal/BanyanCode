@@ -1,10 +1,10 @@
 export * as CodegraphReadiness from "./codegraph-readiness"
 
 import { Cause, Context, Deferred, Effect, Layer, Ref, Schema } from "effect"
-import path from "path"
 import { CodegraphBuildService } from "./codegraph-build-service"
-import { CodegraphRepo } from "./codegraph-repo"
+import { CodegraphRepo, CODEGRAPH_SCHEMA_VERSION } from "./codegraph-repo"
 import { STALENESS_AGE_HIGH_MS } from "./graph-staleness"
+import { WorkspaceIdentity } from "./workspace-identity"
 import type { CodegraphMeta } from "./types"
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -14,10 +14,17 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_THRESHOLD_MS = STALENESS_AGE_HIGH_MS
 const SEVEN_DAYS_MS = STALENESS_AGE_HIGH_MS
 
-// Phase 2: must match the value written in `CodegraphRepo.bumpVersion`.
-// Hardcode rather than re-export to keep the readiness read path
-// dependency-free.
-const CURRENT_SCHEMA_VERSION = 3
+// Phase 8 follow-up (auto-build false triggers): canonicalize a root the same
+// way `WorkspaceIdentity.identityForRoot` does at build time (realpath, with a
+// resolve fallback) and, on win32, case-fold the comparison. The indexed_root
+// stored by a build is the realpath'd canonical spelling, so a caller passing a
+// different casing / a symlink / a junction spelling of the SAME workspace must
+// not be treated as a root change — that was forcing a full rebuild on every
+// tool call.
+const canonicalRoot = (p: string): string => {
+  const real = WorkspaceIdentity.sanitizeRoot(p)
+  return process.platform === "win32" ? real.toLowerCase() : real
+}
 
 export const ReadinessResult = Schema.Struct({
   reason: Schema.Literals(["ready", "missing", "stale", "building", "failed"]),
@@ -84,8 +91,8 @@ export const layer = Layer.effect(
         // `indexed_at` on cache hits (see `bumpIndexedAt`). We only force
         // a rebuild when the graph is structurally invalid (no meta,
         // empty file table) or when the indexed root/schema moved.
-        const rootChanged = !!meta && meta.indexedRoot !== undefined && meta.indexedRoot !== root
-        const schemaStale = !!meta && meta.schemaVersion !== CURRENT_SCHEMA_VERSION
+        const rootChanged = !!meta && meta.indexedRoot !== undefined && canonicalRoot(meta.indexedRoot) !== root
+        const schemaStale = !!meta && meta.schemaVersion !== CODEGRAPH_SCHEMA_VERSION
         const force = !meta || files.length === 0 || rootChanged || schemaStale
 
         // Phase 2: age is a WARNING, not a rebuild trigger.
@@ -167,7 +174,7 @@ export const layer = Layer.effect(
 
     const ensureReady: Interface["ensureReady"] = Effect.fn("CodegraphReadiness.ensureReady")(
       function* (input) {
-        const root = path.resolve(input.root)
+        const root = canonicalRoot(input.root)
         const thresholdMs = input.thresholdMs ?? DEFAULT_THRESHOLD_MS
 
         yield* Ref.set(lastRoot, root)
