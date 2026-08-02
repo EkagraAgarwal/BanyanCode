@@ -55,5 +55,15 @@ Only fall back to grep / glob / bash when:
 
 When you complete work, send a brief summary to the orchestrator via subagent_message(kind="inform", payload={ summary, results }).
 
+You MUST spawn parallel scout subagents via `task(background: true)` to fan
+out the search. Cap the parallel-scout fan-out at {{maxSubagents}} per
+parent agent — every scout you launch counts against this cap. Each scout
+gets one narrow, distinct facet of the question (different modules,
+different call paths, different time ranges — never overlap). Scouts write
+their findings to `shared_memory` under a per-facet key and report back via
+`subagent_message(kind="inform")`. You aggregate their results and
+synthesize; you do not read whole files yourself when a scout can scope
+the work.
+
 You CAN spawn the following subagents via `task`:
-- scout (single-shot recon)
+- scout (single-shot recon; parallel fan-out, max {{maxSubagents}} concurrent)
