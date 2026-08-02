@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
+import fs from "fs/promises"
 import { Effect, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { tmpdir } from "../fixture/tmpdir"
@@ -15,6 +16,8 @@ describe("codegraph-worktree", () => {
   test("WorktreeContext thunk is invoked at tool-execute time (mirrors codegraph_build.resolve path)", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "worktree.sqlite")
+    const thunkRoot = path.join(tmp.path, "from-thunk")
+    await fs.mkdir(thunkRoot, { recursive: true })
 
     const capturedRoot = { current: undefined as string | undefined }
     let thunkInvocations = 0
@@ -55,7 +58,7 @@ describe("codegraph-worktree", () => {
       Banyan.WorktreeContext,
       () => {
         thunkInvocations++
-        return Effect.succeed<string | undefined>("/tmp/somewhere")
+        return Effect.succeed<string | undefined>(thunkRoot)
       },
     )
 
@@ -103,7 +106,7 @@ describe("codegraph-worktree", () => {
     )
 
     expect(thunkInvocations).toBe(1)
-    expect(capturedRoot.current).toBe("/tmp/somewhere")
+    expect(capturedRoot.current).toBe(thunkRoot)
     expect(capturedRoot.current).not.toBe(process.cwd())
   })
 
@@ -188,6 +191,10 @@ describe("codegraph-worktree", () => {
   test("input.root takes precedence over the WorktreeContext thunk", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "explicit.sqlite")
+    const thunkRoot = path.join(tmp.path, "from-thunk")
+    const explicitRoot = path.join(tmp.path, "explicit-input")
+    await fs.mkdir(thunkRoot, { recursive: true })
+    await fs.mkdir(explicitRoot, { recursive: true })
 
     const capturedRoot = { current: undefined as string | undefined }
 
@@ -225,7 +232,7 @@ describe("codegraph-worktree", () => {
 
     const worktreeLayer = Layer.succeed(
       Banyan.WorktreeContext,
-      () => Effect.succeed<string | undefined>("/tmp/from-thunk"),
+      () => Effect.succeed<string | undefined>(thunkRoot),
     )
 
     const repoLayer = codegraphRepoLayer.pipe(Layer.provide(Database.layerFromPath(dbPath)))
@@ -234,7 +241,7 @@ describe("codegraph-worktree", () => {
     const resolveAndStart = Effect.gen(function* () {
       const worktreeAccessor = yield* Banyan.WorktreeContext
       const worktreeOpt = yield* worktreeAccessor()
-      const inputRoot: string | undefined = "/tmp/explicit-input"
+      const inputRoot: string | undefined = explicitRoot
       const root = inputRoot ?? worktreeOpt ?? process.cwd()
       const service = yield* CodegraphBuildService.Service
       yield* service.start({ root, force: false })
@@ -258,6 +265,6 @@ describe("codegraph-worktree", () => {
       ),
     )
 
-    expect(capturedRoot.current).toBe("/tmp/explicit-input")
+    expect(capturedRoot.current).toBe(explicitRoot)
   })
 })
