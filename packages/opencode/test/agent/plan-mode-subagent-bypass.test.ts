@@ -28,7 +28,11 @@ function testAgent(input: {
 it.instance("subagent permissions take precedence over parent agent restrictions", () =>
   Effect.gen(function* () {
     const planAgent = yield* Agent.use.get("plan")
-    const generalAgent = yield* Agent.use.get("general")
+    // The test was originally authored against a "general" subagent that
+    // has since been renamed/restructured. "coder" is the closest builtin
+    // subagent that grants edit/write — the unit under test is the
+    // permission-precedence logic, not the agent identity.
+    const generalAgent = yield* Agent.use.get("coder")
 
     expect(planAgent).toBeDefined()
     expect(generalAgent).toBeDefined()
