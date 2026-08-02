@@ -283,7 +283,6 @@ export function createRoutes(
           Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
         ),
         Banyan.banyanFilesystemDefaultLayer,
-        Banyan.lspFreshnessServiceDefaultLayer,
       ),
     ),
     Layer.provideMerge(
