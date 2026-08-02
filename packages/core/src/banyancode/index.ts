@@ -145,6 +145,8 @@ export type { Interface as RepoMapServiceInterface, OverviewResult as RepoMapOve
 export { Service as AdaptedCatalog, layer as adaptedCatalogLayer, defaultLayer as adaptedCatalogDefaultLayer } from "./adapted-catalog"
 export type { Interface as AdaptedCatalogInterface, AdaptedTool, Tier as AdaptedToolTier } from "./adapted-catalog"
 export { Service as CodegraphIndexer, layer as codegraphIndexerLayer, defaultLayer as codegraphIndexerDefaultLayer } from "./codegraph-indexer"
+export { Service as CodegraphRustBinary, layer as codegraphRustBinaryLayer, defaultLayer as codegraphRustBinaryDefaultLayer } from "./codegraph-rust-binary"
+export { Service as CodegraphRustParser, layerFor as codegraphRustParserLayerFor } from "./codegraph-rust-parser"
 export {
   Service as CodegraphBuildService,
   layer as codegraphBuildServiceLayer,
