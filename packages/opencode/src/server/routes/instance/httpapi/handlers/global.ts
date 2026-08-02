@@ -318,6 +318,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       // catches its own errors), so we surface `started: true` once the
       // kickoff has been scheduled — not after the build itself completes
       // (which would block the request for minutes).
+      yield* Effect.logInfo("codegraph-build: kickoff received", { root, force })
       AppRuntime.runFork(
         Effect.gen(function* () {
           const buildServiceOpt = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
@@ -332,7 +333,11 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
               Effect.logError("codegraph-build: start() failed", { cause: Cause.pretty(cause) }),
             ),
           )
-        }),
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("codegraph-build: runFork body crashed", { cause: Cause.pretty(cause) }),
+          ),
+        ),
       )
       return { started: true, root, dbPath, banyanDir: identity.banyanDir }
     })
