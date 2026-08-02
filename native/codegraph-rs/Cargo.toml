@@ -1,0 +1,19 @@
+[package]
+name = "codegraph-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Tree-sitter-based codegraph parse binary for BanyanCode (JSON-lines stdin/stdout protocol)"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tree-sitter = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.23"
+
+[profile.release]
+lto = true
+strip = true
+opt-level = 3
