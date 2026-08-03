@@ -4,6 +4,7 @@ import { ToolFailure } from "@opencode-ai/llm"
 import { Banyan } from "../banyancode"
 import { GoalConflictError } from "../banyancode/goal-service"
 import type { GoalReviewVerdict } from "../banyancode/goal-payload"
+import { DEFAULT_MAX_GOAL_ITERATIONS } from "../v1/config/banyan-config"
 import { Effect, Layer, Option, Schema } from "effect"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
@@ -88,6 +89,10 @@ export const locationLayer = Layer.effectDiscard(
               }
               const svc = goalServiceOpt.value
 
+              const configOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+              const config = Option.isSome(configOpt) ? yield* configOpt.value.get() : ({} as Banyan.BanyanConfigInfo)
+              const maxIterations = config.banyancode_max_goal_iterations ?? DEFAULT_MAX_GOAL_ITERATIONS
+
               switch (input.action) {
                 case "set": {
                   if (!input.condition) {
@@ -97,7 +102,7 @@ export const locationLayer = Layer.effectDiscard(
                     .setGoal({
                       parentSessionID: context.sessionID,
                       condition: input.condition,
-                      planPath: input.planPath ?? null,
+                      planPath: input.planPath ?? "./plan.md",
                       priority: input.priority ?? null,
                     })
                     .pipe(
@@ -129,6 +134,13 @@ export const locationLayer = Layer.effectDiscard(
                     verdict: input.verdict as GoalReviewVerdict,
                     reason: input.reason ?? null,
                   })
+                  if (
+                    goal.iterationCount >= maxIterations &&
+                    (input.verdict === "fail" || input.verdict === "blocked")
+                  ) {
+                    const blocked = yield* svc.block(id, "max iterations reached")
+                    return { result: { goal: blocked, loopEnded: true, reason: "max iterations reached" } }
+                  }
                   return { result: goal }
                 }
                 case "complete": {
@@ -150,7 +162,11 @@ export const locationLayer = Layer.effectDiscard(
                   return { result: goal }
                 }
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `goal tool failed` })))
+            }).pipe(
+              Effect.mapError((error) =>
+                new ToolFailure({ message: error instanceof Error ? error.message : String(error) }),
+              ),
+            )
           },
         }),
       })

@@ -1,9 +1,19 @@
 import { describe, expect, test } from "bun:test"
+import { randomUUID } from "node:crypto"
+import path from "path"
 import { Effect, Layer, Queue } from "effect"
+import { ToolCall } from "@opencode-ai/llm"
 import { Database } from "@opencode-ai/core/database/database"
 import { GoalService, GoalConflictError } from "../../src/banyancode/goal-service"
+import { DEFAULT_MAX_GOAL_ITERATIONS } from "../../src/v1/config/banyan-config"
+import { GoalTool } from "../../src/tool/goal"
+import { Tool } from "../../src/tool/tool"
+import { ToolCatalog } from "../../src/tool/tool-catalog"
+import { ApplicationTools } from "../../src/tool/application-tools"
+import { ToolOutputStore } from "../../src/tool-output-store"
+import type { Interface as PermissionV2Interface } from "../../src/permission"
+import { PermissionV2 } from "../../src/permission"
 import { tmpdir } from "../fixture/tmpdir"
-import path from "path"
 
 process.env.BANYANCODE_ENABLE = "1"
 
@@ -40,7 +50,7 @@ describe("GoalService", () => {
     await Effect.runPromise(program)
   })
 
-  test("setGoal fails with GoalConflictError when an active goal already exists", async () => {
+  test("setGoal while an active goal exists auto-cancels the stale goal", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.sqlite")
     const dbLayer = Database.layerFromPath(dbPath)
@@ -51,18 +61,85 @@ describe("GoalService", () => {
         parentSessionID: "ses_parent_2",
         condition: "first goal",
       })
+      expect(first.status).toBe("active")
+
+      // No completion in between: a stale active goal (e.g. from an aborted
+      // loop) must not block reuse of /goal — the second set auto-cancels it.
+      const second = yield* svc.setGoal({
+        parentSessionID: "ses_parent_2",
+        condition: "second goal (reuses the session)",
+      })
+      expect(second.status).toBe("active")
+      expect(second.id).not.toBe(first.id)
+
+      const firstAfter = yield* svc.getGoal(first.id)
+      expect(firstAfter?.status).toBe("cancelled")
+
+      const active = yield* svc.getActiveGoal("ses_parent_2")
+      expect(active?.id).toBe(second.id)
+    }).pipe(Effect.provide(buildLayer(dbPath)), Effect.provide(dbLayer))
+
+    await Effect.runPromise(program)
+  })
+
+  test("setGoal keeps the id-collision check (explicit duplicate id still conflicts)", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const program = Effect.gen(function* () {
+      const svc = yield* GoalService.Service
+      const id = "fixed-goal-id"
+      const first = yield* svc.setGoal({
+        id,
+        parentSessionID: "ses_parent_2b",
+        condition: "first goal with explicit id",
+      })
+      expect(first.status).toBe("active")
 
       const second = yield* svc
         .setGoal({
-          parentSessionID: "ses_parent_2",
-          condition: "second goal (should fail)",
+          id,
+          parentSessionID: "ses_parent_2b",
+          condition: "duplicate id should fail",
         })
         .pipe(Effect.flip)
 
       expect(second).toBeInstanceOf(GoalConflictError)
       const err = second as GoalConflictError
-      expect(err.parentSessionID).toBe("ses_parent_2")
+      expect(err.parentSessionID).toBe("ses_parent_2b")
       expect(err.existingGoalID).toBe(first.id)
+    }).pipe(Effect.provide(buildLayer(dbPath)), Effect.provide(dbLayer))
+
+    await Effect.runPromise(program)
+  })
+
+  test("setGoal → achieve → setGoal again works (goal is reusable after a goal ends)", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const program = Effect.gen(function* () {
+      const svc = yield* GoalService.Service
+      const first = yield* svc.setGoal({
+        parentSessionID: "ses_parent_2c",
+        condition: "round one",
+      })
+      const achieved = yield* svc.achieve(first.id, "done")
+      expect(achieved.status).toBe("achieved")
+
+      const second = yield* svc.setGoal({
+        parentSessionID: "ses_parent_2c",
+        condition: "round two",
+      })
+      expect(second.status).toBe("active")
+      expect(second.id).not.toBe(first.id)
+
+      // The achieved goal stays terminal; only the new goal is active.
+      const firstAfter = yield* svc.getGoal(first.id)
+      expect(firstAfter?.status).toBe("achieved")
+      const active = yield* svc.getActiveGoal("ses_parent_2c")
+      expect(active?.id).toBe(second.id)
     }).pipe(Effect.provide(buildLayer(dbPath)), Effect.provide(dbLayer))
 
     await Effect.runPromise(program)
@@ -213,5 +290,91 @@ describe("GoalService", () => {
     }).pipe(Effect.provide(buildLayer(dbPath)), Effect.provide(dbLayer))
 
     await Effect.runPromise(program)
+  })
+
+  test("goal tool: set defaults planPath and record_review blocks at max iterations", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const sessionID = "ses_tool_goal"
+    const messageID = "msg_tool_goal"
+    const makeContext = (): Tool.Context => ({
+      sessionID: sessionID as Tool.Context["sessionID"],
+      agent: "orchestrator" as Tool.Context["agent"],
+      assistantMessageID: messageID as Tool.Context["assistantMessageID"],
+      toolCallID: randomUUID(),
+    })
+    const makeCall = (input: unknown): ToolCall => ({
+      type: "tool-call",
+      id: randomUUID(),
+      name: GoalTool.name,
+      input,
+    })
+    const mockPermission: PermissionV2Interface = {
+      assert: () => Effect.void,
+      ask: () => Effect.void,
+      reply: () => Effect.void,
+      configured: () => Effect.void,
+      list: () => Effect.succeed([]),
+      get: () => Effect.void,
+      forSession: () => Effect.void,
+    } as unknown as PermissionV2Interface
+
+    const outputStore = Layer.mock(ToolOutputStore.Service, {
+      bound: (input) => Effect.sync(() => ({ output: input.output, outputPaths: [] as const })),
+    })
+    const catalogLayer = ToolCatalog.layer.pipe(
+      Layer.provide(ApplicationTools.layer),
+      Layer.provide(outputStore),
+    )
+    const permissionLayer = Layer.succeed(PermissionV2.Service, mockPermission as never)
+    const layer = GoalTool.locationLayer.pipe(
+      Layer.provideMerge(catalogLayer),
+      Layer.provideMerge(permissionLayer),
+      Layer.provideMerge(GoalService.defaultLayer.pipe(Layer.provide(dbLayer))),
+    )
+
+    const program = Effect.gen(function* () {
+      const catalog = yield* ToolCatalog.Service
+      const tool = (yield* catalog.list()).get(GoalTool.name)
+      if (!tool) return yield* Effect.die("goal tool not registered")
+
+      // `set` without planPath defaults it to ./plan.md
+      const setOutput = yield* Tool.settle(
+        tool,
+        makeCall({ action: "set", condition: "fix everything" }),
+        makeContext(),
+      )
+      const setResult = (setOutput.structured as { result: { goal: { planPath: string | null } } }).result
+      expect(setResult.goal.planPath).toBe("./plan.md")
+
+      // A failing review at the default max (5) blocks the goal and reports the loop ended.
+      let lastResult: { goal: { status: string }; loopEnded?: boolean; reason?: string } | undefined
+      for (let i = 1; i <= DEFAULT_MAX_GOAL_ITERATIONS; i++) {
+        const output = yield* Tool.settle(
+          tool,
+          makeCall({
+            action: "record_review",
+            reviewID: `review-${i}`,
+            verdict: "fail",
+            reason: "not done yet",
+          }),
+          makeContext(),
+        )
+        lastResult = (output.structured as { result: typeof lastResult }).result
+      }
+      expect(lastResult?.loopEnded).toBe(true)
+      expect(lastResult?.reason).toBe("max iterations reached")
+      expect(lastResult?.goal.status).toBe("blocked")
+
+      const svc = yield* GoalService.Service
+      const goals = yield* svc.listGoals(sessionID)
+      expect(goals[0]?.status).toBe("blocked")
+    }).pipe(Effect.provide(layer), Effect.scoped)
+
+    // Tool.settle reads ToolTelemetry / AdaptedCatalog via serviceOption, which
+    // degrade gracefully when absent; the cast matches codegraph-remove-tool.test.ts.
+    await Effect.runPromise(program as unknown as Effect.Effect<unknown, never, never>)
   })
 })

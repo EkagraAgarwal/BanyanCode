@@ -24,6 +24,7 @@ export const OpenAICompatibleEndpoint = Schema.Struct({
 
 export const DEFAULT_MAX_SUBAGENTS = 5
 export const MAX_SUBAGENTS_LIMIT = 20
+export const DEFAULT_MAX_GOAL_ITERATIONS = 5
 
 // BanyanCode-owned LSP config. Mirrors the opencode `lsp` shape (boolean for
 // built-in enable, record for per-server overrides) so users can disable,

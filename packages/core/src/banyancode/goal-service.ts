@@ -68,7 +68,7 @@ export const layer: Layer.Layer<Service, never, GoalRepo.Service | Database.Serv
     const setGoal = Effect.fn("GoalService.setGoal")(function* (input: SetGoalInput) {
       const id = input.id ?? randomUUID()
       const now = Date.now()
-      const goal = yield* db
+      const result = yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
             const existing = yield* tx
@@ -84,11 +84,18 @@ export const layer: Layer.Layer<Service, never, GoalRepo.Service | Database.Serv
               .limit(1)
               .get()
               .pipe(Effect.orDie)
+            // A stale active goal (e.g. left behind by an aborted loop) must
+            // not block reuse of /goal in the same session. Auto-cancel it in
+            // the same transaction so the insert below is conflict-free.
+            let superseded: { id: string; parentSessionID: string } | undefined
             if (existing) {
-              return yield* new GoalConflictError({
-                parentSessionID: input.parentSessionID,
-                existingGoalID: existing.id,
-              })
+              yield* tx
+                .update(SubagentGoalsTable)
+                .set({ status: "cancelled", updated_at: now })
+                .where(and(eq(SubagentGoalsTable.id, existing.id), eq(SubagentGoalsTable.status, "active")))
+                .run()
+                .pipe(Effect.orDie)
+              superseded = { id: existing.id, parentSessionID: existing.parent_session_id }
             }
 
             const existingID = yield* tx
@@ -132,22 +139,33 @@ export const layer: Layer.Layer<Service, never, GoalRepo.Service | Database.Serv
               .get()
               .pipe(Effect.orDie)
             if (!row) return yield* Effect.die(`GoalService.setGoal: inserted goal ${id} was not found`)
-            return mapGoalRowToGoal(row)
+            return { goal: mapGoalRowToGoal(row), superseded }
           }),
         )
         .pipe(Effect.catchTag("SqlError", (error) => Effect.die(error)))
 
+      if (result.superseded) {
+        yield* publish({
+          type: "banyancode.goal.cancelled",
+          properties: {
+            id: result.superseded.id,
+            parentSessionID: result.superseded.parentSessionID,
+            reason: "superseded by new goal",
+          },
+        })
+      }
+
       yield* publish({
         type: "banyancode.goal.set",
         properties: {
-          id: goal.id,
-          parentSessionID: goal.parentSessionID,
-          condition: goal.condition,
-          planPath: goal.planPath,
-          priority: goal.priority,
+          id: result.goal.id,
+          parentSessionID: result.goal.parentSessionID,
+          condition: result.goal.condition,
+          planPath: result.goal.planPath,
+          priority: result.goal.priority,
         },
       })
-      return goal
+      return result.goal
     })
 
     const getGoal = Effect.fn("GoalService.getGoal")(function* (id: string) {
