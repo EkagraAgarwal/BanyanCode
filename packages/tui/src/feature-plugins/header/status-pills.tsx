@@ -14,6 +14,11 @@ export function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
   const [activeSessionCount, setActiveSessionCount] = createSignal<number>(0)
   const [lastBuildStatus, setLastBuildStatus] = createSignal<"idle" | "running" | "completed" | "failed">("idle")
+  // Phase 4: set by persisted status hydration when the server reports a
+  // stale graph, cleared by any live build event. Drives the "Graph: stale"
+  // memo branch across restarts even when the local 24h heuristic wouldn't
+  // trigger.
+  const [lastGraphReason, setLastGraphReason] = createSignal<"stale" | undefined>(undefined)
   const [lastBuildMeta, setLastBuildMeta] = createSignal({
     graphVersion: 0,
     graphCoverage: 0,
@@ -28,6 +33,9 @@ export function View(props: { api: TuiPluginApi }) {
   onCleanup(unsubSession)
 
   const unsubGraph = ev.on("banyancode.codegraph.build" as any, (evt: any) => {
+    // A live build event supersedes any persisted status hydration — the
+    // server is talking to us directly now, so drop the reason signal.
+    setLastGraphReason(undefined)
     const status = evt.properties?.status
     if (status === "idle" || status === "running" || status === "completed" || status === "failed") {
       setLastBuildStatus(status)
@@ -70,38 +78,96 @@ export function View(props: { api: TuiPluginApi }) {
     }
   }
 
-  // Phase 1: hydrate the graph meta signals on mount so a TUI restart shows
-  // the real pill state instead of falling through to "Graph: not built"
-  // until the next build event lands. The same codegraph.nodes endpoint
-  // that the sidebar/inspector/tab-graph views already use returns the
-  // CodegraphMeta alongside the node list, so we piggyback on it.
-  const refreshGraphMeta = async () => {
-    try {
-      const result = await props.api.client.global.codegraph.nodes()
-      const meta = result?.data?.meta
-      if (!meta) return
-      setLastBuildStatus("completed")
+  // Phase 4: hydrate the pill from the persisted codegraph status endpoint on
+  // mount so a BanyanCode restart shows the real graph state instead of "not
+  // built" until the next build event lands. Live build/auto-update events
+  // still override for immediate progress; this only fills the restart /
+  // new-session gap where no events exist yet.
+  const MAX_STATUS_ATTEMPTS = 8
+  const STATUS_RETRY_DELAY_MS = 1000
+  let statusCancelled = false
+  let statusRetryTimer: ReturnType<typeof setTimeout> | undefined
+
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => {
+      statusRetryTimer = setTimeout(resolve, ms)
+    })
+
+  const refreshGraphStatus = async (): Promise<"ok" | "retry" | "unavailable"> => {
+    const root = props.api.state?.path?.directory ?? props.api.state?.path?.worktree
+    const statusCall = props.api.client.global?.codegraph?.status?.({ root })
+    if (!statusCall) return "unavailable"
+    const updateMeta = (data: any) =>
       setLastBuildMeta((current) => ({
-        graphVersion:
-          typeof meta.graphVersion === "number" ? meta.graphVersion : current.graphVersion,
-        graphCoverage:
-          typeof meta.graphCoverage === "number" ? meta.graphCoverage : current.graphCoverage,
+        graphVersion: typeof data.graphVersion === "number" ? data.graphVersion : current.graphVersion,
+        graphCoverage: typeof data.graphCoverage === "number" ? data.graphCoverage : current.graphCoverage,
         graphBuiltAt:
-          typeof meta.graphBuiltAt === "number" ? meta.graphBuiltAt : current.graphBuiltAt,
-        totalFiles:
-          typeof meta.totalFiles === "number" ? meta.totalFiles : current.totalFiles,
+          typeof data.graphBuiltAt === "number" || typeof data.graphBuiltAt === "string"
+            ? new Date(data.graphBuiltAt).getTime()
+            : current.graphBuiltAt,
+        totalFiles: typeof data.totalFiles === "number" ? data.totalFiles : current.totalFiles,
       }))
+    try {
+      const result = await statusCall
+      const data = result?.data
+      if (!data || typeof data.reason !== "string") return "retry"
+      switch (data.reason) {
+        case "missing":
+          // Persisted truth: no graph. Leave lastBuildStatus unset so the
+          // memo falls through to "Graph: not built".
+          setLastGraphReason(undefined)
+          return "ok"
+        case "ready":
+          setLastBuildStatus("completed")
+          setLastGraphReason(undefined)
+          updateMeta(data)
+          return "ok"
+        case "stale":
+          // Persisted truth: graph exists but is stale. The reason signal
+          // drives "Graph: stale" even when the local 24h heuristic wouldn't.
+          setLastBuildStatus("completed")
+          setLastGraphReason("stale")
+          updateMeta(data)
+          return "ok"
+        case "building":
+          setLastBuildStatus("running")
+          setLastGraphReason(undefined)
+          return "ok"
+        case "failed":
+          setLastBuildStatus("failed")
+          setLastGraphReason(undefined)
+          return "ok"
+        default:
+          return "retry"
+      }
     } catch {
-      // Codegraph disabled / no DB yet / server not ready — leave the
-      // pill in its default "not built" state. We do NOT mark this as
-      // a failure because `banyancode_codegraph_enabled === false` is
-      // handled by the explicit disabled branch above.
+      // Server not ready yet (startup race) — the caller retries with
+      // bounded backoff.
+      return "retry"
     }
   }
 
+  // Bounded startup retry: the status call can race server readiness on a
+  // restart. Retry up to ~8 times ~1s apart and stop as soon as the server
+  // answers with a definitive status. onCleanup aborts the loop and cancels
+  // any pending sleep timer so there is no unbounded polling after unmount.
+  const refreshGraphStatusWithRetry = async () => {
+    for (let attempt = 0; attempt < MAX_STATUS_ATTEMPTS; attempt++) {
+      if (statusCancelled) return
+      const result = await refreshGraphStatus()
+      if (result !== "retry" || statusCancelled) return
+      await sleep(STATUS_RETRY_DELAY_MS)
+    }
+  }
+
+  onCleanup(() => {
+    statusCancelled = true
+    if (statusRetryTimer !== undefined) clearTimeout(statusRetryTimer)
+  })
+
   onMount(() => {
     refreshSessionCount()
-    refreshGraphMeta()
+    refreshGraphStatusWithRetry()
   })
 
   const mcpList = createMemo(() => props.api.state.mcp())
@@ -136,6 +202,13 @@ const graphState = createMemo<{ label: string; severity: Exclude<Severity, "neut
     return { label: `Graph: syncing (${syncPending()})`, severity: "info" }
   }
   if (syncStatus() === "paused") return { label: "Graph: paused", severity: "warning" }
+  // Phase 4: persisted status reported the graph as stale. This reason signal
+  // is set by refreshGraphStatus and cleared by any live build event, so it
+  // renders "Graph: stale" across restarts even when the local 24h heuristic
+  // below wouldn't trigger (e.g. a freshly built but low-coverage graph).
+  if (lastGraphReason() === "stale" && lastBuildStatus() === "completed") {
+    return { label: "Graph: stale", severity: "warning" }
+  }
   const meta = lastBuildMeta()
   const hasGraph = meta.graphVersion > 0 && meta.totalFiles > 0
   const oldAndIdle =

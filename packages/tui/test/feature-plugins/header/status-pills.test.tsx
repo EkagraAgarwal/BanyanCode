@@ -30,7 +30,22 @@ const stubTheme = {
   borderActive: RGBA.fromInts(100, 100, 100),
 }
 
-async function setupHarness() {
+type GraphStatusResponse = {
+  data: {
+    reason: "ready" | "missing" | "stale" | "building" | "failed"
+    autoBuilt?: boolean
+    graphBuiltAt?: number
+    graphVersion?: number
+    graphCoverage?: number
+    totalFiles?: number
+    warning?: string
+    error?: string
+  }
+}
+
+type GraphStatusMock = (input: { root?: string }) => GraphStatusResponse | Promise<GraphStatusResponse>
+
+async function setupHarness(status?: GraphStatusMock) {
   const events = createEventSource()
   const calls = createFetch()
   const baseApi = createTuiPluginApi({}) as any
@@ -47,6 +62,15 @@ async function setupHarness() {
     },
     client: {
       session: { list: async () => ({ data: [] }) },
+      ...(status
+        ? {
+            global: {
+              codegraph: {
+                status: async (input: { root?: string }) => status(input),
+              },
+            },
+          }
+        : {}),
     },
   }
 
@@ -210,6 +234,109 @@ describe("header status-pills (graph meta truth)", () => {
       await expectLabel("Graph: built")
       emit("banyancode.codegraph.build", { status: "running" })
       await expectLabel("Graph: building")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  // Phase 4: persisted status hydration. No build events are emitted — the
+  // pill must rehydrate from the status endpoint after a restart.
+  test("persisted ready with no build event → Graph: built", async () => {
+    let seenRoot: string | undefined
+    const { app, expectLabel } = await setupHarness(async ({ root }) => {
+      seenRoot = root
+      return {
+        data: {
+          reason: "ready",
+          autoBuilt: false,
+          graphVersion: 3,
+          graphCoverage: 0.95,
+          graphBuiltAt: Date.now(),
+          totalFiles: 42,
+        },
+      }
+    })
+    try {
+      await expectLabel("Graph: built")
+      expect(seenRoot).toBe("/test/workspace")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("persisted missing → Graph: not built", async () => {
+    const { app, expectLabel } = await setupHarness(async () => ({
+      data: { reason: "missing", autoBuilt: false },
+    }))
+    try {
+      await expectLabel("Graph: not built")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("persisted stale → Graph: stale", async () => {
+    // Fresh graphBuiltAt + coverage above the 0.5 threshold means neither the
+    // local 24h heuristic nor the coverage heuristic would trigger — only the
+    // persisted reason signal can drive the stale label here.
+    const { app, expectLabel } = await setupHarness(async () => ({
+      data: {
+        reason: "stale",
+        autoBuilt: false,
+        graphVersion: 1,
+        graphCoverage: 0.9,
+        graphBuiltAt: Date.now(),
+        totalFiles: 10,
+      },
+    }))
+    try {
+      await expectLabel("Graph: stale")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("persisted building → Graph: building", async () => {
+    const { app, expectLabel } = await setupHarness(async () => ({
+      data: { reason: "building", autoBuilt: false },
+    }))
+    try {
+      await expectLabel("Graph: building")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("persisted failed → Graph: build failed", async () => {
+    const { app, expectLabel } = await setupHarness(async () => ({
+      data: { reason: "failed", autoBuilt: false, error: "boom" },
+    }))
+    try {
+      await expectLabel("Graph: build failed")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("first status request rejects, retry succeeds → Graph: built", async () => {
+    let statusCalls = 0
+    const { app, expectLabel } = await setupHarness(async () => {
+      statusCalls += 1
+      if (statusCalls === 1) throw new Error("server not ready")
+      return {
+        data: {
+          reason: "ready",
+          autoBuilt: false,
+          graphVersion: 1,
+          graphCoverage: 0.9,
+          graphBuiltAt: Date.now(),
+          totalFiles: 10,
+        },
+      }
+    })
+    try {
+      await expectLabel("Graph: built")
+      expect(statusCalls).toBe(2)
     } finally {
       app.renderer.destroy()
     }
