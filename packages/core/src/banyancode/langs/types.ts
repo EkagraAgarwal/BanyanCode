@@ -42,7 +42,6 @@ export interface ParsedEdge {
 export interface ParseResult {
   nodes: ParsedNode[]
   edges: ParsedEdge[]
-  imports: string[]
 }
 
 export interface LanguageParser {
