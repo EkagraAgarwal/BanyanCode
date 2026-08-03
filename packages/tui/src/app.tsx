@@ -852,7 +852,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
               } else {
                 toast.show({
                   message: res.data?.reason ?? "Could not start codegraph build",
-                  variant: "error",
+                  // The server explained the refusal (e.g. missing root) — a
+                  // warning, not an error.
+                  variant: res.data?.reason ? "warning" : "error",
                 })
               }
             })

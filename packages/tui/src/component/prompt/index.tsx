@@ -1221,7 +1221,10 @@ export function Prompt(props: PromptProps) {
                 message: reason
                   ? `Could not start codegraph build: ${reason}`
                   : "Could not start codegraph build (no response from server; the server may be busy or unresponsive)",
-                variant: "error",
+                // The server explained the refusal (e.g. missing root) — a
+                // warning, not an error. Only the opaque "no response from
+                // server" fallback stays an error.
+                variant: reason ? "warning" : "error",
               })
             }
           })
