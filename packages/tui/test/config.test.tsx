@@ -58,6 +58,11 @@ test("resolves host-neutral defaults", () => {
   expect(config.keybinds.has("session.list")).toBe(true)
 })
 
+test("resolves provider_remove keybind to ctrl+d", () => {
+  const config = resolve({}, { terminalSuspend: true })
+  expect(config.keybinds.get("provider.remove")).toMatchObject([{ key: "ctrl+d" }])
+})
+
 test("resolves overrides without mutating input", () => {
   const input: TuiConfigInfo = {
     theme: "custom",
