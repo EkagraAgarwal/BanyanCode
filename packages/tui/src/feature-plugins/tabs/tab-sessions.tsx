@@ -7,6 +7,7 @@ import { useRoute } from "../../context/route"
 import { useEvent } from "../../context/event"
 import { useSync } from "../../context/sync"
 import { useProject } from "../../context/project"
+import { useLocal } from "../../context/local"
 import { toHex } from "../../util/color"
 import { setActiveTab } from "./state"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
@@ -27,6 +28,17 @@ interface SessionItem {
   version?: string
 }
 
+export function orderSessions(sessions: SessionItem[], pinnedIDs: string[]): SessionItem[] {
+  const pinned = new Set(pinnedIDs)
+  const recencySorted = sessions
+    .filter((s) => !s.parentID)
+    .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
+  return [
+    ...recencySorted.filter((s) => pinned.has(s.id)),
+    ...recencySorted.filter((s) => !pinned.has(s.id)),
+  ]
+}
+
 function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
   const event = useEvent()
@@ -34,6 +46,7 @@ function View(props: { api: TuiPluginApi }) {
   const route = useRoute()
   const sync = useSync()
   const project = useProject()
+  const local = useLocal()
   const [refreshTrigger, setRefreshTrigger] = createSignal(0)
 
   const notify = (message: string) => {
@@ -64,11 +77,7 @@ function View(props: { api: TuiPluginApi }) {
     return Array.from(byID.values())
   })
 
-  const rootSessions = createMemo(() =>
-    merged()
-      .filter((s) => !s.parentID)
-      .sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0)),
-  )
+  const rootSessions = createMemo(() => orderSessions(merged(), local.session.pinned()))
 
   const children = (parentID: string) => merged().filter((s) => s.parentID === parentID)
 
@@ -225,12 +234,14 @@ function View(props: { api: TuiPluginApi }) {
             >
               <For each={rootSessions()}>
                 {(session) => (
-                  <box paddingLeft={1} paddingRight={1} paddingBottom={1}>
+                  <box paddingLeft={1} paddingRight={1} paddingBottom={0}>
                     <SessionCard
                       session={session}
                       children={children(session.id)}
                       theme={theme()}
                       dotColor={dotColor(session.id)}
+                      pinned={local.session.isPinned(session.id)}
+                      onTogglePin={() => local.session.togglePin(session.id)}
                       onContinue={() => continueSession(session)}
                       onRename={() => renameSession(session)}
                       onDelete={() => deleteSession(session)}
@@ -252,6 +263,8 @@ function SessionCard(props: {
   children: SessionItem[]
   theme: any
   dotColor: string
+  pinned: boolean
+  onTogglePin: () => void
   onContinue: () => void
   onRename: () => void
   onDelete: () => void
@@ -270,6 +283,12 @@ function SessionCard(props: {
     >
       <box flexDirection="row" gap={1} alignItems="center">
         <text fg={props.dotColor}>●</text>
+        <text
+          fg={props.pinned ? toHex(props.theme.accent) : toHex(props.theme.textMuted)}
+          onMouseUp={props.onTogglePin}
+        >
+          {props.pinned ? "★" : "☆"}
+        </text>
         <text fg={toHex(props.theme.text)} flexGrow={1}>
           {props.session.title || "(untitled)"}
         </text>
