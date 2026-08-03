@@ -4,16 +4,22 @@ import { useLocal } from "../context/local"
 import { map, pipe, filter, sortBy, take } from "remeda"
 import { DialogSelect } from "../ui/dialog-select"
 import { useDialog } from "../ui/dialog"
-import { createDialogProviderOptions, DialogProvider } from "./dialog-provider"
+import { createDialogProviderOptions, DialogProvider, removeProviderCredentials } from "./dialog-provider"
 import { DialogVariant } from "./dialog-variant"
 import * as fuzzysort from "fuzzysort"
 import { useConnected } from "./use-connected"
 import { useData } from "../context/data"
+import { useSync } from "../context/sync"
+import { useSDK } from "../context/sdk"
+import { useToast } from "../ui/toast"
 
 export function DialogModel(props: { providerID?: string; onSelect?: (model: { providerID: string; modelID: string }) => void }) {
   const local = useLocal()
   const data = useData()
   const dialog = useDialog()
+  const sync = useSync()
+  const sdk = useSDK()
+  const toast = useToast()
   const [query, setQuery] = createSignal("")
 
   const connected = useConnected()
@@ -169,6 +175,20 @@ export function DialogModel(props: { providerID?: string; onSelect?: (model: { p
           hidden: !connected(),
           onTrigger: (option) => {
             local.model.toggleFavorite(option.value as { providerID: string; modelID: string })
+          },
+        },
+        {
+          command: "provider.remove",
+          title: "Remove",
+          hidden: !connected(),
+          disabled: (option) => {
+            if (!option) return true
+            const providerID = (option.value as { providerID: string }).providerID
+            return !sync.data.provider_next.connected.includes(providerID)
+          },
+          onTrigger: (option) => {
+            const providerID = (option.value as { providerID: string }).providerID
+            void removeProviderCredentials(sdk, toast, providerID)
           },
         },
       ]}
