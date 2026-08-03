@@ -3,6 +3,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { EffectBridge } from "@/effect/bridge"
 import type { InstanceContext } from "@/project/instance-context"
 import { SessionID, MessageID } from "@/session/schema"
+import { Session } from "@/session/session"
 import { Effect, Layer, Context, Schema, Option } from "effect"
 import { Config } from "@/config/config"
 import { MCP } from "../mcp"
@@ -344,6 +345,30 @@ export const layer = Layer.effect(
 
             if (conflictMessage.kind === "conflict") {
               return { kind: "terminal" as const, message: conflictMessage.message }
+            }
+
+            // Starting a goal takes over the session for the orchestrator
+            // loop. Persist both the agent override AND neutralize the
+            // session's permission deny rules via the same Session.Service
+            // patch path the session-update route uses (event publish →
+            // SessionProjector → SessionTable). Without this, a goal started
+            // from plan mode stays read-only: the session's stored agent is
+            // still `plan`, and plan's deny rules (edit, task) are merged
+            // into every effective ruleset on each follow-up turn
+            // (session/tools.ts) and inherited by spawned subagents
+            // (agent/subagent-permissions.ts). The orchestrator agent then
+            // resolves on every turn (both V1 tools and PermissionV2's
+            // agents.resolve) and the empty permission list lets the merged
+            // ruleset fall back to the agent's own allows.
+            const sessionOpt = yield* Effect.serviceOption(Session.Service)
+            if (Option.isSome(sessionOpt)) {
+              const sessions = sessionOpt.value
+              yield* sessions.setAgent({ sessionID, agent: "orchestrator" })
+              yield* sessions.setPermission({ sessionID, permission: [] })
+            } else {
+              yield* Effect.logWarning("goal: Session.Service unavailable; agent/permission overrides not persisted", {
+                "session.id": sessionID,
+              })
             }
 
             // Persisted. Hand off to the orchestrator via the template path.

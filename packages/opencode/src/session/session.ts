@@ -477,6 +477,7 @@ export interface Interface {
   readonly setArchived: (input: { sessionID: SessionID; time?: number }) => Effect.Effect<void>
   readonly setMetadata: (input: typeof SetMetadataInput.Type) => Effect.Effect<void>
   readonly setPermission: (input: { sessionID: SessionID; permission: PermissionV1.Ruleset }) => Effect.Effect<void>
+  readonly setAgent: (input: { sessionID: SessionID; agent: string }) => Effect.Effect<void>
   readonly setRevert: (input: {
     sessionID: SessionID
     revert: Info["revert"]
@@ -814,6 +815,10 @@ export const layer: Layer.Layer<
       )
     })
 
+    const setAgent = Effect.fn("Session.setAgent")(function* (input: { sessionID: SessionID; agent: string }) {
+      yield* patch(input.sessionID, { agent: input.agent, time: { updated: Date.now() } }).pipe(Effect.orDie)
+    })
+
     const setRevert = Effect.fn("Session.setRevert")(function* (input: {
       sessionID: SessionID
       revert: Info["revert"]
@@ -959,6 +964,7 @@ export const layer: Layer.Layer<
       setArchived,
       setMetadata,
       setPermission,
+      setAgent,
       setRevert,
       clearRevert,
       setSummary,
