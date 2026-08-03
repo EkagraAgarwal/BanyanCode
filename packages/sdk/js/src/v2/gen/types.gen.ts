@@ -6646,6 +6646,42 @@ export type GlobalCodegraphBuildResponses = {
 
 export type GlobalCodegraphBuildResponse = GlobalCodegraphBuildResponses[keyof GlobalCodegraphBuildResponses]
 
+export type GlobalCodegraphStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    root?: string
+  }
+  url: "/global/codegraph-status"
+}
+
+export type GlobalCodegraphStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+}
+
+export type GlobalCodegraphStatusError = GlobalCodegraphStatusErrors[keyof GlobalCodegraphStatusErrors]
+
+export type GlobalCodegraphStatusResponses = {
+  /**
+   * Persisted codegraph status for a root
+   */
+  200: {
+    reason: "ready" | "missing" | "stale" | "building" | "failed"
+    autoBuilt: boolean
+    graphBuiltAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    graphVersion?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    graphCoverage?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    totalFiles?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    warning?: string
+    error?: string
+  }
+}
+
+export type GlobalCodegraphStatusResponse = GlobalCodegraphStatusResponses[keyof GlobalCodegraphStatusResponses]
+
 export type GlobalCodegraphNodesData = {
   body?: never
   path?: never

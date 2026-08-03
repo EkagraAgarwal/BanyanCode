@@ -8,6 +8,7 @@ import "@/server/event"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { described } from "./metadata"
+import { InvalidRequestError } from "../errors"
 import { CodegraphNodeSchema } from "@opencode-ai/core/banyancode/types"
 import { GraphMeta } from "@opencode-ai/core/banyancode/types"
 import { MeshStatus } from "@opencode-ai/core/banyancode/mesh-coordinator"
@@ -166,6 +167,24 @@ export const CodegraphBuildResult = Schema.Struct({
   reason: Schema.optional(Schema.String),
 })
 
+export const CodegraphStatusQuery = Schema.Struct({
+  root: Schema.optional(Schema.String),
+})
+
+// Contract for the TUI status pill: persisted codegraph readiness + graph
+// metadata, keyed by an explicit workspace root. The wire shape is exact —
+// consumers (packages/tui status-pills.tsx) depend on these field names.
+export const CodegraphStatusResult = Schema.Struct({
+  reason: Schema.Literals(["ready", "missing", "stale", "building", "failed"]),
+  autoBuilt: Schema.Boolean,
+  graphBuiltAt: Schema.optional(Schema.Number),
+  graphVersion: Schema.optional(Schema.Number),
+  graphCoverage: Schema.optional(Schema.Number),
+  totalFiles: Schema.optional(Schema.Number),
+  warning: Schema.optional(Schema.String),
+  error: Schema.optional(Schema.String),
+})
+
 export const CodegraphRemoveInput = Schema.Struct({
   dropFile: Schema.optional(Schema.Boolean),
 })
@@ -227,6 +246,7 @@ export const GlobalPaths = {
   codegraphForceKill: "/global/codegraph-force-kill",
   codegraphBuild: "/global/codegraph-build",
   codegraphRemove: "/global/codegraph-remove",
+  codegraphStatus: "/global/codegraph-status",
   startup: "/global/startup",
   banyanConfig: "/global/banyan-config",
   codegraphNodes: "/global/codegraph-nodes",
@@ -398,6 +418,22 @@ export const GlobalApi = HttpApi.make("global").add(
           summary: "Build code graph index",
           description:
             "Kick off a codegraph build for the given root (defaults to the current workspace). Runs in the background; progress is published via the banyancode.codegraph.build event.",
+        }),
+      ),
+      HttpApiEndpoint.get("codegraphStatus", GlobalPaths.codegraphStatus, {
+        query: CodegraphStatusQuery,
+        success: described(CodegraphStatusResult, "Persisted codegraph status for a root"),
+        // InvalidRequestError carries a `.message` (HttpApiError.BadRequest in
+        // this effect version renders an EMPTY 400 body, losing the root-
+        // validation message), so root-validation failures surface as a typed
+        // 400 the SDK can decode. Same 400 status the plan calls for.
+        error: InvalidRequestError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.codegraph.status",
+          summary: "Get persisted codegraph status",
+          description:
+            "Read the persisted codegraph build status (missing/ready/stale) plus graph metadata for the given root (defaults to the current workspace). Root validation happens at the HTTP boundary via WorkspaceIdentity.identityForRoot; the status is read from the same canonical per-root DB the build indexer writes to.",
         }),
       ),
       HttpApiEndpoint.get("codegraphNodes", GlobalPaths.codegraphNodes, {

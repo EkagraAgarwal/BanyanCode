@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { WorkspaceIdentity } from "../../src/banyancode/workspace-identity"
+import { channelSuffix } from "../../src/database/banyan-db-path"
 import { tmpdir } from "../fixture/tmpdir"
+
+const dbName = (tag: string) => `banyancode-${tag}${channelSuffix()}.db`
 
 describe("WorkspaceIdentity.identityForRoot", () => {
   test("derives canonical db path inside .banyancode directory", async () => {
@@ -12,7 +15,7 @@ describe("WorkspaceIdentity.identityForRoot", () => {
     const identity = WorkspaceIdentity.identityForRoot(tmp.path)
     expect(identity.root).toBe(tmp.path)
     expect(identity.banyanDir).toBe(join(tmp.path, ".banyancode"))
-    expect(identity.dbPath).toBe(join(tmp.path, ".banyancode", `banyancode-${identity.tag}.db`))
+    expect(identity.dbPath).toBe(join(tmp.path, ".banyancode", dbName(identity.tag)))
     expect(identity.tag).toHaveLength(12)
   })
 
@@ -24,7 +27,7 @@ describe("WorkspaceIdentity.identityForRoot", () => {
 
     const identity = WorkspaceIdentity.identityForRoot(child)
     expect(identity.banyanDir).toBe(join(tmp.path, ".banyancode"))
-    expect(identity.dbPath).toBe(join(tmp.path, ".banyancode", `banyancode-${identity.tag}.db`))
+    expect(identity.dbPath).toBe(join(tmp.path, ".banyancode", dbName(identity.tag)))
   })
 
   test("two distinct roots produce distinct db files", async () => {

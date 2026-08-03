@@ -218,7 +218,7 @@ describe("CodegraphWorkspaceIsolation", () => {
         // seeded. The build ignores the caller's path here because
         // the contract derives storage from root.
         expect(state.dbPath).toContain(join(root, ".banyancode"))
-        expect(state.dbPath).toMatch(/banyancode-[0-9a-f]{12}\.db$/)
+        expect(state.dbPath).toMatch(/banyancode-[0-9a-f]{12}(-[a-zA-Z0-9._-]+)?\.db$/)
       }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
     )
 

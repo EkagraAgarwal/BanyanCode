@@ -3,7 +3,7 @@ export * as CodegraphReadiness from "./codegraph-readiness"
 import { Cause, Context, Deferred, Effect, Layer, Ref, Schema } from "effect"
 import { CodegraphBuildService } from "./codegraph-build-service"
 import { CodegraphRepo, CODEGRAPH_SCHEMA_VERSION } from "./codegraph-repo"
-import { STALENESS_AGE_HIGH_MS } from "./graph-staleness"
+import { STALENESS_AGE_HIGH_MS, STALENESS_COVERAGE_HIGH } from "./graph-staleness"
 import { WorkspaceIdentity } from "./workspace-identity"
 import type { CodegraphMeta } from "./types"
 
@@ -60,6 +60,30 @@ const metaFields = (m: CodegraphMeta | undefined) => ({
   graphCoverage: m?.graphCoverage,
   totalFiles: m?.totalFiles,
 })
+
+/**
+ * Pure persisted-status derivation shared by `CodegraphReadiness.status()`
+ * and the root-aware `global.codegraphStatus` HTTP handler. Distinguishes
+ * `missing` (no meta row), `stale` (coverage < 0.5 OR age > the high
+ * staleness threshold, with the warning attached), and `ready` (healthy)
+ * instead of always returning `ready` whenever a meta row exists.
+ */
+export const statusFromMeta = (meta: CodegraphMeta | undefined): ReadinessResult => {
+  if (!meta) {
+    return { reason: "missing", autoBuilt: false }
+  }
+  const ageMs = Date.now() - meta.graphBuiltAt
+  const coverageLow = (meta.graphCoverage ?? 0) < STALENESS_COVERAGE_HIGH
+  if (coverageLow || ageMs > STALENESS_AGE_HIGH_MS) {
+    const warning = coverageLow
+      ? `graph coverage is ${((meta.graphCoverage ?? 0) * 100).toFixed(0)}%; large parts of the codebase are unindexed`
+      : `graph is ${Math.floor(ageMs / DAY_MS)} day${
+          Math.floor(ageMs / DAY_MS) !== 1 ? "s" : ""
+        } old; consider rebuilding before editing`
+    return { reason: "stale", autoBuilt: false, ...metaFields(meta), warning }
+  }
+  return { reason: "ready", autoBuilt: false, ...metaFields(meta) }
+}
 
 export const layer = Layer.effect(
   Service,
@@ -231,24 +255,7 @@ export const layer = Layer.effect(
     const status: Interface["status"] = () =>
       Effect.gen(function* () {
         const meta = yield* repo.getMeta()
-        if (!meta) {
-          const result: ReadinessResult = { reason: "missing", autoBuilt: false }
-          return result
-        }
-        const ageMs = Date.now() - meta.graphBuiltAt
-        const ageWarning =
-          ageMs > SEVEN_DAYS_MS
-            ? `graph is ${Math.floor(ageMs / DAY_MS)} day${
-                Math.floor(ageMs / DAY_MS) !== 1 ? "s" : ""
-              } old; consider rebuilding before editing`
-            : undefined
-        const result: ReadinessResult = {
-          reason: "ready",
-          autoBuilt: false,
-          ...metaFields(meta),
-          ...(ageWarning !== undefined ? { warning: ageWarning } : {}),
-        }
-        return result
+        return statusFromMeta(meta)
       })
 
     return Service.of({ ensureReady, status })

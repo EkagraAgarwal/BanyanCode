@@ -1,8 +1,8 @@
 export * as WorkspaceIdentity from "./workspace-identity"
 
-import { createHash } from "node:crypto"
 import { existsSync, realpathSync, statSync } from "node:fs"
 import { isAbsolute, join, relative, resolve } from "node:path"
+import { deriveBanyanDbPath, findContainingBanyanDir } from "../database/banyan-db-path"
 
 // Phase 7 follow-up: a pure, synchronous workspace-identity helper that
 // derives the canonical codegraph database path from an *explicit root*
@@ -13,12 +13,19 @@ import { isAbsolute, join, relative, resolve } from "node:path"
 // diagnostic output (effective DB, graph metadata) reflects the same path
 // the repo/indexer services write to.
 //
+// The filename (hash of the realpath'd root + installation-channel suffix)
+// is derived by the shared `deriveBanyanDbPath` helper that `Database.path()`
+// also uses, so a build bound to an explicit root and a server started from
+// that root (or any channel) open the SAME SQLite file. Without the shared
+// derivation, `Database.path()` hashed process.cwd() AND applied the channel
+// suffix while this helper hashed the root WITHOUT the suffix — so dev/next
+// vs stable installs and restart-from-different-cwd scenarios could open
+// different DBs and make `codegraph_meta` look "missing".
+//
 // The helper also produces a small workspace-identity summary that the
 // build status, codegraph repo meta, and the LSP proxy tools all read, so
 // out-of-scope queries carry an explicit `root != indexed_root` signal
 // instead of silently returning fuzzy-match results.
-
-const WORKSPACE_MARKERS = [".git", "banyancode.json", "opencode.json", ".banyancode", ".opencode"]
 
 export const sanitizeRoot = (input: string): string => {
   // Realpath removes 8.3 short-file-name segments and resolves symlinks
@@ -30,30 +37,12 @@ export const sanitizeRoot = (input: string): string => {
   }
 }
 
-const shortHash = (s: string): string =>
-  createHash("sha256").update(s).digest("hex").slice(0, 12)
-
-const findContainingProjectDir = (root: string): string | undefined => {
-  let dir = root
-  while (true) {
-    const candidate = join(dir, ".banyancode")
-    try {
-      if (statSync(candidate).isDirectory()) return candidate
-    } catch {
-      // missing or unreachable; keep walking
-    }
-    const parent = resolve(dir, "..")
-    if (parent === dir) return undefined
-    dir = parent
-  }
-}
-
 export interface WorkspaceIdentity {
   /** Caller-supplied root, normalized via realpath (or resolve on failure). */
   readonly root: string
   /** Marker directory holding the per-workspace DB (.banyancode). */
   readonly banyanDir: string
-  /** Canonical DB filename derived from the root hash, so two workspaces never collide. */
+  /** Canonical DB filename derived from the root hash + channel suffix, so two workspaces never collide. */
   readonly dbPath: string
   /** Short tag used to build the DB filename. */
   readonly tag: string
@@ -67,10 +56,9 @@ export const identityForRoot = (rawRoot: string): WorkspaceIdentity => {
   if (!existsSync(root)) {
     throw new Error(`WorkspaceIdentity.identityForRoot: root '${rawRoot}' does not exist`)
   }
-  const banyanDir = findContainingProjectDir(root) ?? join(root, ".banyancode")
-  const tag = shortHash(root)
-  const dbPath = join(banyanDir, `banyancode-${tag}.db`)
-  return { root, banyanDir, dbPath, tag }
+  const banyanDir = findContainingBanyanDir(root) ?? join(root, ".banyancode")
+  const derivation = deriveBanyanDbPath(banyanDir, root)
+  return { root, banyanDir, dbPath: derivation.dbPath, tag: derivation.tag }
 }
 
 /**

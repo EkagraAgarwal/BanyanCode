@@ -12,7 +12,7 @@ import { Global } from "@opencode-ai/core/global"
 import { Installation } from "@/installation"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
-import { Cause, Duration, Effect, Option, Queue, Schema } from "effect"
+import { Cause, Context, Duration, Effect, Layer, Option, Queue, Schema } from "effect"
 import path from "path"
 import * as Stream from "effect/Stream"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
@@ -23,6 +23,7 @@ import { RootHttpApi } from "../api"
 import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, LintInput, PreflightInput, SafeRenameInput, TestRunInput, TypecheckInput, WebSearchFreeInput } from "../groups/global"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
+import { statusFromMeta } from "@opencode-ai/core/banyancode/codegraph-readiness"
 import { GraphMeta } from "@opencode-ai/core/banyancode/types"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import * as WebSearchFreeTool from "@opencode-ai/core/tool/websearch-free"
@@ -361,6 +362,76 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
         ),
       )
       return { started: true, root, dbPath, banyanDir: identity.banyanDir }
+    })
+
+    const codegraphStatusHandler = Effect.fn("GlobalHttpApi.codegraphStatus")(function* (ctx: {
+      query: { root?: string }
+    }) {
+      // /global/* routes run without the session-scoped InstanceContextMiddleware,
+      // so InstanceRef may be undefined here. Fall back to the current
+      // worktree gracefully, mirroring codegraphBuildHandler.
+      const inst = yield* InstanceRef
+      const root = ctx.query.root ?? inst?.worktree
+      if (!root) {
+        return yield* Effect.fail(
+          new InvalidRequestError({ message: "root is required. Pass it as the `root` query parameter." }),
+        )
+      }
+      // Keep path validation at the HTTP boundary: identityForRoot realpaths
+      // the root and throws on empty / non-existent roots. Surface that as a
+      // typed 400 with the message instead of an opaque 500.
+      let identity: Banyan.WorkspaceIdentityInterface
+      try {
+        identity = Banyan.WorkspaceIdentity.identityForRoot(root)
+      } catch (error) {
+        return yield* Effect.fail(
+          new InvalidRequestError({ message: error instanceof Error ? error.message : `invalid root: ${root}` }),
+        )
+      }
+      // The persisted graph DB is derived from the EXPLICIT root (realpath
+      // hash + installation-channel suffix via WorkspaceIdentity.identityForRoot),
+      // NOT from server-start process.cwd() — Database.path() and the identity
+      // helper now share one derivation. The status read must bind to that
+      // same canonical file, which is only known per request (query param or
+      // instance worktree), so the root-bound layer is built SCOPED here rather
+      // than provided at the server.ts assembly boundary. The HttpApi AGENTS.md
+      // warning against Effect.provide in handlers targets STABLE services
+      // that belong at the application/layer boundary; this is a deliberately
+      // request-scoped, read-only SQLite open that cannot be hoisted because
+      // the root arrives per request.
+      //
+      // The fresh memo map is REQUIRED: the server runtime threads one global
+      // MemoMap (server.ts toWebHandler), and the module-level `layer` /
+      // `codegraphRepoLayer` references are shared with the process-wide
+      // Database. With the shared map, the first construction (the process DB)
+      // gets memoized and this scoped root-bound read would silently reuse it,
+      // reporting the cwd-keyed DB's status instead of the requested root's.
+      // Layer.buildWithMemoMap with a per-request map forces fresh construction
+      // of the root-bound repo; Effect.scoped closes the connection afterwards.
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope
+          const memoMap = Layer.makeMemoMapUnsafe()
+          const context = yield* Layer.buildWithMemoMap(
+            Banyan.codegraphRepoLayer.pipe(Layer.provide(Database.layerFromRoot(identity.root))),
+            memoMap,
+            scope,
+          )
+          const repo = Context.get(context, Banyan.CodegraphRepo)
+          const meta = yield* repo.getMeta()
+          const result = statusFromMeta(meta)
+          return {
+            reason: result.reason,
+            autoBuilt: result.autoBuilt,
+            ...(result.graphBuiltAt !== undefined ? { graphBuiltAt: result.graphBuiltAt } : {}),
+            ...(result.graphVersion !== undefined ? { graphVersion: result.graphVersion } : {}),
+            ...(result.graphCoverage !== undefined ? { graphCoverage: result.graphCoverage } : {}),
+            ...(result.totalFiles !== undefined ? { totalFiles: result.totalFiles } : {}),
+            ...(result.warning !== undefined ? { warning: result.warning } : {}),
+            ...(result.error !== undefined ? { error: result.error } : {}),
+          }
+        }),
+      )
     })
 
     const codegraphNodesHandler = Effect.fn("GlobalHttpApi.codegraphNodes")(function* () {
@@ -782,6 +853,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       .handle("codegraphForceKill", codegraphForceKillHandler)
       .handle("codegraphRemove", codegraphRemoveHandler)
       .handle("codegraphBuild", codegraphBuildHandler)
+      .handle("codegraphStatus", codegraphStatusHandler)
       .handle("codegraphNodes", codegraphNodesHandler)
       .handle("codegraphEdges", codegraphEdgesHandler)
       .handle("banyanAgentSave", banyanAgentSaveHandler)

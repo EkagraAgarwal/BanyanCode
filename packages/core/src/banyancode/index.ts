@@ -155,6 +155,7 @@ export {
   layer as codegraphReadinessLayer,
   defaultLayer as codegraphReadinessDefaultLayer,
   ReadinessResult,
+  statusFromMeta,
   type Interface as CodegraphReadinessInterface,
 } from "./codegraph-readiness"
 export {

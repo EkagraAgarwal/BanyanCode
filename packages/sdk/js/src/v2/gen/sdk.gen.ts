@@ -124,6 +124,8 @@ import type {
   GlobalCodegraphNodesResponses,
   GlobalCodegraphRemoveErrors,
   GlobalCodegraphRemoveResponses,
+  GlobalCodegraphStatusErrors,
+  GlobalCodegraphStatusResponses,
   GlobalConfigGetErrors,
   GlobalConfigGetResponses,
   GlobalConfigUpdateErrors,
@@ -1632,6 +1634,29 @@ export class Codegraph extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Get persisted codegraph status
+   *
+   * Read the persisted codegraph build status (missing/ready/stale) plus graph metadata for the given root (defaults to the current workspace). Root validation happens at the HTTP boundary via WorkspaceIdentity.identityForRoot; the status is read from the same canonical per-root DB the build indexer writes to.
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters?: {
+      root?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "root" }] }])
+    return (options?.client ?? this.client).get<
+      GlobalCodegraphStatusResponses,
+      GlobalCodegraphStatusErrors,
+      ThrowOnError
+    >({
+      url: "/global/codegraph-status",
+      ...options,
+      ...params,
     })
   }
 

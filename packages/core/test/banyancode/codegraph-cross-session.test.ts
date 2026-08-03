@@ -5,8 +5,11 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { tmpdir } from "../fixture/tmpdir"
 import path from "path"
 import fs from "fs/promises"
+import { mkdirSync } from "node:fs"
 import { CodegraphIndexer } from "../../src/banyancode/codegraph-indexer"
 import { CodegraphRepo, defaultLayer as codegraphRepoDefaultLayer } from "../../src/banyancode/codegraph-repo"
+import { WorkspaceIdentity } from "../../src/banyancode/workspace-identity"
+import { channelSuffix } from "../../src/database/banyan-db-path"
 
 process.env.BANYANCODE_ENABLE = "1"
 
@@ -165,5 +168,115 @@ describe("CodegraphIndexer cross-session behavior", () => {
         Effect.scoped,
       ),
     )
+  })
+
+  // Phase 2 (canonical graph DB identity): Database.path() (cwd-keyed) and
+  // WorkspaceIdentity.identityForRoot (root-keyed) must derive the SAME DB
+  // file when the server starts from the workspace root — same realpath hash
+  // AND same installation-channel suffix.
+  test("Database.path() and identityForRoot agree on the DB file when cwd is the root", async () => {
+    await using tmp = await tmpdir()
+    const root = tmp.path
+    mkdirSync(path.join(root, ".banyancode"), { recursive: true })
+    const originalCwd = process.cwd
+
+    try {
+      Object.defineProperty(process, "cwd", {
+        value: () => root,
+        configurable: true,
+      })
+      const identity = WorkspaceIdentity.identityForRoot(root)
+      // The identity filename now carries the same channel suffix as
+      // Database.path(), so the two derivations line up.
+      expect(identity.dbPath).toBe(
+        path.join(identity.banyanDir, `banyancode-${identity.tag}${channelSuffix()}.db`),
+      )
+      expect(Database.path()).toBe(identity.dbPath)
+    } finally {
+      Object.defineProperty(process, "cwd", {
+        value: originalCwd,
+        configurable: true,
+      })
+    }
+  })
+
+  // Phase 2 (canonical graph DB identity): a build bound to an explicit root
+  // via Database.layerFromRoot(root) writes meta into the identity-derived
+  // dbPath. Reopening that SAME dbPath from a DIFFERENT cwd (the restart-
+  // from-another-directory scenario) must still find the meta, and a truly
+  // different workspace root must remain isolated (its own DB, no meta).
+  test("root-bound DB identity survives a different cwd and isolates other roots", async () => {
+    await using tmp = await tmpdir()
+    const root1 = path.join(tmp.path, "ws1")
+    const root2 = path.join(tmp.path, "ws2")
+    mkdirSync(path.join(root1, ".banyancode"), { recursive: true })
+    mkdirSync(path.join(root2, ".banyancode"), { recursive: true })
+    const fileA = path.join(root1, "a.ts")
+    const fileB = path.join(root2, "b.ts")
+    await fs.writeFile(fileA, "function foo() { return 42 }\n")
+    await fs.writeFile(fileB, "function bar() { return 99 }\n")
+
+    const identity1 = WorkspaceIdentity.identityForRoot(root1)
+    const identity2 = WorkspaceIdentity.identityForRoot(root2)
+    expect(identity1.dbPath).not.toBe(identity2.dbPath)
+
+    // Session 1: index root1 through a repo/indexer EXPLICITLY bound to
+    // Database.layerFromRoot(root1) — no defaultLayer, no cwd involvement.
+    const root1DbLayer = Database.layerFromRoot(root1)
+    const indexerLayer = CodegraphIndexer.layer.pipe(
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(CodegraphRepo.layer.pipe(Layer.provide(root1DbLayer))),
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* CodegraphIndexer.Service
+        yield* indexer.indexFiles({ root: root1, paths: [fileA] })
+      }).pipe(
+        Effect.provide(indexerLayer),
+        // The indexer layer also consumes Database.Service directly (not just
+        // through the repo); bind it to the same root DB, mirroring the
+        // existing session tests in this file.
+        Effect.provide(root1DbLayer),
+        Effect.scoped,
+      ),
+    )
+
+    const originalCwd = process.cwd
+    try {
+      // "Restart" the server from a different working directory. The old
+      // Database.path() would hash this directory and open a DIFFERENT file.
+      Object.defineProperty(process, "cwd", {
+        value: () => root2,
+        configurable: true,
+      })
+      expect(Database.path()).not.toBe(identity1.dbPath)
+
+      // Session 2: reopen the SAME root-bound dbPath from the new cwd.
+      const reopenLayer = CodegraphRepo.layer.pipe(Layer.provide(Database.layerFromRoot(root1)))
+      const meta = await Effect.runPromise(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          return yield* repo.getMeta()
+        }).pipe(Effect.provide(reopenLayer), Effect.scoped),
+      )
+      expect(meta).toBeDefined()
+      expect(meta!.indexedRoot).toBe(identity1.root)
+      expect(meta!.graphBuiltAt).toBeGreaterThan(0)
+
+      // Isolation: a genuinely different workspace root has its own DB.
+      const otherLayer = CodegraphRepo.layer.pipe(Layer.provide(Database.layerFromRoot(root2)))
+      const otherMeta = await Effect.runPromise(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          return yield* repo.getMeta()
+        }).pipe(Effect.provide(otherLayer), Effect.scoped),
+      )
+      expect(otherMeta).toBeUndefined()
+    } finally {
+      Object.defineProperty(process, "cwd", {
+        value: originalCwd,
+        configurable: true,
+      })
+    }
   })
 })

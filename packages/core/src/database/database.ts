@@ -5,12 +5,11 @@ import { layer as sqliteLayer } from "#sqlite"
 import { Context, Effect, Layer } from "effect"
 import { Global } from "../global"
 import { Flag } from "../flag/flag"
-import { createHash } from "node:crypto"
 import { isAbsolute, join } from "path"
 import { DatabaseMigration } from "./migration"
-import { InstallationChannel } from "../installation/version"
 import { LayerNode } from "../effect/layer-node"
 import fs from "node:fs"
+import { channelSuffix, deriveBanyanDbPath, findContainingBanyanDir } from "./banyan-db-path"
 
 const makeDatabase = EffectDrizzleSqlite.makeWithDefaults()
 type DatabaseShape = Effect.Success<typeof makeDatabase>
@@ -65,29 +64,9 @@ function findProjectRoot(startDir: string): string | undefined {
   return undefined
 }
 
-function shortHash(s: string): string {
-  return createHash("sha256").update(s).digest("hex").slice(0, 12)
-}
-
 function findOrCreateBanyanProjectDir(startDir: string): string | undefined {
-  let dir = startDir
-  while (true) {
-    const candidate = join(dir, ".banyancode")
-    try {
-      const stat = fs.statSync(candidate)
-      if (stat.isDirectory()) {
-        return candidate
-      }
-    } catch {
-      // ignore
-    }
-    const parent = join(dir, "..")
-    if (parent === dir) {
-      break
-    }
-    dir = parent
-  }
-
+  const existing = findContainingBanyanDir(startDir)
+  if (existing) return existing
   const root = findProjectRoot(startDir) ?? startDir
   const targetDir = join(root, ".banyancode")
   try {
@@ -110,46 +89,29 @@ export function path() {
   if (projectBanyanDir) {
     // BANYANCODE_LEGACY_DB_PATH=1 falls back to the old filename for one
     // release cycle so existing per-project DBs are not silently abandoned.
-    const legacy =
-      process.env.BANYANCODE_LEGACY_DB_PATH === "1" || process.env.BANYANCODE_LEGACY_DB_PATH === "true"
-    if (legacy) {
-      if (
-        ["latest", "beta", "prod"].includes(InstallationChannel) ||
-        process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" ||
-        process.env.OPENCODE_DISABLE_CHANNEL_DB === "true"
-      )
-        return join(projectBanyanDir, "banyancode.db")
-      return join(projectBanyanDir, `banyancode-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}.db`)
-    }
-    // Include a hash of the workspace root so two workspaces in the same
-    // project tree never share a single banyancode.db (the singleton
-    // codegraph_meta row would otherwise let the second workspace's
-    // indexed_root overwrite the first's, breaking auto-update isolation).
-    const workspaceTag = shortHash(
-      (() => {
-        try {
-          return fs.realpathSync.native(process.cwd())
-        } catch {
-          return process.cwd()
-        }
-      })(),
-    )
-    const channelSuffix =
-      ["latest", "beta", "prod"].includes(InstallationChannel) ||
-      process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" ||
-      process.env.OPENCODE_DISABLE_CHANNEL_DB === "true"
-        ? ""
-        : `-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}`
-    return join(projectBanyanDir, `banyancode-${workspaceTag}${channelSuffix}.db`)
+    // The filename derivation (realpath hash + installation-channel suffix)
+    // is shared with WorkspaceIdentity.identityForRoot so the process-wide
+    // DB and the codegraph DB agree when the server starts from the
+    // workspace root.
+    return deriveBanyanDbPath(projectBanyanDir, process.cwd()).dbPath
   }
 
-  if (
-    ["latest", "beta", "prod"].includes(InstallationChannel) ||
-    process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" ||
-    process.env.OPENCODE_DISABLE_CHANNEL_DB === "true"
-  )
-    return join(Global.Path.banyan.data, "banyancode.db")
-  return join(Global.Path.banyan.data, `banyancode-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}.db`)
+  return join(Global.Path.banyan.data, `banyancode${channelSuffix()}.db`)
+}
+
+/**
+ * Bind a Database.Service to the canonical per-root banyancode DB file.
+ * Mirrors `layerFromPath` but derives the filename from an EXPLICIT root
+ * (realpath hash + installation-channel suffix, same derivation as
+ * `WorkspaceIdentity.identityForRoot`), so a repo/indexer bound through this
+ * layer reads and writes the SAME file the codegraph build writes to —
+ * regardless of `process.cwd()` at server start. The caller-supplied root
+ * must exist (or be creatable); use `WorkspaceIdentity.identityForRoot` for
+ * validation at API boundaries.
+ */
+export function layerFromRoot(root: string) {
+  const banyanDir = findContainingBanyanDir(root) ?? join(root, ".banyancode")
+  return layerFromPath(deriveBanyanDbPath(banyanDir, root).dbPath)
 }
 
 export const defaultLayer = Layer.unwrap(

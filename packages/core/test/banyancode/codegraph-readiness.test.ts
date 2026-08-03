@@ -450,5 +450,170 @@ describe("CodegraphReadiness", () => {
       expect(second.value.autoBuilt).toBe(false)
     }
   })
+
+  // Phase 2: status() distinguishes states instead of always returning
+  // "ready" when a meta row exists. No meta row → "missing".
+  test("status() returns missing when no meta exists", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "readiness-status-missing.db")
+    const layer = buildReadinessLayer(dbPath)
+
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* CodegraphReadiness.Service
+          return yield* svc.status()
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    expect(Exit.isSuccess(exit)).toBe(true)
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.reason).toBe("missing")
+      expect(exit.value.autoBuilt).toBe(false)
+      expect(exit.value.graphBuiltAt).toBeUndefined()
+    }
+  })
+
+  // Phase 2: an old graph (age > STALENESS_AGE_HIGH_MS = 7 days) must be
+  // reported as "stale" with the existing age warning, not "ready".
+  test("status() returns stale when the graph is older than the high staleness threshold", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "readiness-status-stale-age.db")
+    const layer = buildReadinessLayer(dbPath)
+    const { CodegraphRepo } = await import("@opencode-ai/core/banyancode/codegraph-repo")
+    const now = Date.now()
+    const EIGHT_DAYS_MS = 8 * 24 * 60 * 60 * 1000
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          yield* repo.setMeta({
+            id: "singleton",
+            graphBuiltAt: now - EIGHT_DAYS_MS,
+            graphVersion: 1,
+            graphCoverage: 1,
+            totalFiles: 1,
+            totalNodes: 0,
+            totalEdges: 0,
+            schemaVersion: 3,
+            indexedRoot: tmp.path,
+          })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* CodegraphReadiness.Service
+          return yield* svc.status()
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    expect(Exit.isSuccess(exit)).toBe(true)
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.reason).toBe("stale")
+      expect(exit.value.autoBuilt).toBe(false)
+      expect(exit.value.warning).toBeDefined()
+      expect(exit.value.warning).toContain("days old")
+      expect(exit.value.graphBuiltAt).toBe(now - EIGHT_DAYS_MS)
+    }
+  })
+
+  // Phase 2: low graph coverage (< 0.5) must be reported as "stale" even
+  // when the graph is fresh.
+  test("status() returns stale when graph coverage is below 0.5", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "readiness-status-stale-coverage.db")
+    const layer = buildReadinessLayer(dbPath)
+    const { CodegraphRepo } = await import("@opencode-ai/core/banyancode/codegraph-repo")
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          yield* repo.setMeta({
+            id: "singleton",
+            graphBuiltAt: Date.now(),
+            graphVersion: 1,
+            graphCoverage: 0.1,
+            totalFiles: 1,
+            totalNodes: 0,
+            totalEdges: 0,
+            schemaVersion: 3,
+            indexedRoot: tmp.path,
+          })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* CodegraphReadiness.Service
+          return yield* svc.status()
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    expect(Exit.isSuccess(exit)).toBe(true)
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.reason).toBe("stale")
+      expect(exit.value.warning).toBeDefined()
+      expect(exit.value.warning).toContain("coverage")
+      expect(exit.value.graphCoverage).toBe(0.1)
+    }
+  })
+
+  // Phase 2: a healthy graph (fresh + adequate coverage) reports "ready".
+  test("status() returns ready when the graph is healthy", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "readiness-status-ready.db")
+    const layer = buildReadinessLayer(dbPath)
+    const { CodegraphRepo } = await import("@opencode-ai/core/banyancode/codegraph-repo")
+    const now = Date.now()
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          yield* repo.setMeta({
+            id: "singleton",
+            graphBuiltAt: now,
+            graphVersion: 2,
+            graphCoverage: 0.9,
+            totalFiles: 42,
+            totalNodes: 0,
+            totalEdges: 0,
+            schemaVersion: 3,
+            indexedRoot: tmp.path,
+          })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* CodegraphReadiness.Service
+          return yield* svc.status()
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    expect(Exit.isSuccess(exit)).toBe(true)
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.reason).toBe("ready")
+      expect(exit.value.autoBuilt).toBe(false)
+      expect(exit.value.warning).toBeUndefined()
+      expect(exit.value.graphVersion).toBe(2)
+      expect(exit.value.graphCoverage).toBe(0.9)
+      expect(exit.value.totalFiles).toBe(42)
+      expect(exit.value.graphBuiltAt).toBe(now)
+    }
+  })
 })
 
