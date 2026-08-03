@@ -84,6 +84,19 @@ export function normalizeCustomProviderID(value: string) {
   return providerID
 }
 
+export async function removeProviderCredentials(
+  sdk: ReturnType<typeof useSDK>,
+  toast: ReturnType<typeof useToast>,
+  providerID: string,
+) {
+  const result = await sdk.client.auth.remove({ providerID })
+  if (result.error) {
+    toast.show({ variant: "error", message: JSON.stringify(result.error) })
+    return
+  }
+  toast.show({ message: `Removed ${providerID} credentials`, variant: "info" })
+}
+
 export function createDialogProviderOptions() {
   const sync = useSync()
   const dialog = useDialog()
@@ -228,7 +241,30 @@ export function createDialogProviderOptions() {
 
 export function DialogProvider() {
   const options = createDialogProviderOptions()
-  return <DialogSelect title="Connect a provider" options={options()} />
+  const sync = useSync()
+  const onboarded = useConnected()
+  const sdk = useSDK()
+  const toast = useToast()
+  return (
+    <DialogSelect
+      title="Connect a provider"
+      options={options()}
+      actions={[
+        {
+          command: "provider.remove",
+          title: "Remove",
+          hidden: !onboarded(),
+          disabled: (option) =>
+            !option ||
+            option.value === CUSTOM_PROVIDER_OPTION_VALUE ||
+            !sync.data.provider_next.connected.includes(option.value as string),
+          onTrigger: (option) => {
+            void removeProviderCredentials(sdk, toast, option.value as string)
+          },
+        },
+      ]}
+    />
+  )
 }
 
 interface AutoMethodProps {
