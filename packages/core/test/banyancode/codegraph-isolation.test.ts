@@ -125,16 +125,14 @@ describe("CodegraphAutoUpdate batch cap", () => {
 
     await Effect.runPromise(
       Effect.gen(function* () {
-        const svc = yield* CodegraphAutoUpdate.Service
         const events = yield* EventV2.Service
 
-        // Queue 500 file events one by one.
+        // Queue 500 file events one by one. The drain fiber is forked at
+        // layer construction and is woken by each event, so no explicit
+        // resume() is needed.
         for (let i = 0; i < 500; i++) {
           yield* events.publish(Watcher.Event.Updated, { file: `/fake/workspace/file_${i}.ts`, event: "add" })
         }
-
-        // Resume to start processing.
-        yield* svc.resume()
 
         // Wait for two drain cycles (debounce 500ms + processing per cycle).
         yield* Effect.sleep(2000)

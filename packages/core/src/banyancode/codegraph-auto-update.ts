@@ -48,8 +48,6 @@ export interface Interface {
     type: "banyancode.codegraph.auto-update.progress"
     properties: ProgressState
   }>
-  readonly pause: () => Effect.Effect<void, never, never>
-  readonly resume: () => Effect.Effect<void, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphAutoUpdate") {}
@@ -86,8 +84,6 @@ export const layer: Layer.Layer<
         state: () => Ref.get(stateRef),
         events: () => events,
         progressEvents: () => progressEvents,
-        pause: () => Effect.void,
-        resume: () => Effect.void,
       })
     }
 
@@ -310,6 +306,15 @@ export const layer: Layer.Layer<
             Effect.logWarning("codegraph auto-update: removeFiles failed", { cause: Cause.pretty(cause) }),
           ),
         )
+        // Unlink-only paths never reach the add/change cleanup in the listener
+        // (:389-393), so drop them here or graceSeenRef grows without bound on
+        // long-lived watchers. A later unlink for the same path gets a fresh
+        // grace window, which is the desired behavior.
+        yield* Ref.update(graceSeenRef, (seen) => {
+          const next = new Set(seen)
+          for (const filePath of removals) next.delete(filePath)
+          return next
+        })
         yield* publishProgress({ phase: "removing", completed: removals.length, total: removals.length, currentFile: removals[removals.length - 1] })
         yield* publishProgress({ phase: "done", completed: removals.length, total: removals.length })
       }
@@ -358,9 +363,19 @@ export const layer: Layer.Layer<
             const signal = yield* Queue.poll(wakeQueue)
             quiet = Option.isNone(signal)
           }
-          while ((yield* Ref.get(pendingRef)).size > 0) yield* processBatch()
+          while ((yield* Ref.get(pendingRef)).size > 0) {
+            // A single processBatch failure must not kill the drain forever —
+            // pendingRef is drained at the top of processBatch, so on failure
+            // the loop exits back to Queue.take and stays alive for the next
+            // wake. Log and continue.
+            yield* processBatch().pipe(
+              Effect.catchCause((cause) =>
+                Effect.logError("codegraph auto-update: processBatch failed", { cause: Cause.pretty(cause) }),
+              ),
+            )
+          }
         }
-      }).pipe(Effect.catchCause((cause) => Effect.logError("codegraph auto-update drain loop failed", { cause: Cause.pretty(cause) }))),
+      }),
     )
     yield* Ref.set(drainFiberRef, drainFiber)
 
@@ -401,25 +416,10 @@ export const layer: Layer.Layer<
     )
     yield* Effect.addFinalizer(() => unsubscribe)
 
-    const pause: Interface["pause"] = () =>
-      Effect.gen(function* () {
-        yield* Ref.set(pausedRef, true)
-        yield* publish({ status: "paused", pending: 0 })
-      })
-
-    const resume: Interface["resume"] = () =>
-      Effect.gen(function* () {
-        yield* Ref.set(pausedRef, false)
-        yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
-        yield* recomputeStatus()
-      })
-
     return Service.of({
       state: () => Ref.get(stateRef),
       events: () => eventsQueue,
       progressEvents: () => progressEventsQueue,
-      pause,
-      resume,
     })
   }),
 )

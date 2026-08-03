@@ -128,7 +128,12 @@ export const layer = Layer.effect(
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
         const currentFiber = yield* Ref.get(inFlight)
-        if (currentFiber) yield* Fiber.interrupt(currentFiber).pipe(Effect.ignore)
+        // Mirror cancel/forceKill (:283/:303): bound the interrupt so a
+        // wedged CPU-bound indexer fiber cannot hang start() forever.
+        if (currentFiber) yield* Fiber.interrupt(currentFiber).pipe(
+          Effect.timeout("2 seconds"),
+          Effect.ignore,
+        )
 
         yield* indexer.cancel()
         // Phase 7 follow-up: canonical storage is derived from the caller-

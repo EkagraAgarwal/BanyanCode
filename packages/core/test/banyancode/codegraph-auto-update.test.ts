@@ -97,17 +97,14 @@ const testLayer = (input: {
   )
 
 describe("CodegraphAutoUpdate", () => {
-  test("starts in idle status and supports pause/resume", async () => {
+  test("starts in idle status", async () => {
     await using tmp = await tmpdir()
     const dbLayer = Database.layerFromPath(path.join(tmp.path, "auto.sqlite"))
     await Effect.runPromise(
       Effect.gen(function* () {
         const svc = yield* CodegraphAutoUpdate.Service
         expect((yield* svc.state()).status).toBe("idle")
-        yield* svc.resume()
         expect((yield* svc.state()).pending).toBe(0)
-        yield* svc.pause()
-        expect((yield* svc.state()).status).toBe("paused")
       }).pipe(Effect.provide(testLayer({})), Effect.provide(dbLayer), Effect.scoped) as any,
     )
   })
