@@ -10,6 +10,7 @@ import type {
   ArchitecturalSlice,
   CodegraphEdge,
   CodegraphFile,
+  CodegraphMeta,
   CodegraphNode,
   RepositoryContext,
   WorkspaceContext,
@@ -19,22 +20,8 @@ import { Service as Git, defaultLayer as gitDefaultLayer } from "./git-service"
 export type { Interface }
 export { Service }
 
-const KIND_PRIORITY: CodegraphNode["kind"][] = [
-  "class",
-  "function",
-  "method",
-  "type",
-  "variable",
-  "file",
-]
-
 const DOC_PATH_PATTERNS = [/\.md$/i, /^readme/i, /^changelog/i, /^contributing/i, /\/docs?\//i, /^design/i]
 const CONFIG_PATH_PATTERNS = [/package\.json$/i, /tsconfig.*\.json$/i, /pyproject\.toml$/i, /cargo\.toml$/i, /go\.mod$/i, /pnpm-workspace\.yaml$/i, /bun\.fig\.toml$/i]
-
-function kindRank(kind: CodegraphNode["kind"]): number {
-  const idx = KIND_PRIORITY.indexOf(kind)
-  return idx === -1 ? Infinity : idx
-}
 
 // Phase 2 ranking heuristic for transitive dependents of a trace anchor.
 //
@@ -103,6 +90,19 @@ const rankTransitiveDependents = (
 }
 
 type EdgeDirection = "callers" | "dependencies"
+
+// Shared per-call context for the query() pipeline: the files table +
+// metadata-only (light) node projection + graph meta, loaded exactly once
+// per invocation and threaded through query/findTests so the 2-4x
+// listAllFiles/listAllNodes reloads collapse to a single load. Light nodes
+// omit the `code` column (searchNodesLight); the only consumer that needs
+// `code` (findTests' substring import matching) fetches it per-candidate
+// via nodesByIDs.
+type QueryContext = {
+  readonly allFiles: readonly CodegraphFile[]
+  readonly allNodesLight: ReadonlyArray<Omit<CodegraphNode, "code"> & { code?: never }>
+  readonly meta: CodegraphMeta | undefined
+}
 
 const CALLER_EDGE_KINDS: ReadonlySet<CodegraphEdge["kind"]> = new Set(["calls", "references"])
 const DEPENDENCY_EDGE_KINDS: ReadonlySet<CodegraphEdge["kind"]> = new Set([
@@ -381,64 +381,13 @@ export const layer = Layer.effect(
         }
       })
 
-    const findSubsystem = (input: {
-      query: string
-      maxDepth?: number
-    }): Effect.Effect<{ entry: CodegraphNode; related: CodegraphNode[] }, never, never> =>
-      Effect.gen(function* () {
-        const candidates = yield* repo.searchNodes({ name: input.query, limit: 20 })
-        const sorted = candidates.slice().sort((a, b) => kindRank(a.kind) - kindRank(b.kind))
-
-        let entry: CodegraphNode | undefined
-        if (sorted.length > 0) {
-          entry = sorted[0]
-        }
-
-        if (!entry) {
-          const all = yield* repo.listAllNodes()
-          const matching = all.filter((n) => n.name.toLowerCase().includes(input.query.toLowerCase()))
-          if (matching.length > 0) {
-            entry = matching.slice().sort((a, b) => kindRank(a.kind) - kindRank(b.kind))[0]
-          }
-        }
-
-        if (!entry) {
-          const dummyEntry: CodegraphNode = {
-            id: "",
-            fileID: "",
-            kind: "function",
-            name: `no-match:${input.query}`,
-            startLine: 0,
-            endLine: 0,
-          }
-          return { entry: dummyEntry, related: [] }
-        }
-
-        const related = yield* walkSubsystem(entry.id, input.maxDepth ?? 3)
-        return { entry, related }
-      })
-
-    const walkSubsystem = (nodeID: string, maxDepth: number): Effect.Effect<CodegraphNode[], never, never> =>
-      Effect.gen(function* () {
-        const edgeKinds = new Set<CodegraphEdge["kind"]>([
-          "calls",
-          "references",
-          "extends",
-          "imports",
-        ])
-        const run = yield* bfsPure(repo, {
-          start: [nodeID],
-          direction: "both",
-          edgeKinds,
-          maxDepth,
-        })
-        return run.results.map((r) => r.node)
-      })
-
-    const findTests = (input: {
-      symbol: string
-      symbolID?: string
-    }): Effect.Effect<
+    const findTests = (
+      input: {
+        symbol: string
+        symbolID?: string
+      },
+      ctx?: QueryContext,
+    ): Effect.Effect<
       { tests: readonly CodegraphNode[]; notFound: boolean; derivation: "tested_by" | "references" | "import" | "substring" | "none" },
       never,
       never
@@ -451,18 +400,29 @@ export const layer = Layer.effect(
         // Discover test files by either `kind = "test"` OR a `.test/.spec`
         // path pattern so we cover fixtures that omit the kind field.
         const testFilePatterns = [".test.ts", ".spec.ts", "test_", "_test.go", "_test.py", ".test.tsx", ".spec.tsx"]
-        const allFiles = yield* repo.listAllFiles()
+        // Shared load (query/impact path) or one-off light load (standalone
+        // `tests` entry): the files table + metadata-only node projection are
+        // loaded once per call. The `code` column is fetched only for the
+        // bounded candidate-test set below — the one consumer that needs it
+        // (substring import matching in doImportMatch).
+        const allFiles = ctx?.allFiles ?? (yield* repo.listAllFiles())
+        const allNodesLight = ctx?.allNodesLight ?? (yield* repo.searchNodesLight({ limit: 100000 }))
         const testFileIDs = new Set(
           allFiles
             .filter((f) => testFilePatterns.some((p) => f.path.toLowerCase().includes(p.toLowerCase())))
             .map((f) => f.id),
         )
-        const allNodes = yield* repo.listAllNodes()
-        const testNodesFromKind = yield* repo.listNodesByKind("test")
-        const testNodeIDs = new Set(testNodesFromKind.map((n) => n.id))
-        const candidateTestNodes = allNodes.filter(
-          (n) => testNodeIDs.has(n.id) || testFileIDs.has(n.fileID),
-        )
+        // Derive the `kind = "test"` set from the shared light projection
+        // (id/fileID/kind are all present) instead of a second
+        // listNodesByKind + full listAllNodes pass — the same ids either way.
+        const testNodeIDs = new Set(allNodesLight.filter((n) => n.kind === "test").map((n) => n.id))
+        const candidateTestNodeIDs = allNodesLight
+          .filter((n) => testNodeIDs.has(n.id) || testFileIDs.has(n.fileID))
+          .map((n) => n.id)
+        // Bounded fetch of FULL candidate nodes — only the test candidates,
+        // never the whole table; `code` is required by doImportMatch below.
+        const candidateTestNodes =
+          candidateTestNodeIDs.length > 0 ? yield* repo.nodesByIDs(candidateTestNodeIDs) : []
 
         const doImportMatch = (symbolModule: string, symbolName: string): CodegraphNode[] => {
           const moduleBase = symbolModule.replace(/\.ts$/, "")
@@ -625,21 +585,35 @@ export const layer = Layer.effect(
         return run.results.map((r) => r.node)
       })
 
-    const query = (input: {
-      query: string
-      limit?: number
-      workspace?: WorkspaceContext
-    }): Effect.Effect<RepositoryContext, never, never> =>
+    // Load the files table + light node projection + graph meta exactly once
+    // per invocation. Every consumer below (findTests, queryWithContext,
+    // impact) shares this instead of re-running listAllFiles/listAllNodes.
+    const loadQueryContext = (): Effect.Effect<QueryContext, never, never> =>
       Effect.gen(function* () {
-        const allFiles = yield* repo.listAllFiles()
-        const allNodes = yield* repo.listAllNodes()
-        const meta = yield* repo.getMeta()
+        const [allFiles, allNodesLight, meta] = yield* Effect.all([
+          repo.listAllFiles(),
+          repo.searchNodesLight({ limit: 100000 }),
+          repo.getMeta(),
+        ])
+        return { allFiles, allNodesLight, meta }
+      })
+
+    const queryWithContext = (
+      input: {
+        query: string
+        limit?: number
+        workspace?: WorkspaceContext
+      },
+      ctx: QueryContext,
+    ): Effect.Effect<RepositoryContext, never, never> =>
+      Effect.gen(function* () {
+        const { allFiles, allNodesLight, meta } = ctx
         const indexedRoot = meta?.indexedRoot
 
         const fileByPath = yield* resolveFileByPath(repo as never, input.query, indexedRoot)
         const symbolResult = yield* findSymbol({ name: input.query, workspace: input.workspace })
         const fileMatches: CodegraphNode[] = fileByPath
-          ? allNodes.filter((n) => n.fileID === fileByPath.id)
+          ? allNodesLight.filter((n) => n.fileID === fileByPath.id)
           : []
 
         // Phase 3: run FTS for ALL queries (not just multi-token). The
@@ -682,7 +656,7 @@ export const layer = Layer.effect(
           }
         }
 
-        const testsResult = symbols.length > 0 ? yield* findTests({ symbol: input.query }) : { tests: [] as readonly CodegraphNode[], notFound: true, derivation: "none" as const }
+        const testsResult = symbols.length > 0 ? yield* findTests({ symbol: input.query }, ctx) : { tests: [] as readonly CodegraphNode[], notFound: true, derivation: "none" as const }
 
         const relatedNodes: CodegraphNode[] = []
         for (const sym of symbols) {
@@ -831,6 +805,16 @@ export const layer = Layer.effect(
         } satisfies RepositoryContext
       })
 
+    const query = (input: {
+      query: string
+      limit?: number
+      workspace?: WorkspaceContext
+    }): Effect.Effect<RepositoryContext, never, never> =>
+      Effect.gen(function* () {
+        const ctx = yield* loadQueryContext()
+        return yield* queryWithContext(input, ctx)
+      })
+
     const slice = (ctx: RepositoryContext): Effect.Effect<ArchitecturalSlice, never, never> =>
       Effect.gen(function* () {
         const entrypoints = ctx.symbols.filter(
@@ -947,10 +931,16 @@ export const layer = Layer.effect(
       workspace?: WorkspaceContext
     }): Effect.Effect<ArchitecturalSlice, never, never> =>
       Effect.gen(function* () {
-        const meta = yield* repo.getMeta()
-        const file = yield* resolveFileByPath(repo as never, input.path, meta?.indexedRoot)
+        // Load the files + light-nodes + meta context ONCE and reuse it for
+        // the query() pipeline below. Previously the file-miss path ran
+        // query() (its own listAllFiles/listAllNodes/getMeta + BFS + tests)
+        // and the resolved-file path re-ran query() at the end — so the
+        // table loads happened twice per impact() call. The `query` string
+        // (`input.path`) and workspace are passed through exactly as before.
+        const qctx = yield* loadQueryContext()
+        const file = yield* resolveFileByPath(repo as never, input.path, qctx.meta?.indexedRoot)
         if (!file) {
-          const ctx = yield* query({ query: input.path, workspace: input.workspace })
+          const ctx = yield* queryWithContext({ query: input.path, workspace: input.workspace }, qctx)
           return yield* slice(ctx)
         }
 
@@ -972,7 +962,7 @@ export const layer = Layer.effect(
             resultLimit,
           }),
         ])
-        const ctx = yield* query({ query: input.path, workspace: input.workspace })
+        const ctx = yield* queryWithContext({ query: input.path, workspace: input.workspace }, qctx)
         const slc = yield* slice(ctx)
         const importantSymbols = new Map<string, CodegraphNode>()
         for (const node of fileNodes) {
@@ -1088,15 +1078,6 @@ export const layer = Layer.effect(
               message: "no callers or dependents reference this symbol in the current graph",
             })
           }
-        }
-
-        const meta = yield* repo.getMeta()
-        if (meta?.indexedRoot && meta.indexedRoot !== input.symbol) {
-          // The script records the indexed root as a cross-check; if
-          // the implicit caller workspace differs from the indexed
-          // root, surface out-of-scope. This is a soft signal that
-          // complements the resolver's existing derivation tag.
-          // (No-op when caller didn't supply a workspace.)
         }
 
         return {

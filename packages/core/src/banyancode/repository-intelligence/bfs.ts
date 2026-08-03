@@ -65,20 +65,31 @@ const fetchFrontierEdges = (
     const wantOut = direction === "outgoing" || direction === "both"
     const wantIn = direction === "incoming" || direction === "both"
 
-    const outEdgesByID = new Map<string, ReadonlyArray<CodegraphEdge>>()
+    // Accumulate with push instead of `[...list, e]` array-spread per edge —
+    // the spread reallocates the whole list for every edge, which is
+    // quadratic on wide frontiers. Output order is identical.
+    const outEdgesByID = new Map<string, CodegraphEdge[]>()
     if (wantOut) {
       const edges = yield* repo.edgesFromBatch(frontier)
       for (const e of edges) {
-        const list = outEdgesByID.get(e.fromNodeID) ?? []
-        outEdgesByID.set(e.fromNodeID, [...list, e])
+        let list = outEdgesByID.get(e.fromNodeID)
+        if (!list) {
+          list = []
+          outEdgesByID.set(e.fromNodeID, list)
+        }
+        list.push(e)
       }
     }
-    const inEdgesByID = new Map<string, ReadonlyArray<CodegraphEdge>>()
+    const inEdgesByID = new Map<string, CodegraphEdge[]>()
     if (wantIn) {
       const edges = yield* repo.edgesToBatch(frontier)
       for (const e of edges) {
-        const list = inEdgesByID.get(e.toNodeID) ?? []
-        inEdgesByID.set(e.toNodeID, [...list, e])
+        let list = inEdgesByID.get(e.toNodeID)
+        if (!list) {
+          list = []
+          inEdgesByID.set(e.toNodeID, list)
+        }
+        list.push(e)
       }
     }
     return { out: outEdgesByID, inc: inEdgesByID }
