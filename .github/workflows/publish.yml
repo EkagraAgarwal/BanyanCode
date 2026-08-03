@@ -5,6 +5,8 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - "dev"
   workflow_dispatch:
     inputs:
       version:
@@ -28,6 +30,7 @@ jobs:
     if: github.repository == 'EkagraAgarwal/BanyanCode'
     outputs:
       version: ${{ steps.resolve.outputs.version }}
+      channel: ${{ steps.resolve.outputs.channel }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
@@ -35,18 +38,35 @@ jobs:
           fetch-tags: true
           ref: ${{ github.ref_name }}
 
-      - name: Resolve version
+      - name: Resolve version and channel
         id: resolve
         working-directory: packages/opencode
         run: |
+          # Channel is branch/version-aware. Tag pushes and manual dispatches
+          # are explicit acts (the "confirmation" for main releases); pushes
+          # to the dev branch auto-publish a canary build. The channel drives
+          # both the npm dist-tag (publish.ts `--tag ${Script.channel}`) and
+          # the channel baked into the binary (build.ts define), which
+          # isolates dev data in banyancode-*-dev.db.
           if [ -n "${{ inputs.version }}" ]; then
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            VERSION="${{ inputs.version }}"
           elif [ "${{ github.event_name }}" = "push" ]; then
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.ref_type }}" = "tag" ]; then
+              VERSION="${GITHUB_REF_NAME#v}"
+            else
+              BASE=$(node -p "require('./package.json').version")
+              VERSION="${BASE}-dev.${GITHUB_SHA:0:7}"
+            fi
           else
             VERSION=$(node -p "require('./package.json').version")
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           fi
+          case "$VERSION" in
+            *-dev.*)            CHANNEL="dev" ;;
+            *-rc.*|*-beta.*)    CHANNEL="next" ;;
+            *)                  CHANNEL="latest" ;;
+          esac
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
 
       - name: Mark package scripts executable
         run: git ls-files -z 'packages/*/script/*.{ts,mjs,js}' | xargs -0 -I {} chmod +x {}
@@ -115,7 +135,7 @@ jobs:
           # `.tar.gz` files to exist; without them the upload step fails
           # with "no matches found" and the release ships empty).
           OPENCODE_RELEASE: 'true'
-          OPENCODE_CHANNEL: latest
+          OPENCODE_CHANNEL: ${{ needs.version.outputs.channel }}
 
       - name: Package macOS binaries
         if: matrix.os-suffix == 'darwin'
@@ -273,14 +293,19 @@ jobs:
         run: |
           set -euo pipefail
           TAG="v${{ needs.version.outputs.version }}"
+          CHANNEL="${{ needs.version.outputs.channel }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG exists; uploading new assets."
           else
-            # Note: not flagged as prerelease. Every shipping version is
-            # treated as `latest` (the npm dist-tag defaults to Script.channel
-            # `latest` in publish.ts). The repo release follows the same
-            # rule — see release/AGENTS.md "latest, not prerelease".
-            gh release create "$TAG" --draft --generate-notes --title "BanyanCode ${{ needs.version.outputs.version }}" --repo "${{ github.repository }}"
+            # Stable versions ship as GA (latest). dev/next (canary, rc,
+            # beta) builds are created as prereleases so `gh release list`
+            # keeps them out of the stable view; the finalize step below
+            # re-affirms the flag once assets are uploaded.
+            if [ "$CHANNEL" = "latest" ]; then
+              gh release create "$TAG" --draft --generate-notes --title "BanyanCode ${{ needs.version.outputs.version }}" --repo "${{ github.repository }}"
+            else
+              gh release create "$TAG" --draft --prerelease --generate-notes --title "BanyanCode ${{ needs.version.outputs.version }} ($CHANNEL)" --repo "${{ github.repository }}"
+            fi
           fi
           shopt -s nullglob
           # Explicit 10-target allowlist. The wildcard `banyancode-*.*`
@@ -318,7 +343,7 @@ jobs:
         env:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
           OPENCODE_RELEASE: 'true'
-          OPENCODE_CHANNEL: latest
+          OPENCODE_CHANNEL: ${{ needs.version.outputs.channel }}
           GH_REPO: ${{ github.repository }}
           NPM_CONFIG_REGISTRY: https://registry.npmjs.org
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -329,10 +354,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Finalize: not a draft, not a prerelease. Per release/AGENTS.md,
-          # every shipping release is `latest` on both npm dist-tag (the
-          # default Script.channel) and the GitHub release `isPrerelease`
-          # flag. Explicit `--prerelease=false` so future AGENTS.md or
-          # workflow changes that introduce `--prerelease` upstream are
-          # overridden here.
-          gh release edit "v${{ needs.version.outputs.version }}" --draft=false --prerelease=false --repo "${{ github.repository }}" || true
+          # Finalize: not a draft. Stable versions ship as GA (latest) on
+          # both the npm dist-tag (Script.channel) and the GitHub release
+          # `isPrerelease` flag; dev/next (canary/rc/beta) versions ship as
+          # prereleases so they never masquerade as stable.
+          if [ "${{ needs.version.outputs.channel }}" = "latest" ]; then
+            gh release edit "v${{ needs.version.outputs.version }}" --draft=false --prerelease=false --repo "${{ github.repository }}" || true
+          else
+            gh release edit "v${{ needs.version.outputs.version }}" --draft=false --prerelease=true --repo "${{ github.repository }}" || true
+          fi

@@ -68,11 +68,12 @@ BanyanCode ships to npm (`banyancode`) and a GitHub release (`v<version>`) throu
 
 ### Release channel
 
-**Every release goes to the npm `latest` dist-tag by default.** `OPENCODE_CHANNEL` defaults to `latest` in both `.github/workflows/publish.yml:112` and `preflight.yml:65`, and `packages/opencode/script/publish.ts:23` runs `npm publish --tag ${Script.channel}` against that value. Operators do not need to set anything to land on `latest`:
+**Channel is branch/version-aware; stable tags land on the npm `latest` dist-tag by default.** `.github/workflows/publish.yml` derives `OPENCODE_CHANNEL` from the version: no prerelease suffix → `latest`, `-rc.*`/`-beta.*` → `next`, `-dev.*` → `dev`. `packages/opencode/script/publish.ts:23` runs `npm publish --tag ${Script.channel}` against that value. Stable releases are the confirmed path — they only happen via an explicit tag push or manual `workflow_dispatch`:
 
 - `git tag -a v<version> -m "BanyanCode <version>" <bump-sha> && git push origin v<version>` → `npm install banyancode@<version>` for everyone on the next dep resolution, and `npm install banyancode` (no version) returns the same `latest`.
-- The GitHub release is cut as `--prerelease` so you can sanity-check assets before finalizing (the workflow flips `--prerelease=false` automatically after the `publish` job succeeds). If you want to delay the GA promotion, edit the release: `gh release edit v<version> --prerelease=true --repo EkagraAgarwal/BanyanCode` — `npm` users will not see the version until you flip it back.
-- To cut a **prerelease** (e.g. `banyancode@26.8.0-rc.1` for a hotfix trial), set `OPENCODE_CHANNEL=next` either via `workflow_dispatch` → `Actions → publish → Run workflow` (no version input override) or by editing the publish workflow's env on a fork. `banyancode@latest` will NOT pick up the prerelease until you re-run with `OPENCODE_CHANNEL=latest` and a fresh tag.
+- The GitHub release is cut as a draft (plus `--prerelease` for dev/next builds) so you can sanity-check assets before finalizing; the workflow finalizes it after the `publish` job succeeds, flipping `--prerelease=false` for stable and keeping `--prerelease=true` for dev/next. If you want to delay the GA promotion of a stable release, edit it: `gh release edit v<version> --prerelease=true --repo EkagraAgarwal/BanyanCode` — `npm` users will not see the version until you flip it back.
+- **`dev` branch pushes auto-publish a canary** to the npm `dev` dist-tag as `YY.MM.PATCH-dev.<sha7>` (no confirmation needed). Every push to `dev` rebuilds all 11 platform targets and re-points `banyancode@dev` at the newest build. The channel is baked into the binary, so canary installs use an isolated `banyancode-*-dev.db` and never touch stable data. Install with `npm install -g banyancode@dev` (or pin a build: `banyancode@26.08.11-dev.abc1234`).
+- To cut a **prerelease** for testers (e.g. `banyancode@26.8.0-rc.1`), tag a `-rc.N`/`-beta.N` version (or dispatch `workflow_dispatch` with that version input) — the workflow maps it to the `next` dist-tag automatically; no env fiddling. `banyancode@latest` will NOT pick up the prerelease.
 
 The `Script.channel` indirection lives in `packages/opencode/script/publish.ts` and `build.ts`; both read `OPENCODE_CHANNEL` and fall back to `latest` when unset, so the "default latest" rule survives partial CI failures.
 
@@ -84,20 +85,20 @@ git tag -a v26.07.4 -m "BanyanCode 26.07.4" <bump-sha>
 git push origin v26.07.4          # the TAG push triggers publish.yml
 ```
 
-The local `pre-push` hook runs `bun turbo typecheck` across 23 packages (cached after first run). If it fails, the push is rejected — fix the typecheck before tagging. The push only fires `publish.yml`; pushes to `main`/`dev` branches only fire `preflight.yml`.
+The local `pre-push` hook runs `bun turbo typecheck` across 23 packages (cached after first run). If it fails, the push is rejected — fix the typecheck before tagging. Tag pushes fire `publish.yml`; pushes to `main` fire `preflight.yml` only (main releases are confirmed via tag), while pushes to `dev` fire `publish.yml` directly as an auto-canary.
 
 ### What `publish.yml` does
 
-Triggered by `push: tags: v*` or `workflow_dispatch` with optional `version` input. Gated on `github.repository == 'EkagraAgarwal/BanyanCode'` so forks never run it.
+Triggered by `push: tags: v*` (stable, confirmed), `push: branches: [dev]` (auto-canary), or `workflow_dispatch` with optional `version` input (manual/confirmed). Gated on `github.repository == 'EkagraAgarwal/BanyanCode'` so forks never run it.
 
 | Job | Purpose |
 |---|---|
-| `version` | Resolves version in priority order: `GITHUB_REF_NAME` (tag push, `v` prefix stripped) → `inputs.version` (manual dispatch) → `packages/opencode/package.json` (fallback). Also chmods script files. |
+| `version` | Resolves version in priority order: `GITHUB_REF_NAME` (tag push, `v` prefix stripped) → `inputs.version` (manual dispatch) → `packages/opencode/package.json` (fallback), with dev-branch pushes getting `YY.MM.PATCH-dev.<sha7>`. Derives `channel` from the version suffix (`-dev.*` → dev, `-rc.*`/`-beta.*` → next, else latest). Also chmods script files. |
 | `build` (matrix: 11 targets — linux-x64, linux-x64-baseline, linux-x64-musl, linux-x64-baseline-musl, linux-arm64, linux-arm64-musl, darwin-x64, darwin-x64-baseline, darwin-arm64, windows-x64, windows-x64-baseline) | `bun ./packages/opencode/script/build.ts --target=<target> --skip-install`. macOS artifacts are zipped, Linux tar.gz'd, Windows uploaded separately for the signing step. The `windows-x64-baseline` build is for downstream signing/triage; only `windows-x64` ships to the release. |
 | `sign-windows` | Optional Azure code-signing. If any `AZURE_*` secret is missing, falls back to unsigned Windows binaries with a `::warning::` annotation (not a failure). |
-| `publish` | Downloads artifacts, creates a `--draft --prerelease` GitHub release, runs `bun ./packages/opencode/script/publish.ts`, then finalizes the draft (`--draft=false`). |
+| `publish` | Downloads artifacts, creates a `--draft` GitHub release (plus `--prerelease` for dev/next), runs `bun ./packages/opencode/script/publish.ts`, then finalizes the draft (`--draft=false`, `--prerelease` matching the channel). |
 
-Concurrency: `${{ github.workflow }}-${{ github.ref }}` — each tag is its own group. Pushing the same tag twice re-runs the workflow safely; see the "never move a tag" lesson below.
+Concurrency: `${{ github.workflow }}-${{ github.ref }}` — each tag and each dev push is its own group. Pushing the same tag twice re-runs the workflow safely; see the "never move a tag" lesson below (dev canaries are tagless, so they never hit it).
 
 ### `publish.ts` semantics
 
