@@ -66,7 +66,7 @@ export const locationLayer = Layer.effectDiscard(
       .register({
         [name]: Tool.make({
           description:
-            "Control subagents in the orchestrator's mesh. Actions: checkin (get status of all subagents), steer (inject an instruction into a subagent's current plan), kill (terminate a subagent gracefully), plan_for (hand a subagent its initial plan).",
+            "Control subagents in the orchestrator's mesh. Actions: checkin (get status of all subagents), steer (inject an instruction into a subagent's current plan), kill (terminate a subagent gracefully), plan_for (hand a subagent its initial plan), review (dispatch the reviewer subagent with paths/description/reason — returns reviewID).",
           input: Input,
            contract: { visibility: "public" },
           output: Output,
