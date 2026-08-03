@@ -386,6 +386,12 @@ export const GlobalApi = HttpApi.make("global").add(
       HttpApiEndpoint.post("codegraphBuild", GlobalPaths.codegraphBuild, {
         payload: CodegraphBuildInput,
         success: described(CodegraphBuildResult, "Codegraph build kickoff result"),
+        // Defense in depth: a declared error schema makes handler failures
+        // surface as a typed 4xx with a `.message` instead of the default
+        // Respondable's empty 5xx body, which the SDK decodes to neither
+        // `data` nor `error.message` and the TUI shows as "no response from
+        // server". Mirrors the sibling `codegraphRemove` endpoint.
+        error: HttpApiError.BadRequest,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "global.codegraph.build",

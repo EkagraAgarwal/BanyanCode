@@ -2,7 +2,7 @@ import { Config } from "@/config/config"
 import { Agent } from "@/agent/agent"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppRuntime } from "@/effect/app-runtime"
-import { InstanceState } from "@/effect/instance-state"
+import { InstanceRef } from "@/effect/instance-ref"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -301,15 +301,36 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
 const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function* (ctx: {
       payload: typeof CodegraphBuildInput.Type
     }) {
-      const worktree = (yield* InstanceState.context).worktree
-      const root = ctx.payload.root ?? worktree
+      // /global/* routes run without the session-scoped InstanceContextMiddleware,
+      // so InstanceRef defaults to undefined here. Read it gracefully so the
+      // endpoint works with an explicit `root` body even when no instance is
+      // active. Do NOT use InstanceState.context — it Effect.dies on a missing
+      // InstanceRef ("InstanceRef not provided"), which escalates to an opaque
+      // 500 and the TUI shows "no response from server".
+      const inst = yield* InstanceRef
+      const root = ctx.payload.root ?? inst?.worktree
+      if (!root) {
+        return {
+          started: false,
+          reason: "root is required. Pass it as the `root` field of the request body.",
+        }
+      }
       // Phase 7 follow-up: per plan, drop arbitrary client-supplied `dbPath`
       // from the build contract. The canonical DB path is derived from the
       // resolved root via WorkspaceIdentity.identityForRoot. If the caller
       // sent a stale `dbPath` we keep it as a diagnostic echo field so
       // existing clients don't break, but the actual storage location is
-      // always the canonical one.
-      const identity = Banyan.WorkspaceIdentity.identityForRoot(root)
+      // always the canonical one. identityForRoot throws on a missing root
+      // path — surface that as an explicit reason, not an opaque 500.
+      let identity: Banyan.WorkspaceIdentityInterface
+      try {
+        identity = Banyan.WorkspaceIdentity.identityForRoot(root)
+      } catch (error) {
+        return {
+          started: false,
+          reason: error instanceof Error ? error.message : `invalid root: ${root}`,
+        }
+      }
       const dbPath = identity.dbPath
       const force = ctx.payload.force ?? false
 
