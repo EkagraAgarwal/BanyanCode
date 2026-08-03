@@ -11,6 +11,7 @@ import { getParserForPath } from "./langs/registry"
 import type { ParseResult } from "./langs/types"
 import { parseTypeScript } from "./langs/typescript"
 import { parsePython } from "./langs/python"
+import { ensureQuerySourcesLoaded } from "./langs/query-executor"
 import { extractTestFileImports } from "./codegraph-helpers"
 
 const TS_LIKE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"])
@@ -188,6 +189,21 @@ export const layer = Layer.effect(
     const repo = yield* CodegraphRepo.Service
     const database = yield* Database.Service
     const cancelled = yield* Ref.make(false)
+
+    // Bundle anchor, NOT a parse dependency: query-executor's `.scm` text
+    // imports — and transitively tree-sitter.ts's wasm imports — must stay
+    // statically reachable from the production graph, because
+    // `packages/opencode/script/build.ts` validates that all 7 tree-sitter
+    // assets exist in compiled binaries and fails the build otherwise. The
+    // indexer no longer parses with tree-sitter (parser edges are
+    // structurally discarded; the derived-edge lifecycle in
+    // rebuildDerivedGraph owns every surviving edge kind), so this call
+    // only primes the module-level query cache for future consumers (e.g.
+    // the Wave-5 tree-sitter node-extraction migration). It builds a
+    // 3-entry Map from bundled strings — microseconds, memoized per
+    // process, no wasm instantiation (that happens only in
+    // `ensureWebTreeSitterReady`, which the indexer no longer calls).
+    yield* Effect.promise(() => ensureQuerySourcesLoaded())
 
     const walkDirectory = (
       dir: string,
