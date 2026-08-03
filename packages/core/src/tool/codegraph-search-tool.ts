@@ -33,8 +33,6 @@ const SearchSignalSchema = Schema.Struct({
   fuzzy: optionalNumber,
   qualified: optionalBoolean,
   graph: optionalNumber,
-  git: optionalNumber,
-  workspace: optionalNumber,
 })
 
 const SearchResultSchema = Schema.Struct({

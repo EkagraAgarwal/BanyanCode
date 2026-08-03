@@ -387,7 +387,10 @@ export const layer = Layer.effect(
         if (input.file) {
           nodes = yield* repo.listNodesByFile(input.file)
         } else {
-          nodes = yield* repo.listAllNodes()
+          // Bounded full-row load: the route regex below matches against
+          // `node.code`, which searchNodesLight omits. searchNodes caps the
+          // row count instead of SELECT * over the whole table.
+          nodes = yield* repo.searchNodes({ limit: 1000 })
         }
 
         const results: CodegraphNode[] = []

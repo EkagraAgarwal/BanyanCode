@@ -1,7 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import path from "path"
 import { CodegraphRepo } from "./codegraph-repo"
-import type { CodegraphNode } from "./types"
+import type { CodegraphMeta, CodegraphNode } from "./types"
 
 export interface PackageOverview {
   readonly path: string
@@ -49,7 +49,7 @@ export interface SearchResult {
 }
 
 export interface Interface {
-  readonly overview: (input: { root: string; limit?: number }) => Effect.Effect<OverviewResult, never, never>
+  readonly overview: (input: { root: string; limit?: number; meta?: CodegraphMeta | undefined }) => Effect.Effect<OverviewResult, never, never>
   readonly detail: (input: { root: string; path: string }) => Effect.Effect<DetailResult, never, never>
   readonly search: (input: { root: string; query: string; limit?: number }) => Effect.Effect<ReadonlyArray<SearchResult>, never, never>
 }
@@ -57,6 +57,12 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@banyancode/RepoMapService") {}
 
 const normalize = (value: string) => value.replaceAll("\\", "/").replace(/^\.\//, "")
+
+// Upper bound on node rows loaded by `overview`. Entrypoint classification
+// needs `isEntrypoint` / `inDegree`, which `searchNodesLight` omits, so the
+// overview uses the full-row `searchNodes` — but bounded at this cap instead
+// of a full-table SELECT (the `code` column is the heavy part).
+const OVERVIEW_NODE_CAP = 1000
 
 const packagePath = (filePath: string) => {
   const parts = normalize(filePath).split("/")
@@ -89,10 +95,16 @@ export const layer = Layer.effect(
     const repo = yield* CodegraphRepo.Service
 
     return Service.of({
-      overview: Effect.fn("RepoMapService.overview")(function* (input: { root: string; limit?: number }) {
+      overview: Effect.fn("RepoMapService.overview")(function* (input: { root: string; limit?: number; meta?: CodegraphMeta | undefined }) {
         const limit = Math.max(1, Math.min(input.limit ?? 50, 500))
+        // Files are metadata-only rows; they must all load to compute
+        // fileKindCounts and per-package file counts. Node rows are the
+        // heavy part (the `code` column) — load them bounded, and use
+        // countNodes() for the exact total instead of materializing every
+        // row just to read `.length`.
         const files = yield* repo.listAllFiles()
-        const nodes = yield* repo.listAllNodes()
+        const nodes = yield* repo.searchNodes({ limit: OVERVIEW_NODE_CAP })
+        const totalNodes = yield* repo.countNodes()
         const filesByID = new Map(files.map((file) => [file.id, file] as const))
         const packageCounts = new Map<string, { files: Set<string>; nodes: number }>()
         const fileKindCounts: Record<string, number> = {}
@@ -131,13 +143,16 @@ export const layer = Layer.effect(
             return file ? [toEntryPoint(node, file.path)] : []
           })
           .slice(0, limit)
-        const meta = yield* repo.getMeta()
+        // Dedupe the meta read: callers that already fetched meta (e.g. the
+        // repo-map tool for staleness) pass it in so we don't SELECT the
+        // meta row twice per overview.
+        const meta = input.meta !== undefined ? input.meta : yield* repo.getMeta()
 
         return {
           packages,
           entryPoints,
           fileKindCounts,
-          totalNodes: nodes.length,
+          totalNodes,
           graphVersion: meta?.graphVersion ?? 0,
         }
       }),

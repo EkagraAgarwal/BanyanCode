@@ -75,7 +75,6 @@ export const layer = Layer.effect(
     const buildService = yield* CodegraphBuildService.Service
     const repo = yield* CodegraphRepo.Service
     const inflight = yield* Ref.make<Map<string, Deferred.Deferred<ReadinessResult, never>>>(new Map())
-    const lastRoot = yield* Ref.make<string | undefined>(undefined)
 
     const runReadiness = (
       root: string,
@@ -84,7 +83,9 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const startMs = Date.now()
         const meta = yield* repo.getMeta()
-        const files = yield* repo.listAllFiles()
+        // Only need to know whether any file row exists — COUNT(*) avoids
+        // materializing the whole file table just to check emptiness.
+        const fileCount = yield* repo.countFiles()
 
         // Phase 2: rebuild triggers. The mtime heuristic is gone — content
         // hash is the real signal and CodegraphIndexer refreshes
@@ -93,7 +94,7 @@ export const layer = Layer.effect(
         // empty file table) or when the indexed root/schema moved.
         const rootChanged = !!meta && meta.indexedRoot !== undefined && canonicalRoot(meta.indexedRoot) !== root
         const schemaStale = !!meta && meta.schemaVersion !== CODEGRAPH_SCHEMA_VERSION
-        const force = !meta || files.length === 0 || rootChanged || schemaStale
+        const force = !meta || fileCount === 0 || rootChanged || schemaStale
 
         // Phase 2: age is a WARNING, not a rebuild trigger.
         const ageMs = meta?.graphBuiltAt ? Date.now() - meta.graphBuiltAt : Infinity
@@ -176,8 +177,6 @@ export const layer = Layer.effect(
       function* (input) {
         const root = canonicalRoot(input.root)
         const thresholdMs = input.thresholdMs ?? DEFAULT_THRESHOLD_MS
-
-        yield* Ref.set(lastRoot, root)
 
         // Create a candidate Deferred eagerly. If we lose the race we still wait
         // on the winner's Deferred — our candidate is GC'd.

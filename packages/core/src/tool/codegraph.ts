@@ -42,12 +42,12 @@ function findRepoRoot(startDir: string): string | undefined {
   return undefined
 }
 
-export const name_build = "codegraph_build"
+const name_build = "codegraph_build"
 export const name_remove = "codegraph_remove"
-export const name_query = "codegraph_query"
-export const name_impact = "codegraph_impact"
-export const name_dependents = "codegraph_dependents"
-export const name_callers = "codegraph_callers"
+const name_query = "codegraph_query"
+const name_impact = "codegraph_impact"
+const name_dependents = "codegraph_dependents"
+const name_callers = "codegraph_callers"
 
 export const InputBuild = Schema.Struct({
   root: optionalString.annotate({
@@ -525,18 +525,19 @@ export const locationLayer = Layer.effectDiscard(
                 let nodes: Banyan.CodegraphNode[] = []
 
                 if (input.function) {
-                  const allNodes = yield* repo.listAllNodes()
-                  nodes = allNodes.filter((n) => n.name === input.function)
+                  // searchNodesLight applies the name LIKE + LIMIT in SQL, so
+                  // the limit is applied before materialization instead of
+                  // loading the whole table then slicing.
+                  nodes = yield* repo.searchNodesLight({ name: input.function, limit })
                 } else if (input.kind) {
-                  const allNodes = yield* repo.listAllNodes()
-                  nodes = allNodes.filter((n) => n.kind === input.kind)
+                  nodes = (yield* repo.listNodesByKind(input.kind)).slice(0, limit)
                 } else if (input.file) {
                   const file = yield* repo.getFileByPath(input.file)
                   if (file) {
                     nodes = yield* repo.listNodesByFile(file.id)
                   }
                 } else {
-                  nodes = yield* repo.listAllNodes()
+                  nodes = yield* repo.searchNodesLight({ limit })
                 }
 
                 const meta = yield* repo.getMeta()

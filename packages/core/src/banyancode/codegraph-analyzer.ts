@@ -87,9 +87,12 @@ export const layer = Layer.effect(
         // 8 is enough for typical transitive impact; the UI truncates larger sets anyway.
         const maxDepth = input.maxDepth ?? 8
         const result: CodegraphNode[] = []
+        // Index-pointer drain instead of queue.shift(): shift() is O(n) per
+        // pop on arrays, which turns a wide BFS into an O(n^2) scan.
+        let head = 0
 
-        while (queue.length > 0) {
-          const current = queue.shift()!
+        while (head < queue.length) {
+          const current = queue[head++]!
           if (visited.has(current.id) || current.depth > maxDepth) continue
           visited.add(current.id)
 
@@ -106,7 +109,10 @@ export const layer = Layer.effect(
             }
           }
           if (nextIDs.length > 0) {
-            const nodes = yield* repo.nodesByIDs(nextIDs)
+            // Dedupe before the DB roundtrip: a diamond (two parents pointing
+            // at the same child) enqueues the child twice because `visited` is
+            // only populated at process time, not discovery time.
+            const nodes = yield* repo.nodesByIDs([...new Set(nextIDs)])
             result.push(...nodes)
           }
         }

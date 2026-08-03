@@ -98,11 +98,12 @@ export const locationLayer = Layer.effectDiscard(
     const analyzer = yield* Banyan.CodegraphAnalyzer
     const readiness = yield* Banyan.CodegraphReadiness
 
-    // Closure-captured file index — `execute` populates it via `repo.listAllFiles()`
-    // and `toModelOutput` reads it. Single-fiber sequencing guarantees the setter
-    // runs before the reader (Effect's settlement pipeline runs execute → encode
-    // → toModelOutput sequentially within a fiber). Avoids lifting toModelOutput
-    // to Effect just to thread one map through.
+    // Closure-captured file index — `execute` populates it lazily (only in
+    // the impact-filepath and find_file branches, via `repo.listAllFiles()`)
+    // and `toModelOutput` reads it. Single-fiber sequencing guarantees the
+    // setter runs before the reader (Effect's settlement pipeline runs
+    // execute → encode → toModelOutput sequentially within a fiber). Avoids
+    // lifting toModelOutput to Effect just to thread one map through.
     const fileIndex: { byID?: ReadonlyMap<string, CodegraphFile> } = {}
 
     // Phase: auto-trigger a full or incremental codegraph build whenever the
@@ -198,12 +199,10 @@ export const locationLayer = Layer.effectDiscard(
 
               yield* ensureGraphReady
 
-              // Populate the file-index closure so toModelOutput can render
-              // real file paths (not fileID UUIDs) in match lines. Done once
-              // per execute; find_file reuses this list instead of calling
-              // listAllFiles() a second time.
-              const allFiles = yield* repo.listAllFiles()
-              fileIndex.byID = new Map(allFiles.map((f) => [f.id, f]))
+              // `fileIndex` is populated lazily (inside the branches that
+              // actually need file rows: impact-filepath and find_file) so
+              // toModelOutput can render real file paths instead of fileID
+              // UUIDs. Other intents skip the listAllFiles load entirely.
 
               const metaRow = yield* repo.getMeta()
               const meta = metaRow
@@ -384,13 +383,18 @@ export const locationLayer = Layer.effectDiscard(
                     /\.[a-z0-9]+$/i.test(input.target) || /[\\/]/.test(input.target)
                   if (looksLikeFilePath) {
                     const allFiles = yield* repo.listAllFiles()
-                    const allNodes = yield* repo.listAllNodes()
+                    fileIndex.byID = new Map(allFiles.map((f) => [f.id, f]))
                     const sep = /[\\/]/.test(input.target) ? `[\\${"/"}]` : ""
                     const fileHits = allFiles.filter((f) => f.path.endsWith(`${sep}${input.target}`))
                     const fileIDs = new Set(fileHits.map((f) => f.id))
-                    const symbolNodes = allNodes.filter(
-                      (n) => fileIDs.has(n.fileID) && n.kind !== "file",
-                    )
+                    // One bounded per-file query instead of a full-table
+                    // listAllNodes() — a file-level impact only needs the
+                    // symbols inside the matched file(s).
+                    const symbolNodes: CodegraphNode[] = []
+                    for (const fileID of fileIDs) {
+                      const fileNodes = yield* repo.listNodesByFile(fileID)
+                      symbolNodes.push(...fileNodes.filter((n) => n.kind !== "file"))
+                    }
                     if (symbolNodes.length === 0) {
                       return {
                         matches: [],
@@ -401,28 +405,39 @@ export const locationLayer = Layer.effectDiscard(
                         _diagnostic: "target-not-resolved" as const,
                       }
                     }
+                    // Hoisted aggregation: one batched upstream BFS over
+                    // edgesToBatch/nodesByIDs replaces the N+1 loop of
+                    // per-symbol analyzer.impact() calls. It replicates
+                    // analyzer.impact's dependents + walkTransitive union
+                    // (direct dependents first, then transitive levels).
                     const aggregated = yield* Effect.gen(function* () {
                       const seen = new Set<string>()
                       const dependents: CodegraphNode[] = []
                       const transitive: CodegraphNode[] = []
-                      for (const sym of symbolNodes) {
-                        const r = yield* analyzer.impact({ nodeID: sym.id }).pipe(
-                          Effect.matchEffect({
-                            onFailure: () =>
-                              Effect.succeed<{ dependents: CodegraphNode[]; transitive: CodegraphNode[] }>({
-                                dependents: [],
-                                transitive: [],
-                              }),
-                            onSuccess: (i) => Effect.succeed(i),
-                          }),
-                        )
-                        for (const n of [...r.dependents, ...r.transitive]) {
-                          if (seen.has(n.id)) continue
-                          seen.add(n.id)
-                          const bucket: CodegraphNode[] =
-                            dependents.length < limit ? dependents : transitive
-                          bucket.push(n)
+                      const visited = new Set<string>()
+                      const maxDepth = 8
+                      let frontier = symbolNodes.map((n) => n.id)
+                      for (let depth = 0; frontier.length > 0 && depth <= maxDepth; depth++) {
+                        const edges = yield* repo.edgesToBatch(frontier)
+                        const nextIDs: string[] = []
+                        for (const edge of edges) {
+                          const nextID = edge.fromNodeID
+                          if (!visited.has(nextID)) {
+                            visited.add(nextID)
+                            nextIDs.push(nextID)
+                          }
                         }
+                        if (nextIDs.length > 0) {
+                          const nodes = yield* repo.nodesByIDs([...new Set(nextIDs)])
+                          for (const n of nodes) {
+                            if (seen.has(n.id)) continue
+                            seen.add(n.id)
+                            const bucket: CodegraphNode[] =
+                              dependents.length < limit ? dependents : transitive
+                            bucket.push(n)
+                          }
+                        }
+                        frontier = nextIDs
                       }
                       return { dependents, transitive }
                     })
@@ -485,9 +500,10 @@ export const locationLayer = Layer.effectDiscard(
                 case "find_file": {
                   const target = input.target ?? ""
                   if (!target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_query", _diagnostic: "empty-target" as const }
-                  // Reuses the `allFiles` closure populated at the top of
-                  // execute — avoids a second repo roundtrip.
-                  const allNodes = yield* repo.listAllNodes()
+                  // File rows are only needed here — load them lazily so
+                  // other intents never pay for the listAllFiles roundtrip.
+                  const allFiles = yield* repo.listAllFiles()
+                  fileIndex.byID = new Map(allFiles.map((f) => [f.id, f]))
 
                   const looksLikeFilename = /\.(md|mdx|ts|tsx|js|jsx|mjs|cjs|json|yaml|yml|toml|sql|py|pyw|go|rs|java|kt|c|cpp|cc|cxx|h|hpp|hh|css|html|sh|ps1|vue|svelte|mdx)$/i.test(target)
                   const sep = /[\\/]/.test(target) ? `[\\${"/"}]` : ""
@@ -500,13 +516,20 @@ export const locationLayer = Layer.effectDiscard(
                     const pathFiltered = allFiles.filter((f) => f.path.endsWith(`${sep}${target}`)).slice(0, limit)
                     files = pathFiltered.map((f) => ({ path: f.path }))
                     const fileIDs = new Set(pathFiltered.map((f) => f.id))
-                    const symbolMatches = allNodes.filter((n) =>
-                      fileIDs.has(n.fileID) || (n.kind === "file" && n.name === target)
-                    )
+                    // Bounded per-fileID pushdown (no heavy `code` column)
+                    // plus file-kind nodes named exactly `target`.
+                    const symbolMatches: CodegraphNode[] = []
+                    for (const fileID of fileIDs) {
+                      const fileNodes = yield* repo.searchNodesLight({ fileID, limit })
+                      symbolMatches.push(...fileNodes)
+                    }
+                    const fileKindNodes = yield* repo.searchNodesLight({ name: target, limit })
+                    symbolMatches.push(...fileKindNodes.filter((n) => n.kind === "file" && n.name === target))
                     matches = symbolMatches.slice(0, limit).map((n) => ({ node: n, derivation: "name-exact" as const }))
                     dispatchedTo = files.length > 0 ? "graph" : "glob"
                   } else {
-                    const symbolMatches = allNodes.filter((n) => n.kind !== "file" && n.name === target)
+                    const symbolMatches = (yield* repo.searchNodesLight({ name: target, limit }))
+                      .filter((n) => n.kind !== "file" && n.name === target)
                     const fileIDs = [...new Set(symbolMatches.map((n) => n.fileID))]
                     files = allFiles
                       .filter((f) => fileIDs.includes(f.id))

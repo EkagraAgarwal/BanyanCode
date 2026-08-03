@@ -289,13 +289,16 @@ export const computePreflight = (
       ? { graphBuiltAt: metaRow.graphBuiltAt, graphCoverage: metaRow.graphCoverage }
       : undefined
     const filePathByID = new Map(allFiles.map((f) => [f.id, f.path]))
+    // id → full file record, built once so the loops below are O(1) per id
+    // instead of a linear allFiles.find() on every test/caller file.
+    const fileByID = new Map(allFiles.map((f) => [f.id, f]))
 
     const testsList: { tests: ReadonlyArray<Banyan.CodegraphNode>; notFound: boolean } = primary
       ? yield* deps.intel.tests({ symbol: primary.name })
       : { tests: [], notFound: false }
     const testsFileByID = new Map<string, Banyan.CodegraphFile>()
     for (const t of testsList.tests) {
-      const file = allFiles.find((f) => f.id === t.fileID)
+      const file = fileByID.get(t.fileID)
       if (file) testsFileByID.set(file.id, file)
     }
 
@@ -305,7 +308,7 @@ export const computePreflight = (
     for (const id of fileIDs) {
       const f = filePathByID.get(id)
       if (!f) continue
-      const fileRecord = allFiles.find((x) => x.id === id)
+      const fileRecord = fileByID.get(id)
       if (!fileRecord) continue
       if (isDocPath(f)) docsAffected.push(fileRecord)
       else if (isConfigPath(f)) configsAffected.push(fileRecord)

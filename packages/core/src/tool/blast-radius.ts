@@ -101,6 +101,9 @@ export const computeBlastRadius = (
 
     const allFiles = yield* deps.repo.listAllFiles()
     const filePathByID = new Map(allFiles.map((f) => [f.id, f.path]))
+    // Reverse lookup built once (O(n) prep) so the per-test-file scan below
+    // is O(1) per entry instead of a linear entries().find() each time.
+    const fileIDByPath = new Map(allFiles.map((f) => [f.path, f.id]))
 
     const seenFileIDs = new Set<string>()
     for (const node of [...impact.dependents, ...impact.transitive]) seenFileIDs.add(node.fileID)
@@ -119,7 +122,7 @@ export const computeBlastRadius = (
     const testFileIDs = new Set<string>()
     for (const p of filePaths) {
       if (TEST_PATH.test(p)) {
-        const id = [...filePathByID.entries()].find(([, path]) => path === p)?.[0]
+        const id = fileIDByPath.get(p)
         if (id) testFileIDs.add(id)
       }
     }

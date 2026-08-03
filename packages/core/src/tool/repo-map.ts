@@ -191,7 +191,9 @@ export const makeRepoMapTool = (deps: {
 
           const meta = yield* deps.repo.getMeta()
           const stale = isStale(meta)
-          const overview = yield* deps.map.overview({ root, limit: input.limit })
+          // meta is passed through so the overview does not re-read the
+          // meta row (it needs graphVersion; the tool already fetched it).
+          const overview = yield* deps.map.overview({ root, limit: input.limit, meta })
           const base: Omit<Schema.Schema.Type<typeof Output>, "mode" | "details" | "search"> = {
             root,
             graphVersion: overview.graphVersion,
