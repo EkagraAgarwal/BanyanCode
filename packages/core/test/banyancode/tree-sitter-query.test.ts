@@ -15,9 +15,16 @@ import {
   parseTypeScriptWithTreeSitter,
   parsePythonWithTreeSitter,
   validateQueryFile,
+  ensureQuerySourcesLoaded,
 } from "@opencode-ai/core/banyancode/langs/query-executor"
 
 process.env.BANYANCODE_ENABLE = "1"
+
+// The indexer no longer warms the query-source cache on layer construction
+// (tree-sitter is decoupled from the index path). Warm it up front so every
+// test below sees a populated grammar cache instead of silently falling back
+// to the regex parser.
+await Effect.runPromise(Effect.promise(() => ensureQuerySourcesLoaded()))
 
 const setWasmEnv = (value: string | undefined): void => {
   if (value === undefined) {

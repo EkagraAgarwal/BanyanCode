@@ -13,6 +13,7 @@ import {
 import {
   parseTypeScriptWithTreeSitterIncremental,
   parsePythonWithTreeSitterIncremental,
+  ensureQuerySourcesLoaded,
 } from "@opencode-ai/core/banyancode/langs/query-executor"
 import { CodegraphIndexer } from "@opencode-ai/core/banyancode/codegraph-indexer"
 import { defaultLayer as codegraphRepoDefaultLayer } from "@opencode-ai/core/banyancode/codegraph-repo"
@@ -41,6 +42,11 @@ const SETUP_EFFECT = Effect.gen(function* () {
   setWasmEnv(undefined)
   yield* _resetTreeSitterStateForTesting()
   yield* ensureWebTreeSitterReady()
+  // The indexer no longer warms the query-source cache on layer construction
+  // (tree-sitter is decoupled from the index path), so warm it here. Without
+  // this, parseTypeScriptWithTreeSitterIncremental sees an empty query source
+  // and silently falls back to the regex parser with `tree: undefined`.
+  yield* Effect.promise(() => ensureQuerySourcesLoaded())
 })
 
 describe("incremental tree-sitter parsing (Phase 2f)", () => {

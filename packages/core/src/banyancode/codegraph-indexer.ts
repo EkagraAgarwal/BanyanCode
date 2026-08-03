@@ -9,13 +9,8 @@ import { Database } from "../database/database"
 import type { CodegraphEdge, CodegraphFile, CodegraphNode, CodegraphNodeKind } from "./types"
 import { getParserForPath } from "./langs/registry"
 import type { ParseResult } from "./langs/types"
-import {
-  ensureQuerySourcesLoaded,
-  parseTypeScriptWithTreeSitterIncremental,
-  parsePythonWithTreeSitterIncremental,
-} from "./langs/query-executor"
-import { ensureWebTreeSitterReady } from "./langs/tree-sitter"
-import type { Tree } from "web-tree-sitter"
+import { parseTypeScript } from "./langs/typescript"
+import { parsePython } from "./langs/python"
 import { extractTestFileImports } from "./codegraph-helpers"
 
 const TS_LIKE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"])
@@ -186,12 +181,6 @@ const DEFAULT_GENERATED_EXCLUDES = [
   "packages/sdk/js/src/v2/gen",
 ]
 
-// Plan Phase 5: cap the tree-sitter cache so a long-lived indexer cannot
-// retain hundreds of MB of native parse trees. Trees past the cap are
-// dropped (treated as cold on next access). 1000 trees ≈ a few hundred MB
-// at typical sizes, well below any reasonable memory budget.
-const TREE_CACHE_CAP = 1000
-
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -199,32 +188,7 @@ export const layer = Layer.effect(
     const repo = yield* CodegraphRepo.Service
     const database = yield* Database.Service
     const cancelled = yield* Ref.make(false)
-    const treeCacheRef = yield* Ref.make(new Map<string, Tree>())
 
-    // Warm the grammar cache so per-file parses never read `.scm` from disk.
-    yield* Effect.promise(() => ensureQuerySourcesLoaded())
-    // Initialize tree-sitter state, but never fail layer construction.
-    yield* ensureWebTreeSitterReady()
-
-    const pruneTreeCache = Effect.fn("CodegraphIndexer.pruneTreeCache")(function* () {
-      yield* Ref.update(treeCacheRef, (m) => {
-        if (m.size <= TREE_CACHE_CAP) return m
-        const overflow = m.size - TREE_CACHE_CAP
-        const keysToDelete: string[] = []
-        for (const key of m.keys()) {
-          keysToDelete.push(key)
-          if (keysToDelete.length >= overflow) break
-        }
-        for (const key of keysToDelete) m.delete(key)
-        return m
-      })
-    })
-
-    const dropTreeCacheFor = (filePath: string) =>
-      Ref.update(treeCacheRef, (m) => {
-        m.delete(filePath)
-        return m
-      })
     const walkDirectory = (
       dir: string,
       maxFileSizeBytes: number,
@@ -431,7 +395,6 @@ const indexCandidateFileCore = (
     cancelled: Ref.Ref<boolean>
     currentlyParsingRef: Ref.Ref<string | undefined>
     progressCounter: Ref.Ref<number>
-    treeCacheRef: Ref.Ref<Map<string, Tree>>
     // Phase 2: fileIDs that hit the content-hash cache in this build.
     // After the drain loop we batch-update `indexed_at` on these so any
     // downstream consumer that compares mtime to indexed_at doesn't get
@@ -459,10 +422,8 @@ const indexCandidateFileCore = (
       yield* Ref.update(cfg.skippedRef, (n) => n + 1)
       yield* Ref.update(cfg.skippedCachedRef, (n) => n + 1)
       yield* Ref.update(cfg.cachedFileIDsRef, (s) => {
-        if (s.has(existing.id)) return s
-        const next = new Set(s)
-        next.add(existing.id)
-        return next
+        s.add(existing.id)
+        return s
       })
       yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
       return
@@ -491,16 +452,17 @@ const indexCandidateFileCore = (
       // Phase 2: track cached fileIDs so the drain loop can refresh
       // `indexed_at` in one batched UPDATE after the parse pass.
       yield* Ref.update(cfg.cachedFileIDsRef, (s) => {
-        if (s.has(existing.id)) return s
-        const next = new Set(s)
-        next.add(existing.id)
-        return next
+        s.add(existing.id)
+        return s
       })
       yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
       return
     }
 
-    if (content.split("\n").some((line) => line.length > 5000)) {
+    const lines = content.split("\n")
+    const lineCount = lines.length
+
+    if (lines.some((line) => line.length > 5000)) {
       yield* Effect.logDebug(`Skipping minified/compiled file: ${relativePath}`)
       yield* Ref.update(cfg.skippedRef, (n) => n + 1)
       yield* Ref.update(cfg.skippedMinifiedRef, (n) => n + 1)
@@ -550,39 +512,14 @@ const indexCandidateFileCore = (
     const parser = getParserForPath(filePath)
     const fileID = existing?.id ?? randomUUID()
     let result: ParseResult
-    let newTree: Tree | undefined
     if (isArtifact) {
-      result = { nodes: [], edges: [], imports: [] }
+      result = { nodes: [], edges: [] }
     } else if (TS_LIKE_EXTS.has(ext)) {
-      const cached = yield* Ref.get(cfg.treeCacheRef)
-      const oldTree: Tree | undefined = cached.get(filePath)
-      const incr = yield* parseTypeScriptWithTreeSitterIncremental(content, fileID, oldTree)
-      result = incr.result
-      newTree = incr.tree
-      const capturedTree: Tree | undefined = newTree
-      if (capturedTree) {
-        yield* Ref.update(cfg.treeCacheRef, (m) => {
-          m.set(filePath, capturedTree)
-          return m
-        })
-        yield* pruneTreeCache()
-      }
+      result = parseTypeScript(content, fileID)
     } else if (PY_LIKE_EXTS.has(ext)) {
-      const cached = yield* Ref.get(cfg.treeCacheRef)
-      const oldTree: Tree | undefined = cached.get(filePath)
-      const incr = yield* parsePythonWithTreeSitterIncremental(content, fileID, oldTree)
-      result = incr.result
-      newTree = incr.tree
-      const capturedTree: Tree | undefined = newTree
-      if (capturedTree) {
-        yield* Ref.update(cfg.treeCacheRef, (m) => {
-          m.set(filePath, capturedTree)
-          return m
-        })
-        yield* pruneTreeCache()
-      }
+      result = parsePython(content, fileID)
     } else {
-      result = parser.parse(content, filePath)
+      result = parser.parse(content, fileID)
     }
     let language = "generic"
     if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx" || ext === ".mts" || ext === ".cts" || ext === ".mjs" || ext === ".cjs") language = "typescript"
@@ -618,7 +555,7 @@ const indexCandidateFileCore = (
       name: path.basename(filePath),
       signature: relativePath,
       startLine: 1,
-      endLine: content.split("\n").length,
+      endLine: lineCount,
       code: content.slice(0, 4000),
       derivation: "regex-v1",
     }
@@ -650,7 +587,6 @@ const indexCandidateFileCore = (
       }))
 
     if (fileKind) {
-      const lineCount = content.split("\n").length
       nodes.push({
         id: `${fileID}:artifact:${fileKind}`,
         fileID,
@@ -740,6 +676,15 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   const allFiles = yield* repo.listAllFiles()
   const fileByID = new Map(allFiles.map((f) => [f.id, f]))
   const fileDir = (filePath: string) => path.dirname(filePath).replace(/\\/g, "/")
+  // Files grouped by normalized directory so the same-dir peer scan and the
+  // configured_by scan avoid re-iterating every file in the graph per owner.
+  const filesByDir = new Map<string, CodegraphFile[]>()
+  for (const file of allFiles) {
+    const dir = fileDir(file.path)
+    const list = filesByDir.get(dir) ?? []
+    list.push(file)
+    filesByDir.set(dir, list)
+  }
 
   const nodeMap = new Map<string, CodegraphNode[]>()
   const nodeByID = new Map<string, CodegraphNode>()
@@ -799,9 +744,11 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   const referenceEdgeKeys = new Set<string>()
 
   // For referenceEdges: iterate only nodes that have code and are NOT skipped kinds.
-  // In incremental mode, iterate changed files plus dependent files as edge sources.
+  // In incremental mode, iterate changed files plus dependent files as edge sources
+  // (untouched files never need an import scope recomputed).
   const importScopesByFileID = new Map<string, Set<string>>()
   for (const [fileID, nodes] of nodesByFileID) {
+    if (sourceSet && !sourceSet.has(fileID)) continue
     const fileNode = nodes.find((node) => node.kind === "file")
     const owner = fileByID.get(fileID)
     if (!fileNode?.code || !owner) continue
@@ -855,8 +802,9 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       const owner = fileByID.get(nodeA.fileID)
       if (owner) {
         const ownerDir = fileDir(owner.path)
-        for (const file of allFiles) {
-          if (file.id === owner.id || fileDir(file.path) !== ownerDir) continue
+        const peers = filesByDir.get(ownerDir) ?? []
+        for (const file of peers) {
+          if (file.id === owner.id) continue
           const peerNodes = nodesByFileID.get(file.id) ?? []
           for (const node of peerNodes) {
             if (node.kind !== "file") inScopeNodeIDs.add(node.id)
@@ -957,8 +905,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     if (!cfgFile) continue
     const cfgDir = fileDir(cfgFile.path)
     const cfgBasename = cfgFile.path.replace(/\\/g, "/").split("/").pop() ?? cfgFile.path
-    for (const file of allFiles) {
-      if (fileDir(file.path) !== cfgDir) continue
+    for (const file of filesByDir.get(cfgDir) ?? []) {
       if (file.id === cfg.fileID) continue
       const fromNodes = nodesByFileID.get(file.id) ?? []
       const fromNode = fromNodes.find(
@@ -1181,7 +1128,6 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           cancelled,
           currentlyParsingRef,
           progressCounter,
-          treeCacheRef,
           cachedFileIDsRef,
           existingFilesByPath,
         })
@@ -1246,14 +1192,26 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       for (const [path, row] of existingFilesByPath) {
         if (!walkedPaths.has(path)) orphanFileRows.push({ id: row.id, path })
       }
-      for (const orphan of orphanFileRows) {
-        yield* repo.deleteFile(orphan.id).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning(`Pruning orphaned file row failed for ${orphan.path}`, {
-              cause: Cause.pretty(cause),
-            }),
-          ),
-        )
+      // Batch the prunes: chunk the orphan ids and delete each chunk inside
+      // one transaction (repo.deleteFile nests its own transaction as a
+      // savepoint, so per-file catch-cause logging is preserved while the
+      // per-chunk commit overhead drops from 1 tx/file to 1 tx/900 files).
+      const ORPHAN_DELETE_CHUNK = 900
+      for (let i = 0; i < orphanFileRows.length; i += ORPHAN_DELETE_CHUNK) {
+        const chunk = orphanFileRows.slice(i, i + ORPHAN_DELETE_CHUNK)
+        yield* database.db.transaction(() =>
+          Effect.gen(function* () {
+            for (const orphan of chunk) {
+              yield* repo.deleteFile(orphan.id).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning(`Pruning orphaned file row failed for ${orphan.path}`, {
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              )
+            }
+          }),
+        ).pipe(Effect.orDie)
       }
 
       // Phase 2: refresh `indexed_at` on every file that hit the content
@@ -1374,7 +1332,6 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
             yield* repo.deleteFile(existing.id)
             existingFilesByPath.delete(filePath)
           }
-          yield* dropTreeCacheFor(filePath)
           skippedInputs++
           continue
         }
@@ -1392,7 +1349,6 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         } else {
           skippedInputs++
         }
-        yield* dropTreeCacheFor(filePath)
       }
 
       for (const filePath of input.addedOrChanged) {
@@ -1404,7 +1360,6 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
             yield* repo.deleteFile(existing.id)
             existingFilesByPath.delete(filePath)
           }
-          yield* dropTreeCacheFor(filePath)
           skippedInputs++
           continue
         }
@@ -1427,7 +1382,6 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
             yield* repo.deleteFile(existing.id)
             existingFilesByPath.delete(filePath)
           }
-          yield* dropTreeCacheFor(filePath)
           skippedInputs++
           continue
         }
@@ -1454,7 +1408,6 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
             yield* repo.deleteFile(existing.id)
             existingFilesByPath.delete(filePath)
           }
-          yield* dropTreeCacheFor(filePath)
           skippedInputs++
           continue
         }
@@ -1580,7 +1533,6 @@ const drainParsedQueue = Effect.gen(function* () {
               cancelled,
               currentlyParsingRef,
               progressCounter,
-              treeCacheRef,
               cachedFileIDsRef,
               existingFilesByPath,
             })
