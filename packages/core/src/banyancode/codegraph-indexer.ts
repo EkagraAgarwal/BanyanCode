@@ -14,8 +14,6 @@ import {
   parseTypeScriptWithTreeSitterIncremental,
   parsePythonWithTreeSitterIncremental,
 } from "./langs/query-executor"
-import { CodegraphRustParser } from "./codegraph-rust-parser"
-import { BanyanConfigService } from "./banyan-config"
 import { ensureWebTreeSitterReady } from "./langs/tree-sitter"
 import type { Tree } from "web-tree-sitter"
 import { extractTestFileImports } from "./codegraph-helpers"
@@ -440,7 +438,6 @@ const indexCandidateFileCore = (
     // stuck on a cached file forever.
     cachedFileIDsRef: Ref.Ref<Set<string>>
     existingFilesByPath: ReadonlyMap<string, CodegraphFile>
-    rustBackend?: CodegraphRustParser.Interface
   },
 ): Effect.Effect<void, never, never> => {
   return Effect.gen(function* () {
@@ -556,39 +553,33 @@ const indexCandidateFileCore = (
     let newTree: Tree | undefined
     if (isArtifact) {
       result = { nodes: [], edges: [], imports: [] }
-    } else if (TS_LIKE_EXTS.has(ext) || PY_LIKE_EXTS.has(ext)) {
-      const lang: "ts" | "py" = TS_LIKE_EXTS.has(ext) ? "ts" : "py"
-      if (cfg.rustBackend) {
-        result = yield* cfg.rustBackend.parse({ content, fileID, lang })
-        newTree = undefined
-      } else if (lang === "ts") {
-        const cached = yield* Ref.get(cfg.treeCacheRef)
-        const oldTree: Tree | undefined = cached.get(filePath)
-        const incr = yield* parseTypeScriptWithTreeSitterIncremental(content, fileID, oldTree)
-        result = incr.result
-        newTree = incr.tree
-        const capturedTree: Tree | undefined = newTree
-        if (capturedTree) {
-          yield* Ref.update(cfg.treeCacheRef, (m) => {
-            m.set(filePath, capturedTree)
-            return m
-          })
-          yield* pruneTreeCache()
-        }
-      } else {
-        const cached = yield* Ref.get(cfg.treeCacheRef)
-        const oldTree: Tree | undefined = cached.get(filePath)
-        const incr = yield* parsePythonWithTreeSitterIncremental(content, fileID, oldTree)
-        result = incr.result
-        newTree = incr.tree
-        const capturedTree: Tree | undefined = newTree
-        if (capturedTree) {
-          yield* Ref.update(cfg.treeCacheRef, (m) => {
-            m.set(filePath, capturedTree)
-            return m
-          })
-          yield* pruneTreeCache()
-        }
+    } else if (TS_LIKE_EXTS.has(ext)) {
+      const cached = yield* Ref.get(cfg.treeCacheRef)
+      const oldTree: Tree | undefined = cached.get(filePath)
+      const incr = yield* parseTypeScriptWithTreeSitterIncremental(content, fileID, oldTree)
+      result = incr.result
+      newTree = incr.tree
+      const capturedTree: Tree | undefined = newTree
+      if (capturedTree) {
+        yield* Ref.update(cfg.treeCacheRef, (m) => {
+          m.set(filePath, capturedTree)
+          return m
+        })
+        yield* pruneTreeCache()
+      }
+    } else if (PY_LIKE_EXTS.has(ext)) {
+      const cached = yield* Ref.get(cfg.treeCacheRef)
+      const oldTree: Tree | undefined = cached.get(filePath)
+      const incr = yield* parsePythonWithTreeSitterIncremental(content, fileID, oldTree)
+      result = incr.result
+      newTree = incr.tree
+      const capturedTree: Tree | undefined = newTree
+      if (capturedTree) {
+        yield* Ref.update(cfg.treeCacheRef, (m) => {
+          m.set(filePath, capturedTree)
+          return m
+        })
+        yield* pruneTreeCache()
       }
     } else {
       result = parser.parse(content, filePath)
@@ -1087,22 +1078,6 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
-
-      // Codegraph parse backend selection. Activated when either the env
-      // var BANYANCODE_CODEGRAPH_BACKEND=rust or BanyanConfig.banyancode_codegraph_backend
-      // === "rust" is set. When active AND a CodegraphRustParser service is
-      // in scope (provided by a consumer layer when the codegraph-rs binary
-      // is resolvable), TS/PY route through it; otherwise fall back to the
-      // existing tree-sitter/regex pipeline. serviceOption keeps R unchanged.
-      const configOpt = yield* Effect.serviceOption(BanyanConfigService.Service)
-      const configBackend = configOpt._tag === "Some"
-        ? (yield* configOpt.value.get()).banyancode_codegraph_backend
-        : undefined
-      const wantRust =
-        process.env.BANYANCODE_CODEGRAPH_BACKEND === "rust" || configBackend === "rust"
-      const rustBackendOpt = wantRust
-        ? yield* Effect.serviceOption(CodegraphRustParser.Service)
-        : undefined
       const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root, input.excludePatterns)
       const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, gitignore, banyanignore)
       const allFiles = walkResult.files
@@ -1209,7 +1184,6 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           treeCacheRef,
           cachedFileIDsRef,
           existingFilesByPath,
-          rustBackend: rustBackendOpt && rustBackendOpt._tag === "Some" ? rustBackendOpt.value : undefined,
         })
       }
 
@@ -1373,15 +1347,6 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
-      const configOpt = yield* Effect.serviceOption(BanyanConfigService.Service)
-      const configBackend = configOpt._tag === "Some"
-        ? (yield* configOpt.value.get()).banyancode_codegraph_backend
-        : undefined
-      const wantRust =
-        process.env.BANYANCODE_CODEGRAPH_BACKEND === "rust" || configBackend === "rust"
-      const rustBackendOpt = wantRust
-        ? yield* Effect.serviceOption(CodegraphRustParser.Service)
-        : undefined
       const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root, input.excludePatterns)
       const removedFileIDs = new Set<string>()
       const filteredRemoved: string[] = []
@@ -1618,7 +1583,6 @@ const drainParsedQueue = Effect.gen(function* () {
               treeCacheRef,
               cachedFileIDsRef,
               existingFilesByPath,
-              rustBackend: rustBackendOpt && rustBackendOpt._tag === "Some" ? rustBackendOpt.value : undefined,
             })
           }, { concurrency: 8, discard: true }),
           drainParsedQueue,

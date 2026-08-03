@@ -76,11 +76,6 @@ export const Info = Schema.Struct({
   banyancode_codegraph_exclude_patterns: Schema.optional(Schema.Array(Schema.String)),
   banyancode_codegraph_concurrency: Schema.optional(Schema.Number),
   banyancode_codegraph_batch_size: Schema.optional(Schema.Number),
-  // Index backend for the codegraph parser. "js" = current regex/tree-sitter
-  // pipeline (default). "rust" = opt-in to `native/codegraph-rs` via
-  // BANYANCODE_CODEGRAPH_BIN or the bundled binary. Fail-open: if the rust
-  // binary can't be resolved, the indexer falls back to "js" with a warning.
-  banyancode_codegraph_backend: Schema.optional(Schema.Literals(["js", "rust"])),
   // Incremental codegraph auto-update. When false, the file-watcher bridge
   // never invokes indexFiles/removeFiles in response to file events. The
   // user must run /codegraph-build manually. Debounce bounds the queue wake
