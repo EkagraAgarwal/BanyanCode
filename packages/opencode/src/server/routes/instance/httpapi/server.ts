@@ -60,6 +60,7 @@ import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
+import { defaultLayer as authV2DefaultLayer } from "@opencode-ai/core/auth"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { MeshCoordinator } from "@opencode-ai/core/banyancode/mesh-coordinator"
 import * as AiSdkTransportModule from "@/effect/transport-ai-sdk"
@@ -225,6 +226,11 @@ export function createRoutes(
       cors(corsOptions),
       Database.defaultLayer,
       Account.defaultLayer,
+      // V2 account store (account.json) — read by the catalog to decide
+      // provider availability. Must be in scope for the auth handlers so V1
+      // credential writes mirror into it (the model picker drops providers
+      // whose credentials were removed).
+      authV2DefaultLayer,
       Agent.defaultLayer,
       Auth.defaultLayer,
       BackgroundJob.defaultLayer,

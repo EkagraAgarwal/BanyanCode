@@ -1,9 +1,15 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import path from "path"
-import { Effect, Layer, Record, Result, Schema, Context } from "effect"
+import { Effect, Layer, Option, Record, Result, Schema, Context } from "effect"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import { Global } from "@opencode-ai/core/global"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import {
+  ApiKeyCredential,
+  OAuthCredential,
+  Service as AccountService,
+  ServiceID,
+} from "@opencode-ai/core/auth"
 
 export const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key"
 
@@ -70,6 +76,51 @@ export const layer = Layer.effect(
       return (yield* all())[providerID]
     })
 
+    // Mirror a V1 credential write into the V2 account store (account.json).
+    // The V2 catalog decides provider/model availability from account.json and
+    // only re-evaluates on V2 account events, so a V1-only write leaves the
+    // model picker stale: after removing a credential the provider's models
+    // still appear as available until restart. Best-effort: skip when the V2
+    // Account service is not in scope (e.g. CLI-only runtimes).
+    const syncAccount = Effect.fnUntraced(function* (key: string, info?: Info) {
+      const opt = yield* Effect.serviceOption(AccountService)
+      if (Option.isNone(opt)) return
+      const accounts = opt.value
+      const serviceID = ServiceID.make(key)
+      const existing = yield* accounts.forService(serviceID).pipe(Effect.orDie)
+
+      if (!info) {
+        for (const account of existing) {
+          yield* accounts.remove(account.id).pipe(Effect.orDie)
+        }
+        return
+      }
+
+      if (info.type === "wellknown") return
+      const credential =
+        info.type === "api"
+          ? new ApiKeyCredential({
+              type: "api",
+              key: info.key,
+              ...(info.metadata ? { metadata: info.metadata } : {}),
+            })
+          : new OAuthCredential({
+              type: "oauth",
+              refresh: info.refresh,
+              access: info.access,
+              expires: info.expires,
+            })
+      const match = existing[0]
+      if (match) {
+        yield* accounts.update(match.id, { credential }).pipe(Effect.orDie)
+        // update() publishes no event; activate() publishes Switched, which
+        // triggers the catalog refresh so availability re-evaluates.
+        yield* accounts.activate(match.id).pipe(Effect.orDie)
+      } else {
+        yield* accounts.create({ serviceID, credential }).pipe(Effect.orDie)
+      }
+    })
+
     const set = Effect.fn("Auth.set")(function* (key: string, info: Info) {
       const norm = key.replace(/\/+$/, "")
       const data = yield* all()
@@ -78,6 +129,7 @@ export const layer = Layer.effect(
       yield* fsys
         .writeJson(file, { ...data, [norm]: info }, 0o600)
         .pipe(Effect.mapError(fail("Failed to write auth data")))
+      yield* syncAccount(norm, info)
     })
 
     const remove = Effect.fn("Auth.remove")(function* (key: string) {
@@ -86,6 +138,7 @@ export const layer = Layer.effect(
       delete data[key]
       delete data[norm]
       yield* fsys.writeJson(file, data, 0o600).pipe(Effect.mapError(fail("Failed to write auth data")))
+      yield* syncAccount(norm)
     })
 
     return Service.of({ get, all, set, remove })
