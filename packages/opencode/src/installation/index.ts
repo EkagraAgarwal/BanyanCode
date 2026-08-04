@@ -15,10 +15,13 @@ import { makeRuntime } from "@opencode-ai/core/effect/runtime"
 import semver from "semver"
 import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { NpmConfig } from "@opencode-ai/core/npm-config"
+import { canonicalVersion, resolveAbsoluteLatest, shouldSkipUpgrade } from "./compare"
 
 export type Method = "curl" | "npm" | "yarn" | "pnpm" | "bun" | "brew" | "scoop" | "choco" | "snap" | "unknown"
 
 export type ReleaseType = "patch" | "minor" | "major"
+
+export { canonicalVersion, resolveAbsoluteLatest, shouldSkipUpgrade } from "./compare"
 
 export const Event = {
   Updated: EventV2.define({
@@ -252,10 +255,25 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         }
 
         if (detectedMethod === "npm" || detectedMethod === "bun" || detectedMethod === "pnpm") {
+          const registry = yield* NpmConfig.registry(process.cwd())
+          if (InstallationChannel === "dev") {
+            // Dev (canary) users follow the absolute latest: read both the
+            // `dev` and `latest` dist-tags and pick the newer, tolerating one
+            // of the two fetches failing.
+            const fetchVersion = (tag: string) =>
+              httpOk
+                .execute(HttpClientRequest.get(`${registry}/banyancode/${tag}`).pipe(HttpClientRequest.acceptJson))
+                .pipe(
+                  Effect.flatMap((response) => HttpClientResponse.schemaBodyJson(NpmPackage)(response)),
+                  Effect.map((data) => data.version),
+                  Effect.orElseSucceed(() => undefined),
+                )
+            const devVersion = yield* fetchVersion("dev")
+            const latestVersion = yield* fetchVersion("latest")
+            return resolveAbsoluteLatest(devVersion, latestVersion)
+          }
           const response = yield* httpOk.execute(
-            HttpClientRequest.get(`${yield* NpmConfig.registry(process.cwd())}/banyancode/${InstallationChannel}`).pipe(
-              HttpClientRequest.acceptJson,
-            ),
+            HttpClientRequest.get(`${registry}/banyancode/${InstallationChannel}`).pipe(HttpClientRequest.acceptJson),
           )
           const data = yield* HttpClientResponse.schemaBodyJson(NpmPackage)(response)
           return data.version

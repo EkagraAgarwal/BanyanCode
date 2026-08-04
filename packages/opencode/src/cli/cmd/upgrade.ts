@@ -4,26 +4,10 @@ import * as prompts from "@clack/prompts"
 import { Installation } from "../../installation"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 
-const CANARY_SHA_SUFFIX = /-dev\.[0-9a-f]{7,}$/
-// npm drops the leading zero from the CalVer month ("26.08.11" → "26.8.11");
-// normalize so both forms compare equal.
-const canonical = (version: string) => version.replace(/(^|\.)0+(?=\d)/g, "$1")
-
-// Decides whether `banyancode upgrade` should skip. Canary versions are
-// `YY.MM.PATCH-dev.<sha7>`; the sha is arbitrary (not orderable), so a plain
-// numeric comparison wrongly treats an old sha as "newer" (e.g. 5013cc3 vs
-// 1dd17c0) and skips the published build. When the installed and latest
-// versions share the same base and are both canaries, the dist-tag is the
-// source of truth — upgrade unless they are exactly equal.
-export function shouldSkipUpgrade(installed: string, latest: string): boolean {
-  if (canonical(installed) === canonical(latest)) return true
-  const installedCanary = CANARY_SHA_SUFFIX.test(installed)
-  const latestCanary = CANARY_SHA_SUFFIX.test(latest)
-  const sameBase =
-    canonical(installed.replace(CANARY_SHA_SUFFIX, "")) === canonical(latest.replace(CANARY_SHA_SUFFIX, ""))
-  if (installedCanary && latestCanary && sameBase) return false
-  return installed.localeCompare(latest, undefined, { numeric: true }) > 0
-}
+// `shouldSkipUpgrade` lives in the installation module (shared with the
+// startup auto-update check); re-export here to keep the existing import
+// path (`cli/cmd/upgrade`) working.
+export { shouldSkipUpgrade } from "../../installation"
 
 export const UpgradeCommand = {
   command: "upgrade [target]",
@@ -78,7 +62,7 @@ export const UpgradeCommand = {
     }
 
     if (!args.target) {
-      if (shouldSkipUpgrade(InstallationVersion, latest)) {
+      if (Installation.shouldSkipUpgrade(InstallationVersion, latest)) {
         prompts.log.warn(`You are on ${InstallationVersion}; latest on this channel is ${latest}. Skipping.`)
         prompts.outro("Done")
         return
