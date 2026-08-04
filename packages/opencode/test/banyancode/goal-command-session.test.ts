@@ -23,14 +23,17 @@ import { Permission } from "../../src/permission"
 process.env.BANYANCODE_ENABLE = "1"
 
 // Plan mode denies every edit tool (except plans/*.md) and every task
-// (except scout). Mirrors the `plan` agent block in src/agent/agent.ts. A
-// session created in plan mode stores these as its session permission, and
-// session/tools.ts merges them into every effective ruleset.
+// (except scout, explore, and researcher). Mirrors the `plan` agent block
+// in src/agent/agent.ts. A session created in plan mode stores these as
+// its session permission, and session/tools.ts merges them into every
+// effective ruleset.
 const planPermission: PermissionV1.Ruleset = [
   { permission: "edit", pattern: "*", action: "deny" },
   { permission: "edit", pattern: ".opencode/plans/*.md", action: "allow" },
   { permission: "task", pattern: "*", action: "deny" },
   { permission: "task", pattern: "scout", action: "allow" },
+  { permission: "task", pattern: "explore", action: "allow" },
+  { permission: "task", pattern: "researcher", action: "allow" },
 ]
 
 // Orchestrator agent rules: `*` allow plus its task/subagent allows, with no

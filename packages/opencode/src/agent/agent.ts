@@ -194,7 +194,7 @@ export const layer = Layer.effect(
           build: {
             name: "build",
             description: "The default agent. Executes tools based on configured permissions.",
-            prompt: PROMPT_BUILD,
+            prompt: renderTemplate(PROMPT_BUILD, subagentVars),
             options: {},
             permission: Permission.merge(
               defaults,
@@ -248,6 +248,8 @@ export const layer = Layer.effect(
                 task: {
                   "*": "deny",
                   scout: "allow",
+                  explore: "allow",
+                  researcher: "allow",
                 },
                 edit: {
                   "*": "deny",

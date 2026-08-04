@@ -166,7 +166,7 @@ describe("reviewer — receives a Codegraph-first policy block", () => {
   )
 })
 
-describe("plan agent — gains the ability to spawn background scouts", () => {
+describe("plan agent — can delegate to explore, researcher, and scout subagents", () => {
   it.instance("plan agent allows `task: scout`", () =>
     Effect.gen(function* () {
       const _ = yield* TestInstance
@@ -178,13 +178,35 @@ describe("plan agent — gains the ability to spawn background scouts", () => {
     }),
   )
 
+  it.instance("plan agent allows `task: explore`", () =>
+    Effect.gen(function* () {
+      const _ = yield* TestInstance
+      const plan = yield* Agent.Service.use((svc) => svc.get("plan"))
+      expect(plan).toBeDefined()
+      if (!plan) return
+      const result = Permission.evaluate("task", "explore", plan.permission)
+      expect(result.action).toBe("allow")
+    }),
+  )
+
+  it.instance("plan agent allows `task: researcher`", () =>
+    Effect.gen(function* () {
+      const _ = yield* TestInstance
+      const plan = yield* Agent.Service.use((svc) => svc.get("plan"))
+      expect(plan).toBeDefined()
+      if (!plan) return
+      const result = Permission.evaluate("task", "researcher", plan.permission)
+      expect(result.action).toBe("allow")
+    }),
+  )
+
   it.instance("plan agent still denies every other subagent type", () =>
     Effect.gen(function* () {
       const _ = yield* TestInstance
       const plan = yield* Agent.Service.use((svc) => svc.get("plan"))
       expect(plan).toBeDefined()
       if (!plan) return
-      for (const subagentType of ["coder", "explore", "researcher", "reviewer", "orchestrator"]) {
+      for (const subagentType of ["coder", "reviewer", "orchestrator"]) {
         const result = Permission.evaluate("task", subagentType, plan.permission)
         expect(result.action).toBe("deny")
       }

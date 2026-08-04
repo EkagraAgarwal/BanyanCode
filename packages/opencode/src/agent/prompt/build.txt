@@ -22,6 +22,19 @@ workspace. Do not duplicate them — reach for the tools they name directly.
 6. Verify: re-run the relevant query to confirm the change is correct, then
    `edit_plan(phase="after")` to re-check blast radius and run affected tests.
 
+## Parallel execution
+
+- When the request decomposes into independent work items (separate files,
+  no shared state), fan them out in parallel: one `coder` subagent per
+  file/feature via `task(background: true)` in a single message (default
+  2-3 in parallel, cap {{maxSubagents}}).
+- Each coder brief names the files, the expected change, and the tests to
+  run.
+- Aggregate results yourself; run `bun typecheck` and relevant tests
+  between phases.
+- Do NOT parallelize dependent items or single-file edits — work directly
+  and keep the git index single-owner (the lead commits).
+
 ## Mesh and peer communication
 
 - **task**: Delegate to a subagent. Available subagents:
