@@ -145,18 +145,36 @@ const renderReviewResult = (reviewID: string, text: string): string =>
 
 export const applyReviewBridge = Effect.fn("applyReviewBridge")(function* () {
   const flags = yield* RuntimeFlags.Service
-  if (!flags.banyancodeEnable) return
+  if (!flags.banyancodeEnable) {
+    yield* Effect.logWarning("review-bridge: disabled (banyancodeEnable=false)")
+    return
+  }
 
   const busOpt = yield* Effect.serviceOption(SubagentBusService)
-  if (Option.isNone(busOpt)) return
+  if (Option.isNone(busOpt)) {
+    yield* Effect.logWarning("review-bridge: disabled (SubagentBus not in scope)")
+    return
+  }
   const reviewsOpt = yield* Effect.serviceOption(SubagentReviewRequestsService)
-  if (Option.isNone(reviewsOpt)) return
+  if (Option.isNone(reviewsOpt)) {
+    yield* Effect.logWarning("review-bridge: disabled (SubagentReviewRequests not in scope)")
+    return
+  }
   const agentSvcOpt = yield* Effect.serviceOption(Agent.Service)
-  if (Option.isNone(agentSvcOpt)) return
+  if (Option.isNone(agentSvcOpt)) {
+    yield* Effect.logWarning("review-bridge: disabled (Agent not in scope)")
+    return
+  }
   const sessionsOpt = yield* Effect.serviceOption(Session.Service)
-  if (Option.isNone(sessionsOpt)) return
+  if (Option.isNone(sessionsOpt)) {
+    yield* Effect.logWarning("review-bridge: disabled (Session not in scope)")
+    return
+  }
   const promptSvcOpt = yield* Effect.serviceOption(SessionPrompt.Service)
-  if (Option.isNone(promptSvcOpt)) return
+  if (Option.isNone(promptSvcOpt)) {
+    yield* Effect.logWarning("review-bridge: disabled (SessionPrompt not in scope)")
+    return
+  }
   // EventV2Bridge is optional — used for status republish. If absent, we
   // just skip the re-publish step. `eventsOpt` is captured in closure so the
   // drain's R-channel does NOT widen to require EventV2Bridge when it's
