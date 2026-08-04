@@ -104,4 +104,47 @@ describe("auth HttpApi (instance-scoped)", () => {
     { git: false },
     30000,
   )
+
+  it.instance(
+    "auth changes propagate to the provider list after disposal (user-visible remove flow)",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const catalogProvider = "openai"
+
+        // Set a credential for a real catalog provider.
+        const put = yield* requestInDirectory(
+          AuthPaths.auth.replace(":providerID", catalogProvider),
+          test.directory,
+          {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ type: "api", key: "sk-test-key" }),
+          },
+        )
+        expect(put.status).toBe(200)
+
+        // A fresh instance reads the credential → provider shows as connected.
+        const listAfterSet = yield* requestInDirectory("/provider", test.directory, { method: "GET" })
+        expect(listAfterSet.status).toBe(200)
+        const connectedAfterSet = (yield* listAfterSet.json) as { connected: string[] }
+        expect(connectedAfterSet.connected).toContain(catalogProvider)
+
+        // Remove it — the DELETE must not 500 and must dispose the instance.
+        const del = yield* requestInDirectory(
+          AuthPaths.auth.replace(":providerID", catalogProvider),
+          test.directory,
+          { method: "DELETE" },
+        )
+        expect(del.status).toBe(200)
+
+        // The next provider list no longer contains it.
+        const listAfterRemove = yield* requestInDirectory("/provider", test.directory, { method: "GET" })
+        expect(listAfterRemove.status).toBe(200)
+        const connectedAfterRemove = (yield* listAfterRemove.json) as { connected: string[] }
+        expect(connectedAfterRemove.connected).not.toContain(catalogProvider)
+      }),
+    { git: false },
+    30000,
+  )
 })
