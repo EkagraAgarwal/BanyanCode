@@ -22,21 +22,31 @@ export const AccountPlugin = PluginV2.define({
     return {
       "catalog.transform": Effect.fn(function* (evt) {
         const active = yield* accounts.activeAll().pipe(Effect.orDie)
-        if (active.size === 0) return
         for (const item of evt.provider.list()) {
           const account = active.get(Auth.ServiceID.make(item.provider.id))
-          if (!account) continue
-          evt.provider.update(item.provider.id, (provider) => {
-            provider.enabled = {
-              via: "account",
-              service: account.serviceID,
-            }
-            if (account.credential.type === "api") {
-              provider.request.body.apiKey = account.credential.key
-              Object.assign(provider.request.body, account.credential.metadata ?? {})
-            }
-            if (account.credential.type === "oauth") provider.request.body.apiKey = account.credential.access
-          })
+          if (account) {
+            evt.provider.update(item.provider.id, (provider) => {
+              provider.enabled = {
+                via: "account",
+                service: account.serviceID,
+              }
+              if (account.credential.type === "api") {
+                provider.request.body.apiKey = account.credential.key
+                Object.assign(provider.request.body, account.credential.metadata ?? {})
+              }
+              if (account.credential.type === "oauth") provider.request.body.apiKey = account.credential.access
+            })
+          } else if (typeof item.provider.enabled === "object" && item.provider.enabled.via === "account") {
+            // The account backing this provider was removed. Reset availability
+            // so the provider (and its models) drop out of the catalog's
+            // available() lists — otherwise the model picker keeps showing the
+            // provider's models until restart. Preserve env-based enablement:
+            // an env var for the provider still makes it usable.
+            const envKey = item.provider.env.find((env) => process.env[env])
+            evt.provider.update(item.provider.id, (provider) => {
+              provider.enabled = envKey ? { via: "env", name: envKey } : false
+            })
+          }
         }
       }),
       "account.switched": Effect.fn(function* () {}),
