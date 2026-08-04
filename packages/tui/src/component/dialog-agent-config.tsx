@@ -1,11 +1,13 @@
 /** @jsxImportSource @opentui/solid */
-import { createSignal, Show } from "solid-js"
+import { createSignal, onMount, Show } from "solid-js"
 import { useDialog } from "../ui/dialog"
 import { useTheme } from "../context/theme"
 import { useSDK } from "../context/sdk"
 import { useToast } from "../ui/toast"
 import { toHex } from "../util/color"
-import { DialogMultiSelect } from "../ui/dialog-multi-select"
+import { useBindings } from "../keymap"
+import { useLocal } from "../context/local"
+import { DialogMultiSelect, type MultiSelectGroup } from "../ui/dialog-multi-select"
 import { DialogModel } from "./dialog-model"
 
 export interface AgentConfigInput {
@@ -23,60 +25,99 @@ export interface AgentConfigResult {
   enabled: boolean
 }
 
-const TOOL_GROUPS = [
-  {
-    category: "Read",
-    options: [
-      { value: "read", label: "read", description: "Read file contents" },
-      { value: "glob", label: "glob", description: "Find files by pattern" },
-      { value: "grep", label: "grep", description: "Search file contents" },
-    ],
-  },
-  {
-    category: "Write",
-    options: [
-      { value: "write", label: "write", description: "Write file contents" },
-      { value: "edit", label: "edit", description: "Edit file by string match" },
-    ],
-  },
-  {
-    category: "Execute",
-    options: [
-      { value: "bash", label: "bash", description: "Run shell commands" },
-      { value: "task", label: "task", description: "Spawn subagent" },
-    ],
-  },
-  {
-    category: "Web",
-    options: [
-      { value: "webfetch", label: "webfetch", description: "Fetch a URL" },
-      { value: "websearch", label: "websearch", description: "Web search" },
-      { value: "websearch_free", label: "websearch_free", description: "Free web search" },
-    ],
-  },
-  {
-    category: "Codegraph",
-    options: [
-      { value: "code_find", label: "code_find", description: "Search codegraph" },
-      { value: "code_emit", label: "code_emit", description: "Emit code to graph" },
-    ],
-  },
-  {
-    category: "Memory",
-    options: [
-      { value: "memory_store", label: "memory_store", description: "Save to memory" },
-      { value: "memory_recall", label: "memory_recall", description: "Read from memory" },
-      { value: "memory_search", label: "memory_search", description: "Search memory" },
-    ],
-  },
-  {
-    category: "BanyanCode",
-    options: [
-      { value: "systeminfo", label: "systeminfo", description: "System status" },
-      { value: "codegraph_build", label: "codegraph_build", description: "Rebuild codegraph" },
-    ],
-  },
+const TOOL_DESCRIPTIONS: Record<string, string> = {
+  read: "Read file contents",
+  glob: "Find files by pattern",
+  grep: "Search file contents",
+  write: "Write file contents",
+  edit: "Edit file by string match",
+  bash: "Run shell commands",
+  task: "Spawn subagent",
+  webfetch: "Fetch a URL",
+  websearch: "Web search",
+  websearch_free: "Free web search",
+  code_find: "Search the codegraph",
+  code_emit: "Emit code to graph",
+  codegraph_build: "Rebuild the codegraph index",
+  codegraph_remove: "Remove the codegraph index",
+  codegraph_status: "Show codegraph index status",
+  repository_query: "Semantic repository search",
+  repository_explain: "Explain a symbol",
+  repository_trace: "Trace a symbol's callers",
+  repository_impact: "Impact analysis by file",
+  repository_tests: "Find tests for a symbol",
+  memory_store: "Save to memory",
+  memory_recall: "Read from memory",
+  memory_search: "Search memory",
+  memory_list: "List memory entries",
+  memory_forget: "Delete a memory entry",
+  systeminfo: "System status",
+  blast_radius: "Blast radius of a symbol",
+  preflight: "Preflight edit report",
+  safe_rename: "Plan a symbol rename",
+  edit_plan: "Plan an edit before applying",
+}
+
+// Static fallback used when the registry fetch fails or returns empty.
+const FALLBACK_TOOLS = Object.entries(TOOL_DESCRIPTIONS).map(([id, description]) => ({ id, description }))
+
+// Built-ins get explicit buckets; everything else is bucketed by prefix.
+const BUILTIN_GROUP: Record<string, string> = {
+  read: "Read",
+  glob: "Read",
+  grep: "Read",
+  code_find: "Read",
+  code_emit: "Read",
+  systeminfo: "Read",
+  write: "Write",
+  edit: "Write",
+  bash: "Execute",
+  task: "Execute",
+  webfetch: "Web",
+  websearch: "Web",
+  websearch_free: "Web",
+}
+
+const PREFIX_GROUP: { prefix: string; category: string }[] = [
+  { prefix: "codegraph_", category: "Codegraph" },
+  { prefix: "repository_", category: "Repository" },
+  { prefix: "memory_", category: "Memory" },
+  { prefix: "banyan_", category: "BanyanCode" },
+  { prefix: "banyancode_", category: "BanyanCode" },
 ]
+
+const GROUP_ORDER = ["Read", "Write", "Execute", "Web", "Codegraph", "Repository", "Memory", "BanyanCode", "Other"]
+
+function groupTools(tools: { id: string; description?: string }[]): MultiSelectGroup[] {
+  const buckets = new Map<string, { id: string; description?: string }[]>()
+  const push = (category: string, tool: { id: string; description?: string }) => {
+    const list = buckets.get(category) ?? []
+    list.push(tool)
+    buckets.set(category, list)
+  }
+  for (const tool of tools) {
+    const explicit = BUILTIN_GROUP[tool.id]
+    const prefix = PREFIX_GROUP.find((p) => tool.id.startsWith(p.prefix))
+    push(explicit ?? prefix?.category ?? "Other", tool)
+  }
+  return Array.from(buckets.entries())
+    .sort((a, b) => {
+      const ai = GROUP_ORDER.indexOf(a[0])
+      const bi = GROUP_ORDER.indexOf(b[0])
+      return (ai === -1 ? GROUP_ORDER.length : ai) - (bi === -1 ? GROUP_ORDER.length : bi)
+    })
+    .map(([category, list]) => ({
+      category,
+      options: list
+        .slice()
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((tool) => ({
+          value: tool.id,
+          label: tool.id,
+          description: tool.description ?? TOOL_DESCRIPTIONS[tool.id] ?? "Agent tool",
+        })),
+    }))
+}
 
 export function DialogAgentConfig(props: {
   initial?: AgentConfigInput
@@ -88,12 +129,99 @@ export function DialogAgentConfig(props: {
   const toast = useToast()
 
   const [step, setStep] = createSignal<"name" | "description" | "model" | "tools" | "review">("name")
+  const [showModelPicker, setShowModelPicker] = createSignal(false)
   const [name, setName] = createSignal(props.initial?.name ?? "")
   const [description, setDescription] = createSignal(props.initial?.description ?? "")
   const [model, setModel] = createSignal<{ providerID: string; modelID: string } | undefined>(
     props.initial?.model,
   )
   const [tools, setTools] = createSignal<string[]>(props.initial?.tools ?? [])
+  const [toolGroups, setToolGroups] = createSignal<MultiSelectGroup[]>(groupTools(FALLBACK_TOOLS))
+  const [toolsLoading, setToolsLoading] = createSignal(true)
+
+  const loadTools = async () => {
+    try {
+      let currentModel: { providerID: string; modelID: string } | undefined
+      try {
+        currentModel = useLocal().model.current()
+      } catch {
+        currentModel = undefined
+      }
+      let loaded: { id: string; description?: string }[] | undefined
+      if (currentModel) {
+        const res = await sdk.client.tool.list({
+          provider: currentModel.providerID,
+          model: currentModel.modelID,
+        })
+        if (res.data && res.data.length > 0) {
+          loaded = res.data.map((tool) => ({ id: tool.id, description: tool.description }))
+        }
+      }
+      if (!loaded || loaded.length === 0) {
+        const res = await sdk.client.tool.ids()
+        if (res.data && res.data.length > 0) {
+          loaded = res.data.map((id) => ({ id }))
+        }
+      }
+      if (loaded && loaded.length > 0) setToolGroups(groupTools(loaded))
+    } catch {
+      // Registry fetch failed — keep the static fallback list.
+    } finally {
+      setToolsLoading(false)
+    }
+  }
+
+  onMount(() => {
+    void loadTools()
+  })
+
+  const openModelPicker = () => {
+    setShowModelPicker(true)
+  }
+
+  // Model step: enter skips to tools, space opens the model picker.
+  // Bindings are gated off while the inline picker is open (it has its own
+  // DialogSelect keymap).
+  useBindings(() => ({
+    enabled: step() === "model" && !showModelPicker(),
+    priority: 1,
+    commands: [
+      {
+        name: "dialog.agent-config.model.default",
+        title: "Use default model",
+        category: "Dialog",
+        run: () => setStep("tools"),
+      },
+      {
+        name: "dialog.agent-config.model.pick",
+        title: "Open model picker",
+        category: "Dialog",
+        run: openModelPicker,
+      },
+    ],
+    bindings: [
+      { key: "enter", desc: "Use default model", group: "Dialog", cmd: () => setStep("tools") },
+      { key: "space", desc: "Open model picker", group: "Dialog", cmd: openModelPicker },
+    ],
+  }))
+
+  // Review step: enter saves, escape cancels.
+  useBindings(() => ({
+    enabled: step() === "review",
+    priority: 1,
+    commands: [
+      {
+        name: "dialog.agent-config.save",
+        title: "Save agent",
+        category: "Dialog",
+        run: () => void save(),
+      },
+    ],
+    bindings: [
+      { key: "enter", desc: "Save agent", group: "Dialog", cmd: () => void save() },
+      { key: "escape", desc: "Cancel", group: "Dialog", cmd: () => dialog.clear() },
+    ],
+  }))
 
   const save = async () => {
     const finalName = name().trim()
@@ -110,14 +238,16 @@ export function DialogAgentConfig(props: {
         enabled: true,
       }
 
-      // Save via SDK (handler will be added in server-side phase)
-      const saveResult = await (sdk.client as any).global?.banyanAgent?.save?.({
+      const saveResult = await sdk.client.global.banyanAgent.save({
         name: result.name,
         description: result.description,
         model: result.model,
         tools: result.tools,
-        enabled: result.enabled,
       })
+      if (saveResult.error) {
+        toast.show({ message: `Save failed: ${String(saveResult.error)}`, variant: "error" })
+        return
+      }
 
       if (props.onSave) props.onSave(result)
       toast.show({ message: `Saved agent "${finalName}"`, variant: "success" })
@@ -163,45 +293,50 @@ export function DialogAgentConfig(props: {
       </Show>
 
       <Show when={step() === "model"}>
-        <box flexDirection="column" paddingLeft={2} paddingTop={1}>
-          <text fg={toHex(theme.textMuted)}>Step 3/4: Model (optional)</text>
-          <text fg={toHex(theme.textMuted)}>Press enter to skip, or pick a model</text>
-          <text fg={toHex(theme.text)}>
-            Current:{" "}
-            {model()
-              ? `${model()!.providerID}/${model()!.modelID}`
-              : "(default — inherits from parent)"}
-          </text>
-          <box flexDirection="row" gap={1} marginTop={1}>
-            <text
-              fg={toHex(theme.success)}
-              onMouseUp={() => setStep("tools")}
-            >
-              [enter use default]
-            </text>
-            <text
-              fg={toHex(theme.primary)}
-              onMouseUp={() => {
-                dialog.replace(() => (
-                  <DialogModel
-                    onSelect={(model) => {
-                      setModel(model)
-                      setStep("tools")
-                    }}
-                  />
-                ))
+        <Show
+          when={!showModelPicker()}
+          fallback={
+            <DialogModel
+              preserveStack
+              onSelect={(selectedModel) => {
+                setModel(selectedModel)
+                setShowModelPicker(false)
+                setStep("tools")
               }}
-            >
-              [space picker]
+            />
+          }
+        >
+          <box flexDirection="column" paddingLeft={2} paddingTop={1}>
+            <text fg={toHex(theme.textMuted)}>Step 3/4: Model (optional)</text>
+            <text fg={toHex(theme.textMuted)}>Press enter to skip, or pick a model</text>
+            <text fg={toHex(theme.text)}>
+              Current:{" "}
+              {model()
+                ? `${model()!.providerID}/${model()!.modelID}`
+                : "(default — inherits from parent)"}
             </text>
+            <box flexDirection="row" gap={1} marginTop={1}>
+              <text
+                fg={toHex(theme.success)}
+                onMouseUp={() => setStep("tools")}
+              >
+                [enter use default]
+              </text>
+              <text
+                fg={toHex(theme.primary)}
+                onMouseUp={openModelPicker}
+              >
+                [space picker]
+              </text>
+            </box>
           </box>
-        </box>
+        </Show>
       </Show>
 
       <Show when={step() === "tools"}>
         <DialogMultiSelect
-          title="Step 4/4: Tools"
-          groups={TOOL_GROUPS}
+          title={`Step 4/4: Tools${toolsLoading() ? " (loading...)" : ""}`}
+          groups={toolGroups()}
           selected={tools()}
           onConfirm={(selected) => {
             setTools(selected)

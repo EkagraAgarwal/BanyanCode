@@ -116,7 +116,7 @@ test("dialog-agent-config source has focus ref on name input", () => {
   expect(source).toContain("el.focus()")
 })
 
-test("dialog-agent-config source wires DialogModel for model picker", () => {
+test("dialog-agent-config source wires DialogModel inline for model picker", () => {
   const fs = require("fs") as typeof import("fs")
   const path = require("path") as typeof import("path")
   const source = fs.readFileSync(
@@ -124,9 +124,97 @@ test("dialog-agent-config source wires DialogModel for model picker", () => {
     "utf8",
   )
   expect(source).toContain("DialogModel")
-  expect(source).toContain("dialog.replace(() => (")
-  expect(source).toContain("onSelect={(model)")
+  // The picker is rendered INLINE (gated by a showModelPicker signal), NOT via
+  // dialog.replace — replacing the wizard would unmount it mid-flow.
+  expect(source).toContain("showModelPicker")
+  expect(source).toContain("preserveStack")
+  expect(source).not.toContain("dialog.replace(() => (")
+  expect(source).toContain("onSelect={(selectedModel)")
   expect(source).toContain("setStep(\"tools\")")
+})
+
+test("dialog-agent-config model step has keyboard wiring (enter + space)", () => {
+  const fs = require("fs") as typeof import("fs")
+  const path = require("path") as typeof import("path")
+  const source = fs.readFileSync(
+    path.resolve(__dirname, "../../../src/component/dialog-agent-config.tsx"),
+    "utf8",
+  )
+  expect(source).toContain("useBindings")
+  expect(source).toContain('enabled: step() === "model"')
+  expect(source).toContain('key: "enter"')
+  expect(source).toContain('key: "space"')
+})
+
+test("dialog-agent-config tools list is registry-backed with a full fallback", () => {
+  const fs = require("fs") as typeof import("fs")
+  const path = require("path") as typeof import("path")
+  const source = fs.readFileSync(
+    path.resolve(__dirname, "../../../src/component/dialog-agent-config.tsx"),
+    "utf8",
+  )
+  // Fetches the registry list at dialog open (tool.list needs provider+model, tool.ids is model-free).
+  expect(source).toMatch(/tool\.(list|ids)\(/)
+  expect(source).toContain("repository_query")
+  expect(source).toContain("preflight")
+})
+
+test("dialog-agent-config save uses typed banyanAgent.save (no silent optional chain)", () => {
+  const fs = require("fs") as typeof import("fs")
+  const path = require("path") as typeof import("path")
+  const source = fs.readFileSync(
+    path.resolve(__dirname, "../../../src/component/dialog-agent-config.tsx"),
+    "utf8",
+  )
+  expect(source).toContain("banyanAgent.save")
+  expect(source).toContain("saveResult.error")
+  expect(source).not.toContain("as any).global?.banyanAgent")
+})
+
+test("dialog-multi-select has per-group select all/clear plus enter/escape bindings", () => {
+  const fs = require("fs") as typeof import("fs")
+  const path = require("path") as typeof import("path")
+  const source = fs.readFileSync(
+    path.resolve(__dirname, "../../../src/ui/dialog-multi-select.tsx"),
+    "utf8",
+  )
+  expect(source).toContain("[select all]")
+  expect(source).toContain("[clear]")
+  expect(source).toContain("toggleGroup")
+  expect(source).toContain("useBindings")
+  expect(source).toContain('key: "enter"')
+})
+
+test("dialog-multi-select confirm does not clear the dialog stack", () => {
+  const fs = require("fs") as typeof import("fs")
+  const path = require("path") as typeof import("path")
+  const source = fs.readFileSync(
+    path.resolve(__dirname, "../../../src/ui/dialog-multi-select.tsx"),
+    "utf8",
+  )
+  // confirm() must only invoke onConfirm — the parent (DialogAgentConfig wizard)
+  // decides navigation. dialog.clear() would unmount the whole wizard stack.
+  const confirmMatch = source.match(/const confirm = \(\) => \{[\s\S]*?\n  \}/)
+  expect(confirmMatch).toBeTruthy()
+  expect(confirmMatch![0]).toContain("onConfirm")
+  expect(confirmMatch![0]).not.toContain("dialog.clear()")
+  // Escape still cancels the whole flow.
+  expect(source).toContain('key: "escape"')
+  expect(source).toContain("dialog.clear()")
+})
+
+test("dialog-model preserveStack prop gates dialog.clear in onSelect", () => {
+  const fs = require("fs") as typeof import("fs")
+  const path = require("path") as typeof import("path")
+  const source = fs.readFileSync(
+    path.resolve(__dirname, "../../../src/component/dialog-model.tsx"),
+    "utf8",
+  )
+  expect(source).toContain("preserveStack")
+  expect(source).toMatch(/if \(!props\.preserveStack\) dialog\.clear\(\)/)
+  // The top-level picker flow (tab-agents.tsx) keeps clear-on-select: the
+  // default (preserveStack unset) must still clear.
+  expect(source).toContain("props.onSelect({ providerID, modelID })")
 })
 
 // Integration tests for agent override persistence (Slice B)

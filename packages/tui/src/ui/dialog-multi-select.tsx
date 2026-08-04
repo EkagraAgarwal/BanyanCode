@@ -3,6 +3,7 @@ import { createMemo, createSignal, For, Show } from "solid-js"
 import { useDialog } from "../ui/dialog"
 import { useTheme } from "../context/theme"
 import { toHex } from "../util/color"
+import { useBindings } from "../keymap"
 
 export interface MultiSelectOption<T = string> {
   value: T
@@ -57,8 +58,25 @@ export function DialogMultiSelect<T extends string = string>(props: DialogMultiS
 
   const confirm = () => {
     props.onConfirm(Array.from(selected()))
-    dialog.clear()
   }
+
+  useBindings(() => ({
+    enabled: true,
+    // Dialog form semantics must win over the global managed textarea input layer.
+    priority: 1,
+    commands: [
+      {
+        name: "dialog.multi-select.confirm",
+        title: "Confirm selection",
+        category: "Dialog",
+        run: confirm,
+      },
+    ],
+    bindings: [
+      { key: "enter", desc: "Confirm", group: "Dialog", cmd: confirm },
+      { key: "escape", desc: "Cancel", group: "Dialog", cmd: () => dialog.clear() },
+    ],
+  }))
 
   return (
     <box flexDirection="column" width="100%" height="100%" backgroundColor={toHex(theme.background)}>
@@ -88,12 +106,35 @@ export function DialogMultiSelect<T extends string = string>(props: DialogMultiS
                 )
               }),
             )
+            const groupAllSelected = () => {
+              const opts = filteredGroup()
+              return opts.length > 0 && opts.every((opt) => selected().has(opt.value))
+            }
+            // Only toggles options visible under the current search query.
+            const toggleGroup = () => {
+              const opts = filteredGroup()
+              const next = new Set(selected())
+              const selectAll = !opts.every((opt) => next.has(opt.value))
+              for (const opt of opts) {
+                if (selectAll) next.add(opt.value)
+                else next.delete(opt.value)
+              }
+              setSelected(next)
+            }
             return (
               <Show when={filteredGroup().length > 0}>
                 <box flexDirection="column" marginBottom={1}>
-                  <text fg={toHex(theme.textMuted)}>
-                    <b>── {group.category} ──</b>
-                  </text>
+                  <box flexDirection="row" gap={1}>
+                    <text fg={toHex(theme.textMuted)}>
+                      <b>── {group.category} ──</b>
+                    </text>
+                    <text
+                      fg={toHex(groupAllSelected() ? theme.success : theme.textMuted)}
+                      onMouseUp={toggleGroup}
+                    >
+                      {groupAllSelected() ? "[clear]" : "[select all]"}
+                    </text>
+                  </box>
                   <For each={filteredGroup()}>
                     {(opt) => {
                       const isSelected = () => selected().has(opt.value)

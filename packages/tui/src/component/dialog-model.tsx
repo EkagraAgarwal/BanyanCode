@@ -13,7 +13,13 @@ import { useSync } from "../context/sync"
 import { useSDK } from "../context/sdk"
 import { useToast } from "../ui/toast"
 
-export function DialogModel(props: { providerID?: string; onSelect?: (model: { providerID: string; modelID: string }) => void }) {
+export function DialogModel(props: {
+  providerID?: string
+  // When true, onSelect does NOT dialog.clear() — the embedding dialog decides
+  // its own navigation (used by DialogAgentConfig's inline model picker).
+  preserveStack?: boolean
+  onSelect?: (model: { providerID: string; modelID: string }) => void
+}) {
   const local = useLocal()
   const data = useData()
   const dialog = useDialog()
@@ -141,7 +147,7 @@ export function DialogModel(props: { providerID?: string; onSelect?: (model: { p
   function onSelect(providerID: string, modelID: string) {
     if (props.onSelect) {
       props.onSelect({ providerID, modelID })
-      dialog.clear()
+      if (!props.preserveStack) dialog.clear()
       return
     }
     local.model.set({ providerID, modelID }, { recent: true })
