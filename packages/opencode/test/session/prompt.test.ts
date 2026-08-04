@@ -56,6 +56,9 @@ import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { layer as AiSdkTransportLayer } from "@/effect/transport-ai-sdk"
+import { Banyan } from "@opencode-ai/core/banyancode"
+import { BanyanToolsMount } from "@/effect/banyan-tools-mount"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -184,6 +187,13 @@ function makePrompt(input?: { processor?: "blocking" }) {
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
+  
+  // Provide BanyanCode-required services: AiSdkTransport and ToolCatalog
+  const banyanCatalog = BanyanToolsMount.attachToCatalog(
+    Banyan.toolCatalogDefaultLayer.pipe(Layer.provide(deps))
+  )
+  const aiSdkTransport = AiSdkTransportLayer
+  
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
   const registry = ToolRegistry.layer.pipe(
@@ -226,6 +236,8 @@ function makePrompt(input?: { processor?: "blocking" }) {
     Layer.provide(SystemPrompt.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
     Layer.provideMerge(deps),
+    Layer.provideMerge(banyanCatalog),
+    Layer.provideMerge(aiSdkTransport),
     Layer.provide(summary),
   )
 }
