@@ -494,17 +494,39 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       }
 
       const escapeYamlScalar = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`
+
+      // ConfigAgentV1.Info.model is a STRING "providerID/modelID", not an object.
+      // Consumers (Provider.parseModel / ModelV2.parse) split on "/" taking the
+      // first segment as providerID, so multi-slash modelIDs round-trip.
+      const model = ctx.payload.model
+      const modelLine = model
+        ? `model: ${escapeYamlScalar(model.providerID ? `${model.providerID}/${model.modelID}` : model.modelID)}`
+        : null
+
+      // ConfigAgentV1.Info.tools is a Record<tool, boolean>, not an array.
+      // ConfigAgentV1.normalize converts { "read": true } into permission allow rules.
+      const toolsLine =
+        ctx.payload.tools && ctx.payload.tools.length > 0
+          ? `tools: { ${ctx.payload.tools.map((tool) => `${escapeYamlScalar(tool)}: true`).join(", ")} }`
+          : null
+
+      // ConfigPermissionV1.Info is Union([Action, InputObject]) — a single action
+      // string OR a record of key -> rule. A YAML list of strings does NOT decode,
+      // so map each requested permission key to an explicit allow rule.
+      const permissionLine =
+        ctx.payload.permission && ctx.payload.permission.length > 0
+          ? `permission: { ${ctx.payload.permission.map((key) => `${escapeYamlScalar(key)}: "allow"`).join(", ")} }`
+          : null
+
       const frontmatter: (string | null)[] = [
         "---",
         `name: ${escapeYamlScalar(safeName)}`,
         `description: ${escapeYamlScalar(ctx.payload.description ?? "")}`,
         `mode: ${escapeYamlScalar(ctx.payload.mode ?? "subagent")}`,
         ctx.payload.hidden !== undefined ? `hidden: ${ctx.payload.hidden}` : null,
-        ctx.payload.model ? `model: ${JSON.stringify(ctx.payload.model)}` : null,
-        `permission: [${(ctx.payload.permission ?? []).map(escapeYamlScalar).join(", ")}]`,
-        ctx.payload.tools && ctx.payload.tools.length > 0
-          ? `tools: [${ctx.payload.tools.map(escapeYamlScalar).join(", ")}]`
-          : null,
+        modelLine,
+        permissionLine,
+        toolsLine,
         "---",
         "",
       ]
