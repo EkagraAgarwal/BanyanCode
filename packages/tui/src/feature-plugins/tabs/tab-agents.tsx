@@ -8,7 +8,6 @@ import { useDialog } from "../../ui/dialog"
 import { useSync } from "../../context/sync"
 import { useToast } from "../../ui/toast"
 import { useEvent } from "../../context/event"
-import { RoundedBorder } from "../../ui/border.ts"
 import { DialogAgentConfig } from "../../component/dialog-agent-config"
 import { DialogModel } from "../../component/dialog-model"
 
@@ -271,7 +270,7 @@ function View(props: { api: TuiPluginApi }) {
         Built-in and configured agents. Toggle subagents off to remove them from orchestration.
       </text>
       <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
-        <box flexDirection="column" paddingTop={0} gap={1}>
+        <box flexDirection="column" paddingTop={0} gap={0}>
           <Show when={orchestrator()}>
             {(prim) => (
               <>
@@ -300,7 +299,7 @@ function View(props: { api: TuiPluginApi }) {
             )}
           </Show>
           <GroupLabel label="SUBAGENTS" theme={theme()} />
-          <box flexDirection="column" paddingLeft={2} paddingRight={2} gap={1}>
+          <box flexDirection="column" paddingLeft={2} paddingRight={2} gap={0}>
             <For each={subagents()}>
               {(agent) => (
                 <AgentCard
@@ -332,7 +331,7 @@ function View(props: { api: TuiPluginApi }) {
 
 function GroupLabel(props: { label: string; theme: any }) {
   return (
-    <text fg={toHex(props.theme.textMuted)} paddingLeft={2} paddingTop={1}>
+    <text fg={toHex(props.theme.textMuted)} paddingLeft={2} paddingTop={0}>
       <b>{props.label}</b>
     </text>
   )
@@ -368,9 +367,8 @@ function AgentCard(props: {
   return (
     <box
       flexDirection="column"
-      border={["left", "right", "top", "bottom"]}
-      borderColor={props.theme.border}
-      customBorderChars={RoundedBorder.customBorderChars}
+      border={["bottom"]}
+      borderColor={props.theme.borderSubtle}
       paddingLeft={1}
       paddingRight={1}
       paddingTop={0}
@@ -393,24 +391,18 @@ function AgentCard(props: {
           </box>
         </Show>
       </box>
-      <text fg={toHex(props.theme.primary)}>{description()}</text>
+      <text fg={toHex(props.theme.primary)} wrapMode="none" truncate>{description()}</text>
       <box flexDirection="row" gap={1} alignItems="center">
         <text fg={toHex(props.theme.textMuted)}>Model</text>
         <text fg={toHex(props.theme.info)} onMouseUp={props.onOpenModel}>
           {props.modelLabel} ▾
         </text>
+        <text fg={toHex(props.theme.textMuted)}>· Prompt</text>
+        <text fg={toHex(props.theme.info)} onMouseUp={props.onStartEditPrompt}>
+          edit system prompt
+        </text>
       </box>
-      <Show
-        when={props.editingPrompt}
-        fallback={
-          <box flexDirection="row" gap={1} alignItems="center">
-            <text fg={toHex(props.theme.textMuted)}>Prompt</text>
-            <text fg={toHex(props.theme.info)} onMouseUp={props.onStartEditPrompt}>
-              edit system prompt
-            </text>
-          </box>
-        }
-      >
+      <Show when={props.editingPrompt}>
         <box flexDirection="column" gap={1}>
           <box flexDirection="row" gap={1} alignItems="center">
             <text fg={toHex(props.theme.textMuted)}>Prompt</text>
