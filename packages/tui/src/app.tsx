@@ -1211,10 +1211,24 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     await DialogAlert.show(
       dialog,
       "Update Complete",
-      `Successfully updated to OpenCode v${result.data.version}. Please restart the application.`,
+      `Successfully updated to banyancode v${result.data.version}. Please restart the application.`,
     )
 
     void exit()
+  })
+
+  // Fired by the startup auto-update check after it silently installs a newer
+  // build (dev channel always auto-installs; stable auto-installs patches).
+  // The running process is still the old binary, so surface the restart
+  // requirement instead of forcing an exit mid-session.
+  event.on("installation.updated", (evt) => {
+    const version = evt.properties.version
+    toast.show({
+      title: "Update installed",
+      message: `banyancode updated to v${version}. Restart to apply the update.`,
+      variant: "info",
+      duration: 20000,
+    })
   })
 
   const plugin = createMemo(() => {
