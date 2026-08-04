@@ -1,44 +1,54 @@
 # Goal
 
-(verbatim) can you fix a few bugs/ implement features? 1. there is too much space between 2 sessions in the sessions tab. make it more compact. 2. add a pin icon that pins a chat to the top (marks it as favourite). use a ui similar to how apple music has a star for adding songs to liked songs. if that is not possible, just add a button next to continue, rename, and delete called pin. 3. do a deep review of /goal command. if you call it from plan mode, it switches to orchestration which is correct but that loop is stuck in read only mode. 4. /goal cannot be used multiple times in the same session, even if a goal has ended. make /goal be reusable. fix any other bugs with /goal command. 5. the reviewer agent doesnt seem to be working. review it and fix it. it should have fresh cleean context and access to the plan to verify everything.
+(verbatim) add an auto update feature like the upstream opencode that checks for the latest version on startup and auto installs it. it should use the latest stable build if its on a stable build and the absolute latest build (dev or stable, whichever is newer) if its on dev.
 
 ## Findings (investigation complete)
 
-- **Items 1–2 (sessions tab):** already implemented on `dev` by `ca0d806ac` (`packages/tui/src/feature-plugins/tabs/tab-sessions.tsx`): wrapper `gap={0}` (line 217), per-card `paddingBottom={0}` (line 237), Apple-Music-style pin star `★`/`☆` (lines 286-291), pinned-first sort via `orderSessions` (31-40), `ctrl+f` (`session_pin_toggle`), state persisted TUI-locally (`local.tsx` `togglePin`). Tests in `tab-sessions.test.tsx`. → Verify-only step.
-- **Item 3 (read-only loop):** `/goal` (command/index.ts:249-360) overrides the agent per-turn (`agent:"orchestrator"`) but never persists it; session agent stays `plan`, `session.permission` deny rules persist and are merged into every effective ruleset (session/tools.ts:73), and subagents inherit parent denies (`agent/subagent-permissions.ts:14-27`). → Persist `orchestrator` on the session + neutralize deny rules when a goal starts.
-- **Item 4 (reuse):** goals only reach terminal state via an explicit tool call; a dead loop leaves an `active` row → `setGoal` conflict blocks every later `/goal`. Also `banyancode_max_goal_iterations` never enforced, `planPath` default mismatch (`null` vs `"./plan.md"`), `tool/goal.ts:153` swallows errors. → Auto-cancel stale active goals on new `setGoal`; enforce max iterations; fix defaults/error mapping.
-- **Item 5 (reviewer):** `banyancode-review-bridge.ts` dispatches with `model = subagent.model ?? {modelID:"",providerID:""}` (reviewer has no model) → `Provider.getModel("","")` throws → row stuck `dispatched`, verdict never reaches the orchestrator; `mesh_control` description omits `review`; no e2e test. Fresh child session per dispatch already exists (good). → Model fallback (parent session model / `banyancode_goal_evaluator_model`), verdict delivery into the parent session, tool-description fix, e2e test.
+The startup auto-update plumbing already exists (mirrors upstream opencode):
+
+- **Startup check:** `packages/opencode/src/cli/cmd/tui.ts:194-196` fires `checkUpgrade` 1s after TUI boot → `packages/opencode/src/cli/tui/worker.ts:52-55` → `packages/opencode/src/cli/upgrade.ts` `upgrade()`.
+- **Decision + install:** `cli/upgrade.ts` skips on `config.autoupdate === false` / `OPENCODE_DISABLE_AUTOUPDATE`; emits `installation.update-available` (notify) or auto-runs `Installation.upgrade(method, latest)` when the release kind is `patch`.
+- **Latest resolution:** `packages/opencode/src/installation/index.ts:235-291` `Installation.latest(method)` — for npm/bun/pnpm it queries `registry/banyancode/${InstallationChannel}` (the build-time channel dist-tag ONLY).
+- **TUI surface:** `packages/tui/src/app.tsx:1172-1218` shows an "Update Available" dialog on the event and calls `sdk.client.global.upgrade({ target })` → `handlers/global.ts:126-156`.
+- **Canary-aware comparison** exists only in the manual command: `packages/opencode/src/cli/cmd/upgrade.ts` `shouldSkipUpgrade` + `canonical()` (npm drops the leading zero: `26.07.4` → `26.7.4`), tested in `packages/opencode/test/cli/upgrade.test.ts`.
+
+Gaps versus the user's ask:
+
+1. **No channel-aware "absolute latest".** On the `dev` channel, `latest()` only reads the `dev` dist-tag — it never considers the stable `latest` tag, so a dev user is not told about (and never auto-installs) a newer stable build, and there is no "whichever is newer" logic. On stable the behavior is already correct (queries `latest` tag).
+2. **Startup check version comparison is broken by npm leading-zero stripping.** Baked `InstallationVersion` is `26.07.4`; the npm registry returns `26.7.4`. `cli/upgrade.ts:26` does raw `===`, which never matches → the check always proceeds (re-runs `npm install -g banyancode@26.7.4` every startup even when current) and `getReleaseType` compares un-normalized strings.
+3. **Dev channel auto-install is gated by the stable-channel patch rule.** `cli/upgrade.ts:30` only auto-installs `patch` releases; canary consumers should always auto-follow the absolute latest (dev cadence). Stable keeps the upstream patch-only gate + `"notify"` semantics.
+
+No HTTP route/schema changes → no SDK regeneration needed. Headless `run`/`serve` startup is intentionally out of scope (matches upstream, which only checks in the TUI).
 
 ## Steps
 
-1. **Sessions tab verify (items 1–2):** confirm `tab-sessions.tsx` compact spacing + star pin exist on HEAD and spacing tests pass; fix any deviation from the user's ask (e.g. residual inter-card gaps).
-2. **/goal read-only fix (item 3):** in the GOAL command handler (`packages/opencode/src/command/index.ts`), after persisting the goal, persist `agent = "orchestrator"` on the session and clear/neutralize `session.permission` deny rules so the goal loop can edit files, call `goal(action=...)`, and dispatch coders/reviewer even when invoked from plan mode.
-3. **/goal reusability + enforcement (item 4):**
-   a. `goal-service.setGoal`: auto-transition any existing `active` goal for the same `parentSessionID` → `cancelled` (reason "superseded by new goal") before inserting, so `/goal` works repeatedly in one session even after an aborted loop.
-   b. `tool/goal.ts record_review`: enforce `banyancode_max_goal_iterations` — when `iterationCount` reaches the max with a fail/blocked verdict, auto-transition the goal to `blocked` (reason "max iterations reached") and report it.
-   c. `tool/goal.ts set`: default `planPath` to `"./plan.md"` when absent (match the command's default).
-   d. `tool/goal.ts`: stop swallowing the original error (`mapError` → preserve message, translate only expected typed errors).
-4. **Reviewer agent fix (item 5):**
-   a. `banyancode-review-bridge.ts`: model fallback — use `banyancode_goal_evaluator_model` config if set, else the parent session's model (pattern: `task.ts:278-281`); never dispatch with an empty model.
-   b. Deliver the reviewer result (VERDICT + reasoning) into the parent session after completion (pattern: task-result injection, `task.ts:318-322`) so the orchestrator LLM can read it and call `record_review` with the `reviewID` returned by `mesh_control(action="review")`.
-   c. `mesh-control.ts`: add the `review` action to the tool description so the orchestrator's tool guide documents it.
-   d. Add an e2e test: dispatch a review via the bridge with a real model and assert the verdict row completes and the result reaches the parent.
-5. **Verification:** `bun typecheck` + `bun test` in `packages/core`, `packages/opencode`, `packages/tui`; run goal-service tests, review-bridge tests, tab-sessions tests.
+1. **Version comparison helpers (`packages/opencode/src/installation/compare.ts`, new):** move `canonical()`/`canonicalVersion` and `shouldSkipUpgrade` out of `cli/cmd/upgrade.ts` into a pure, exported module; add:
+   - `resolveAbsoluteLatest(devTag, latestTag)` — pure decision: returns `devTag` unless the stable tag's numeric core (strip `-dev.*` / prerelease suffix) is STRICTLY greater than the dev tag's core; on equal base prefer the canary (dev users follow the dev branch). Handles `undefined` fallbacks (one fetch failed).
+   - Re-export from `installation/index.ts` (`export { ... } from "./compare"`); keep `shouldSkipUpgrade` importable from `cli/cmd/upgrade.ts` via re-export so the existing test keeps passing (or update the test import — either is fine, keep it consistent).
+2. **Channel-aware `latest()` (`packages/opencode/src/installation/index.ts`):** for npm/bun/pnpm, when `InstallationChannel === "dev"`, fetch BOTH the `dev` and `latest` dist-tags (Effect.all, tolerate one failing) and return `resolveAbsoluteLatest(...)`. All other channels/methods keep today's behavior (stable-only sources: curl/brew/choco/scoop/GitHub unchanged).
+3. **Startup check (`packages/opencode/src/cli/upgrade.ts`):**
+   - Replace raw `InstallationVersion === latest` with the normalized `shouldSkipUpgrade(InstallationVersion, latest)` (handles `26.07.4` vs `26.7.4` AND same-base different-sha canaries).
+   - Pass canonicalized versions to `getReleaseType`.
+   - Extract a pure decision helper `shouldAutoInstall(channel, kind, autoupdate)` → `true` when `kind === "patch"` OR channel is dev (dev always auto-follows); `false` when `autoupdate === "notify"`; exported for tests.
+4. **Tests:**
+   - `packages/opencode/test/installation/compare.test.ts` (new): `resolveAbsoluteLatest` matrix — dev newer (canary wins), stable strictly newer (stable wins), equal base (canary wins), leading-zero forms (`26.08.11-dev.x` vs `26.8.11`), one-undefined fallback; `shouldSkipUpgrade` regression cases from `cli/upgrade.test.ts` still pass after the move.
+   - `packages/opencode/test/installation/installation.test.ts`: assert non-dev `latest("npm")` still queries only `.../banyancode/${InstallationChannel}` (existing tests already cover; keep green).
+   - `packages/opencode/test/cli/upgrade.test.ts`: add `shouldAutoInstall` cases — stable+patch installs, stable+minor notifies, dev+minor installs, `"notify"` never installs; add startup equality case (baked `26.07.4` vs registry `26.7.4` → skip).
+5. **Verification:** `bun typecheck` and `bun test` in `packages/opencode` (run `test/installation/`, `test/cli/upgrade.test.ts`); also run `packages/tui` typecheck (no TUI edits expected — confirm none needed).
 
 ## Exit criteria
 
 Reviewer judges **pass** when ALL hold:
 
-1. **Sessions tab:** `tab-sessions.tsx` on HEAD has wrapper `gap={0}`, per-card `paddingBottom={0}`, and the `★`/`☆` pin star wired to `onTogglePin`/`local.session.togglePin`; `orderSessions` sorts pinned first; `tab-sessions.test.tsx` spacing assertions exist and pass on non-win32 CI (source-assertions pass locally).
-2. **Goal loop not read-only:** the GOAL command handler persists `agent: "orchestrator"` on the session (SessionTable/update path) and neutralizes `session.permission` deny rules at goal start; a test proves a plan-mode session starting a goal yields orchestrator permissions (edit/task allowed).
-3. **Goal reuse:** `setGoal` auto-cancels a stale `active` goal for the same parent session; `goal-service.test.ts` covers: (i) set → set again after cancel works, (ii) set while active auto-cancels the old one.
-4. **Goal enforcement:** `record_review` blocks the goal when `iterationCount >= banyancode_max_goal_iterations` with a fail/blocked verdict; `set` defaults `planPath` to `"./plan.md"`; `goal` tool failures preserve the original error message.
-5. **Reviewer works:** `banyancode-review-bridge.ts` never dispatches with an empty model (falls back to config `banyancode_goal_evaluator_model` or parent session model); completed reviews deliver the verdict into the parent session; `mesh_control` description lists `review`; e2e test passes with a real model and asserts the review row reaches a terminal state and the parent sees the result.
-6. **Clean context:** the review bridge creates a fresh child session per dispatch (no reuse); verified by the e2e test.
-7. **No regressions:** `bun typecheck` passes in `packages/core`, `packages/opencode`, `packages/tui`; `bun test` passes for `packages/core/test/banyancode/goal-service.test.ts`, the new review-bridge test, `packages/tui/test/feature-plugins/tabs/tab-sessions.test.tsx`, and `packages/tui/test/config.test.tsx` (pre-existing unrelated failures documented, not caused by this change).
+1. `Installation.latest("npm"|"bun"|"pnpm")` on the `dev` channel fetches BOTH dist-tags and returns the absolute newest per `resolveAbsoluteLatest` (dev wins on equal base; stable wins only when its core is strictly greater); all other channels/methods unchanged (existing tests still pass).
+2. `resolveAbsoluteLatest` is a pure exported function with unit tests covering: dev newer, stable strictly newer, equal base → dev, leading-zero equivalence (`26.08.11-dev.x` vs `26.8.11`), and single-fetch-failure fallback.
+3. `cli/upgrade.ts` uses `shouldSkipUpgrade` (normalized equality) instead of raw `===` — a baked `26.07.4` vs registry `26.7.4` skips the upgrade; same-base different-sha canaries proceed.
+4. `cli/upgrade.ts` auto-installs for dev channel regardless of release kind (unless `autoupdate === "notify"` or `false`); stable channel keeps the patch-only gate + notify semantics. The decision lives in a pure exported `shouldAutoInstall(channel, kind, autoupdate)` with unit tests.
+5. No regressions: `bun typecheck` passes in `packages/opencode`; `bun test` passes for `test/installation/installation.test.ts`, `test/cli/upgrade.test.ts`, and the new compare tests.
 
 ## Out of scope
 
-- Restoring the pre-goal agent after the goal ends (user can switch back; agent-switch event already shows).
-- TUI live goal-progress events (goal event queue drain) — the queue stays bounded; not part of the 5 items.
-- Anything outside the 5 numbered items.
+- Headless (`run`/`serve`) startup checks (matches upstream TUI-only behavior).
+- TUI dialog/UX changes (already complete at `app.tsx:1172-1218`).
+- `next` (rc/beta) channel semantics (keeps today's own-tag behavior).
+- curl/brew/choco/scoop/GitHub latest resolution (stable-only sources; no dev channel exists there).
