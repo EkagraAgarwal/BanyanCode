@@ -52,6 +52,23 @@ const STATUS_FILTER_VALUES: ReadonlyArray<StatusFilter> = [...(MEMORY_STATUSES a
 void KIND_FILTER_VALUES
 void STATUS_FILTER_VALUES
 
+const KIND_ORDER: ReadonlyArray<string> = [
+  "identity",
+  "preference",
+  "convention",
+  "constraint",
+  "decision",
+  "architecture",
+  "warning",
+  "failure",
+  "ownership",
+  "environment",
+  "pattern",
+  "summary",
+  "observation",
+  "todo",
+]
+
 function timeAgo(ts?: number) {
   if (!ts) return "—"
   const s = Math.floor((Date.now() - ts) / 1000)
@@ -104,6 +121,7 @@ function View(props: { api: TuiPluginApi }) {
   const [kindFilter, setKindFilter] = createSignal<string>("all")
   const [statusFilter, setStatusFilter] = createSignal<StatusFilter>("all")
   const [showSummary, setShowSummary] = createSignal(true)
+  const [expandedKinds, setExpandedKinds] = createSignal<ReadonlySet<string>>(new Set())
   const [actionError, setActionError] = createSignal<string | null>(null)
 
   const notify = (message: string) => {
@@ -225,6 +243,37 @@ function View(props: { api: TuiPluginApi }) {
     })
     return filtered.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
   })
+
+  const pendingEntries = createMemo<MemoryEntry[]>(() =>
+    filteredEntries().filter((entry) => entry.status === "pending"),
+  )
+
+  const kindSections = createMemo(() => {
+    const groups = new Map<string, MemoryEntry[]>()
+    for (const entry of filteredEntries()) {
+      if (entry.status === "pending") continue
+      const kind = entry.kind ?? "observation"
+      const list = groups.get(kind)
+      if (list) list.push(entry)
+      else groups.set(kind, [entry])
+    }
+    const known = KIND_ORDER.filter((kind) => groups.has(kind))
+    const unknown = Array.from(groups.keys())
+      .filter((kind) => !KIND_ORDER.includes(kind))
+      .sort()
+    return [...known, ...unknown].map((kind) => ({
+      kind,
+      count: groups.get(kind)!.length,
+      entries: groups.get(kind)!,
+    }))
+  })
+
+  const toggleKind = (kind: string) => {
+    const next = new Set(expandedKinds())
+    if (next.has(kind)) next.delete(kind)
+    else next.add(kind)
+    setExpandedKinds(next)
+  }
 
   const showDetail = (entry: MemoryEntry) => {
     const lines = [
@@ -368,7 +417,7 @@ function View(props: { api: TuiPluginApi }) {
         </box>
       </box>
 
-      <box flexDirection="row" gap={2} paddingLeft={2} paddingRight={2} paddingTop={1}>
+      <box flexDirection="row" gap={1} alignItems="center" paddingLeft={2} paddingRight={2} paddingTop={1}>
         <text fg={toHex(theme().textMuted)}>scope:</text>
         <text
           fg={toHex(scope() === "global" ? theme().primary : theme().textMuted)}
@@ -388,9 +437,7 @@ function View(props: { api: TuiPluginApi }) {
         >
           [session]
         </text>
-      </box>
-
-      <box flexDirection="row" gap={2} paddingLeft={2} paddingRight={2} paddingTop={1}>
+        <text fg={toHex(theme().textMuted)}>·</text>
         <text fg={toHex(theme().textMuted)}>kind:</text>
         <text
           fg={toHex(kindFilter() === "all" ? theme().primary : theme().text)}
@@ -398,9 +445,7 @@ function View(props: { api: TuiPluginApi }) {
         >
           [{kindFilter()} ▾]
         </text>
-      </box>
-
-      <box flexDirection="row" gap={2} paddingLeft={2} paddingRight={2} paddingTop={1}>
+        <text fg={toHex(theme().textMuted)}>·</text>
         <text fg={toHex(theme().textMuted)}>status:</text>
         <text
           fg={toHex(statusFilter() === "all" ? theme().primary : theme().text)}
@@ -430,7 +475,7 @@ function View(props: { api: TuiPluginApi }) {
         <box flexDirection="column" paddingTop={1} gap={0}>
           <Show when={entries() !== undefined && candidates() !== undefined} fallback={<LoadingState theme={theme()} />}>
             <Show
-              when={filteredEntries().length > 0}
+              when={pendingEntries().length > 0 || kindSections().length > 0}
               fallback={
                 <EmptyState
                   theme={theme()}
@@ -439,20 +484,61 @@ function View(props: { api: TuiPluginApi }) {
                 />
               }
             >
-              <For each={filteredEntries()}>
-                {(entry) => (
-                  <box paddingLeft={1} paddingRight={1} paddingBottom={1}>
-                    <MemoryCard
-                      entry={entry}
-                      theme={theme()}
-                      timeAgo={timeAgo}
-                      onShow={showDetail}
-                      onPromote={promote}
-                      onReject={reject}
-                      onForget={forget}
-                    />
-                  </box>
-                )}
+              <Show when={pendingEntries().length > 0}>
+                <GroupLabel label="PENDING CANDIDATES" theme={theme()} />
+                <For each={pendingEntries()}>
+                  {(entry) => (
+                    <box paddingLeft={1} paddingRight={1} paddingBottom={1}>
+                      <MemoryCard
+                        entry={entry}
+                        theme={theme()}
+                        timeAgo={timeAgo}
+                        onShow={showDetail}
+                        onPromote={promote}
+                        onReject={reject}
+                        onForget={forget}
+                      />
+                    </box>
+                  )}
+                </For>
+              </Show>
+              <For each={kindSections()}>
+                {(section) => {
+                  const expanded = () => expandedKinds().has(section.kind)
+                  const toggle = () => toggleKind(section.kind)
+                  return (
+                    <>
+                      <box flexDirection="row" alignItems="center" onMouseUp={toggle}>
+                        <text fg={toHex(theme().textMuted)} paddingLeft={2} paddingTop={1}>
+                          <b>{section.kind}</b>
+                        </text>
+                        <text fg={toHex(theme().textMuted)} paddingTop={1}>
+                          ({section.count})
+                        </text>
+                        <text fg={toHex(theme().textMuted)} paddingTop={1}>
+                          {expanded() ? "[▾]" : "[▸]"}
+                        </text>
+                      </box>
+                      <Show when={expanded()}>
+                        <For each={section.entries}>
+                          {(entry) => (
+                            <box paddingLeft={1} paddingRight={1} paddingBottom={1}>
+                              <MemoryCard
+                                entry={entry}
+                                theme={theme()}
+                                timeAgo={timeAgo}
+                                onShow={showDetail}
+                                onPromote={promote}
+                                onReject={reject}
+                                onForget={forget}
+                              />
+                            </box>
+                          )}
+                        </For>
+                      </Show>
+                    </>
+                  )
+                }}
               </For>
             </Show>
           </Show>
@@ -595,38 +681,39 @@ function MemoryCard(props: {
       border={["left", "right", "top", "bottom"]}
       borderColor={props.theme.border}
       customBorderChars={RoundedBorder.customBorderChars}
+      paddingLeft={1}
+      paddingRight={1}
+      paddingTop={0}
+      paddingBottom={0}
     >
-      <box
-        flexDirection="column"
-        backgroundColor={props.theme.background}
-        width="100%"
-        paddingLeft={1}
-        paddingRight={1}
-        paddingTop={1}
-        paddingBottom={1}
-        gap={0}
-      >
-        <box flexDirection="row" gap={1} alignItems="center" marginTop={0} marginBottom={0}>
-          <text fg={toHex(props.theme[status().color])}>{status().glyph}</text>
-          <text fg={toHex(props.theme.primary)}>
-            <b>{props.entry.kind ?? "observation"}:{props.entry.key}</b>
-          </text>
-          <text fg={toHex(props.theme.textMuted)}>v{props.entry.version}</text>
-          <box flexGrow={1} justifyContent="flex-end" flexDirection="row">
-            <text fg={toHex(props.theme.textMuted)}>{props.timeAgo(props.entry.updatedAt)}</text>
-          </box>
-        </box>
-        <text fg={toHex(props.theme.textMuted)} marginTop={0} marginBottom={0}>
-          {previewBody(props.entry)}
+      <box flexDirection="row" gap={1} alignItems="center">
+        <text fg={toHex(props.theme[status().color])}>{status().glyph}</text>
+        <text fg={toHex(props.theme.primary)}>
+          <b>{props.entry.kind ?? "observation"}:{props.entry.key}</b>
         </text>
-        <box flexDirection="row" gap={2} paddingTop={0} marginTop={0} marginBottom={0}>
-          <text fg={toHex(props.theme.info)} onMouseUp={show}>
-            open
-          </text>
-          <text fg={toHex(props.theme.error)} onMouseUp={() => props.onForget(props.entry)}>
-            forget
-          </text>
+        <text fg={toHex(props.theme.textMuted)}>v{props.entry.version}</text>
+        <box flexGrow={1} justifyContent="flex-end" flexDirection="row">
+          <text fg={toHex(props.theme.textMuted)}>{props.timeAgo(props.entry.updatedAt)}</text>
         </box>
+      </box>
+      <Show when={previewBody(props.entry)}>
+        <text fg={toHex(props.theme.textMuted)}>{previewBody(props.entry)}</text>
+      </Show>
+      <box flexDirection="row" gap={2} paddingTop={0}>
+        <text fg={toHex(props.theme.info)} onMouseUp={show}>
+          open
+        </text>
+        <Show when={isPending()}>
+          <text fg={toHex(props.theme.success)} onMouseUp={() => props.onPromote(props.entry)}>
+            promote
+          </text>
+          <text fg={toHex(props.theme.warning)} onMouseUp={() => props.onReject(props.entry)}>
+            reject
+          </text>
+        </Show>
+        <text fg={toHex(props.theme.error)} onMouseUp={() => props.onForget(props.entry)}>
+          forget
+        </text>
       </box>
     </box>
   )
@@ -647,7 +734,5 @@ const plugin: BuiltinTuiPlugin = {
   id,
   tui,
 }
-
-// PENDING CANDIDATES
 
 export default plugin
