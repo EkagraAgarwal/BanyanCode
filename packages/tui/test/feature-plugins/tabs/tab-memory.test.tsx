@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, test } from "bun:test"
+import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import { createSignal, onMount } from "solid-js"
 import TabMemory from "../../../src/feature-plugins/tabs/tab-memory"
@@ -45,6 +45,15 @@ function Harness(props: { children: any }) {
   )
 }
 
+function readTabMemory(): string {
+  const fs = require("fs") as typeof import("fs")
+  const path = require("path") as typeof import("path")
+  return fs.readFileSync(
+    path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-memory.tsx"),
+    "utf8",
+  )
+}
+
 test("tab-memory session_tab_memory slot renders without throwing", async () => {
   const [slotContent, setSlotContent] = createSignal<any>(null)
 
@@ -84,20 +93,17 @@ test("tab-memory session_tab_memory slot renders without throwing", async () => 
   }
 })
 
-test("tab-memory source uses RoundedBorder cards and an Add memory action, with no slash commands", () => {
-  const fs = require("fs") as typeof import("fs")
-  const path = require("path") as typeof import("path")
-  const source = fs.readFileSync(
-    path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-memory.tsx"),
-    "utf8",
-  )
-  expect(source).toContain("RoundedBorder")
+test("tab-memory source uses compact bottom-border rows and an Add memory action, with no slash commands", () => {
+  const source = readTabMemory()
   expect(source).toContain("[+ Add memory]")
   expect(source).toContain("openAddMemoryDialog")
-  expect(source).toContain("function GroupLabel")
   expect(source).toContain("function MemoryCard")
-  expect(source).toContain("function SummaryCard")
-  expect(source).toContain("PENDING CANDIDATES")
+  expect(source).toContain('border={["bottom"]}')
+  // No full rounded cards, no PENDING CANDIDATES / summary / group sections.
+  expect(source).not.toContain("RoundedBorder")
+  expect(source).not.toContain("PENDING CANDIDATES")
+  expect(source).not.toContain("function GroupLabel")
+  expect(source).not.toContain("function SummaryCard")
   expect(source).not.toContain("slashName")
   expect(source).not.toContain('slashName: "memory-add"')
   expect(source).not.toContain('slashName: "memory-search"')
@@ -121,117 +127,67 @@ test("app.tsx no longer registers the six memory slash commands", () => {
   expect(source).not.toContain("runMemorySummary")
 })
 
-test("SummaryCard source pushes the first content row below the top border", () => {
-  const fs = require("fs") as typeof import("fs")
-  const path = require("path") as typeof import("path")
-  const source = fs.readFileSync(
-    path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-memory.tsx"),
-    "utf8",
-  )
-  // The bordered container should set paddingTop={1} (or wrap content in a padded inner box)
-  // so the status row never collides with the rounded top border.
-  expect(source).toMatch(/function SummaryCard[\s\S]+paddingTop=\{1\}/)
+test("tab-memory scrollbox content column uses gap=0 with no gap=1 or marginTop spacers", () => {
+  const source = readTabMemory()
+  // The scroll content column holding the list must use gap={0} (config-tab
+  // compactness contract) so there is no blank row between adjacent cards.
+  expect(source).toContain('<box flexDirection="column" paddingTop={0} gap={0}>')
+  // No gap={1} inside the scrollbox region, and no manual marginTop spacers
+  // anywhere (mirrors tab-agents-compact-spacing.test.tsx).
+  const scrollMatch = source.match(/<scrollbox[\s\S]*?<\/scrollbox>/)
+  expect(scrollMatch).not.toBeNull()
+  expect(scrollMatch![0]).not.toMatch(/gap=\{1\}/)
+  expect(source).not.toMatch(/marginTop=\{1\}/)
 })
 
-test("SummaryCard wraps loading text in a layout-stable box (regression: refresh…hiddenobservation=3)", () => {
-  const fs = require("fs") as typeof import("fs")
-  const path = require("path") as typeof import("path")
-  const source = fs.readFileSync(
-    path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-memory.tsx"),
-    "utf8",
-  )
-  const startIdx = source.indexOf("function SummaryCard")
-  expect(startIdx).toBeGreaterThan(-1)
-  const tail = source.slice(startIdx)
-  // SummaryCard renders, in order: status row, optional loading box, optional
-  // decision/warning digests, action row with refresh+hide. The loading fallback
-  // must be wrapped in a box (not a bare <text>) so the column height stays
-  // stable when loading flips on/off and rows do not collapse onto the status
-  // row (the "refresh…hiddenobservation=3" regression).
-  expect(tail).toContain("loading…")
-  // kinds() default literal must not read like a kind name in the status row.
-  expect(tail).toContain('if (items.length === 0) return "—"')
-  // Inner column has a real row gap (>= 1) so summary/loading/controls separate.
-  expect(tail).toContain("gap={1}")
-  // Loading fallback wraps the <text> in a <box>.
-  const loadingBlockIdx = tail.indexOf("props.loading && !props.summary")
-  expect(loadingBlockIdx).toBeGreaterThan(-1)
-  const loadingBlock = tail.slice(loadingBlockIdx, tail.indexOf("</Show>", loadingBlockIdx))
-  expect(loadingBlock).toContain("<box")
-  expect(loadingBlock).toContain("</box>")
+test("tab-memory MemoryCard uses bottom-border only (no full rounded box)", () => {
+  const source = readTabMemory()
+  const card = source.slice(source.indexOf("function MemoryCard"))
+  expect(card).toContain('border={["bottom"]}')
+  expect(card).not.toContain('border={["left", "right", "top", "bottom"]}')
+  expect(source).not.toContain("RoundedBorder")
 })
 
-test("memory tab exposes compact kind/status selectors (no fact/file-note sentinels)", () => {
-  const fs = require("fs") as typeof import("fs")
-  const path = require("path") as typeof import("path")
-  const tab = fs.readFileSync(
-    path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-memory.tsx"),
-    "utf8",
-  )
-  // The chip walls are gone; the filter rows render a single labelled value
-  // that opens a DialogSelect. Hard-coded bogus kinds are still absent.
-  expect(tab).toContain("openKindPicker")
-  expect(tab).toContain("openStatusPicker")
-  expect(tab).toContain("DialogMemoryKind")
-  expect(tab).toContain("DialogMemoryStatus")
-  expect(tab).not.toContain('"file-note"')
-  expect(tab).not.toContain('"fact"')
-  expect(tab).not.toMatch(/For each=\{KIND_FILTER_VALUES\}/)
-  expect(tab).not.toMatch(/For each=\{STATUS_FILTER_VALUES\}/)
+test("tab-memory renders a single flat list (no sections, accordions, filters, or summary)", () => {
+  const source = readTabMemory()
+  // Flat list only: no pending/summary sections, no kind accordions, no
+  // scope/kind/status filter chrome, no picker dialogs.
+  expect(source).not.toContain("PENDING CANDIDATES")
+  expect(source).not.toContain("GroupLabel")
+  expect(source).not.toContain("toggleKind")
+  expect(source).not.toContain("expandedKinds")
+  expect(source).not.toContain("SummaryCard")
+  expect(source).not.toContain("openKindPicker")
+  expect(source).not.toContain("openStatusPicker")
+  expect(source).not.toContain("DialogMemoryKind")
+  expect(source).not.toContain("DialogMemoryStatus")
+  expect(source).not.toContain("kindFilter")
+  expect(source).not.toContain("statusFilter")
 })
 
-test("memory tab wires kindFilter and statusFilter into the list request source", () => {
-  const fs = require("fs") as typeof import("fs")
-  const path = require("path") as typeof import("path")
-  const tab = fs.readFileSync(
-    path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-memory.tsx"),
-    "utf8",
-  )
-  // The dead `filterStatus = undefined` / `filterKind = undefined` locals are gone.
-  expect(tab).not.toContain("const filterStatus = undefined")
-  expect(tab).not.toContain("const filterKind = undefined")
-  // The statusFilter signal must be created and forwarded to the request.
-  expect(tab).toContain('createSignal<StatusFilter>("all")')
-  expect(tab).toContain('createSignal<string>("all")')
-  // Status updates now flow through the compact picker callback.
-  expect(tab).toContain("setStatusFilter(value as StatusFilter)")
-  expect(tab).toContain("setKindFilter(value)")
-  // The list request payload sources status and kind from the resource source signal.
-  expect(tab).toContain("status: source.status,")
-  expect(tab).toContain("kind: source.kind,")
+test("tab-memory rows expose open and forget only (no promote/reject actions)", () => {
+  const source = readTabMemory()
+  // Slice the MemoryCard function body: its action row must be open + forget.
+  const card = source.slice(source.indexOf("function MemoryCard"))
+  expect(card).toContain("open")
+  expect(card).toContain("forget")
+  expect(card).not.toContain("promote")
+  expect(card).not.toContain("reject")
+  // forget still confirms before deleting.
+  expect(source).toContain("DialogConfirm")
 })
 
-test("memory tab renders compact kind/status selectors (no chip walls)", () => {
-  const fs = require("fs") as typeof import("fs")
-  const path = require("path") as typeof import("path")
-  const tab = fs.readFileSync(
-    path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-memory.tsx"),
-    "utf8",
-  )
-  // The responsive selector rows render a single labelled value, not a chip wall.
-  // Asserting the shape on the source protects against regression to the long chip row.
-  expect(tab).toMatch(/<text[^>]*>\s*kind:<\/text>/)
-  expect(tab).toMatch(/<text[^>]*>\s*status:<\/text>/)
-  expect(tab).toMatch(/\[{kindFilter\(\)} ▾\]/)
-  expect(tab).toMatch(/\[{statusFilter\(\)} ▾\]/)
-  // The two chip walls are gone.
-  expect(tab).not.toMatch(/For each=\{KIND_FILTER_VALUES\}/)
-  expect(tab).not.toMatch(/For each=\{STATUS_FILTER_VALUES\}/)
-})
-
-test("memory tab view body exposes picker handlers bound to DialogSelect dialogs", () => {
-  const fs = require("fs") as typeof import("fs")
-  const path = require("path") as typeof import("path")
-  const tab = fs.readFileSync(
-    path.resolve(__dirname, "../../../src/feature-plugins/tabs/tab-memory.tsx"),
-    "utf8",
-  )
-  // The compact selector rows must open the kind/status pickers, which call back
-  // into the existing signals and trigger a refresh.
-  expect(tab).toContain("const openKindPicker")
-  expect(tab).toContain("const openStatusPicker")
-  expect(tab).toMatch(/openKindPicker[\s\S]+?DialogMemoryKind[\s\S]+?setKindFilter\(value\)/)
-  expect(tab).toMatch(/openStatusPicker[\s\S]+?DialogMemoryStatus[\s\S]+?setStatusFilter\(value as StatusFilter\)/)
+test("tab-memory list request merges both scopes with no kind/status filters", () => {
+  const source = readTabMemory()
+  // The single list source fetches global + session and merges (scope toggle
+  // removed) with no kind/status filter and no separate candidates/summary
+  // resources.
+  expect(source).toContain('scope: "global"')
+  expect(source).toContain('scope: "session"')
+  expect(source).not.toContain("status: source.status")
+  expect(source).not.toContain("kind: source.kind")
+  expect(source).not.toContain("memory.candidates")
+  expect(source).not.toContain("memory.summary")
 })
 
 test("previewBody deliberately truncates long bodies to a single-line ellipsis", () => {
