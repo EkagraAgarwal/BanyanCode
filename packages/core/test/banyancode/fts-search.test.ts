@@ -168,4 +168,32 @@ describe("fts-search", () => {
     expect(hits.length).toBe(1)
     expect(hits[0].name).toBe("zzyzxMarker")
   })
+
+  test("multi-token AND-join: node matching all terms outranks node matching one", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    const hits = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+
+        yield* repo.putFile({ id: "f7", path: "src/session.ts", contentHash: "h7", language: "typescript", indexedAt: 1 })
+        yield* repo.putNode({ id: "n7a", fileID: "f7", kind: "function", name: "recoverSession", startLine: 1, endLine: 5, code: "function recoverSession() { return recovery }" })
+        yield* repo.putNode({ id: "n7b", fileID: "f7", kind: "function", name: "onlyRecovery", startLine: 6, endLine: 10, code: "function onlyRecovery() { return recovery }" })
+
+        return yield* repo.ftsSearchNodes({ query: "session recovery", limit: 10 })
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+
+    // AND-join (spec Phase 2 item 4): both tokens must match, so the node
+    // whose name/code contains BOTH "session" and "recovery" is found, and
+    // the node matching only "recovery" is not surfaced ahead of it.
+    expect(hits.length).toBeGreaterThanOrEqual(1)
+    const bothMatch = hits.find((h) => h.name === "recoverSession")
+    expect(bothMatch).toBeDefined()
+    expect(hits[0]!.name).toBe("recoverSession")
+  })
 })

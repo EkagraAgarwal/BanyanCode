@@ -756,8 +756,15 @@ export const layer = Layer.effect(
       if (!sanitized) return []
       const tokens = expandQueryToTokens(sanitized)
       if (tokens.length === 0) return []
-      const ftsQuery = tokens.map((t) => `"${t}"`).join(" OR ")
-      if (!ftsQuery) return []
+      // Multi-token queries join terms with AND (all terms must match) so
+      // "session recovery" no longer surfaces every node containing "session"
+      // OR "recovery". When the AND query returns zero hits we re-run with OR
+      // as a recall fallback — a single well-known identifier buried in the
+      // code column is better returned than missed entirely. Single-token
+      // queries always use OR (trivially the same as the bare term).
+      const quote = (t: string) => `"${t}"`
+      const andQuery = tokens.map(quote).join(" AND ")
+      const orQuery = tokens.map(quote).join(" OR ")
       type FTSRow = {
         id: string
         file_id: string
@@ -797,17 +804,26 @@ export const layer = Layer.effect(
       // ORDER BY bm25 ASC because FTS5's bm25() returns more-negative values
       // for better matches (negated sum of term-frequency / inverse-document-
       // frequency contributions, per the SQLite docs).
-      const rows: FTSRow[] = yield* db
-        .all<FTSRow>(sql`
-          SELECT n.id, n.file_id, n.kind, n.name, n.signature, n.start_line, n.end_line, n.code,
-                 bm25(codegraph_fts, 10.0, 3.0, 1.0) AS bm25
-          FROM codegraph_fts
-          INNER JOIN codegraph_nodes n ON n.rowid = codegraph_fts.rowid
-          WHERE codegraph_fts MATCH ${ftsQuery}
-          ORDER BY bm25
-          LIMIT ${limit}
-        `)
-        .pipe(Effect.orDie)
+      const runFts = (match: string): Effect.Effect<FTSRow[], never, never> =>
+        db
+          .all<FTSRow>(sql`
+            SELECT n.id, n.file_id, n.kind, n.name, n.signature, n.start_line, n.end_line, n.code,
+                   bm25(codegraph_fts, 10.0, 3.0, 1.0) AS bm25
+            FROM codegraph_fts
+            INNER JOIN codegraph_nodes n ON n.rowid = codegraph_fts.rowid
+            WHERE codegraph_fts MATCH ${match}
+            ORDER BY bm25
+            LIMIT ${limit}
+          `)
+          .pipe(Effect.orDie)
+
+      let rows: FTSRow[]
+      if (tokens.length >= 2) {
+        const andRows = yield* runFts(andQuery)
+        rows = andRows.length > 0 ? andRows : yield* runFts(orQuery)
+      } else {
+        rows = yield* runFts(orQuery)
+      }
       return rows.map((row) => ({
         id: row.id,
         fileID: row.file_id,
