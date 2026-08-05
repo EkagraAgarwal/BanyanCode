@@ -20,7 +20,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, LintInput, PreflightInput, SafeRenameInput, TestRunInput, ToolUsageResult, TypecheckInput, WebSearchFreeInput } from "../groups/global"
+import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodeFindInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, LintInput, PreflightInput, SafeRenameInput, TestRunInput, ToolUsageResult, TypecheckInput, WebSearchFreeInput } from "../groups/global"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
 import { statusFromMeta } from "@opencode-ai/core/banyancode/codegraph-readiness"
@@ -28,6 +28,7 @@ import { GraphMeta } from "@opencode-ai/core/banyancode/types"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import * as WebSearchFreeTool from "@opencode-ai/core/tool/websearch-free"
 import { parse as parseWebSearchFree } from "@opencode-ai/core/tool/websearch-free/parse"
+import * as CodeFindTool from "@opencode-ai/core/tool/code-find"
 import * as PreflightTool from "@opencode-ai/core/tool/preflight"
 import * as BlastRadiusTool from "@opencode-ai/core/tool/blast-radius"
 import * as SafeRenameTool from "@opencode-ai/core/tool/safe-rename"
@@ -656,6 +657,35 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       } satisfies typeof WebSearchFreeTool.Output.Type
     })
 
+    const settleCodeFindHandler = (
+      payload: typeof CodeFindInput.Type,
+      services: {
+        permission: PermissionV2Interface
+        repo: CodegraphRepoInterface
+        analyzer: CodegraphAnalyzerInterface
+        readiness: Banyan.CodegraphReadinessInterface
+      },
+    ): Effect.Effect<typeof CodeFindTool.Output.Type, InvalidRequestError, never> =>
+      Effect.gen(function* () {
+        const tool = CodeFindTool.makeCodeFindTool(services)
+        const call: ToolCall = {
+          type: "tool-call",
+          id: randomUUID(),
+          name: CodeFindTool.name,
+          input: payload as unknown as Record<string, unknown>,
+        }
+        const ctxTool: ToolNS.Context = {
+          sessionID: "global" as ToolNS.Context["sessionID"],
+          agent: "global" as ToolNS.Context["agent"],
+          assistantMessageID: "global" as ToolNS.Context["assistantMessageID"],
+          toolCallID: call.id,
+        }
+        const settleResult = yield* ToolNS.settle(tool, call, ctxTool).pipe(
+          Effect.mapError((err) => new InvalidRequestError({ message: err.message })),
+        )
+        return (settleResult as { structured: typeof CodeFindTool.Output.Type }).structured
+      })
+
     const settlePreflightHandler = (
       payload: typeof PreflightInput.Type,
       services: {
@@ -745,6 +775,21 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
         )
         return (settleResult as { structured: typeof SafeRenameTool.Output.Type }).structured
       })
+
+    const codeFindHandler = Effect.fn("GlobalHttpApi.codeFind")(function* (ctx: {
+      payload: typeof CodeFindInput.Type
+    }) {
+      const repo = yield* Banyan.CodegraphRepo
+      const analyzer = yield* Banyan.CodegraphAnalyzer
+      const readiness = yield* Banyan.CodegraphReadiness
+      const permission = yield* PermissionV2.Service
+      return yield* settleCodeFindHandler(ctx.payload, {
+        permission: permission as PermissionV2Interface,
+        repo: repo as CodegraphRepoInterface,
+        analyzer: analyzer as CodegraphAnalyzerInterface,
+        readiness,
+      })
+    })
 
     const preflightHandler = Effect.fn("GlobalHttpApi.preflight")(function* (ctx: {
       payload: typeof PreflightInput.Type
@@ -893,6 +938,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       .handle("codegraphEdges", codegraphEdgesHandler)
       .handle("banyanAgentSave", banyanAgentSaveHandler)
       .handle("websearchFree", websearchFreeHandler)
+      .handle("codeFind", codeFindHandler)
       .handle("preflight", preflightHandler)
       .handle("blastRadius", blastRadiusHandler)
       .handle("safeRename", safeRenameHandler)

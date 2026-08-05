@@ -13,6 +13,7 @@ import { CodegraphNodeSchema } from "@opencode-ai/core/banyancode/types"
 import { GraphMeta } from "@opencode-ai/core/banyancode/types"
 import { MeshStatus } from "@opencode-ai/core/banyancode/mesh-coordinator"
 import * as WebSearchFreeTool from "@opencode-ai/core/tool/websearch-free"
+import * as CodeFindTool from "@opencode-ai/core/tool/code-find"
 import * as PreflightTool from "@opencode-ai/core/tool/preflight"
 import * as BlastRadiusTool from "@opencode-ai/core/tool/blast-radius"
 import * as SafeRenameTool from "@opencode-ai/core/tool/safe-rename"
@@ -212,6 +213,9 @@ export const ToolUsageResult = Schema.Struct({
 export const WebSearchFreeInput = WebSearchFreeTool.Input
 export const WebSearchFreeResult = WebSearchFreeTool.Output
 
+export const CodeFindInput = CodeFindTool.Input
+export const CodeFindResult = CodeFindTool.Output
+
 export const PreflightInput = PreflightTool.Input
 export const PreflightResult = PreflightTool.Output
 
@@ -270,6 +274,7 @@ export const GlobalPaths = {
   banyanAgentOverride: "/global/banyan-agent-override",
   banyanAgentPrompt: "/global/banyan-agent-prompt",
   websearchFree: "/global/websearch-free",
+  codeFind: "/global/code-find",
   preflight: "/global/preflight",
   blastRadius: "/global/blast-radius",
   safeRename: "/global/safe-rename",
@@ -540,6 +545,18 @@ export const GlobalApi = HttpApi.make("global").add(
           summary: "DuckDuckGo web search",
           description:
             "Run a free web search using DuckDuckGo HTML. Honors BANYANCODE_DISABLE_WEBSEARCH=1 to disable the tool entirely.",
+        }),
+      ),
+      HttpApiEndpoint.post("codeFind", GlobalPaths.codeFind, {
+        payload: CodeFindInput,
+        success: described(CodeFindResult, "Symbol locator results"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.codeFind",
+          summary: "Symbol locator",
+          description:
+            "Top-level symbol locator across the codebase graph. Routes by intent — definition/callers/dependents/impact/find_file — and returns matches (CodegraphNode[]), files, diagnostics, and the resolved node ID. Mirrors the in-agent code_find tool.",
         }),
       ),
       HttpApiEndpoint.post("preflight", GlobalPaths.preflight, {

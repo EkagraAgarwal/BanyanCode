@@ -6852,6 +6852,73 @@ export type GlobalWebsearchFreeResponses = {
 
 export type GlobalWebsearchFreeResponse = GlobalWebsearchFreeResponses[keyof GlobalWebsearchFreeResponses]
 
+export type GlobalCodeFindData = {
+  /**
+   * Top-level symbol locator across the codebase graph. Routes to the right downstream tool based on `intent`. Always pass both `intent` and `target`.
+   */
+  body?: {
+    /**
+     * The kind of search to perform on the code graph. Pick exactly one based on what the user is asking: 'definition' to locate where a symbol is declared; 'callers' to find every place that invokes the symbol; 'dependents' to find symbols that depend on the target; 'impact' to compute direct + transitive blast radius; 'find_file' to locate a file by name. Every intent requires a non-empty `target`.
+     */
+    intent: "definition" | "callers" | "dependents" | "impact" | "find_file"
+    /**
+     * REQUIRED for every intent. The symbol name (e.g. 'MemoryRepo.update'), filename (e.g. 'memory-repo.ts'), or node ID (UUID:line-line). Never pass an empty string or omit this field — if no target is clear from the user's prompt, ask the user for one or call code_find with a different tool.
+     */
+    target: string
+    /**
+     * When true (recommended), if the exact symbol name isn't found the resolver falls back to Context.Service tag, code-substring, and name-like matching. Pass false only when the user explicitly asks for strict exact-name matching. When false and no exact match exists, the tool returns _diagnostic='target-not-resolved'.
+     */
+    includeKeywordFallback: boolean
+    /**
+     * Maximum number of results to return. Defaults to 50 when omitted. Pass a smaller value (e.g. 10) when the user wants a short list, or larger (e.g. 200) for broad exploration. Allowed range: 1-500.
+     */
+    limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path?: never
+  query?: never
+  url: "/global/code-find"
+}
+
+export type GlobalCodeFindErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalCodeFindError = GlobalCodeFindErrors[keyof GlobalCodeFindErrors]
+
+export type GlobalCodeFindResponses = {
+  /**
+   * Symbol locator results
+   */
+  200: {
+    matches: Array<{
+      node: BanyanCodegraphNode
+      derivation: "tag-fallback" | "name-exact" | "qualified-split" | "code-substring" | "name-like" | "fts-bm25"
+    }>
+    files: Array<{
+      path: string
+    }>
+    meta?: {
+      graphBuiltAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      graphVersion: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      graphCoverage: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalFiles: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalNodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalEdges: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    intent: string
+    dispatchedTo?: string
+    staleFiles?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    _diagnostic?: "symbol-not-in-graph" | "target-not-resolved" | "no-edges-found" | "empty-target" | "stale-graph"
+    resolvedNodeID?: string
+    resolvedDerivation?: "tag-fallback" | "name-exact" | "qualified-split" | "code-substring" | "name-like" | "fts-bm25"
+  }
+}
+
+export type GlobalCodeFindResponse = GlobalCodeFindResponses[keyof GlobalCodeFindResponses]
+
 export type GlobalPreflightData = {
   /**
    * Decision report for an upcoming edit: full candidate list, blast radius, touched event bridges, HTTP routes, configs, and structured risk tags. Use before any non-trivial rename or delete.

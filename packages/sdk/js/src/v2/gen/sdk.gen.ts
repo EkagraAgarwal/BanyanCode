@@ -112,6 +112,8 @@ import type {
   GlobalBanyanConfigUpdateResponses,
   GlobalBlastRadiusErrors,
   GlobalBlastRadiusResponses,
+  GlobalCodeFindErrors,
+  GlobalCodeFindResponses,
   GlobalCodegraphBuildErrors,
   GlobalCodegraphBuildResponses,
   GlobalCodegraphCancelErrors,
@@ -1887,6 +1889,45 @@ export class Global extends HeyApiClient {
         },
       },
     )
+  }
+
+  /**
+   * Symbol locator
+   *
+   * Top-level symbol locator across the codebase graph. Routes by intent — definition/callers/dependents/impact/find_file — and returns matches (CodegraphNode[]), files, diagnostics, and the resolved node ID. Mirrors the in-agent code_find tool.
+   */
+  public codeFind<ThrowOnError extends boolean = false>(
+    parameters?: {
+      intent?: "definition" | "callers" | "dependents" | "impact" | "find_file"
+      target?: string
+      includeKeywordFallback?: boolean
+      limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "intent" },
+            { in: "body", key: "target" },
+            { in: "body", key: "includeKeywordFallback" },
+            { in: "body", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<GlobalCodeFindResponses, GlobalCodeFindErrors, ThrowOnError>({
+      url: "/global/code-find",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 
   /**
