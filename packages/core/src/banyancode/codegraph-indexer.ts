@@ -9,7 +9,7 @@ import { Database } from "../database/database"
 import type { CodegraphEdge, CodegraphFile, CodegraphNode, CodegraphNodeKind } from "./types"
 import { getParserForPath } from "./langs/registry"
 import type { ParseResult } from "./langs/types"
-import { parseTypeScript } from "./langs/typescript"
+import { parseTypeScript, stripCommentsAndStrings } from "./langs/typescript"
 import { parsePython } from "./langs/python"
 import { ensureQuerySourcesLoaded } from "./langs/query-executor"
 import { extractTestFileImports } from "./codegraph-helpers"
@@ -774,6 +774,27 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       if (!specifier) continue
       const importedFiles = deriveModuleCandidates(owner.path, specifier)
       for (const imported of importedFiles) {
+        // Phase 5 (P8a): emit one `imports` edge per imported FILE — from
+        // the importing file's file-kind node to the imported file's
+        // file-kind node. Previously the declared `imports` edge kind was
+        // only used to build the in-scope node set and no edge was ever
+        // emitted, so `imports` never appeared in the graph. Dedup via the
+        // shared referenceEdgeKeys set (distinct `${from}->${to}:imports`
+        // key format) so a file imported by several statements yields one
+        // edge. The endpoint guard (nodeByID.has) keeps the edge from ever
+        // pointing at a node outside the current index window.
+        const importedFileNodeID = `${imported.id}:file`
+        if (nodeByID.has(importedFileNodeID)) {
+          const importKey = `${fileNode.id}->${importedFileNodeID}:imports`
+          if (!referenceEdgeKeys.has(importKey)) {
+            referenceEdgeKeys.add(importKey)
+            referenceEdges.push({
+              fromNodeID: fileNode.id,
+              toNodeID: importedFileNodeID,
+              kind: "imports",
+            })
+          }
+        }
         const importedNodes = nodesByFileID.get(imported.id) ?? []
         for (const node of importedNodes) {
           if (node.kind === "file") continue
@@ -836,8 +857,14 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       scoped.push(scopedNode)
       inScopeByName.set(scopedNode.name, scoped)
     }
+    // Phase 5 (P8b): strip comment and string-literal regions BEFORE the
+    // identifier scan and kind classification so a comment mentioning a
+    // symbol or a string like `"callBash("` cannot fabricate a
+    // `references`/`calls` edge. The original `nodeA.code` stays on the
+    // node unchanged — the strip is only for edge classification.
+    const strippedCode = stripCommentsAndStrings(nodeA.code)
     const identifiers = new Set<string>()
-    for (const m of nodeA.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
+    for (const m of strippedCode.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
       if (m[0].length >= 3 && inScopeByName.has(m[0])) identifiers.add(m[0])
     }
 
@@ -849,9 +876,9 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         if (nodeB.id === nodeA.id) continue
 
         const kind =
-          nodeA.kind === "class" && nodeA.code.includes(`extends ${name}`)
+          nodeA.kind === "class" && strippedCode.includes(`extends ${name}`)
             ? ("extends" as const)
-            : nodeA.code.includes(`${name}(`)
+            : strippedCode.includes(`${name}(`)
               ? ("calls" as const)
               : ("references" as const)
 

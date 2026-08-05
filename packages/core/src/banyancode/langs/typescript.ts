@@ -210,6 +210,88 @@ function extractInterfaceMembers(
   return members
 }
 
+// Strip comment and string-literal regions from source text so downstream
+// classification (identifier word-scans and `includes("extends ")` /
+// `includes(name + "(")` kind heuristics) never fires inside comments or
+// strings. Replaced regions become spaces/newlines (never removed entirely)
+// so line structure and token boundaries are preserved. Regex-v1 pragmatic
+// subset: `//` line comments, `/* */` block comments, `"..."` / `'...'`
+// strings, and `` `...` `` template literals (interpolations stripped whole).
+export function stripCommentsAndStrings(code: string): string {
+  const out: string[] = []
+  let i = 0
+  let lineComment = false
+  let blockComment = false
+  let inString: '"' | "'" | "`" | undefined = undefined
+  const len = code.length
+  while (i < len) {
+    const ch = code[i]!
+    const next = i + 1 < len ? code[i + 1]! : ""
+    if (lineComment) {
+      out.push(ch === "\n" ? "\n" : " ")
+      if (ch === "\n") lineComment = false
+      i++
+      continue
+    }
+    if (blockComment) {
+      if (ch === "*" && next === "/") {
+        out.push("  ")
+        i += 2
+        blockComment = false
+        continue
+      }
+      out.push(ch === "\n" ? "\n" : " ")
+      i++
+      continue
+    }
+    if (inString) {
+      if (ch === "\\") {
+        // Escape sequence: swallow the escaped char too.
+        out.push("  ")
+        i += 2
+        continue
+      }
+      if (ch === inString) {
+        out.push(" ")
+        inString = undefined
+        i++
+        continue
+      }
+      if (ch === "\n") {
+        // Unterminated string — treat the newline as the terminator.
+        out.push("\n")
+        inString = undefined
+        i++
+        continue
+      }
+      out.push(" ")
+      i++
+      continue
+    }
+    if (ch === "/" && next === "/") {
+      out.push("  ")
+      i += 2
+      lineComment = true
+      continue
+    }
+    if (ch === "/" && next === "*") {
+      out.push("  ")
+      i += 2
+      blockComment = true
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      out.push(" ")
+      inString = ch
+      i++
+      continue
+    }
+    out.push(ch)
+    i++
+  }
+  return out.join("")
+}
+
 export function parseTypeScript(content: string, fileID: string): ParseResult {
   const nodes: ParsedNode[] = []
   const edges: ParsedEdge[] = []
