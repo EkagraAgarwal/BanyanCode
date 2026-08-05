@@ -2,8 +2,9 @@ export * as CodegraphAnalyzer from "./codegraph-analyzer"
 
 import { Context, Effect, Layer, Schema } from "effect"
 import { CodegraphRepo } from "./codegraph-repo"
+import { bfsPure } from "./repository-intelligence/bfs"
 import { resolveGraphTargetPure } from "./symbol-resolver"
-import type { CodegraphNode } from "./types"
+import type { CodegraphEdgeKind, CodegraphNode } from "./types"
 
 export class SymbolNotFoundError extends Schema.TaggedErrorClass<SymbolNotFoundError>()("Banyan/SymbolNotFoundError", {
   symbol: Schema.String,
@@ -17,6 +18,31 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphAnalyzer") {}
+
+// Phase 3 (codegraph-tools-v2 P2): every traversal below runs through
+// `bfsPure` — the same batched frontier-swap primitive as
+// repository-intelligence — instead of per-node `edgesTo`/`edgesFrom` (N+1).
+// Edge queries are now O(depth): one `edgesToBatch`/`edgesFromBatch` per
+// frontier, with nodes fetched once via `nodesByIDs`.
+const CALLER_EDGE_KINDS: ReadonlySet<CodegraphEdgeKind> = new Set(["calls", "references"])
+// Every edge kind the indexer emits. `dependents`/`impact`/`walkTransitive`
+// are intentionally unfiltered on kind: anything that points at the symbol
+// is a dependent for impact-analysis purposes.
+const ALL_EDGE_KINDS: ReadonlySet<CodegraphEdgeKind> = new Set([
+  "imports",
+  "calls",
+  "extends",
+  "references",
+  "tested_by",
+  "configured_by",
+  "built_by",
+  "mounts",
+  "generated_from",
+])
+// 8 is enough for typical transitive impact; the UI truncates larger sets anyway.
+const TRANSITIVE_MAX_DEPTH = 8
+// Bounded so a wide graph can never materialize an unbounded result list.
+const TRANSITIVE_RESULT_LIMIT = 500
 
 export const layer = Layer.effect(
   Service,
@@ -41,9 +67,13 @@ export const layer = Layer.effect(
         if (!nodeID) {
           return yield* new SymbolNotFoundError({ symbol: input.function ?? input.nodeID ?? "unknown" })
         }
-        const edges = yield* repo.edgesTo(nodeID)
-        const callerIDs = [...new Set(edges.filter((e) => e.kind === "calls" || e.kind === "references").map((e) => e.fromNodeID))]
-        return yield* repo.nodesByIDs(callerIDs)
+        const run = yield* bfsPure(repo, {
+          start: [nodeID],
+          direction: "incoming",
+          edgeKinds: CALLER_EDGE_KINDS,
+          maxDepth: 1,
+        })
+        return run.results.map((r) => r.node)
       })
 
     const dependents = (input: { nodeID?: string; function?: string }): Effect.Effect<CodegraphNode[], SymbolNotFoundError> =>
@@ -56,9 +86,13 @@ export const layer = Layer.effect(
         // points at the symbol — extends, imports, calls, references, type-checks —
         // is a dependent for impact-analysis purposes. This mirrors what
         // `code_find intent=dependents` reported before the unification.
-        const edges = yield* repo.edgesTo(nodeID)
-        const dependentIDs = [...new Set(edges.map((e) => e.fromNodeID))]
-        return yield* repo.nodesByIDs(dependentIDs)
+        const run = yield* bfsPure(repo, {
+          start: [nodeID],
+          direction: "incoming",
+          edgeKinds: ALL_EDGE_KINDS,
+          maxDepth: 1,
+        })
+        return run.results.map((r) => r.node)
       })
 
     const impact = (input: { nodeID?: string; function?: string }): Effect.Effect<{ dependents: CodegraphNode[]; transitive: CodegraphNode[] }, SymbolNotFoundError> =>
@@ -67,57 +101,35 @@ export const layer = Layer.effect(
         if (!nodeID) {
           return yield* new SymbolNotFoundError({ symbol: input.function ?? input.nodeID ?? "unknown" })
         }
-        const direct = yield* dependents({ nodeID })
-        const upstreamTransitive = yield* walkTransitive({ nodeID, direction: "upstream" })
-        const seen = new Set<string>()
+        const run = yield* bfsPure(repo, {
+          start: [nodeID],
+          direction: "incoming",
+          edgeKinds: ALL_EDGE_KINDS,
+          maxDepth: TRANSITIVE_MAX_DEPTH,
+          resultLimit: TRANSITIVE_RESULT_LIMIT,
+        })
+        const dependents: CodegraphNode[] = []
         const transitive: CodegraphNode[] = []
-        for (const n of upstreamTransitive) {
-          if (!seen.has(n.id)) {
-            seen.add(n.id)
-            transitive.push(n)
-          }
+        // bfsPure marks visited at enqueue, so every node appears exactly once
+        // (a diamond reached via two parents yields a single result). Split on
+        // first-discovery depth, mirroring repository-intelligence/layer.ts.
+        for (const r of run.results) {
+          if (r.depth === 1) dependents.push(r.node)
+          else transitive.push(r.node)
         }
-        return { dependents: direct, transitive }
+        return { dependents, transitive }
       })
 
     const walkTransitive = (input: { nodeID: string; direction: "upstream" | "downstream"; maxDepth?: number }): Effect.Effect<CodegraphNode[]> =>
       Effect.gen(function* () {
-        const visited = new Set<string>()
-        const queue: Array<{ id: string; depth: number }> = [{ id: input.nodeID, depth: 0 }]
-        // 8 is enough for typical transitive impact; the UI truncates larger sets anyway.
-        const maxDepth = input.maxDepth ?? 8
-        const result: CodegraphNode[] = []
-        // Index-pointer drain instead of queue.shift(): shift() is O(n) per
-        // pop on arrays, which turns a wide BFS into an O(n^2) scan.
-        let head = 0
-
-        while (head < queue.length) {
-          const current = queue[head++]!
-          if (visited.has(current.id) || current.depth > maxDepth) continue
-          visited.add(current.id)
-
-          const edges = input.direction === "upstream"
-            ? yield* repo.edgesTo(current.id)
-            : yield* repo.edgesFrom(current.id)
-
-          const nextIDs: string[] = []
-          for (const edge of edges) {
-            const nextID = input.direction === "upstream" ? edge.fromNodeID : edge.toNodeID
-            if (!visited.has(nextID)) {
-              queue.push({ id: nextID, depth: current.depth + 1 })
-              nextIDs.push(nextID)
-            }
-          }
-          if (nextIDs.length > 0) {
-            // Dedupe before the DB roundtrip: a diamond (two parents pointing
-            // at the same child) enqueues the child twice because `visited` is
-            // only populated at process time, not discovery time.
-            const nodes = yield* repo.nodesByIDs([...new Set(nextIDs)])
-            result.push(...nodes)
-          }
-        }
-
-        return result
+        const run = yield* bfsPure(repo, {
+          start: [input.nodeID],
+          direction: input.direction === "upstream" ? "incoming" : "outgoing",
+          edgeKinds: ALL_EDGE_KINDS,
+          maxDepth: input.maxDepth ?? TRANSITIVE_MAX_DEPTH,
+          resultLimit: TRANSITIVE_RESULT_LIMIT,
+        })
+        return run.results.map((r) => r.node)
       })
 
     return Service.of({ callers, dependents, impact, walkTransitive })
