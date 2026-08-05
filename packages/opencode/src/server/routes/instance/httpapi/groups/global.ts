@@ -195,6 +195,20 @@ export const CodegraphRemoveResult = Schema.Struct({
   droppedFile: Schema.Boolean,
 })
 
+// Phase 6 (usage surface): a single `codegraph_tool_usage` row. Consumers
+// (the TUI sidebar widget) depend on these field names — `toolId` is the tool
+// registry id, `useCount` the lifetime invocation count, `lastUsedAt` the
+// epoch-seconds of the most recent invocation.
+export const ToolUsageRow = Schema.Struct({
+  toolId: Schema.String,
+  useCount: Schema.Number,
+  lastUsedAt: Schema.Number,
+}).annotate({ identifier: "ToolUsageRow" })
+
+export const ToolUsageResult = Schema.Struct({
+  tools: Schema.Array(ToolUsageRow),
+}).annotate({ identifier: "ToolUsageResult" })
+
 export const WebSearchFreeInput = WebSearchFreeTool.Input
 export const WebSearchFreeResult = WebSearchFreeTool.Output
 
@@ -247,6 +261,7 @@ export const GlobalPaths = {
   codegraphBuild: "/global/codegraph-build",
   codegraphRemove: "/global/codegraph-remove",
   codegraphStatus: "/global/codegraph-status",
+  toolUsage: "/global/tool-usage",
   startup: "/global/startup",
   banyanConfig: "/global/banyan-config",
   codegraphNodes: "/global/codegraph-nodes",
@@ -434,6 +449,16 @@ export const GlobalApi = HttpApi.make("global").add(
           summary: "Get persisted codegraph status",
           description:
             "Read the persisted codegraph build status (missing/ready/stale) plus graph metadata for the given root (defaults to the current workspace). Root validation happens at the HTTP boundary via WorkspaceIdentity.identityForRoot; the status is read from the same canonical per-root DB the build indexer writes to.",
+        }),
+      ),
+      HttpApiEndpoint.get("toolUsage", GlobalPaths.toolUsage, {
+        success: described(ToolUsageResult, "Most-used codegraph tools"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.toolUsage",
+          summary: "List tool usage",
+          description:
+            "Return the most-used tools from the `codegraph_tool_usage` table, ordered by use count (lifetime invocation count), capped at 50 rows. The same table drives the hot-tier promotion gate in the adapted tool catalog. Returns an empty list when BanyanCode is disabled.",
         }),
       ),
       HttpApiEndpoint.get("codegraphNodes", GlobalPaths.codegraphNodes, {

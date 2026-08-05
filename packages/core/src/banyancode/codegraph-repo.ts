@@ -166,6 +166,17 @@ export interface Interface {
    * per-file drift signal meta-age/coverage staleness cannot see.
    */
   readonly countStaleFiles: () => Effect.Effect<number, never, never>
+  /**
+   * Phase 6 (usage surface): read the `codegraph_tool_usage` rows most-used
+   * first. Consumers (HTTP `GET /global/tool-usage`, the TUI sidebar widget)
+   * surface tool adoption; the hot-tier promotion gate in `AdaptedCatalog`
+   * already reads the same table for the last-24h window.
+   */
+  readonly listToolUsage: () => Effect.Effect<
+    ReadonlyArray<{ toolId: string; useCount: number; lastUsedAt: number }>,
+    never,
+    never
+  >
   readonly putEdge: (edge: CodegraphEdge) => Effect.Effect<void, never, never>
   readonly putEdges: (edges: CodegraphEdge[]) => Effect.Effect<void, never, never>
   readonly getEdge: (id: string) => Effect.Effect<CodegraphEdge | undefined, never, never>
@@ -872,6 +883,20 @@ export const layer = Layer.effect(
         .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_files WHERE mtime_ms > indexed_at`)
         .pipe(Effect.orDie)
       return row?.c ?? 0
+    })
+
+    const listToolUsage = Effect.fn("CodegraphRepo.listToolUsage")(function* () {
+      const rows = yield* db
+        .all<{ tool_id: string; use_count: number; last_used_at: number }>(sql`
+          SELECT tool_id, use_count, last_used_at FROM codegraph_tool_usage
+          ORDER BY use_count DESC LIMIT 50
+        `)
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        toolId: row.tool_id,
+        useCount: row.use_count,
+        lastUsedAt: row.last_used_at,
+      }))
     })
 
     const edgesFrom = Effect.fn("CodegraphRepo.edgesFrom")(function* (nodeID: string) {
@@ -1639,6 +1664,7 @@ export const layer = Layer.effect(
       countEdges,
       countFiles,
       countStaleFiles,
+      listToolUsage,
       putEdge,
       putEdges,
       getEdge,

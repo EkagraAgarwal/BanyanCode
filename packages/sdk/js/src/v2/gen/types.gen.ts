@@ -5,10 +5,10 @@ export type ClientOptions = {
 }
 
 export type Event =
-  | EventModelsDevRefreshed
   | EventAccountAdded
   | EventAccountRemoved
   | EventAccountSwitched
+  | EventModelsDevRefreshed
   | EventPluginAdded
   | EventCatalogModelUpdated
   | EventSessionCreated
@@ -710,13 +710,6 @@ export type GlobalEvent = {
   payload:
     | {
         id: string
-        type: "models-dev.refreshed"
-        properties: {
-          [key: string]: unknown
-        }
-      }
-    | {
-        id: string
         type: "account.added"
         properties: {
           account: AuthInfo
@@ -736,6 +729,13 @@ export type GlobalEvent = {
           serviceID: string
           from?: string
           to?: string
+        }
+      }
+    | {
+        id: string
+        type: "models-dev.refreshed"
+        properties: {
+          [key: string]: unknown
         }
       }
     | {
@@ -2296,6 +2296,16 @@ export type BanyanConfig = {
 
 export type EffectHttpApiErrorServiceUnavailable = {
   _tag: "ServiceUnavailable"
+}
+
+export type ToolUsageRow = {
+  toolId: string
+  useCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  lastUsedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type ToolUsageResult = {
+  tools: Array<ToolUsageRow>
 }
 
 export type BanyanCodegraphNode = {
@@ -4886,14 +4896,6 @@ export type ReferenceInfo = {
   source: ReferenceLocalSource | ReferenceGitSource
 }
 
-export type EventModelsDevRefreshed = {
-  id: string
-  type: "models-dev.refreshed"
-  properties: {
-    [key: string]: unknown
-  }
-}
-
 export type EventAccountAdded = {
   id: string
   type: "account.added"
@@ -4917,6 +4919,14 @@ export type EventAccountSwitched = {
     serviceID: string
     from?: string
     to?: string
+  }
+}
+
+export type EventModelsDevRefreshed = {
+  id: string
+  type: "models-dev.refreshed"
+  properties: {
+    [key: string]: unknown
   }
 }
 
@@ -6628,6 +6638,31 @@ export type GlobalCodegraphStatusResponses = {
 
 export type GlobalCodegraphStatusResponse = GlobalCodegraphStatusResponses[keyof GlobalCodegraphStatusResponses]
 
+export type GlobalToolUsageData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/tool-usage"
+}
+
+export type GlobalToolUsageErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalToolUsageError = GlobalToolUsageErrors[keyof GlobalToolUsageErrors]
+
+export type GlobalToolUsageResponses = {
+  /**
+   * Most-used codegraph tools
+   */
+  200: ToolUsageResult
+}
+
+export type GlobalToolUsageResponse = GlobalToolUsageResponses[keyof GlobalToolUsageResponses]
+
 export type GlobalCodegraphNodesData = {
   body?: never
   path?: never
@@ -6906,6 +6941,7 @@ export type GlobalPreflightResponses = {
       totalNodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       totalEdges: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     }
+    staleFiles?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     generatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   }
 }
@@ -6951,6 +6987,7 @@ export type GlobalBlastRadiusResponses = {
     testsToRun: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     risk: "low" | "medium" | "high" | "unknown"
     graphStale?: boolean
+    staleFiles?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     meta?: {
       graphBuiltAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       graphVersion: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"

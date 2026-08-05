@@ -150,6 +150,8 @@ import type {
   GlobalStartupResponses,
   GlobalTestRunErrors,
   GlobalTestRunResponses,
+  GlobalToolUsageErrors,
+  GlobalToolUsageResponses,
   GlobalTypecheckErrors,
   GlobalTypecheckResponses,
   GlobalUpgradeErrors,
@@ -1819,6 +1821,18 @@ export class Global extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * List tool usage
+   *
+   * Return the most-used tools from the `codegraph_tool_usage` table, ordered by use count (lifetime invocation count), capped at 50 rows. The same table drives the hot-tier promotion gate in the adapted tool catalog. Returns an empty list when BanyanCode is disabled.
+   */
+  public toolUsage<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<GlobalToolUsageResponses, GlobalToolUsageErrors, ThrowOnError>({
+      url: "/global/tool-usage",
+      ...options,
     })
   }
 

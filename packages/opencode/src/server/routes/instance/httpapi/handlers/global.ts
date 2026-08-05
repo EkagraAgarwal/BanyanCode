@@ -20,7 +20,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, LintInput, PreflightInput, SafeRenameInput, TestRunInput, TypecheckInput, WebSearchFreeInput } from "../groups/global"
+import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, LintInput, PreflightInput, SafeRenameInput, TestRunInput, ToolUsageResult, TypecheckInput, WebSearchFreeInput } from "../groups/global"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
 import { statusFromMeta } from "@opencode-ai/core/banyancode/codegraph-readiness"
@@ -362,6 +362,18 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
         ),
       )
       return { started: true, root, dbPath, banyanDir: identity.banyanDir }
+    })
+
+    const toolUsageHandler = Effect.fn("GlobalHttpApi.toolUsage")(function* () {
+      const repoOpt = yield* Effect.serviceOption(Banyan.CodegraphRepo)
+      if (Option.isNone(repoOpt)) {
+        // BanyanCode is disabled (no CodegraphRepo in the app runtime): the
+        // usage table is a BanyanCode concept, so surface an empty list
+        // rather than failing the request.
+        return { tools: [] } satisfies typeof ToolUsageResult.Type
+      }
+      const rows = yield* repoOpt.value.listToolUsage()
+      return { tools: rows } satisfies typeof ToolUsageResult.Type
     })
 
     const codegraphStatusHandler = Effect.fn("GlobalHttpApi.codegraphStatus")(function* (ctx: {
@@ -876,6 +888,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       .handle("codegraphRemove", codegraphRemoveHandler)
       .handle("codegraphBuild", codegraphBuildHandler)
       .handle("codegraphStatus", codegraphStatusHandler)
+      .handle("toolUsage", toolUsageHandler)
       .handle("codegraphNodes", codegraphNodesHandler)
       .handle("codegraphEdges", codegraphEdgesHandler)
       .handle("banyanAgentSave", banyanAgentSaveHandler)
