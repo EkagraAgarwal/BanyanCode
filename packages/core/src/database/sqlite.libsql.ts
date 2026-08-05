@@ -146,7 +146,18 @@ const nativeLayer = (config: Config) =>
       const client = createClient({
         url,
       })
-      yield* Effect.addFinalizer(() => Effect.sync(() => { client.close() }))
+      // Teardown: checkpoint the WAL before close so a scoped DB (test tmpdirs
+      // in particular) releases its -wal/-shm locks synchronously instead of
+      // leaving them held past scope teardown — a fast test that finishes before
+      // the libsql driver settles would otherwise EBUSY on rm of the tempdir.
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => client.execute({ sql: "PRAGMA wal_checkpoint(TRUNCATE)", args: [] })).pipe(
+            Effect.ignore,
+          )
+          client.close()
+        }),
+      )
       // Apply PRAGMAs at startup
       yield* Effect.promise(() => client.execute({ sql: "PRAGMA journal_mode = WAL", args: [] }))
       yield* Effect.promise(() => client.execute({ sql: "PRAGMA synchronous = NORMAL", args: [] }))

@@ -303,6 +303,32 @@ describe("RepositoryIntelligence", () => {
     )
   })
 
+  test("query returns real ranking.score > 0 for an exact-name query", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        yield* seedFixture()
+        const ri = yield* RepositoryIntelligence.Service
+
+        // Phase 4 (P3): the hardcoded `ranking: { score: 0, signals: all 0 }`
+        // stub is replaced with rank() scores. An exact-name query must carry
+        // a non-zero score and a non-zero exact bucket.
+        const ctx = yield* ri.query({ query: "calculate" })
+        expect(ctx.ranking.score).toBeGreaterThan(0)
+        expect(ctx.ranking.signals.exact).toBeGreaterThan(0)
+        expect(ctx.ranking.signals.symbol).toBeGreaterThanOrEqual(0)
+        expect(ctx.ranking.signals.graph).toBeGreaterThanOrEqual(0)
+        expect(ctx.ranking.signals.git).toBe(0)
+        expect(ctx.ranking.signals.workspace).toBe(0)
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
   test("explain recovers Context.Service tag fallback", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.db")

@@ -252,11 +252,16 @@ function modeGraph(_query: string, _nodes: CodegraphNode[]): SearchResult[] {
   return []
 }
 
-// ─── Graph Signal (stubbed) ──────────────────────────────────────────────────
+// ─── Graph Signal (real, in_degree-based) ────────────────────────────────────
 
-function graphSignal(_nodeID: string, _edges: Map<string, { callers: number; callees: number }>): number {
-  // Stub: return 0. Graph expansion will be added in a future phase.
-  return 0
+// Per-node graph signal read from the indexed `in_degree` column (populated
+// by the indexer's `recomputeInDegree` pass — see codegraph-indexer.ts), so
+// the cascade never loads the edges table. Saturates at 10 connections, then
+// applies the per-neighbor weight; the call site additionally caps the added
+// score at WEIGHT_GRAPH_MAX (5.0).
+function graphSignal(node: CodegraphNode): number {
+  const inDegree = typeof node.inDegree === "number" ? node.inDegree : 0
+  return Math.min(inDegree, 10) * 0.5
 }
 
 // ─── Combined Search ─────────────────────────────────────────────────────────
@@ -431,23 +436,6 @@ export function makeService(repo: CodegraphRepo.Interface): Interface {
       const candidateSet = yield* repo.searchNodesLight({ name: query, limit: FUZZY_CANDIDATE_CAP })
       const allNodes = candidateSet as CodegraphNode[]
 
-      // The graph signal is currently a stub (returns 0) so the edge
-      // map is only used for the per-mode `.graph` field. The full
-      // edge list is loaded once per cascade — the Phase A BFS primitive
-      // already provides a richer edgesFromBatch / edgesToBatch path
-      // for callers that need real graph traversal.
-      const allEdges = yield* repo.listAllEdges()
-      const edgeMap = new Map<string, { callers: number; callees: number }>()
-      for (const edge of allEdges) {
-        const callers = edgeMap.get(edge.toNodeID) ?? { callers: 0, callees: 0 }
-        callers.callers++
-        edgeMap.set(edge.toNodeID, callers)
-
-        const callees = edgeMap.get(edge.fromNodeID) ?? { callers: 0, callees: 0 }
-        callees.callees++
-        edgeMap.set(edge.fromNodeID, callees)
-      }
-
       const modeResults: SearchResult[] = []
 
       for (const mode of modes) {
@@ -481,10 +469,12 @@ export function makeService(repo: CodegraphRepo.Interface): Interface {
             break
         }
 
-        // Add graph signal (currently stubbed to 0; preserved for
-        // back-compat with downstream consumers that read signals.graph).
+        // Add the per-node graph signal read from the indexed `in_degree`
+        // column (populated by the indexer's recomputeInDegree pass) — no
+        // edges-table load. `signals.graph` is kept for back-compat with
+        // downstream consumers that read it.
         results = results.map((r) => {
-          const gs = graphSignal(r.node.id, edgeMap)
+          const gs = graphSignal(r.node)
           const cappedGs = Math.min(gs, WEIGHT_GRAPH_MAX)
           return {
             ...r,

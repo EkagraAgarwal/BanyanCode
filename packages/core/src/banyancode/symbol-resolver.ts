@@ -63,7 +63,8 @@ export type ResolveRepo = Pick<
   | "findSymbolsByServiceTag"
   | "queryNodes"
   | "searchNodes"
-  | "listAllNodes"
+  | "searchNodesLight"
+  | "nodesByIDs"
   | "nodeByID"
   | "fileIDsByServiceName"
   | "filesByIDs"
@@ -183,8 +184,12 @@ export const resolveGraphTargetStrict = (
       const leaf = parts[parts.length - 1] ?? ""
       const parentName = parts.slice(0, -1).join(".")
       if (leaf && parentName) {
-        const allNodes = yield* repo.listAllNodes()
-        const validFileIDs = new Set(allNodes.filter((n) => n.name === parentName).map((n) => n.fileID))
+        // Phase 2 (P5): bound the qualified-split scan to a light projection
+        // (id/fileID/kind/name — the heavy `code` column is never selected).
+        // Full rows are fetched via nodesByIDs only for the candidate file
+        // scope that survives the filters.
+        const lightNodes = yield* repo.searchNodesLight({ limit: 1000 })
+        const validFileIDs = new Set(lightNodes.filter((n) => n.name === parentName).map((n) => n.fileID))
         for (const fileID of yield* repo.fileIDsByServiceName(parentName)) {
           validFileIDs.add(fileID)
         }
@@ -197,13 +202,18 @@ export const resolveGraphTargetStrict = (
           if (p && isTestFilePath(p)) validFileIDs.delete(id)
         }
         parentFileIDs = validFileIDs
-        const splitHits = allNodes.filter(
+        const splitHits = lightNodes.filter(
           (n) => n.name === leaf && validFileIDs.has(n.fileID) && (input.kind ? n.kind === input.kind : true),
         )
         tried.push("qualified-split")
         const filtered = input.fileID ? splitHits.filter((n) => n.fileID === input.fileID) : splitHits
         if (filtered.length > 0) {
-          return toResult(dedupeByID(filtered).slice(0, limit), "qualified-split")
+          // Fetch the full rows (including `code`) for the matched candidate
+          // scope, preserving the light-projection order so the head node is
+          // deterministic across rebuilds.
+          const fullByID = new Map((yield* repo.nodesByIDs(filtered.map((n) => n.id))).map((n) => [n.id, n]))
+          const full = filtered.map((n) => fullByID.get(n.id) ?? n)
+          return toResult(dedupeByID(full).slice(0, limit), "qualified-split")
         }
       }
     }
@@ -223,20 +233,31 @@ export const resolveGraphTargetStrict = (
     const leaf = target.includes(".") ? target.split(".").pop()!.toLowerCase() : lowerTarget
     const scoped = parentFileIDs !== undefined && parentFileIDs.size > 0
     const isShortLeaf = leaf.length < 6
-    const allNodes = yield* repo.listAllNodes()
     const nameMatches = (n: CodegraphNode): boolean => {
       // Scoped lookups trust the leaf name even when short — the parent file
       // scope is the disambiguator. Unscoped lookups keep the gate.
       if (isShortLeaf && !scoped) return false
       return n.name.toLowerCase() === lowerTarget || n.name.toLowerCase() === leaf
     }
-    const codeHitsRaw = allNodes.filter(
+    // Phase 2 (P5): bound the code-substring fallback to a light projection
+    // (never the heavy `code` column) and fetch full rows via nodesByIDs only
+    // for the bounded candidate set that survives the non-code gates — mirrors
+    // the `findTests` pattern in repository-intelligence/layer.ts: bounded
+    // candidate filter first, then nodesByIDs for the rows that need `code`.
+    // The code-OR (`n.code?.includes(lowerTarget)`) still runs against the
+    // fetched set so code-only matches (e.g. `Effect.gen` inside a class body)
+    // keep working within the bounded window.
+    const lightNodes = yield* repo.searchNodesLight({ limit: 1000 })
+    const gated = lightNodes.filter(
       (n) =>
         n.kind !== "file" &&
         (input.kind ? n.kind === input.kind : true) &&
         (!input.fileID || n.fileID === input.fileID) &&
-        (scoped ? parentFileIDs!.has(n.fileID) : true) &&
-        (nameMatches(n) || n.code?.toLowerCase().includes(lowerTarget) === true),
+        (scoped ? parentFileIDs!.has(n.fileID) : true),
+    )
+    const codeCandidates = gated.length > 0 ? yield* repo.nodesByIDs(gated.map((n) => n.id)) : []
+    const codeHitsRaw = codeCandidates.filter(
+      (n) => nameMatches(n) || n.code?.toLowerCase().includes(lowerTarget) === true,
     )
     const codeHits = sortBySpecificity(codeHitsRaw, lowerTarget)
     tried.push("code-substring")

@@ -4,6 +4,7 @@ import type { Interface as CodegraphRepoInterface } from "../codegraph-repo"
 import { resolveGraphTargetPure } from "../symbol-resolver"
 import { isTestFilePath } from "../codegraph-paths"
 import { bfsPure } from "./bfs"
+import { rank, type RankingResult } from "../ranking/rank"
 import { Service } from "./service"
 import type { Interface } from "./service"
 import type {
@@ -780,6 +781,56 @@ export const layer = Layer.effect(
             ? `Loosen focusDirs or pass none to search the whole graph.`
             : undefined
 
+        // Phase 4 (P3): real ranking via ranking/rank.ts — never ship zeros
+        // labeled as signals. Per-symbol features come from the same signals
+        // the search cascade uses: name equality (exact), FTS hit order
+        // (bm25), the indexed `in_degree` column (graph), and focusDirs
+        // membership (workspace). Traversal behavior is untouched — this is
+        // purely the ranking output.
+        const filePathByID = new Map<string, string>()
+        for (const f of allFiles) filePathByID.set(f.id, f.path.replace(/\\/g, "/"))
+        const queryLower = input.query.toLowerCase()
+        const normalizedFocusDirs =
+          (input.workspace?.focusDirs.length ?? 0) > 0
+            ? normalizeFocusDirs(input.workspace!.focusDirs, indexedRoot)
+            : []
+        const ftsOrder = new Map<string, number>()
+        ftsHits.forEach((hit, idx) => {
+          if (!ftsOrder.has(hit.id)) ftsOrder.set(hit.id, idx)
+        })
+        const rankedSymbols = rank(
+          symbols.map((n) => ({
+            candidate: n,
+            query: input.query,
+            exactMatch: n.name.toLowerCase() === queryLower,
+            prefixMatch: n.name.toLowerCase().startsWith(queryLower),
+            camelMatch: false,
+            snakeMatch: false,
+            bm25Score: ftsOrder.has(n.id)
+              ? Math.max(0, 1 - ftsOrder.get(n.id)! / Math.max(ftsHits.length, 1))
+              : 0,
+            fuzzyDistance: Infinity,
+            qualifiedMatch: false,
+            directCallers: n.inDegree ?? 0,
+            directCallees: 0,
+            gitFrequency: 0,
+            workspaceProximity:
+              normalizedFocusDirs.length > 0 &&
+              pathMatchesFocusDirs(filePathByID.get(n.fileID) ?? "", normalizedFocusDirs)
+                ? 1
+                : 0,
+            failingTests: 0,
+          })),
+        )
+        const topRanked = rankedSymbols.reduce<RankingResult | undefined>(
+          (best, r) => (best === undefined || r.score > best.score ? r : best),
+          undefined,
+        )
+        const ranking = topRanked ?? {
+          score: 0,
+          signals: { exact: 0, symbol: 0, graph: 0, git: 0, workspace: 0 },
+        }
+
         return {
           status,
           reason,
@@ -798,8 +849,9 @@ export const layer = Layer.effect(
           workspace: input.workspace,
           diagnostics,
           ranking: {
-            score: 0,
-            signals: { exact: 0, symbol: 0, graph: 0, git: 0, workspace: 0 },
+            score: ranking.score,
+            signals: ranking.signals,
+            workspace: input.workspace,
           },
           ...(symbolResult.ambiguity ? { ambiguity: symbolResult.ambiguity } : {}),
         } satisfies RepositoryContext

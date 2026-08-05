@@ -34,7 +34,7 @@ export const BANYAN_PUBLIC_TOOL_IDS = [
 export const BANYAN_INTERNAL_TOOL_IDS = [
   "codegraph_query", "codegraph_search", "codegraph_callers", "codegraph_dependents", "codegraph_impact",
   "codegraph_find_implementations", "codegraph_find_overrides", "codegraph_find_recursive", "codegraph_find_async", "codegraph_find_http_routes",
-  "repository_impact", "repository_symbols", "repository_relationships", "repository_ownership",
+  "repository_symbols", "repository_relationships", "repository_ownership",
 ] as const
 
 export const banyanToolLayer = () => Layer.mergeAll(
