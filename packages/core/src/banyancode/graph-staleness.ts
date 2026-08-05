@@ -4,6 +4,9 @@
  * age > 1 day = med, age > 7 days = high, coverage < 0.5 = high regardless of age.
  * meta === undefined (never built) is always high.
  */
+import { Effect } from "effect"
+import type { Interface as CodegraphRepoInterface } from "./codegraph-repo"
+
 export interface StaleResult {
   stale: boolean
   severity?: "med" | "high"
@@ -50,3 +53,27 @@ export function isStale(
   }
   return { stale: false }
 }
+
+/**
+ * Per-result staleness (Phase 1): given a set of file IDs, batch-fetch the
+ * file rows and count how many have an `mtimeMs` newer than their
+ * `indexedAt` — i.e. the file changed on disk after (or during) the snapshot
+ * the graph was built from. Returns `{ stale, staleFiles }` so tools can
+ * surface both the boolean flag (for a `stale-graph` diagnostic) and the
+ * count (for a `staleFiles` output field). Complements `isStale` (which is
+ * meta-age/coverage only and cannot see a graph built minutes ago whose
+ * files changed seconds ago).
+ */
+export const countStaleFilesFor = (
+  repo: CodegraphRepoInterface,
+  fileIDs: ReadonlyArray<string>,
+): Effect.Effect<{ stale: boolean; staleFiles: number }, never, never> =>
+  Effect.gen(function* () {
+    if (fileIDs.length === 0) return { stale: false, staleFiles: 0 }
+    const files = yield* repo.filesByIDs([...new Set(fileIDs)])
+    let staleFiles = 0
+    for (const f of files) {
+      if ((f.mtimeMs ?? 0) > f.indexedAt) staleFiles++
+    }
+    return { stale: staleFiles > 0, staleFiles }
+  })

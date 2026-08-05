@@ -9,6 +9,7 @@ import type { Interface as CodegraphReadinessInterface } from "../banyancode/cod
 import type { Interface as RepositoryIntelligenceInterface } from "../banyancode/repository-intelligence/service"
 import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan, isStale } from "../banyancode"
+import { countStaleFilesFor } from "../banyancode/graph-staleness"
 import { GraphMeta } from "../banyancode/types"
 import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
 import { traced } from "../observability/trace"
@@ -49,6 +50,9 @@ export const Output = Schema.Struct({
   testsToRun: Schema.Number,
   risk: Schema.Literals(["low", "medium", "high", "unknown"]),
   graphStale: Schema.optional(Schema.Boolean),
+  // Phase 1 (freshness): how many affected files have an mtime newer than
+  // their indexed_at — their indexed data may be stale. Absent when 0.
+  staleFiles: Schema.optional(Schema.Number),
   meta: Schema.optional(GraphMeta),
   resolved: Schema.Boolean,
   resolutionDerivation: Schema.optional(
@@ -136,6 +140,9 @@ export const computeBlastRadius = (
     const metaRow = yield* deps.repo.getMeta()
     const stale = isStale(staleInputFromMeta(metaRow))
     const metaOut = toGraphMeta(metaRow)
+    // Phase 1 (freshness): per-file drift over the affected file set — a
+    // fresh meta can still sit on top of files that changed after indexing.
+    const perFileStale = yield* countStaleFilesFor(deps.repo, [...seenFileIDs])
 
     // When the resolver fails to map the input to an indexed node we cannot
     // trust the count — `analyzer.impact` returns 0/0 for both "safe" and
@@ -154,7 +161,8 @@ export const computeBlastRadius = (
       resolved: isResolved,
       ...(metaOut ? { meta: metaOut } : {}),
       ...(resolutionDerivation ? { resolutionDerivation } : {}),
-      ...(stale.stale ? { graphStale: true } : {}),
+      ...(stale.stale || perFileStale.stale ? { graphStale: true } : {}),
+      ...(perFileStale.staleFiles > 0 ? { staleFiles: perFileStale.staleFiles } : {}),
     }
   })
 

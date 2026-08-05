@@ -219,6 +219,67 @@ describe("CodegraphReadiness", () => {
     expect(elapsed).toBeLessThan(2_000)
   })
 
+  // Phase 1 (freshness): `changedFiles` is populated from
+  // repo.countStaleFiles() even when the graph is structurally valid — the
+  // fast path must not silently claim `ready` while files changed on disk
+  // after the snapshot. Per-file drift is surfaced, never a rebuild trigger.
+  test("ensureReady reports changedFiles > 0 when files changed after indexing", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "readiness-changed-files.db")
+    const repoDir = path.join(tmp.path, "src")
+    const filePath = path.join(repoDir, "a.ts")
+    fs.mkdirSync(repoDir, { recursive: true })
+    fs.writeFileSync(filePath, "export const a = 1\n")
+
+    const layer = buildReadinessLayer(dbPath)
+    const { CodegraphRepo } = await import("@opencode-ai/core/banyancode/codegraph-repo")
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          // File indexed at T-60s whose mtime is now — changed on disk after
+          // the snapshot: mtimeMs > indexedAt.
+          yield* repo.putFile({
+            id: "f1",
+            path: filePath,
+            contentHash: "h1",
+            language: "typescript",
+            indexedAt: Date.now() - 60_000,
+            mtimeMs: Date.now(),
+          })
+          yield* repo.setMeta({
+            id: "singleton",
+            graphBuiltAt: Date.now() - 60_000,
+            graphVersion: 1,
+            graphCoverage: 1,
+            totalFiles: 1,
+            totalNodes: 0,
+            totalEdges: 0,
+            schemaVersion: CODEGRAPH_SCHEMA_VERSION,
+            indexedRoot: repoDir,
+          })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* CodegraphReadiness.Service
+          return yield* svc.ensureReady({ root: repoDir })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    expect(Exit.isSuccess(exit)).toBe(true)
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.reason).toBe("ready")
+      expect(exit.value.autoBuilt).toBe(false)
+      expect(exit.value.changedFiles).toBe(1)
+    }
+  })
+
   // Phase 2: age is now a warning, not a rebuild trigger. A graph built
   // 8 days ago but with content unchanged must return ready/false
   // (assuming structural conditions are fine). The 7-day threshold is

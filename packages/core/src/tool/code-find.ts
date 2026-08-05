@@ -4,6 +4,7 @@ import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import path from "path"
 import { Banyan, isStale } from "../banyancode"
+import { countStaleFilesFor } from "../banyancode/graph-staleness"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
 import type { CodegraphFile, CodegraphNode } from "../banyancode/types"
@@ -76,6 +77,9 @@ export const Output = Schema.Struct({
   meta: Schema.optional(GraphMeta),
   intent: Schema.String,
   dispatchedTo: Schema.optional(Schema.String),
+  // Phase 1 (freshness): how many of the matched files have an mtime newer
+  // than their indexed_at — data for those files may be stale. Absent when 0.
+  staleFiles: Schema.optional(Schema.Number),
   // `target-not-resolved` = resolver tried all strategies and missed.
   // `no-edges-found`    = target resolved, analyzer returned 0 results.
   // `empty-target`      = caller passed an empty `target`.
@@ -216,7 +220,6 @@ export const locationLayer = Layer.effectDiscard(
                   }
                 : undefined
               const stale = isStale(meta)
-              const staleDiagnostic = stale.stale ? ("stale-graph" as const) : undefined
 
               const resolveTarget = (
                 target: string,
@@ -264,15 +267,19 @@ export const locationLayer = Layer.effectDiscard(
                     }
                   }
                   const matches = resolved.candidates.map((n) => ({ node: n, derivation: resolved.derivation }))
+                  const matched = matches.slice(0, limit)
+                  const perFile = yield* countStaleFilesFor(repo, matched.map((m) => m.node.fileID))
+                  const staleGraph = stale.stale || perFile.stale ? ("stale-graph" as const) : undefined
                   return {
-                    matches: matches.slice(0, limit),
+                    matches: matched,
                     files: [],
                     meta,
                     intent: input.intent,
                     dispatchedTo: "codegraph_query",
                     resolvedNodeID: resolved.nodeID,
                     resolvedDerivation: resolved.derivation,
-                    ...(staleDiagnostic ? { _diagnostic: staleDiagnostic } : {}),
+                    ...(perFile.staleFiles > 0 ? { staleFiles: perFile.staleFiles } : {}),
+                    ...(staleGraph ? { _diagnostic: staleGraph } : {}),
                   }
                 }
                 case "callers": {
@@ -307,7 +314,12 @@ export const locationLayer = Layer.effectDiscard(
                   )
                   const matches = result.map((n) => ({ node: n, derivation: resolved.derivation }))
                   const isEmpty = matches.length === 0
-                  const _diagnostic = isEmpty ? ("no-edges-found" as const) : staleDiagnostic ?? undefined
+                  const perFile = yield* countStaleFilesFor(repo, matches.map((m) => m.node.fileID))
+                  const _diagnostic = isEmpty
+                    ? ("no-edges-found" as const)
+                    : stale.stale || perFile.stale
+                      ? ("stale-graph" as const)
+                      : undefined
                   return {
                     matches,
                     files: [],
@@ -316,6 +328,7 @@ export const locationLayer = Layer.effectDiscard(
                     dispatchedTo: "codegraph_callers",
                     resolvedNodeID: resolved.nodeID,
                     resolvedDerivation: resolved.derivation,
+                    ...(perFile.staleFiles > 0 ? { staleFiles: perFile.staleFiles } : {}),
                     ...(_diagnostic ? { _diagnostic } : {}),
                   }
                 }
@@ -351,7 +364,12 @@ export const locationLayer = Layer.effectDiscard(
                   )
                   const matches = result.map((n) => ({ node: n, derivation: resolved.derivation }))
                   const isEmpty = matches.length === 0
-                  const _diagnostic = isEmpty ? ("no-edges-found" as const) : staleDiagnostic ?? undefined
+                  const perFile = yield* countStaleFilesFor(repo, matches.map((m) => m.node.fileID))
+                  const _diagnostic = isEmpty
+                    ? ("no-edges-found" as const)
+                    : stale.stale || perFile.stale
+                      ? ("stale-graph" as const)
+                      : undefined
                   return {
                     matches,
                     files: [],
@@ -360,6 +378,7 @@ export const locationLayer = Layer.effectDiscard(
                     dispatchedTo: "codegraph_dependents",
                     resolvedNodeID: resolved.nodeID,
                     resolvedDerivation: resolved.derivation,
+                    ...(perFile.staleFiles > 0 ? { staleFiles: perFile.staleFiles } : {}),
                     ...(_diagnostic ? { _diagnostic } : {}),
                   }
                 }
@@ -446,7 +465,12 @@ export const locationLayer = Layer.effectDiscard(
                       ...aggregated.transitive.map((n) => ({ node: n, derivation: "name-exact" as const })),
                     ].slice(0, limit)
                     const isEmpty = matches.length === 0
-                    const _diagnostic = isEmpty ? ("no-edges-found" as const) : staleDiagnostic ?? undefined
+                    const perFile = yield* countStaleFilesFor(repo, matches.map((m) => m.node.fileID))
+                    const _diagnostic = isEmpty
+                      ? ("no-edges-found" as const)
+                      : stale.stale || perFile.stale
+                        ? ("stale-graph" as const)
+                        : undefined
                     return {
                       matches,
                       files: [],
@@ -454,6 +478,7 @@ export const locationLayer = Layer.effectDiscard(
                       intent: input.intent,
                       dispatchedTo: "codegraph_impact",
                       resolvedDerivation: "name-exact" as const,
+                      ...(perFile.staleFiles > 0 ? { staleFiles: perFile.staleFiles } : {}),
                       ...(_diagnostic ? { _diagnostic } : {}),
                     }
                   }
@@ -485,7 +510,12 @@ export const locationLayer = Layer.effectDiscard(
                     ...result.transitive.map((n) => ({ node: n, derivation: resolved.derivation })),
                   ].slice(0, limit)
                   const isEmpty = matches.length === 0
-                  const _diagnostic = isEmpty ? ("no-edges-found" as const) : staleDiagnostic ?? undefined
+                  const perFile = yield* countStaleFilesFor(repo, matches.map((m) => m.node.fileID))
+                  const _diagnostic = isEmpty
+                    ? ("no-edges-found" as const)
+                    : stale.stale || perFile.stale
+                      ? ("stale-graph" as const)
+                      : undefined
                   return {
                     matches,
                     files: [],
@@ -494,6 +524,7 @@ export const locationLayer = Layer.effectDiscard(
                     dispatchedTo: "codegraph_impact",
                     resolvedNodeID: resolved.nodeID,
                     resolvedDerivation: resolved.derivation,
+                    ...(perFile.staleFiles > 0 ? { staleFiles: perFile.staleFiles } : {}),
                     ...(_diagnostic ? { _diagnostic } : {}),
                   }
                 }
@@ -511,11 +542,13 @@ export const locationLayer = Layer.effectDiscard(
                   let files: { path: string }[]
                   let matches: { node: CodegraphNode; derivation: ResolutionDerivation }[]
                   let dispatchedTo: string
+                  let matchedFileIDs: ReadonlyArray<string> = []
 
                   if (looksLikeFilename || sep !== "") {
                     const pathFiltered = allFiles.filter((f) => f.path.endsWith(`${sep}${target}`)).slice(0, limit)
                     files = pathFiltered.map((f) => ({ path: f.path }))
                     const fileIDs = new Set(pathFiltered.map((f) => f.id))
+                    matchedFileIDs = [...fileIDs]
                     // Bounded per-fileID pushdown (no heavy `code` column)
                     // plus file-kind nodes named exactly `target`.
                     const symbolMatches: CodegraphNode[] = []
@@ -531,6 +564,7 @@ export const locationLayer = Layer.effectDiscard(
                     const symbolMatches = (yield* repo.searchNodesLight({ name: target, limit }))
                       .filter((n) => n.kind !== "file" && n.name === target)
                     const fileIDs = [...new Set(symbolMatches.map((n) => n.fileID))]
+                    matchedFileIDs = fileIDs
                     files = allFiles
                       .filter((f) => fileIDs.includes(f.id))
                       .slice(0, limit)
@@ -548,13 +582,16 @@ export const locationLayer = Layer.effectDiscard(
                     }
                   }
 
+                  const perFile = yield* countStaleFilesFor(repo, matchedFileIDs)
+                  const staleGraph = stale.stale || perFile.stale ? ("stale-graph" as const) : undefined
                   return {
                     matches,
                     files,
                     meta,
                     intent: input.intent,
                     dispatchedTo,
-                    ...(staleDiagnostic ? { _diagnostic: staleDiagnostic } : {}),
+                    ...(perFile.staleFiles > 0 ? { staleFiles: perFile.staleFiles } : {}),
+                    ...(staleGraph ? { _diagnostic: staleGraph } : {}),
                   }
                 }
               }

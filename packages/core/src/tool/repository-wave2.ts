@@ -2,6 +2,7 @@ import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import path from "path"
 import { Banyan, isStale } from "../banyancode"
+import { countStaleFilesFor } from "../banyancode/graph-staleness"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta, type ArchitecturalSlice as ArchitecturalSliceT,
   type RepositoryContext as RepositoryContextT,
@@ -540,9 +541,27 @@ export const locationLayer = Layer.effectDiscard(
               })
               const metaRow = yield* repo.getMeta()
               const staleResult = isStale(staleInputFromMeta(metaRow))
-              if (staleResult.stale && staleResult.reason && !ctx.reason) {
-                ;(ctx as { reason?: string; degraded?: boolean }).reason = `${staleResult.reason}; results may be incomplete`
-                ;(ctx as { reason?: string; degraded?: boolean }).degraded = true
+              // Phase 1 (freshness): per-file drift over the result's file
+              // set — a fresh meta can still sit on top of files that
+              // changed after indexing. Surfaced via the diagnostics array
+              // (wire schema unchanged).
+              const staleFilesResult = yield* countStaleFilesFor(repo, [
+                ...ctx.files.map((f) => f.id),
+                ...ctx.symbols.map((s) => s.fileID),
+                ...ctx.tests.map((t) => t.fileID),
+              ])
+              if ((staleResult.stale || staleFilesResult.stale) && !ctx.reason) {
+                const message = staleFilesResult.stale
+                  ? `${staleFilesResult.staleFiles} file(s) changed since index; run /codegraph-build`
+                  : `${staleResult.reason}; results may be incomplete`
+                const extended = ctx as {
+                  reason?: string
+                  degraded?: boolean
+                  diagnostics?: readonly { kind: string; message: string }[]
+                }
+                extended.reason = message
+                extended.degraded = true
+                extended.diagnostics = [...(ctx.diagnostics ?? []), { kind: "stale-graph", message }]
               }
               return contextToOutput(ctx, toGraphMeta(metaRow))
             }),
@@ -594,9 +613,25 @@ export const locationLayer = Layer.effectDiscard(
               })
               const metaRow = yield* repo.getMeta()
               const staleResult = isStale(staleInputFromMeta(metaRow))
-              if (staleResult.stale && staleResult.reason && !slc.reason) {
-                ;(slc as { reason?: string; degraded?: boolean }).reason = `${staleResult.reason}; results may be incomplete`
-                ;(slc as { reason?: string; degraded?: boolean }).degraded = true
+              const staleFilesResult = yield* countStaleFilesFor(repo, [
+                ...slc.entrypoints.map((s) => s.fileID),
+                ...slc.importantSymbols.map((s) => s.fileID),
+                ...slc.relatedTests.map((s) => s.fileID),
+                ...(slc.directCallers ?? []).map((s) => s.fileID),
+                ...(slc.transitiveDependents ?? []).map((s) => s.fileID),
+              ])
+              if ((staleResult.stale || staleFilesResult.stale) && !slc.reason) {
+                const message = staleFilesResult.stale
+                  ? `${staleFilesResult.staleFiles} file(s) changed since index; run /codegraph-build`
+                  : `${staleResult.reason}; results may be incomplete`
+                const extended = slc as {
+                  reason?: string
+                  degraded?: boolean
+                  diagnostics?: readonly { kind: string; message: string }[]
+                }
+                extended.reason = message
+                extended.degraded = true
+                extended.diagnostics = [...(slc.diagnostics ?? []), { kind: "stale-graph", message }]
               }
               return sliceToOutput(slc, toGraphMeta(metaRow))
             }),

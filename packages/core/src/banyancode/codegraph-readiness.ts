@@ -110,6 +110,12 @@ export const layer = Layer.effect(
         // Only need to know whether any file row exists — COUNT(*) avoids
         // materializing the whole file table just to check emptiness.
         const fileCount = yield* repo.countFiles()
+        // Phase 1 (freshness): per-file drift — rows whose mtime is newer
+        // than their indexed_at. Surface it as `changedFiles` so callers
+        // can see that files changed after the graph snapshot even when the
+        // graph is structurally valid (meta present, files indexed, root
+        // unchanged). Never a rebuild trigger; age stays advisory.
+        const staleCount = meta ? yield* repo.countStaleFiles() : 0
 
         // Phase 2: rebuild triggers. The mtime heuristic is gone — content
         // hash is the real signal and CodegraphIndexer refreshes
@@ -138,6 +144,7 @@ export const layer = Layer.effect(
             reason: "ready",
             autoBuilt: false,
             ...metaFields(meta),
+            changedFiles: staleCount,
             ...(ageWarning !== undefined ? { warning: ageWarning } : {}),
           }
           return result

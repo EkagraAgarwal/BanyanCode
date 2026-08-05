@@ -64,6 +64,7 @@ const mockCodegraphRepoLayer = Layer.succeed(
     searchNodes: () => Effect.succeed([]),
     countNodes: () => Effect.succeed(0),
     countEdges: () => Effect.succeed(0),
+    countStaleFiles: () => Effect.succeed(0),
     countFiles: () => Effect.succeed(0),
     putEdge: () => Effect.void,
     getEdge: () => Effect.succeed(undefined),
@@ -296,6 +297,7 @@ describe("code_find", () => {
         searchNodes: () => Effect.succeed([]),
         countNodes: () => Effect.succeed(1),
         countEdges: () => Effect.succeed(0),
+        countStaleFiles: () => Effect.succeed(0),
         countFiles: () => Effect.succeed(1),
         putEdge: () => Effect.void,
         getEdge: () => Effect.succeed(undefined),
@@ -389,6 +391,7 @@ describe("code_find", () => {
         searchNodes: () => Effect.succeed([]),
         countNodes: () => Effect.succeed(1),
         countEdges: () => Effect.succeed(0),
+        countStaleFiles: () => Effect.succeed(0),
         countFiles: () => Effect.succeed(1),
         putEdge: () => Effect.void,
         getEdge: () => Effect.succeed(undefined),
@@ -500,6 +503,7 @@ describe("code_find", () => {
         searchNodes: () => Effect.succeed([]),
         countNodes: () => Effect.succeed(2),
         countEdges: () => Effect.succeed(0),
+        countStaleFiles: () => Effect.succeed(0),
         countFiles: () => Effect.succeed(1),
         putEdge: () => Effect.void,
         getEdge: () => Effect.succeed(undefined),
@@ -523,11 +527,17 @@ describe("code_find", () => {
         bumpVersion: () =>
           Effect.succeed({ graphVersion: 1, coverage: 1, totalNodes: 0, totalEdges: 0, totalFiles: 0, graphBuiltAt: 0 }),
         bumpIndexedAt: () => Effect.void,
-        nodesByIDs: () => Effect.succeed([]),
+        nodesByIDs: (ids: string[]) =>
+          Effect.succeed([authClass, loginMethod].filter((n) => ids.includes(n.id))),
         putEdges: () => Effect.void,
         rebuildFtsIndex: () => Effect.succeed({ rowsIndexed: 0 }),
         recomputeInDegree: () => Effect.void,
-        searchNodesLight: () => Effect.succeed([]),
+        // Phase 2 (P5): the resolver's qualified-split step reads a light
+        // projection (no `code` column) instead of listAllNodes.
+        searchNodesLight: () =>
+          Effect.succeed(
+            [{ ...authClass }, { ...loginMethod }].map(({ code: _code, ...rest }) => rest),
+          ),
         ftsSearchNodes: () => Effect.succeed([]),
         nodesByFileIDs: () => Effect.succeed([]),
         dependentsOfFiles: () => Effect.succeed([]),

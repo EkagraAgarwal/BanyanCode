@@ -11,6 +11,7 @@ import type { Interface as CodegraphReadinessInterface } from "../banyancode/cod
 import type { Interface as RepositoryIntelligenceInterface } from "../banyancode/repository-intelligence/service"
 import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan, isStale } from "../banyancode"
+import { countStaleFilesFor } from "../banyancode/graph-staleness"
 import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
@@ -96,6 +97,9 @@ export const Output = Schema.Struct({
   risks: Schema.Array(RiskSchema),
   derivation: DerivationLiterals,
   meta: Schema.optional(GraphMeta),
+  // Phase 1 (freshness): how many caller files have an mtime newer than
+  // their indexed_at — their indexed data may be stale. Absent when 0.
+  staleFiles: Schema.optional(Schema.Number),
   generatedAt: Schema.Number,
 })
 
@@ -372,6 +376,16 @@ export const computePreflight = (
         message: stale.reason,
       })
     }
+    // Phase 1 (freshness): per-file drift over the caller file set — a
+    // fresh meta can still sit on top of files that changed after indexing.
+    const perFileStale = yield* countStaleFilesFor(deps.repo, [...fileIDs])
+    if (perFileStale.stale && !stale.stale) {
+      risks.push({
+        kind: "stale-graph",
+        severity: "high",
+        message: `${perFileStale.staleFiles} file(s) changed since index; run /codegraph-build`,
+      })
+    }
 
     const graphMetaOut = toGraphMeta(metaRow)
     return {
@@ -386,6 +400,7 @@ export const computePreflight = (
       risks,
       derivation: "regex-v1" as const,
       ...(graphMetaOut ? { meta: graphMetaOut } : {}),
+      ...(perFileStale.staleFiles > 0 ? { staleFiles: perFileStale.staleFiles } : {}),
       generatedAt: now,
     }
   })

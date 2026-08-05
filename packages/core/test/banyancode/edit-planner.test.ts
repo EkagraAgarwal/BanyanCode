@@ -37,6 +37,7 @@ const makeMockRepo = (options: {
       searchNodes: () => Effect.succeed([]),
       countNodes: () => Effect.succeed(options.nodes?.length ?? 0),
       countEdges: () => Effect.succeed(0),
+      countStaleFiles: () => Effect.succeed(0),
       countFiles: () => Effect.succeed(0),
       edgesFrom: () => Effect.succeed([]),
       edgesTo: () => Effect.succeed([]),

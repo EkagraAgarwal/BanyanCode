@@ -159,6 +159,13 @@ export interface Interface {
   readonly countNodes: () => Effect.Effect<number, never, never>
   readonly countEdges: () => Effect.Effect<number, never, never>
   readonly countFiles: () => Effect.Effect<number, never, never>
+  /**
+   * Phase 1 (freshness): count file rows whose `mtime_ms` is newer than
+   * their `indexed_at` — i.e. files whose content changed on disk after
+   * (or during) the snapshot the graph was built from. This is the
+   * per-file drift signal meta-age/coverage staleness cannot see.
+   */
+  readonly countStaleFiles: () => Effect.Effect<number, never, never>
   readonly putEdge: (edge: CodegraphEdge) => Effect.Effect<void, never, never>
   readonly putEdges: (edges: CodegraphEdge[]) => Effect.Effect<void, never, never>
   readonly getEdge: (id: string) => Effect.Effect<CodegraphEdge | undefined, never, never>
@@ -856,6 +863,13 @@ export const layer = Layer.effect(
     const countFiles = Effect.fn("CodegraphRepo.countFiles")(function* () {
       const row = yield* db
         .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_files`)
+        .pipe(Effect.orDie)
+      return row?.c ?? 0
+    })
+
+    const countStaleFiles = Effect.fn("CodegraphRepo.countStaleFiles")(function* () {
+      const row = yield* db
+        .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_files WHERE mtime_ms > indexed_at`)
         .pipe(Effect.orDie)
       return row?.c ?? 0
     })
@@ -1624,6 +1638,7 @@ export const layer = Layer.effect(
       countNodes,
       countEdges,
       countFiles,
+      countStaleFiles,
       putEdge,
       putEdges,
       getEdge,
