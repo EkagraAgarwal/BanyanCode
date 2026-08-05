@@ -1481,7 +1481,7 @@ export const layer = Layer.effect(
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
               MessageV2.toModelMessagesEffect(msgs, model),
-              sys.codegraph(),
+              sys.codegraph(tools),
             ])
             const system = [...env, ...instructions, ...(codegraph ? [codegraph] : []), ...(skills ? [skills] : [])]
             const format = lastUser.format ?? { type: "text" as const }

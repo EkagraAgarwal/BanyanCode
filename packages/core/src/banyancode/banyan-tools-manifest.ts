@@ -23,7 +23,7 @@ import { WebSearchFreeTool } from "../tool/websearch-free"
 
 export const BANYAN_PUBLIC_TOOL_IDS = [
   "codegraph_build", "codegraph_remove", "code_find",
-  "repository_query", "repository_explain", "repository_trace", "repository_tests",
+  "repository_query", "repository_explain", "repository_impact", "repository_trace", "repository_tests",
   "blast_radius", "preflight", "safe_rename", "edit_plan", "websearch_free",
   "memory_store", "memory_recall", "memory_list", "memory_search", "memory_forget", "memory_candidate_emit",
   "shared_memory", "mesh_control", "mesh_subscribe", "subagent_message", "system_status", "goal",

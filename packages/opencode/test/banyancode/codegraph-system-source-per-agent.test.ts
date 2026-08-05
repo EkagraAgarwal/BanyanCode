@@ -68,10 +68,12 @@ describe("BanyanCode tool guide — per-agent x model matrix", () => {
             for (const t of FORBIDDEN_TOOLS) {
               expect(guide).not.toContain(t)
             }
-            // ADVANCED tools (codegraph_impact, repository_impact) are NOT in
+            // ADVANCED tools (codegraph_impact) are NOT in
             // the source's BANYAN_TOOL_IDS allowlist, so they are filtered
             // out before rendering regardless of model strength. Model-strength
             // filtering is the upstream ToolRegistry's job.
+            // repository_impact is a REQUIRED public tool (registered with
+            // visibility "public") and must appear in the guide.
             for (const t of ADVANCED_TOOLS) {
               expect(guide).not.toContain(t)
             }

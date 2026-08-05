@@ -399,6 +399,7 @@ describe("v2 probe baseline — anti-slop tool contract", () => {
       "code_find",
       "repository_query",
       "repository_explain",
+      "repository_impact",
       "repository_trace",
       "repository_tests",
       "blast_radius",

@@ -1,5 +1,6 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Context, Effect, Layer, Option } from "effect"
+import type { Tool as AITool } from "ai"
 
 import { InstanceState } from "@/effect/instance-state"
 
@@ -42,7 +43,7 @@ export function provider(model: Provider.Model) {
 export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
-  readonly codegraph: () => Effect.Effect<string | undefined>
+  readonly codegraph: (tools?: Record<string, AITool>) => Effect.Effect<string | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SystemPrompt") {}
@@ -107,9 +108,19 @@ export const layer = Layer.effect(
         ].join("\n")
       }),
 
-      codegraph: Effect.fn("SystemPrompt.codegraph")(function* () {
+      codegraph: Effect.fn("SystemPrompt.codegraph")(function* (tools?: Record<string, AITool>) {
         const enabled = process.env.BANYANCODE_ENABLE !== "0"
         if (!enabled) return
+
+        // Map the resolved AI-SDK tool set into the source's
+        // CodegraphToolDescription shape so the rendered guide carries the
+        // per-tool descriptions the model will see in its function list.
+        const descriptions = tools
+          ? Object.entries(tools).map(([id, tool]) => ({
+              id,
+              description: tool.description ?? "",
+            }))
+          : undefined
 
         // Prefer the BanyanCode source module when it is in scope (e.g. tests
         // that provide the layer, or future wiring via `defaultLayer`). Falls
@@ -118,7 +129,7 @@ export const layer = Layer.effect(
         // for graph + repository tools over grep/glob/bash.
         const source = yield* Effect.serviceOption(Banyan.CodegraphSystemSource)
         return yield* Option.match(source, {
-          onSome: (svc) => svc.load(),
+          onSome: (svc) => svc.load(descriptions === undefined ? undefined : { tools: descriptions }),
           onNone: () => Effect.succeed(Banyan.CodegraphSystemSourceNS.POLICY_TEXT),
         })
       }),

@@ -16,6 +16,7 @@ export const REQUIRED_TOOLS = [
   "code_find",
   "repository_query",
   "repository_explain",
+  "repository_impact",
   "repository_trace",
   "repository_tests",
   "blast_radius",
@@ -57,7 +58,7 @@ export const FORBIDDEN_TOOLS = [
 
 // Strong-model-only tools — only emitted when the upstream consumer
 // (ToolRegistry) has decided the model is strong enough to see them.
-export const ADVANCED_TOOLS = ["codegraph_impact", "repository_impact"] as const
+export const ADVANCED_TOOLS = ["codegraph_impact"] as const
 
 // Model strengths mirror `tool-visibility.test.ts:117-128` + the addition
 // of `minimax-M3` (this product's default model).
