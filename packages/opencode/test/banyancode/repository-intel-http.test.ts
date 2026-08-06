@@ -60,14 +60,23 @@ describe("repository-intel HttpApi", () => {
     }),
   )
 
-  it.live("tests returns array of test nodes", () =>
+  it.live("tests returns detailed TestsOutput shape", () =>
     Effect.gen(function* () {
       const response = yield* HttpClientRequest.post(RepositoryIntelPaths.tests).pipe(
-        HttpClientRequest.bodyJson({ symbol: "build" }),
+        HttpClientRequest.bodyJson({ symbol: "build", limit: 5 }),
         Effect.flatMap(HttpClient.execute),
       )
       expect(response.status).toBe(200)
-      expect(Array.isArray(yield* response.json)).toBe(true)
+      const body = (yield* response.json) as {
+        tests: unknown[]
+        testsDetailed?: unknown[]
+        derivation: string
+        notFound: boolean
+        fallbackReason?: string
+      }
+      expect(Array.isArray(body.tests)).toBe(true)
+      expect(typeof body.derivation).toBe("string")
+      expect(typeof body.notFound).toBe("boolean")
     }),
   )
 

@@ -1,8 +1,10 @@
-import type { ArchitecturalSlice, CodegraphFile, CodegraphNode } from "../banyancode/types"
+import type { ArchitecturalSlice, CodegraphFile, CodegraphNode, TestMatchDerivation } from "../banyancode/types"
 
 const MAX_ITEMS_PER_OUTPUT = 50
 
 type OwnershipEntry = { path: string; count: number }
+
+type DetailedTest = { node: CodegraphNode; derivation: TestMatchDerivation | "none"; confidence: number }
 
 export type FormatRepositoryContext = {
   status?: "success" | "partial" | "failed"
@@ -15,6 +17,7 @@ export type FormatRepositoryContext = {
   files: readonly CodegraphFile[]
   graph: { nodes: readonly CodegraphNode[]; edges: ReadonlyArray<unknown> }
   tests: readonly CodegraphNode[]
+  testsDetailed?: readonly DetailedTest[]
   docs: readonly CodegraphFile[]
   configs: readonly CodegraphFile[]
   git: {
@@ -22,6 +25,8 @@ export type FormatRepositoryContext = {
     ownership: ReadonlyArray<OwnershipEntry> | ReadonlyMap<string, number>
   }
   diagnostics?: readonly { kind: string; message: string }[]
+  ambiguity?: { total: number; kept: number }
+  searchDerivation?: string
 }
 
 const truncate = (s: string, max: number): string =>
@@ -62,6 +67,20 @@ export type FormatArchitecturalSlice = ArchitecturalSlice & {
   diagnostics?: readonly { kind: string; message: string }[]
 }
 
+const renderDetailedTestsBlock = (detailed: readonly DetailedTest[] | undefined, tests: readonly CodegraphNode[], header: string): string => {
+  if (tests.length === 0) return `${header}: none.`
+  if (detailed && detailed.length > 0) {
+    const visible = detailed.slice(0, MAX_ITEMS_PER_OUTPUT)
+    const lines = visible.map(
+      (r) => `${r.node.kind} ${r.node.name} (${r.node.fileID}:${r.node.startLine}-${r.node.endLine}) [${r.derivation}, conf ${r.confidence}]`,
+    )
+    const remaining = tests.length - visible.length
+    const tail = remaining > 0 ? `\n... and ${remaining} more.` : ""
+    return `${header} (${tests.length}):\n${lines.join("\n")}${tail}`
+  }
+  return renderNodesBlock(tests, header)
+}
+
 export const formatArchitecturalSlice = (slice: FormatArchitecturalSlice): string => {
   const statusLines: string[] = []
   if (slice.status) {
@@ -91,7 +110,7 @@ export const formatArchitecturalSlice = (slice: FormatArchitecturalSlice): strin
       : []),
     renderNodesBlock(slice.importantSymbols, "Important symbols"),
     renderNodesBlock(slice.routes, "Routes"),
-    renderNodesBlock(slice.relatedTests, "Related tests"),
+    renderDetailedTestsBlock(slice.relatedTestsDetailed, slice.relatedTests, "Related tests"),
     renderFilesBlock(slice.relatedDocs, "Related docs"),
     renderFilesBlock(slice.configs, "Configs"),
     `Dependencies (${slice.dependencies.length}): ${
@@ -129,6 +148,12 @@ export const formatRepositoryContext = (ctx: FormatRepositoryContext): string =>
     if (ctx.recoveryHint) statusLines.push(`Recovery Hint: ${ctx.recoveryHint}`)
     if (ctx.fallbackUsed) statusLines.push(`[Note: resolved via Context.Service tag fallback]`)
   }
+  if (ctx.ambiguity && ctx.ambiguity.total > 1) {
+    statusLines.push(`[Note: "${ctx.query}" matched ${ctx.ambiguity.total} candidate nodes; ${ctx.ambiguity.kept} shown — pass focusDirs to disambiguate]`)
+  }
+  if (ctx.searchDerivation) {
+    statusLines.push(`[Note: symbol resolution derivation: ${ctx.searchDerivation}]`)
+  }
 
   const noteLines: string[] = []
   if (ctx.diagnostics && ctx.diagnostics.length > 0) {
@@ -144,7 +169,7 @@ export const formatRepositoryContext = (ctx: FormatRepositoryContext): string =>
     `Repository query: ${ctx.query}`,
     renderNodesBlock(ctx.symbols, "Symbols"),
     renderFilesBlock(ctx.files, "Files"),
-    renderNodesBlock(ctx.tests, "Tests"),
+    renderDetailedTestsBlock(ctx.testsDetailed, ctx.tests, "Tests"),
     renderFilesBlock(ctx.docs, "Docs"),
     renderFilesBlock(ctx.configs, "Configs"),
     renderNodesBlock(ctx.graph.nodes, "Graph nodes"),
@@ -161,6 +186,44 @@ export const formatRepositoryContext = (ctx: FormatRepositoryContext): string =>
 
 export const formatNodesList = (nodes: readonly CodegraphNode[], header: string): string =>
   renderNodesBlock(nodes, header)
+
+export type FormatTestsOutput = {
+  tests: readonly CodegraphNode[]
+  testsDetailed?: readonly DetailedTest[]
+  derivation?: TestMatchDerivation | "none"
+  notFound: boolean
+  fallbackReason?: string
+  staleFiles?: number
+}
+
+export const formatTestsOutput = (output: FormatTestsOutput): string => {
+  const statusLines: string[] = []
+  if (output.notFound) {
+    statusLines.push(`No test nodes found for the requested symbol.`)
+  } else if (output.derivation) {
+    statusLines.push(`Primary derivation: ${output.derivation}`)
+  }
+  if (output.staleFiles && output.staleFiles > 0) {
+    statusLines.push(`${output.staleFiles} file(s) changed since index; run /codegraph-build`)
+  }
+  const blocks: string[] = []
+  if (output.testsDetailed && output.testsDetailed.length > 0) {
+    const visible = output.testsDetailed.slice(0, MAX_ITEMS_PER_OUTPUT)
+    const lines = visible.map(
+      (r) =>
+        `${r.node.kind} ${r.node.name} (${r.node.fileID}:${r.node.startLine}-${r.node.endLine}) [${r.derivation}, conf ${r.confidence}]${r.derivation === "substring-low-confidence" ? " — DIAGNOSTIC ONLY, not a confirmed test" : ""}`,
+    )
+    const remaining = output.testsDetailed.length - visible.length
+    const tail = remaining > 0 ? `\n... and ${remaining} more.` : ""
+    blocks.push(`Tests (${output.testsDetailed.length}):\n${lines.join("\n")}${tail}`)
+  } else {
+    blocks.push(renderNodesBlock(output.tests, "Tests"))
+  }
+  if (output.fallbackReason) {
+    blocks.push(`[Fallback: ${output.fallbackReason}]`)
+  }
+  return [...statusLines, ...blocks].join("\n\n")
+}
 
 export const formatOwnership = (owner: string | undefined, count: number): string => {
   if (!owner) {

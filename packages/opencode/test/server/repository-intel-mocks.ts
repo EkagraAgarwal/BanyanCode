@@ -48,6 +48,7 @@ export const repositoryIntelServiceMocks = Layer.mergeAll(
       tests: () =>
         Effect.succeed({
           tests: [] as readonly CodegraphNode[],
+          results: [],
           notFound: false,
           derivation: "none" as const,
         }),

@@ -2347,6 +2347,14 @@ export type BanyanQueryInput = {
   }
 }
 
+export type BanyanTestResultDerivation = "tested_by" | "references" | "import-binding" | "substring-low-confidence"
+
+export type BanyanTestMatch = {
+  node: BanyanCodegraphNode
+  derivation: BanyanTestResultDerivation
+  confidence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
 export type BanyanCodegraphFile = {
   id: string
   path: string
@@ -2356,16 +2364,28 @@ export type BanyanCodegraphFile = {
 }
 
 export type BanyanArchitecturalSlice = {
+  status?: "success" | "partial" | "failed"
+  reason?: string
+  recoveryHint?: string
+  fallbackUsed?: boolean
+  degraded?: boolean
   summary: string
   entrypoints: Array<BanyanCodegraphNode>
   importantSymbols: Array<BanyanCodegraphNode>
   relatedTests: Array<BanyanCodegraphNode>
+  relatedTestsDetailed?: Array<BanyanTestMatch>
   relatedDocs: Array<BanyanCodegraphFile>
   configs: Array<BanyanCodegraphFile>
   routes: Array<BanyanCodegraphNode>
   dependencies: Array<{
     name: string
     version?: string
+  }>
+  directCallers: Array<BanyanCodegraphNode>
+  transitiveDependents: Array<BanyanCodegraphNode>
+  diagnostics?: Array<{
+    kind: string
+    message: string
   }>
 }
 
@@ -2420,6 +2440,7 @@ export type BanyanRepositoryContext = {
     edges: Array<BanyanCodegraphEdge>
   }
   tests: Array<BanyanCodegraphNode>
+  testsDetailed?: Array<BanyanTestMatch>
   docs: Array<BanyanCodegraphFile>
   configs: Array<BanyanCodegraphFile>
   git: BanyanGitContext
@@ -2427,8 +2448,23 @@ export type BanyanRepositoryContext = {
     worktree: string
     focusDirs: Array<string>
   }
-  diagnostics?: Array<unknown>
+  diagnostics?: Array<{
+    kind: string
+    message: string
+  }>
   ranking: BanyanRanking
+  ambiguity?: {
+    total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    kept: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  searchDerivation?:
+    | "tag-fallback"
+    | "name-exact"
+    | "qualified-split"
+    | "code-substring"
+    | "name-like"
+    | "fts-bm25"
+    | "node-id"
 }
 
 export type BanyanRepositoryResponse = {
@@ -2464,6 +2500,18 @@ export type BanyanTraceInput = {
 
 export type BanyanTestsInput = {
   symbol: string
+  limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type BanyanTestDerivation = "tested_by" | "references" | "import-binding" | "substring-low-confidence" | "none"
+
+export type BanyanTestsOutput = {
+  tests: Array<BanyanCodegraphNode>
+  testsDetailed?: Array<BanyanTestMatch>
+  derivation: BanyanTestDerivation
+  notFound: boolean
+  fallbackReason?: string
+  staleFiles?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type BanyanSymbolsInput = {
@@ -6897,7 +6945,14 @@ export type GlobalCodeFindResponses = {
   200: {
     matches: Array<{
       node: BanyanCodegraphNode
-      derivation: "tag-fallback" | "name-exact" | "qualified-split" | "code-substring" | "name-like" | "fts-bm25"
+      derivation:
+        | "tag-fallback"
+        | "name-exact"
+        | "qualified-split"
+        | "code-substring"
+        | "name-like"
+        | "fts-bm25"
+        | "node-id"
     }>
     files: Array<{
       path: string
@@ -6913,9 +6968,22 @@ export type GlobalCodeFindResponses = {
     intent: string
     dispatchedTo?: string
     staleFiles?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    _diagnostic?: "symbol-not-in-graph" | "target-not-resolved" | "no-edges-found" | "empty-target" | "stale-graph"
+    _diagnostic?:
+      | "symbol-not-in-graph"
+      | "target-not-resolved"
+      | "stale-node-id"
+      | "no-edges-found"
+      | "empty-target"
+      | "stale-graph"
     resolvedNodeID?: string
-    resolvedDerivation?: "tag-fallback" | "name-exact" | "qualified-split" | "code-substring" | "name-like" | "fts-bm25"
+    resolvedDerivation?:
+      | "tag-fallback"
+      | "name-exact"
+      | "qualified-split"
+      | "code-substring"
+      | "name-like"
+      | "fts-bm25"
+      | "node-id"
   }
 }
 
@@ -7073,6 +7141,7 @@ export type GlobalBlastRadiusResponses = {
       | "code-substring"
       | "name-like"
       | "fts-bm25"
+      | "node-id"
   }
 }
 
@@ -7466,7 +7535,7 @@ export type RepositoryIntelTestsResponses = {
   /**
    * Tests for symbol
    */
-  200: Array<BanyanCodegraphNode>
+  200: BanyanTestsOutput
 }
 
 export type RepositoryIntelTestsResponse = RepositoryIntelTestsResponses[keyof RepositoryIntelTestsResponses]

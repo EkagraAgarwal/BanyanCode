@@ -54,6 +54,7 @@ export const repositoryIntelHandlers = HttpApiBuilder.group(RootHttpApi, "reposi
       return yield* intel.trace({
         symbol: ctx.payload.symbol,
         depth: ctx.payload.depth,
+        limit: ctx.payload.limit,
         workspace: ctx.payload.workspace,
       })
     })
@@ -61,8 +62,17 @@ export const repositoryIntelHandlers = HttpApiBuilder.group(RootHttpApi, "reposi
     const testsHandler = Effect.fn("RepositoryIntel.tests")(function* (ctx: {
       payload: typeof TestsInput.Type
     }) {
-      const result = yield* intel.tests({ symbol: ctx.payload.symbol })
-      return result.tests
+      const result = yield* intel.tests({
+        symbol: ctx.payload.symbol,
+        limit: ctx.payload.limit,
+      })
+      return {
+        tests: result.tests,
+        testsDetailed: result.results.length > 0 ? result.results : undefined,
+        derivation: result.derivation,
+        notFound: result.notFound,
+        ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {}),
+      }
     })
 
     const symbolsHandler = Effect.fn("RepositoryIntel.symbols")(function* (ctx: {

@@ -2,18 +2,21 @@ import { Effect, Layer } from "effect"
 import { CodegraphRepo } from "../codegraph-repo"
 import type { Interface as CodegraphRepoInterface } from "../codegraph-repo"
 import { resolveGraphTargetPure } from "../symbol-resolver"
-import { isTestFilePath } from "../codegraph-paths"
+import { isTestFilePath, resolveFileByPath, toRepoRelativePath } from "../codegraph-paths"
 import { bfsPure } from "./bfs"
 import { rank, type RankingResult } from "../ranking/rank"
 import { Service } from "./service"
 import type { Interface } from "./service"
 import type {
   ArchitecturalSlice,
+  CodegraphBinding,
   CodegraphEdge,
   CodegraphFile,
   CodegraphMeta,
   CodegraphNode,
   RepositoryContext,
+  TestMatch,
+  TestMatchDerivation,
   WorkspaceContext,
 } from "../types"
 import { Service as Git, defaultLayer as gitDefaultLayer } from "./git-service"
@@ -169,7 +172,7 @@ const applyFocusDirsFilter = (
   allFiles: readonly CodegraphFile[],
 ): CodegraphNode[] => {
   const filePathByID = new Map<string, string>()
-  for (const f of allFiles) filePathByID.set(f.id, f.path.replace(/\\/g, "/"))
+  for (const f of allFiles) filePathByID.set(f.id, toRepoRelativePath(f.path, indexedRoot))
   const rawFocusDirs = workspace?.focusDirs ?? []
   const normalizedFocusDirs =
     rawFocusDirs.length > 0 ? normalizeFocusDirs(rawFocusDirs, indexedRoot) : rawFocusDirs
@@ -191,69 +194,6 @@ const applyFocusDirsFilter = (
 
   return filtered
 }
-
-// Normalize a caller-provided path against the indexed graph's root so
-// the same input resolves whether the user typed an absolute Windows
-// path, a path with backslashes, or a clean repo-relative path.
-//
-// NOTE: The original `normalizePathForLookup` only stripped the indexed
-// root from absolute inputs and relied on `getFileByPath`'s exact match
-// against the stored form. In practice the graph stores ABSOLUTE paths on
-// Windows (`D:\OpenCode\packages\core\…`), so the stripped relative form
-// never matched. The new `resolveFileByPath` tries multiple candidate
-// forms (exact, root-prefixed, root-suffixed) before falling back to a
-// single suffix match so the call works for legacy relative rows and
-// current absolute rows alike.
-//
-// Replaces the previous one-way normalizer for `findSymbol`, `query`,
-// `impact`, and `relationships`.
-const buildPathCandidates = (input: string, indexedRoot?: string): string[] => {
-  const cleaned = input.replace(/\\/g, "/").trim()
-  if (!cleaned) return []
-  const root = indexedRoot ? indexedRoot.replace(/\\/g, "/").replace(/\/+$/, "") : undefined
-  const out: string[] = []
-  // Always try the cleaned form first (handles current-absolute rows).
-  out.push(cleaned)
-  if (root) {
-    // Root-prefixed form: root + cleaned if cleaned was repo-relative.
-    if (root && !cleaned.startsWith(root + "/") && cleaned !== root) {
-      out.push(`${root}/${cleaned}`)
-      out.push(`${root}${cleaned.startsWith("/") ? "" : "/"}${cleaned}`)
-    }
-    // Root-stripped form: legacy-relative rows stored before the indexer
-    // migrated to absolute paths.
-    if (cleaned === root) {
-      out.push("")
-    } else if (cleaned.startsWith(root + "/")) {
-      out.push(cleaned.slice(root.length + 1))
-    }
-  }
-  return out
-}
-
-const resolveFileByPath = (
-  repo: CodegraphRepoInterface,
-  input: string,
-  indexedRoot: string | undefined,
-): Effect.Effect<CodegraphFile | undefined, never, never> =>
-  Effect.gen(function* () {
-    const candidates = buildPathCandidates(input, indexedRoot)
-    for (const candidate of candidates) {
-      if (!candidate) continue
-      const file = yield* repo.getFileByPath(candidate)
-      if (file) return file
-    }
-    // Suffix fallback: only if exactly one match (avoid picking an arbitrary
-    // file when two absolute paths end with the same suffix).
-    const allFiles = yield* repo.listAllFiles()
-    const normInput = input.replace(/\\/g, "/").replace(/^\.\//, "")
-    const matches = allFiles.filter((f: CodegraphFile) => {
-      const p = f.path.replace(/\\/g, "/")
-      return p === normInput || p.endsWith("/" + normInput) || p.endsWith(normInput)
-    })
-    if (matches.length === 1) return matches[0]
-    return undefined
-  })
 
 function isConfigPath(path: string): boolean {
   return CONFIG_PATH_PATTERNS.some((p) => p.test(path))
@@ -300,8 +240,10 @@ export const layer = Layer.effect(
 
         // Resolve graph-relative focusDirs once. Pull indexedRoot from the
         // graph metadata so a caller-supplied worktree path can never
-        // double-prefix the comparison.
-        const meta = hasFocusDirs ? yield* repo.getMeta() : undefined
+        // double-prefix the comparison. Also needed for the product-package
+        // tie-breaker below, which compares repo-relative display paths.
+        const needsMeta = hasFocusDirs || (nodes.length > 1 && derivation === "name-exact")
+        const meta = needsMeta ? yield* repo.getMeta() : undefined
         const normalizedFocusDirs = hasFocusDirs
           ? normalizeFocusDirs(rawFocusDirs, meta?.indexedRoot)
           : rawFocusDirs
@@ -313,7 +255,7 @@ export const layer = Layer.effect(
           const candidateFileIDs = Array.from(new Set(nodes.map((n) => n.fileID)))
           const files = yield* repo.filesByIDs(candidateFileIDs)
           const filePathByID = new Map<string, string>()
-          for (const f of files) filePathByID.set(f.id, f.path.replace(/\\/g, "/"))
+          for (const f of files) filePathByID.set(f.id, toRepoRelativePath(f.path, meta?.indexedRoot))
 
           const focused: CodegraphNode[] = []
           for (const node of nodes) {
@@ -352,7 +294,7 @@ export const layer = Layer.effect(
           const filePathByNodeID = new Map<string, string>()
           for (const f of files) {
             for (const node of nodes) {
-              if (node.fileID === f.id) filePathByNodeID.set(node.id, f.path.replace(/\\/g, "/"))
+              if (node.fileID === f.id) filePathByNodeID.set(node.id, toRepoRelativePath(f.path, meta?.indexedRoot))
             }
           }
 
@@ -382,22 +324,92 @@ export const layer = Layer.effect(
         }
       })
 
+    // Module-resolution helpers for import-binding test evidence. The
+    // persisted `codegraph_bindings` rows carry raw module specifiers; we
+    // normalize both sides (extension-stripped, slash-normalized) and resolve
+    // relative specifiers against the importing file's directory so a test
+    // that does `import { X } from "../../src/foo"` matches the target
+    // module `packages/core/src/foo.ts`.
+    const normalizeModulePath = (p: string): string =>
+      p.replace(/\\/g, "/").replace(/\.(ts|tsx|js|jsx|mjs|cjs)$/i, "")
+
+    const moduleDirOf = (p: string): string => {
+      const norm = normalizeModulePath(p)
+      const i = norm.lastIndexOf("/")
+      return i >= 0 ? norm.slice(0, i) : ""
+    }
+
+    const resolveRelativeModule = (fromFilePath: string, source: string): string => {
+      const base = moduleDirOf(fromFilePath)
+      const joined = base ? `${base}/${source}` : source
+      const segments: string[] = []
+      for (const seg of joined.split("/")) {
+        if (seg === "..") {
+          if (segments.length > 0) segments.pop()
+        } else if (seg !== "." && seg !== "") {
+          segments.push(seg)
+        }
+      }
+      return segments.join("/")
+    }
+
+    const importBindingMatchesTarget = (
+      binding: CodegraphBinding,
+      fromFilePath: string,
+      targetSearchName: string,
+      targetModuleBase: string,
+    ): boolean => {
+      const names = [binding.importedName, binding.exportName, binding.localName].filter(
+        (n): n is string => Boolean(n),
+      )
+      if (names.includes(targetSearchName)) return true
+      if (!binding.source) return false
+      const resolved = binding.source.startsWith(".")
+        ? resolveRelativeModule(fromFilePath, binding.source)
+        : binding.source
+      const normalized = normalizeModulePath(resolved)
+      return (
+        normalized === targetModuleBase ||
+        targetModuleBase.endsWith("/" + normalized) ||
+        normalized.endsWith("/" + targetModuleBase)
+      )
+    }
+
+    // Confidence per test-match derivation. `substring-low-confidence` is
+    // deliberately ~10 so an evidence-free raw-code hit can never rank as a
+    // real test hit.
+    const TEST_DERIVATION_CONFIDENCE: Record<TestMatchDerivation, number> = {
+      tested_by: 100,
+      references: 80,
+      "import-binding": 60,
+      "substring-low-confidence": 10,
+    }
+
     const findTests = (
       input: {
         symbol: string
         symbolID?: string
+        limit?: number
       },
       ctx?: QueryContext,
     ): Effect.Effect<
-      { tests: readonly CodegraphNode[]; notFound: boolean; derivation: "tested_by" | "references" | "import" | "substring" | "none" },
+      {
+        tests: readonly CodegraphNode[]
+        results: readonly TestMatch[]
+        notFound: boolean
+        derivation: TestMatchDerivation | "none"
+        fallbackReason?: string
+      },
       never,
       never
     > =>
       Effect.gen(function* () {
-        // Phase 4: rank test matches by evidence. tested_by edges are
-        // exact; references/calls edges are strong; import + substring
-        // matches are explicitly low-confidence and only surface when no
-        // graph edge connects the test to the target.
+        // Phase 4: rank test matches by evidence. `tested_by` edges are
+        // exact; calls/references edges are strong; resolved import
+        // bindings are moderate. Raw code-substring matches are surfaced
+        // ONLY as explicit `substring-low-confidence` diagnostics — a helper
+        // whose code merely mentions the target name must never be reported
+        // as a normal test hit.
         // Discover test files by either `kind = "test"` OR a `.test/.spec`
         // path pattern so we cover fixtures that omit the kind field.
         const testFilePatterns = [".test.ts", ".spec.ts", "test_", "_test.go", "_test.py", ".test.tsx", ".spec.tsx"]
@@ -405,7 +417,7 @@ export const layer = Layer.effect(
         // `tests` entry): the files table + metadata-only node projection are
         // loaded once per call. The `code` column is fetched only for the
         // bounded candidate-test set below — the one consumer that needs it
-        // (substring import matching in doImportMatch).
+        // (substring diagnostic matching).
         const allFiles = ctx?.allFiles ?? (yield* repo.listAllFiles())
         const allNodesLight = ctx?.allNodesLight ?? (yield* repo.searchNodesLight({ limit: 100000 }))
         const testFileIDs = new Set(
@@ -421,103 +433,157 @@ export const layer = Layer.effect(
           .filter((n) => testNodeIDs.has(n.id) || testFileIDs.has(n.fileID))
           .map((n) => n.id)
         // Bounded fetch of FULL candidate nodes — only the test candidates,
-        // never the whole table; `code` is required by doImportMatch below.
+        // never the whole table.
         const candidateTestNodes =
           candidateTestNodeIDs.length > 0 ? yield* repo.nodesByIDs(candidateTestNodeIDs) : []
 
-        const doImportMatch = (symbolModule: string, symbolName: string): CodegraphNode[] => {
-          const moduleBase = symbolModule.replace(/\.ts$/, "")
-          const matching: CodegraphNode[] = []
-          for (const testNode of candidateTestNodes) {
-            if (!testNode.code) continue
-            if (testNode.code.includes(moduleBase) || testNode.code.includes(symbolName)) {
-              matching.push(testNode)
-            }
-          }
-          return matching
-        }
+        const limit =
+          input.limit === undefined ? 50 : Math.max(1, Math.min(500, Math.floor(input.limit)))
 
-        const doEvidenceMatch = (
-          symbolID: string,
-        ): Effect.Effect<{ tests: CodegraphNode[]; derivation: "tested_by" | "references" | "none" }, never, never> =>
-          Effect.gen(function* () {
-            if (candidateTestNodes.length === 0) return { tests: [], derivation: "none" }
-
-            const candidateIDs = candidateTestNodes.map((t) => t.id)
-
-            // 1) tested_by edges pointing AT a test node FROM the symbol —
-            // strongest evidence. One batched query for all candidates'
-            // incoming edges.
-            const incomingToCandidates = yield* repo.edgesToBatch(candidateIDs)
-            const testedBy: CodegraphNode[] = []
-            for (const edge of incomingToCandidates) {
-              if (edge.kind !== "tested_by") continue
-              if (edge.fromNodeID !== symbolID) continue
-              const testNode = candidateTestNodes.find((t) => t.id === edge.toNodeID)
-              if (testNode) testedBy.push(testNode)
-            }
-            if (testedBy.length > 0) return { tests: testedBy, derivation: "tested_by" }
-
-            // 2) calls/references edges FROM each test node TO the symbol —
-            // strong evidence, batched per the same frontier model.
-            const outgoingFromCandidates = yield* repo.edgesFromBatch(candidateIDs)
-            const edgeByCandidate = new Map<string, CodegraphEdge[]>()
-            for (const edge of outgoingFromCandidates) {
-              if (edge.kind !== "calls" && edge.kind !== "references") continue
-              if (edge.toNodeID !== symbolID) continue
-              const list = edgeByCandidate.get(edge.fromNodeID) ?? []
-              list.push(edge)
-              edgeByCandidate.set(edge.fromNodeID, list)
-            }
-            const references: CodegraphNode[] = []
-            for (const testNode of candidateTestNodes) {
-              if ((edgeByCandidate.get(testNode.id) ?? []).length > 0) references.push(testNode)
-            }
-            if (references.length > 0) return { tests: references, derivation: "references" }
-
-            return { tests: [], derivation: "none" }
-          })
+        let targetNode: CodegraphNode | undefined
+        let targetFile: CodegraphFile | undefined
+        let ambiguityNote: string | undefined
 
         if (input.symbolID) {
-          const targetNode = yield* repo.nodeByID(input.symbolID)
-          if (!targetNode) return { tests: [], notFound: true, derivation: "none" }
-          const targetFile = yield* repo.getFile(targetNode.fileID)
-          if (!targetFile) return { tests: [], notFound: true, derivation: "none" }
-
-          const evidence = yield* doEvidenceMatch(input.symbolID)
-          if (evidence.tests.length > 0) {
-            return { tests: evidence.tests, notFound: false, derivation: evidence.derivation }
+          targetNode = yield* repo.nodeByID(input.symbolID)
+          targetFile = targetNode ? yield* repo.getFile(targetNode.fileID) : undefined
+          if (!targetNode || !targetFile) return { tests: [], results: [], notFound: true, derivation: "none" }
+        } else {
+          const symbolResult = yield* findSymbol({ name: input.symbol })
+          if (symbolResult.nodes.length === 0) {
+            return { tests: [], results: [], notFound: true, derivation: "none" }
           }
-          const importMatching = doImportMatch(targetFile.path, input.symbol)
-          if (importMatching.length > 0) {
-            return { tests: importMatching, notFound: false, derivation: "import" }
+          const searchName = input.symbol.includes(".") ? input.symbol.split(".").pop()! : input.symbol
+          const exactMatch = symbolResult.nodes.find((n) => n.name === searchName)
+          targetNode = yield* repo.nodeByID((exactMatch ?? symbolResult.nodes[0])!.id)
+          targetFile = targetNode ? yield* repo.getFile(targetNode.fileID) : undefined
+          if (!targetNode || !targetFile) return { tests: [], results: [], notFound: true, derivation: "none" }
+          if (symbolResult.ambiguity && symbolResult.ambiguity.total > 1) {
+            ambiguityNote = `"${input.symbol}" matched ${symbolResult.ambiguity.total} candidate node(s); tests resolved against ${targetNode.name}`
           }
-          return { tests: [], notFound: false, derivation: "none" }
         }
 
-        const symbolResult = yield* findSymbol({ name: input.symbol })
-        if (symbolResult.nodes.length === 0) {
-          return { tests: [], notFound: true, derivation: "none" }
+        if (candidateTestNodes.length === 0) {
+          return {
+            tests: [],
+            results: [],
+            notFound: false,
+            derivation: "none",
+            ...(ambiguityNote ? { fallbackReason: ambiguityNote } : {}),
+          }
         }
 
-        const searchName = input.symbol.includes(".") ? input.symbol.split(".").pop()! : input.symbol
-        const exactMatch = symbolResult.nodes.find((n) => n.name === searchName)
-        const symbolID = (exactMatch ?? symbolResult.nodes[0])!.id
+        const targetSearchName = input.symbol.includes(".") ? input.symbol.split(".").pop()! : input.symbol
+        const targetModuleBase = normalizeModulePath(targetFile.path)
 
-        const targetNode = yield* repo.nodeByID(symbolID)
-        if (!targetNode) return { tests: [], notFound: true, derivation: "none" }
-        const targetFile = yield* repo.getFile(targetNode.fileID)
-        if (!targetFile) return { tests: [], notFound: true, derivation: "none" }
+        // Load the persisted import/export bindings for the candidate test
+        // files once, so import-binding evidence never re-parses source.
+        const candidateFileIDs = Array.from(new Set(candidateTestNodes.map((n) => n.fileID)))
+        const bindings =
+          candidateFileIDs.length > 0 ? yield* repo.bindingsByFileIDs({ fileIDs: candidateFileIDs }) : []
+        const bindingsByFile = new Map<string, CodegraphBinding[]>()
+        for (const b of bindings) {
+          const list = bindingsByFile.get(b.fileID) ?? []
+          list.push(b)
+          bindingsByFile.set(b.fileID, list)
+        }
 
-        const evidence = yield* doEvidenceMatch(symbolID)
-        if (evidence.tests.length > 0) {
-          return { tests: evidence.tests, notFound: false, derivation: evidence.derivation }
+        const candidateIDs = candidateTestNodes.map((t) => t.id)
+        const [incomingToCandidates, outgoingFromCandidates] = yield* Effect.all([
+          repo.edgesToBatch(candidateIDs),
+          repo.edgesFromBatch(candidateIDs),
+        ])
+
+        // nodeID -> best (highest-confidence) match. A node can be reachable
+        // by several signals; the strongest derivation wins.
+        const matches = new Map<string, TestMatch>()
+        const consider = (node: CodegraphNode, derivation: TestMatchDerivation) => {
+          const confidence = TEST_DERIVATION_CONFIDENCE[derivation]
+          const existing = matches.get(node.id)
+          if (!existing || confidence > existing.confidence) {
+            matches.set(node.id, { node, derivation, confidence })
+          }
         }
-        const importMatching = doImportMatch(targetFile.path, input.symbol)
-        if (importMatching.length > 0) {
-          return { tests: importMatching, notFound: false, derivation: "import" }
+
+        // 1) `tested_by` edges pointing AT a test node FROM the symbol —
+        // strongest evidence.
+        for (const edge of incomingToCandidates) {
+          if (edge.kind !== "tested_by" || edge.fromNodeID !== targetNode.id) continue
+          const testNode = candidateTestNodes.find((t) => t.id === edge.toNodeID)
+          if (testNode) consider(testNode, "tested_by")
         }
-        return { tests: [], notFound: false, derivation: "none" }
+
+        // 2) calls/references edges FROM each test node TO the symbol —
+        // strong evidence. A `references` edge derived purely from a name
+        // appearing in code (`heuristic-name`) is the substring-equivalent
+        // evidence the strict policy forbids treating as a real test hit — a
+        // mock helper whose body merely mentions the symbol's name must not
+        // rank above an evidence-backed test. Real `references` come from
+        // resolved import bindings (`binding-resolved` / `service-tag`),
+        // same-file usage, or hand-seeded graphs with unknown provenance
+        // (pre-migration rows normalize to undefined/0 — treat as unknown,
+        // not heuristic). `calls` edges always mean an actual invocation, so
+        // they always count.
+        const referencedBy = new Set<string>()
+        for (const edge of outgoingFromCandidates) {
+          if ((edge.kind !== "calls" && edge.kind !== "references") || edge.toNodeID !== targetNode.id) continue
+          if (edge.kind === "references" && edge.derivation === "heuristic-name") continue
+          referencedBy.add(edge.fromNodeID)
+        }
+        for (const testNode of candidateTestNodes) {
+          if (referencedBy.has(testNode.id)) consider(testNode, "references")
+        }
+
+        // 3) resolved import bindings — the test file imports the target
+        // module or the target symbol by name.
+        for (const testNode of candidateTestNodes) {
+          const fileBindings = bindingsByFile.get(testNode.fileID) ?? []
+          if (
+            fileBindings.some((b) =>
+              importBindingMatchesTarget(b, targetFile.path, targetSearchName, targetModuleBase),
+            )
+          ) {
+            consider(testNode, "import-binding")
+          }
+        }
+
+        // 4) raw code substring — explicitly low-confidence diagnostic ONLY.
+        // Never a normal test hit; a node already backed by evidence is not
+        // re-flagged.
+        for (const testNode of candidateTestNodes) {
+          if (matches.has(testNode.id) || !testNode.code) continue
+          if (
+            testNode.code.includes(targetSearchName) ||
+            (targetModuleBase.length > 0 && testNode.code.includes(targetModuleBase))
+          ) {
+            consider(testNode, "substring-low-confidence")
+          }
+        }
+
+        const ordered = [...matches.values()].sort(
+          (a, b) => b.confidence - a.confidence || a.node.name.localeCompare(b.node.name),
+        )
+        const results = ordered.slice(0, limit)
+        const tests = results.filter((r) => r.derivation !== "substring-low-confidence").map((r) => r.node)
+        const evidenceCount = results.filter((r) => r.derivation !== "substring-low-confidence").length
+        const substringCount = results.filter((r) => r.derivation === "substring-low-confidence").length
+
+        let fallbackReason = ambiguityNote
+        if (evidenceCount === 0 && substringCount > 0) {
+          const note =
+            `no graph evidence connected tests to "${input.symbol}"; ` +
+            `${substringCount} node(s) matched by raw code substring and are surfaced as low-confidence diagnostics only`
+          fallbackReason = fallbackReason ? `${fallbackReason}; ${note}` : note
+        }
+
+        const derivation: TestMatchDerivation | "none" = results[0]?.derivation ?? "none"
+        return {
+          tests,
+          results,
+          notFound: false,
+          derivation,
+          ...(fallbackReason ? { fallbackReason } : {}),
+        }
       })
 
     const findRelated = (input: {
@@ -657,7 +723,14 @@ export const layer = Layer.effect(
           }
         }
 
-        const testsResult = symbols.length > 0 ? yield* findTests({ symbol: input.query }, ctx) : { tests: [] as readonly CodegraphNode[], notFound: true, derivation: "none" as const }
+        const testsResult = symbols.length > 0
+          ? yield* findTests({ symbol: input.query }, ctx)
+          : {
+              tests: [] as readonly CodegraphNode[],
+              results: [] as readonly TestMatch[],
+              notFound: true,
+              derivation: "none" as const,
+            }
 
         const relatedNodes: CodegraphNode[] = []
         for (const sym of symbols) {
@@ -737,6 +810,12 @@ export const layer = Layer.effect(
             message: `Resolved via FTS5 bm25 ranking for "${input.query}".`,
           })
         }
+        if (testsResult.fallbackReason) {
+          diagnostics.push({
+            kind: "test-resolution-fallback",
+            message: testsResult.fallbackReason,
+          })
+        }
 
         const graphFileIDs = new Set<string>(
           graphNodesList.map((n) => n.fileID).filter((id): id is string => Boolean(id))
@@ -788,7 +867,7 @@ export const layer = Layer.effect(
         // membership (workspace). Traversal behavior is untouched — this is
         // purely the ranking output.
         const filePathByID = new Map<string, string>()
-        for (const f of allFiles) filePathByID.set(f.id, f.path.replace(/\\/g, "/"))
+        for (const f of allFiles) filePathByID.set(f.id, toRepoRelativePath(f.path, indexedRoot))
         const queryLower = input.query.toLowerCase()
         const normalizedFocusDirs =
           (input.workspace?.focusDirs.length ?? 0) > 0
@@ -843,6 +922,9 @@ export const layer = Layer.effect(
           files,
           graph: { nodes: graphNodesList, edges: graphEdges },
           tests: testsResult.tests.filter((n) => bucketFileIDs.has(n.fileID)),
+          ...(testsResult.results.length > 0
+            ? { testsDetailed: testsResult.results.filter((r) => bucketFileIDs.has(r.node.fileID)) }
+            : {}),
           docs,
           configs,
           git: { recentCommits, ownership },
@@ -881,6 +963,9 @@ export const layer = Layer.effect(
           if (symbolNames.has(t.name)) return true
           return ctx.symbols.length > 0
         })
+        const relatedTestsDetailed = ctx.testsDetailed?.filter((r) =>
+          ctx.tests.some((t) => t.id === r.node.id),
+        )
 
         const summaryParts: string[] = []
         summaryParts.push(`Query "${ctx.query}"`)
@@ -953,6 +1038,7 @@ export const layer = Layer.effect(
           entrypoints,
           importantSymbols,
           relatedTests: ctx.tests,
+          ...(relatedTestsDetailed ? { relatedTestsDetailed } : {}),
           relatedDocs: ctx.docs,
           configs: ctx.configs,
           routes,
@@ -966,6 +1052,7 @@ export const layer = Layer.effect(
                   dependents: transitiveSet.size - transitiveDependents.length,
                 }
               : undefined,
+          ...(ctx.diagnostics && ctx.diagnostics.length > 0 ? { diagnostics: ctx.diagnostics } : {}),
         } satisfies ArchitecturalSlice
       })
 
@@ -1065,6 +1152,19 @@ export const layer = Layer.effect(
           }
         }
 
+        // Phase 4: never silently anchor to `symbols[0]` when the resolver
+        // genuinely returned multiple candidates — surface the ambiguity as
+        // a structured diagnostic so the caller can disambiguate.
+        const traceDiagnostics: Array<{ kind: string; message: string }> = []
+        if (ctx.ambiguity && ctx.ambiguity.total > 1) {
+          traceDiagnostics.push({
+            kind: "ambiguous-symbol",
+            message:
+              `"${input.symbol}" matched ${ctx.ambiguity.total} candidate node(s); ` +
+              `trace anchored to "${ctx.symbols[0]?.name ?? "unknown"}" — pass focusDirs to disambiguate`,
+          })
+        }
+
         const anchor = ctx.symbols[0]!
         const maxDepth = input.depth ?? 2
         const limit = Math.max(1, Math.min(1000, input.limit ?? 50))
@@ -1112,8 +1212,14 @@ export const layer = Layer.effect(
         // caller can distinguish "no-source-callers" from
         // "no-edges-found" from "out-of-scope". The existing
         // ArchitecturalSlice already has free-form `reason`; we add
-        // explicit `diagnostics` entries the tool can surface.
-        const diagnostics: Array<{ kind: string; message: string }> = []
+        // explicit `diagnostics` entries the tool can surface. Any
+        // diagnostics propagated from the query context (ambiguity,
+        // test-resolution fallback) are preserved ahead of trace-specific
+        // findings.
+        const diagnostics: Array<{ kind: string; message: string }> = [
+          ...(slc.diagnostics ?? []),
+          ...traceDiagnostics,
+        ]
         if (directCallers.length === 0 && visibleTransitive.length === 0) {
           // No source intent callers at all. Distinguish "no edges
           // exist" from "no source callers" — if the BFS found test
@@ -1146,12 +1252,13 @@ export const layer = Layer.effect(
       input: { symbol: string; limit?: number },
     ): Effect.Effect<{
       tests: readonly CodegraphNode[]
+      results: readonly TestMatch[]
       notFound: boolean
-      derivation: "tested_by" | "references" | "import" | "substring" | "none"
+      derivation: TestMatchDerivation | "none"
+      fallbackReason?: string
     }, never, never> =>
       Effect.gen(function* () {
-        const result = yield* findTests(input)
-        return result
+        return yield* findTests(input)
       })
 
     const symbols = (input: { query: string; limit?: number }): Effect.Effect<readonly CodegraphNode[], never, never> =>

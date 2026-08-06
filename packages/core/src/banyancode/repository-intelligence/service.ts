@@ -1,5 +1,12 @@
 import { Context, Effect } from "effect"
-import type { ArchitecturalSlice, CodegraphNode, RepositoryContext, WorkspaceContext } from "../types"
+import type {
+  ArchitecturalSlice,
+  CodegraphNode,
+  RepositoryContext,
+  TestMatch,
+  TestMatchDerivation,
+  WorkspaceContext,
+} from "../types"
 
 export interface Interface {
   readonly query: (input: { query: string; limit?: number; workspace?: WorkspaceContext }) => Effect.Effect<RepositoryContext, never, never>
@@ -12,8 +19,10 @@ export interface Interface {
     limit?: number
   }) => Effect.Effect<{
     tests: readonly CodegraphNode[]
+    results: readonly TestMatch[]
     notFound: boolean
-    derivation: "tested_by" | "references" | "import" | "substring" | "none"
+    derivation: TestMatchDerivation | "none"
+    fallbackReason?: string
   }, never, never>
   readonly symbols: (input: { query: string; limit?: number }) => Effect.Effect<readonly CodegraphNode[], never, never>
   readonly relationships: (input: {
