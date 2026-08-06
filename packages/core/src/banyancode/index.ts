@@ -159,6 +159,14 @@ export {
   type Interface as CodegraphReadinessInterface,
 } from "./codegraph-readiness"
 export {
+  Service as CodegraphBootstrap,
+  layer as codegraphBootstrapLayer,
+  defaultLayer as codegraphBootstrapDefaultLayer,
+  BootstrapState,
+  type Interface as CodegraphBootstrapInterface,
+} from "./codegraph-bootstrap"
+export * as CodegraphBootstrapNS from "./codegraph-bootstrap"
+export {
   Service as CodegraphAutoUpdate,
   layer as codegraphAutoUpdateLayer,
   defaultLayer as codegraphAutoUpdateDefaultLayer,

@@ -128,8 +128,25 @@ export const layer = Layer.effect(
         // available so the V1 prompt still ships the model-facing preference
         // for graph + repository tools over grep/glob/bash.
         const source = yield* Effect.serviceOption(Banyan.CodegraphSystemSource)
+
+        // Phase A: read the graph bootstrap state so the rendered policy can
+        // tell the model whether a graph is ready, building, or missing. The
+        // bootstrap service is optional — when it is not in scope (tests that
+        // only provide SystemPrompt.defaultLayer) the Graph state line is
+        // omitted entirely and behavior is unchanged.
+        const bootstrap = yield* Effect.serviceOption(Banyan.CodegraphBootstrap)
+        const graphState = Option.isSome(bootstrap)
+          ? yield* bootstrap.value.status().pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+          : undefined
+
         return yield* Option.match(source, {
-          onSome: (svc) => svc.load(descriptions === undefined ? undefined : { tools: descriptions }),
+          onSome: (svc) =>
+            descriptions === undefined && graphState === undefined
+              ? svc.load(undefined)
+              : svc.load({
+                  ...(descriptions ? { tools: descriptions } : {}),
+                  ...(graphState ? { graph: graphState } : {}),
+                }),
           onNone: () => Effect.succeed(Banyan.CodegraphSystemSourceNS.POLICY_TEXT),
         })
       }),

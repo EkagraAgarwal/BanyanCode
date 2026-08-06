@@ -1,11 +1,16 @@
-import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { describe, expect, test } from "bun:test"
+import { Effect, Exit, Layer } from "effect"
 import { SystemPrompt } from "@/session/system"
 import { Skill } from "@/skill"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
+import { Database } from "@opencode-ai/core/database/database"
+import { Banyan } from "@opencode-ai/core/banyancode"
+import { CODEGRAPH_SCHEMA_VERSION } from "@opencode-ai/core/banyancode/codegraph-repo"
 import { testEffect } from "../lib/effect"
+import { tmpdir } from "../fixture/fixture"
+import path from "path"
 
 const it = testEffect(
   Layer.mergeAll(
@@ -15,6 +20,28 @@ const it = testEffect(
     LocationServiceMap.layer,
   ),
 )
+
+// Phase A: SystemPrompt.defaultLayer + a CodegraphBootstrap wired to a
+// tmpdir DB. The real indexer is never started here — the bootstrap's
+// `status()` path only reads the meta row, so seeding it directly is
+// sufficient to flip the rendered Graph state line.
+const buildBootstrapSystemLayer = (dbPath: string) => {
+  const dbLayer = Database.layerFromPath(dbPath)
+  return Layer.mergeAll(
+    SystemPrompt.defaultLayer,
+    Skill.defaultLayer,
+    FSUtil.defaultLayer,
+    LocationServiceMap.layer,
+    Banyan.CodegraphSystemSourceNS.defaultLayer,
+    Banyan.codegraphBootstrapLayer.pipe(
+      Layer.provide(Banyan.codegraphReadinessLayer),
+      Layer.provide(Banyan.codegraphBuildServiceLayer),
+      Layer.provide(Banyan.codegraphIndexerLayer.pipe(Layer.provide(dbLayer))),
+      Layer.provideMerge(Banyan.codegraphRepoLayer.pipe(Layer.provide(dbLayer))),
+      Layer.provideMerge(FSUtil.defaultLayer),
+    ),
+  )
+}
 
 describe("PR C: SystemPrompt.codegraph auto-tools policy", () => {
   it.effect("returns undefined when BanyanCode is disabled", () =>
@@ -56,4 +83,46 @@ describe("PR C: SystemPrompt.codegraph auto-tools policy", () => {
       }
     }),
   )
+
+  // Phase A: when the bootstrap service IS in scope, codegraph() reads the
+  // graph state and renders a "Graph state:" line into the policy block.
+  // Missing graph → the block still renders and does not throw; a seeded
+  // meta row → the block carries the ready marker with the symbol count.
+  test("codegraph() renders the Graph state line when the bootstrap service is provided", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "bootstrap.db")
+    const layer = buildBootstrapSystemLayer(dbPath)
+
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* SystemPrompt.Service
+          const missing = yield* svc.codegraph()
+          expect(missing).toBeDefined()
+          expect(missing).toContain("Codegraph-first search policy")
+          expect(missing).toContain("Graph state: missing")
+          expect(missing).not.toContain("Graph state: ready")
+
+          const repo = yield* Banyan.CodegraphRepo
+          yield* repo.setMeta({
+            id: "singleton",
+            graphBuiltAt: Date.now(),
+            graphVersion: 1,
+            graphCoverage: 1,
+            totalFiles: 1204,
+            totalNodes: 1000,
+            totalEdges: 500,
+            schemaVersion: CODEGRAPH_SCHEMA_VERSION,
+            indexedRoot: tmp.path,
+          })
+
+          const ready = yield* svc.codegraph()
+          expect(ready).toBeDefined()
+          expect(ready).toContain("Graph state: ready (1,204 symbols)")
+          expect(ready).toContain("code_find")
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+    expect(Exit.isSuccess(exit)).toBe(true)
+  })
 })

@@ -39,6 +39,7 @@ export interface CodegraphSystemInput {
   readonly agent?: AgentV2.Info
   readonly model?: ModelV2.Info
   readonly tools?: ReadonlyArray<CodegraphToolDescription>
+  readonly graph?: { readonly state: "ready" | "building" | "missing"; readonly symbols?: number }
 }
 
 export interface Interface {
@@ -55,6 +56,14 @@ export const POLICY_TEXT = [
   "question in this workspace. Grep / glob / bash and raw file reads are",
   "last resorts, not defaults. The complete tool catalog with descriptions",
   "follows in this prompt.",
+  "",
+  "Session start: if Graph state is ready, call `banyan_repo_map` once to load",
+  "the workspace outline, then `code_find` before touching files.",
+  "",
+  "Cost: one graph call replaces 3-5 bash grep/read loops, and repository tools",
+  "return file:line answers you can edit directly. Hot tools (mounted):",
+  "`code_find`, `repository_query`, `blast_radius`, `preflight`. Anything else:",
+  "`banyan_tool_search`.",
   "",
   "Bootstrap rule (do this BEFORE any other action):",
   "1. Graph and repository tools auto-trigger a build ONLY when the graph is",
@@ -199,12 +208,30 @@ function renderToolGuide(tools: ReadonlyArray<CodegraphToolDescription>): string
   ].join("\n")
 }
 
+// Phase A: one "Graph state:" line appended to the rendered block so the
+// model can tell "graph ready" from "graph absent". `symbols` is the
+// indexer's total-file count (codegraph coverage numerator), rendered with
+// locale separators when present.
+const graphLineFor = (graph: NonNullable<CodegraphSystemInput["graph"]>): string => {
+  if (graph.state === "ready") {
+    const symbols = graph.symbols === undefined ? "N/A" : graph.symbols.toLocaleString()
+    return `Graph state: ready (${symbols} symbols) — use code_find/repository_* now.`
+  }
+  if (graph.state === "building") {
+    return "Graph state: building in background — first graph call will wait for the build."
+  }
+  return "Graph state: missing — the first graph call will build it."
+}
+
 const loadImpl: Interface["load"] = Effect.fn("CodegraphSystemSource.load")(function* (input) {
   const tools = input?.tools ?? []
-  if (tools.length === 0) return POLICY_TEXT
+  const graph = input?.graph
+  // Pinned: without tools AND without a graph state, the output is exactly
+  // POLICY_TEXT (no trailing join artifacts).
+  if (tools.length === 0 && graph === undefined) return POLICY_TEXT
   const guide = renderToolGuide(tools)
-  if (guide.length === 0) return POLICY_TEXT
-  return [POLICY_TEXT, guide].join("\n\n")
+  const graphLine = graph === undefined ? "" : graphLineFor(graph)
+  return [POLICY_TEXT, guide, graphLine].filter((part) => part.length > 0).join("\n\n")
 })
 
 export const layer: Layer.Layer<Service, never, never> = Layer.effect(

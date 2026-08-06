@@ -14,6 +14,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { Banyan } from "@opencode-ai/core/banyancode"
 
 import { NotFoundError } from "@/storage/storage"
 import { eq } from "drizzle-orm"
@@ -575,6 +576,15 @@ export const layer: Layer.Layer<
         },
       }
       yield* Effect.logInfo("created", result)
+
+      // Phase A: kick the background graph bootstrap so the model's first
+      // graph-tool call finds a ready index instead of paying cold-start.
+      // serviceOption keeps R=never (no layer-dep churn); failures are logged
+      // inside the service and are non-fatal to session creation.
+      const bootstrapOpt = yield* Effect.serviceOption(Banyan.CodegraphBootstrap)
+      if (Option.isSome(bootstrapOpt) && input.directory) {
+        yield* bootstrapOpt.value.ensureGraph({ root: input.directory }).pipe(Effect.ignore)
+      }
 
       yield* events.publish(SessionV1.Event.Created, { sessionID: result.id, info: result })
 

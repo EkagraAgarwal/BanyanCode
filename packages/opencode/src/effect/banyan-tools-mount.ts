@@ -34,6 +34,10 @@ const codegraphReadinessLayer = Banyan.codegraphReadinessDefaultLayer.pipe(
   Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, databaseLayer, EventV2.defaultLayer)),
 )
 
+const codegraphBootstrapLayer = Banyan.codegraphBootstrapDefaultLayer.pipe(
+  Layer.provide(codegraphReadinessLayer),
+)
+
 const meshCoordinatorLayer = Banyan.meshCoordinatorDefaultLayer.pipe(
   Layer.provide(Banyan.subagentReviewRequestsRepoDefaultLayer),
   Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
@@ -103,6 +107,7 @@ export const banyanToolDepsLayer = Layer.mergeAll(
   subagentBusLayer,
   codegraphBuildServiceLayer,
   codegraphReadinessLayer,
+  codegraphBootstrapLayer,
   repoMapLayer,
   adaptedCatalogLayer,
   verifierLayer,
