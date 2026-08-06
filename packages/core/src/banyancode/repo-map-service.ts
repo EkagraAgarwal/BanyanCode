@@ -2,6 +2,7 @@ import { Context, Effect, Layer } from "effect"
 import path from "path"
 import { CodegraphRepo } from "./codegraph-repo"
 import type { CodegraphMeta, CodegraphNode } from "./types"
+import { resolveFileByPath, toRepoRelativePath } from "./codegraph-paths"
 
 export interface PackageOverview {
   readonly path: string
@@ -28,6 +29,8 @@ export interface OverviewResult {
 
 export interface DetailResult {
   readonly path: string
+  /** False when no `codegraph_files` row matched the requested path. */
+  readonly found: boolean
   readonly symbols: ReadonlyArray<{
     readonly name: string
     readonly kind: string
@@ -105,14 +108,23 @@ export const layer = Layer.effect(
         const files = yield* repo.listAllFiles()
         const nodes = yield* repo.searchNodes({ limit: OVERVIEW_NODE_CAP })
         const totalNodes = yield* repo.countNodes()
+        // Dedupe the meta read: callers that already fetched meta (e.g. the
+        // repo-map tool for staleness) pass it in so we don't SELECT the
+        // meta row twice per overview.
+        const meta = input.meta !== undefined ? input.meta : yield* repo.getMeta()
+        // Stored paths are absolute (Windows keeps backslashes); grouping
+        // and entry-point rendering must use repo-relative display paths or
+        // `packages/...` prefixes never match on absolute rows.
+        const indexedRoot = meta?.indexedRoot
         const filesByID = new Map(files.map((file) => [file.id, file] as const))
         const packageCounts = new Map<string, { files: Set<string>; nodes: number }>()
         const fileKindCounts: Record<string, number> = {}
 
         files.forEach((file) => {
-          const kind = fileKind(file.path, file.language)
+          const displayPath = toRepoRelativePath(file.path, indexedRoot)
+          const kind = fileKind(displayPath, file.language)
           fileKindCounts[kind] = (fileKindCounts[kind] ?? 0) + 1
-          const key = packagePath(file.path)
+          const key = packagePath(displayPath)
           const current = packageCounts.get(key) ?? { files: new Set<string>(), nodes: 0 }
           current.files.add(file.id)
           packageCounts.set(key, current)
@@ -120,7 +132,7 @@ export const layer = Layer.effect(
         nodes.forEach((node) => {
           const file = filesByID.get(node.fileID)
           if (!file) return
-          const key = packagePath(file.path)
+          const key = packagePath(toRepoRelativePath(file.path, indexedRoot))
           const current = packageCounts.get(key) ?? { files: new Set<string>(), nodes: 0 }
           current.nodes += 1
           packageCounts.set(key, current)
@@ -135,18 +147,14 @@ export const layer = Layer.effect(
             if (node.isEntrypoint) return true
             const file = filesByID.get(node.fileID)
             if (!file) return false
-            return fileKind(file.path, file.language) === "entrypoint"
+            return fileKind(toRepoRelativePath(file.path, indexedRoot), file.language) === "entrypoint"
           })
           .sort((a, b) => (b.inDegree ?? 0) - (a.inDegree ?? 0) || a.name.localeCompare(b.name))
           .flatMap((node) => {
             const file = filesByID.get(node.fileID)
-            return file ? [toEntryPoint(node, file.path)] : []
+            return file ? [toEntryPoint(node, toRepoRelativePath(file.path, indexedRoot))] : []
           })
           .slice(0, limit)
-        // Dedupe the meta read: callers that already fetched meta (e.g. the
-        // repo-map tool for staleness) pass it in so we don't SELECT the
-        // meta row twice per overview.
-        const meta = input.meta !== undefined ? input.meta : yield* repo.getMeta()
 
         return {
           packages,
@@ -157,30 +165,45 @@ export const layer = Layer.effect(
         }
       }),
       detail: Effect.fn("RepoMapService.detail")(function* (input: { root: string; path: string }) {
-        const root = normalize(path.resolve(input.root))
-        const requested = normalize(path.isAbsolute(input.path) ? path.resolve(input.path) : input.path)
-        const relative = path.isAbsolute(input.path) ? normalize(path.relative(root, requested)) : requested
-        if (relative.startsWith("../") || relative === "..") return { path: relative, symbols: [] }
-        const file = yield* repo.getFileByPath(relative)
-        if (!file) return { path: relative, symbols: [] }
+        // Phase 2: resolve through the shared path resolver. `getFileByPath`
+        // exact-matches the stored string, and production rows store ABSOLUTE
+        // paths (backslashes on Windows), so the old relative-only lookup
+        // returned `path-not-found` for every real graph. The resolver tries
+        // exact, root-prefixed, and uniquely-suffixed candidates against both
+        // slash forms.
+        const meta = yield* repo.getMeta()
+        const indexedRoot = meta?.indexedRoot
+        const file = yield* resolveFileByPath(repo, input.path, indexedRoot)
+        if (!file) {
+          // Not-found: still report the repo-relative display form of the
+          // attempted path so callers can show what was tried.
+          return { path: toRepoRelativePath(input.path, indexedRoot) || input.path, symbols: [], found: false }
+        }
         const nodes = yield* repo.listNodesByFile(file.id)
+        // File-kind rows (`<fileID>:file`) are index scaffolding, not
+        // symbols — excluding them lets callers distinguish "file exists but
+        // has no code symbols" from a symbol-bearing file.
+        const symbols = nodes
+          .filter((node) => node.kind !== "file")
+          .sort((a, b) => a.startLine - b.startLine || a.name.localeCompare(b.name))
+          .map((node) => ({
+            name: node.name,
+            kind: node.kind,
+            startLine: node.startLine,
+            endLine: node.endLine,
+            ...(node.signature === undefined ? {} : { signature: node.signature }),
+          }))
         return {
-          path: file.path,
-          symbols: nodes
-            .sort((a, b) => a.startLine - b.startLine || a.name.localeCompare(b.name))
-            .map((node) => ({
-              name: node.name,
-              kind: node.kind,
-              startLine: node.startLine,
-              endLine: node.endLine,
-              ...(node.signature === undefined ? {} : { signature: node.signature }),
-            })),
+          path: toRepoRelativePath(file.path, indexedRoot) || file.path,
+          symbols,
+          found: true,
         }
       }),
       search: Effect.fn("RepoMapService.search")(function* (input: { root: string; query: string; limit?: number }) {
         const hits = yield* repo.ftsSearchNodes({ query: input.query, limit: Math.max(1, Math.min(input.limit ?? 25, 100)) })
         const files = yield* repo.filesByIDs([...new Set(hits.map((hit) => hit.fileID))])
-        const filesByID = new Map(files.map((file) => [file.id, file.path] as const))
+        const meta = yield* repo.getMeta()
+        const filesByID = new Map(files.map((file) => [file.id, toRepoRelativePath(file.path, meta?.indexedRoot)] as const))
         return hits.flatMap((hit) => {
           const filePath = filesByID.get(hit.fileID)
           if (!filePath) return []

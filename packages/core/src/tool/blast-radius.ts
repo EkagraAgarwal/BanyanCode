@@ -56,7 +56,7 @@ export const Output = Schema.Struct({
   meta: Schema.optional(GraphMeta),
   resolved: Schema.Boolean,
   resolutionDerivation: Schema.optional(
-    Schema.Literals(["tag-fallback", "name-exact", "qualified-split", "code-substring", "name-like", "fts-bm25"]),
+    Schema.Literals(["tag-fallback", "name-exact", "qualified-split", "code-substring", "name-like", "fts-bm25", "node-id"]),
   ),
 })
 

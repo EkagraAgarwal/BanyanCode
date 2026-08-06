@@ -1,14 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
+import fs from "fs/promises"
 import { Effect, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { tmpdir } from "../fixture/tmpdir"
 import {
   Service as CodegraphRepo,
   defaultLayer as codegraphRepoDefaultLayer,
 } from "../../src/banyancode/codegraph-repo"
 import type { Interface as CodegraphRepoInterface } from "../../src/banyancode/codegraph-repo"
+import { CodegraphIndexer } from "../../src/banyancode/codegraph-indexer"
 import {
   Service as RepoMapService,
   defaultLayer as repoMapServiceDefaultLayer,
@@ -189,6 +192,131 @@ describe("RepoMapService", () => {
         expect(hits.some((hit) => hit.name === "login" && hit.path === "packages/auth/src/login.ts")).toBe(true)
         expect(hits.every((hit) => hit.relevance >= 0)).toBe(true)
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 0 real-index regression: the real indexer stores ABSOLUTE paths
+// (backslashes on Windows). detail() must resolve `./`-relative, bare
+// relative, and absolute inputs against those rows, and report repo-relative
+// display paths — the seeded relative rows above masked this defect.
+// ---------------------------------------------------------------------------
+describe("RepoMapService real-index path resolution", () => {
+  const indexLayer = CodegraphIndexer.layer.pipe(
+    Layer.provide(FSUtil.defaultLayer),
+    Layer.provide(codegraphRepoDefaultLayer),
+  )
+  const mapLayer = Layer.mergeAll(codegraphRepoDefaultLayer, repoMapServiceDefaultLayer)
+
+  const indexFixture = (root: string, dbPath: string) => {
+    const dbLayer = Database.layerFromPath(dbPath)
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* CodegraphIndexer.Service
+        yield* indexer.index({ root, force: true })
+      }).pipe(Effect.provide(indexLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  }
+
+  // `index()` does not write the meta row — the codegraph build service bumps
+  // it afterward. The real-index tests mirror that so repo-map can derive
+  // repo-relative display paths from `meta.indexedRoot` against real stored rows.
+  const bumpMeta = (repo: CodegraphRepoInterface, root: string) =>
+    repo.bumpVersion({ eligibleFiles: 1, indexedRoot: root })
+
+  const writeFixture = async (root: string) => {
+    const coreSrc = path.join(root, "packages", "core", "src")
+    await fs.mkdir(coreSrc, { recursive: true })
+    await fs.writeFile(
+      path.join(coreSrc, "index.ts"),
+      ["export function bootstrap() { return 1 }", "export class Config {}"].join("\n"),
+    )
+    await fs.writeFile(path.join(coreSrc, "router.ts"), "export function handle() { return 3 }\n")
+    const authSrc = path.join(root, "packages", "auth", "src")
+    await fs.mkdir(authSrc, { recursive: true })
+    await fs.writeFile(path.join(authSrc, "login.ts"), "export function login(user: unknown) { return user }\n")
+  }
+
+  test("detail resolves ./relative, bare relative, and absolute queries against absolute stored paths", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "repo-map.db")
+    await writeFixture(tmp.path)
+    await indexFixture(tmp.path, dbPath)
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo
+        yield* bumpMeta(repo, tmp.path)
+        const map = yield* RepoMapService
+
+        const viaDotSlash = yield* map.detail({ root: tmp.path, path: "./packages/core/src/index.ts" })
+        expect(viaDotSlash.found).toBe(true)
+        expect(viaDotSlash.path).toBe("packages/core/src/index.ts")
+        expect(viaDotSlash.symbols.map((s) => s.name).sort()).toEqual(["Config", "bootstrap"])
+
+        const viaRelative = yield* map.detail({ root: tmp.path, path: "packages/core/src/index.ts" })
+        expect(viaRelative.found).toBe(true)
+        expect(viaRelative.path).toBe("packages/core/src/index.ts")
+
+        const viaAbsolute = yield* map.detail({ root: tmp.path, path: path.join(tmp.path, "packages", "core", "src", "index.ts") })
+        expect(viaAbsolute.found).toBe(true)
+        expect(viaAbsolute.path).toBe("packages/core/src/index.ts")
+        expect(viaAbsolute.symbols.map((s) => s.name).sort()).toEqual(["Config", "bootstrap"])
+
+        const missing = yield* map.detail({ root: tmp.path, path: "packages/missing/file.ts" })
+        expect(missing.found).toBe(false)
+        expect(missing.symbols.length).toBe(0)
+      }).pipe(Effect.provide(mapLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("detail distinguishes a symbol-less file (found, no symbols) from a missing file (not found)", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "repo-map.db")
+    await writeFixture(tmp.path)
+    await fs.writeFile(path.join(tmp.path, "packages", "core", "src", "placeholder.ts"), "// no symbols here\n")
+    await indexFixture(tmp.path, dbPath)
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo
+        yield* bumpMeta(repo, tmp.path)
+        const map = yield* RepoMapService
+
+        const symbolLess = yield* map.detail({ root: tmp.path, path: "packages/core/src/placeholder.ts" })
+        expect(symbolLess.found).toBe(true)
+        expect(symbolLess.symbols.length).toBe(0)
+
+        const absent = yield* map.detail({ root: tmp.path, path: "packages/core/src/nope.ts" })
+        expect(absent.found).toBe(false)
+      }).pipe(Effect.provide(mapLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("overview groups absolute stored paths into packages and renders repo-relative entry points", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "repo-map.db")
+    await writeFixture(tmp.path)
+    await indexFixture(tmp.path, dbPath)
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo
+        yield* bumpMeta(repo, tmp.path)
+        const map = yield* RepoMapService
+        const overview = yield* map.overview({ root: tmp.path })
+
+        const packageNames = overview.packages.map((pkg) => pkg.path).sort()
+        expect(packageNames).toEqual(["packages/auth", "packages/core"])
+        const core = overview.packages.find((pkg) => pkg.path === "packages/core")
+        expect(core?.files).toBe(2)
+        expect(overview.entryPoints.every((entry) => !entry.path.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(entry.path))).toBe(true)
+        expect(overview.entryPoints.some((entry) => entry.name === "bootstrap" && entry.path === "packages/core/src/index.ts")).toBe(true)
+      }).pipe(Effect.provide(mapLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
 })
