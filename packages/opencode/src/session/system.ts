@@ -123,10 +123,11 @@ export const layer = Layer.effect(
           : undefined
 
         // Prefer the BanyanCode source module when it is in scope (e.g. tests
-        // that provide the layer, or future wiring via `defaultLayer`). Falls
-        // back to the exported `POLICY_TEXT` constant when the service is not
-        // available so the V1 prompt still ships the model-facing preference
-        // for graph + repository tools over grep/glob/bash.
+        // that provide the layer, or SystemPrompt.defaultLayer which mounts
+        // `CodegraphSystemSource` explicitly). Falls back to the exported
+        // `POLICY_TEXT` constant when the service is not available so
+        // isolated test layers that build the raw `layer` still ship the
+        // model-facing preference for graph + repository tools.
         const source = yield* Effect.serviceOption(Banyan.CodegraphSystemSource)
 
         // Phase A: read the graph bootstrap state so the rendered policy can
@@ -154,7 +155,18 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(Skill.defaultLayer), Layer.provide(LocationServiceMap.layer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(Skill.defaultLayer),
+  Layer.provide(LocationServiceMap.layer),
+  // Mount the dynamic codegraph source so the V1 prompt composes the per-session
+  // tool guide + graph state whenever SystemPrompt is built in production
+  // (AppLayer / createRoutes) instead of silently degrading to the static
+  // POLICY_TEXT. The bootstrap state service is wired by the runtime
+  // composition (AppLayer / createRoutes mount the root-bound
+  // `codegraphBootstrapDefaultLayer` facade), not here — it needs the graph
+  // DB, which is out of scope for this renderer-only layer.
+  Layer.provide(Banyan.CodegraphSystemSourceNS.defaultLayer),
+)
 
 const locationServiceMapNode = LayerNode.make(LocationServiceMap.layer, [])
 

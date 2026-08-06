@@ -59,13 +59,12 @@ describe("PR C: SystemPrompt.codegraph auto-tools policy", () => {
     }),
   )
 
-  // The V1 layer here does NOT provide Banyan.CodegraphSystemSource, so
-  // SystemPrompt.codegraph() falls back to `legacyCodegraphPolicy()` in
-  // packages/opencode/src/session/system.ts. That fallback intentionally
-  // ships the same header (`## Codegraph-first search policy`) the V2 source
-  // emits so V1 always carries at least the policy section. The per-tool
-  // catalog is added by tests / calling layers that provide the V2 source
-  // (see `codegraph-system-source.test.ts`).
+  // The V1 layer here uses `SystemPrompt.defaultLayer`, which now mounts
+  // `CodegraphSystemSource`. With no `tools` and no bootstrap in scope,
+  // `load(undefined)` pins to exactly `POLICY_TEXT`, so the fallback branch
+  // in `SystemPrompt.codegraph()` ships the same header (`## Codegraph-first
+  // search policy`) and the per-tool catalog is added by tests / calling
+  // layers that pass the resolved tool set (see `codegraph-system-source.test.ts`).
   it.effect("returns the codegraph block when BanyanCode is enabled", () =>
     Effect.gen(function* () {
       const svc = yield* SystemPrompt.Service
@@ -120,6 +119,42 @@ describe("PR C: SystemPrompt.codegraph auto-tools policy", () => {
           expect(ready).toBeDefined()
           expect(ready).toContain("Graph state: ready (1,204 symbols)")
           expect(ready).toContain("code_find")
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+    expect(Exit.isSuccess(exit)).toBe(true)
+  })
+
+  // Regression for unify-runtime-root: the V1 session prompt composition
+  // must carry BOTH the dynamic tool guide (rendered from the materialized
+  // tool set the model sees) AND the graph state. `SystemPrompt.defaultLayer`
+  // mounts `CodegraphSystemSource`, and the AppLayer mounts the root-bound
+  // `CodegraphBootstrap`, so `codegraph(tools)` renders the per-tool catalog
+  // section in addition to the policy + Graph state line.
+  test("codegraph(tools) renders the dynamic tool guide AND graph state (V1 AppLayer composition)", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "bootstrap-tools.db")
+    const layer = buildBootstrapSystemLayer(dbPath)
+
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* SystemPrompt.Service
+          const tools = {
+            code_find: { description: "Look up a symbol or file in the code graph" },
+            repository_query: { description: "Run a semantic query over the repository" },
+            banyan_repo_map: { description: "Token-budgeted outline of the workspace" },
+          } as unknown as Record<string, { description?: string }>
+
+          const block = yield* svc.codegraph(tools as never)
+          expect(block).toBeDefined()
+          // Dynamic tool guide: per-tool descriptions rendered into the prompt.
+          expect(block).toContain("BanyanCode tool guide")
+          expect(block).toContain("Look up a symbol or file in the code graph")
+          expect(block).toContain("Token-budgeted outline of the workspace")
+          // Static policy + graph state still present.
+          expect(block).toContain("Codegraph-first search policy")
+          expect(block).toContain("Graph state:")
         }).pipe(Effect.provide(layer)),
       ),
     )
