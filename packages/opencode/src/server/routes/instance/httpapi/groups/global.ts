@@ -210,6 +210,13 @@ export const ToolUsageResult = Schema.Struct({
   tools: Schema.Array(ToolUsageRow),
 }).annotate({ identifier: "ToolUsageResult" })
 
+// Phase C (per-session adoption): optional session filter for
+// GET /global/tool-usage. When absent the endpoint keeps its
+// lifetime-aggregate contract.
+export const ToolUsageQuery = Schema.Struct({
+  session: Schema.optional(Schema.String),
+})
+
 export const WebSearchFreeInput = WebSearchFreeTool.Input
 export const WebSearchFreeResult = WebSearchFreeTool.Output
 
@@ -457,13 +464,14 @@ export const GlobalApi = HttpApi.make("global").add(
         }),
       ),
       HttpApiEndpoint.get("toolUsage", GlobalPaths.toolUsage, {
+        query: ToolUsageQuery,
         success: described(ToolUsageResult, "Most-used codegraph tools"),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "global.toolUsage",
           summary: "List tool usage",
           description:
-            "Return the most-used tools from the `codegraph_tool_usage` table, ordered by use count (lifetime invocation count), capped at 50 rows. The same table drives the hot-tier promotion gate in the adapted tool catalog. Returns an empty list when BanyanCode is disabled.",
+            "Return the most-used tools from the `codegraph_tool_usage` table, ordered by use count (lifetime invocation count), capped at 50 rows. Pass ?session=<id> for per-session rows (tools whose session_id matches the given session). The same table drives the hot-tier promotion gate in the adapted tool catalog. Returns an empty list when BanyanCode is disabled.",
         }),
       ),
       HttpApiEndpoint.get("codegraphNodes", GlobalPaths.codegraphNodes, {

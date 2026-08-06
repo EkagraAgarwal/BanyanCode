@@ -176,4 +176,54 @@ describe("tool usage HttpApi", () => {
       )
     }),
   )
+
+  it.live("GET /global/tool-usage?session=<id> returns only that session's rows; no-session returns all rows", () =>
+    Effect.gen(function* () {
+      yield* runWithFreshDb((dbPath) =>
+        Effect.gen(function* () {
+          const dbLayer = Database.layerFromPath(dbPath)
+          const apiLayer = buildApiLayer(dbPath)
+          yield* Effect.gen(function* () {
+            const { db } = yield* Database.Service
+            yield* DatabaseMigration.apply(db)
+          }).pipe(Effect.provide(dbLayer), Effect.scoped)
+
+          // Record usage through the adapted catalog (the production write
+          // path) with session ids, against the same DB the endpoint reads.
+          yield* Effect.gen(function* () {
+            const catalog = yield* Banyan.AdaptedCatalog
+            yield* catalog.recordUsage("code_find", "ses_test1")
+            yield* catalog.recordUsage("blast_radius", "ses_test1")
+            yield* catalog.recordUsage("repository_query", "ses_test2")
+          }).pipe(
+            Effect.provide(Banyan.adaptedCatalogDefaultLayer.pipe(Layer.provide(dbLayer))),
+            Effect.scoped,
+          )
+
+          const response = yield* Effect.succeed(
+            HttpClientRequest.get(`${GlobalPaths.toolUsage}?session=ses_test1`),
+          ).pipe(Effect.flatMap(HttpClient.execute), Effect.provide(apiLayer))
+          expect(response.status).toBe(200)
+          const body = (yield* response.json) as {
+            tools: Array<{ toolId: string; useCount: number; lastUsedAt: number }>
+          }
+          expect(body.tools.length).toBe(2)
+          expect(body.tools.map((tool) => tool.toolId).sort()).toEqual(["blast_radius", "code_find"])
+          expect(body.tools.every((tool) => tool.useCount === 1)).toBe(true)
+
+          // Aggregate contract unchanged: without the session filter every
+          // row comes back regardless of which session wrote it.
+          const all = yield* Effect.succeed(HttpClientRequest.get(GlobalPaths.toolUsage)).pipe(
+            Effect.flatMap(HttpClient.execute),
+            Effect.provide(apiLayer),
+          )
+          expect(all.status).toBe(200)
+          const allBody = (yield* all.json) as {
+            tools: Array<{ toolId: string; useCount: number; lastUsedAt: number }>
+          }
+          expect(allBody.tools.length).toBe(3)
+        }),
+      )
+    }),
+  )
 })

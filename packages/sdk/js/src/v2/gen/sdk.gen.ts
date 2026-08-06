@@ -1829,12 +1829,19 @@ export class Global extends HeyApiClient {
   /**
    * List tool usage
    *
-   * Return the most-used tools from the `codegraph_tool_usage` table, ordered by use count (lifetime invocation count), capped at 50 rows. The same table drives the hot-tier promotion gate in the adapted tool catalog. Returns an empty list when BanyanCode is disabled.
+   * Return the most-used tools from the `codegraph_tool_usage` table, ordered by use count (lifetime invocation count), capped at 50 rows. Pass ?session=<id> for per-session rows (tools whose session_id matches the given session). The same table drives the hot-tier promotion gate in the adapted tool catalog. Returns an empty list when BanyanCode is disabled.
    */
-  public toolUsage<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+  public toolUsage<ThrowOnError extends boolean = false>(
+    parameters?: {
+      session?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "session" }] }])
     return (options?.client ?? this.client).get<GlobalToolUsageResponses, GlobalToolUsageErrors, ThrowOnError>({
       url: "/global/tool-usage",
       ...options,
+      ...params,
     })
   }
 

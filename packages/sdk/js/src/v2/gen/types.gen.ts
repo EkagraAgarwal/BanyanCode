@@ -49,16 +49,26 @@ export type Event =
   | EventSessionNextCompactionStarted
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
+  | EventPermissionV2Asked
+  | EventPermissionV2Replied
+  | EventBanyancodeConfigUpdated
+  | EventBanyancodeMeshStatus
+  | EventBanyancodeMemoryCommitted
+  | EventBanyancodeMemoryCandidateEmitted
+  | EventBanyancodeMemoryPromoted
+  | EventBanyancodeMemoryRejected
+  | EventBanyancodeCodegraphBuild
+  | EventFileWatcherUpdated
+  | EventBanyancodeCodegraphAutoUpdate
+  | EventBanyancodeCodegraphAutoUpdateProgress
+  | EventBanyancodeSystemUpdated
   | EventMessagePartDelta
   | EventSessionDiff
   | EventSessionError
   | EventInstallationUpdated
   | EventInstallationUpdateAvailable
   | EventFileEdited
-  | EventPermissionV2Asked
-  | EventPermissionV2Replied
   | EventReferenceUpdated
-  | EventFileWatcherUpdated
   | EventPtyCreated
   | EventPtyUpdated
   | EventPtyExited
@@ -67,16 +77,6 @@ export type Event =
   | EventQuestionV2Replied
   | EventQuestionV2Rejected
   | EventTodoUpdated
-  | EventBanyancodeConfigUpdated
-  | EventBanyancodeMeshStatus
-  | EventBanyancodeMemoryCommitted
-  | EventBanyancodeMemoryCandidateEmitted
-  | EventBanyancodeMemoryPromoted
-  | EventBanyancodeMemoryRejected
-  | EventBanyancodeCodegraphBuild
-  | EventBanyancodeCodegraphAutoUpdate
-  | EventBanyancodeCodegraphAutoUpdateProgress
-  | EventBanyancodeSystemUpdated
   | EventLspUpdated
   | EventPermissionAsked
   | EventPermissionReplied
@@ -1206,61 +1206,6 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "message.part.delta"
-        properties: {
-          sessionID: string
-          messageID: string
-          partID: string
-          field: string
-          delta: string
-        }
-      }
-    | {
-        id: string
-        type: "session.diff"
-        properties: {
-          sessionID: string
-          diff: Array<SnapshotFileDiff>
-        }
-      }
-    | {
-        id: string
-        type: "session.error"
-        properties: {
-          sessionID?: string
-          error?:
-            | ProviderAuthError
-            | UnknownError
-            | MessageOutputLengthError
-            | MessageAbortedError
-            | StructuredOutputError
-            | ContextOverflowError
-            | ApiError
-        }
-      }
-    | {
-        id: string
-        type: "installation.updated"
-        properties: {
-          version: string
-        }
-      }
-    | {
-        id: string
-        type: "installation.update-available"
-        properties: {
-          version: string
-        }
-      }
-    | {
-        id: string
-        type: "file.edited"
-        properties: {
-          file: string
-        }
-      }
-    | {
-        id: string
         type: "permission.v2.asked"
         properties: {
           id: string
@@ -1281,88 +1226,6 @@ export type GlobalEvent = {
           sessionID: string
           requestID: string
           reply: PermissionV2Reply
-        }
-      }
-    | {
-        id: string
-        type: "reference.updated"
-        properties: {
-          [key: string]: unknown
-        }
-      }
-    | {
-        id: string
-        type: "file.watcher.updated"
-        properties: {
-          file: string
-          event: "add" | "change" | "unlink"
-        }
-      }
-    | {
-        id: string
-        type: "pty.created"
-        properties: {
-          info: Pty
-        }
-      }
-    | {
-        id: string
-        type: "pty.updated"
-        properties: {
-          info: Pty
-        }
-      }
-    | {
-        id: string
-        type: "pty.exited"
-        properties: {
-          id: string
-          exitCode: number
-        }
-      }
-    | {
-        id: string
-        type: "pty.deleted"
-        properties: {
-          id: string
-        }
-      }
-    | {
-        id: string
-        type: "question.v2.asked"
-        properties: {
-          id: string
-          sessionID: string
-          /**
-           * Questions to ask
-           */
-          questions: Array<QuestionV2Info>
-          tool?: QuestionV2Tool
-        }
-      }
-    | {
-        id: string
-        type: "question.v2.replied"
-        properties: {
-          sessionID: string
-          requestID: string
-          answers: Array<QuestionV2Answer>
-        }
-      }
-    | {
-        id: string
-        type: "question.v2.rejected"
-        properties: {
-          sessionID: string
-          requestID: string
-        }
-      }
-    | {
-        id: string
-        type: "todo.updated"
-        properties: {
-          sessionID: string
-          todos: Array<Todo>
         }
       }
     | {
@@ -1492,6 +1355,14 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "file.watcher.updated"
+        properties: {
+          file: string
+          event: "add" | "change" | "unlink"
+        }
+      }
+    | {
+        id: string
         type: "banyancode.codegraph.auto-update"
         properties: {
           status: "idle" | "watching" | "draining" | "paused"
@@ -1525,6 +1396,135 @@ export type GlobalEvent = {
           diskUsedBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           diskTotalBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           platform: "windows" | "linux" | "darwin"
+        }
+      }
+    | {
+        id: string
+        type: "message.part.delta"
+        properties: {
+          sessionID: string
+          messageID: string
+          partID: string
+          field: string
+          delta: string
+        }
+      }
+    | {
+        id: string
+        type: "session.diff"
+        properties: {
+          sessionID: string
+          diff: Array<SnapshotFileDiff>
+        }
+      }
+    | {
+        id: string
+        type: "session.error"
+        properties: {
+          sessionID?: string
+          error?:
+            | ProviderAuthError
+            | UnknownError
+            | MessageOutputLengthError
+            | MessageAbortedError
+            | StructuredOutputError
+            | ContextOverflowError
+            | ApiError
+        }
+      }
+    | {
+        id: string
+        type: "installation.updated"
+        properties: {
+          version: string
+        }
+      }
+    | {
+        id: string
+        type: "installation.update-available"
+        properties: {
+          version: string
+        }
+      }
+    | {
+        id: string
+        type: "file.edited"
+        properties: {
+          file: string
+        }
+      }
+    | {
+        id: string
+        type: "reference.updated"
+        properties: {
+          [key: string]: unknown
+        }
+      }
+    | {
+        id: string
+        type: "pty.created"
+        properties: {
+          info: Pty
+        }
+      }
+    | {
+        id: string
+        type: "pty.updated"
+        properties: {
+          info: Pty
+        }
+      }
+    | {
+        id: string
+        type: "pty.exited"
+        properties: {
+          id: string
+          exitCode: number
+        }
+      }
+    | {
+        id: string
+        type: "pty.deleted"
+        properties: {
+          id: string
+        }
+      }
+    | {
+        id: string
+        type: "question.v2.asked"
+        properties: {
+          id: string
+          sessionID: string
+          /**
+           * Questions to ask
+           */
+          questions: Array<QuestionV2Info>
+          tool?: QuestionV2Tool
+        }
+      }
+    | {
+        id: string
+        type: "question.v2.replied"
+        properties: {
+          sessionID: string
+          requestID: string
+          answers: Array<QuestionV2Answer>
+        }
+      }
+    | {
+        id: string
+        type: "question.v2.rejected"
+        properties: {
+          sessionID: string
+          requestID: string
+        }
+      }
+    | {
+        id: string
+        type: "todo.updated"
+        properties: {
+          sessionID: string
+          todos: Array<Todo>
         }
       }
     | {
@@ -5532,67 +5532,6 @@ export type EventSessionNextCompactionEnded = {
   }
 }
 
-export type EventMessagePartDelta = {
-  id: string
-  type: "message.part.delta"
-  properties: {
-    sessionID: string
-    messageID: string
-    partID: string
-    field: string
-    delta: string
-  }
-}
-
-export type EventSessionDiff = {
-  id: string
-  type: "session.diff"
-  properties: {
-    sessionID: string
-    diff: Array<SnapshotFileDiff>
-  }
-}
-
-export type EventSessionError = {
-  id: string
-  type: "session.error"
-  properties: {
-    sessionID?: string
-    error?:
-      | ProviderAuthError
-      | UnknownError
-      | MessageOutputLengthError
-      | MessageAbortedError
-      | StructuredOutputError
-      | ContextOverflowError
-      | ApiError
-  }
-}
-
-export type EventInstallationUpdated = {
-  id: string
-  type: "installation.updated"
-  properties: {
-    version: string
-  }
-}
-
-export type EventInstallationUpdateAvailable = {
-  id: string
-  type: "installation.update-available"
-  properties: {
-    version: string
-  }
-}
-
-export type EventFileEdited = {
-  id: string
-  type: "file.edited"
-  properties: {
-    file: string
-  }
-}
-
 export type EventPermissionV2Asked = {
   id: string
   type: "permission.v2.asked"
@@ -5616,98 +5555,6 @@ export type EventPermissionV2Replied = {
     sessionID: string
     requestID: string
     reply: PermissionV2Reply
-  }
-}
-
-export type EventReferenceUpdated = {
-  id: string
-  type: "reference.updated"
-  properties: {
-    [key: string]: unknown
-  }
-}
-
-export type EventFileWatcherUpdated = {
-  id: string
-  type: "file.watcher.updated"
-  properties: {
-    file: string
-    event: "add" | "change" | "unlink"
-  }
-}
-
-export type EventPtyCreated = {
-  id: string
-  type: "pty.created"
-  properties: {
-    info: Pty
-  }
-}
-
-export type EventPtyUpdated = {
-  id: string
-  type: "pty.updated"
-  properties: {
-    info: Pty
-  }
-}
-
-export type EventPtyExited = {
-  id: string
-  type: "pty.exited"
-  properties: {
-    id: string
-    exitCode: number
-  }
-}
-
-export type EventPtyDeleted = {
-  id: string
-  type: "pty.deleted"
-  properties: {
-    id: string
-  }
-}
-
-export type EventQuestionV2Asked = {
-  id: string
-  type: "question.v2.asked"
-  properties: {
-    id: string
-    sessionID: string
-    /**
-     * Questions to ask
-     */
-    questions: Array<QuestionV2Info>
-    tool?: QuestionV2Tool
-  }
-}
-
-export type EventQuestionV2Replied = {
-  id: string
-  type: "question.v2.replied"
-  properties: {
-    sessionID: string
-    requestID: string
-    answers: Array<QuestionV2Answer>
-  }
-}
-
-export type EventQuestionV2Rejected = {
-  id: string
-  type: "question.v2.rejected"
-  properties: {
-    sessionID: string
-    requestID: string
-  }
-}
-
-export type EventTodoUpdated = {
-  id: string
-  type: "todo.updated"
-  properties: {
-    sessionID: string
-    todos: Array<Todo>
   }
 }
 
@@ -5843,6 +5690,15 @@ export type EventBanyancodeCodegraphBuild = {
   }
 }
 
+export type EventFileWatcherUpdated = {
+  id: string
+  type: "file.watcher.updated"
+  properties: {
+    file: string
+    event: "add" | "change" | "unlink"
+  }
+}
+
 export type EventBanyancodeCodegraphAutoUpdate = {
   id: string
   type: "banyancode.codegraph.auto-update"
@@ -5880,6 +5736,150 @@ export type EventBanyancodeSystemUpdated = {
     diskUsedBytes?: number | "NaN" | "Infinity" | "-Infinity"
     diskTotalBytes?: number | "NaN" | "Infinity" | "-Infinity"
     platform: "windows" | "linux" | "darwin"
+  }
+}
+
+export type EventMessagePartDelta = {
+  id: string
+  type: "message.part.delta"
+  properties: {
+    sessionID: string
+    messageID: string
+    partID: string
+    field: string
+    delta: string
+  }
+}
+
+export type EventSessionDiff = {
+  id: string
+  type: "session.diff"
+  properties: {
+    sessionID: string
+    diff: Array<SnapshotFileDiff>
+  }
+}
+
+export type EventSessionError = {
+  id: string
+  type: "session.error"
+  properties: {
+    sessionID?: string
+    error?:
+      | ProviderAuthError
+      | UnknownError
+      | MessageOutputLengthError
+      | MessageAbortedError
+      | StructuredOutputError
+      | ContextOverflowError
+      | ApiError
+  }
+}
+
+export type EventInstallationUpdated = {
+  id: string
+  type: "installation.updated"
+  properties: {
+    version: string
+  }
+}
+
+export type EventInstallationUpdateAvailable = {
+  id: string
+  type: "installation.update-available"
+  properties: {
+    version: string
+  }
+}
+
+export type EventFileEdited = {
+  id: string
+  type: "file.edited"
+  properties: {
+    file: string
+  }
+}
+
+export type EventReferenceUpdated = {
+  id: string
+  type: "reference.updated"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
+export type EventPtyCreated = {
+  id: string
+  type: "pty.created"
+  properties: {
+    info: Pty
+  }
+}
+
+export type EventPtyUpdated = {
+  id: string
+  type: "pty.updated"
+  properties: {
+    info: Pty
+  }
+}
+
+export type EventPtyExited = {
+  id: string
+  type: "pty.exited"
+  properties: {
+    id: string
+    exitCode: number
+  }
+}
+
+export type EventPtyDeleted = {
+  id: string
+  type: "pty.deleted"
+  properties: {
+    id: string
+  }
+}
+
+export type EventQuestionV2Asked = {
+  id: string
+  type: "question.v2.asked"
+  properties: {
+    id: string
+    sessionID: string
+    /**
+     * Questions to ask
+     */
+    questions: Array<QuestionV2Info>
+    tool?: QuestionV2Tool
+  }
+}
+
+export type EventQuestionV2Replied = {
+  id: string
+  type: "question.v2.replied"
+  properties: {
+    sessionID: string
+    requestID: string
+    answers: Array<QuestionV2Answer>
+  }
+}
+
+export type EventQuestionV2Rejected = {
+  id: string
+  type: "question.v2.rejected"
+  properties: {
+    sessionID: string
+    requestID: string
+  }
+}
+
+export type EventTodoUpdated = {
+  id: string
+  type: "todo.updated"
+  properties: {
+    sessionID: string
+    todos: Array<Todo>
   }
 }
 
@@ -6641,7 +6641,9 @@ export type GlobalCodegraphStatusResponse = GlobalCodegraphStatusResponses[keyof
 export type GlobalToolUsageData = {
   body?: never
   path?: never
-  query?: never
+  query?: {
+    session?: string
+  }
   url: "/global/tool-usage"
 }
 

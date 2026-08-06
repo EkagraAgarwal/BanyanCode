@@ -27,7 +27,7 @@ export interface MaterializeInput {
 export interface Interface {
   readonly materialize: (input: MaterializeInput) => Effect.Effect<ReadonlyArray<AdaptedTool>, never, never>
   readonly tier: (tool: AdaptedTool) => Tier
-  readonly recordUsage: (toolID: string) => Effect.Effect<void, never, never>
+  readonly recordUsage: (toolID: string, sessionID?: string) => Effect.Effect<void, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/AdaptedCatalog") {}
@@ -47,10 +47,10 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* Database.Service
 
-    const recordUsage = Effect.fn("AdaptedCatalog.recordUsage")(function* (toolID: string) {
+    const recordUsage = Effect.fn("AdaptedCatalog.recordUsage")(function* (toolID: string, sessionID?: string) {
       yield* db.run(sql`
-        INSERT INTO codegraph_tool_usage (tool_id, last_used_at, use_count)
-        VALUES (${toolID}, unixepoch(), 1)
+        INSERT INTO codegraph_tool_usage (tool_id, session_id, last_used_at, use_count)
+        VALUES (${toolID}, ${sessionID ?? null}, unixepoch(), 1)
         ON CONFLICT(tool_id) DO UPDATE SET
           last_used_at = unixepoch(),
           use_count = codegraph_tool_usage.use_count + 1

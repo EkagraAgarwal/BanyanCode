@@ -164,24 +164,27 @@ describe("AdaptedCatalog", () => {
     expect(result).toEqual([])
   })
 
-  test("recordUsage increments use_count and last_used_at", async () => {
+  test("recordUsage increments use_count, stamps session_id, and keeps lifetime aggregates", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "catalog.db")
     const { all } = setupLayers(dbPath)
 
-    const useCount = await Effect.runPromise(
+    const rows = await Effect.runPromise(
       Effect.gen(function* () {
         const catalog = yield* AdaptedCatalog
-        yield* catalog.recordUsage("some_tool")
-        yield* catalog.recordUsage("some_tool")
+        yield* catalog.recordUsage("t1", "ses_a")
+        yield* catalog.recordUsage("t1", "ses_a")
+        yield* catalog.recordUsage("t2", "ses_b")
         const { db } = yield* Database.Service
-        const rows = yield* db.all<{ tool_id: string; use_count: number }>(
-          sql`SELECT tool_id, use_count FROM codegraph_tool_usage`,
+        return yield* db.all<{ tool_id: string; session_id: string | null; use_count: number }>(
+          sql`SELECT tool_id, session_id, use_count FROM codegraph_tool_usage`,
         )
-        return rows.find((row) => row.tool_id === "some_tool")?.use_count ?? 0
       }).pipe(Effect.provide(all), Effect.scoped),
     )
-    expect(useCount).toBe(2)
+    const t1 = rows.find((row) => row.tool_id === "t1")
+    const t2 = rows.find((row) => row.tool_id === "t2")
+    expect(t1).toEqual({ tool_id: "t1", session_id: "ses_a", use_count: 2 })
+    expect(t2).toEqual({ tool_id: "t2", session_id: "ses_b", use_count: 1 })
   })
 
   test("tier accessor returns the stored tier", async () => {

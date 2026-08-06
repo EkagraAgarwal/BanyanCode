@@ -171,8 +171,12 @@ export interface Interface {
    * first. Consumers (HTTP `GET /global/tool-usage`, the TUI sidebar widget)
    * surface tool adoption; the hot-tier promotion gate in `AdaptedCatalog`
    * already reads the same table for the last-24h window.
+   *
+   * Phase C (per-session adoption): pass `{ session }` to scope the read to
+   * rows whose `session_id` matches (the session that most recently used the
+   * tool). Omitting the filter keeps the lifetime-aggregate contract.
    */
-  readonly listToolUsage: () => Effect.Effect<
+  readonly listToolUsage: (input?: { session?: string }) => Effect.Effect<
     ReadonlyArray<{ toolId: string; useCount: number; lastUsedAt: number }>,
     never,
     never
@@ -901,10 +905,11 @@ export const layer = Layer.effect(
       return row?.c ?? 0
     })
 
-    const listToolUsage = Effect.fn("CodegraphRepo.listToolUsage")(function* () {
+    const listToolUsage = Effect.fn("CodegraphRepo.listToolUsage")(function* (input?: { session?: string }) {
       const rows = yield* db
         .all<{ tool_id: string; use_count: number; last_used_at: number }>(sql`
           SELECT tool_id, use_count, last_used_at FROM codegraph_tool_usage
+          ${input?.session !== undefined ? sql`WHERE session_id = ${input.session}` : sql``}
           ORDER BY use_count DESC LIMIT 50
         `)
         .pipe(Effect.orDie)

@@ -237,7 +237,7 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
             ),
           ),
           Effect.tap((output) => {
-            const usage = adaptedCatalogOpt._tag === "Some" ? adaptedCatalogOpt.value.recordUsage(toolID) : Effect.void
+            const usage = adaptedCatalogOpt._tag === "Some" ? adaptedCatalogOpt.value.recordUsage(toolID, sessionID) : Effect.void
             const outputStr = JSON.stringify(output)
             const outputSize = outputStr.length
             const fallbackUsed = (output && typeof output === "object" && "fallbackUsed" in output) ? !!(output as any).fallbackUsed : undefined

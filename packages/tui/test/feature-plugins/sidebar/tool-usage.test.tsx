@@ -106,3 +106,54 @@ test("sidebar tool-usage renders nothing when the endpoint is unavailable", asyn
 
   expect(frame).not.toContain("TOOL USAGE")
 })
+
+test("sidebar tool-usage renders the graph adoption summary line above the list", async () => {
+  // Graph-family rows with a recent timestamp keep the summary line short
+  // enough to fit the 40-char test frame. The "first use" seconds value
+  // drifts by render latency, so assert a 6Xs range rather than an exact
+  // number.
+  const recent = Math.floor(Date.now() / 1000) - 60
+  const recentRows = [
+    { toolId: "code_find", useCount: 42, lastUsedAt: recent },
+    { toolId: "blast_radius", useCount: 7, lastUsedAt: recent },
+  ]
+  const frame = await renderWidget((url: URL) => {
+    if (url.pathname === "/global/tool-usage") {
+      return new Response(JSON.stringify({ tools: recentRows }), {
+        headers: { "content-type": "application/json" },
+      })
+    }
+    if (url.pathname === "/global/codegraph-status") {
+      return new Response(JSON.stringify({ reason: "ready", autoBuilt: true, totalFiles: 500 }), {
+        headers: { "content-type": "application/json" },
+      })
+    }
+    return undefined
+  })
+
+  expect(frame).toContain("graph 500 sym")
+  expect(frame).toContain("49 calls")
+  expect(frame).toMatch(/first use 6\d+s/)
+  // The list still renders under the summary.
+  expect(frame).toContain("TOOL USAGE")
+  expect(frame).toContain("code_find")
+})
+
+test("sidebar tool-usage hides the summary when no graph-family rows and no graph status", async () => {
+  // Usage rows exist but none are graph-family tools, and the status fetch
+  // fails — the summary line must not render as a useless "0 calls" line.
+  const frame = await renderWidget((url: URL) => {
+    if (url.pathname === "/global/tool-usage") {
+      return new Response(JSON.stringify({ tools: [{ toolId: "bash", useCount: 5, lastUsedAt: 1722900000 }] }), {
+        headers: { "content-type": "application/json" },
+      })
+    }
+    return undefined
+  })
+
+  expect(frame).toContain("TOOL USAGE")
+  expect(frame).toContain("bash")
+  expect(frame).not.toContain("calls")
+  expect(frame).not.toContain("first use")
+  expect(frame).not.toContain("sym ·")
+})

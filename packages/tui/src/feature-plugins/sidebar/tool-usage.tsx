@@ -11,11 +11,26 @@ const id = "internal:sidebar-tool-usage"
 // single-line rows. The sidebar wrapper owns the inter-plugin gap.
 const MAX_ROWS = 8
 
-interface UsageRow {
-  toolId: string
-  useCount: number
-  lastUsedAt: number
-}
+// Phase C (per-session adoption): the tool ids that count as "graph
+// adoption" for the one-line summary. Everything in this set is a graph /
+// repository intelligence tool surfaced by the adapted catalog.
+const GRAPH_FAMILY = new Set([
+  "codegraph_build",
+  "codegraph_remove",
+  "code_find",
+  "repository_query",
+  "repository_explain",
+  "repository_impact",
+  "repository_trace",
+  "repository_tests",
+  "blast_radius",
+  "preflight",
+  "safe_rename",
+  "edit_plan",
+  "banyan_repo_map",
+  "banyan_tool_search",
+  "banyan_test",
+])
 
 function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
@@ -33,11 +48,56 @@ function View(props: { api: TuiPluginApi }) {
     }
   })
 
+  // Phase C: graph adoption summary. Fetch only after the usage list has
+  // resolved (and only when it is non-empty — on non-BanyanCode servers the
+  // usage fetch fails, so the status call is skipped entirely). Fail-silent:
+  // older servers without /global/codegraph-status resolve to undefined and
+  // the "graph N sym" segment is omitted.
+  const [graphStatus] = createResource(
+    () => (usage()?.length ?? 0) > 0,
+    async () => {
+      try {
+        const res = await sdk.client.global.codegraph.status({})
+        return res.data
+      } catch {
+        return undefined
+      }
+    },
+  )
+
   const rows = () => usage()?.slice(0, MAX_ROWS) ?? []
+
+  const graphFamilyRows = () => (usage() ?? []).filter((row) => GRAPH_FAMILY.has(row.toolId))
+  const totalCalls = () => graphFamilyRows().reduce((sum, row) => sum + Number(row.useCount), 0)
+  const firstUseAgo = () => {
+    const family = graphFamilyRows()
+    if (family.length === 0) return undefined
+    const minLastUsed = Math.min(...family.map((row) => Number(row.lastUsedAt)))
+    return Math.max(0, Math.round(Date.now() / 1000 - minLastUsed))
+  }
+  const summaryLine = () => {
+    const files = graphStatus()?.totalFiles
+    const calls = totalCalls()
+    const first = firstUseAgo()
+    // No graph-family rows AND no graph status → nothing useful to say;
+    // hide the line entirely (don't show "graph · 0 calls" on non-BanyanCode
+    // servers).
+    if (files === undefined && first === undefined) return undefined
+    const parts: string[] = []
+    if (files !== undefined) parts.push(`graph ${files} sym`)
+    if (calls > 0) parts.push(`${calls} calls`)
+    if (first !== undefined) parts.push(`first use ${first}s`)
+    return parts.join(" · ")
+  }
 
   return (
     <Show when={usage() !== undefined && usage()!.length > 0}>
       <box flexDirection="column" gap={0}>
+        <Show when={summaryLine() !== undefined}>
+          <text fg={toHex(theme().textMuted)} wrapMode="none">
+            {summaryLine()}
+          </text>
+        </Show>
         <text fg={toHex(theme().primary)}>
           <b>TOOL USAGE</b>
         </text>
