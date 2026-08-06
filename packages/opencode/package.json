@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "26.08.15",
+  "version": "26.08.16",
   "name": "opencode",
   "description": "Open-source terminal coding agent with parallel subagents, persistent memory, code-graph intelligence, and built-in web research.",
   "type": "module",
