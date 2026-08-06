@@ -1,4 +1,5 @@
 import { Layer, ManagedRuntime, Effect, Option, Cause } from "effect"
+import path from "path"
 import { FetchHttpClient } from "effect/unstable/http"
 import { AppProcess } from "@opencode-ai/core/process"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -263,6 +264,15 @@ AppRuntime.runFork(
 
     const meta = yield* repoOpt.value.getMeta()
     if (!meta || !meta.indexedRoot) return
+    // A poisoned meta.indexedRoot pointing at the filesystem root (e.g.
+    // `D:\`) would replay the index across the whole drive on every start.
+    // Refuse and require an explicit root via codegraph_build.
+    if (path.parse(meta.indexedRoot).root === meta.indexedRoot) {
+      yield* Effect.logWarning(
+        "codegraph: refusing to replay startup index at filesystem root; run codegraph_build with an explicit root",
+      )
+      return
+    }
     const files = yield* repoOpt.value.listAllFiles()
     if (files.length === 0) return
 

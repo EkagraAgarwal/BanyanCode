@@ -160,4 +160,33 @@ describe("POST /global/codegraph-build", () => {
       }
     }),
   )
+
+  it.live("filesystem root as explicit root returns started:false refusing to index the drive", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.promise(() => tmpdir())
+      try {
+        const dbPath = path.join(tmp.path, "codegraph-build-http.sqlite")
+        const apiLayer = buildApiLayer(dbPath)
+        // On win32 this is the drive root (e.g. `D:\`); on POSIX `/`. Either
+        // way it is the filesystem root and must be refused before any
+        // kickoff is scheduled.
+        const driveRoot = path.parse(process.cwd()).root
+
+        const response = yield* HttpClientRequest.post(GlobalPaths.codegraphBuild).pipe(
+          HttpClientRequest.bodyJson({ root: driveRoot }),
+          Effect.flatMap(HttpClient.execute),
+          Effect.provide(apiLayer),
+        )
+        expect(response.status).toBe(200)
+        const data = (yield* response.json) as {
+          started: boolean
+          reason?: string
+        }
+        expect(data.started).toBe(false)
+        expect(data.reason).toContain("refusing to index filesystem root")
+      } finally {
+        yield* Effect.promise(() => tmp[Symbol.asyncDispose]())
+      }
+    }),
+  )
 })

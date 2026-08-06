@@ -190,7 +190,13 @@ export const layer: Layer.Layer<
         if (norm === normHome) break
         for (const marker of WORKSPACE_ROOT_MARKERS) {
           try {
-            if (fs.existsSync(path.join(dir, marker))) return dir
+            if (fs.existsSync(path.join(dir, marker))) {
+              // A marker at the filesystem root (e.g. `D:\.banyancode`) is
+              // polluted state, not a workspace marker — deriving the root as
+              // the whole drive would make the initial build index the entire
+              // disk. Fall through to the common-parent fallback instead.
+              if (path.parse(dir).root !== dir) return dir
+            }
           } catch {
             // unreachable marker — keep walking
           }
@@ -211,7 +217,10 @@ export const layer: Layer.Layer<
           candidate = parent
         }
       }
-      return candidate
+      // The common parent can also collapse to a filesystem root (e.g. a
+      // single changed file directly under `D:\`) — never derive the root as
+      // the whole drive; let the caller log "could not derive root" instead.
+      return path.parse(candidate).root === candidate ? undefined : candidate
     }
 
     const initialBuildTriggeredRef = yield* Ref.make(false)

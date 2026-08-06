@@ -56,6 +56,10 @@ export const identityForRoot = (rawRoot: string): WorkspaceIdentity => {
   if (!existsSync(root)) {
     throw new Error(`WorkspaceIdentity.identityForRoot: root '${rawRoot}' does not exist`)
   }
+  // findContainingBanyanDir walks up for an existing `.banyancode` marker and
+  // skips a marker sitting at the filesystem root (e.g. `D:\.banyancode`) —
+  // that is polluted state, not a workspace marker. Fall back to the
+  // root-local `.banyancode` when no (non-root) marker exists.
   const banyanDir = findContainingBanyanDir(root) ?? join(root, ".banyancode")
   const derivation = deriveBanyanDbPath(banyanDir, root)
   return { root, banyanDir, dbPath: derivation.dbPath, tag: derivation.tag }

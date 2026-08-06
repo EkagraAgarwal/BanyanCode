@@ -135,7 +135,11 @@ export const layer = Layer.effect(
 
     const resolve = Effect.fn("Project.resolve")(function* (input: AbsolutePath) {
       const repo = yield* git.find(input)
-      if (!repo) return { id: ID.global, directory: AbsolutePath.make(path.parse(input).root), vcs: undefined }
+      // Non-git directories resolve to the input directory itself, never to
+      // the filesystem root (path.parse(input).root on win32 = the drive root,
+      // e.g. `D:\`) — a poisoned drive-root directory flows into
+      // InstanceRef.worktree and makes codegraph builds index the whole drive.
+      if (!repo) return { id: ID.global, directory: AbsolutePath.make(input), vcs: undefined }
 
       const previous = yield* cached(repo.store)
       const id = (yield* remote(repo)) ?? previous ?? (yield* root(repo))

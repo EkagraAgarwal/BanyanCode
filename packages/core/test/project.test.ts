@@ -37,6 +37,27 @@ function real(value: string) {
   return Effect.promise(() => fs.realpath(value)).pipe(Effect.map((value) => AbsolutePath.make(value)))
 }
 
+// On win32, os.tmpdir() lives under the user profile, which is commonly
+// itself a git repo carrying a `banyancode` cache file — fs.up would find
+// that ancestor repo and resolve() would never take the non-git path. Create
+// the dir at the drive root instead (mirrors the D:/terminalbench scenario;
+// no git ancestors). POSIX /tmp is not under a repo, so the stock fixture
+// suffices.
+async function nonGitDir() {
+  if (process.platform !== "win32") return tmpdir()
+  const dir = path.join(
+    path.parse(process.cwd()).root,
+    `opencode-core-test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+  )
+  await fs.mkdir(dir)
+  return {
+    path: dir,
+    async [Symbol.asyncDispose]() {
+      await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+    },
+  }
+}
+
 async function initRepo(dir: string, opts?: { commit?: boolean; remote?: string }) {
   await $`git init`.cwd(dir).quiet()
   await $`git config core.fsmonitor false`.cwd(dir).quiet()
@@ -103,7 +124,7 @@ describe("ProjectV2.resolve", () => {
   it.live("returns global for non-git directory", () =>
     Effect.gen(function* () {
       const tmp = yield* Effect.acquireRelease(
-        Effect.promise(() => tmpdir()),
+        Effect.promise(() => nonGitDir()),
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
       )
       const project = yield* ProjectV2.Service
@@ -111,9 +132,30 @@ describe("ProjectV2.resolve", () => {
       const result = yield* project.resolve(abs(tmp.path))
 
       expect(result.id).toBe(ProjectV2.ID.make("global"))
-      expect(path.resolve(result.directory)).toBe(path.parse(tmp.path).root)
+      // Regression: resolve used to return the filesystem root (drive root on
+      // win32) for non-git directories, which poisoned InstanceRef.worktree
+      // and made codegraph builds index the whole drive.
+      expect(result.directory).toBe(abs(tmp.path))
+      expect(result.directory).not.toBe(abs(path.parse(tmp.path).root))
       expect(result.previous).toBeUndefined()
       expect(result.vcs).toBeUndefined()
+    }),
+  )
+
+  it.live("returns the input directory (not the drive root) for a nested non-git directory", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => nonGitDir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      yield* Effect.promise(() => fs.mkdir(path.join(tmp.path, "a", "b"), { recursive: true }))
+      const project = yield* ProjectV2.Service
+
+      const result = yield* project.resolve(abs(path.join(tmp.path, "a", "b")))
+
+      expect(result.id).toBe(ProjectV2.ID.make("global"))
+      expect(result.directory).toBe(abs(path.join(tmp.path, "a", "b")))
+      expect(result.directory).not.toBe(abs(path.parse(tmp.path).root))
     }),
   )
 

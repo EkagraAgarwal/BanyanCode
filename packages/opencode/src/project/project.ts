@@ -253,7 +253,11 @@ export const layer = Layer.effect(
       yield* Effect.logInfo("fromDirectory", { directory })
 
       const data = yield* projectV2.resolve(AbsolutePath.make(directory))
-      const worktree = data.id === ProjectV2.ID.make("global") && !data.vcs ? "/" : data.directory
+      // For global (non-git) projects, worktree was previously `/` (or, via a
+      // poisoned resolve, the drive root). ProjectV2.resolve now returns the
+      // input directory itself for non-git directories, so use it directly —
+      // a `/` or `D:\` worktree makes codegraph builds index the whole drive.
+      const worktree = data.directory
 
       // Phase 2: upsert
       const projectID = ProjectV2.ID.make(data.id)

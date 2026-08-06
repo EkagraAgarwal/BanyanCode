@@ -333,6 +333,15 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
           reason: error instanceof Error ? error.message : `invalid root: ${root}`,
         }
       }
+      // A root that IS the filesystem root (e.g. `D:\` or `/`) means the
+      // caller (or a poisoned InstanceRef.worktree) asked us to index the
+      // whole drive. Refuse before the kickoff is scheduled.
+      if (path.parse(identity.root).root === identity.root) {
+        return {
+          started: false,
+          reason: `refusing to index filesystem root: ${identity.root}. Pass a project directory as root.`,
+        }
+      }
       const dbPath = identity.dbPath
       const force = ctx.payload.force ?? false
 
@@ -365,7 +374,9 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       return { started: true, root, dbPath, banyanDir: identity.banyanDir }
     })
 
-    const toolUsageHandler = Effect.fn("GlobalHttpApi.toolUsage")(function* () {
+    const toolUsageHandler = Effect.fn("GlobalHttpApi.toolUsage")(function* (ctx: {
+      query: { session?: string }
+    }) {
       const repoOpt = yield* Effect.serviceOption(Banyan.CodegraphRepo)
       if (Option.isNone(repoOpt)) {
         // BanyanCode is disabled (no CodegraphRepo in the app runtime): the
@@ -373,7 +384,9 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
         // rather than failing the request.
         return { tools: [] } satisfies typeof ToolUsageResult.Type
       }
-      const rows = yield* repoOpt.value.listToolUsage()
+      const rows = yield* repoOpt.value.listToolUsage(
+        ctx.query.session !== undefined ? { session: ctx.query.session } : undefined,
+      )
       return { tools: rows } satisfies typeof ToolUsageResult.Type
     })
 
@@ -399,6 +412,14 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       } catch (error) {
         return yield* Effect.fail(
           new InvalidRequestError({ message: error instanceof Error ? error.message : `invalid root: ${root}` }),
+        )
+      }
+      // Same drive-root guard as codegraphBuildHandler: a root that IS the
+      // filesystem root means the caller (or a poisoned InstanceRef.worktree)
+      // would index the whole drive. Reject with a typed 400.
+      if (path.parse(identity.root).root === identity.root) {
+        return yield* Effect.fail(
+          new InvalidRequestError({ message: `refusing to index filesystem root: ${identity.root}` }),
         )
       }
       // The persisted graph DB is derived from the EXPLICIT root (realpath

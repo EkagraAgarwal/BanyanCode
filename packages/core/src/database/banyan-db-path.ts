@@ -18,7 +18,7 @@
 
 import { createHash } from "node:crypto"
 import { realpathSync, statSync } from "node:fs"
-import { join, resolve } from "node:path"
+import { join, parse, resolve } from "node:path"
 import { InstallationChannel } from "../installation/version"
 
 export const shortHash = (s: string): string =>
@@ -80,7 +80,19 @@ export const findContainingBanyanDir = (startDir: string): string | undefined =>
   while (true) {
     const candidate = join(dir, ".banyancode")
     try {
-      if (statSync(candidate).isDirectory()) return candidate
+      if (statSync(candidate).isDirectory()) {
+        // A `.banyancode` marker sitting at the filesystem root (e.g.
+        // `D:\.banyancode`) is polluted state, not a workspace marker: it
+        // would hijack every child project on the drive. Skip it and keep
+        // walking — UNLESS startDir itself IS the filesystem root, in which
+        // case the root marker is the only candidate and must win.
+        const rootOf = (p: string) => parse(p).root
+        const isRootLevelMarker =
+          rootOf(candidate) === rootOf(startDir) &&
+          candidate !== join(startDir, ".banyancode") &&
+          candidate === join(rootOf(startDir), ".banyancode")
+        if (!isRootLevelMarker) return candidate
+      }
     } catch {
       // missing or unreachable; keep walking
     }

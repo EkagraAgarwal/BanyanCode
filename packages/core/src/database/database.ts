@@ -65,6 +65,10 @@ function findProjectRoot(startDir: string): string | undefined {
 }
 
 function findOrCreateBanyanProjectDir(startDir: string): string | undefined {
+  // findContainingBanyanDir skips a `.banyancode` marker that sits at the
+  // filesystem root (e.g. `D:\.banyancode`), so a polluted drive root never
+  // hijacks child projects; the marker is only honored when startDir itself
+  // IS the filesystem root.
   const existing = findContainingBanyanDir(startDir)
   if (existing) return existing
   const root = findProjectRoot(startDir) ?? startDir
@@ -110,6 +114,10 @@ export function path() {
  * validation at API boundaries.
  */
 export function layerFromRoot(root: string) {
+  // findContainingBanyanDir walks up for an existing `.banyancode` marker and
+  // deliberately skips a marker sitting at the filesystem root, so a polluted
+  // drive-root marker never hijacks child projects. Fall back to the
+  // root-local `.banyancode` when no (non-root) marker exists.
   const banyanDir = findContainingBanyanDir(root) ?? join(root, ".banyancode")
   return layerFromPath(deriveBanyanDbPath(banyanDir, root).dbPath)
 }

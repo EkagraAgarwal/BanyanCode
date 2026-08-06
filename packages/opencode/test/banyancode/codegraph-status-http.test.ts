@@ -219,4 +219,24 @@ describe("GET /global/codegraph-status", () => {
       }
     }),
   )
+
+  it.live("returns 400 refusing to index a filesystem-root root", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.promise(() => tmpdir())
+      try {
+        const dbPath = path.join(tmp.path, "codegraph-status-http.sqlite")
+        const apiLayer = buildApiLayer(dbPath)
+        const driveRoot = path.parse(process.cwd()).root
+
+        const response = yield* HttpClient.execute(
+          HttpClientRequest.get(`${GlobalPaths.codegraphStatus}?root=${encodeURIComponent(driveRoot)}`),
+        ).pipe(Effect.provide(apiLayer))
+        expect(response.status).toBe(400)
+        const data = (yield* response.json) as { message?: string }
+        expect(data.message).toContain("refusing to index filesystem root")
+      } finally {
+        yield* Effect.promise(() => tmp[Symbol.asyncDispose]())
+      }
+    }),
+  )
 })
