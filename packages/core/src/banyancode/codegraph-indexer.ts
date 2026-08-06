@@ -6,9 +6,23 @@ import path from "path"
 import { FSUtil } from "../fs-util"
 import { CodegraphRepo } from "./codegraph-repo"
 import { Database } from "../database/database"
-import type { CodegraphEdge, CodegraphFile, CodegraphNode, CodegraphNodeKind } from "./types"
+import type { CodegraphBinding, CodegraphEdge, CodegraphEdgeDerivation, CodegraphFile, CodegraphNode, CodegraphNodeKind } from "./types"
+import { EDGE_CONFIDENCE } from "./types"
+import {
+  buildBindingIndex,
+  buildTsconfigAliases,
+  buildWorkspacePackageMap,
+  createModuleResolver,
+  resolveQualifiedReference,
+  type BindingIndex,
+  type ModuleResolver,
+  type QualifiedResolution,
+  type ResolutionContext,
+  type ResolutionFile,
+  type ResolutionNode,
+} from "./codegraph-binding-model"
 import { getParserForPath } from "./langs/registry"
-import type { ParseResult } from "./langs/types"
+import type { ParsedBinding, ParseResult } from "./langs/types"
 import { parseTypeScript, stripCommentsAndStrings } from "./langs/typescript"
 import { parsePython } from "./langs/python"
 import { ensureQuerySourcesLoaded } from "./langs/query-executor"
@@ -375,6 +389,7 @@ type ParsedFile = {
   readonly file: CodegraphFile
   readonly nodes: CodegraphNode[]
   readonly edges: CodegraphEdge[]
+  readonly bindings: readonly ParsedBinding[]
   readonly relativePath: string
   readonly skipped: boolean
   readonly previousFileID?: string
@@ -529,7 +544,7 @@ const indexCandidateFileCore = (
     const fileID = existing?.id ?? randomUUID()
     let result: ParseResult
     if (isArtifact) {
-      result = { nodes: [], edges: [] }
+      result = { nodes: [], edges: [], bindings: [] }
     } else if (TS_LIKE_EXTS.has(ext)) {
       result = parseTypeScript(content, fileID)
     } else if (PY_LIKE_EXTS.has(ext)) {
@@ -620,6 +635,7 @@ const indexCandidateFileCore = (
       file,
       nodes,
       edges,
+      bindings: result.bindings,
       relativePath,
       skipped: false,
       previousFileID: existing?.id,
@@ -652,6 +668,20 @@ const indexCandidateFileCore = (
     ),
   )
 }
+
+const isEdgeSourceNode = (node: CodegraphNode): boolean =>
+  !!node.code &&
+  node.kind !== "test" &&
+  node.kind !== "route" &&
+  node.kind !== "config" &&
+  node.kind !== "build" &&
+  node.kind !== "package" &&
+  node.kind !== "generated" &&
+  node.kind !== "ci" &&
+  node.kind !== "docker" &&
+  node.kind !== "env" &&
+  node.kind !== "doc" &&
+  node.kind !== "file"
 
 const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(function* (
   changedFileIDs: string[] | undefined,
@@ -723,6 +753,52 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }
   }
 
+  // Binding-aware edge pass context: turn persisted bindings + service tags
+  // into a resolution index, and derive workspace-package / tsconfig-paths
+  // module resolution from the (small) package.json + tsconfig files on disk.
+  const resolutionFilesByID = new Map<string, ResolutionFile>()
+  const resolutionFilesByPath = new Map<string, ResolutionFile>()
+  for (const f of allFiles) {
+    const normPath = f.path.replace(/\\/g, "/")
+    const rf: ResolutionFile = { id: f.id, path: normPath }
+    resolutionFilesByID.set(f.id, rf)
+    resolutionFilesByPath.set(normPath, rf)
+  }
+  const resolutionNodesByFile = new Map<string, readonly ResolutionNode[]>()
+  for (const [fileID, nodes] of nodesByFileID) {
+    resolutionNodesByFile.set(fileID, nodes.map((n) => ({ id: n.id, name: n.name, kind: n.kind })))
+  }
+
+  const serviceNodeIDByFile = new Map<string, string>()
+  for (const tag of yield* repo.listServiceTags()) {
+    serviceNodeIDByFile.set(tag.fileID, tag.nodeID)
+  }
+  const bindingIndex = buildBindingIndex(yield* repo.listBindings())
+
+  const jsonConfigFiles: { path: string; content: string }[] = []
+  for (const f of allFiles) {
+    const base = path.basename(f.path).toLowerCase()
+    if (base !== "package.json" && !(base.startsWith("tsconfig") && base.endsWith(".json"))) continue
+    const content = yield* fs.readFileStringSafe(f.path).pipe(Effect.orDie)
+    if (content !== undefined) jsonConfigFiles.push({ path: f.path, content })
+  }
+  const workspacePackages = buildWorkspacePackageMap(jsonConfigFiles.filter((f) => path.basename(f.path).toLowerCase() === "package.json"))
+  const tsconfigAliases = buildTsconfigAliases(jsonConfigFiles.filter((f) => {
+    const base = path.basename(f.path).toLowerCase()
+    return base.startsWith("tsconfig") && base.endsWith(".json")
+  }))
+  const resolveModule = createModuleResolver({
+    fileByPath: resolutionFilesByPath,
+    workspacePackages,
+    tsconfigAliases,
+  })
+  const resolutionContext: ResolutionContext = {
+    filesByID: resolutionFilesByID,
+    nodesByFile: resolutionNodesByFile,
+    serviceNodeIDByFile,
+    resolveModule,
+  }
+
   const fileByPath = new Map(allFiles.map((f) => [f.path.replace(/\\/g, "/"), f]))
   const deriveModuleCandidates = (sourcePath: string, specifier: string): ReadonlyArray<CodegraphFile> => {
     if (!specifier) return []
@@ -755,7 +831,13 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       .filter((file): file is CodegraphFile => file !== undefined)
   }
 
-  const referenceEdges: { fromNodeID: string; toNodeID: string; kind: "imports" | "calls" | "extends" | "references" }[] = []
+  const referenceEdges: {
+    fromNodeID: string
+    toNodeID: string
+    kind: "imports" | "calls" | "extends" | "references"
+    derivation?: CodegraphEdgeDerivation
+    confidence?: number
+  }[] = []
   const crossEdges: { fromNodeID: string; toNodeID: string; kind: CodegraphEdge["kind"] }[] = []
   const referenceEdgeKeys = new Set<string>()
 
@@ -805,23 +887,45 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     importScopesByFileID.set(fileID, scope)
   }
 
+  // Binding-aware pass: resolve dotted references (e.g. `MeshCoordinator.Service`,
+  // `Banyan.MeshCoordinator.Service`) through persisted import/export bindings
+  // into concrete nodes. Emits `binding-resolved` / `service-tag` edges and
+  // records the authoritative name -> target map used below to suppress
+  // wrong-name heuristic edges (cross-service collision).
+  const bindingEdges = new Map<
+    string,
+    { fromNodeID: string; toNodeID: string; kind: "references"; derivation: CodegraphEdgeDerivation; confidence: number }
+  >()
+  const authoritativeByNodeID = new Map<string, Map<string, string>>()
+  const qualifiedRefRegex = /(\b[A-Za-z_]\w*)\.([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)/g
   for (const nodeA of allNodesForIndex) {
-    if (
-      !nodeA.code ||
-      nodeA.kind === "test" ||
-      nodeA.kind === "route" ||
-      nodeA.kind === "config" ||
-      nodeA.kind === "build" ||
-      nodeA.kind === "package" ||
-      nodeA.kind === "generated" ||
-      nodeA.kind === "ci" ||
-      nodeA.kind === "docker" ||
-      nodeA.kind === "env" ||
-      nodeA.kind === "doc" ||
-      nodeA.kind === "file"
-    ) {
-      continue
+    if (!isEdgeSourceNode(nodeA)) continue
+    // Incremental: skip nodeA if its file is neither changed nor a dependent source
+    if (sourceSet && !sourceSet.has(nodeA.fileID)) continue
+    if (!bindingIndex.imports.has(nodeA.fileID) && !bindingIndex.exports.has(nodeA.fileID)) continue
+    const strippedCode = stripCommentsAndStrings(nodeA.code ?? "")
+    const authoritative = new Map<string, string>()
+    for (const m of strippedCode.matchAll(qualifiedRefRegex)) {
+      const chain = [m[1]!, ...m[2]!.split(".")]
+      const resolution = resolveQualifiedReference(resolutionContext, bindingIndex, nodeA.fileID, chain)
+      if (!resolution) continue
+      const target = nodeByID.get(resolution.nodeID)
+      if (!target || target.id === nodeA.id || target.fileID === nodeA.fileID) continue
+      bindingEdges.set(`${nodeA.id}->${target.id}:references`, {
+        fromNodeID: nodeA.id,
+        toNodeID: target.id,
+        kind: "references",
+        derivation: resolution.derivation,
+        confidence: resolution.confidence,
+      })
+      authoritative.set(chain[0]!, resolution.nodeID)
+      authoritative.set(chain[chain.length - 1]!, resolution.nodeID)
     }
+    if (authoritative.size > 0) authoritativeByNodeID.set(nodeA.id, authoritative)
+  }
+
+  for (const nodeA of allNodesForIndex) {
+    if (!isEdgeSourceNode(nodeA)) continue
 
     // Incremental: skip nodeA if its file is neither changed nor a dependent source
     if (sourceSet && !sourceSet.has(nodeA.fileID)) continue
@@ -862,18 +966,25 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     // symbol or a string like `"callBash("` cannot fabricate a
     // `references`/`calls` edge. The original `nodeA.code` stays on the
     // node unchanged — the strip is only for edge classification.
-    const strippedCode = stripCommentsAndStrings(nodeA.code)
+    const strippedCode = stripCommentsAndStrings(nodeA.code ?? "")
     const identifiers = new Set<string>()
     for (const m of strippedCode.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
       if (m[0].length >= 3 && inScopeByName.has(m[0])) identifiers.add(m[0])
     }
 
+    const authoritative = authoritativeByNodeID.get(nodeA.id)
     for (const name of identifiers) {
       const targets = inScopeByName.get(name)
       if (!targets || targets.length === 0) continue
 
+      // The binding pass already resolved this name to a specific node; drop
+      // heuristic edges to any other node sharing the name (cross-service
+      // collision guard).
+      const authTarget = authoritative?.get(name)
+
       for (const nodeB of targets) {
         if (nodeB.id === nodeA.id) continue
+        if (authTarget && authTarget !== nodeB.id) continue
 
         const kind =
           nodeA.kind === "class" && strippedCode.includes(`extends ${name}`)
@@ -889,6 +1000,11 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           fromNodeID: nodeA.id,
           toNodeID: nodeB.id,
           kind,
+          derivation: nodeB.fileID === nodeA.fileID ? "same-file" : "heuristic-name",
+          confidence:
+            nodeB.fileID === nodeA.fileID
+              ? EDGE_CONFIDENCE["same-file"]
+              : EDGE_CONFIDENCE["heuristic-name"],
         })
       }
     }
@@ -1015,12 +1131,28 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }
   }
 
+  // Merge heuristic reference edges and binding-resolved edges into a single
+  // deduped set. Binding-resolved edges are higher-confidence and win for the
+  // same (from, to, kind) pair.
+  const mergedReferenceEdges = new Map<
+    string,
+    { fromNodeID: string; toNodeID: string; kind: "imports" | "calls" | "extends" | "references"; derivation?: CodegraphEdgeDerivation; confidence?: number }
+  >()
+  for (const e of referenceEdges) {
+    mergedReferenceEdges.set(`${e.fromNodeID}->${e.toNodeID}:${e.kind}`, e)
+  }
+  for (const e of bindingEdges.values()) {
+    mergedReferenceEdges.set(`${e.fromNodeID}->${e.toNodeID}:${e.kind}`, e)
+  }
+
   const edgesToWrite = [
-    ...referenceEdges.map((e) => ({
+    ...[...mergedReferenceEdges.values()].map((e) => ({
       id: `${e.fromNodeID}->${e.toNodeID}:${e.kind}`,
       fromNodeID: e.fromNodeID,
       toNodeID: e.toNodeID,
       kind: e.kind,
+      derivation: e.derivation,
+      confidence: e.confidence,
     })),
     ...crossEdges.map((e) => ({
       id: `${e.fromNodeID}->${e.toNodeID}:${e.kind}`,
@@ -1149,6 +1281,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         file: { id: "", path: "", contentHash: "", language: "", indexedAt: 0 },
         nodes: [],
         edges: [],
+        bindings: [],
         relativePath,
         skipped: true,
       })
@@ -1186,6 +1319,11 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
             file: parsed.file,
             nodes: parsed.nodes,
             edges: parsed.edges,
+            bindings: parsed.bindings.map((b) => ({
+              ...b,
+              fileID: parsed.file.id,
+              indexedAt: parsed.file.indexedAt,
+            })),
             ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
           }).pipe(
             Effect.catchCause((cause) =>
@@ -1496,6 +1634,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         file: { id: "", path: "", contentHash: "", language: "", indexedAt: 0 },
         nodes: [],
         edges: [],
+        bindings: [],
         relativePath,
         skipped: true,
       })
@@ -1526,6 +1665,11 @@ const drainParsedQueue = Effect.gen(function* () {
             file: parsed.file,
             nodes: parsed.nodes,
             edges: parsed.edges,
+            bindings: parsed.bindings.map((b) => ({
+              ...b,
+              fileID: parsed.file.id,
+              indexedAt: parsed.file.indexedAt,
+            })),
             ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
           }).pipe(
             Effect.catchCause((cause) =>

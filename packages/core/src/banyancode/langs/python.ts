@@ -119,5 +119,5 @@ export function parsePython(content: string, fileID: string): ParseResult {
     nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, code })
   }
 
-  return { nodes, edges }
+  return { nodes, edges, bindings: [] }
 }

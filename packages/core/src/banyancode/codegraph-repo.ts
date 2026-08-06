@@ -3,13 +3,13 @@ export * as CodegraphRepo from "./codegraph-repo"
 import { and, eq, inArray, or, sql } from "drizzle-orm"
 import { Cause, Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
-import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
+import { CodegraphBindingsTable, CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
 import { CodegraphMetaTable } from "./codegraph-meta.sql"
 import { CodegraphParseErrorsTable } from "./codegraph-parse-errors.sql"
 import { CodegraphServiceTagsTable } from "./codegraph-service-tags.sql"
 import { CodegraphTracesTable } from "./codegraph-traces.sql"
 import { isTestFilePath } from "./codegraph-paths"
-import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from "./types"
+import type { CodegraphBinding, CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from "./types"
 
 export type FTSResult = CodegraphNode & { readonly bm25: number }
 
@@ -23,7 +23,7 @@ const MAX_EDGES_PER_INSERT = 5000
 // CodegraphReadiness to detect structural staleness. Keep in sync with the
 // readiness consumer (codegraph-readiness.ts imports this constant — do NOT
 // hardcode the literal in both files).
-export const CODEGRAPH_SCHEMA_VERSION = 3
+export const CODEGRAPH_SCHEMA_VERSION = 4
 
 // Phase 3 query expansion: split an identifier-style query into its
 // constituent lowercase tokens so a single user query like
@@ -121,6 +121,7 @@ const safeSize = (path: string): number => {
 // for `codegraph_*` tables — add new schema tables here and `clearAll` will
 // pick them up automatically.
 const codegraphSchemaTables = [
+  CodegraphBindingsTable,
   CodegraphServiceTagsTable,
   CodegraphTracesTable,
   CodegraphParseErrorsTable,
@@ -219,6 +220,13 @@ export interface Interface {
     nodes: CodegraphNode[]
     edges: CodegraphEdge[]
     previousFileID?: string
+    /**
+     * Phase: import/export bindings extracted from this file's source.
+     * Persisted in `codegraph_bindings` within the same transaction as the
+     * file/nodes/edges so the derived-edge pass can resolve qualified refs
+     * and barrel chains without re-parsing.
+     */
+    bindings?: CodegraphBinding[]
   }) => Effect.Effect<void, never, never>
   readonly clearAll: (
     input?: { dropFile?: boolean },
@@ -285,6 +293,19 @@ export interface Interface {
    * Returns an empty array if no match.
    */
   readonly fileIDsByServiceName: (serviceName: string) => Effect.Effect<readonly string[], never, never>
+  /**
+   * All `codegraph_service_tags` rows. The derived-edge pass uses the
+   * `service_name` alias to connect qualified references (`X.Service`,
+   * barrel chains) to the canonical `Service` node during edge construction.
+   */
+  readonly listServiceTags: () => Effect.Effect<ReadonlyArray<{ tag: string; serviceName: string; nodeID: string; fileID: string }>, never, never>
+  /**
+   * All persisted import/export bindings. The derived-edge pass loads this
+   * once per graph rebuild to resolve qualified references without re-parsing.
+   */
+  readonly listBindings: () => Effect.Effect<CodegraphBinding[], never, never>
+  /** Bindings owned by a specific set of files (incremental rebuilds). */
+  readonly bindingsByFileIDs: (input: { fileIDs: readonly string[] }) => Effect.Effect<CodegraphBinding[], never, never>
   readonly rebuildFtsIndex: () => Effect.Effect<{ rowsIndexed: number }, never, never>
 }
 
@@ -444,6 +465,15 @@ export const layer = Layer.effect(
         inDegree: row.in_degree,
       } as CodegraphNode & { isEntrypoint?: number; inDegree?: number })
 
+    const rowToEdge = (row: typeof CodegraphEdgesTable.$inferSelect): CodegraphEdge => ({
+      id: row.id,
+      fromNodeID: row.from_node_id,
+      toNodeID: row.to_node_id,
+      kind: row.kind as CodegraphEdge["kind"],
+      derivation: (row.derivation ?? undefined) as CodegraphEdge["derivation"],
+      confidence: row.confidence > 0 ? row.confidence : undefined,
+    })
+
     const listNodesByFile = Effect.fn("CodegraphRepo.listNodesByFile")(function* (fileID: string) {
       const rows = yield* db
         .select()
@@ -477,6 +507,8 @@ export const layer = Layer.effect(
           from_node_id: edge.fromNodeID,
           to_node_id: edge.toNodeID,
           kind: edge.kind,
+          derivation: edge.derivation ?? null,
+          confidence: edge.confidence ?? 0,
         })
         .onConflictDoUpdate({
           target: CodegraphEdgesTable.id,
@@ -484,6 +516,8 @@ export const layer = Layer.effect(
             from_node_id: edge.fromNodeID,
             to_node_id: edge.toNodeID,
             kind: edge.kind,
+            derivation: edge.derivation ?? null,
+            confidence: edge.confidence ?? 0,
           },
         })
         .run()
@@ -498,12 +532,7 @@ export const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       if (!row) return undefined
-      return {
-        id: row.id,
-        fromNodeID: row.from_node_id,
-        toNodeID: row.to_node_id,
-        kind: row.kind as CodegraphEdge["kind"],
-      }
+      return rowToEdge(row)
     })
 
     const listAllEdges = Effect.fn("CodegraphRepo.listAllEdges")(function* () {
@@ -512,12 +541,7 @@ export const layer = Layer.effect(
         .from(CodegraphEdgesTable)
         .all()
         .pipe(Effect.orDie)
-      return rows.map((row) => ({
-        id: row.id,
-        fromNodeID: row.from_node_id,
-        toNodeID: row.to_node_id,
-        kind: row.kind as CodegraphEdge["kind"],
-      }))
+      return rows.map(rowToEdge)
     })
 
     const listEdgesByNode = Effect.fn("CodegraphRepo.listEdgesByNode")(function* (nodeID: string) {
@@ -527,12 +551,7 @@ export const layer = Layer.effect(
         .where(eq(CodegraphEdgesTable.from_node_id, nodeID))
         .all()
         .pipe(Effect.orDie)
-      return rows.map((row) => ({
-        id: row.id,
-        fromNodeID: row.from_node_id,
-        toNodeID: row.to_node_id,
-        kind: row.kind as CodegraphEdge["kind"],
-      }))
+      return rows.map(rowToEdge)
     })
 
     const deleteFile = Effect.fn("CodegraphRepo.deleteFile")(function* (id: string) {
@@ -906,12 +925,24 @@ export const layer = Layer.effect(
     })
 
     const listToolUsage = Effect.fn("CodegraphRepo.listToolUsage")(function* (input?: { session?: string }) {
+      // Phase 5: rows are keyed by `(session_id, tool_id)`. Without a session
+      // filter, aggregate across sessions (lifetime contract preserved);
+      // with one, return that session's own rows.
       const rows = yield* db
-        .all<{ tool_id: string; use_count: number; last_used_at: number }>(sql`
-          SELECT tool_id, use_count, last_used_at FROM codegraph_tool_usage
-          ${input?.session !== undefined ? sql`WHERE session_id = ${input.session}` : sql``}
-          ORDER BY use_count DESC LIMIT 50
-        `)
+        .all<{ tool_id: string; use_count: number; last_used_at: number }>(
+          input?.session !== undefined
+            ? sql`
+                SELECT tool_id, use_count, last_used_at FROM codegraph_tool_usage
+                WHERE session_id = ${input.session}
+                ORDER BY use_count DESC LIMIT 50
+              `
+            : sql`
+                SELECT tool_id, SUM(use_count) AS use_count, MAX(last_used_at) AS last_used_at
+                FROM codegraph_tool_usage
+                GROUP BY tool_id
+                ORDER BY use_count DESC LIMIT 50
+              `,
+        )
         .pipe(Effect.orDie)
       return rows.map((row) => ({
         toolId: row.tool_id,
@@ -931,12 +962,7 @@ export const layer = Layer.effect(
         .where(eq(CodegraphEdgesTable.to_node_id, nodeID))
         .all()
         .pipe(Effect.orDie)
-      return rows.map((row) => ({
-        id: row.id,
-        fromNodeID: row.from_node_id,
-        toNodeID: row.to_node_id,
-        kind: row.kind as CodegraphEdge["kind"],
-      }))
+      return rows.map(rowToEdge)
     })
 
     const edgesFromBatch = Effect.fn("CodegraphRepo.edgesFromBatch")(function* (ids: ReadonlyArray<string>) {
@@ -953,12 +979,7 @@ export const layer = Layer.effect(
           .pipe(Effect.orDie)
         allRows.push(...rows)
       }
-      return allRows.map((row) => ({
-        id: row.id,
-        fromNodeID: row.from_node_id,
-        toNodeID: row.to_node_id,
-        kind: row.kind as CodegraphEdge["kind"],
-      }))
+      return allRows.map(rowToEdge)
     })
 
     const edgesToBatch = Effect.fn("CodegraphRepo.edgesToBatch")(function* (ids: ReadonlyArray<string>) {
@@ -975,12 +996,7 @@ export const layer = Layer.effect(
           .pipe(Effect.orDie)
         allRows.push(...rows)
       }
-      return allRows.map((row) => ({
-        id: row.id,
-        fromNodeID: row.from_node_id,
-        toNodeID: row.to_node_id,
-        kind: row.kind as CodegraphEdge["kind"],
-      }))
+      return allRows.map(rowToEdge)
     })
 
     const dependentsOfFiles = Effect.fn("CodegraphRepo.dependentsOfFiles")(function* (input: {
@@ -1152,6 +1168,8 @@ export const layer = Layer.effect(
                   from_node_id: e.fromNodeID,
                   to_node_id: e.toNodeID,
                   kind: e.kind,
+                  derivation: e.derivation ?? null,
+                  confidence: e.confidence ?? 0,
                 })),
               )
               .onConflictDoNothing({
@@ -1417,6 +1435,57 @@ export const layer = Layer.effect(
       return [...ids]
     })
 
+    const listServiceTags = Effect.fn("CodegraphRepo.listServiceTags")(function* () {
+      const rows = yield* db
+        .select()
+        .from(CodegraphServiceTagsTable)
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        tag: row.tag,
+        serviceName: row.service_name,
+        nodeID: row.node_id,
+        fileID: row.file_id,
+      }))
+    })
+
+    const rowToBinding = (row: typeof CodegraphBindingsTable.$inferSelect): CodegraphBinding => ({
+      id: row.id,
+      fileID: row.file_id,
+      kind: row.kind as CodegraphBinding["kind"],
+      localName: row.local_name ?? undefined,
+      importedName: row.imported_name ?? undefined,
+      exportName: row.export_name ?? undefined,
+      source: row.source,
+      indexedAt: row.indexed_at,
+    })
+
+    const listBindings = Effect.fn("CodegraphRepo.listBindings")(function* () {
+      const rows = yield* db
+        .select()
+        .from(CodegraphBindingsTable)
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map(rowToBinding)
+    })
+
+    const bindingsByFileIDs = Effect.fn("CodegraphRepo.bindingsByFileIDs")(function* (input: { fileIDs: readonly string[] }) {
+      if (input.fileIDs.length === 0) return []
+      const chunkSize = 900
+      const allRows: typeof CodegraphBindingsTable.$inferSelect[] = []
+      for (let i = 0; i < input.fileIDs.length; i += chunkSize) {
+        const chunk = input.fileIDs.slice(i, i + chunkSize)
+        const rows = yield* db
+          .select()
+          .from(CodegraphBindingsTable)
+          .where(inArray(CodegraphBindingsTable.file_id, chunk))
+          .all()
+          .pipe(Effect.orDie)
+        allRows.push(...rows)
+      }
+      return allRows.map(rowToBinding)
+    })
+
     const rebuildFtsIndex = Effect.fn("CodegraphRepo.rebuildFtsIndex")(function* () {
       return yield* db.transaction((tx) =>
         Effect.gen(function* () {
@@ -1482,6 +1551,7 @@ export const layer = Layer.effect(
       nodes: CodegraphNode[]
       edges: CodegraphEdge[]
       previousFileID?: string
+      bindings?: CodegraphBinding[]
     }) {
       yield* db
         .transaction((tx) =>
@@ -1648,10 +1718,38 @@ export const layer = Layer.effect(
                     from_node_id: e.fromNodeID,
                     to_node_id: e.toNodeID,
                     kind: e.kind,
+                    derivation: e.derivation ?? null,
+                    confidence: e.confidence ?? 0,
                   })),
                 )
                 .onConflictDoNothing({
                   target: CodegraphEdgesTable.id,
+                })
+                .run()
+                .pipe(Effect.orDie)
+            }
+
+            // Phase: persist import/export bindings. The file row was deleted
+            // by path above, so any stale binding rows for this path were
+            // cascade-removed; insert the freshly-extracted set (may be empty
+            // for non-TypeScript files, in which case nothing to do).
+            if (input.bindings && input.bindings.length > 0) {
+              yield* tx
+                .insert(CodegraphBindingsTable)
+                .values(
+                  input.bindings.map((b) => ({
+                    id: b.id,
+                    file_id: b.fileID,
+                    kind: b.kind,
+                    local_name: b.localName ?? null,
+                    imported_name: b.importedName ?? null,
+                    export_name: b.exportName ?? null,
+                    source: b.source,
+                    indexed_at: b.indexedAt,
+                  })),
+                )
+                .onConflictDoNothing({
+                  target: CodegraphBindingsTable.id,
                 })
                 .run()
                 .pipe(Effect.orDie)
@@ -1709,6 +1807,9 @@ export const layer = Layer.effect(
       findSymbolsByServiceTag,
       lookupByServiceTag,
       fileIDsByServiceName,
+      listServiceTags,
+      listBindings,
+      bindingsByFileIDs,
       rebuildFtsIndex,
       recomputeInDegree,
       bumpIndexedAt,

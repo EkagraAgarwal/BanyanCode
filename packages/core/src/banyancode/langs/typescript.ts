@@ -1,4 +1,4 @@
-import type { ParseResult, ParsedNode, ParsedEdge } from "./types"
+import type { ParseResult, ParsedBinding, ParsedNode, ParsedEdge } from "./types"
 
 const IMPORTS_REGEX = /import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["']([^"']+)["']/g
 const EXPORT_CLASS_REGEX = /export\s+class\s+(\w+)(?:\s+extends\s+(\w+))?/g
@@ -25,6 +25,17 @@ const EFFECT_FN_CONST_REGEX = /const\s+(\w+)\s*=\s*Effect\.fn\s*\(\s*["']([^"']+
 // before the `(` so signatures like `put: (key: string) => Effect.Effect<void>`
 // match (the `:` is required by the TS interface body syntax, not optional).
 const INTERFACE_MEMBER_REGEX = /(?:^|\n)\s*(?:readonly\s+)?(\w+)\s*[:\s]\s*\(([^)]*)\)\s*[:=]\s*([^\n;]+)/g
+
+// Binding-model regexes. These feed the import/export binding rows the
+// derived-edge pass uses to resolve qualified references like
+// `MeshCoordinator.Service` and barrel chains `Banyan.MeshCoordinator.Service`
+// instead of matching the bare `Service` name heuristically.
+const IMPORT_STATEMENT_REGEX = /import\s+(type\s+)?([^;]*?)\s+from\s+["']([^"']+)["']/g
+const RE_EXPORT_STAR_AS_REGEX = /export\s+\*\s+as\s+(\w+)\s+from\s+["']([^"']+)["']/g
+const RE_EXPORT_STAR_REGEX = /export\s+\*\s+from\s+["']([^"']+)["']/g
+const RE_EXPORT_NAMED_REGEX = /export\s+(?:type\s+)?\{([^}]*)\}(?:\s+from\s+["']([^"']+)["'])?/g
+const EXPORT_DECL_NAME_REGEX = /(?:^|\n)\s*export\s+(?:declare\s+|abstract\s+)?(default\s+)?(?:class|function|interface|type|const|let|var|enum)\s+(\w+)/g
+const EXPORT_DEFAULT_IDENT_REGEX = /(?:^|\n)\s*export\s+default\s+(?!class\b|function\b|interface\b|type\b|const\b|let\b|var\b|enum\b)(\w+)/g
 
 function computeLineStartOffsets(content: string): number[] {
   const offsets = [0]
@@ -292,9 +303,111 @@ export function stripCommentsAndStrings(code: string): string {
   return out.join("")
 }
 
+// Extract import/export bindings that the derived-edge pass needs to resolve
+// qualified references (`MeshCoordinator.Service`, barrel chains like
+// `Banyan.MeshCoordinator.Service`) instead of falling back to name heuristics.
+// The regexes are intentionally statement-level: they run on the raw source so
+// comments/strings cannot fake a binding, and they never mutate the node/edge
+// shape (bindings are an additive ParseResult field).
+function extractBindings(content: string, fileID: string): ParsedBinding[] {
+  const bindings: ParsedBinding[] = []
+
+  for (const match of content.matchAll(IMPORT_STATEMENT_REGEX)) {
+    const clauses = match[2] ?? ""
+    const source = match[3] ?? ""
+    if (!source) continue
+    const clause = clauses.trim()
+    if (clause.startsWith("* as ")) {
+      const ns = clause.slice("* as ".length).trim().split(/\s+/)[0] ?? ""
+      if (ns) {
+        bindings.push({ id: `${fileID}:import:${ns}`, kind: "import", localName: ns, importedName: "*", exportName: "*", source })
+      }
+      continue
+    }
+    const braceIndex = clause.indexOf("{")
+    if (braceIndex !== -1) {
+      // `import { A, B as C } from "src"` — also handles the
+      // `import D, { A } from "src"` form where the default specifier
+      // precedes the brace block.
+      const defaultName = clause.slice(0, braceIndex).trim()
+      if (defaultName && defaultName !== "type") {
+        bindings.push({ id: `${fileID}:import:${defaultName}`, kind: "import", localName: defaultName, importedName: "default", exportName: "default", source })
+      }
+      for (const item of clause.slice(braceIndex + 1, -1).split(",")) {
+        const [a, , b] = item.trim().split(/\s+/)
+        if (!a) continue
+        const local = b ?? a
+        bindings.push({ id: `${fileID}:import:${local}`, kind: "import", localName: local, exportName: a, importedName: a, source })
+      }
+      continue
+    }
+    if (clause && clause !== "type") {
+      const defaultName = clause.split(",")[0]?.trim()
+      if (defaultName) {
+        bindings.push({ id: `${fileID}:import:${defaultName}`, kind: "import", localName: defaultName, importedName: "default", exportName: "default", source })
+      }
+    }
+  }
+
+  for (const match of content.matchAll(RE_EXPORT_STAR_AS_REGEX)) {
+    const ns = match[1]!
+    const source = match[2]!
+    bindings.push({ id: `${fileID}:reexport:${ns}`, kind: "namespace-re-export", localName: ns, importedName: "*", exportName: "*", source })
+  }
+
+  for (const match of content.matchAll(RE_EXPORT_STAR_REGEX)) {
+    const source = match[1]!
+    bindings.push({ id: `${fileID}:reexport:*:${source}`, kind: "star-re-export", importedName: "*", exportName: "*", source })
+  }
+
+  for (const match of content.matchAll(RE_EXPORT_NAMED_REGEX)) {
+    const items = match[1]!
+    const source = match[2] ?? ""
+    for (const item of items.split(",")) {
+      const [a, , b] = item.trim().split(/\s+/)
+      if (!a) continue
+      const local = b ?? a
+      bindings.push({
+        id: `${fileID}:reexport:${a}`,
+        kind: source ? "re-export" : "export",
+        localName: local,
+        importedName: a,
+        exportName: a,
+        source,
+      })
+    }
+  }
+
+  for (const match of content.matchAll(EXPORT_DECL_NAME_REGEX)) {
+    const isDefault = match[1] === "default"
+    const name = match[2]!
+    bindings.push({
+      id: `${fileID}:export:${name}`,
+      kind: "export",
+      localName: name,
+      importedName: isDefault ? "default" : name,
+      exportName: isDefault ? "default" : name,
+      source: "",
+    })
+  }
+
+  for (const match of content.matchAll(EXPORT_DEFAULT_IDENT_REGEX)) {
+    const name = match[1]!
+    bindings.push({ id: `${fileID}:export:default`, kind: "export", localName: name, importedName: "default", exportName: "default", source: "" })
+  }
+
+  const seen = new Set<string>()
+  return bindings.filter((b) => {
+    if (seen.has(b.id)) return false
+    seen.add(b.id)
+    return true
+  })
+}
+
 export function parseTypeScript(content: string, fileID: string): ParseResult {
   const nodes: ParsedNode[] = []
   const edges: ParsedEdge[] = []
+  const bindings = extractBindings(content, fileID)
   const offsets = computeLineStartOffsets(content)
 
   for (const match of content.matchAll(IMPORTS_REGEX)) {
@@ -399,5 +512,5 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     nodes.push({ id: `${fileID}:type:${name}:${startLine}`, kind: "type", name, startLine, endLine, code })
   }
 
-  return { nodes, edges }
+  return { nodes, edges, bindings }
 }

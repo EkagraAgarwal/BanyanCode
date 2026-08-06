@@ -22,5 +22,5 @@ export function parseDocker(content: string, fileID: string): ParseResult {
     })
   }
 
-  return { nodes, edges: [] }
+  return { nodes, edges: [], bindings: [] }
 }

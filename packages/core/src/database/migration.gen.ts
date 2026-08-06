@@ -20,5 +20,8 @@ export const migrations = (
     import("./migration/20260803120000_verification_runs"),
     import("./migration/20260804120000_codegraph_tool_usage"),
     import("./migration/20260806120000_add_session_id"),
+    import("./migration/20260806130000_codegraph_bindings_edge_confidence"),
+    import("./migration/20260806140000_codegraph_tool_usage_composite_key"),
+    import("./migration/20260806150000_codegraph_policy_events"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]
