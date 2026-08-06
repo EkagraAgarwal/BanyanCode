@@ -41,6 +41,27 @@ describe("Banyan.CodegraphSystemSource.Service", () => {
     }),
   )
 
+  it.effect("load() with a graph state renders the Graph state line and no tool guide", () =>
+    Effect.gen(function* () {
+      const svc = yield* Banyan.CodegraphSystemSource
+      const text = yield* svc.load({ tools: [], graph: { state: "ready", symbols: 1204 } })
+      expect(text).toContain("Codegraph-first search policy")
+      expect(text).toContain("Graph state: ready (1,204 symbols)")
+      expect(text).not.toContain("BanyanCode tool guide")
+    }),
+  )
+
+  it.effect("load() without a graph state renders no Graph state line", () =>
+    Effect.gen(function* () {
+      const svc = yield* Banyan.CodegraphSystemSource
+      const text = yield* svc.load({})
+      expect(text).toContain("Codegraph-first search policy")
+      // The static policy mentions "Graph state is ready" (no colon); the
+      // Phase A readiness line is the only "Graph state:" (colon) render.
+      expect(text).not.toContain("Graph state:")
+    }),
+  )
+
   it.effect("load() with input undefined returns POLICY_TEXT without a tool guide", () =>
     Effect.gen(function* () {
       const svc = yield* Banyan.CodegraphSystemSource
