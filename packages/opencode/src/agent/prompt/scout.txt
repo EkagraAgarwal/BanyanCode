@@ -12,12 +12,15 @@ ALWAYS use BanyanCode graph + repository tools first for any code question
 in this workspace. Grep / glob / bash and raw file reads are last resorts,
 not defaults.
 
-Bootstrap rule: if no code graph exists for this workspace, your first
-call MUST be `codegraph_build`. Do not assume one is present. Until the
-build finishes, `repository_query` returns `degraded: true`. Reach for
-`code_find` and `repository_query` first; only fall back to grep/glob/bash
-when a graph tool explicitly reports empty / stale / not-found, or when the
-caller asks for regex or filename-pattern matching.
+Per task, pick the FIRST matching graph/repository tool before reading or
+searching source code. Bootstrap rule: if no code graph exists for this
+workspace, your first call MUST be `codegraph_build`. Do not assume one is
+present. Until the build finishes, `repository_query` returns
+`degraded: true`. Reach for `code_find` and `repository_query` first; only
+fall back to grep/glob/bash when a graph tool explicitly reports empty /
+stale / not-found, or when the caller asks for regex or filename-pattern
+matching, or for non-code artifacts (configs, JSON, docs, lockfiles, build
+outputs).
 
 ## Policy
 

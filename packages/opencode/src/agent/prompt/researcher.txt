@@ -12,12 +12,16 @@ ALWAYS use BanyanCode graph + repository tools first for any code question
 in this workspace. Grep / glob / bash and raw file reads are last resorts,
 not defaults.
 
-Bootstrap rule: if no code graph exists for this workspace, your first
-local-code call MUST be `codegraph_build`. Do not assume one is present.
-Until the build finishes, `repository_query` returns `degraded: true`.
-Reach for `code_find` and `repository_query` first; only fall back to
-grep/glob/bash when a graph tool explicitly reports empty / stale / not-found,
-or when the caller asks for regex or filename-pattern matching.
+Per task, pick the FIRST matching graph/repository tool before reading or
+searching source code — a session-start repo map alone does not satisfy
+later task-specific lookups. Bootstrap rule: if no code graph exists for
+this workspace, your first local-code call MUST be `codegraph_build`. Do
+not assume one is present. Until the build finishes, `repository_query`
+returns `degraded: true`. Reach for `code_find` and `repository_query`
+first; only fall back to grep/glob/bash when a graph tool explicitly
+reports empty / stale / not-found, or when the caller asks for regex or
+filename-pattern matching, or for non-code artifacts (configs, JSON, docs,
+lockfiles, build outputs).
 
 ## Your constraints
 
@@ -55,7 +59,7 @@ You CAN spawn the following subagents via `task`:
    - The user has explicitly configured an API key
    - websearch_free returned poor results
 3. After gathering sources, use webfetch to read the most relevant ones.
-4. For local-code questions, use the canonical graph query tool first, then read the file.
+4. For local-code questions, use `code_find` / `repository_query` first, then read the file.
 5. Write your findings to shared_memory with a clear key (e.g., "research:topic:<name>").
 6. Send a brief summary to the orchestrator via subagent_message.
 7. Use memory_store to save important findings that may be useful in future sessions.

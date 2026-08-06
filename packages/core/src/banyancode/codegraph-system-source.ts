@@ -2,14 +2,19 @@
  * BanyanCode Codegraph System Source.
  *
  * Renders the policy + tool-guide block that is appended to the model-facing
- * system prompt when BanyanCode is enabled. The block has two parts:
+ * system prompt when BanyanCode is enabled. The block has three parts:
  *
  *   1. The `## Codegraph-first search policy (ALWAYS)` section — a static,
  *      model-facing paragraph that tells the LLM to always reach for graph +
  *      repository tools first, and to bootstrap a code graph before any other
  *      action if one does not exist. Always emitted when BanyanCode is enabled
  *      (gated on `process.env.BANYANCODE_ENABLE !== "0"`).
- *   2. The `## BanyanCode tool guide` section — a per-session list of the
+ *   2. The `## Graph-first routing (ALWAYS)` section — the dynamic graph-state
+ *      line plus a short per-task routing rule, rendered right after the
+ *      policy and before the tool guide so the model sees current graph state
+ *      and the routing rule early. Only emitted when the caller supplies a
+ *      `graph` state.
+ *   3. The `## BanyanCode tool guide` section — a per-session list of the
  *      LLM-visible BanyanCode tools that have been materialized for the
  *      agent+model pair. Only emitted when the caller supplies a `tools` array.
  *
@@ -52,55 +57,28 @@ export class Service extends Context.Service<Service, Interface>()("@banyancode/
 export const POLICY_TEXT = [
   "## Codegraph-first search policy (ALWAYS)",
   "",
-  "ALWAYS use BanyanCode graph + repository tools first for any code",
-  "question in this workspace. Grep / glob / bash and raw file reads are",
-  "last resorts, not defaults. The complete tool catalog with descriptions",
-  "follows in this prompt.",
+  "ALWAYS use BanyanCode graph + repository tools first for any code question",
+  "in this workspace. Per task, pick the FIRST matching graph/repository tool",
+  "before reading or searching source code. A session-start repo map alone",
+  "does not satisfy later task-specific lookups — re-query the graph for each",
+  "new symbol, file, or call question. Grep / glob / bash and raw file reads",
+  "are last resorts, not defaults.",
   "",
-  "Session start: if Graph state is ready, call `banyan_repo_map` once to load",
-  "the workspace outline, then `code_find` before touching files.",
+  "Exemptions — skip the graph ONLY for:",
+  "- regex or filename-pattern matching the user explicitly asked for,",
+  "- non-code artifacts (configs, JSON, docs, lockfiles, build outputs).",
   "",
-  "Cost: one graph call replaces 3-5 bash grep/read loops, and repository tools",
-  "return file:line answers you can edit directly. Hot tools (mounted):",
-  "`code_find`, `repository_query`, `blast_radius`, `preflight`. Anything else:",
-  "`banyan_tool_search`.",
+  "Routing ladder — first match wins:",
+  "- symbol/file lookup → `code_find` (definition, callers, dependents, impact, find_file)",
+  "- workspace outline → `banyan_repo_map`",
+  "- architecture / call chain / tests / semantic search → `repository_query`, `repository_explain`, `repository_trace`, `repository_tests`",
+  "- edit risk / verification → `blast_radius`, `preflight`, `edit_plan`",
+  "- rename → `safe_rename`",
+  "- build/refresh → `codegraph_build` (auto-triggers only when the graph is missing",
+  "  or structurally invalid; manual builds are the preferred refresh path)",
   "",
-  "Bootstrap rule (do this BEFORE any other action):",
-  "1. Graph and repository tools auto-trigger a build ONLY when the graph is",
-  "   missing or structurally invalid (no meta row, empty file table, root or",
-  "   schema mismatch). Do not run `codegraph_build` on every session — it",
-  "   returns `ready` without rebuilding when the graph is fresh.",
-  "2. When you DO need a refresh (you made edits, or you want to re-index),",
-  "   call `codegraph_build` explicitly — manual builds are the preferred",
-  "   refresh path over waiting for an auto-trigger.",
-  "3. After the build, always reach for graph tools first. For symbol/file",
-  "   lookup, start with `code_find` (five intents: definition, callers,",
-  "   dependents, impact, find_file).",
-  "4. For semantic/architectural context, escalate to `repository_query`,",
-  "   `repository_explain`, `repository_trace`, `repository_tests`.",
-  "5. Before any non-trivial edit, run `blast_radius` (summary) or",
-  "   `preflight` (decision-ready: callers, tests, docs, configs, event",
-  "   bridges, HTTP routes).",
-  "6. After edits, run `edit_plan(phase=\"after\")` to re-verify blast radius.",
-  "",
-  "Tool routing ladder — pick the FIRST tool that matches the question:",
-  "- 'Where is X declared?' → `code_find(intent='definition')`",
-  "- 'Who calls X? / what depends on X?' → `code_find(intent='callers' | 'dependents')`",
-  "- 'Find the file for X' → `code_find(intent='find_file')`",
-  "- 'What does this workspace look like?' → `banyan_repo_map` (packages, entry points, per-file symbols)",
-  "- 'Architecture / how does X fit in?' → `repository_explain`",
-  "- 'What breaks if I edit file F?' → `repository_impact(path=F)`",
-  "- 'Follow the call chain from X' → `repository_trace(symbol=X)`",
-  "- 'Which tests cover X?' → `repository_tests(symbol=X)`",
-  "- 'Find anything about <topic>' → `repository_query(query=<topic>)`",
-  "- 'How risky is changing X?' → `blast_radius(target=X)` (counts) or `preflight(target=X)` (full report)",
-  "- 'Plan / verify an edit' → `edit_plan(phase='before' | 'after')`",
-  "- 'Rename X safely' → `safe_rename(symbol=X)`",
-  "",
-  "Only fall back to grep / glob / bash when:",
-  "- a graph tool explicitly reports empty / stale / not-found,",
-  "- the user explicitly asks for regex or filename-pattern matching,",
-  "- you're searching non-code artifacts (configs, JSON, docs, build outputs).",
+  "Fall back to grep/glob/bash only after a graph tool reports",
+  "not-found/empty/stale/failed, or an exemption applies.",
   "",
   "## Background subagents (ALWAYS)",
   "",
@@ -223,15 +201,31 @@ const graphLineFor = (graph: NonNullable<CodegraphSystemInput["graph"]>): string
   return "Graph state: missing — the first graph call will build it."
 }
 
+// Phase 5: the dynamic block — the graph-state line plus a SHORT per-task
+// routing rule — is rendered right after the static policy and before the
+// tool guide, so the model sees "what is the graph doing right now" and the
+// routing rule before the catalog. The full routing ladder stays in the
+// static policy; this is the one-line reminder the plan's "move the routing
+// rule earlier" refers to.
+const routingHeaderFor = (graph?: CodegraphSystemInput["graph"]): string => {
+  const graphLine = graph === undefined ? "" : graphLineFor(graph)
+  const rule = [
+    "Pick the FIRST matching graph/repository tool for the current task before",
+    "read/grep/bash. Only fall back after a graph tool reports",
+    "not-found/empty/stale/failed, or for regex / non-code artifacts.",
+  ].join("\n")
+  return ["## Graph-first routing (ALWAYS)", graphLine, rule].filter((part) => part.length > 0).join("\n\n")
+}
+
 const loadImpl: Interface["load"] = Effect.fn("CodegraphSystemSource.load")(function* (input) {
   const tools = input?.tools ?? []
   const graph = input?.graph
   // Pinned: without tools AND without a graph state, the output is exactly
   // POLICY_TEXT (no trailing join artifacts).
   if (tools.length === 0 && graph === undefined) return POLICY_TEXT
+  const routing = routingHeaderFor(graph)
   const guide = renderToolGuide(tools)
-  const graphLine = graph === undefined ? "" : graphLineFor(graph)
-  return [POLICY_TEXT, guide, graphLine].filter((part) => part.length > 0).join("\n\n")
+  return [POLICY_TEXT, routing, guide].filter((part) => part.length > 0).join("\n\n")
 })
 
 export const layer: Layer.Layer<Service, never, never> = Layer.effect(

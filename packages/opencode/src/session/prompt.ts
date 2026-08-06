@@ -1483,7 +1483,11 @@ export const layer = Layer.effect(
               MessageV2.toModelMessagesEffect(msgs, model),
               sys.codegraph(tools),
             ])
-            const system = [...env, ...instructions, ...(codegraph ? [codegraph] : []), ...(skills ? [skills] : [])]
+            // Phase 5: position the codegraph policy + dynamic graph-state +
+            // routing rule early (right after the environment block, before
+            // instructions) so the model sees current graph state and the
+            // per-task routing rule before the detailed instructions.
+            const system = [...env, ...(codegraph ? [codegraph] : []), ...instructions, ...(skills ? [skills] : [])]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({
