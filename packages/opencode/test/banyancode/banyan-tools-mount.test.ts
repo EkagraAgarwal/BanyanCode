@@ -113,6 +113,30 @@ describe("BanyanToolsMount", () => {
     }) as unknown as Effect.Effect<void, never, Scope.Scope>,
   )
 
+  // A3: the tools array is part of the provider request prefix — if the
+  // materialized definitions (set, order, descriptions, schemas) changed
+  // between steps of a session, the whole prompt cache misses even with the
+  // system-prompt freeze (A1) in place. Pin byte-stability across repeated
+  // materializations.
+  it.effect("tool definitions are byte-identical across repeated materializations (prompt-prefix stability)", () =>
+    Effect.gen(function* () {
+      const catalog = yield* ToolCatalog.Service
+      const snapshot = (materialization: ReturnType<typeof catalog.materialize> extends Effect.Effect<infer M> ? M : never) =>
+        materialization.definitions.map((d) => ({
+          name: d.name,
+          description: d.description,
+          inputSchema: d.inputSchema,
+        }))
+      const first = snapshot(yield* catalog.materialize())
+      const second = snapshot(yield* catalog.materialize())
+      expect(first.length).toBeGreaterThan(0)
+      expect(second).toEqual(first)
+      // Same keys in the same order (no per-call reordering that would break
+      // prefix caching at the tools-array boundary).
+      expect(second.map((d) => d.name)).toEqual(first.map((d) => d.name))
+    }) as unknown as Effect.Effect<void, never, Scope.Scope>,
+  )
+
   describe("when Tools.Service is absent", () => {
     const itBare = testEffect(
       Layer.effectDiscard(BanyanToolsMount.registerBanyanTools) as unknown as Layer.Layer<never, never, never>,

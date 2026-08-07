@@ -1,5 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Context, Effect, Layer, Option } from "effect"
+import { Context, Effect, Layer, Option, Ref } from "effect"
 import type { Tool as AITool } from "ai"
 
 import { InstanceState } from "@/effect/instance-state"
@@ -43,16 +43,31 @@ export function provider(model: Provider.Model) {
 export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
-  readonly codegraph: (tools?: Record<string, AITool>) => Effect.Effect<string | undefined>
+  readonly codegraph: (tools?: Record<string, AITool>, sessionID?: string) => Effect.Effect<string | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SystemPrompt") {}
+
+// Per-session rendered-block cache for the codegraph policy + graph-state line +
+// tool guide. The system prompt is rebuilt on EVERY step (prompt.ts loop), and the
+// graph-state line was previously read LIVE from the bootstrap on every render —
+// so a background index build flipping missing→building→ready(N) (or the symbol
+// count changing as files are edited) mutated the request prefix mid-session and
+// forced a FULL provider cache miss on every step (the dominant cost driver in the
+// chess benchmark: ~25 misses, 42K→189K fresh-token re-sends). Freezing the block
+// at first render per session makes the prefix byte-identical across steps and
+// continuation turns. Live state still reaches the model through tool results
+// (codegraph_build / banyan_repo_map report current status + graphVersion).
+// The tool guide re-renders only when the tool-set hash changes (rare: agent/model
+// switches that alter tool visibility).
+type CodegraphCacheEntry = { readonly toolsHash: string; readonly text: string }
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const skill = yield* Skill.Service
     const locations = yield* LocationServiceMap
+    const codegraphCache = yield* Ref.make(new Map<string, CodegraphCacheEntry>())
 
     return Service.of({
       environment: Effect.fn("SystemPrompt.environment")(function* (model: Provider.Model) {
@@ -108,7 +123,7 @@ export const layer = Layer.effect(
         ].join("\n")
       }),
 
-      codegraph: Effect.fn("SystemPrompt.codegraph")(function* (tools?: Record<string, AITool>) {
+      codegraph: Effect.fn("SystemPrompt.codegraph")(function* (tools?: Record<string, AITool>, sessionID?: string) {
         const enabled = process.env.BANYANCODE_ENABLE !== "0"
         if (!enabled) return
 
@@ -122,6 +137,23 @@ export const layer = Layer.effect(
             }))
           : undefined
 
+        // Deterministic per-process hash of the tool set. Byte-stable ordering:
+        // sort by id so registry iteration order can never perturb the prefix.
+        const toolsHash = descriptions
+          ? String(
+              Bun.hash(
+                JSON.stringify([...descriptions].sort((a, b) => a.id.localeCompare(b.id))),
+              ),
+            )
+          : ""
+
+        // Per-session freeze: the first render in a session wins; only a tool-set
+        // change (agent/model switch altering tool visibility) re-renders.
+        if (sessionID !== undefined) {
+          const cached = (yield* Ref.get(codegraphCache)).get(sessionID)
+          if (cached !== undefined && cached.toolsHash === toolsHash) return cached.text
+        }
+
         // Prefer the BanyanCode source module when it is in scope (e.g. tests
         // that provide the layer, or SystemPrompt.defaultLayer which mounts
         // `CodegraphSystemSource` explicitly). Falls back to the exported
@@ -134,13 +166,15 @@ export const layer = Layer.effect(
         // tell the model whether a graph is ready, building, or missing. The
         // bootstrap service is optional — when it is not in scope (tests that
         // only provide SystemPrompt.defaultLayer) the Graph state line is
-        // omitted entirely and behavior is unchanged.
+        // omitted entirely and behavior is unchanged. NOTE: this status is read
+        // once per session (frozen by the cache above); it is intentionally not
+        // live per step, for prompt-cache stability.
         const bootstrap = yield* Effect.serviceOption(Banyan.CodegraphBootstrap)
         const graphState = Option.isSome(bootstrap)
           ? yield* bootstrap.value.status().pipe(Effect.catchCause(() => Effect.succeed(undefined)))
           : undefined
 
-        return yield* Option.match(source, {
+        const text = yield* Option.match(source, {
           onSome: (svc) =>
             descriptions === undefined && graphState === undefined
               ? svc.load(undefined)
@@ -150,6 +184,15 @@ export const layer = Layer.effect(
                 }),
           onNone: () => Effect.succeed(Banyan.CodegraphSystemSourceNS.POLICY_TEXT),
         })
+
+        if (sessionID !== undefined) {
+          yield* Ref.update(codegraphCache, (cache) => {
+            const next = new Map(cache)
+            next.set(sessionID, { toolsHash, text })
+            return next
+          })
+        }
+        return text
       }),
     })
   }),

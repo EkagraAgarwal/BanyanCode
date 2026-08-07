@@ -161,3 +161,72 @@ describe("PR C: SystemPrompt.codegraph auto-tools policy", () => {
     expect(Exit.isSuccess(exit)).toBe(true)
   })
 })
+
+describe("A1: per-session codegraph block freeze (prompt-cache stability)", () => {
+  const TOOLS = {
+    code_find: { description: "Look up a symbol or file in the code graph" },
+    repository_query: { description: "Run a semantic query over the repository" },
+    banyan_repo_map: { description: "Token-budgeted outline of the workspace" },
+  } as unknown as Record<string, { description?: string }>
+
+  // The system prompt is rebuilt on every step (prompt.ts loop); before the
+  // freeze, the "Graph state:" line was read LIVE from the bootstrap on each
+  // render, so a background build flipping missing→ready(N) (or the symbol
+  // count changing as files are edited) mutated the request prefix and forced
+  // a full provider cache miss on every step. This test pins the freeze:
+  // with a sessionID, the first render wins and later steps return
+  // byte-identical text even as the graph state changes underneath.
+  test("rendered block is byte-identical across steps of one session despite graph-state flips", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "prefix-freeze.db")
+    const layer = buildBootstrapSystemLayer(dbPath)
+
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* SystemPrompt.Service
+          const sessionID = "ses_prefix_freeze"
+
+          const first = yield* svc.codegraph(TOOLS as never, sessionID)
+          expect(first).toBeDefined()
+          expect(first).toContain("Graph state: missing")
+
+          // Between steps the graph flips to ready with a different symbol
+          // count (the background indexer finished / re-indexed).
+          const repo = yield* Banyan.CodegraphRepo
+          yield* repo.setMeta({
+            id: "singleton",
+            graphBuiltAt: Date.now(),
+            graphVersion: 1,
+            graphCoverage: 1,
+            totalFiles: 20462,
+            totalNodes: 20000,
+            totalEdges: 10000,
+            schemaVersion: CODEGRAPH_SCHEMA_VERSION,
+            indexedRoot: tmp.path,
+          })
+
+          const second = yield* svc.codegraph(TOOLS as never, sessionID)
+          // Byte-identical: the freeze holds within a session.
+          expect(second).toEqual(first)
+          expect(second).toContain("Graph state: missing")
+
+          // A DIFFERENT session re-renders live — the freeze is per-session.
+          const other = yield* svc.codegraph(TOOLS as never, "ses_other")
+          expect(other).toContain("Graph state: ready (20,462 symbols)")
+          expect(other).not.toEqual(first)
+
+          // A changed tool set invalidates the cache even for the same session.
+          const changedTools = {
+            ...TOOLS,
+            code_find: { description: "Changed description for cache invalidation" },
+          } as unknown as Record<string, { description?: string }>
+          const changed = yield* svc.codegraph(changedTools as never, sessionID)
+          expect(changed).toContain("Changed description for cache invalidation")
+          expect(changed).not.toEqual(first)
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+    expect(Exit.isSuccess(exit)).toBe(true)
+  })
+})

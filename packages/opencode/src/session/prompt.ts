@@ -1481,7 +1481,7 @@ export const layer = Layer.effect(
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
               MessageV2.toModelMessagesEffect(msgs, model),
-              sys.codegraph(tools),
+              sys.codegraph(tools, sessionID),
             ])
             // Phase 5: position the codegraph policy + dynamic graph-state +
             // routing rule early (right after the environment block, before
