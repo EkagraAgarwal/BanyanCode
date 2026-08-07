@@ -77,8 +77,13 @@ export const POLICY_TEXT = [
   "- build/refresh → `codegraph_build` (auto-triggers only when the graph is missing",
   "  or structurally invalid; manual builds are the preferred refresh path)",
   "",
-  "Fall back to grep/glob/bash only after a graph tool reports",
-  "not-found/empty/stale/failed, or an exemption applies.",
+  "Fall back to grep/glob/bash only after YOU called a graph/repository tool",
+  "and it returned not-found/empty/stale/failed, or an exemption applies.",
+  "",
+  "The `Graph state` line below says whether the index is built yet: when it",
+  "reads `missing`, run `codegraph_build` once at session start (it returns",
+  "ready if the graph already exists) — or the first graph call will build it",
+  "lazily.",
   "",
   "## Background subagents (ALWAYS)",
   "",
@@ -120,6 +125,25 @@ const TOOL_FAMILIES = [
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
+// Tool descriptions in the guide are compressed to a one-line routing hint.
+// The full "Use when / Examples / Returns / Avoid when" text is already sent
+// to the provider inside the tools array, so duplicating it verbatim in the
+// system prompt only inflates every request (and every cache miss) — this was
+// the dominant contributor to the 23K-token initial prompt measured in the
+// chess benchmark vs 8.9K for upstream opencode.
+const GUIDE_DESCRIPTION_LIMIT = 140
+
+const compactDescription = (description: string): string => {
+  const collapsed = description.replace(/\s+/g, " ").trim()
+  const body = collapsed.startsWith("Use when:") ? collapsed.slice("Use when:".length).trim() : collapsed
+  const sentenceEnd = body.search(/\.(?:\s+[A-Z]|$)/)
+  const firstSentence = sentenceEnd === -1 ? body : body.slice(0, sentenceEnd + 1)
+  const trimmed = firstSentence.trim()
+  return trimmed.length <= GUIDE_DESCRIPTION_LIMIT
+    ? trimmed
+    : `${trimmed.slice(0, GUIDE_DESCRIPTION_LIMIT - 1).trimEnd()}…`
+}
+
 function renderToolGuide(tools: ReadonlyArray<CodegraphToolDescription>): string {
   const allowed = getBanyanToolIds()
   const visible = tools.filter((tool) => allowed.has(tool.id))
@@ -131,50 +155,12 @@ function renderToolGuide(tools: ReadonlyArray<CodegraphToolDescription>): string
     for (const id of family.ids) {
       const tool = byId.get(id)
       if (!tool) continue
-      const description = tool.description.replace(/\s+/g, " ").trim()
-      entries.push(`- **${tool.id}** — ${description}`)
+      entries.push(`- **${tool.id}** — ${compactDescription(tool.description)}`)
     }
     if (entries.length === 0) continue
     sections.push(`### ${family.title}\n\n${entries.join("\n")}`)
   }
   if (sections.length === 0) return ""
-  const catalogFamilies: ReadonlyArray<{ readonly title: string; readonly lead: string; readonly ids: ReadonlyArray<string> }> = [
-    {
-      title: "Repo map",
-      lead:
-        "banyan_repo_map — token-budgeted outline of packages, entry points, and per-file symbols. " +
-        "Use this before reading files; pass `root`, `path`, or `query` to scope the call.",
-      ids: ["banyan_repo_map"],
-    },
-    {
-      title: "Tool search",
-      lead:
-        "banyan_tool_search — search the adapted catalog (hot / warm / cold). " +
-        "Use this to discover cold tools that are not mounted in the system prompt; " +
-        "default `tier='all'` also refreshes the hot tool view.",
-      ids: ["banyan_tool_search"],
-    },
-  ]
-  const catalogEntries: string[] = []
-  for (const family of catalogFamilies) {
-    for (const id of family.ids) {
-      const tool = byId.get(id)
-      if (!tool) continue
-      const description = tool.description.replace(/\s+/g, " ").trim()
-      catalogEntries.push(`- **${tool.id}** — ${description}`)
-    }
-  }
-  const catalogSection = catalogEntries.length === 0
-    ? ""
-    : [
-        "### Hot tool catalog",
-        "",
-        "These tools are mounted in the system prompt. Reach for them directly " +
-          "without calling `banyan_tool_search`. Cold tools (advanced/internal) are " +
-          "NOT inlined here — discover them with `banyan_tool_search(query)`.",
-        "",
-        catalogEntries.join("\n"),
-      ].join("\n")
   return [
     "## BanyanCode tool guide",
     "",
@@ -182,7 +168,7 @@ function renderToolGuide(tools: ReadonlyArray<CodegraphToolDescription>): string
     "match the registry; consult the tool list the model receives for full",
     "input/output schemas.",
     "",
-    [sections.join("\n\n"), catalogSection].filter((part) => part.length > 0).join("\n\n"),
+    sections.join("\n\n"),
   ].join("\n")
 }
 
@@ -211,7 +197,7 @@ const routingHeaderFor = (graph?: CodegraphSystemInput["graph"]): string => {
   const graphLine = graph === undefined ? "" : graphLineFor(graph)
   const rule = [
     "Pick the FIRST matching graph/repository tool for the current task before",
-    "read/grep/bash. Only fall back after a graph tool reports",
+    "read/grep/bash. Only fall back after a graph tool YOU called reports",
     "not-found/empty/stale/failed, or for regex / non-code artifacts.",
   ].join("\n")
   return ["## Graph-first routing (ALWAYS)", graphLine, rule].filter((part) => part.length > 0).join("\n\n")

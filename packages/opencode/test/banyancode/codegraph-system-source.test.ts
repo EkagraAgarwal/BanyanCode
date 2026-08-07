@@ -20,6 +20,7 @@ import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { SystemPrompt } from "@/session/system"
 import { Skill } from "@/skill"
 import { testEffect } from "../lib/effect"
+import { MAX_GUIDE_CHARS, REQUIRED_TOOLS } from "./tool-guide-constants"
 
 const it = testEffect(
   Layer.mergeAll(
@@ -142,6 +143,54 @@ describe("Banyan.CodegraphSystemSource.Service", () => {
       } finally {
         if (original === undefined) delete process.env.BANYANCODE_ENABLE
         else process.env.BANYANCODE_ENABLE = original
+      }
+    }),
+  )
+})
+
+describe("BanyanCode tool guide — size budget (B1/B2)", () => {
+  const it = testEffect(
+    Layer.mergeAll(
+      Banyan.CodegraphSystemSourceNS.defaultLayer,
+      Skill.defaultLayer,
+      FSUtil.defaultLayer,
+      LocationServiceMap.layer,
+    ),
+  )
+
+  // Realistic full-template descriptions (the "Use when / Examples / Returns /
+  // Avoid when" boilerplate every Tool.make ships) for every REQUIRED tool —
+  // the worst case the renderer sees in production.
+  const realisticTools = (): Array<{ id: string; description: string }> =>
+    REQUIRED_TOOLS.map((id) => ({
+      id,
+      description:
+        `Use when: the agent needs to perform the ${id} operation against the current workspace. ` +
+        `This is a longer-than-needed sentence that pads the description toward the pre-compaction length. ` +
+        `Examples - "Do the ${id} thing", "Find where ${id} applies". ` +
+        `Returns { mode, hits, details }. Avoid when the answer is already in context. ` +
+        `After this, often: repository_query. Before this: nothing.`,
+    }))
+
+  it.effect("renders the full tool set under MAX_GUIDE_CHARS with one-line entries", () =>
+    Effect.gen(function* () {
+      const svc = yield* Banyan.CodegraphSystemSource
+      const text = yield* svc.load({ tools: realisticTools() })
+
+      const guideHeader = "## BanyanCode tool guide"
+      const headerIndex = text.indexOf(guideHeader)
+      expect(headerIndex).toBeGreaterThan(-1)
+      const guide = text.slice(headerIndex + guideHeader.length)
+      expect(guide.length).toBeLessThanOrEqual(MAX_GUIDE_CHARS)
+
+      // Every required tool id is still present.
+      for (const id of REQUIRED_TOOLS) expect(guide).toContain(id)
+      // No entry exceeds the one-line limit: each line is the id + ≤140 chars.
+      for (const line of guide.split("\n")) {
+        if (!line.startsWith("- **")) continue
+        const dash = line.indexOf("—")
+        const hint = dash === -1 ? "" : line.slice(dash + 1).trim()
+        expect(hint.length).toBeLessThanOrEqual(141)
       }
     }),
   )
