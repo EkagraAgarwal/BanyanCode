@@ -147,11 +147,11 @@ export const layer: Layer.Layer<Service, never, CodegraphReadiness.Service> = La
   }),
 )
 
-export const defaultLayer: Layer.Layer<Service, never, never> = layer.pipe(
+export const defaultLayer = layer.pipe(
   Layer.provide(CodegraphReadiness.defaultLayer),
   // CodegraphIndexer.defaultLayer leaves FSUtil.Service in R (the indexer
   // layer's own defaultLayer only provides CodegraphRepo), so satisfy it
-  // here to keep the bootstrap defaultLayer fully closed.
+  // here to keep the bootstrap defaultLayer closed at the type level.
   Layer.provide(FSUtil.defaultLayer),
   // The readiness defaultLayer does not pull BanyanConfig into scope; the
   // ensureGraph watch_enabled check uses serviceOption, so provide the
