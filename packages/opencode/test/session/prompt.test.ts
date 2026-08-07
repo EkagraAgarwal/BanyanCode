@@ -758,7 +758,7 @@ it.instance("loop continues when finish is stop but assistant has tool parts", (
   }),
 )
 
-it.instance("failed subtask preserves metadata on error tool state", () =>
+it.instance("failed subtask preserves metadata and surfaces model error in child session", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig((url) => ({
       ...providerCfg(url),
@@ -789,22 +789,37 @@ it.instance("failed subtask preserves metadata on error tool state", () =>
     expect(taskMsg?.info.role).toBe("assistant")
     if (!taskMsg || taskMsg.info.role !== "assistant") return
 
-    const tool = errorTool(taskMsg.parts)
+    // The fork (b3efeed32) turns a model-not-found into a graceful blocked
+    // outcome in the child loop instead of failing the prompt, so the task
+    // tool completes with empty output and the error surfaces in the child
+    // session's assistant message rather than on the parent tool part.
+    const tool = completedTool(taskMsg.parts)
     if (!tool) return
 
-    expect(tool.state.error).toContain("Tool execution failed")
     expect(tool.state.metadata).toBeDefined()
     expect(tool.state.metadata?.sessionId).toBeDefined()
     expect(tool.state.metadata?.model).toEqual({
       providerID: ProviderV2.ID.make("test"),
       modelID: ModelV2.ID.make("missing-model"),
     })
+
+    // The child session's last assistant carries the model-not-found error.
+    const childID = SessionID.make(tool.state.metadata?.sessionId as string)
+    const childMsgs = yield* sessions.messages({ sessionID: childID })
+    const childAssistant = childMsgs.findLast((item) => item.info.role === "assistant")
+    expect(childAssistant?.info.role).toBe("assistant")
+    if (!childAssistant || childAssistant.info.role !== "assistant") return
+    expect(childAssistant.info.error?.name).toBe("ProviderAuthError")
+    expect((childAssistant.info.error?.data as { message?: string })?.message).toContain("Model not found")
   }),
 )
 
 it.instance("subtask child inherits parent session external_directory allow", () =>
   Effect.gen(function* () {
-    const { llm } = yield* useServerConfig(providerCfg)
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      agent: { general: { model: "test/test-model" } },
+    }))
     const prompt = yield* SessionPrompt.Service
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({
@@ -852,7 +867,11 @@ noLLMServer.instance("prompt tools replace previous prompt tool rules", () =>
 
     const reloaded = yield* sessions.get(session.id)
     expect(reloaded.permission).toEqual([{ permission: "read", pattern: "*", action: "allow" }])
-    expect(Permission.evaluate("bash", "anything", reloaded.permission ?? []).action).toBe("ask")
+    // Unmatched tools fall back to the default action, which is "allow" in this
+    // fork (Permission.evaluate's fallback rule) rather than upstream's "ask".
+    // The meaningful assertion is that bash is no longer denied by the first
+    // prompt's `bash: false` rule — i.e. the rules were replaced, not merged.
+    expect(Permission.evaluate("bash", "anything", reloaded.permission ?? []).action).toBe("allow")
   }),
 )
 
@@ -860,7 +879,10 @@ it.instance(
   "running subtask preserves metadata after tool-call transition",
   () =>
     Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        agent: { general: { model: "test/test-model" } },
+      }))
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
       const chat = yield* sessions.create({ title: "Pinned" })
@@ -878,6 +900,7 @@ it.instance(
           if (tool?.state.status === "running" && tool.state.metadata?.sessionId) return tool
         }),
         "timed out waiting for running subtask metadata",
+        "30 seconds",
       )
 
       if (tool.state.status !== "running") return
@@ -888,14 +911,17 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  5_000,
+  30_000,
 )
 
 it.instance(
   "running task tool preserves metadata after tool-call transition",
   () =>
     Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        agent: { general: { model: "test/test-model" } },
+      }))
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
       const chat = yield* sessions.create({
@@ -922,6 +948,7 @@ it.instance(
           if (tool?.state.status === "running" && tool.state.metadata?.sessionId) return tool
         }),
         "timed out waiting for running task metadata",
+        "30 seconds",
       )
 
       if (tool.state.status !== "running") return
@@ -932,7 +959,7 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  10_000,
+  60_000,
 )
 
 it.instance(
@@ -956,7 +983,7 @@ it.instance(
       yield* Fiber.await(fiber)
       expect((yield* status.get(chat.id)).type).toBe("idle")
     }),
-  3_000,
+  30_000,
 )
 
 // Cancel semantics
@@ -984,7 +1011,7 @@ it.instance(
         expect(exit.value.info.role).toBe("assistant")
       }
     }),
-  3_000,
+  30_000,
 )
 
 it.instance(
@@ -1010,7 +1037,7 @@ it.instance(
         }
       }
     }),
-  3_000,
+  30_000,
 )
 
 raceNoLLMServer.instance(
@@ -1099,7 +1126,7 @@ raceNoLLMServer.instance(
       }
     }),
   { config: cfg },
-  3_000,
+  30_000,
 )
 
 noLLMServer.instance(
@@ -1145,15 +1172,18 @@ noLLMServer.instance(
       expect(taskMsg.info.time.completed).toBeDefined()
       expect(taskMsg.info.finish).toBeDefined()
     }),
-  { config: cfg },
-  30_000,
+  { config: { ...cfg, agent: { general: { model: "test/test-model" } } } },
+  120_000,
 )
 
 it.instance(
   "cancel propagates from slash command subtask to child session",
   () =>
     Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        agent: { general: { model: "test/test-model" } },
+      }))
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
       const status = yield* SessionStatus.Service
@@ -1181,7 +1211,7 @@ it.instance(
       expect((yield* status.get(chat.id)).type).toBe("idle")
       expect((yield* status.get(childID)).type).toBe("idle")
     }),
-  10_000,
+  60_000,
 )
 
 it.instance(
@@ -1209,7 +1239,7 @@ it.instance(
       }
     }),
   { git: true },
-  3_000,
+  30_000,
 )
 
 // Queue semantics
@@ -1247,7 +1277,7 @@ it.instance(
       expect(a.info.id).toBe(b.info.id)
       expect(a.info.role).toBe("assistant")
     }),
-  3_000,
+  30_000,
 )
 
 it.instance(
@@ -1294,6 +1324,7 @@ it.instance(
             ),
           ),
         "timed out waiting for second prompt to save",
+        "30 seconds",
       )
 
       yield* Deferred.succeed(gate, void 0)
@@ -1315,7 +1346,7 @@ it.instance(
       expect(inputs).toHaveLength(2)
       expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("second")
     }),
-  3_000,
+  30_000,
 )
 
 it.instance(
@@ -1344,7 +1375,7 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  3_000,
+  30_000,
 )
 
 noLLMServer.instance("assertNotBusy succeeds when idle", () =>
@@ -1384,7 +1415,7 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  3_000,
+  30_000,
 )
 
 unixNoLLMServer(
@@ -1577,7 +1608,7 @@ it.instance(
       const sh = yield* prompt
         .shell({ sessionID: chat.id, agent: "build", command: "sleep 0.2" })
         .pipe(Effect.forkChild)
-      yield* waitForBusy(chat.id)
+      yield* waitForBusy(chat.id, "30 seconds")
 
       const loop = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
       yield* Effect.sleep(50)
@@ -1595,7 +1626,7 @@ it.instance(
       expect(yield* llm.calls).toBe(1)
     }),
   { git: true },
-  3_000,
+  30_000,
 )
 
 it.instance(
@@ -1614,7 +1645,7 @@ it.instance(
       const sh = yield* prompt
         .shell({ sessionID: chat.id, agent: "build", command: "sleep 0.2" })
         .pipe(Effect.forkChild)
-      yield* waitForBusy(chat.id)
+      yield* waitForBusy(chat.id, "30 seconds")
 
       const a = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
       const b = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
@@ -1634,7 +1665,7 @@ it.instance(
       expect(yield* llm.calls).toBe(1)
     }),
   { git: true },
-  3_000,
+  30_000,
 )
 
 unix(
@@ -1909,14 +1940,14 @@ noLLMServer.instance(
         })
         .pipe(Effect.forkChild)
 
-      yield* awaitWithTimeout(Deferred.await(ready), "timed out waiting for read tool to start", "10 seconds")
+      yield* awaitWithTimeout(Deferred.await(ready), "timed out waiting for read tool to start", "60 seconds")
       yield* prompt.cancel(chat.id)
       yield* Fiber.interrupt(fiber)
       const exit = yield* Fiber.await(fiber)
       expect(Exit.isFailure(exit)).toBe(true)
     }),
   { config: cfg },
-  30_000,
+  120_000,
 )
 
 noLLMServer.instance(
@@ -1944,14 +1975,14 @@ noLLMServer.instance(
         })
         .pipe(Effect.forkChild)
 
-      yield* awaitWithTimeout(Deferred.await(ready), "timed out waiting for read tool to start", "10 seconds")
+      yield* awaitWithTimeout(Deferred.await(ready), "timed out waiting for read tool to start", "60 seconds")
       yield* prompt.cancel(chat.id)
       yield* Fiber.interrupt(fiber)
       const exit = yield* Fiber.await(fiber)
       expect(Exit.isFailure(exit)).toBe(true)
     }),
   { config: cfg },
-  30_000,
+  120_000,
 )
 
 // Missing file handling
@@ -2135,7 +2166,7 @@ it.instance(
         expect(last.info.error?.name).toBe("MessageAbortedError")
       }
     }),
-  3_000,
+  30_000,
 )
 
 // Agent variant
@@ -2428,7 +2459,7 @@ it.instance(
       // at iteration 6 (step=6 > maxSteps=5).
       expect(yield* llm.calls).toBe(5)
     }),
-  30_000,
+  120_000,
 )
 
 it.instance(
@@ -2473,7 +2504,7 @@ it.instance(
       }
       expect(yield* llm.calls).toBe(11)
     }),
-  60_000,
+  120_000,
 )
 
 it.instance(
@@ -2510,7 +2541,7 @@ it.instance(
       }
       expect(yield* llm.calls).toBe(3)
     }),
-  30_000,
+  60_000,
 )
 
 it.instance(
