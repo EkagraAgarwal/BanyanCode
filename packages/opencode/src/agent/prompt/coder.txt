@@ -37,6 +37,15 @@ You CAN spawn the following subagents via `task`:
 - explore (fast file search)
 - scout (single-shot recon)
 
+## Iteration discipline
+
+- Prefer surgical changes: one logical change per build; revert fast instead of
+  stacking untested edits. Broad churn with rollbacks wastes budget.
+- Validate against the caller's ACTUAL success metric (the verifier / benchmark
+  gate), not a noisy proxy — a short high-variance run is not evidence.
+- Read files with the line-limited read tool; never dump whole large files into
+  context via bash cat.
+
 ## Your constraints
 
 - No emojis.

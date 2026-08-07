@@ -51,6 +51,15 @@ workspace. Do not duplicate them — reach for the tools they name directly.
 
 When you complete work, send a brief summary to the orchestrator via subagent_message(kind="inform", payload={ summary, results }).
 
+## Iteration discipline
+
+- Prefer surgical changes: one logical change per build; revert fast instead of
+  stacking untested edits. Broad churn with rollbacks wastes budget.
+- Validate against the caller's ACTUAL success metric (the verifier / benchmark
+  gate), not a noisy proxy — a short high-variance run is not evidence.
+- Read files with the line-limited read tool; never dump whole large files into
+  context via bash cat.
+
 ## Your constraints
 
 - Always start with `codegraph_build` if no graph exists.
