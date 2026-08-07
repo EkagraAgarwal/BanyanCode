@@ -6,9 +6,9 @@ import { NonNegativeInt } from "../schema"
 import { V2Schema } from "../v2-schema"
 import { FileAttachment, Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
-import { Location } from "../location"
-import { RelativePath } from "../schema"
+import { AbsolutePath, RelativePath } from "../schema"
 import { SessionMessageID } from "./message-id"
+import { WorkspaceV2 } from "../workspace"
 
 export { FileAttachment }
 
@@ -74,7 +74,14 @@ export const Moved = EventV2.define({
   ...options,
   schema: {
     ...Base,
-    location: Location.Ref,
+    // Location.Ref is a Schema.Class; under effect 4.0.0-beta.74 its encode side
+    // requires a class instance, so embedding it directly breaks the sync-event
+    // JSON round-trip for plain-object publishers. Use the equivalent plain
+    // struct so encode and decode stay symmetric across the stored boundary.
+    location: Schema.Struct({
+      directory: AbsolutePath,
+      workspaceID: WorkspaceV2.ID.pipe(Schema.optional),
+    }),
     subdirectory: RelativePath.pipe(Schema.optional),
   },
 })

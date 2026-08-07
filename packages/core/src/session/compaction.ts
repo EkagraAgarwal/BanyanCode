@@ -122,7 +122,10 @@ const estimateRequest = (request: unknown) => {
       chars += JSON.stringify(tool).length + 16
     }
   }
-  return Token.estimate(String(chars))
+  // Token.estimate divides string length by 4; apply the same divisor to the
+  // accumulated character count without allocating the concatenated string.
+  // (Token.estimate(String(chars)) would estimate the digit string, ~1 token.)
+  return Math.max(0, Math.round(chars / 4))
 }
 
 const estimatePart = (part: unknown) => {
