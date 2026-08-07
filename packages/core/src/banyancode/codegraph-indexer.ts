@@ -172,11 +172,10 @@ const DEFAULT_IGNORED = [
 ]
 
 // Out-of-product UI packages that the codegraph never needs to index.
-// These are out of scope per AGENTS.md ("desktop, web, app, storybook
-// packages are explicitly out of scope"). They are still respected
-// when the user explicitly lists them in `banyancode_codegraph_exclude_patterns`
-// or `.banyancode/ignore`, but they are also excluded by default so
-// that a fresh build does not waste time walking packages/desktop etc.
+// These were removed from the repo in the TUI/CLI-only strip; the entries
+// remain so older checkouts that still carry them are not walked. They are
+// still respected when the user explicitly lists them in
+// `banyancode_codegraph_exclude_patterns` or `.banyancode/ignore`.
 const DEFAULT_PRODUCT_EXCLUDES = [
   "packages/web",
   "packages/app",
