@@ -32,7 +32,24 @@ export const Input = Schema.Struct({
   limit: optionalNumber.annotate({
     description: "Maximum number of packages, entry points, and search hits to return. Defaults to 50. Allowed range: 1-200.",
   }),
-}).annotate({
+}).pipe(
+  // C1: require at least one of root/path/query AT THE SCHEMA LEVEL so an
+  // empty `{}` call fails validation before execute (previously it passed the
+  // schema — all fields optional — and only errored in the handler, wasting a
+  // full tool round-trip; the benchmark transcript shows the model's very
+  // first graph-tool call dying on exactly this). Overview callers pass
+  // `root` (e.g. "."). `Schema.check` does not change the JSON schema the
+  // model sees — the fields stay optional, with the guidance in the
+  // description below.
+  Schema.check(
+    Schema.makeFilter(
+      (input) =>
+        input.root !== undefined || input.path !== undefined || input.query !== undefined
+          ? true
+          : "banyan_repo_map: at least one of `root`, `path`, or `query` must be provided.",
+    ),
+  ),
+).annotate({
   description:
     "Token-budgeted outline of the most structurally central symbols in the " +
     "current workspace. Use this before reading files: it returns packages, " +

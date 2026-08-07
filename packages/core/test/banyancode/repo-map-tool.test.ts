@@ -174,4 +174,19 @@ describe("banyan_repo_map tool", () => {
     )
     expect(result._tag).toBe("Failure")
   })
+
+  // C1: the at-least-one-of rule is enforced at the SCHEMA level, so an empty
+  // `{}` call fails decode before execute (previously it passed the schema and
+  // only errored inside the handler — the model's first graph-tool call in the
+  // chess benchmark died exactly there).
+  test("schema rejects empty input at decode time with a clear message", () => {
+    expect(() => Schema.decodeUnknownSync(RepoMapInput)({})).toThrow(
+      "at least one of `root`, `path`, or `query` must be provided",
+    )
+    // root-only overview call still decodes fine.
+    expect(Schema.decodeUnknownSync(RepoMapInput)({ root: "/repo" }).root).toBe("/repo")
+    // path-only and query-only calls decode fine too.
+    expect(Schema.decodeUnknownSync(RepoMapInput)({ path: "src/feature.ts" }).path).toBe("src/feature.ts")
+    expect(Schema.decodeUnknownSync(RepoMapInput)({ query: "doWork" }).query).toBe("doWork")
+  })
 })
