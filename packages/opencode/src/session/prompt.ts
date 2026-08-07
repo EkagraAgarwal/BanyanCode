@@ -16,7 +16,6 @@ import { SessionCompaction } from "./compaction"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
 import { Plugin } from "../plugin"
-import MAX_STEPS from "../session/prompt/max-steps.txt"
 import { ToolRegistry } from "@/tool/registry"
 import { MCP } from "../mcp"
 import { LSP } from "@/lsp/lsp"
@@ -68,9 +67,7 @@ import { canonicalizeToolBatch, NO_PROGRESS_THRESHOLD, sameFingerprintSet } from
 // deprecated alias mapped to `"completed"` for one minor version so external
 // callers that pattern-match on the inner gen's return value keep working
 // while consumers migrate.
-type LoopOutcome = "continue" | "completed" | "blocked" | "maxSteps" | "maxTime" | "noProgress"
-
-const DEFAULT_SOFT_STEP_CAP = 100
+type LoopOutcome = "continue" | "completed" | "blocked" | "maxTime" | "noProgress"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1344,13 +1341,6 @@ export const layer = Layer.effect(
             yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
             throw error
           }
-          // V1 soft step cap: `agent.steps` (per-agent override) takes priority;
-          // otherwise default to 100. The V2 loop keeps its stricter 25-step
-          // cap in `packages/core/src/session/runner/llm.ts`; the two are
-          // intentionally different because V2 is a multi-runner pipeline that
-          // should fail-fast, while V1 is a single-runner session loop.
-          const maxSteps = agent.steps ?? DEFAULT_SOFT_STEP_CAP
-          const isLastStep = step >= maxSteps
           msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
             Effect.provideService(RuntimeFlags.Service, flags),
             Effect.provideService(FSUtil.Service, fsys),
@@ -1372,26 +1362,7 @@ export const layer = Layer.effect(
             time: { created: Date.now() },
             sessionID,
           }
-          // Hard backstop: when `step > maxSteps`, the loop has overrun the soft
-          // reminder by one step. Persist a terminal `APIError` on a fresh
-          // assistant message and break before invoking the provider. The
-          // existing `isLastStep` reminder injection above is unchanged — it is
-          // a soft prompt nudge, this is the safety net.
-          if (step > maxSteps) {
-            msg.error = new SessionV1.APIError({
-              message: `Hard step cap reached (maxSteps=${maxSteps})`,
-              isRetryable: false,
-            }).toObject()
-            msg.finish = "error"
-            msg.time.completed = Date.now()
-            yield* sessions.updateMessage(msg)
-            yield* Effect.logInfo("loop exit: outcome=maxSteps", {
-              "session.id": sessionID,
-              step,
-              maxSteps,
-            })
-            break
-          }
+
           yield* sessions.updateMessage(msg)
 
           const finalizeInterruptedAssistant = Effect.gen(function* () {
@@ -1497,7 +1468,7 @@ export const layer = Layer.effect(
               sessionID,
               parentSessionID: session.parentID,
               system,
-              messages: [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])],
+              messages: modelMsgs,
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,

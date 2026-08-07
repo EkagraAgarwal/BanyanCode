@@ -2390,48 +2390,6 @@ function errorToolSeedPart(input: {
 }
 
 it.instance(
-  "hard cap persists terminal error and exits with maxSteps",
-  () =>
-    Effect.gen(function* () {
-      const { llm } = yield* useServerConfig((url) => ({
-        ...providerCfg(url),
-        agent: { build: { steps: 5 } },
-      }))
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const chat = yield* sessions.create({
-        title: "Pinned",
-        permission: [{ permission: "*", pattern: "*", action: "allow" }],
-      })
-      yield* prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        noReply: true,
-        parts: [{ type: "text", text: "hello" }],
-      })
-      // Use a real tool (`glob`) with different inputs each turn so the
-      // fingerprint set evolves across turns and the no-progress detector
-      // doesn't pre-empt the hard cap. Glob is read-only and cross-platform.
-      for (let i = 0; i < 6; i++) {
-        yield* llm.tool("glob", { pattern: `**/*-cap-${i}.txt` })
-      }
-
-      const result = yield* prompt.loop({ sessionID: chat.id })
-
-      expect(result.info.role).toBe("assistant")
-      if (result.info.role === "assistant") {
-        expect(result.info.finish).toBe("error")
-        expect(result.info.error?.name).toBe("APIError")
-        expect((result.info.error?.data as { message?: string })?.message).toContain("maxSteps")
-      }
-      // 5 tool turns consumed; the 6th never reaches the provider because the hard cap fires
-      // at iteration 6 (step=6 > maxSteps=5).
-      expect(yield* llm.calls).toBe(5)
-    }),
-  30_000,
-)
-
-it.instance(
   "soft reminder does not hard-stop the loop",
   () =>
     Effect.gen(function* () {
@@ -2451,11 +2409,9 @@ it.instance(
         noReply: true,
         parts: [{ type: "text", text: "hello" }],
       })
-      // 10 tool turns followed by a text completion. With maxSteps=100 the
-      // soft-reminder injection (step === maxSteps) never fires within these
-      // 10 iterations, but the loop processes them naturally without a
-      // hard-stop. We assert the loop completes with `stop` finish and no
-      // terminal error — i.e. the soft budget is a nudge, not a hard cap.
+      // 10 tool turns followed by a text completion. The loop processes them
+      // naturally without a hard-stop. We assert the loop completes with
+      // `stop` finish and no terminal error — the loop is not capped.
       // Use `glob` with distinct patterns so fingerprints evolve across
       // turns and the no-progress detector doesn't pre-empt.
       for (let i = 0; i < 10; i++) {
@@ -2467,7 +2423,6 @@ it.instance(
 
       expect(result.info.role).toBe("assistant")
       if (result.info.role === "assistant") {
-        // Loop continues past the soft reminder; final assistant is the natural completion.
         expect(result.info.finish).toBe("stop")
         expect(result.info.error).toBeUndefined()
       }
