@@ -500,7 +500,7 @@
     },
     "packages/opencode": {
       "name": "opencode",
-      "version": "26.7.33",
+      "version": "26.8.16",
       "bin": {
         "banyancode": "./bin/banyancode",
       },
