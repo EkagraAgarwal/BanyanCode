@@ -301,10 +301,14 @@ export const current = Effect.fn("SessionContextEpoch.current")(function* (
   agent: AgentV2.ID,
   revision: number,
 ) {
+  // `agent` exists on both the epoch and the session row; alias the joined
+  // duplicate so the SQL result has unique column names. Without the alias the
+  // driver row collapses the duplicate key and drizzle's positional mapper
+  // misaligns (the epoch would appear to have the wrong agent/revision).
   const value = yield* db
     .select({
       agent: SessionContextEpochTable.agent,
-      selected: SessionTable.agent,
+      selected: sql`${SessionTable.agent}`.as("selected"),
       revision: SessionContextEpochTable.revision,
     })
     .from(SessionContextEpochTable)
