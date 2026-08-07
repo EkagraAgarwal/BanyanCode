@@ -12,7 +12,7 @@ BanyanCode is a CLI/TUI-only fork of [OpenCode](https://github.com/anomalyco/ope
 4. **Researcher Agent with Free Web Search** — a `researcher` subagent backed by DuckDuckGo HTML scraping (`websearch_free`), requiring no API keys.
 5. **Repository Intelligence (Wave 1 & Wave 2)** — a stable 8-method public surface (`query`, `explain`, `impact`, `trace`, `tests`, `symbols`, `relationships`, `ownership`) returning a typed `ArchitecturalSlice`. Driven by `bfsPure` graph traversal, batched SQL queries, and evidence-based test discovery.
 
-Upstream web/desktop surfaces (desktop, web, app, storybook, ui, console, stats, enterprise, slack, function, identity, containers) were removed in the TUI/CLI-only strip. BanyanCode is a sequence of additions to OpenCode, not a full rewrite.
+Upstream desktop, web, app, and Storybook packages are explicitly out of scope. BanyanCode is a sequence of additions to OpenCode, not a full rewrite.
 
 ## Repo Layout
 
@@ -27,6 +27,8 @@ The repo is a Bun workspace composed of packages under `packages/`:
 | `llm` | AI SDK provider adapters and HTTP recorder | AI SDK provider configuration |
 | `effect-drizzle-sqlite`, `effect-sqlite-node` | Generic SQLite bindings | Database integration bindings |
 | `plugin` | Plugin authoring SDK | Plugin system |
+| `server`, `console`, `storybook`, `app`, `web`, `desktop` | Upstream surfaces | Out of scope for BanyanCode |
+| `stats` | Public download stats | Downstream package stats |
 
 Build system: Turborepo on top of Bun (`bun turbo`). Tests run from individual package directories (e.g. `packages/opencode` or `packages/core`), never from the repository root.
 
@@ -350,6 +352,7 @@ BanyanCode compiles into single-file binary executables across **11 target archi
 
 ### Bun Compilation & Embedded Assets (`packages/opencode/script/build.ts`)
 - **Native libSQL Embedding (`createLibsqlPlugin`)**: Patches `@libsql/client` `requireNative()` calls to static imports (e.g. `@libsql/win32-x64-msvc`), enabling Bun single-file compilation to embed `.node` N-API binary bindings directly inside the single executable.
+- **Embedded Web UI (`createEmbeddedWebUIBundle`)**: Bundles `packages/app` into `opencode-web-ui.gen.ts` via `with { type: "file" }` imports.
 - **Binary Smoke Verification**: Runs `banyancode --version` and launches native targets in a temp environment for 2.5 seconds to verify `turso.schema` initialization and ensure `dlopen` of embedded native bindings succeeds.
 
 ### Publishing & Installation (`packages/opencode/script/publish.ts` & `postinstall.mjs`)

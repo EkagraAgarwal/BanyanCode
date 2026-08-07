@@ -22,7 +22,7 @@ const banyan = Option.isSome(option) ? yield* option.value.get() : ({} as Banyan
 
 ## Codegraph ignore file
 
-The codegraph indexer looks for `.banyancode/ignore` (inside the `.banyancode/` dir), NOT `.banyancodeignore` (project root). See `codegraph-indexer.ts:58`. Update `specs/banyancode/` if you change this.
+The codegraph indexer looks for `.banyancode/ignore` (inside the `.banyancode/` dir), NOT `.banyancodeignore` (project root). See `codegraph-indexer.ts:58`. Update docs at `packages/docs/src/content/docs/banyancode-codegraph.mdx` if you change this.
 
 ## BanyanTools.locationLayer is the wrong pattern
 

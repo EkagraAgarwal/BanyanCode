@@ -1,0 +1,62 @@
+---
+title: BanyanCode Code Graph
+description: Polyglot code graph with tree-sitter
+---
+
+# BanyanCode Code Graph
+
+BanyanCode builds a polyglot code graph using tree-sitter (TypeScript, JavaScript, Python, Go, Rust) with regex fallback for other languages. The graph captures files, symbols, imports, calls, and Wave 1 structural edges (tests, routes, config mounts, etc.).
+
+## Ignore rules
+
+The indexer skips:
+
+- Default patterns: `node_modules`, `.git`, `dist`, `build`, `.sst`, `.opencode/`, `.banyancode/`, `*.db`, `*.db-wal`, `*.db-shm`
+- `.gitignore` patterns from the project root
+- `.banyancode/ignore` patterns (if present)
+
+For workspace-specific exclusions — large scratch files, planning artifacts, vendored mirrors — drop a `.banyancode/ignore` at the workspace root listing one glob per line (gitignore syntax). Anything larger than the size cap, or that doesn't look like source code, is also skipped automatically and tallied in the build report's skip reasons.
+
+## Building the code graph
+
+### TUI
+
+Run `/codegraph-build` from the prompt. A floating progress widget shows the current file and lets you cancel. The resolved DB path is shown in the widget.
+
+### CLI
+
+```bash
+banyancode codegraph build --force
+banyancode codegraph build --root ./packages/core --force
+banyancode codegraph status
+banyancode codegraph cancel
+banyancode codegraph force-kill   # if cancel does not unblock a stuck build
+banyancode codegraph path         # print .banyancode/banyancode.db location
+```
+
+### Agent tools
+
+Agents can call `codegraph_build`, `codegraph_query`, `codegraph_callers`, `codegraph_dependents`, and `codegraph_impact`. Wave 1 also adds `codegraph_search`, structural `codegraph_find_*`, and seven `repo_*` tools — see the [BanyanCode overview](./banyancode.mdx).
+
+## Querying
+
+Use slash commands such as `/codegraph-search` and `/repo-find-subsystem`, or ask the agent to call the `codegraph_*` / `repo_*` tools directly. The **Codegraph Intel** sidebar panel keeps the last 8 queries visible during a session.
+
+## Troubleshooting
+
+### Build hangs or stalls
+
+- Check `banyancode codegraph status` — if stuck at the same count, run `banyancode codegraph cancel` then `banyancode codegraph force-kill`.
+- Ensure only one build runs at a time; a second `build` call is rejected while status is `running`.
+- Verify BanyanCode is enabled (it is by default; only set `BANYANCODE_ENABLE=0` if you want to turn it off).
+
+### Index fails
+
+- Check that the root path exists and is readable.
+- Verify `.banyancode/ignore` is not excluding necessary files.
+- Ensure sufficient disk space for `banyancode.db`.
+
+### Search returns no results
+
+- Run `banyancode codegraph build --force` (or `/codegraph-build`) first.
+- Try a more specific query or use `codegraph_query` for exact symbol matches.

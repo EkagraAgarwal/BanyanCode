@@ -45,13 +45,13 @@
     "./ui/dialog": "./src/ui/dialog.tsx",
     "./ui/spinner": "./src/ui/spinner.ts",
     "./ui/toast": "./src/ui/toast.tsx",
-    "./component/spinner": "./src/component/spinner.tsx",
-    "./audio/*": "./audio/*"
+    "./component/spinner": "./src/component/spinner.tsx"
   },
   "dependencies": {
     "@opencode-ai/core": "workspace:*",
     "@opencode-ai/plugin": "workspace:*",
     "@opencode-ai/sdk": "workspace:*",
+    "@opencode-ai/ui": "workspace:*",
     "@opentui/core": "catalog:",
     "@opentui/keymap": "catalog:",
     "@opentui/solid": "catalog:",

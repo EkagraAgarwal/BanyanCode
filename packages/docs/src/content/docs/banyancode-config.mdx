@@ -1,0 +1,110 @@
+---
+title: BanyanCode Configuration
+description: banyancode.json keys added by BanyanCode
+---
+
+# BanyanCode Configuration
+
+BanyanCode is its own identity. Its configuration lives in separate locations from OpenCode — they don't share any file paths.
+
+## File locations
+
+| Path | Purpose |
+|------|---------|
+| `./banyancode.json` | Per-project BanyanCode config (JSONC with comments) |
+| `./.banyancode/` | Per-project BanyanCode directory (agents, commands, skills, plugins, tui.json, plans) |
+| `~/.config/banyancode/banyancode.json` | Global BanyanCode config |
+| `~/.config/banyancode/tui.json` | Global TUI config |
+| `~/.local/share/banyancode/banyancode.db` | SQLite database |
+| `~/.cache/banyancode/` | BanyanCode cache |
+| `~/.local/state/banyancode/` | BanyanCode state |
+| `/tmp/banyancode/` | BanyanCode temp dir |
+
+OpenCode's paths (`.opencode/`, `~/.config/opencode/`, etc.) are unchanged and loaded in parallel — BanyanCode doesn't read or write them.
+
+## Why separate from OpenCode?
+
+BanyanCode is built on top of OpenCode but is its own product. Sharing config files caused a real problem: BanyanCode would write its own keys (like `banyancode_yolo_mode`) into `opencode.json`, and OpenCode would error out because it didn't recognize the keys.
+
+The fix: BanyanCode has its own file locations, its own config schema, and its own env vars. Both products can be installed and run side by side without conflict.
+
+## Top-level keys in banyancode.json
+
+### `agent.<name>.model`
+
+Standard BanyanCode key — set a specific model for an agent.
+
+```json
+{
+  "agent": {
+    "orchestrator": { "model": "anthropic/claude-3-5-sonnet" },
+    "researcher": { "model": "openai/gpt-4o-mini" },
+    "explore": { "model": "anthropic/claude-3-5-haiku" },
+    "general": { "model": "anthropic/claude-3-5-sonnet" }
+  }
+}
+```
+
+You can change this at runtime via the TUI: `/agent-model`. The change takes effect immediately without restarting the process.
+
+## Environment variables
+
+### `BANYANCODE_ENABLE`
+
+BanyanCode services are **on by default**. Every BanyanCode feature (orchestrator, researcher, mesh, memory, codegraph, slash commands) registers automatically.
+
+```bash
+BANYANCODE_ENABLE=0   # disable BanyanCode and run as upstream OpenCode
+```
+
+This is the only way to turn the feature gate off; the env var is read as a boolean (`0` disables, anything else keeps the default on).
+
+### `BANYANCODE_DISABLE_WEBSEARCH`
+
+Disables the `websearch_free` tool even when BanyanCode is enabled. Useful for environments that block outbound HTTP to DuckDuckGo.
+
+```bash
+BANYANCODE_DISABLE_WEBSEARCH=1
+```
+
+## TUI keybinds and slash commands
+
+| Command | Description |
+|---------|-------------|
+| `/agent-model` | Open the dialog to pick the model for a BanyanCode agent (orchestrator, researcher, explore, general) |
+| `/model` | Pick the model for the current agent (OpenCode default) |
+| `/models` | Same as `/model` |
+| `/codegraph-build` | Build the code graph index — runs in background; a progress widget shows in the TUI |
+| `/codegraph-remove` | Delete the current codegraph index from the project-local database |
+| `/memory-search` | Search the BanyanCode memory store |
+
+## Background codegraph build
+
+The `/codegraph-build` slash command runs the `codegraph_build` tool directly — it does not send a prompt to the agent. The build runs in the background; the chat stays active.
+
+While the build runs, a progress widget appears in the bottom-right of the TUI:
+
+```
+Codegraph build — Running
+████████████████░░░░░░░ 45% (45/100)
+Indexing: packages/core/src/banyancode/codegraph-indexer.ts
+Press Ctrl+C to cancel
+```
+
+When the build finishes, the widget shows the final result:
+
+```
+Codegraph build — Completed
+████████████████████ 100% (200/200)
+indexed=180 skipped=20 duration_ms=4250
+```
+
+If the build fails, the widget shows the error message in red.
+
+Cancelling a running build is currently available only through the HTTP `codegraphCancel` endpoint; there is no slash command for it yet. Multiple builds cancel the previous one — if you run `/codegraph-build` while another build is running, the old build is cancelled and the new one starts.
+
+This feature is on by default; set `BANYANCODE_ENABLE=0` to disable it.
+
+## Feature gates
+
+All BanyanCode features (orchestrator, researcher, mesh, memory, codegraph) are on by default. Set `BANYANCODE_ENABLE=0` to disable them, at which point the user-facing behavior is identical to upstream OpenCode.

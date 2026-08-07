@@ -184,5 +184,5 @@ if (-not $NoModifyPath) {
 Write-Host ""
 Write-Host "  BanyanCode installed successfully." -ForegroundColor Green
 Write-Host "  Get started: open a new PowerShell, cd to a project, run 'banyancode'." -ForegroundColor Cyan
-Write-Host "  Docs: https://github.com/$Repo#readme" -ForegroundColor DarkGray
+Write-Host "  Docs: https://github.com/$Repo/blob/main/packages/docs/src/content/docs/banyancode-install.mdx" -ForegroundColor DarkGray
 Write-Host ""
