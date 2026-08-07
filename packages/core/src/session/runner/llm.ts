@@ -29,7 +29,7 @@ import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
-import { type RunError, Service } from "./index"
+import { type RunError, Service, StepLimitExceededError } from "./index"
 import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
@@ -83,6 +83,9 @@ import { toLLMMessages } from "./to-llm-message"
  * provider turn. Registry definitions are advertised, local tool calls are settled durably, and a
  * bounded explicit loop starts the next provider turn after local settlement.
  */
+
+// QUESTION: Did this exist previously, or did we add this limit? Does it make sense?
+const MAX_STEPS = 25
 
 export const layer = Layer.effect(
   Service,
@@ -379,11 +382,14 @@ export const layer = Layer.effect(
       let openActivity = input.force === true || hasSteer || hasQueue
       while (openActivity) {
         let needsContinuation = true
-        while (needsContinuation) {
+        for (let step = 0; step < MAX_STEPS; step++) {
           needsContinuation = yield* runTurn(input.sessionID, promotion)
           promotion = "steer"
           if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+          if (!needsContinuation) break
         }
+        if (needsContinuation)
+          return yield* new StepLimitExceededError({ sessionID: input.sessionID, limit: MAX_STEPS })
         openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = openActivity ? "queue" : undefined
       }

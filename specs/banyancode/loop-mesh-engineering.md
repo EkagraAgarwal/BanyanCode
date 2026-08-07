@@ -59,7 +59,7 @@ The mesh is layered on a Drizzle-backed SQLite store (`banyancode-local.db`) plu
 6. Provider error (line 1394-1404).
 7. Inner-gen `outcome === "break"` (line 1441).
 
-**V2 — `packages/core/src/session/runner/llm.ts`.** Outer `while (openActivity)`, inner unbounded `while (needsContinuation)` loop. Step caps were removed from both runtimes in the TUI/CLI-only strip (agents run until completion, `maxTime`, or the no-progress guard).
+**V2 — `packages/core/src/session/runner/llm.ts:373-396`.** Outer `while (openActivity)`, inner `for (let step = 0; step < MAX_STEPS; step++)` with `MAX_STEPS = 25` (line 88). Exit on `step >= MAX_STEPS` -> `StepLimitExceededError` (line 392).
 
 **No reviewer / critic step in either runtime.** Plan-mode approval gate exists for `plan` agent via `task/plan.ts:15-78` (`plan_exit` Yes/No).
 
@@ -92,8 +92,8 @@ The mesh is layered on a Drizzle-backed SQLite store (`banyancode-local.db`) plu
 
 | Tool | Hard cap | Soft cap | Goal-conditioned exit | Verifier-driven exit | Brick-wall detector |
 |---|---|---|---|---|---|
-| **BanyanCode V1** | none (removed in the strip) | none | none | none | none |
-| **BanyanCode V2** | none (removed in the strip) | none | none | none | none |
+| **BanyanCode V1** | `agent.steps ?? Infinity` (per agent) | none | none | none | none — `MAX_STEPS` injection at last step is a textual nudge, not a real halt |
+| **BanyanCode V2** | `MAX_STEPS = 25` (`llm.ts:88`) | none | none | none | none |
 | **Claude Code** | optional `maxTurns` per agent (default "No limit" for CLI; configurable per-subagent) | `CLAUDE_CODE_MAX_RETRIES=10` (transport only) | `/goal` evaluator (Haiku, session-scoped Stop hook) | `/verify`, `/review`, `/code-review`, `/security-review`, `/simplify`, `/advisor`, dynamic workflows (adversarial verifier / evaluator-optimizer) | thrashing detector: stops compacting after repeated immediate refill/compact cycles; auto-mode falls back after 3 consecutive blocks or 20 total |
 | **Devin** | none in product; 45 min in SWE-bench eval; recommended <=3 hr | session-size classifier (L/XL flagged "unhealthy") | confidence gating (🟢 auto-execute; 🟡/🔴 wait for approval); "interactive plan" editable before execution | Devin Review (clean-context reviewer, catches ~2 bugs/PR, ~58% severe); Auto-Fix (closes the loop without human); Security Swarm (runtime exploitability check) | none documented; "Awaiting instructions" sidebar chip and post-hoc session-insights categorization (build failure, environment, scope ambiguity) |
 | **Cursor** | none documented | none | none | `/review` skill (Cursor 0.49+) — Bugbot, code review | none |
@@ -502,7 +502,9 @@ These are the questions a follow-up spec / RFC should answer before implementati
 
 ### BanyanCode (internal)
 - `packages/opencode/src/session/prompt.ts:1149-1448` — V1 `runLoop`
+- `packages/opencode/src/session/prompt.ts:1276-1277` — `maxSteps = agent.steps ?? Infinity`, `isLastStep`
 - `packages/opencode/src/session/prompt.ts:1179-1198` — primary exit condition
+- `packages/opencode/src/session/prompt/max-steps.txt` — MAX_STEPS injection text
 - `packages/opencode/src/session/run-state.ts` — `SessionRunState.ensureRunning`
 - `packages/opencode/src/agent/agent.ts:174-532` — V1 agent registry
 - `packages/opencode/src/agent/prompt/orchestrator.txt` — orchestrator system prompt
@@ -514,8 +516,9 @@ These are the questions a follow-up spec / RFC should answer before implementati
 - `packages/opencode/src/cli/cmd/*.ts` — CLI commands (no `goal.ts`)
 - `packages/opencode/src/session/system.ts:110-124` — V1 system prompt `codegraph()` source
 - `packages/core/src/agent.ts:13` — V2 default agent registry (selection-only)
-- `packages/core/src/session/runner/llm.ts` — V2 unbounded continuation loop (step cap removed in the strip)
-- `packages/core/src/session/runner/index.ts` — runner error types
+- `packages/core/src/session/runner/llm.ts:88` — `MAX_STEPS = 25`
+- `packages/core/src/session/runner/llm.ts:373-396` — V2 outer loop
+- `packages/core/src/session/runner/index.ts:12-37` — `StepLimitExceededError`
 - `packages/core/src/banyancode/subagent-bus.ts:1-119` — bus + idempotent publish
 - `packages/core/src/banyancode/subagent-messages-repo.ts:1-153` — Drizzle CRUD
 - `packages/core/src/banyancode/subagent-plans-repo.ts:1-89` — `SubagentPlan` repo
