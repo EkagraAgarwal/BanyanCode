@@ -44,5 +44,8 @@ tsconfig.tsbuildinfo
 scratch-*.ts
 scratch-*.js
 
+# Local session transcript exports (contain full conversation payloads)
+prompts.md
+
 # Phase 0 codegraph recon (2026-07-08) - research only, never commit
 codegraph-recon-*.ts
