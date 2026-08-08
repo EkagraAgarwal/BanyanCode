@@ -13,6 +13,7 @@ import type { EventSource } from "@opencode-ai/tui/context/sdk"
 import { writeHeapSnapshot } from "v8"
 import { validateSession } from "../tui/validate-session"
 import { win32InstallCtrlCGuard } from "@opencode-ai/tui/terminal-win32"
+import { createParentKill, watchParentCtrlC } from "../tui/parent-kill"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
@@ -146,12 +147,56 @@ export const TuiThreadCommand = cmd({
       process.on("SIGUSR2", reload)
 
       let stopped = false
+      const hardKill = () => {
+        // Parent-owned kill path: never wait on a worker RPC. A wedged worker
+        // (CPU-bound indexing, hung SQLite write) cannot acknowledge cancel or
+        // shutdown, so we terminate it and exit from the parent process.
+        if (stopped) return
+        stopped = true
+        try {
+          worker.terminate()
+        } catch {}
+        process.exit(0)
+      }
+
+      const parentKill = createParentKill({
+        onCancel: () => {
+          // Fire-and-forget codegraph cancel through the worker fetch proxy.
+          // The worker adds the server auth header, so no auth wiring needed
+          // here. If the worker is wedged this never resolves — that is what
+          // arms the escalation timer.
+          client
+            .call("fetch", {
+              url: "http://opencode.internal/global/codegraph-cancel",
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: "{}",
+            })
+            .then(() => parentKill.cancelAcked())
+            .catch(() => {})
+        },
+        onKill: hardKill,
+      })
+      // Backstop: even if the TUI keymap is stuck, the parent can observe raw
+      // Ctrl+C bytes and escalate to a hard kill. Armed only while a codegraph
+      // build is active (reported by the app below), so a stray double Ctrl+C
+      // while typing never kills the app.
+      const unwatchStdin = watchParentCtrlC(parentKill)
+
       const stop = async () => {
         if (stopped) return
         stopped = true
         process.off("SIGUSR2", reload)
-        await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
-        worker.terminate()
+        unwatchStdin()
+        parentKill.dispose()
+        // Fire the graceful shutdown, then give the worker a short grace to
+        // flush state before force-terminating. Never block a user's exit on
+        // a wedged worker.
+        const shutdown = client.call("shutdown", undefined).catch(() => {})
+        await withTimeout(shutdown, 2_000).catch(() => {})
+        try {
+          worker.terminate()
+        } catch {}
       }
 
       const prompt = await input(args.prompt)
@@ -221,6 +266,8 @@ export const TuiThreadCommand = cmd({
               directory: cwd,
               fetch: transport.fetch,
               events: transport.events,
+              onKill: hardKill,
+              onCodegraphBuildChange: (active) => parentKill.setArmed(active),
               args: {
                 continue: args.continue,
                 sessionID: args.session,

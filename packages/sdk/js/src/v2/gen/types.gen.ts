@@ -1335,6 +1335,7 @@ export type GlobalEvent = {
           lastCompletedFile?: string
           lastCompletedPath?: string
           currentlyParsing?: string
+          deriving?: boolean
           graphVersion?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           graphCoverage?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           totalFiles?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -2245,6 +2246,7 @@ export type BanyanConfig = {
   banyancode_codegraph_batch_size?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   banyancode_codegraph_watch_enabled?: boolean
   banyancode_codegraph_watch_debounce_ms?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_codegraph_auto_index?: boolean
   banyancode_trace_max_days?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   banyancode_trace_max_events?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   banyancode_mesh_default_provider?: string
@@ -5721,6 +5723,7 @@ export type EventBanyancodeCodegraphBuild = {
     lastCompletedFile?: string
     lastCompletedPath?: string
     currentlyParsing?: string
+    deriving?: boolean
     graphVersion?: number | "NaN" | "Infinity" | "-Infinity"
     graphCoverage?: number | "NaN" | "Infinity" | "-Infinity"
     totalFiles?: number | "NaN" | "Infinity" | "-Infinity"

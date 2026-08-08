@@ -1,5 +1,26 @@
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
+import { CODEGRAPH_CHILD_FLAG } from "@opencode-ai/core/banyancode/codegraph-indexer-child"
+
+// Compiled-binary child-indexer dispatch: the codegraph build service re-execs
+// the binary with `--codegraph-indexer-child --child-config=<json>` when the
+// source module is not on disk (compiled distribution). Intercept before yargs
+// so the flag never reaches the strict parser, and exit cleanly with the
+// child's exit code.
+const CHILD_CONFIG_PREFIX = "--child-config="
+const childFlagIndex = process.argv.indexOf(CODEGRAPH_CHILD_FLAG)
+if (childFlagIndex !== -1) {
+  const configArg = process.argv[childFlagIndex + 1]
+  const configJson = configArg?.startsWith(CHILD_CONFIG_PREFIX) ? configArg.slice(CHILD_CONFIG_PREFIX.length) : undefined
+  if (!configJson) {
+    process.stderr.write("codegraph-indexer-child: missing --child-config=<json>\n")
+    process.exit(2)
+  }
+  const { runChildIndexer } = await import("./cli/codegraph-indexer-child")
+  const code = await runChildIndexer(configJson)
+  process.exit(code)
+}
+
 import { RunCommand } from "./cli/cmd/run"
 import { GenerateCommand } from "./cli/cmd/generate"
 import { ConsoleCommand } from "./cli/cmd/account"

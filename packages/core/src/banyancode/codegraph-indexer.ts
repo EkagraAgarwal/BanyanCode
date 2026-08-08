@@ -69,7 +69,7 @@ export interface Interface {
     force?: boolean
     maxFileSizeBytes?: number
     excludePatterns?: readonly string[]
-    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "parse" | "derived" }) => Effect.Effect<void>
   }) => Effect.Effect<
     {
       indexed: number
@@ -116,7 +116,7 @@ export interface Interface {
     force?: boolean
     maxFileSizeBytes?: number
     excludePatterns?: readonly string[]
-    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "parse" | "derived" }) => Effect.Effect<void>
   }) => Effect.Effect<{
     indexed: number
     removed: number
@@ -129,7 +129,7 @@ export interface Interface {
     force?: boolean
     maxFileSizeBytes?: number
     excludePatterns?: readonly string[]
-    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "parse" | "derived" }) => Effect.Effect<void>
   }) => Effect.Effect<{
     indexed: number
     skipped: number
@@ -395,6 +395,17 @@ type ParsedFile = {
   readonly previousFileID?: string
 }
 const CHECKPOINT_EVERY = 1000
+// Parse-phase concurrency. 8 concurrent regex parses monopolize the event
+// loop (parse is synchronous CPU work with no mid-parse yield points), which
+// is what froze the TUI worker at "2555/2977" before indexing moved to a
+// child process. On Windows the default is 2 (the freeze was Windows-only);
+// elsewhere keep 8 for throughput. Overridable so power users can tune it:
+//   BANYANCODE_INDEX_PARSE_CONCURRENCY=8
+const parseConcurrency = (): number => {
+  const fromEnv = Number(process.env.BANYANCODE_INDEX_PARSE_CONCURRENCY)
+  if (Number.isInteger(fromEnv) && fromEnv > 0) return fromEnv
+  return process.platform === "win32" ? 2 : 8
+}
 type CandidateFile = {
   readonly path: string
   readonly sizeBytes: number
@@ -410,7 +421,7 @@ const indexCandidateFileCore = (
       root: string
       force?: boolean
       maxFileSizeBytes?: number
-      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "parse" | "derived" }) => Effect.Effect<void>
     }
     maxFileSizeBytes: number
     total: number
@@ -664,6 +675,10 @@ const indexCandidateFileCore = (
         if (cfg.input.onProgress) {
           yield* cfg.input.onProgress({ file: relativePath, done: doneCount, total: cfg.total, currentFile })
         }
+        // Parse is synchronous CPU work; yield after each file so the drain
+        // consumer and the host event loop (RPC/SSE on the worker) get a turn
+        // between files instead of running N parses back-to-back.
+        yield* Effect.yieldNow
       }),
     ),
   )
@@ -1257,7 +1272,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       force?: boolean
       maxFileSizeBytes?: number
       excludePatterns?: readonly string[]
-      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "parse" | "derived" }) => Effect.Effect<void>
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
@@ -1410,6 +1425,10 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
             yield* Ref.update(indexedRef, (n) => n + 1)
             yield* Ref.update(symbolsIndexedRef, (n) => n + parsed.nodes.length)
           }
+          // writeFileGraph is a DB write (WAL + transaction commit) that can
+          // stall the event loop on a large repo; yield after each write so
+          // the host loop (RPC/SSE) stays responsive mid-index.
+          yield* Effect.yieldNow
           if (processed % CHECKPOINT_EVERY === 0) {
             yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
           }
@@ -1418,7 +1437,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
 
       yield* Effect.all(
         [
-          Effect.forEach(codeFiles, parseFiber, { concurrency: 8, discard: true }),
+          Effect.forEach(codeFiles, parseFiber, { concurrency: parseConcurrency(), discard: true }),
           drainParsedQueue,
         ],
         { concurrency: 2, discard: true },
@@ -1474,6 +1493,11 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
 
       const indexed = yield* Ref.get(indexedRef)
       if (indexed > 0) {
+        // Phase marker so consumers (build service → TUI progress widget) can
+        // distinguish "stuck mid-parse" from the post-parse derived pass.
+        if (input.onProgress) {
+          yield* input.onProgress({ file: "", done: 0, total, phase: "derived" })
+        }
         yield* rebuildDerivedGraph(undefined)
       }
       const skipped = yield* Ref.get(skippedRef)
@@ -1543,7 +1567,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       force?: boolean
       maxFileSizeBytes?: number
       excludePatterns?: readonly string[]
-      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "parse" | "derived" }) => Effect.Effect<void>
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
@@ -1755,6 +1779,9 @@ const drainParsedQueue = Effect.gen(function* () {
           if (parsed.nodes.length > 0) {
             yield* Ref.update(indexedRef, (n) => n + 1)
           }
+          // Keep the host event loop responsive between DB writes on the
+          // incremental path too (mirror of the full-build drain).
+          yield* Effect.yieldNow
           if (processed % CHECKPOINT_EVERY === 0) {
             yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
           }
@@ -1784,7 +1811,7 @@ const drainParsedQueue = Effect.gen(function* () {
               cachedFileIDsRef,
               existingFilesByPath,
             })
-          }, { concurrency: 8, discard: true }),
+          }, { concurrency: parseConcurrency(), discard: true }),
           drainParsedQueue,
         ],
         { concurrency: 2, discard: true },
@@ -1846,7 +1873,7 @@ const drainParsedQueue = Effect.gen(function* () {
       force?: boolean
       maxFileSizeBytes?: number
       excludePatterns?: readonly string[]
-      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string; phase?: "parse" | "derived" }) => Effect.Effect<void>
     }) {
       const result = yield* applyChanges({
         root: input.root,

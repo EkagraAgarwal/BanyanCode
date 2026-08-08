@@ -88,52 +88,37 @@ describe("CodegraphBootstrap", () => {
     }
   })
 
-  test("empty workspace: ensureGraph kicks a background build that completes; status ends ready", async () => {
+  // Run an ensureGraph assertion with a specific BANYANCODEGRAPH_BOOTSTRAP
+  // value, restoring the previous value afterwards.
+  const withBootstrap = async <A>(value: "0" | "1", fn: () => Promise<A>) => {
+    const original = process.env.BANYANCODEGRAPH_BOOTSTRAP
+    process.env.BANYANCODEGRAPH_BOOTSTRAP = value
+    try {
+      return await fn()
+    } finally {
+      if (original === undefined) delete process.env.BANYANCODEGRAPH_BOOTSTRAP
+      else process.env.BANYANCODEGRAPH_BOOTSTRAP = original
+    }
+  }
+
+  test("default (env unset): ensureGraph is status-only — no background build is kicked", async () => {
     await using tmp = await tmpdir()
     const repoDir = path.join(tmp.path, "src")
     fs.mkdirSync(repoDir, { recursive: true })
     fs.writeFileSync(path.join(repoDir, "a.ts"), "export const a = 1\n")
-    fs.writeFileSync(path.join(repoDir, "b.py"), "def b():\n    return 1\n")
-    fs.writeFileSync(path.join(tmp.path, "c.ts"), "export const c = 2\n")
 
-    const dbPath = path.join(tmp.path, "bootstrap.db")
+    const dbPath = path.join(tmp.path, "bootstrap-default.db")
     const layer = buildBootstrapLayer(dbPath)
 
     const exit = await Effect.runPromiseExit(
       Effect.scoped(
         Effect.gen(function* () {
           const svc = yield* CodegraphBootstrap.Service
-          const first = yield* svc.ensureGraph({ root: tmp.path })
-          expect(first.state).toBe("building")
-          // The kick is non-blocking: the caller must never wait on a build.
-          const st = yield* waitForState(svc, "ready")
-          expect(st.state).toBe("ready")
-          expect(st.symbols).toBeGreaterThanOrEqual(1)
-          // The DB ends with a meta row.
-          const repo = yield* CodegraphRepo.Service
-          const meta = yield* repo.getMeta()
-          expect(meta).toBeDefined()
-          expect(meta?.totalFiles).toBeGreaterThanOrEqual(1)
-          return st
-        }).pipe(Effect.provide(layer)),
-      ),
-    )
-    expect(exit._tag).toBe("Success")
-  })
-
-  test("filesystem-root guard returns { state: 'missing' } without building", async () => {
-    await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "bootstrap.db")
-    const layer = buildBootstrapLayer(dbPath)
-
-    const exit = await Effect.runPromiseExit(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const svc = yield* CodegraphBootstrap.Service
-          const st = yield* svc.ensureGraph({ root: path.parse(tmp.path).root })
-          expect(st).toEqual({ state: "missing" })
-          // Give a would-be build a moment: nothing may appear.
-          yield* Effect.sleep("250 millis")
+          const st = yield* svc.ensureGraph({ root: tmp.path })
+          // Status-only: missing and nothing kicked, even though a build
+          // would otherwise be possible.
+          expect(st.state).toBe("missing")
+          yield* Effect.sleep("300 millis")
           const after = yield* svc.status()
           expect(after.state).toBe("missing")
           const repo = yield* CodegraphRepo.Service
@@ -146,15 +131,75 @@ describe("CodegraphBootstrap", () => {
     expect(exit._tag).toBe("Success")
   })
 
+  test("empty workspace with BANYANCODEGRAPH_BOOTSTRAP=1: ensureGraph kicks a background build that completes; status ends ready", async () => {
+    await using tmp = await tmpdir()
+    const repoDir = path.join(tmp.path, "src")
+    fs.mkdirSync(repoDir, { recursive: true })
+    fs.writeFileSync(path.join(repoDir, "a.ts"), "export const a = 1\n")
+    fs.writeFileSync(path.join(repoDir, "b.py"), "def b():\n    return 1\n")
+    fs.writeFileSync(path.join(tmp.path, "c.ts"), "export const c = 2\n")
+
+    const dbPath = path.join(tmp.path, "bootstrap.db")
+    const layer = buildBootstrapLayer(dbPath)
+
+    const exit = await withBootstrap("1", () =>
+      Effect.runPromiseExit(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const svc = yield* CodegraphBootstrap.Service
+            const first = yield* svc.ensureGraph({ root: tmp.path })
+            expect(first.state).toBe("building")
+            // The kick is non-blocking: the caller must never wait on a build.
+            const st = yield* waitForState(svc, "ready")
+            expect(st.state).toBe("ready")
+            expect(st.symbols).toBeGreaterThanOrEqual(1)
+            // The DB ends with a meta row.
+            const repo = yield* CodegraphRepo.Service
+            const meta = yield* repo.getMeta()
+            expect(meta).toBeDefined()
+            expect(meta?.totalFiles).toBeGreaterThanOrEqual(1)
+            return st
+          }).pipe(Effect.provide(layer)),
+        ),
+      ),
+    )
+    expect(exit._tag).toBe("Success")
+  })
+
+  test("filesystem-root guard (BANYANCODEGRAPH_BOOTSTRAP=1) returns { state: 'missing' } without building", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "bootstrap.db")
+    const layer = buildBootstrapLayer(dbPath)
+
+    const exit = await withBootstrap("1", () =>
+      Effect.runPromiseExit(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const svc = yield* CodegraphBootstrap.Service
+            const st = yield* svc.ensureGraph({ root: path.parse(tmp.path).root })
+            expect(st).toEqual({ state: "missing" })
+            // Give a would-be build a moment: nothing may appear.
+            yield* Effect.sleep("250 millis")
+            const after = yield* svc.status()
+            expect(after.state).toBe("missing")
+            const repo = yield* CodegraphRepo.Service
+            const meta = yield* repo.getMeta()
+            expect(meta).toBeUndefined()
+            return st
+          }).pipe(Effect.provide(layer)),
+        ),
+      ),
+    )
+    expect(exit._tag).toBe("Success")
+  })
+
   test("BANYANCODEGRAPH_BOOTSTRAP=0 disables the build kick (status stays missing)", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "bootstrap.db")
     const layer = buildBootstrapLayer(dbPath)
 
-    const original = process.env.BANYANCODEGRAPH_BOOTSTRAP
-    process.env.BANYANCODEGRAPH_BOOTSTRAP = "0"
-    try {
-      const exit = await Effect.runPromiseExit(
+    const exit = await withBootstrap("0", () =>
+      Effect.runPromiseExit(
         Effect.scoped(
           Effect.gen(function* () {
             const svc = yield* CodegraphBootstrap.Service
@@ -169,12 +214,9 @@ describe("CodegraphBootstrap", () => {
             return st
           }).pipe(Effect.provide(layer)),
         ),
-      )
-      expect(exit._tag).toBe("Success")
-    } finally {
-      if (original === undefined) delete process.env.BANYANCODEGRAPH_BOOTSTRAP
-      else process.env.BANYANCODEGRAPH_BOOTSTRAP = original
-    }
+      ),
+    )
+    expect(exit._tag).toBe("Success")
   })
 
   test("ensureGraph never fails, even for a root that does not exist", async () => {
@@ -182,16 +224,18 @@ describe("CodegraphBootstrap", () => {
     const dbPath = path.join(tmp.path, "bootstrap.db")
     const layer = buildBootstrapLayer(dbPath)
 
-    const exit = await Effect.runPromiseExit(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const svc = yield* CodegraphBootstrap.Service
-          const st = yield* svc.ensureGraph({ root: path.join(tmp.path, "does-not-exist") })
-          // The build fails in the background and is logged; the caller
-          // receives a state, never an error.
-          expect(["building", "missing"]).toContain(st.state)
-          return st
-        }).pipe(Effect.provide(layer)),
+    const exit = await withBootstrap("1", () =>
+      Effect.runPromiseExit(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const svc = yield* CodegraphBootstrap.Service
+            const st = yield* svc.ensureGraph({ root: path.join(tmp.path, "does-not-exist") })
+            // The build fails in the background and is logged; the caller
+            // receives a state, never an error.
+            expect(["building", "missing"]).toContain(st.state)
+            return st
+          }).pipe(Effect.provide(layer)),
+        ),
       ),
     )
     expect(exit._tag).toBe("Success")

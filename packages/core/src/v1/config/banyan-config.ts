@@ -83,6 +83,11 @@ export const Info = Schema.Struct({
   // signal so a `git rebase`-style burst collapses into one batch.
   banyancode_codegraph_watch_enabled: Schema.optional(Schema.Boolean),
   banyancode_codegraph_watch_debounce_ms: Schema.optional(Schema.Number),
+  // Session-start codegraph bootstrap. When true (or BANYANCODEGRAPH_BOOTSTRAP=1),
+  // opening/continuing a session kicks a background index if the graph is
+  // missing. Default false: session start is status-only and indexing happens
+  // on /codegraph-build or lazily on the first graph-tool call.
+  banyancode_codegraph_auto_index: Schema.optional(Schema.Boolean),
   banyancode_trace_max_days: Schema.optional(Schema.Number),
   banyancode_trace_max_events: Schema.optional(Schema.Number),
   banyancode_mesh_default_provider: Schema.optional(Schema.String),

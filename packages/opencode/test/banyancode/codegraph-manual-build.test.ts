@@ -130,7 +130,12 @@ describe("Manual codegraph build - progress reporting", () => {
   test("events queue receives every progress event (no double-consumer race)", async () => {
     await using tmp = await tmpdir()
     const dir = tmp.path
-    await makeFixtureCodebase(dir, 10)
+    // 60 files: enough that the build spans several 100ms throttle windows on
+    // any machine, so mid-progress events deterministically pass the throttle.
+    // (10 tiny files index inside a single throttle window and only the
+    // initial done=0 running event is ever published — that used to make
+    // this assertion flaky on fast machines.)
+    await makeFixtureCodebase(dir, 60)
     const dbPath = path.join(dir, "test.sqlite")
     const layer = makeTestLayer(dbPath)
 
@@ -178,11 +183,15 @@ describe("Manual codegraph build - progress reporting", () => {
     expect(received.length).toBeGreaterThan(2)
     expect(runningEvents.length).toBeGreaterThan(0)
     const lastRunning = runningEvents[runningEvents.length - 1]
-    expect(lastRunning.total).toBe(10)
-    expect(Math.max(...runningEvents.map((event) => event.done))).toBe(10)
+    expect(lastRunning.total).toBe(60)
+    // The throttle publishes at most one running event per 100ms, so the last
+    // published running event is not guaranteed to carry the final done count —
+    // but progress MUST flow through the queue (that's the no-double-consumer
+    // invariant the throttling preserves).
+    expect(Math.max(...runningEvents.map((event) => event.done))).toBeGreaterThan(0)
     expect(completedEvent).toBeDefined()
-    expect(completedEvent?.done).toBe(10)
-    expect(completedEvent?.total).toBe(10)
+    expect(completedEvent?.done).toBe(60)
+    expect(completedEvent?.total).toBe(60)
   }, 60000)
 })
 

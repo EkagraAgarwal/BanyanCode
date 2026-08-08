@@ -7,6 +7,7 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { ClipboardProvider, useClipboard } from "./context/clipboard"
 import { ExitProvider, useExit } from "./context/exit"
+import { KillProvider, useKill } from "./context/kill"
 import { EpilogueProvider } from "./context/epilogue"
 import * as Selection from "./util/selection"
 import { createCliRenderer, MouseButton, type CliRenderer } from "@opentui/core"
@@ -93,10 +94,11 @@ import { cliErrorMessage, errorFormat } from "./util/error"
 // While a codegraph build is active, Ctrl+C routes to `codegraph.cancel`
 // (the app_exit path is suppressed so the two don't both fire). A wedged
 // worker can make the cancel RPC hang forever, trapping the user. Fallback:
-// the FIRST press fires the cancel request; a second press within the window
-// (or a cancel request that fails to resolve within the window) exits the
-// app locally, terminating the worker instead of leaving the user stuck.
-const CODECRAPH_CANCEL_FALLBACK_MS = 5_000
+// the FIRST press fires the cancel request fire-and-forget; a second press
+// within the window (or a cancel request that is not acknowledged within the
+// window) hard-kills via the parent-owned kill path (onKill), terminating the
+// worker instead of leaving the user stuck.
+const CODECRAPH_CANCEL_FALLBACK_MS = 2_000
 let lastCodegraphCancelAt = 0
 
 const appGlobalBindingCommands = [
@@ -157,6 +159,17 @@ export type TuiInput = {
   headers?: RequestInit["headers"]
   events?: EventSource
   pluginHost: TuiPluginHost
+  /**
+   * Parent-owned hard kill: terminate the worker and exit without waiting on
+   * any worker RPC. Wired by the CLI parent (tui.ts).
+   */
+  onKill?: () => void
+  /**
+   * Notify the parent when a codegraph build transitions between
+   * active/stuck and idle, so the parent's raw-Ctrl+C kill backstop only
+   * escalates while a build is actually running.
+   */
+  onCodegraphBuildChange?: (active: boolean) => void
 }
 
 function errorMessage(error: unknown) {
@@ -257,7 +270,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                 destroyRenderer(renderer)
               }}
             >
-              <EpilogueProvider set={(value) => (exit.epilogue = value)}>
+              <KillProvider kill={input.onKill}>
+                <EpilogueProvider set={(value) => (exit.epilogue = value)}>
                 <ErrorBoundary fallback={(error, reset) => <ErrorComponent error={error} reset={reset} mode={mode} />}>
                   <TuiPathsProvider
                     value={{
@@ -323,6 +337,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                               <EditorContextProvider>
                                                                 <App
                                                                   onSnapshot={input.onSnapshot}
+                                                                  onCodegraphBuildChange={input.onCodegraphBuildChange}
                                                                   pluginHost={input.pluginHost}
                                                                 />
                                                               </EditorContextProvider>
@@ -352,6 +367,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                   </TuiPathsProvider>
                 </ErrorBoundary>
               </EpilogueProvider>
+              </KillProvider>
             </ExitProvider>
           )
         }, renderer)
@@ -376,7 +392,11 @@ function AutocompleteOverlay() {
   )
 }
 
-function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPluginHost }) {
+function App(props: {
+  onSnapshot?: () => Promise<string[]>
+  pluginHost: TuiPluginHost
+  onCodegraphBuildChange?: (active: boolean) => void
+}) {
   const startup = useTuiStartup()
   const tuiConfig = useTuiConfig()
   const route = useRoute()
@@ -394,6 +414,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const sync = useSync()
   const project = useProject()
   const exit = useExit()
+  const kill = useKill()
   const promptRef = usePromptRef()
   const pluginRuntime = usePluginRuntime()
   const attention = createTuiAttention({ renderer, config: tuiConfig, kv })
@@ -847,24 +868,22 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           lastCodegraphCancelAt = now
           if (repeated) {
             // The first cancel request did not land within the window — the
-            // worker is wedged. Exit the app locally instead of suppressing
-            // app.exit indefinitely.
-            void exit()
+            // worker is wedged. Hard-kill from the parent: terminate the
+            // worker and exit without waiting on any RPC.
+            kill()
             return
           }
-          toast.show({ message: "Codegraph build cancelled", variant: "info" })
+          toast.show({ message: "Codegraph build cancelled (press Ctrl+C again to force quit)", variant: "info" })
           dialog.clear()
-          Promise.race([
-            sdk.client.global.codegraph.cancel({}),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("cancel request timed out")), CODECRAPH_CANCEL_FALLBACK_MS),
-            ),
-          ]).catch(() => {
-            // The server never acknowledged the cancel. Fall through to a
-            // local exit so the user is never trapped with an unresponsive
-            // build (and the worker process is terminated with the app).
-            void exit()
-          })
+          // Fire-and-forget: never block the key loop on a cancel RPC that a
+          // wedged worker will never acknowledge. When the worker responds,
+          // reset the escalation window so a later press starts fresh.
+          sdk.client.global.codegraph
+            .cancel({})
+            .then(() => {
+              lastCodegraphCancelAt = 0
+            })
+            .catch(() => {})
         },
       },
       {
@@ -1108,6 +1127,13 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   )
 
   const build = useCodegraphBuild()
+
+  // Keep the parent's raw-Ctrl+C kill backstop armed only while a codegraph
+  // build is active/stuck. `onCodegraphBuildChange` is wired by the CLI parent
+  // (tui.ts) to the parent-kill controller.
+  createEffect(() => {
+    props.onCodegraphBuildChange?.(isBuildActive(build.state, Date.now()))
+  })
 
   useBindings(() => ({
     commands: appCommands(),

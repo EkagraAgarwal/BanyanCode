@@ -3,6 +3,7 @@ export * as CodegraphBuildService from "./codegraph-build-service"
 import { Cause, Context, Effect, Fiber, Layer, Queue, Ref, Schema } from "effect"
 import { CodegraphIndexer } from "./codegraph-indexer"
 import { CodegraphRepo } from "./codegraph-repo"
+import { CodegraphChildIndexer } from "./codegraph-indexer-child"
 import { EventV2 } from "../event"
 import { WorkspaceIdentity } from "./workspace-identity"
 
@@ -23,6 +24,10 @@ export const State = Schema.Struct({
   lastCompletedFile: Schema.optional(Schema.String),
   lastCompletedPath: Schema.optional(Schema.String),
   currentlyParsing: Schema.optional(Schema.String),
+  // True while the post-parse derived pass (rebuildDerivedGraph) runs. The
+  // TUI progress widget uses this to show "Deriving edges…" instead of a
+  // stalled file counter.
+  deriving: Schema.optional(Schema.Boolean),
   graphVersion: Schema.optional(Schema.Number),
   graphCoverage: Schema.optional(Schema.Number),
   // Phase 1: the status pill needs both fields to decide between
@@ -108,6 +113,17 @@ export const layer = Layer.effect(
     const repo = yield* CodegraphRepo.Service
     const state = yield* Ref.make<State>({ status: "idle", done: 0, total: 0 })
     const inFlight = yield* Ref.make<Fiber.Fiber<unknown, unknown> | undefined>(undefined)
+    // The live child-process subprocess (only set in child-indexer mode). A
+    // wedged CPU-bound parse loop in the child can never block the worker
+    // event loop; cancel = hard `kill()`. The watcher fiber that joins it is
+    // tracked in `inFlight` as usual.
+    const childProc = yield* Ref.make<{
+      readonly pid: number
+      readonly exited: Promise<number>
+      readonly stdout: ReadableStream<Uint8Array>
+      readonly stderr: ReadableStream<Uint8Array>
+      readonly kill: () => void
+    } | undefined>(undefined)
     // Phase 2: dropping strategy so Queue.offer never suspends the producer.
     // The events queue is drained by the bridge; if it falls behind, new
     // events are dropped rather than blocking the worker. Per AGENTS.md,
@@ -127,6 +143,187 @@ export const layer = Layer.effect(
     const PROGRESS_PUBLISH_INTERVAL_MS = 100
     const lastProgressPublishedAt = yield* Ref.make(0)
 
+    type ChildProcess = {
+      readonly pid: number
+      readonly exited: Promise<number>
+      readonly stdout: ReadableStream<Uint8Array>
+      readonly stderr: ReadableStream<Uint8Array>
+      readonly kill: () => void
+    }
+
+    const killChild = (proc: ChildProcess | undefined) => {
+      if (!proc) return
+      try {
+        proc.kill()
+      } catch {
+        // kill() can throw on an already-exited process — nothing to do.
+      }
+    }
+
+    /**
+     * Watch a child indexer process: stream its stdout JSON protocol into the
+     * state Ref (with throttled publishes), drain stderr (kept to a tail so a
+     * chatty child never blocks its own pipe), and resolve to the same shape
+     * the in-process worker returns so the shared sequencing fiber can produce
+     * the terminal state. Fails with the child's error message when the child
+     * reports an error, exits non-zero without a result, or its stdout closes
+     * before a result arrives.
+     */
+    type ChildResult = {
+      indexed: number
+      skipped: number
+      symbolsIndexed: number
+      skippedByReason: {
+        gitignored: number
+        banyanignored: number
+        artifact: number
+        tooLarge: number
+        minified: number
+        tooLargeParse: number
+        cached: number
+        readError: number
+        parseFailure: number
+      }
+      parseErrors: Array<{ path: string; cause: string; indexedAt: number }>
+    }
+    type ChildOutcome = {
+      result: ChildResult
+      graphVersion: number
+      coverage: number
+      totalNodes: number
+      totalEdges: number
+      totalFiles: number
+      graphBuiltAt: number
+    }
+
+    const watchChildProcess = (
+      proc: ChildProcess,
+      initial: State,
+    ): Effect.Effect<ChildOutcome, Error, never> =>
+      Effect.gen(function* () {
+        let resultMsg:
+          | (ChildOutcome & {
+              type: "result"
+              result: ChildResult
+            })
+          | undefined
+        let errorMsg: string | undefined
+        const errTailRef = yield* Ref.make("")
+
+        const handleLine = (line: string) =>
+          Effect.gen(function* () {
+            let msg: Record<string, unknown>
+            try {
+              msg = JSON.parse(line) as Record<string, unknown>
+            } catch {
+              return // non-protocol line (defensive; child logs are suppressed)
+            }
+            if (msg.type === "progress") {
+              const done = typeof msg.done === "number" ? msg.done : 0
+              const total = typeof msg.total === "number" ? msg.total : 0
+              const file = typeof msg.file === "string" ? msg.file : ""
+              const currentFile = typeof msg.currentFile === "string" ? msg.currentFile : undefined
+              const basename = file.split("/").pop() ?? file.split("\\").pop() ?? file
+              const next: State = {
+                ...initial,
+                done,
+                total,
+                currentFile: file,
+                lastProgressAt: Date.now(),
+                lastCompletedFile: basename,
+                lastCompletedPath: file,
+                currentlyParsing: currentFile,
+              }
+              yield* Ref.set(state, next)
+              const now = Date.now()
+              const lastPublish = yield* Ref.get(lastProgressPublishedAt)
+              if (now - lastPublish >= PROGRESS_PUBLISH_INTERVAL_MS) {
+                yield* Ref.set(lastProgressPublishedAt, now)
+                yield* publish(next)
+              }
+            } else if (msg.type === "phase" && msg.phase === "derived") {
+              const current = yield* Ref.get(state)
+              const next: State = { ...current, status: "running", deriving: true, lastProgressAt: Date.now() }
+              yield* Ref.set(state, next)
+              yield* publish(next)
+            } else if (msg.type === "result") {
+              resultMsg = msg as typeof resultMsg
+            } else if (msg.type === "error") {
+              errorMsg = typeof msg.message === "string" ? msg.message : "child indexer failed"
+            }
+          })
+
+        const readLines = (stream: ReadableStream<Uint8Array>, onLine: (line: string) => Effect.Effect<void>) =>
+          Effect.gen(function* () {
+            const decoder = new TextDecoder()
+            const reader = stream.getReader()
+            let buffer = ""
+            try {
+              while (true) {
+                const { value, done } = yield* Effect.promise(() => reader.read())
+                if (done) break
+                buffer += decoder.decode(value, { stream: true })
+                let nl: number
+                while ((nl = buffer.indexOf("\n")) !== -1) {
+                  const line = buffer.slice(0, nl).trim()
+                  buffer = buffer.slice(nl + 1)
+                  if (line) yield* onLine(line)
+                }
+              }
+              if (buffer.trim()) yield* onLine(buffer.trim())
+            } catch {
+              // Stream closed early — typically the child was hard-killed by
+              // cancel()/forceKill(), which already flips the state to
+              // "cancelled" after interrupting this fiber. Treat as EOF.
+            }
+          })
+
+        const drainStderr = Effect.gen(function* () {
+          const decoder = new TextDecoder()
+          const reader = proc.stderr.getReader()
+          let buf = ""
+          try {
+            while (true) {
+              const { value, done } = yield* Effect.promise(() => reader.read())
+              if (done) break
+              buf += decoder.decode(value, { stream: true })
+              if (buf.length > 8192) buf = buf.slice(buf.length - 8192)
+            }
+          } catch {
+            // child killed
+          }
+          yield* Ref.set(errTailRef, buf)
+        })
+
+        yield* Effect.all([readLines(proc.stdout, handleLine), drainStderr], { concurrency: 2 })
+
+        const exitCode = yield* Effect.promise(() => proc.exited)
+        if (errorMsg) {
+          const tail = yield* Ref.get(errTailRef)
+          return yield* Effect.fail(new Error(tail.trim() ? `${errorMsg} (stderr: ${tail.trim().slice(0, 400)})` : errorMsg))
+        }
+        if (!resultMsg) {
+          const tail = yield* Ref.get(errTailRef)
+          const detail = tail.trim() ? ` stderr: ${tail.trim().slice(0, 400)}` : ""
+          return yield* Effect.fail(new Error(`child indexer exited with code ${exitCode} before reporting a result${detail}`))
+        }
+        return {
+          result: {
+            indexed: resultMsg.result.indexed,
+            skipped: resultMsg.result.skipped,
+            symbolsIndexed: resultMsg.result.symbolsIndexed,
+            skippedByReason: resultMsg.result.skippedByReason,
+            parseErrors: resultMsg.result.parseErrors,
+          },
+          graphVersion: resultMsg.graphVersion,
+          coverage: resultMsg.coverage,
+          totalNodes: resultMsg.totalNodes,
+          totalEdges: resultMsg.totalEdges,
+          totalFiles: resultMsg.totalFiles,
+          graphBuiltAt: resultMsg.graphBuiltAt,
+        }
+      })
+
     // The events queue is drained by the build bridge in
     // packages/opencode/src/effect/banyancode-codegraph-bridge.ts, which
     // republishes through EventV2Bridge (and therefore stamps the
@@ -137,12 +334,27 @@ export const layer = Layer.effect(
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
         const currentFiber = yield* Ref.get(inFlight)
-        // Mirror cancel/forceKill (:283/:303): bound the interrupt so a
-        // wedged CPU-bound indexer fiber cannot hang start() forever.
-        if (currentFiber) yield* Fiber.interrupt(currentFiber).pipe(
-          Effect.timeout("2 seconds"),
-          Effect.ignore,
-        )
+        if (currentFiber) {
+          // Atomically detach the previous build's fiber first so its
+          // sequencing fiber can't write a terminal state over the new
+          // build's running state. Bail on detach if a newer start already
+          // replaced inFlight. Mirror cancel/forceKill: bound the interrupt
+          // so a wedged CPU-bound indexer fiber cannot hang start() forever.
+          const detached = yield* Ref.modify(inFlight, (f) => (f === currentFiber ? [true, undefined] : [false, f]))
+          if (detached) {
+            // In child mode the previous build's process is hard-killed so a
+            // new build never races a leftover indexer holding the DB write lock.
+            const previousChild = yield* Ref.get(childProc)
+            if (previousChild) {
+              killChild(previousChild)
+              yield* Ref.set(childProc, undefined)
+            }
+          }
+          yield* Fiber.interrupt(currentFiber).pipe(
+            Effect.timeout("2 seconds"),
+            Effect.ignore,
+          )
+        }
 
         yield* indexer.cancel()
         // Phase 7 follow-up: canonical storage is derived from the caller-
@@ -177,49 +389,79 @@ export const layer = Layer.effect(
         // JOINS the worker. If the terminal state were written inside the
         // worker, the worker's final `publish` call could block on a full
         // events queue and the build would never reach a terminal state.
-        const worker = Effect.gen(function* () {
-          const result = yield* indexer.index({
-            root: identity.root,
-            force: input.force ?? false,
-            ...(input.excludePatterns ? { excludePatterns: input.excludePatterns } : {}),
-            onProgress: Effect.fn("CodegraphBuildService.onProgress")(function* ({ file, done, total, currentFile }) {
-              const basename = file.split("/").pop() ?? file.split("\\").pop() ?? file
-              const next: State = {
-                ...initial,
-                done,
-                total,
-                currentFile: file,
-                lastProgressAt: Date.now(),
-                lastCompletedFile: basename,
-                lastCompletedPath: file,
-                currentlyParsing: currentFile,
-              }
-              yield* Ref.set(state, next)
-              const now = Date.now()
-              const lastPublish = yield* Ref.get(lastProgressPublishedAt)
-              if (now - lastPublish >= PROGRESS_PUBLISH_INTERVAL_MS) {
-                yield* Ref.set(lastProgressPublishedAt, now)
-                yield* publish(next)
-              }
-            }),
-          })
-
-          // Only bump version on successful completion. Phase 0: pass
-          // eligibleFiles so graphCoverage uses the same formula on both
-          // the full build path here and the incremental applyChanges
-          // path. bumpVersion derives totalNodes/totalEdges internally.
-          // Phase 1: also surface totalFiles and graphBuiltAt so the
-          // terminal publish can populate the status pill's `hasGraph`
-          // check without re-reading `repo.getMeta()` after the bump.
-          const { graphVersion, coverage, totalNodes, totalEdges, totalFiles, graphBuiltAt } =
-            yield* repo.bumpVersion({
-              eligibleFiles: result.eligibleFiles,
-              scannedFiles: result.scannedFiles,
-              indexedRoot: identity.root,
+        //
+        // Child mode: the TUI worker opted in via BANYANCODE_INDEXER_CHILD=1
+        // (set in packages/opencode/src/cli/tui/worker.ts). The full
+        // walk/parse/write/derived runs in a dedicated process so a large
+        // repo can never freeze the worker's event loop; cancel is a hard
+        // process kill. The child reports progress/result over stdout IPC and
+        // the watcher below feeds the same state Ref + throttle as the
+        // in-process onProgress path.
+        const worker = CodegraphChildIndexer.childIndexerEnabled()
+          ? Effect.gen(function* () {
+              const cmd = CodegraphChildIndexer.childCommand({
+                root: identity.root,
+                dbPath: identity.dbPath,
+                force: input.force ?? false,
+                ...(input.excludePatterns ? { excludePatterns: input.excludePatterns } : {}),
+              })
+              const proc = Bun.spawn(cmd, {
+                cwd: identity.root,
+                stdout: "pipe",
+                stderr: "pipe",
+                stdin: "ignore",
+                env: {
+                  ...process.env,
+                  OPENCODE_DISABLE_STDERR_LOGGER: "1",
+                },
+              })
+              yield* Ref.set(childProc, proc)
+              const outcome = yield* watchChildProcess(proc, initial)
+              return outcome
             })
+          : Effect.gen(function* () {
+              const result = yield* indexer.index({
+                root: identity.root,
+                force: input.force ?? false,
+                ...(input.excludePatterns ? { excludePatterns: input.excludePatterns } : {}),
+                onProgress: Effect.fn("CodegraphBuildService.onProgress")(function* ({ file, done, total, currentFile }) {
+                  const basename = file.split("/").pop() ?? file.split("\\").pop() ?? file
+                  const next: State = {
+                    ...initial,
+                    done,
+                    total,
+                    currentFile: file,
+                    lastProgressAt: Date.now(),
+                    lastCompletedFile: basename,
+                    lastCompletedPath: file,
+                    currentlyParsing: currentFile,
+                  }
+                  yield* Ref.set(state, next)
+                  const now = Date.now()
+                  const lastPublish = yield* Ref.get(lastProgressPublishedAt)
+                  if (now - lastPublish >= PROGRESS_PUBLISH_INTERVAL_MS) {
+                    yield* Ref.set(lastProgressPublishedAt, now)
+                    yield* publish(next)
+                  }
+                }),
+              })
 
-          return { result, graphVersion, coverage, totalNodes, totalEdges, totalFiles, graphBuiltAt }
-        })
+              // Only bump version on successful completion. Phase 0: pass
+              // eligibleFiles so graphCoverage uses the same formula on both
+              // the full build path here and the incremental applyChanges
+              // path. bumpVersion derives totalNodes/totalEdges internally.
+              // Phase 1: also surface totalFiles and graphBuiltAt so the
+              // terminal publish can populate the status pill's `hasGraph`
+              // check without re-reading `repo.getMeta()` after the bump.
+              const { graphVersion, coverage, totalNodes, totalEdges, totalFiles, graphBuiltAt } =
+                yield* repo.bumpVersion({
+                  eligibleFiles: result.eligibleFiles,
+                  scannedFiles: result.scannedFiles,
+                  indexedRoot: identity.root,
+                })
+
+              return { result, graphVersion, coverage, totalNodes, totalEdges, totalFiles, graphBuiltAt }
+            })
 
         // Fork into the runtime's global scope (not the request scope). The fork
         // must outlive the originating request because the build runs for
@@ -251,7 +493,6 @@ export const layer = Layer.effect(
             if (liveFiber !== workerFiber) return
             const current = yield* Ref.get(state)
             if (current.status !== "running") return
-
             // Read state from Ref to preserve lastCompletedFile / currentlyParsing /
             // lastProgressAt set by the last onProgress callback. Spreading
             // `current` first means those fields survive into the terminal state.
@@ -262,6 +503,11 @@ export const layer = Layer.effect(
             // undefined or stale value for these fields, and the freshest
             // truth lives on `outcome`. Per AGENTS.md: success-only — the
             // failed branch deliberately leaves them unset.
+            // Claim the terminal state atomically. A concurrent cancel() may
+            // have already claimed the "running" state and flipped it to
+            // "cancelled"; writing here without the atomic claim would race
+            // it and surface "All fibers interrupted without error" as a
+            // bogus "failed" terminal state. Only the winner publishes.
             const terminal: State = outcome.kind === "completed"
               ? {
                   ...current,
@@ -288,8 +534,8 @@ export const layer = Layer.effect(
                   error: outcome.error,
                 }
 
-            yield* Ref.set(state, terminal)
-            yield* publish(terminal)
+            const claimed = yield* Ref.modify(state, (s) => (s.status !== "running" ? [false, s] : [true, terminal]))
+            if (claimed) yield* publish(terminal)
           }),
         )
       }) as unknown as Effect.Effect<void, never, never>
@@ -298,19 +544,41 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const fiber = yield* Ref.get(inFlight)
         if (fiber) {
-          yield* Fiber.interrupt(fiber).pipe(
-            Effect.timeout("2 seconds"),
-            Effect.ignore,
-          )
-          yield* Ref.set(inFlight, undefined)
-          const current = yield* Ref.get(state)
-          if (current.status === "running") {
-            const next: State = { ...current, status: "cancelled" }
-            yield* Ref.set(state, next)
-            yield* publish(next)
+          // Atomically detach the fiber from inFlight BEFORE interrupting.
+          // The sequencing fiber checks inFlight after its join; if it still
+          // sees our workerFiber it would write a bogus "failed" terminal
+          // state ("All fibers interrupted without error") over the
+          // "cancelled" state below. If a newer start already replaced
+          // inFlight, bail — it owns the child and the state now.
+          const detached = yield* Ref.modify(inFlight, (f) => (f === fiber ? [true, undefined] : [false, f]))
+          if (detached) {
+            // In child mode the process is hard-killed first so the interrupted
+            // read loop never waits on a still-running child. `kill()` on
+            // Windows is TerminateProcess — a hard guarantee.
+            const child = yield* Ref.get(childProc)
+            if (child) {
+              killChild(child)
+              yield* Ref.set(childProc, undefined)
+            }
+            yield* Fiber.interrupt(fiber).pipe(
+              Effect.timeout("2 seconds"),
+              Effect.ignore,
+            )
           }
         }
         yield* indexer.cancel()
+        // Atomically claim the cancelled terminal state. The sequencing fiber
+        // uses the same atomic claim, so exactly one of us wins the "running"
+        // state; if it already wrote a terminal state, we don't overwrite it.
+        const claimed = yield* Ref.modify(state, (s) => {
+          if (s.status !== "running") return [false, s]
+          const next: State = { ...s, status: "cancelled", deriving: false }
+          return [true, next]
+        })
+        if (claimed) {
+          const next = yield* Ref.get(state)
+          yield* publish(next)
+        }
       })
 
     const forceKill: Interface["forceKill"] = () =>
@@ -318,17 +586,33 @@ export const layer = Layer.effect(
         const fiber = yield* Ref.get(inFlight)
         // First try a normal cancel via Fiber.interrupt — works most of the time.
         if (fiber) {
-          yield* Fiber.interrupt(fiber).pipe(
-            Effect.timeout("2 seconds"),
-            Effect.ignore,
-          )
-          yield* Ref.set(inFlight, undefined)
+          // Atomically detach before interrupting so the sequencing fiber
+          // can't write a terminal state over the cancelled state (same race
+          // as cancel()).
+          const detached = yield* Ref.modify(inFlight, (f) => (f === fiber ? [true, undefined] : [false, f]))
+          if (detached) {
+            // Child mode: hard-kill the indexer process first. `kill()` is
+            // TerminateProcess on Windows, so a CPU-bound child can never block
+            // this path.
+            const child = yield* Ref.get(childProc)
+            if (child) {
+              killChild(child)
+              yield* Ref.set(childProc, undefined)
+            }
+            yield* Fiber.interrupt(fiber).pipe(
+              Effect.timeout("2 seconds"),
+              Effect.ignore,
+            )
+          }
         }
         yield* indexer.cancel()
-        const current = yield* Ref.get(state)
-        if (current.status === "running") {
-          const next: State = { ...current, status: "cancelled", error: "force-killed" }
-          yield* Ref.set(state, next)
+        const claimed = yield* Ref.modify(state, (s) => {
+          if (s.status !== "running") return [false, s]
+          const next: State = { ...s, status: "cancelled", deriving: false, error: "force-killed" }
+          return [true, next]
+        })
+        if (claimed) {
+          const next = yield* Ref.get(state)
           yield* publish(next)
         }
 

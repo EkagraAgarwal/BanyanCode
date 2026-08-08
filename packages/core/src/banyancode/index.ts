@@ -160,6 +160,13 @@ export {
   defaultLayer as codegraphBuildServiceDefaultLayer,
 } from "./codegraph-build-service"
 export {
+  runChildIndexer as codegraphChildIndexerRun,
+  childCommand as codegraphChildIndexerCommand,
+  childIndexerEnabled as codegraphChildIndexerEnabled,
+  CODEGRAPH_CHILD_FLAG,
+  type ChildIndexerConfig as CodegraphChildIndexerConfig,
+} from "./codegraph-indexer-child"
+export {
   Service as CodegraphReadiness,
   layer as codegraphReadinessLayer,
   defaultLayer as codegraphReadinessDefaultLayer,

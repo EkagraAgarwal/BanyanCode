@@ -28,6 +28,8 @@ import { useEvent } from "../../context/event"
 import { editorSelectionKey, useEditorContext, type EditorSelection } from "../../context/editor"
 import { normalizePromptContent, openEditor } from "../../editor"
 import { useExit } from "../../context/exit"
+import { useKill } from "../../context/kill"
+import { useCodegraphBuild, isBuildActive } from "../codegraph-progress"
 import { promptOffsetWidth } from "../../prompt/display"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { usePromptHistory, type PromptInfo } from "../../prompt/history"
@@ -157,6 +159,8 @@ export function Prompt(props: PromptProps) {
   const tabShortcut = useCommandShortcut("tabs.next")
   const renderer = useRenderer()
   const exit = useExit()
+  const kill = useKill()
+  const build = useCodegraphBuild()
   const dimensions = useTerminalDimensions()
   const { theme, syntax } = useTheme()
   const kv = useKV()
@@ -391,6 +395,14 @@ export function Prompt(props: PromptProps) {
                 setTimeout(() => reject(new Error("abort timed out")), 5_000),
               ),
             ]).catch((err) => {
+              // If a codegraph build is active/stuck, the worker is genuinely
+              // wedged (the abort RPC hangs because the event loop is blocked)
+              // — escalate to the parent-owned hard kill instead of leaving
+              // the user trapped.
+              if (isBuildActive(build.state, Date.now())) {
+                kill()
+                return
+              }
               toast.show({
                 variant: "error",
                 message: `Session did not stop (${err instanceof Error ? err.message : String(err)}). Press Esc again or Ctrl+C to exit.`,

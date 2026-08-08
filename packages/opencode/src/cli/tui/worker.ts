@@ -11,6 +11,13 @@ import { AppRuntime } from "@/effect/app-runtime"
 import { Effect } from "effect"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 
+// The TUI worker hosts the HTTP server + AppRuntime + the codegraph indexer.
+// A large in-process index starved this event loop (prompt/SSE froze, Esc and
+// Ctrl+C went dead). Run indexing in a dedicated child process instead so the
+// worker only spawns/kills the child and streams its progress. See
+// packages/core/src/banyancode/codegraph-indexer-child.ts.
+process.env.BANYANCODE_INDEXER_CHILD = "1"
+
 Heap.start()
 
 // Subscribe to global events and forward them via RPC

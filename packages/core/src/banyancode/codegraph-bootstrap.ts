@@ -72,70 +72,88 @@ export const layer: Layer.Layer<Service, never, CodegraphReadiness.Service> = La
     const inflight = yield* Ref.make<Map<string, boolean>>(new Map())
 
     const ensureGraph: Interface["ensureGraph"] = Effect.fn("CodegraphBootstrap.ensureGraph")(function* (input) {
-      // Opt-out: the bootstrap env flag turns ensureGraph into a pure
-      // status probe (the lazy auto-trigger on tool call still works).
-      if (process.env.BANYANCODEGRAPH_BOOTSTRAP === "0") return yield* status()
-
-      // Filesystem-root guard: never treat a whole drive as a workspace.
-      if (!input.root) return { state: "missing" }
-      if (path.parse(path.resolve(input.root)).root === path.resolve(input.root)) {
-        return { state: "missing" }
+      // Bootstrap is opt-in: opening/continuing a session must not start a
+      // full index on the request worker by default (that is what starved
+      // prompt/SSE RPCs during active chats). Only kick a background build
+      // when the user opts in via BANYANCODEGRAPH_BOOTSTRAP=1 or
+      // banyancode_codegraph_auto_index=true. "0" / false explicitly disable
+      // it. The lazy auto-trigger on the first graph-tool call remains the
+      // safety net.
+      const bootstrapEnabled = process.env.BANYANCODEGRAPH_BOOTSTRAP === "1"
+      if (!bootstrapEnabled) {
+        const configOpt = yield* Effect.serviceOption(BanyanConfigService.Service)
+        if (Option.isSome(configOpt)) {
+          const cfg = yield* configOpt.value.get()
+          if (cfg.banyancode_codegraph_auto_index === true) return yield* ensureGraphOptIn(input)
+        }
+        return yield* status()
       }
-
-      // Honor the codegraph_auto_update disable semantics: watch_enabled
-      // false means the user does not want background builds, so we only
-      // report status (the lazy auto-trigger on tool call still works).
-      const configOpt = yield* Effect.serviceOption(BanyanConfigService.Service)
-      if (Option.isSome(configOpt)) {
-        const cfg = yield* configOpt.value.get()
-        if (cfg.banyancode_codegraph_watch_enabled === false) return yield* status()
-      }
-
-      // Quick read: a usable graph (or a build already running) means
-      // there is nothing to kick.
-      const result = yield* readiness.status()
-      if (result.reason === "ready" || result.reason === "stale" || result.reason === "building") {
-        return mapState(result)
-      }
-
-      // missing/failed: kick a background build, once per root. The fork
-      // is detached so the caller never waits on the build; a timeout only
-      // interrupts the ensureReady poll — the underlying build fiber owns
-      // its own lifecycle and keeps running, which is exactly the desired
-      // "pending marker" semantics.
-      const root = input.root
-      const alreadyInflight = yield* Ref.modify(inflight, (m) => {
-        if (m.has(root)) return [true, m] as const
-        const next = new Map(m)
-        next.set(root, true)
-        return [false, next] as const
-      })
-      if (alreadyInflight) return { state: "building" }
-
-      const rawTimeout = Number(process.env.BANYANCODEGRAPH_BOOTSTRAP_TIMEOUT_MS ?? 60000)
-      const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : 60000
-
-      yield* Effect.forkDetach(
-        readiness
-          .ensureReady({ root })
-          .pipe(
-            Effect.timeout(Duration.millis(timeoutMs)),
-            Effect.catchCause((cause) =>
-              Effect.logWarning("codegraph bootstrap: background build failed", { cause: Cause.pretty(cause) }),
-            ),
-          )
-          .pipe(
-            Effect.ensuring(
-              Ref.update(inflight, (m) => {
-                const next = new Map(m)
-                next.delete(root)
-                return next
-              }),
-            ),
-          ),
-      )
-      return { state: "building" }
+      return yield* ensureGraphOptIn(input)
     })
+
+    const ensureGraphOptIn: Interface["ensureGraph"] = Effect.fn("CodegraphBootstrap.ensureGraphOptIn")(
+      function* (input) {
+        // Filesystem-root guard: never treat a whole drive as a workspace.
+        if (!input.root) return { state: "missing" }
+        if (path.parse(path.resolve(input.root)).root === path.resolve(input.root)) {
+          return { state: "missing" }
+        }
+
+        // Honor the codegraph_auto_update disable semantics: watch_enabled
+        // false means the user does not want background builds, so we only
+        // report status (the lazy auto-trigger on tool call still works).
+        const configOpt = yield* Effect.serviceOption(BanyanConfigService.Service)
+        if (Option.isSome(configOpt)) {
+          const cfg = yield* configOpt.value.get()
+          if (cfg.banyancode_codegraph_watch_enabled === false) return yield* status()
+        }
+
+        // Quick read: a usable graph (or a build already running) means
+        // there is nothing to kick.
+        const result = yield* readiness.status()
+        if (result.reason === "ready" || result.reason === "stale" || result.reason === "building") {
+          return mapState(result)
+        }
+
+        // missing/failed: kick a background build, once per root. The fork
+        // is detached so the caller never waits on the build; a timeout only
+        // interrupts the ensureReady poll — the underlying build fiber owns
+        // its own lifecycle and keeps running, which is exactly the desired
+        // "pending marker" semantics.
+        const root = input.root
+        const alreadyInflight = yield* Ref.modify(inflight, (m) => {
+          if (m.has(root)) return [true, m] as const
+          const next = new Map(m)
+          next.set(root, true)
+          return [false, next] as const
+        })
+        if (alreadyInflight) return { state: "building" }
+
+        const rawTimeout = Number(process.env.BANYANCODEGRAPH_BOOTSTRAP_TIMEOUT_MS ?? 60000)
+        const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : 60000
+
+        yield* Effect.forkDetach(
+          readiness
+            .ensureReady({ root })
+            .pipe(
+              Effect.timeout(Duration.millis(timeoutMs)),
+              Effect.catchCause((cause) =>
+                Effect.logWarning("codegraph bootstrap: background build failed", { cause: Cause.pretty(cause) }),
+              ),
+            )
+            .pipe(
+              Effect.ensuring(
+                Ref.update(inflight, (m) => {
+                  const next = new Map(m)
+                  next.delete(root)
+                  return next
+                }),
+              ),
+            ),
+        )
+        return { state: "building" }
+      },
+    )
 
     const status: Interface["status"] = () =>
       Effect.gen(function* () {
