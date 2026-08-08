@@ -380,8 +380,22 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void sdk.client.session.abort({
-              sessionID: props.sessionID,
+            // Surface an unresponsive abort RPC instead of silently swallowing
+            // it: a wedged worker that never acknowledges the abort should tell
+            // the user the session is still busy and that a repeat interrupt
+            // (or Ctrl+C) can escalate to a local exit. The existing
+            // double-press confirmation UX is preserved.
+            Promise.race([
+              sdk.client.session.abort({ sessionID: props.sessionID }),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("abort timed out")), 5_000),
+              ),
+            ]).catch((err) => {
+              toast.show({
+                variant: "error",
+                message: `Session did not stop (${err instanceof Error ? err.message : String(err)}). Press Esc again or Ctrl+C to exit.`,
+                duration: 5000,
+              })
             })
             setStore("interrupt", 0)
           }

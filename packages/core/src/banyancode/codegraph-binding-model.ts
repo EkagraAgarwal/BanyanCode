@@ -123,6 +123,12 @@ export type QualifiedResolution = {
   readonly confidence: number
 }
 
+// Backstop for export-chain traversal. The visited-state already guarantees
+// termination on cyclic re-export graphs (`export *` cycles, mutually
+// re-exporting barrels); this is a depth bound so an acyclic-but-deep barrel
+// chain can never starve the worker thread that runs the derived pass.
+const MAX_EXPORT_CHAIN_DEPTH = 64
+
 /**
  * Resolve a dotted reference chain in `fileID` to a concrete node. The head
  * segment must be either an import binding local name or a namespace-re-export
@@ -145,6 +151,11 @@ export const resolveQualifiedReference = (
   const sourceFile = ctx.filesByID.get(fileID)
   if (!sourceFile) return undefined
 
+  // Shared across every descent from this reference so sibling branches prune
+  // identically (resolution is deterministic per (file, names) state) and so
+  // star re-export cycles terminate instead of recursing forever.
+  const visited = new Set<string>()
+
   const importList = index.imports.get(fileID)?.get(head)
   if (importList && importList.length > 0) {
     for (const imp of importList) {
@@ -153,7 +164,7 @@ export const resolveQualifiedReference = (
       if (imp.importedName === "*") {
         // `import * as NS from "src"` — NS is the module namespace itself.
         for (const m of moduleFiles) {
-          const r = resolveExportChain(ctx, index, m, segments.slice(1))
+          const r = resolveExportChain(ctx, index, m, segments.slice(1), visited, 0)
           if (r) return r
         }
       } else {
@@ -162,7 +173,7 @@ export const resolveQualifiedReference = (
         const exportedName = imp.exportName ?? imp.localName
         if (!exportedName) continue
         for (const m of moduleFiles) {
-          const r = resolveExportChain(ctx, index, m, [exportedName, ...segments.slice(1)])
+          const r = resolveExportChain(ctx, index, m, [exportedName, ...segments.slice(1)], visited, 0)
           if (r) return r
         }
       }
@@ -177,7 +188,7 @@ export const resolveQualifiedReference = (
     for (const b of nsExports) {
       if (b.kind !== "namespace-re-export") continue
       for (const m of ctx.resolveModule(sourceFile.path, b.source)) {
-        const r = resolveExportChain(ctx, index, m, segments.slice(1))
+        const r = resolveExportChain(ctx, index, m, segments.slice(1), visited, 0)
         if (r) return r
       }
     }
@@ -198,9 +209,19 @@ const resolveExportChain = (
   index: BindingIndex,
   file: ResolutionFile,
   names: readonly string[],
+  visited: Set<string>,
+  depth: number,
 ): QualifiedResolution | undefined => {
+  if (depth > MAX_EXPORT_CHAIN_DEPTH) return undefined
   const name = names[0]
   if (!name) return undefined
+
+  // Prune on repeated (file, names) state. Every recursion path from this
+  // state is deterministic, so a cycle can never hold a resolution that a
+  // first visit missed — dropping it is safe and guarantees termination.
+  const visitedKey = `${file.id}\u0000${names.join("\u0000")}`
+  if (visited.has(visitedKey)) return undefined
+  visited.add(visitedKey)
 
   const exportList = index.exports.get(file.id)?.get(name)
   if (exportList && exportList.length > 0) {
@@ -219,14 +240,14 @@ const resolveExportChain = (
             if (service) return serviceTagged(service)
             return undefined
           }
-          const r = resolveExportChain(ctx, index, m, names.slice(1))
+          const r = resolveExportChain(ctx, index, m, names.slice(1), visited, depth + 1)
           if (r) return r
         }
       }
       if (b.kind === "re-export" && b.exportName) {
         // `export { A as B } from "src"` — A is what `src` exports.
         for (const m of ctx.resolveModule(file.path, b.source)) {
-          const r = resolveExportChain(ctx, index, m, [b.exportName, ...names.slice(1)])
+          const r = resolveExportChain(ctx, index, m, [b.exportName, ...names.slice(1)], visited, depth + 1)
           if (r) return r
         }
       }
@@ -236,7 +257,7 @@ const resolveExportChain = (
   // `export * from "src"` — try the name inside each re-exported module.
   for (const star of index.starReExports.get(file.id) ?? []) {
     for (const m of ctx.resolveModule(file.path, star.source)) {
-      const r = resolveExportChain(ctx, index, m, names)
+      const r = resolveExportChain(ctx, index, m, names, visited, depth + 1)
       if (r) return r
     }
   }

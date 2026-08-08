@@ -118,6 +118,15 @@ export const layer = Layer.effect(
 
     const publish = (s: State) => Queue.offer(events, { type: "banyancode.codegraph.build", properties: s }).pipe(Effect.ignore)
 
+    // Progress events are throttled to this cadence. The state Ref is still
+    // updated on EVERY progress callback (so `status()` is always fresh), but
+    // the event queue only sees one publication per interval. Initial and
+    // terminal states bypass the throttle entirely. Keeping the cadence wide
+    // prevents a multi-thousand-file index from flooding the TUI with a
+    // `banyancode.codegraph.build` event per file.
+    const PROGRESS_PUBLISH_INTERVAL_MS = 100
+    const lastProgressPublishedAt = yield* Ref.make(0)
+
     // The events queue is drained by the build bridge in
     // packages/opencode/src/effect/banyancode-codegraph-bridge.ts, which
     // republishes through EventV2Bridge (and therefore stamps the
@@ -186,7 +195,12 @@ export const layer = Layer.effect(
                 currentlyParsing: currentFile,
               }
               yield* Ref.set(state, next)
-              yield* publish(next)
+              const now = Date.now()
+              const lastPublish = yield* Ref.get(lastProgressPublishedAt)
+              if (now - lastPublish >= PROGRESS_PUBLISH_INTERVAL_MS) {
+                yield* Ref.set(lastProgressPublishedAt, now)
+                yield* publish(next)
+              }
             }),
           })
 

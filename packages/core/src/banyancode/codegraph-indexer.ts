@@ -690,6 +690,21 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   const isCancelled = yield* Ref.get(cancelled)
   if (isCancelled) return
 
+  // Phase instrumentation: every marker records wall-clock time since the last
+  // marker so a stall identifies parsing, binding resolution, edge writes, or
+  // in-degree recomputation instead of just "the derived pass took forever".
+  const SLOW_PHASE_WARN_MS = 2_000
+  const phaseTimings: { name: string; ms: number }[] = []
+  let lastPhaseMark = Date.now()
+  const phase = (name: string): Effect.Effect<void> => {
+    const ms = Date.now() - lastPhaseMark
+    lastPhaseMark = Date.now()
+    phaseTimings.push({ name, ms })
+    return ms > SLOW_PHASE_WARN_MS
+      ? Effect.logWarning(`codegraph: slow derived phase "${name}" took ${ms}ms`)
+      : Effect.void
+  }
+
   const changedSet = changedFileIDs && changedFileIDs.length > 0 ? new Set(changedFileIDs) : null
   const sourceFileIDs = new Set<string>([
     ...(changedFileIDs ?? []),
@@ -718,6 +733,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     // Full rebuild
     allNodesForIndex = yield* repo.searchNodes({ limit: 100_000 })
   }
+  yield* phase("load-nodes")
 
   const allFiles = yield* repo.listAllFiles()
   const fileByID = new Map(allFiles.map((f) => [f.id, f]))
@@ -735,7 +751,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   const nodeMap = new Map<string, CodegraphNode[]>()
   const nodeByID = new Map<string, CodegraphNode>()
   const nodesByFileID = new Map<string, CodegraphNode[]>()
-  const BATCH_SIZE = 500
+  const BATCH_SIZE = 50
 
   for (let batchStart = 0; batchStart < allNodesForIndex.length; batchStart += BATCH_SIZE) {
     if (yield* Ref.get(cancelled)) break
@@ -752,6 +768,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       nodesByFileID.set(node.fileID, fileList)
     }
   }
+  yield* phase("build-index")
 
   // Binding-aware edge pass context: turn persisted bindings + service tags
   // into a resolution index, and derive workspace-package / tsconfig-paths
@@ -774,6 +791,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     serviceNodeIDByFile.set(tag.fileID, tag.nodeID)
   }
   const bindingIndex = buildBindingIndex(yield* repo.listBindings())
+  yield* phase("binding-context")
 
   const jsonConfigFiles: { path: string; content: string }[] = []
   for (const f of allFiles) {
@@ -798,6 +816,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     serviceNodeIDByFile,
     resolveModule,
   }
+  yield* phase("module-resolver")
 
   const fileByPath = new Map(allFiles.map((f) => [f.path.replace(/\\/g, "/"), f]))
   const deriveModuleCandidates = (sourcePath: string, specifier: string): ReadonlyArray<CodegraphFile> => {
@@ -845,47 +864,55 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   // In incremental mode, iterate changed files plus dependent files as edge sources
   // (untouched files never need an import scope recomputed).
   const importScopesByFileID = new Map<string, Set<string>>()
-  for (const [fileID, nodes] of nodesByFileID) {
-    if (sourceSet && !sourceSet.has(fileID)) continue
-    const fileNode = nodes.find((node) => node.kind === "file")
-    const owner = fileByID.get(fileID)
-    if (!fileNode?.code || !owner) continue
-    const scope = new Set<string>()
-    for (const match of fileNode.code.matchAll(/import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["']([^"']+)["']/g)) {
-      const specifier = match[1]
-      if (!specifier) continue
-      const importedFiles = deriveModuleCandidates(owner.path, specifier)
-      for (const imported of importedFiles) {
-        // Phase 5 (P8a): emit one `imports` edge per imported FILE — from
-        // the importing file's file-kind node to the imported file's
-        // file-kind node. Previously the declared `imports` edge kind was
-        // only used to build the in-scope node set and no edge was ever
-        // emitted, so `imports` never appeared in the graph. Dedup via the
-        // shared referenceEdgeKeys set (distinct `${from}->${to}:imports`
-        // key format) so a file imported by several statements yields one
-        // edge. The endpoint guard (nodeByID.has) keeps the edge from ever
-        // pointing at a node outside the current index window.
-        const importedFileNodeID = `${imported.id}:file`
-        if (nodeByID.has(importedFileNodeID)) {
-          const importKey = `${fileNode.id}->${importedFileNodeID}:imports`
-          if (!referenceEdgeKeys.has(importKey)) {
-            referenceEdgeKeys.add(importKey)
-            referenceEdges.push({
-              fromNodeID: fileNode.id,
-              toNodeID: importedFileNodeID,
-              kind: "imports",
-            })
+  const nodesByFileEntries = [...nodesByFileID.entries()]
+  for (let batchStart = 0; batchStart < nodesByFileEntries.length; batchStart += BATCH_SIZE) {
+    if (yield* Ref.get(cancelled)) break
+    const batchEnd = Math.min(batchStart + BATCH_SIZE, nodesByFileEntries.length)
+    for (let k = batchStart; k < batchEnd; k++) {
+      const [fileID, nodes] = nodesByFileEntries[k]!
+      if (sourceSet && !sourceSet.has(fileID)) continue
+      const fileNode = nodes.find((node) => node.kind === "file")
+      const owner = fileByID.get(fileID)
+      if (!fileNode?.code || !owner) continue
+      const scope = new Set<string>()
+      for (const match of fileNode.code.matchAll(/import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["']([^"']+)["']/g)) {
+        const specifier = match[1]
+        if (!specifier) continue
+        const importedFiles = deriveModuleCandidates(owner.path, specifier)
+        for (const imported of importedFiles) {
+          // Phase 5 (P8a): emit one `imports` edge per imported FILE — from
+          // the importing file's file-kind node to the imported file's
+          // file-kind node. Previously the declared `imports` edge kind was
+          // only used to build the in-scope node set and no edge was ever
+          // emitted, so `imports` never appeared in the graph. Dedup via the
+          // shared referenceEdgeKeys set (distinct `${from}->${to}:imports`
+          // key format) so a file imported by several statements yields one
+          // edge. The endpoint guard (nodeByID.has) keeps the edge from ever
+          // pointing at a node outside the current index window.
+          const importedFileNodeID = `${imported.id}:file`
+          if (nodeByID.has(importedFileNodeID)) {
+            const importKey = `${fileNode.id}->${importedFileNodeID}:imports`
+            if (!referenceEdgeKeys.has(importKey)) {
+              referenceEdgeKeys.add(importKey)
+              referenceEdges.push({
+                fromNodeID: fileNode.id,
+                toNodeID: importedFileNodeID,
+                kind: "imports",
+              })
+            }
+          }
+          const importedNodes = nodesByFileID.get(imported.id) ?? []
+          for (const node of importedNodes) {
+            if (node.kind === "file") continue
+            scope.add(node.id)
           }
         }
-        const importedNodes = nodesByFileID.get(imported.id) ?? []
-        for (const node of importedNodes) {
-          if (node.kind === "file") continue
-          scope.add(node.id)
-        }
       }
+      importScopesByFileID.set(fileID, scope)
     }
-    importScopesByFileID.set(fileID, scope)
+    yield* Effect.yieldNow
   }
+  yield* phase("import-scopes")
 
   // Binding-aware pass: resolve dotted references (e.g. `MeshCoordinator.Service`,
   // `Banyan.MeshCoordinator.Service`) through persisted import/export bindings
@@ -898,117 +925,144 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   >()
   const authoritativeByNodeID = new Map<string, Map<string, string>>()
   const qualifiedRefRegex = /(\b[A-Za-z_]\w*)\.([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)/g
-  for (const nodeA of allNodesForIndex) {
-    if (!isEdgeSourceNode(nodeA)) continue
-    // Incremental: skip nodeA if its file is neither changed nor a dependent source
-    if (sourceSet && !sourceSet.has(nodeA.fileID)) continue
-    if (!bindingIndex.imports.has(nodeA.fileID) && !bindingIndex.exports.has(nodeA.fileID)) continue
-    const strippedCode = stripCommentsAndStrings(nodeA.code ?? "")
-    const authoritative = new Map<string, string>()
-    for (const m of strippedCode.matchAll(qualifiedRefRegex)) {
-      const chain = [m[1]!, ...m[2]!.split(".")]
-      const resolution = resolveQualifiedReference(resolutionContext, bindingIndex, nodeA.fileID, chain)
-      if (!resolution) continue
-      const target = nodeByID.get(resolution.nodeID)
-      if (!target || target.id === nodeA.id || target.fileID === nodeA.fileID) continue
-      bindingEdges.set(`${nodeA.id}->${target.id}:references`, {
-        fromNodeID: nodeA.id,
-        toNodeID: target.id,
-        kind: "references",
-        derivation: resolution.derivation,
-        confidence: resolution.confidence,
-      })
-      authoritative.set(chain[0]!, resolution.nodeID)
-      authoritative.set(chain[chain.length - 1]!, resolution.nodeID)
-    }
-    if (authoritative.size > 0) authoritativeByNodeID.set(nodeA.id, authoritative)
+
+  // Strip source once per node and reuse the result across the binding and
+  // heuristic passes below. Both passes ran `stripCommentsAndStrings` on the
+  // same node previously, doubling the regex work on every rebuild.
+  const strippedByNodeID = new Map<string, string>()
+  const strippedSource = (node: CodegraphNode): string => {
+    const cached = strippedByNodeID.get(node.id)
+    if (cached !== undefined) return cached
+    const stripped = stripCommentsAndStrings(node.code ?? "")
+    strippedByNodeID.set(node.id, stripped)
+    return stripped
   }
 
-  for (const nodeA of allNodesForIndex) {
-    if (!isEdgeSourceNode(nodeA)) continue
-
-    // Incremental: skip nodeA if its file is neither changed nor a dependent source
-    if (sourceSet && !sourceSet.has(nodeA.fileID)) continue
-
-    const inScopeNodeIDs = new Set<string>()
-    const sameFileNodes = nodesByFileID.get(nodeA.fileID) ?? []
-    for (const n of sameFileNodes) {
-      if (n.id !== nodeA.id && n.kind !== "file") inScopeNodeIDs.add(n.id)
+  for (let batchStart = 0; batchStart < allNodesForIndex.length; batchStart += BATCH_SIZE) {
+    if (yield* Ref.get(cancelled)) break
+    const batchEnd = Math.min(batchStart + BATCH_SIZE, allNodesForIndex.length)
+    for (let k = batchStart; k < batchEnd; k++) {
+      const nodeA = allNodesForIndex[k]!
+      if (!isEdgeSourceNode(nodeA)) continue
+      // Incremental: skip nodeA if its file is neither changed nor a dependent source
+      if (sourceSet && !sourceSet.has(nodeA.fileID)) continue
+      if (!bindingIndex.imports.has(nodeA.fileID) && !bindingIndex.exports.has(nodeA.fileID)) continue
+      const strippedCode = strippedSource(nodeA)
+      const authoritative = new Map<string, string>()
+      for (const m of strippedCode.matchAll(qualifiedRefRegex)) {
+        const chain = [m[1]!, ...m[2]!.split(".")]
+        const resolution = resolveQualifiedReference(resolutionContext, bindingIndex, nodeA.fileID, chain)
+        if (!resolution) continue
+        const target = nodeByID.get(resolution.nodeID)
+        if (!target || target.id === nodeA.id || target.fileID === nodeA.fileID) continue
+        bindingEdges.set(`${nodeA.id}->${target.id}:references`, {
+          fromNodeID: nodeA.id,
+          toNodeID: target.id,
+          kind: "references",
+          derivation: resolution.derivation,
+          confidence: resolution.confidence,
+        })
+        authoritative.set(chain[0]!, resolution.nodeID)
+        authoritative.set(chain[chain.length - 1]!, resolution.nodeID)
+      }
+      if (authoritative.size > 0) authoritativeByNodeID.set(nodeA.id, authoritative)
     }
-    const importedScope = importScopesByFileID.get(nodeA.fileID)
-    if (importedScope) {
-      for (const importedID of importedScope) inScopeNodeIDs.add(importedID)
-    }
-    if (!importedScope || importedScope.size === 0) {
-      const owner = fileByID.get(nodeA.fileID)
-      if (owner) {
-        const ownerDir = fileDir(owner.path)
-        const peers = filesByDir.get(ownerDir) ?? []
-        for (const file of peers) {
-          if (file.id === owner.id) continue
-          const peerNodes = nodesByFileID.get(file.id) ?? []
-          for (const node of peerNodes) {
-            if (node.kind !== "file") inScopeNodeIDs.add(node.id)
+    yield* Effect.yieldNow
+  }
+  yield* phase("binding-pass")
+
+  for (let batchStart = 0; batchStart < allNodesForIndex.length; batchStart += BATCH_SIZE) {
+    if (yield* Ref.get(cancelled)) break
+    const batchEnd = Math.min(batchStart + BATCH_SIZE, allNodesForIndex.length)
+    for (let k = batchStart; k < batchEnd; k++) {
+      const nodeA = allNodesForIndex[k]!
+      if (!isEdgeSourceNode(nodeA)) continue
+
+      // Incremental: skip nodeA if its file is neither changed nor a dependent source
+      if (sourceSet && !sourceSet.has(nodeA.fileID)) continue
+
+      const inScopeNodeIDs = new Set<string>()
+      const sameFileNodes = nodesByFileID.get(nodeA.fileID) ?? []
+      for (const n of sameFileNodes) {
+        if (n.id !== nodeA.id && n.kind !== "file") inScopeNodeIDs.add(n.id)
+      }
+      const importedScope = importScopesByFileID.get(nodeA.fileID)
+      if (importedScope) {
+        for (const importedID of importedScope) inScopeNodeIDs.add(importedID)
+      }
+      if (!importedScope || importedScope.size === 0) {
+        const owner = fileByID.get(nodeA.fileID)
+        if (owner) {
+          const ownerDir = fileDir(owner.path)
+          const peers = filesByDir.get(ownerDir) ?? []
+          for (const file of peers) {
+            if (file.id === owner.id) continue
+            const peerNodes = nodesByFileID.get(file.id) ?? []
+            for (const node of peerNodes) {
+              if (node.kind !== "file") inScopeNodeIDs.add(node.id)
+            }
           }
         }
       }
-    }
-    const inScopeByName = new Map<string, CodegraphNode[]>()
-    for (const nodeID of inScopeNodeIDs) {
-      const scopedNode = nodeByID.get(nodeID)
-      if (!scopedNode) continue
-      const scoped = inScopeByName.get(scopedNode.name) ?? []
-      scoped.push(scopedNode)
-      inScopeByName.set(scopedNode.name, scoped)
-    }
-    // Phase 5 (P8b): strip comment and string-literal regions BEFORE the
-    // identifier scan and kind classification so a comment mentioning a
-    // symbol or a string like `"callBash("` cannot fabricate a
-    // `references`/`calls` edge. The original `nodeA.code` stays on the
-    // node unchanged — the strip is only for edge classification.
-    const strippedCode = stripCommentsAndStrings(nodeA.code ?? "")
-    const identifiers = new Set<string>()
-    for (const m of strippedCode.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
-      if (m[0].length >= 3 && inScopeByName.has(m[0])) identifiers.add(m[0])
-    }
+      const inScopeByName = new Map<string, CodegraphNode[]>()
+      for (const nodeID of inScopeNodeIDs) {
+        const scopedNode = nodeByID.get(nodeID)
+        if (!scopedNode) continue
+        const scoped = inScopeByName.get(scopedNode.name) ?? []
+        scoped.push(scopedNode)
+        inScopeByName.set(scopedNode.name, scoped)
+      }
+      // Phase 5 (P8b): strip comment and string-literal regions BEFORE the
+      // identifier scan and kind classification so a comment mentioning a
+      // symbol or a string like `"callBash("` cannot fabricate a
+      // `references`/`calls` edge. The original `nodeA.code` stays on the
+      // node unchanged — the strip is only for edge classification.
+      const strippedCode = strippedSource(nodeA)
+      const identifiers = new Set<string>()
+      for (const m of strippedCode.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
+        if (m[0].length >= 3 && inScopeByName.has(m[0])) identifiers.add(m[0])
+      }
 
-    const authoritative = authoritativeByNodeID.get(nodeA.id)
-    for (const name of identifiers) {
-      const targets = inScopeByName.get(name)
-      if (!targets || targets.length === 0) continue
+      const authoritative = authoritativeByNodeID.get(nodeA.id)
+      for (const name of identifiers) {
+        const targets = inScopeByName.get(name)
+        if (!targets || targets.length === 0) continue
 
-      // The binding pass already resolved this name to a specific node; drop
-      // heuristic edges to any other node sharing the name (cross-service
-      // collision guard).
-      const authTarget = authoritative?.get(name)
+        // The binding pass already resolved this name to a specific node; drop
+        // heuristic edges to any other node sharing the name (cross-service
+        // collision guard).
+        const authTarget = authoritative?.get(name)
 
-      for (const nodeB of targets) {
-        if (nodeB.id === nodeA.id) continue
-        if (authTarget && authTarget !== nodeB.id) continue
+        for (const nodeB of targets) {
+          if (nodeB.id === nodeA.id) continue
+          if (authTarget && authTarget !== nodeB.id) continue
 
-        const kind =
-          nodeA.kind === "class" && strippedCode.includes(`extends ${name}`)
-            ? ("extends" as const)
-            : strippedCode.includes(`${name}(`)
-              ? ("calls" as const)
-              : ("references" as const)
+          const kind =
+            nodeA.kind === "class" && strippedCode.includes(`extends ${name}`)
+              ? ("extends" as const)
+              : strippedCode.includes(`${name}(`)
+                ? ("calls" as const)
+                : ("references" as const)
 
-        const key = `${nodeA.id}->${nodeB.id}:${kind}`
-        if (referenceEdgeKeys.has(key)) continue
-        referenceEdgeKeys.add(key)
-        referenceEdges.push({
-          fromNodeID: nodeA.id,
-          toNodeID: nodeB.id,
-          kind,
-          derivation: nodeB.fileID === nodeA.fileID ? "same-file" : "heuristic-name",
-          confidence:
-            nodeB.fileID === nodeA.fileID
-              ? EDGE_CONFIDENCE["same-file"]
-              : EDGE_CONFIDENCE["heuristic-name"],
-        })
+          const key = `${nodeA.id}->${nodeB.id}:${kind}`
+          if (referenceEdgeKeys.has(key)) continue
+          referenceEdgeKeys.add(key)
+          referenceEdges.push({
+            fromNodeID: nodeA.id,
+            toNodeID: nodeB.id,
+            kind,
+            derivation: nodeB.fileID === nodeA.fileID ? "same-file" : "heuristic-name",
+            confidence:
+              nodeB.fileID === nodeA.fileID
+                ? EDGE_CONFIDENCE["same-file"]
+                : EDGE_CONFIDENCE["heuristic-name"],
+          })
+        }
       }
     }
+    yield* Effect.yieldNow
   }
+  yield* phase("heuristic-pass")
 
   // Filter node lists by file set for crossEdges that are scope-limited to changed/dependent files.
   // In incremental mode, changed and dependent source files are processed.
@@ -1130,6 +1184,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       if (sourceNode) crossEdges.push({ fromNodeID: gen.id, toNodeID: sourceNode.id, kind: "generated_from" })
     }
   }
+  yield* phase("cross-edges")
 
   // Merge heuristic reference edges and binding-resolved edges into a single
   // deduped set. Binding-resolved edges are higher-confidence and win for the
@@ -1189,6 +1244,12 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     // graph so downstream readers see accurate ranker scores.
     yield* repo.recomputeInDegree().pipe(Effect.orDie)
   }
+  yield* phase("write-edges")
+  yield* Effect.logInfo("codegraph: derived pass complete", {
+    nodes: allNodesForIndex.length,
+    edges: edgesToWrite.length,
+    phases: phaseTimings.map((p) => `${p.name}=${p.ms}ms`).join(", "),
+  })
 })
 
     const index = Effect.fn("CodegraphIndexer.index")(function* (input: {

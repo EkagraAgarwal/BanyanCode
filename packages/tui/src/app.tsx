@@ -90,6 +90,15 @@ import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-wi
 import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat } from "./util/error"
 
+// While a codegraph build is active, Ctrl+C routes to `codegraph.cancel`
+// (the app_exit path is suppressed so the two don't both fire). A wedged
+// worker can make the cancel RPC hang forever, trapping the user. Fallback:
+// the FIRST press fires the cancel request; a second press within the window
+// (or a cancel request that fails to resolve within the window) exits the
+// app locally, terminating the worker instead of leaving the user stuck.
+const CODECRAPH_CANCEL_FALLBACK_MS = 5_000
+let lastCodegraphCancelAt = 0
+
 const appGlobalBindingCommands = [
   "session.list",
   "session.new",
@@ -833,9 +842,29 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "BanyanCode",
         slashName: "codegraph-cancel",
         run: () => {
-          sdk.client.global.codegraph.cancel({}).catch(() => {})
+          const now = Date.now()
+          const repeated = lastCodegraphCancelAt !== 0 && now - lastCodegraphCancelAt < CODECRAPH_CANCEL_FALLBACK_MS
+          lastCodegraphCancelAt = now
+          if (repeated) {
+            // The first cancel request did not land within the window — the
+            // worker is wedged. Exit the app locally instead of suppressing
+            // app.exit indefinitely.
+            void exit()
+            return
+          }
           toast.show({ message: "Codegraph build cancelled", variant: "info" })
           dialog.clear()
+          Promise.race([
+            sdk.client.global.codegraph.cancel({}),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("cancel request timed out")), CODECRAPH_CANCEL_FALLBACK_MS),
+            ),
+          ]).catch(() => {
+            // The server never acknowledged the cancel. Fall through to a
+            // local exit so the user is never trapped with an unresponsive
+            // build (and the worker process is terminated with the app).
+            void exit()
+          })
         },
       },
       {

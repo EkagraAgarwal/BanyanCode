@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Cause, Effect, Layer } from "effect"
+import { Cause, Effect, Fiber, Layer, Queue } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
 import { tmpdir } from "../fixture/tmpdir"
@@ -32,6 +32,7 @@ const makeMockIndexer = (options: {
   }
   indexError?: CodegraphIndexer.CodegraphError
   progressUpdates?: { file: string; done: number; total: number }[]
+  progressSleepMs?: number
 }) => {
   return Layer.succeed(
     CodegraphIndexer.Service,
@@ -39,6 +40,7 @@ const makeMockIndexer = (options: {
       index: (input) => {
         return Effect.gen(function* () {
           for (const update of options.progressUpdates ?? []) {
+            if (options.progressSleepMs) yield* Effect.sleep(options.progressSleepMs)
             if (input.onProgress) yield* input.onProgress(update)
           }
           if (options.indexError) return yield* Effect.fail(options.indexError)
@@ -275,6 +277,85 @@ describe("CodegraphBuildService", () => {
         // DB confirms: no meta row was written
         const meta = yield* repo.getMeta()
         expect(meta).toBeUndefined()
+      }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("progress publications are throttled while the terminal state is always published", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    // 200 callbacks at a 5ms cadence flood the worker in ~1s. The build
+    // service must coalesce these into ~1 publication per 100ms so the TUI
+    // never sees a `banyancode.codegraph.build` event per file, while still
+    // (a) keeping `status()` fresh on every callback and (b) always
+    // publishing the terminal "completed" state.
+    const updateCount = 200
+    const updates = Array.from({ length: updateCount }, (_, i) => ({
+      file: `f${i}.ts`,
+      done: i + 1,
+      total: updateCount,
+    }))
+    const mockIndexer = makeMockIndexer({
+      progressUpdates: updates,
+      progressSleepMs: 5,
+      indexResult: { indexed: updateCount, skipped: 0, scannedFiles: updateCount, eligibleFiles: updateCount },
+    })
+
+    const serviceLayer = layer.pipe(
+      Layer.provide(mockIndexer),
+      Layer.provide(EventV2.defaultLayer),
+      Layer.provide(CodegraphRepo.defaultLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* CodegraphBuildService.Service
+
+        let progressPublished = 0
+        let lastRunningAt = 0
+        let terminal: CodegraphBuildService.State | undefined
+        const drain = yield* Effect.forkScoped(
+          Effect.gen(function* () {
+            for (;;) {
+              const ev = yield* Queue.take(service.events())
+              if (ev.properties.status === "running") {
+                progressPublished++
+                lastRunningAt = Date.now()
+              }
+              terminal = ev.properties
+              if (ev.properties.status === "completed" || ev.properties.status === "failed" || ev.properties.status === "cancelled") return
+            }
+          }),
+        )
+
+        yield* service.start({ root: tmp.path, force: false })
+        yield* Fiber.join(drain).pipe(Effect.timeout("10 seconds"))
+
+        const state = yield* service.status()
+
+        console.log(`\n=== Progress publication throttling ===`)
+        console.log(`callbacks   : ${updateCount} progress updates over ~1s`)
+        console.log(`published   : ${progressPublished} running events`)
+        console.log(`lastRunning : ${lastRunningAt > 0 ? `${Date.now() - lastRunningAt}ms ago` : "n/a"}`)
+        console.log(`terminal    : ${terminal?.status}`)
+        console.log(`state.done  : ${state.done}/${state.total}`)
+        console.log(`=======================================\n`)
+
+        // The flood must coalesce: 200 callbacks at a 100ms publish cadence
+        // yield ~10-15 running events on a normal machine. 50 is a wide CI-safe
+        // ceiling that still fails loudly if someone removes the throttle and
+        // every callback becomes a published event (~201).
+        expect(progressPublished).toBeLessThanOrEqual(50)
+        expect(progressPublished).toBeGreaterThan(0)
+        // Terminal state bypasses the throttle — the TUI's progress widget
+        // must always observe the completed transition.
+        expect(terminal?.status).toBe("completed")
+        // `status()` reflects the freshest callback even while publishing is
+        // throttled.
+        expect(state.status).toBe("completed")
+        expect(state.done).toBe(updateCount)
       }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })

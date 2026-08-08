@@ -9,6 +9,53 @@ export type EventSource = {
   subscribe: (handler: (event: GlobalEvent) => void) => Promise<() => void>
 }
 
+/**
+ * Merge contiguous `message.part.delta` events that target the same
+ * (messageID, partID, field). The consumer appends `delta` to the part field,
+ * so concatenating contiguous deltas is lossless and keeps exact final text;
+ * merging cuts the number of store updates / renders during long streaming
+ * bursts. Order is preserved around every non-delta event and around deltas
+ * for a different part or field (each new key starts a fresh pending run).
+ */
+export const coalesceDeltas = (events: GlobalEvent[]): GlobalEvent[] => {
+  const out: GlobalEvent[] = []
+  let pending: GlobalEvent | undefined
+  for (const event of events) {
+    if (event.payload.type !== "message.part.delta") {
+      if (pending !== undefined) {
+        out.push(pending)
+        pending = undefined
+      }
+      out.push(event)
+      continue
+    }
+    const props = event.payload.properties
+    if (
+      pending !== undefined &&
+      pending.payload.type === "message.part.delta" &&
+      pending.payload.properties.messageID === props.messageID &&
+      pending.payload.properties.partID === props.partID &&
+      pending.payload.properties.field === props.field
+    ) {
+      pending = {
+        ...pending,
+        payload: {
+          ...pending.payload,
+          properties: {
+            ...pending.payload.properties,
+            delta: pending.payload.properties.delta + props.delta,
+          },
+        },
+      }
+      continue
+    }
+    if (pending !== undefined) out.push(pending)
+    pending = event
+  }
+  if (pending !== undefined) out.push(pending)
+  return out
+}
+
 export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
   name: "SDK",
   init: (props: {
@@ -54,7 +101,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
     const flush = () => {
       if (queue.length === 0) return
-      const events = queue
+      const events = coalesceDeltas(queue)
       queue = []
       timer = undefined
       last = Date.now()

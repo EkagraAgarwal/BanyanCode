@@ -280,4 +280,49 @@ describe("binding-model module resolution", () => {
     expect(resolveModule("D:/proj/src/app/main.ts", "@core/services/foo").map((f) => f.id)).toEqual(["coreSvc"])
     expect(resolveModule("D:/proj/src/app/main.ts", "@org/lib/banyancode").map((f) => f.id)).toEqual(["pkgBanyan"])
   })
+
+  test("cyclic star re-exports terminate and deep barrel chains are depth-bounded", () => {
+    // a.ts and b.ts `export * from` each other. Resolving a name that exists
+    // nowhere in the cycle must return undefined instead of recursing forever.
+    const cycleBindings = [
+      mkBinding({ id: "imp:ns", fileID: "consumer", kind: "import", localName: "NS", importedName: "*", source: "./a" }),
+      mkBinding({ id: "star:a->b", fileID: "a", kind: "star-re-export", source: "./b" }),
+      mkBinding({ id: "star:b->a", fileID: "b", kind: "star-re-export", source: "./a" }),
+    ]
+    const cycleFiles = [
+      { id: "consumer", path: "D:/proj/src/consumer.ts" },
+      { id: "a", path: "D:/proj/src/a.ts" },
+      { id: "b", path: "D:/proj/src/b.ts" },
+    ]
+    const { index: cycleIndex, context: cycleContext } = makeContext(cycleBindings, cycleFiles)
+
+    const missing = resolveQualifiedReference(cycleContext, cycleIndex, "consumer", ["NS", "DoesNotExist"])
+    expect(missing).toBeUndefined()
+
+    // A deep acyclic barrel chain longer than MAX_EXPORT_CHAIN_DEPTH must be
+    // cut off at the depth bound. m0 -> m1 -> ... -> m79 each `export * from`
+    // the next; the `Leaf` node lives at m79, far past the 64-hop budget, so
+    // the reference must NOT resolve. A shallow sibling on m0 resolves.
+    const chainLength = 80
+    const deepBindings: CodegraphBinding[] = [
+      mkBinding({ id: "deep:import:ns", fileID: "deep-consumer", kind: "import", localName: "NS", importedName: "*", source: "./m0" }),
+      mkBinding({ id: "deep:export:shallow", fileID: "m0", kind: "export", localName: "Shallow", importedName: "Shallow", exportName: "Shallow", source: "" }),
+      mkBinding({ id: "deep:export:leaf", fileID: "m79", kind: "export", localName: "Leaf", importedName: "Leaf", exportName: "Leaf", source: "" }),
+    ]
+    const deepFiles = [{ id: "deep-consumer", path: "D:/proj/deep/consumer.ts" }]
+    for (let i = 0; i < chainLength; i++) {
+      deepFiles.push({ id: `m${i}`, path: `D:/proj/deep/m${i}.ts` })
+      if (i < chainLength - 1) {
+        deepBindings.push(mkBinding({ id: `deep:star:m${i}->m${i + 1}`, fileID: `m${i}`, kind: "star-re-export", source: `./m${i + 1}` }))
+      }
+    }
+    const deepNodesByFile = new Map<string, { id: string; name: string; kind: string }[]>([
+      ["m0", [{ id: "m0:Shallow", name: "Shallow", kind: "class" }]],
+      ["m79", [{ id: "m79:Leaf", name: "Leaf", kind: "class" }]],
+    ])
+    const { index: deepIndex, context: deepContext } = makeContext(deepBindings, deepFiles, deepNodesByFile)
+
+    expect(resolveQualifiedReference(deepContext, deepIndex, "deep-consumer", ["NS", "Shallow"])?.nodeID).toBe("m0:Shallow")
+    expect(resolveQualifiedReference(deepContext, deepIndex, "deep-consumer", ["NS", "Leaf"])).toBeUndefined()
+  })
 })
