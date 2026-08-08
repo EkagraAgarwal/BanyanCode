@@ -119,7 +119,7 @@ const TOOL_FAMILIES = [
   { title: "Shared memory", ids: ["shared_memory"] },
   { title: "System status", ids: ["system_status"] },
   { title: "Goals", ids: ["goal"] },
-  { title: "Repository map", ids: ["banyan_repo_map", "banyan_tool_search"] },
+  { title: "Repository map", ids: ["banyan_repo_map"] },
   { title: "Verification", ids: ["banyan_test"] },
 ] as const
 

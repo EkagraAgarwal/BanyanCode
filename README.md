@@ -190,12 +190,6 @@ Every subagent draws from the same toolbelt, organized by job — **30+ tools ac
 | `todowrite` | Structured task list with priorities and status |
 | `skill` | Load specialized skill instructions (e.g. `effect`, `customize-opencode`) |
 
-**Tool Discovery**
-
-| Tool | Purpose |
-|---|---|
-| `banyan_tool_search` | Discover warm/cold-tier tools by query |
-
 </details>
 
 ---

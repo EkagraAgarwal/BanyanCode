@@ -192,10 +192,7 @@ export const makeRepoMapTool = (deps: {
       "Avoid when\n" +
       "  you already have a nodeID — use codegraph_query or repository_query.\n" +
       "After this, often: code_find (locate specific symbols), " +
-      "  repository_query (semantic context).\n" +
-      "Routing tier note: this tool is HOT for the agent (always available). " +
-      "  Use banyan_tool_search to discover cold tools (advanced/internal) " +
-      "  before reaching for the registry.",
+      "  repository_query (semantic context).",
     contract: { visibility: "public" },
     input: Input,
     output: Output,

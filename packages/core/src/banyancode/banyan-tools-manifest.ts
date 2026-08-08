@@ -17,7 +17,6 @@ import { StructuralQueriesTool } from "../tool/structural-queries-tool"
 import { SubagentMessageTool } from "../tool/subagent-message"
 import { SystemStatusTool } from "../tool/system-status"
 import { TestTool } from "../tool/test"
-import { ToolSearchTool } from "../tool/tool-search"
 import { RepoMapTool } from "../tool/repo-map"
 import { WebSearchFreeTool } from "../tool/websearch-free"
 
@@ -27,7 +26,7 @@ export const BANYAN_PUBLIC_TOOL_IDS = [
   "blast_radius", "preflight", "safe_rename", "edit_plan", "websearch_free",
   "memory_store", "memory_recall", "memory_list", "memory_search", "memory_forget", "memory_candidate_emit",
   "shared_memory", "mesh_control", "mesh_subscribe", "subagent_message", "system_status", "goal",
-  "banyan_repo_map", "banyan_tool_search",
+  "banyan_repo_map",
   "banyan_test",
 ] as const
 
@@ -44,7 +43,7 @@ export const banyanToolLayer = () => Layer.mergeAll(
   WebSearchFreeTool.layer, MemoryTools.locationLayer, MemoryCandidateTool.layer,
   SharedMemoryTool.layer, MeshControlTool.locationLayer, MeshSubscribeTool.locationLayer,
   SubagentMessageTool.layer, SystemStatusTool.layer, GoalTool.locationLayer,
-  RepoMapTool.locationLayer, ToolSearchTool.locationLayer,
+  RepoMapTool.locationLayer,
   TestTool.locationLayer,
 )
 

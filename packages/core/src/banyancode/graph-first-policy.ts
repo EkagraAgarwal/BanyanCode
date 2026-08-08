@@ -40,7 +40,6 @@ export const GRAPH_ATTEMPT_TOOL_IDS: ReadonlySet<string> = new Set([
   "safe_rename",
   "edit_plan",
   "banyan_repo_map",
-  "banyan_tool_search",
   "banyan_test",
 ])
 

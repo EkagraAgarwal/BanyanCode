@@ -420,7 +420,6 @@ describe("v2 probe baseline — anti-slop tool contract", () => {
       "system_status",
       "goal",
       "banyan_repo_map",
-      "banyan_tool_search",
       "banyan_test",
     ] as const
 
