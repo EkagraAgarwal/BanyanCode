@@ -213,6 +213,11 @@ export const layer = Layer.effect(
       banyanignorePatterns: string[],
     ): Effect.Effect<{ files: CandidateFile[]; skippedBySize: number; skippedByGitignore: number; skippedByBanyanignore: number }> => {
       return Effect.gen(function* () {
+        // Nested .gitignore support: a directory's own .gitignore applies to its
+        // subtree (appended AFTER ancestor patterns, so later = higher precedence
+        // via last-match-wins, mirroring git). .banyancode/ignore stays root-only.
+        const localIgnore = yield* loadDirGitignore(dir)
+        const effectiveGitignore = localIgnore.length > 0 ? [...gitignorePatterns, ...localIgnore] : gitignorePatterns
         const entries = yield* fs.readDirectoryEntries(dir).pipe(Effect.catch(() => Effect.succeed<FSUtil.DirEntry[]>([])))
         const files: CandidateFile[] = []
         let skippedBySize = 0
@@ -226,7 +231,7 @@ export const layer = Layer.effect(
             continue
           }
           const fullPath = path.join(dir, entryName)
-          if (isIgnoredByPatterns(gitignorePatterns, root, fullPath)) {
+          if (isIgnoredByPatterns(effectiveGitignore, root, fullPath)) {
             skippedByGitignore++
             continue
           }
@@ -234,7 +239,7 @@ export const layer = Layer.effect(
             skippedByBanyanignore++
             continue
           }
-          const subResult = yield* walkDirectory(fullPath, maxFileSizeBytes, root, gitignorePatterns, banyanignorePatterns)
+          const subResult = yield* walkDirectory(fullPath, maxFileSizeBytes, root, effectiveGitignore, banyanignorePatterns)
           files.push(...subResult.files)
           skippedBySize += subResult.skippedBySize
           skippedByGitignore += subResult.skippedByGitignore
@@ -243,7 +248,7 @@ export const layer = Layer.effect(
         for (const entry of entries) {
           if (entry.type !== "file") continue
           const fullPath = path.join(dir, entry.name)
-          if (isIgnoredByPatterns(gitignorePatterns, root, fullPath)) {
+          if (isIgnoredByPatterns(effectiveGitignore, root, fullPath)) {
             skippedByGitignore++
             continue
           }
@@ -269,21 +274,43 @@ export const layer = Layer.effect(
       })
     }
 
+    const parseIgnoreLines = (content: string): string[] =>
+      content.split("\n").filter((l) => l.trim() && !l.trimStart().startsWith("#"))
+
+    // Memoized per-directory .gitignore contents, keyed by mtime so a
+    // .gitignore created/edited between indexer calls is re-read (the
+    // incremental path must observe new ignore files, e.g. applyChanges).
+    const dirGitignoreCache = new Map<string, { mtimeMs: number; lines: string[] }>()
+    const loadDirGitignore = (dir: string): Effect.Effect<string[]> => {
+      return Effect.gen(function* () {
+        const gitignorePath = path.join(dir, ".gitignore")
+        const exists = yield* fs.existsSafe(gitignorePath)
+        let mtimeMs = 0
+        if (exists) {
+          const statOpt = yield* fs.stat(gitignorePath).pipe(Effect.option)
+          if (statOpt._tag === "Some") {
+            const stats = statOpt.value
+            mtimeMs = "value" in stats.mtime ? Math.floor(stats.mtime.value.getTime()) : 0
+          }
+        }
+        const cached = dirGitignoreCache.get(dir)
+        if (cached !== undefined && cached.mtimeMs === mtimeMs) return cached.lines
+        const lines = exists ? parseIgnoreLines((yield* fs.readFileStringSafe(gitignorePath).pipe(Effect.orDie)) ?? "") : []
+        dirGitignoreCache.set(dir, { mtimeMs, lines })
+        return lines
+      })
+    }
+
     const loadIgnorePatterns = (root: string, excludePatterns?: readonly string[]): Effect.Effect<{ gitignore: string[]; banyanignore: string[] }> => {
       return Effect.gen(function* () {
         const gitignore: string[] = [...DEFAULT_IGNORED, ...DEFAULT_PRODUCT_EXCLUDES, ...DEFAULT_GENERATED_EXCLUDES]
         const banyanignore: string[] = []
-        const gitignorePath = path.join(root, ".gitignore")
         const banyancodeignorePath = path.join(root, ".banyancode", "ignore")
-        const gitignoreExists = yield* fs.existsSafe(gitignorePath)
-        if (gitignoreExists) {
-          const content = yield* fs.readFileStringSafe(gitignorePath).pipe(Effect.orDie)
-          if (content) gitignore.push(...content.split("\n").filter((l) => l.trim() && !l.startsWith("#")))
-        }
+        gitignore.push(...(yield* loadDirGitignore(root)))
         const banyancodeExists = yield* fs.existsSafe(banyancodeignorePath)
         if (banyancodeExists) {
           const content = yield* fs.readFileStringSafe(banyancodeignorePath).pipe(Effect.orDie)
-          if (content) banyanignore.push(...content.split("\n").filter((l) => l.trim() && !l.startsWith("#")))
+          if (content) banyanignore.push(...parseIgnoreLines(content))
         }
         if (excludePatterns && excludePatterns.length > 0) {
           for (const p of excludePatterns) {
@@ -295,25 +322,70 @@ export const layer = Layer.effect(
       })
     }
 
+    type CompiledIgnorePattern = { regex: RegExp; negated: boolean }
+    const compiledPatternCache = new Map<string, CompiledIgnorePattern>()
+
+    // gitignore-compatible pattern compiler: supports `**` (crosses slashes,
+    // with leading `**/` matching zero or more directories), `*`/`?` (within a
+    // segment), `!` negation (last matching pattern wins, git order semantics),
+    // and trailing `/` (directory-only). A pattern matches a path if it matches
+    // the path itself OR any directory prefix of it (git excludes a directory's
+    // contents when the directory matches). Slashless patterns match basenames
+    // at any depth; slashed patterns are relative to the ignore file's dir
+    // (here: the workspace root).
+    const compileIgnorePattern = (pattern: string): CompiledIgnorePattern | undefined => {
+      let p = pattern.trim()
+      if (p === "" || p.startsWith("#")) return undefined
+      const negated = p.startsWith("!")
+      if (negated) p = p.slice(1)
+      p = p.replace(/\/+$/, "").replace(/^\/+/, "")
+      if (p === "") return undefined
+      const hasSlash = p.includes("/")
+      // `**` markers are captured via placeholders BEFORE escaping, because
+      // the inserted `(?:.*/)?` group would otherwise be mangled by the later
+      // `*`/`?` segment replacements.
+      let glob = p
+        .replace(/\*\*\//g, "\u0001")
+        .replace(/\*\*/g, "\u0002")
+        .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+        .replace(/\*/g, "[^/]*")
+        .replace(/\?/g, "[^/]")
+        .replace(/\u0001/g, "(?:.*/)?")
+        .replace(/\u0002/g, ".*")
+      if (!hasSlash) glob = `(?:.*/)?${glob}`
+      return { regex: new RegExp(`^${glob}(?:/.*)?$`), negated }
+    }
+
     const isIgnoredByPatterns = (patterns: string[], root: string, filePath: string): boolean => {
       const relativePath = path.relative(root, filePath).replace(/\\/g, "/")
-      const segments = relativePath.split("/")
+      let ignored = false
       for (const pattern of patterns) {
-        const trimmed = pattern.trim()
-        if (trimmed === "" || trimmed.startsWith("#")) continue
-        const cleanPattern = trimmed.replace(/^\/+|\/+$/g, "")
-        if (cleanPattern === "") continue
-
-        if (cleanPattern.includes("/")) {
-          if (relativePath === cleanPattern || relativePath.startsWith(cleanPattern + "/")) return true
-        } else {
-          if (segments.includes(cleanPattern)) return true
-          const regex = globToRegex(cleanPattern)
-          if (segments.some((seg) => regex.test(seg))) return true
+        let compiled = compiledPatternCache.get(pattern)
+        if (compiled === undefined) {
+          compiled = compileIgnorePattern(pattern)
+          if (compiled === undefined) continue
+          compiledPatternCache.set(pattern, compiled)
         }
+        if (compiled.regex.test(relativePath)) ignored = !compiled.negated
       }
-      return false
+      return ignored
     }
+
+    // Pattern stack for a single file path: root patterns + every ancestor
+    // directory's .gitignore (root-most first, so deeper files win). Used by
+    // the incremental paths (applyChanges) so nested ignores apply there too.
+    const patternsForPath = (root: string, filePath: string, base: string[]): Effect.Effect<string[]> =>
+      Effect.gen(function* () {
+        const segments = path.dirname(path.relative(root, filePath)).split(/[\\/]/).filter((s) => s !== "" && s !== ".")
+        let stack = base
+        let current = root
+        for (const segment of segments) {
+          current = path.join(current, segment)
+          const local = yield* loadDirGitignore(current)
+          if (local.length > 0) stack = [...stack, ...local]
+        }
+        return stack
+      })
 
     const hashContent = (content: string | undefined): string => {
       if (!content) return ""
@@ -1368,7 +1440,8 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         : []
 
       for (const filePath of input.removed) {
-        if (isIgnoredByPatterns(gitignore, input.root, filePath) || isIgnoredByPatterns(banyanignore, input.root, filePath)) {
+        const pathGitignore = yield* patternsForPath(input.root, filePath, gitignore)
+        if (isIgnoredByPatterns(pathGitignore, input.root, filePath) || isIgnoredByPatterns(banyanignore, input.root, filePath)) {
           const existing = existingFilesByPath.get(filePath)
           if (existing) {
             removedFileIDs.add(existing.id)
@@ -1396,7 +1469,8 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
 
       for (const filePath of input.addedOrChanged) {
         const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
-        if (isIgnoredByPatterns(gitignore, input.root, filePath) || isIgnoredByPatterns(banyanignore, input.root, filePath)) {
+        const pathGitignore = yield* patternsForPath(input.root, filePath, gitignore)
+        if (isIgnoredByPatterns(pathGitignore, input.root, filePath) || isIgnoredByPatterns(banyanignore, input.root, filePath)) {
           const existing = existingFilesByPath.get(filePath)
           if (existing) {
             removedFileIDs.add(existing.id)
@@ -1673,20 +1747,6 @@ const drainParsedQueue = Effect.gen(function* () {
     return Service.of({ index, applyChanges, indexFiles, removeFiles, cancel })
   }),
 )
-
-function globToRegex(pattern: string): RegExp {
-  let regexStr = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*")
-    .replace(/\?/g, ".")
-  if (!regexStr.startsWith(".*")) {
-    regexStr = "^" + regexStr
-  }
-  if (!regexStr.endsWith(".*")) {
-    regexStr = regexStr + "$"
-  }
-  return new RegExp(regexStr)
-}
 
 // Note: CodegraphRepo.defaultLayer already provides Database.defaultLayer,
 // so we don't provide it again here. Tests that need a custom DB path should
