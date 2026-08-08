@@ -282,7 +282,6 @@ describe("Config", () => {
                     mode: "subagent",
                     hidden: false,
                     color: "warning",
-                    steps: 12,
                     disabled: false,
                     permissions: [{ action: "edit", resource: "*", effect: "deny" }],
                   },
@@ -366,7 +365,6 @@ describe("Config", () => {
             expect(reviewer?.mode).toBe("subagent")
             expect(reviewer?.hidden).toBe(false)
             expect(reviewer?.color).toBe("warning")
-            expect(reviewer?.steps).toBe(12)
             expect(reviewer?.disabled).toBe(false)
             expect(reviewer?.permissions).toEqual([{ action: "edit", resource: "*", effect: "deny" }])
             expect(documents[0]?.info.snapshots).toBe(false)

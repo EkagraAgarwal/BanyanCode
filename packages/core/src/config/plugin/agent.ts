@@ -28,7 +28,6 @@ const agentKeys = new Set([
   "mode",
   "hidden",
   "color",
-  "steps",
   "disabled",
   "permissions",
 ])
@@ -91,7 +90,6 @@ export const Plugin = PluginV2.define({
             if (item.mode !== undefined) agent.mode = item.mode
             if (item.hidden !== undefined) agent.hidden = item.hidden
             if (item.color !== undefined) agent.color = item.color
-            if (item.steps !== undefined) agent.steps = item.steps
             if (item.permissions !== undefined) agent.permissions.push(...item.permissions)
           })
         }

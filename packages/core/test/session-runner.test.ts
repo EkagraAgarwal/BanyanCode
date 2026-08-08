@@ -3178,62 +3178,6 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("fails after the bounded number of local tool continuation steps", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Loop forever" }), resume: false })
-
-      requests.length = 0
-      authorizations.length = 0
-      executions.length = 0
-      streamGate = undefined
-      streamStarted = undefined
-      responses = Array.from({ length: 25 }, (_, index) => [
-        LLMEvent.stepStart({ index: 0 }),
-        LLMEvent.toolCall({ id: `call-echo-${index}`, name: "echo", input: { text: `${index}` } }),
-        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
-        LLMEvent.finish({ reason: "tool-calls" }),
-      ])
-
-      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
-
-      expect(failure).toMatchObject({ _tag: "SessionRunner.StepLimitExceededError", sessionID, limit: 25 })
-      expect(requests).toHaveLength(25)
-      expect(executions).toHaveLength(25)
-    }),
-  )
-
-  it.effect("does not restart a capped tool loop for a coalesced stale wake", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      const coordinator = yield* SessionRunCoordinator.Service
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Loop forever" }), resume: false })
-
-      requests.length = 0
-      responses = Array.from({ length: 25 }, (_, index) => [
-        LLMEvent.stepStart({ index: 0 }),
-        LLMEvent.toolCall({ id: `call-capped-${index}`, name: "echo", input: { text: `${index}` } }),
-        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
-        LLMEvent.finish({ reason: "tool-calls" }),
-      ])
-      streamGate = yield* Deferred.make<void>()
-      streamStarted = yield* Deferred.make<void>()
-
-      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
-      yield* Deferred.await(streamStarted)
-      yield* coordinator.wake(sessionID)
-      yield* Deferred.succeed(streamGate, undefined)
-      expect(yield* Fiber.join(run).pipe(Effect.flip)).toMatchObject({ _tag: "SessionRunner.StepLimitExceededError" })
-      streamGate = undefined
-      streamStarted = undefined
-      yield* Effect.yieldNow
-
-      expect(requests).toHaveLength(25)
-    }),
-  )
-
   it.effect("accepts a terminal response on the final bounded provider turn", () =>
     Effect.gen(function* () {
       yield* setup

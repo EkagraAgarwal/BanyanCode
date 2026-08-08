@@ -284,25 +284,6 @@ it.instance(
 )
 
 it.instance(
-  "agent steps/maxSteps config sets steps property",
-  () =>
-    Effect.gen(function* () {
-      const build = yield* load((svc) => svc.get("build"))
-      const plan = yield* load((svc) => svc.get("plan"))
-      expect(build?.steps).toBe(50)
-      expect(plan?.steps).toBe(100)
-    }),
-  {
-    config: {
-      agent: {
-        build: { steps: 50 },
-        plan: { maxSteps: 100 },
-      },
-    },
-  },
-)
-
-it.instance(
   "agent mode can be overridden",
   () =>
     Effect.gen(function* () {

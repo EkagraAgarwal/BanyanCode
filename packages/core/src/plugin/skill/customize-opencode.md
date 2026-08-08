@@ -263,7 +263,7 @@ frontmatter.
 `mode` is one of `"primary"`, `"subagent"`, `"all"`.
 
 Allowed top-level frontmatter fields: `name, model, variant, description, mode,
-hidden, color, steps, options, permission, disable, temperature, top_p`. Any
+hidden, color, options, permission, disable, temperature, top_p`. Any
 unknown field is silently routed into `options`.
 
 To disable a built-in agent: `agent: { build: { disable: true } }`, or in a

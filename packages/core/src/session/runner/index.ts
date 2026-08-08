@@ -9,20 +9,11 @@ import type { SystemContext } from "../../system-context/index"
 import type { SessionContextEpoch } from "../context-epoch"
 import type { ToolOutputStore } from "../../tool-output-store"
 
-export class StepLimitExceededError extends Schema.TaggedErrorClass<StepLimitExceededError>()(
-  "SessionRunner.StepLimitExceededError",
-  {
-    sessionID: SessionSchema.ID,
-    limit: Schema.Int,
-  },
-) {}
-
 export type RunError =
   | LLMError
   | SessionRunnerModel.Error
   | MessageDecodeError
   | ContextSnapshotDecodeError
-  | StepLimitExceededError
   | SystemContext.InitializationBlocked
   | SessionContextEpoch.AgentReplacementBlocked
   | ToolOutputStore.Error
