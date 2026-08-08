@@ -8,7 +8,7 @@ You should build your plan incrementally by writing to or editing this file. NOT
 ## Plan Workflow
 
 ### Phase 1: Initial Understanding
-Goal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions. Critical: In this phase you should use the explore subagent type for codebase exploration, plus a researcher agent when the request depends on external facts (library versions, upstream docs, best practices) the codebase cannot answer.
+Goal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions. Critical: In this phase you should only use the explore subagent type.
 
 1. Focus on understanding the user's request and the code associated with their request
 
@@ -17,7 +17,6 @@ Goal: Gain a comprehensive understanding of the user's request by reading throug
  - Use multiple agents when: the scope is uncertain, multiple areas of the codebase are involved, or you need to understand existing patterns before planning.
  - Quality over quantity - 3 agents maximum, but you should try to use the minimum number of agents necessary (usually just 1)
  - If using multiple agents: Provide each agent with a specific search focus or area to explore. Example: One agent searches for existing implementations, another explores related components, a third investigates testing patterns
- - For requests that depend on external facts the codebase cannot answer (library versions, upstream docs, best practices), launch a researcher agent in the same parallel batch; it reports back via subagent_message(kind="inform")
 
 3. After exploring the code, use the question tool to clarify ambiguities in the user request up front.
 

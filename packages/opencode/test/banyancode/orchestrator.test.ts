@@ -65,16 +65,16 @@ describe("orchestrator agent", () => {
         const prompt = detail.prompt!
         expect(prompt).toContain("shared_memory")
         expect(prompt).toContain("subagent")
-        expect(prompt).toContain("fanout")
-        expect(prompt).toContain("PREFER 2-3 parallel subagents")
-        expect(prompt).toContain("maximum is 5")
+        expect(prompt).toContain("fan out")
+        expect(prompt).toContain("cap {{maxSubagents}}".replace("{{maxSubagents}}", "5"))
         // The orchestrator prompt now DELEGATES to the system context for
         // the codegraph policy rather than inlining it. The full tool list
         // (codegraph_build, code_find, ...) lives in the SystemPrompt
         // block, asserted below in the policy-contains-tools suite.
         expect(prompt).toContain("Codegraph-first search policy")
         expect(prompt).toContain("system context")
-        expect(prompt).toContain("Background subagents")
+        expect(prompt).toContain("Parallel subagent mesh")
+        expect(prompt).toContain("When /goal is active")
       }),
   )
 })
@@ -90,8 +90,8 @@ describe("orchestrator agent — system-context policy still carries the tool li
       expect(block).toContain("blast_radius")
       expect(block).toContain("preflight")
       expect(block).toContain("edit_plan")
-      // New policy section shipped by Phase 1.
-      expect(block).toContain("Background subagents")
+      // New policy section ships the parallel mesh.
+      expect(block).toContain("Parallel subagent mesh")
     }),
   )
 })
@@ -117,8 +117,8 @@ describe("researcher agent", () => {
         expect(prompt).toContain("websearch_free")
         expect(prompt).toContain("READ-ONLY")
         // Phase 3 — parallel scout fan-out is rendered with maxSubagents.
-        expect(prompt).toContain("parallel scout subagents")
-        expect(prompt).toMatch(/max \d+ concurrent/)
+        expect(prompt).toContain("scout")
+        expect(prompt).toMatch(/cap \d+/)
       }),
   )
 })

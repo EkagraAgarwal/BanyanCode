@@ -7,9 +7,11 @@
  *   (a) NONE of the 8 provider prompt files contains the literal string
  *       "prefer using Glob and Grep tools" — this was the active conflict
  *       that the previous commit removed.
- *   (b) `gpt.txt`, `codex.txt`, `gemini.txt` each contain the pointer phrase
- *       "BanyanCode tool guide" so the model is steered at the source module's
- *       policy + per-session tool catalog.
+ *   (b) NONE of the 8 provider prompt files contains the "BanyanCode tool
+ *       guide" pointer. Provider prompts are upstream-identical; the pointer
+ *       and the tool-preference policy live in the always-on
+ *       CodegraphSystemSource block (see subagent-prompts-pointer.test.ts
+ *       for the pointer's presence in the rendered policy/guide block).
  *   (c) `anthropic.txt`, `beast.txt`, `default.txt`, `kimi.txt`, `trinity.txt`
  *       MUST NOT mention `codegraph` or `code_find` — those prompts carry
  *       model personality / provider-specific guidance, NOT tool preferences.
@@ -38,11 +40,11 @@ const PROMPTS: ReadonlyArray<readonly [string, string]> = [
   ["trinity", PROMPT_TRINITY],
 ]
 
-const POINTER_BEARERS = new Set(["gpt", "codex", "gemini"])
-
 const NON_TOOL_PROMPTS = new Set(["anthropic", "beast", "default", "kimi", "trinity"])
 
 const FORBIDDEN_PHRASE = "prefer using Glob and Grep tools"
+
+const POINTER_PHRASE = "BanyanCode tool guide"
 
 describe("provider prompt — no grep/glob preference conflict", () => {
   for (const [name, text] of PROMPTS) {
@@ -52,11 +54,10 @@ describe("provider prompt — no grep/glob preference conflict", () => {
   }
 })
 
-describe("provider prompt — pointer phrase on pointer-bearing providers", () => {
+describe("provider prompt — upstream-clean, pointer lives in the policy block", () => {
   for (const [name, text] of PROMPTS) {
-    if (!POINTER_BEARERS.has(name)) continue
-    test(`${name}.txt contains the "BanyanCode tool guide" pointer`, () => {
-      expect(text).toContain("BanyanCode tool guide")
+    test(`${name}.txt does not contain the "${POINTER_PHRASE}" pointer`, () => {
+      expect(text).not.toContain(POINTER_PHRASE)
     })
   }
 })

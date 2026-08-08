@@ -292,6 +292,13 @@ export type ContextOverflowError = {
   }
 }
 
+export type ContentFilterError = {
+  name: "ContentFilterError"
+  data: {
+    message: string
+  }
+}
+
 export type ApiError = {
   name: "APIError"
   data: {
@@ -323,6 +330,7 @@ export type AssistantMessage = {
     | MessageAbortedError
     | StructuredOutputError
     | ContextOverflowError
+    | ContentFilterError
     | ApiError
   parentID: string
   modelID: string
@@ -840,7 +848,10 @@ export type GlobalEvent = {
         properties: {
           timestamp: number
           sessionID: string
-          location: LocationRef
+          location: {
+            directory: string
+            workspaceID?: string
+          }
           subdirectory?: string
         }
       }
@@ -1429,6 +1440,7 @@ export type GlobalEvent = {
             | MessageAbortedError
             | StructuredOutputError
             | ContextOverflowError
+            | ContentFilterError
             | ApiError
         }
       }
@@ -1883,8 +1895,6 @@ export type AgentConfig = {
    * Hex color code (e.g., #FF5733) or theme color (e.g., primary)
    */
   color?: string | "primary" | "secondary" | "accent" | "success" | "warning" | "error" | "info"
-  steps?: number
-  maxSteps?: number
   permission?: PermissionConfig
   [key: string]:
     | unknown
@@ -1908,7 +1918,6 @@ export type AgentConfig = {
     | "warning"
     | "error"
     | "info"
-    | number
     | PermissionConfig
     | undefined
 }
@@ -3123,7 +3132,6 @@ export type Agent = {
   options: {
     [key: string]: unknown
   }
-  steps?: number
 }
 
 export type LspStatus = {
@@ -3708,11 +3716,6 @@ export type ModelV2Info = {
   }
 }
 
-export type LocationRef = {
-  directory: string
-  workspaceID?: string
-}
-
 export type PromptSource = {
   start: number
   end: number
@@ -3969,7 +3972,10 @@ export type SyncEventSessionNextMoved = {
     data: {
       timestamp: number
       sessionID: string
-      location: LocationRef
+      location: {
+        directory: string
+        workspaceID?: string
+      }
       subdirectory?: string
     }
   }
@@ -4529,8 +4535,12 @@ export type AgentV2Info = {
   mode: "subagent" | "primary" | "all"
   hidden: boolean
   color?: string | "primary" | "secondary" | "accent" | "success" | "warning" | "error" | "info"
-  steps?: number
   permissions: PermissionV2Ruleset
+}
+
+export type LocationRef = {
+  directory: string
+  workspaceID?: string
 }
 
 export type SessionV2Info = {
@@ -5187,7 +5197,10 @@ export type EventSessionNextMoved = {
   properties: {
     timestamp: number
     sessionID: string
-    location: LocationRef
+    location: {
+      directory: string
+      workspaceID?: string
+    }
     subdirectory?: string
   }
 }
@@ -5820,6 +5833,7 @@ export type EventSessionError = {
       | MessageAbortedError
       | StructuredOutputError
       | ContextOverflowError
+      | ContentFilterError
       | ApiError
   }
 }
