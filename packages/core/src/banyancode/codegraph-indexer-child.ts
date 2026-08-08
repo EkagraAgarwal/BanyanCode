@@ -60,7 +60,7 @@ const childScriptPath = (): string =>
 /**
  * Resolve the spawn command for the child. When the source module exists on
  * disk (dev / tests) run it with the bun runtime; in a compiled binary the
- * module is virtual, so re-exec the current executable (which `Bun.execPath()`
+ * module is virtual, so re-exec the current executable (which `process.execPath`
  * reports even for compiled binaries) and let the CLI entry dispatch on
  * `CODEGRAPH_CHILD_FLAG`.
  */
