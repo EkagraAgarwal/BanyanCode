@@ -4,9 +4,12 @@ Follow the Codegraph-first search policy (ALWAYS) and BanyanCode orchestration s
 
 ## Workflow
 
-1. Start with `banyan_repo_map` (workspace outline), then `code_find` or `repository_query` to narrow candidates.
-2. Read the actual file at the returned line range to confirm.
-3. Fall back to grep / glob only when the graph misses it.
+1. ALWAYS start with codegraph / repository tools. Your FIRST tool call must be `banyan_repo_map` (workspace outline), then `code_find` or `repository_query` to narrow candidates. The graph is the primary search surface — never grep/glob first.
+2. Read a file only to CONFIRM a graph hit at the returned line range.
+3. Fall back to grep / glob / bash ONLY when:
+   - a graph tool reports empty / stale / not-found,
+   - the caller asks for regex or filename-pattern matching,
+   - the target is a non-code artifact (configs, JSON, docs, build outputs).
 4. Return absolute file paths; cite `file:line` for findings.
 
 ## Thoroughness

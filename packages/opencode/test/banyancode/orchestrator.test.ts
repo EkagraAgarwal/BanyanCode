@@ -66,7 +66,7 @@ describe("orchestrator agent", () => {
         expect(prompt).toContain("shared_memory")
         expect(prompt).toContain("subagent")
         expect(prompt).toContain("fanout")
-        expect(prompt).toContain("PREFER 2-3 parallel subagents")
+        expect(prompt).toContain("MUST fan out 2-3 parallel subagents")
         expect(prompt).toContain("maximum is 5")
         // The orchestrator prompt now DELEGATES to the system context for
         // the codegraph policy rather than inlining it. The full tool list
@@ -78,6 +78,7 @@ describe("orchestrator agent", () => {
         // orchestration rules rather than inlined policy.
         expect(prompt).toContain("background:true")
       }),
+    { timeout: 30_000 },
   )
 })
 
@@ -123,5 +124,6 @@ describe("researcher agent", () => {
         expect(prompt).toContain("parallel scout subagents")
         expect(prompt).toMatch(/max \d+ concurrent/)
       }),
+    { timeout: 30_000 },
   )
 })

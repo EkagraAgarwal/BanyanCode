@@ -135,7 +135,7 @@ describe("prose agents — stripped the inline policy block, point to system con
       const prompt = orchestrator.prompt ?? ""
       expect(prompt).toContain("Codegraph-first search policy (ALWAYS)")
       expect(prompt).toContain("system context")
-      expect(prompt).toContain("PREFER 2-3 parallel subagents")
+      expect(prompt).toContain("MUST fan out 2-3 parallel subagents")
       expect(prompt).toContain("maximum is 5")
       // Orchestrator-specific orchestration prose is preserved.
       expect(prompt).toContain("## Orchestration rules")
@@ -235,7 +235,7 @@ describe("banyan orchestration block — SystemPrompt.banyan()", () => {
       const block = yield* SystemPrompt.Service.use((svc) => svc.banyan())
       expect(block).toBeDefined()
       expect(block).toContain("BanyanCode orchestration (ALWAYS)")
-      expect(block).toContain("Parallel delegation is the default")
+      expect(block).toContain("Parallel delegation is MANDATORY")
       // {{maxSubagents}} must be rendered — no literal placeholder survives.
       expect(block).not.toContain("{{maxSubagents}}")
       expect(block).toContain("the cap is 5")

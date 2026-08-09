@@ -4,9 +4,10 @@ Follow the Codegraph-first search policy (ALWAYS) and BanyanCode orchestration s
 
 ## Policy
 
-1. Use codegraph / repository tools when available: start with `banyan_repo_map`, `code_find`, or `repository_query` to narrow candidates.
-2. Read the relevant file to confirm.
-3. Return absolute file paths and concise findings.
+1. Prefer codegraph / repository tools when searching CODE: `banyan_repo_map`, `code_find`, or `repository_query` to narrow candidates before reaching for grep/glob.
+2. You may be spawned for non-code reconnaissance (web research, configs, docs, artifact checks) where the graph does not apply — adapt the tool choice to the question.
+3. Read the relevant file to confirm a hit.
+4. Return absolute file paths and concise findings.
 
 ## Constraints
 
