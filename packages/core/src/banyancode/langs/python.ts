@@ -32,44 +32,57 @@ function lineAtOffset(offsets: readonly number[], offset: number): number {
   return count
 }
 
+// Body-extraction budget for getPythonNodeBody: stop extending the captured
+// block past 16KB or 2048 lines so a def whose body never dedents (or trails
+// in blank/comment lines) can't scan the rest of the file.
+const PY_BODY_CHAR_BOUND = 16384
+const PY_BODY_LINE_BOUND = 2048
+
+// Same set as JS `\s`: leading-whitespace scans must agree with the regex
+// indent measurement and `trim()` emptiness check they replace.
+function isPyWs(ch: string): boolean {
+  return (
+    ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\v" || ch === "\f" ||
+    ch === "\u00a0" || ch === "\u1680" ||
+    (ch >= "\u2000" && ch <= "\u200a") ||
+    ch === "\u2028" || ch === "\u2029" || ch === "\u202f" || ch === "\u205f" || ch === "\u3000" || ch === "\ufeff"
+  )
+}
+
+function leadingWsLen(content: string, from: number, to: number): number {
+  let n = 0
+  while (from + n < to && isPyWs(content[from + n]!)) n++
+  return n
+}
+
 function getPythonNodeBody(content: string, matchIndex: number, startLine: number): { code: string; endLine: number } {
+  const startOffset = matchIndex
   let nextNewline = content.indexOf("\n", matchIndex)
-  const declLine = nextNewline === -1 ? content.substring(matchIndex) : content.substring(matchIndex, nextNewline)
-  const indentMatch = declLine.match(/^(\s*)/)
-  const declIndent = indentMatch ? indentMatch[1].length : 0
+  const declIndent = leadingWsLen(content, matchIndex, nextNewline === -1 ? content.length : nextNewline)
 
   let endOffset = nextNewline === -1 ? content.length : nextNewline
   let lineCount = 1
   let blockIndent: number | null = null
 
-  while (nextNewline !== -1) {
+  while (nextNewline !== -1 && endOffset - startOffset < PY_BODY_CHAR_BOUND && lineCount < PY_BODY_LINE_BOUND) {
     const lineStart = nextNewline + 1
     const lineEndNewline = content.indexOf("\n", lineStart)
     const lineEnd = lineEndNewline === -1 ? content.length : lineEndNewline
-    const line = content.substring(lineStart, lineEnd)
-    const trimmed = line.trim()
-    if (trimmed === "" || trimmed.startsWith("#")) {
+    const indent = leadingWsLen(content, lineStart, lineEnd)
+    const firstCode = lineStart + indent
+    if (firstCode === lineEnd || content[firstCode] === "#") {
       endOffset = lineEnd
       lineCount++
-    } else {
-      const lineIndent = line.match(/^(\s*)/)?.[1].length ?? 0
-      if (blockIndent === null) {
-        if (lineIndent > declIndent) {
-          blockIndent = lineIndent
-          endOffset = lineEnd
-          lineCount++
-        } else {
-          break
-        }
-      } else {
-        if (lineIndent >= blockIndent || lineIndent > declIndent) {
-          endOffset = lineEnd
-          lineCount++
-        } else {
-          break
-        }
-      }
-    }
+    } else if (blockIndent === null) {
+      if (indent > declIndent) {
+        blockIndent = indent
+        endOffset = lineEnd
+        lineCount++
+      } else break
+    } else if (indent >= blockIndent || indent > declIndent) {
+      endOffset = lineEnd
+      lineCount++
+    } else break
     nextNewline = lineEndNewline
   }
 
