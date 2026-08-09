@@ -54,33 +54,33 @@ export const POLICY_TEXT = [
   "",
   "ALWAYS use BanyanCode graph + repository tools first for any code",
   "question in this workspace. Grep / glob / bash and raw file reads are",
-  "last resorts, not defaults. The complete tool catalog with descriptions",
-  "follows in this prompt.",
+  "last resorts, not defaults. The BanyanCode tool guide below lists the",
+  "session's Banyan tools by family; full input/output schemas are in the",
+  "tool list.",
   "",
-  "Session start: if Graph state is ready, call `banyan_repo_map` once to load",
-  "the workspace outline, then `code_find` before touching files.",
+  "Session start: if Graph state is ready, call `banyan_repo_map` once,",
+  "then `code_find` before touching files.",
   "",
-  "Cost: one graph call replaces 3-5 bash grep/read loops, and repository tools",
-  "return file:line answers you can edit directly. Hot tools (mounted):",
-  "`code_find`, `repository_query`, `blast_radius`, `preflight`. Anything else:",
-  "`banyan_tool_search`.",
+  "Cost: one graph call replaces 3-5 bash grep/read loops; repo tools",
+  "return file:line answers you can edit. Hot tools (mounted):",
+  "`code_find`, `repository_query`, `blast_radius`, `preflight`; anything",
+  "else: `banyan_tool_search`.",
   "",
-  "Bootstrap rule (do this BEFORE any other action):",
-  "1. Graph and repository tools auto-trigger a build ONLY when the graph is",
-  "   missing or structurally invalid (no meta row, empty file table, root or",
-  "   schema mismatch). Do not run `codegraph_build` on every session — it",
-  "   returns `ready` without rebuilding when the graph is fresh.",
-  "2. When you DO need a refresh (you made edits, or you want to re-index),",
-  "   call `codegraph_build` explicitly — manual builds are the preferred",
-  "   refresh path over waiting for an auto-trigger.",
-  "3. After the build, always reach for graph tools first. For symbol/file",
-  "   lookup, start with `code_find` (five intents: definition, callers,",
-  "   dependents, impact, find_file).",
-  "4. For semantic/architectural context, escalate to `repository_query`,",
+  "Bootstrap (BEFORE any other action):",
+  "1. Graph/repo tools auto-trigger a build ONLY when the graph is missing",
+  "   or structurally invalid (no meta row, empty file table, root/schema",
+  "   mismatch). Don't run `codegraph_build` on every session — it returns",
+  "   `ready` when fresh.",
+  "2. To refresh (you made edits, or want to re-index), call",
+  "   `codegraph_build` explicitly — manual builds beat waiting for an",
+  "   auto-trigger.",
+  "3. After the build, use graph tools first: `code_find` (intents:",
+  "   definition, callers, dependents, impact, find_file).",
+  "4. For semantic/architectural context: `repository_query`,",
   "   `repository_explain`, `repository_trace`, `repository_tests`.",
   "5. Before any non-trivial edit, run `blast_radius` (summary) or",
-  "   `preflight` (decision-ready: callers, tests, docs, configs, event",
-  "   bridges, HTTP routes).",
+  "   `preflight` (callers, tests, docs, configs, event bridges, HTTP",
+  "   routes).",
   "6. After edits, run `edit_plan(phase=\"after\")` to re-verify blast radius.",
   "",
   "Tool routing ladder — pick the FIRST tool that matches the question:",
@@ -98,24 +98,9 @@ export const POLICY_TEXT = [
   "- 'Rename X safely' → `safe_rename(symbol=X)`",
   "",
   "Only fall back to grep / glob / bash when:",
-  "- a graph tool explicitly reports empty / stale / not-found,",
-  "- the user explicitly asks for regex or filename-pattern matching,",
+  "- a graph tool reports empty / stale / not-found,",
+  "- the user asks for regex or filename-pattern matching,",
   "- you're searching non-code artifacts (configs, JSON, docs, build outputs).",
-  "",
-  "## Background subagents (ALWAYS)",
-  "",
-  "When delegating via the `task` tool, prefer `background: true`. Sync",
-  "(foreground) delegation blocks your context and wastes tokens. Sync is",
-  "acceptable ONLY for a trivial single-tool-call lookup where waiting is",
-  "faster than polling — otherwise always background.",
-  "",
-  "Always background:",
-  "- multi-step subagents (researcher, orchestrator, coder, explore, reviewer)",
-  "- subagents that fan out to multiple tools",
-  "- any subagent expected to take more than one second",
-  "",
-  "Sync only: a single grep/glob for confirmation before proceeding, or any",
-  "case where you genuinely need the result inline to make your next decision.",
 ].join("\n")
 
 // Lookup the public tool ids lazily: reading BanyanToolsManifest.* at module
@@ -142,6 +127,23 @@ const TOOL_FAMILIES = [
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
+// Guide entries render only the first sentence of each tool description —
+// the model already receives the full descriptions and schemas in its
+// function tool list, so the guide just needs family discoverability.
+// Long first sentences are truncated at MAX_DESCRIPTION_CHARS with "…".
+const MAX_DESCRIPTION_CHARS = 140
+
+const firstSentence = (description: string): string => {
+  const collapsed = description.replace(/\s+/g, " ").trim()
+  // Sentence end: a period followed by whitespace + an uppercase letter
+  // (or "(" / backtick), so abbreviations like "e.g." are not boundaries.
+  const end = collapsed.search(/\.(?=\s+[A-Z(`]|$)/)
+  const sentence = end === -1 ? collapsed : collapsed.slice(0, end + 1)
+  return sentence.length > MAX_DESCRIPTION_CHARS
+    ? `${sentence.slice(0, MAX_DESCRIPTION_CHARS)}…`
+    : sentence
+}
+
 function renderToolGuide(tools: ReadonlyArray<CodegraphToolDescription>): string {
   const allowed = getBanyanToolIds()
   const visible = tools.filter((tool) => allowed.has(tool.id))
@@ -153,58 +155,19 @@ function renderToolGuide(tools: ReadonlyArray<CodegraphToolDescription>): string
     for (const id of family.ids) {
       const tool = byId.get(id)
       if (!tool) continue
-      const description = tool.description.replace(/\s+/g, " ").trim()
-      entries.push(`- **${tool.id}** — ${description}`)
+      entries.push(`- **${tool.id}** — ${firstSentence(tool.description)}`)
     }
     if (entries.length === 0) continue
     sections.push(`### ${family.title}\n\n${entries.join("\n")}`)
   }
   if (sections.length === 0) return ""
-  const catalogFamilies: ReadonlyArray<{ readonly title: string; readonly lead: string; readonly ids: ReadonlyArray<string> }> = [
-    {
-      title: "Repo map",
-      lead:
-        "banyan_repo_map — token-budgeted outline of packages, entry points, and per-file symbols. " +
-        "Use this before reading files; pass `root`, `path`, or `query` to scope the call.",
-      ids: ["banyan_repo_map"],
-    },
-    {
-      title: "Tool search",
-      lead:
-        "banyan_tool_search — search the adapted catalog (hot / warm / cold). " +
-        "Use this to discover cold tools that are not mounted in the system prompt; " +
-        "default `tier='all'` also refreshes the hot tool view.",
-      ids: ["banyan_tool_search"],
-    },
-  ]
-  const catalogEntries: string[] = []
-  for (const family of catalogFamilies) {
-    for (const id of family.ids) {
-      const tool = byId.get(id)
-      if (!tool) continue
-      const description = tool.description.replace(/\s+/g, " ").trim()
-      catalogEntries.push(`- **${tool.id}** — ${description}`)
-    }
-  }
-  const catalogSection = catalogEntries.length === 0
-    ? ""
-    : [
-        "### Hot tool catalog",
-        "",
-        "These tools are mounted in the system prompt. Reach for them directly " +
-          "without calling `banyan_tool_search`. Cold tools (advanced/internal) are " +
-          "NOT inlined here — discover them with `banyan_tool_search(query)`.",
-        "",
-        catalogEntries.join("\n"),
-      ].join("\n")
   return [
     "## BanyanCode tool guide",
     "",
-    "The following tools are available in this session. Names and descriptions",
-    "match the registry; consult the tool list the model receives for full",
-    "input/output schemas.",
+    "The following Banyan tools are available in this session, grouped by",
+    "family. Full input/output schemas are in the tool list.",
     "",
-    [sections.join("\n\n"), catalogSection].filter((part) => part.length > 0).join("\n\n"),
+    sections.join("\n\n"),
   ].join("\n")
 }
 
