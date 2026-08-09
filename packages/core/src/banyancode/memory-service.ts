@@ -13,7 +13,6 @@
 
 import { and, eq, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Queue } from "effect"
-import { randomUUID } from "node:crypto"
 import { Database } from "../database/database"
 import { MemoryEntriesTable } from "./memory.sql"
 import { MemoryRepo, mapMemoryRowToEntry } from "./memory-repo"
@@ -21,6 +20,8 @@ import { payloadFingerprint, unwrapMemoryValue, type MemoryPayloadV1 } from "./m
 import { MemoryCandidateEmitted, MemoryCommitted, MemoryPromoted, MemoryRejected } from "./memory-events"
 import type { MemoryEntry } from "./types"
 import { NotFoundError, StaleWriteError } from "./types"
+import { Hash } from "../util/hash"
+import { stableStringify } from "../util/encode"
 
 export interface EmitCandidateInput {
   /** Caller-provided id; generated if omitted. */
@@ -80,8 +81,22 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/v2
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
-const toCandidateId = (input: { id?: string; key: string }) =>
-  input.id ?? `candidate:${randomUUID()}`
+/**
+ * Deterministic candidate id: an LLM retry of the same emit (same scope /
+ * session / key / value) must upsert the SAME row instead of duplicating.
+ * Re-emitting the same key with different content creates a new row.
+ */
+const toCandidateId = (input: {
+  id?: string
+  scope: "global" | "session"
+  sessionID?: string
+  key: string
+  value: unknown
+}) => {
+  if (input.id) return input.id
+  const sid = input.sessionID ?? "global"
+  return `candidate:${Hash.fast(`${input.scope}|${sid}|${input.key}|${stableStringify(input.value)}`)}`
+}
 
 export const layer: Layer.Layer<Service, never, MemoryRepo.Service | Database.Service> = Layer.effect(
   Service,
@@ -110,9 +125,9 @@ export const layer: Layer.Layer<Service, never, MemoryRepo.Service | Database.Se
 
     const emitCandidate: Interface["emitCandidate"] = (input) =>
       Effect.gen(function* () {
-        const id = toCandidateId(input)
         const scope = input.scope ?? "session"
         const sessionID = scope === "session" ? input.sessionID : undefined
+        const id = toCandidateId({ ...input, scope, sessionID })
         yield* repo.put({
           id,
           key: input.key,

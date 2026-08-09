@@ -62,6 +62,20 @@ export interface Interface {
     input: PutInput & { createdAt?: number; overrides?: PutOverrides },
   ) => Effect.Effect<void, never, never>
   readonly get: (id: string) => Effect.Effect<MemoryEntry | undefined, never, never>
+  /**
+   * Resolve the ROOT session id for a (possibly nested) subagent session by
+   * walking `parent_id` up the `session` table. Returns the input unchanged
+   * when the row is missing or already root, so non-subagent callers are
+   * never rewritten.
+   */
+  readonly resolveRootSessionID: (sessionID: string) => Effect.Effect<string, never, never>
+  /**
+   * Read fallback for shared_memory: the newest session-scoped row matching
+   * a key across ANY session. Orphaned rows written by a subagent under its
+   * own session id (pre scope-inheritance fix) remain retrievable by the
+   * parent.
+   */
+  readonly getLatestSessionScoped: (key: string) => Effect.Effect<MemoryEntry | undefined, never, never>
   readonly list: (scope: "global" | "session", sessionID?: string) => Effect.Effect<MemoryEntry[], never, never>
   readonly forget: (id: string) => Effect.Effect<void, never, never>
   readonly forgetByKey: (input: ForgetByKeyInput) => Effect.Effect<number, never, never>
@@ -202,6 +216,36 @@ export const layer = Layer.effect(
         .select()
         .from(MemoryEntriesTable)
         .where(eq(MemoryEntriesTable.id, id))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return undefined
+      return mapRowToEntry(row)
+    })
+
+    const resolveRootSessionID = Effect.fn("MemoryRepo.resolveRootSessionID")(function* (sessionID: string) {
+      const row = yield* db
+        .get<{ id: string }>(sql`
+          WITH RECURSIVE parent_chain(id, parent_id, depth) AS (
+            SELECT id, parent_id, 0 FROM session WHERE id = ${sessionID}
+            UNION ALL
+            SELECT s.id, s.parent_id, c.depth + 1
+            FROM session s
+            JOIN parent_chain c ON s.id = c.parent_id
+            WHERE c.parent_id IS NOT NULL AND c.depth < 64
+          )
+          SELECT id FROM parent_chain ORDER BY depth DESC LIMIT 1
+        `)
+        .pipe(Effect.orDie)
+      return row?.id ?? sessionID
+    })
+
+    const getLatestSessionScoped = Effect.fn("MemoryRepo.getLatestSessionScoped")(function* (key: string) {
+      const row = yield* db
+        .select()
+        .from(MemoryEntriesTable)
+        .where(and(eq(MemoryEntriesTable.scope, "session"), eq(MemoryEntriesTable.key, key)))
+        .orderBy(sql`${MemoryEntriesTable.created_at} DESC`)
+        .limit(1)
         .get()
         .pipe(Effect.orDie)
       if (!row) return undefined
@@ -472,7 +516,7 @@ export const layer = Layer.effect(
       return result.length
     })
 
-    return Service.of({ put, get, list, forget, forgetByKey, search, searchRanked, vacuum, update })
+    return Service.of({ put, get, resolveRootSessionID, getLatestSessionScoped, list, forget, forgetByKey, search, searchRanked, vacuum, update })
   }),
 )
 

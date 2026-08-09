@@ -10,6 +10,29 @@ export function base64Decode(value: string) {
   return new TextDecoder().decode(bytes)
 }
 
+/**
+ * JSON.stringify with object keys sorted recursively so LLM-generated
+ * payloads serialize identically regardless of key insertion order. Used to
+ * derive deterministic ids for idempotent memory/mesh writes. Circular
+ * references are dropped (not thrown) so a weird payload never crashes the
+ * id derivation.
+ */
+export function stableStringify(value: unknown): string {
+  const seen = new WeakSet<object>()
+  const canonicalize = (v: unknown): unknown => {
+    if (v === null || typeof v !== "object") return v
+    if (seen.has(v)) return undefined
+    seen.add(v)
+    if (Array.isArray(v)) return v.map(canonicalize)
+    const sorted: Record<string, unknown> = {}
+    for (const k of Object.keys(v as object).sort()) {
+      sorted[k] = canonicalize((v as Record<string, unknown>)[k])
+    }
+    return sorted
+  }
+  return JSON.stringify(canonicalize(value)) ?? "undefined"
+}
+
 export async function hash(content: string, algorithm = "SHA-256"): Promise<string> {
   const encoder = new TextEncoder()
   const data = encoder.encode(content)

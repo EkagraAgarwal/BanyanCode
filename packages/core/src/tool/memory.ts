@@ -6,6 +6,8 @@ import { Banyan } from "../banyancode"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { Hash } from "../util/hash"
+import { stableStringify } from "../util/encode"
 
 const MAX_ENTRIES_PER_SCOPE = 10000
 const MAX_VALUE_SIZE_BYTES = 64 * 1024
@@ -95,6 +97,45 @@ const guardGlobalWrite = (scope: "global" | "session", agent: string): string | 
   return `agent "${agent || "<unknown>"}" may not write scope=global memory. Use memory_candidate_emit for durable facts; only the build / orchestrator agent may write canonical global memory.`
 }
 
+/**
+ * Resolve the effective scope + sessionID for a memory tool call.
+ *
+ * Subagents (sessions whose `parent_id` chain resolves to a DIFFERENT root
+ * session) default to `scope="session"` under the ROOT parent session id, so
+ * their writes are visible to the build/orchestrator that spawned them.
+ * Callers whose session IS the root keep today's behavior exactly
+ * (memory_store defaults to `scope="global"`). An explicit input.scope or
+ * input.sessionID always wins.
+ */
+const resolveScopeAndSession = (
+  inputScope: "global" | "session" | undefined,
+  inputSessionID: string | undefined,
+  contextSessionID: string,
+  rootSessionID: string,
+): { scope: "global" | "session"; sessionID: string } => {
+  const isSubagent = rootSessionID !== contextSessionID
+  return {
+    scope: (inputScope ?? (isSubagent ? "session" : "global")) as "global" | "session",
+    sessionID: inputSessionID ?? (isSubagent ? rootSessionID : contextSessionID),
+  }
+}
+
+/**
+ * Deterministic id for memory_store: an LLM retry of the same write (same
+ * scope / session / key / content) must upsert the SAME row. Re-storing the
+ * same key with different content produces a different hash → a new row,
+ * which preserves the "recall picks latest" semantics.
+ */
+export const deriveMemoryStoreId = (
+  scope: "global" | "session",
+  sessionID: string | undefined,
+  key: string,
+  value: unknown,
+): string => {
+  const sid = sessionID ?? "global"
+  return `mem:${Hash.fast(`${scope}|${sid}|${key}|${stableStringify(value)}`)}`
+}
+
 function keywordSearch(query: string, entries: Banyan.MemoryEntry[]): Banyan.MemoryEntry[] {
   const lowerQuery = query.toLowerCase()
   return entries
@@ -120,7 +161,7 @@ export const locationLayer = Layer.effectDiscard(
       .register({
         [name_store]: Tool.make({
           description:
-            "Store a memory entry with key-value pair, optional context, tags, scope, and TTL. scope=global is only allowed for build / orchestrator; other agents should use memory_candidate_emit for durable facts.",
+            "Store a memory entry with key-value pair, optional context, tags, scope, and TTL. scope=global is only allowed for build / orchestrator; other agents should use memory_candidate_emit for durable facts. Subagent calls default to scope=session under the root parent session so the orchestrator can read them.",
 input: InputStore,
            contract: { visibility: "public" },
           output: OutputStore,
@@ -139,8 +180,13 @@ input: InputStore,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
-              const scope = (input.scope ?? "global") as "global" | "session"
-              const sessionID = input.sessionID ?? context.sessionID
+              const rootSessionID = yield* repo.resolveRootSessionID(context.sessionID)
+              const { scope, sessionID } = resolveScopeAndSession(
+                input.scope,
+                input.sessionID,
+                context.sessionID,
+                rootSessionID,
+              )
 
               const guard = guardGlobalWrite(scope, context.agent)
               if (guard) {
@@ -172,7 +218,7 @@ input: InputStore,
                 })
               }
 
-              const id = crypto.randomUUID()
+              const id = deriveMemoryStoreId(scope, sessionID, input.key, input.value)
               const now = Date.now()
 
               yield* repo.put({
@@ -199,7 +245,8 @@ input: InputStore,
           },
         }),
         [name_recall]: Tool.make({
-          description: "Recall a memory entry by key",
+          description:
+            "Recall a memory entry by key. Use at the start of a task to retrieve facts stored in previous sessions before re-investigating. Returns the most recent entry when multiple exist with the same key; returns null when nothing matches. Subagent calls default to session scope under the root parent session.",
           input: InputRecall,
            contract: { visibility: "public" },
           output: OutputRecall,
@@ -218,8 +265,13 @@ input: InputStore,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
-              const scope = (input.scope ?? "global") as "global" | "session"
-              const sessionID = input.sessionID ?? context.sessionID
+              const rootSessionID = yield* repo.resolveRootSessionID(context.sessionID)
+              const { scope, sessionID } = resolveScopeAndSession(
+                input.scope,
+                input.sessionID,
+                context.sessionID,
+                rootSessionID,
+              )
               const results = yield* repo.search(scope, sessionID, input.key)
 
               if (results.length === 0) {
@@ -232,7 +284,8 @@ input: InputStore,
           },
         }),
         [name_list]: Tool.make({
-          description: "List memory entries with optional prefix filter, tag filter, scope, and sessionID",
+          description:
+            "List memory entries with optional prefix filter, tag filter, scope, and sessionID. Use to survey what has been stored — for example, to enumerate prior findings before synthesizing a result. Subagent calls default to session scope under the root parent session.",
           input: InputList,
            contract: { visibility: "public" },
           output: OutputList,
@@ -251,8 +304,13 @@ input: InputStore,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
-              const scope = (input.scope ?? "global") as "global" | "session"
-              const sessionID = input.sessionID ?? context.sessionID
+              const rootSessionID = yield* repo.resolveRootSessionID(context.sessionID)
+              const { scope, sessionID } = resolveScopeAndSession(
+                input.scope,
+                input.sessionID,
+                context.sessionID,
+                rootSessionID,
+              )
               let entries = yield* repo.list(scope, sessionID)
 
               if (input.prefix) {
@@ -272,7 +330,8 @@ input: InputStore,
           },
         }),
         [name_forget]: Tool.make({
-          description: "Delete a memory entry by key",
+          description:
+            "Delete a memory entry by key. Use when stored memory is wrong, stale, or no longer wanted — for example after a user correction. Deletes the most recent entry when multiple share the key. Subagent calls default to session scope under the root parent session.",
           input: InputForget,
            contract: { visibility: "public" },
           output: OutputForget,
@@ -291,8 +350,13 @@ input: InputStore,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
-              const scope = (input.scope ?? "global") as "global" | "session"
-              const sessionID = input.sessionID ?? context.sessionID
+              const rootSessionID = yield* repo.resolveRootSessionID(context.sessionID)
+              const { scope, sessionID } = resolveScopeAndSession(
+                input.scope,
+                input.sessionID,
+                context.sessionID,
+                rootSessionID,
+              )
               const results = yield* repo.search(scope, sessionID, input.key)
 
               if (results.length === 0) {
@@ -327,8 +391,13 @@ input: InputStore,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
-              const scope = (input.scope ?? "global") as "global" | "session"
-              const sessionID = input.sessionID ?? context.sessionID
+              const rootSessionID = yield* repo.resolveRootSessionID(context.sessionID)
+              const { scope, sessionID } = resolveScopeAndSession(
+                input.scope,
+                input.sessionID,
+                context.sessionID,
+                rootSessionID,
+              )
               const ranked = yield* repo.searchRanked({
                 query: input.query,
                 limit: input.limit ?? 10,

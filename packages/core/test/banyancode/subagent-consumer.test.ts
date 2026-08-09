@@ -38,6 +38,8 @@ const buildServiceLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>, 
           } as MemoryEntry)
         }),
       get: () => Effect.succeed(undefined),
+      resolveRootSessionID: (sessionID) => Effect.succeed(sessionID),
+      getLatestSessionScoped: () => Effect.succeed(undefined),
       list: () => Effect.succeed([]),
       forget: () => Effect.void,
       forgetByKey: () => Effect.succeed(0),
