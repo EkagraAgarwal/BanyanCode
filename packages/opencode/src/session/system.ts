@@ -1,5 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Context, Effect, Layer, Option, Ref } from "effect"
+import { Context, Effect, Layer, Option } from "effect"
 import type { Tool as AITool } from "ai"
 
 import { InstanceState } from "@/effect/instance-state"
@@ -13,6 +13,7 @@ import PROMPT_KIMI from "./prompt/kimi.txt"
 
 import PROMPT_CODEX from "./prompt/codex.txt"
 import PROMPT_TRINITY from "./prompt/trinity.txt"
+import PROMPT_BANYAN from "./prompt/banyan.txt"
 import type { Provider } from "@/provider/provider"
 import type { Agent } from "@/agent/agent"
 import { Permission } from "@/permission"
@@ -23,6 +24,7 @@ import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Reference } from "@opencode-ai/core/reference"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { DEFAULT_MAX_SUBAGENTS } from "@opencode-ai/core/v1/config/banyan-config"
 
 export function provider(model: Provider.Model) {
   if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3"))
@@ -43,31 +45,17 @@ export function provider(model: Provider.Model) {
 export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
-  readonly codegraph: (tools?: Record<string, AITool>, sessionID?: string) => Effect.Effect<string | undefined>
+  readonly codegraph: (tools?: Record<string, AITool>) => Effect.Effect<string | undefined>
+  readonly banyan: () => Effect.Effect<string | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SystemPrompt") {}
-
-// Per-session rendered-block cache for the codegraph policy + graph-state line +
-// tool guide. The system prompt is rebuilt on EVERY step (prompt.ts loop), and the
-// graph-state line was previously read LIVE from the bootstrap on every render —
-// so a background index build flipping missing→building→ready(N) (or the symbol
-// count changing as files are edited) mutated the request prefix mid-session and
-// forced a FULL provider cache miss on every step (the dominant cost driver in the
-// chess benchmark: ~25 misses, 42K→189K fresh-token re-sends). Freezing the block
-// at first render per session makes the prefix byte-identical across steps and
-// continuation turns. Live state still reaches the model through tool results
-// (codegraph_build / banyan_repo_map report current status + graphVersion).
-// The tool guide re-renders only when the tool-set hash changes (rare: agent/model
-// switches that alter tool visibility).
-type CodegraphCacheEntry = { readonly toolsHash: string; readonly text: string }
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const skill = yield* Skill.Service
     const locations = yield* LocationServiceMap
-    const codegraphCache = yield* Ref.make(new Map<string, CodegraphCacheEntry>())
 
     return Service.of({
       environment: Effect.fn("SystemPrompt.environment")(function* (model: Provider.Model) {
@@ -123,10 +111,9 @@ export const layer = Layer.effect(
         ].join("\n")
       }),
 
-      codegraph: Effect.fn("SystemPrompt.codegraph")(function* (tools?: Record<string, AITool>, sessionID?: string) {
+      codegraph: Effect.fn("SystemPrompt.codegraph")(function* (tools?: Record<string, AITool>) {
         const enabled = process.env.BANYANCODE_ENABLE !== "0"
         if (!enabled) return
-
         // Map the resolved AI-SDK tool set into the source's
         // CodegraphToolDescription shape so the rendered guide carries the
         // per-tool descriptions the model will see in its function list.
@@ -137,44 +124,24 @@ export const layer = Layer.effect(
             }))
           : undefined
 
-        // Deterministic per-process hash of the tool set. Byte-stable ordering:
-        // sort by id so registry iteration order can never perturb the prefix.
-        const toolsHash = descriptions
-          ? String(
-              Bun.hash(
-                JSON.stringify([...descriptions].sort((a, b) => a.id.localeCompare(b.id))),
-              ),
-            )
-          : ""
-
-        // Per-session freeze: the first render in a session wins; only a tool-set
-        // change (agent/model switch altering tool visibility) re-renders.
-        if (sessionID !== undefined) {
-          const cached = (yield* Ref.get(codegraphCache)).get(sessionID)
-          if (cached !== undefined && cached.toolsHash === toolsHash) return cached.text
-        }
-
         // Prefer the BanyanCode source module when it is in scope (e.g. tests
-        // that provide the layer, or SystemPrompt.defaultLayer which mounts
-        // `CodegraphSystemSource` explicitly). Falls back to the exported
-        // `POLICY_TEXT` constant when the service is not available so
-        // isolated test layers that build the raw `layer` still ship the
-        // model-facing preference for graph + repository tools.
+        // that provide the layer, or future wiring via `defaultLayer`). Falls
+        // back to the exported `POLICY_TEXT` constant when the service is not
+        // available so the V1 prompt still ships the model-facing preference
+        // for graph + repository tools over grep/glob/bash.
         const source = yield* Effect.serviceOption(Banyan.CodegraphSystemSource)
 
         // Phase A: read the graph bootstrap state so the rendered policy can
         // tell the model whether a graph is ready, building, or missing. The
         // bootstrap service is optional — when it is not in scope (tests that
         // only provide SystemPrompt.defaultLayer) the Graph state line is
-        // omitted entirely and behavior is unchanged. NOTE: this status is read
-        // once per session (frozen by the cache above); it is intentionally not
-        // live per step, for prompt-cache stability.
+        // omitted entirely and behavior is unchanged.
         const bootstrap = yield* Effect.serviceOption(Banyan.CodegraphBootstrap)
         const graphState = Option.isSome(bootstrap)
           ? yield* bootstrap.value.status().pipe(Effect.catchCause(() => Effect.succeed(undefined)))
           : undefined
 
-        const text = yield* Option.match(source, {
+        return yield* Option.match(source, {
           onSome: (svc) =>
             descriptions === undefined && graphState === undefined
               ? svc.load(undefined)
@@ -184,32 +151,29 @@ export const layer = Layer.effect(
                 }),
           onNone: () => Effect.succeed(Banyan.CodegraphSystemSourceNS.POLICY_TEXT),
         })
+      }),
 
-        if (sessionID !== undefined) {
-          yield* Ref.update(codegraphCache, (cache) => {
-            const next = new Map(cache)
-            next.set(sessionID, { toolsHash, text })
-            return next
-          })
-        }
-        return text
+      banyan: Effect.fn("SystemPrompt.banyan")(function* () {
+        if (process.env.BANYANCODE_ENABLE === "0") return
+
+        // Orchestration block rendered with the configured subagent cap. This
+        // replaces the per-agent duplication that used to live in build.txt /
+        // plan.txt / explore.txt / ... — one shared system part, rendered once
+        // per session for every agent.
+        const banyanConfigOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+        const maxSubagents =
+          banyanConfigOpt._tag === "Some"
+            ? ((yield* banyanConfigOpt.value.get()).banyancode_max_subagents ?? DEFAULT_MAX_SUBAGENTS)
+            : DEFAULT_MAX_SUBAGENTS
+        return PROMPT_BANYAN.replace(/\{\{(\w+)\}\}/g, (_, key) =>
+          key === "maxSubagents" ? String(maxSubagents) : `{{${key}}}`,
+        )
       }),
     })
   }),
 )
 
-export const defaultLayer = layer.pipe(
-  Layer.provide(Skill.defaultLayer),
-  Layer.provide(LocationServiceMap.layer),
-  // Mount the dynamic codegraph source so the V1 prompt composes the per-session
-  // tool guide + graph state whenever SystemPrompt is built in production
-  // (AppLayer / createRoutes) instead of silently degrading to the static
-  // POLICY_TEXT. The bootstrap state service is wired by the runtime
-  // composition (AppLayer / createRoutes mount the root-bound
-  // `codegraphBootstrapDefaultLayer` facade), not here — it needs the graph
-  // DB, which is out of scope for this renderer-only layer.
-  Layer.provide(Banyan.CodegraphSystemSourceNS.defaultLayer),
-)
+export const defaultLayer = layer.pipe(Layer.provide(Skill.defaultLayer), Layer.provide(LocationServiceMap.layer))
 
 const locationServiceMapNode = LayerNode.make(LocationServiceMap.layer, [])
 

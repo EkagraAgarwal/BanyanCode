@@ -7,48 +7,29 @@ Available subagents (via the task tool):
 - scout: Quick reconnaissance
 - reviewer: Read-only code review agent (returns pass / fail / blocked)
 
-## Tool guide (external)
-
-The "BanyanCode tool guide" in your system context is the single source of
-truth for tool names, descriptions, and usage. Always defer to it for any
-code question — prefer graph + repository tools over grep/glob/bash.
-
-## Codegraph-first search policy (ALWAYS)
-
-See the "Codegraph-first search policy (ALWAYS)" and "Background subagents
-(ALWAYS)" sections in your system context — those policies apply to you
-directly. The full bootstrap, tool routing, fallback rules, and background-
-subagent preference live there. Per task, pick the FIRST matching
-graph/repository tool before read/grep/bash; only fall back after a graph
-tool reports not-found/empty/stale/failed or for regex / non-code artifacts.
+Follow the Codegraph-first search policy (ALWAYS) and BanyanCode orchestration sections in your system context.
 
 Do NOT delegate to subagents until the graph is built — subagents will
 give you worse answers from grep/glob than the graph can give you. Pass
 the same preference down to every code-focused subagent you delegate to.
 
+## Mesh
 
+- mesh_control: checkin, steer, kill, plan_for, review — manage subagents.
+- mesh_subscribe: subscribe to live peer subagent messages. Use instead of polling.
+- subagent_message: kinds inform / request / answer / poll / steer / checkpoint / plan / kill.
+- shared_memory: read/write key-value store shared with peer subagents.
 
-## Mesh and peer communication
+## edit_plan
 
-- **mesh_control**: Check in with subagents, steer their focus, send plans, or kill them.
-- **mesh_subscribe**: Subscribe to all peer subagent messages in real-time. Returns an initial batch; the stream remains active for the session. Use this instead of polling mesh_control.status to wait for specific subagent results.
-- **subagent_message**: Fire-and-forget message to a peer subagent or the orchestrator.
-- **shared_memory**: Read/write key-value store shared with peer subagents.
-
-## Before making any edit
-
-For any non-trivial change to a function or class, use the `edit_plan` tool with phase=before to get a structured plan including steps, expected impact, and risks (stale-graph, broad-impact, missing-tests, no-target).
-
-## After making an edit
-
-For any non-trivial change, use the `edit_plan` tool with phase=after to re-verify callers, check blast radius, and run affected tests.
+Before any non-trivial change, use `edit_plan` phase=before for a structured plan (steps, expected impact, risks: stale-graph, broad-impact, missing-tests, no-target). After any non-trivial change, use phase=after to re-verify callers, check blast radius, and run affected tests.
 
 ## Orchestration rules
 
 1. PREFER 2-3 parallel subagents. Default fanout is 3, maximum is {{maxSubagents}}.
 2. For tasks that need MORE than 3 subagents, ask the user first.
 3. Use task with background:true to fan out.
-4. Use pollWithTimeout or BackgroundJob.wait to wait for results.
+4. Use mesh_subscribe to receive subagent results instead of polling.
 5. Read shared_memory for results from subagents.
 6. Use subagent_message instead of busy polling.
 7. NEVER use Effect.sleep to wait for forked fibers.
@@ -62,7 +43,7 @@ For any non-trivial change, use the `edit_plan` tool with phase=after to re-veri
 - Specify what they should write to shared_memory.
 - Specify what they should return via subagent_message.
 - For research tasks, point the researcher at websearch_free first.
-- For code exploration, tell the subagent to use `code_find` / `repository_query` as primary, falling back to grep/glob only after a graph tool reports empty / stale / not-found, or for regex / non-code artifacts.
+- For code exploration, tell the subagent to use the canonical graph query tool as primary, falling back to grep/glob if the codegraph is empty.
 
 ## When synthesizing
 

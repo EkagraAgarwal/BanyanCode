@@ -2,19 +2,14 @@
  * BanyanCode Codegraph System Source.
  *
  * Renders the policy + tool-guide block that is appended to the model-facing
- * system prompt when BanyanCode is enabled. The block has three parts:
+ * system prompt when BanyanCode is enabled. The block has two parts:
  *
  *   1. The `## Codegraph-first search policy (ALWAYS)` section — a static,
  *      model-facing paragraph that tells the LLM to always reach for graph +
  *      repository tools first, and to bootstrap a code graph before any other
  *      action if one does not exist. Always emitted when BanyanCode is enabled
  *      (gated on `process.env.BANYANCODE_ENABLE !== "0"`).
- *   2. The `## Graph-first routing (ALWAYS)` section — the dynamic graph-state
- *      line plus a short per-task routing rule, rendered right after the
- *      policy and before the tool guide so the model sees current graph state
- *      and the routing rule early. Only emitted when the caller supplies a
- *      `graph` state.
- *   3. The `## BanyanCode tool guide` section — a per-session list of the
+ *   2. The `## BanyanCode tool guide` section — a per-session list of the
  *      LLM-visible BanyanCode tools that have been materialized for the
  *      agent+model pair. Only emitted when the caller supplies a `tools` array.
  *
@@ -57,48 +52,55 @@ export class Service extends Context.Service<Service, Interface>()("@banyancode/
 export const POLICY_TEXT = [
   "## Codegraph-first search policy (ALWAYS)",
   "",
-  "ALWAYS use BanyanCode graph + repository tools first for any code question",
-  "in this workspace. Per task, pick the FIRST matching graph/repository tool",
-  "before reading or searching source code. A session-start repo map alone",
-  "does not satisfy later task-specific lookups — re-query the graph for each",
-  "new symbol, file, or call question. Grep / glob / bash and raw file reads",
-  "are last resorts, not defaults.",
+  "ALWAYS use BanyanCode graph + repository tools first for any code",
+  "question in this workspace. Grep / glob / bash and raw file reads are",
+  "last resorts, not defaults. The BanyanCode tool guide below lists the",
+  "session's Banyan tools by family; full input/output schemas are in the",
+  "tool list.",
   "",
-  "Exemptions — skip the graph ONLY for:",
-  "- regex or filename-pattern matching the user explicitly asked for,",
-  "- non-code artifacts (configs, JSON, docs, lockfiles, build outputs).",
+  "Session start: if Graph state is ready, call `banyan_repo_map` once,",
+  "then `code_find` before touching files.",
   "",
-  "Routing ladder — first match wins:",
-  "- symbol/file lookup → `code_find` (definition, callers, dependents, impact, find_file)",
-  "- workspace outline → `banyan_repo_map`",
-  "- architecture / call chain / tests / semantic search → `repository_query`, `repository_explain`, `repository_trace`, `repository_tests`",
-  "- edit risk / verification → `blast_radius`, `preflight`, `edit_plan`",
-  "- rename → `safe_rename`",
-  "- build/refresh → `codegraph_build` (auto-triggers only when the graph is missing",
-  "  or structurally invalid; manual builds are the preferred refresh path)",
+  "Cost: one graph call replaces 3-5 bash grep/read loops; repo tools",
+  "return file:line answers you can edit. Hot tools (mounted):",
+  "`code_find`, `repository_query`, `blast_radius`, `preflight`; anything",
+  "else: `banyan_tool_search`.",
   "",
-  "Fall back to grep/glob/bash only after YOU called a graph/repository tool",
-  "and it returned not-found/empty/stale/failed, or an exemption applies.",
+  "Bootstrap (BEFORE any other action):",
+  "1. Graph/repo tools auto-trigger a build ONLY when the graph is missing",
+  "   or structurally invalid (no meta row, empty file table, root/schema",
+  "   mismatch). Don't run `codegraph_build` on every session — it returns",
+  "   `ready` when fresh.",
+  "2. To refresh (you made edits, or want to re-index), call",
+  "   `codegraph_build` explicitly — manual builds beat waiting for an",
+  "   auto-trigger.",
+  "3. After the build, use graph tools first: `code_find` (intents:",
+  "   definition, callers, dependents, impact, find_file).",
+  "4. For semantic/architectural context: `repository_query`,",
+  "   `repository_explain`, `repository_trace`, `repository_tests`.",
+  "5. Before any non-trivial edit, run `blast_radius` (summary) or",
+  "   `preflight` (callers, tests, docs, configs, event bridges, HTTP",
+  "   routes).",
+  "6. After edits, run `edit_plan(phase=\"after\")` to re-verify blast radius.",
   "",
-  "The `Graph state` line below says whether the index is built yet: when it",
-  "reads `missing`, run `codegraph_build` once at session start (it returns",
-  "ready if the graph already exists) — or the first graph call will build it",
-  "lazily.",
+  "Tool routing ladder — pick the FIRST tool that matches the question:",
+  "- 'Where is X declared?' → `code_find(intent='definition')`",
+  "- 'Who calls X? / what depends on X?' → `code_find(intent='callers' | 'dependents')`",
+  "- 'Find the file for X' → `code_find(intent='find_file')`",
+  "- 'What does this workspace look like?' → `banyan_repo_map` (packages, entry points, per-file symbols)",
+  "- 'Architecture / how does X fit in?' → `repository_explain`",
+  "- 'What breaks if I edit file F?' → `repository_impact(path=F)`",
+  "- 'Follow the call chain from X' → `repository_trace(symbol=X)`",
+  "- 'Which tests cover X?' → `repository_tests(symbol=X)`",
+  "- 'Find anything about <topic>' → `repository_query(query=<topic>)`",
+  "- 'How risky is changing X?' → `blast_radius(target=X)` (counts) or `preflight(target=X)` (full report)",
+  "- 'Plan / verify an edit' → `edit_plan(phase='before' | 'after')`",
+  "- 'Rename X safely' → `safe_rename(symbol=X)`",
   "",
-  "## Background subagents (ALWAYS)",
-  "",
-  "When delegating via the `task` tool, prefer `background: true`. Sync",
-  "(foreground) delegation blocks your context and wastes tokens. Sync is",
-  "acceptable ONLY for a trivial single-tool-call lookup where waiting is",
-  "faster than polling — otherwise always background.",
-  "",
-  "Always background:",
-  "- multi-step subagents (researcher, orchestrator, coder, explore, reviewer)",
-  "- subagents that fan out to multiple tools",
-  "- any subagent expected to take more than one second",
-  "",
-  "Sync only: a single grep/glob for confirmation before proceeding, or any",
-  "case where you genuinely need the result inline to make your next decision.",
+  "Only fall back to grep / glob / bash when:",
+  "- a graph tool reports empty / stale / not-found,",
+  "- the user asks for regex or filename-pattern matching,",
+  "- you're searching non-code artifacts (configs, JSON, docs, build outputs).",
 ].join("\n")
 
 // Lookup the public tool ids lazily: reading BanyanToolsManifest.* at module
@@ -125,23 +127,21 @@ const TOOL_FAMILIES = [
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
-// Tool descriptions in the guide are compressed to a one-line routing hint.
-// The full "Use when / Examples / Returns / Avoid when" text is already sent
-// to the provider inside the tools array, so duplicating it verbatim in the
-// system prompt only inflates every request (and every cache miss) — this was
-// the dominant contributor to the 23K-token initial prompt measured in the
-// chess benchmark vs 8.9K for upstream opencode.
-const GUIDE_DESCRIPTION_LIMIT = 140
+// Guide entries render only the first sentence of each tool description —
+// the model already receives the full descriptions and schemas in its
+// function tool list, so the guide just needs family discoverability.
+// Long first sentences are truncated at MAX_DESCRIPTION_CHARS with "…".
+const MAX_DESCRIPTION_CHARS = 140
 
-const compactDescription = (description: string): string => {
+const firstSentence = (description: string): string => {
   const collapsed = description.replace(/\s+/g, " ").trim()
-  const body = collapsed.startsWith("Use when:") ? collapsed.slice("Use when:".length).trim() : collapsed
-  const sentenceEnd = body.search(/\.(?:\s+[A-Z]|$)/)
-  const firstSentence = sentenceEnd === -1 ? body : body.slice(0, sentenceEnd + 1)
-  const trimmed = firstSentence.trim()
-  return trimmed.length <= GUIDE_DESCRIPTION_LIMIT
-    ? trimmed
-    : `${trimmed.slice(0, GUIDE_DESCRIPTION_LIMIT - 1).trimEnd()}…`
+  // Sentence end: a period followed by whitespace + an uppercase letter
+  // (or "(" / backtick), so abbreviations like "e.g." are not boundaries.
+  const end = collapsed.search(/\.(?=\s+[A-Z(`]|$)/)
+  const sentence = end === -1 ? collapsed : collapsed.slice(0, end + 1)
+  return sentence.length > MAX_DESCRIPTION_CHARS
+    ? `${sentence.slice(0, MAX_DESCRIPTION_CHARS)}…`
+    : sentence
 }
 
 function renderToolGuide(tools: ReadonlyArray<CodegraphToolDescription>): string {
@@ -155,7 +155,7 @@ function renderToolGuide(tools: ReadonlyArray<CodegraphToolDescription>): string
     for (const id of family.ids) {
       const tool = byId.get(id)
       if (!tool) continue
-      entries.push(`- **${tool.id}** — ${compactDescription(tool.description)}`)
+      entries.push(`- **${tool.id}** — ${firstSentence(tool.description)}`)
     }
     if (entries.length === 0) continue
     sections.push(`### ${family.title}\n\n${entries.join("\n")}`)
@@ -164,9 +164,8 @@ function renderToolGuide(tools: ReadonlyArray<CodegraphToolDescription>): string
   return [
     "## BanyanCode tool guide",
     "",
-    "The following tools are available in this session. Names and descriptions",
-    "match the registry; consult the tool list the model receives for full",
-    "input/output schemas.",
+    "The following Banyan tools are available in this session, grouped by",
+    "family. Full input/output schemas are in the tool list.",
     "",
     sections.join("\n\n"),
   ].join("\n")
@@ -187,31 +186,15 @@ const graphLineFor = (graph: NonNullable<CodegraphSystemInput["graph"]>): string
   return "Graph state: missing — the first graph call will build it."
 }
 
-// Phase 5: the dynamic block — the graph-state line plus a SHORT per-task
-// routing rule — is rendered right after the static policy and before the
-// tool guide, so the model sees "what is the graph doing right now" and the
-// routing rule before the catalog. The full routing ladder stays in the
-// static policy; this is the one-line reminder the plan's "move the routing
-// rule earlier" refers to.
-const routingHeaderFor = (graph?: CodegraphSystemInput["graph"]): string => {
-  const graphLine = graph === undefined ? "" : graphLineFor(graph)
-  const rule = [
-    "Pick the FIRST matching graph/repository tool for the current task before",
-    "read/grep/bash. Only fall back after a graph tool YOU called reports",
-    "not-found/empty/stale/failed, or for regex / non-code artifacts.",
-  ].join("\n")
-  return ["## Graph-first routing (ALWAYS)", graphLine, rule].filter((part) => part.length > 0).join("\n\n")
-}
-
 const loadImpl: Interface["load"] = Effect.fn("CodegraphSystemSource.load")(function* (input) {
   const tools = input?.tools ?? []
   const graph = input?.graph
   // Pinned: without tools AND without a graph state, the output is exactly
   // POLICY_TEXT (no trailing join artifacts).
   if (tools.length === 0 && graph === undefined) return POLICY_TEXT
-  const routing = routingHeaderFor(graph)
   const guide = renderToolGuide(tools)
-  return [POLICY_TEXT, routing, guide].filter((part) => part.length > 0).join("\n\n")
+  const graphLine = graph === undefined ? "" : graphLineFor(graph)
+  return [POLICY_TEXT, guide, graphLine].filter((part) => part.length > 0).join("\n\n")
 })
 
 export const layer: Layer.Layer<Service, never, never> = Layer.effect(

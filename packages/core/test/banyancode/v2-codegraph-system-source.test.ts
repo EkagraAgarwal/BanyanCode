@@ -103,6 +103,50 @@ describe("CodegraphSystemSource.Service.load (V2 rendering)", () => {
     }),
   )
 
+  it.effect(
+    "rendered guide lists the graph/repo tool ids, drops the Hot tool catalog, and POLICY_TEXT no longer ships the background-subagent section",
+    () =>
+      Effect.gen(function* () {
+        const svc = yield* CodegraphSystemSource.Service
+        const text = yield* svc.load({
+          tools: [
+            {
+              id: "code_find",
+              description:
+                "Top-level symbol locator across the codebase graph. Routes to the right tool based on the intent you pass.",
+            },
+            {
+              id: "repository_query",
+              description:
+                "Semantic repository search. Top-level entry point for high-level questions about a codebase.",
+            },
+            { id: "banyan_repo_map", description: "Token-budgeted outline of the workspace. Use this before reading files." },
+            { id: "banyan_tool_search", description: "Search the adapted tool catalog." },
+            {
+              id: "blast_radius",
+              description:
+                "Use when: a lightweight, count-only blast-radius read of a symbol — direct + transitive dependents, files touched, tests referencing the target by name/import OR living in the caller file set, and a single-word risk verdict.",
+            },
+          ],
+        })
+        // Guide ids render in bold; the full ids are also asserted.
+        expect(text).toContain("**code_find**")
+        expect(text).toContain("**repository_query**")
+        expect(text).toContain("**banyan_repo_map**")
+        expect(text).toContain("**banyan_tool_search**")
+        // The duplicate "Hot tool catalog" section was deleted.
+        expect(text).not.toContain("Hot tool catalog")
+        // Only the first sentence of each description is rendered.
+        expect(text).toContain("Top-level symbol locator across the codebase graph.")
+        expect(text).not.toContain("Routes to the right tool based on the intent you pass.")
+        // Long first sentences are truncated with an ellipsis.
+        expect(text).toContain("…")
+        // The background-subagent section moved to the orchestration block.
+        expect(text).not.toContain("Background subagents (ALWAYS)")
+        expect(CodegraphSystemSource.POLICY_TEXT).not.toContain("Background subagents (ALWAYS)")
+      }),
+  )
+
   it.effect("load() output matches the graph-first / repository-first policy header", () =>
     Effect.gen(function* () {
       const svc = yield* CodegraphSystemSource.Service

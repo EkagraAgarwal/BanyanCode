@@ -38,7 +38,10 @@ describe("Banyan.CodegraphSystemSource.Service", () => {
       const svc = yield* Banyan.CodegraphSystemSource
       const text = yield* svc.load({ tools: [] })
       expect(text).toContain("Codegraph-first search policy")
-      expect(text).not.toContain("BanyanCode tool guide")
+      // The pointer sentence mentions the guide, but no family sections
+      // render when no tools are supplied.
+      expect(text).toContain("BanyanCode tool guide below lists")
+      expect(text).not.toContain("### Code graph")
     }),
   )
 
@@ -68,7 +71,7 @@ describe("Banyan.CodegraphSystemSource.Service", () => {
       const svc = yield* Banyan.CodegraphSystemSource
       const text = yield* svc.load()
       expect(text).toContain("Codegraph-first search policy")
-      expect(text).not.toContain("BanyanCode tool guide")
+      expect(text).not.toContain("### Code graph")
     }),
   )
 

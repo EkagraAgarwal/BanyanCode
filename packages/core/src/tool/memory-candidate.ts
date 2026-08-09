@@ -34,6 +34,7 @@ export const layer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const permission = yield* PermissionV2.Service
     const memoryService = yield* Banyan.MemoryService
+    const memoryRepo = yield* Banyan.MemoryRepo
 
     yield* tools
       .register({
@@ -58,13 +59,19 @@ export const layer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
+              // Subagent candidates land under the ROOT parent session so the
+              // build/orchestrator can see them. Explicit sessionID wins.
+              const rootSessionID = yield* memoryRepo.resolveRootSessionID(context.sessionID)
+              const sessionID =
+                input.sessionID ?? (rootSessionID !== context.sessionID ? rootSessionID : context.sessionID)
+
               const entry = yield* memoryService.emitCandidate({
                 key: input.key,
                 value: input.value,
                 context: input.context,
                 tags: input.tags ? [...input.tags] : [],
                 scope: input.scope ?? "session",
-                sessionID: input.sessionID ?? context.sessionID,
+                sessionID,
                 agentID: context.agent,
               })
 

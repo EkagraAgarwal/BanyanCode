@@ -6,6 +6,8 @@ import { Banyan } from "../banyancode"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { Hash } from "../util/hash"
+import { stableStringify } from "../util/encode"
 
 export const name = "subagent_message"
 
@@ -14,11 +16,12 @@ export const Input = Schema.Struct({
   kind: Schema.Literals(["request", "inform", "answer", "poll", "steer", "checkpoint", "plan", "kill"]),
   payload: Schema.Unknown,
   /**
-   * Idempotency key for deduplication. If omitted, falls back to
-   * `lk_${sessionID}_${callID}` where `callID` is the V1 tool-runtime's
-   * per-attempt call id (stable for one in-flight call, NOT across LLM-
-   * generated retries). For retries, the LLM MUST echo back `idempotencyKey`
-   * and `createdAt` from the first call's return value.
+   * Idempotency key for deduplication. If omitted, falls back to a STABLE
+   * key derived from `(sessionID, kind, to, stable JSON of payload)` — so an
+   * LLM retry of the same logical message (new tool call id, same payload)
+   * upserts the same row instead of duplicating. For retries, the LLM MUST
+   * echo back `idempotencyKey` and `createdAt` from the first call's return
+   * value.
    */
   idempotencyKey: Schema.optional(Schema.String),
   /**
@@ -65,8 +68,9 @@ export const layer = Layer.effectDiscard(
 Retry contract: if this tool is called again with the same \`idempotencyKey\` (and
 \`createdAt\` if it was set on the first call), the server returns the original
 \`id\` and \`createdAt\` without creating a duplicate row. If \`idempotencyKey\` is
-omitted on the first call, the tool generates a fallback key
-\\\`lk_\\\${"$"}{sessionID}_\\\${"$"}{callID}\\\`. For any retry, you MUST echo back both
+omitted, the tool derives a STABLE fallback key from the message content
+(sessionID, kind, to, payload), so retries of the same logical message
+deduplicate even with a fresh tool call id. For any retry, you MUST echo back both
 \`idempotencyKey\` and \`createdAt\` from the first call's response.`,
           input: Input,
            contract: { visibility: "public" },
@@ -86,10 +90,14 @@ omitted on the first call, the tool generates a fallback key
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
-              // Fallback idempotency key: only for the first call (no key provided).
-              // Retries must echo back the key from the first response.
+              // Stable fallback idempotency key: derived from the logical
+              // message content so an LLM retry (fresh tool call id, same
+              // payload) upserts the same row. Explicit keys still win.
               const idempotencyKey =
-                input.idempotencyKey ?? `lk_${context.sessionID}_${context.toolCallID}`
+                input.idempotencyKey ??
+                `lk_${context.sessionID}_${Hash.fast(
+                  `${input.kind}|${input.to ?? ""}|${stableStringify(input.payload)}`,
+                )}`
 
               const result = yield* bus.publishOrFetch({
                 id: idempotencyKey,

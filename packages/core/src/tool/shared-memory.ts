@@ -61,7 +61,8 @@ export const layer = Layer.effectDiscard(
     yield* tools
       .register({
         [name]: Tool.make({
-          description: "Read, write, list, or delete entries in shared memory accessible across subagents.",
+          description:
+            "Read, write, list, or delete entries in shared memory — the key-value store shared across subagents and the lead agent. Use to exchange findings between agents instead of re-searching: write results under a namespaced key (e.g. 'research:topic:name') and let peers read that key rather than duplicating the work. Writes are session-scoped and inherited to the root (lead) session, so a subagent's write is immediately visible to the lead and to peers. Retries are idempotent: re-writing the same key with the same value updates the entry instead of duplicating it.",
           input: Input,
            contract: { visibility: "public" },
           output: Output,
@@ -70,7 +71,11 @@ export const layer = Layer.effectDiscard(
             return Effect.gen(function* () {
               const effectiveAgentID = input.agentID ?? context.agent
               const effectiveScope = input.scope ?? "session"
-              const effectiveSessionID = input.sessionID ?? context.sessionID
+              // Subagent writes land on the ROOT parent session (walked via
+              // the `session.parent_id` chain) so the parent can read/list
+              // them under its own session id. Explicit input.sessionID wins.
+              const effectiveSessionID =
+                input.sessionID ?? (yield* memoryRepo.resolveRootSessionID(context.sessionID))
               const effectiveKey = input.key ?? ""
               const effectiveID = input.id ?? effectiveKey
 
@@ -195,7 +200,14 @@ export const layer = Layer.effectDiscard(
                   }
                 }
                 case "read": {
-                  const entry = yield* memoryRepo.get(effectiveID)
+                  const exact = yield* memoryRepo.get(effectiveID)
+                  // Exact-id lookup misses → fall back to the newest
+                  // session-scoped row for this key across ANY session so
+                  // orphaned child-session rows from before the scope
+                  // inheritance fix remain retrievable. Only when the caller
+                  // read by key (an explicit id was already covered by get).
+                  const entry =
+                    exact ?? (!input.id && effectiveKey ? yield* memoryRepo.getLatestSessionScoped(effectiveKey) : undefined)
                   if (!entry) {
                     return { ok: false, entries: [] as unknown[] }
                   }
