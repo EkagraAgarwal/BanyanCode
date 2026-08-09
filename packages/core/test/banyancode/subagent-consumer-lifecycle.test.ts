@@ -26,6 +26,8 @@ const buildServiceLayer = (dbPath: string, queue: Queue.Queue<SubagentMessage>) 
     MemoryRepo.Service.of({
       put: () => Effect.void,
       get: () => Effect.succeed(undefined),
+      resolveRootSessionID: (sessionID) => Effect.succeed(sessionID),
+      getLatestSessionScoped: () => Effect.succeed(undefined),
       list: () => Effect.succeed([]),
       forget: () => Effect.void,
       forgetByKey: () => Effect.succeed(0),
@@ -122,6 +124,8 @@ describe("SubagentConsumer lifecycle", () => {
         Layer.succeed(MemoryRepo.Service, MemoryRepo.Service.of({
           put: () => Effect.void,
           get: () => Effect.succeed(undefined),
+          resolveRootSessionID: (sessionID) => Effect.succeed(sessionID),
+          getLatestSessionScoped: () => Effect.succeed(undefined),
           list: () => Effect.succeed([]),
           forget: () => Effect.void,
           forgetByKey: () => Effect.succeed(0),
@@ -187,6 +191,8 @@ describe("SubagentConsumer lifecycle", () => {
         Layer.succeed(MemoryRepo.Service, MemoryRepo.Service.of({
           put: () => Effect.void,
           get: () => Effect.succeed(undefined),
+          resolveRootSessionID: (sessionID) => Effect.succeed(sessionID),
+          getLatestSessionScoped: () => Effect.succeed(undefined),
           list: () => Effect.succeed([]),
           forget: () => Effect.void,
           forgetByKey: () => Effect.succeed(0),
@@ -261,6 +267,8 @@ describe("SubagentConsumer lifecycle", () => {
         Layer.succeed(MemoryRepo.Service, MemoryRepo.Service.of({
           put: () => Effect.void,
           get: () => Effect.succeed(undefined),
+          resolveRootSessionID: (sessionID) => Effect.succeed(sessionID),
+          getLatestSessionScoped: () => Effect.succeed(undefined),
           list: () => Effect.succeed([]),
           forget: () => Effect.void,
           forgetByKey: () => Effect.succeed(0),
