@@ -74,7 +74,9 @@ describe("orchestrator agent", () => {
         // block, asserted below in the policy-contains-tools suite.
         expect(prompt).toContain("Codegraph-first search policy")
         expect(prompt).toContain("system context")
-        expect(prompt).toContain("Background subagents")
+        // The background-subagent preference is embodied in the
+        // orchestration rules rather than inlined policy.
+        expect(prompt).toContain("background:true")
       }),
   )
 })
@@ -90,8 +92,9 @@ describe("orchestrator agent — system-context policy still carries the tool li
       expect(block).toContain("blast_radius")
       expect(block).toContain("preflight")
       expect(block).toContain("edit_plan")
-      // New policy section shipped by Phase 1.
-      expect(block).toContain("Background subagents")
+      // The background-subagent section moved out of the policy block into
+      // the orchestration block (src/session/prompt/banyan.txt).
+      expect(block).not.toContain("Background subagents")
     }),
   )
 })

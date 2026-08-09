@@ -55,15 +55,14 @@ afterEach(async () => {
   await disposeAllInstances()
 })
 
-describe("POLICY_TEXT — background-subagent preference", () => {
-  itPolicy.effect("ships the new 'Background subagents (ALWAYS)' section", () =>
+describe("POLICY_TEXT — background-subagent section moved to the orchestration block", () => {
+  itPolicy.effect("no longer ships the 'Background subagents (ALWAYS)' section", () =>
     Effect.gen(function* () {
       const block = yield* SystemPrompt.Service.use((svc) => svc.codegraph())
       expect(block).toBeDefined()
-      expect(block).toContain("Background subagents (ALWAYS)")
-      expect(block).toContain("background: true")
-      expect(block).toContain("Sync")
-      expect(block).toContain("acceptable ONLY for a trivial")
+      expect(block).toContain("Codegraph-first search policy (ALWAYS)")
+      expect(block).not.toContain("Background subagents (ALWAYS)")
+      expect(block).not.toContain("background: true")
     }),
   )
 
@@ -87,26 +86,42 @@ describe("POLICY_TEXT — background-subagent preference", () => {
       const fromSvc = yield* Banyan.CodegraphSystemSourceNS.Service.use((svc) => svc.load({ tools: [] }))
       const exported = Banyan.CodegraphSystemSourceNS.POLICY_TEXT
       expect(fromSvc).toBe(exported)
-      expect(exported).toContain("Background subagents (ALWAYS)")
+      expect(exported).toContain("Codegraph-first search policy (ALWAYS)")
+      // The background-subagent section lives in the orchestration block
+      // (src/session/prompt/banyan.txt), not in the policy text.
+      expect(exported).not.toContain("Background subagents (ALWAYS)")
     }),
   )
 })
 
 describe("prose agents — stripped the inline policy block, point to system context", () => {
-  for (const agentName of ["build", "coder", "plan"] as const) {
-    it.instance(`${agentName} prompt no longer contains the full inline policy body`, () =>
+  it.instance("coder prompt no longer contains the full inline policy body", () =>
+    Effect.gen(function* () {
+      const _ = yield* TestInstance
+      const agent = yield* Agent.Service.use((svc) => svc.get("coder"))
+      expect(agent).toBeDefined()
+      if (!agent) return
+      const prompt = agent.prompt ?? ""
+      // Pointer is preserved.
+      expect(prompt).toContain("Codegraph-first search policy (ALWAYS)")
+      expect(prompt).toContain("system context")
+      // Body is gone — the prose list of bootstrap rules was duplicated
+      // with the SystemPrompt block and is now centralised.
+      expect(prompt).not.toContain("last resorts")
+    }),
+  )
+
+  for (const agentName of ["build", "plan"] as const) {
+    it.instance(`${agentName} has no custom prompt — provider prompt + injected system blocks apply`, () =>
       Effect.gen(function* () {
         const _ = yield* TestInstance
         const agent = yield* Agent.Service.use((svc) => svc.get(agentName))
         expect(agent).toBeDefined()
         if (!agent) return
-        const prompt = agent.prompt ?? ""
-        // Pointer is preserved.
-        expect(prompt).toContain("Codegraph-first search policy (ALWAYS)")
-        expect(prompt).toContain("system context")
-        // Body is gone — the prose list of bootstrap rules was duplicated
-        // with the SystemPrompt block and is now centralised.
-        expect(prompt).not.toContain("last resorts")
+        // Upstream parity: build/plan rely on the provider-specific prompt
+        // (default.txt, anthropic.txt, ...) plus the injected codegraph and
+        // orchestration system blocks — not a bespoke agent prompt.
+        expect(agent.prompt).toBeUndefined()
       }),
     )
   }
@@ -129,9 +144,9 @@ describe("prose agents — stripped the inline policy block, point to system con
   )
 })
 
-describe("terse subagents — keep inline policy for defense-in-depth", () => {
+describe("terse subagents — inline policy removed, one-line pointer to system context", () => {
   for (const agentName of ["explore", "researcher", "scout"] as const) {
-    it.instance(`${agentName} prompt still carries the inline Codegraph-first search policy body`, () =>
+    it.instance(`${agentName} prompt points to the system-context policy, no inline body`, () =>
       Effect.gen(function* () {
         const _ = yield* TestInstance
         const agent = yield* Agent.Service.use((svc) => svc.get(agentName))
@@ -139,18 +154,18 @@ describe("terse subagents — keep inline policy for defense-in-depth", () => {
         if (!agent) return
         const prompt = agent.prompt ?? ""
         expect(prompt).toContain("Codegraph-first search policy (ALWAYS)")
-        expect(prompt).toContain("ALWAYS use BanyanCode graph + repository tools")
-        expect(prompt).toContain("codegraph_build")
-        expect(prompt).toContain("code_find")
-        expect(prompt).toContain("repository_query")
-        expect(prompt).toContain("last resort")
+        expect(prompt).toContain("system context")
+        // The duplicated inline policy body is gone — it lives in the
+        // SystemPrompt block injected into every agent's system context.
+        expect(prompt).not.toContain("ALWAYS use BanyanCode graph + repository tools")
+        expect(prompt).not.toContain("last resort")
       }),
     )
   }
 })
 
-describe("reviewer — receives a Codegraph-first policy block", () => {
-  it.instance("reviewer prompt mentions the codegraph-first policy", () =>
+describe("reviewer — points to system context, keeps the review rules", () => {
+  it.instance("reviewer prompt keeps the read-end-to-end rule and the pointer", () =>
     Effect.gen(function* () {
       const _ = yield* TestInstance
       const reviewer = yield* Agent.Service.use((svc) => svc.get("reviewer"))
@@ -159,9 +174,9 @@ describe("reviewer — receives a Codegraph-first policy block", () => {
       const prompt = reviewer.prompt ?? ""
       expect(prompt).toContain("Codegraph-first search policy (ALWAYS)")
       expect(prompt).toContain("system context")
-      // Reviewer-specific guidance — they READ code via the graph.
-      expect(prompt).toContain("reach for `code_find`")
-      expect(prompt).toContain("Never `cat` a whole file")
+      // Reviewer-specific guidance — they READ code, end-to-end.
+      expect(prompt).toContain("end-to-end")
+      expect(prompt).toContain("Do not skim")
     }),
   )
 })
@@ -210,6 +225,23 @@ describe("plan agent — can delegate to explore, researcher, and scout subagent
         const result = Permission.evaluate("task", subagentType, plan.permission)
         expect(result.action).toBe("deny")
       }
+    }),
+  )
+})
+
+describe("banyan orchestration block — SystemPrompt.banyan()", () => {
+  itPolicy.effect("renders the orchestration block with resolved maxSubagents", () =>
+    Effect.gen(function* () {
+      const block = yield* SystemPrompt.Service.use((svc) => svc.banyan())
+      expect(block).toBeDefined()
+      expect(block).toContain("BanyanCode orchestration (ALWAYS)")
+      expect(block).toContain("Parallel delegation is the default")
+      // {{maxSubagents}} must be rendered — no literal placeholder survives.
+      expect(block).not.toContain("{{maxSubagents}}")
+      expect(block).toContain("the cap is 5")
+      // The mesh contract that the shared-memory scoping fix enables.
+      expect(block).toContain("shared_memory")
+      expect(block).toContain("inherited to the root session")
     }),
   )
 })

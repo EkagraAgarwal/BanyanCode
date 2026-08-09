@@ -1476,14 +1476,21 @@ export const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [skills, env, instructions, modelMsgs, codegraph] = yield* Effect.all([
+            const [skills, env, instructions, modelMsgs, codegraph, banyan] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
               MessageV2.toModelMessagesEffect(msgs, model),
               sys.codegraph(tools),
+              sys.banyan(),
             ])
-            const system = [...env, ...instructions, ...(codegraph ? [codegraph] : []), ...(skills ? [skills] : [])]
+            const system = [
+              ...env,
+              ...instructions,
+              ...(codegraph ? [codegraph] : []),
+              ...(banyan ? [banyan] : []),
+              ...(skills ? [skills] : []),
+            ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({

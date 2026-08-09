@@ -13,6 +13,7 @@ import PROMPT_KIMI from "./prompt/kimi.txt"
 
 import PROMPT_CODEX from "./prompt/codex.txt"
 import PROMPT_TRINITY from "./prompt/trinity.txt"
+import PROMPT_BANYAN from "./prompt/banyan.txt"
 import type { Provider } from "@/provider/provider"
 import type { Agent } from "@/agent/agent"
 import { Permission } from "@/permission"
@@ -23,6 +24,7 @@ import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Reference } from "@opencode-ai/core/reference"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { DEFAULT_MAX_SUBAGENTS } from "@opencode-ai/core/v1/config/banyan-config"
 
 export function provider(model: Provider.Model) {
   if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3"))
@@ -44,6 +46,7 @@ export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
   readonly codegraph: (tools?: Record<string, AITool>) => Effect.Effect<string | undefined>
+  readonly banyan: () => Effect.Effect<string | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SystemPrompt") {}
@@ -111,7 +114,6 @@ export const layer = Layer.effect(
       codegraph: Effect.fn("SystemPrompt.codegraph")(function* (tools?: Record<string, AITool>) {
         const enabled = process.env.BANYANCODE_ENABLE !== "0"
         if (!enabled) return
-
         // Map the resolved AI-SDK tool set into the source's
         // CodegraphToolDescription shape so the rendered guide carries the
         // per-tool descriptions the model will see in its function list.
@@ -149,6 +151,23 @@ export const layer = Layer.effect(
                 }),
           onNone: () => Effect.succeed(Banyan.CodegraphSystemSourceNS.POLICY_TEXT),
         })
+      }),
+
+      banyan: Effect.fn("SystemPrompt.banyan")(function* () {
+        if (process.env.BANYANCODE_ENABLE === "0") return
+
+        // Orchestration block rendered with the configured subagent cap. This
+        // replaces the per-agent duplication that used to live in build.txt /
+        // plan.txt / explore.txt / ... — one shared system part, rendered once
+        // per session for every agent.
+        const banyanConfigOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+        const maxSubagents =
+          banyanConfigOpt._tag === "Some"
+            ? ((yield* banyanConfigOpt.value.get()).banyancode_max_subagents ?? DEFAULT_MAX_SUBAGENTS)
+            : DEFAULT_MAX_SUBAGENTS
+        return PROMPT_BANYAN.replace(/\{\{(\w+)\}\}/g, (_, key) =>
+          key === "maxSubagents" ? String(maxSubagents) : `{{${key}}}`,
+        )
       }),
     })
   }),

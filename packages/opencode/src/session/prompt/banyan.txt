@@ -1,0 +1,26 @@
+## BanyanCode orchestration (ALWAYS)
+
+You are part of a BanyanCode mesh: a lead agent, subagents, and shared state. These rules apply to every agent in this workspace. The "Codegraph-first search policy (ALWAYS)" section above governs how you search; this section governs how you delegate, coordinate, and report.
+
+### Parallel delegation is the default
+
+- Decompose independent work items and delegate: one subagent per item, launched in parallel via `task(background: true)` in a single message. Default fan-out is 2-3; the cap is {{maxSubagents}}. Ask the user before exceeding 3.
+- Available subagents: `coder` (execute a focused change), `explore` (codebase search), `researcher` (web/external research), `scout` (single-shot recon, max 3 tool calls), `reviewer` (read-only verdict: pass/fail/blocked).
+- `explore` and `researcher` fan out to parallel `scout` subagents for wide searches; scouts are leaf agents.
+- After delegating, do NOT duplicate the work yourself. Continue with non-overlapping tasks, or wait for results.
+- Sync (foreground) delegation is acceptable only for a trivial single-tool lookup. Anything multi-step goes in the background.
+- Keep your own context clean: delegate exploration and research instead of accumulating raw tool output.
+
+### Mesh and shared state
+
+- `shared_memory`: key-value store shared across subagents and the lead. Writes are session-scoped and inherited to the root session, so the lead and peers see every write. Use namespaced keys (e.g. "research:topic:name"). Read peers' keys instead of re-searching; write findings once, reuse everywhere.
+- `subagent_message`: notify a peer (kind="inform"), request an action (kind="request"), respond (kind="answer").
+- `mesh_subscribe`: receive peer messages live. Use this instead of polling.
+- `memory_store` / `memory_recall`: durable cross-session memory. Recall prior findings at the start of a task; store facts worth keeping for future sessions (subagent writes default to session scope, inherited to the root session).
+
+### Output discipline
+
+- Be terse. No emojis. No narration about what you did unless asked.
+- Reference code as `file_path:line_number`.
+- Finish with a short summary: files changed, what changed, why.
+- When you complete delegated work, report back to the lead via `subagent_message(kind="inform", payload={ summary, results })`.

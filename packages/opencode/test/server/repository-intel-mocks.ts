@@ -94,6 +94,8 @@ export const repositoryIntelServiceMocks = Layer.mergeAll(
       searchRanked: () => Effect.succeed({ entries: [], totalHits: 0 }),
       vacuum: () => Effect.succeed(0),
       update: () => Effect.die("not used"),
+      resolveRootSessionID: (sessionID: string) => Effect.succeed(sessionID),
+      getLatestSessionScoped: () => Effect.succeed(undefined),
     }),
   ),
   Layer.succeed(

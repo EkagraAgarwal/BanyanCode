@@ -1,7 +1,10 @@
 /**
- * Regression guard: every built-in subagent prompt contains the
- * "BanyanCode tool guide" pointer phrase and is free of the
- * "prefer using Glob and Grep" conflict phrase.
+ * Regression guard: every built-in subagent prompt carries a one-line
+ * pointer to the system-context policy sections, is free of the
+ * duplicated inline policy blocks ("Tool guide (external)",
+ * "Codegraph-first search policy (ALWAYS)", "Mesh and peer
+ * communication"), and is free of the "prefer using Glob and Grep"
+ * conflict phrase.
  *
  * Two paths are exercised:
  *
@@ -37,8 +40,19 @@ import { Skill } from "@/skill"
 import { SystemPrompt, provider as systemProvider } from "@/session/system"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 
-const POINTER_PHRASE = "BanyanCode tool guide"
+// Provider prompts (gpt.txt, codex.txt, gemini.txt) carry the
+// "BanyanCode tool guide" pointer phrase.
+const PROVIDER_POINTER_PHRASE = "BanyanCode tool guide"
+// Subagent .txt prompts carry a one-line pointer to the policy sections
+// injected into every agent's system context.
+const SUBAGENT_POINTER_PHRASE =
+  "Follow the Codegraph-first search policy (ALWAYS) and BanyanCode orchestration sections in your system context."
 const FORBIDDEN_PHRASE = "prefer using Glob and Grep"
+const DUPLICATED_BLOCK_HEADERS = [
+  "## Tool guide (external)",
+  "## Codegraph-first search policy (ALWAYS)",
+  "## Mesh and peer communication",
+] as const
 
 const AGENTS_WITH_PROMPT = [
   "coder",
@@ -78,15 +92,18 @@ afterEach(async () => {
   await disposeAllInstances()
 })
 
-describe("subagent prompts — pointer phrase present, conflict phrase absent", () => {
+describe("subagent prompts — one-line pointer, no duplicated policy blocks", () => {
   for (const agentName of AGENTS_WITH_PROMPT) {
-    it.instance(`${agentName} prompt contains "${POINTER_PHRASE}" and not "${FORBIDDEN_PHRASE}"`, () =>
+    it.instance(`${agentName} prompt points to system context and not "${FORBIDDEN_PHRASE}"`, () =>
       Effect.gen(function* () {
         const agent = yield* Agent.Service.use((svc) => svc.get(agentName))
         expect(agent).toBeDefined()
         if (!agent) return
         expect(agent.prompt).toBeDefined()
-        expect(agent.prompt).toContain(POINTER_PHRASE)
+        expect(agent.prompt).toContain(SUBAGENT_POINTER_PHRASE)
+        for (const header of DUPLICATED_BLOCK_HEADERS) {
+          expect(agent.prompt).not.toContain(header)
+        }
         expect(agent.prompt).not.toContain(FORBIDDEN_PHRASE)
       }),
     )
@@ -108,7 +125,7 @@ describe("build/plan effective prompt — pointer present for pointer-bearing pr
           expect(providerChunks.length).toBeGreaterThan(0)
           const effective = providerChunks.join("\n")
 
-          expect(effective).toContain(POINTER_PHRASE)
+          expect(effective).toContain(PROVIDER_POINTER_PHRASE)
           expect(effective).not.toContain(FORBIDDEN_PHRASE)
 
           // Sanity-check that SystemPrompt.codegraph() integrates cleanly
