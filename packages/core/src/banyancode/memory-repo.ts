@@ -334,7 +334,8 @@ export const layer = Layer.effect(
         const tokens = ftsQuery
           .split(/\s+/)
           .map((t) => t.replace(/"/g, ""))
-          .filter((t) => t.length > 0)
+          .filter((t) => t.length >= 2)
+          .slice(0, 8)
         if (tokens.length === 0) return { entries: [], totalHits: 0 }
         const ftsExpression = tokens.map((t) => `"${t}"`).join(" OR ")
 
@@ -358,25 +359,60 @@ export const layer = Layer.effect(
         type RankedRow = typeof MemoryEntriesTable.$inferSelect
 
         try {
+          // Single-scan totalHits with FTS-driven execution, guaranteed by
+          // construction: the `fts_hits` CTE scans ONLY memory_entries_fts
+          // (the MATCH lives in the FTS context), so SQLite can never flip
+          // the join order and evaluate MATCH per row of memory_entries —
+          // the ~1-6s pathology seen when the scope/session_id filters
+          // invited memory_scope_session_idx to drive. `matched` applies the
+          // scope/session/status/kind filters to the full match set, and
+          // `(SELECT COUNT(*) FROM matched)` reports the exact totalHits in
+          // the SAME statement — the previous code paid 2x by re-issuing the
+          // identical MATCH in a separate COUNT(*) query, and the row count
+          // of a LIMIT-then-filter query undercounts whenever the filters
+          // prune some of the top-ranked rowids.
+          //
+          // NOTE: this deliberately avoids `COUNT(*) OVER ()` (a window
+          // function) even though the runtime SQLite is >= 3.25 — FTS5 in
+          // this build rejects `unable to use function bm25 in the
+          // requested context` whenever a window function shares the
+          // statement with bm25 (verified empirically against the bundled
+          // libsql 3.45.1; the error fires whether bm25 is bare in ORDER BY
+          // or aliased in the SELECT list). The CTE shape achieves the same
+          // single-MATCH guarantee.
+          //
+          // bm25 weights: (key=10.0, title=3.0, body=1.0, kind=1.0) — FTS5's
+          // bm25() returns the NEGATIVE of the weighted TF-IDF sum, so a
+          // higher weight means a stronger rank boost when a term matches
+          // that column (see codegraph-repo.ts:783-810 for the same
+          // rationale). key is the most authoritative signal; title second;
+          // body/kind the noisiest. ORDER BY __bm25 ASC picks the most
+          // negative (best) score.
           const rankedRows = yield* db
-            .all<RankedRow>(sql`
-              SELECT \`memory_entries\`.* FROM \`memory_entries\`
-              INNER JOIN \`memory_entries_fts\` ON \`memory_entries_fts\`.\`rowid\` = \`memory_entries\`.\`rowid\`
-              WHERE \`memory_entries_fts\` MATCH ${ftsExpression} ${filterSql}
-              ORDER BY bm25(\`memory_entries_fts\`)
-              LIMIT ${limit}
+            .all<RankedRow & { __total: number }>(sql`
+              WITH fts_hits AS MATERIALIZED (
+                SELECT \`rowid\` FROM \`memory_entries_fts\`
+                WHERE \`memory_entries_fts\` MATCH ${ftsExpression}
+              ),
+              matched AS MATERIALIZED (
+                SELECT \`memory_entries\`.\`rowid\` AS __rid
+                FROM \`memory_entries\`
+                INNER JOIN fts_hits ON fts_hits.\`rowid\` = \`memory_entries\`.\`rowid\`
+                ${filterSql}
+              ),
+              ranked AS (
+                SELECT \`memory_entries\`.*, bm25(\`memory_entries_fts\`, 10.0, 3.0, 1.0, 1.0) AS __bm25
+                FROM \`memory_entries\`
+                INNER JOIN matched ON matched.__rid = \`memory_entries\`.\`rowid\`
+                INNER JOIN \`memory_entries_fts\` ON \`memory_entries_fts\`.\`rowid\` = \`memory_entries\`.\`rowid\`
+                ORDER BY __bm25
+                LIMIT ${limit}
+              )
+              SELECT ranked.*, (SELECT COUNT(*) FROM matched) AS __total FROM ranked
             `)
             .pipe(Effect.orDie)
 
-          const totalRow = yield* db
-            .get<{ c: number }>(sql`
-              SELECT COUNT(*) AS c FROM \`memory_entries\`
-              INNER JOIN \`memory_entries_fts\` ON \`memory_entries_fts\`.\`rowid\` = \`memory_entries\`.\`rowid\`
-              WHERE \`memory_entries_fts\` MATCH ${ftsExpression} ${filterSql}
-            `)
-            .pipe(Effect.orDie)
-
-          return { entries: rankedRows.map(mapRowToEntry), totalHits: totalRow?.c ?? 0 }
+          return { entries: rankedRows.map(mapRowToEntry), totalHits: Number(rankedRows[0]?.__total ?? 0) }
         } catch {
           // FTS table missing or query malformed — fall back to a degraded
           // SQL LIKE scan pushed down to the DB so we don't load the entire
@@ -406,13 +442,28 @@ export const layer = Layer.effect(
             .all<RankedRow>(sql`
               SELECT \`memory_entries\`.* FROM \`memory_entries\`
               WHERE ${filterSql}
+              ORDER BY \`memory_entries\`.\`created_at\` DESC
               LIMIT ${limit}
             `)
             .pipe(Effect.orDie)
 
+          // When the fallback hit the LIMIT the row count may be truncated,
+          // so run a real COUNT(*) over the same WHERE (without LIMIT) to
+          // report the true totalHits instead of a capped guess.
+          let totalHits = fallbackRows.length
+          if (fallbackRows.length === limit) {
+            const totalRow = yield* db
+              .get<{ c: number }>(sql`
+                SELECT COUNT(*) AS c FROM \`memory_entries\`
+                WHERE ${filterSql}
+              `)
+              .pipe(Effect.orDie)
+            totalHits = totalRow?.c ?? fallbackRows.length
+          }
+
           return {
             entries: fallbackRows.map(mapRowToEntry),
-            totalHits: fallbackRows.length,
+            totalHits,
           }
         }
       })
