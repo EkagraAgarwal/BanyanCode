@@ -29,7 +29,7 @@ import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
-import { type RunError, Service, StepLimitExceededError } from "./index"
+import { type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
@@ -45,7 +45,6 @@ import { toLLMMessages } from "./to-llm-message"
  *   - [ ] Replace local ownership with durable multi-node ownership when clustered.
  *   - [ ] Mark busy, retrying, idle, interrupted, or terminal-failure status durably.
  *   - [ ] Honor interruption and reject stale work after runtime attachment replacement.
- *   - [x] Bound model steps.
  *   - [ ] Bound provider retries and repeated identical tool calls.
  *
  * - Runtime context assembly
@@ -80,12 +79,9 @@ import { toLLMMessages } from "./to-llm-message"
  * Durable activity recovery remains a separate future slice with an explicit retry policy.
  *
  * The current slice loads V2 history, translates it, resolves a model through a core service, and persists one
- * provider turn. Registry definitions are advertised, local tool calls are settled durably, and a
- * bounded explicit loop starts the next provider turn after local settlement.
+ * provider turn. Registry definitions are advertised, local tool calls are settled durably, and an
+ * explicit loop starts the next provider turn after local settlement.
  */
-
-// QUESTION: Did this exist previously, or did we add this limit? Does it make sense?
-const MAX_STEPS = 25
 
 export const layer = Layer.effect(
   Service,
@@ -382,14 +378,11 @@ export const layer = Layer.effect(
       let openActivity = input.force === true || hasSteer || hasQueue
       while (openActivity) {
         let needsContinuation = true
-        for (let step = 0; step < MAX_STEPS; step++) {
+        while (needsContinuation) {
           needsContinuation = yield* runTurn(input.sessionID, promotion)
           promotion = "steer"
           if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
-          if (!needsContinuation) break
         }
-        if (needsContinuation)
-          return yield* new StepLimitExceededError({ sessionID: input.sessionID, limit: MAX_STEPS })
         openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = openActivity ? "queue" : undefined
       }
