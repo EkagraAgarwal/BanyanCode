@@ -27,8 +27,9 @@ describe("CodegraphRepo parse errors", () => {
 
         const errors = yield* repo.listParseErrors()
         expect(errors.length).toBe(2)
-        expect(errors[0].path).toBe("src/also-broken.ts")
-        expect(errors[1].path).toBe("src/broken.ts")
+        // Order is undefined when both inserts share the same indexed_at
+        // millisecond, so assert on the set.
+        expect(errors.map((e) => e.path).sort()).toEqual(["src/also-broken.ts", "src/broken.ts"])
 
         yield* repo.clearParseErrors()
 

@@ -147,6 +147,8 @@ const DEFAULT_IGNORED = [
   ".git",
   ".opencode",
   ".banyancode",
+  ".bun",
+  ".bun-cache",
   // BanyanCode runtime artifacts left at a workspace root. A *.db is the
   // indexer's own DB (codegraph.sql.ts, memory.sql.ts, subagent-*.sql.ts);
   // *.db-wal / *.db-shm are SQLite sidecars. Always exclude — they are
@@ -155,6 +157,7 @@ const DEFAULT_IGNORED = [
   "*.db",
   "*.db-wal",
   "*.db-shm",
+  "*.lock",
 ]
 
 // Out-of-product UI packages that the codegraph never needs to index.
@@ -205,49 +208,130 @@ export const layer = Layer.effect(
     // `ensureWebTreeSitterReady`, which the indexer no longer calls).
     yield* Effect.promise(() => ensureQuerySourcesLoaded())
 
+    // Nested .gitignore support: per-build cache of compiled patterns keyed by
+    // directory (null = no .gitignore or nothing to add). Populated lazily by
+    // loadDirGitignore during the walk and by applyChanges' ancestor scan.
+    const nestedGitignoreCache = new Map<string, IgnorePattern[] | null>()
+
+    const loadIgnoreContext = (root: string, excludePatterns?: readonly string[]): Effect.Effect<IgnoreContext> => {
+      return Effect.gen(function* () {
+        nestedGitignoreCache.clear()
+        const defaults = [...DEFAULT_IGNORED, ...DEFAULT_PRODUCT_EXCLUDES, ...DEFAULT_GENERATED_EXCLUDES]
+          .map((raw) => compileIgnorePattern(raw, root))
+          .filter((p): p is IgnorePattern => p !== undefined)
+        const rootGit: IgnorePattern[] = []
+        const gitignorePath = path.join(root, ".gitignore")
+        if (yield* fs.existsSafe(gitignorePath)) {
+          const content = yield* fs.readFileStringSafe(gitignorePath).pipe(Effect.orDie)
+          if (content) {
+            for (const line of content.split("\n")) {
+              const pattern = compileIgnorePattern(line, root)
+              if (pattern) rootGit.push(pattern)
+            }
+          }
+        }
+        const banyan: IgnorePattern[] = []
+        const banyancodeIgnorePath = path.join(root, ".banyancode", "ignore")
+        if (yield* fs.existsSafe(banyancodeIgnorePath)) {
+          const content = yield* fs.readFileStringSafe(banyancodeIgnorePath).pipe(Effect.orDie)
+          if (content) {
+            for (const line of content.split("\n")) {
+              const pattern = compileIgnorePattern(line, root)
+              if (pattern) banyan.push(pattern)
+            }
+          }
+        }
+        if (excludePatterns) {
+          for (const raw of excludePatterns) {
+            const pattern = compileIgnorePattern(raw, root)
+            if (pattern) banyan.push(pattern)
+          }
+        }
+        return { root, defaults, rootGit, banyan, nested: nestedGitignoreCache }
+      })
+    }
+
+    const loadDirGitignore = (dir: string): Effect.Effect<void> => {
+      if (nestedGitignoreCache.has(dir)) return Effect.void
+      return Effect.gen(function* () {
+        const gitignorePath = path.join(dir, ".gitignore")
+        if (yield* fs.existsSafe(gitignorePath)) {
+          const content = yield* fs.readFileStringSafe(gitignorePath).pipe(Effect.orDie)
+          const patterns: IgnorePattern[] = []
+          if (content) {
+            for (const line of content.split("\n")) {
+              const pattern = compileIgnorePattern(line, dir)
+              if (pattern) patterns.push(pattern)
+            }
+          }
+          nestedGitignoreCache.set(dir, patterns)
+        } else {
+          nestedGitignoreCache.set(dir, null)
+        }
+      })
+    }
+
+    const decideIgnored = (ctx: IgnoreContext, fullPath: string, isDir: boolean): "git" | "banyan" | "none" => {
+      let dir = path.dirname(fullPath)
+      while (dir !== ctx.root && dir.length > ctx.root.length) {
+        const nested = ctx.nested.get(dir)
+        if (nested && nested.length > 0) {
+          const decided = evaluatePatterns(nested, fullPath, isDir)
+          if (decided !== undefined) return decided ? "git" : "none"
+        }
+        const parent = path.dirname(dir)
+        if (parent === dir) break
+        dir = parent
+      }
+      const rootDecision = evaluatePatterns(ctx.rootGit, fullPath, isDir)
+      if (rootDecision !== undefined) return rootDecision ? "git" : "none"
+      if (evaluatePatterns(ctx.defaults, fullPath, isDir) === true) return "git"
+      return evaluatePatterns(ctx.banyan, fullPath, isDir) === true ? "banyan" : "none"
+    }
+
     const walkDirectory = (
       dir: string,
       maxFileSizeBytes: number,
       root: string,
-      gitignorePatterns: string[],
-      banyanignorePatterns: string[],
-    ): Effect.Effect<{ files: CandidateFile[]; skippedBySize: number; skippedByGitignore: number; skippedByBanyanignore: number }> => {
+      ctx: IgnoreContext,
+    ): Effect.Effect<WalkResult> => {
+      const walkSubdir = (subdir: string): Effect.Effect<WalkResult> => {
+        if (decideIgnored(ctx, subdir, true) !== "none") {
+          return Effect.succeed({ files: [], skippedBySize: 0, skippedByGitignore: 1, skippedByBanyanignore: 0 })
+        }
+        return walkDirectory(subdir, maxFileSizeBytes, root, ctx)
+      }
       return Effect.gen(function* () {
+        if (dir !== root) yield* loadDirGitignore(dir)
         const entries = yield* fs.readDirectoryEntries(dir).pipe(Effect.catch(() => Effect.succeed<FSUtil.DirEntry[]>([])))
-        const files: CandidateFile[] = []
+        const dirNames: string[] = []
+        const fileNames: string[] = []
+        for (const entry of entries) {
+          if (entry.type === "directory") dirNames.push(path.basename(entry.name))
+          else if (entry.type === "file") fileNames.push(entry.name)
+        }
+        const subResults = yield* Effect.all(dirNames.map((name) => walkSubdir(path.join(dir, name))), {
+          concurrency: 8,
+          discard: false,
+        })
         let skippedBySize = 0
         let skippedByGitignore = 0
         let skippedByBanyanignore = 0
-        for (const entry of entries) {
-          if (entry.type !== "directory") continue
-          const entryName = path.basename(entry.name)
-          if (DEFAULT_IGNORED.includes(entryName)) {
-            skippedByGitignore++
-            continue
-          }
-          const fullPath = path.join(dir, entryName)
-          if (isIgnoredByPatterns(gitignorePatterns, root, fullPath)) {
-            skippedByGitignore++
-            continue
-          }
-          if (isIgnoredByPatterns(banyanignorePatterns, root, fullPath)) {
-            skippedByBanyanignore++
-            continue
-          }
-          const subResult = yield* walkDirectory(fullPath, maxFileSizeBytes, root, gitignorePatterns, banyanignorePatterns)
-          files.push(...subResult.files)
-          skippedBySize += subResult.skippedBySize
-          skippedByGitignore += subResult.skippedByGitignore
-          skippedByBanyanignore += subResult.skippedByBanyanignore
+        const files: CandidateFile[] = []
+        for (const sub of subResults) {
+          files.push(...sub.files)
+          skippedBySize += sub.skippedBySize
+          skippedByGitignore += sub.skippedByGitignore
+          skippedByBanyanignore += sub.skippedByBanyanignore
         }
-        for (const entry of entries) {
-          if (entry.type !== "file") continue
-          const fullPath = path.join(dir, entry.name)
-          if (isIgnoredByPatterns(gitignorePatterns, root, fullPath)) {
+        for (const name of fileNames) {
+          const fullPath = path.join(dir, name)
+          const ignored = decideIgnored(ctx, fullPath, false)
+          if (ignored === "git") {
             skippedByGitignore++
             continue
           }
-          if (isIgnoredByPatterns(banyanignorePatterns, root, fullPath)) {
+          if (ignored === "banyan") {
             skippedByBanyanignore++
             continue
           }
@@ -267,52 +351,6 @@ export const layer = Layer.effect(
         }
         return { files, skippedBySize, skippedByGitignore, skippedByBanyanignore }
       })
-    }
-
-    const loadIgnorePatterns = (root: string, excludePatterns?: readonly string[]): Effect.Effect<{ gitignore: string[]; banyanignore: string[] }> => {
-      return Effect.gen(function* () {
-        const gitignore: string[] = [...DEFAULT_IGNORED, ...DEFAULT_PRODUCT_EXCLUDES, ...DEFAULT_GENERATED_EXCLUDES]
-        const banyanignore: string[] = []
-        const gitignorePath = path.join(root, ".gitignore")
-        const banyancodeignorePath = path.join(root, ".banyancode", "ignore")
-        const gitignoreExists = yield* fs.existsSafe(gitignorePath)
-        if (gitignoreExists) {
-          const content = yield* fs.readFileStringSafe(gitignorePath).pipe(Effect.orDie)
-          if (content) gitignore.push(...content.split("\n").filter((l) => l.trim() && !l.startsWith("#")))
-        }
-        const banyancodeExists = yield* fs.existsSafe(banyancodeignorePath)
-        if (banyancodeExists) {
-          const content = yield* fs.readFileStringSafe(banyancodeignorePath).pipe(Effect.orDie)
-          if (content) banyanignore.push(...content.split("\n").filter((l) => l.trim() && !l.startsWith("#")))
-        }
-        if (excludePatterns && excludePatterns.length > 0) {
-          for (const p of excludePatterns) {
-            const trimmed = p.trim()
-            if (trimmed) banyanignore.push(trimmed)
-          }
-        }
-        return { gitignore, banyanignore }
-      })
-    }
-
-    const isIgnoredByPatterns = (patterns: string[], root: string, filePath: string): boolean => {
-      const relativePath = path.relative(root, filePath).replace(/\\/g, "/")
-      const segments = relativePath.split("/")
-      for (const pattern of patterns) {
-        const trimmed = pattern.trim()
-        if (trimmed === "" || trimmed.startsWith("#")) continue
-        const cleanPattern = trimmed.replace(/^\/+|\/+$/g, "")
-        if (cleanPattern === "") continue
-
-        if (cleanPattern.includes("/")) {
-          if (relativePath === cleanPattern || relativePath.startsWith(cleanPattern + "/")) return true
-        } else {
-          if (segments.includes(cleanPattern)) return true
-          const regex = globToRegex(cleanPattern)
-          if (segments.some((seg) => regex.test(seg))) return true
-        }
-      }
-      return false
     }
 
     const hashContent = (content: string | undefined): string => {
@@ -384,6 +422,12 @@ type CandidateFile = {
   readonly path: string
   readonly sizeBytes: number
   readonly mtimeMs: number
+}
+type WalkResult = {
+  files: CandidateFile[]
+  skippedBySize: number
+  skippedByGitignore: number
+  skippedByBanyanignore: number
 }
 type StatOutcome = { kind: "ok"; stats: FileSystem.File.Info } | { kind: "vanished" } | { kind: "unreadable" }
 
@@ -1068,56 +1112,15 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
-      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root, input.excludePatterns)
-      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, gitignore, banyanignore)
+      const ignoreCtx = yield* loadIgnoreContext(input.root, input.excludePatterns)
+      const walkStart = Date.now()
+      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, ignoreCtx)
       const allFiles = walkResult.files
-      const codeExtensions = new Set([
-        ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs",
-        ".py", ".pyw",
-        ".zig",
-        ".rs",
-        ".go",
-        ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh",
-        ".java", ".kt",
-        ".cs",
-        ".swift",
-        ".rb",
-        ".php",
-        ".sh", ".bat", ".ps1",
-        ".sql",
-        ".html", ".css",
-        ".md",
-      ])
-      const isArtifactPath = (filePath: string) => {
-        const base = path.basename(filePath)
-        const lower = base.toLowerCase()
-        const normPath = filePath.replace(/\\/g, "/")
-        if (lower === "package.json") return true
-        if (lower === "dockerfile" || lower.startsWith("dockerfile.") || lower.endsWith(".dockerfile")) return true
-        if (lower === "compose.yml" || lower === "compose.yaml") return true
-        if (lower === "docker-compose.yml" || lower === "docker-compose.yaml") return true
-        if (lower === "jenkinsfile") return true
-        if (lower === ".gitlab-ci.yml") return true
-        if (lower.startsWith("azure-pipelines") && lower.endsWith(".yml")) return true
-        if (lower.startsWith("tsconfig") && lower.endsWith(".json")) return true
-        if (lower === "pnpm-workspace.yaml" || lower === "pnpm-workspace.yml") return true
-        if (lower === "pyproject.toml") return true
-        if (lower === "cargo.toml") return true
-        if (lower === "go.mod") return true
-        if (lower === ".envrc" || lower === ".env.example") return true
-        if (lower.startsWith(".env")) return true
-        if (lower.startsWith("dotenv")) return true
-        if (/\/\.github\/workflows\/.+\.(yml|yaml)$/i.test(normPath)) return true
-        if (/\/\.circleci\/.+\.(yml|yaml)$/i.test(normPath)) return true
-        if (/\.config\.(json|js|ts)$/i.test(base)) return true
-        if (lower === "config.json") return true
-        return false
-      }
-      const codeFiles = allFiles.filter((f) => {
-        const ext = path.extname(f.path).toLowerCase()
-        return codeExtensions.has(ext) || isArtifactPath(f.path)
-      })
+      yield* Effect.logDebug(`codegraph: walk took ${Date.now() - walkStart}ms (${allFiles.length} files)`)
+      const codeFiles = allFiles.filter((f) => isIndexablePath(f.path))
+      const listStart = Date.now()
       const existingFilesByPath = new Map((yield* repo.listAllFiles()).map((f) => [f.path, f]))
+      yield* Effect.logDebug(`codegraph: listAllFiles took ${Date.now() - listStart}ms`)
 
       const indexedRef = yield* Ref.make(0)
       const skippedRef = yield* Ref.make(0)
@@ -1217,6 +1220,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         }
       })
 
+      const parseStart = Date.now()
       yield* Effect.all(
         [
           Effect.forEach(codeFiles, parseFiber, { concurrency: 8, discard: true }),
@@ -1224,7 +1228,10 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         ],
         { concurrency: 2, discard: true },
       ).pipe(Effect.ensuring(Queue.shutdown(parsedQueue)))
+      yield* Effect.logDebug(`codegraph: parse+drain took ${Date.now() - parseStart}ms`)
+      const checkpointStart = Date.now()
       yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
+      yield* Effect.logDebug(`codegraph: wal_checkpoint(TRUNCATE) took ${Date.now() - checkpointStart}ms`)
 
       // Phase 3: prune files that disappeared between walks. Before this,
       // a `full rebuild` left orphan rows in `codegraph_files` and their
@@ -1262,6 +1269,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       // cheaper than touching each row in the drain loop and, more
       // importantly, fixes the readiness trap where a cached file's
       // never-refreshed timestamp made it look "changed" forever.
+      const bumpStart = Date.now()
       const cachedFileIDs = yield* Ref.get(cachedFileIDsRef)
       if (cachedFileIDs.size > 0) {
         yield* repo.bumpIndexedAt({ fileIDs: [...cachedFileIDs], indexedAt: Date.now() }).pipe(
@@ -1272,6 +1280,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           ),
         )
       }
+      yield* Effect.logDebug(`codegraph: bumpIndexedAt took ${Date.now() - bumpStart}ms (${cachedFileIDs.size} files)`)
 
       const indexed = yield* Ref.get(indexedRef)
       if (indexed > 0) {
@@ -1348,12 +1357,26 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
-      const { gitignore, banyanignore } = yield* loadIgnorePatterns(input.root, input.excludePatterns)
+      const ignoreCtx = yield* loadIgnoreContext(input.root, input.excludePatterns)
       const removedFileIDs = new Set<string>()
       const filteredRemoved: string[] = []
       const filteredAddedOrChanged: CandidateFile[] = []
       let skippedInputs = 0
+      const listStart = Date.now()
       const existingFilesByPath = new Map((yield* repo.listAllFiles()).map((f) => [f.path, f]))
+      yield* Effect.logDebug(`codegraph: incremental listAllFiles took ${Date.now() - listStart}ms`)
+
+      // Pre-load every ancestor .gitignore for the change set so the sync
+      // decideIgnored checks below see the same nested rules the walker uses.
+      for (const filePath of new Set([...input.removed, ...input.addedOrChanged])) {
+        let dir = path.dirname(filePath)
+        while (dir !== input.root && dir.length > input.root.length) {
+          yield* loadDirGitignore(dir)
+          const parent = path.dirname(dir)
+          if (parent === dir) break
+          dir = parent
+        }
+      }
 
       // Capture the pre-mutation file IDs before delete/write cascades remove
       // their endpoint nodes and edges. This lets removed and replaced files
@@ -1368,7 +1391,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         : []
 
       for (const filePath of input.removed) {
-        if (isIgnoredByPatterns(gitignore, input.root, filePath) || isIgnoredByPatterns(banyanignore, input.root, filePath)) {
+        if (decideIgnored(ignoreCtx, filePath, false) !== "none") {
           const existing = existingFilesByPath.get(filePath)
           if (existing) {
             removedFileIDs.add(existing.id)
@@ -1396,7 +1419,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
 
       for (const filePath of input.addedOrChanged) {
         const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
-        if (isIgnoredByPatterns(gitignore, input.root, filePath) || isIgnoredByPatterns(banyanignore, input.root, filePath)) {
+        if (decideIgnored(ignoreCtx, filePath, false) !== "none") {
           const existing = existingFilesByPath.get(filePath)
           if (existing) {
             removedFileIDs.add(existing.id)
@@ -1445,6 +1468,20 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         }
         if (stats.size > maxFileSizeBytes) {
           yield* Effect.logDebug(`Skipping large file (potential bundle): ${relativePath} (${stats.size} bytes, limit: ${maxFileSizeBytes})`)
+          const existing = existingFilesByPath.get(filePath)
+          if (existing) {
+            removedFileIDs.add(existing.id)
+            yield* repo.deleteFile(existing.id)
+            existingFilesByPath.delete(filePath)
+          }
+          skippedInputs++
+          continue
+        }
+        // Same eligibility predicate as the full walk (index): incremental
+        // builds must not index files the full build would skip, or the two
+        // graphs diverge. Stale rows for previously-indexed non-code files
+        // are pruned like the ignore branch does.
+        if (!isIndexablePath(filePath)) {
           const existing = existingFilesByPath.get(filePath)
           if (existing) {
             removedFileIDs.add(existing.id)
@@ -1556,6 +1593,7 @@ const drainParsedQueue = Effect.gen(function* () {
         }
       })
 
+      const parseStart = Date.now()
       yield* Effect.all(
         [
           Effect.forEach(filteredAddedOrChanged, (candidate) => {
@@ -1584,13 +1622,17 @@ const drainParsedQueue = Effect.gen(function* () {
         ],
         { concurrency: 2, discard: true },
       ).pipe(Effect.ensuring(Queue.shutdown(parsedQueue)))
+      yield* Effect.logDebug(`codegraph: incremental parse+drain took ${Date.now() - parseStart}ms`)
 
+      const checkpointStart = Date.now()
       yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
+      yield* Effect.logDebug(`codegraph: incremental wal_checkpoint(TRUNCATE) took ${Date.now() - checkpointStart}ms`)
 
       // Phase 2: refresh `indexed_at` on every file that hit the cache
       // in this incremental build. Same logic as the full-build path —
       // keeps downstream time-based heuristics from getting stuck on
       // cached files.
+      const bumpStart = Date.now()
       const cachedFileIDs = yield* Ref.get(cachedFileIDsRef)
       if (cachedFileIDs.size > 0) {
         yield* repo.bumpIndexedAt({ fileIDs: [...cachedFileIDs], indexedAt: Date.now() }).pipe(
@@ -1601,6 +1643,7 @@ const drainParsedQueue = Effect.gen(function* () {
           ),
         )
       }
+      yield* Effect.logDebug(`codegraph: incremental bumpIndexedAt took ${Date.now() - bumpStart}ms (${cachedFileIDs.size} files)`)
 
       const changedFileIDs = Array.from(yield* Ref.get(changedFileIDsRef))
       if (changedFileIDs.length > 0) {
@@ -1616,7 +1659,10 @@ const drainParsedQueue = Effect.gen(function* () {
       // yet seen by the walker). This keeps coverage comparable to a full
       // build when the change set IS the entire repo.
       const listingCount = filteredAddedOrChanged.length + filteredRemoved.length
-      const eligibleForCoverage = listingCount > 0 ? listingCount : fileCount
+      // Floor the denominator at the current file count: a tiny change set
+      // (1-5 files from the watcher) must never tank graph coverage past the
+      // staleness cliff, or readiness forces an endless rebuild loop.
+      const eligibleForCoverage = Math.max(listingCount, fileCount)
       if (changedFileIDs.length > 0) {
         yield* repo.bumpVersion({
           eligibleFiles: eligibleForCoverage,
@@ -1674,18 +1720,130 @@ const drainParsedQueue = Effect.gen(function* () {
   }),
 )
 
-function globToRegex(pattern: string): RegExp {
-  let regexStr = pattern
+const globToRegex = (pattern: string): string =>
+  pattern
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*")
-    .replace(/\?/g, ".")
-  if (!regexStr.startsWith(".*")) {
-    regexStr = "^" + regexStr
+    // `**`/`**/` are consumed into placeholders first: the `*`/`?` passes
+    // below would otherwise clobber the `(?:.*/)?` tokens they insert.
+    .replace(/\*\*\//g, "\u0000GS\u0000")
+    .replace(/\*\*/g, "\u0000G\u0000")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]")
+    .replace(/\u0000GS\u0000/g, "(?:.*/)?")
+    .replace(/\u0000G\u0000/g, ".*")
+
+type IgnorePattern = {
+  readonly regex: RegExp
+  readonly dirRegex: RegExp | undefined
+  readonly negated: boolean
+  readonly base: string
+}
+
+// Gitignore compiler with real git semantics: basename patterns match at any
+// depth, slash patterns are relative to the ignore file's directory, a leading
+// "/" anchors to it, a trailing "/" is directory-only, "!" negates, and
+// `**`/`**/` span path segments. Last-match-wins is applied by evaluatePatterns.
+const compileIgnorePattern = (raw: string, base: string): IgnorePattern | undefined => {
+  let pattern = raw.trim()
+  if (pattern === "" || pattern.startsWith("#")) return undefined
+  let negated = false
+  if (pattern.startsWith("!")) {
+    negated = true
+    pattern = pattern.slice(1).trim()
+    if (pattern === "") return undefined
   }
-  if (!regexStr.endsWith(".*")) {
-    regexStr = regexStr + "$"
+  let dirOnly = false
+  if (pattern.endsWith("/")) {
+    dirOnly = true
+    pattern = pattern.slice(0, -1)
   }
-  return new RegExp(regexStr)
+  if (pattern === "") return undefined
+  const anchored = pattern.startsWith("/")
+  const pathPart = anchored ? pattern.slice(1) : pattern
+  if (pathPart === "") return undefined
+  const glob = globToRegex(pathPart)
+  const prefix = anchored || pathPart.includes("/") ? "^" : "(?:^|.*/)?"
+  const regex = new RegExp(prefix + glob + (dirOnly ? "$" : "(?:/.*)?$"))
+  const dirRegex = dirOnly ? new RegExp(prefix + glob + "/.*$") : undefined
+  return { regex, dirRegex, negated, base }
+}
+
+// Evaluate one ignore file's patterns against a path (last match wins). Returns
+// true (ignored), false (re-included by a later negation), or undefined when no
+// pattern matched. Paths are matched relative to each pattern's own base dir.
+const evaluatePatterns = (patterns: readonly IgnorePattern[], fullPath: string, isDir: boolean): boolean | undefined => {
+  let decided: boolean | undefined
+  const relCache = new Map<string, string>()
+  for (const pattern of patterns) {
+    let rel = relCache.get(pattern.base)
+    if (rel === undefined) {
+      rel = path.relative(pattern.base, fullPath).replace(/\\/g, "/")
+      relCache.set(pattern.base, rel)
+    }
+    const matched = pattern.dirRegex
+      ? (isDir && pattern.regex.test(rel)) || pattern.dirRegex.test(rel)
+      : pattern.regex.test(rel)
+    if (matched) decided = !pattern.negated
+  }
+  return decided
+}
+
+const CODE_EXTENSIONS = new Set([
+  ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs",
+  ".py", ".pyw",
+  ".zig",
+  ".rs",
+  ".go",
+  ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh",
+  ".java", ".kt",
+  ".cs",
+  ".swift",
+  ".rb",
+  ".php",
+  ".sh", ".bat", ".ps1",
+  ".sql",
+  ".html", ".css",
+  ".md",
+])
+
+const isArtifactPath = (filePath: string): boolean => {
+  const base = path.basename(filePath)
+  const lower = base.toLowerCase()
+  const normPath = filePath.replace(/\\/g, "/")
+  if (lower === "package.json") return true
+  if (lower === "dockerfile" || lower.startsWith("dockerfile.") || lower.endsWith(".dockerfile")) return true
+  if (lower === "compose.yml" || lower === "compose.yaml") return true
+  if (lower === "docker-compose.yml" || lower === "docker-compose.yaml") return true
+  if (lower === "jenkinsfile") return true
+  if (lower === ".gitlab-ci.yml") return true
+  if (lower.startsWith("azure-pipelines") && lower.endsWith(".yml")) return true
+  if (lower.startsWith("tsconfig") && lower.endsWith(".json")) return true
+  if (lower === "pnpm-workspace.yaml" || lower === "pnpm-workspace.yml") return true
+  if (lower === "pyproject.toml") return true
+  if (lower === "cargo.toml") return true
+  if (lower === "go.mod") return true
+  if (lower === ".envrc" || lower === ".env.example") return true
+  if (lower.startsWith(".env")) return true
+  if (lower.startsWith("dotenv")) return true
+  if (/\/\.github\/workflows\/.+\.(yml|yaml)$/i.test(normPath)) return true
+  if (/\/\.circleci\/.+\.(yml|yaml)$/i.test(normPath)) return true
+  if (/\.config\.(json|js|ts)$/i.test(base)) return true
+  if (lower === "config.json") return true
+  return false
+}
+
+// Shared eligibility predicate: both the full walk (index) and the incremental
+// path (applyChanges) must index exactly the same file set, or the two graphs
+// diverge (non-code files appearing only in incremental builds).
+const isIndexablePath = (filePath: string): boolean =>
+  CODE_EXTENSIONS.has(path.extname(filePath).toLowerCase()) || isArtifactPath(filePath)
+
+type IgnoreContext = {
+  readonly root: string
+  readonly defaults: readonly IgnorePattern[]
+  readonly rootGit: readonly IgnorePattern[]
+  readonly banyan: readonly IgnorePattern[]
+  readonly nested: Map<string, IgnorePattern[] | null>
 }
 
 // Note: CodegraphRepo.defaultLayer already provides Database.defaultLayer,
