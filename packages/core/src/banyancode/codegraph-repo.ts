@@ -167,6 +167,16 @@ export interface Interface {
    */
   readonly countStaleFiles: () => Effect.Effect<number, never, never>
   /**
+   * Read the most recently-modified stale files (`mtime_ms > indexed_at`),
+   * newest mtime first. Used by the `codegraph_staleness` diagnostic tool to
+   * surface which files are driving the stale count.
+   */
+  readonly listStaleFiles: (limit: number) => Effect.Effect<
+    ReadonlyArray<{ path: string; mtimeMs: number; indexedAt: number }>,
+    never,
+    never
+  >
+  /**
    * Phase 6 (usage surface): read the `codegraph_tool_usage` rows most-used
    * first. Consumers (HTTP `GET /global/tool-usage`, the TUI sidebar widget)
    * surface tool adoption; the hot-tier promotion gate in `AdaptedCatalog`
@@ -905,6 +915,21 @@ export const layer = Layer.effect(
       return row?.c ?? 0
     })
 
+    const listStaleFiles = Effect.fn("CodegraphRepo.listStaleFiles")(function* (limit: number) {
+      const rows = yield* db
+        .all<{ path: string; mtime_ms: number; indexed_at: number }>(sql`
+          SELECT path, mtime_ms, indexed_at FROM codegraph_files
+          WHERE mtime_ms > indexed_at
+          ORDER BY mtime_ms DESC LIMIT ${limit}
+        `)
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        path: row.path,
+        mtimeMs: row.mtime_ms,
+        indexedAt: row.indexed_at,
+      }))
+    })
+
     const listToolUsage = Effect.fn("CodegraphRepo.listToolUsage")(function* (input?: { session?: string }) {
       const rows = yield* db
         .all<{ tool_id: string; use_count: number; last_used_at: number }>(sql`
@@ -1456,20 +1481,29 @@ export const layer = Layer.effect(
     const putNodes = Effect.fn("CodegraphRepo.putNodes")(function* (nodes: CodegraphNode[]) {
       if (nodes.length === 0) return
       yield* db
-        .insert(CodegraphNodesTable)
-        .values(nodes.map(nodeToInsertRow))
-        .onConflictDoUpdate({
-          target: CodegraphNodesTable.id,
-          set: {
-            file_id: nodes[0].fileID,
-            // Other columns will only diverge from the insert values on the
-            // very first conflict (when a node is re-parsed); in that case
-            // the caller already wrote the latest values via a transaction
-            // that wraps putNodes, so setting file_id here keeps the FK
-            // consistent without re-stating every column.
-          },
-        })
-        .run()
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            for (let i = 0; i < nodes.length; i += MAX_NODES_PER_INSERT) {
+              const batch = nodes.slice(i, i + MAX_NODES_PER_INSERT)
+              yield* tx
+                .insert(CodegraphNodesTable)
+                .values(batch.map(nodeToInsertRow))
+                .onConflictDoUpdate({
+                  target: CodegraphNodesTable.id,
+                  set: {
+                    file_id: sql`excluded.file_id`,
+                    // Other columns will only diverge from the insert values on the
+                    // very first conflict (when a node is re-parsed); in that case
+                    // the caller already wrote the latest values via a transaction
+                    // that wraps putNodes, so setting file_id here keeps the FK
+                    // consistent without re-stating every column.
+                  },
+                })
+                .run()
+                .pipe(Effect.orDie)
+            }
+          }),
+        )
         .pipe(Effect.orDie)
     })
 
@@ -1542,24 +1576,27 @@ export const layer = Layer.effect(
               .pipe(Effect.orDie)
 
             if (input.nodes.length > 0) {
-              yield* tx
-                .insert(CodegraphNodesTable)
-                .values(input.nodes.map(nodeToInsertRow))
-                .onConflictDoUpdate({
-                  target: CodegraphNodesTable.id,
-                  set: {
-                    file_id: sql`excluded.file_id`,
-                    kind: sql`excluded.kind`,
-                    name: sql`excluded.name`,
-                    signature: sql`excluded.signature`,
-                    start_line: sql`excluded.start_line`,
-                    end_line: sql`excluded.end_line`,
-                    code: sql`excluded.code`,
-                    is_entrypoint: sql`excluded.is_entrypoint`,
-                  },
-                })
-                .run()
-                .pipe(Effect.orDie)
+              for (let i = 0; i < input.nodes.length; i += MAX_NODES_PER_INSERT) {
+                const batch = input.nodes.slice(i, i + MAX_NODES_PER_INSERT)
+                yield* tx
+                  .insert(CodegraphNodesTable)
+                  .values(batch.map(nodeToInsertRow))
+                  .onConflictDoUpdate({
+                    target: CodegraphNodesTable.id,
+                    set: {
+                      file_id: sql`excluded.file_id`,
+                      kind: sql`excluded.kind`,
+                      name: sql`excluded.name`,
+                      signature: sql`excluded.signature`,
+                      start_line: sql`excluded.start_line`,
+                      end_line: sql`excluded.end_line`,
+                      code: sql`excluded.code`,
+                      is_entrypoint: sql`excluded.is_entrypoint`,
+                    },
+                  })
+                  .run()
+                  .pipe(Effect.orDie)
+              }
 
               // Skip service-tag extraction entirely for files under test
               // paths. A `*.test.ts` that declares `class MemoryRepo extends
@@ -1685,6 +1722,7 @@ export const layer = Layer.effect(
       countEdges,
       countFiles,
       countStaleFiles,
+      listStaleFiles,
       listToolUsage,
       putEdge,
       putEdges,
