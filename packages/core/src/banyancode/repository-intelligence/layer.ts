@@ -407,6 +407,13 @@ export const layer = Layer.effect(
         // bounded candidate-test set below — the one consumer that needs it
         // (substring import matching in doImportMatch).
         const allFiles = ctx?.allFiles ?? (yield* repo.listAllFiles())
+        // WS1 (tool-hardening R3): this light load cannot take a `name`
+        // filter even though `input.symbol` is in scope — the projection
+        // drives TEST discovery (kind=test / test-file patterns), and test
+        // nodes' names rarely contain the queried symbol; filtering would
+        // drop the very candidates `doImportMatch` scans for `code`
+        // substrings. Bounded by node count; migrate to name-filtered SQL
+        // when >100k nodes.
         const allNodesLight = ctx?.allNodesLight ?? (yield* repo.searchNodesLight({ limit: 100000 }))
         const testFileIDs = new Set(
           allFiles
@@ -593,6 +600,10 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const [allFiles, allNodesLight, meta] = yield* Effect.all([
           repo.listAllFiles(),
+          // WS1 (tool-hardening R3): shared context load — no single symbol
+          // name is known here (the projection feeds findTests, query file
+          // matches, and impact). Bounded by node count; migrate to
+          // name-filtered SQL when >100k nodes.
           repo.searchNodesLight({ limit: 100000 }),
           repo.getMeta(),
         ])
