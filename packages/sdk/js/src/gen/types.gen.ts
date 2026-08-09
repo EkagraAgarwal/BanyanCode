@@ -990,10 +990,6 @@ export type AgentConfig = {
    * Hex color code for the agent (e.g., #FF5733)
    */
   color?: string
-  /**
-   * Maximum number of agentic iterations before forcing text-only response
-   */
-  maxSteps?: number
   permission?: {
     edit?: "ask" | "allow" | "deny"
     bash?:
@@ -1610,7 +1606,6 @@ export type Agent = {
   options: {
     [key: string]: unknown
   }
-  maxSteps?: number
 }
 
 export type McpStatusConnected = {

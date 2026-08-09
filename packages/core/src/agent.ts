@@ -5,7 +5,6 @@ import { castDraft, enableMapSet, type Draft } from "immer"
 import { ModelV2 } from "./model"
 import { PermissionSchema } from "./permission/schema"
 import { ProviderV2 } from "./provider"
-import { PositiveInt } from "./schema"
 import { State } from "./state"
 
 export const ID = Schema.String.pipe(Schema.brand("AgentV2.ID"))
@@ -26,7 +25,6 @@ export class Info extends Schema.Class<Info>("AgentV2.Info")({
   mode: Schema.Literals(["subagent", "primary", "all"]),
   hidden: Schema.Boolean,
   color: Color.pipe(Schema.optional),
-  steps: PositiveInt.pipe(Schema.optional),
   permissions: PermissionSchema.Ruleset,
 }) {
   static empty(id: ID) {
