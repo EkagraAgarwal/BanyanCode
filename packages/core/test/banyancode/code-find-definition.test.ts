@@ -66,6 +66,7 @@ const mockCodegraphRepoLayer = Layer.succeed(
     countNodes: () => Effect.succeed(0),
     countEdges: () => Effect.succeed(0),
     countStaleFiles: () => Effect.succeed(0),
+    listStaleFiles: () => Effect.succeed([]),
     listToolUsage: () => Effect.succeed([]),
     countFiles: () => Effect.succeed(0),
     putEdge: () => Effect.void,

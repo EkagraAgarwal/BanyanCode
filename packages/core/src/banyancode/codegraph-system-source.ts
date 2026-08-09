@@ -111,12 +111,12 @@ const getBanyanToolIds = (): ReadonlySet<string> =>
   new Set<string>(BanyanToolsManifest.BANYAN_PUBLIC_TOOL_IDS)
 
 const TOOL_FAMILIES = [
-  { title: "Code graph", ids: ["codegraph_build", "codegraph_remove", "code_find"] },
+  { title: "Code graph", ids: ["codegraph_build", "codegraph_remove", "code_find", "codegraph_staleness"] },
   { title: "Repository intelligence", ids: ["repository_query", "repository_explain", "repository_impact", "repository_trace", "repository_tests"] },
   { title: "Edit decision support", ids: ["blast_radius", "preflight", "safe_rename", "edit_plan"] },
   { title: "External research", ids: ["websearch_free"] },
-  { title: "Memory", ids: ["memory_store", "memory_recall", "memory_list", "memory_search", "memory_forget", "memory_candidate_emit"] },
-  { title: "Mesh coordination", ids: ["mesh_control", "mesh_subscribe"] },
+  { title: "Memory", ids: ["memory_store", "memory_recall", "memory_list", "memory_search", "memory_forget", "memory_candidate_emit", "memory_stats"] },
+  { title: "Mesh coordination", ids: ["mesh_control", "mesh_subscribe", "mesh_status"] },
   { title: "Peer messaging", ids: ["subagent_message"] },
   { title: "Shared memory", ids: ["shared_memory"] },
   { title: "System status", ids: ["system_status"] },

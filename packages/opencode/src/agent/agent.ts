@@ -175,6 +175,9 @@ export const layer = Layer.effect(
           banyan_typecheck: "allow",
           banyan_test: "allow",
           banyan_lint: "allow",
+          codegraph_staleness: "allow",
+          memory_stats: "allow",
+          mesh_status: "allow",
         })
 
         const user = Permission.fromConfig(cfg.permission ?? {})
@@ -309,6 +312,9 @@ export const layer = Layer.effect(
                 banyan_typecheck: "allow",
                 banyan_test: "allow",
                 banyan_lint: "allow",
+                codegraph_staleness: "allow",
+                memory_stats: "allow",
+                mesh_status: "allow",
                 codegraph_query: "allow",
                 codegraph_search: "allow",
                 codegraph_callers: "allow",
@@ -424,6 +430,9 @@ export const layer = Layer.effect(
                 banyan_typecheck: "allow",
                 banyan_test: "allow",
                 banyan_lint: "allow",
+                codegraph_staleness: "allow",
+                memory_stats: "allow",
+                mesh_status: "allow",
                 codegraph_query: "allow",
                 codegraph_callers: "allow",
                 codegraph_dependents: "allow",
@@ -509,6 +518,9 @@ export const layer = Layer.effect(
               defaults,
               Permission.fromConfig({
                 "*": "deny",
+                codegraph_staleness: "allow",
+                memory_stats: "allow",
+                mesh_status: "allow",
               }),
               user,
             ),
@@ -525,6 +537,9 @@ export const layer = Layer.effect(
               defaults,
               Permission.fromConfig({
                 "*": "deny",
+                codegraph_staleness: "allow",
+                memory_stats: "allow",
+                mesh_status: "allow",
               }),
               user,
             ),
@@ -540,6 +555,9 @@ export const layer = Layer.effect(
               defaults,
               Permission.fromConfig({
                 "*": "deny",
+                codegraph_staleness: "allow",
+                memory_stats: "allow",
+                mesh_status: "allow",
               }),
               user,
             ),
