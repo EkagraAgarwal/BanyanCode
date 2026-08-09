@@ -10,7 +10,10 @@ import { InstanceState } from "@/effect/instance-state"
 import { MessageID, PartID } from "../session/schema"
 import EXIT_DESCRIPTION from "./plan-exit.txt"
 
-export const Parameters = Schema.Struct({})
+// `Schema.Struct({})` projects to an `anyOf` root that strict tool-schema
+// validators reject; `Schema.Record(Schema.String, Schema.Unknown)` projects
+// to `{ type: "object" }` (see core tool/system-status.ts for the same fix).
+export const Parameters = Schema.Record(Schema.String, Schema.Unknown)
 
 export const PlanExitTool = Tool.define(
   "plan_exit",

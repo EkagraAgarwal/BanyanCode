@@ -17,7 +17,11 @@ export const name = "memory_stats"
 // in sync if the quota ever changes.
 const QUOTA_BYTES = 100 * 1024 * 1024
 
-export const Input = Schema.Struct({}).annotate({
+// `Schema.Struct({})` projects to `{ anyOf: [{type:"object"}, {type:"array"}] }`,
+// which strict tool-schema validators (OpenAI Responses, GPT-5 family, etc.)
+// reject. `Schema.Record(Schema.String, Schema.Unknown)` projects to a bare
+// `{ type: "object" }`; see system-status.ts for the same fix.
+export const Input = Schema.Record(Schema.String, Schema.Unknown).annotate({
   description:
     "Report cross-session memory usage: entry counts and approximate stored " +
     "bytes for global and session scopes, compared against the storage quota.",

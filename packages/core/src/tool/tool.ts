@@ -343,6 +343,27 @@ function runtimeOf(tool: AnyTool) {
 
 function toJsonSchema(schema: Schema.Top): JsonSchema.JsonSchema {
   const document = Schema.toJsonSchemaDocument(schema)
-  if (Object.keys(document.definitions).length === 0) return document.schema
-  return { ...document.schema, $defs: document.definitions }
+  const projected = Object.keys(document.definitions).length === 0 ? document.schema : { ...document.schema, $defs: document.definitions }
+  return normalizeEmptyStructUnion(projected)
+}
+
+// Effect projects `Schema.Struct({})` (zero-arg tool inputs) to
+// `{ anyOf: [{ type: "object" }, { type: "array" }] }`, a root with no
+// `type: "object"` that strict tool-schema validators (OpenAI Responses,
+// GPT-5 family, etc.) reject. Emit the accepted bare object shape instead,
+// matching the V1 `ToolJsonSchema.isEmptyStructUnion` normalization.
+function normalizeEmptyStructUnion(schema: JsonSchema.JsonSchema): JsonSchema.JsonSchema {
+  if (!isRecord(schema) || !Array.isArray(schema.anyOf)) return schema
+  const variants = schema.anyOf
+  const isEmptyStructUnion =
+    variants.length === 2 &&
+    variants.some((item) => isRecord(item) && item.type === "object" && item.properties === undefined) &&
+    variants.some((item) => isRecord(item) && item.type === "array" && item.items === undefined)
+  if (!isEmptyStructUnion) return schema
+  const { anyOf: _, ...rest } = schema
+  return { type: "object", properties: {}, ...rest }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }

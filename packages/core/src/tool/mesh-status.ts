@@ -11,7 +11,11 @@ const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
 export const name = "mesh_status"
 
-export const Input = Schema.Struct({}).annotate({
+// `Schema.Struct({})` projects to `{ anyOf: [{type:"object"}, {type:"array"}] }`,
+// which strict tool-schema validators (OpenAI Responses, GPT-5 family, etc.)
+// reject. `Schema.Record(Schema.String, Schema.Unknown)` projects to a bare
+// `{ type: "object" }`; see system-status.ts for the same fix.
+export const Input = Schema.Record(Schema.String, Schema.Unknown).annotate({
   description:
     "Report the subagent mesh state for the current orchestration tree: " +
     "peer agents and their statuses, plus recent peer activity. Read-only " +
