@@ -25,13 +25,14 @@
 
 process.env.BANYANCODE_ENABLE = "1"
 
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { Agent } from "@/agent/agent"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
+import { Permission } from "@/permission"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Plugin } from "@/plugin"
@@ -39,6 +40,8 @@ import { Provider } from "@/provider/provider"
 import { Skill } from "@/skill"
 import { SystemPrompt, provider as systemProvider } from "@/session/system"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
+
+import PLAN_MODE from "../../src/session/prompt/plan-mode.txt"
 
 // Provider prompts (gpt.txt, codex.txt, gemini.txt) carry the
 // "BanyanCode tool guide" pointer phrase.
@@ -139,4 +142,52 @@ describe("build/plan effective prompt — pointer present for pointer-bearing pr
       )
     }
   }
+})
+
+describe("orchestration-first prompt policy", () => {
+  it.instance("banyan block names the build-mode explore + coder + researcher fan-out", () =>
+    Effect.gen(function* () {
+      const block = yield* (yield* SystemPrompt.Service).banyan()
+      expect(block).toBeDefined()
+      expect(block).toContain("Mode fan-out policy")
+      expect(block).toContain("Plan mode")
+      expect(block).toContain("Build mode")
+      expect(block).toContain("explore")
+      expect(block).toContain("coder")
+      expect(block).toContain("researcher")
+      expect(block).toContain("background")
+      expect(block).toContain("the cap is 5")
+    }),
+  )
+
+  it.instance("banyan block routes searches through the codegraph-first ladder", () =>
+    Effect.gen(function* () {
+      const block = yield* (yield* SystemPrompt.Service).banyan()
+      expect(block).toBeDefined()
+      expect(block).toContain("Codegraph-first search policy (ALWAYS)")
+      expect(block).toContain("code_find(intent='definition')")
+      expect(block).toContain("repository_explain")
+      expect(block).toContain("blast_radius")
+      expect(block).toContain("preflight")
+      expect(block).toContain("last resorts")
+    }),
+  )
+
+  test("plan-mode.txt launches explore and researcher in parallel and aggregates via shared_memory", () => {
+    expect(PLAN_MODE).toContain("Launch explore and researcher subagents IN PARALLEL")
+    expect(PLAN_MODE).toContain("background: true")
+    expect(PLAN_MODE).toContain("researcher agent in the same parallel batch")
+    expect(PLAN_MODE).toContain("shared_memory")
+    expect(PLAN_MODE).toContain("MUST NOT make any edits")
+  })
+
+  it.instance("coder agent permits task: researcher", () =>
+    Effect.gen(function* () {
+      const coder = yield* Agent.Service.use((svc) => svc.get("coder"))
+      expect(coder).toBeDefined()
+      if (!coder) return
+      const result = Permission.evaluate("task", "researcher", coder.permission)
+      expect(result.action).toBe("allow")
+    }),
+  )
 })

@@ -4,7 +4,7 @@ Follow the Codegraph-first search policy (ALWAYS) and BanyanCode orchestration s
 
 ## Workflow
 
-1. Start with `code_find` or `repository_query` to narrow candidates.
+1. Start with `banyan_repo_map` (workspace outline), then `code_find` or `repository_query` to narrow candidates.
 2. Read the actual file at the returned line range to confirm.
 3. Fall back to grep / glob only when the graph misses it.
 4. Return absolute file paths; cite `file:line` for findings.
@@ -18,7 +18,7 @@ Adapt to the caller's tier:
 
 ## Scout fan-out
 
-You MUST spawn parallel scout subagents via `task(background: true)` in ONE message when the caller asks for "very thorough" — max {{maxSubagents}} concurrent, each with a narrow, non-overlapping facet of the question. Scouts write findings to shared_memory under per-facet keys and report via subagent_message(kind="inform"). Aggregate their results; never re-run their searches.
+You MUST spawn parallel scout subagents (2-5) via `task(background: true)` in ONE message for wide searches or "very thorough" calls — max {{maxSubagents}} concurrent, each with a narrow, non-overlapping facet of the question. Scouts write findings to shared_memory under namespaced keys ("explore:<topic>:<facet>") and report via subagent_message(kind="inform"). Aggregate their results; never re-run their searches.
 
 ## Constraints
 

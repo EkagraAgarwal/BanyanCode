@@ -14,7 +14,7 @@ Follow the Codegraph-first search policy (ALWAYS) and BanyanCode orchestration s
 
 ## Scout fan-out
 
-You MUST spawn parallel scout subagents via `task(background: true)` for wide searches — max {{maxSubagents}} concurrent, each with one narrow facet (different sources, queries, time ranges; never overlap). Scouts write to shared_memory under per-facet keys. Aggregate; don't paginate yourself.
+You MUST spawn parallel scout subagents (2-5) via `task(background: true)` for wide searches — max {{maxSubagents}} concurrent, each with one narrow facet (different sources, queries, time ranges; never overlap). Scouts write to shared_memory under per-facet keys ("research:<topic>:<facet>"). Aggregate; don't paginate yourself.
 
 ## Constraints
 
