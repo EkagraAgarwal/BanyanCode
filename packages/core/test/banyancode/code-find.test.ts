@@ -1,23 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import path from "path"
-import fs from "fs/promises"
 import { Effect, Layer } from "effect"
-import { Database } from "@opencode-ai/core/database/database"
-import { FSUtil } from "@opencode-ai/core/fs-util"
-import { tmpdir } from "../fixture/tmpdir"
 import { PermissionV2 } from "../../src/permission"
-import type { Interface as PermissionV2Interface } from "../../src/permission"
 import { CodegraphRepo } from "../../src/banyancode/codegraph-repo"
 import { CodegraphAnalyzer } from "../../src/banyancode/codegraph-analyzer"
-import { CodegraphReadiness } from "../../src/banyancode/codegraph-readiness"
-import { CodegraphIndexer } from "../../src/banyancode/codegraph-indexer"
-import { Banyan } from "../../src/banyancode"
-import { makeCodeFindTool } from "../../src/tool/code-find"
-import { AgentV2 } from "../../src/agent"
-import { SessionMessage } from "../../src/session/message"
-import { SessionSchema } from "../../src/session/schema"
-import { Tool } from "../../src/tool/tool"
-import { resolveGraphTargetPure, resolveGraphTargetStrict, isNodeIDShape } from "../../src/banyancode/symbol-resolver"
+import { resolveGraphTargetPure, resolveGraphTargetStrict } from "../../src/banyancode/symbol-resolver"
 import type { CodegraphNode, CodegraphFile, CodegraphMeta } from "../../src/banyancode/types"
 
 // Set BANYANCODE_ENABLE for all tests
@@ -91,9 +77,6 @@ const mockCodegraphRepoLayer = Layer.succeed(
     deleteDerivedEdgesForFiles: () => Effect.succeed([]),
     deleteAllDerivedEdges: () => Effect.succeed([]),
     fileIDsByServiceName: () => Effect.succeed([]),
-    listServiceTags: () => Effect.succeed([]),
-    listBindings: () => Effect.succeed([]),
-    bindingsByFileIDs: () => Effect.succeed([]),
     writeFileGraph: () => Effect.void,
     clearAll: () => Effect.succeed({ sizeBefore: 0, sizeAfter: 0, droppedFile: false }),
     recordParseError: () => Effect.void,
@@ -328,9 +311,6 @@ describe("code_find", () => {
         deleteDerivedEdgesForFiles: () => Effect.succeed([]),
         deleteAllDerivedEdges: () => Effect.succeed([]),
         fileIDsByServiceName: () => Effect.succeed([]),
-        listServiceTags: () => Effect.succeed([]),
-        listBindings: () => Effect.succeed([]),
-        bindingsByFileIDs: () => Effect.succeed([]),
         writeFileGraph: () => Effect.void,
         clearAll: () => Effect.succeed({ sizeBefore: 0, sizeAfter: 0, droppedFile: false }),
         recordParseError: () => Effect.void,
@@ -426,9 +406,6 @@ describe("code_find", () => {
         deleteDerivedEdgesForFiles: () => Effect.succeed([]),
         deleteAllDerivedEdges: () => Effect.succeed([]),
         fileIDsByServiceName: () => Effect.succeed([]),
-        listServiceTags: () => Effect.succeed([]),
-        listBindings: () => Effect.succeed([]),
-        bindingsByFileIDs: () => Effect.succeed([]),
         writeFileGraph: () => Effect.void,
         clearAll: () => Effect.succeed({ sizeBefore: 0, sizeAfter: 0, droppedFile: false }),
         recordParseError: () => Effect.void,
@@ -542,9 +519,6 @@ describe("code_find", () => {
         deleteDerivedEdgesForFiles: () => Effect.succeed([]),
         deleteAllDerivedEdges: () => Effect.succeed([]),
         fileIDsByServiceName: () => Effect.succeed([]),
-        listServiceTags: () => Effect.succeed([]),
-        listBindings: () => Effect.succeed([]),
-        bindingsByFileIDs: () => Effect.succeed([]),
         writeFileGraph: () => Effect.void,
         clearAll: () => Effect.succeed({ sizeBefore: 0, sizeAfter: 0, droppedFile: false }),
         recordParseError: () => Effect.void,
@@ -596,190 +570,4 @@ describe("code_find", () => {
     )
   })
 
-})
-
-// ---------------------------------------------------------------------------
-// Phase 0 real-index regression: node-ID resolution, stale node-ID
-// diagnostics, and service-tag leaf normalization against a graph built by
-// the REAL indexer (UUID fileIDs, absolute stored paths).
-// ---------------------------------------------------------------------------
-describe("code_find real-index resolution", () => {
-  const indexLayer = CodegraphIndexer.layer.pipe(
-    Layer.provide(FSUtil.defaultLayer),
-    Layer.provide(CodegraphRepo.defaultLayer),
-  )
-  const repoLayer = CodegraphRepo.defaultLayer
-
-  const writeFixture = async (root: string) => {
-    const src = path.join(root, "src")
-    await fs.mkdir(src, { recursive: true })
-    await fs.writeFile(
-      path.join(src, "service.ts"),
-      [
-        'import { Context } from "effect"',
-        "export class MeshCoordinator extends Context.Service<MeshCoordinator, unknown>()(\"@banyancode/MeshCoordinator\") {}",
-        "",
-      ].join("\n"),
-    )
-    await fs.writeFile(
-      path.join(src, "index.ts"),
-      ["export function bootstrap() { return 42 }", "export const helper = (n: number) => n * 2"].join("\n"),
-    )
-  }
-
-  const indexFixture = (root: string, dbPath: string) => {
-    const dbLayer = Database.layerFromPath(dbPath)
-    return Effect.runPromise(
-      Effect.gen(function* () {
-        const indexer = yield* CodegraphIndexer.Service
-        yield* indexer.index({ root, force: true })
-      }).pipe(Effect.provide(indexLayer), Effect.provide(dbLayer), Effect.scoped),
-    )
-  }
-
-  test("isNodeIDShape recognizes UUID-prefixed node IDs and rejects plain names", () => {
-    expect(isNodeIDShape("f0e2c9a8-1234-4abc-8def-0123456789ab:function:bootstrap:1")).toBe(true)
-    expect(isNodeIDShape("f0e2c9a8-1234-4abc-8def-0123456789ab:file")).toBe(true)
-    expect(isNodeIDShape("bootstrap")).toBe(false)
-    expect(isNodeIDShape("Banyan.MeshCoordinator")).toBe(false)
-  })
-
-  test("direct node-ID resolution returns the node with derivation node-id", async () => {
-    await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "test.sqlite")
-    await writeFixture(tmp.path)
-    await indexFixture(tmp.path, dbPath)
-    const dbLayer = Database.layerFromPath(dbPath)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* CodegraphRepo.Service
-        const nodes = yield* repo.listAllNodes()
-        const target = nodes.find((n) => n.kind === "function" && n.name === "bootstrap")
-        expect(target).toBeDefined()
-        if (!target) return
-        expect(isNodeIDShape(target.id)).toBe(true)
-
-        const result = yield* resolveGraphTargetStrict(repo, { target: target.id, limit: 10 })
-        expect(result._tag).toBe("Ok")
-        if (result._tag === "Ok") {
-          expect(result.value.derivation).toBe("node-id")
-          expect(result.value.nodeID).toBe(target.id)
-          expect(result.value.node.name).toBe("bootstrap")
-        }
-      }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
-    )
-  })
-
-  test("a stale/nonexistent node-ID-shaped target misses with node-id tried", async () => {
-    await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "test.sqlite")
-    await writeFixture(tmp.path)
-    await indexFixture(tmp.path, dbPath)
-    const dbLayer = Database.layerFromPath(dbPath)
-
-    const staleID = "00000000-0000-4000-8000-000000000000:function:gone:1"
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* CodegraphRepo.Service
-        const result = yield* resolveGraphTargetStrict(repo, { target: staleID, limit: 10 })
-        expect(result._tag).toBe("Miss")
-        if (result._tag === "Miss") {
-          expect(result.value.tried).toContain("node-id")
-        }
-      }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
-    )
-  })
-
-  test("code_find surfaces the stale-node-id diagnostic for an absent node-ID target", async () => {
-    await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "test.sqlite")
-    await writeFixture(tmp.path)
-    await indexFixture(tmp.path, dbPath)
-    const dbLayer = Database.layerFromPath(dbPath)
-
-    const mockReadinessLayer = Layer.succeed(
-      CodegraphReadiness.Service,
-      CodegraphReadiness.Service.of({
-        ensureReady: () => Effect.succeed({ reason: "ready", autoBuilt: false }),
-        status: () => Effect.succeed({ reason: "ready", autoBuilt: false }),
-      }),
-    )
-    const worktreeLayer = Layer.succeed(
-      Banyan.WorktreeContext,
-      () => Effect.succeed<string | undefined>(tmp.path),
-    )
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const permission = yield* PermissionV2.Service
-        const repo = yield* CodegraphRepo.Service
-        const analyzer = yield* CodegraphAnalyzer.Service
-        const readiness = yield* CodegraphReadiness.Service
-        const tool = makeCodeFindTool({
-          permission: permission as PermissionV2Interface,
-          repo,
-          analyzer,
-          readiness,
-        })
-        const result = yield* Tool.settle(
-          tool,
-          {
-            type: "tool-call",
-            id: "call-1",
-            name: "code_find",
-            input: {
-              intent: "definition",
-              target: "00000000-0000-4000-8000-000000000000:function:gone:1",
-              includeKeywordFallback: false,
-              limit: 10,
-            },
-          },
-          {
-            sessionID: SessionSchema.ID.make("ses-real-index"),
-            agent: AgentV2.ID.make("test"),
-            assistantMessageID: SessionMessage.ID.make("msg_real-index"),
-            toolCallID: "call-1",
-          },
-        )
-        const structured = result.structured as { _diagnostic?: string; resolvedNodeID?: string }
-        expect(structured._diagnostic).toBe("stale-node-id")
-        expect(structured.resolvedNodeID).toBeUndefined()
-      }).pipe(
-        Effect.provide(repoLayer),
-        Effect.provide(mockPermissionLayer),
-        Effect.provide(mockCodegraphAnalyzerLayer),
-        Effect.provide(mockReadinessLayer),
-        Effect.provide(worktreeLayer),
-        Effect.provide(dbLayer),
-        Effect.scoped,
-      ),
-    )
-  })
-
-  test("bare MeshCoordinator and Banyan.MeshCoordinator resolve to the same node via service-tag leaf", async () => {
-    await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "test.sqlite")
-    await writeFixture(tmp.path)
-    await indexFixture(tmp.path, dbPath)
-    const dbLayer = Database.layerFromPath(dbPath)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* CodegraphRepo.Service
-
-        const bare = yield* resolveGraphTargetStrict(repo, { target: "MeshCoordinator", limit: 10 })
-        expect(bare._tag).toBe("Ok")
-        const qualified = yield* resolveGraphTargetStrict(repo, { target: "Banyan.MeshCoordinator", limit: 10 })
-        expect(qualified._tag).toBe("Ok")
-        if (bare._tag === "Ok" && qualified._tag === "Ok") {
-          expect(bare.value.nodeID).toBe(qualified.value.nodeID)
-          expect(bare.value.node.name).toBe("MeshCoordinator")
-          expect(bare.value.derivation).toBe("tag-fallback")
-          expect(qualified.value.derivation).toBe("tag-fallback")
-        }
-      }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
-    )
-  })
 })

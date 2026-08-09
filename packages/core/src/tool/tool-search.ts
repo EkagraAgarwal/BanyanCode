@@ -73,12 +73,8 @@ const renderOutput = (output: Schema.Schema.Type<typeof Output>): string => {
     return `${header}\n\nNo matching tools.`
   }
   const lines = output.hits.map((hit) => {
-    // One-line hint per hit: the full description is available via the
-    // materialized tool definitions; a 3K-token dump per search call was a
-    // measured cost driver in the chess benchmark (5 searches ≈ 15K tokens).
-    const collapsed = hit.tool.description.replace(/\s+/g, " ").trim()
-    const hint = collapsed.length <= 140 ? collapsed : `${collapsed.slice(0, 139).trimEnd()}…`
-    return `  ${hit.tool.id} (${hit.tool.tier}) rel=${hit.relevance.toFixed(2)}\n    ${hint}`
+    const description = hit.tool.description.replace(/\s+/g, " ").trim()
+    return `  ${hit.tool.id} (${hit.tool.tier}) rel=${hit.relevance.toFixed(2)}\n    ${description}`
   })
   return `${header}\n\n${lines.join("\n")}`
 }

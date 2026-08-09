@@ -90,10 +90,3 @@ export const PROVIDER_PROMPT_FILES = [
 
 // 7 built-in agents that the BanyanCode tool guide policy must cover.
 export const BUILTIN_AGENT_NAMES = ["build", "plan", "explore", "coder", "scout", "researcher", "orchestrator"] as const
-
-// Size budget for the rendered tool guide section (the "## BanyanCode tool
-// guide" block, excluding POLICY_TEXT). The guide is a one-line routing hint
-// per tool — full descriptions live in the tools array, so duplicating them
-// here only inflates the request prefix and every cache miss. 8000 chars ≈
-// ~2.2K tokens (down from ~14K before the compaction in B1).
-export const MAX_GUIDE_CHARS = 8000

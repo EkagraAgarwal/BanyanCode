@@ -58,6 +58,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { EventV2 } from "@opencode-ai/core/event"
+import { PluginV2 } from "@opencode-ai/core/plugin"
 import { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
 import * as AiSdkTransportModule from "./transport-ai-sdk"
 import { applyCodegraphBuildBridge } from "./banyancode-codegraph-bridge"
@@ -136,29 +137,44 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(Ripgrep.defaultLayer),
   Layer.provideMerge(FetchHttpClient.layer),
   Layer.provideMerge(InstanceLayer.layer),
-  // Root-aware graph owner. Every graph service below is bound to the
-  // canonical workspace root (explicit tool input → session WorktreeContext →
-  // cwd/repo-root fallback), NOT to process.cwd() at process start. The
-  // codegraphReadinessDefaultLayer / build / bootstrap seams are the SAME
-  // root-bound layers server.ts mounts via the createRoutes facade, so
-  // slash commands, agent tool calls, /global/codegraph-status, and the TUI
-  // progress bridge all share one DB identity and build state.
-  Layer.provideMerge(BanyanToolsMount.banyanGraphOwnerLayer),
-  Layer.provideMerge(BanyanToolsMount.codegraphBuildServiceDefaultLayer),
-  Layer.provideMerge(BanyanToolsMount.codegraphReadinessDefaultLayer),
-  Layer.provideMerge(BanyanToolsMount.codegraphBootstrapDefaultLayer),
-  Layer.provideMerge(Banyan.codegraphSystemSourceDefaultLayer),
+  Layer.provideMerge(Banyan.codegraphRepoDefaultLayer),
+  Layer.provideMerge(Banyan.editPlannerDefaultLayer),
+  Layer.provideMerge(Banyan.codegraphAnalyzerDefaultLayer),
   Layer.provideMerge(
     Banyan.banyanFilesystemDefaultLayer.pipe(
       Layer.provide(EventV2.defaultLayer),
     ),
   ),
+  Layer.provideMerge(Banyan.searchDefaultLayer),
+  Layer.provideMerge(Banyan.structuralQueriesDefaultLayer),
+  Layer.provideMerge(
+    Banyan.codegraphBuildServiceDefaultLayer.pipe(
+      Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+      Layer.provide(PluginV2.locationLayer),
+      Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
+    ),
+  ),
+  Layer.provideMerge(
+    Banyan.codegraphReadinessDefaultLayer.pipe(
+      Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+      Layer.provide(PluginV2.locationLayer),
+      Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
+    ),
+  ),
+  Layer.provideMerge(
+    Banyan.repositoryIntelligenceDefaultLayer.pipe(
+      Layer.provide(Database.defaultLayer),
+    ),
+  ),
   Layer.provideMerge(coreToolCatalogLayer),
   Layer.provideMerge(
     Layer.mergeAll(
+      Banyan.codegraphAnalyzerDefaultLayer,
+      Banyan.searchDefaultLayer,
+      Banyan.structuralQueriesDefaultLayer,
       Banyan.gitDefaultLayer,
-      Banyan.systemMonitorDefaultLayer,
-      Banyan.banyanConfigServiceDefaultLayer,
+Banyan.systemMonitorDefaultLayer,
+  Banyan.banyanConfigServiceDefaultLayer,
       Banyan.memoryRepoDefaultLayer,
       Banyan.memoryServiceDefaultLayer,
       Banyan.memoryProjectionDefaultLayer,
@@ -169,7 +185,7 @@ export const AppLayer = Layer.mergeAll(
       Layer.provide(
         CrossSpawnSpawner.defaultLayer as Layer.Layer<unknown, unknown, never>,
       ),
-      Layer.provide(BanyanToolsMount.banyanGraphOwnerLayer),
+      Layer.provide(Banyan.codegraphRepoDefaultLayer),
       Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
       Layer.provide(Database.defaultLayer),
       Layer.provide(FSUtil.defaultLayer),
@@ -317,38 +333,5 @@ AppRuntime.runFork(
       )
     }
     yield* Effect.logInfo("─".repeat(40))
-  }) as never,
-)
-
-// Assert the V1 prompt's codegraph source + bootstrap are in scope. When
-// BanyanCode is enabled the session prompt composes the dynamic tool guide
-// and graph state through `CodegraphSystemSource` and `CodegraphBootstrap`;
-// if either service is dropped from AppLayer, SystemPrompt.codegraph() would
-// silently degrade to the static POLICY_TEXT. Die loudly instead of shipping
-// a degraded prompt.
-AppRuntime.runFork(
-  Effect.gen(function* () {
-    if (process.env.BANYANCODE_ENABLE === "0") return
-    const source = yield* Effect.serviceOption(Banyan.CodegraphSystemSource)
-    if (Option.isNone(source)) {
-      return yield* Effect.die(
-        new Error(
-          `AppRuntime: BanyanCode is enabled but CodegraphSystemSource is not mounted. ` +
-            `The V1 prompt would silently fall back to the static policy. ` +
-            `Mount Banyan.codegraphSystemSourceDefaultLayer in AppLayer.`,
-        ),
-      )
-    }
-    const bootstrap = yield* Effect.serviceOption(Banyan.CodegraphBootstrap)
-    if (Option.isNone(bootstrap)) {
-      return yield* Effect.die(
-        new Error(
-          `AppRuntime: BanyanCode is enabled but CodegraphBootstrap is not mounted. ` +
-            `The V1 prompt would omit graph state. ` +
-            `Mount BanyanToolsMount.codegraphBootstrapDefaultLayer in AppLayer.`,
-        ),
-      )
-    }
-    yield* Effect.logInfo("codegraph: V1 prompt source + bootstrap mounted")
   }) as never,
 )

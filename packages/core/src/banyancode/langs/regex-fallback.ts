@@ -24,5 +24,5 @@ export function parseGeneric(content: string, fileID: string): ParseResult {
     addNode("class", name, startLine, endLine)
   }
 
-  return { nodes, edges: [], bindings: [] }
+  return { nodes, edges: [] }
 }

@@ -63,7 +63,7 @@ const seedUsage = async (
         yield* db.run(sql`
           INSERT INTO codegraph_tool_usage (tool_id, last_used_at, use_count)
           VALUES (${entry.toolID}, ${entry.lastUsedAt}, ${entry.useCount})
-          ON CONFLICT(session_id, tool_id) DO UPDATE SET
+          ON CONFLICT(tool_id) DO UPDATE SET
             last_used_at = excluded.last_used_at,
             use_count = excluded.use_count
         `)
@@ -164,7 +164,7 @@ describe("AdaptedCatalog", () => {
     expect(result).toEqual([])
   })
 
-  test("recordUsage keeps per-session composite rows (a later session never overwrites an earlier one)", async () => {
+  test("recordUsage increments use_count, stamps session_id, and keeps lifetime aggregates", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "catalog.db")
     const { all } = setupLayers(dbPath)
@@ -174,43 +174,17 @@ describe("AdaptedCatalog", () => {
         const catalog = yield* AdaptedCatalog
         yield* catalog.recordUsage("t1", "ses_a")
         yield* catalog.recordUsage("t1", "ses_a")
-        yield* catalog.recordUsage("t1", "ses_b")
         yield* catalog.recordUsage("t2", "ses_b")
         const { db } = yield* Database.Service
-        return yield* db.all<{ tool_id: string; session_id: string; use_count: number }>(
+        return yield* db.all<{ tool_id: string; session_id: string | null; use_count: number }>(
           sql`SELECT tool_id, session_id, use_count FROM codegraph_tool_usage`,
         )
       }).pipe(Effect.provide(all), Effect.scoped),
     )
-    // Composite `(session_id, tool_id)` PK: the same tool used by two
-    // sessions keeps two rows instead of overwriting `session_id`.
-    expect(rows).toEqual(
-      expect.arrayContaining([
-        { tool_id: "t1", session_id: "ses_a", use_count: 2 },
-        { tool_id: "t1", session_id: "ses_b", use_count: 1 },
-        { tool_id: "t2", session_id: "ses_b", use_count: 1 },
-      ]),
-    )
-    expect(rows).toHaveLength(3)
-  })
-
-  test("recordUsage without a session uses the '' sentinel so counts never collide", async () => {
-    await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "catalog.db")
-    const { all } = setupLayers(dbPath)
-
-    const rows = await Effect.runPromise(
-      Effect.gen(function* () {
-        const catalog = yield* AdaptedCatalog
-        yield* catalog.recordUsage("t1")
-        yield* catalog.recordUsage("t1")
-        const { db } = yield* Database.Service
-        return yield* db.all<{ tool_id: string; session_id: string; use_count: number }>(
-          sql`SELECT tool_id, session_id, use_count FROM codegraph_tool_usage`,
-        )
-      }).pipe(Effect.provide(all), Effect.scoped),
-    )
-    expect(rows).toEqual([{ tool_id: "t1", session_id: "", use_count: 2 }])
+    const t1 = rows.find((row) => row.tool_id === "t1")
+    const t2 = rows.find((row) => row.tool_id === "t2")
+    expect(t1).toEqual({ tool_id: "t1", session_id: "ses_a", use_count: 2 })
+    expect(t2).toEqual({ tool_id: "t2", session_id: "ses_b", use_count: 1 })
   })
 
   test("tier accessor returns the stored tier", async () => {

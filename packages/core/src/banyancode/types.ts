@@ -73,25 +73,6 @@ export type CodegraphEdgeKind =
   | "mounts"
   | "generated_from"
 
-/**
- * How a derived edge was produced. Ordered roughly high-to-low confidence;
- * consumers should prefer `binding-resolved` / `service-tag` edges over
- * `heuristic-name` ones and report when only heuristic edges exist.
- */
-export type CodegraphEdgeDerivation =
-  | "binding-resolved"
-  | "service-tag"
-  | "same-file"
-  | "heuristic-name"
-
-/** 0-100 scale; higher is more trustworthy. See `CodegraphEdgeDerivation`. */
-export const EDGE_CONFIDENCE: Record<CodegraphEdgeDerivation, number> = {
-  "binding-resolved": 100,
-  "service-tag": 80,
-  "same-file": 60,
-  "heuristic-name": 40,
-}
-
 export type CodegraphNode = {
   id: string
   fileID: string
@@ -155,53 +136,6 @@ export type CodegraphEdge = {
   fromNodeID: string
   toNodeID: string
   kind: CodegraphEdgeKind
-  derivation?: CodegraphEdgeDerivation
-  /**
-   * 0-100 trust score set by the derived-edge pass. `binding-resolved` =
-   * 100, `service-tag` = 80, `same-file` = 60, `heuristic-name` = 40.
-   * Omitted (undefined) for parser edges that predate the confidence model.
-   */
-  confidence?: number
-}
-
-/**
- * Persisted import/export binding row. Mirrors `ParsedBinding` from
- * `langs/types.ts` plus the owning file id and index timestamp. Written by
- * `writeFileGraph` during the parse pass and read by the derived-edge pass
- * (`rebuildDerivedGraph`) to resolve qualified references and barrel chains.
- */
-export type CodegraphBinding = {
-  id: string
-  fileID: string
-  kind: "import" | "export" | "re-export" | "namespace-re-export" | "star-re-export"
-  /** Local name in the source file: import alias, exported declaration name, or re-exported local name. */
-  localName?: string
-  /** Consumer-visible export name. `"*"` for star/namespace re-exports, `"default"` for default exports. */
-  importedName?: string
-  /** For imports: the name imported from the source module (differs from `localName` for `import { A as B }`). */
-  exportName?: string
-  /** Module specifier. Empty for local (non re-export) declarations. */
-  source: string
-  indexedAt: number
-}
-
-/**
- * How a test node was matched to its target symbol, ordered roughly
- * high-to-low confidence. `substring-low-confidence` is an explicit
- * diagnostic fallback (raw code substring with no graph evidence) and must
- * never be reported as a normal test hit.
- */
-export type TestMatchDerivation =
-  | "tested_by"
-  | "references"
-  | "import-binding"
-  | "substring-low-confidence"
-
-/** One evidence-bearing test match: the node plus how/why it matched. */
-export type TestMatch = {
-  readonly node: CodegraphNode
-  readonly derivation: TestMatchDerivation
-  readonly confidence: number
 }
 
 export type SubagentMessage = {
@@ -272,8 +206,6 @@ export interface ArchitecturalSlice {
   readonly entrypoints: readonly CodegraphNode[]
   readonly importantSymbols: readonly CodegraphNode[]
   readonly relatedTests: readonly CodegraphNode[]
-  /** Per-result derivation + confidence for `relatedTests`, when the source context carried it. */
-  readonly relatedTestsDetailed?: readonly TestMatch[]
   readonly relatedDocs: readonly CodegraphFile[]
   readonly configs: readonly CodegraphFile[]
   readonly routes: readonly CodegraphNode[]
@@ -298,8 +230,6 @@ export interface RepositoryContext {
   readonly files: readonly CodegraphFile[]
   readonly graph: { readonly nodes: readonly CodegraphNode[]; readonly edges: readonly CodegraphEdge[] }
   readonly tests: readonly CodegraphNode[]
-  /** Per-result derivation + confidence for `tests`. */
-  readonly testsDetailed?: readonly TestMatch[]
   readonly docs: readonly CodegraphFile[]
   readonly configs: readonly CodegraphFile[]
   readonly git: {
@@ -349,50 +279,3 @@ export const GraphMeta = Schema.Struct({
   totalNodes: Schema.Number,
   totalEdges: Schema.Number,
 })
-
-/**
- * Rollout mode for the per-turn graph-first redirect in the common session
- * tool wrapper (`packages/opencode/src/session/tools.ts`). `off` (default)
- * changes no tool behavior; `advisory` appends a structured redirect note to
- * early source-code `read`/`grep`/`glob` results without blocking them;
- * `enforce` returns only the redirect until the model attempts a
- * graph/repository tool in the same turn.
- */
-export type GraphFirstMode = "off" | "advisory" | "enforce"
-
-/**
- * Outcome of a graph/repository tool call, classified from its rendered
- * output for adoption telemetry. Distinct from a readiness `BootstrapState`:
- * this describes what a tool RESULT reported, not the graph's build state.
- */
-export type GraphOutcome =
-  | "ok"
-  | "not-found"
-  | "empty"
-  | "stale"
-  | "failed"
-  | "degraded"
-  | "fallback"
-
-/** The model-facing graph build state at the time an event was recorded. */
-export type GraphPolicyGraphState = "ready" | "building" | "missing"
-
-export type GraphPolicyEventType = "call" | "redirect" | "graph_attempt"
-
-/**
- * A per-turn tool-call event recorded by the common session tool wrapper
- * into the `codegraph_policy_events` table. Together with the
- * `codegraph_tool_usage` aggregate this measures graph-first adoption:
- * graph attempt before fallback, first-use latency, result quality, and the
- * bootstrap state observed at call time.
- */
-export interface GraphPolicyEvent {
-  readonly sessionID: string
-  readonly messageID: string
-  readonly toolID: string
-  readonly eventType: GraphPolicyEventType
-  readonly mode: GraphFirstMode
-  readonly ts: number
-  readonly graphState?: GraphPolicyGraphState
-  readonly outcome?: GraphOutcome
-}

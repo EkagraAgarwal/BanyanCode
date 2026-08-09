@@ -2,9 +2,9 @@ export * as CodegraphTools from "./codegraph"
 
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
+import { existsSync } from "node:fs"
 import path from "node:path"
 import { Banyan } from "../banyancode"
-import { resolveWorkspaceRoot } from "../banyancode/workspace-root"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
 import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
@@ -17,20 +17,30 @@ import { optionalBoolean, optionalNumber, optionalString } from "./tool-schema"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 
-// Like `traced`, but resolves the canonical workspace root through
-// `resolveWorkspaceRoot` (explicit input / WorktreeContext / cwd / repo-root
-// discovery) instead of `process.cwd()`.
-const tracedRoot = <A, E, R>(
-  sessionID: string,
-  tool: string,
-  input: unknown,
-  summary: (result: A) => string,
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> =>
-  Effect.gen(function* () {
-    const root = yield* resolveWorkspaceRoot({})
-    return yield* traced(root, sessionID, tool, input, summary, effect)
-  })
+function findRepoRoot(startDir: string): string | undefined {
+  let dir = path.resolve(startDir)
+  const { root: fsRoot } = path.parse(dir)
+  
+  // First pass: look specifically for .git to find the true workspace/monorepo root
+  let current = dir
+  while (current !== fsRoot) {
+    if (existsSync(path.join(current, ".git"))) {
+      return current
+    }
+    current = path.dirname(current)
+  }
+  
+  // Second pass: fallback to package.json if not a git repository
+  current = dir
+  while (current !== fsRoot) {
+    if (existsSync(path.join(current, "package.json"))) {
+      return current
+    }
+    current = path.dirname(current)
+  }
+  
+  return undefined
+}
 
 const name_build = "codegraph_build"
 export const name_remove = "codegraph_remove"
@@ -243,7 +253,8 @@ export const makeCodegraphRemoveTool = (deps: {
       },
     ],
     execute: (input, context) =>
-      tracedRoot(
+      traced(
+        process.cwd(),
         context.sessionID,
         name_remove,
         input,
@@ -304,7 +315,7 @@ export const locationLayer = Layer.effectDiscard(
     const ensureGraphReady = (input: { readonly [key: string]: unknown }, toolLabel: string) =>
       Effect.gen(function* () {
         const rootHint = typeof input.root === "string" ? input.root : undefined
-        const resolvedRoot = yield* resolveWorkspaceRoot({ explicit: rootHint })
+        const resolvedRoot = rootHint ?? findRepoRoot(process.cwd()) ?? process.cwd()
         const ready = yield* readiness.ensureReady({ root: path.resolve(resolvedRoot) })
         if (ready.reason === "failed") {
           yield* Effect.logWarning(`${toolLabel}: readiness failed: ${ready.error ?? "unknown"}`)
@@ -359,7 +370,8 @@ export const locationLayer = Layer.effectDiscard(
             return [{ type: "text", text: lines.join("\n") }]
           },
           execute: (input, context) => {
-            return tracedRoot(
+            return traced(
+              process.cwd(),
               context.sessionID,
               name_build,
               input,
@@ -375,8 +387,21 @@ export const locationLayer = Layer.effectDiscard(
                   source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
                 })
 
-                const resolvedRoot = yield* resolveWorkspaceRoot({ explicit: input.root })
-                const root = path.resolve(resolvedRoot)
+                let resolvedRoot: string | undefined = input.root
+                if (!resolvedRoot) {
+                  const ws = findRepoRoot(process.cwd())
+                  if (ws) {
+                    resolvedRoot = ws
+                    yield* Effect.logWarning(
+                      `codegraph_build: input.root not provided; walked up from CWD to repo root: ${ws}`,
+                    )
+                  } else {
+                    yield* Effect.logWarning(
+                      `codegraph_build: input.root not provided and no .git/package.json marker found from CWD ${process.cwd()}; falling back to process.cwd()`,
+                    )
+                  }
+                }
+                const root = path.resolve(resolvedRoot ?? process.cwd())
                 yield* buildService.start({ root, force: input.force ?? false })
 
                 let currentStatus = yield* buildService.status()
@@ -478,7 +503,8 @@ export const locationLayer = Layer.effectDiscard(
           ],
           execute: (input, context) => {
             const limit = input.limit ?? 50
-            return tracedRoot(
+            return traced(
+              process.cwd(),
               context.sessionID,
               name_query,
               input,
@@ -556,7 +582,8 @@ export const locationLayer = Layer.effectDiscard(
           ],
           execute: (input, context) => {
             const limit = input.limit ?? 100
-            return tracedRoot(
+            return traced(
+              process.cwd(),
               context.sessionID,
               name_impact,
               input,
@@ -618,7 +645,8 @@ export const locationLayer = Layer.effectDiscard(
           ],
           execute: (input, context) => {
             const limit = input.limit ?? 50
-            return tracedRoot(
+            return traced(
+              process.cwd(),
               context.sessionID,
               name_dependents,
               input,
@@ -676,7 +704,8 @@ export const locationLayer = Layer.effectDiscard(
           ],
           execute: (input, context) => {
             const limit = input.limit ?? 50
-            return tracedRoot(
+            return traced(
+              process.cwd(),
               context.sessionID,
               name_callers,
               input,

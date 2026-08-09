@@ -4,40 +4,24 @@ import path from "path"
 import { Banyan, isStale } from "../banyancode"
 import { countStaleFilesFor } from "../banyancode/graph-staleness"
 import { traced } from "../observability/trace"
-import { resolveWorkspaceRoot } from "../banyancode/workspace-root"
 import { CodegraphNodeSchema, GraphMeta, type ArchitecturalSlice as ArchitecturalSliceT,
   type RepositoryContext as RepositoryContextT,
 } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { resolveGraphTargetPure } from "../banyancode/symbol-resolver"
+import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import {
   formatArchitecturalSlice,
   formatNodesList,
   formatOwnership,
   formatRepositoryContext,
-  formatTestsOutput,
 } from "./repository-format"
 import { optionalNumber, optionalString } from "./tool-schema"
 import { staleInputFromMeta, toGraphMeta } from "./graph-meta"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
-
-// Like `traced`, but resolves the canonical workspace root through
-// `resolveWorkspaceRoot` (explicit input / WorktreeContext / cwd / repo-root
-// discovery) instead of `process.cwd()`. This keeps every repository tool on
-// the same graph identity as the session's selected worktree.
-const tracedRoot = <A, E, R>(
-  sessionID: string,
-  tool: string,
-  input: unknown,
-  summary: (result: A) => string,
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> =>
-  Effect.gen(function* () {
-    const root = yield* resolveWorkspaceRoot({})
-    return yield* traced(root, sessionID, tool, input, summary, effect)
-  })
 
 export const name_query = "repository_query"
 // repository_slice retired: repository_explain supersedes it
@@ -50,21 +34,6 @@ export const name_relationships = "repository_relationships"
 export const name_ownership = "repository_ownership"
 
 const CodegraphNodeSchemaArray = Schema.Array(CodegraphNodeSchema)
-// Per-result derivations never include `none`; the top-level `derivation`
-// field of a tests result does.
-const TestResultDerivationSchema = Schema.Literals([
-  "tested_by",
-  "references",
-  "import-binding",
-  "substring-low-confidence",
-])
-const TestDerivationSchema = Schema.Literals([
-  "tested_by",
-  "references",
-  "import-binding",
-  "substring-low-confidence",
-  "none",
-])
 const CodegraphEdgeSchema = Schema.Struct({
   id: Schema.String,
   fromNodeID: Schema.String,
@@ -126,15 +95,6 @@ const ArchitecturalSliceSchema = Schema.Struct({
   ),
   importantSymbols: CodegraphNodeSchemaArray,
   relatedTests: CodegraphNodeSchemaArray,
-  relatedTestsDetailed: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        node: CodegraphNodeSchema,
-        derivation: TestResultDerivationSchema,
-        confidence: Schema.Number,
-      }),
-    ),
-  ),
   relatedDocs: Schema.Array(CodegraphFileSchema),
   configs: Schema.Array(CodegraphFileSchema),
   routes: CodegraphNodeSchemaArray,
@@ -167,15 +127,6 @@ const RepositoryContextSchema = Schema.Struct({
     edges: CodegraphEdgeSchemaArray,
   }),
   tests: CodegraphNodeSchemaArray,
-  testsDetailed: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        node: CodegraphNodeSchema,
-        derivation: TestResultDerivationSchema,
-        confidence: Schema.Number,
-      }),
-    ),
-  ),
   docs: Schema.Array(CodegraphFileSchema),
   configs: Schema.Array(CodegraphFileSchema),
   git: Schema.Struct({
@@ -195,23 +146,6 @@ const RepositoryContextSchema = Schema.Struct({
   }),
   workspace: Schema.optional(WorkspaceContextSchema),
   ranking: RankingSchema,
-  ambiguity: Schema.optional(
-    Schema.Struct({
-      total: Schema.Number,
-      kept: Schema.Number,
-    }),
-  ),
-  searchDerivation: Schema.optional(
-    Schema.Literals([
-      "tag-fallback",
-      "name-exact",
-      "qualified-split",
-      "code-substring",
-      "name-like",
-      "fts-bm25",
-      "node-id",
-    ]),
-  ),
   diagnostics: Schema.optional(Schema.Array(
     Schema.Struct({
       kind: Schema.String,
@@ -376,21 +310,18 @@ const QueryOutput = RepositoryContextSchema
 const ExplainOutput = ArchitecturalSliceSchema
 const ImpactOutput = ArchitecturalSliceSchema
 const TraceOutput = ArchitecturalSliceSchema
+const TestDerivationSchema = Schema.Literals(["tested_by", "references", "import", "substring", "none"])
 const TestsOutput = Schema.Struct({
   tests: CodegraphNodeSchemaArray,
   testsDetailed: Schema.optional(
     Schema.Array(
       Schema.Struct({
         node: CodegraphNodeSchema,
-        derivation: TestResultDerivationSchema,
-        confidence: Schema.Number,
+        derivation: TestDerivationSchema,
       }),
     ),
   ),
-  derivation: TestDerivationSchema,
   notFound: Schema.Boolean,
-  fallbackReason: Schema.optional(Schema.String),
-  staleFiles: Schema.optional(Schema.Number),
   meta: Schema.optional(GraphMeta),
 })
 const SymbolsOutput = Schema.Struct({ symbols: CodegraphNodeSchemaArray })
@@ -437,9 +368,6 @@ const contextToOutput = (
     edges: [...ctx.graph.edges],
   },
   tests: [...ctx.tests],
-  ...(ctx.testsDetailed
-    ? { testsDetailed: ctx.testsDetailed.map((r) => ({ node: r.node, derivation: r.derivation, confidence: r.confidence })) }
-    : {}),
   docs: [...ctx.docs],
   configs: [...ctx.configs],
   git: {
@@ -468,8 +396,6 @@ const contextToOutput = (
       : {}),
   },
   ...(ctx.diagnostics ? { diagnostics: [...ctx.diagnostics] } : {}),
-  ...(ctx.ambiguity ? { ambiguity: { ...ctx.ambiguity } } : {}),
-  ...(ctx.searchDerivation ? { searchDerivation: ctx.searchDerivation } : {}),
   ...(graphMeta ? { meta: graphMeta } : {}),
 })
 
@@ -503,9 +429,6 @@ const sliceToOutput = (
     : {}),
   importantSymbols: [...slc.importantSymbols],
   relatedTests: [...slc.relatedTests],
-  ...(slc.relatedTestsDetailed
-    ? { relatedTestsDetailed: slc.relatedTestsDetailed.map((r) => ({ node: r.node, derivation: r.derivation, confidence: r.confidence })) }
-    : {}),
   relatedDocs: [...slc.relatedDocs],
   configs: [...slc.configs],
   routes: [...slc.routes],
@@ -556,7 +479,7 @@ export const locationLayer = Layer.effectDiscard(
       Effect.gen(function* () {
         const ws = input.workspace as { worktree?: string } | undefined
         const rootHint = typeof ws?.worktree === "string" ? ws.worktree : undefined
-        const resolvedRoot = yield* resolveWorkspaceRoot({ explicit: rootHint })
+        const resolvedRoot = rootHint ?? process.cwd()
         const ready = yield* readiness.ensureReady({ root: path.resolve(resolvedRoot) })
         if (ready.reason === "failed") {
           yield* Effect.logWarning(`${toolLabel}: readiness failed: ${ready.error ?? "unknown"}`)
@@ -590,7 +513,8 @@ export const locationLayer = Layer.effectDiscard(
           { type: "text", text: formatRepositoryContext(output) },
         ],
         execute: (input, context) =>
-          tracedRoot(
+          traced(
+            process.cwd(),
             context.sessionID,
             name_query,
             input,
@@ -663,7 +587,8 @@ export const locationLayer = Layer.effectDiscard(
         output: OutputExplain,
         toModelOutput: ({ output }) => [{ type: "text", text: formatArchitecturalSlice(output) }],
         execute: (input, context) =>
-          tracedRoot(
+          traced(
+            process.cwd(),
             context.sessionID,
             name_explain,
             input,
@@ -730,7 +655,8 @@ export const locationLayer = Layer.effectDiscard(
         output: OutputImpact,
         toModelOutput: ({ output }) => [{ type: "text", text: formatArchitecturalSlice(output) }],
         execute: (input, context) =>
-          tracedRoot(
+          traced(
+            process.cwd(),
             context.sessionID,
             name_impact,
             input,
@@ -755,27 +681,6 @@ export const locationLayer = Layer.effectDiscard(
                 ...(ws ? { workspace: ws } : {}),
               })
               const metaRow = yield* repo.getMeta()
-              const staleResult = isStale(staleInputFromMeta(metaRow))
-              const staleFilesResult = yield* countStaleFilesFor(repo, [
-                ...slc.entrypoints.map((s) => s.fileID),
-                ...slc.importantSymbols.map((s) => s.fileID),
-                ...slc.relatedTests.map((s) => s.fileID),
-                ...(slc.directCallers ?? []).map((s) => s.fileID),
-                ...(slc.transitiveDependents ?? []).map((s) => s.fileID),
-              ])
-              if ((staleResult.stale || staleFilesResult.stale) && !slc.reason) {
-                const message = staleFilesResult.stale
-                  ? `${staleFilesResult.staleFiles} file(s) changed since index; run /codegraph-build`
-                  : `${staleResult.reason}; results may be incomplete`
-                const extended = slc as {
-                  reason?: string
-                  degraded?: boolean
-                  diagnostics?: readonly { kind: string; message: string }[]
-                }
-                extended.reason = message
-                extended.degraded = true
-                extended.diagnostics = [...(slc.diagnostics ?? []), { kind: "stale-graph", message }]
-              }
               return sliceToOutput(slc, toGraphMeta(metaRow))
             }),
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_impact failed" }))),
@@ -799,7 +704,8 @@ export const locationLayer = Layer.effectDiscard(
         output: OutputTrace,
         toModelOutput: ({ output }) => [{ type: "text", text: formatArchitecturalSlice(output) }],
         execute: (input, context) =>
-          tracedRoot(
+          traced(
+            process.cwd(),
             context.sessionID,
             name_trace,
             input,
@@ -825,27 +731,6 @@ export const locationLayer = Layer.effectDiscard(
                 ...(ws ? { workspace: ws } : {}),
               })
               const metaRow = yield* repo.getMeta()
-              const staleResult = isStale(staleInputFromMeta(metaRow))
-              const staleFilesResult = yield* countStaleFilesFor(repo, [
-                ...slc.entrypoints.map((s) => s.fileID),
-                ...slc.importantSymbols.map((s) => s.fileID),
-                ...slc.relatedTests.map((s) => s.fileID),
-                ...(slc.directCallers ?? []).map((s) => s.fileID),
-                ...(slc.transitiveDependents ?? []).map((s) => s.fileID),
-              ])
-              if ((staleResult.stale || staleFilesResult.stale) && !slc.reason) {
-                const message = staleFilesResult.stale
-                  ? `${staleFilesResult.staleFiles} file(s) changed since index; run /codegraph-build`
-                  : `${staleResult.reason}; results may be incomplete`
-                const extended = slc as {
-                  reason?: string
-                  degraded?: boolean
-                  diagnostics?: readonly { kind: string; message: string }[]
-                }
-                extended.reason = message
-                extended.degraded = true
-                extended.diagnostics = [...(slc.diagnostics ?? []), { kind: "stale-graph", message }]
-              }
               return sliceToOutput(slc, toGraphMeta(metaRow))
             }),
           ).pipe(Effect.mapError(() => new ToolFailure({ message: "repository_trace failed" }))),
@@ -858,12 +743,7 @@ export const locationLayer = Layer.effectDiscard(
           "  - \"Tests for `parse`\"\n" +
           "  - \"Tests for `MemoryRepo.update`\"\n" +
           "Returns\n" +
-          "  { tests: CodegraphNode[], testsDetailed: [{ node, derivation, confidence }],\n" +
-          "    derivation, notFound, fallbackReason, staleFiles }\n" +
-          "  Derivation ranks evidence: tested_by (exact edge) > references\n" +
-          "  (calls/references edge) > import-binding (resolved import). A\n" +
-          "  `substring-low-confidence` match is a raw-code diagnostic, NOT a\n" +
-          "  normal test hit — never cite it as a test.\n" +
+          "  { tests: CodegraphNode[] }\n" +
           "Avoid when\n" +
           "  you want the architectural slice — use repository_explain.\n" +
           "After this, often: read — to inspect a specific test.\n" +
@@ -871,9 +751,10 @@ export const locationLayer = Layer.effectDiscard(
         contract: { visibility: "public" },
         input: InputTests,
         output: OutputTests,
-        toModelOutput: ({ output }) => [{ type: "text", text: formatTestsOutput(output) }],
+        toModelOutput: ({ output }) => [{ type: "text", text: formatNodesList(output.tests, "Tests") }],
         execute: (input, context) =>
-          tracedRoot(
+          traced(
+            process.cwd(),
             context.sessionID,
             name_tests,
             input,
@@ -891,31 +772,41 @@ export const locationLayer = Layer.effectDiscard(
 
               yield* ensureGraphReady(input, name_tests)
 
-              // `intel.tests` is the single source of truth for test
-              // discovery: per-result derivation + confidence ranking
-              // (tested_by → references → import-binding →
-              // substring-low-confidence). The old duplicate resolver gate
-              // could discard intelligence-layer results (Issue #4) — it's
-              // gone. `notFound` still distinguishes a genuinely unknown
-              // symbol from "no evidence found".
+              // Keep the resolver call so we can short-circuit on a hard
+              // Miss (genuinely unknown symbol) and surface `notFound: true`
+              // to the caller. We do NOT use the resolver to bucket tests
+              // any more — `intel.tests` already does derivation ranking
+              // (tested_by → references → import → substring) and is the
+              // single source of truth. Previously a depth-1 BFS around the
+              // resolved node's file was excluding valid tests (Issue #4).
+              const resolved = yield* resolveGraphTargetPure(
+                repo as CodegraphRepoInterface,
+                { target: input.symbol },
+              )
+
               const metaRow = yield* repo.getMeta()
               const graphMeta = toGraphMeta(metaRow)
-              const testsResult = yield* intel.tests({ symbol: input.symbol, limit: input.limit })
-              const limit = Math.max(1, Math.min(500, input.limit ?? 50))
+              const tests = yield* intel.tests({ symbol: input.symbol, limit: input.limit })
+              if (resolved._tag === "Miss") {
+                return { tests: [], testsDetailed: [], notFound: true, ...(graphMeta ? { meta: graphMeta } : {}) }
+              }
 
-              const testsDetailed = testsResult.results.slice(0, limit)
-              const staleFilesResult = yield* countStaleFilesFor(repo, [
-                ...testsDetailed.map((r) => r.node.fileID),
-              ])
+              const rank: Record<typeof tests.derivation, number> = {
+                tested_by: 0,
+                references: 1,
+                import: 2,
+                substring: 3,
+                none: 4,
+              }
+              const limit = Math.max(1, Math.min(500, input.limit ?? 50))
+              const testsDetailed = tests.tests
+                .map((node) => ({ node, derivation: tests.derivation as typeof tests.derivation }))
+                .sort((a, b) => rank[a.derivation] - rank[b.derivation] || a.node.name.localeCompare(b.node.name))
+                .slice(0, limit)
               return {
-                tests: testsDetailed
-                  .filter((r) => r.derivation !== "substring-low-confidence")
-                  .map((r) => r.node),
+                tests: testsDetailed.map((entry) => entry.node),
                 testsDetailed,
-                derivation: testsResult.derivation,
-                notFound: testsResult.notFound && testsDetailed.length === 0,
-                ...(testsResult.fallbackReason ? { fallbackReason: testsResult.fallbackReason } : {}),
-                ...(staleFilesResult.staleFiles > 0 ? { staleFiles: staleFilesResult.staleFiles } : {}),
+                notFound: tests.notFound && testsDetailed.length === 0,
                 ...(graphMeta ? { meta: graphMeta } : {}),
               }
             }),
@@ -938,7 +829,8 @@ export const locationLayer = Layer.effectDiscard(
         output: OutputSymbols,
         toModelOutput: ({ output }) => [{ type: "text", text: formatNodesList(output.symbols, "Symbols") }],
         execute: (input, context) =>
-          tracedRoot(
+          traced(
+            process.cwd(),
             context.sessionID,
             name_symbols,
             input,
@@ -980,7 +872,8 @@ export const locationLayer = Layer.effectDiscard(
         output: OutputRelationships,
         toModelOutput: ({ output }) => [{ type: "text", text: formatNodesList(output.nodes, "Related nodes") }],
         execute: (input, context) =>
-          tracedRoot(
+          traced(
+            process.cwd(),
             context.sessionID,
             name_relationships,
             input,
@@ -1026,7 +919,8 @@ export const locationLayer = Layer.effectDiscard(
         output: OutputOwnership,
         toModelOutput: ({ output }) => [{ type: "text", text: formatOwnership(output.owner, output.count) }],
         execute: (input, context) =>
-          tracedRoot(
+          traced(
+            process.cwd(),
             context.sessionID,
             name_ownership,
             input,

@@ -37,29 +37,6 @@ const RankingSignalsSchema = Schema.Struct({
   workspace: Schema.Number,
 }).annotate({ identifier: "Banyan/RankingSignals" })
 
-const TestResultDerivationSchema = Schema.Literals([
-  "tested_by",
-  "references",
-  "import-binding",
-  "substring-low-confidence",
-]).annotate({ identifier: "Banyan/TestResultDerivation" })
-
-const TestDerivationSchema = Schema.Literals([
-  "tested_by",
-  "references",
-  "import-binding",
-  "substring-low-confidence",
-  "none",
-]).annotate({ identifier: "Banyan/TestDerivation" })
-
-const TestMatchSchema = Schema.Struct({
-  node: CodegraphNodeSchema,
-  derivation: TestResultDerivationSchema,
-  confidence: Schema.Number,
-}).annotate({ identifier: "Banyan/TestMatch" })
-
-const TestMatchArraySchema = Schema.Array(TestMatchSchema)
-
 const RankingSchema = Schema.Struct({
   score: Schema.Number,
   signals: RankingSignalsSchema,
@@ -67,16 +44,10 @@ const RankingSchema = Schema.Struct({
 }).annotate({ identifier: "Banyan/Ranking" })
 
 const ArchitecturalSliceSchema = Schema.Struct({
-  status: Schema.optional(Schema.Literals(["success", "partial", "failed"])),
-  reason: Schema.optional(Schema.String),
-  recoveryHint: Schema.optional(Schema.String),
-  fallbackUsed: Schema.optional(Schema.Boolean),
-  degraded: Schema.optional(Schema.Boolean),
   summary: Schema.String,
   entrypoints: Schema.Array(CodegraphNodeSchema),
   importantSymbols: Schema.Array(CodegraphNodeSchema),
   relatedTests: Schema.Array(CodegraphNodeSchema),
-  relatedTestsDetailed: Schema.optional(TestMatchArraySchema),
   relatedDocs: Schema.Array(CodegraphFileSchema),
   configs: Schema.Array(CodegraphFileSchema),
   routes: Schema.Array(CodegraphNodeSchema),
@@ -85,16 +56,6 @@ const ArchitecturalSliceSchema = Schema.Struct({
       name: Schema.String,
       version: Schema.optional(Schema.String),
     }),
-  ),
-  directCallers: Schema.Array(CodegraphNodeSchema),
-  transitiveDependents: Schema.Array(CodegraphNodeSchema),
-  diagnostics: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        kind: Schema.String,
-        message: Schema.String,
-      }),
-    ),
   ),
 }).annotate({ identifier: "Banyan/ArchitecturalSlice" })
 
@@ -125,37 +86,12 @@ const RepositoryContextSchema = Schema.Struct({
     edges: Schema.Array(CodegraphEdgeSchema),
   }),
   tests: Schema.Array(CodegraphNodeSchema),
-  testsDetailed: Schema.optional(TestMatchArraySchema),
   docs: Schema.Array(CodegraphFileSchema),
   configs: Schema.Array(CodegraphFileSchema),
   git: GitContextSchema,
   workspace: Schema.optional(WorkspaceContextSchema),
-  diagnostics: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        kind: Schema.String,
-        message: Schema.String,
-      }),
-    ),
-  ),
+  diagnostics: Schema.optional(Schema.Array(Schema.Unknown)),
   ranking: RankingSchema,
-  ambiguity: Schema.optional(
-    Schema.Struct({
-      total: Schema.Number,
-      kept: Schema.Number,
-    }),
-  ),
-  searchDerivation: Schema.optional(
-    Schema.Literals([
-      "tag-fallback",
-      "name-exact",
-      "qualified-split",
-      "code-substring",
-      "name-like",
-      "fts-bm25",
-      "node-id",
-    ]),
-  ),
 }).annotate({ identifier: "Banyan/RepositoryContext" })
 
 export const RepositoryResponseSchema = Schema.Struct({
@@ -193,7 +129,6 @@ export const TraceInput = Schema.Struct({
 
 export const TestsInput = Schema.Struct({
   symbol: Schema.String,
-  limit: Schema.optional(Schema.Number),
 }).annotate({ identifier: "Banyan/TestsInput" })
 
 export const SymbolsInput = Schema.Struct({
@@ -216,15 +151,6 @@ export const OwnershipResult = Schema.Struct({
   owner: Schema.optional(Schema.String),
   count: Schema.Number,
 }).annotate({ identifier: "Banyan/OwnershipResult" })
-
-export const TestsOutput = Schema.Struct({
-  tests: Schema.Array(CodegraphNodeSchema),
-  testsDetailed: Schema.optional(TestMatchArraySchema),
-  derivation: TestDerivationSchema,
-  notFound: Schema.Boolean,
-  fallbackReason: Schema.optional(Schema.String),
-  staleFiles: Schema.optional(Schema.Number),
-}).annotate({ identifier: "Banyan/TestsOutput" })
 
 export const ArchitecturalSliceQuery = Schema.Struct({
   focus: Schema.String,
@@ -290,13 +216,12 @@ export const RepositoryIntelApi = HttpApi.make("repository-intel").add(
       ),
       HttpApiEndpoint.post("tests", RepositoryIntelPaths.tests, {
         payload: TestsInput,
-        success: described(TestsOutput, "Tests for symbol"),
+        success: described(Schema.Array(CodegraphNodeSchema), "Tests for symbol"),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "repositoryIntel.tests",
           summary: "Find tests",
-          description:
-            "Returns test nodes covering the given symbol with per-result derivation and confidence. A substring-low-confidence match is a raw-code diagnostic, never a confirmed test hit.",
+          description: "Returns the test nodes covering the given symbol.",
         }),
       ),
       HttpApiEndpoint.post("symbols", RepositoryIntelPaths.symbols, {

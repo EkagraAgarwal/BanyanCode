@@ -2,21 +2,20 @@ export * as CodeFindTool from "./code-find"
 
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
+import path from "path"
 import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import type { Interface as CodegraphAnalyzerInterface } from "../banyancode/codegraph-analyzer"
 import type { Interface as CodegraphReadinessInterface } from "../banyancode/codegraph-readiness"
 import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan, isStale } from "../banyancode"
 import { countStaleFilesFor } from "../banyancode/graph-staleness"
-import { resolveWorkspaceRoot } from "../banyancode/workspace-root"
-import { resolveFileByPath } from "../banyancode/codegraph-paths"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
 import type { CodegraphFile, CodegraphNode } from "../banyancode/types"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
-import { resolveGraphTargetPure, resolveGraphTargetStrict, isNodeIDShape } from "../banyancode/symbol-resolver"
+import { resolveGraphTargetPure, resolveGraphTargetStrict } from "../banyancode/symbol-resolver"
 import type { ResolutionDerivation } from "../banyancode/symbol-resolver"
 import { formatNodes } from "./codegraph-format"
 import { optionalNumber } from "./tool-schema"
@@ -69,7 +68,7 @@ export const Input = Schema.Struct({
     "downstream tool based on `intent`. Always pass both `intent` and `target`.",
 })
 
-export const DerivationSchema = Schema.Literals(["tag-fallback", "name-exact", "qualified-split", "code-substring", "name-like", "fts-bm25", "node-id"])
+export const DerivationSchema = Schema.Literals(["tag-fallback", "name-exact", "qualified-split", "code-substring", "name-like", "fts-bm25"])
 
 const MatchEntrySchema = Schema.Struct({
   node: CodegraphNodeSchema,
@@ -86,12 +85,10 @@ export const Output = Schema.Struct({
   // than their indexed_at — data for those files may be stale. Absent when 0.
   staleFiles: Schema.optional(Schema.Number),
   // `target-not-resolved` = resolver tried all strategies and missed.
-  // `stale-node-id`      = the target was node-ID-shaped but no such node
-  //                        exists — the ID may reference a stale graph.
   // `no-edges-found`    = target resolved, analyzer returned 0 results.
   // `empty-target`      = caller passed an empty `target`.
   _diagnostic: Schema.optional(
-    Schema.Literals(["symbol-not-in-graph", "target-not-resolved", "stale-node-id", "no-edges-found", "empty-target", "stale-graph"]),
+    Schema.Literals(["symbol-not-in-graph", "target-not-resolved", "no-edges-found", "empty-target", "stale-graph"]),
   ),
   // Surfaced when resolution succeeded — lets callers correlate the result
   // back to a derivation so the model can re-query differently if needed.
@@ -115,21 +112,14 @@ export const makeCodeFindTool = (deps: {
 
   // Phase: auto-trigger a full or incremental codegraph build whenever the
   // code-find tool runs against an unbuilt or stale graph, so the agent
-  // does not waste a turn on empty/incorrect data. The root comes from the
-  // selected instance/worktree (Phase 1: never `process.cwd()` directly).
-  const ensureGraphReady = (root: string) =>
-    Effect.gen(function* () {
-      const ready = yield* deps.readiness.ensureReady({ root })
-      if (ready.reason === "failed") {
-        yield* Effect.logWarning(`code_find: readiness failed: ${ready.error ?? "unknown"}`)
-      }
-      return ready
-    })
-
-  // A resolver miss on a node-ID-shaped target means the ID points at a
-  // stale graph — distinct from "no symbol matched".
-  const missDiagnostic = (target: string): "stale-node-id" | "target-not-resolved" =>
-    isNodeIDShape(target) ? "stale-node-id" : "target-not-resolved"
+  // does not waste a turn on empty/incorrect data.
+  const ensureGraphReady = Effect.gen(function* () {
+    const ready = yield* deps.readiness.ensureReady({ root: path.resolve(process.cwd()) })
+    if (ready.reason === "failed") {
+      yield* Effect.logWarning(`code_find: readiness failed: ${ready.error ?? "unknown"}`)
+    }
+    return ready
+  })
 
   return Tool.make({
     description:
@@ -193,18 +183,13 @@ export const makeCodeFindTool = (deps: {
     },
     execute: (input, context) => {
       const limit = input.limit ?? 50
-      return Effect.gen(function* () {
-        // Resolve the canonical workspace root once and use it for the trace
-        // span, graph readiness, and file lookups — one source of truth
-        // instead of `process.cwd()` in three places.
-        const root = yield* resolveWorkspaceRoot()
-        return yield* traced(
-          root,
-          context.sessionID,
-          name,
-          input,
-          (output) => `intent=${output.intent} dispatched=${output.dispatchedTo ?? "n/a"} matches=${output.matches.length} files=${output.files.length}`,
-          Effect.gen(function* () {
+      return traced(
+        process.cwd(),
+        context.sessionID,
+        name,
+        input,
+        (output) => `intent=${output.intent} dispatched=${output.dispatchedTo ?? "n/a"} matches=${output.matches.length} files=${output.files.length}`,
+        Effect.gen(function* () {
           yield* deps.permission.assert({
             action: name,
             resources: [input.target],
@@ -215,7 +200,7 @@ export const makeCodeFindTool = (deps: {
             source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
           })
 
-          yield* ensureGraphReady(root)
+          yield* ensureGraphReady
 
           // `fileIndex` is populated lazily (inside the branches that
           // actually need file rows: impact-filepath and find_file) so
@@ -277,7 +262,7 @@ export const makeCodeFindTool = (deps: {
                   meta,
                   intent: input.intent,
                   dispatchedTo: "codegraph_query",
-                  _diagnostic: missDiagnostic(target),
+                  _diagnostic: "target-not-resolved" as const,
                 }
               }
               const matches = resolved.candidates.map((n) => ({ node: n, derivation: resolved.derivation }))
@@ -314,7 +299,7 @@ export const makeCodeFindTool = (deps: {
                   meta,
                   intent: input.intent,
                   dispatchedTo: "codegraph_callers",
-                  _diagnostic: missDiagnostic(input.target),
+                  _diagnostic: "target-not-resolved" as const,
                 }
               }
               const result = yield* deps.analyzer.callers({ nodeID: resolved.nodeID }).pipe(
@@ -364,7 +349,7 @@ export const makeCodeFindTool = (deps: {
                   meta,
                   intent: input.intent,
                   dispatchedTo: "codegraph_dependents",
-                  _diagnostic: missDiagnostic(input.target),
+                  _diagnostic: "target-not-resolved" as const,
                 }
               }
               const result = yield* deps.analyzer.dependents({ nodeID: resolved.nodeID }).pipe(
@@ -415,16 +400,10 @@ export const makeCodeFindTool = (deps: {
               const looksLikeFilePath =
                 /\.[a-z0-9]+$/i.test(input.target) || /[\\/]/.test(input.target)
               if (looksLikeFilePath) {
-                const metaForRoot = yield* deps.repo.getMeta()
-                const resolvedFile = yield* resolveFileByPath(deps.repo, input.target, metaForRoot?.indexedRoot)
-                const allFiles = resolvedFile ? [] : yield* deps.repo.listAllFiles()
-                fileIndex.byID = new Map(
-                  resolvedFile
-                    ? [[resolvedFile.id, resolvedFile]]
-                    : allFiles.map((f) => [f.id, f] as const),
-                )
+                const allFiles = yield* deps.repo.listAllFiles()
+                fileIndex.byID = new Map(allFiles.map((f) => [f.id, f]))
                 const sep = /[\\/]/.test(input.target) ? `[\\${"/"}]` : ""
-                const fileHits = resolvedFile ? [resolvedFile] : allFiles.filter((f) => f.path.endsWith(`${sep}${input.target}`))
+                const fileHits = allFiles.filter((f) => f.path.endsWith(`${sep}${input.target}`))
                 const fileIDs = new Set(fileHits.map((f) => f.id))
                 // One bounded per-file query instead of a full-table
                 // listAllNodes() — a file-level impact only needs the
@@ -510,7 +489,7 @@ export const makeCodeFindTool = (deps: {
                   meta,
                   intent: input.intent,
                   dispatchedTo: "codegraph_impact",
-                  _diagnostic: missDiagnostic(input.target),
+                  _diagnostic: "target-not-resolved" as const,
                 }
               }
               const result = yield* deps.analyzer.impact({ nodeID: resolved.nodeID }).pipe(
@@ -565,11 +544,7 @@ export const makeCodeFindTool = (deps: {
               let matchedFileIDs: ReadonlyArray<string> = []
 
               if (looksLikeFilename || sep !== "") {
-                const metaForRoot = yield* deps.repo.getMeta()
-                const resolvedFile = yield* resolveFileByPath(deps.repo, target, metaForRoot?.indexedRoot)
-                const pathFiltered = resolvedFile
-                  ? [resolvedFile].slice(0, limit)
-                  : allFiles.filter((f) => f.path.endsWith(`${sep}${target}`)).slice(0, limit)
+                const pathFiltered = allFiles.filter((f) => f.path.endsWith(`${sep}${target}`)).slice(0, limit)
                 files = pathFiltered.map((f) => ({ path: f.path }))
                 const fileIDs = new Set(pathFiltered.map((f) => f.id))
                 matchedFileIDs = [...fileIDs]
@@ -620,15 +595,12 @@ export const makeCodeFindTool = (deps: {
             }
           }
         }),
-      ).pipe(
-        Effect.mapError((err) => {
-          if (err instanceof ToolFailure) return err
-          return new ToolFailure({ message: `code_find failed for intent=${input.intent}` })
-        }),
-      )
-    })
-  },
-})
+      ).pipe(Effect.mapError((err) => {
+        if (err instanceof ToolFailure) return err
+        return new ToolFailure({ message: `code_find failed for intent=${input.intent}` })
+      }))
+    },
+  })
 }
 
 export const locationLayer = Layer.effectDiscard(

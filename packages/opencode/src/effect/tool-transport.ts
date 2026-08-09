@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 import { type Tool as AITool } from "ai"
 import { ProviderTransform } from "@/provider/transform"
+import type { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import type { PermissionV2 } from "@opencode-ai/core/permission"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import type { EffectBridge } from "@/effect/bridge"
@@ -17,13 +18,7 @@ export interface ToolMaterializationContext {
   readonly agent: string
   readonly model: Parameters<typeof ProviderTransform.schema>[0]
   readonly messages: SessionV1.WithParts[]
-  /**
-   * The selected worktree (session directory) for the materialization. Used
-   * to resolve the canonical graph root — tools and the tool bridge prefer
-   * this over the server's `process.cwd()`, so a server launched from a
-   * different directory still targets the selected worktree's graph.
-   */
-  readonly workspace: string | undefined
+  readonly workspace: WorkspaceV2.ID | undefined
   readonly permissions: PermissionV2.Ruleset
   readonly run: EffectBridge.Shape
   readonly pluginTrigger: (

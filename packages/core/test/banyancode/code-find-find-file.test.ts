@@ -95,9 +95,6 @@ const mockCodegraphRepoLayer = Layer.succeed(
     filesByIDs: () => Effect.succeed([]),
     edgesFromBatch: () => Effect.succeed([]),
     edgesToBatch: () => Effect.succeed([]),
-    listServiceTags: () => Effect.succeed([]),
-    listBindings: () => Effect.succeed([]),
-    bindingsByFileIDs: () => Effect.succeed([]),
   }),
 )
 

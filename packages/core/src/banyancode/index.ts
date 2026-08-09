@@ -4,7 +4,6 @@ export * as BanyanToolsManifest from "./banyan-tools-manifest"
 export { MemoryEntriesTable } from "./memory.sql"
 export { CodegraphFilesTable, CodegraphNodesTable, CodegraphEdgesTable } from "./codegraph.sql"
 export { CodegraphToolUsageTable } from "./codegraph-tool-usage.sql"
-export { CodegraphPolicyEventsTable } from "./codegraph-policy-events.sql"
 export { CodegraphServiceTagsTable } from "./codegraph-service-tags.sql"
 export { CodegraphTracesTable } from "./codegraph-traces.sql"
 export { CodegraphMetaTable } from "./codegraph-meta.sql"
@@ -24,14 +23,6 @@ export type {
 export { CodegraphNodeSchema } from "./types"
 export { GraphMeta } from "./types"
 export { NotFoundError, StaleWriteError } from "./types"
-export type {
-  GraphFirstMode,
-  GraphOutcome,
-  GraphPolicyGraphState,
-  GraphPolicyEventType,
-  GraphPolicyEvent,
-} from "./types"
-export * as GraphFirstPolicy from "./graph-first-policy"
 export { Service as MemoryRepo, layer as memoryRepoLayer, defaultLayer as memoryRepoDefaultLayer } from "./memory-repo"
 export type { SearchRankedInput, SearchRankedResult } from "./memory-repo"
 export {

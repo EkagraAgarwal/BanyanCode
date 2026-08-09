@@ -32,24 +32,7 @@ export const Input = Schema.Struct({
   limit: optionalNumber.annotate({
     description: "Maximum number of packages, entry points, and search hits to return. Defaults to 50. Allowed range: 1-200.",
   }),
-}).pipe(
-  // C1: require at least one of root/path/query AT THE SCHEMA LEVEL so an
-  // empty `{}` call fails validation before execute (previously it passed the
-  // schema — all fields optional — and only errored in the handler, wasting a
-  // full tool round-trip; the benchmark transcript shows the model's very
-  // first graph-tool call dying on exactly this). Overview callers pass
-  // `root` (e.g. "."). `Schema.check` does not change the JSON schema the
-  // model sees — the fields stay optional, with the guidance in the
-  // description below.
-  Schema.check(
-    Schema.makeFilter(
-      (input) =>
-        input.root !== undefined || input.path !== undefined || input.query !== undefined
-          ? true
-          : "banyan_repo_map: at least one of `root`, `path`, or `query` must be provided.",
-    ),
-  ),
-).annotate({
+}).annotate({
   description:
     "Token-budgeted outline of the most structurally central symbols in the " +
     "current workspace. Use this before reading files: it returns packages, " +
@@ -81,12 +64,6 @@ const DetailSymbolSchema = Schema.Struct({
   signature: Schema.optional(Schema.String),
 })
 
-const DetailsSchema = Schema.Struct({
-  path: Schema.String,
-  found: Schema.Boolean,
-  symbols: Schema.Array(DetailSymbolSchema),
-})
-
 const SearchHitSchema = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -113,8 +90,7 @@ export const Output = Schema.Struct({
   search: Schema.optional(Schema.Array(SearchHitSchema)),
   meta: Schema.optional(GraphMeta),
   _diagnostic: Schema.optional(Schema.Literals([
-    "no-input", "no-graph", "stale-graph",
-    "file-not-in-graph", "file-has-no-symbols", "no-matches",
+    "no-input", "no-graph", "stale-graph", "path-not-found", "no-matches",
   ])),
 })
 
@@ -149,16 +125,6 @@ const renderOutput = (output: Schema.Schema.Type<typeof Output>): string => {
     : output.search && output.search.length === 0
       ? "Search: no matches."
       : ""
-  // Distinguish "not indexed" from "indexed but symbol-less", and surface
-  // the attempted canonical path plus a recovery hint instead of a bare
-  // failure literal.
-  const attemptedPath = output.details?.path ?? ""
-  const diagnosticHint =
-    output._diagnostic === "file-not-in-graph"
-      ? `\n\nNot in graph: "${attemptedPath}" is not in the codegraph index. Run /codegraph-build (or /codegraph-build --force) to index it, or check the path spelling.`
-      : output._diagnostic === "file-has-no-symbols"
-        ? `\n\nNo symbols: "${attemptedPath}" is in the graph but has no indexed symbols — it may be a config/data/empty file.`
-        : ""
   const blocks = [
     header,
     "File kinds:\n" + (kindLines || "  (none)"),
@@ -166,7 +132,6 @@ const renderOutput = (output: Schema.Schema.Type<typeof Output>): string => {
     "Entry points:\n" + (entryLines || "  (none)"),
     detailsBlock,
     searchBlock,
-    diagnosticHint,
   ].filter((part) => part.length > 0)
   return blocks.join("\n\n")
 }
@@ -255,11 +220,8 @@ export const makeRepoMapTool = (deps: {
 
           if (input.path) {
             const detail = yield* deps.map.detail({ root, path: input.path })
-            if (!detail.found) {
-              return withDiagnostic({ ...base, mode: "detail" as const, details: detail, _diagnostic: "file-not-in-graph" as const })
-            }
             if (detail.symbols.length === 0) {
-              return withDiagnostic({ ...base, mode: "detail" as const, details: detail, _diagnostic: "file-has-no-symbols" as const })
+              return withDiagnostic({ ...base, mode: "detail" as const, details: detail, _diagnostic: "path-not-found" as const })
             }
             return withDiagnostic({ ...base, mode: "detail" as const, details: detail })
           }

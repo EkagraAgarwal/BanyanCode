@@ -2326,7 +2326,7 @@ export class RepositoryIntel extends HeyApiClient {
   /**
    * Find tests
    *
-   * Returns test nodes covering the given symbol with per-result derivation and confidence. A substring-low-confidence match is a raw-code diagnostic, never a confirmed test hit.
+   * Returns the test nodes covering the given symbol.
    */
   public tests<ThrowOnError extends boolean = false>(
     parameters?: {

@@ -12,7 +12,7 @@ import { Truncate } from "@/tool/truncate"
 import { Plugin } from "@/plugin"
 import type { TaskPromptOps } from "@/tool/task"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
-import { Effect, Option, Ref } from "effect"
+import { Effect, Option } from "effect"
 import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
 import { SessionProcessor } from "./processor"
@@ -23,8 +23,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import * as AiSdkTransportModule from "@/effect/transport-ai-sdk"
 import { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
 import type { ToolMaterializationContext } from "@/effect/tool-transport"
-import { Banyan } from "@opencode-ai/core/banyancode"
-import type { GraphFirstMode, GraphOutcome } from "@opencode-ai/core/banyancode/types"
+import { BanyanToolsManifest } from "@opencode-ai/core/banyancode/banyan-tools-manifest"
 
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
@@ -76,85 +75,6 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         .pipe(Effect.orDie),
   })
 
-  // Phase 5 (graph-first): per-turn graph-policy state. `resolve` runs once
-  // per model turn (see `session/prompt.ts`), so a fresh `graphAttempted` Ref
-  // per resolve gives per-turn state. Telemetry is recorded through the
-  // `AdaptedCatalog` service when it is in scope (AppRuntime); it is
-  // best-effort and never fails the tool call.
-  const banyanEnabled = process.env.BANYANCODE_ENABLE !== "0"
-  const graphFirstMode: GraphFirstMode = Banyan.GraphFirstPolicy.graphFirstMode()
-  const adaptedCatalogOpt = yield* Effect.serviceOption(Banyan.AdaptedCatalog)
-  const bootstrapOpt = yield* Effect.serviceOption(Banyan.CodegraphBootstrap)
-  const graphState = Option.isSome(bootstrapOpt)
-    ? yield* bootstrapOpt.value.status().pipe(
-        Effect.map((s) => s.state),
-        Effect.catchCause(() => Effect.succeed(undefined)),
-      )
-    : undefined
-  const graphAttempted = yield* Ref.make(false)
-
-  const recordUsage = (toolID: string) =>
-    Option.isSome(adaptedCatalogOpt)
-      ? adaptedCatalogOpt.value.recordUsage(toolID, input.session.id).pipe(Effect.catchCause(() => Effect.void))
-      : Effect.void
-
-  const policyEvent = (toolID: string, eventType: "call" | "redirect" | "graph_attempt", outcome?: GraphOutcome) =>
-    Option.isSome(adaptedCatalogOpt)
-      ? adaptedCatalogOpt.value
-          .recordPolicyEvent({
-            sessionID: input.session.id,
-            messageID: input.processor.message.id,
-            toolID,
-            eventType,
-            mode: graphFirstMode,
-            ts: Date.now(),
-            ...(graphState === undefined ? {} : { graphState }),
-            ...(outcome === undefined ? {} : { outcome }),
-          })
-          .pipe(Effect.catchCause(() => Effect.void))
-      : Effect.void
-
-  const markGraphAttempt = (toolID: string, resultText?: string) =>
-    Effect.gen(function* () {
-      yield* Ref.set(graphAttempted, true)
-      if (resultText !== undefined) {
-        yield* policyEvent(toolID, "graph_attempt", Banyan.GraphFirstPolicy.graphOutcome(resultText))
-      }
-    })
-
-  // One structured redirect for early source-code reads/searches made before
-  // any task-specific graph attempt in this turn. Returns undefined in `off`
-  // mode (default — zero behavior change) and for non-code artifacts.
-  const redirectFor = Effect.fn("SessionTools.redirectFor")(function* (toolID: string, args: Record<string, unknown>) {
-    if (!banyanEnabled || graphFirstMode === "off") return undefined
-    if (!Banyan.GraphFirstPolicy.isSourceRead(toolID)) return undefined
-    if (yield* Ref.get(graphAttempted)) return undefined
-    return Banyan.GraphFirstPolicy.redirectFor(toolID, args)
-  })
-
-  const enforceBlock = (
-    toolID: string,
-    redirect: NonNullable<ReturnType<typeof Banyan.GraphFirstPolicy.redirectFor>>,
-  ) => ({
-    title: "Graph-first redirect",
-    metadata: { graphRedirect: { mode: graphFirstMode, tool: redirect.tool, hint: redirect.hint } },
-    output: [
-      "<graph-first-policy>",
-      `The \`${toolID}\` tool was redirected because no codegraph/repository tool has been attempted in this turn (BANYANCODE_GRAPH_FIRST_MODE=enforce).`,
-      "",
-      `Call \`${redirect.tool}\` first — ${redirect.hint}`,
-      'See the "Codegraph-first search policy (ALWAYS)" section of the system prompt.',
-      "</graph-first-policy>",
-    ].join("\n"),
-    attachments: [],
-  })
-
-  const advisoryNote = (
-    toolID: string,
-    redirect: NonNullable<ReturnType<typeof Banyan.GraphFirstPolicy.redirectFor>>,
-  ) =>
-    `\n\n<graph-first-policy>Consider \`${redirect.tool}\` first — ${redirect.hint} (${toolID} ran before any graph attempt in this turn).</graph-first-policy>`
-
   for (const item of yield* registry.tools({
     modelID: ModelV2.ID.make(input.model.api.id),
     providerID: input.model.providerID,
@@ -168,36 +88,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         return run.promise(
           Effect.gen(function* () {
             const ctx = context(args, options)
-            const redirect = yield* redirectFor(item.id, args)
-            yield* recordUsage(item.id)
-            if (redirect !== undefined && graphFirstMode === "enforce") {
-              // Block until the model attempts a graph/repository tool in
-              // this turn. ONE structured redirect naming the tool to use.
-              yield* policyEvent(item.id, "redirect")
-              const output = enforceBlock(item.id, redirect)
-              yield* plugin.trigger(
-                "tool.execute.after",
-                { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
-                output,
-              )
-              if (options.abortSignal?.aborted) {
-                yield* input.processor.completeToolCall(options.toolCallId, output)
-              }
-              return output
-            }
-            yield* policyEvent(item.id, "call")
             yield* plugin.trigger(
               "tool.execute.before",
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
               { args },
             )
             const result = yield* item.execute(args, ctx)
-            // A graph/repository tool call satisfies the per-turn graph
-            // attempt requirement and supplies the fallback-classified outcome.
-            if (Banyan.GraphFirstPolicy.isGraphAttempt(item.id)) {
-              const resultText = typeof result.output === "string" ? result.output : ""
-              yield* markGraphAttempt(item.id, resultText)
-            }
             const output = {
               ...result,
               attachments: result.attachments?.map((attachment) => ({
@@ -206,12 +102,6 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                 sessionID: ctx.sessionID,
                 messageID: input.processor.message.id,
               })),
-            }
-            // Advisory: let the read/search run but append a structured
-            // redirect note when it happened before any graph attempt.
-            if (redirect !== undefined && graphFirstMode === "advisory") {
-              yield* policyEvent(item.id, "redirect")
-              output.output = `${output.output ?? ""}${advisoryNote(item.id, redirect)}`
             }
             yield* plugin.trigger(
               "tool.execute.after",
@@ -228,6 +118,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     })
   }
 
+  const banyanEnabled = process.env.BANYANCODE_ENABLE !== "0"
   const transportOption = yield* Effect.serviceOption(AiSdkTransportModule.Service)
   const catalogOption = yield* Effect.serviceOption(ToolCatalog.Service)
   if (banyanEnabled && (Option.isNone(transportOption) || Option.isNone(catalogOption))) {
@@ -262,7 +153,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       agent: input.agent.name,
       model: input.model,
       messages: input.messages,
-      workspace: input.session.directory,
+      workspace: undefined,
       permissions: Permission.merge(input.agent.permission, input.session.permission ?? []) as never,
       run,
       pluginTrigger: (event: "tool.execute.before" | "tool.execute.after", payload: unknown, out: unknown) =>
@@ -272,7 +163,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     })
     if (banyanEnabled) {
       const materializedIds = new Set(materializations.map((m) => m.id))
-      const missingPublic = Banyan.BanyanToolsManifest.BANYAN_PUBLIC_TOOL_IDS.filter((id: string) => !materializedIds.has(id))
+      const missingPublic = BanyanToolsManifest.BANYAN_PUBLIC_TOOL_IDS.filter((id: string) => !materializedIds.has(id))
       if (missingPublic.length > 0) {
         return yield* Effect.die(
           new Error(
@@ -283,38 +174,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         )
       }
     }
-    const wrapGraphAttemptTool = (id: string, inner: AITool): AITool => {
-      const innerExecute = inner.execute
-      if (!innerExecute) return inner
-      return {
-        ...inner,
-        execute(args: unknown, options: ToolExecutionOptions) {
-          return run.promise(
-            Effect.gen(function* () {
-              if (Banyan.GraphFirstPolicy.isGraphAttempt(id)) {
-                yield* Ref.set(graphAttempted, true)
-              }
-              yield* policyEvent(id, "call")
-              const result = yield* Effect.promise(() => innerExecute(args, options))
-              if (Banyan.GraphFirstPolicy.isGraphAttempt(id)) {
-                const text = typeof result === "object" && result !== null && "output" in result
-                  ? String((result as { output: unknown }).output)
-                  : undefined
-                yield* markGraphAttempt(id, text)
-              }
-              return result
-            }),
-          )
-        },
-      }
-    }
     for (const { id, tool: v2Tool } of materializations) {
       if (tools[id]) continue
-      // Phase 5: wrap every V2 tool so a graph/repository call marks the
-      // per-turn `graphAttempted` state (unblocking later read/grep/glob in
-      // enforce mode) and records a graph-attempt telemetry event with an
-      // outcome. Only applied when BanyanCode is enabled.
-      tools[id] = banyanEnabled ? wrapGraphAttemptTool(id, v2Tool) : v2Tool
+      tools[id] = v2Tool
     }
   }
 
@@ -329,8 +191,6 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       run.promise(
         Effect.gen(function* () {
           const ctx = context(args, opts)
-          yield* recordUsage(key)
-          yield* policyEvent(key, "call")
           yield* plugin.trigger(
             "tool.execute.before",
             { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },

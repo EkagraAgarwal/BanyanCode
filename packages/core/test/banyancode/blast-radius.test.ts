@@ -70,12 +70,7 @@ const buildIntel = (repo: CodegraphRepoInterface): RepositoryIntelligenceInterfa
         }
       }
       const tests = allNodes.filter((n) => seen.has(n.id) && n.kind === "test")
-      return {
-        tests,
-        results: tests.map((node) => ({ node, derivation: "references" as const, confidence: 80 })),
-        notFound: tests.length === 0,
-        derivation: tests.length > 0 ? ("references" as const) : ("none" as const),
-      }
+      return { tests, notFound: tests.length === 0, derivation: "import" as const }
     })
   return {
     query: () => Effect.die("not used"),

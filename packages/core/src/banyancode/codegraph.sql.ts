@@ -58,42 +58,9 @@ export const CodegraphEdgesTable = sqliteTable(
       .notNull()
       .references(() => CodegraphNodesTable.id, { onDelete: "cascade" }),
     kind: text().notNull(),
-    // Phase: edge confidence model. `derivation` is the provenance label
-    // (`binding-resolved` / `service-tag` / `same-file` / `heuristic-name`)
-    // and `confidence` is the 0-100 trust score the derived-edge pass stamps
-    // so traversal consumers can prefer high-confidence edges and report
-    // when only heuristic edges exist. Nullable so pre-migration rows keep
-    // working; new rows always carry both fields.
-    derivation: text(),
-    confidence: integer().notNull().default(0),
   },
   (table) => [
     index("codegraph_edge_from_idx").on(table.from_node_id),
     index("codegraph_edge_to_idx").on(table.to_node_id),
-    index("codegraph_edge_confidence_idx").on(table.confidence),
-  ],
-)
-
-// Phase: persisted import/export bindings. One row per import/export/re-export
-// statement in a TypeScript file. `writeFileGraph` writes them during the parse
-// pass; `rebuildDerivedGraph` reads them to construct binding-aware edges
-// (qualified refs, barrel chains) without re-parsing source on every rebuild.
-export const CodegraphBindingsTable = sqliteTable(
-  "codegraph_bindings",
-  {
-    id: text().primaryKey(),
-    file_id: text()
-      .notNull()
-      .references(() => CodegraphFilesTable.id, { onDelete: "cascade" }),
-    kind: text().notNull(),
-    local_name: text(),
-    imported_name: text(),
-    export_name: text(),
-    source: text().notNull().default(""),
-    indexed_at: integer().notNull(),
-  },
-  (table) => [
-    index("codegraph_bindings_file_idx").on(table.file_id),
-    index("codegraph_bindings_source_idx").on(table.source),
   ],
 )

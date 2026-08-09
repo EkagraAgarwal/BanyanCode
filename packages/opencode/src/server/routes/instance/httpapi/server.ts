@@ -277,30 +277,33 @@ export function createRoutes(
       Banyan.banyanConfigServiceDefaultLayer,
     ]),
     Layer.provideMerge(
-      // Root-aware facade into the AppRuntime graph owner. The same
-      // root-bound layers AppLayer mounts (banyan-tools-mount.ts) — DB/repo/
-      // build/readiness/bootstrap chain + read-path services — are mounted
-      // here so slash commands, agent tool calls, /global/codegraph-status,
-      // and the TUI progress bridge share one root-bound DB identity and one
-      // build state even when the server cwd differs from the worktree.
-      // `codegraphReadinessDefaultLayer` is kept mounted here on purpose: a
-      // drift-guard test asserts both AppLayer and createRoutes expose it.
       Layer.mergeAll(
-        BanyanToolsMount.banyanGraphOwnerLayer,
-        BanyanToolsMount.codegraphReadinessDefaultLayer,
-        BanyanToolsMount.codegraphBootstrapDefaultLayer,
-        Banyan.codegraphSystemSourceDefaultLayer,
+        Banyan.codegraphBuildServiceDefaultLayer.pipe(
+          Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+          Layer.provide(Banyan.editPlannerDefaultLayer),
+          Layer.provide(Banyan.codegraphAnalyzerDefaultLayer),
+          Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
+        ),
+        Banyan.codegraphReadinessDefaultLayer.pipe(
+          Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+          Layer.provide(Banyan.editPlannerDefaultLayer),
+          Layer.provide(Banyan.codegraphAnalyzerDefaultLayer),
+          Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
+        ),
         Banyan.banyanFilesystemDefaultLayer,
       ),
     ),
     Layer.provideMerge(
       Layer.mergeAll(
+        Banyan.repositoryIntelligenceDefaultLayer,
+        Banyan.searchDefaultLayer,
+        Banyan.structuralQueriesDefaultLayer,
         Banyan.memoryRepoDefaultLayer,
         Banyan.memoryServiceDefaultLayer,
         Banyan.memoryProjectionDefaultLayer,
         Banyan.goalRepoDefaultLayer,
         Banyan.goalServiceDefaultLayer,
-      ).pipe(Layer.provide(Database.defaultLayer)),
+      ).pipe(Layer.provide(Banyan.codegraphRepoDefaultLayer), Layer.provide(Database.defaultLayer)),
     ),
     Layer.provideMerge(
       BanyanToolsMount.attachToCatalog(

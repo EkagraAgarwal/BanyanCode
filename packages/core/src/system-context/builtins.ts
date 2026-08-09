@@ -5,7 +5,6 @@ import { Location } from "../location"
 import { SystemContext } from "./index"
 import { InstructionContext } from "../instruction-context"
 import { SystemContextRegistry } from "./registry"
-import { register as registerCodegraphSource } from "../banyancode/codegraph-system-source"
 
 const builtIns = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -38,10 +37,6 @@ const builtIns = Layer.effectDiscard(
     ])
 
     yield* registry.register({ key: SystemContext.Key.make("core/builtins"), load: Effect.succeed(context) })
-    // V2: register the BanyanCode codegraph policy source (no-op when
-    // BANYANCODE_ENABLE === "0"). The source is static policy text; V2 callers
-    // that need the per-session tool guide compose `Service.load` directly.
-    yield* registerCodegraphSource(registry)
   }),
 )
 

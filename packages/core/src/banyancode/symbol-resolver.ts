@@ -25,7 +25,6 @@ export type ResolutionDerivation =
   | "code-substring"
   | "name-like"
   | "fts-bm25"
-  | "node-id"
 
 export interface ResolvedTarget {
   readonly nodeID: string
@@ -70,19 +69,6 @@ export type ResolveRepo = Pick<
   | "fileIDsByServiceName"
   | "filesByIDs"
 >
-
-const NODE_ID_UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-
-/**
- * True when the target has the shape of a codegraph node ID — a UUID
- * `fileID` prefix followed by one or more `:`-separated segments, e.g.
- * `<fileID>:file`, `<fileID>:class:MeshCoordinator:12`. Node IDs are the
- * only dotted/colon-heavy strings the resolver should treat as opaque
- * handles: the indexer's `fileID` is `randomUUID()` (see
- * codegraph-indexer.ts), so a name like `Foo.bar` never matches.
- */
-export const isNodeIDShape = (target: string): boolean =>
-  new RegExp(`^${NODE_ID_UUID}(?::[^:]+)+$`, "i").test(target.trim())
 
 export const resolveGraphTargetPure = (
   repo: ResolveRepo,
@@ -165,33 +151,9 @@ export const resolveGraphTargetStrict = (
         return [...nonTest, ...test]
       })
 
-    // 0) Exact node ID lookup — node IDs are UUID-prefixed (`<fileID>:file`,
-    //    `<fileID>:class:Name:line`, ...). When the target has that shape,
-    //    resolve directly via `nodeByID` so callers can traverse a known node
-    //    without a name query. A miss on an ID-shaped target short-circuits:
-    //    running the name cascade on an opaque handle would only produce
-    //    meaningless substring matches, so the caller should report the ID as
-    //    stale instead.
-    if (isNodeIDShape(target)) {
-      tried.push("node-id")
-      const node = yield* repo.nodeByID(target)
-      const filtered = filterByKind(filterByFile(node ? [node] : []))
-      if (filtered.length > 0) return toResult(filtered, "node-id")
-      return { _tag: "Miss" as const, value: { target, tried } }
-    }
-
     // 1) Context.Service tag lookup — covers BanyanCode's dominant pattern.
     const tagHitsRaw = filterByKind(filterByFile(yield* repo.findSymbolsByServiceTag(target)))
-    // Phase 2: qualified service targets (e.g. `Banyan.MeshCoordinator`)
-    // share the same canonical `Service` node as their bare leaf. Resolve
-    // the leaf via service tags ONLY when the qualified form itself has no
-    // tag evidence, so `Banyan.MeshCoordinator` and `MeshCoordinator`
-    // resolve identically without making arbitrary dotted symbols fuzzy.
-    const leafTagHitsRaw =
-      target.includes(".") && tagHitsRaw.length === 0
-        ? filterByKind(filterByFile(yield* repo.findSymbolsByServiceTag(target.split(".").pop() ?? "")))
-        : []
-    const tagHits = dedupeByID([...tagHitsRaw, ...leafTagHitsRaw])
+    const tagHits = dedupeByID(tagHitsRaw)
     tried.push("tag-fallback")
     if (tagHits.length > 0) {
       const ordered = yield* reorderNonTestFirst(tagHits)
