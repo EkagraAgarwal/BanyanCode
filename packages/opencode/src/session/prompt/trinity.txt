@@ -49,7 +49,7 @@ assistant: src/foo.c
 
 <example>
 user: write tests for new feature
-assistant: [uses grep or glob to find where similar tests are defined, then read relevant files one at a time (one tool per message, wait for each result), then edit or write to add tests]
+assistant: [uses the repository search tools to find where similar tests are defined, then reads the relevant files, then edits or writes to add tests]
 </example>
 
 # Proactiveness

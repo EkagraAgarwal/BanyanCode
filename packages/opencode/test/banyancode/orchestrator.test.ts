@@ -72,7 +72,7 @@ describe("orchestrator agent", () => {
         // the codegraph policy rather than inlining it. The full tool list
         // (codegraph_build, code_find, ...) lives in the SystemPrompt
         // block, asserted below in the policy-contains-tools suite.
-        expect(prompt).toContain("Codegraph-first search policy")
+        expect(prompt).toContain("Repository intelligence is the canonical interface")
         expect(prompt).toContain("system context")
         // The background-subagent preference is embodied in the
         // orchestration rules rather than inlined policy.

@@ -60,24 +60,24 @@ describe("POLICY_TEXT — background-subagent section moved to the orchestration
     Effect.gen(function* () {
       const block = yield* SystemPrompt.Service.use((svc) => svc.codegraph())
       expect(block).toBeDefined()
-      expect(block).toContain("Codegraph-first search policy (ALWAYS)")
+      expect(block).toContain("Repository intelligence is the canonical interface (ALWAYS)")
       expect(block).not.toContain("Background subagents (ALWAYS)")
       expect(block).not.toContain("background: true")
     }),
   )
 
-  itPolicy.effect("preserves the original 'Codegraph-first search policy (ALWAYS)' section", () =>
+  itPolicy.effect("preserves the original 'Repository intelligence is the canonical interface (ALWAYS)' section", () =>
     Effect.gen(function* () {
       const block = yield* SystemPrompt.Service.use((svc) => svc.codegraph())
-      expect(block).toContain("Codegraph-first search policy (ALWAYS)")
-      expect(block).toContain("ALWAYS use BanyanCode graph + repository tools")
+      expect(block).toContain("Repository intelligence is the canonical interface (ALWAYS)")
+      expect(block).toContain("intelligence tools are the canonical search surface")
       expect(block).toContain("codegraph_build")
       expect(block).toContain("code_find")
       expect(block).toContain("repository_query")
       expect(block).toContain("blast_radius")
       expect(block).toContain("preflight")
       expect(block).toContain("edit_plan")
-      expect(block).toContain("last resort")
+      expect(block).toContain("fallbacks, not")
     }),
   )
 
@@ -86,7 +86,7 @@ describe("POLICY_TEXT — background-subagent section moved to the orchestration
       const fromSvc = yield* Banyan.CodegraphSystemSourceNS.Service.use((svc) => svc.load({ tools: [] }))
       const exported = Banyan.CodegraphSystemSourceNS.POLICY_TEXT
       expect(fromSvc).toBe(exported)
-      expect(exported).toContain("Codegraph-first search policy (ALWAYS)")
+      expect(exported).toContain("Repository intelligence is the canonical interface (ALWAYS)")
       // The background-subagent section lives in the orchestration block
       // (src/session/prompt/banyan.txt), not in the policy text.
       expect(exported).not.toContain("Background subagents (ALWAYS)")
@@ -103,7 +103,7 @@ describe("prose agents — stripped the inline policy block, point to system con
       if (!agent) return
       const prompt = agent.prompt ?? ""
       // Pointer is preserved.
-      expect(prompt).toContain("Codegraph-first search policy (ALWAYS)")
+      expect(prompt).toContain("Repository intelligence is the canonical interface (ALWAYS)")
       expect(prompt).toContain("system context")
       // Body is gone — the prose list of bootstrap rules was duplicated
       // with the SystemPrompt block and is now centralised.
@@ -133,7 +133,7 @@ describe("prose agents — stripped the inline policy block, point to system con
       expect(orchestrator).toBeDefined()
       if (!orchestrator) return
       const prompt = orchestrator.prompt ?? ""
-      expect(prompt).toContain("Codegraph-first search policy (ALWAYS)")
+      expect(prompt).toContain("Repository intelligence is the canonical interface (ALWAYS)")
       expect(prompt).toContain("system context")
       expect(prompt).toContain("MUST fan out 2-3 parallel subagents")
       expect(prompt).toContain("maximum is 5")
@@ -153,7 +153,7 @@ describe("terse subagents — inline policy removed, one-line pointer to system 
         expect(agent).toBeDefined()
         if (!agent) return
         const prompt = agent.prompt ?? ""
-        expect(prompt).toContain("Codegraph-first search policy (ALWAYS)")
+        expect(prompt).toContain("Repository intelligence is the canonical interface (ALWAYS)")
         expect(prompt).toContain("system context")
         // The duplicated inline policy body is gone — it lives in the
         // SystemPrompt block injected into every agent's system context.
@@ -172,7 +172,7 @@ describe("reviewer — points to system context, keeps the review rules", () => 
       expect(reviewer).toBeDefined()
       if (!reviewer) return
       const prompt = reviewer.prompt ?? ""
-      expect(prompt).toContain("Codegraph-first search policy (ALWAYS)")
+      expect(prompt).toContain("Repository intelligence is the canonical interface (ALWAYS)")
       expect(prompt).toContain("system context")
       // Reviewer-specific guidance — they READ code, end-to-end.
       expect(prompt).toContain("end-to-end")

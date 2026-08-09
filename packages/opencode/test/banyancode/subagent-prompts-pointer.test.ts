@@ -49,11 +49,12 @@ const PROVIDER_POINTER_PHRASE = "BanyanCode tool guide"
 // Subagent .txt prompts carry a one-line pointer to the policy sections
 // injected into every agent's system context.
 const SUBAGENT_POINTER_PHRASE =
-  "Follow the Codegraph-first search policy (ALWAYS) and BanyanCode orchestration sections in your system context."
+  'Follow the "Repository intelligence is the canonical interface (ALWAYS)" and BanyanCode orchestration sections in your system context.'
 const FORBIDDEN_PHRASE = "prefer using Glob and Grep"
 const DUPLICATED_BLOCK_HEADERS = [
   "## Tool guide (external)",
   "## Codegraph-first search policy (ALWAYS)",
+  "## Repository intelligence is the canonical interface (ALWAYS)",
   "## Mesh and peer communication",
 ] as const
 
@@ -164,12 +165,12 @@ describe("orchestration-first prompt policy", () => {
     Effect.gen(function* () {
       const block = yield* (yield* SystemPrompt.Service).banyan()
       expect(block).toBeDefined()
-      expect(block).toContain("Codegraph-first search policy (ALWAYS)")
-      expect(block).toContain("code_find(intent='definition')")
+      expect(block).toContain("Repository intelligence is the canonical interface")
+      expect(block).toContain("repository_query")
       expect(block).toContain("repository_explain")
       expect(block).toContain("blast_radius")
       expect(block).toContain("preflight")
-      expect(block).toContain("last resorts")
+      expect(block).toContain("fallbacks, not defaults")
     }),
   )
 

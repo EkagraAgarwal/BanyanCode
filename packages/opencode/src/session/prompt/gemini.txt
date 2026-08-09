@@ -85,11 +85,11 @@ model: [tool_call: bash for 'node server.js &' because it must run in the backgr
 <example>
 user: Refactor the auth logic in src/auth.py to use the requests library instead of urllib.
 model: Okay, I can refactor 'src/auth.py'.
-First, I'll analyze the code and check for a test safety net before planning any changes.
-[tool_call: glob for path 'tests/test_auth.py']
-[tool_call: read for absolute_path '/path/to/tests/test_auth.py']
+First, I'll locate the auth module and check for a test safety net before planning any changes.
+[tool_call: repository_query for query 'auth.py requests urllib' or code_find for 'auth']
+[tool_call: read for absolute_path '/path/to/src/auth.py']
 (After analysis)
-Great, 'tests/test_auth.py' exists and covers the core authentication logic. With this safety net in place, I can safely plan the refactoring.
+I found 'tests/test_auth.py' which covers the core authentication logic. With this safety net in place, I can safely plan the refactoring.
 I'll also confirm 'requests' is a dependency.
 [tool_call: read for absolute_path '/path/to/requirements.txt']
 (After analysis)
@@ -118,10 +118,10 @@ model: I can run \`rm -rf /path/to/project/temp\`. This will permanently delete 
 <example>
 user: Write tests for someFile.ts
 model:
-Okay, I can write those tests. First, I'll read \`someFile.ts\` to understand its functionality.
-[tool_call: read for absolute_path '/path/to/someFile.ts' or use glob to find \`someFile.ts\` if its location is unknown]
+Okay, I can write those tests. First, I'll locate \`someFile.ts\` with the repository search tools if its location is unknown, then read it to understand its functionality.
+[tool_call: repository_query for query 'someFile' or code_find for 'someFile.ts']
 Now I'll look for existing or related test files to understand current testing conventions and dependencies.
-[tool_call: glob for paths ['**/*.test.ts', 'src/**/*.spec.ts'] assuming someFile.ts is in the src directory]
+[tool_call: repository_query for query 'test conventions' or glob for paths ['**/*.test.ts', 'src/**/*.spec.ts']]
 (After reviewing existing tests and the file content)
 [tool_call: write to create /path/to/someFile.test.ts with the test code]
 I've written the tests. Now I'll run the project's test command to verify them.
@@ -131,8 +131,8 @@ I've written the tests. Now I'll run the project's test command to verify them.
 <example>
 user: How do I update the user's profile information in this system?
 model:
-I'm not immediately sure how user profile information is updated. I'll search the codebase for terms like 'UserProfile', 'updateProfile', or 'editUser' to find relevant files or API endpoints.
-[tool_call: grep for pattern 'UserProfile|updateProfile|editUser']
+I'm not immediately sure how user profile information is updated. I'll search the codebase with the repository search tools for profile-related code to find relevant files or API endpoints.
+[tool_call: repository_query for query 'UserProfile updateProfile editUser profile update']
 (After reviewing search results, assuming a relevant file like '/path/to/UserProfileService.java' was found)
 Okay, \`/path/to/UserProfileService.java\` seems like the most relevant file. I'll read its content to understand how updates are handled.
 [tool_call: read for absolute_path '/path/to/UserProfileService.java']

@@ -104,7 +104,7 @@ describe("BanyanCode system-prompt source — manifest coverage", () => {
     Effect.gen(function* () {
       const svc = yield* Banyan.CodegraphSystemSource
       const guide = yield* svc.load({ tools: [] })
-      expect(guide).toContain("Codegraph-first search policy")
+      expect(guide).toContain("Repository intelligence is the canonical interface")
     }),
   )
 })

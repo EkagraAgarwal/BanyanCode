@@ -36,10 +36,10 @@ describe("Banyan.CodegraphSystemSource.Service", () => {
     Effect.gen(function* () {
       const svc = yield* Banyan.CodegraphSystemSource
       const text = yield* svc.load({ tools: [] })
-      expect(text).toContain("Codegraph-first search policy")
+      expect(text).toContain("Repository intelligence is the canonical interface")
       // The pointer sentence mentions the guide, but no family sections
       // render when no tools are supplied.
-      expect(text).toContain("BanyanCode tool guide below lists")
+      expect(text).toContain("canonical search surface")
       expect(text).not.toContain("### Code graph")
     }),
   )
@@ -48,7 +48,7 @@ describe("Banyan.CodegraphSystemSource.Service", () => {
     Effect.gen(function* () {
       const svc = yield* Banyan.CodegraphSystemSource
       const text = yield* svc.load()
-      expect(text).toContain("Codegraph-first search policy")
+      expect(text).toContain("Repository intelligence is the canonical interface")
       expect(text).not.toContain("### Code graph")
     }),
   )
@@ -67,7 +67,7 @@ describe("Banyan.CodegraphSystemSource.Service", () => {
         })
         expect(text).toContain("BanyanCode tool guide")
         expect(text).toContain("Look up a symbol or file in the code graph")
-        expect(text).toContain("`code_find`")
+        expect(text).toContain("code_find")
         // forbidden / non-banyan ids must not appear in the rendered catalog
         expect(text).not.toContain("internal — should be filtered out")
         expect(text).not.toContain("not a banyan id — should be filtered out")
@@ -87,11 +87,11 @@ describe("Banyan.CodegraphSystemSource.Service", () => {
     Effect.gen(function* () {
       const svc = yield* Banyan.CodegraphSystemSource
       const text = yield* svc.load({ tools: [{ id: "code_find", description: "find a symbol" }] })
-      expect(text).toMatch(/graph.{0,3}first|repository.{0,3}first/i)
+      expect(text).toMatch(/canonical interface|repository.{0,3}first/i)
       // Pin the strengthened policy: must always-bootstrap and always-prioritize
       expect(text).toContain("ALWAYS")
       expect(text).toContain("codegraph_build")
-      expect(text).toContain("last resort")
+      expect(text).toContain("fallbacks, not")
     }),
   )
 
@@ -105,7 +105,7 @@ describe("Banyan.CodegraphSystemSource.Service", () => {
         // load() does not gate on the env var; only the registry-side
         // register() does. POLICY_TEXT remains accessible.
         const text = yield* svc.load()
-        expect(text).toContain("Codegraph-first search policy")
+        expect(text).toContain("Repository intelligence is the canonical interface")
       } finally {
         if (original === undefined) delete process.env.BANYANCODE_ENABLE
         else process.env.BANYANCODE_ENABLE = original

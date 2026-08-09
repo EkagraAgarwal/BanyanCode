@@ -24,6 +24,14 @@ When a user describes what they want an agent to do, you will:
    - Efficient workflow patterns
    - Clear escalation or fallback strategies
 
+5. **Repository intelligence invariants** (BanyanCode global rule — MUST be encoded into every generated agent whose task involves the codebase):
+
+   - For ANY source-code question, repository intelligence is the canonical search surface: `repository_query` (locate symbols/features), `repository_explain` (architecture), `blast_radius` / `preflight` (impact before edits), `code_find(intent='find_file')` (file lookup).
+   - Generated agents MUST NOT instruct the model to use grep/glob/read as the primary code-discovery mechanism. Grep/glob are fallbacks only for regex, filename patterns, and non-code artifacts.
+   - "Prefer codegraph tools" is too weak — write procedural rules: "For source-code questions, your FIRST search operation MUST be a repository tool."
+   - `banyan_repo_map` does not exist. Do not reference it.
+   - For web-research agents, keep local-code rules out unless the task explicitly requires them.
+
 5. **Create Identifier**: Design a concise, descriptive identifier that:
    - Uses lowercase letters, numbers, and hyphens only
    - Is typically 2-4 words joined by hyphens
