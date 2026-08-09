@@ -158,6 +158,49 @@ describe("memory HttpApi", () => {
     }),
   )
 
+  it.live("unscoped recall falls back to session-scoped rows (cross-caller gap)", () =>
+    Effect.gen(function* () {
+      yield* runWithFreshDb((dbPath) =>
+        Effect.gen(function* () {
+          const dbLayer = Database.layerFromPath(dbPath)
+          const apiLayer = buildApiLayer(dbPath)
+          yield* Effect.gen(function* () {
+            const { db } = yield* Database.Service
+            yield* DatabaseMigration.apply(db)
+          }).pipe(Effect.provide(dbLayer), Effect.scoped)
+
+          // Subagent-style write: session scope under the ROOT session id.
+          yield* makePost(MemoryPaths.store, {
+            key: "cross:caller",
+            scope: "session",
+            sessionID: "ses_root",
+            value: { kind: "observation", title: "subagent finding", body: "written by a subagent" },
+          }).pipe(Effect.provide(apiLayer))
+
+          // Unscoped recall defaults to global → miss; the handler must fall
+          // back to MemoryRepo.getLatestSessionScoped and return the row.
+          const response = yield* makePost(MemoryPaths.recall, {
+            key: "cross:caller",
+          }).pipe(Effect.provide(apiLayer))
+          expect(response.status).toBe(200)
+          const body = (yield* response.json) as Array<{ key: string; sessionID?: string }>
+          expect(body.length).toBe(1)
+          expect(body[0]?.key).toBe("cross:caller")
+          expect(body[0]?.sessionID).toBe("ses_root")
+
+          // Explicit scope=global must NOT fall back — still an empty list.
+          const explicitResponse = yield* makePost(MemoryPaths.recall, {
+            key: "cross:caller",
+            scope: "global",
+          }).pipe(Effect.provide(apiLayer))
+          expect(explicitResponse.status).toBe(200)
+          const explicitBody = (yield* explicitResponse.json) as Array<unknown>
+          expect(explicitBody.length).toBe(0)
+        }),
+      )
+    }),
+  )
+
   it.live("store rejects keys that fail the pattern check", () =>
     Effect.gen(function* () {
       yield* runWithFreshDb((dbPath) =>
