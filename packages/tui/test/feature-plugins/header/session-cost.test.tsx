@@ -38,6 +38,29 @@ const fixtureSession = {
   title: "Test Session",
 }
 
+const childSessions = [
+  {
+    id: "child_1",
+    parentID: "session_test",
+    cost: 0.01,
+    tokens: { input: 5000, output: 5000, reasoning: 0, cache: { read: 0, write: 0 } },
+    agent: "scout",
+    model: { id: "test/model" },
+    time: { updated: Date.now() },
+    title: "Child One",
+  },
+  {
+    id: "child_2",
+    parentID: "session_test",
+    cost: 0.02,
+    tokens: { input: 1000, output: 1000, reasoning: 500, cache: { read: 0, write: 0 } },
+    agent: "explore",
+    model: { id: "test/model" },
+    time: { updated: Date.now() },
+    title: "Child Two",
+  },
+]
+
 test("header session-cost app_top slot renders with cost data", async () => {
   const events = createEventSource()
   const calls = createFetch()
@@ -48,6 +71,11 @@ test("header session-cost app_top slot renders with cost data", async () => {
     const api: any = {
       ...createTuiPluginApi({}),
       theme: { current: stubTheme },
+      client: {
+        session: {
+          children: async () => ({ data: [] }),
+        },
+      },
       state: {
         session: { get: () => undefined },
         path: { directory: "/test/workspace" },
@@ -100,6 +128,10 @@ test("header session-cost app_top slot renders with cost data", async () => {
       </TestTuiContexts>
     </ExitProvider>
   ), { width: 100, height: 6 })
+  // Let the tree mount and the session.updated event land before pumping the
+  // renderer (same pattern as status-pills.test.tsx — pumping before the
+  // mount tick leaves the widget unmounted).
+  await Bun.sleep(100)
   await testSetup.renderOnce()
   await new Promise((r) => setTimeout(r, 0))
   await testSetup.renderOnce()
@@ -111,6 +143,95 @@ test("header session-cost app_top slot renders with cost data", async () => {
     .trimEnd()
   try {
     expect(snapshot).toMatchSnapshot()
+  } finally {
+    testSetup.renderer.destroy()
+  }
+})
+
+test("header session-cost app_top slot includes subagent costs in the total", async () => {
+  const events = createEventSource()
+  const calls = createFetch()
+  const config = createTuiResolvedConfig()
+  const [slotContent, setSlotContent] = createSignal<any>(null)
+
+  function Inner() {
+    const api: any = {
+      ...createTuiPluginApi({}),
+      theme: { current: stubTheme },
+      client: {
+        session: {
+          children: async () => ({ data: childSessions }),
+        },
+      },
+      state: {
+        session: { get: () => undefined },
+        path: { directory: "/test/workspace" },
+        mcp: () => [],
+        lsp: () => [],
+      },
+    }
+    api.slots = {
+      register: (plugin: any) => {
+        if (!plugin?.slots?.app_top) return () => {}
+        const el = plugin.slots.app_top({}, { session_id: "session_test" })
+        setSlotContent(() => el)
+        return () => {}
+      },
+    }
+    onMount(() => {
+      HeaderSessionCost.tui(api as any, undefined as any, { id: "test" } as any).catch(() => {})
+      queueMicrotask(() => {
+        events.emit({
+          directory,
+          payload: {
+            id: "evt_session_updated",
+            type: "session.updated",
+            properties: { info: fixtureSession },
+          } as any,
+        })
+      })
+    })
+    return <box>{slotContent()}</box>
+  }
+
+  const testSetup = await testRender(() => (
+    <ExitProvider exit={console.error}>
+      <TestTuiContexts>
+        <ArgsProvider>
+          <KVProvider>
+            <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+              <ProjectProvider>
+                <SyncProvider>
+                  <TuiConfigProvider config={config}>
+                    <ThemeProvider mode="dark">
+                      <Inner />
+                    </ThemeProvider>
+                  </TuiConfigProvider>
+                </SyncProvider>
+              </ProjectProvider>
+            </SDKProvider>
+          </KVProvider>
+        </ArgsProvider>
+      </TestTuiContexts>
+    </ExitProvider>
+  ), { width: 100, height: 6 })
+  // Let the tree mount and the session.updated event land before pumping the
+  // renderer (same pattern as status-pills.test.tsx — pumping before the
+  // mount tick leaves the widget unmounted).
+  await Bun.sleep(100)
+  // Wait until the session.updated event has landed in the sync store, the
+  // children fetch has resolved, and the widget has re-rendered.
+  // parent 0.0234 + child_1 0.01 + child_2 0.02 = 0.0534 -> "$0.05"
+  // parent 20134 + child_1 10000 + child_2 2500 = 32634 -> "33k"
+  let frame = ""
+  for (let i = 0; i < 100; i++) {
+    await testSetup.renderOnce()
+    frame = testSetup.captureCharFrame()
+    if (frame.includes("Session: $0.05")) break
+    await Bun.sleep(25)
+  }
+  try {
+    expect(frame).toContain("Session: $0.05 · 33k tok (incl. subagents)")
   } finally {
     testSetup.renderer.destroy()
   }

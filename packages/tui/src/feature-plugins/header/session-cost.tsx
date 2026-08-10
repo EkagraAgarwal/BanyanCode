@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createSignal, onCleanup, Show } from "solid-js"
+import type { Session } from "@opencode-ai/sdk/v2"
+import { createSignal, onCleanup, onMount, Show } from "solid-js"
 import { useSync } from "../../context/sync"
 import { useEvent } from "../../context/event"
 import { toHex } from "../../util/color"
@@ -28,28 +29,58 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const ev = useEvent()
 
   const [tick, setTick] = createSignal(0)
+  const [children, setChildren] = createSignal<Session[]>([])
 
-  const unsub = ev.on("session.updated" as any, () => setTick((t) => t + 1))
+  // Children publish their own `session.updated` events, so refetch them on
+  // every update tick (parent or child) and once on mount.
+  const refreshChildren = async () => {
+    try {
+      const res = await props.api.client.session.children({ sessionID: props.session_id })
+      setChildren(res.data ?? [])
+    } catch {
+      setChildren([])
+    }
+  }
+
+  const unsub = ev.on("session.updated" as any, () => {
+    setTick((t) => t + 1)
+    void refreshChildren()
+  })
   onCleanup(unsub)
+
+  onMount(() => {
+    void refreshChildren()
+  })
 
   const session = () => {
     void tick()
     return sync.session.get(props.session_id)
   }
 
-  const cost = () => session()?.cost
+  const cost = () => {
+    const s = session()
+    if (s?.cost === undefined) return undefined
+    let total = s.cost
+    for (const child of children()) total += child.cost ?? 0
+    return total
+  }
+
   const tokens = () => {
     const s = session()
     if (!s?.tokens) return undefined
-    return totalTokens(s)
+    let total = totalTokens(s)
+    for (const child of children()) total += totalTokens(child)
+    return total
   }
+
+  const hasChildren = () => children().length > 0
 
   const hasData = () => cost() !== undefined && tokens() !== undefined
 
   return (
     <Show when={hasData()}>
       <text fg={toHex(theme().text)}>
-        Session: ${cost()!.toFixed(2)} · {formatTokens(tokens()!)} tok (session total)
+        Session: ${cost()!.toFixed(2)} · {formatTokens(tokens()!)} tok {hasChildren() ? "(incl. subagents)" : "(session total)"}
       </text>
     </Show>
   )
