@@ -16,7 +16,7 @@ import { Tools } from "./tools"
 export const name = "bash"
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
 export const MAX_TIMEOUT_MS = 10 * 60 * 1_000
-export const MAX_CAPTURE_BYTES = 1024 * 1024
+export const MAX_CAPTURE_BYTES = 128 * 1024
 
 export const Input = Schema.Struct({
   command: Schema.String.annotate({ description: "Shell command string to execute" }),
