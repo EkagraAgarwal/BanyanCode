@@ -70,6 +70,28 @@ export const include = (request: LLMRequest): ReadonlyArray<OpenAIResponseInclud
   return filtered.length > 0 ? filtered : undefined
 }
 
+// `prompt_cache_key` is an OpenAI Responses field that only OpenAI, OpenRouter,
+// and Mistral document. Compatible endpoints (meta, deepseek, togetherai, ...)
+// may not implement it, and an undocumented key can destabilize prompt-cache
+// routing and cause full cache misses. A caller-supplied key in providerOptions
+// is an explicit opt-in for any provider; without one the key is only emitted
+// for documented providers (see `promptCacheKeyPolicy`).
+export const promptCacheKeyProviders = ["openai", "openrouter", "mistral"] as const
+export type PromptCacheKeyProvider = (typeof promptCacheKeyProviders)[number]
+const PROMPT_CACHE_KEY_PROVIDERS = new Set<string>(promptCacheKeyProviders)
+
+export const supportsPromptCacheKey = (provider: string) => PROMPT_CACHE_KEY_PROVIDERS.has(provider)
+
+// Resolve the session prompt-cache-key policy. `"auto"` (the default) sends the
+// session id only to providers that document `prompt_cache_key` support; `"off"`
+// never sends it; any other string is sent verbatim for every provider.
+export const promptCacheKeyPolicy = (policy: string, provider: string, sessionID: string): string | undefined => {
+  if (policy === "off") return undefined
+  const sessionKey = /^ses_[0-9a-f]{64}$/.test(sessionID) ? sessionID.slice(4) : sessionID
+  if (policy !== "auto") return policy
+  return PROMPT_CACHE_KEY_PROVIDERS.has(provider) ? sessionKey : undefined
+}
+
 export const promptCacheKey = (request: LLMRequest) => {
   const value = options(request)?.promptCacheKey
   return typeof value === "string" ? value : undefined

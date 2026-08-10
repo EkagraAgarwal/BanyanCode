@@ -253,6 +253,13 @@ const invalid = ProviderShared.invalidRequest
 // =============================================================================
 // Request Lowering
 // =============================================================================
+// OpenAI's own Responses API documents server-side `store`, `item_reference`,
+// and `prompt_cache_key`. Compatible deployments (meta, Azure, custom gateways)
+// are stateless by default: full items plus `store: false` and the
+// encrypted-reasoning include so prior reasoning/tool history round-trips
+// without server-side retention.
+const isOpenAIProvider = (request: LLMRequest) => request.model.provider === "openai"
+
 const lowerTool = (tool: ToolDefinition): OpenAIResponsesTool => ({
   type: "function",
   name: tool.name,
@@ -343,6 +350,9 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
     request.system.length === 0 ? [] : [{ role: "system", content: ProviderShared.joinText(request.system) }]
   const input: OpenAIResponsesInputItem[] = [...system]
   const store = OpenAIOptions.store(request)
+  // Non-OpenAI Responses deployments have no documented store retention, so
+  // `item_reference` is never safe there: lower full items instead.
+  const stateless = !isOpenAIProvider(request)
 
   for (const message of request.messages) {
     if (message.role === "system") {
@@ -381,7 +391,7 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
           flushText()
           const reasoning = lowerReasoning(part)
           if (!reasoning) continue
-          if (store !== false && reasoning.id) {
+          if (!stateless && store !== false && reasoning.id) {
             if (!reasoningReferences.has(reasoning.id)) input.push({ type: "item_reference", id: reasoning.id })
             reasoningReferences.add(reasoning.id)
             continue
@@ -406,7 +416,7 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
         if (part.type === "tool-result" && part.providerExecuted === true) {
           flushText()
           const itemID = hostedToolItemID(part)
-          if (store !== false && itemID && !hostedToolReferences.has(itemID))
+          if (!stateless && store !== false && itemID && !hostedToolReferences.has(itemID))
             input.push({ type: "item_reference", id: itemID })
           if (itemID) hostedToolReferences.add(itemID)
           continue
@@ -436,7 +446,7 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
   // With store:false, OpenAI only accepts previous reasoning items when the
   // complete item has encrypted state. Summary blocks for one item may carry
   // that state only on the last block, so filter after they have been joined.
-  return store === false
+  return stateless || store === false
     ? input.filter(
         (item) => !("type" in item) || item.type !== "reasoning" || typeof item.encrypted_content === "string",
       )
@@ -445,20 +455,27 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
 
 const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (request: LLMRequest) {
   const store = OpenAIOptions.store(request)
+  const stateless = !isOpenAIProvider(request)
   const promptCacheKey = OpenAIOptions.promptCacheKey(request)
   const effort = OpenAIOptions.reasoningEffort(request)
   if (effort && !OpenAIOptions.isReasoningEffort(effort))
     return yield* invalid(`OpenAI Responses does not support reasoning effort ${effort}`)
   const summary = OpenAIOptions.reasoningSummary(request)
   const include = OpenAIOptions.include(request)
+  // Stateless deployments need the encrypted reasoning content back so a
+  // follow-up turn can resend it as a full item; default the include on.
+  const statelessInclude: ReadonlyArray<OpenAIOptions.OpenAIResponseIncludable> | undefined =
+    stateless && !include?.includes("reasoning.encrypted_content")
+      ? ["reasoning.encrypted_content", ...(include ?? [])]
+      : include
   const verbosity = OpenAIOptions.textVerbosity(request)
   const instructions = OpenAIOptions.instructions(request)
   const serviceTier = OpenAIOptions.serviceTier(request)
   return {
     ...(instructions ? { instructions } : {}),
-    ...(store !== undefined ? { store } : {}),
+    ...(stateless ? { store: false } : store !== undefined ? { store } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
-    ...(include ? { include } : {}),
+    ...(statelessInclude ? { include: statelessInclude } : {}),
     ...(effort || summary ? { reasoning: { effort, summary } } : {}),
     ...(verbosity ? { text: { verbosity } } : {}),
     ...(serviceTier ? { service_tier: serviceTier } : {}),
@@ -953,7 +970,9 @@ export const protocol = Protocol.make({
       tools: ToolStream.empty<string>(),
       lifecycle: Lifecycle.initial(),
       reasoningItems: {},
-      store: OpenAIOptions.store(request),
+      // Stateless deployments never store, so summary parts stay open until the
+      // item closes with its encrypted content — same as explicit `store: false`.
+      store: isOpenAIProvider(request) ? OpenAIOptions.store(request) : false,
     }),
     step,
     terminal: (event) => TERMINAL_TYPES.has(event.type),

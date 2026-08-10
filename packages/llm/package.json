@@ -32,7 +32,8 @@
     "./protocols/gemini": "./src/protocols/gemini.ts",
     "./protocols/openai-chat": "./src/protocols/openai-chat.ts",
     "./protocols/openai-compatible-chat": "./src/protocols/openai-compatible-chat.ts",
-    "./protocols/openai-responses": "./src/protocols/openai-responses.ts"
+    "./protocols/openai-responses": "./src/protocols/openai-responses.ts",
+    "./protocols/utils/openai-options": "./src/protocols/utils/openai-options.ts"
   },
   "devDependencies": {
     "@clack/prompts": "1.0.0-alpha.1",

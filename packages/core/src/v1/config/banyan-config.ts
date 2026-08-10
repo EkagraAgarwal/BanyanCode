@@ -88,6 +88,13 @@ export const Info = Schema.Struct({
   banyancode_mesh_default_provider: Schema.optional(Schema.String),
   banyancode_mesh_default_model: Schema.optional(Schema.String),
   banyancode_mesh_subagent_cooldown: Schema.optional(Schema.Number),
+  // Prompt-cache key policy for OpenAI-compatible endpoints. `prompt_cache_key`
+  // is only documented by OpenAI/OpenRouter/Mistral; "auto" (default) sends the
+  // session id only to those providers, "off" never sends it, and an explicit
+  // string is always sent.
+  banyancode_prompt_cache_key: Schema.optional(
+    Schema.Union([Schema.Literal("auto"), Schema.Literal("off"), Schema.NonEmptyString]),
+  ),
   // BanyanCode-owned LSP config. True = enable all built-in LSP servers; a
   // record = enable built-ins with per-server overrides (disabled / custom
   // command / env / extensions / initialization). BanyanCode does not read

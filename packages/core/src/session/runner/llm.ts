@@ -7,8 +7,11 @@ import {
   isContextOverflowFailure,
   type ProviderErrorEvent,
 } from "@opencode-ai/llm"
+import { OpenAIOptions } from "@opencode-ai/llm/protocols/utils/openai-options"
 import { Cause, DateTime, Effect, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
+import { BanyanConfigService } from "../../banyancode/banyan-config"
+import { BanyanConfig } from "../../v1/config/banyan-config"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
@@ -211,10 +214,16 @@ export const layer = Layer.effect(
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
       const toolMaterialization = yield* tools.materialize(agent.info?.permissions)
-      const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
+      const banyanConfig = Option.getOrUndefined(yield* Effect.serviceOption(BanyanConfigService.Service))
+      const banyan = banyanConfig ? yield* banyanConfig.get() : ({} as BanyanConfig.Info)
+      const promptCacheKey = OpenAIOptions.promptCacheKeyPolicy(
+        banyan.banyancode_prompt_cache_key ?? "auto",
+        String(model.provider),
+        session.id,
+      )
       const request = LLM.request({
         model,
-        providerOptions: { openai: { promptCacheKey } },
+        ...(promptCacheKey === undefined ? {} : { providerOptions: { openai: { promptCacheKey } } }),
         system: [agent.info?.system, system.baseline]
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
