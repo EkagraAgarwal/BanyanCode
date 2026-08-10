@@ -57,7 +57,11 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
   const system = [
     [
-      ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
+      ...(input.agent.prompt
+        ? input.agent.systemPrompt === "append"
+          ? [...SystemPrompt.provider(input.model), input.agent.prompt]
+          : [input.agent.prompt]
+        : SystemPrompt.provider(input.model)),
       ...input.system,
       ...(input.user.system ? [input.user.system] : []),
     ]

@@ -10,10 +10,21 @@ import { NotFoundError, StaleWriteError } from "../banyancode/types"
 
 export const name = "shared_memory"
 
+const OP_LITERALS = ["read", "write", "list", "delete"] as const
+
 export const Input = Schema.Struct({
-  op: Schema.Literals(["read", "write", "list", "delete"]),
+  // `op` is optional at the schema level so stuffed-invocation recovery in
+  // execute() can run: LLMs occasionally serialize the WHOLE call into the
+  // value/payload parameter (see normalizeSharedMemoryInput). The description
+  // still mandates a top-level op, and execute() rejects with a teaching
+  // error when op is genuinely absent.
+  op: Schema.optional(Schema.Literals(["read", "write", "list", "delete"])),
   key: Schema.optional(Schema.String),
   id: Schema.optional(Schema.String),
+  // The value to store on write. `payload` is the canonical name — `value`
+  // is a deprecated alias kept so existing callers keep working. A param
+  // named `value` invited LLMs to nest the whole invocation inside it.
+  payload: Schema.optional(Schema.Unknown),
   value: Schema.optional(Schema.Unknown),
   tags: Schema.optional(Schema.Array(Schema.String)),
   scope: Schema.optional(Schema.Literals(["global", "session"])),
@@ -21,6 +32,43 @@ export const Input = Schema.Struct({
   expectedVersion: Schema.optional(Schema.Number),
   agentID: Schema.optional(Schema.String),
 })
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null
+
+/**
+ * Recover the "stuffed invocation" failure mode: the LLM serializes the
+ * entire call into the value/payload parameter —
+ *
+ *   shared_memory(value: { op: "write", key: "research:x", value: {...} })
+ *
+ * leaving the top-level `op` (and friends) missing, which the strict decode
+ * previously rejected with an opaque "Missing key at 'op'" error. This only
+ * unwraps when the top-level `op` is ABSENT and the payload carries a valid
+ * `op` literal — a legitimate stored payload that happens to contain an
+ * `op` key is untouched whenever the top-level op was provided.
+ */
+export const normalizeSharedMemoryInput = (
+  input: typeof Input.Type,
+): typeof Input.Type & { op: NonNullable<typeof Input.Type["op"]> } | typeof Input.Type => {
+  if (input.op) return input
+  const stuffed = (input.value ?? input.payload) as unknown
+  if (!isRecord(stuffed) || typeof stuffed.op !== "string" || !OP_LITERALS.includes(stuffed.op as never)) {
+    return input
+  }
+  const op = stuffed.op as (typeof OP_LITERALS)[number]
+  return {
+    op,
+    key: typeof stuffed.key === "string" ? stuffed.key : input.key,
+    id: typeof stuffed.id === "string" ? stuffed.id : input.id,
+    payload: "payload" in stuffed ? stuffed.payload : undefined,
+    value: "value" in stuffed ? stuffed.value : undefined,
+    tags: Array.isArray(stuffed.tags) ? (stuffed.tags as string[]) : input.tags,
+    scope: stuffed.scope === "global" || stuffed.scope === "session" ? stuffed.scope : input.scope,
+    sessionID: typeof stuffed.sessionID === "string" ? stuffed.sessionID : input.sessionID,
+    expectedVersion: typeof stuffed.expectedVersion === "number" ? stuffed.expectedVersion : input.expectedVersion,
+    agentID: typeof stuffed.agentID === "string" ? stuffed.agentID : input.agentID,
+  }
+}
 
 export const Output = Schema.Struct({
   ok: Schema.Boolean,
@@ -62,52 +110,62 @@ export const layer = Layer.effectDiscard(
       .register({
         [name]: Tool.make({
           description:
-            "Read, write, list, or delete entries in shared memory — the key-value store shared across subagents and the lead agent. Use to exchange findings between agents instead of re-searching: write results under a namespaced key (e.g. 'research:topic:name') and let peers read that key rather than duplicating the work. Writes are session-scoped and inherited to the root (lead) session, so a subagent's write is immediately visible to the lead and to peers. Retries are idempotent: re-writing the same key with the same value updates the entry instead of duplicating it.",
+            "Read, write, list, or delete entries in shared memory — the key-value store shared across subagents and the lead agent. Use to exchange findings between agents instead of re-searching: write results under a namespaced key (e.g. 'research:topic:name') and let peers read that key rather than duplicating the work. Writes are session-scoped and inherited to the root (lead) session, so a subagent's write is immediately visible to the lead and to peers. Retries are idempotent: re-writing the same key with the same value updates the entry instead of duplicating it.\n\nCALL SHAPE: pass op, key, tags, scope, and payload as TOP-LEVEL parameters. op is REQUIRED: 'read' | 'write' | 'list' | 'delete'. The value to store on write goes in the payload parameter. Do NOT nest the call inside the payload/value parameter — a call like shared_memory(value={op: 'write', key: ...}) is auto-recovered but is an error pattern.",
           input: Input,
            contract: { visibility: "public" },
           output: Output,
           toModelOutput: ({ output }) => [{ type: "text", text: JSON.stringify(output) }],
           execute: (input, context) => {
             return Effect.gen(function* () {
-              const effectiveAgentID = input.agentID ?? context.agent
-              const effectiveScope = input.scope ?? "session"
+              const normalized = normalizeSharedMemoryInput(input)
+              if (!normalized.op) {
+                return {
+                  ok: false,
+                  entries: [] as unknown[],
+                  error:
+                    "op is required — pass op, key, and payload as TOP-LEVEL parameters. Example: shared_memory(op='write', key='research:topic', payload={...}). Do not nest the call inside the value/payload parameter.",
+                }
+              }
+              const effectivePayload = normalized.payload !== undefined ? normalized.payload : normalized.value
+              const effectiveAgentID = normalized.agentID ?? context.agent
+              const effectiveScope = normalized.scope ?? "session"
               // Subagent writes land on the ROOT parent session (walked via
               // the `session.parent_id` chain) so the parent can read/list
               // them under its own session id. Explicit input.sessionID wins.
               const effectiveSessionID =
-                input.sessionID ?? (yield* memoryRepo.resolveRootSessionID(context.sessionID))
-              const effectiveKey = input.key ?? ""
-              const effectiveID = input.id ?? effectiveKey
+                normalized.sessionID ?? (yield* memoryRepo.resolveRootSessionID(context.sessionID))
+              const effectiveKey = normalized.key ?? ""
+              const effectiveID = normalized.id ?? effectiveKey
 
               yield* permission.assert({
                 action: name,
                 resources: [effectiveKey],
                 save: ["*"],
-                metadata: input,
+                metadata: normalized,
                 sessionID: context.sessionID,
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
-              if (input.op === "write" && !input.key) {
+              if (normalized.op === "write" && !normalized.key) {
                 return { ok: false, entries: [] as unknown[], error: "write requires key" }
               }
-              if (input.op === "write") {
+              if (normalized.op === "write") {
                 const guard = guardGlobalWrite(effectiveScope, context.agent)
                 if (guard) {
                   return { ok: false, entries: [] as unknown[], error: guard }
                 }
               }
-              if (input.op === "delete" && !input.key) {
+              if (normalized.op === "delete" && !normalized.key) {
                 return { ok: false, entries: [] as unknown[], error: "delete requires key" }
               }
-              if ((input.op === "read" || input.op === "write") && !input.id && !input.key) {
+              if ((normalized.op === "read" || normalized.op === "write") && !normalized.id && !normalized.key) {
                 return { ok: false, entries: [] as unknown[], error: "read/write requires id or key" }
               }
 
-              switch (input.op) {
+              switch (normalized.op) {
                 case "write": {
-                  if (input.expectedVersion !== undefined) {
+                  if (normalized.expectedVersion !== undefined) {
                     // Conditional update: rely on MemoryRepo's atomic CAS
                     // (it wraps the version check + update in a single
                     // db.transaction with `WHERE id=? AND version=?, then
@@ -123,10 +181,10 @@ export const layer = Layer.effectDiscard(
                     return yield* memoryRepo
                       .update({
                         id: effectiveID,
-                        expectedVersion: input.expectedVersion,
-                        value: input.value,
+                        expectedVersion: normalized.expectedVersion,
+                        value: effectivePayload,
                         agentID: effectiveAgentID,
-                        tags: input.tags ? [...input.tags] : undefined,
+                        tags: normalized.tags ? [...normalized.tags] : undefined,
                       })
                       .pipe(
                         // NotFoundError → row didn't exist; fall through to
@@ -139,8 +197,8 @@ export const layer = Layer.effectDiscard(
                             .put({
                               id: effectiveID,
                               key: effectiveKey,
-                              value: input.value ?? null,
-                              tags: input.tags ? [...input.tags] : [],
+                              value: effectivePayload ?? null,
+                              tags: normalized.tags ? [...normalized.tags] : [],
                               scope: effectiveScope,
                               sessionID: effectiveSessionID,
                               agentID: effectiveAgentID,
@@ -185,8 +243,8 @@ export const layer = Layer.effectDiscard(
                   yield* memoryRepo.put({
                     id: effectiveID,
                     key: effectiveKey,
-                    value: input.value ?? null,
-                    tags: input.tags ? [...input.tags] : [],
+                    value: effectivePayload ?? null,
+                    tags: normalized.tags ? [...normalized.tags] : [],
                     scope: effectiveScope,
                     sessionID: effectiveSessionID,
                     agentID: effectiveAgentID,
@@ -207,7 +265,7 @@ export const layer = Layer.effectDiscard(
                   // inheritance fix remain retrievable. Only when the caller
                   // read by key (an explicit id was already covered by get).
                   const entry =
-                    exact ?? (!input.id && effectiveKey ? yield* memoryRepo.getLatestSessionScoped(effectiveKey) : undefined)
+                    exact ?? (!normalized.id && effectiveKey ? yield* memoryRepo.getLatestSessionScoped(effectiveKey) : undefined)
                   if (!entry) {
                     return { ok: false, entries: [] as unknown[] }
                   }
@@ -256,7 +314,7 @@ export const layer = Layer.effectDiscard(
                   }
                 }
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `shared_memory failed for ${input.op}` })))
+            }).pipe(Effect.mapError(() => new ToolFailure({ message: `shared_memory failed for ${input.op ?? "unknown"}` })))
           },
         }),
       })

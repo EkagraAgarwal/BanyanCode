@@ -1883,8 +1883,6 @@ export type AgentConfig = {
    * Hex color code (e.g., #FF5733) or theme color (e.g., primary)
    */
   color?: string | "primary" | "secondary" | "accent" | "success" | "warning" | "error" | "info"
-  steps?: number
-  maxSteps?: number
   permission?: PermissionConfig
   [key: string]:
     | unknown
@@ -1908,7 +1906,6 @@ export type AgentConfig = {
     | "warning"
     | "error"
     | "info"
-    | number
     | PermissionConfig
     | undefined
 }
@@ -3075,7 +3072,6 @@ export type Agent = {
   options: {
     [key: string]: unknown
   }
-  steps?: number
 }
 
 export type LspStatus = {
@@ -4481,7 +4477,6 @@ export type AgentV2Info = {
   mode: "subagent" | "primary" | "all"
   hidden: boolean
   color?: string | "primary" | "secondary" | "accent" | "success" | "warning" | "error" | "info"
-  steps?: number
   permissions: PermissionV2Ruleset
 }
 

@@ -140,8 +140,6 @@ export type {
   GoalReviewVerdict,
 } from "./goal-payload"
 export { Service as CodegraphRepo, layer as codegraphRepoLayer, defaultLayer as codegraphRepoDefaultLayer } from "./codegraph-repo"
-export { Service as RepoMapService, layer as repoMapServiceLayer, defaultLayer as repoMapServiceDefaultLayer } from "./repo-map-service"
-export type { Interface as RepoMapServiceInterface, OverviewResult as RepoMapOverview, DetailResult as RepoMapDetail, SearchResult as RepoMapSearchResult } from "./repo-map-service"
 export { Service as AdaptedCatalog, layer as adaptedCatalogLayer, defaultLayer as adaptedCatalogDefaultLayer } from "./adapted-catalog"
 export type { Interface as AdaptedCatalogInterface, AdaptedTool, Tier as AdaptedToolTier } from "./adapted-catalog"
 export { Service as CodegraphIndexer, layer as codegraphIndexerLayer, defaultLayer as codegraphIndexerDefaultLayer } from "./codegraph-indexer"

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
+import * as fs from "node:fs/promises"
 import type { Interface as CodegraphReadinessInterface } from "../../src/banyancode/codegraph-readiness"
 import { Database } from "@opencode-ai/core/database/database"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
@@ -172,6 +173,88 @@ describe("preflight tool", () => {
         expect(missing.target.resolved).toBe(false)
         const noTargetRisk = missing.risks.find((r) => r.kind === "no-target")
         expect(noTargetRisk?.severity).toBe("high")
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("computePreflight classifies dependent docs and graph-derived routes/bridges", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+        const analyzer = yield* CodegraphAnalyzer.Service
+        const intel = yield* RepositoryIntelligence.Service
+        yield* seedPreflightGraph(repo as unknown as CodegraphRepoInterface)
+
+        // Real files on disk so the graph-driven route/bridge scan can read
+        // content. Paths are relative to the graph root == input.root.
+        const groupRel = path
+          .join("packages", "opencode", "src", "server", "routes", "instance", "httpapi", "groups", "widget.ts")
+          .replace(/\\/g, "/")
+        const bridgeRel = path
+          .join("packages", "opencode", "src", "effect", "widget-bridge.ts")
+          .replace(/\\/g, "/")
+        yield* Effect.promise(() => fs.mkdir(path.dirname(path.join(tmp.path, groupRel)), { recursive: true }))
+        yield* Effect.promise(() => fs.mkdir(path.dirname(path.join(tmp.path, bridgeRel)), { recursive: true }))
+        yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, groupRel), `HttpApiEndpoint.post("widgets", "widgetCreate")`))
+        yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, bridgeRel), `export const widgetBridge = 1`))
+
+        yield* repo.putFile({
+          id: "file-group",
+          path: groupRel,
+          contentHash: "h5",
+          language: "typescript",
+          indexedAt: 5,
+        })
+        yield* repo.putFile({
+          id: "file-bridge",
+          path: bridgeRel,
+          contentHash: "h6",
+          language: "typescript",
+          indexedAt: 6,
+        })
+        yield* repo.putNode({
+          id: "node-group",
+          fileID: "file-group",
+          kind: "route",
+          name: "widgetRoutes",
+          startLine: 1,
+          endLine: 10,
+        })
+        yield* repo.putNode({
+          id: "node-bridge",
+          fileID: "file-bridge",
+          kind: "function",
+          name: "widgetBridge",
+          startLine: 1,
+          endLine: 5,
+        })
+        // Dependents of the target file: the doc file (pre-seeded), the
+        // groups file, and the bridge file.
+        yield* repo.putEdge({ id: "edge-doc-target", fromNodeID: "node-doc", toNodeID: "node-target", kind: "references" })
+        yield* repo.putEdge({ id: "edge-group-target", fromNodeID: "node-group", toNodeID: "node-target", kind: "references" })
+        yield* repo.putEdge({ id: "edge-bridge-target", fromNodeID: "node-bridge", toNodeID: "node-target", kind: "references" })
+
+        const found = yield* computePreflight(
+          {
+            repo: repo as unknown as CodegraphRepoInterface,
+            analyzer: analyzer as unknown as CodegraphAnalyzerInterface,
+            intel: intel as unknown as RepositoryIntelligenceInterface,
+          },
+          { action: "modify", target: "alpha", root: tmp.path },
+        )
+
+        // WS5: docs classified from the target's dependents, not just callers.
+        expect(found.docsAffected.map((f) => f.path)).toContain("design/foo.md")
+        // WS5: bridges/groups detected from graph-returned files by path
+        // pattern, even though the literal "alpha" never appears in them.
+        expect(found.eventBridgesAffected.map((b) => b.file)).toContain(bridgeRel)
+        expect(found.httpRoutesAffected.length).toBeGreaterThan(0)
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })

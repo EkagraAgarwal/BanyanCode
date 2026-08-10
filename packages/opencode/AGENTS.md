@@ -118,7 +118,7 @@ See `specs/effect/migration.md` for the compact pattern reference and examples.
 - Prefer `ChildProcessSpawner.ChildProcessSpawner` with `ChildProcess.make(...)` instead of custom process wrappers.
 - Prefer `HttpClient.HttpClient` instead of raw `fetch`.
 - Prefer `Path.Path`, `Config`, `Clock`, and `DateTime` when those concerns are already inside Effect code.
-- For background loops or scheduled tasks, use `Effect.repeat` or `Effect.schedule` with `Effect.forkScoped` in the layer definition.
+- For background loops or scheduled tasks, use `Effect.repeat` with `Schedule.spaced` inside `Effect.forkScoped` in the layer definition.
 
 ## Effect.cached for deduplication
 

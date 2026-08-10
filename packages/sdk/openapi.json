@@ -18088,14 +18088,6 @@
             ],
             "description": "Hex color code (e.g., #FF5733) or theme color (e.g., primary)"
           },
-          "steps": {
-            "type": "integer",
-            "exclusiveMinimum": 0
-          },
-          "maxSteps": {
-            "type": "integer",
-            "exclusiveMinimum": 0
-          },
           "permission": {
             "$ref": "#/components/schemas/PermissionConfig"
           }
@@ -19917,9 +19909,6 @@
           },
           "options": {
             "type": "object"
-          },
-          "steps": {
-            "type": "number"
           }
         },
         "required": ["name", "mode", "permission", "options"],
@@ -24434,10 +24423,6 @@
                 "enum": ["primary", "secondary", "accent", "success", "warning", "error", "info"]
               }
             ]
-          },
-          "steps": {
-            "type": "integer",
-            "exclusiveMinimum": 0
           },
           "permissions": {
             "$ref": "#/components/schemas/PermissionV2Ruleset"

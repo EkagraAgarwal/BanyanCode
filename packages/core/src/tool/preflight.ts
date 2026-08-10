@@ -286,6 +286,16 @@ export const computePreflight = (
 
     const fileIDs = new Set<string>()
     for (const n of [...directCallers, ...transitiveCallers]) fileIDs.add(n.fileID)
+    // WS5: the target file's own dependents matter for docs/configs/route/
+    // bridge classification too — a central TS file's callers are almost all
+    // .ts, so docsAffected/configsAffected were always 0 for it before this.
+    if (primary) {
+      const dependentFileIDs = yield* deps.repo.dependentsOfFiles({
+        fileIDs: [primary.fileID],
+        limit: 100,
+      })
+      for (const id of dependentFileIDs) fileIDs.add(id)
+    }
 
     const allFiles = yield* deps.repo.listAllFiles()
     const metaRow = yield* deps.repo.getMeta()
@@ -326,6 +336,44 @@ export const computePreflight = (
       try: () => scanHttpRoutes(repoRoot, input.target),
       catch: () => new Error("scanHttpRoutes failed"),
     }).pipe(Effect.orElseSucceed(() => [] as Array<{ method: string; path: string; file: string }>))
+
+    // WS5: graph-driven route/bridge detection — classify every
+    // graph-returned file (callers + dependents of the target) whose path
+    // matches the bridge/groups patterns and run the extraction regex on it.
+    // Catches bridges/groups that reference the symbol through the graph
+    // (e.g. a service consumed via an import chain) even when the literal
+    // symbol string never appears in the file. The hardcoded dir scans above
+    // remain as a fallback for graph-less roots.
+    if (primary) {
+      const graphFiles = yield* deps.repo.filesByIDs([...fileIDs])
+      for (const f of graphFiles) {
+        const rel = f.path.replace(/\\/g, "/")
+        const isBridge = /effect\/.*-bridge\.ts$/i.test(rel)
+        const isGroups = /httpapi\/groups\/.*\.ts$/i.test(rel)
+        if (!isBridge && !isGroups) continue
+        const abs = path.join(repoRoot, f.path)
+        const content = yield* Effect.promise(() => fs.readFile(abs, "utf8")).pipe(
+          Effect.catchCause(() => Effect.succeed("")),
+        )
+        if (!content) continue
+        if (isBridge) {
+          const base = f.path.replace(/-bridge\.ts$/i, "").split(/[\\/]/).pop() ?? f.path
+          if (!eventBridges.some((b) => b.file === f.path)) {
+            eventBridges.push({ name: base, file: f.path })
+          }
+        }
+        if (isGroups) {
+          ROUTE_REGEX.lastIndex = 0
+          let match: RegExpExecArray | null
+          while ((match = ROUTE_REGEX.exec(content)) !== null) {
+            const route = { method: match[1].toUpperCase(), path: match[3], file: f.path }
+            if (!httpRoutes.some((r) => r.file === route.file && r.method === route.method && r.path === route.path)) {
+              httpRoutes.push(route)
+            }
+          }
+        }
+      }
+    }
 
     const risks: Array<typeof RiskSchema.Type> = []
     if (!resolved) {

@@ -32,7 +32,7 @@
  * `app-runtime.ts` next to the existing `applyCodegraphBuildBridge` /
  * `applyMeshBridge` calls.
  */
-import { Cause, Effect, Option, Queue, Schema } from "effect"
+import { Cause, Effect, Option, Queue, Ref, Schema } from "effect"
 import { Service as SubagentBusService } from "@opencode-ai/core/banyancode/subagent-bus"
 import { Service as SubagentReviewRequestsService } from "@opencode-ai/core/banyancode/subagent-review-requests-repo"
 import type { SubagentMessage } from "@opencode-ai/core/banyancode/types"
@@ -47,29 +47,23 @@ import { deriveSubagentSessionPermission } from "@/agent/subagent-permissions"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 
-const formatReviewPrompt = (msg: SubagentMessage): string => {
-  // The `payload` is `{ reviewID, diff?, description?, paths?, priority?, reason? }`
-  // per the MeshCoordinator.review contract. We assemble a review prompt that
-  // the `reviewer` agent (read-only) can act on.
-  const payload = (msg.payload ?? {}) as Record<string, unknown>
-  const reviewID = typeof payload.reviewID === "string" ? payload.reviewID : (msg.reviewID ?? msg.id)
-  const diff = typeof payload.diff === "string" ? payload.diff : undefined
-  const description = typeof payload.description === "string" ? payload.description : undefined
-  const paths = Array.isArray(payload.paths)
-    ? (payload.paths as ReadonlyArray<unknown>).filter((p): p is string => typeof p === "string")
-    : undefined
-  const priority = typeof payload.priority === "string" ? payload.priority : undefined
-  const reason = typeof payload.reason === "string" ? payload.reason : undefined
-
+const formatReviewPrompt = (req: {
+  reviewID: string
+  diff: string | null
+  description: string | null
+  paths: ReadonlyArray<string> | null
+  priority: string | null
+  reason: string | null
+}): string => {
   const lines: string[] = []
-  lines.push(`Review request ${reviewID}:`)
-  if (description) lines.push("", "Description:", description)
-  if (paths && paths.length > 0) {
-    lines.push("", "Focus paths:", ...paths.map((p) => `  - ${p}`))
+  lines.push(`Review request ${req.reviewID}:`)
+  if (req.description) lines.push("", "Description:", req.description)
+  if (req.paths && req.paths.length > 0) {
+    lines.push("", "Focus paths:", ...req.paths.map((p) => `  - ${p}`))
   }
-  if (reason) lines.push("", "Reason:", reason)
-  if (diff) lines.push("", "Diff:", "```diff", diff, "```")
-  if (priority) lines.push("", `Priority: ${priority}`)
+  if (req.reason) lines.push("", "Reason:", req.reason)
+  if (req.diff) lines.push("", "Diff:", "```diff", req.diff, "```")
+  if (req.priority) lines.push("", `Priority: ${req.priority}`)
   lines.push("", "Return pass / fail / blocked with a one-paragraph rationale.")
   return lines.join("\n")
 }
@@ -188,29 +182,33 @@ export const applyReviewBridge = Effect.fn("applyReviewBridge")(function* () {
   const promptSvc = promptSvcOpt.value
   const events = Option.isSome(eventsOpt) ? eventsOpt.value : undefined
 
-  const queue = yield* bus.subscribeAll()
+  // In-flight guard shared by the queue path and the DB-poll path so a single
+  // reviewID can never be dispatched twice (e.g. the bus message raced the
+  // poll tick). The row's `pending`→`dispatched` transition in the repo is
+  // also conditional, so even a cross-process double-take loses cleanly.
+  const inFlight = yield* Ref.make<Set<string>>(new Set())
 
-  // Drain the global SubagentBus queue. Only `kind: "review"` messages are
-  // ours — every other kind passes through unchanged. We do NOT republish
-  // them via EventV2Bridge: that is the subagent-consumer's job, and the
-  // bridge is the sole owner of this queue.
-  const work = Effect.gen(function* () {
-    while (true) {
-      const msg = yield* Queue.take(queue)
-      if (msg.kind !== "review") continue
+  // Row-based dispatch. The SubagentBus queue is in-memory per runtime
+  // instance, but the request row lives in the shared SQLite — so this is the
+  // single source of truth. The queue path is a fast-path hint; the poll loop
+  // below guarantees cross-runtime and crash recovery.
+  const dispatchReview = (reviewID: string): Effect.Effect<void, never, never> =>
+    Effect.gen(function* () {
+      if ((yield* Ref.get(inFlight)).has(reviewID)) return
+      const req = yield* reviews.getByID(reviewID)
+      if (!req || req.status !== "pending") return
+      yield* Ref.update(inFlight, (s) => {
+        const next = new Set(s)
+        next.add(reviewID)
+        return next
+      })
       yield* Effect.gen(function* () {
-        const reviewID = msg.reviewID
-        if (!reviewID) {
-          yield* Effect.logWarning("review-bridge: dropping review message without reviewID", { msgID: msg.id })
-          return
-        }
-
         // 1. Validate the agent.
-        const subagent = yield* agentSvc.get(msg.toAgent ?? "reviewer")
+        const subagent = yield* agentSvc.get(req.targetAgent ?? "reviewer")
         if (!subagent) {
           yield* reviews.markFailed({
             id: reviewID,
-            result: { error: `agent not found: ${msg.toAgent ?? "reviewer"}` },
+            result: { error: `agent not found: ${req.targetAgent ?? "reviewer"}` },
           })
           return
         }
@@ -222,12 +220,15 @@ export const applyReviewBridge = Effect.fn("applyReviewBridge")(function* () {
           return
         }
 
-        // 2. Create a child session under the orchestrator.
-        const parent = yield* sessions.get(msg.parentSessionID as SessionID).pipe(
+        // 2. Create a child session under the orchestrator. A missing parent
+        // session (restart, deleted session) fails the request instead of
+        // stranding it in `pending` for the poll loop to re-hit forever.
+        const parent = yield* sessions.get(req.parentSessionID as SessionID).pipe(
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
-              yield* Effect.logError("review-bridge: failed to load parent session", {
-                cause: Cause.pretty(cause),
+              yield* reviews.markFailed({
+                id: reviewID,
+                result: { error: `parent session load failed: ${Cause.pretty(cause)}` },
               })
               return yield* Effect.fail(cause)
             }),
@@ -241,7 +242,7 @@ export const applyReviewBridge = Effect.fn("applyReviewBridge")(function* () {
 
         const child = yield* sessions.create({
           parentID: parent.id,
-          title: `Review: ${msg.id}`,
+          title: `Review: ${reviewID}`,
           agent: subagent.name,
           permission: childPermission,
         })
@@ -249,13 +250,20 @@ export const applyReviewBridge = Effect.fn("applyReviewBridge")(function* () {
         yield* reviews.markDispatched(reviewID)
 
         // 3. Format the review prompt and run it.
-        const promptText = formatReviewPrompt(msg)
-        // Phase 1D fix: the reviewer agent has no `model` field. Resolve the
-        // model in order (reviewer agent's own model →
-        // `banyancode_goal_evaluator_model` → parent session model) and NEVER
-        // dispatch with an empty model — `Provider.getModel("", "")` throws
-        // ModelNotFoundError and the request would stay `dispatched` forever.
-        // When nothing resolves, fail the request with a typed error.
+        const promptText = formatReviewPrompt({
+          reviewID,
+          diff: req.diff,
+          description: req.description,
+          paths: req.paths,
+          priority: req.priority,
+          reason: req.reason,
+        })
+        // The reviewer agent has no `model` field. Resolve the model in order
+        // (reviewer agent's own model → `banyancode_goal_evaluator_model` →
+        // parent session model) and NEVER dispatch with an empty model —
+        // `Provider.getModel("", "")` throws ModelNotFoundError and the
+        // request would stay `dispatched` forever. When nothing resolves,
+        // fail the request with a typed error.
         const model = yield* resolveReviewerModel({
           reviewID,
           subagentModel: subagent.model,
@@ -295,14 +303,59 @@ export const applyReviewBridge = Effect.fn("applyReviewBridge")(function* () {
             })
             .pipe(Effect.ignore),
         )
-      }).pipe(Effect.catchCause((cause) => Effect.logError("review-bridge: dispatch failed", { cause })))
-    }
-  }).pipe(
-    Effect.catchCause((cause) => Effect.logError("review-bridge: drain loop failed; stopping", { cause })),
-  )
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            yield* Effect.logError("review-bridge: dispatch failed", { reviewID, cause: Cause.pretty(cause) })
+            // Never leave the row stranded: a failed dispatch becomes
+            // `failed` so the poll loop does not re-hit it every tick.
+            yield* reviews.markFailed({ id: reviewID, result: { error: Cause.pretty(cause) } }).pipe(Effect.ignore)
+          }),
+        ),
+        Effect.ensuring(
+          Ref.update(inFlight, (s) => {
+            const next = new Set(s)
+            next.delete(reviewID)
+            return next
+          }),
+        ),
+      )
+    })
 
-  // Detached fiber — the bridge must survive the AppRuntime runFork caller
+  const queue = yield* bus.subscribeAll()
+
+  // Fast path: drain the in-memory global queue. Only `kind: "review"`
+  // messages are ours — every other kind passes through unchanged.
+  const queueWork = Effect.gen(function* () {
+    while (true) {
+      const msg = yield* Queue.take(queue)
+      if (msg.kind !== "review") continue
+      if (!msg.reviewID) {
+        yield* Effect.logWarning("review-bridge: dropping review message without reviewID", { msgID: msg.id })
+        continue
+      }
+      yield* dispatchReview(msg.reviewID)
+    }
+  }).pipe(Effect.catchCause((cause) => Effect.logError("review-bridge: queue drain failed; stopping", { cause })))
+
+  // Recovery path: poll the shared SQLite for `pending` requests. This is
+  // what makes dispatch survive runtime boundaries (mesh_control runs in the
+  // server layer, the bridge in AppRuntime — separate in-memory bus queues)
+  // and process restarts (stranded `pending` rows get picked up on boot).
+  const POLL_INTERVAL_MS = 2000
+  const pollWork = Effect.gen(function* () {
+    while (true) {
+      const pending = yield* reviews.listPending()
+      for (const req of pending) {
+        yield* dispatchReview(req.id)
+      }
+      yield* Effect.sleep(`${POLL_INTERVAL_MS} millis`)
+    }
+  }).pipe(Effect.catchCause((cause) => Effect.logError("review-bridge: poll loop failed; stopping", { cause })))
+
+  // Detached fibers — the bridge must survive the AppRuntime runFork caller
   // scope. Mirrors the codegraph-bridge / system-bridge / memory-bridge
   // pattern.
-  yield* Effect.forkDetach(work)
+  yield* Effect.forkDetach(queueWork)
+  yield* Effect.forkDetach(pollWork)
 })

@@ -99,7 +99,7 @@ describe("PR C: SystemPrompt.codegraph auto-tools policy", () => {
           const svc = yield* SystemPrompt.Service
           const missing = yield* svc.codegraph()
           expect(missing).toBeDefined()
-          expect(missing).toContain("Codegraph-first search policy")
+          expect(missing).toContain("Repository intelligence is the canonical interface")
           expect(missing).toContain("Graph state: missing")
           expect(missing).not.toContain("Graph state: ready")
 

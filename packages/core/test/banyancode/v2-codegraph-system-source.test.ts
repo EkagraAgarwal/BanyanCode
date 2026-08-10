@@ -43,10 +43,10 @@ describe("CodegraphSystemSource.register (V2 wiring)", () => {
 
         const context = yield* registry.load()
         const initialized = yield* SystemContext.initialize(context)
-        expect(initialized.baseline).toContain("Codegraph-first search policy")
+        expect(initialized.baseline).toContain("Repository intelligence is the canonical interface")
         expect(initialized.baseline).toContain("ALWAYS")
         expect(initialized.baseline).toContain("codegraph_build")
-        expect(initialized.baseline).toContain("last resort")
+        expect(initialized.baseline).toContain("fallback")
         expect(initialized.baseline.length).toBeGreaterThan(0)
         // The snapshot must carry the namespaced key the source uses.
         expect(initialized.snapshot["banyancode/codegraph-policy"]).toBeDefined()
@@ -89,7 +89,7 @@ describe("CodegraphSystemSource.Service.load (V2 rendering)", () => {
       })
       expect(text).toContain("BanyanCode tool guide")
       expect(text).toContain("Look up a symbol or file in the code graph")
-      expect(text).toContain("`code_find`")
+      expect(text).toContain("code_find")
     }),
   )
 
@@ -120,7 +120,6 @@ describe("CodegraphSystemSource.Service.load (V2 rendering)", () => {
               description:
                 "Semantic repository search. Top-level entry point for high-level questions about a codebase.",
             },
-            { id: "banyan_repo_map", description: "Token-budgeted outline of the workspace. Use this before reading files." },
             { id: "banyan_tool_search", description: "Search the adapted tool catalog." },
             {
               id: "blast_radius",
@@ -132,8 +131,9 @@ describe("CodegraphSystemSource.Service.load (V2 rendering)", () => {
         // Guide ids render in bold; the full ids are also asserted.
         expect(text).toContain("**code_find**")
         expect(text).toContain("**repository_query**")
-        expect(text).toContain("**banyan_repo_map**")
         expect(text).toContain("**banyan_tool_search**")
+        // banyan_repo_map was removed.
+        expect(text).not.toContain("banyan_repo_map")
         // The duplicate "Hot tool catalog" section was deleted.
         expect(text).not.toContain("Hot tool catalog")
         // Only the first sentence of each description is rendered.
@@ -151,7 +151,7 @@ describe("CodegraphSystemSource.Service.load (V2 rendering)", () => {
     Effect.gen(function* () {
       const svc = yield* CodegraphSystemSource.Service
       const text = yield* svc.load({ tools: [{ id: "code_find", description: "find a symbol" }] })
-      expect(text).toMatch(/graph.{0,3}first|repository.{0,3}first/i)
+      expect(text).toMatch(/canonical interface|repository.{0,3}first/i)
     }),
   )
 })

@@ -1,7 +1,6 @@
 export * as ConfigAgentV1 from "./agent"
 
 import { Schema, SchemaGetter } from "effect"
-import { PositiveInt } from "../../schema"
 import { ConfigPermissionV1 } from "./permission"
 
 const Color = Schema.Union([
@@ -31,10 +30,6 @@ const AgentSchema = Schema.StructWithRest(
     color: Schema.optional(Color).annotate({
       description: "Hex color code (e.g., #FF5733) or theme color (e.g., primary)",
     }),
-    steps: Schema.optional(PositiveInt).annotate({
-      description: "Maximum number of agentic iterations before forcing text-only response",
-    }),
-    maxSteps: Schema.optional(PositiveInt).annotate({ description: "@deprecated Use 'steps' field instead." }),
     permission: Schema.optional(ConfigPermissionV1.Info),
   }),
   [Schema.Record(Schema.String, Schema.Any)],
@@ -51,8 +46,6 @@ const KNOWN_KEYS = new Set([
   "mode",
   "hidden",
   "color",
-  "steps",
-  "maxSteps",
   "options",
   "permission",
   "disable",
@@ -76,8 +69,7 @@ const normalize = (agent: Schema.Schema.Type<typeof AgentSchema>): Schema.Schema
   }
   globalThis.Object.assign(permission, agent.permission)
 
-  const steps = agent.steps ?? agent.maxSteps
-  return { ...agent, options, permission, ...(steps !== undefined ? { steps } : {}) }
+  return { ...agent, options, permission }
 }
 
 export const Info = AgentSchema.pipe(

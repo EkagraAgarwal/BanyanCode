@@ -138,7 +138,6 @@ Every subagent draws from the same toolbelt, organized by job — **30+ tools ac
 | `repository_trace` | Follow imports/calls outward from a symbol, to a configurable depth |
 | `repository_impact` | File- or feature-level impact: what breaks if this file changes |
 | `repository_tests` | List the test files that reference a symbol |
-| `banyan_repo_map` | Token-budgeted workspace outline — packages, entry points, per-file symbols |
 
 **File & Code**
 

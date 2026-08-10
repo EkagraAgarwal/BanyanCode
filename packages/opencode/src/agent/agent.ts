@@ -62,8 +62,11 @@ export const Info = Schema.Struct({
   ),
   variant: Schema.optional(Schema.String),
   prompt: Schema.optional(Schema.String),
+  systemPrompt: Schema.optional(Schema.Literals(["append", "replace"])).annotate({
+    description:
+      "How a custom prompt is composed with the provider prompt: 'replace' (default) swaps the provider prompt for agent.prompt; 'append' concatenates provider prompt + agent.prompt.",
+  }),
   options: Schema.Record(Schema.String, Schema.Unknown),
-  steps: Schema.optional(Schema.Finite),
 }).annotate({ identifier: "Agent" })
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 
@@ -167,11 +170,13 @@ export const layer = Layer.effect(
           mesh_subscribe: "allow",
           subagent_message: "allow",
           system_status: "allow",
-          banyan_repo_map: "allow",
           banyan_tool_search: "allow",
           banyan_typecheck: "allow",
           banyan_test: "allow",
           banyan_lint: "allow",
+          codegraph_staleness: "allow",
+          memory_stats: "allow",
+          mesh_status: "allow",
         })
 
         const user = Permission.fromConfig(cfg.permission ?? {})
@@ -301,11 +306,13 @@ export const layer = Layer.effect(
                 mesh_subscribe: "allow",
                 subagent_message: "allow",
                 system_status: "allow",
-                banyan_repo_map: "allow",
                 banyan_tool_search: "allow",
                 banyan_typecheck: "allow",
                 banyan_test: "allow",
                 banyan_lint: "allow",
+                codegraph_staleness: "allow",
+                memory_stats: "allow",
+                mesh_status: "allow",
                 codegraph_query: "allow",
                 codegraph_search: "allow",
                 codegraph_callers: "allow",
@@ -384,6 +391,7 @@ export const layer = Layer.effect(
                   "*": "deny",
                   explore: "allow",
                   scout: "allow",
+                  researcher: "allow",
                 },
               }),
               user,
@@ -415,11 +423,13 @@ export const layer = Layer.effect(
                 mesh_subscribe: "allow",
                 subagent_message: "allow",
                 system_status: "allow",
-                banyan_repo_map: "allow",
                 banyan_tool_search: "allow",
                 banyan_typecheck: "allow",
                 banyan_test: "allow",
                 banyan_lint: "allow",
+                codegraph_staleness: "allow",
+                memory_stats: "allow",
+                mesh_status: "allow",
                 codegraph_query: "allow",
                 codegraph_callers: "allow",
                 codegraph_dependents: "allow",
@@ -505,6 +515,9 @@ export const layer = Layer.effect(
               defaults,
               Permission.fromConfig({
                 "*": "deny",
+                codegraph_staleness: "allow",
+                memory_stats: "allow",
+                mesh_status: "allow",
               }),
               user,
             ),
@@ -521,6 +534,9 @@ export const layer = Layer.effect(
               defaults,
               Permission.fromConfig({
                 "*": "deny",
+                codegraph_staleness: "allow",
+                memory_stats: "allow",
+                mesh_status: "allow",
               }),
               user,
             ),
@@ -536,6 +552,9 @@ export const layer = Layer.effect(
               defaults,
               Permission.fromConfig({
                 "*": "deny",
+                codegraph_staleness: "allow",
+                memory_stats: "allow",
+                mesh_status: "allow",
               }),
               user,
             ),
@@ -614,7 +633,6 @@ export const layer = Layer.effect(
                 mesh_subscribe: "allow",
                 subagent_message: "allow",
                 system_status: "allow",
-                banyan_repo_map: "allow",
                 banyan_tool_search: "allow",
                 banyan_typecheck: "allow",
                 banyan_test: "allow",
@@ -647,6 +665,13 @@ export const layer = Layer.effect(
           if (value.model) item.model = Provider.parseModel(value.model)
           item.variant = value.variant ?? item.variant
           item.prompt = value.prompt ?? item.prompt
+          // `systemPrompt` from .md frontmatter lands in `options.systemPrompt`
+          // (the core ConfigAgentV1 decode folds unknown keys into options);
+          // validate it here so only the two supported modes are accepted.
+          const frontmatterSystemPrompt = (value.options as Record<string, unknown> | undefined)?.systemPrompt
+          if (frontmatterSystemPrompt === "append" || frontmatterSystemPrompt === "replace") {
+            item.systemPrompt = frontmatterSystemPrompt
+          }
           item.description = value.description ?? item.description
           item.temperature = value.temperature ?? item.temperature
           item.topP = value.top_p ?? item.topP
@@ -654,7 +679,6 @@ export const layer = Layer.effect(
           item.color = value.color ?? item.color
           item.hidden = value.hidden ?? item.hidden
           item.name = value.name ?? item.name
-          item.steps = value.steps ?? item.steps
           item.options = mergeDeep(item.options, value.options ?? {})
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
         }

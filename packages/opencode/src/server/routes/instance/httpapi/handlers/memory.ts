@@ -80,6 +80,14 @@ export const memoryHandlers = HttpApiBuilder.group(RootHttpApi, "memory", (handl
     }) {
       const scope = (ctx.payload.scope ?? "global") as "global" | "session"
       const matches = yield* repo.search(scope, ctx.payload.sessionID ?? undefined, ctx.payload.key)
+      if (matches.length === 0 && ctx.payload.scope === undefined) {
+        // Cross-caller fallback: subagent memory_store writes session-scoped
+        // under the root session id; an unscoped recall defaults to global and
+        // would otherwise silently miss it. Same primitive the tool layer and
+        // shared_memory use (MemoryRepo.getLatestSessionScoped).
+        const sessionFallback = yield* repo.getLatestSessionScoped(ctx.payload.key)
+        if (sessionFallback) return [toWire(sessionFallback)]
+      }
       return matches.map(toWire)
     })
 

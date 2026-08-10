@@ -304,4 +304,64 @@ describe("review-bridge", () => {
         expect(calls.find((c) => c.text.startsWith("Review request"))).toBeUndefined()
       }),
   )
+
+  it.instance(
+    "dispatches a pending row via the DB poll even without a bus message (cross-runtime recovery)",
+    () =>
+      Effect.gen(function* () {
+        yield* Ref.set(configRef, {})
+        yield* Ref.set(promptCalls, [])
+
+        const sessions = yield* Session.Service
+        const reviews = yield* SubagentReviewRequests.Service
+
+        // No mesh.review, no SubagentBus publish: this simulates the request
+        // being persisted by a DIFFERENT runtime instance (mesh_control runs
+        // in the server layer, whose in-memory bus queue the AppRuntime
+        // bridge never sees). Only the shared SQLite row exists — the poll
+        // loop must pick it up.
+        const parent = yield* sessions.create({
+          title: "orchestrator session",
+          agent: "orchestrator",
+          model: {
+            id: ModelV2.ID.make("test-model"),
+            providerID: ProviderV2.ID.make("test-provider"),
+          },
+        })
+        const reviewID = "cross-runtime-review"
+        const now = Date.now()
+        yield* reviews.put({
+          id: reviewID,
+          parentSessionID: parent.id,
+          targetAgent: "reviewer",
+          diff: null,
+          description: "review from another runtime",
+          paths: null,
+          priority: null,
+          reason: null,
+          status: "pending",
+          createdAt: now,
+          result: null,
+        })
+
+        yield* applyReviewBridge().pipe(Effect.scoped)
+
+        const row = yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const r = yield* reviews.getByID(reviewID)
+            return r && r.status !== "pending" && r.status !== "dispatched" ? r : undefined
+          }),
+          "poll-dispatched review row never reached a terminal state",
+          "8 seconds",
+        )
+        expect(row.status).toBe("completed")
+        expect((row.result as any).text).toContain("pass")
+
+        const calls = yield* Ref.get(promptCalls)
+        const reviewCall = calls.find((c) => c.text.startsWith("Review request"))
+        expect(reviewCall).toBeDefined()
+        expect(reviewCall?.model?.modelID).toBe("test-model")
+        expect(reviewCall?.text).toContain("cross-runtime-review")
+      }),
+  )
 })

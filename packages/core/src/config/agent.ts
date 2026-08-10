@@ -3,7 +3,6 @@ export * as ConfigAgent from "./agent"
 import { Schema } from "effect"
 import { PermissionSchema } from "../permission/schema"
 import { ConfigProvider } from "./provider"
-import { PositiveInt } from "../schema"
 
 export const Color = Schema.Union([
   Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/)),
@@ -19,7 +18,6 @@ export class Info extends Schema.Class<Info>("ConfigV2.Agent")({
   mode: Schema.Literals(["subagent", "primary", "all"]).pipe(Schema.optional),
   hidden: Schema.Boolean.pipe(Schema.optional),
   color: Color.pipe(Schema.optional),
-  steps: PositiveInt.pipe(Schema.optional),
   disabled: Schema.Boolean.pipe(Schema.optional),
   permissions: PermissionSchema.Ruleset.pipe(Schema.optional),
 }) {}

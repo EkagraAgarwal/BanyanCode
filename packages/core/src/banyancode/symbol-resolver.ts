@@ -68,7 +68,15 @@ export type ResolveRepo = Pick<
   | "nodeByID"
   | "fileIDsByServiceName"
   | "filesByIDs"
->
+> & {
+  /**
+   * WS1 (tool-hardening R2): optional FTS5 bm25 member, wired into a new
+   * resolver step between qualified-split and code-substring. Optional so
+   * unit tests that build minimal `ResolveRepo` mocks keep compiling; the
+   * step simply does not run when the member is absent.
+   */
+  readonly ftsSearchNodes?: CodegraphRepoInterface["ftsSearchNodes"]
+}
 
 export const resolveGraphTargetPure = (
   repo: ResolveRepo,
@@ -188,8 +196,18 @@ export const resolveGraphTargetStrict = (
         // (id/fileID/kind/name — the heavy `code` column is never selected).
         // Full rows are fetched via nodesByIDs only for the candidate file
         // scope that survives the filters.
-        const lightNodes = yield* repo.searchNodesLight({ limit: 1000 })
-        const validFileIDs = new Set(lightNodes.filter((n) => n.name === parentName).map((n) => n.fileID))
+        // WS1 (tool-hardening R1): the scan used to be name-unfiltered, so
+        // SQL's `ORDER BY name LIMIT 1000` returned only the alphabetically
+        // first 1000 nodes (names <= "D" on a 20k-node graph) and qualified
+        // targets like `MemoryRepo.update` never saw their parent or leaf.
+        // Both scans below carry a SQL-side name filter — LIKE applies BEFORE
+        // the LIMIT, so every matching candidate is seen; the exact-name JS
+        // filters narrow the widened sets back down.
+        const [parentScan, leafScan] = yield* Effect.all([
+          repo.searchNodesLight({ name: parentName, limit: 1000 }),
+          repo.searchNodesLight({ name: leaf, limit: 1000 }),
+        ])
+        const validFileIDs = new Set(parentScan.filter((n) => n.name === parentName).map((n) => n.fileID))
         for (const fileID of yield* repo.fileIDsByServiceName(parentName)) {
           validFileIDs.add(fileID)
         }
@@ -202,7 +220,7 @@ export const resolveGraphTargetStrict = (
           if (p && isTestFilePath(p)) validFileIDs.delete(id)
         }
         parentFileIDs = validFileIDs
-        const splitHits = lightNodes.filter(
+        const splitHits = leafScan.filter(
           (n) => n.name === leaf && validFileIDs.has(n.fileID) && (input.kind ? n.kind === input.kind : true),
         )
         tried.push("qualified-split")
@@ -220,6 +238,30 @@ export const resolveGraphTargetStrict = (
 
     if (!allowKeywordFallback) {
       return { _tag: "Miss" as const, value: { target, tried } }
+    }
+
+    // WS1 (tool-hardening R2): FTS5 bm25 step — the derivation string already
+    // existed in both schemas but the step was never wired. When the target
+    // is qualified and step 3 computed a parent-file scope, let FTS find the
+    // leaf inside that scope even when the leaf-named node was missed by
+    // qualified-split (e.g. the parent matched only via a service tag).
+    // FTS failures are treated as a miss (this step must never break
+    // resolution); an empty `parentFileIDs` (no parent found) filters out
+    // every hit, so the step contributes nothing for unresolved parents.
+    if (target.includes(".") && parentFileIDs !== undefined && repo.ftsSearchNodes) {
+      const leaf = target.split(".").pop()!.toLowerCase()
+      const ftsHitsRaw = yield* repo
+        .ftsSearchNodes({ query: leaf, limit: 20 })
+        .pipe(Effect.catchCause(() => Effect.succeed([])))
+      const ftsHits = dedupeByID(
+        ftsHitsRaw.filter(
+          (n) => parentFileIDs!.has(n.fileID) && (input.kind ? n.kind === input.kind : true),
+        ),
+      )
+      tried.push("fts-bm25")
+      if (ftsHits.length > 0) {
+        return toResult(ftsHits.slice(0, limit), "fts-bm25")
+      }
     }
 
     // 4) Code-substring + last-segment fallback (mirrors code_find definition).
@@ -247,8 +289,18 @@ export const resolveGraphTargetStrict = (
     // The code-OR (`n.code?.includes(lowerTarget)`) still runs against the
     // fetched set so code-only matches (e.g. `Effect.gen` inside a class body)
     // keep working within the bounded window.
-    const lightNodes = yield* repo.searchNodesLight({ limit: 1000 })
-    const gated = lightNodes.filter(
+    // WS1 (tool-hardening R1/A2): the code-substring scan is now name-filtered
+    // (SQL LIKE before LIMIT), so the 1000-row window is no longer the
+    // alphabetically-first 1000 nodes of the graph. Name filtering alone
+    // would drop code-only matches — a node whose NAME has nothing to do with
+    // the leaf but whose code contains the target (e.g. `ConfigTag` for
+    // `Effect.gen`) — so the candidate set is widened with an FTS5 bm25 query
+    // over the leaf. The JS gates below apply to both sources.
+    const lightNodes = yield* repo.searchNodesLight({ name: leaf, limit: 1000 })
+    const ftsWidened = repo.ftsSearchNodes
+      ? yield* repo.ftsSearchNodes({ query: leaf, limit: 50 }).pipe(Effect.catchCause(() => Effect.succeed([])))
+      : []
+    const gated = [...lightNodes, ...ftsWidened].filter(
       (n) =>
         n.kind !== "file" &&
         (input.kind ? n.kind === input.kind : true) &&

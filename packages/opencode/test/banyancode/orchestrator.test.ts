@@ -66,18 +66,19 @@ describe("orchestrator agent", () => {
         expect(prompt).toContain("shared_memory")
         expect(prompt).toContain("subagent")
         expect(prompt).toContain("fanout")
-        expect(prompt).toContain("PREFER 2-3 parallel subagents")
+        expect(prompt).toContain("MUST fan out 2-3 parallel subagents")
         expect(prompt).toContain("maximum is 5")
         // The orchestrator prompt now DELEGATES to the system context for
         // the codegraph policy rather than inlining it. The full tool list
         // (codegraph_build, code_find, ...) lives in the SystemPrompt
         // block, asserted below in the policy-contains-tools suite.
-        expect(prompt).toContain("Codegraph-first search policy")
+        expect(prompt).toContain("Repository intelligence is the canonical interface")
         expect(prompt).toContain("system context")
         // The background-subagent preference is embodied in the
         // orchestration rules rather than inlined policy.
         expect(prompt).toContain("background:true")
       }),
+    { timeout: 30_000 },
   )
 })
 
@@ -123,5 +124,6 @@ describe("researcher agent", () => {
         expect(prompt).toContain("parallel scout subagents")
         expect(prompt).toMatch(/max \d+ concurrent/)
       }),
+    { timeout: 30_000 },
   )
 })

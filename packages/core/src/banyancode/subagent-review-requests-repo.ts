@@ -1,6 +1,6 @@
 export * as SubagentReviewRequests from "./subagent-review-requests-repo"
 
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { Context, Effect, Layer, Ref } from "effect"
 import { Database } from "../database/database"
 import { SubagentReviewRequestsTable } from "./subagent-review-requests.sql"
@@ -28,6 +28,14 @@ export interface Interface {
   ) => Effect.Effect<void, never, never>
   readonly getByID: (id: string) => Effect.Effect<SubagentReviewRequest | undefined, never, never>
   readonly listByParent: (parentSessionID: string) => Effect.Effect<SubagentReviewRequest[], never, never>
+  // Rows still waiting for dispatch. The review bridge polls this across
+  // runtime boundaries: the in-memory SubagentBus queue only carries messages
+  // within one runtime instance, so a request persisted by a different
+  // runtime (e.g. mesh_control in the server layer) is only ever picked up
+  // from here.
+  readonly listPending: () => Effect.Effect<SubagentReviewRequest[], never, never>
+  // Conditional pending→dispatched transition: safe to call concurrently from
+  // the queue path and the DB-poll path — exactly one wins.
   readonly markDispatched: (id: string) => Effect.Effect<void, never, never>
   readonly markCompleted: (input: { id: string; result: unknown }) => Effect.Effect<void, never, never>
   readonly markFailed: (input: { id: string; result: unknown }) => Effect.Effect<void, never, never>
@@ -139,17 +147,44 @@ export const layer = Layer.effect(
       }))
     })
 
+    const listPending = Effect.fn("SubagentReviewRequestsRepo.listPending")(function* () {
+      const rows = yield* db
+        .select()
+        .from(SubagentReviewRequestsTable)
+        .where(eq(SubagentReviewRequestsTable.status, "pending"))
+        .orderBy(SubagentReviewRequestsTable.created_at)
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        id: row.id,
+        parentSessionID: row.parent_session_id,
+        targetAgent: row.target_agent,
+        diff: row.diff,
+        description: row.description,
+        paths: row.paths as ReadonlyArray<string> | null,
+        priority: row.priority,
+        reason: row.reason,
+        status: row.status as ReviewStatus,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        result: row.result,
+      }))
+    })
+
     const markDispatched = Effect.fn("SubagentReviewRequestsRepo.markDispatched")(function* (id: string) {
       const now = Date.now()
       yield* db
         .update(SubagentReviewRequestsTable)
         .set({ status: "dispatched", updated_at: now })
-        .where(eq(SubagentReviewRequestsTable.id, id))
+        .where(and(eq(SubagentReviewRequestsTable.id, id), eq(SubagentReviewRequestsTable.status, "pending")))
         .run()
         .pipe(Effect.orDie)
       yield* Ref.update(cache, (c) => {
         const row = c[id]
-        if (!row) return c
+        // The cache mirrors the conditional DB transition: a row that was
+        // already terminal (or dispatched) in the cache must not be flipped
+        // back by a losing racer.
+        if (!row || row.status !== "pending") return c
         return { ...c, [id]: { ...row, status: "dispatched" as const, updatedAt: now } }
       })
     })
@@ -190,7 +225,7 @@ export const layer = Layer.effect(
       })
     })
 
-    return Service.of({ put, getByID, listByParent, markDispatched, markCompleted, markFailed })
+    return Service.of({ put, getByID, listByParent, listPending, markDispatched, markCompleted, markFailed })
   }),
 )
 

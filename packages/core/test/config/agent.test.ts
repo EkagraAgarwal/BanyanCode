@@ -125,7 +125,6 @@ describe("ConfigAgentPlugin.Plugin", () => {
                     mode: "subagent",
                     hidden: true,
                     color: "warning",
-                    steps: 12,
                     request: {
                       headers: { first: "one", shared: "first" },
                       body: { enabled: true, profile: "review", effort: "medium" },
@@ -163,7 +162,6 @@ describe("ConfigAgentPlugin.Plugin", () => {
         mode: "subagent",
         hidden: true,
         color: "warning",
-        steps: 12,
         model: { providerID: "anthropic", id: "claude-sonnet", variant: undefined },
       })
       expect(reviewer.request).toEqual({

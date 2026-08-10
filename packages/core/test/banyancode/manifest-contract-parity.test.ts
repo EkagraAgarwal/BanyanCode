@@ -33,7 +33,6 @@ const deps = Layer.mergeAll(
   Layer.succeed(Banyan.SubagentMessagesRepo, {} as never),
   Layer.succeed(Banyan.MeshCoordinator, {} as never),
   Layer.succeed(Banyan.SystemMonitorService, {} as never),
-  Layer.succeed(Banyan.RepoMapService, {} as never),
   Layer.succeed(Banyan.AdaptedCatalog, {} as never),
   Layer.succeed(Banyan.VerifierService, {} as never),
   FetchHttpClient.layer,

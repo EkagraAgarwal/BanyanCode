@@ -35,7 +35,6 @@ export const REQUIRED_TOOLS = [
   "mesh_subscribe",
   "subagent_message",
   "system_status",
-  "banyan_repo_map",
   "banyan_tool_search",
   "banyan_test",
 ] as const

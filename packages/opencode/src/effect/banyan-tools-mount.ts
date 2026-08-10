@@ -59,10 +59,6 @@ const repositoryIntelligenceLayer = Banyan.repositoryIntelligenceDefaultLayer.pi
   Layer.provide(databaseLayer),
 )
 
-const repoMapLayer = Banyan.repoMapServiceDefaultLayer.pipe(
-  Layer.provide(codegraphRepoLayer),
-)
-
 const adaptedCatalogLayer = Banyan.adaptedCatalogDefaultLayer.pipe(
   Layer.provide(databaseLayer),
 )
@@ -108,7 +104,6 @@ export const banyanToolDepsLayer = Layer.mergeAll(
   codegraphBuildServiceLayer,
   codegraphReadinessLayer,
   codegraphBootstrapLayer,
-  repoMapLayer,
   adaptedCatalogLayer,
   verifierLayer,
 )

@@ -16,7 +16,6 @@ import { SessionCompaction } from "./compaction"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
 import { Plugin } from "../plugin"
-import MAX_STEPS from "../session/prompt/max-steps.txt"
 import { ToolRegistry } from "@/tool/registry"
 import { MCP } from "../mcp"
 import { LSP } from "@/lsp/lsp"
@@ -61,16 +60,13 @@ import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
 import { Banyan } from "@opencode-ai/core/banyancode"
-import { canonicalizeToolBatch, NO_PROGRESS_THRESHOLD, sameFingerprintSet } from "./no-progress"
 
 // V1 loop control primitive: discriminated outcome for the runLoop. The loop
 // exits whenever the outcome is not `"continue"`. `"break"` is kept as a
 // deprecated alias mapped to `"completed"` for one minor version so external
 // callers that pattern-match on the inner gen's return value keep working
 // while consumers migrate.
-type LoopOutcome = "continue" | "completed" | "blocked" | "maxSteps" | "maxTime" | "noProgress"
-
-const DEFAULT_SOFT_STEP_CAP = 100
+type LoopOutcome = "continue" | "completed" | "blocked" | "maxTime"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1186,53 +1182,6 @@ export const layer = Layer.effect(
               (part) => part.type === "tool" && !part.metadata?.providerExecuted && !isOrphanedInterruptedTool(part),
             ) ?? false
 
-          // No-progress detector: compare the canonical fingerprint set of the
-          // last NO_PROGRESS_THRESHOLD non-empty assistant turns. When all three
-          // match and the most recent fingerprint set is non-empty (i.e. the
-          // agent has been stuck calling the same tool with the same input
-          // across the last three turns), exit with `"noProgress"`. Empty
-          // turns (pure-text completions) are skipped — a turn with zero tool
-          // calls is normal completion, not a stuck loop.
-          const recentFingerprints: Set<string>[] = []
-          for (let i = msgs.length - 1; i >= 0 && recentFingerprints.length < NO_PROGRESS_THRESHOLD; i--) {
-            const candidate = msgs[i]
-            if (!candidate || candidate.info.role !== "assistant") continue
-            const fp = canonicalizeToolBatch([candidate])
-            if (fp.size === 0) continue
-            recentFingerprints.push(fp)
-          }
-          if (
-            recentFingerprints.length === NO_PROGRESS_THRESHOLD &&
-            recentFingerprints.every((fp) => sameFingerprintSet(fp, recentFingerprints[0]!))
-          ) {
-            const stuckMsg: SessionV1.Assistant = {
-              id: MessageID.ascending(),
-              parentID: lastUser.id,
-              role: "assistant",
-              mode: lastAssistant?.mode ?? "build",
-              agent: lastAssistant?.agent ?? lastUser.agent,
-              variant: lastUser.model.variant,
-              path: { cwd: ctx.directory, root: ctx.worktree },
-              cost: 0,
-              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-              modelID: lastUser.model.modelID,
-              providerID: lastUser.model.providerID,
-              time: { created: Date.now(), completed: Date.now() },
-              sessionID,
-              error: new SessionV1.APIError({
-                message: `No-progress detected: identical tool batches for ${NO_PROGRESS_THRESHOLD} turns`,
-                isRetryable: false,
-              }).toObject(),
-              finish: "error",
-            }
-            yield* sessions.updateMessage(stuckMsg)
-            yield* Effect.logInfo("loop exit: outcome=noProgress", {
-              "session.id": sessionID,
-              step,
-            })
-            break
-          }
-
           if (
             lastAssistant?.finish &&
             !["tool-calls"].includes(lastAssistant.finish) &&
@@ -1344,13 +1293,6 @@ export const layer = Layer.effect(
             yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
             throw error
           }
-          // V1 soft step cap: `agent.steps` (per-agent override) takes priority;
-          // otherwise default to 100. The V2 loop keeps its stricter 25-step
-          // cap in `packages/core/src/session/runner/llm.ts`; the two are
-          // intentionally different because V2 is a multi-runner pipeline that
-          // should fail-fast, while V1 is a single-runner session loop.
-          const maxSteps = agent.steps ?? DEFAULT_SOFT_STEP_CAP
-          const isLastStep = step >= maxSteps
           msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
             Effect.provideService(RuntimeFlags.Service, flags),
             Effect.provideService(FSUtil.Service, fsys),
@@ -1371,26 +1313,6 @@ export const layer = Layer.effect(
             providerID: model.providerID,
             time: { created: Date.now() },
             sessionID,
-          }
-          // Hard backstop: when `step > maxSteps`, the loop has overrun the soft
-          // reminder by one step. Persist a terminal `APIError` on a fresh
-          // assistant message and break before invoking the provider. The
-          // existing `isLastStep` reminder injection above is unchanged — it is
-          // a soft prompt nudge, this is the safety net.
-          if (step > maxSteps) {
-            msg.error = new SessionV1.APIError({
-              message: `Hard step cap reached (maxSteps=${maxSteps})`,
-              isRetryable: false,
-            }).toObject()
-            msg.finish = "error"
-            msg.time.completed = Date.now()
-            yield* sessions.updateMessage(msg)
-            yield* Effect.logInfo("loop exit: outcome=maxSteps", {
-              "session.id": sessionID,
-              step,
-              maxSteps,
-            })
-            break
           }
           yield* sessions.updateMessage(msg)
 
@@ -1500,7 +1422,7 @@ export const layer = Layer.effect(
               sessionID,
               parentSessionID: session.parentID,
               system,
-              messages: [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])],
+              messages: [...modelMsgs],
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,

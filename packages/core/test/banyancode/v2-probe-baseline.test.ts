@@ -419,9 +419,11 @@ describe("v2 probe baseline — anti-slop tool contract", () => {
       "subagent_message",
       "system_status",
       "goal",
-      "banyan_repo_map",
       "banyan_tool_search",
       "banyan_test",
+      "codegraph_staleness",
+      "memory_stats",
+      "mesh_status",
     ] as const
 
     const mod = await import("../../src/banyancode/banyan-tools-manifest")

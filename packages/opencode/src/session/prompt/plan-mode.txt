@@ -12,12 +12,13 @@ Goal: Gain a comprehensive understanding of the user's request by reading throug
 
 1. Focus on understanding the user's request and the code associated with their request
 
-2. **Launch up to 3 explore agents IN PARALLEL** (single message, multiple tool calls) to efficiently explore the codebase.
- - Use 1 agent when the task is isolated to known files, the user provided specific file paths, or you're making a small targeted change.
- - Use multiple agents when: the scope is uncertain, multiple areas of the codebase are involved, or you need to understand existing patterns before planning.
- - Quality over quantity - 3 agents maximum, but you should try to use the minimum number of agents necessary (usually just 1)
- - If using multiple agents: Provide each agent with a specific search focus or area to explore. Example: One agent searches for existing implementations, another explores related components, a third investigates testing patterns
- - For requests that depend on external facts the codebase cannot answer (library versions, upstream docs, best practices), launch a researcher agent in the same parallel batch; it reports back via subagent_message(kind="inform")
+2. **Launch explore and researcher subagents IN PARALLEL** (single message, multiple tool calls, `task(background: true)`) to efficiently explore the codebase.
+  - Use 1 explore agent when the task is isolated to known files, the user provided specific file paths, or you're making a small targeted change.
+  - Use multiple explore agents when: the scope is uncertain, multiple areas of the codebase are involved, or you need to understand existing patterns before planning.
+  - Quality over quantity - 3 explore agents maximum, but you should try to use the minimum number of agents necessary (usually just 1)
+  - If using multiple agents: Provide each agent with a specific search focus or area to explore. Example: One agent searches for existing implementations, another explores related components, a third investigates testing patterns
+  - For requests that depend on external facts the codebase cannot answer (library versions, upstream docs, best practices), ALWAYS launch a researcher agent in the same parallel batch; it reports back via subagent_message(kind="inform")
+  - Have every agent write findings to shared_memory under namespaced keys (e.g. "explore:<topic>", "research:<topic>") and report back via subagent_message(kind="inform") — the lead aggregates, never re-runs their searches
 
 3. After exploring the code, use the question tool to clarify ambiguities in the user request up front.
 
@@ -25,6 +26,8 @@ Goal: Gain a comprehensive understanding of the user's request by reading throug
 Goal: Design an implementation approach.
 
 Launch general agent(s) to design the implementation based on the user's intent and your exploration results from Phase 1.
+
+Fan out additional explore / coder-scoped questions via subagents as needed; synthesize their shared_memory findings into the plan. Never re-do delegated searches yourself.
 
 You can launch up to 1 agent(s) in parallel.
 

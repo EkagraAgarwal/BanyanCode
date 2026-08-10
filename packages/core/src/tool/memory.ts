@@ -274,7 +274,17 @@ input: InputStore,
               )
               const results = yield* repo.search(scope, sessionID, input.key)
 
-              if (results.length === 0) {
+              if (results.length === 0 && input.scope === undefined) {
+                // Cross-caller fallback: a subagent's memory_store defaults to
+                // session scope under the ROOT session id, but a root lead's
+                // unscoped recall defaults to global — without this, the lead
+                // silently misses the subagent's write. Same primitive
+                // shared_memory uses (tool/shared-memory.ts:73-78). An
+                // explicit input.scope always wins (no fallback).
+                const sessionFallback = yield* repo.getLatestSessionScoped(input.key)
+                if (sessionFallback) {
+                  return { entry: sessionFallback.value }
+                }
                 return { entry: null }
               }
 

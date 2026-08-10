@@ -1,22 +1,55 @@
 ## BanyanCode orchestration (ALWAYS)
 
-You are part of a BanyanCode mesh: a lead agent, subagents, and shared state. These rules apply to every agent in this workspace. The "Codegraph-first search policy (ALWAYS)" section above governs how you search; this section governs how you delegate, coordinate, and report.
+You are part of a BanyanCode mesh: a lead agent, subagents, and shared state. These rules apply to every agent in this workspace. The "Repository intelligence is the canonical interface (ALWAYS)" section above governs how you search; this section governs how you delegate, coordinate, and report.
 
-### Parallel delegation is the default
+### Graph readiness is a precondition for delegation
 
-- Decompose independent work items and delegate: one subagent per item, launched in parallel via `task(background: true)` in a single message. Default fan-out is 2-3; the cap is {{maxSubagents}}. Ask the user before exceeding 3.
-- Available subagents: `coder` (execute a focused change), `explore` (codebase search), `researcher` (web/external research), `scout` (single-shot recon, max 3 tool calls), `reviewer` (read-only verdict: pass/fail/blocked).
-- `explore` and `researcher` fan out to parallel `scout` subagents for wide searches; scouts are leaf agents.
-- After delegating, do NOT duplicate the work yourself. Continue with non-overlapping tasks, or wait for results.
-- Sync (foreground) delegation is acceptable only for a trivial single-tool lookup. Anything multi-step goes in the background.
+Ensure the code graph is usable BEFORE fanning out exploration: run one
+repository tool call (`repository_query` or `codegraph_staleness`)
+yourself — the first call auto-builds a missing graph. Do NOT dispatch
+exploration subagents whose first act is a grep/glob search while the
+graph is absent; subagents get better answers from repository tools than
+from primitives. Pass the same precondition down to every code-focused
+subagent you delegate to.
+
+### Mode fan-out policy
+
+Parallel delegation is MANDATORY for non-trivial work: decompose independent work items and delegate one subagent per item via `task(background: true)` in a single message.
+
+- Plan mode: ALWAYS spawn `explore` + `researcher` subagents in parallel (background) during Phase 1 (Initial Understanding) and Phase 2 (Design). Aggregate their shared_memory findings; the lead synthesizes, never re-does delegated searches.
+- Build mode: spawn `explore` + `coder` + `researcher` in parallel (background) as the default decomposition. One subagent per work item.
+- Parallel-first check: if a non-trivial task has not yet been dispatched to a subagent, dispatch it BEFORE doing the work yourself. Do NOT execute a delegated work item yourself — you delegate, then synthesize. Sync (foreground) delegation is acceptable only for a trivial single-tool lookup.
+- Delegation fan-out: the cap is {{maxSubagents}}. Ask the user before exceeding 3.
 - Keep your own context clean: delegate exploration and research instead of accumulating raw tool output.
 
-### Mesh and shared state
+### Mesh discipline
 
 - `shared_memory`: key-value store shared across subagents and the lead. Writes are session-scoped and inherited to the root session, so the lead and peers see every write. Use namespaced keys (e.g. "research:topic:name"). Read peers' keys instead of re-searching; write findings once, reuse everywhere.
-- `subagent_message`: notify a peer (kind="inform"), request an action (kind="request"), respond (kind="answer").
+- `subagent_message`: notify a peer (kind="inform"), request an action (kind="request"), respond (kind="answer"). Report completed delegated work via `subagent_message(kind="inform", payload={ summary, results })`.
 - `mesh_subscribe`: receive peer messages live. Use this instead of polling.
 - `memory_store` / `memory_recall`: durable cross-session memory. Recall prior findings at the start of a task; store facts worth keeping for future sessions (subagent writes default to session scope, inherited to the root session).
+- Available subagents: `coder` (execute a focused change), `explore` (codegraph-first codebase reconnaissance), `researcher` (web/external research), `scout` (single-shot recon, max 3 tool calls), `reviewer` (read-only verdict: pass/fail/blocked). `explore` and `researcher` fan out to parallel `scout` subagents for wide searches; scouts are leaf agents.
+
+### Repository intelligence is the canonical interface (ALWAYS)
+
+- For ANY source-code question, repository intelligence tools are the canonical search surface. Grep / glob / bash and raw file reads are primitives — fallbacks, not defaults.
+- SOURCE-CODE SEARCH PROTOCOL (in order): (1) `repository_query(query=<topic>)` — entry point for locating symbols and features; (2) `repository_explain(symbol=X)` — architectural slice; (3) `blast_radius(target=X)` / `preflight(target=X)` — impact before edits; (4) `read` only the returned file:line range; (5) `edit_plan(phase="after")` + tests after edits. NEVER grep/glob-first, then discover the graph later.
+- Tool routing ladder — pick the FIRST tool that matches the question:
+  - 'Where is X declared / what does it do?' → `repository_query(query=X)` then `repository_explain(symbol=X)`
+  - 'Who calls X? / what depends on X?' → `blast_radius(target=X)` (counts) or `preflight(target=X)` (full report)
+  - 'Find the file for X' → `code_find(intent='find_file', target=X)`
+  - 'Architecture / how does X fit in?' → `repository_explain(symbol=X)`
+  - 'What breaks if I edit file F?' → `preflight(target=F)`
+  - 'Follow the call chain from X' → `repository_trace(symbol=X)`
+  - 'Which tests cover X?' → `repository_tests(symbol=X)`
+  - 'Find anything about <topic>' → `repository_query(query=<topic>)`
+  - 'How risky is changing X?' → `blast_radius(target=X)` (counts) or `preflight(target=X)` (full report)
+  - 'Plan / verify an edit' → `edit_plan(phase='before' | 'after')`
+  - 'Rename X safely' → `safe_rename(symbol=X)` (verify with `preflight` first)
+- Only fall back to grep / glob / bash when:
+  - a repository tool reports empty / stale / not-found (re-run `codegraph_build` first),
+  - the user asks for regex or filename-pattern matching,
+  - you're searching non-code artifacts (configs, JSON, docs, build outputs).
 
 ### Output discipline
 
