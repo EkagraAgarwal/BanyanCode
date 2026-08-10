@@ -11,6 +11,7 @@ import { useTheme } from "../context/theme"
 import { TextAttributes } from "@opentui/core"
 import type { ProviderAuthAuthorization, ProviderAuthMethod } from "@opencode-ai/sdk/v2"
 import { DialogModel } from "./dialog-model"
+import { useData } from "../context/data"
 import { useToast } from "../ui/toast"
 import { isConsoleManagedProvider } from "../util/provider-origin"
 import { useConnected } from "./use-connected"
@@ -392,6 +393,7 @@ function ApiMethod(props: ApiMethodProps) {
   const dialog = useDialog()
   const sdk = useSDK()
   const sync = useSync()
+  const data = useData()
   const toast = useToast()
   const { theme } = useTheme()
 
@@ -443,6 +445,12 @@ function ApiMethod(props: ApiMethodProps) {
           dialog.clear()
           return
         }
+        // auth.set disposes the server instance, so the event-driven refresh
+        // races the picker and loses. Re-fetch provider + model lists before
+        // opening the picker so the freshly connected provider's models are
+        // visible without a restart.
+        await data.location.provider.refresh()
+        await data.location.model.refresh()
         dialog.replace(() => <DialogModel providerID={props.providerID} />)
       }}
     />

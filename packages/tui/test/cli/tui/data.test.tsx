@@ -222,6 +222,65 @@ test("refreshes providers and models on auth lifecycle events", async () => {
   }
 })
 
+test("refreshes providers and models on server.instance.disposed (auth.set recovery)", async () => {
+  const events = createEventSource()
+  const refresh = { provider: 0, model: 0 }
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/provider") {
+      refresh.provider++
+      return json({ location: { directory, project: { id: "proj_test", directory } }, data: [] })
+    }
+    if (url.pathname === "/api/model") {
+      refresh.model++
+      return json({ location: { directory, project: { id: "proj_test", directory } }, data: [] })
+    }
+    return undefined
+  })
+  let data!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    data = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </SDKProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    await wait(() => refresh.provider === 1 && refresh.model === 1)
+
+    // auth.set / auth.remove dispose the server instance; the model picker
+    // must recover from the dispose event alone (account.* events may be lost
+    // in the window).
+    emitEvent(events, {
+      id: "evt_disposed_1",
+      type: "server.instance.disposed",
+      properties: { directory },
+    })
+    await wait(() => refresh.provider === 2 && refresh.model === 2)
+
+    expect(refresh.provider).toBe(2)
+    expect(refresh.model).toBe(2)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("settles pending tools when a live failure arrives", async () => {
   const events = createEventSource()
   const calls = createFetch()

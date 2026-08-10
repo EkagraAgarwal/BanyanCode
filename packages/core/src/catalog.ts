@@ -1,6 +1,6 @@
 export * as Catalog from "./catalog"
 
-import { Context, Effect, Layer, Option, Order, pipe, Schema, Array, Scope, Stream } from "effect"
+import { Cause, Context, Effect, Layer, Option, Order, pipe, Schema, Array, Scope, Stream } from "effect"
 import { castDraft, enableMapSet, type Draft } from "immer"
 import { Auth } from "./auth"
 import { ModelV2 } from "./model"
@@ -218,16 +218,23 @@ export const layer = Layer.effect(
     const refresh = Effect.fn("CatalogV2.refresh")(function* () {
       yield* state.mutate(() => Effect.void, "auth.changed")
     })
+    // A single failed refresh must not kill the forked stream consumer
+    // (one-shot fiber, no resubscribe): log the failure and keep consuming so
+    // a later auth event can still refresh the catalog.
+    const refreshSafe = () =>
+      refresh().pipe(
+        Effect.catchCause((cause) => Effect.logError("CatalogV2.refresh failed", { cause: Cause.pretty(cause) })),
+      )
     yield* events.subscribe(Auth.Event.Added).pipe(
-      Stream.runForEach(() => refresh()),
+      Stream.runForEach(() => refreshSafe()),
       Effect.forkIn(scope, { startImmediately: true }),
     )
     yield* events.subscribe(Auth.Event.Removed).pipe(
-      Stream.runForEach(() => refresh()),
+      Stream.runForEach(() => refreshSafe()),
       Effect.forkIn(scope, { startImmediately: true }),
     )
     yield* events.subscribe(Auth.Event.Switched).pipe(
-      Stream.runForEach(() => refresh()),
+      Stream.runForEach(() => refreshSafe()),
       Effect.forkIn(scope, { startImmediately: true }),
     )
 

@@ -12,6 +12,7 @@ import { Catalog } from "@opencode-ai/core/catalog"
 import { EventV2 } from "@opencode-ai/core/event"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Location } from "@opencode-ai/core/location"
+import { ModelV2 } from "@opencode-ai/core/model"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 import { AccountPlugin } from "@opencode-ai/core/plugin/account"
 import { Project } from "@opencode-ai/core/project"
@@ -261,6 +262,81 @@ describe("auth HttpApi (instance-scoped)", () => {
         )
         expect(del.status).toBe(200)
         yield* pollWithTimeout(catalogHasProvider(false), "provider never dropped from the v2 catalog")
+      }),
+    { git: false },
+    30000,
+  )
+
+  it.instance(
+    "auth.set refreshes the v2 catalog so the model-picker list is fresh (no restart)",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const catalog = yield* Catalog.Service
+        const plugin = yield* PluginV2.Service
+        const accounts = yield* Auth.Service
+        const events = yield* EventV2.Service
+        const providerID = ProviderV2.ID.make("openai")
+        const modelID = ModelV2.ID.make("test-only-model")
+
+        // Mirror the production plugin stack: AccountPlugin enables providers
+        // backed by an account; the stub registers a uniquely-named model only
+        // while the account exists (models.dev data must not leak into the
+        // assertion).
+        yield* plugin.add({
+          ...AccountPlugin,
+          effect: AccountPlugin.effect.pipe(
+            Effect.provideService(Auth.Service, accounts),
+            Effect.provideService(EventV2.Service, events),
+            Effect.provideService(PluginV2.Service, plugin),
+          ),
+        })
+        yield* plugin.add({
+          id: PluginV2.ID.make("test-openai-models"),
+          effect: Effect.succeed({
+            "catalog.transform": (evt) =>
+              Effect.gen(function* () {
+                const active = yield* accounts.activeAll().pipe(Effect.orDie)
+                if (!active.has(Auth.ServiceID.make(providerID))) return
+                evt.provider.update(providerID, () => {})
+                evt.model.update(providerID, modelID, (model) => {
+                  model.name = "test-only-model"
+                })
+              }),
+          }),
+        })
+        yield* Effect.yieldNow
+
+        // No credential yet: no openai models in the catalog.
+        expect((yield* catalog.model.all()).some((model) => model.id === modelID)).toBe(false)
+
+        // Add the credential; the instance is disposed before the response resolves.
+        const put = yield* requestInDirectory(
+          AuthPaths.auth.replace(":providerID", providerID),
+          test.directory,
+          {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ type: "api", key: "sk-test-key" }),
+          },
+        )
+        expect(put.status).toBe(200)
+
+        // The account event chain re-runs every catalog.transform, so the
+        // provider's models land in the catalog without a restart — the data
+        // the model picker's list is built from.
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const models = yield* catalog.model.all()
+            return models.some((model) => model.id === modelID) ? (true as const) : undefined
+          }),
+          "openai model never appeared in the v2 catalog after auth.set",
+        )
+
+        // The TUI's data.location.model.refresh() call (v2.model.list) must
+        // succeed against the real HTTP layer right after the disposal.
+        const modelList = yield* requestInDirectory("/api/model", test.directory, { method: "GET" })
+        expect(modelList.status).toBe(200)
       }),
     { git: false },
     30000,

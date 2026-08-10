@@ -428,6 +428,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           void result.location.provider.refresh()
           void result.location.model.refresh()
           break
+        case "server.instance.disposed":
+          // auth.set / auth.remove dispose the server instance and re-create
+          // it on the next request; the account.* events can race the model
+          // picker, so refresh the location lists deterministically here —
+          // the picker reads these lists when it opens.
+          void result.location.provider.refresh()
+          void result.location.model.refresh()
+          break
       }
     })
 
