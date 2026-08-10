@@ -69,8 +69,10 @@ describe("codegraph_staleness tool", () => {
   test("Input / Output / name are exported with correct shape", () => {
     expect(stalenessName).toBe("codegraph_staleness")
     expect(StalenessOutput.fields).toHaveProperty("staleFiles")
+    expect(StalenessOutput.fields).toHaveProperty("missingFiles")
     expect(StalenessOutput.fields).toHaveProperty("totalFiles")
     expect(StalenessOutput.fields).toHaveProperty("topStale")
+    expect(StalenessOutput.fields).toHaveProperty("topMissing")
   })
 
   test("counts stale files and lists the stale path", async () => {
@@ -114,6 +116,53 @@ describe("codegraph_staleness tool", () => {
     expect(structured.topStale[0]?.path).toBe("packages/core/src/stale.ts")
     expect(structured.topStale[0]?.mtimeMs).toBe(200)
     expect(structured.topStale[0]?.indexedAt).toBe(100)
+  })
+
+  test("counts missing files (indexed but deleted from disk) and lists them", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "staleness-missing.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+    const repoLayer = codegraphRepoDefaultLayer.pipe(Layer.provide(dbLayer))
+
+    const existing = path.join(tmp.path, "exists.ts")
+    await Bun.write(existing, "export const x = 1\n")
+    const ghost = path.join(tmp.path, "deleted.ts")
+
+    const { structured } = (await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo
+        // Ghost: path is indexed but the file no longer exists on disk.
+        yield* seedFile(repo, {
+          id: "file-ghost",
+          path: ghost,
+          contentHash: "ghost",
+          language: "typescript",
+          indexedAt: 100,
+          mtimeMs: 50,
+        })
+        // Real: path exists on disk (mtime older than indexed_at → not stale).
+        yield* seedFile(repo, {
+          id: "file-real",
+          path: existing,
+          contentHash: "real",
+          language: "typescript",
+          indexedAt: 200,
+          mtimeMs: 100,
+        })
+        const tool = makeCodegraphStalenessTool({
+          permission: mockPermission,
+          repo,
+        })
+        return yield* Tool.settle(tool, makeCall(stalenessName, {}), makeContext())
+      }).pipe(Effect.provide(repoLayer), Effect.scoped),
+    )) as { structured: Schema.Schema.Type<typeof StalenessOutput> }
+
+    expect(structured.staleFiles).toBe(0)
+    expect(structured.missingFiles).toBe(1)
+    expect(structured.totalFiles).toBe(2)
+    expect(structured.topMissing).toHaveLength(1)
+    expect(structured.topMissing[0]?.path).toBe(ghost)
+    expect(structured.topMissing[0]?.indexedAt).toBe(100)
   })
 
   test("returns zeros when no graph is indexed", async () => {
