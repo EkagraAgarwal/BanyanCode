@@ -1,3 +1,10 @@
+## Delegation gate (ALWAYS)
+
+- Before doing non-trivial work yourself, decompose it into independent work items and dispatch one subagent per item with `task(background: true)` in a single message.
+- Do not execute a delegated work item yourself: delegate, then synthesize.
+- Sync (foreground) delegation is acceptable only for a trivial single-tool lookup.
+- Cap: {{maxSubagents}} parallel subagents; ask the user before exceeding 3.
+
 ## BanyanCode orchestration (ALWAYS)
 
 You are part of a BanyanCode mesh: a lead agent, subagents, and shared state. These rules apply to every agent in this workspace. The "Repository intelligence is the canonical interface (ALWAYS)" section above governs how you search; this section governs how you delegate, coordinate, and report.
