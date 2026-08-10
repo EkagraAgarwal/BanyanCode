@@ -4,6 +4,7 @@ import { parseTypeScript } from "./typescript"
 import { parsePython } from "./python"
 import { parseMarkdown } from "./markdown"
 import { parseDocker } from "./docker"
+import { parseC } from "./c"
 import { parseGeneric } from "./regex-fallback"
 
 const typescriptParser: LanguageParser = {
@@ -14,6 +15,18 @@ const typescriptParser: LanguageParser = {
 const pythonParser: LanguageParser = {
   extensions: [".py", ".pyw"],
   parse: parsePython,
+}
+
+// One shared regex parser for C and C++ (class/template/namespace tolerant);
+// the split exists so extension routing is explicit.
+const cParser: LanguageParser = {
+  extensions: [".c", ".h"],
+  parse: parseC,
+}
+
+const cppParser: LanguageParser = {
+  extensions: [".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"],
+  parse: parseC,
 }
 
 const markdownParser: LanguageParser = {
@@ -34,6 +47,8 @@ const genericParser: LanguageParser = {
 const parsers: LanguageParser[] = [
   typescriptParser,
   pythonParser,
+  cParser,
+  cppParser,
   markdownParser,
   dockerParser,
   genericParser,
@@ -61,5 +76,5 @@ export function getParserForPath(filePath: string): LanguageParser {
   return getParser(path.extname(filePath).toLowerCase())
 }
 
-export { parseTypeScript, parsePython, parseMarkdown, parseDocker, parseGeneric }
+export { parseTypeScript, parsePython, parseMarkdown, parseDocker, parseC, parseGeneric }
 export type { LanguageParser, ParseResult, ParsedNode, ParsedEdge } from "./types"
