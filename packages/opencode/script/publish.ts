@@ -3,6 +3,7 @@ import { $ } from "bun"
 import pkg from "../package.json"
 import { Script } from "@opencode-ai/script"
 import { fileURLToPath } from "url"
+import { placeholderScript } from "./install-placeholder"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
@@ -35,21 +36,7 @@ await $`mkdir -p ./dist/${WRAPPER_NAME}`
 await $`mkdir -p ./dist/${WRAPPER_NAME}/bin`
 await $`cp ./script/postinstall.mjs ./dist/${WRAPPER_NAME}/postinstall.mjs`
 await Bun.file(`./dist/${WRAPPER_NAME}/LICENSE`).write(await Bun.file("../../LICENSE").text())
-await Bun.file(`./dist/${WRAPPER_NAME}/bin/${WRAPPER_NAME}.exe`).write(
-  [
-    `echo "Error: ${WRAPPER_NAME}'s postinstall script was not run." >&2`,
-    'echo "" >&2',
-    'echo "This occurs when using --ignore-scripts during installation, or when using a" >&2',
-    'echo "package manager like pnpm that does not run postinstall scripts by default." >&2',
-    'echo "" >&2',
-    'echo "To fix this, run the postinstall script manually:" >&2',
-    `echo "  cd node_modules/${WRAPPER_NAME} && node postinstall.mjs" >&2`,
-    'echo "" >&2',
-    `echo "Or reinstall ${WRAPPER_NAME} without the --ignore-scripts flag." >&2`,
-    "exit 1",
-    "",
-  ].join("\n"),
-)
+await Bun.file(`./dist/${WRAPPER_NAME}/bin/${WRAPPER_NAME}.exe`).write(placeholderScript(process.platform))
 
 await Bun.file(`./dist/${WRAPPER_NAME}/package.json`).write(
   JSON.stringify(

@@ -177,7 +177,16 @@ function main() {
   throw new Error(
     `It seems your package manager failed to install the right banyancode CLI package. Try manually installing ${packageNames()
       .map((name) => JSON.stringify(name))
-      .join(" or ")}.`,
+      .join(" or ")}.\n` +
+      `\n` +
+      `If the postinstall script itself was skipped: npm 11+ blocks lifecycle scripts unless\n` +
+      `they are approved, and pnpm skips them by default. Install or upgrade with:\n` +
+      `  npm install -g --allow-scripts=banyancode banyancode\n` +
+      `  npm config set allow-scripts=banyancode --location=user\n` +
+      `  pnpm approve-builds   (or add banyancode to onlyBuiltDependencies)\n` +
+      `\n` +
+      `Or run the postinstall script manually:\n` +
+      `  cd node_modules/banyancode && node postinstall.mjs`,
   )
 }
 
