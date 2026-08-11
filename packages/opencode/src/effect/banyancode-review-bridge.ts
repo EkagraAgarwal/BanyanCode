@@ -33,10 +33,14 @@
  * `applyMeshBridge` calls.
  */
 import { Cause, Effect, Option, Queue, Ref, Schema } from "effect"
+import { eq } from "drizzle-orm"
 import { Service as SubagentBusService } from "@opencode-ai/core/banyancode/subagent-bus"
 import { Service as SubagentReviewRequestsService } from "@opencode-ai/core/banyancode/subagent-review-requests-repo"
 import type { SubagentMessage } from "@opencode-ai/core/banyancode/types"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { SessionTable } from "@opencode-ai/core/session/sql"
+import { Database } from "@opencode-ai/core/database/database"
+import { InstanceStore } from "@/project/instance-store"
 import { SessionID, MessageID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
@@ -137,7 +141,7 @@ const resolveReviewerModel = Effect.fnUntraced(function* (input: {
 const renderReviewResult = (reviewID: string, text: string): string =>
   [`<review_result reviewID="${reviewID}">`, text, `</review_result>`].join("\n")
 
-export const applyReviewBridge = Effect.fn("applyReviewBridge")(function* () {
+export const applyReviewBridge = Effect.gen(function* () {
   const flags = yield* RuntimeFlags.Service
   if (!flags.banyancodeEnable) {
     yield* Effect.logWarning("review-bridge: disabled (banyancodeEnable=false)")
@@ -169,6 +173,16 @@ export const applyReviewBridge = Effect.fn("applyReviewBridge")(function* () {
     yield* Effect.logWarning("review-bridge: disabled (SessionPrompt not in scope)")
     return
   }
+  const instanceStoreOpt = yield* Effect.serviceOption(InstanceStore.Service)
+  if (Option.isNone(instanceStoreOpt)) {
+    yield* Effect.logWarning("review-bridge: disabled (InstanceStore not in scope)")
+    return
+  }
+  const dbOpt = yield* Effect.serviceOption(Database.Service)
+  if (Option.isNone(dbOpt)) {
+    yield* Effect.logWarning("review-bridge: disabled (Database not in scope)")
+    return
+  }
   // EventV2Bridge is optional — used for status republish. If absent, we
   // just skip the re-publish step. `eventsOpt` is captured in closure so the
   // drain's R-channel does NOT widen to require EventV2Bridge when it's
@@ -180,6 +194,8 @@ export const applyReviewBridge = Effect.fn("applyReviewBridge")(function* () {
   const agentSvc = agentSvcOpt.value
   const sessions = sessionsOpt.value
   const promptSvc = promptSvcOpt.value
+  const instanceStore = instanceStoreOpt.value
+  const db = dbOpt.value.db
   const events = Option.isSome(eventsOpt) ? eventsOpt.value : undefined
 
   // In-flight guard shared by the queue path and the DB-poll path so a single
@@ -203,6 +219,34 @@ export const applyReviewBridge = Effect.fn("applyReviewBridge")(function* () {
         return next
       })
       yield* Effect.gen(function* () {
+        // 0. Resolve the parent session's directory straight from the DB.
+        // AppRuntime has no ambient instance, so instance-scoped services
+        // (Agent/Session/SessionPrompt) must run under an InstanceStore-
+        // provided context. A missing parent row fails the request instead of
+        // stranding it in `pending` for the poll loop to re-hit forever.
+        const parentRow = yield* db
+          .select({ directory: SessionTable.directory })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, req.parentSessionID as SessionID))
+          .get()
+        if (!parentRow) {
+          yield* reviews.markFailed({
+            id: reviewID,
+            result: { error: `parent session row not found: ${req.parentSessionID}` },
+          })
+          return
+        }
+        if (!parentRow.directory) {
+          yield* reviews.markFailed({
+            id: reviewID,
+            result: { error: `parent session has no directory: ${req.parentSessionID}` },
+          })
+          return
+        }
+
+        yield* instanceStore.provide(
+          { directory: parentRow.directory },
+          Effect.gen(function* () {
         // 1. Validate the agent.
         const subagent = yield* agentSvc.get(req.targetAgent ?? "reviewer")
         if (!subagent) {
@@ -302,6 +346,8 @@ export const applyReviewBridge = Effect.fn("applyReviewBridge")(function* () {
               parts: [{ type: "text", synthetic: true, text: renderReviewResult(reviewID, text) }],
             })
             .pipe(Effect.ignore),
+        )
+          }),
         )
       }).pipe(
         Effect.catchCause((cause) =>

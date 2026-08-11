@@ -13,6 +13,7 @@ import { SubagentBus } from "@opencode-ai/core/banyancode/subagent-bus"
 import { MeshCoordinator } from "@opencode-ai/core/banyancode/mesh-coordinator"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { applyReviewBridge } from "@/effect/banyancode-review-bridge"
+import { InstanceStore } from "@/project/instance-store"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { Agent } from "@/agent/agent"
@@ -106,6 +107,14 @@ const mockConfigLayer = Layer.mock(Banyan.BanyanConfigService, {
   get: () => Effect.map(Ref.get(configRef), (cfg) => cfg as any),
 })
 
+// The bridge now resolves the parent session's directory from the DB and
+// binds it via InstanceStore.provide before touching instance-scoped
+// services. `it.instance` already provides a real instance context, so the
+// mock just runs the body unchanged.
+const mockInstanceStoreLayer = Layer.mock(InstanceStore.Service, {
+  provide: ((_input: any, effect: any) => effect) as any,
+})
+
 const dbLayer = Database.layerFromPath(TEST_DB_PATH)
 const eventsLayer = EventV2.defaultLayer.pipe(Layer.provide(dbLayer))
 const bridgeEventsLayer = EventV2Bridge.layer.pipe(Layer.provide(eventsLayer))
@@ -151,6 +160,7 @@ const it = testEffect(
     mockPromptLayer,
     mockAgentLayer,
     mockConfigLayer,
+    mockInstanceStoreLayer,
   ),
 )
 
@@ -187,7 +197,7 @@ describe("review-bridge", () => {
           },
         })
 
-        yield* applyReviewBridge().pipe(Effect.scoped)
+        yield* applyReviewBridge.pipe(Effect.scoped)
 
         // (a) the review row reaches a terminal state.
         const row = yield* pollWithTimeout(
@@ -249,7 +259,7 @@ describe("review-bridge", () => {
           reviewSpec: { targetAgent: "reviewer", description: "review the diff" },
         })
 
-        yield* applyReviewBridge().pipe(Effect.scoped)
+        yield* applyReviewBridge.pipe(Effect.scoped)
 
         const row = yield* pollWithTimeout(
           Effect.gen(function* () {
@@ -288,7 +298,7 @@ describe("review-bridge", () => {
           reviewSpec: { targetAgent: "reviewer", description: "review the diff" },
         })
 
-        yield* applyReviewBridge().pipe(Effect.scoped)
+        yield* applyReviewBridge.pipe(Effect.scoped)
 
         const row = yield* pollWithTimeout(
           Effect.gen(function* () {
@@ -344,7 +354,7 @@ describe("review-bridge", () => {
           result: null,
         })
 
-        yield* applyReviewBridge().pipe(Effect.scoped)
+        yield* applyReviewBridge.pipe(Effect.scoped)
 
         const row = yield* pollWithTimeout(
           Effect.gen(function* () {
