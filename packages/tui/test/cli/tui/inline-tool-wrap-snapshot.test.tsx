@@ -2,7 +2,16 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { createSignal, For, Show } from "solid-js"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { testRender, type JSX } from "@opentui/solid"
+import { KeymapProvider } from "@opentui/keymap/solid"
+import { TestTuiContexts } from "../../fixture/tui-environment"
+import { createEventSource, createFetch, directory } from "../../fixture/tui-sdk"
+import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { TuiConfigProvider } from "../../../src/config"
+import { KVProvider } from "../../../src/context/kv"
+import { SDKProvider } from "../../../src/context/sdk"
+import { ThemeProvider } from "../../../src/context/theme"
 import {
+  BlockTool,
   formatCompletedSubagentDetail,
   formatSubagentRetry,
   formatSubagentTitle,
@@ -22,6 +31,31 @@ afterEach(() => {
   testSetup?.renderer.destroy()
   testSetup = undefined
 })
+
+const mockKeymap = {
+  dispatchCommand: () => {},
+} as any
+
+function Harness(props: { children: any }) {
+  const config = createTuiResolvedConfig()
+  const events = createEventSource()
+  const calls = createFetch()
+  return (
+    <TestTuiContexts>
+      <KVProvider>
+        <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+          <TuiConfigProvider config={config}>
+            <ThemeProvider mode="dark">
+              <KeymapProvider keymap={mockKeymap}>
+                {props.children}
+              </KeymapProvider>
+            </ThemeProvider>
+          </TuiConfigProvider>
+        </SDKProvider>
+      </KVProvider>
+    </TestTuiContexts>
+  )
+}
 
 type ToolFixture = { icon: string; label: string; error?: string }
 
@@ -134,6 +168,32 @@ function LoadedReadBeforeSubagentFixture() {
   )
 }
 
+function ReasoningThenToolFixture() {
+  return (
+    <box flexDirection="column" width={72}>
+      <box id="text-reasoning-1" paddingLeft={3} flexDirection="column">
+        <text>Thinking: inspecting the layout</text>
+      </box>
+      <BlockTool title="$ ls">
+        <text>file.ts</text>
+      </BlockTool>
+    </box>
+  )
+}
+
+function ToolThenToolFixture() {
+  return (
+    <box flexDirection="column" width={72}>
+      <BlockTool title="$ ls">
+        <text>file.ts</text>
+      </BlockTool>
+      <BlockTool title="$ pwd">
+        <text>src</text>
+      </BlockTool>
+    </box>
+  )
+}
+
 function StickyScrollFixture(props: { separated: boolean; scroll: (scroll: ScrollBoxRenderable) => void }) {
   return (
     <scrollbox ref={props.scroll} stickyScroll={true} stickyStart="bottom" height={3} width={72}>
@@ -165,6 +225,31 @@ async function renderFrame(component: () => JSX.Element, options: { width: numbe
     .map((line) => line.trimEnd())
     .join("\n")
     .trimEnd()
+}
+
+// BlockTool needs the theme/KV providers, which mount children asynchronously
+// (KV read + theme palette/discovery gate on `ready`). Poll until the expected
+// marker appears instead of racing a fixed timeout.
+async function waitForFrame(predicate: (frame: string) => boolean, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs
+  let frame = testSetup!.captureCharFrame()
+  while (!predicate(frame)) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for frame condition\nlast frame:\n${frame}`)
+    await Bun.sleep(20)
+    await testSetup!.renderOnce()
+    frame = testSetup!.captureCharFrame()
+  }
+  return frame
+}
+
+function captureRows() {
+  return testSetup!
+    .captureCharFrame()
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trimEnd()
+    .split("\n")
 }
 
 describe("TUI inline tool wrapping", () => {
@@ -272,5 +357,41 @@ describe("TUI inline tool wrapping", () => {
     await testSetup.renderOnce()
     expect(scroll?.scrollHeight).toBe(3)
     expect(scroll?.scrollTop).toBe(Math.max(0, scroll!.scrollHeight - scroll!.viewport.height))
+  })
+
+  test("separates a compact tool block from a preceding text sibling with a blank row", async () => {
+    testSetup = await testRender(
+      () => (
+        <Harness>
+          <ReasoningThenToolFixture />
+        </Harness>
+      ),
+      { width: 72, height: 10 },
+    )
+    await waitForFrame((frame) => frame.includes("$ ls"))
+    const rows = captureRows()
+    const thoughtRow = rows.findIndex((row) => row.includes("Thinking: inspecting the layout"))
+    const toolRow = rows.findIndex((row) => row.includes("$ ls"))
+    expect(thoughtRow).toBeGreaterThanOrEqual(0)
+    expect(toolRow).toBe(thoughtRow + 2)
+  })
+
+  test("keeps adjacent tool blocks flush with no blank row between them", async () => {
+    testSetup = await testRender(
+      () => (
+        <Harness>
+          <ToolThenToolFixture />
+        </Harness>
+      ),
+      { width: 72, height: 10 },
+    )
+    await waitForFrame((frame) => frame.includes("$ pwd"))
+    const rows = captureRows()
+    const firstToolContentRow = rows.findIndex((row) => row.includes("file.ts"))
+    const secondToolRow = rows.findIndex((row) => row.includes("$ pwd"))
+    expect(firstToolContentRow).toBeGreaterThanOrEqual(0)
+    // The second tool block starts on the row directly after the first block's
+    // content: no blank row between adjacent tool blocks.
+    expect(secondToolRow).toBe(firstToolContentRow + 1)
   })
 })

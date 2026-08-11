@@ -32,9 +32,9 @@ import type {
   Part,
   Provider,
   ToolPart,
-  UserMessage,
+  UserMessage as SdkUserMessage,
   TextPart,
-  ReasoningPart,
+  ReasoningPart as SdkReasoningPart,
   SessionStatus,
 } from "@opencode-ai/sdk/v2"
 import { useLocal } from "../../context/local"
@@ -1277,7 +1277,7 @@ export function Session() {
                                   />
                                 ))
                               }}
-                              message={message as UserMessage}
+                              message={message as SdkUserMessage}
                               parts={sync.data.part[message.id] ?? []}
                               pending={pending()}
                             />
@@ -1448,8 +1448,8 @@ const MIME_BADGE: Record<string, string> = {
   "application/x-directory": "dir",
 }
 
-function UserMessage(props: {
-  message: UserMessage
+export function UserMessage(props: {
+  message: SdkUserMessage
   parts: Part[]
   onMouseUp: () => void
   index: number
@@ -1496,13 +1496,13 @@ function UserMessage(props: {
               setHover(false)
             }}
             onMouseUp={props.onMouseUp}
-            paddingTop={0}
-            paddingBottom={0}
+            paddingTop={1}
+            paddingBottom={1}
             paddingLeft={2}
             backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
             flexShrink={0}
           >
-            <text fg={theme.text} paddingTop={1} paddingBottom={1}>{text()}</text>
+            <text fg={theme.text}>{text()}</text>
             <Show when={files().length}>
               <box flexDirection="row" paddingBottom={metadataVisible() ? 1 : 0} paddingTop={0} gap={1} flexWrap="wrap">
                 <For each={files()}>
@@ -1666,7 +1666,7 @@ const PART_MAPPING = {
 
 const INLINE_TOOL_ICON_WIDTH = 2
 
-function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: AssistantMessage }) {
+export function ReasoningPart(props: { last: boolean; part: SdkReasoningPart; message: AssistantMessage }) {
   const { theme } = useTheme()
   const ctx = use()
   // Collapsed by default in hide mode: a single line throughout, so the
@@ -1710,7 +1710,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
             <code
               filetype="markdown"
               drawUnstyledText={false}
-              streaming={true}
+              streaming={!isDone()}
               syntaxStyle={syntax()}
               content={summary().body}
               conceal={ctx.conceal()}
@@ -2108,7 +2108,7 @@ export function InlineToolRow(props: {
   )
 }
 
-function BlockTool(props: {
+export function BlockTool(props: {
   title: string
   children: JSX.Element
   onClick?: () => void
@@ -2133,7 +2133,7 @@ function BlockTool(props: {
           if (!previous?.id) return 0
           if (previous.id.startsWith("tool-block-")) return 0
           if (previous.id.startsWith("tool-inline-")) return 0
-          if (previous.id.startsWith("text-")) return 0
+          if (previous.id.startsWith("text-")) return 1
           return 1
         })
       }}
