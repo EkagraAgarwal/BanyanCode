@@ -12,6 +12,25 @@ bun install
 bun dev                  # TUI in dev mode (hot reload, all source in-process)
 ```
 
+### Installing / upgrading with npm 11+
+
+npm 11+ blocks unapproved lifecycle scripts, so `banyancode`'s postinstall
+(which installs the platform binary) will not run unless the package is
+approved. When installing globally, pass the allow-scripts flag:
+
+```bash
+npm install -g --allow-scripts=banyancode banyancode
+# or approve banyancode for all future installs:
+npm config set allow-scripts=banyancode --location=user
+```
+
+`banyancode upgrade` shells out to `npm install -g banyancode@<version>` and
+needs the same allow-scripts approval — set the config key above, or the
+upgrade will fail with "postinstall script was not run". pnpm users should
+approve the package via `pnpm approve-builds` (or an `onlyBuiltDependencies`
+entry) since pnpm skips postinstall scripts by default. If the postinstall
+was skipped, run it manually: `cd node_modules/banyancode && node postinstall.mjs`.
+
 ## Build a standalone binary
 
 ```bash
