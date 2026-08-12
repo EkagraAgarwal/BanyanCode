@@ -221,6 +221,7 @@ export {
 export * as RepositoryGatewayNS from "./gateway"
 export * as RepositoryGatewayTypes from "./gateway/types"
 export * as RepositoryGatewayRouter from "./gateway/router"
+export * as RepositoryGatewayNeedle from "./gateway/needle-router"
 export * as RepositoryGatewayNormalizer from "./gateway/normalizer"
 export * as RepositoryGatewayFormatter from "./gateway/formatter"
 export { Service as Git, layer as gitLayer, defaultLayer as gitDefaultLayer } from "./repository-intelligence/git-service"
@@ -246,6 +247,7 @@ export {
 export * as RoutingRules from "./routing/rules"
 export * as RoutingFeatures from "./routing/features"
 export * as RoutingThresholds from "./routing/thresholds"
+export * as RoutingBench from "./routing/bench"
 export {
   Service as StructuralQueries,
   layer as structuralQueriesLayer,

@@ -19,8 +19,11 @@ export {
 } from "./features"
 export { HIGH_CONFIDENCE, MID_CONFIDENCE, routeForConfidence } from "./thresholds"
 export {
+  coarseRouteForDecision,
   expectedCoarseRoute,
+  routerInputFor,
   scoreCorpus,
+  scoreRouter,
   toRuleInput,
   type BenchResult,
   type CaseScore,

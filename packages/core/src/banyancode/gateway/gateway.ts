@@ -4,6 +4,7 @@ import { Clock, Context, Effect, Layer, Option } from "effect"
 import { Service as BanyanConfigService } from "../banyan-config"
 import { intelligenceBackend } from "./backends"
 import { NoopRouter, ROUTER_IDENTITY, ROUTER_VERSION, RulesRouter, ToolRouterService } from "./router"
+import { defaultLayer as needleClientDefaultLayer, NeedleRouter } from "./needle-router"
 import { normalize } from "./normalizer"
 import { emitTrace, traceFor } from "./trace"
 import type { RepositoryOperation, RepositoryRequest, RepositoryResult, RouteDecision, ToolRouter } from "./types"
@@ -142,17 +143,22 @@ export const layer: Layer.Layer<Service, never, ToolRouterService> = Layer.effec
 
 // Router selection (plan §2.7, §4): env override (`BANYANCODE_ROUTER=rules`)
 // wins over the `banyancode_router` config key, which in turn defaults OFF.
-// "rules" activates the deterministic RulesRouter; anything else (unset/
-// "off"/"needle" — the needle classifier is a later wave) resolves to the
-// NoopRouter passthrough, so the default install is a byte-for-byte
-// behavioral no-op (plan §78). Missing BanyanConfigService (serviceOption
-// None) also means OFF.
+// "rules" activates the deterministic RulesRouter; "needle" activates the
+// NeedleRouter (Needle 2 learned classifier) — its classify() never fails and
+// falls back to DIRECT when the needle server is unreachable, so a down
+// server leaves the gateway byte-for-byte on the default path (spec §35).
+// Anything else (unset/"off") resolves to the NoopRouter passthrough, so the
+// default install is a byte-for-byte behavioral no-op (plan §78). Missing
+// BanyanConfigService (serviceOption None) also means OFF.
 const routerFromConfig: Effect.Effect<ToolRouter, never, never> = Effect.gen(function* () {
   if (process.env.BANYANCODE_ROUTER === "rules") return RulesRouter
+  if (process.env.BANYANCODE_ROUTER === "needle") return NeedleRouter
   const configOpt = yield* Effect.serviceOption(BanyanConfigService)
   if (Option.isNone(configOpt)) return NoopRouter
   const config = yield* configOpt.value.get()
-  return config.banyancode_router === "rules" ? RulesRouter : NoopRouter
+  if (config.banyancode_router === "rules") return RulesRouter
+  if (config.banyancode_router === "needle") return NeedleRouter
+  return NoopRouter
 })
 
 export const defaultLayer: Layer.Layer<Service, never, never> = Layer.effect(
@@ -161,4 +167,4 @@ export const defaultLayer: Layer.Layer<Service, never, never> = Layer.effect(
     const router = yield* routerFromConfig
     return yield* buildGateway(router)
   }),
-)
+).pipe(Layer.provide(needleClientDefaultLayer))

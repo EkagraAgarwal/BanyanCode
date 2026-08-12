@@ -1,10 +1,16 @@
 /**
  * Routing benchmark harness — shared scoring logic (spec §46-51, §148-151).
  *
- * Scores any `evaluate(input): RuleVerdict` router against the routing corpus
- * (`test/fixture/routing-corpus.ts`, 365 cases / 45 hard negatives). Coarse
- * scoring collapses the corpus's fine-grained expected routes onto the three
- * verdict buckets:
+ * Two entry points, one scoring pipeline:
+ *   - `scoreCorpus(corpus, evaluate)` — scores any deterministic
+ *     `evaluate(input): RuleVerdict` router (the rules path);
+ *   - `scoreRouter(corpus, classify)` — scores any gateway ToolRouter
+ *     (`classify(input): Effect<RouteDecision>`), i.e. RulesRouter, the
+ *     upcoming NeedleRouter, or a test stub, against the same corpus.
+ *
+ * Both run against the routing corpus (`test/fixture/routing-corpus.ts`, 365
+ * cases / 45 hard negatives). Coarse scoring collapses the corpus's
+ * fine-grained expected routes onto the three verdict buckets:
  *
  *   DIRECT_READ / DIRECT_SEARCH / DIRECT_GLOB  -> "direct"
  *   SYMBOL_SEARCH / REFERENCES / CALLERS / CALLEES / DEPENDENTS / IMPORTS /
@@ -25,7 +31,9 @@
  *     hybrid (dangerous — documentation content missed by the graph).
  * Per spec §46 the false-intelligence rate is the one to optimize first.
  */
+import { Effect } from "effect"
 import type { RoutingCase } from "../../../test/fixture/routing-corpus"
+import type { RouteDecision, RouterInput } from "../gateway/types"
 import type { RuleInput, RuleVerdict, RouteVerdict } from "./types"
 
 /** Coarse route buckets the corpus expected routes are mapped onto. */
@@ -102,22 +110,22 @@ const CATEGORIES = [
   "hard-negative",
 ] as const satisfies readonly RoutingCase["category"][]
 
-/** Score a corpus against a router. Pure: no I/O, no side effects. */
-export function scoreCorpus(corpus: readonly RoutingCase[], evaluate: Evaluator): BenchResult {
-  const cases: CaseScore[] = corpus.map((c) => {
-    const verdict = evaluate(toRuleInput(c))
-    const expected = expectedCoarseRoute(c.expectedRoute)
-    return {
-      id: c.id,
-      category: c.category,
-      expectedRoute: c.expectedRoute,
-      expected,
-      actual: verdict.verdict,
-      correct: verdict.verdict === expected,
-      verdict,
-    }
-  })
+/** Score one corpus case from its verdict. Shared by the sync and Effect paths. */
+const scoreCase = (case_: RoutingCase, verdict: RuleVerdict): CaseScore => {
+  const expected = expectedCoarseRoute(case_.expectedRoute)
+  return {
+    id: case_.id,
+    category: case_.category,
+    expectedRoute: case_.expectedRoute,
+    expected,
+    actual: verdict.verdict,
+    correct: verdict.verdict === expected,
+    verdict,
+  }
+}
 
+/** Aggregate a flat CaseScore list into the benchmark result (baseline + error rates). */
+const aggregateScores = (cases: readonly CaseScore[]): BenchResult => {
   const total = cases.length
   const correct = cases.filter((c) => c.correct).length
   const baselineCorrect = cases.filter((c) => c.expected === "direct").length
@@ -157,4 +165,58 @@ export function scoreCorpus(corpus: readonly RoutingCase[], evaluate: Evaluator)
     falseIntelligenceRate: directExpected === 0 ? 0 : falseIntelligence.length / directExpected,
     cases,
   }
+}
+
+/** Score a corpus against a router. Pure: no I/O, no side effects. */
+export function scoreCorpus(corpus: readonly RoutingCase[], evaluate: Evaluator): BenchResult {
+  return aggregateScores(corpus.map((c) => scoreCase(c, evaluate(toRuleInput(c)))))
+}
+
+// ── Generic ToolRouter scorer (spec §47-51, §111, §123, §148) ────────────
+// scoreRouter scores ANY gateway router — RulesRouter, the upcoming
+// NeedleRouter, or a test stub — against the same corpus by running its
+// Effect-based classify per case (concurrency 4). The classify contract is
+// never-failing (plan §2.7): defects must be caught INSIDE classify and fail
+// closed to "direct", so a router bug can never block the benchmark.
+
+/** Map a corpus case onto the gateway RouterInput routers consume (spec §133). */
+export function routerInputFor(case_: RoutingCase): RouterInput {
+  return {
+    toolName: case_.toolName,
+    arguments: case_.arguments,
+    userRequest: case_.userRequest,
+    recentToolCalls: [],
+  }
+}
+
+/** Map a RouteDecision route onto the coarse bucket used for scoring. */
+export function coarseRouteForDecision(route: RouteDecision["route"]): CoarseRoute {
+  switch (route) {
+    case "direct":
+      return "direct"
+    case "intelligence":
+      return "intelligence"
+    case "augment":
+      // Augment = original tool + graph augmentation: the corpus "hybrid"
+      // bucket (combine multiple routes).
+      return "hybrid"
+  }
+}
+
+const verdictFromDecision = (decision: RouteDecision): RuleVerdict => ({
+  verdict: coarseRouteForDecision(decision.route),
+  reasonCodes: [...decision.reasonCodes],
+  confidence: decision.confidence,
+})
+
+/** Score a corpus against a gateway ToolRouter's classify. Effect-based. */
+export function scoreRouter(
+  corpus: readonly RoutingCase[],
+  classify: (input: RouterInput) => Effect.Effect<RouteDecision, never, never>,
+): Effect.Effect<BenchResult, never, never> {
+  return Effect.forEach(corpus, (case_) => classify(routerInputFor(case_)), { concurrency: 4 }).pipe(
+    Effect.map((decisions) =>
+      aggregateScores(decisions.map((decision, index) => scoreCase(corpus[index], verdictFromDecision(decision)))),
+    ),
+  )
 }
