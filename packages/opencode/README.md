@@ -14,9 +14,21 @@ bun dev                  # TUI in dev mode (hot reload, all source in-process)
 
 ### Installing / upgrading with npm 11+
 
-npm 11+ blocks unapproved lifecycle scripts, so `banyancode`'s postinstall
-(which installs the platform binary) will not run unless the package is
-approved. When installing globally, pass the allow-scripts flag:
+`banyancode` ships a thin JS shim (`bin/banyancode.js`) as its bin entry. The
+shim resolves the correct platform package (`banyancode-<platform>-<arch>`
+from `optionalDependencies`) at first run and spawns the real CLI, so the
+command works even when lifecycle scripts are skipped — npm 11's allow-scripts
+default-deny, `--ignore-scripts`, bun global installs (which never run
+postinstall), and pnpm's no-build default.
+
+The `postinstall` script is best-effort: when it runs, it pre-copies the native
+binary to `bin/banyancode.exe` so the shim can take a fast path. If it is
+skipped, nothing breaks — the shim falls back to resolving the platform package
+from `node_modules` at runtime (or a temporary `npm install` as a last resort).
+
+Because postinstall is optional, you do **not** need to approve scripts for
+basic use. To silence npm 11's "install scripts not yet covered by
+allowScripts" warning and enable the fast path, approve `banyancode`:
 
 ```bash
 npm install -g --allow-scripts=banyancode banyancode
@@ -24,12 +36,10 @@ npm install -g --allow-scripts=banyancode banyancode
 npm config set allow-scripts=banyancode --location=user
 ```
 
-`banyancode upgrade` shells out to `npm install -g banyancode@<version>` and
-needs the same allow-scripts approval — set the config key above, or the
-upgrade will fail with "postinstall script was not run". pnpm users should
-approve the package via `pnpm approve-builds` (or an `onlyBuiltDependencies`
-entry) since pnpm skips postinstall scripts by default. If the postinstall
-was skipped, run it manually: `cd node_modules/banyancode && node postinstall.mjs`.
+pnpm users can approve the package via `pnpm approve-builds` (or an
+`onlyBuiltDependencies` entry) for the same fast path. To run the postinstall
+manually after an install that skipped it:
+`cd node_modules/banyancode && node postinstall.mjs`.
 
 ## Build a standalone binary
 
