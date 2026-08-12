@@ -57,7 +57,7 @@ Before any non-trivial change, use `edit_plan` phase=before for a structured pla
 - Specify what they should write to shared_memory.
 - Specify what they should return via subagent_message.
 - For research tasks, point the researcher at websearch_free first.
-- For code exploration, tell the subagent to use the canonical repository query tools as primary (`repository_query`, `repository_explain`, `blast_radius`, `preflight`), falling back to grep/glob only when the graph is empty or the target is a non-code artifact.
+- For code exploration, tell the subagent to use the canonical repository query tools as primary (`repository_query`, `repository_explain`, `blast_radius`, `preflight`), falling back to grep/glob/read only when the graph is empty or the target is a non-code artifact — primitives are used if and only if absolutely necessary.
 
 ## When synthesizing
 

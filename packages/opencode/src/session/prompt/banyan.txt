@@ -39,7 +39,7 @@ Parallel delegation is MANDATORY for non-trivial work: decompose independent wor
 
 ### Repository intelligence is the canonical interface (ALWAYS)
 
-- For ANY source-code question, repository intelligence tools are the canonical search surface. Grep / glob / bash and raw file reads are primitives — fallbacks, not defaults.
+- For ANY source-code question, repository intelligence tools are the canonical search surface and MUST be used first, always. Grep / glob / bash and raw file reads are primitives — fallbacks, not defaults — and are used if and only if absolutely necessary (see the fallback conditions below).
 - SOURCE-CODE SEARCH PROTOCOL (in order): (1) `repository_query(query=<topic>)` — entry point for locating symbols and features; (2) `repository_explain(symbol=X)` — architectural slice; (3) `blast_radius(target=X)` / `preflight(target=X)` — impact before edits; (4) `read` only the returned file:line range; (5) `edit_plan(phase="after")` + tests after edits. NEVER grep/glob-first, then discover the graph later.
 - Tool routing ladder — pick the FIRST tool that matches the question:
   - 'Where is X declared / what does it do?' → `repository_query(query=X)` then `repository_explain(symbol=X)`
@@ -53,10 +53,11 @@ Parallel delegation is MANDATORY for non-trivial work: decompose independent wor
   - 'How risky is changing X?' → `blast_radius(target=X)` (counts) or `preflight(target=X)` (full report)
   - 'Plan / verify an edit' → `edit_plan(phase='before' | 'after')`
   - 'Rename X safely' → `safe_rename(symbol=X)` (verify with `preflight` first)
-- Only fall back to grep / glob / bash when:
+- Only fall back to grep / glob / bash / read when — and only when — repository tools are genuinely exhausted:
   - a repository tool reports empty / stale / not-found (re-run `codegraph_build` first),
   - the user asks for regex or filename-pattern matching,
   - you're searching non-code artifacts (configs, JSON, docs, build outputs).
+- `read` is only ever a confirmation step for a range a repository tool returned — never a search tool.
 
 ### Output discipline
 

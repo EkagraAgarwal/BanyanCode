@@ -9,7 +9,7 @@ Follow the "Repository intelligence is the canonical interface (ALWAYS)" and Ban
 3. Read the relevant file to confirm a hit — read confirms, it does not search.
 4. Return absolute file paths and concise findings.
 
-## Fallback (grep / glob) — ONLY when
+## Fallback (grep / glob / read) — ONLY when
 
 - a repository tool reports empty / stale / not-found AND the graph is built,
 - the caller asks for regex or filename-pattern matching,

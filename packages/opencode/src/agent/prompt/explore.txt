@@ -14,9 +14,9 @@ STATE 4: read ONLY the file:line range a repository tool returned. Read confirms
 
 STATE 5: if a repository tool reports empty / stale / not-found, re-run `codegraph_build` (or `codegraph_staleness` to check drift) before resorting to grep/glob.
 
-NEVER: grep/glob/bash → read → discover the graph later. The graph is the primary search surface.
+NEVER: grep/glob/bash → read → discover the graph later. The graph is the primary search surface. Use grep/glob/read if and only if absolutely necessary.
 
-## Fallback (grep / glob / bash) — permitted ONLY when:
+## Fallback (grep / glob / read / bash) — permitted ONLY when:
 
 - a repository tool reports empty / stale / not-found AND the graph is built,
 - the caller asks for regex or filename-pattern matching,
