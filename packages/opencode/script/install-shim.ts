@@ -14,16 +14,20 @@
  * treats as a magic-checked fast path.
  *
  * The generated file is plain CommonJS running under node, zero deps beyond
- * node builtins, and starts with an esbuild-style polyglot header so it also
- * executes correctly when the kernel/shell dispatches it directly.
+ * node builtins. The first line is a `#!/usr/bin/env node` shebang — NOT a
+ * polyglot `#!/bin/sh` header: npm's shim generator inspects the bin target's
+ * first line to decide how to build its bin shims, and a `#!/bin/sh` header
+ * makes Windows `.cmd` shims dispatch through sh.exe (which does not exist on
+ * Windows), breaking the command. `#!/usr/bin/env node` yields node-dispatching
+ * shims on all platforms AND supports direct exec (bun global symlinks,
+ * probe.ts `--version` spawns).
  */
 export function shimScript(binaries: Record<string, string>): string {
   const entries = Object.entries(binaries)
     .map(([name, version]) => `  ${JSON.stringify(name)}: ${JSON.stringify(version)}`)
     .join(",\n")
 
-  return `#!/bin/sh
-':' //; exec "$(command -v nodejs || command -v node || echo node)" "$0" "$@"
+  return `#!/usr/bin/env node
 "use strict";
 const childProcess = require("child_process");
 const fs = require("fs");
