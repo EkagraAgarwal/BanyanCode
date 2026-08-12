@@ -190,9 +190,16 @@ function main() {
   )
 }
 
+// Best-effort pre-copy. The JS shim (bin/banyancode.js) resolves the platform
+// package at runtime, so an npm install must never fail because of this script.
+// On success the native binary is copied to bin/banyancode.exe, which the shim
+// uses as a magic-checked fast path.
 try {
   main()
 } catch (error) {
-  console.error(error.message)
-  process.exit(1)
+  console.error(`banyancode postinstall: ${error.message}`)
+  console.error(
+    "banyancode postinstall: continuing anyway — the JS shim (bin/banyancode.js) will resolve the platform package at runtime.",
+  )
+  process.exit(0)
 }

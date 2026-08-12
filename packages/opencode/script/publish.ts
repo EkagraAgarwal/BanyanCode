@@ -3,7 +3,7 @@ import { $ } from "bun"
 import pkg from "../package.json"
 import { Script } from "@opencode-ai/script"
 import { fileURLToPath } from "url"
-import { placeholderScript } from "./install-placeholder"
+import { shimScript } from "./install-shim"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
@@ -36,7 +36,7 @@ await $`mkdir -p ./dist/${WRAPPER_NAME}`
 await $`mkdir -p ./dist/${WRAPPER_NAME}/bin`
 await $`cp ./script/postinstall.mjs ./dist/${WRAPPER_NAME}/postinstall.mjs`
 await Bun.file(`./dist/${WRAPPER_NAME}/LICENSE`).write(await Bun.file("../../LICENSE").text())
-await Bun.file(`./dist/${WRAPPER_NAME}/bin/${WRAPPER_NAME}.exe`).write(placeholderScript(process.platform))
+await Bun.file(`./dist/${WRAPPER_NAME}/bin/${WRAPPER_NAME}.js`).write(shimScript(binaries))
 
 await Bun.file(`./dist/${WRAPPER_NAME}/package.json`).write(
   JSON.stringify(
@@ -44,7 +44,7 @@ await Bun.file(`./dist/${WRAPPER_NAME}/package.json`).write(
       name: WRAPPER_NAME,
       description: pkg.description,
       bin: {
-        [WRAPPER_NAME]: `./bin/${WRAPPER_NAME}.exe`,
+        [WRAPPER_NAME]: `./bin/${WRAPPER_NAME}.js`,
       },
       scripts: {
         postinstall: "node ./postinstall.mjs",
