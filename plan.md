@@ -20,6 +20,13 @@ Context: iteration 1 (goal 476a247b) shipped the shebang'd placeholder in 26.8.2
 
 ## Exit criteria
 
+## Iteration status
+
+- Iteration 1 (review PASS 2026-08-12): all code work complete — JS-shim bin (`bin/banyancode.js`, `#!/usr/bin/env node`), best-effort postinstall, placeholder removed, `method()` execPath fast-path extended for the platform-package binary layout, README + ARCHITECTURE updated. typecheck pass; shim tests 5 pass / 3 skip (win32) / 0 fail (3 cold runs); win32 runtime proven via manual harness AND the published-package end-to-end below.
+- Review re-verification (2026-08-12, lead): exit criteria 1-5 checked in-repo — `publish.ts:39,46-47` writes `bin/banyancode.js` + bin field; shebang/map/magic/guidance asserted by 5/5 passing content tests; `postinstall.mjs` catch → warn → exit 0; `install-placeholder` grep-clean outside plan.md; README documents postinstall optional. Criterion 6 enforced by pre-push typecheck; 7 lead-verified (canary on npm + `--ignore-scripts` e2e). Known win32 flake: skipped functional tests trip a bun skipIf hook timeout on cold runs (documented in the test comment) — 0 assertion failures.
+- End-to-end (lead): `npm install --ignore-scripts banyancode@dev` in a temp dir → `.cmd` shim and `node bin/banyancode.js` both print `26.08.20-dev.c83c8df` with NO postinstall executed.
+- Shebang lesson (already applied): a `#!/bin/sh` header on the bin target makes npm's shim generator emit shell-dispatching `.cmd` shims on Windows (→ "cannot find the path"); `#!/usr/bin/env node` yields node-dispatching shims on all platforms.
+
 Reviewer judges **pass** when ALL hold:
 
 1. `bin/banyancode.js` is the bin entry (tarball `bin` field `{ banyancode: "./bin/banyancode.js" }`) and its generated content starts with `#!/usr/bin/env node` (npm builds node-dispatching bin shims from a node shebang on ALL platforms; a `#!/bin/sh` header breaks Windows `.cmd` shims which dispatch through nonexistent sh.exe), and embeds the platform package map, ELF/MZ magic fast-path check, and `--allow-scripts`/`node postinstall.mjs` guidance — asserted by unit tests.
