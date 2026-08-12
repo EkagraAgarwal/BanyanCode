@@ -100,6 +100,31 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/In
 
 export const use = serviceUse(Service)
 
+// The JS-shim bin (bin/banyancode.js) spawns the platform-package binary, so a
+// running process's execPath is .../node_modules/banyancode-<platform>-<arch>/bin/banyancode —
+// a sibling of the umbrella package directory rather than the umbrella itself.
+// These helpers recover the umbrella package directory from both the running
+// execPath and a known install so method() can match the two without falling
+// back to package-manager subprocess probing.
+async function umbrellaDirFromExec(execPath: string) {
+  const pkgDir = path.dirname(path.dirname(execPath))
+  const modulesDir = path.dirname(pkgDir)
+  if (path.basename(modulesDir).toLowerCase() !== "node_modules") return undefined
+  if (!/^banyancode-(windows|linux|darwin)-(x64|arm64|arm)(?:-baseline)?(?:-musl)?$/i.test(path.basename(pkgDir))) {
+    return undefined
+  }
+  const umbrella = path.join(modulesDir, "banyancode")
+  return fs.realpath(umbrella).catch(() => path.resolve(umbrella))
+}
+
+async function installUmbrellaDir(resolved: string) {
+  const stat = await fs.stat(resolved).catch(() => undefined)
+  if (stat?.isDirectory()) return fs.realpath(resolved).catch(() => path.resolve(resolved))
+  const bin = path.dirname(resolved)
+  if (path.basename(bin).toLowerCase() !== "bin") return undefined
+  return fs.realpath(path.dirname(bin)).catch(() => path.resolve(path.dirname(bin)))
+}
+
 export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Service> = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -194,14 +219,22 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         const exec = process.execPath.toLowerCase()
         const detected = yield* Effect.promise(async () => {
           const execPath = await fs.realpath(process.execPath).catch(() => path.resolve(process.execPath))
+          const execResolved = execPath.toLowerCase()
           const installs = await findAllBanyanCodeInstalls()
           const matches = await Promise.all(
-            installs.map(async (install) => ({
-              install,
-              resolved: await fs.realpath(install.path).catch(() => path.resolve(install.path)),
-            })),
+            installs.map(async (install) => {
+              const resolved = await fs.realpath(install.path).catch(() => path.resolve(install.path))
+              const umbrella = await installUmbrellaDir(resolved)
+              return { install, resolved: resolved.toLowerCase(), umbrella: umbrella?.toLowerCase() }
+            }),
           )
-          return matches.find((item) => item.resolved.toLowerCase() === execPath.toLowerCase())?.install.method
+          const execUmbrella = (await umbrellaDirFromExec(execPath))?.toLowerCase()
+          return matches.find(
+            (item) =>
+              item.resolved === execResolved ||
+              execResolved.startsWith(item.resolved + path.sep) ||
+              (execUmbrella !== undefined && item.umbrella === execUmbrella),
+          )?.install.method
         })
         if (detected) return detected
 
