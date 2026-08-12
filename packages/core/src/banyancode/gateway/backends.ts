@@ -57,7 +57,7 @@ const resolvedOperationName = (operation: RepositoryOperation): string =>
 // Placeholder provenance: the backend is tool-agnostic (it only sees the
 // operation), so originalTool here is a stand-in. The gateway overwrites the
 // full provenance from the request + RouteDecision before returning the outcome.
-const provenanceForOperation = (operation: RepositoryOperation): RepositoryResult["provenance"] => ({
+export const provenanceForOperation = (operation: RepositoryOperation): RepositoryResult["provenance"] => ({
   originalTool: "gateway",
   resolvedOperation: resolvedOperationName(operation),
   router: ROUTER_IDENTITY,
@@ -66,7 +66,7 @@ const provenanceForOperation = (operation: RepositoryOperation): RepositoryResul
 
 // Fail-closed result: `route: "direct"` signals the gateway to fall through to
 // the original tool. `operation`/`source` are carried for trace fidelity.
-const directResult = (operation: RepositoryOperation): RepositoryResult => ({
+export const directResult = (operation: RepositoryOperation): RepositoryResult => ({
   route: "direct",
   operation,
   source: "codegraph",

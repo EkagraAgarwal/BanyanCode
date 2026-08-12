@@ -219,6 +219,12 @@ export {
   defaultLayer as repositoryGatewayDefaultLayer,
 } from "./gateway"
 export * as RepositoryGatewayNS from "./gateway"
+export {
+  Service as InvestigationStateService,
+  layer as investigationStateLayer,
+  defaultLayer as investigationStateDefaultLayer,
+} from "./gateway/investigation"
+export * as InvestigationState from "./gateway/investigation"
 export * as RepositoryGatewayTypes from "./gateway/types"
 export * as RepositoryGatewayRouter from "./gateway/router"
 export * as RepositoryGatewayNeedle from "./gateway/needle-router"

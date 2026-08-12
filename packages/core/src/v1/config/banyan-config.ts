@@ -71,6 +71,12 @@ export const Info = Schema.Struct({
   banyancode_router: Schema.optional(
     Schema.Union([Schema.Literal("off"), Schema.Literal("rules"), Schema.Literal("needle")]),
   ),
+  // Read augmentation (needle2 gateway plan §4 / spec §77, §117). When true,
+  // a read of a code file may carry a compact symbol header (Symbol / Imports
+  // / References / Callers / Dependents) built from the code graph — exact
+  // source is never replaced. Default off: augment never engages unless this
+  // is explicitly enabled.
+  banyancode_augment_read: Schema.optional(Schema.Boolean),
   /** Default evaluator model for /goal: a cheap/fast small model the reviewer is graded against. Format: "provider/model-id" e.g. "anthropic/claude-haiku-4-5". */
   banyancode_goal_evaluator_model: Schema.optional(Schema.String),
   /** Maximum number of reviewer-fail iterations before the goal is auto-blocked and surfaced to the user. Default 5. */

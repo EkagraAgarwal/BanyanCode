@@ -2,6 +2,7 @@ export * as RepositoryGateway from "./gateway"
 
 import { Clock, Context, Effect, Layer, Option } from "effect"
 import { Service as BanyanConfigService } from "../banyan-config"
+import { augmentBackend } from "./augment"
 import { intelligenceBackend } from "./backends"
 import { NoopRouter, ROUTER_IDENTITY, ROUTER_VERSION, RulesRouter, ToolRouterService } from "./router"
 import { defaultLayer as needleClientDefaultLayer, NeedleRouter } from "./needle-router"
@@ -12,10 +13,14 @@ import type { RepositoryOperation, RepositoryRequest, RepositoryResult, RouteDec
 // Outcome of a routed request. DIRECT falls through to the original tool;
 // INTELLIGENCE carries a backend-produced result the caller may use (Phase 2
 // discards it at the registry hook per the Phase 0 contract — the original
-// tool always runs).
+// tool always runs). AUGMENT (Phase 7, spec §6.2/§29/§117) keeps the original
+// operation and carries an optional compact symbol header the caller may
+// append to the exact content; `header` is the model-facing one-liner,
+// `result` is the graph-derived internal payload (source "codegraph").
 export type GatewayOutcome =
   | { readonly route: "direct" }
   | { readonly route: "intelligence"; readonly result: RepositoryResult }
+  | { readonly route: "augment"; readonly header: string; readonly result: RepositoryResult }
 
 export interface Interface {
   readonly execute: (request: RepositoryRequest) => Effect.Effect<GatewayOutcome, never, never>
@@ -38,11 +43,37 @@ export const makeBackendSelector = (backends: readonly RepositoryBackend[]): Bac
   select: (operation) => backends.find((backend) => backend.supports(operation)),
 })
 
+// Authoritative provenance (spec §43, §60): stamped from the request +
+// decision because backends only see the operation. Applies to both
+// INTELLIGENCE and AUGMENT results so graph-derived payloads never masquerade
+// as filesystem output.
+const stampProvenance = (
+  request: RepositoryRequest,
+  targetOperation: RepositoryOperation,
+  decision: RouteDecision,
+  result: RepositoryResult,
+): RepositoryResult => ({
+  ...result,
+  provenance: {
+    originalTool: request.originalTool,
+    resolvedOperation:
+      targetOperation.kind === "relationship"
+        ? `relationship:${targetOperation.relation}`
+        : targetOperation.kind,
+    router: decision.router ?? ROUTER_IDENTITY,
+    routerVersion: decision.routerVersion ?? ROUTER_VERSION,
+  },
+})
+
 // Resolve the GatewayOutcome for a decision through the backend selector seam.
 // DIRECT short-circuits; a non-DIRECT decision with no matching backend falls
 // back to DIRECT (fail-closed, spec §35 — never widen R). The backend executes
 // the ROUTER's operation (the resolved semantic op) when present, falling back
-// to the normalized one.
+// to the normalized one. A backend result with route "augment" (from the
+// augment backend on a content op, reached by an "augment" decision OR an
+// "intelligence" decision on a content operation) produces the AUGMENT
+// outcome carrying the compact header; any other non-intelligence result
+// falls through to DIRECT.
 const resolveOutcome = (
   request: RepositoryRequest,
   operation: RepositoryOperation,
@@ -55,26 +86,17 @@ const resolveOutcome = (
   if (!backend) return Effect.succeed({ route: "direct" } as const)
   return backend.execute(targetOperation).pipe(
     Effect.map((result) => {
+      if (result.route === "augment") {
+        const stamped = stampProvenance(request, targetOperation, decision, result)
+        return { route: "augment", header: stamped.header ?? "", result: stamped } as const
+      }
       // Fail-closed passthrough: a backend that cannot answer cleanly returns a
       // result with route "direct" (e.g. a relation without a graph mapping) —
       // the gateway falls through to the original tool untouched.
       if (result.route !== "intelligence") return { route: "direct" } as const
       return {
         route: "intelligence",
-        result: {
-          ...result,
-          // Authoritative provenance (spec §43): stamped here from the request
-          // + decision because the backend only sees the operation.
-          provenance: {
-            originalTool: request.originalTool,
-            resolvedOperation:
-              targetOperation.kind === "relationship"
-                ? `relationship:${targetOperation.relation}`
-                : targetOperation.kind,
-            router: decision.router ?? ROUTER_IDENTITY,
-            routerVersion: decision.routerVersion ?? ROUTER_VERSION,
-          },
-        },
+        result: stampProvenance(request, targetOperation, decision, result),
       } as const
     }),
   )
@@ -104,7 +126,13 @@ export const directBackend: RepositoryBackend = {
 // Shared gateway construction given a concrete router.
 const buildGateway = (router: ToolRouter): Effect.Effect<Interface, never, never> =>
   Effect.gen(function* () {
-    const selector = makeBackendSelector([directBackend, intelligenceBackend])
+    // augmentBackend first: it claims every content operation, so a content op
+    // reached via an "augment" RouteDecision OR an "intelligence" decision on
+    // a content read resolves to AUGMENT (gated by banyancode_augment_read,
+    // fail-closed to direct when off). directBackend remains as the reference
+    // filesystem backend for the seam; intelligenceBackend handles
+    // symbol/relationship ops.
+    const selector = makeBackendSelector([augmentBackend, directBackend, intelligenceBackend])
 
     const execute = (request: RepositoryRequest): Effect.Effect<GatewayOutcome, never, never> =>
       Effect.gen(function* () {

@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
+import { ToolFailure } from "@opencode-ai/llm"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionMessage } from "@opencode-ai/core/session/message"
@@ -9,7 +10,7 @@ import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import { RepositoryGateway } from "../../src/banyancode/gateway"
 import { ToolRouterService } from "../../src/banyancode/gateway/router"
-import type { RouterInput } from "../../src/banyancode/gateway/types"
+import type { RepositoryRequest, RouterInput } from "../../src/banyancode/gateway/types"
 import { testEffect } from "../lib/effect"
 import { settleTool } from "../lib/tool"
 
@@ -74,6 +75,44 @@ const intelligenceConsulted = testEffect(
   Layer.provideMerge(registry, RepositoryGateway.layer.pipe(Layer.provide(intelligenceRouter))),
 )
 
+// Runtime 5 — gateway double that records calls and resolves AUGMENT (Phase 7,
+// spec §6.2/§29/§117). `execute` returns the outcome directly (mirrors the
+// router+backend outcome shape), so the merge contract in settleWith is tested
+// in isolation from the augment backend: the read tool's model-facing page
+// content gets the header prepended; grep/glob, non-json, and error
+// settlements stay byte-identical.
+const gatewayCalls: RepositoryRequest[] = []
+const augmentOutcome: RepositoryGateway.GatewayOutcome = {
+  route: "augment",
+  header: "Symbol: Foo | Imports: 1 | References: 2 | Callers: 2 | Dependents: 1",
+  result: {
+    route: "augment",
+    operation: { kind: "content", path: "src/foo.ts" },
+    source: "codegraph",
+    results: [],
+    header: "Symbol: Foo | Imports: 1 | References: 2 | Callers: 2 | Dependents: 1",
+    provenance: { originalTool: "read", resolvedOperation: "content", router: "rules", routerVersion: "0.1.0" },
+  },
+}
+const augmentGateway = Layer.mock(RepositoryGateway.Service, {
+  execute: (request) =>
+    Effect.sync(() => {
+      gatewayCalls.push(request)
+      return augmentOutcome
+    }),
+})
+const augmentConsulted = testEffect(Layer.provideMerge(registry, augmentGateway))
+
+// Runtime 6 — same double resolving DIRECT: the merge must not fire.
+const directGateway = Layer.mock(RepositoryGateway.Service, {
+  execute: (request) =>
+    Effect.sync(() => {
+      gatewayCalls.push(request)
+      return { route: "direct" as const }
+    }),
+})
+const directConsulted = testEffect(Layer.provideMerge(registry, directGateway))
+
 const identity = {
   agent: AgentV2.ID.make("build"),
   assistantMessageID: SessionMessage.ID.make("msg_gateway"),
@@ -96,6 +135,50 @@ const make = (name: string) =>
     execute: ({ text }) => Effect.succeed({ text: `${name}:${text}` }),
     toModelOutput: ({ output }) => [{ type: "text", text: output.text }],
   })
+
+// Page-shaped read probe: `toModelOutput` returns [] so settlement is
+// { type: "json", value: <text-page> } — the exact shape the AUGMENT merge
+// targets (mirrors ReadTool.TextPage, read-filesystem.ts:39-46).
+const pageRead = Tool.make({
+  description: "read probe (text page)",
+  input: Schema.Struct({ text: Schema.String }),
+  output: Schema.Struct({
+    type: Schema.Literal("text-page"),
+    content: Schema.String,
+    mime: Schema.String,
+    offset: Schema.Number,
+    truncated: Schema.Boolean,
+  }),
+  execute: () =>
+    Effect.succeed({
+      type: "text-page" as const,
+      content: "line one\nline two",
+      mime: "text/plain",
+      offset: 1,
+      truncated: false,
+    }),
+  toModelOutput: () => [],
+})
+
+// Read probe whose settlement is json but NOT TextPage-shaped (has a `content`
+// string but no "text-page" discriminator): the shape guard must skip the merge.
+const nonPageRead = Tool.make({
+  description: "read probe (non-page json)",
+  input: Schema.Struct({ text: Schema.String }),
+  output: Schema.Struct({ content: Schema.String, mime: Schema.String }),
+  execute: () => Effect.succeed({ content: "raw content", mime: "text/plain" }),
+  toModelOutput: () => [],
+})
+
+// Read probe that fails with LLM.ToolFailure -> error settlement: the merge
+// must leave error results untouched.
+const failingRead = Tool.make({
+  description: "read probe (fails)",
+  input: Schema.Struct({ text: Schema.String }),
+  output: Schema.Struct({ text: Schema.String }),
+  execute: () => Effect.fail(new ToolFailure({ message: "boom" })),
+  toModelOutput: () => [],
+})
 
 const registerProbes = (service: ToolRegistry.Interface) =>
   service.register({ read: make("read"), grep: make("grep"), glob: make("glob") })
@@ -212,6 +295,86 @@ describe("RepositoryGateway interception in ToolRegistry.settleWith", () => {
         })
         expect(intelRouterCalls.length).toBeGreaterThan(0)
         expect(intelRouterCalls.at(-1)?.toolName).toBe("grep")
+      }),
+    )
+  })
+
+  describe("AUGMENT outcome merged into the read page (Phase 7, spec §6.2/§29/§117)", () => {
+    augmentConsulted.effect("read settle: header is prepended, type stays json, storage output untouched", () =>
+      Effect.gen(function* () {
+        gatewayCalls.length = 0
+        const service = yield* ToolRegistry.Service
+        yield* service.register({ read: pageRead, grep: make("grep"), glob: make("glob") })
+        const settled = yield* settleTool(service, call("read"))
+        // Model-facing result: header prefixed into the page content, type kept "json".
+        expect(settled.result).toEqual({
+          type: "json",
+          value: {
+            type: "text-page",
+            content: "Symbol: Foo | Imports: 1 | References: 2 | Callers: 2 | Dependents: 1\nline one\nline two",
+            mime: "text/plain",
+            offset: 1,
+            truncated: false,
+          },
+        })
+        // Storage/TUI output is untouched: the merge is model-facing only.
+        expect(settled.output?.structured).toEqual({
+          type: "text-page",
+          content: "line one\nline two",
+          mime: "text/plain",
+          offset: 1,
+          truncated: false,
+        })
+        expect(gatewayCalls.at(-1)?.originalTool).toBe("read")
+      }),
+    )
+
+    directConsulted.effect("direct outcome: read page unchanged (no prefix)", () =>
+      Effect.gen(function* () {
+        gatewayCalls.length = 0
+        const service = yield* ToolRegistry.Service
+        yield* service.register({ read: pageRead })
+        const settled = yield* settleTool(service, call("read"))
+        expect(settled.result).toEqual({
+          type: "json",
+          value: {
+            type: "text-page",
+            content: "line one\nline two",
+            mime: "text/plain",
+            offset: 1,
+            truncated: false,
+          },
+        })
+      }),
+    )
+
+    augmentConsulted.effect("augment outcome on grep: result unchanged (merge is read-only)", () =>
+      Effect.gen(function* () {
+        gatewayCalls.length = 0
+        const service = yield* ToolRegistry.Service
+        yield* service.register({ read: pageRead, grep: make("grep") })
+        const settled = yield* settleTool(service, call("grep"))
+        expect(settled.result).toEqual({ type: "text", value: "grep:grep" })
+      }),
+    )
+
+    augmentConsulted.effect("augment outcome with a failed read: error settlement unchanged", () =>
+      Effect.gen(function* () {
+        gatewayCalls.length = 0
+        const service = yield* ToolRegistry.Service
+        yield* service.register({ read: failingRead })
+        const settled = yield* settleTool(service, call("read"))
+        expect(settled).toEqual({ result: { type: "error", value: "boom" } })
+      }),
+    )
+
+    augmentConsulted.effect("augment outcome with non-page json settlement: unchanged (shape guard)", () =>
+      Effect.gen(function* () {
+        gatewayCalls.length = 0
+        const service = yield* ToolRegistry.Service
+        yield* service.register({ read: nonPageRead })
+        const settled = yield* settleTool(service, call("read"))
+        expect(settled.result).toEqual({ type: "json", value: { content: "raw content", mime: "text/plain" } })
       }),
     )
   })

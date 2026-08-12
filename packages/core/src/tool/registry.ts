@@ -2,11 +2,13 @@ export * as ToolRegistry from "./registry"
 
 import { ToolOutput, type ToolCall, type ToolDefinition, type ToolResultValue } from "@opencode-ai/llm"
 import { Context, Effect, Layer, Option, Scope } from "effect"
-import { Service as RepositoryGateway } from "../banyancode/gateway"
+import { Service as RepositoryGateway, type GatewayOutcome } from "../banyancode/gateway"
+import { deriveNote, Service as InvestigationStateService } from "../banyancode/gateway/investigation"
 import { AgentV2 } from "../agent"
 import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
+import { SessionStore } from "../session/store"
 import { ToolOutputStore } from "../tool-output-store"
 import { Wildcard } from "../util/wildcard"
 import { ApplicationTools } from "./application-tools"
@@ -24,6 +26,29 @@ export type ExecuteInput = {
 // repository tools. Non-listed tools skip the hook entirely — byte-identical
 // path. (read/glob activation follows grep per the plan's rollout sequence.)
 const GATEWAY_TOOLS = new Set(["read", "grep", "glob"])
+
+// Phase 7 merge (spec §6.2, §29, §117): prepend the gateway's AUGMENT header
+// to the read tool's model-facing page content. The result keeps type "json"
+// and the page keeps its shape with `content = `${header}\n${page.content}``.
+// Read-only and fail-closed by contract (spec §35): only the read tool, only a
+// TextPage-shaped json settlement (TextPage discriminator `type: "text-page"`,
+// `content: string`) — grep/glob, error settlements, non-page json values, and
+// an absent/non-augment outcome all fall through byte-identical. Never throws;
+// an unexpected shape simply skips the merge and keeps the original result.
+const mergeAugmentHeader = (
+  outcome: GatewayOutcome | undefined,
+  toolName: string,
+  result: ToolResultValue,
+): ToolResultValue => {
+  if (outcome?.route !== "augment") return result
+  if (toolName !== "read") return result
+  if (result.type !== "json") return result
+  const page = result.value
+  if (typeof page !== "object" || page === null) return result
+  const record = page as Record<string, unknown>
+  if (record.type !== "text-page" || typeof record.content !== "string") return result
+  return { type: "json", value: { ...record, content: `${outcome.header}\n${record.content}` } }
+}
 
 export interface Interface {
   readonly materialize: (permissions?: PermissionV2.Ruleset) => Effect.Effect<Materialization>
@@ -74,16 +99,52 @@ const registryLayer = Layer.effect(
       // contract: `serviceOption` never widens R, so a missing/disabled gateway
       // is a byte-for-byte no-op passthrough (precedent: tool.ts:128-129).
       // Gated to the conventional tools (read/grep/glob) — everything else
-      // skips the hook. The outcome is discarded by design (Phase 0/2
-      // contract): the gateway may route to INTELLIGENCE and execute a backend,
-      // but the leaf settle below always runs, so observable tool behavior is
-      // unchanged while the router feature is on.
+      // skips the hook. The outcome is captured for the Phase 7 AUGMENT merge
+      // (spec §6.2/§29/§117): only the read tool's json page content gets the
+      // header prepended; every other route/tool falls through to the leaf
+      // settle unchanged, so observable tool behavior is preserved while the
+      // router feature is on.
+      let outcome: GatewayOutcome | undefined = undefined
       const gatewayOpt = yield* Effect.serviceOption(RepositoryGateway)
       if (Option.isSome(gatewayOpt) && GATEWAY_TOOLS.has(input.call.name)) {
-        yield* gatewayOpt.value.execute({
+        // Phase 6 — Gate B context (plan §2.2): resolve the session's user
+        // request, the recent tool-call names, and the per-(session, agent)
+        // investigation state before routing. Every fetch is fail-closed: a
+        // missing service or a failed load yields undefined/empty context and
+        // the tool still runs unchanged (serviceOption + catchCause, R stays
+        // never).
+        const storeOpt = yield* Effect.serviceOption(SessionStore.Service)
+        const messages = Option.isSome(storeOpt)
+          ? yield* storeOpt.value.context(input.sessionID).pipe(Effect.catchCause(() => Effect.succeed([])))
+          : []
+        const userRequest = messages.filter((m) => m.type === "user").at(-1)?.text.slice(0, 200)
+        const recentToolCalls = messages
+          .flatMap((m) => (m.type === "assistant" ? m.content : []))
+          .filter((part): part is SessionMessage.AssistantTool => part.type === "tool")
+          .slice(-5)
+          .map((part) => ({
+            tool: part.name,
+            arguments: part.state.status === "pending" ? {} : (part.state.input ?? {}),
+          }))
+        const investigationOpt = yield* Effect.serviceOption(InvestigationStateService)
+        const investigationState = Option.isSome(investigationOpt)
+          ? yield* investigationOpt.value.get(input.sessionID, input.agent)
+          : undefined
+        if (Option.isSome(investigationOpt)) {
+          yield* investigationOpt.value.note(
+            input.sessionID,
+            input.agent,
+            deriveNote(input.call.name, (input.call.input ?? {}) as Record<string, unknown>),
+          )
+        }
+        outcome = yield* gatewayOpt.value.execute({
           source: "model-tool",
           originalTool: input.call.name,
           arguments: (input.call.input ?? {}) as Record<string, unknown>,
+          sessionID: input.sessionID,
+          userRequest,
+          recentToolCalls,
+          investigationState,
         })
       }
       const pending = yield* settle(registration.tool, input.call, {
@@ -100,7 +161,7 @@ const registryLayer = Layer.effect(
       if ("result" in pending) return pending
       const output = pending.output
       const bounded = yield* resources.bound({ sessionID: input.sessionID, toolCallID: input.call.id, output })
-      const result = ToolOutput.toResultValue(bounded.output)
+      const result = mergeAugmentHeader(outcome, input.call.name, ToolOutput.toResultValue(bounded.output))
       if (result.type === "error")
         return bounded.outputPaths.length > 0 ? { result, outputPaths: bounded.outputPaths } : { result }
       return bounded.outputPaths.length > 0

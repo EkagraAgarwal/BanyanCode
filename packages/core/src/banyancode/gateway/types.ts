@@ -106,6 +106,10 @@ export interface RepositoryResult {
   readonly operation: RepositoryOperation
   readonly source: RepositoryResultSource
   readonly results: readonly RepositoryResultItem[]
+  // AUGMENT payload (spec §6.2 / §29): the compact symbol header produced by
+  // the augment backend for a content operation. Present only when
+  // `route === "augment"`; the gateway lifts it onto the GatewayOutcome.
+  readonly header?: string
   readonly provenance: {
     readonly originalTool: string
     readonly resolvedOperation: string

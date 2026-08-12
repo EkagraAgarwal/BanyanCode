@@ -32,6 +32,23 @@ const formatItem = (item: RepositoryResultItem): string => {
   return item.name !== undefined ? `${base} (${item.name})` : base
 }
 
+// AUGMENT header counts (spec §6.2 / §29): a compact orientation aid for a
+// content read — the file's main symbol plus graph-derived counts, never the
+// file contents (exact source always comes from the original tool).
+export interface AugmentSymbolCounts {
+  readonly symbol: string
+  readonly imports: number
+  readonly references: number
+  readonly callers: number
+  readonly dependents: number
+}
+
+// One compact line, model-facing (spec §110: internal vs model-facing
+// schema). The counts are produced by the augment header builder; this
+// function only renders them.
+export const formatAugmentHeader = (counts: AugmentSymbolCounts): string =>
+  `Symbol: ${counts.symbol} | Imports: ${counts.imports} | References: ${counts.references} | Callers: ${counts.callers} | Dependents: ${counts.dependents}`
+
 export const format = (operation: RepositoryOperation, result: RepositoryResult): string => {
   const header = formatHeader(operation)
   const lines = result.results.map(formatItem)
