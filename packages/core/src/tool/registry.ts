@@ -1,7 +1,8 @@
 export * as ToolRegistry from "./registry"
 
 import { ToolOutput, type ToolCall, type ToolDefinition, type ToolResultValue } from "@opencode-ai/llm"
-import { Context, Effect, Layer, Scope } from "effect"
+import { Context, Effect, Layer, Option, Scope } from "effect"
+import { Service as RepositoryGateway } from "../banyancode/gateway"
 import { AgentV2 } from "../agent"
 import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
@@ -64,6 +65,21 @@ const registryLayer = Layer.effect(
         }
       if (advertised && registration.identity !== advertised)
         return { result: { type: "error" as const, value: `Stale tool call: ${input.call.name}` } }
+      // Repository Gateway interception (plan §2.1, Gate A). Optional by
+      // contract: `serviceOption` never widens R, so a missing/disabled gateway
+      // is a byte-for-byte no-op passthrough (precedent: tool.ts:128-129).
+      const gatewayOpt = yield* Effect.serviceOption(RepositoryGateway)
+      if (Option.isSome(gatewayOpt)) {
+        yield* gatewayOpt.value.execute({
+          source: "model-tool",
+          originalTool: input.call.name,
+          arguments: (input.call.input ?? {}) as Record<string, unknown>,
+        })
+        // Phase 0 is DIRECT-only: the default NoopRouter resolves every request
+        // DIRECT, so we always fall through to the leaf settle below, unchanged.
+        // An INTELLIGENCE outcome is unreachable while the NoopRouter is the
+        // default; backend execution is wired in a later phase (plan §2.4).
+      }
       const pending = yield* settle(registration.tool, input.call, {
         sessionID: input.sessionID,
         agent: input.agent,

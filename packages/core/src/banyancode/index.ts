@@ -213,8 +213,39 @@ export {
   layer as repositoryIntelligenceLayer,
   defaultLayer as repositoryIntelligenceDefaultLayer,
 } from "./repository-intelligence"
+export {
+  Service as RepositoryGateway,
+  layer as repositoryGatewayLayer,
+  defaultLayer as repositoryGatewayDefaultLayer,
+} from "./gateway"
+export * as RepositoryGatewayNS from "./gateway"
+export * as RepositoryGatewayTypes from "./gateway/types"
+export * as RepositoryGatewayRouter from "./gateway/router"
+export * as RepositoryGatewayNormalizer from "./gateway/normalizer"
+export * as RepositoryGatewayFormatter from "./gateway/formatter"
 export { Service as Git, layer as gitLayer, defaultLayer as gitDefaultLayer } from "./repository-intelligence/git-service"
 export { Service as Search, layer as searchLayer, defaultLayer as searchDefaultLayer } from "./search"
+export { evaluate as evaluateRoutingRule, REASON_CODES as RoutingReasonCodes, CONFIDENCE as RoutingConfidence } from "./routing/rules"
+export type { RuleInput, RuleVerdict, RouteVerdict } from "./routing/types"
+export {
+  HIGH_CONFIDENCE as RoutingHighConfidence,
+  MID_CONFIDENCE as RoutingMidConfidence,
+  routeForConfidence,
+} from "./routing/thresholds"
+export {
+  extractPaths,
+  extractPattern,
+  hasRelationshipLanguage,
+  isConfigFile,
+  isDirectPathSignal,
+  isDocsScoped,
+  isDocumentationPath,
+  isExactFileRead,
+  isLiteralQuery,
+} from "./routing/features"
+export * as RoutingRules from "./routing/rules"
+export * as RoutingFeatures from "./routing/features"
+export * as RoutingThresholds from "./routing/thresholds"
 export {
   Service as StructuralQueries,
   layer as structuralQueriesLayer,
