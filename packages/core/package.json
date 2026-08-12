@@ -9,6 +9,7 @@
     "db": "bun drizzle-kit",
     "migration": "bun run script/migration.ts",
     "fix-node-pty": "bun run script/fix-node-pty.ts",
+    "routing-bench": "bun run script/routing-bench.ts",
     "test": "bun test --only-failures",
     "typecheck": "tsgo --noEmit"
   },

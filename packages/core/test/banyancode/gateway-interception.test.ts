@@ -48,6 +48,32 @@ const consulted = testEffect(
   Layer.provideMerge(registry, RepositoryGateway.layer.pipe(Layer.provide(recordingRouter))),
 )
 
+// Runtime 4 — gateway with a recording router that resolves INTELLIGENCE: the
+// gateway executes the (missing) backend -> fail-closed direct outcome, which
+// the registry discards. Observable tool behavior must be unchanged (Phase 2
+// contract — the original leaf settle always runs).
+const intelRouterCalls: RouterInput[] = []
+const intelligenceRouter = Layer.succeed(
+  ToolRouterService,
+  ToolRouterService.of({
+    classify: (input) =>
+      Effect.sync(() => {
+        intelRouterCalls.push(input)
+        return {
+          route: "intelligence" as const,
+          operation: { kind: "relationship" as const, relation: "callers" as const, target: "Foo" },
+          confidence: 0.9,
+          reasonCodes: ["relationship-language"],
+          router: "rules",
+          routerVersion: "0.1.0",
+        }
+      }),
+  }),
+)
+const intelligenceConsulted = testEffect(
+  Layer.provideMerge(registry, RepositoryGateway.layer.pipe(Layer.provide(intelligenceRouter))),
+)
+
 const identity = {
   agent: AgentV2.ID.make("build"),
   assistantMessageID: SessionMessage.ID.make("msg_gateway"),
@@ -148,6 +174,44 @@ describe("RepositoryGateway interception in ToolRegistry.settleWith", () => {
         expect(routerCalls.at(-1)?.toolName).toBe("read")
         expect(routerCalls.at(-1)?.arguments).toEqual({ text: "read" })
         expect(routerCalls.at(-1)?.recentToolCalls).toEqual([])
+      }),
+    )
+
+    consulted.effect("non-listed tools (bash) skip the gateway entirely", () =>
+      Effect.gen(function* () {
+        routerCalls.length = 0
+        const service = yield* ToolRegistry.Service
+        yield* registerProbes(service)
+        yield* service.register({ bash: make("bash") })
+        const settled = yield* settleTool(service, call("bash"))
+        expect(settled).toEqual({
+          result: { type: "text", value: "bash:bash" },
+          output: {
+            structured: { text: "bash:bash" },
+            content: [{ type: "text", text: "bash:bash" }],
+          },
+        })
+        expect(routerCalls.length).toBe(0)
+      }),
+    )
+  })
+
+  describe("router test double (intelligence outcome is discarded — Phase 2 no observable change)", () => {
+    intelligenceConsulted.effect("intelligence decision still settles unchanged and the router was consulted", () =>
+      Effect.gen(function* () {
+        intelRouterCalls.length = 0
+        const service = yield* ToolRegistry.Service
+        yield* registerProbes(service)
+        const settled = yield* settleTool(service, call("grep"))
+        expect(settled).toEqual({
+          result: { type: "text", value: "grep:grep" },
+          output: {
+            structured: { text: "grep:grep" },
+            content: [{ type: "text", text: "grep:grep" }],
+          },
+        })
+        expect(intelRouterCalls.length).toBeGreaterThan(0)
+        expect(intelRouterCalls.at(-1)?.toolName).toBe("grep")
       }),
     )
   })

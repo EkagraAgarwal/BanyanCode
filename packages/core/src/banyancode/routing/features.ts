@@ -35,13 +35,15 @@ function basenameOf(path: string): string {
 
 /**
  * Documentation-path signal (spec §20): README / CONTRIBUTING / LICENSE /
- * CHANGELOG basenames, any path under a `docs/` directory, and markdown files.
+ * CHANGELOG basenames, any path under a `docs/` or `specs/` directory, and
+ * markdown files.
  */
 export function isDocumentationPath(path: string): boolean {
   const base = basenameOf(path)
   const stem = base.replace(/\.(md|mdx|txt)$/i, "").toLowerCase()
   if (DOC_BASENAMES.has(stem)) return true
   if (hasSegment(normalizePath(path), "docs")) return true
+  if (hasSegment(normalizePath(path), "specs")) return true
   return DOC_EXTENSIONS.has(extensionOf(base))
 }
 
@@ -70,6 +72,8 @@ export function isDirectPathSignal(path: string): boolean {
  * Resolve the path scope for an input: `input.paths` plus arg-derived paths
  * (`path`, `paths`, `directory`). For glob, the `pattern` is itself a path
  * pattern and is included so `glob docs/** /*.md` is detected as docs-scoped.
+ * For grep, the `include` glob filter is included so `include: "*.md"` is
+ * detected as a docs-scope signal (spec §128/§137).
  */
 export function extractPaths(input: RuleInput): string[] {
   const out: string[] = []
@@ -89,6 +93,7 @@ export function extractPaths(input: RuleInput): string[] {
   push(input.arguments.paths)
   push(input.arguments.directory)
   if (input.toolName === "glob") push(input.arguments.pattern)
+  if (input.toolName === "grep") push(input.arguments.include)
   return out
 }
 

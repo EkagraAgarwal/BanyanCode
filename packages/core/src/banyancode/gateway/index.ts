@@ -2,6 +2,7 @@ export { Service, layer, defaultLayer, type Interface, type GatewayOutcome } fro
 export * as RepositoryGateway from "./gateway"
 export * as RepositoryGatewayTypes from "./types"
 export * as RepositoryGatewayRouter from "./router"
+export * as RepositoryGatewayBackends from "./backends"
 export * as RepositoryGatewayNormalizer from "./normalizer"
 export * as RepositoryGatewayFormatter from "./formatter"
 export * as RepositoryGatewayTrace from "./trace"

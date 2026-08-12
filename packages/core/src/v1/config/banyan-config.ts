@@ -65,6 +65,12 @@ export const Info = Schema.Struct({
   // Used as both a prompt hint AND a hard runtime limit in MeshCoordinator.
   // Default: 5, max: 20
   banyancode_max_subagents: Schema.optional(Schema.Number),
+  // Repository Gateway router selection (needle2 gateway plan §4). Default
+  // "off" = NoopRouter passthrough (byte-for-byte behavioral no-op); "rules" =
+  // deterministic RulesRouter; "needle" = Needle 2 classifier.
+  banyancode_router: Schema.optional(
+    Schema.Union([Schema.Literal("off"), Schema.Literal("rules"), Schema.Literal("needle")]),
+  ),
   /** Default evaluator model for /goal: a cheap/fast small model the reviewer is graded against. Format: "provider/model-id" e.g. "anthropic/claude-haiku-4-5". */
   banyancode_goal_evaluator_model: Schema.optional(Schema.String),
   /** Maximum number of reviewer-fail iterations before the goal is auto-blocked and surfaced to the user. Default 5. */

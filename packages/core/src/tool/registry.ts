@@ -20,6 +20,11 @@ export type ExecuteInput = {
   readonly call: ToolCall
 }
 
+// Gate A/§116: the repository gateway intercepts only the conventional
+// repository tools. Non-listed tools skip the hook entirely — byte-identical
+// path. (read/glob activation follows grep per the plan's rollout sequence.)
+const GATEWAY_TOOLS = new Set(["read", "grep", "glob"])
+
 export interface Interface {
   readonly materialize: (permissions?: PermissionV2.Ruleset) => Effect.Effect<Materialization>
   /**
@@ -68,17 +73,18 @@ const registryLayer = Layer.effect(
       // Repository Gateway interception (plan §2.1, Gate A). Optional by
       // contract: `serviceOption` never widens R, so a missing/disabled gateway
       // is a byte-for-byte no-op passthrough (precedent: tool.ts:128-129).
+      // Gated to the conventional tools (read/grep/glob) — everything else
+      // skips the hook. The outcome is discarded by design (Phase 0/2
+      // contract): the gateway may route to INTELLIGENCE and execute a backend,
+      // but the leaf settle below always runs, so observable tool behavior is
+      // unchanged while the router feature is on.
       const gatewayOpt = yield* Effect.serviceOption(RepositoryGateway)
-      if (Option.isSome(gatewayOpt)) {
+      if (Option.isSome(gatewayOpt) && GATEWAY_TOOLS.has(input.call.name)) {
         yield* gatewayOpt.value.execute({
           source: "model-tool",
           originalTool: input.call.name,
           arguments: (input.call.input ?? {}) as Record<string, unknown>,
         })
-        // Phase 0 is DIRECT-only: the default NoopRouter resolves every request
-        // DIRECT, so we always fall through to the leaf settle below, unchanged.
-        // An INTELLIGENCE outcome is unreachable while the NoopRouter is the
-        // default; backend execution is wired in a later phase (plan §2.4).
       }
       const pending = yield* settle(registration.tool, input.call, {
         sessionID: input.sessionID,
