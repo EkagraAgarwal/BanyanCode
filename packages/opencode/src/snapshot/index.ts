@@ -39,6 +39,33 @@ interface GitResult {
   readonly stderr: string
 }
 
+// Cooldown applied after a failed `git add` per gitdir. Settlements (step
+// start/finish, tool settlement) call add() back-to-back; when a file keeps
+// being rewritten mid-hash (e.g. `.ccsm/*` churn) every attempt fails, so
+// without this the whole worktree gets re-hashed on every settlement.
+// A failed add arms a ADD_INTERVAL_MS window during which the heavy
+// diff/ls-files + stage work is skipped; the next cycle retries. Successful
+// adds are never throttled — the snapshot contract is that the next cycle
+// stages whatever changed.
+const ADD_INTERVAL_MS = 1000
+
+// Rate-limit window for the unstable-source warning per gitdir. The failure
+// itself is a per-cycle skip (the next cycle retries), so only surface it at
+// most once per window instead of spamming on every settlement.
+const WARN_INTERVAL_MS = 30_000
+
+// Whether `lastRun` is recent enough that another run should be skipped.
+// `undefined` (never run) is never throttled. Pure so it can be unit-tested.
+const shouldThrottle = (lastRun: number | undefined, now: number, minIntervalMs: number) =>
+  lastRun !== undefined && now - lastRun < minIntervalMs
+
+// Conservative detection of the "file changed while git was hashing" failure
+// (`git add` exits 128 with "fatal: confused by unstable object source data"
+// or an index-pack variant). Deliberately narrow: unrelated git errors still
+// log through the normal warning path. Pure so it can be unit-tested.
+const isUnstableSourceError = (stderr: string) =>
+  /unstable object source data|index-pack failed|index-pack died/.test(stderr)
+
 type State = Omit<Interface, "init">
 
 export interface Interface {
@@ -61,6 +88,12 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
     const appProcess = yield* AppProcess.Service
     const config = yield* Config.Service
     const locks = new Map<string, Semaphore.Semaphore>()
+    // Per-gitdir last-run timestamps: `addThrottle` arms the failure cooldown
+    // for the heavy diff + stage work, `warnThrottle` rate-limits the
+    // unstable-source warning. Keyed by gitdir (layer scope, shared across
+    // instances like `locks`).
+    const addThrottle = new Map<string, number>()
+    const warnThrottle = new Map<string, number>()
 
     const lock = (key: string) => {
       const hit = locks.get(key)
@@ -142,8 +175,15 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           )
         })
 
+        // Runs `git add --all --sparse` for the given candidate paths.
+        // Returns true when the index was staged (or there was nothing to
+        // stage), false when git failed. Unstable-source failures (a file
+        // rewritten mid-hash, e.g. a constantly churning scratch dir) skip the
+        // cycle silently — the next cycle retries — and their warning is
+        // rate-limited to once per WARN_INTERVAL_MS per gitdir. All other
+        // failures keep logging on every occurrence.
         const stage = Effect.fnUntraced(function* (files: string[]) {
-          if (!files.length) return
+          if (!files.length) return true
           const result = yield* git(
             [...cfg, ...args(["add", "--all", "--sparse", "--pathspec-from-file=-", "--pathspec-file-nul"])],
             {
@@ -151,11 +191,26 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               stdin: feed(files),
             },
           )
-          if (result.code === 0) return
+          if (result.code === 0) return true
+
+          if (isUnstableSourceError(result.stderr)) {
+            const now = Date.now()
+            const lastWarn = warnThrottle.get(state.gitdir)
+            if (!shouldThrottle(lastWarn, now, WARN_INTERVAL_MS)) {
+              warnThrottle.set(state.gitdir, now)
+              yield* Effect.logWarning("failed to add snapshot files", {
+                exitCode: result.code,
+                stderr: result.stderr,
+              })
+            }
+            return false
+          }
+
           yield* Effect.logWarning("failed to add snapshot files", {
             exitCode: result.code,
             stderr: result.stderr,
           })
+          return false
         })
 
         const exists = (file: string) => fs.exists(file).pipe(Effect.orDie)
@@ -233,6 +288,18 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
 
         const add = Effect.fnUntraced(function* () {
           yield* sync()
+
+          // Per-gitdir failure cooldown: after a failed add (typically a file
+          // rewritten mid-hash) skip the diff/ls-files + stage work for
+          // ADD_INTERVAL_MS so settlements stop hammering `git add
+          // --all --sparse` on a worktree git can't hash. sync() above always
+          // runs so excludes stay fresh. A skipped call returns true; the
+          // caller hashes/diffs against the last staged state and the next
+          // cycle retries.
+          const now = Date.now()
+          const lastFailed = addThrottle.get(state.gitdir)
+          if (shouldThrottle(lastFailed, now, ADD_INTERVAL_MS)) return true
+
           const [diff, other] = yield* Effect.all(
             [
               git([...quote, ...args(["diff-files", "--name-only", "-z", "--", "."])], {
@@ -245,19 +312,20 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             { concurrency: 2 },
           )
           if (diff.code !== 0 || other.code !== 0) {
+            addThrottle.set(state.gitdir, Date.now())
             yield* Effect.logWarning("failed to list snapshot files", {
               diffCode: diff.code,
               diffStderr: diff.stderr,
               otherCode: other.code,
               otherStderr: other.stderr,
             })
-            return
+            return false
           }
 
           const tracked = diff.text.split("\0").filter(Boolean)
           const untracked = other.text.split("\0").filter(Boolean)
           const all = Array.from(new Set([...tracked, ...untracked]))
-          if (!all.length) return
+          if (!all.length) return true
 
           // Resolve source-repo ignore rules against the exact candidate set.
           // --no-index keeps this pattern-based even when a path is already tracked.
@@ -271,7 +339,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           }
 
           const allow = all.filter((item) => !ignored.has(item))
-          if (!allow.length) return
+          if (!allow.length) return true
 
           const large = new Set(
             (yield* Effect.all(
@@ -293,7 +361,9 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           const block = new Set(untracked.filter((item) => large.has(item)))
           yield* sync(Array.from(block))
           // Stage only the allowed candidate paths so snapshot updates stay scoped.
-          yield* stage(allow.filter((item) => !block.has(item)))
+          const staged = yield* stage(allow.filter((item) => !block.has(item)))
+          if (!staged) addThrottle.set(state.gitdir, Date.now())
+          return staged
         })
 
         const cleanup = Effect.fnUntraced(function* () {
@@ -804,5 +874,8 @@ export const defaultLayer = layer.pipe(
 )
 
 export const node = LayerNode.make(layer, [FSUtil.node, AppProcess.node, Config.node])
+
+// Test-only surface for the pure throttle/detection helpers.
+export const __test = { shouldThrottle, isUnstableSourceError }
 
 export * as Snapshot from "."

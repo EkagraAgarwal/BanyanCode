@@ -1119,3 +1119,32 @@ it.instance(
   }),
   { git: true },
 )
+
+it.instance(
+  "tight track loop with a churning background writer succeeds and the next cycle catches up",
+  Effect.gen(function* () {
+    const tmp = yield* bootstrap()
+    const snapshot = yield* Snapshot.Service
+    const before = yield* snapshot.track()
+    expect(before).toBeTruthy()
+    // Constantly rewrite a file the way a scratch dir (e.g. `.ccsm/*`) does.
+    const writer = yield* Effect.gen(function* () {
+      for (let i = 0; i < 20; i++) {
+        yield* write(`${tmp.path}/churn.txt`, `churn-${i}-${Math.random()}`)
+        yield* Effect.sleep("5 millis")
+      }
+    }).pipe(Effect.forkScoped)
+    const hashes: (string | undefined)[] = []
+    for (let i = 0; i < 8; i++) {
+      hashes.push(yield* snapshot.track())
+    }
+    yield* Fiber.join(writer)
+    // No throw, and every cycle produces a hash even when the add was skipped.
+    expect(hashes.every((h) => typeof h === "string" && h.length > 0)).toBe(true)
+    // Once the cooldown window elapses the next cycle stages changes again.
+    yield* Effect.sleep("1100 millis")
+    yield* write(`${tmp.path}/caught-up.txt`, "caught up")
+    expect((yield* snapshot.patch(before!)).files).toContain(fwd(tmp.path, "caught-up.txt"))
+  }),
+  { git: true },
+)
