@@ -45,6 +45,7 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  systemBreakdown?: Record<string, number>
 }
 
 export type StreamRequest = StreamInput & {

@@ -83,6 +83,7 @@ interface ProcessorContext extends Input {
   currentTextID: string | undefined
   reasoningMap: Record<string, SessionV1.ReasoningPart>
   v2AssistantMessageID: SessionMessage.ID | undefined
+  systemBreakdown: Record<string, number> | undefined
   stepStartedAt?: number
   firstTextAt?: number
 }
@@ -127,6 +128,7 @@ export const layer = Layer.effect(
         currentTextID: undefined,
         reasoningMap: {},
         v2AssistantMessageID: undefined,
+        systemBreakdown: undefined,
       }
       const mirrorAssistant = flags.experimentalEventSystem && !input.assistantMessage.summary
       let aborted = false
@@ -713,6 +715,10 @@ export const layer = Layer.effect(
               stepDurationMs > 0 && usage.tokens.output > 0
                 ? (usage.tokens.output / stepDurationMs) * 1000
                 : undefined
+            const stepTokens = {
+              ...usage.tokens,
+              ...(ctx.systemBreakdown ? { breakdown: ctx.systemBreakdown } : {}),
+            }
             if (!ctx.assistantMessage.summary) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
@@ -721,7 +727,7 @@ export const layer = Layer.effect(
                   assistantMessageID: yield* currentV2AssistantMessage(),
                   finish: value.reason,
                   cost: usage.cost,
-                  tokens: usage.tokens,
+                  tokens: stepTokens,
                   snapshot: completedSnapshot,
                   timestamp: DateTime.makeUnsafe(now),
                   ...(ttftMs !== undefined ? { ttftMs } : {}),
@@ -742,7 +748,7 @@ export const layer = Layer.effect(
               messageID: ctx.assistantMessage.id,
               sessionID: ctx.assistantMessage.sessionID,
               type: "step-finish",
-              tokens: usage.tokens,
+              tokens: stepTokens,
               cost: usage.cost,
             })
             yield* session.updateMessage(ctx.assistantMessage)
@@ -991,6 +997,7 @@ ctx.assistantMessage.error = error
             ctx.currentText = undefined
             ctx.currentTextID = undefined
             ctx.reasoningMap = {}
+            ctx.systemBreakdown = streamInput.systemBreakdown
             yield* status.set(ctx.sessionID, { type: "busy" })
             const stream = llm.stream(streamInput)
 

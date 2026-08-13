@@ -287,6 +287,115 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
   ),
 )
 
+it.live("step-finish persists tokens.breakdown from the process stream input", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+
+        yield* llm.text("hello", { usage: { input: 10, output: 5 } })
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "hi")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        const systemBreakdown = {
+          base: 500,
+          environment: 300,
+          instructions: 200,
+          codegraph: 150,
+          orchestration: 120,
+          skills: 80,
+          agent: 100,
+          user: 10,
+          structuredOutput: 40,
+        }
+
+        const value = yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "hi" }],
+          tools: {},
+          systemBreakdown,
+        })
+
+        // JSONB round-trip: the breakdown attached at request assembly must
+        // survive write -> read through the part store.
+        const parts = yield* MessageV2.parts(msg.id)
+        const stepFinish = parts.find((part): part is SessionV1.StepFinishPart => part.type === "step-finish")
+
+        expect(value).toBe("continue")
+        expect(stepFinish).toBeDefined()
+        expect(stepFinish?.tokens.breakdown).toEqual(systemBreakdown)
+        // base usage tokens are still persisted alongside the breakdown
+        expect(stepFinish?.tokens.input).toBe(10)
+        expect(stepFinish?.tokens.output).toBe(5)
+      }),
+    { config: (url) => providerCfg(url) },
+  ),
+)
+
+it.live("step-finish omits tokens.breakdown when the stream input has none", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+
+        yield* llm.text("hi")
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "no breakdown")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "hi" }],
+          tools: {},
+        })
+
+        const parts = yield* MessageV2.parts(msg.id)
+        const stepFinish = parts.find((part): part is SessionV1.StepFinishPart => part.type === "step-finish")
+
+        expect(stepFinish).toBeDefined()
+        expect(stepFinish?.tokens.breakdown).toBeUndefined()
+      }),
+    { config: (url) => providerCfg(url) },
+  ),
+)
+
 it.live("session.processor effect tests preserve text start time", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>

@@ -44,6 +44,7 @@ import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "../../src/shell/shell"
+import PROMPT_DEFAULT from "../../src/session/prompt/default.txt"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
@@ -517,6 +518,55 @@ it.instance("loop calls LLM and returns assistant message", () =>
     const parts = result.parts.filter((p) => p.type === "text")
     expect(parts.some((p) => p.type === "text" && p.text === "world")).toBe(true)
     expect(yield* llm.hits).toHaveLength(1)
+  }),
+)
+
+it.instance("step-finish persists the system prompt token breakdown", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.text("world")
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    expect(result.info.role).toBe("assistant")
+
+    // JSONB round-trip: the breakdown the assembly attached to the process
+    // input must survive write -> read through the part store.
+    const parts = yield* MessageV2.parts(result.info.id)
+    const stepFinish = parts.find((part): part is SessionV1.StepFinishPart => part.type === "step-finish")
+    expect(stepFinish).toBeDefined()
+    const breakdown = stepFinish?.tokens.breakdown
+    expect(breakdown).toBeDefined()
+
+    // The default build agent has no custom prompt, so the provider prompt is
+    // used as `base` and `agent` is omitted; text format means no
+    // `structuredOutput`, and the user message carries no `user.system`.
+    expect(breakdown).toEqual(
+      expect.objectContaining({
+        base: Math.max(1, Math.ceil(PROMPT_DEFAULT.length / 4)),
+        environment: expect.any(Number),
+        skills: expect.any(Number),
+        codegraph: expect.any(Number),
+        orchestration: expect.any(Number),
+      }),
+    )
+    expect(breakdown?.agent).toBeUndefined()
+    expect(breakdown?.user).toBeUndefined()
+    expect(breakdown?.structuredOutput).toBeUndefined()
+    for (const value of Object.values(breakdown ?? {})) {
+      expect(Number.isInteger(value) && value >= 1).toBe(true)
+    }
   }),
 )
 
