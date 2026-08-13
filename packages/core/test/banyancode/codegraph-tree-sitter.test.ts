@@ -36,8 +36,14 @@ const serviceLayer = CodegraphIndexer.layer.pipe(
 )
 
 // Intra-file call (alpha → beta) plus an extends pair so both parser-owned
-// `calls` and derived `extends` are exercised.
-const TS_FIXTURE = `export function alpha() {
+// `calls` and derived `extends` are exercised. The leading comment line
+// keeps `alpha` OFF line 1: the tree-sitter caller endpoint is
+// `startPosition.row + 1` (line 2), and the regex parsers must compute the
+// same declaration line or the parser-edge remap silently drops every
+// parser-owned edge for the file (historical off-by-one: regex anchored on
+// the consumed `\n` and reported the line BEFORE the declaration).
+const TS_FIXTURE = `// header keeps alpha off line 1
+export function alpha() {
   return beta()
 }
 
@@ -189,14 +195,30 @@ describe("codegraph tree-sitter backend (Phase 0)", () => {
 
           // The tree-sitter call edge (alpha calls beta) survives with its
           // endpoints remapped onto the real same-file nodes (the edges
-          // table FK-enforces both endpoints onto codegraph_nodes).
+          // table FK-enforces both endpoints onto codegraph_nodes). alpha
+          // is on line 2 (not 1) and beta on line 6 — the remap must match
+          // the tree-sitter `startPosition.row + 1` lines against the
+          // regex parsers' DECLARATION lines. An off-by-one in the regex
+          // startLine (or a tolerant ±1 fallback resolving to line 1/5)
+          // fails the exact endpoint assertions below.
           const parserCall = yield* db.get<{ c: number }>(sql`
             SELECT COUNT(*) AS c FROM codegraph_edges
             WHERE kind = 'calls' AND id LIKE '%:calls:beta:%'
-              AND from_node_id LIKE ${`${file!.id}:function:alpha%`}
-              AND to_node_id LIKE ${`${file!.id}:function:beta%`}
+              AND from_node_id = ${`${file!.id}:function:alpha:2`}
+              AND to_node_id = ${`${file!.id}:function:beta:6`}
           `)
           expect(parserCall?.c ?? 0).toBe(1)
+
+          // The regex parser's node lines agree with tree-sitter: alpha's
+          // declaration line is 2 and beta's is 6.
+          const alphaLine = yield* db.get<{ l: number }>(sql`
+            SELECT start_line AS l FROM codegraph_nodes WHERE id = ${`${file!.id}:function:alpha:2`}
+          `)
+          expect(alphaLine?.l).toBe(2)
+          const betaLine = yield* db.get<{ l: number }>(sql`
+            SELECT start_line AS l FROM codegraph_nodes WHERE id = ${`${file!.id}:function:beta:6`}
+          `)
+          expect(betaLine?.l).toBe(6)
 
           // Derived calls regeneration is skipped for the tree-sitter-parsed
           // file: no derived (-> id) calls edge at all.

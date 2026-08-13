@@ -32,6 +32,23 @@ function lineAtOffset(offsets: readonly number[], offset: number): number {
   return count
 }
 
+// First non-whitespace char at/after the match start. The `(?:^|\n)` anchor
+// (plus any whitespace between it and the keyword) can sit one or more
+// lines before the `def`/`class`, so the declaration line is the line of
+// this index — 1-based, matching tree-sitter's `startPosition.row + 1`
+// (the line of the `def` keyword). The parser-mode remap in
+// codegraph-indexer keys tree-sitter `:function:<line>` endpoints off this
+// line, so a skew here silently drops every parser-owned edge.
+function declIndexAt(content: string, matchIndex: number): number {
+  let i = matchIndex
+  while (i < content.length && /\s/.test(content[i]!)) i++
+  return i
+}
+
+function declStartLine(content: string, offsets: readonly number[], matchIndex: number): number {
+  return lineAtOffset(offsets, declIndexAt(content, matchIndex))
+}
+
 // Body-extraction budget for getPythonNodeBody: stop extending the captured
 // block past 16KB or 2048 lines so a def whose body never dedents (or trails
 // in blank/comment lines) can't scan the rest of the file.
@@ -55,11 +72,20 @@ function leadingWsLen(content: string, from: number, to: number): number {
   return n
 }
 
-function getPythonNodeBody(content: string, matchIndex: number, startLine: number): { code: string; endLine: number } {
-  const startOffset = matchIndex
-  let nextNewline = content.indexOf("\n", matchIndex)
-  const declIndent = leadingWsLen(content, matchIndex, nextNewline === -1 ? content.length : nextNewline)
+function getPythonNodeBody(
+  content: string,
+  offsets: readonly number[],
+  matchIndex: number,
+): { code: string; endLine: number } {
+  // Scan the signature's newline from the DECLARATION, not the anchor: the
+  // `(?:^|\n)` anchor matches the newline BEFORE the `def`, so scanning from
+  // matchIndex finds the anchor itself and captures an empty body for every
+  // def that is not at the very start of the file.
+  const declIndex = declIndexAt(content, matchIndex)
+  let nextNewline = content.indexOf("\n", declIndex)
+  const declIndent = leadingWsLen(content, declIndex, nextNewline === -1 ? content.length : nextNewline)
 
+  const startOffset = matchIndex
   let endOffset = nextNewline === -1 ? content.length : nextNewline
   let lineCount = 1
   let blockIndent: number | null = null
@@ -87,7 +113,9 @@ function getPythonNodeBody(content: string, matchIndex: number, startLine: numbe
   }
 
   const code = content.substring(matchIndex, endOffset)
-  const endLine = startLine + lineCount - 1
+  // End line = 1-based line of the last captured char (`endOffset` is
+  // exclusive), independent of where the anchor sits.
+  const endLine = lineAtOffset(offsets, endOffset - 1)
   return { code, endLine }
 }
 
@@ -120,15 +148,15 @@ export function parsePython(content: string, fileID: string): ParseResult {
 
   for (const match of content.matchAll(CLASS_REGEX)) {
     const name = match[1]
-    const startLine = lineAtOffset(offsets, match.index)
-    const { code, endLine } = getPythonNodeBody(content, match.index, startLine)
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getPythonNodeBody(content, offsets, match.index)
     nodes.push({ id: `${fileID}:class:${name}:${startLine}`, kind: "class", name, startLine, endLine, code })
   }
 
   for (const match of content.matchAll(DEF_REGEX)) {
     const name = match[1]
-    const startLine = lineAtOffset(offsets, match.index)
-    const { code, endLine } = getPythonNodeBody(content, match.index, startLine)
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getPythonNodeBody(content, offsets, match.index)
     nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, code })
   }
 

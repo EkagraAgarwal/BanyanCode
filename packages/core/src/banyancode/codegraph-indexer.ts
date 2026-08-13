@@ -736,8 +736,24 @@ const indexCandidateFileCore = (
       if (knownNodeIDs.has(endpoint)) return endpoint
       const kindLine = /^[^:]+:(function|method|class|variable|type):(\d+)$/.exec(endpoint)
       if (kindLine) {
-        const resolved = nodeIdsByKindLine.get(kindLine[1]!)?.get(Number(kindLine[2]))
-        if (resolved) return resolved
+        const byLine = nodeIdsByKindLine.get(kindLine[1]!)
+        if (byLine) {
+          const line = Number(kindLine[2])
+          const resolved = byLine.get(line)
+          if (resolved) return resolved
+          // Defense-in-depth: tolerate a ±1 line skew between the
+          // tree-sitter endpoint (`startPosition.row + 1` of the enclosing
+          // callable) and the regex parser's startLine. The parsers now
+          // agree exactly for single-line declarations; skew survives only
+          // for unusual layouts (e.g. `export` on its own line above
+          // `function`, where tree-sitter rows the `function` keyword but
+          // the regex anchors on `export`). Prefer line-1: the historical
+          // off-by-one direction was the regex line one BELOW the
+          // tree-sitter line.
+          const adjacent = byLine.get(line - 1) ?? byLine.get(line + 1)
+          if (adjacent) return adjacent
+        }
+        return null
       }
       const symbol = /^symbol:(.+)$/.exec(endpoint)
       if (symbol) {

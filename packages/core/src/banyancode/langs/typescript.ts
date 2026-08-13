@@ -53,16 +53,28 @@ function lineAtOffset(offsets: readonly number[], offset: number): number {
   return count
 }
 
-// `startLine + code.split("\n").length - 1` without the per-match split: the
-// newline count in [matchIndex, endOffset) is `lineAtOffset(endOffset) -
-// lineAtOffset(matchIndex)`.
-function endLineFor(
-  offsets: readonly number[],
-  matchIndex: number,
-  startLine: number,
-  endOffset: number,
-): number {
-  return startLine + lineAtOffset(offsets, endOffset) - lineAtOffset(offsets, matchIndex)
+// Index of the declaration proper. The `(?:^|\n)` anchor (and any `\s*`
+// between it and the keyword) can sit one or more lines before the
+// declaration, so the first non-whitespace char after the match start
+// carries the true declaration line. This is 1-based and points at the
+// FIRST LINE OF THE DECLARATION (the `function`/`class`/`const` keyword),
+// matching tree-sitter's `startPosition.row + 1` — the parser-mode remap
+// in codegraph-indexer keys tree-sitter `:function:<line>` endpoints off
+// this line, so a skew here silently drops every parser-owned edge.
+function declStartLine(content: string, offsets: readonly number[], matchIndex: number): number {
+  let i = matchIndex
+  while (i < content.length && /\s/.test(content[i]!)) i++
+  return lineAtOffset(offsets, i)
+}
+
+// End line of a captured body: the 1-based line of its last character
+// (`endOffset` is exclusive). Previously computed as
+// `startLine + lineAtOffset(endOffset) - lineAtOffset(matchIndex)`, which
+// assumed startLine was the ANCHOR line (`(?:^|\n)` position). startLine
+// is now the declaration line, so the end line is a pure function of the
+// offset.
+function endLineFor(offsets: readonly number[], endOffset: number): number {
+  return lineAtOffset(offsets, endOffset - 1)
 }
 
 // Forward-scan budgets for body extraction. The opening-brace discovery scan
@@ -77,7 +89,6 @@ function getTSNodeBody(
   offsets: readonly number[],
   matchIndex: number,
   matchText: string,
-  startLine: number,
 ): { code: string; endLine: number } {
   const afterMatchIndex = matchIndex + matchText.length
   const openLimit = Math.min(afterMatchIndex + OPEN_SCAN_BOUND, content.length)
@@ -109,7 +120,7 @@ function getTSNodeBody(
         if (braceCount === 0) {
           return {
             code: content.substring(matchIndex, i + 1),
-            endLine: endLineFor(offsets, matchIndex, startLine, i + 1),
+            endLine: endLineFor(offsets, i + 1),
           }
         }
       }
@@ -117,13 +128,13 @@ function getTSNodeBody(
     }
     return {
       code: content.substring(matchIndex, braceLimit),
-      endLine: endLineFor(offsets, matchIndex, startLine, braceLimit),
+      endLine: endLineFor(offsets, braceLimit),
     }
   }
   const endOffset = firstSemicolon !== -1 ? firstSemicolon + 1 : afterMatchIndex
   return {
     code: content.substring(matchIndex, endOffset),
-    endLine: endLineFor(offsets, matchIndex, startLine, endOffset),
+    endLine: endLineFor(offsets, endOffset),
   }
 }
 
@@ -134,10 +145,9 @@ function getArrowBody(
   offsets: readonly number[],
   matchIndex: number,
   matchText: string,
-  startLine: number,
 ): { code: string; endLine: number } {
   const arrowIndex = content.indexOf("=>", matchIndex + matchText.length - 2)
-  if (arrowIndex === -1) return getTSNodeBody(content, offsets, matchIndex, matchText, startLine)
+  if (arrowIndex === -1) return getTSNodeBody(content, offsets, matchIndex, matchText)
 
   const afterArrow = arrowIndex + 2
   const sliceEnd = Math.min(afterArrow + OPEN_SCAN_BOUND, content.length)
@@ -145,14 +155,14 @@ function getArrowBody(
   const rest = slice.trimStart()
   if (rest.startsWith("{")) {
     const braceStart = sliceEnd - rest.length
-    return getTSNodeBody(content, offsets, matchIndex, content.substring(matchIndex, braceStart + 1), startLine)
+    return getTSNodeBody(content, offsets, matchIndex, content.substring(matchIndex, braceStart + 1))
   }
 
   const lineRel = slice.indexOf("\n")
   const endOffset = lineRel === -1 ? sliceEnd : afterArrow + lineRel
   return {
     code: content.substring(matchIndex, endOffset),
-    endLine: endLineFor(offsets, matchIndex, startLine, endOffset),
+    endLine: endLineFor(offsets, endOffset),
   }
 }
 
@@ -161,11 +171,10 @@ function getFactoryBody(
   offsets: readonly number[],
   matchIndex: number,
   matchText: string,
-  startLine: number,
 ): { code: string; endLine: number } {
   const afterMatchIndex = matchIndex + matchText.length
   const openParen = content.indexOf("(", afterMatchIndex)
-  if (openParen === -1) return getTSNodeBody(content, offsets, matchIndex, matchText, startLine)
+  if (openParen === -1) return getTSNodeBody(content, offsets, matchIndex, matchText)
   const parenLimit = Math.min(openParen + BRACE_SCAN_BOUND, content.length)
   let parenCount = 1
   let i = openParen + 1
@@ -177,7 +186,7 @@ function getFactoryBody(
   const closeParen = i - 1
   return {
     code: content.substring(matchIndex, closeParen + 1),
-    endLine: endLineFor(offsets, matchIndex, startLine, closeParen + 1),
+    endLine: endLineFor(offsets, closeParen + 1),
   }
 }
 
@@ -187,9 +196,9 @@ function extractClassMethods(classCode: string, classStartLine: number, fileID: 
   for (const match of classCode.matchAll(CLASS_METHOD_REGEX)) {
     const name = match[1]
     if (name === "constructor") continue
-    const localStart = lineAtOffset(localOffsets, match.index)
+    const localStart = declStartLine(classCode, localOffsets, match.index)
     const startLine = classStartLine + localStart - 1
-    const { code, endLine: localEnd } = getTSNodeBody(classCode, localOffsets, match.index!, match[0], localStart)
+    const { code, endLine: localEnd } = getTSNodeBody(classCode, localOffsets, match.index!, match[0])
     const endLine = classStartLine + localEnd - 1
     const effectMatch = code.match(EFFECT_FN_REGEX)
     const signature = effectMatch ? effectMatch[1] : match[0].trim()
@@ -225,7 +234,7 @@ function extractInterfaceMembers(
     if (!name || name === interfaceName) continue
     const params = match[2] ?? ""
     const returnType = (match[3] ?? "").trim().replace(/\s*\{$/, "")
-    const localStart = lineAtOffset(localOffsets, match.index)
+    const localStart = declStartLine(interfaceCode, localOffsets, match.index)
     const startLine = interfaceStartLine + localStart - 1
     const signature = `${name}(${params.trim()}): ${returnType}`.replace(/\s+/g, " ").trim()
     // Members live on one line in real BanyanCode code; treat the line range
@@ -347,24 +356,24 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
 
   for (const match of content.matchAll(EXPORT_CLASS_REGEX)) {
     const name = match[1]
-    const startLine = lineAtOffset(offsets, match.index)
-    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0], startLine)
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0])
     nodes.push({ id: `${fileID}:class:${name}:${startLine}`, kind: "class", name, startLine, endLine, code })
     nodes.push(...extractClassMethods(code, startLine, fileID, name))
   }
 
   for (const match of content.matchAll(CLASS_REGEX)) {
     const name = match[1]
-    const startLine = lineAtOffset(offsets, match.index)
-    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0], startLine)
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0])
     nodes.push({ id: `${fileID}:class:${name}:${startLine}`, kind: "class", name, startLine, endLine, code })
     nodes.push(...extractClassMethods(code, startLine, fileID, name))
   }
 
   for (const match of content.matchAll(FUNCTION_REGEX)) {
     const name = match[1]
-    const startLine = lineAtOffset(offsets, match.index)
-    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0], startLine)
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0])
     const effectMatch = code.match(EFFECT_FN_REGEX)
     const signature = effectMatch ? effectMatch[1] : match[0].trim()
     nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
@@ -374,15 +383,15 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     const name = match[1]
     const factoryCall = match[2]
     const signature = factoryCall.replace(/\s*\($/, "")
-    const startLine = lineAtOffset(offsets, match.index)
-    const { code, endLine } = getFactoryBody(content, offsets, match.index!, match[0], startLine)
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getFactoryBody(content, offsets, match.index!, match[0])
     nodes.push({ id: `${fileID}:factory:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
   }
 
   for (const match of content.matchAll(ARROW_CONST_REGEX)) {
     const name = match[1]
-    const startLine = lineAtOffset(offsets, match.index)
-    const { code, endLine } = getArrowBody(content, offsets, match.index!, match[0], startLine)
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getArrowBody(content, offsets, match.index!, match[0])
     const effectMatch = code.match(EFFECT_FN_REGEX)
     const signature = effectMatch ? effectMatch[1] : match[0].trim()
     nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
@@ -391,7 +400,7 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
   for (const match of content.matchAll(EFFECT_FN_CONST_REGEX)) {
     const name = match[1]
     const signature = match[2]
-    const startLine = lineAtOffset(offsets, match.index)
+    const startLine = declStartLine(content, offsets, match.index)
     const afterMatchIndex = match.index + match[0].length
     const openLimit = Math.min(afterMatchIndex + OPEN_SCAN_BOUND, content.length)
     let firstBrace = -1
@@ -402,7 +411,7 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
       }
     }
     let code = match[0]
-    let endLine = startLine
+    let endLine = endLineFor(offsets, match.index + match[0].length)
     if (firstBrace !== -1) {
       const braceLimit = Math.min(firstBrace + BRACE_SCAN_BOUND, content.length)
       let braceCount = 1
@@ -413,7 +422,7 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
           braceCount--
           if (braceCount === 0) {
             code = content.substring(match.index, i + 1)
-            endLine = endLineFor(offsets, match.index, startLine, i + 1)
+            endLine = endLineFor(offsets, i + 1)
             break
           }
         }
@@ -421,7 +430,7 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
       }
       if (code === match[0]) {
         code = content.substring(match.index, braceLimit)
-        endLine = endLineFor(offsets, match.index, startLine, braceLimit)
+        endLine = endLineFor(offsets, braceLimit)
       }
     }
     nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
@@ -429,16 +438,16 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
 
   for (const match of content.matchAll(INTERFACE_REGEX)) {
     const name = match[1]
-    const startLine = lineAtOffset(offsets, match.index)
-    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0], startLine)
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0])
     nodes.push({ id: `${fileID}:type:${name}:${startLine}`, kind: "type", name, startLine, endLine, code })
     nodes.push(...extractInterfaceMembers(code, startLine, fileID, name))
   }
 
   for (const match of content.matchAll(TYPE_REGEX)) {
     const name = match[1]
-    const startLine = lineAtOffset(offsets, match.index)
-    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0], startLine)
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0])
     nodes.push({ id: `${fileID}:type:${name}:${startLine}`, kind: "type", name, startLine, endLine, code })
   }
 
