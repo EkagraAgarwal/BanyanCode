@@ -159,16 +159,18 @@ const gatewayWithConfigRules = testEffect(
   ),
 )
 
-// defaultLayer + config OFF + the intel double: NoopRouter keeps every request
-// DIRECT even though a backend is available.
+// defaultLayer + config "off" + the intel double: NoopRouter keeps every
+// request DIRECT even though a backend is available (explicit opt-out — the
+// router defaults to "rules" when the config key is absent).
 const gatewayWithConfigOff = testEffect(
   Layer.provideMerge(
     RepositoryGateway.defaultLayer,
-    Layer.mergeAll(configWith(undefined), intelDouble),
+    Layer.mergeAll(configWith("off"), intelDouble),
   ),
 )
 
-// defaultLayer with no BanyanConfigService at all: OFF default (plan §78).
+// defaultLayer with no BanyanConfigService at all: RulesRouter default (the
+// gateway is ON by default — plan §4).
 const gatewayWithNoConfig = testEffect(Layer.provideMerge(RepositoryGateway.defaultLayer, intelDouble))
 
 describe("RepositoryGateway INTELLIGENCE backend (Phase 2/3)", () => {

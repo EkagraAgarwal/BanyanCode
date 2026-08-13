@@ -8,6 +8,7 @@ import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { ApplicationTools } from "@opencode-ai/core/tool/application-tools"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { Tool } from "@opencode-ai/core/tool/tool"
+import { Service as BanyanConfigService } from "../../src/banyancode/banyan-config"
 import { RepositoryGateway } from "../../src/banyancode/gateway"
 import { ToolRouterService } from "../../src/banyancode/gateway/router"
 import type { RepositoryRequest, RouterInput } from "../../src/banyancode/gateway/types"
@@ -26,10 +27,21 @@ const registry = ToolRegistry.layer.pipe(Layer.provide(ApplicationTools.layer), 
 // the pre-gateway behavior.
 const disabled = testEffect(registry)
 
-// Runtime 2 — gateway enabled with the default NoopRouter: every request routes
-// DIRECT, so settlement must be identical to Runtime 1 (DIRECT-only invariant,
-// plan §2.1).
-const enabled = testEffect(Layer.provideMerge(registry, RepositoryGateway.defaultLayer))
+// Runtime 2 — gateway enabled with the NoopRouter (explicit `banyancode_router:
+// "off"` — the router is ON by default now, so the DIRECT-only invariant is
+// tested against the opt-out install): every request routes DIRECT, so
+// settlement must be identical to Runtime 1 (DIRECT-only invariant, plan §2.1).
+const configWithOff = Layer.mock(BanyanConfigService, {
+  get: () => Effect.succeed({ banyancode_router: "off" as const }),
+  getGlobal: () => Effect.succeed({}),
+  update: () => Effect.succeed({}),
+  updateAgentOverride: () => Effect.succeed({}),
+  getAgentOverrides: () => Effect.succeed({}),
+  updateAgentPrompt: () => Effect.succeed({}),
+})
+const enabled = testEffect(
+  Layer.provideMerge(registry, Layer.provideMerge(RepositoryGateway.defaultLayer, configWithOff)),
+)
 
 // Runtime 3 — gateway with a recording router test double: proves the choke
 // point actually consults the gateway (and that a DIRECT outcome falls through

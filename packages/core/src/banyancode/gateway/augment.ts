@@ -87,15 +87,16 @@ const mainSymbolForPath = (ctx: RepositoryContext, path: string): CodegraphNode 
   )[0]
 }
 
-// Config gate (plan §4 / spec §77): `banyancode_augment_read` defaults OFF.
-// A missing BanyanConfigService (serviceOption None) also means off, matching
-// the routerFromConfig convention in gateway.ts.
+// Config gate (plan §4 / spec §77): `banyancode_augment_read` defaults ON.
+// Only an explicit `false` disables augmentation; a missing BanyanConfigService
+// (serviceOption None) or an unset flag means enabled — the gateway is ON by
+// default and must be opted out of explicitly.
 export const augmentEnabled = (): Effect.Effect<boolean, never, never> =>
   Effect.gen(function* () {
     const configOpt = yield* Effect.serviceOption(BanyanConfigService)
-    if (Option.isNone(configOpt)) return false
+    if (Option.isNone(configOpt)) return true
     const config = yield* configOpt.value.get()
-    return config.banyancode_augment_read === true
+    return config.banyancode_augment_read !== false
   })
 
 // Build the compact symbol header + its RepositoryResult for a code file path.

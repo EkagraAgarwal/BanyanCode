@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
+import { Service as BanyanConfigService } from "../../src/banyancode/banyan-config"
 import { RepositoryGateway } from "../../src/banyancode/gateway"
 import { RepositoryGatewayRouter } from "../../src/banyancode/gateway/router"
 import { RepositoryGatewayNormalizer } from "../../src/banyancode/gateway/normalizer"
@@ -9,7 +10,19 @@ import { testEffect } from "../lib/effect"
 
 process.env.BANYANCODE_ENABLE = "1"
 
-const it = testEffect(RepositoryGateway.defaultLayer)
+// Config double: explicit `banyancode_router: "off"` so defaultLayer resolves
+// the NoopRouter — the DIRECT-only invariant suite exercises the opt-out
+// install (the RulesRouter default is covered by gateway-defaults.test.ts).
+const configWithOff = Layer.mock(BanyanConfigService, {
+  get: () => Effect.succeed({ banyancode_router: "off" as const }),
+  getGlobal: () => Effect.succeed({}),
+  update: () => Effect.succeed({}),
+  updateAgentOverride: () => Effect.succeed({}),
+  getAgentOverrides: () => Effect.succeed({}),
+  updateAgentPrompt: () => Effect.succeed({}),
+})
+
+const it = testEffect(Layer.provideMerge(RepositoryGateway.defaultLayer, configWithOff))
 
 describe("RepositoryGateway (Phase 0 — DIRECT only)", () => {
   describe("NoopRouter", () => {

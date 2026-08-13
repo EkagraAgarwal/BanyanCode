@@ -10,12 +10,13 @@ import { emitTrace, traceFor } from "./trace"
 import type { RepositoryOperation, RepositoryRequest, RepositoryResult, RouteDecision, ToolRouter } from "./types"
 
 // Outcome of a routed request. DIRECT falls through to the original tool;
-// INTELLIGENCE carries a backend-produced result the caller may use (Phase 2
-// discards it at the registry hook per the Phase 0 contract — the original
-// tool always runs). AUGMENT (Phase 7, spec §6.2/§29/§117) keeps the original
-// operation and carries an optional compact symbol header the caller may
-// append to the exact content; `header` is the model-facing one-liner,
-// `result` is the graph-derived internal payload (source "codegraph").
+// INTELLIGENCE carries a backend-produced result the caller may substitute
+// for the model-facing output (the V2 registry hook renders it; the original
+// tool still runs and its storage output is preserved). AUGMENT (Phase 7,
+// spec §6.2/§29/§117) keeps the original operation and carries an optional
+// compact symbol header the caller may append to the exact content; `header`
+// is the model-facing one-liner, `result` is the graph-derived internal
+// payload (source "codegraph").
 export type GatewayOutcome =
   | { readonly route: "direct" }
   | { readonly route: "intelligence"; readonly result: RepositoryResult }
@@ -103,8 +104,8 @@ const resolveOutcome = (
 
 // Minimal DIRECT executor for content operations: emits a filesystem-source
 // result without touching the graph. Defined here as the reference backend
-// for the selector seam; the default NoopRouter never produces a non-DIRECT
-// decision, so this backend is not invoked on the default install.
+// for the selector seam; the NoopRouter (explicit "off") never produces a
+// non-DIRECT decision, so this backend is not invoked on an opt-out install.
 export const directBackend: RepositoryBackend = {
   supports: (operation) => operation.kind === "content",
   execute: (operation) =>
@@ -147,13 +148,17 @@ const buildGateway = (router: ToolRouter): Effect.Effect<Interface, never, never
         })
         const outcome = yield* resolveOutcome(request, operation, decision, selector)
         // Phase 1 tracing (spec §44): one `repository_route` event per routed
-        // request, written to the per-session JSONL trace file. emitTrace never
-        // fails (catchCause inside), so R stays never.
-        const trace = traceFor(request, decision, outcome, startedAt)
-        yield* emitTrace(trace, {
-          worktree: request.repositoryContext?.root,
-          sessionID: request.sessionID,
-        })
+        // request, written to the per-session JSONL trace file. Gated by
+        // `banyancode_router_trace` (or env BANYANCODE_ROUTER_TRACE=true) —
+        // off by default, so the default install writes nothing. emitTrace
+        // never fails (catchCause inside), so R stays never.
+        if (yield* traceEnabled()) {
+          const trace = traceFor(request, decision, outcome, startedAt)
+          yield* emitTrace(trace, {
+            worktree: request.repositoryContext?.root,
+            sessionID: request.sessionID,
+          })
+        }
         return outcome
       })
 
@@ -168,19 +173,35 @@ export const layer: Layer.Layer<Service, never, ToolRouterService> = Layer.effec
   }),
 )
 
-// Router selection (plan §2.7, §4): env override (`BANYANCODE_ROUTER=rules`)
-// wins over the `banyancode_router` config key, which in turn defaults OFF.
-// "rules" activates the deterministic RulesRouter. Anything else (unset/"off")
-// resolves to the NoopRouter passthrough, so the default install is a
-// byte-for-byte behavioral no-op (plan §78). Missing BanyanConfigService
-// (serviceOption None) also means OFF.
+// Trace emission gate (plan §4): `repository_route` traces are OFF by default.
+// Emit only when the env override BANYANCODE_ROUTER_TRACE=true is set OR the
+// `banyancode_router_trace` config key is explicitly true. A missing
+// BanyanConfigService (serviceOption None) means no trace. Never fails.
+const traceEnabled = (): Effect.Effect<boolean, never, never> =>
+  Effect.gen(function* () {
+    if (process.env.BANYANCODE_ROUTER_TRACE === "true") return true
+    const configOpt = yield* Effect.serviceOption(BanyanConfigService)
+    if (Option.isNone(configOpt)) return false
+    const config = yield* configOpt.value.get()
+    return config.banyancode_router_trace === true
+  })
+
+// Router selection (plan §2.7, §4): the env override (`BANYANCODE_ROUTER`)
+// wins, then the `banyancode_router` config key. "off" (env or config)
+// resolves to the NoopRouter passthrough (byte-for-byte behavioral no-op);
+// "rules" activates the deterministic RulesRouter. Everything else — unset
+// env, unset config key, unknown values, or a missing BanyanConfigService
+// (serviceOption None) — defaults to the RulesRouter: the gateway is ON by
+// default and must be opted out of explicitly.
 const routerFromConfig: Effect.Effect<ToolRouter, never, never> = Effect.gen(function* () {
-  if (process.env.BANYANCODE_ROUTER === "rules") return RulesRouter
+  const env = process.env.BANYANCODE_ROUTER
+  if (env === "off") return NoopRouter
+  if (env === "rules") return RulesRouter
   const configOpt = yield* Effect.serviceOption(BanyanConfigService)
-  if (Option.isNone(configOpt)) return NoopRouter
+  if (Option.isNone(configOpt)) return RulesRouter
   const config = yield* configOpt.value.get()
-  if (config.banyancode_router === "rules") return RulesRouter
-  return NoopRouter
+  if (config.banyancode_router === "off") return NoopRouter
+  return RulesRouter
 })
 
 export const defaultLayer: Layer.Layer<Service, never, never> = Layer.effect(

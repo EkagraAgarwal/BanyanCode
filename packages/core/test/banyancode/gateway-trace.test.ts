@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Effect, Layer } from "effect"
+import { Service as BanyanConfigService } from "../../src/banyancode/banyan-config"
 import { RepositoryGateway } from "../../src/banyancode/gateway"
 import { ToolRouterService } from "../../src/banyancode/gateway/router"
 import { RepositoryGatewayTrace } from "../../src/banyancode/gateway/trace"
@@ -26,8 +27,23 @@ const testDoubleRouter = ToolRouterService.of({
     }),
 })
 
+// Config double with the trace flag ON — trace emission is gated behind
+// `banyancode_router_trace` (default false), so this suite enables it
+// explicitly (the gating itself is covered in gateway-defaults.test.ts).
+const configWithTrace = Layer.mock(BanyanConfigService, {
+  get: () => Effect.succeed({ banyancode_router_trace: true }),
+  getGlobal: () => Effect.succeed({}),
+  update: () => Effect.succeed({}),
+  updateAgentOverride: () => Effect.succeed({}),
+  getAgentOverrides: () => Effect.succeed({}),
+  updateAgentPrompt: () => Effect.succeed({}),
+})
+
 const it = testEffect(
-  RepositoryGateway.layer.pipe(Layer.provide(Layer.succeed(ToolRouterService, testDoubleRouter))),
+  Layer.provideMerge(
+    RepositoryGateway.layer.pipe(Layer.provide(Layer.succeed(ToolRouterService, testDoubleRouter))),
+    configWithTrace,
+  ),
 )
 
 describe("RepositoryGateway tracing (Phase 1 — repository_route)", () => {

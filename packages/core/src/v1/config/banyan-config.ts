@@ -66,16 +66,26 @@ export const Info = Schema.Struct({
   // Default: 5, max: 20
   banyancode_max_subagents: Schema.optional(Schema.Number),
   // Repository Gateway router selection (needle2 gateway plan §4). Default
-  // "off" = NoopRouter passthrough (byte-for-byte behavioral no-op); "rules" =
-  // deterministic RulesRouter.
+  // "rules" = deterministic RulesRouter (gateway ON by default); "off" =
+  // NoopRouter passthrough (byte-for-byte behavioral no-op). Opt out
+  // explicitly with "off".
   banyancode_router: Schema.optional(
     Schema.Union([Schema.Literal("off"), Schema.Literal("rules")]),
   ),
-  // Read augmentation (needle2 gateway plan §4 / spec §77, §117). When true,
-  // a read of a code file may carry a compact symbol header (Symbol / Imports
-  // / References / Callers / Dependents) built from the code graph — exact
-  // source is never replaced. Default off: augment never engages unless this
-  // is explicitly enabled.
+  // Per-tool routing kill-switches (needle2 gateway plan §4). Absent flag
+  // means routing allowed (default true); an explicit false bypasses the
+  // gateway entirely for that tool (the settle is byte-identical).
+  banyancode_route_grep: Schema.optional(Schema.Boolean),
+  banyancode_route_read: Schema.optional(Schema.Boolean),
+  banyancode_route_glob: Schema.optional(Schema.Boolean),
+  // repository_route trace emission (needle2 gateway plan §4 / spec §44).
+  // Default false: traces are written only when explicitly enabled here or via
+  // env BANYANCODE_ROUTER_TRACE=true.
+  banyancode_router_trace: Schema.optional(Schema.Boolean),
+  // Read augmentation (needle2 gateway plan §4 / spec §77, §117). A read of a
+  // code file may carry a compact symbol header (Symbol / Imports / References
+  // / Callers / Dependents) built from the code graph — exact source is never
+  // replaced. Default on: augmentation engages unless explicitly disabled.
   banyancode_augment_read: Schema.optional(Schema.Boolean),
   /** Default evaluator model for /goal: a cheap/fast small model the reviewer is graded against. Format: "provider/model-id" e.g. "anthropic/claude-haiku-4-5". */
   banyancode_goal_evaluator_model: Schema.optional(Schema.String),

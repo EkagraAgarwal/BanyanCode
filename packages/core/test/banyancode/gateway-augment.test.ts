@@ -171,7 +171,9 @@ const withAugment = (router: ToolRouter, intel: Layer.Layer<RepositoryIntelligen
     ),
   )
 
-// Config gate OFF (explicit false) and no config service at all.
+// Config gate OFF (explicit false) and no config service at all. The no-config
+// runtime now defaults ON (the gateway is on by default; only an explicit
+// false disables augmentation).
 const withAugmentGateOff = (router: ToolRouter) =>
   testEffect(
     Layer.provideMerge(
@@ -263,7 +265,7 @@ describe("RepositoryGateway AUGMENT (Phase 7)", () => {
       }),
     )
 
-    withAugmentNoConfig(augmentRouter).effect("no BanyanConfigService -> augment never engages (default off)", () =>
+    withAugmentNoConfig(augmentRouter).effect("no BanyanConfigService -> augment engages (default on)", () =>
       Effect.gen(function* () {
         const gateway = yield* RepositoryGateway.Service
         const outcome = yield* gateway.execute({
@@ -271,7 +273,10 @@ describe("RepositoryGateway AUGMENT (Phase 7)", () => {
           originalTool: "read",
           arguments: { path: "src/server.ts" },
         })
-        expect(outcome.route).toBe("direct")
+        expect(outcome.route).toBe("augment")
+        if (outcome.route === "augment") {
+          expect(outcome.header).toBe(EXPECTED_HEADER)
+        }
       }),
     )
 
