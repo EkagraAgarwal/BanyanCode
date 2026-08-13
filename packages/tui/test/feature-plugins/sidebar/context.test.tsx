@@ -122,6 +122,19 @@ const fixtureAssistant = {
   time: { created: 0, completed: 1000 },
 }
 
+const fixtureBreakdown = { base: 100, agent: 50, codegraph: 200 }
+
+const breakdownAssistantParts = [
+  ...fixtureAssistantParts,
+  {
+    id: "part-finish",
+    sessionID: "session_test",
+    messageID: "msg-1",
+    type: "step-finish" as const,
+    tokens: { breakdown: fixtureBreakdown },
+  },
+]
+
 const partMap: Record<string, any[]> = {
   "msg-u1": fixtureUserParts,
   "msg-1": fixtureAssistantParts,
@@ -202,6 +215,28 @@ test("context widget source contains concise single-line category labels", () =>
     expect(source).toContain(label)
   }
   expect(source).not.toMatch(/label:\s*"Agent"/)
+})
+
+test("context widget renders breakdown source labels and the Overhead residual", () => {
+  const source = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
+    "utf8",
+  )
+  for (const label of ["Base", "Agent", "Codegraph", "Overhead"]) {
+    expect(source).toContain(label)
+  }
+})
+
+test("cache is a legend-only row, never a bar segment", () => {
+  const source = require("fs").readFileSync(
+    require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
+    "utf8",
+  )
+  // The segments() memo (source of both the bar and the legend rows) must not
+  // emit a cache segment — cache is folded into basis and reported separately.
+  expect(source).not.toMatch(/key:\s*"cache"/)
+  // The cache row lives in the legend, after the source rows, gated on cache > 0.
+  expect(source).toMatch(/tb\(\)\.cache\s*>\s*0/)
 })
 
 test("context widget no longer uses the old 'Memory' label", () => {
@@ -472,6 +507,28 @@ describe("categorizeTokens", () => {
   test("Prompt residual never goes negative", () => {
     const cat = categorizeTokens([fixtureUser as any, fixtureAssistant as any], partsGetter)
     expect(cat!.prompt).toBeGreaterThanOrEqual(0)
+  })
+
+  test("step-finish breakdown replaces the residual with explicit source rows", () => {
+    const cat = categorizeTokens(
+      [fixtureUser as any, fixtureAssistant as any],
+      (id: string) => (id === "msg-1" ? breakdownAssistantParts : fixtureUserParts),
+    )
+    expect(cat).not.toBeNull()
+    expect(cat!.breakdown).toEqual(fixtureBreakdown)
+    // basis = input (5000) + cache (250 + 75) = 5325. Heuristic buckets are
+    // small enough to skip clamping, so the residual subtracts both them and
+    // the breakdown total (350).
+    const heuristicBuckets = cat!.files + cat!.tools + cat!.subagents + cat!.userMessages
+    expect(cat!.prompt).toBe(Math.max(0, 5000 + 250 + 75 - heuristicBuckets - 350))
+    expect(cat!.total).toBe(5000 + 3000 + 1000 + 250 + 75)
+  })
+
+  test("cache tokens are reported as a legend-only value while cacheRead/cacheWrite stay zeroed", () => {
+    const cat = categorizeTokens([fixtureUser as any, fixtureAssistant as any], partsGetter)
+    expect(cat!.cache).toBe(250 + 75)
+    expect(cat!.cacheRead).toBe(0)
+    expect(cat!.cacheWrite).toBe(0)
   })
 
   test("context widget does not collapse heuristic buckets when cache dominates", () => {

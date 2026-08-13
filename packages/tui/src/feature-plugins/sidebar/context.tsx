@@ -144,6 +144,22 @@ const categorizeTokens = (
     assistants.findLast((a) => (a.tokens?.input ?? 0) > 0) ?? assistants[assistants.length - 1]
   const billingIdx = messages.findIndex((m) => isAssistant(m) && m.id === billingAssistant.id)
 
+  let breakdown: Record<string, number> | undefined
+  let breakdownTotal = 0
+  // The billing assistant's step-finish part may carry a per-source token
+  // breakdown ({ base, agent, user, environment, instructions, skills,
+  // codegraph, orchestration, structuredOutput }) from the provider. When
+  // present, the residual "Other" bucket is replaced by these explicit rows.
+  for (const part of partsGetter(billingAssistant.id)) {
+    if (!part || (part as any).type !== "step-finish") continue
+    const bd = (part as any).tokens?.breakdown
+    if (bd && typeof bd === "object" && Object.keys(bd).length > 0) {
+      breakdown = { ...(bd as Record<string, number>) }
+      for (const n of Object.values(bd)) breakdownTotal += Number(n) || 0
+      break
+    }
+  }
+
   let filesTokens = 0
   let toolsTokens = 0
   let subagentTokens = 0
@@ -214,11 +230,11 @@ const categorizeTokens = (
   // prevents the categories from collapsing when the conversation is
   // cache-heavy and inputTotal is small. Cache is implicit in basis; the
   // cacheRead/cacheWrite return fields are zeroed out to avoid double-counting
-  // in the legend/bar.
+  // in the legend/bar, while `cache` carries the real sum for a legend-only row.
   const basis = inputTotal + totalCache
 
   const heuristicBuckets = filesTokens + toolsTokens + subagentTokens + userTokens
-  const prompt = Math.max(0, basis - heuristicBuckets)
+  const prompt = Math.max(0, basis - heuristicBuckets - breakdownTotal)
   const files = Math.min(filesTokens, basis)
   const tools = Math.min(toolsTokens, Math.max(0, basis - files))
   const subagents = Math.min(subagentTokens, Math.max(0, basis - files - tools))
@@ -234,6 +250,8 @@ const categorizeTokens = (
     subagents,
     cacheRead: 0,
     cacheWrite: 0,
+    breakdown,
+    cache: cacheRead + cacheWrite,
     total: inputTotal + output + reasoning + cacheRead + cacheWrite,
   }
 }
@@ -247,6 +265,20 @@ interface Segment {
   tokens: number
   color: "primary" | "accent" | "info" | "success" | "warning" | "muted"
 }
+
+// Provider breakdown keys -> legend label + bar color. Order is stable:
+// system-ish sources first, tool-ish last.
+const BREAKDOWN_LABELS: ReadonlyArray<[string, string, Segment["color"]]> = [
+  ["base", "Base", "muted"],
+  ["agent", "Agent", "info"],
+  ["user", "User System", "muted"],
+  ["environment", "Environment", "accent"],
+  ["instructions", "Instructions", "accent"],
+  ["skills", "Skills", "muted"],
+  ["codegraph", "Codegraph", "info"],
+  ["orchestration", "Orchestration", "warning"],
+  ["structuredOutput", "Structured Output", "success"],
+]
 
 function View(props: { api: TuiPluginApi; session_id: string }) {
   const theme = () => props.api.theme.current
@@ -301,22 +333,36 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const segments = createMemo<Segment[]>(() => {
     const cat = categorization()
     if (!cat) return []
-    const cache = cat.cacheRead + cat.cacheWrite
-    return [
-      { key: "user", label: "User", tokens: cat.userMessages, color: "muted" },
-      { key: "thinking", label: "Thinking", tokens: cat.thinking, color: "accent" },
+    const promptSegments: Segment[] = []
+    if (cat.breakdown) {
+      for (const [key, label, color] of BREAKDOWN_LABELS) {
+        const tokens = cat.breakdown[key]
+        if (tokens === undefined || tokens <= 0) continue
+        promptSegments.push({ key, label, tokens, color })
+      }
+      // Residual after the explicit breakdown rows. Renamed to "Overhead" so
+      // the catch-all is honest; hidden when the breakdown already accounts
+      // for the whole basis.
+      if (cat.prompt > 0) {
+        promptSegments.push({ key: "prompt", label: "Overhead", tokens: cat.prompt, color: "info" })
+      }
+    } else {
       // Residual bucket: system prompt + tool definitions + agent prompt +
       // memory attachments + codegraph summary + anything the heuristic
       // (files/tools/subagents/user) couldn't attribute to a named call.
       // For a long session with memory recall this can easily run 100-300k;
       // "Other" is honest about the catch-all nature without misleading users
       // about a single component.
-      { key: "prompt", label: "Other", tokens: cat.prompt, color: "info" },
+      promptSegments.push({ key: "prompt", label: "Other", tokens: cat.prompt, color: "info" })
+    }
+    return [
+      { key: "user", label: "User", tokens: cat.userMessages, color: "muted" },
+      { key: "thinking", label: "Thinking", tokens: cat.thinking, color: "accent" },
+      ...promptSegments,
       { key: "files", label: "Files", tokens: cat.files, color: "success" },
       { key: "tools", label: "Tools", tokens: cat.tools, color: "warning" },
       { key: "subagents", label: "Subagents", tokens: cat.subagents, color: "muted" },
       { key: "output", label: "Output", tokens: cat.output, color: "primary" },
-      { key: "cache", label: "Cache", tokens: cache, color: "info" },
     ]
   })
 
@@ -420,6 +466,27 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                   )
                 }}
               </For>
+              {/* Cache tokens were folded into basis (input + cache), so the
+                  source rows above already include them; this row only reports
+                  how much of that total came from cache reads/writes. It is
+                  legend-only — never a bar segment — so bar proportions stay
+                  correct. */}
+              <Show when={tb().cache > 0 && tb().total > 0}>
+                <box flexDirection="row" justifyContent="space-between" width="100%">
+                  <box flexDirection="row" gap={1}>
+                    <text fg={segColor("muted")}>■</text>
+                    <text fg={toHex(theme().text)}>Cache</text>
+                  </box>
+                  <box flexDirection="row" gap={1}>
+                    <text fg={toHex(theme().text)}>
+                      {formatTokensCompact(tb().cache)}
+                    </text>
+                    <text fg={toHex(theme().textMuted)}>
+                      {`${((tb().cache / tb().total) * 100).toFixed(1)}%`}
+                    </text>
+                  </box>
+                </box>
+              </Show>
             </box>
           </box>
         )}
