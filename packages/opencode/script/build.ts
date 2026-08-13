@@ -292,8 +292,9 @@ for (const item of targets) {
   // Match by basename so the check survives workspace-relative vs absolute
   // path differences across OSes and Bun versions. The wasm basenames must
   // match the on-disk filenames of the grammar packages exactly — note the
-  // c-sharp underscore (tree-sitter_c_sharp.wasm) and the php-only variant
-  // (tree-sitter-php_only.wasm) which are NOT dash/hyphen derivations of the
+  // c-sharp hyphen+underscore (tree-sitter-c_sharp.wasm — the grammar names
+  // its wasm after the parser not the npm package) and the php-only variant
+  // (tree-sitter-php_only.wasm) which are NOT simple derivations of the
   // package names.
   const inputBasenames = new Set(
     Object.keys(result.metafile?.inputs ?? {}).map((input) => path.basename(input)),
@@ -308,7 +309,7 @@ for (const item of targets) {
     "tree-sitter-c.wasm",
     "tree-sitter-cpp.wasm",
     "tree-sitter-java.wasm",
-    "tree-sitter_c_sharp.wasm",
+    "tree-sitter-c_sharp.wasm",
     "tree-sitter-ruby.wasm",
     "tree-sitter-php_only.wasm",
     "tree-sitter-bash.wasm",

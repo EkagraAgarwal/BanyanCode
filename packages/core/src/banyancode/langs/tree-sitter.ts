@@ -38,7 +38,7 @@ import treeSitterCppWasm from "tree-sitter-cpp/tree-sitter-cpp.wasm" with { type
 // @ts-ignore same rationale as the main wasm import above.
 import treeSitterJavaWasm from "tree-sitter-java/tree-sitter-java.wasm" with { type: "wasm" }
 // @ts-ignore same rationale as the main wasm import above.
-import treeSitterCSharpWasm from "tree-sitter-c-sharp/tree-sitter_c_sharp.wasm" with { type: "wasm" }
+import treeSitterCSharpWasm from "tree-sitter-c-sharp/tree-sitter-c_sharp.wasm" with { type: "wasm" }
 // @ts-ignore same rationale as the main wasm import above.
 import treeSitterRubyWasm from "tree-sitter-ruby/tree-sitter-ruby.wasm" with { type: "wasm" }
 // @ts-ignore same rationale as the main wasm import above.
