@@ -2302,7 +2302,8 @@ function Glob(props: ToolProps) {
   const pathFormatter = usePathFormatter()
   return (
     <InlineTool icon="✱" pending="Finding files..." complete={stringValue(props.input.pattern)} part={props.part}>
-      Glob "{stringValue(props.input.pattern)}"{" "}
+      Glob {codegraphGlyph(props.metadata)}
+      "{stringValue(props.input.pattern)}"{" "}
       <Show when={stringValue(props.input.path)}>in {pathFormatter.format(stringValue(props.input.path))} </Show>
       <Show when={numberValue(props.metadata.count)}>
         ({numberValue(props.metadata.count)} {numberValue(props.metadata.count) === 1 ? "match" : "matches"})
@@ -2332,7 +2333,8 @@ function Read(props: ToolProps) {
         spinner={isRunning()}
         part={props.part}
       >
-        Read {pathFormatter.format(stringValue(props.input.filePath))} {input(props.input, ["filePath"])}
+        Read {codegraphGlyph(props.metadata)}
+        {pathFormatter.format(stringValue(props.input.filePath))} {input(props.input, ["filePath"])}
       </InlineTool>
       <Show when={isCompleted() && loaded().length > 0}>
         <For each={loaded()}>
@@ -2353,7 +2355,8 @@ function Grep(props: ToolProps) {
   const pathFormatter = usePathFormatter()
   return (
     <InlineTool icon="✱" pending="Searching content..." complete={stringValue(props.input.pattern)} part={props.part}>
-      Grep "{stringValue(props.input.pattern)}"{" "}
+      Grep {codegraphGlyph(props.metadata)}
+      "{stringValue(props.input.pattern)}"{" "}
       <Show when={stringValue(props.input.path)}>in {pathFormatter.format(stringValue(props.input.path))} </Show>
       <Show when={numberValue(props.metadata.matches)}>
         ({numberValue(props.metadata.matches)} {numberValue(props.metadata.matches) === 1 ? "match" : "matches"})
@@ -2788,6 +2791,15 @@ const toolDisplays = new Set([
 
 export function toolDisplay(tool: string) {
   return toolDisplays.has(tool) ? tool : "generic"
+}
+
+// Codegraph interception indicator: the gateway seam stamps
+// `metadata.codegraph = true` on read/grep/glob calls it answered from the
+// repository graph (AUGMENT header or INTELLIGENCE substitution). The TUI
+// renders the same gear glyph codegraph/banyan tools carry next to the tool
+// name so the user can see the call was rerouted, not executed normally.
+export function codegraphGlyph(metadata: Record<string, unknown>): string {
+  return metadata.codegraph === true ? "⚙ " : ""
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {

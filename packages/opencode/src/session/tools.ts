@@ -139,6 +139,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const output = {
               ...result,
               output: final.output,
+              // The TUI renders the codegraph gear glyph on intercepted tool
+              // calls (read/grep/glob answered by the repository gateway).
+              metadata: final.codegraph ? { ...result.metadata, codegraph: true } : result.metadata,
               attachments: result.attachments?.map((attachment) => ({
                 ...attachment,
                 id: PartID.ascending(),

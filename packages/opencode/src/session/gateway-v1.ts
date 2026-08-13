@@ -129,28 +129,32 @@ const renderCompactSummary = (record: Record<string, unknown>): string => {
 // - INTELLIGENCE replaces the output with a rendered text of the result
 //   (Formatter when the shape fits, compact summary otherwise).
 // - Anything else returns the result unchanged (title/attachments untouched).
+// `codegraph` is true when the outcome routed through the code graph
+// (AUGMENT header produced or INTELLIGENCE answer rendered) — the TUI shows
+// the gear glyph on such calls.
 export const applyOutcome = (
   itemID: string,
   outcome: unknown,
   result: { readonly title: string; readonly output: string },
-): { title: string; output: string } => {
-  if (typeof outcome !== "object" || outcome === null) return result
+): { title: string; output: string; codegraph: boolean } => {
+  if (typeof outcome !== "object" || outcome === null) return { ...result, codegraph: false }
   const record = outcome as Record<string, unknown>
   if (record.route === "augment" && itemID === "read" && typeof record.header === "string") {
-    return { ...result, output: `${record.header}\n${result.output}` }
+    return { ...result, output: `${record.header}\n${result.output}`, codegraph: true }
   }
   if (record.route === "intelligence" && record.result !== undefined) {
     if (isRenderableResult(record.result)) {
       return {
         ...result,
         output: Banyan.RepositoryGatewayFormatter.format(record.result.operation, record.result),
+        codegraph: true,
       }
     }
     if (typeof record.result === "object") {
-      return { ...result, output: renderCompactSummary(record.result as Record<string, unknown>) }
+      return { ...result, output: renderCompactSummary(record.result as Record<string, unknown>), codegraph: true }
     }
   }
-  return result
+  return { ...result, codegraph: false }
 }
 
 export * as GatewayV1 from "./gateway-v1"

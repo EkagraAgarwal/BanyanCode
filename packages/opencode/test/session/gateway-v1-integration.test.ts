@@ -233,6 +233,9 @@ describe("SessionTools.resolve gateway seam", () => {
         const output = yield* executeTool("read", { path: "src/foo.ts" })
         // AUGMENT: header prepended, original content preserved.
         expect(output.output).toBe("## Symbol Foo (1 ref)\nPAGE_BODY")
+        // Codegraph indicator: the stored metadata flags the interception so
+        // the TUI can render the gear glyph next to the tool call.
+        expect(output.metadata).toMatchObject({ codegraph: true })
         // Gate A: the hook consulted the gateway with the routed tool + Gate B context.
         expect(gatewayRequests.at(-1)?.originalTool).toBe("read")
         expect(gatewayRequests.at(-1)?.userRequest).toBe("who calls Foo?")
@@ -254,6 +257,8 @@ describe("SessionTools.resolve gateway seam", () => {
         expect(output.output).not.toContain("PAGE_BODY")
         expect(output.output).toContain("Foo callers:")
         expect(output.output).toContain("src/a.ts:42 (Foo)")
+        // Codegraph indicator flag rides along in the stored metadata.
+        expect(output.metadata).toMatchObject({ codegraph: true })
       }),
     )
 
@@ -264,6 +269,8 @@ describe("SessionTools.resolve gateway seam", () => {
         gatewayRequests.length = 0
         const output = yield* executeTool("read", { path: "src/foo.ts" })
         expect(output.output).toBe("PAGE_BODY")
+        // Direct: no codegraph flag in metadata.
+        expect(output.metadata).not.toMatchObject({ codegraph: true })
         // Seam still consulted the gateway before falling through.
         expect(gatewayRequests.at(-1)?.originalTool).toBe("read")
       }),

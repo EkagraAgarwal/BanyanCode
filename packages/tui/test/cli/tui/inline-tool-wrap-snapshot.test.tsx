@@ -12,6 +12,7 @@ import { SDKProvider } from "../../../src/context/sdk"
 import { ThemeProvider } from "../../../src/context/theme"
 import {
   BlockTool,
+  codegraphGlyph,
   formatCompletedSubagentDetail,
   formatSubagentRetry,
   formatSubagentTitle,
@@ -256,6 +257,12 @@ describe("TUI inline tool wrapping", () => {
   test("falls back for unknown tool names", () => {
     expect(toolDisplay("bash")).toBe("bash")
     expect(toolDisplay("plugin_tool")).toBe("generic")
+  })
+
+  test("codegraphGlyph marks intercepted read/grep/glob calls with the gear", () => {
+    expect(codegraphGlyph({})).toBe("")
+    expect(codegraphGlyph({ codegraph: true })).toBe("⚙ ")
+    expect(codegraphGlyph({ codegraph: false })).toBe("")
   })
 
   test("filters malformed nested tool wire data", () => {

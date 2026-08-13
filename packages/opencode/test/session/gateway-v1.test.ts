@@ -83,11 +83,12 @@ describe("GatewayV1.deriveGateB", () => {
 
 describe("GatewayV1.applyOutcome", () => {
   const result = { title: "t", output: "original" }
+  const passthrough = { ...result, codegraph: false }
 
   test("non-object outcome returns the result unchanged", () => {
-    expect(GatewayV1.applyOutcome("read", undefined, result)).toEqual(result)
-    expect(GatewayV1.applyOutcome("read", null, result)).toEqual(result)
-    expect(GatewayV1.applyOutcome("read", "direct", result)).toEqual(result)
+    expect(GatewayV1.applyOutcome("read", undefined, result)).toEqual(passthrough)
+    expect(GatewayV1.applyOutcome("read", null, result)).toEqual(passthrough)
+    expect(GatewayV1.applyOutcome("read", "direct", result)).toEqual(passthrough)
   })
 
   test("augment prepends the header only for the read tool", () => {
@@ -95,13 +96,14 @@ describe("GatewayV1.applyOutcome", () => {
     expect(GatewayV1.applyOutcome("read", outcome, result)).toEqual({
       title: "t",
       output: "Symbol: Foo | Imports: 1\noriginal",
+      codegraph: true,
     })
-    expect(GatewayV1.applyOutcome("grep", outcome, result)).toEqual(result)
+    expect(GatewayV1.applyOutcome("grep", outcome, result)).toEqual(passthrough)
   })
 
   test("augment without a string header passes through", () => {
-    expect(GatewayV1.applyOutcome("read", { route: "augment" }, result)).toEqual(result)
-    expect(GatewayV1.applyOutcome("read", { route: "augment", header: 42 }, result)).toEqual(result)
+    expect(GatewayV1.applyOutcome("read", { route: "augment" }, result)).toEqual(passthrough)
+    expect(GatewayV1.applyOutcome("read", { route: "augment", header: 42 }, result)).toEqual(passthrough)
   })
 
   test("intelligence renders via the Formatter when the result is renderable", () => {
@@ -120,6 +122,7 @@ describe("GatewayV1.applyOutcome", () => {
     expect(applied.title).toBe("t")
     expect(applied.output).toContain('Symbols for "MemoryRepo":')
     expect(applied.output).toContain("packages/core/src/banyancode/memory-repo.ts:42 (MemoryRepo.update)")
+    expect(applied.codegraph).toBe(true)
   })
 
   test("intelligence with a non-renderable result renders a compact summary", () => {
@@ -141,10 +144,10 @@ describe("GatewayV1.applyOutcome", () => {
   })
 
   test("intelligence with a primitive result passes through", () => {
-    expect(GatewayV1.applyOutcome("grep", { route: "intelligence", result: "nope" }, result)).toEqual(result)
+    expect(GatewayV1.applyOutcome("grep", { route: "intelligence", result: "nope" }, result)).toEqual(passthrough)
   })
 
   test("unknown route returns the result unchanged", () => {
-    expect(GatewayV1.applyOutcome("read", { route: "direct" }, result)).toEqual(result)
+    expect(GatewayV1.applyOutcome("read", { route: "direct" }, result)).toEqual(passthrough)
   })
 })
