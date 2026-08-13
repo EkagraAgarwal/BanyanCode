@@ -11,7 +11,12 @@ import { getParserForPath } from "./langs/registry"
 import type { ParseResult } from "./langs/types"
 import { parseTypeScript, stripCommentsAndStrings } from "./langs/typescript"
 import { parsePython } from "./langs/python"
-import { ensureQuerySourcesLoaded } from "./langs/query-executor"
+import {
+  ensureQuerySourcesLoaded,
+  parsePythonWithTreeSitter,
+  parseTypeScriptWithTreeSitter,
+} from "./langs/query-executor"
+import { ensureWebTreeSitterReady } from "./langs/tree-sitter"
 import { extractTestFileImports } from "./codegraph-helpers"
 
 const TS_LIKE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"])
@@ -193,19 +198,17 @@ export const layer = Layer.effect(
     const database = yield* Database.Service
     const cancelled = yield* Ref.make(false)
 
-    // Bundle anchor, NOT a parse dependency: query-executor's `.scm` text
-    // imports — and transitively tree-sitter.ts's wasm imports — must stay
-    // statically reachable from the production graph, because
-    // `packages/opencode/script/build.ts` validates that all 7 tree-sitter
-    // assets exist in compiled binaries and fails the build otherwise. The
-    // indexer no longer parses with tree-sitter (parser edges are
-    // structurally discarded; the derived-edge lifecycle in
-    // rebuildDerivedGraph owns every surviving edge kind), so this call
-    // only primes the module-level query cache for future consumers (e.g.
-    // the Wave-5 tree-sitter node-extraction migration). It builds a
-    // 3-entry Map from bundled strings — microseconds, memoized per
-    // process, no wasm instantiation (that happens only in
-    // `ensureWebTreeSitterReady`, which the indexer no longer calls).
+    // Bundle anchor: query-executor's `.scm` text imports — and transitively
+    // tree-sitter.ts's wasm imports — must stay statically reachable from
+    // the production graph, because `packages/opencode/script/build.ts`
+    // validates that all 7 tree-sitter assets exist in compiled binaries and
+    // fails the build otherwise. This call also primes the module-level
+    // query-source cache used by the per-file tree-sitter parse path below
+    // (Phase 0: TS/JS/Python route through parseTypeScriptWithTreeSitter /
+    // parsePythonWithTreeSitter). It builds a 3-entry Map from bundled
+    // strings — microseconds, memoized per process, no wasm instantiation
+    // (that happens once per build in `ensureWebTreeSitterReady`, called at
+    // the top of `index` and `applyChanges`).
     yield* Effect.promise(() => ensureQuerySourcesLoaded())
 
     // Nested .gitignore support: per-build cache of compiled patterns keyed by
@@ -417,6 +420,39 @@ type ParsedFile = {
   readonly skipped: boolean
   readonly previousFileID?: string
 }
+
+// Phase 0 tree-sitter: per-file parse outcome. `backend` is the parser that
+// produced the nodes; `error` is non-null when the tree-sitter path failed
+// (wasm unavailable / exception → regex fallback) or reported a syntax error
+// (ERROR / MISSING node). The file ALWAYS continues with the (regex) result.
+type ParseOutcome = {
+  readonly result: ParseResult
+  readonly backend: "regex" | "tree-sitter"
+  readonly error: { message: string } | null
+}
+
+const treeSitterParseWithFallback = (
+  parse: Effect.Effect<ParseResult, unknown, never>,
+  regexFallback: () => ParseResult,
+): Effect.Effect<ParseOutcome, never, never> =>
+  parse.pipe(
+    Effect.map((result) => ({
+      result,
+      backend: result.backend === "tree-sitter" ? ("tree-sitter" as const) : ("regex" as const),
+      error: result.syntaxError
+        ? { message: `tree-sitter syntax error at line ${result.syntaxError.line}: ${result.syntaxError.message}` }
+        : null,
+    })),
+    // The tree-sitter path must NEVER fail an index build: wasm unavailable
+    // or an exception inside the parse falls back to the regex parser.
+    Effect.catchCause((cause) =>
+      Effect.succeed({
+        result: regexFallback(),
+        backend: "regex" as const,
+        error: { message: `tree-sitter unavailable: ${Cause.pretty(cause)}` },
+      }),
+    ),
+  )
 const CHECKPOINT_EVERY = 1000
 type CandidateFile = {
   readonly path: string
@@ -460,6 +496,16 @@ const indexCandidateFileCore = (
     // downstream consumer that compares mtime to indexed_at doesn't get
     // stuck on a cached file forever.
     cachedFileIDsRef: Ref.Ref<Set<string>>
+    // Phase 0 tree-sitter: BANYANCODE_TS_EDGES mode ("derived" default).
+    // Read once per build; parser mode lets tree-sitter query edges
+    // (calls / yield / service_access) survive for tree-sitter-parsed files.
+    edgeMode: "derived" | "parser"
+    // Phase 0 tree-sitter (parser mode only): fileIDs whose tree-sitter
+    // query edges were actually stored this build (parser owns their call
+    // edges), plus the stored parser-edge ids. rebuildDerivedGraph uses
+    // them to skip the delete+regenerate pass for parser-owned call edges.
+    parserFileIDsRef: Ref.Ref<Set<string>>
+    parserEdgeIDsRef: Ref.Ref<Set<string>>
     existingFilesByPath: ReadonlyMap<string, CodegraphFile>
   },
 ): Effect.Effect<void, never, never> => {
@@ -571,15 +617,37 @@ const indexCandidateFileCore = (
 
     const parser = getParserForPath(filePath)
     const fileID = existing?.id ?? randomUUID()
-    let result: ParseResult
+    // Phase 0 tree-sitter: TS/JS/Python route through the tree-sitter parse
+    // (node extraction stays regex inside query-executor; the tree-sitter
+    // pass adds query edges + syntax-error detection). Every failure path
+    // falls back to the regex parser — the build never fails on a parse.
+    let outcome: ParseOutcome
     if (isArtifact) {
-      result = { nodes: [], edges: [] }
+      outcome = { result: { nodes: [], edges: [] }, backend: "regex", error: null }
     } else if (TS_LIKE_EXTS.has(ext)) {
-      result = parseTypeScript(content, fileID)
+      outcome = yield* treeSitterParseWithFallback(
+        parseTypeScriptWithTreeSitter(content, fileID),
+        () => parseTypeScript(content, fileID),
+      )
     } else if (PY_LIKE_EXTS.has(ext)) {
-      result = parsePython(content, fileID)
+      outcome = yield* treeSitterParseWithFallback(
+        parsePythonWithTreeSitter(content, fileID),
+        () => parsePython(content, fileID),
+      )
     } else {
-      result = parser.parse(content, fileID)
+      outcome = { result: parser.parse(content, fileID), backend: "regex", error: null }
+    }
+    const result = outcome.result
+    if (outcome.error) {
+      // Record + continue: the file still indexes with the regex fallback
+      // result; the parse error is visible in codegraph_parse_errors and the
+      // parseFailure skip bucket.
+      yield* repo.recordParseError({ path: relativePath, cause: outcome.error.message, indexedAt: Date.now() }).pipe(
+        Effect.catchCause((innerCause) =>
+          Effect.logWarning(`recordParseError insert failed for ${relativePath}`, { cause: Cause.pretty(innerCause) }),
+        ),
+      )
+      yield* Ref.update(cfg.skippedParseFailureRef, (n) => n + 1)
     }
     let language = "generic"
     if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx" || ext === ".mts" || ext === ".cts" || ext === ".mjs" || ext === ".cjs") language = "typescript"
@@ -617,8 +685,16 @@ const indexCandidateFileCore = (
       startLine: 1,
       endLine: lineCount,
       code: content.slice(0, 4000),
+      // Phase 0 tree-sitter: the file-level node is indexer-owned, so it
+      // keeps the regex-v1 derivation even when symbol nodes below come
+      // from the tree-sitter path.
       derivation: "regex-v1",
     }
+    // Phase 0 tree-sitter: symbol nodes produced by the tree-sitter path get
+    // "tree-sitter-v1" (nodes themselves are still regex-extracted today);
+    // regex fallback (wasm unavailable / exception) stays "regex-v1".
+    const nodeDerivation: CodegraphNode["derivation"] =
+      outcome.backend === "tree-sitter" ? "tree-sitter-v1" : "regex-v1"
     const nodes: CodegraphNode[] = [fileLevelNode, ...result.nodes.map((n) => {
       const node: CodegraphNode = {
         id: n.id,
@@ -629,7 +705,7 @@ const indexCandidateFileCore = (
         startLine: n.startLine,
         endLine: n.endLine,
         code: n.code,
-        derivation: "regex-v1",
+        derivation: nodeDerivation,
       }
       return Object.assign(node, {
         isEntrypoint: isEntrypointNode(node, filePath) ? 1 : 0,
@@ -637,14 +713,81 @@ const indexCandidateFileCore = (
     })]
 
     const knownNodeIDs = new Set(nodes.map((n) => n.id))
-    const edges: CodegraphEdge[] = result.edges
-      .filter((e) => knownNodeIDs.has(e.fromNodeID) && knownNodeIDs.has(e.toNodeID))
-      .map((e) => ({
-        id: e.id,
-        fromNodeID: e.fromNodeID,
-        toNodeID: e.toNodeID,
-        kind: e.kind,
-      }))
+    const parserMode = cfg.edgeMode === "parser"
+    // Phase 0 tree-sitter (parser mode): resolve a parser-edge endpoint to a
+    // real node id. codegraph_edges FK-enforces both endpoints onto
+    // codegraph_nodes, so symbolic parser targets (`symbol:X`, `service:X`)
+    // and line-only sources (`<fileID>:function:<line>`) must be remapped to
+    // nodes in THIS file or the edge cannot be stored.
+    const nodeIdsByKindLine = new Map<string, Map<number, string>>()
+    const nodeIdsByName = new Map<string, string[]>()
+    for (const n of result.nodes) {
+      let byLine = nodeIdsByKindLine.get(n.kind)
+      if (!byLine) {
+        byLine = new Map()
+        nodeIdsByKindLine.set(n.kind, byLine)
+      }
+      byLine.set(n.startLine, n.id)
+      const byName = nodeIdsByName.get(n.name) ?? []
+      byName.push(n.id)
+      nodeIdsByName.set(n.name, byName)
+    }
+    const resolveParserEndpoint = (endpoint: string): string | null => {
+      if (knownNodeIDs.has(endpoint)) return endpoint
+      const kindLine = /^[^:]+:(function|method|class|variable|type):(\d+)$/.exec(endpoint)
+      if (kindLine) {
+        const resolved = nodeIdsByKindLine.get(kindLine[1]!)?.get(Number(kindLine[2]))
+        if (resolved) return resolved
+      }
+      const symbol = /^symbol:(.+)$/.exec(endpoint)
+      if (symbol) {
+        const candidates = nodeIdsByName.get(symbol[1]!) ?? []
+        // Prefer callable kinds; any same-file node is acceptable.
+        const preferred = candidates.filter((id) => /:(function|method|class):/.test(id))
+        return (preferred[0] ?? candidates[0]) ?? null
+      }
+      return null
+    }
+    const edges: CodegraphEdge[] = []
+    for (const e of result.edges) {
+      if (parserMode && outcome.backend === "tree-sitter" && e.source === "tree-sitter") {
+        // Phase 0 tree-sitter: parser-owned edges survive with remapped
+        // endpoints (intra-file calls). Edges whose target cannot be
+        // resolved (service tags, out-of-file symbols) stay index-time-only.
+        const fromNodeID = resolveParserEndpoint(e.fromNodeID)
+        const toNodeID = resolveParserEndpoint(e.toNodeID)
+        if (fromNodeID && toNodeID) {
+          edges.push({ id: e.id, fromNodeID, toNodeID, kind: e.kind })
+        }
+        continue
+      }
+      // Everything else keeps the strict endpoint check (regex `imports`
+      // edges stay discarded — module resolution is derived).
+      if (knownNodeIDs.has(e.fromNodeID) && knownNodeIDs.has(e.toNodeID)) {
+        edges.push({ id: e.id, fromNodeID: e.fromNodeID, toNodeID: e.toNodeID, kind: e.kind })
+      }
+    }
+
+    // Phase 0 tree-sitter (parser mode): track tree-sitter-parsed fileIDs
+    // that OWN their call edges (at least one parser edge was actually
+    // written this build) plus those edge ids, so rebuildDerivedGraph can
+    // preserve them (skip delete + skip derived calls regeneration). Files
+    // whose parser edges could not be stored (cross-file `symbol:` targets,
+    // `new` expressions, service tags — nothing same-file resolvable, and
+    // the edges table FK-enforces both endpoints onto codegraph_nodes) keep
+    // the full derived calls lifecycle.
+    if (parserMode && outcome.backend === "tree-sitter") {
+      if (edges.length > 0) {
+        yield* Ref.update(cfg.parserFileIDsRef, (s) => {
+          s.add(fileID)
+          return s
+        })
+        yield* Ref.update(cfg.parserEdgeIDsRef, (s) => {
+          for (const e of edges) s.add(e.id)
+          return s
+        })
+      }
+    }
 
     if (fileKind) {
       nodes.push({
@@ -697,9 +840,29 @@ const indexCandidateFileCore = (
   )
 }
 
+// BANYANCODE_TS_EDGES (Phase 0 tree-sitter edge-mode switch; read once per
+// build, default "derived"):
+//   derived — EXACTLY today's behavior: this function deletes + regenerates
+//     all 8 derived kinds (calls, extends, references, tested_by,
+//     configured_by, built_by, mounts, generated_from) plus imports.
+//     Parser-emitted edges are discarded at index time and never reach the
+//     DB. Byte-identical with the switch unset.
+//   parser — for files where the tree-sitter query edges (calls) were
+//     actually stored this build (parserState.fileIDs — same-file-resolvable
+//     targets only; the edges table FK-enforces both endpoints onto
+//     codegraph_nodes), those edges survive: the delete pass preserves
+//     their ids (parserState.preserveEdgeIDs) and the calls regeneration
+//     below is skipped for those files. Files whose parser edges could not
+//     be stored (cross-file `symbol:` targets, `new` expressions, service
+//     tags) keep the full derived calls lifecycle. imports stays derived
+//     (module resolution is indexer-owned) and the cross-edges (tested_by /
+//     configured_by / built_by / mounts / generated_from) stay derived.
+//     `yield` and `service_access` are not derived kinds, so they are
+//     untouched here.
 const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(function* (
   changedFileIDs: string[] | undefined,
   additionalSourceFileIDs?: readonly string[],
+  parserState?: { fileIDs: ReadonlySet<string>; preserveEdgeIDs: ReadonlySet<string> },
 ) {
   const isCancelled = yield* Ref.get(cancelled)
   if (isCancelled) return
@@ -926,6 +1089,12 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
               ? ("calls" as const)
               : ("references" as const)
 
+        // Phase 0 tree-sitter (parser mode): the tree-sitter query pass owns
+        // `calls` edges for tree-sitter-parsed files — skip regenerating
+        // them so the parser-emitted edges survive unchanged. references /
+        // extends stay derived for those files.
+        if (kind === "calls" && parserState?.fileIDs.has(nodeA.fileID)) continue
+
         const key = `${nodeA.id}->${nodeB.id}:${kind}`
         if (referenceEdgeKeys.has(key)) continue
         referenceEdgeKeys.add(key)
@@ -1079,15 +1248,23 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     touchedNodeIDs.add(edge.toNodeID)
   }
   if (changedSet) {
-    const deletedTouched = yield* repo.deleteDerivedEdgesForFiles({ fileIDs: changedFileIDs! })
+    const deletedTouched = yield* repo.deleteDerivedEdgesForFiles({
+      fileIDs: changedFileIDs!,
+      // Phase 0 tree-sitter (parser mode): keep the parser-emitted edge ids
+      // written this build — remapped parser edges have real node endpoints,
+      // so without the exclusion the node-endpoint delete would wipe them.
+      preserveEdgeIDs: parserState?.preserveEdgeIDs,
+    })
     for (const nodeID of deletedTouched) touchedNodeIDs.add(nodeID)
   } else {
     // Full-rebuild derived-edge purge. Pre-Phase-3a rebuilds inserted with
     // onConflictDoNothing without ever deleting, which let stale derived edges
     // accumulate across builds (~166K stale edges on this repo before the fix).
     // Deleting them here and re-inserting via putEdges gives a reproducible
-    // import-scoped count.
-    const deletedTouchedFull = yield* repo.deleteAllDerivedEdges()
+    // import-scoped count. Phase 0 tree-sitter (parser mode): preserve the
+    // parser-emitted edge ids written this build so parser-owned call edges
+    // survive; everything else is purged and regenerated as today.
+    const deletedTouchedFull = yield* repo.deleteAllDerivedEdges(parserState?.preserveEdgeIDs)
     for (const nodeID of deletedTouchedFull) touchedNodeIDs.add(nodeID)
   }
   if (edgesToWrite.length > 0) {
@@ -1112,6 +1289,15 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
+      // Phase 0 tree-sitter: prime the parser bundle ONCE per build (before
+      // the walk loop). ensureWebTreeSitterReady is idempotent and never
+      // throws; the per-file parse path then runs with the bundle loaded.
+      yield* ensureWebTreeSitterReady()
+      // Phase 0 tree-sitter edge-mode switch: read once per build, default
+      // "derived" (byte-identical with today's behavior when unset).
+      const edgeMode = yield* Effect.sync(() => (process.env.BANYANCODE_TS_EDGES === "parser" ? "parser" : "derived"))
+      const parserFileIDsRef = yield* Ref.make<Set<string>>(new Set())
+      const parserEdgeIDsRef = yield* Ref.make<Set<string>>(new Set())
       const ignoreCtx = yield* loadIgnoreContext(input.root, input.excludePatterns)
       const walkStart = Date.now()
       const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, ignoreCtx)
@@ -1175,6 +1361,9 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
           currentlyParsingRef,
           progressCounter,
           cachedFileIDsRef,
+          edgeMode,
+          parserFileIDsRef,
+          parserEdgeIDsRef,
           existingFilesByPath,
         })
       }
@@ -1284,7 +1473,17 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
 
       const indexed = yield* Ref.get(indexedRef)
       if (indexed > 0) {
-        yield* rebuildDerivedGraph(undefined)
+        // Phase 0 tree-sitter (parser mode): hand rebuildDerivedGraph the
+        // tree-sitter-parsed fileIDs + parser edge ids written this build so
+        // parser-owned call edges survive the delete+regenerate pass. In
+        // derived mode nothing is passed — byte-identical with today.
+        const parserState = edgeMode === "parser"
+          ? {
+              fileIDs: yield* Ref.get(parserFileIDsRef),
+              preserveEdgeIDs: yield* Ref.get(parserEdgeIDsRef),
+            }
+          : undefined
+        yield* rebuildDerivedGraph(undefined, undefined, parserState)
       }
       const skipped = yield* Ref.get(skippedRef)
       const symbolsIndexed = yield* Ref.get(symbolsIndexedRef)
@@ -1357,6 +1556,13 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
+      // Phase 0 tree-sitter: prime the parser bundle once per (incremental)
+      // build — same rationale as the full-build path in `index`.
+      yield* ensureWebTreeSitterReady()
+      // Phase 0 tree-sitter edge-mode switch: read once per build.
+      const edgeMode = yield* Effect.sync(() => (process.env.BANYANCODE_TS_EDGES === "parser" ? "parser" : "derived"))
+      const parserFileIDsRef = yield* Ref.make<Set<string>>(new Set())
+      const parserEdgeIDsRef = yield* Ref.make<Set<string>>(new Set())
       const ignoreCtx = yield* loadIgnoreContext(input.root, input.excludePatterns)
       const removedFileIDs = new Set<string>()
       const filteredRemoved: string[] = []
@@ -1615,6 +1821,9 @@ const drainParsedQueue = Effect.gen(function* () {
               currentlyParsingRef,
               progressCounter,
               cachedFileIDsRef,
+              edgeMode,
+              parserFileIDsRef,
+              parserEdgeIDsRef,
               existingFilesByPath,
             })
           }, { concurrency: 8, discard: true }),
@@ -1649,7 +1858,15 @@ const drainParsedQueue = Effect.gen(function* () {
       if (changedFileIDs.length > 0) {
         const changedSet = new Set(changedFileIDs)
         const dependentSourceFileIDs = dependentFileIDs.filter((fileID) => !changedSet.has(fileID))
-        yield* rebuildDerivedGraph(changedFileIDs, dependentSourceFileIDs)
+        // Phase 0 tree-sitter (parser mode): same preserve/regeneration-skip
+        // handoff as the full-build path (see `index`).
+        const parserState = edgeMode === "parser"
+          ? {
+              fileIDs: yield* Ref.get(parserFileIDsRef),
+              preserveEdgeIDs: yield* Ref.get(parserEdgeIDsRef),
+            }
+          : undefined
+        yield* rebuildDerivedGraph(changedFileIDs, dependentSourceFileIDs, parserState)
       }
 
       const fileCount = yield* repo.countFiles()

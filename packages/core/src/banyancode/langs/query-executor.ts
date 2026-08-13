@@ -151,6 +151,35 @@ const findEnclosingCallable = (start: Node): Node | null => {
 
 const lineNumber = (node: Node): number => node.startPosition.row + 1
 
+// Phase 0 tree-sitter: web-tree-sitter exposes missing nodes as `isMissing`
+// (a boolean property in the current binding; a method in older ones) whose
+// `type` is the EXPECTED grammar symbol (e.g. "}"), and recovery regions as
+// nodes with type "ERROR". Walk the whole tree iteratively (no recursion —
+// deep ASTs must not overflow the stack) and report the first one.
+const isMissingNode = (node: Node): boolean => {
+  const flag = (node as unknown as { isMissing?: boolean | (() => boolean) }).isMissing
+  return typeof flag === "function" ? flag() : flag === true
+}
+
+const findSyntaxError = (rootNode: Node): { line: number; message: string } | null => {
+  const stack: Node[] = [rootNode]
+  while (stack.length > 0) {
+    const node = stack.pop()!
+    if (node.type === "ERROR") {
+      const snippet = node.text.trim().replace(/\s+/g, " ").slice(0, 60)
+      return { line: lineNumber(node), message: `syntax error near '${snippet || "unexpected token"}'` }
+    }
+    if (isMissingNode(node)) {
+      return { line: lineNumber(node), message: `missing '${node.type}'` }
+    }
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i)
+      if (child) stack.push(child)
+    }
+  }
+  return null
+}
+
 const getCapture = (captures: readonly QueryCapture[], name: string): Node | undefined =>
   captures.find((c) => c.name === name)?.node
 
@@ -239,7 +268,10 @@ const extractEdgesFromMatches = (
   ]) {
     if (seen.has(edge.id)) continue
     seen.add(edge.id)
-    all.push(edge)
+    // Phase 0 tree-sitter: mark every edge produced by the tree-sitter
+    // query pass so the indexer can tell parser-owned edges from regex
+    // parser output (imports) when BANYANCODE_TS_EDGES=parser is set.
+    all.push({ ...edge, source: "tree-sitter" })
   }
   return all
 }
@@ -256,10 +288,15 @@ const runQueryAndExtract = (
   refs: BundleRefs,
   content: string,
   fileID: string,
-): ParsedEdge[] => {
+): { edges: ParsedEdge[]; syntaxError: { line: number; message: string } | null } => {
   const tree = refs.parser.parse(content)
-  if (!tree) return []
-  return buildQueryOnTree(tree, refs.query, fileID)
+  if (!tree) return { edges: [], syntaxError: null }
+  return {
+    edges: buildQueryOnTree(tree, refs.query, fileID),
+    // Phase 0 tree-sitter: report ERROR / MISSING nodes so the indexer can
+    // record a real parse error (Wave-5 goal) while still indexing this file.
+    syntaxError: tree.rootNode ? findSyntaxError(tree.rootNode) : null,
+  }
 }
 
 const QUERY_CACHE = new Map<string, Query>()
@@ -295,9 +332,17 @@ export const parseTypeScriptWithTreeSitter = (
       if (!parser || !language) return parseTypeScript(content, fileID)
       const query = getCachedQuery(".ts", language, Query, querySource)
       if (!query) return parseTypeScript(content, fileID)
-      const tsEdges = runQueryAndExtract({ parser, query }, content, fileID)
+      const { edges: tsEdges, syntaxError } = runQueryAndExtract({ parser, query }, content, fileID)
       const regex = parseTypeScript(content, fileID)
-      return { ...regex, edges: [...regex.edges, ...tsEdges] }
+      return {
+        ...regex,
+        edges: [...regex.edges, ...tsEdges],
+        // Phase 0 tree-sitter: mark the backend so the indexer can stamp
+        // node derivation and (with BANYANCODE_TS_EDGES=parser) let these
+        // edges survive the derived-edge lifecycle.
+        backend: "tree-sitter" as const,
+        ...(syntaxError ? { syntaxError } : {}),
+      }
     })
   })
 
@@ -315,9 +360,15 @@ export const parsePythonWithTreeSitter = (
       if (!parser || !language) return parsePython(content, fileID)
       const query = getCachedQuery(".py", language, Query, querySource)
       if (!query) return parsePython(content, fileID)
-      const tsEdges = runQueryAndExtract({ parser, query }, content, fileID)
+      const { edges: tsEdges, syntaxError } = runQueryAndExtract({ parser, query }, content, fileID)
       const regex = parsePython(content, fileID)
-      return { ...regex, edges: [...regex.edges, ...tsEdges] }
+      return {
+        ...regex,
+        edges: [...regex.edges, ...tsEdges],
+        // Phase 0 tree-sitter: see parseTypeScriptWithTreeSitter.
+        backend: "tree-sitter" as const,
+        ...(syntaxError ? { syntaxError } : {}),
+      }
     })
   })
 

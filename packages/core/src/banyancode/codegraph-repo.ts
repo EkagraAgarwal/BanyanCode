@@ -1,6 +1,7 @@
 export * as CodegraphRepo from "./codegraph-repo"
 
-import { and, eq, inArray, or, sql } from "drizzle-orm"
+import { and, eq, inArray, notInArray, or, sql } from "drizzle-orm"
+import type { SQL } from "drizzle-orm"
 import { Cause, Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { CodegraphEdgesTable, CodegraphFilesTable, CodegraphNodesTable } from "./codegraph.sql"
@@ -201,7 +202,15 @@ export interface Interface {
   readonly edgesFromBatch: (ids: ReadonlyArray<string>) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesToBatch: (ids: ReadonlyArray<string>) => Effect.Effect<CodegraphEdge[], never, never>
   readonly deleteFile: (id: string) => Effect.Effect<void, never, never>
-  readonly deleteDerivedEdgesForFiles: (input: { fileIDs: string[] }) => Effect.Effect<readonly string[], never, never>
+  readonly deleteDerivedEdgesForFiles: (input: {
+    fileIDs: string[]
+    /**
+     * Phase 0 tree-sitter (BANYANCODE_TS_EDGES=parser): edge ids to exempt
+     * from the delete — the parser-emitted tree-sitter query edges written
+     * by this build. Optional; default (derived) mode passes nothing.
+     */
+    preserveEdgeIDs?: ReadonlySet<string>
+  }) => Effect.Effect<readonly string[], never, never>
   /**
    * Phase 3d-followup: full-rebuild derived-edge purge. Wipes every edge whose
    * `kind` is in the derived set (`calls`, `extends`, `references`, `tested_by`,
@@ -214,8 +223,12 @@ export interface Interface {
    * Full-mode callers must follow up with `recomputeInDegree` over EVERY
    * node in the graph — not just the touched subset — because in-degree
    * counts for nodes with no remaining derived edges become zero.
+   *
+   * Phase 0 tree-sitter (BANYANCODE_TS_EDGES=parser): pass the parser-edge
+   * ids written this build to exempt them from the purge (parser-owned
+   * call edges survive); default (derived) mode passes nothing.
    */
-  readonly deleteAllDerivedEdges: () => Effect.Effect<readonly string[], never, never>
+  readonly deleteAllDerivedEdges: (preserveEdgeIDs?: ReadonlySet<string>) => Effect.Effect<readonly string[], never, never>
   /**
    * Atomically replace one file's worth of graph data: if `previousFileID`
    * is set, delete that file (cascade-removes its nodes/edges); then insert
@@ -563,7 +576,10 @@ export const layer = Layer.effect(
     })
 
     // Clears edges that became invalid because their endpoints' files were re-indexed.
-    const deleteDerivedEdgesForFiles = Effect.fn("CodegraphRepo.deleteDerivedEdgesForFiles")(function* (input: { fileIDs: string[] }) {
+    const deleteDerivedEdgesForFiles = Effect.fn("CodegraphRepo.deleteDerivedEdgesForFiles")(function* (input: {
+      fileIDs: string[]
+      preserveEdgeIDs?: ReadonlySet<string>
+    }) {
       if (input.fileIDs.length === 0) return []
       return yield* db.transaction((tx) =>
         Effect.gen(function* () {
@@ -575,7 +591,7 @@ export const layer = Layer.effect(
             .pipe(Effect.orDie)
           const nodeIDs = nodeIDRows.map((r) => r.id)
           if (nodeIDs.length === 0) return []
-          const derivedWhere = and(
+          let derivedWhere: SQL | undefined = and(
             or(
               inArray(CodegraphEdgesTable.from_node_id, nodeIDs),
               inArray(CodegraphEdgesTable.to_node_id, nodeIDs),
@@ -591,6 +607,11 @@ export const layer = Layer.effect(
               eq(CodegraphEdgesTable.kind, "generated_from"),
             ),
           )
+          // Phase 0 tree-sitter (parser mode): exempt parser-emitted edge
+          // ids so parser-owned tree-sitter query edges survive the delete.
+          if (input.preserveEdgeIDs && input.preserveEdgeIDs.size > 0) {
+            derivedWhere = and(derivedWhere, notInArray(CodegraphEdgesTable.id, [...input.preserveEdgeIDs]))
+          }
           const deletedRows = yield* tx
             .select({ from: CodegraphEdgesTable.from_node_id, to: CodegraphEdgesTable.to_node_id })
             .from(CodegraphEdgesTable)
@@ -612,7 +633,7 @@ export const layer = Layer.effect(
       ).pipe(Effect.orDie)
     })
 
-    const deleteAllDerivedEdges = Effect.fn("CodegraphRepo.deleteAllDerivedEdges")(function* () {
+    const deleteAllDerivedEdges = Effect.fn("CodegraphRepo.deleteAllDerivedEdges")(function* (preserveEdgeIDs?: ReadonlySet<string>) {
       return yield* db.transaction((tx) =>
         Effect.gen(function* () {
           const derivedKinds = [
@@ -625,15 +646,21 @@ export const layer = Layer.effect(
             "mounts",
             "generated_from",
           ]
+          let where: SQL | undefined = inArray(CodegraphEdgesTable.kind, derivedKinds)
+          // Phase 0 tree-sitter (parser mode): exempt parser-emitted edge
+          // ids so parser-owned tree-sitter query edges survive the purge.
+          if (preserveEdgeIDs && preserveEdgeIDs.size > 0) {
+            where = and(where, notInArray(CodegraphEdgesTable.id, [...preserveEdgeIDs]))
+          }
           const deletedRows = yield* tx
             .select({ from: CodegraphEdgesTable.from_node_id, to: CodegraphEdgesTable.to_node_id })
             .from(CodegraphEdgesTable)
-            .where(inArray(CodegraphEdgesTable.kind, derivedKinds))
+            .where(where)
             .all()
             .pipe(Effect.orDie)
           yield* tx
             .delete(CodegraphEdgesTable)
-            .where(inArray(CodegraphEdgesTable.kind, derivedKinds))
+            .where(where)
             .run()
             .pipe(Effect.orDie)
           const touched = new Set<string>()

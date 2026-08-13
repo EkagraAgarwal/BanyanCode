@@ -5,7 +5,16 @@ description: Polyglot code graph with tree-sitter
 
 # BanyanCode Code Graph
 
-BanyanCode builds a polyglot code graph using tree-sitter (TypeScript, JavaScript, Python, Go, Rust) with regex fallback for other languages. The graph captures files, symbols, imports, calls, and Wave 1 structural edges (tests, routes, config mounts, etc.).
+BanyanCode builds a polyglot code graph. TypeScript, JavaScript, and Python go through the tree-sitter parse path (node extraction with syntax-error detection and regex fallback when the tree-sitter wasm bundle is unavailable); other languages use the regex parsers, with a tree-sitter language rollout planned for later phases. The graph captures files, symbols, imports, calls, and Wave 1 structural edges (tests, routes, config mounts, etc.).
+
+## Edge modes (`BANYANCODE_TS_EDGES`)
+
+Derived edges are indexer-owned: `rebuildDerivedGraph` deletes and regenerates `calls` / `extends` / `references` / `imports` plus the structural cross-edges (`tested_by`, `configured_by`, `built_by`, `mounts`, `generated_from`) on every build. Set the environment variable to opt into parser-owned call edges:
+
+- `BANYANCODE_TS_EDGES=derived` (default): exactly the derived lifecycle above — tree-sitter query edges (calls / yield / service_access) are discarded at index time and never reach the graph.
+- `BANYANCODE_TS_EDGES=parser`: for files the tree-sitter parse path handled, the tree-sitter query edges (intra-file `calls`, `yield`, `service_access`) survive the derived pass. `imports` and all structural cross-edges stay derived; files parsed by the regex fallback (wasm unavailable) keep derived `calls` as usual.
+
+Parse errors from the tree-sitter path (ERROR/MISSING nodes, wasm unavailable, exceptions) are recorded via `codegraph_parse_errors` and counted in the build report's `parseFailure` bucket; the file still indexes via the regex fallback.
 
 ## Ignore rules
 
