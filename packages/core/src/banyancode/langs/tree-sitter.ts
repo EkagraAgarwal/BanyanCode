@@ -27,18 +27,86 @@ import treeSitterTypescriptWasm from "tree-sitter-typescript/tree-sitter-typescr
 import treeSitterJavascriptWasm from "tree-sitter-javascript/tree-sitter-javascript.wasm" with { type: "wasm" }
 // @ts-ignore same rationale as the main wasm import above.
 import treeSitterPythonWasm from "tree-sitter-python/tree-sitter-python.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterRustWasm from "tree-sitter-rust/tree-sitter-rust.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterGoWasm from "tree-sitter-go/tree-sitter-go.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterCWasm from "tree-sitter-c/tree-sitter-c.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterCppWasm from "tree-sitter-cpp/tree-sitter-cpp.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterJavaWasm from "tree-sitter-java/tree-sitter-java.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterCSharpWasm from "tree-sitter-c-sharp/tree-sitter_c_sharp.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterRubyWasm from "tree-sitter-ruby/tree-sitter-ruby.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterPhpWasm from "tree-sitter-php/tree-sitter-php_only.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterBashWasm from "tree-sitter-bash/tree-sitter-bash.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterJsonWasm from "tree-sitter-json/tree-sitter-json.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterZigWasm from "@tree-sitter-grammars/tree-sitter-zig/tree-sitter-zig.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterTomlWasm from "@tree-sitter-grammars/tree-sitter-toml/tree-sitter-toml.wasm" with { type: "wasm" }
+// @ts-ignore same rationale as the main wasm import above.
+import treeSitterYamlWasm from "@tree-sitter-grammars/tree-sitter-yaml/tree-sitter-yaml.wasm" with { type: "wasm" }
 
 export const TREE_SITTER_WASM_SOURCES = Object.freeze({
   main: treeSitterMainWasm,
   typescript: treeSitterTypescriptWasm,
   javascript: treeSitterJavascriptWasm,
   python: treeSitterPythonWasm,
+  rust: treeSitterRustWasm,
+  go: treeSitterGoWasm,
+  c: treeSitterCWasm,
+  cpp: treeSitterCppWasm,
+  java: treeSitterJavaWasm,
+  csharp: treeSitterCSharpWasm,
+  ruby: treeSitterRubyWasm,
+  php: treeSitterPhpWasm,
+  bash: treeSitterBashWasm,
+  json: treeSitterJsonWasm,
+  zig: treeSitterZigWasm,
+  toml: treeSitterTomlWasm,
+  yaml: treeSitterYamlWasm,
 })
+
+// Extension groups per grammar family. `main` is the web-tree-sitter runtime,
+// not a language, so it is deliberately absent. One shared Parser instance
+// per family keeps `parseIncremental` (parser.parse(content, oldTree)) valid
+// across all extensions of the same grammar.
+const GRAMMAR_EXTENSIONS: Readonly<
+  Record<Exclude<keyof typeof TREE_SITTER_WASM_SOURCES, "main">, readonly string[]>
+> = {
+  typescript: [".ts", ".tsx", ".mts", ".cts"],
+  javascript: [".js", ".jsx", ".mjs", ".cjs"],
+  python: [".py", ".pyw"],
+  rust: [".rs"],
+  go: [".go"],
+  c: [".c", ".h"],
+  cpp: [".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"],
+  java: [".java"],
+  csharp: [".cs"],
+  ruby: [".rb"],
+  php: [".php"],
+  bash: [".sh", ".bash"],
+  json: [".json"],
+  zig: [".zig"],
+  toml: [".toml"],
+  yaml: [".yml", ".yaml"],
+}
 
 export const HEAP_INITIAL_PAGES = 256
 export const HEAP_MAX_PAGES = 4096
 
-const SUPPORTED_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".py", ".pyw"])
+const SUPPORTED_EXTENSIONS = new Set([
+  ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".py", ".pyw",
+  ".rs", ".go", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx",
+  ".java", ".cs", ".rb", ".php", ".sh", ".bash", ".json", ".zig", ".toml", ".yml", ".yaml",
+])
 
 export interface ParseTree {
   rootNode: {
@@ -115,17 +183,21 @@ export const ensureWebTreeSitterReady = (): Effect.Effect<void, never, never> =>
 
     const newState = yield* Effect.tryPromise({
       try: async () => {
-        const [mainAsset, tsAsset, jsAsset, pyAsset] = await Promise.all([
-          Promise.resolve(TREE_SITTER_WASM_SOURCES.main),
-          Promise.resolve(TREE_SITTER_WASM_SOURCES.typescript),
-          Promise.resolve(TREE_SITTER_WASM_SOURCES.javascript),
-          Promise.resolve(TREE_SITTER_WASM_SOURCES.python),
-        ])
-
-        const mainPath = resolveAssetPath(mainAsset)
-        const tsPath = resolveAssetPath(tsAsset)
-        const jsPath = resolveAssetPath(jsAsset)
-        const pyPath = resolveAssetPath(pyAsset)
+        // Promise.all over every named source; object insertion order keeps
+        // `main` first. `await asset` inside the map normalizes thenables —
+        // the same semantics as the original per-entry Promise.resolve
+        // wrapper — then each asset path is converted for Language.load.
+        const [mainAsset, ...grammarAssets] = await Promise.all(
+          (Object.entries(TREE_SITTER_WASM_SOURCES) as Array<[keyof typeof TREE_SITTER_WASM_SOURCES, string]>).map(
+            async ([key, asset]) => [key, resolveAssetPath(await asset)] as const,
+          ),
+        )
+        const mainPath = mainAsset[1]
+        // `main` is destructured out above, so the remainder is exactly the
+        // grammar keys of TREE_SITTER_WASM_SOURCES (typescript … yaml).
+        const grammarEntries = grammarAssets as Array<
+          readonly [Exclude<keyof typeof TREE_SITTER_WASM_SOURCES, "main">, string]
+        >
 
         const webTreeSitter = await import("web-tree-sitter")
         await webTreeSitter.Parser.init({
@@ -134,31 +206,19 @@ export const ensureWebTreeSitterReady = (): Effect.Effect<void, never, never> =>
           },
         })
 
-        const tsLang = await webTreeSitter.Language.load(tsPath)
-        const jsLang = await webTreeSitter.Language.load(jsPath)
-        const pyLang = await webTreeSitter.Language.load(pyPath)
-
         const parsersByExt = new Map<string, import("web-tree-sitter").Parser>()
         const languagesByExt = new Map<string, unknown>()
-        const tsParser = new webTreeSitter.Parser()
-        tsParser.setLanguage(tsLang)
-        for (const ext of [".ts", ".tsx", ".mts", ".cts"]) {
-          parsersByExt.set(ext, tsParser)
-          languagesByExt.set(ext, tsLang)
-        }
-
-        const jsParser = new webTreeSitter.Parser()
-        jsParser.setLanguage(jsLang)
-        for (const ext of [".js", ".jsx", ".mjs", ".cjs"]) {
-          parsersByExt.set(ext, jsParser)
-          languagesByExt.set(ext, jsLang)
-        }
-
-        const pyParser = new webTreeSitter.Parser()
-        pyParser.setLanguage(pyLang)
-        for (const ext of [".py", ".pyw"]) {
-          parsersByExt.set(ext, pyParser)
-          languagesByExt.set(ext, pyLang)
+        for (const [grammar, assetPath] of grammarEntries) {
+          const language = await webTreeSitter.Language.load(assetPath)
+          // One shared Parser per grammar family so incremental parses
+          // (parser.parse(content, oldTree)) stay valid across every
+          // extension mapped to the same language.
+          const parser = new webTreeSitter.Parser()
+          parser.setLanguage(language)
+          for (const ext of GRAMMAR_EXTENSIONS[grammar]) {
+            parsersByExt.set(ext, parser)
+            languagesByExt.set(ext, language)
+          }
         }
 
         return {
