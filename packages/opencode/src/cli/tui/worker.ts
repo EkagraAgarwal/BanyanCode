@@ -45,22 +45,39 @@ export const rpc = {
     return result
   },
   async server(input: { port: number; hostname: string; mdns?: boolean; cors?: string[] }) {
-    if (server) await server.stop(true)
-    server = await Server.listen(input)
-    return { url: server.url.toString() }
+    try {
+      if (server) await server.stop(true)
+      server = await Server.listen(input)
+      return { url: server.url.toString() }
+    } catch (error) {
+      // Surface the failure through the RPC channel instead of letting an
+      // uncaught exception abort the worker process.
+      console.error("[tui-worker] server start failed", error)
+      throw new Error(error instanceof Error ? error.message : String(error))
+    }
   },
   async checkUpgrade(input: { directory: string }) {
-    await InstanceRuntime.load({ directory: input.directory })
-    await upgrade().catch(() => {})
+    try {
+      await InstanceRuntime.load({ directory: input.directory })
+      await upgrade().catch(() => {})
+    } catch (error) {
+      console.error("[tui-worker] upgrade check failed", error)
+      throw new Error(error instanceof Error ? error.message : String(error))
+    }
   },
   async reload() {
-    await AppRuntime.runPromise(
-      Effect.gen(function* () {
-        const cfg = yield* Config.Service
-        yield* cfg.invalidate()
-        yield* disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true })
-      }),
-    )
+    try {
+      await AppRuntime.runPromise(
+        Effect.gen(function* () {
+          const cfg = yield* Config.Service
+          yield* cfg.invalidate()
+          yield* disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true })
+        }),
+      )
+    } catch (error) {
+      console.error("[tui-worker] reload failed", error)
+      throw new Error(error instanceof Error ? error.message : String(error))
+    }
   },
   async shutdown() {
     await InstanceRuntime.disposeAllInstances()

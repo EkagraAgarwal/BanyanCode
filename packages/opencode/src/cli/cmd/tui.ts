@@ -135,10 +135,13 @@ export const TuiThreadCommand = cmd({
       const client = Rpc.client<typeof rpc>(worker)
       // The fullscreen TUI runs with OpenTUI in externalOutputMode "passthrough"
       // so any stderr write from a worker crash overwrites the rendered frame.
-      // Swallow worker errors silently; the file logger still records them via
-      // the parent process's uncaughtException handler, and the next request
-      // will surface a fresh connection error if the worker is actually dead.
-      worker.onerror = () => {}
+      // Keep the handler non-fatal: a single stderr line is acceptable, the file
+      // logger still records the full crash via the parent process's
+      // uncaughtException handler, and the next request will surface a fresh
+      // connection error if the worker is actually dead.
+      worker.onerror = (error) => {
+        console.error("[tui] worker error", error?.message ?? error)
+      }
       worker.onmessageerror = () => {}
       const reload = () => {
         client.call("reload", undefined).catch(() => {})
