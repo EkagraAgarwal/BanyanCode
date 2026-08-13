@@ -150,9 +150,12 @@ const nativeLayer = (config: Config) =>
       // in particular) releases its -wal/-shm locks synchronously instead of
       // leaving them held past scope teardown — a fast test that finishes before
       // the libsql driver settles would otherwise EBUSY on rm of the tempdir.
+      // PASSIVE is required (not TRUNCATE): other processes (subagent workers,
+      // external sqlite3) may hold in-flight WAL transactions, and TRUNCATE
+      // resets the WAL out from under them, corrupting the DB.
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
-          yield* Effect.promise(() => client.execute({ sql: "PRAGMA wal_checkpoint(TRUNCATE)", args: [] })).pipe(
+          yield* Effect.promise(() => client.execute({ sql: "PRAGMA wal_checkpoint(PASSIVE)", args: [] })).pipe(
             Effect.ignore,
           )
           client.close()
@@ -164,7 +167,6 @@ const nativeLayer = (config: Config) =>
       yield* Effect.promise(() => client.execute({ sql: "PRAGMA busy_timeout = 5000", args: [] }))
       yield* Effect.promise(() => client.execute({ sql: "PRAGMA cache_size = -64000", args: [] }))
       yield* Effect.promise(() => client.execute({ sql: "PRAGMA foreign_keys = ON", args: [] }))
-      yield* Effect.promise(() => client.execute({ sql: "PRAGMA mmap_size = 268435456", args: [] }))
       yield* Effect.promise(() => client.execute({ sql: "PRAGMA temp_store = MEMORY", args: [] }))
       // Only set page_size if not already set
       const pageSizeResult = yield* Effect.promise(() => client.execute({ sql: "PRAGMA page_size", args: [] }))

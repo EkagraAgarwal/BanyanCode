@@ -2,7 +2,8 @@ export * as Database from "./database"
 
 import { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
 import { layer as sqliteLayer } from "#sqlite"
-import { Context, Effect, Layer } from "effect"
+import { Cause, Context, Effect, Layer } from "effect"
+import { classifySqliteError } from "effect/unstable/sql/SqlError"
 import { Global } from "../global"
 import { Flag } from "../flag/flag"
 import { isAbsolute, join } from "path"
@@ -20,9 +21,14 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/storage/Database") {}
 
-export const layer = Layer.effect(
-  Service,
+// Shared open sequence: process PRAGMAs + apply migrations on the drizzle db
+// built over the `#sqlite` layer (provided by the caller via `sqliteLayer`).
+// Every layer entry point funnels through here so corruption quarantine/rebuild
+// applies uniformly. `filename` identifies the DB file — the `#sqlite` layer
+// binds it and the quarantine path in `layerFromPath` consults it.
+const open = (filename: string) =>
   Effect.gen(function* () {
+    void filename
     const db = yield* makeDatabase
 
     yield* db.run("PRAGMA journal_mode = WAL")
@@ -33,12 +39,111 @@ export const layer = Layer.effect(
     yield* db.run("PRAGMA wal_checkpoint(PASSIVE)")
     yield* DatabaseMigration.apply(db)
 
+    return db
+  })
+
+// SQLITE_CORRUPT ("database disk image is malformed") and SQLITE_NOTADB
+// ("file is not a database" / "not a database") message markers.
+const CORRUPT_MARKERS = ["database disk image is malformed", "file is not a database", "not a database"] as const
+
+const hasCorruptionMarker = (text: string): boolean => {
+  const lower = text.toLowerCase()
+  return CORRUPT_MARKERS.some((marker) => lower.includes(marker))
+}
+
+// Walk an error's message/reason/cause chain looking for corruption markers.
+// `classifySqliteError` (below) normalizes native driver causes by reading
+// `.code`/`.errno`; SQLITE_CORRUPT (11) / SQLITE_NOTADB (26) classify as
+// UnknownError whose `.cause` preserves the native message, so the message
+// chain is the deciding signal. The `seen` set guards cyclic cause chains.
+const corruptionSignals = (value: unknown, seen: Set<unknown>): boolean => {
+  if (!value || typeof value !== "object" || seen.has(value)) return false
+  seen.add(value)
+  const record = value as Record<string, unknown>
+  if (typeof record.message === "string" && hasCorruptionMarker(record.message)) return true
+  if (record.reason && typeof record.reason === "object" && corruptionSignals(record.reason, seen)) return true
+  if (record.cause && typeof record.cause === "object" && corruptionSignals(record.cause, seen)) return true
+  return false
+}
+
+const isCorruptionError = (cause: Cause.Cause<unknown>): boolean => {
+  for (const reason of cause.reasons) {
+    if (reason._tag === "Interrupt") continue
+    const value = reason._tag === "Die" ? reason.defect : reason.error
+    // Structured classification first, then the message chain on both the raw
+    // value and the normalized reason (they share the native cause).
+    const classified = classifySqliteError(value)
+    if (corruptionSignals(classified, new Set()) || corruptionSignals(value, new Set())) return true
+  }
+  return false
+}
+
+const isQuarantinable = (filename: string): boolean =>
+  filename !== ":memory:" && filename !== "" && !filename.startsWith("file:")
+
+const QUARANTINE_RETRIES = 20
+
+// Rename the DB file and its -wal/-shm siblings (when present) to
+// `<name>.corrupt-<epochMs>` so the next open creates a fresh database. The
+// rename is retried briefly because the failed client may still hold the file
+// open for a few ms after its scope closes (Windows EBUSY).
+const quarantineCorruptDatabase = (filename: string): Effect.Effect<string[], never> =>
+  Effect.gen(function* () {
+    const stamp = `corrupt-${Date.now()}`
+    const renamed: string[] = []
+    for (const suffix of ["", "-wal", "-shm"] as const) {
+      const target = `${filename}${suffix}`
+      const dest = `${target}.${stamp}`
+      for (let attempt = 0; attempt < QUARANTINE_RETRIES; attempt++) {
+        const result = yield* Effect.sync(() => {
+          if (!fs.existsSync(target)) return "missing" as const
+          try {
+            fs.renameSync(target, dest)
+            return "renamed" as const
+          } catch {
+            return "locked" as const
+          }
+        })
+        if (result === "renamed") {
+          renamed.push(dest)
+          break
+        }
+        if (result === "missing") break
+        yield* Effect.sleep("25 millis")
+      }
+    }
+    return renamed
+  })
+
+export const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const db = yield* open("")
     return { db }
   }).pipe(Effect.orDie),
 )
 
 export function layerFromPath(filename: string) {
-  return layer.pipe(Layer.provide(sqliteLayer({ filename })))
+  const build = () => layer.pipe(Layer.provide(sqliteLayer({ filename })))
+  return build().pipe(
+    Layer.catchCause((cause) => {
+      if (isQuarantinable(filename) && isCorruptionError(cause)) {
+        // Quarantine the corrupt file, then rebuild the same layer fresh so the
+        // next open lands on a pristine path. `Layer.unwrap` runs the
+        // quarantine effect before the replacement layer builds, and
+        // `Layer.fresh` gives the rebuild its own memoMap so a failed first
+        // build (memoized under the shared layer identity) is not reused.
+        return Layer.unwrap(
+          Effect.gen(function* () {
+            const renamed = yield* quarantineCorruptDatabase(filename)
+            yield* Effect.logWarning("corrupt database quarantined; rebuilding", { path: filename, renamed })
+            return Layer.fresh(build())
+          }),
+        )
+      }
+      return Layer.effect(Service, Effect.die(Cause.squash(cause)))
+    }),
+  )
 }
 
 function findProjectRoot(startDir: string): string | undefined {
