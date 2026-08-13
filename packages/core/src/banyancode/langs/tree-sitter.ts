@@ -310,7 +310,7 @@ export const layer: Layer.Layer<Service, never, never> = Layer.effect(
     const getLanguage = (ext: string): Effect.Effect<unknown, TreeSitterUnavailableError, never> =>
       withTreeSitter((state) => {
         if (!SUPPORTED_EXTENSIONS.has(ext)) {
-          throw new Error(`Unsupported extension: ${ext}. Tree-sitter TS/JS/Python scaffold exists; real parsers land in PR 5/6.`)
+          throw new Error(`Unsupported extension: ${ext}. Tree-sitter grammar loaded for this extension (16 languages; see SUPPORTED_EXTENSIONS).`)
         }
         const language = state.parser.languagesByExt.get(ext)
         if (language === undefined) throw new Error(`No language for: ${ext}`)
@@ -320,7 +320,7 @@ export const layer: Layer.Layer<Service, never, never> = Layer.effect(
     const parse = (ext: string, content: string): Effect.Effect<ParseTree, TreeSitterUnavailableError, never> =>
       withTreeSitter((state) => {
         if (!SUPPORTED_EXTENSIONS.has(ext)) {
-          throw new Error(`Unsupported extension: ${ext}. Tree-sitter TS/JS/Python scaffold exists; real parsers land in PR 5/6.`)
+          throw new Error(`Unsupported extension: ${ext}. Tree-sitter grammar loaded for this extension (16 languages; see SUPPORTED_EXTENSIONS).`)
         }
         const parser = state.parser.parsersByExt.get(ext)
         if (!parser) throw new Error(`No parser for: ${ext}`)

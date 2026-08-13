@@ -202,11 +202,11 @@ export const layer = Layer.effect(
     // Bundle anchor: query-executor's `.scm` text imports — and transitively
     // tree-sitter.ts's wasm imports — must stay statically reachable from
     // the production graph, because `packages/opencode/script/build.ts`
-    // validates that all 7 tree-sitter assets exist in compiled binaries and
-    // fails the build otherwise. This call also primes the module-level
-    // query-source cache used by the per-file tree-sitter parse path below
-    // (Phase 0: TS/JS/Python route through parseTypeScriptWithTreeSitter /
-    // parsePythonWithTreeSitter). It builds a 3-entry Map from bundled
+    // validates that all 20 tree-sitter assets (17 wasm + 3 scm) exist in
+    // compiled binaries and fails the build otherwise. This call also primes
+    // the module-level query-source cache used by the per-file tree-sitter
+    // parse path below (Phase 0: TS/JS/Python via .scm query edges, plus the
+    // 13 AST-walk adapter languages). It builds a 3-entry Map from bundled
     // strings — microseconds, memoized per process, no wasm instantiation
     // (that happens once per build in `ensureWebTreeSitterReady`, called at
     // the top of `index` and `applyChanges`).

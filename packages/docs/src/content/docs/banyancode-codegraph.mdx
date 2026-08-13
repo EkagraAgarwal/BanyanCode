@@ -5,7 +5,7 @@ description: Polyglot code graph with tree-sitter
 
 # BanyanCode Code Graph
 
-BanyanCode builds a polyglot code graph. TypeScript, JavaScript, and Python go through the tree-sitter parse path (node extraction with syntax-error detection and regex fallback when the tree-sitter wasm bundle is unavailable); other languages use the regex parsers, with a tree-sitter language rollout planned for later phases. The graph captures files, symbols, imports, calls, and Wave 1 structural edges (tests, routes, config mounts, etc.).
+BanyanCode builds a polyglot code graph. Sixteen languages route through the tree-sitter parse path first: TypeScript / JavaScript / Python (node extraction plus `.scm` query edges with syntax-error detection) and rust / go / java / c / c++ / csharp / ruby / php / bash / zig / toml / yaml (AST-walk node extraction via the `langs/adapters/` mappings). Every tree-sitter language falls back to its regex parser when the wasm bundle is unavailable. The graph captures files, symbols, imports, calls, and Wave 1 structural edges (tests, routes, config mounts, etc.).
 
 ## Edge modes (`BANYANCODE_TS_EDGES`)
 
