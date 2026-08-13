@@ -47,6 +47,7 @@ import { Shell } from "../../src/shell/shell"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
+import { CodegraphRepo } from "@opencode-ai/core/banyancode/codegraph-repo"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Format } from "../../src/format"
@@ -2293,6 +2294,244 @@ noLLMServer.instance(
           expect(err.data.message).toContain("init")
         }
       }
+    }),
+  30_000,
+)
+
+// ---------------------------------------------------------------------------
+// Repository Gateway interception e2e (V1 runtime, default install)
+// ---------------------------------------------------------------------------
+// Proves the intercept layer end-to-end through the REAL prompt loop: a mock
+// LLM issues read/grep tool calls, the real V1 seam (SessionTools.resolve ->
+// gateway hook) consults the real RepositoryGateway.defaultLayer (RulesRouter
+// by default), and the outcome is observable in the stored tool part. The
+// codegraph is seeded into the harness's in-memory Database (OPENCODE_DB):
+// the gateway layers are merged into the harness stack like AppLayer does.
+//
+// Expected (default install, per M1 + augment-defaults):
+//   - read of a code file  -> symbol header prepended to the model-facing page
+//     (exact source preserved below)
+//   - grep with relationship language -> INTELLIGENCE answer from the graph
+//   - grep with docs/plain phrase     -> DIRECT, raw grep matches
+//   - banyancode_router: "off"        -> byte-identical (no header, no graph)
+//   - read of a non-code file         -> DIRECT, byte-identical
+
+const gatewayHarness = Layer.provideMerge(
+  Layer.provideMerge(
+    Layer.provideMerge(
+      Layer.provideMerge(
+        makeHttp(),
+        Banyan.RepositoryGatewayNS.defaultLayer,
+      ),
+      Banyan.investigationStateDefaultLayer,
+    ),
+    Banyan.codegraphRepoDefaultLayer,
+  ),
+  Banyan.repositoryIntelligenceDefaultLayer,
+)
+
+const gatewayIt = testEffect(gatewayHarness)
+
+// Off install: explicit banyancode_router: "off" resolves NoopRouter, so the
+// gateway must be a byte-for-byte passthrough even though it is mounted and
+// the graph is seeded.
+const offConfig = Layer.mock(Banyan.BanyanConfigService, {
+  get: () => Effect.succeed({ banyancode_router: "off" }),
+  getGlobal: () => Effect.succeed({}),
+  update: () => Effect.succeed({}),
+  updateAgentOverride: () => Effect.succeed({}),
+  getAgentOverrides: () => Effect.succeed({}),
+  updateAgentPrompt: () => Effect.succeed({}),
+})
+const gatewayOffIt = testEffect(Layer.provideMerge(gatewayHarness, offConfig))
+
+const seedAuthGraph = Effect.fn("test.seedAuthGraph")(function* () {
+  const repo = yield* CodegraphRepo.Service
+  yield* repo.putFile({ id: "f-auth", path: "src/auth.ts", contentHash: "h1", language: "typescript", indexedAt: 1 })
+  yield* repo.putFile({ id: "f-server", path: "src/server.ts", contentHash: "h2", language: "typescript", indexedAt: 2 })
+  yield* repo.putFile({ id: "f-docs", path: "docs/README.md", contentHash: "h3", language: "markdown", indexedAt: 3 })
+  yield* repo.putNode({
+    id: "n-auth",
+    fileID: "f-auth",
+    kind: "class",
+    name: "AuthManager",
+    signature: "class AuthManager",
+    startLine: 1,
+    endLine: 4,
+    code: "export class AuthManager {}\n",
+  })
+  yield* repo.putNode({
+    id: "n-server",
+    fileID: "f-server",
+    kind: "function",
+    name: "handleRequest",
+    signature: "handleRequest()",
+    startLine: 42,
+    endLine: 60,
+    code: "export function handleRequest() {}\n",
+  })
+  yield* repo.putEdge({ id: "e-call", fromNodeID: "n-server", toNodeID: "n-auth", kind: "calls" })
+})
+
+const AUTH_SRC = "export class AuthManager {}\nconst x = 1\n"
+const SERVER_SRC = "export function handleRequest() {}\n"
+const DOCS_SRC = "authentication flow\n"
+
+const completedPart = (msgs: SessionV1.WithParts[], tool: string) =>
+  msgs
+    .flatMap((msg) => msg.parts)
+    .find(
+      (part): part is CompletedToolPart => part.type === "tool" && part.tool === tool && part.state.status === "completed",
+    )
+
+gatewayIt.instance(
+  "gateway intercepts read of a code file and prepends the symbol header (default install)",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        title: "Gateway read",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* writeText(path.join(dir, "src", "auth.ts"), AUTH_SRC)
+      yield* writeText(path.join(dir, "src", "server.ts"), SERVER_SRC)
+      yield* writeText(path.join(dir, "docs", "README.md"), DOCS_SRC)
+      yield* seedAuthGraph()
+
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "read src/auth.ts" }],
+      })
+      yield* llm.tool("read", { filePath: "src/auth.ts" })
+      yield* llm.text("done")
+
+      const result = yield* prompt.loop({ sessionID: session.id })
+      expect(result.info.role).toBe("assistant")
+
+      const msgs = yield* MessageV2.filterCompactedEffect(session.id)
+      const tool = completedPart(msgs, "read")
+      if (!tool) return
+      // Model-facing page: exact source preserved, symbol header prepended.
+      expect(tool.state.output).toContain("Symbol: AuthManager")
+      expect(tool.state.output).toContain("export class AuthManager")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "done")).toBe(true)
+    }),
+  30_000,
+)
+
+gatewayIt.instance(
+  "gateway answers relationship grep from the codegraph (default install)",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        title: "Gateway grep",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* writeText(path.join(dir, "src", "auth.ts"), AUTH_SRC)
+      yield* writeText(path.join(dir, "src", "server.ts"), SERVER_SRC)
+      yield* seedAuthGraph()
+
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "who calls AuthManager" }],
+      })
+      yield* llm.tool("grep", { pattern: "who calls AuthManager" })
+      yield* llm.text("done")
+
+      const result = yield* prompt.loop({ sessionID: session.id })
+      expect(result.info.role).toBe("assistant")
+
+      const msgs = yield* MessageV2.filterCompactedEffect(session.id)
+      const tool = completedPart(msgs, "grep")
+      if (!tool) return
+      // INTELLIGENCE: the model-facing result is the rendered graph answer.
+      expect(tool.state.output).toContain("AuthManager callers:")
+      expect(tool.state.output).toContain("src/server.ts")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "done")).toBe(true)
+    }),
+  30_000,
+)
+
+gatewayIt.instance(
+  "gateway leaves docs-scoped grep byte-identical (hard negative)",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        title: "Gateway hard negative",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* writeText(path.join(dir, "docs", "README.md"), DOCS_SRC)
+      yield* seedAuthGraph()
+
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "find authentication flow" }],
+      })
+      yield* llm.tool("grep", { pattern: "authentication flow", path: path.join(dir, "docs") })
+      yield* llm.text("done")
+
+      const result = yield* prompt.loop({ sessionID: session.id })
+      expect(result.info.role).toBe("assistant")
+
+      const msgs = yield* MessageV2.filterCompactedEffect(session.id)
+      const tool = completedPart(msgs, "grep")
+      if (!tool) return
+      // DIRECT: raw ripgrep match, no graph answer, no callers rendering.
+      expect(tool.state.output).toContain("authentication flow")
+      expect(tool.state.output).not.toContain("callers:")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "done")).toBe(true)
+    }),
+  30_000,
+)
+
+gatewayOffIt.instance(
+  "banyancode_router: off keeps read byte-identical even with a seeded graph",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        title: "Gateway off",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* writeText(path.join(dir, "src", "auth.ts"), AUTH_SRC)
+      yield* writeText(path.join(dir, "src", "server.ts"), SERVER_SRC)
+      yield* seedAuthGraph()
+
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "read src/auth.ts" }],
+      })
+      yield* llm.tool("read", { filePath: "src/auth.ts" })
+      yield* llm.text("done")
+
+      const result = yield* prompt.loop({ sessionID: session.id })
+      expect(result.info.role).toBe("assistant")
+
+      const msgs = yield* MessageV2.filterCompactedEffect(session.id)
+      const tool = completedPart(msgs, "read")
+      if (!tool) return
+      // NoopRouter: no symbol header, exact page only.
+      expect(tool.state.output).not.toContain("Symbol: AuthManager")
+      expect(tool.state.output).toContain("export class AuthManager")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "done")).toBe(true)
     }),
   30_000,
 )
