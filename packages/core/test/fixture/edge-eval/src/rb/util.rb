@@ -1,0 +1,3 @@
+def helper
+  "hello"
+end
