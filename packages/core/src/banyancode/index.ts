@@ -227,7 +227,6 @@ export {
 export * as InvestigationState from "./gateway/investigation"
 export * as RepositoryGatewayTypes from "./gateway/types"
 export * as RepositoryGatewayRouter from "./gateway/router"
-export * as RepositoryGatewayNeedle from "./gateway/needle-router"
 export * as RepositoryGatewayNormalizer from "./gateway/normalizer"
 export * as RepositoryGatewayFormatter from "./gateway/formatter"
 export { Service as Git, layer as gitLayer, defaultLayer as gitDefaultLayer } from "./repository-intelligence/git-service"

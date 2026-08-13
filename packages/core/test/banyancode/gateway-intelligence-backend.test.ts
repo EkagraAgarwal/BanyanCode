@@ -140,7 +140,7 @@ const gatewayWithDegradedIntel = testEffect(
 )
 
 // BanyanConfigService doubles for defaultLayer router selection (plan §2.7).
-const configWith = (banyancode_router: "off" | "rules" | "needle" | undefined) =>
+const configWith = (banyancode_router: "off" | "rules" | undefined) =>
   Layer.mock(BanyanConfigService, {
     get: () => Effect.succeed({ banyancode_router }),
     getGlobal: () => Effect.succeed({}),

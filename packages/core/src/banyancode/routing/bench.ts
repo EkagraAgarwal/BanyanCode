@@ -5,8 +5,8 @@
  *   - `scoreCorpus(corpus, evaluate)` — scores any deterministic
  *     `evaluate(input): RuleVerdict` router (the rules path);
  *   - `scoreRouter(corpus, classify)` — scores any gateway ToolRouter
- *     (`classify(input): Effect<RouteDecision>`), i.e. RulesRouter, the
- *     upcoming NeedleRouter, or a test stub, against the same corpus.
+ *     (`classify(input): Effect<RouteDecision>`), i.e. RulesRouter or a test
+ *     stub, against the same corpus.
  *
  * Both run against the routing corpus (`test/fixture/routing-corpus.ts`, 365
  * cases / 45 hard negatives). Coarse scoring collapses the corpus's
@@ -173,11 +173,11 @@ export function scoreCorpus(corpus: readonly RoutingCase[], evaluate: Evaluator)
 }
 
 // ── Generic ToolRouter scorer (spec §47-51, §111, §123, §148) ────────────
-// scoreRouter scores ANY gateway router — RulesRouter, the upcoming
-// NeedleRouter, or a test stub — against the same corpus by running its
-// Effect-based classify per case (concurrency 4). The classify contract is
-// never-failing (plan §2.7): defects must be caught INSIDE classify and fail
-// closed to "direct", so a router bug can never block the benchmark.
+// scoreRouter scores ANY gateway router — RulesRouter or a test stub —
+// against the same corpus by running its Effect-based classify per case
+// (concurrency 4). The classify contract is never-failing (plan §2.7):
+// defects must be caught INSIDE classify and fail closed to "direct", so a
+// router bug can never block the benchmark.
 
 /** Map a corpus case onto the gateway RouterInput routers consume (spec §133). */
 export function routerInputFor(case_: RoutingCase): RouterInput {

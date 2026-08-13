@@ -13,11 +13,6 @@ describe("BanyanConfig router flag", () => {
     expect(result.banyancode_router).toBe("rules")
   })
 
-  test("parses banyancode_router: needle", () => {
-    const result = Schema.decodeSync(BanyanConfig.Info)({ banyancode_router: "needle" })
-    expect(result.banyancode_router).toBe("needle")
-  })
-
   test("parses banyancode_router: off", () => {
     const result = Schema.decodeSync(BanyanConfig.Info)({ banyancode_router: "off" })
     expect(result.banyancode_router).toBe("off")

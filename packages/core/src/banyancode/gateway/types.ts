@@ -93,7 +93,7 @@ export interface RouteDecision {
   readonly reasonCodes: readonly string[]
   // Router provenance (spec §43): implementation + versions recorded in traces.
   // The default NoopRouter reports { router: "noop", routerVersion: "0" };
-  // RulesRouter / NeedleRouter carry their own identity.
+  // RulesRouter carries its own identity.
   readonly router?: string
   readonly routerVersion?: string
   readonly policyVersion?: string

@@ -67,9 +67,9 @@ export const Info = Schema.Struct({
   banyancode_max_subagents: Schema.optional(Schema.Number),
   // Repository Gateway router selection (needle2 gateway plan §4). Default
   // "off" = NoopRouter passthrough (byte-for-byte behavioral no-op); "rules" =
-  // deterministic RulesRouter; "needle" = Needle 2 classifier.
+  // deterministic RulesRouter.
   banyancode_router: Schema.optional(
-    Schema.Union([Schema.Literal("off"), Schema.Literal("rules"), Schema.Literal("needle")]),
+    Schema.Union([Schema.Literal("off"), Schema.Literal("rules")]),
   ),
   // Read augmentation (needle2 gateway plan §4 / spec §77, §117). When true,
   // a read of a code file may carry a compact symbol header (Symbol / Imports
