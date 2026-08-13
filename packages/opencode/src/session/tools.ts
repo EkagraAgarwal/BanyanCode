@@ -22,8 +22,11 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import * as AiSdkTransportModule from "@/effect/transport-ai-sdk"
 import { ToolCatalog } from "@opencode-ai/core/tool/tool-catalog"
+import { AgentV2 } from "@opencode-ai/core/agent"
 import type { ToolMaterializationContext } from "@/effect/tool-transport"
 import { BanyanToolsManifest } from "@opencode-ai/core/banyancode/banyan-tools-manifest"
+import { Banyan } from "@opencode-ai/core/banyancode"
+import { GatewayV1 } from "./gateway-v1"
 
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
@@ -93,9 +96,49 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
               { args },
             )
+            // Repository Gateway interception (Gate A, plan §2.1/§2.2): the
+            // optional service never widens R (`serviceOption`), so a missing
+            // gateway is a byte-for-byte no-op. Gated to the conventional
+            // repository tools; every fetch is fail-closed (catchCause ->
+            // undefined outcome) so a defective gateway can never change the
+            // tool's error/abort behavior.
+            const gatewayOpt = yield* Effect.serviceOption(Banyan.RepositoryGateway)
+            let outcome: unknown = undefined
+            if (Option.isSome(gatewayOpt) && GatewayV1.GATEWAY_TOOLS.has(item.id)) {
+              const gateB = GatewayV1.deriveGateB(ctx.messages)
+              const agentID = ctx.agent as AgentV2.ID
+              const investigationOpt = yield* Effect.serviceOption(Banyan.InvestigationStateService)
+              const investigationState = Option.isSome(investigationOpt)
+                ? yield* investigationOpt.value.get(ctx.sessionID, agentID).pipe(
+                    Effect.catchCause(() => Effect.succeed(undefined)),
+                  )
+                : undefined
+              if (Option.isSome(investigationOpt)) {
+                yield* investigationOpt.value
+                  .note(
+                    ctx.sessionID,
+                    agentID,
+                    Banyan.InvestigationState.deriveNote(item.id, args as Record<string, unknown>),
+                  )
+                  .pipe(Effect.catchCause(() => Effect.void))
+              }
+              outcome = yield* gatewayOpt.value
+                .execute({
+                  source: "model-tool",
+                  originalTool: item.id,
+                  arguments: args as Record<string, unknown>,
+                  sessionID: ctx.sessionID,
+                  userRequest: gateB.userRequest,
+                  recentToolCalls: gateB.recentToolCalls,
+                  investigationState,
+                })
+                .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+            }
             const result = yield* item.execute(args, ctx)
+            const final = GatewayV1.applyOutcome(item.id, outcome, result)
             const output = {
               ...result,
+              output: final.output,
               attachments: result.attachments?.map((attachment) => ({
                 ...attachment,
                 id: PartID.ascending(),

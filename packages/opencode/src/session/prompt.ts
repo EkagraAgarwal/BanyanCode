@@ -1721,6 +1721,8 @@ export const defaultLayer = Layer.suspend(() =>
         CrossSpawnSpawner.defaultLayer,
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
+        Banyan.RepositoryGatewayNS.defaultLayer,
+        Banyan.InvestigationState.defaultLayer,
       ),
     ),
   ),

@@ -15,6 +15,8 @@ import { ModelsDev } from "./models-dev"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
 import { Database } from "./database/database"
+import { defaultLayer as repositoryGatewayDefaultLayer } from "./banyancode/gateway"
+import { defaultLayer as investigationStateDefaultLayer } from "./banyancode/gateway/investigation"
 import { PermissionV2 } from "./permission"
 import { PermissionSaved } from "./permission/saved"
 import { FileSystem } from "./filesystem"
@@ -74,7 +76,16 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       Layer.provide(resources),
       Layer.provide(base),
     )
-    const services = Layer.mergeAll(base, resources, permissionsAndTools)
+    const services = Layer.mergeAll(
+      base,
+      resources,
+      permissionsAndTools,
+      // Repository Gateway + per-(session, agent) investigation state: the V2
+      // registry hook reads both via serviceOption (R stays never), so mounting
+      // them here makes the interception live in the V2 runner context.
+      repositoryGatewayDefaultLayer,
+      investigationStateDefaultLayer,
+    )
     const image = Image.layer.pipe(Layer.provide(services))
     const mutation = FileMutation.locationLayer.pipe(Layer.provide(services))
     const skillGuidance = SkillGuidance.locationLayer.pipe(Layer.provide(services))

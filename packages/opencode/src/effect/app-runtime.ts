@@ -166,6 +166,8 @@ export const AppLayer = Layer.mergeAll(
       Layer.provide(Database.defaultLayer),
     ),
   ),
+  Layer.provideMerge(Banyan.RepositoryGatewayNS.defaultLayer),
+  Layer.provideMerge(Banyan.InvestigationState.defaultLayer),
   Layer.provideMerge(coreToolCatalogLayer),
   Layer.provideMerge(
     Layer.mergeAll(

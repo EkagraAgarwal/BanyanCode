@@ -303,6 +303,8 @@ export function createRoutes(
         Banyan.memoryProjectionDefaultLayer,
         Banyan.goalRepoDefaultLayer,
         Banyan.goalServiceDefaultLayer,
+        Banyan.RepositoryGatewayNS.defaultLayer,
+        Banyan.InvestigationState.defaultLayer,
       ).pipe(Layer.provide(Banyan.codegraphRepoDefaultLayer), Layer.provide(Database.defaultLayer)),
     ),
     Layer.provideMerge(
