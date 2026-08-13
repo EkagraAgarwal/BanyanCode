@@ -204,10 +204,21 @@ const routerFromConfig: Effect.Effect<ToolRouter, never, never> = Effect.gen(fun
   return RulesRouter
 })
 
+// Router resolution deferred to per-classify time instead of layer build time
+// (FIX 2): a BanyanConfigService supplied as a Layer.mergeAll sibling (not a
+// provide dependency) is invisible inside defaultLayer's construction gen, so
+// a build-time routerFromConfig would silently ignore `banyancode_router:
+// "off"` in such compositions — only env or a direct Layer.provideMerge
+// dependency worked. routerFromConfig never fails (catchAll inside), so R
+// stays never. This makes config/env effective per request regardless of layer
+// composition order.
+const lazyRouter: ToolRouter = {
+  classify: (input) => Effect.flatMap(routerFromConfig, (router) => router.classify(input)),
+}
+
 export const defaultLayer: Layer.Layer<Service, never, never> = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const router = yield* routerFromConfig
-    return yield* buildGateway(router)
+    return yield* buildGateway(lazyRouter)
   }),
 )

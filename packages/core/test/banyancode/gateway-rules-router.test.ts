@@ -123,16 +123,71 @@ describe("RulesRouter (Phase 2 — deterministic rules)", () => {
         expect(decision.confidence).toBe(1)
       }),
     )
+  })
 
-    it.effect("exact read request stays direct (exact-content-read)", () =>
+  describe("exact-content reads: code files AUGMENT, non-code stays DIRECT (Phase 7)", () => {
+    it.effect("exact read of a code file -> augment (content-code-file)", () =>
       Effect.gen(function* () {
         const decision = yield* RepositoryGatewayRouter.RulesRouter.classify({
           toolName: "read",
           arguments: { path: "src/foo.ts" },
           recentToolCalls: [],
         })
+        expect(decision.route).toBe("augment")
+        expect(decision.confidence).toBe(1)
+        expect(decision.reasonCodes).toContain("content-code-file")
+        expect(decision.reasonCodes).toContain("exact-content-read")
+        expect(decision.router).toBe("rules")
+        expect(decision.routerVersion).toBe("0.1.0")
+      }),
+    )
+
+    it.effect("exact read of a markdown file stays direct (exact-content-read)", () =>
+      Effect.gen(function* () {
+        const decision = yield* RepositoryGatewayRouter.RulesRouter.classify({
+          toolName: "read",
+          arguments: { path: "README.md" },
+          recentToolCalls: [],
+        })
         expect(decision.route).toBe("direct")
         expect(decision.reasonCodes).toContain("exact-content-read")
+        expect(decision.confidence).toBe(1)
+      }),
+    )
+
+    it.effect("exact read of a config file stays direct (exact-content-read)", () =>
+      Effect.gen(function* () {
+        const decision = yield* RepositoryGatewayRouter.RulesRouter.classify({
+          toolName: "read",
+          arguments: { path: "package.json" },
+          recentToolCalls: [],
+        })
+        expect(decision.route).toBe("direct")
+        expect(decision.reasonCodes).toContain("exact-content-read")
+      }),
+    )
+
+    it.effect("range read of a code file -> augment (exact-range-read + content-code-file)", () =>
+      Effect.gen(function* () {
+        const decision = yield* RepositoryGatewayRouter.RulesRouter.classify({
+          toolName: "read",
+          arguments: { path: "src/foo.ts", offset: 1, limit: 50 },
+          recentToolCalls: [],
+        })
+        expect(decision.route).toBe("augment")
+        expect(decision.reasonCodes).toContain("content-code-file")
+        expect(decision.reasonCodes).toContain("exact-range-read")
+      }),
+    )
+
+    it.effect("read with a non-string path never augments (fail-closed)", () =>
+      Effect.gen(function* () {
+        const decision = yield* RepositoryGatewayRouter.RulesRouter.classify({
+          toolName: "read",
+          arguments: { path: 42 },
+          recentToolCalls: [],
+        })
+        expect(decision.route).toBe("direct")
       }),
     )
   })

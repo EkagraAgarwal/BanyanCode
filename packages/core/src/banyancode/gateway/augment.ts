@@ -39,7 +39,10 @@ const CODE_EXTENSIONS: ReadonlySet<string> = new Set([
   "ex", "exs", "erl", "hrl", "hs", "clj", "cljs",
 ])
 
-const isCodePath = (path: string): boolean => {
+// Shared code-file predicate: the RulesRouter uses the SAME allowlist for its
+// augment decision (router.ts), so every "augment" decision can actually
+// produce a header here — or fail closed to exact content.
+export const isCodePath = (path: string): boolean => {
   const dot = path.lastIndexOf(".")
   if (dot < 0 || dot === path.length - 1) return false
   return CODE_EXTENSIONS.has(path.slice(dot + 1).toLowerCase())

@@ -11,7 +11,11 @@
 // SYMBOL_SEARCH / REFERENCES / CALLERS / CALLEES / DEPENDENTS / IMPORTS /
 // IMPLEMENTATIONS / EXTENSIONS / IMPACT / STRUCTURAL / ARCHITECTURE / OWNERSHIP
 // = rewrite into the corresponding repository-intelligence operation;
-// HYBRID = combine multiple routes.
+// HYBRID = combine multiple routes; AUGMENT_READ (Phase 7, spec §6.2/§117) =
+// exact-content read of a CODE file that additionally carries the compact
+// symbol header when the graph has the file's main symbol (fail-closed to
+// byte-identical content otherwise — the intended DEFAULT router behavior,
+// scoring "hybrid" in the coarse buckets).
 //
 // Hard negatives (category "hard-negative", spec §48/§128/§129) must all route
 // DIRECT_*: documentation paths and explicit phrase searches override
@@ -27,6 +31,7 @@ export interface RoutingCase {
     | "DIRECT_READ"
     | "DIRECT_SEARCH"
     | "DIRECT_GLOB"
+    | "AUGMENT_READ"
     | "SYMBOL_SEARCH"
     | "REFERENCES"
     | "CALLERS"
@@ -80,7 +85,7 @@ export const ROUTING_CORPUS: RoutingCase[] = [
   { id: "content-024", toolName: "read", arguments: { filePath: "docs/README.md" }, expectedRoute: "DIRECT_READ", category: "content" },
   { id: "content-025", toolName: "read", arguments: { filePath: "docs/architecture.md" }, expectedRoute: "DIRECT_READ", category: "content" },
   { id: "content-026", toolName: "read", arguments: { filePath: "docs/getting-started.md" }, expectedRoute: "DIRECT_READ", category: "content" },
-  { id: "content-027", toolName: "read", arguments: { filePath: "packages/core/src/v1/config/banyan-config.ts" }, userRequest: "Show me the BanyanConfig schema", expectedRoute: "DIRECT_READ", category: "content" },
+  { id: "content-027", toolName: "read", arguments: { filePath: "packages/core/src/v1/config/banyan-config.ts" }, userRequest: "Show me the BanyanConfig schema", expectedRoute: "AUGMENT_READ", category: "content", note: "Read of a code file: exact content + symbol header by default (Phase 7), fail-closed to byte-identical when the graph lacks the symbol." },
   { id: "content-028", toolName: "read", arguments: { filePath: "banyancode.json" }, userRequest: "Show my current BanyanCode config", expectedRoute: "DIRECT_READ", category: "content" },
   { id: "content-029", toolName: "read", arguments: { filePath: ".banyancode/banyancode.json" }, expectedRoute: "DIRECT_READ", category: "content" },
   { id: "content-030", toolName: "read", arguments: { filePath: "packages/opencode/package.json" }, expectedRoute: "DIRECT_READ", category: "content" },
@@ -112,7 +117,7 @@ export const ROUTING_CORPUS: RoutingCase[] = [
   { id: "content-056", toolName: "read", arguments: { filePath: "packages/opencode/tsconfig.json" }, expectedRoute: "DIRECT_READ", category: "content" },
   { id: "content-057", toolName: "read", arguments: { filePath: ".vscode/settings.json" }, expectedRoute: "DIRECT_READ", category: "content" },
   { id: "content-058", toolName: "read", arguments: { filePath: ".devcontainer/devcontainer.json" }, expectedRoute: "DIRECT_READ", category: "content" },
-  { id: "content-059", toolName: "read", arguments: { filePath: "scripts/build.sh" }, expectedRoute: "DIRECT_READ", category: "content" },
+  { id: "content-059", toolName: "read", arguments: { filePath: "scripts/build.sh" }, expectedRoute: "AUGMENT_READ", category: "content", note: "Shell script is a code file per the shared gateway allowlist; augment fail-closes to exact content when the graph has no sh symbols." },
   { id: "content-060", toolName: "read", arguments: { filePath: ".github/workflows/release.yml" }, expectedRoute: "DIRECT_READ", category: "content" },
 
   // ── lexical-search: TODO/exact strings/error messages/comments/docs terms → DIRECT_SEARCH ──
@@ -372,15 +377,15 @@ export const ROUTING_CORPUS: RoutingCase[] = [
 
   // ── ambiguous: no user intent → conservative DIRECT fallback, note explains alternatives ──
   { id: "amb-001", toolName: "grep", arguments: { pattern: "Foo" }, expectedRoute: "DIRECT_SEARCH", category: "ambiguous", note: "No userRequest; Foo could be a symbol (SYMBOL_SEARCH) or a class name (REFERENCES). Conservative direct fallback is correct (spec §21)." },
-  { id: "amb-002", toolName: "read", arguments: { filePath: "Foo.ts" }, expectedRoute: "DIRECT_READ", category: "ambiguous", note: "Literal file path; could be SYMBOL_SEARCH if Foo.ts names a symbol the user wants resolved." },
+  { id: "amb-002", toolName: "read", arguments: { filePath: "Foo.ts" }, expectedRoute: "AUGMENT_READ", category: "ambiguous", note: "Literal file path; could be SYMBOL_SEARCH if Foo.ts names a symbol the user wants resolved. Code-file read augments by default." },
   { id: "amb-003", toolName: "glob", arguments: { pattern: "**/*auth*" }, expectedRoute: "DIRECT_GLOB", category: "ambiguous", note: "Literal pattern; could be OWNERSHIP if the user wants the auth subsystem boundaries." },
   { id: "amb-004", toolName: "grep", arguments: { pattern: "load" }, expectedRoute: "DIRECT_SEARCH", category: "ambiguous", note: "Generic term; could be SYMBOL_SEARCH for a load() function definition." },
   { id: "amb-005", toolName: "grep", arguments: { pattern: "init" }, expectedRoute: "DIRECT_SEARCH", category: "ambiguous", note: "Generic term; could be SYMBOL_SEARCH for init() definitions." },
   { id: "amb-006", toolName: "grep", arguments: { pattern: "parse" }, expectedRoute: "DIRECT_SEARCH", category: "ambiguous", note: "Could be SYMBOL_SEARCH for parse() or a lexical string." },
   { id: "amb-007", toolName: "grep", arguments: { pattern: "run" }, expectedRoute: "DIRECT_SEARCH", category: "ambiguous", note: "Generic verb; no symbol or user intent to anchor a graph route." },
   { id: "amb-008", toolName: "grep", arguments: { pattern: "get" }, expectedRoute: "DIRECT_SEARCH", category: "ambiguous", note: "Generic verb; no symbol or user intent to anchor a graph route." },
-  { id: "amb-009", toolName: "read", arguments: { filePath: "index.ts" }, expectedRoute: "DIRECT_READ", category: "ambiguous", note: "Could be a barrel or a single symbol; path is literal so read stands." },
-  { id: "amb-010", toolName: "read", arguments: { filePath: "types.ts" }, expectedRoute: "DIRECT_READ", category: "ambiguous", note: "Symbol-heavy file but the path is literal; DIRECT_READ preserves content." },
+  { id: "amb-009", toolName: "read", arguments: { filePath: "index.ts" }, expectedRoute: "AUGMENT_READ", category: "ambiguous", note: "Code-file read; augment adds the barrel's symbol header when the graph has one." },
+  { id: "amb-010", toolName: "read", arguments: { filePath: "types.ts" }, expectedRoute: "AUGMENT_READ", category: "ambiguous", note: "Code-file read; augment adds the file's main type header when the graph has one." },
   { id: "amb-011", toolName: "glob", arguments: { pattern: "**/*.ts" }, expectedRoute: "DIRECT_GLOB", category: "ambiguous", note: "Broad pattern; no semantic target." },
   { id: "amb-012", toolName: "glob", arguments: { pattern: "**/test/**" }, expectedRoute: "DIRECT_GLOB", category: "ambiguous", note: "Test layout pattern; could be OWNERSHIP of tests without user intent." },
   { id: "amb-013", toolName: "grep", arguments: { pattern: "AuthManager" }, expectedRoute: "DIRECT_SEARCH", category: "ambiguous", note: "Symbol-name-shaped but no userRequest: CALLERS vs REFERENCES vs SYMBOL_SEARCH unresolvable (spec §21)." },
@@ -391,7 +396,7 @@ export const ROUTING_CORPUS: RoutingCase[] = [
   { id: "amb-018", toolName: "grep", arguments: { pattern: "calls" }, expectedRoute: "DIRECT_SEARCH", category: "ambiguous", note: "Relationship verb but no symbol or userRequest to route to CALLERS." },
   { id: "amb-019", toolName: "grep", arguments: { pattern: "implements" }, expectedRoute: "DIRECT_SEARCH", category: "ambiguous", note: "Could be STRUCTURAL, but no user intent; the §49 bug shows doc scope must keep it DIRECT_SEARCH." },
   { id: "amb-020", toolName: "grep", arguments: { pattern: "extends" }, expectedRoute: "DIRECT_SEARCH", category: "ambiguous", note: "Could be EXTENSIONS/STRUCTURAL; no symbol or user intent." },
-  { id: "amb-021", toolName: "read", arguments: { filePath: "memory-repo.ts" }, expectedRoute: "DIRECT_READ", category: "ambiguous", note: "Literal file path; could be SYMBOL_SEARCH for MemoryRepo." },
+  { id: "amb-021", toolName: "read", arguments: { filePath: "memory-repo.ts" }, expectedRoute: "AUGMENT_READ", category: "ambiguous", note: "Literal file path; could be SYMBOL_SEARCH for MemoryRepo. Code-file read augments by default." },
   { id: "amb-022", toolName: "glob", arguments: { pattern: "**/*bridge*" }, expectedRoute: "DIRECT_GLOB", category: "ambiguous", note: "Could be ARCHITECTURE for the bridge subsystem without user intent." },
   { id: "amb-023", toolName: "glob", arguments: { pattern: "**/config/**" }, expectedRoute: "DIRECT_GLOB", category: "ambiguous", note: "Could be OWNERSHIP of the config subsystem without user intent." },
   { id: "amb-024", toolName: "grep", arguments: { pattern: "plugin" }, expectedRoute: "DIRECT_SEARCH", category: "ambiguous", note: "Generic noun; could be ARCHITECTURE for plugin loading." },
@@ -427,7 +432,7 @@ export const ROUTING_CORPUS: RoutingCase[] = [
   // Content reads of documentation → DIRECT_READ
   { id: "hn-026", toolName: "read", arguments: { filePath: "docs/api.md" }, userRequest: "Read the documentation describing which classes call Foo", expectedRoute: "DIRECT_READ", category: "hard-negative", note: "§48: read of documentation stays DIRECT_READ, not CALLERS." },
   { id: "hn-027", toolName: "read", arguments: { filePath: "README.md" }, userRequest: "Show me what the README says about classes that call Foo", expectedRoute: "DIRECT_READ", category: "hard-negative" },
-  { id: "hn-028", toolName: "read", arguments: { filePath: "src/foo.ts" }, userRequest: "Show the entire Foo function", expectedRoute: "DIRECT_READ", category: "hard-negative", note: "§48: user wants actual source; DIRECT_READ, not SYMBOL_SEARCH-only." },
+  { id: "hn-028", toolName: "read", arguments: { filePath: "src/foo.ts" }, userRequest: "Show the entire Foo function", expectedRoute: "AUGMENT_READ", category: "hard-negative", note: "§48: user wants actual source — AUGMENT_READ preserves the exact content byte-for-byte and only appends the compact symbol header (not a SYMBOL_SEARCH-only substitution), so the no-graph-replacement invariant still holds." },
   { id: "hn-029", toolName: "read", arguments: { filePath: "docs/architecture.md" }, userRequest: "Show the documentation about how AuthManager works", expectedRoute: "DIRECT_READ", category: "hard-negative" },
   { id: "hn-030", toolName: "read", arguments: { filePath: "docs/faq.md" }, userRequest: "What does the FAQ say about MemoryRepo?", expectedRoute: "DIRECT_READ", category: "hard-negative" },
   { id: "hn-031", toolName: "read", arguments: { filePath: "docs/callers.md" }, userRequest: "Show me the callers documentation", expectedRoute: "DIRECT_READ", category: "hard-negative", note: "Filename says callers but it is a doc file; content read." },

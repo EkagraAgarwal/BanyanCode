@@ -6,6 +6,7 @@ const ROUTES = [
   "DIRECT_READ",
   "DIRECT_SEARCH",
   "DIRECT_GLOB",
+  "AUGMENT_READ",
   "SYMBOL_SEARCH",
   "REFERENCES",
   "CALLERS",
@@ -65,11 +66,18 @@ describe("routing corpus", () => {
     }
   })
 
-  test("hard negatives: at least 40, and every one routes DIRECT_*", () => {
+  test("hard negatives: at least 40, and every one routes DIRECT_* or AUGMENT_READ", () => {
     const hardNegatives = ROUTING_CORPUS.filter((c) => c.category === "hard-negative")
     expect(hardNegatives.length).toBeGreaterThanOrEqual(40)
     for (const c of hardNegatives) {
-      expect(c.expectedRoute.startsWith("DIRECT"), `id ${c.id} expectedRoute ${c.expectedRoute}`).toBe(true)
+      // AUGMENT_READ is permitted for code-file reads: it preserves the exact
+      // content byte-for-byte (header is model-facing metadata only), so the
+      // §48 no-graph-substitution invariant still holds. hn-028 (src/foo.ts)
+      // is the canonical case.
+      expect(
+        c.expectedRoute.startsWith("DIRECT") || c.expectedRoute === "AUGMENT_READ",
+        `id ${c.id} expectedRoute ${c.expectedRoute}`,
+      ).toBe(true)
     }
   })
 

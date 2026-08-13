@@ -13,6 +13,7 @@
  * fine-grained expected routes onto the three verdict buckets:
  *
  *   DIRECT_READ / DIRECT_SEARCH / DIRECT_GLOB  -> "direct"
+ *   AUGMENT_READ (Phase 7 code-file read)       -> "hybrid"
  *   SYMBOL_SEARCH / REFERENCES / CALLERS / CALLEES / DEPENDENTS / IMPORTS /
  *   IMPLEMENTATIONS / EXTENSIONS / IMPACT / STRUCTURAL / ARCHITECTURE /
  *   OWNERSHIP                                  -> "intelligence"
@@ -46,6 +47,7 @@ export function expectedCoarseRoute(expected: RoutingCase["expectedRoute"]): Coa
     case "DIRECT_SEARCH":
     case "DIRECT_GLOB":
       return "direct"
+    case "AUGMENT_READ":
     case "HYBRID":
       return "hybrid"
     default:

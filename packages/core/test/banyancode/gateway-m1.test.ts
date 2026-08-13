@@ -218,12 +218,13 @@ const offInstallLayer = Layer.provideMerge(
   Layer.provideMerge(RepositoryGateway.defaultLayer, configWith({ banyancode_router: "off" })),
 )
 
-// R4 — the AUGMENT route signal through the REAL gateway + REAL graph: the
-// RulesRouter has no augment branch yet (every exact-content read routes
-// DIRECT at precedence 1 — see scenario 3a and the finding in the summary),
-// so the Phase 7 augment decision arrives through the ToolRouter seam, the
-// same "future RulesRouter-variant signal" gateway-augment.test.ts drives —
-// but here the header is built from a REAL graph, not an intel double.
+// R4 — the AUGMENT route signal through the REAL gateway + REAL graph via the
+// ToolRouter seam: scenario 3a now proves the RulesRouter emits the augment
+// decision natively for code-file reads (content-code-file); 3b drives the
+// same decision through the ToolRouterService seam to isolate the
+// backend+graph path from router policy (same "RulesRouter-variant signal"
+// gateway-augment.test.ts uses) — here the header is built from a REAL graph,
+// not an intel double.
 const augmentContentRouter: ToolRouter = {
   classify: (input) =>
     Effect.succeed({
@@ -382,17 +383,39 @@ describe("M1 — model-equivalent agent via read/grep/glob only (spec §155, pla
   })
 
   describe("scenario 3 — read behavior", () => {
-    test("3a: an exact-content read stays DIRECT in the default install (byte-identical)", async () => {
+    test("3a: an exact-content read of a code file carries the symbol header in the default install (storage byte-identical)", async () => {
       await using tmp = await tmpdir()
       const input = call("read", { path: "src/auth.ts" })
 
       const baseline = await settleFor(tmp, baselineLayer, input)
       const settled = await settleFor(tmp, defaultInstallLayer, input)
 
-      expect(settled).toEqual(baseline)
+      // Model-facing page: graph-derived header prepended, exact source below.
+      // The RulesRouter now routes code-file reads to AUGMENT (content-code-file)
+      // and the REAL graph resolves the seeded AuthManager symbol.
       expect(settled.result).toEqual({
         type: "json",
-        value: { type: "text-page", content: AUTH_SRC, mime: "text/plain", offset: 1, truncated: false },
+        value: {
+          type: "text-page",
+          content: `${EXPECTED_AUGMENT_HEADER}\n${AUTH_SRC}`,
+          mime: "text/plain",
+          offset: 1,
+          truncated: false,
+        },
+      })
+      const pageContent = settled.result.type === "json"
+        ? (settled.result.value as { content?: string }).content ?? ""
+        : ""
+      expect(pageContent.startsWith(EXPECTED_AUGMENT_HEADER)).toBe(true)
+      expect(pageContent).toContain("export class AuthManager")
+      // Storage/TUI output is the raw page — the header is model-facing only.
+      expect(settled.output?.structured).toEqual(baseline.output?.structured)
+      expect(settled.output?.structured).toEqual({
+        type: "text-page",
+        content: AUTH_SRC,
+        mime: "text/plain",
+        offset: 1,
+        truncated: false,
       })
     })
 

@@ -2,8 +2,9 @@ export * as RepositoryGatewayRouter from "./router"
 
 import { Context, Effect } from "effect"
 import { extractPattern, routeForConfidence } from "../routing"
-import { evaluate as evaluateRoutingRules } from "../routing/rules"
+import { REASON_CODES, evaluate as evaluateRoutingRules } from "../routing/rules"
 import type { RuleInput } from "../routing/types"
+import { isCodePath } from "./augment"
 import type { Relation, RepositoryOperation, RouteDecision, RouterInput, ToolRouter } from "./types"
 
 // Context tag for the ToolRouter dependency consumed by the gateway layer.
@@ -17,6 +18,11 @@ export class ToolRouterService extends Context.Service<ToolRouterService, ToolRo
 // the relation-keyword table, threshold banding, or verdict mapping changes.
 export const ROUTER_IDENTITY = "rules"
 export const ROUTER_VERSION = "0.1.0"
+
+// Router-level reason code for the AUGMENT branch (Phase 7): an exact-content
+// read of a code file. Sits alongside the routing-rules verdict codes on the
+// decision's reasonCodes list.
+export const REASON_CODE_CONTENT_CODE_FILE = "content-code-file"
 
 // Passthrough router — the default. Every request routes DIRECT with full
 // confidence so the gateway is a byte-for-byte behavioral no-op when the
@@ -94,10 +100,40 @@ export const deriveOperation = (input: RouterInput): RepositoryOperation => {
   return { kind: "symbol", query: pattern }
 }
 
+// Read target path for an exact-read input (mirrors isExactFileRead's
+// extraction in routing/features.ts): the `path` argument first, then
+// `filePath`. Empty when no string target is present — isCodePath("") is
+// false, so the augment branch never fires without a real path.
+const readPathFor = (input: RouterInput): string => {
+  const target = input.arguments.path ?? input.arguments.filePath
+  return typeof target === "string" ? target : ""
+}
+
 // Pure verdict -> RouteDecision mapping. Never throws (pure functions only).
 export const classifyRules = (input: RouterInput): RouteDecision => {
   const verdict = evaluateRoutingRules(buildRuleInput(input))
   const banded = routeForConfidence(verdict.confidence, verdict.verdict)
+
+  // AUGMENT branch (Phase 7, spec §6.2/§29/§117): an exact-content/range read
+  // of a CODE file routes to the augment backend, which appends the compact
+  // symbol header when the graph has the file's main symbol — and fail-closes
+  // to byte-identical content otherwise (missing symbol, config off, degraded
+  // graph). Non-code reads (docs/config/data) and every other operation keep
+  // the DIRECT decision path byte-identical. The code-file allowlist is shared
+  // with the backend (isCodePath) so the decision and the outcome always agree.
+  if (
+    (verdict.reasonCodes.includes(REASON_CODES.exactContentRead) ||
+      verdict.reasonCodes.includes(REASON_CODES.exactRangeRead)) &&
+    isCodePath(readPathFor(input))
+  ) {
+    return {
+      route: "augment",
+      confidence: 1,
+      reasonCodes: [...verdict.reasonCodes, REASON_CODE_CONTENT_CODE_FILE],
+      router: ROUTER_IDENTITY,
+      routerVersion: ROUTER_VERSION,
+    }
+  }
 
   // Only high-confidence (>= 0.90) relationship language upgrades to
   // INTELLIGENCE (spec §24). Hybrid — relationship language alongside a
