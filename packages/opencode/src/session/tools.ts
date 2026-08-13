@@ -104,7 +104,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             // tool's error/abort behavior.
             const gatewayOpt = yield* Effect.serviceOption(Banyan.RepositoryGateway)
             let outcome: unknown = undefined
-            if (Option.isSome(gatewayOpt) && GatewayV1.GATEWAY_TOOLS.has(item.id)) {
+            if (Option.isSome(gatewayOpt) && GatewayV1.GATEWAY_TOOLS.has(item.id) && (yield* GatewayV1.routeAllowed(item.id))) {
               const gateB = GatewayV1.deriveGateB(ctx.messages)
               const agentID = ctx.agent as AgentV2.ID
               const investigationOpt = yield* Effect.serviceOption(Banyan.InvestigationStateService)

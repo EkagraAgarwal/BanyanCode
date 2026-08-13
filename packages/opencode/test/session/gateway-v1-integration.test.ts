@@ -100,6 +100,13 @@ const withGateway = testEffect(Layer.provideMerge(baseLayer, gatewayDouble))
 const investigated = testEffect(
   Layer.provideMerge(Layer.provideMerge(baseLayer, gatewayDouble), Banyan.InvestigationState.layer),
 )
+// Kill-switch runtime: BanyanConfigService with an explicit per-tool off flag.
+// routeAllowed reads it via serviceOption (fail-closed -> allowed when absent).
+const grepDisabledConfig = Layer.mock(Banyan.BanyanConfigService, {
+  get: () => Effect.succeed({ banyancode_route_grep: false }),
+  getGlobal: () => Effect.succeed({}),
+})
+const withGrepDisabled = testEffect(Layer.provideMerge(Layer.provideMerge(baseLayer, gatewayDouble), grepDisabledConfig))
 
 // --- resolve() input stubs ----------------------------------------------------
 
@@ -258,6 +265,30 @@ describe("SessionTools.resolve gateway seam", () => {
         const output = yield* executeTool("read", { path: "src/foo.ts" })
         expect(output.output).toBe("PAGE_BODY")
         // Seam still consulted the gateway before falling through.
+        expect(gatewayRequests.at(-1)?.originalTool).toBe("read")
+      }),
+    )
+
+    withGrepDisabled.effect("banyancode_route_grep: false bypasses the gateway for grep", () =>
+      Effect.gen(function* () {
+        probeTools = [grepProbe]
+        fixedOutcome = intelligenceOutcome
+        gatewayRequests.length = 0
+        const output = yield* executeTool("grep", { pattern: "Foo" })
+        // Kill-switch: gateway never consulted, leaf output byte-identical.
+        expect(output.output).toBe("PAGE_BODY")
+        expect(gatewayRequests.length).toBe(0)
+      }),
+    )
+
+    withGrepDisabled.effect("read still routes with only grep disabled", () =>
+      Effect.gen(function* () {
+        probeTools = [readProbe]
+        fixedOutcome = augmentOutcome
+        gatewayRequests.length = 0
+        const output = yield* executeTool("read", { path: "src/foo.ts" })
+        // The read kill-switch is unset, so the augment header still fires.
+        expect(output.output).toBe("## Symbol Foo (1 ref)\nPAGE_BODY")
         expect(gatewayRequests.at(-1)?.originalTool).toBe("read")
       }),
     )

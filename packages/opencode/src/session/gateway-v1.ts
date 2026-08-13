@@ -1,5 +1,6 @@
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { Effect, Option } from "effect"
 
 // V1 runtime seam for the Repository Intelligence Gateway (plan §2.1 Gate A /
 // §2.2 Gate B, mirroring the V2 hook in core/tool/registry.ts). Pure,
@@ -13,6 +14,22 @@ import { Banyan } from "@opencode-ai/core/banyancode"
 // tools. Not exported from core's registry (V2 owns its own copy there), so a
 // local const keeps this seam self-contained.
 export const GATEWAY_TOOLS = new Set(["read", "grep", "glob"])
+
+// Per-tool routing kill-switches (plan §4), the V1 twin of core's
+// `routeAllowedFor`: an explicit `banyancode_route_<tool>: false` bypasses the
+// gateway for that tool (the settle is byte-identical). Fail-closed by
+// contract — a missing BanyanConfigService or an absent flag means routing is
+// allowed; config can only ever DISABLE the hook for a single tool.
+export const routeAllowed = (toolName: string): Effect.Effect<boolean, never, never> =>
+  Effect.gen(function* () {
+    const configOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+    if (Option.isNone(configOpt)) return true
+    const config = yield* configOpt.value.get()
+    if (toolName === "grep" && config.banyancode_route_grep === false) return false
+    if (toolName === "read" && config.banyancode_route_read === false) return false
+    if (toolName === "glob" && config.banyancode_route_glob === false) return false
+    return true
+  })
 
 export interface GateB {
   readonly userRequest?: string
