@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import * as fs from "node:fs/promises"
 import path from "node:path"
-import type { ParseResult, ParsedEdge } from "./types"
+import type { ParseResult, ParsedEdge, ParsedNode } from "./types"
 import { parseTypeScript } from "./typescript"
 import { parsePython } from "./python"
 import {
@@ -9,6 +9,8 @@ import {
   withTreeSitter,
 } from "./tree-sitter"
 import type { Language, Node, Parser, Query, QueryCapture, QueryMatch, Tree } from "web-tree-sitter"
+import { getWalkerMapping } from "./adapters"
+import type { NodeKindMapping, NodeKindMappingEntry } from "./adapters"
 
 // Static, literal imports so Bun's bundler can inline the `.scm` grammar
 // sources at bundle time. Variable-specifier dynamic imports
@@ -434,6 +436,191 @@ export const parsePythonWithTreeSitterIncremental = (
         }),
       ),
     )
+  })
+
+// ---------------------------------------------------------------------------
+// Phase 5 (Batch 3): generic AST-walk node extraction for the 13 languages
+// with bundled grammars but no .scm query files (rust, go, java, c, cpp,
+// csharp, ruby, php, bash, json, zig, toml, yaml). The walker is driven by
+// the declarative per-language mappings in langs/adapters/ — every node type
+// and field name there was verified against the bundled grammar by parsing
+// real samples. Nodes merge onto the regex fallback result with the same
+// contract as parseTypeScriptWithTreeSitter: backend:"tree-sitter" when the
+// AST pass ran, syntaxError recorded (and the file still indexes), regex
+// fallback when wasm is unavailable.
+// ---------------------------------------------------------------------------
+
+// Same body cap as the regex parsers' body extraction (regex-fallback.ts
+// GENERIC_BODY_BOUND): walked node.code must stay bounded for the derived
+// identifier scan in rebuildDerivedGraph.
+const WALKED_NODE_BODY_CAP = 4000
+
+// Bounded ancestor walk: deep ASTs must not walk the whole file per node.
+const METHOD_ANCESTOR_DEPTH = 10
+
+const stripWalkedName = (raw: string): string => {
+  let trimmed = raw.trim()
+  if (trimmed.length >= 2) {
+    const first = trimmed[0]
+    const last = trimmed[trimmed.length - 1]
+    if ((first === "\"" && last === "\"") || (first === "'" && last === "'")) {
+      trimmed = trimmed.slice(1, -1)
+    }
+  }
+  // cpp out-of-line methods resolve to a qualified_identifier whose text is
+  // `Widget::draw` — same convention as the c.ts regex parser, which keeps
+  // only the final component (name.split("::").pop()).
+  const lastSegment = trimmed.split("::").pop()
+  return lastSegment ?? trimmed
+}
+
+// c/cpp declarator chain: `AuthManager* auth_new(void)` parses as
+// declarator: (pointer_declarator declarator: (function_declarator
+// declarator: (identifier) ...)) — pointer-returning functions wrap the
+// declarator one level deeper than plain ones. Descend childForFieldName
+// through every wrapper until a plain name node (identifier /
+// qualified_identifier) is reached.
+const DECLARATOR_WRAPPERS = new Set([
+  "pointer_declarator",
+  "function_declarator",
+  "init_declarator",
+  "array_declarator",
+  "parenthesized_declarator",
+])
+
+const resolveWalkedNameNode = (node: Node, entry: NodeKindMappingEntry): Node | null => {
+  let nameNode = entry.nameField ? node.childForFieldName(entry.nameField) : node.firstNamedChild
+  if (!nameNode) return null
+  if (entry.nameKinds && !entry.nameKinds.includes(nameNode.type)) return null
+  if (entry.nameSubField) {
+    let sub = nameNode.childForFieldName(entry.nameSubField)
+    while (sub && DECLARATOR_WRAPPERS.has(sub.type)) {
+      nameNode = sub
+      sub = nameNode.childForFieldName(entry.nameSubField)
+    }
+    if (sub) nameNode = sub
+  }
+  if (entry.nameDepth) {
+    let current: Node = nameNode
+    for (let i = 0; i < entry.nameDepth; i++) {
+      const deeper = current.firstNamedChild
+      if (!deeper) break
+      current = deeper
+    }
+    nameNode = current
+  }
+  return nameNode
+}
+
+const hasAncestorType = (node: Node, types: readonly string[]): boolean => {
+  let current: Node | null = node.parent
+  let depth = 0
+  while (current && depth < METHOD_ANCESTOR_DEPTH) {
+    if (types.includes(current.type)) return true
+    current = current.parent
+    depth++
+  }
+  return false
+}
+
+const buildWalkedNode = (node: Node, entry: NodeKindMappingEntry, fileID: string): ParsedNode | null => {
+  if (entry.onlyWhenParent && (!node.parent || !entry.onlyWhenParent.includes(node.parent.type))) return null
+  let kind = entry.kind
+  if (entry.kindByChildType) {
+    kind = entry.defaultKind ?? entry.kind
+    for (const child of node.namedChildren) {
+      if (!child) continue
+      const match = entry.kindByChildType.find((k) => k.childType === child.type)
+      if (match) {
+        kind = match.kind
+        break
+      }
+    }
+  }
+  const nameNode = resolveWalkedNameNode(node, entry)
+  if (!nameNode) return null
+  if (entry.methodOnly) {
+    kind = "method"
+  } else if (entry.methodAncestors && hasAncestorType(node, entry.methodAncestors)) {
+    kind = "method"
+  } else if (entry.methodNameTypes && entry.methodNameTypes.includes(nameNode.type)) {
+    kind = "method"
+  }
+  const name = stripWalkedName(nameNode.text)
+  if (!name) return null
+  const startLine = node.startPosition.row + 1
+  const endLine = node.endPosition.row + 1
+  const text = node.text
+  const code = text.slice(0, WALKED_NODE_BODY_CAP)
+  const firstLine = text.split("\n", 1)[0]?.trim() ?? ""
+  const signature = firstLine.length > 200 ? firstLine.slice(0, 200) : firstLine
+  const parsed: ParsedNode = { id: `${fileID}:${kind}:${name}:${startLine}`, kind, name, startLine, endLine, code }
+  if (signature) parsed.signature = signature
+  return parsed
+}
+
+// Iterative AST walk (no recursion — deep ASTs must not overflow the stack),
+// emitting one codegraph node per mapped tree-sitter node type.
+export const walkNodeTree = (rootNode: Node, mapping: NodeKindMapping, fileID: string): ParsedNode[] => {
+  const out: ParsedNode[] = []
+  const seen = new Set<string>()
+  const stack: Node[] = [rootNode]
+  while (stack.length > 0) {
+    const node = stack.pop()!
+    const entry = mapping.get(node.type)
+    if (entry) {
+      const built = buildWalkedNode(node, entry, fileID)
+      if (built && !seen.has(built.id)) {
+        seen.add(built.id)
+        out.push(built)
+      }
+    }
+    const namedChildren = node.namedChildren
+    for (let i = namedChildren.length - 1; i >= 0; i--) {
+      const child = namedChildren[i]
+      if (child) stack.push(child)
+    }
+  }
+  return out
+}
+
+/**
+ * Phase 5 (Batch 3): tree-sitter AST-walk parse for languages whose grammar
+ * has no .scm query bundle (rust … yaml). Walks the parsed AST with the
+ * per-extension node-kind mapping, records the first syntax error, and merges
+ * onto the regex fallback result — same contract as
+ * parseTypeScriptWithTreeSitter: walked nodes replace the regex nodes (they
+ * are the same symbols, AST-extracted), regex edges stay (their endpoints
+ * use the identical `${fileID}:<kind>:<name>:<line>` id scheme), and the
+ * result is stamped backend:"tree-sitter".
+ */
+export const parseLanguageWithTreeSitter = (
+  ext: string,
+  content: string,
+  fileID: string,
+  regexFallback: () => ParseResult,
+): Effect.Effect<ParseResult, TreeSitterUnavailableError, never> =>
+  Effect.gen(function* () {
+    const mapping = getWalkerMapping(ext)
+    if (!mapping) return regexFallback()
+    return yield* withTreeSitter((state) => {
+      const parser = state.parser.parsersByExt.get(ext)
+      if (!parser) return regexFallback()
+      const tree = parser.parse(content)
+      const rootNode = tree?.rootNode
+      if (!rootNode) return regexFallback()
+      const walked = walkNodeTree(rootNode, mapping, fileID)
+      const regex = regexFallback()
+      const syntaxError = findSyntaxError(rootNode)
+      return {
+        ...regex,
+        nodes: walked.length > 0 ? walked : regex.nodes,
+        // Phase 0 tree-sitter: mark the backend so the indexer can stamp
+        // node derivation (tree-sitter-v1) exactly like the TS/PY path.
+        backend: "tree-sitter" as const,
+        ...(syntaxError ? { syntaxError } : {}),
+      }
+    })
   })
 
 export const validateQueryFile = (ext: string): Effect.Effect<boolean, TreeSitterUnavailableError, never> =>

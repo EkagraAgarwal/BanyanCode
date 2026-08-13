@@ -6,6 +6,16 @@ import { parseMarkdown } from "./markdown"
 import { parseDocker } from "./docker"
 import { parseC } from "./c"
 import { parseGeneric } from "./regex-fallback"
+import { TREE_SITTER_WALK_EXTENSIONS } from "./adapters"
+
+// Extensions whose parsing routes through the tree-sitter AST walker
+// (parseLanguageWithTreeSitter in query-executor) with the registry parser
+// as regex fallback. TS/JS/Python are deliberately NOT in this set — the
+// indexer dispatches them through the .scm-query path
+// (parseTypeScriptWithTreeSitter / parsePythonWithTreeSitter) and their
+// behavior must stay identical. The indexer reads this set at dispatch time,
+// so adding a grammar = adding its extension here + an adapter mapping.
+export { TREE_SITTER_WALK_EXTENSIONS }
 
 const typescriptParser: LanguageParser = {
   extensions: [".ts", ".tsx", ".mts", ".cts"],

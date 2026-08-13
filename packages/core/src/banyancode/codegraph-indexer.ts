@@ -7,12 +7,13 @@ import { FSUtil } from "../fs-util"
 import { CodegraphRepo } from "./codegraph-repo"
 import { Database } from "../database/database"
 import type { CodegraphEdge, CodegraphFile, CodegraphNode, CodegraphNodeKind } from "./types"
-import { getParserForPath } from "./langs/registry"
+import { getParserForPath, TREE_SITTER_WALK_EXTENSIONS } from "./langs/registry"
 import type { ParseResult } from "./langs/types"
 import { parseTypeScript, stripCommentsAndStrings } from "./langs/typescript"
 import { parsePython } from "./langs/python"
 import {
   ensureQuerySourcesLoaded,
+  parseLanguageWithTreeSitter,
   parsePythonWithTreeSitter,
   parseTypeScriptWithTreeSitter,
 } from "./langs/query-executor"
@@ -634,6 +635,17 @@ const indexCandidateFileCore = (
         parsePythonWithTreeSitter(content, fileID),
         () => parsePython(content, fileID),
       )
+    } else if (TREE_SITTER_WALK_EXTENSIONS.includes(ext)) {
+      // Phase 5 (Batch 3): the 13 AST-walk languages (rust/go/java/c/cpp/
+      // csharp/ruby/php/bash/json/zig/toml/yaml) route through
+      // parseLanguageWithTreeSitter with the registry parser as regex
+      // fallback. Same lifecycle as the TS/PY path: derivation stamped
+      // tree-sitter-v1, syntax errors recorded + continue, wasm-unavailable
+      // degrades to the regex result.
+      outcome = yield* treeSitterParseWithFallback(
+        parseLanguageWithTreeSitter(ext, content, fileID, () => parser.parse(content, fileID)),
+        () => parser.parse(content, fileID),
+      )
     } else {
       outcome = { result: parser.parse(content, fileID), backend: "regex", error: null }
     }
@@ -655,16 +667,19 @@ const indexCandidateFileCore = (
     else if (ext === ".zig") language = "zig"
     else if (ext === ".rs") language = "rust"
     else if (ext === ".go") language = "go"
-    else if (ext === ".c" || ext === ".cpp" || ext === ".cc" || ext === ".cxx" || ext === ".h" || ext === ".hpp" || ext === ".hh") language = "c_cpp"
+    else if (ext === ".c" || ext === ".cpp" || ext === ".cc" || ext === ".cxx" || ext === ".h" || ext === ".hpp" || ext === ".hh" || ext === ".hxx") language = "c_cpp"
     else if (ext === ".java" || ext === ".kt") language = "java"
     else if (ext === ".cs") language = "csharp"
     else if (ext === ".swift") language = "swift"
     else if (ext === ".rb") language = "ruby"
     else if (ext === ".php") language = "php"
-    else if (ext === ".sh" || ext === ".bat" || ext === ".ps1") language = "shell"
+    else if (ext === ".sh" || ext === ".bash" || ext === ".bat" || ext === ".ps1") language = "shell"
     else if (ext === ".sql") language = "sql"
     else if (ext === ".html" || ext === ".css") language = "web"
     else if (ext === ".md") language = "markdown"
+    else if (ext === ".json") language = "json"
+    else if (ext === ".toml") language = "toml"
+    else if (ext === ".yml" || ext === ".yaml") language = "yaml"
 
     const indexedAt = Date.now()
     const file: CodegraphFile = {
@@ -792,7 +807,20 @@ const indexCandidateFileCore = (
     // `new` expressions, service tags — nothing same-file resolvable, and
     // the edges table FK-enforces both endpoints onto codegraph_nodes) keep
     // the full derived calls lifecycle.
-    if (parserMode && outcome.backend === "tree-sitter") {
+    //
+    // Phase 5 (Batch 3): the ownership guard additionally requires at least
+    // one `source: "tree-sitter"` edge in the parse result. The AST-walk
+    // languages (rust/go/c/...) never emit parser edges — their regex edges
+    // (parseC's same-file `calls`) use derived-style `->` ids and must NOT
+    // claim parser ownership, or rebuildDerivedGraph would skip their calls
+    // regeneration and the cross-file peer-scope edges would vanish in
+    // parser mode. TS/PY are unaffected: their parser edges always carry
+    // source:"tree-sitter".
+    if (
+      parserMode &&
+      outcome.backend === "tree-sitter" &&
+      result.edges.some((e) => e.source === "tree-sitter")
+    ) {
       if (edges.length > 0) {
         yield* Ref.update(cfg.parserFileIDsRef, (s) => {
           s.add(fileID)
