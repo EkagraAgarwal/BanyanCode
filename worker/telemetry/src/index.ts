@@ -31,6 +31,10 @@ const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Headers": "Content-Type",
 }
 
+// Retention window per specs/banyancode/install-telemetry.md: 365 days, enforced by the
+// scheduled cron below. Rows older than this are purged daily (03:00 UTC).
+const RETENTION_MS = 365 * 24 * 60 * 60 * 1000
+
 // --- Minimal structural types for the D1 binding ---------------------------------------
 
 interface D1Result {
@@ -238,5 +242,13 @@ export default {
     const headers = new Headers(response.headers)
     for (const [key, value] of Object.entries(CORS_HEADERS)) headers.set(key, value)
     return new Response(response.body, { status: response.status, headers })
+  },
+
+  // Daily 03:00 UTC purge (see [triggers] in wrangler.toml): enforce the 365-day retention
+  // mandate from specs/banyancode/install-telemetry.md by deleting rows past the window.
+  async scheduled(_event: unknown, env: Env): Promise<void> {
+    await env.DB.prepare("DELETE FROM install_events WHERE timestamp < ?")
+      .bind(Date.now() - RETENTION_MS)
+      .run()
   },
 }

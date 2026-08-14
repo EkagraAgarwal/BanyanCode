@@ -11,3 +11,8 @@ compatibility_date = "2025-01-01"
 # binding = "DB"
 # database_name = "banyancode-telemetry-db"
 # database_id = "<uuid from `wrangler d1 create`>"
+
+# Daily 03:00 UTC purge — fires the `scheduled` handler in src/index.ts, which enforces
+# the 365-day retention mandate from specs/banyancode/install-telemetry.md.
+[triggers]
+crons = ["0 3 * * *"]

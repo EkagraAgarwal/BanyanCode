@@ -50,6 +50,7 @@ The client POSTs to `{ENDPOINT}/ping` (e.g. `https://banyancode-telemetry.<accou
 ```json
 {
   "install_id": "uuid",
+  "event_type": "first_run",
   "version": "26.08.1",
   "channel": "latest",
   "os": "darwin",
@@ -88,24 +89,30 @@ bun run deploy
 `[[d1_databases]]` in `wrangler.toml` ships commented out — uncomment it and fill in the
 `database_id` printed by step 1 before deploying.
 
-## Retention policy (365 days)
+### CI deploy
 
-The spec mandates 365-day retention. Purge rows older than 365 days, e.g. as a scheduled cron:
+`.github/workflows/deploy-telemetry.yml` deploys on `main` pushes touching
+`worker/telemetry/**` or via `workflow_dispatch`. Requires the `CLOUDFLARE_API_TOKEN`
+(account-scoped, Workers Scripts:Edit + D1:Edit) and `CLOUDFLARE_ACCOUNT_ID` secrets;
+it runs `wrangler deploy` then applies `schema.sql` to the remote D1. Complete step 1
+(create the D1 database + uncomment the binding) before the first CI run.
 
-```toml
-# wrangler.toml — scheduled purge (uncomment; deploy with `wrangler deploy` picks it up)
-# [triggers]
-# crons = ["0 3 * * *"]
-```
+## Retention policy (365 days) — implemented
+
+The spec mandates 365-day retention, and the worker now enforces it automatically. The
+default export ships a `scheduled` handler (`src/index.ts`) wired to a daily 03:00 UTC cron
+(`[triggers]` in `wrangler.toml`). On each trigger it deletes rows older than 365 days:
 
 ```ts
-// src/cron.ts — or inline in index.ts: run on ScheduledEvent
-//   await env.DB.prepare(
-//     "DELETE FROM install_events WHERE timestamp < ?",
-//   ).bind(Date.now() - 365 * 24 * 60 * 60 * 1000).run()
+await env.DB.prepare("DELETE FROM install_events WHERE timestamp < ?")
+  .bind(Date.now() - RETENTION_MS)
+  .run()
 ```
 
-or one-off via wrangler:
+No manual wrangler command is needed — deploy with `wrangler deploy` (or the CI workflow)
+and the cron is registered with the worker.
+
+As an alternative, a one-off purge can be run manually via wrangler:
 
 ```bash
 wrangler d1 execute banyancode-telemetry-db --remote \
