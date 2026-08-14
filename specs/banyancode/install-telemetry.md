@@ -6,113 +6,90 @@ Never claim direct human-user measurement.
 
 ## Metric contract (define before measuring)
 
-| Metric | Definition |
-|---|---|
-| `total_install_ids` | distinct install_ids ever seen |
-| `new_install_ids` | first-ever ping (`first_run` event) within period |
-| `active_install_ids` | `heartbeat` event within period (Phase 3) |
-| `ci_install_ids` / `non_ci_install_ids` | split on `ci` flag |
-| `estimated_human_installs` | ≈ non-CI unique installs — installation-level estimate, NOT a human count |
+| Metric | Definition | Where to look |
+|---|---|---|
+| `total_install_ids` | distinct install_ids ever seen | PostHog: Unique users (all time) |
+| `new_install_ids` | first-ever ping (`banyan_install`) within period | PostHog: New users (period) |
+| `active_install_ids` | `banyan_heartbeat` within period (Phase 3) | PostHog: Unique users filtered to `banyan_heartbeat` (period) |
+| `ci_install_ids` / `non_ci_install_ids` | split on `ci` property | Any insight filtered by `ci == true/false` |
+| `estimated_human_installs` | ≈ non-CI unique installs — installation-level estimate, NOT a human count | `non_ci_install_ids` |
 
-## Phase 0 — Download counting (CI-only, ship first)
+## Transport decision (2026-08-14): PostHog cloud, no server required
 
-- New BanyanCode stats script (model after `script/stats.ts:52-95`):
-  - `api.npmjs.org/downloads/point/last-month/banyancode` (umbrella)
-  - SUM of the 10 per-platform packages (`banyancode-linux-x64`, `banyancode-darwin-arm64`,
-    ...) — approximates real binary installs better than the umbrella count
-  - GitHub release-asset `download_count` from `api.github.com/repos/EkagraAgarwal/BanyanCode/releases`
-- PostHog event mirroring `script/stats.ts:3-29,204-212` (`POSTHOG_KEY` secret, `distinct_id: "download"`).
-- Workflow `.github/workflows/<name>.yml`: daily cron, gated on `EkagraAgarwal/BanyanCode`.
-- Output appended to `STATS.md` in the BanyanCode repo. Establishes the historical baseline
-  before client telemetry exists.
+The client sends events **directly to PostHog's cloud capture endpoint**
+(`https://us.i.posthog.com/i/v0/e/`, free tier) using the project API key baked into the
+binary at build time. **No server, no DNS, no worker deployment is required** — PostHog
+hosts the collector and the dashboard. This is the default transport.
 
-## Phase 1 — First-run ping (unique installs)
+- `distinct_id` = the client's `install_id` (random UUID) → PostHog counts unique installs,
+  new installs, and (with heartbeat) active installs out of the box.
+- Events: `banyan_install` (first run) and `banyan_heartbeat` (weekly). Properties:
+  `version`, `channel`, `os`, `arch`, `install_method`, `ci`.
+- Key resolution: `BANYANCODE_POSTHOG_KEY` env (runtime, for dev) → baked build-time value
+  (`packages/opencode/script/build.ts` `define`, same mechanism as `OPENCODE_CHANNEL`).
+  Project API keys are public-by-design (client-safe); do NOT bake project SECRET keys.
+- Custom endpoint (`BANYANCODE_TELEMETRY_ENDPOINT` → `POST {endpoint}/ping`) remains
+  available as an alternative transport for self-hosters (see `worker/telemetry/`).
+- No key AND no custom endpoint → telemetry is a silent no-op (never marks attempts).
+- Privacy contract unchanged: no hostname, username, path, project/model/prompt data,
+  MAC/device identifiers. PostHog is configured server-side to not store IPs (or the
+  capture key's IP capture is disabled in project settings).
 
-### Install identity file (global, channel-independent)
+### Checking your numbers (no server — PostHog dashboard)
 
-`~/.local/state/banyancode/install.json` (deliberately NOT per-channel DB — the ID must
-survive canary/stable switches and npm upgrades; same global-state precedent as `session.json`):
+- **Unique installs (cumulative):** Insights → Trend → Events `banyan_install` → Unique users.
+- **New installs per week:** Insight → "New users" over `banyan_install`.
+- **Active installs (weekly):** Insight → Events `banyan_heartbeat` → Unique users over
+  a 7-day rolling window.
+- **Human estimate:** add a filter `ci == false` to any insight.
+- **Per-version adoption:** group by `version` property.
 
-```json
-{
-  "install_id": "uuid",
-  "telemetry": { "last_attempt": "ISO8601", "last_success": "ISO8601" }
-}
-```
+## Phase 0 — Download counting (DONE: `script/banyan-stats.ts` + `banyan-stats.yml`)
 
-State machine (distinguish "attempted" from "server observed"):
-- no file → first-ever install; generate `install_id = crypto.randomUUID()` (random, never MAC-derived)
-- file without `last_success` → retry, capped at once per 24h via `last_attempt`
-- `last_success` set → never ping again
+- npm umbrella + SUM of the 11 per-platform packages + GitHub release-asset counts,
+  appended daily to `STATS.md`; PostHog `banyan_download` events (source:
+  github/npm/npm_binary). Trend signal only — not unique installs.
 
-### Payload (≤ 200 bytes)
+## Phase 1 — First-run ping (DONE: `packages/opencode/src/installation/telemetry.ts`)
 
-```json
-{
-  "install_id": "...",
-  "version": "...",      // InstallationVersion (build-baked)
-  "channel": "...",      // InstallationChannel
-  "os": "...", "arch": "...",
-  "install_method": "npm | pnpm | bun | homebrew | standalone | source | unknown",
-  "ci": true
-}
-```
+- `~/.local/state/banyancode/install.json` (global, channel-independent):
+  `{ install_id, telemetry: { last_attempt, last_success, last_heartbeat } }`.
+- State machine: no file → first-ever; no `last_success` + stale `last_attempt` (>24h) →
+  retry; `last_success` → never again. Attempt ≠ observed (file written before request).
+- Payload ≤ 200 bytes: `{ install_id, version, channel, os, arch, install_method, ci }`;
+  `install_method` normalized to `npm | pnpm | bun | homebrew | standalone | source | unknown`
+  (from `probe.ts`), never raw probe output.
+- Wired in `cli/cmd/run.ts` after `ensureBanyanDirs`; dynamic import; 3s timeout; silent
+  failure; one-line first-run notice on first ping.
 
-`install_method` MUST be normalized into the stable enum above (mapped from
-`packages/opencode/src/installation/probe.ts` `findAllBanyanCodeInstalls`, `:122-222`)
-before sending. Never ship raw probe output.
+## Phase 2 — Consent (DONE)
 
-### Privacy guarantees (enforced contract, documented in the module)
+- `banyancode_telemetry: "on" | "off"` (default on) in `BanyanConfig.Info`; env
+  `BANYANCODE_TELEMETRY=off`; honor `DO_NOT_TRACK=1`; `banyancode telemetry status|on|off`.
 
-No hostname. No username. No filesystem path. No IP persistence (edge discards source IP).
-No repo/project path. No model/provider info. No prompt/tool contents. No MAC/device identifiers.
+## Phase 3 — Active installations (BUILD: weekly heartbeat)
 
-### Wiring
+- `banyan_heartbeat` event, cadence 7 days (`last_heartbeat` in install.json), gated on:
+  telemetry enabled AND the install has a `last_success` (never heartbeat a first-run that
+  never observed).
+- Fired from the same `run.ts` dynamic-import hook as the first-run ping.
+- Gives `active_install_ids` (weekly active installs) and `returning_install_ids`
+  (heartbeat in current window AND a heartbeat in the previous window).
+- No new payload fields; same 200-byte posture.
 
-- New module `packages/opencode/src/installation/telemetry.ts`.
-- Fired from `cli/cmd/run.ts` after `ensureBanyanDirs` (`:241`), dynamic import to keep
-  cold start fast; only on real runs (not `--version` / help).
-- 3s timeout, silent failure, debug-level log only. Never blocks startup, never retries
-  in-process (retry = next run).
+## Remaining implementation steps (this phase)
 
-### Endpoint (Cloudflare Worker + KV/D1)
-
-Event-appendable schema — `install_id` is NOT the PK:
-
-```
-install_events(
-  event_id TEXT PK,
-  install_id TEXT NOT NULL,
-  event_type TEXT NOT NULL,          -- 'first_run' | 'heartbeat'
-  timestamp INTEGER NOT NULL,
-  version TEXT, channel TEXT,
-  os TEXT, arch TEXT,
-  install_method TEXT,
-  ci INTEGER
-)
-```
-
-First-seen installs = distinct `install_id` over `first_run` rows (unique index on
-`(install_id, event_type)`). Source IP discarded at the edge. 365-day retention. Future
-event types require no migration.
-
-## Phase 2 — Consent (Homebrew model: on by default, easy opt-out)
-
-- `banyancode_telemetry: "on" | "off"` in `BanyanConfig.Info`
-  (`packages/core/src/v1/config/banyan-config.ts`), default `"on"`.
-- Env override `BANYANCODE_TELEMETRY=off`; honor `DO_NOT_TRACK=1`.
-- One-line first-run notice in CLI.
-- Optional `banyancode telemetry status|on|off` subcommand.
-
-## Phase 3 — Active installations (future, only if Phase 0-2 metrics prove worth keeping)
-
-- Weekly heartbeat → `active_install_ids`, `returning_install_ids`.
-- Same worker endpoint, zero new payload fields, same `install_events` table
-  (`event_type = 'heartbeat'`).
+1. `telemetry.ts`: transport switch (PostHog capture default → custom endpoint fallback),
+   `shouldHeartbeat` + `heartbeat()` orchestrator, `last_heartbeat` read/write.
+2. `script/build.ts`: define `process.env.BANYANCODE_POSTHOG_KEY` from env (default "").
+3. `cli/cmd/run.ts`: fire `heartbeat()` alongside `pingOnFirstRun()`.
+4. Tests (`telemetry.test.ts`): PostHog capture shape (URL, body, distinct_id, event,
+   properties), no-key no-op, heartbeat cadence/gating/no-observance guard.
+5. Typecheck (core/opencode), run telemetry tests, SDK regen if schema touched (it is not).
+6. Commit + push `dev` (auto-canary re-publish).
+7. User action: create PostHog project → set project API key when building/canary →
+   dashboard queries above. `worker/telemetry/` remains the optional self-host path.
 
 ## Order
 
-1. Phase 0 (historical baseline before telemetry exists)
-2. Phase 1 (anonymous UUID ping)
-3. Phase 2 (opt-out + DO_NOT_TRACK)
-4. Phase 3 only if the install metric is worth maintaining
+1. Phase 0 (DONE) → 2. Phase 1 (DONE) → 3. Phase 2 (DONE) → 4. Phase 3 (this build)
