@@ -13,6 +13,15 @@ import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecy
 
 Heap.start()
 
+// The TUI is the default command (`$0` in cli/cmd/tui.ts), so first-run
+// install telemetry and the weekly heartbeat must fire here, not only in
+// the headless `run` handler. Fire-and-forget; the module catches its own
+// failures and the worker must not block startup on the network.
+void import("@/installation/telemetry").then(async (m) => {
+  await m.pingOnFirstRun()
+  await m.heartbeat()
+})
+
 // Subscribe to global events and forward them via RPC
 GlobalBus.on("event", (event) => {
   Rpc.emit("global.event", event)
