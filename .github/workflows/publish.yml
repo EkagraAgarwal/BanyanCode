@@ -136,6 +136,9 @@ jobs:
           # with "no matches found" and the release ships empty).
           OPENCODE_RELEASE: 'true'
           OPENCODE_CHANNEL: ${{ needs.version.outputs.channel }}
+          # Project API key (client-safe by design). Baked into the binary via
+          # build.ts's `process.env.BANYANCODE_POSTHOG_KEY` define at bake time.
+          BANYANCODE_POSTHOG_KEY: ${{ secrets.BANYANCODE_POSTHOG_KEY }}
 
       - name: Package macOS binaries
         if: matrix.os-suffix == 'darwin'

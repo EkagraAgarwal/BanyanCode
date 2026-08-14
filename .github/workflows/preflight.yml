@@ -63,6 +63,9 @@ jobs:
           OPENCODE_VERSION: ${{ steps.v.outputs.version }}
           OPENCODE_RELEASE: 'false'
           OPENCODE_CHANNEL: latest
+          # Mirrors publish.yml's build job: bakes BANYANCODE_POSTHOG_KEY into
+          # the single-arch bundle when the secret is set.
+          BANYANCODE_POSTHOG_KEY: ${{ secrets.BANYANCODE_POSTHOG_KEY }}
         run: bun ./packages/opencode/script/build.ts --single --skip-install
 
       - name: Smoke-test binary
