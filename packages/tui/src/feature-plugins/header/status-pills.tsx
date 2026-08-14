@@ -95,7 +95,7 @@ export function View(props: { api: TuiPluginApi }) {
 
   const refreshGraphStatus = async (): Promise<"ok" | "retry" | "unavailable"> => {
     const root = props.api.state?.path?.directory ?? props.api.state?.path?.worktree
-    const statusCall = props.api.client.global?.codegraph?.status?.({ root })
+    const statusCall = props.api.client?.global?.codegraph?.status?.({ root })
     if (!statusCall) return "unavailable"
     const updateMeta = (data: any) =>
       setLastBuildMeta((current) => ({
