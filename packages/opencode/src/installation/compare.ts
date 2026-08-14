@@ -7,20 +7,34 @@ const CANARY_SHA_SUFFIX = /-dev\.[0-9a-f]{7,}$/
 // normalize so both forms compare equal.
 export const canonicalVersion = (version: string) => version.replace(/(^|\.)0+(?=\d)/g, "$1")
 
+export const isCanaryVersion = (version: string) => CANARY_SHA_SUFFIX.test(version)
+
 // Decides whether an upgrade can be skipped. Canary versions are
 // `YY.MM.PATCH-dev.<sha7>`; the sha is arbitrary (not orderable), so a plain
 // numeric comparison wrongly treats an old sha as "newer" (e.g. 5013cc3 vs
 // 1dd17c0) and skips the published build. When the installed and latest
 // versions share the same base and are both canaries, the dist-tag is the
-// source of truth — upgrade unless they are exactly equal.
+// source of truth — upgrade unless they are exactly equal. A canary also
+// never outranks a stable by string order alone (its `-dev.<sha>` suffix
+// sorts above end-of-string), so mixed canary/stable comparisons decide on
+// the version core only.
 export function shouldSkipUpgrade(installed: string, latest: string): boolean {
   if (canonicalVersion(installed) === canonicalVersion(latest)) return true
-  const installedCanary = CANARY_SHA_SUFFIX.test(installed)
-  const latestCanary = CANARY_SHA_SUFFIX.test(latest)
-  const sameBase =
-    canonicalVersion(installed.replace(CANARY_SHA_SUFFIX, "")) ===
-    canonicalVersion(latest.replace(CANARY_SHA_SUFFIX, ""))
-  if (installedCanary && latestCanary && sameBase) return false
+  const installedCanary = isCanaryVersion(installed)
+  const latestCanary = isCanaryVersion(latest)
+  if (installedCanary && latestCanary) {
+    const sameBase =
+      canonicalVersion(installed.replace(CANARY_SHA_SUFFIX, "")) ===
+      canonicalVersion(latest.replace(CANARY_SHA_SUFFIX, ""))
+    if (sameBase) return false
+  }
+  if (installedCanary !== latestCanary) {
+    const coreComparison = compareCores(installed, latest)
+    // Installed canary: upgrade unless its own base is already strictly newer.
+    if (installedCanary) return coreComparison > 0
+    // Installed stable: only upgrade when the canary target's base is strictly newer.
+    return coreComparison >= 0
+  }
   return installed.localeCompare(latest, undefined, { numeric: true }) > 0
 }
 

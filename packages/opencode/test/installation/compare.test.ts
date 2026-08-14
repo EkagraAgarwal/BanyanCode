@@ -67,4 +67,20 @@ describe("shouldSkipUpgrade", () => {
   test("upgrades same-base canaries with different shas even across leading-zero forms", () => {
     expect(shouldSkipUpgrade("26.07.4-dev.5013cc3", "26.7.4-dev.1dd17c0")).toBe(false)
   })
+
+  test("upgrades an installed canary against a stable on the same base (regression: dev.13d26aa vs 26.8.22)", () => {
+    expect(shouldSkipUpgrade("26.08.22-dev.13d26aa", "26.8.22")).toBe(false)
+  })
+
+  test("upgrades an installed canary against a stable on a newer base", () => {
+    expect(shouldSkipUpgrade("26.8.21-dev.abc1234", "26.8.22")).toBe(false)
+  })
+
+  test("skips an installed canary whose base is newer than the stable", () => {
+    expect(shouldSkipUpgrade("26.8.23-dev.abc1234", "26.8.22")).toBe(true)
+  })
+
+  test("skips an installed stable against a same-base canary", () => {
+    expect(shouldSkipUpgrade("26.8.22", "26.8.22-dev.abc1234")).toBe(true)
+  })
 })

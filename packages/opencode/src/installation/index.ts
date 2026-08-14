@@ -15,7 +15,7 @@ import { makeRuntime } from "@opencode-ai/core/effect/runtime"
 import semver from "semver"
 import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { NpmConfig } from "@opencode-ai/core/npm-config"
-import { canonicalVersion, resolveAbsoluteLatest, shouldSkipUpgrade } from "./compare"
+import { canonicalVersion, isCanaryVersion, resolveAbsoluteLatest, shouldSkipUpgrade } from "./compare"
 
 export type Method = "curl" | "npm" | "yarn" | "pnpm" | "bun" | "brew" | "scoop" | "choco" | "snap" | "unknown"
 
@@ -289,20 +289,23 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
 
         if (detectedMethod === "npm" || detectedMethod === "bun" || detectedMethod === "pnpm") {
           const registry = yield* NpmConfig.registry(process.cwd())
-          if (InstallationChannel === "dev") {
-            // Dev (canary) users follow the absolute latest: read both the
-            // `dev` and `latest` dist-tags and pick the newer, tolerating one
-            // of the two fetches failing.
-            const fetchVersion = (tag: string) =>
-              httpOk
-                .execute(HttpClientRequest.get(`${registry}/banyancode/${tag}`).pipe(HttpClientRequest.acceptJson))
-                .pipe(
-                  Effect.flatMap((response) => HttpClientResponse.schemaBodyJson(NpmPackage)(response)),
-                  Effect.map((data) => data.version),
-                  Effect.orElseSucceed(() => undefined),
-                )
-            const devVersion = yield* fetchVersion("dev")
-            const latestVersion = yield* fetchVersion("latest")
+          // Dev-channel binaries AND any install that is itself a canary
+          // follow the absolute latest: read both the `dev` and `latest`
+          // dist-tags and pick the newer, tolerating one of the two fetches
+          // failing. (Without the canary check, a canary installed on a
+          // latest-channel binary would compare against the stable tag and
+          // skip because its `-dev.<sha>` suffix sorts above the stable.)
+          const fetchVersion = (tag: string) =>
+            httpOk
+              .execute(HttpClientRequest.get(`${registry}/banyancode/${tag}`).pipe(HttpClientRequest.acceptJson))
+              .pipe(
+                Effect.flatMap((response) => HttpClientResponse.schemaBodyJson(NpmPackage)(response)),
+                Effect.map((data) => data.version),
+                Effect.orElseSucceed(() => undefined),
+              )
+          const devVersion = yield* fetchVersion("dev")
+          const latestVersion = yield* fetchVersion("latest")
+          if (InstallationChannel === "dev" || isCanaryVersion(InstallationVersion)) {
             return resolveAbsoluteLatest(devVersion, latestVersion)
           }
           const response = yield* httpOk.execute(
