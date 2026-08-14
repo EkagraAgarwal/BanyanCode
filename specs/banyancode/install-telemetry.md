@@ -28,6 +28,8 @@ hosts the collector and the dashboard. This is the default transport.
 - Key resolution: `BANYANCODE_POSTHOG_KEY` env (runtime, for dev) → baked build-time value
   (`packages/opencode/script/build.ts` `define`, same mechanism as `OPENCODE_CHANNEL`).
   Project API keys are public-by-design (client-safe); do NOT bake project SECRET keys.
+  The define uses the dotted form `"process.env.BANYANCODE_POSTHOG_KEY"` — bare-key
+  defines do not replace `process.env` member expressions in Bun.build.
 - Custom endpoint (`BANYANCODE_TELEMETRY_ENDPOINT` → `POST {endpoint}/ping`) remains
   available as an alternative transport for self-hosters (see `worker/telemetry/`).
 - No key AND no custom endpoint → telemetry is a silent no-op (never marks attempts).
@@ -67,7 +69,7 @@ hosts the collector and the dashboard. This is the default transport.
 - `banyancode_telemetry: "on" | "off"` (default on) in `BanyanConfig.Info`; env
   `BANYANCODE_TELEMETRY=off`; honor `DO_NOT_TRACK=1`; `banyancode telemetry status|on|off`.
 
-## Phase 3 — Active installations (BUILD: weekly heartbeat)
+## Phase 3 — Active installations (SHIPPED: weekly heartbeat)
 
 - `banyan_heartbeat` event, cadence 7 days (`last_heartbeat` in install.json), gated on:
   telemetry enabled AND the install has a `last_success` (never heartbeat a first-run that
@@ -77,19 +79,43 @@ hosts the collector and the dashboard. This is the default transport.
   (heartbeat in current window AND a heartbeat in the previous window).
 - No new payload fields; same 200-byte posture.
 
-## Remaining implementation steps (this phase)
+## Shipped (Phase 3A)
 
-1. `telemetry.ts`: transport switch (PostHog capture default → custom endpoint fallback),
-   `shouldHeartbeat` + `heartbeat()` orchestrator, `last_heartbeat` read/write.
-2. `script/build.ts`: define `process.env.BANYANCODE_POSTHOG_KEY` from env (default "").
-3. `cli/cmd/run.ts`: fire `heartbeat()` alongside `pingOnFirstRun()`.
-4. Tests (`telemetry.test.ts`): PostHog capture shape (URL, body, distinct_id, event,
-   properties), no-key no-op, heartbeat cadence/gating/no-observance guard.
-5. Typecheck (core/opencode), run telemetry tests, SDK regen if schema touched (it is not).
-6. Commit + push `dev` (auto-canary re-publish).
-7. User action: create PostHog project → set project API key when building/canary →
-   dashboard queries above. `worker/telemetry/` remains the optional self-host path.
+1. `telemetry.ts` (`packages/opencode/src/installation/telemetry.ts`): `PingPayload`
+   carries `event_type: "first_run" | "heartbeat"`; `InstallTelemetryState` gained
+   `last_heartbeat` (backward-compatible parse); `shouldHeartbeat(identity, now)` — 7-day
+   cadence gated on `last_success` (never heartbeat an unobserved install); `heartbeat()`
+   orchestrator: consent → transport-availability → identity/`shouldHeartbeat` → send →
+   write `last_heartbeat` only on success (no `last_attempt` field for heartbeat).
+2. Transport switch in `ping()`: PostHog capture default
+   (`https://us.i.posthog.com/i/v0/e/`, body `{ api_key, distinct_id: install_id, event:
+   banyan_install | banyan_heartbeat, properties }`, 3s timeout) when
+   `BANYANCODE_POSTHOG_KEY` resolves → custom `{endpoint}/ping` fallback (payload now
+   includes `event_type` — fixes the worker protocol mismatch) → silent no-op
+   (`PingOutcome` gained `"noop"`) when neither key nor endpoint.
+3. `buildPayload` takes an `event_type` param (default `"first_run"`).
+4. `script/build.ts` define: `"process.env.BANYANCODE_POSTHOG_KEY"` baked from env,
+   default `""`.
+5. `cli/cmd/run.ts` fires `heartbeat()` alongside `pingOnFirstRun()`.
+6. Tests: 37 pass (`test/installation/telemetry.test.ts`): heartbeat gating/cadence,
+   PostHog capture shape, no-key-no-endpoint noop, `event_type` in payload.
+
+### User action (post-ship)
+
+- Create PostHog project → set project API key when building/canary
+  (`BANYANCODE_POSTHOG_KEY`) → dashboard queries above. `worker/telemetry/` remains the
+  optional self-host path.
+
+## Phase 3B (self-host worker) — partially shipped
+
+- `.github/workflows/deploy-telemetry.yml` exists (manual dispatch + main push touching
+  `worker/telemetry/**`; needs `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`; runs
+  `wrangler deploy` then applies `schema.sql`).
+- Worker ships a `scheduled` cron (daily 03:00 UTC) enforcing 365-day retention
+  (`worker/telemetry/src/index.ts`, `[triggers]` in `wrangler.toml`).
+- D1 binding still commented out in `wrangler.toml` — create the database and uncomment
+  the binding before first deploy (user action). Worker NOT yet deployed.
 
 ## Order
 
-1. Phase 0 (DONE) → 2. Phase 1 (DONE) → 3. Phase 2 (DONE) → 4. Phase 3 (this build)
+1. Phase 0 (DONE) → 2. Phase 1 (DONE) → 3. Phase 2 (DONE) → 4. Phase 3 (SHIPPED)
