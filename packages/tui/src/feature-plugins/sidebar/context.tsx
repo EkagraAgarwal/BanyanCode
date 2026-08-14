@@ -145,17 +145,15 @@ const categorizeTokens = (
   const billingIdx = messages.findIndex((m) => isAssistant(m) && m.id === billingAssistant.id)
 
   let breakdown: Record<string, number> | undefined
-  let breakdownTotal = 0
   // The billing assistant's step-finish part may carry a per-source token
   // breakdown ({ base, agent, user, environment, instructions, skills,
-  // codegraph, orchestration, structuredOutput }) from the provider. When
-  // present, the residual "Other" bucket is replaced by these explicit rows.
+  // codegraph, orchestration, structuredOutput, tools }) from the provider.
+  // The segments() memo folds these keys into the consolidated rows.
   for (const part of partsGetter(billingAssistant.id)) {
     if (!part || (part as any).type !== "step-finish") continue
     const bd = (part as any).tokens?.breakdown
     if (bd && typeof bd === "object" && Object.keys(bd).length > 0) {
       breakdown = { ...(bd as Record<string, number>) }
-      for (const n of Object.values(bd)) breakdownTotal += Number(n) || 0
       break
     }
   }
@@ -230,11 +228,9 @@ const categorizeTokens = (
   // prevents the categories from collapsing when the conversation is
   // cache-heavy and inputTotal is small. Cache is implicit in basis; the
   // cacheRead/cacheWrite return fields are zeroed out to avoid double-counting
-  // in the legend/bar, while `cache` carries the real sum for a legend-only row.
+  // in the legend/bar, while `cache` carries the real sum for the cache chip.
   const basis = inputTotal + totalCache
 
-  const heuristicBuckets = filesTokens + toolsTokens + subagentTokens + userTokens
-  const prompt = Math.max(0, basis - heuristicBuckets - breakdownTotal)
   const files = Math.min(filesTokens, basis)
   const tools = Math.min(toolsTokens, Math.max(0, basis - files))
   const subagents = Math.min(subagentTokens, Math.max(0, basis - files - tools))
@@ -245,19 +241,16 @@ const categorizeTokens = (
     files,
     tools,
     output,
-    prompt,
     userMessages: users,
     subagents,
     cacheRead: 0,
     cacheWrite: 0,
     breakdown,
     cache: cacheRead + cacheWrite,
-    total: inputTotal + output + reasoning + cacheRead + cacheWrite,
+    basis,
+    total: inputTotal + output + reasoning,
   }
 }
-
-// Exported for unit testing — not part of the public API.
-export const __test = { categorizeTokens, sumToolTokens, estimateTokens, allocateBarWidths, taskSpawnPromptTokens }
 
 interface Segment {
   key: string
@@ -266,19 +259,55 @@ interface Segment {
   color: "primary" | "accent" | "info" | "success" | "warning" | "muted"
 }
 
-// Provider breakdown keys -> legend label + bar color. Order is stable:
-// system-ish sources first, tool-ish last.
-const BREAKDOWN_LABELS: ReadonlyArray<[string, string, Segment["color"]]> = [
-  ["base", "Base", "muted"],
-  ["agent", "Agent", "info"],
-  ["user", "User System", "muted"],
-  ["environment", "Environment", "accent"],
-  ["instructions", "Instructions", "accent"],
-  ["skills", "Skills", "muted"],
-  ["codegraph", "Codegraph", "info"],
-  ["orchestration", "Orchestration", "warning"],
-  ["structuredOutput", "Structured Output", "success"],
+// Provider breakdown keys -> target consolidated row. Keys with no entry are
+// ignored; the target rows render in the stable segment order below.
+const BREAKDOWN_MERGE: ReadonlyArray<[string, Segment["key"]]> = [
+  ["base", "system"],
+  ["agent", "system"],
+  ["user", "system"],
+  ["environment", "system"],
+  ["instructions", "system"],
+  ["skills", "system"],
+  ["structuredOutput", "system"],
+  ["codegraph", "codegraphOrchestration"],
+  ["orchestration", "codegraphOrchestration"],
+  ["tools", "toolDefinitions"],
 ]
+
+const mergeBreakdown = (
+  breakdown: Record<string, number> | undefined,
+): Partial<Record<Segment["key"], number>> => {
+  const merged: Partial<Record<Segment["key"], number>> = {}
+  if (!breakdown) return merged
+  for (const [key, target] of BREAKDOWN_MERGE) {
+    const tokens = breakdown[key]
+    if (tokens === undefined || tokens <= 0) continue
+    merged[target] = (merged[target] ?? 0) + tokens
+  }
+  return merged
+}
+
+// Residual after the consolidated rows: "Other" appears only when genuinely
+// unaccounted (> 5% of basis), never negative.
+const withResidual = (segments: ReadonlyArray<Segment>, basis: number): Segment[] => {
+  const accounted = segments.reduce((sum, s) => sum + s.tokens, 0)
+  const residual = Math.max(0, basis - accounted)
+  if (residual / basis > 0.05) {
+    return [...segments, { key: "other", label: "Other", tokens: residual, color: "info" }]
+  }
+  return [...segments]
+}
+
+// Exported for unit testing — not part of the public API.
+export const __test = {
+  categorizeTokens,
+  sumToolTokens,
+  estimateTokens,
+  allocateBarWidths,
+  taskSpawnPromptTokens,
+  mergeBreakdown,
+  withResidual,
+}
 
 function View(props: { api: TuiPluginApi; session_id: string }) {
   const theme = () => props.api.theme.current
@@ -333,37 +362,37 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const segments = createMemo<Segment[]>(() => {
     const cat = categorization()
     if (!cat) return []
-    const promptSegments: Segment[] = []
-    if (cat.breakdown) {
-      for (const [key, label, color] of BREAKDOWN_LABELS) {
-        const tokens = cat.breakdown[key]
-        if (tokens === undefined || tokens <= 0) continue
-        promptSegments.push({ key, label, tokens, color })
-      }
-      // Residual after the explicit breakdown rows. Renamed to "Overhead" so
-      // the catch-all is honest; hidden when the breakdown already accounts
-      // for the whole basis.
-      if (cat.prompt > 0) {
-        promptSegments.push({ key: "prompt", label: "Overhead", tokens: cat.prompt, color: "info" })
-      }
-    } else {
-      // Residual bucket: system prompt + tool definitions + agent prompt +
-      // memory attachments + codegraph summary + anything the heuristic
-      // (files/tools/subagents/user) couldn't attribute to a named call.
-      // For a long session with memory recall this can easily run 100-300k;
-      // "Other" is honest about the catch-all nature without misleading users
-      // about a single component.
-      promptSegments.push({ key: "prompt", label: "Other", tokens: cat.prompt, color: "info" })
-    }
-    return [
-      { key: "user", label: "User", tokens: cat.userMessages, color: "muted" },
-      { key: "thinking", label: "Thinking", tokens: cat.thinking, color: "accent" },
-      ...promptSegments,
+    const breakdownTokens = mergeBreakdown(cat.breakdown)
+    const rows: Segment[] = [
+      {
+        key: "system",
+        label: "System",
+        tokens: breakdownTokens.system ?? 0,
+        color: "muted",
+      },
+      {
+        key: "codegraphOrchestration",
+        label: "Codegraph & Orchestration",
+        tokens: breakdownTokens.codegraphOrchestration ?? 0,
+        color: "info",
+      },
+      {
+        key: "toolDefinitions",
+        label: "Tool Definitions",
+        tokens: breakdownTokens.toolDefinitions ?? 0,
+        color: "info",
+      },
+      { key: "toolCalls", label: "Tool Calls", tokens: cat.tools, color: "warning" },
       { key: "files", label: "Files", tokens: cat.files, color: "success" },
-      { key: "tools", label: "Tools", tokens: cat.tools, color: "warning" },
+      {
+        key: "conversation",
+        label: "Conversation",
+        tokens: cat.userMessages + cat.thinking + cat.output,
+        color: "accent",
+      },
       { key: "subagents", label: "Subagents", tokens: cat.subagents, color: "muted" },
-      { key: "output", label: "Output", tokens: cat.output, color: "primary" },
     ]
+    return withResidual(rows, cat.basis)
   })
 
   const segColor = (color: Segment["color"]): string => {
@@ -466,25 +495,15 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                   )
                 }}
               </For>
-              {/* Cache tokens were folded into basis (input + cache), so the
-                  source rows above already include them; this row only reports
-                  how much of that total came from cache reads/writes. It is
-                  legend-only — never a bar segment — so bar proportions stay
-                  correct. */}
-              <Show when={tb().cache > 0 && tb().total > 0}>
+              {/* Cache is folded into basis (input + cache), so the source
+                  rows above already include it; this chip only reports how
+                  much of that total came from cache. It is informational —
+                  never a % segment — so legend proportions stay correct. */}
+              <Show when={tb().cache > 0}>
                 <box flexDirection="row" justifyContent="space-between" width="100%">
-                  <box flexDirection="row" gap={1}>
-                    <text fg={segColor("muted")}>■</text>
-                    <text fg={toHex(theme().text)}>Cache</text>
-                  </box>
-                  <box flexDirection="row" gap={1}>
-                    <text fg={toHex(theme().text)}>
-                      {formatTokensCompact(tb().cache)}
-                    </text>
-                    <text fg={toHex(theme().textMuted)}>
-                      {`${((tb().cache / tb().total) * 100).toFixed(1)}%`}
-                    </text>
-                  </box>
+                  <text fg={toHex(theme().textMuted)}>
+                    {formatTokensCompact(tb().cache)} cached · included in input
+                  </text>
                 </box>
               </Show>
             </box>

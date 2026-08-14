@@ -35,12 +35,16 @@ const {
   allocateBarWidths,
   taskSpawnPromptTokens,
   estimateTokens,
+  mergeBreakdown,
+  withResidual,
 } = (ctxModule.__test ?? ctxModule.default?.__test) as {
   categorizeTokens: any
   sumToolTokens: any
   allocateBarWidths: any
   taskSpawnPromptTokens: any
   estimateTokens: any
+  mergeBreakdown: any
+  withResidual: any
 }
 
 const fixtureUser = {
@@ -122,7 +126,7 @@ const fixtureAssistant = {
   time: { created: 0, completed: 1000 },
 }
 
-const fixtureBreakdown = { base: 100, agent: 50, codegraph: 200 }
+const fixtureBreakdown = { base: 100, agent: 50, codegraph: 200, tools: 300 }
 
 const breakdownAssistantParts = [
   ...fixtureAssistantParts,
@@ -211,23 +215,37 @@ test("context widget source contains concise single-line category labels", () =>
     require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
     "utf8",
   )
-  for (const label of ["User", "Subagents", "Output", "Tools", "Files", "Other", "Thinking", "Cache"]) {
+  for (const label of [
+    "System",
+    "Codegraph & Orchestration",
+    "Tool Definitions",
+    "Tool Calls",
+    "Files",
+    "Conversation",
+    "Subagents",
+    "Other",
+  ]) {
     expect(source).toContain(label)
   }
   expect(source).not.toMatch(/label:\s*"Agent"/)
 })
 
-test("context widget renders breakdown source labels and the Overhead residual", () => {
+test("context widget folds provider breakdown keys into consolidated rows", () => {
   const source = require("fs").readFileSync(
     require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
     "utf8",
   )
-  for (const label of ["Base", "Agent", "Codegraph", "Overhead"]) {
+  for (const label of ["System", "Codegraph & Orchestration", "Tool Definitions"]) {
     expect(source).toContain(label)
   }
+  // Per-key rows are gone: base/agent/etc. fold into System, codegraph and
+  // orchestration into one row, and the residual is named "Other".
+  expect(source).not.toMatch(/label:\s*"Base"/)
+  expect(source).not.toMatch(/label:\s*"Agent"/)
+  expect(source).not.toContain("Overhead")
 })
 
-test("cache is a legend-only row, never a bar segment", () => {
+test("cache is a chip, never a bar segment or percentage row", () => {
   const source = require("fs").readFileSync(
     require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
     "utf8",
@@ -235,8 +253,11 @@ test("cache is a legend-only row, never a bar segment", () => {
   // The segments() memo (source of both the bar and the legend rows) must not
   // emit a cache segment — cache is folded into basis and reported separately.
   expect(source).not.toMatch(/key:\s*"cache"/)
-  // The cache row lives in the legend, after the source rows, gated on cache > 0.
+  // The chip renders when cache > 0 and is informational text only.
   expect(source).toMatch(/tb\(\)\.cache\s*>\s*0/)
+  expect(source).toContain("cached · included in input")
+  expect(source).not.toMatch(/label:\s*"Cache"/)
+  expect(source).not.toMatch(/tb\(\)\.cache\s*\/\s*tb\(\)\.total/)
 })
 
 test("context widget no longer uses the old 'Memory' label", () => {
@@ -430,9 +451,9 @@ describe("categorizeTokens", () => {
     expect(sumToolTokens(tool)).toBe(estimateTokens(JSON.stringify({ cmd: "ls" })) + estimateTokens("hello world"))
   })
 
-  test("total = input + output + reasoning + cache.read + cache.write", () => {
+  test("total = input + output + reasoning, cache excluded from the denominator", () => {
     const cat = categorizeTokens([fixtureUser as any, fixtureAssistant as any], partsGetter)
-    expect(cat!.total).toBe(5000 + 3000 + 1000 + 250 + 75)
+    expect(cat!.total).toBe(5000 + 3000 + 1000)
   })
 
   test("heuristic buckets are clamped to basis (input + cache)", () => {
@@ -456,10 +477,9 @@ describe("categorizeTokens", () => {
       (id: string) => (id === "msg-1" ? hugeParts : fixtureUserParts),
     )
     const basis = 5000 + 250 + 75 // input + cache.read + cache.write
+    expect(cat!.basis).toBe(basis)
     expect(cat!.files).toBeLessThanOrEqual(basis)
-    expect(cat!.files + cat!.tools + cat!.subagents + cat!.userMessages + cat!.prompt).toBeLessThanOrEqual(
-      basis,
-    )
+    expect(cat!.files + cat!.tools + cat!.subagents + cat!.userMessages).toBeLessThanOrEqual(basis)
     // cacheRead/cacheWrite are zeroed in the return; cache is implicit in basis.
     expect(cat!.cacheRead).toBe(0)
     expect(cat!.cacheWrite).toBe(0)
@@ -500,28 +520,20 @@ describe("categorizeTokens", () => {
     // cacheRead/cacheWrite are zeroed in the return; cache is implicit in basis.
     expect(cat!.cacheRead).toBe(0)
     expect(cat!.cacheWrite).toBe(0)
-    expect(cat!.prompt).toBeGreaterThan(0)
     expect(cat!.output).toBe(3000)
   })
 
-  test("Prompt residual never goes negative", () => {
-    const cat = categorizeTokens([fixtureUser as any, fixtureAssistant as any], partsGetter)
-    expect(cat!.prompt).toBeGreaterThanOrEqual(0)
-  })
-
-  test("step-finish breakdown replaces the residual with explicit source rows", () => {
+  test("step-finish breakdown feeds the consolidated System row", () => {
     const cat = categorizeTokens(
       [fixtureUser as any, fixtureAssistant as any],
       (id: string) => (id === "msg-1" ? breakdownAssistantParts : fixtureUserParts),
     )
     expect(cat).not.toBeNull()
     expect(cat!.breakdown).toEqual(fixtureBreakdown)
-    // basis = input (5000) + cache (250 + 75) = 5325. Heuristic buckets are
-    // small enough to skip clamping, so the residual subtracts both them and
-    // the breakdown total (350).
-    const heuristicBuckets = cat!.files + cat!.tools + cat!.subagents + cat!.userMessages
-    expect(cat!.prompt).toBe(Math.max(0, 5000 + 250 + 75 - heuristicBuckets - 350))
-    expect(cat!.total).toBe(5000 + 3000 + 1000 + 250 + 75)
+    expect(cat!.breakdown!.tools).toBe(300)
+    // basis = input (5000) + cache (250 + 75) = 5325.
+    expect(cat!.basis).toBe(5000 + 250 + 75)
+    expect(cat!.total).toBe(5000 + 3000 + 1000)
   })
 
   test("cache tokens are reported as a legend-only value while cacheRead/cacheWrite stay zeroed", () => {
@@ -571,6 +583,54 @@ describe("categorizeTokens", () => {
     expect(cat!.files).toBe(5000)
     expect(cat!.cacheRead).toBe(0)
     expect(cat!.cacheWrite).toBe(0)
-    expect(cat!.total).toBe(5300)
+    expect(cat!.total).toBe(300)
+  })
+})
+
+describe("mergeBreakdown", () => {
+  test("folds system-ish keys into System and codegraph/orchestration into one row", () => {
+    const merged = mergeBreakdown({
+      base: 100,
+      agent: 50,
+      user: 25,
+      environment: 10,
+      instructions: 5,
+      skills: 5,
+      structuredOutput: 5,
+      codegraph: 200,
+      orchestration: 50,
+      tools: 300,
+    })
+    expect(merged.system).toBe(200)
+    expect(merged.codegraphOrchestration).toBe(250)
+    expect(merged.toolDefinitions).toBe(300)
+  })
+
+  test("skips unknown and non-positive keys", () => {
+    const merged = mergeBreakdown({ base: 0, unknown: 100 })
+    expect(merged.system).toBeUndefined()
+  })
+
+  test("returns an empty map when there is no breakdown", () => {
+    expect(mergeBreakdown(undefined)).toEqual({})
+  })
+})
+
+describe("withResidual", () => {
+  const seg = (tokens: number) => ({ key: "files", label: "Files", tokens, color: "success" as const })
+
+  test("shows Other when unaccounted tokens exceed 5% of basis", () => {
+    const out = withResidual([seg(100)], 1000)
+    expect(out).toHaveLength(2)
+    expect(out[out.length - 1]).toMatchObject({ label: "Other", tokens: 900 })
+  })
+
+  test("hides Other when unaccounted tokens are at most 5% of basis", () => {
+    expect(withResidual([seg(960)], 1000)).toHaveLength(1)
+    expect(withResidual([seg(950)], 1000)).toHaveLength(1)
+  })
+
+  test("never goes negative", () => {
+    expect(withResidual([seg(2000)], 1000)).toHaveLength(1)
   })
 })
