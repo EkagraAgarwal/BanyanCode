@@ -315,6 +315,7 @@ it.live("step-finish persists tokens.breakdown from the process stream input", (
           agent: 100,
           user: 10,
           structuredOutput: 40,
+          tools: 60,
         }
 
         const value = yield* handle.process({
@@ -343,6 +344,8 @@ it.live("step-finish persists tokens.breakdown from the process stream input", (
         expect(value).toBe("continue")
         expect(stepFinish).toBeDefined()
         expect(stepFinish?.tokens.breakdown).toEqual(systemBreakdown)
+        // 10 keys: the 9 original component estimates plus the new tools key
+        expect(Object.keys(systemBreakdown)).toHaveLength(10)
         // base usage tokens are still persisted alongside the breakdown
         expect(stepFinish?.tokens.input).toBe(10)
         expect(stepFinish?.tokens.output).toBe(5)

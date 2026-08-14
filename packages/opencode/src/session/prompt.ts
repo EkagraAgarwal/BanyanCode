@@ -1437,6 +1437,22 @@ export const layer = Layer.effect(
             if (banyan) systemBreakdown.orchestration = estimateTokens(banyan)
             if (skills) systemBreakdown.skills = estimateTokens(skills)
             if (format.type === "json_schema") systemBreakdown.structuredOutput = estimateTokens(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+            if (Object.keys(tools).length) {
+              // Mirror the AI SDK's activeTools filter (llm.ts drops the
+              // "invalid" repair tool before streaming) so the estimate
+              // reflects the schemas actually sent to the provider.
+              const implTools = Object.entries(tools)
+                .filter(([name]) => name !== "invalid")
+                .map(([name, t]) => ({
+                  type: "function",
+                  function: {
+                    name,
+                    description: t.description,
+                    parameters: (t.inputSchema as { jsonSchema?: unknown }).jsonSchema ?? {},
+                  },
+                }))
+              systemBreakdown.tools = estimateTokens(JSON.stringify(implTools))
+            }
             const result = yield* handle.process({
               user: lastUser,
               agent,
