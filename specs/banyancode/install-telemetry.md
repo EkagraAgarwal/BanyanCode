@@ -106,15 +106,14 @@ hosts the collector and the dashboard. This is the default transport.
   (`BANYANCODE_POSTHOG_KEY`) → dashboard queries above. `worker/telemetry/` remains the
   optional self-host path.
 
-## Phase 3B (self-host worker) — partially shipped
+## Phase 3B (self-host worker) — SKIPPED (PostHog-only transport)
 
-- `.github/workflows/deploy-telemetry.yml` exists (manual dispatch + main push touching
-  `worker/telemetry/**`; needs `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`; runs
-  `wrangler deploy` then applies `schema.sql`).
-- Worker ships a `scheduled` cron (daily 03:00 UTC) enforcing 365-day retention
-  (`worker/telemetry/src/index.ts`, `[triggers]` in `wrangler.toml`).
-- D1 binding still commented out in `wrangler.toml` — create the database and uncomment
-  the binding before first deploy (user action). Worker NOT yet deployed.
+- Decision 2026-08-14: the self-host Cloudflare worker is **not deployed**; PostHog cloud
+  is the sole transport.
+- `deploy-telemetry.yml`, the `scheduled` 365-day retention cron, and the `[triggers]`
+  entry were reverted with this decision.
+- `worker/telemetry/` source stays in-tree as an optional self-host reference (custom
+  `BANYANCODE_TELEMETRY_ENDPOINT` fallback), but no deploy path is maintained.
 
 ## Order
 

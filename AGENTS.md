@@ -113,6 +113,10 @@ Concurrency: `${{ github.workflow }}-${{ github.ref }}` — each tag and each de
 | Secret | Consumed by | If missing |
 |---|---|---|
 | `NPM_TOKEN` | `publish.ts` (npm publish) | `publish` job fails. Preflight surfaces the blocker without failing the run (see `.github/workflows/preflight.yml:45-59`). |
+| `BANYANCODE_POSTHOG_KEY` | `script/build.ts` / `build-node.ts` (baked into binaries) — PostHog project API key (`phc_`), public-by-design, forwarded from the `publish.yml` build job and `preflight.yml` via `BANYANCODE_POSTHOG_KEY` env | Telemetry silently no-ops (client sends no events). |
+| `POSTHOG_KEY` | `script/banyan-stats.ts` (daily stats workflow) — same `phc_` project key, sends `banyan_download` events | Download trend events skipped (STATS.md still updates). |
+| `BANYANCODE_POSTHOG_PROJECT_ID` | `script/banyan-stats.ts` (weekly report HogQL queries) — PostHog project id (numeric) | Stats script skips install aggregates. |
+| `BANYANCODE_POSTHOG_PERSONAL_KEY` | `script/banyan-stats.ts` (weekly report HogQL queries) — PostHog personal API key (`phx_`), private, `query:read` scope | Stats script skips install aggregates. |
 | `AZURE_CLIENT_ID` / `_TENANT_ID` / `_SUBSCRIPTION_ID` / `_TRUSTED_SIGNING_ACCOUNT_NAME` / `_TRUSTED_SIGNING_CERTIFICATE_PROFILE` / `_TRUSTED_SIGNING_ENDPOINT` | `sign-windows` | Windows binaries ship unsigned with `::warning::`. Functional but not code-signed. |
 | `HOMEBREW_TAP_TOKEN`, `AUR_KEY` | declared in `publish.yml:217-218` but **not consumed** — legacy from the upstream OpenCode pipeline | n/a |
 | `GITHUB_TOKEN` | auto-provisioned; release upload + finalize | n/a |

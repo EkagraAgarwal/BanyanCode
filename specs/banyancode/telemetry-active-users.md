@@ -77,17 +77,15 @@ client. Download counts stay a trend signal (`banyan_download`); unique numbers 
 6. Typecheck (core/opencode), run `telemetry.test.ts`. SDK regen NOT required (no schema
    change).
 
-### Phase 3B — worker deploy (optional, self-host path)
+### Phase 3B — worker deploy (SKIPPED — PostHog-only transport)
 
-7. Create D1 database, apply `schema.sql` (`wrangler d1 create banyancode-telemetry-db`
-   + `wrangler d1 execute ... --file schema.sql`), uncomment the `[[d1_databases]]`
-   binding in `wrangler.toml`. → **OPEN (user action)** — binding still commented, worker
-   not deployed.
-8. Add a deploy workflow (`.github/workflows/deploy-telemetry.yml`, manual dispatch +
-   push-to-main) or document the manual `wrangler deploy` path. Worker already supports
-   `event_type` — no worker code change needed once the client sends it. → **DONE** —
-   `deploy-telemetry.yml` ships (manual dispatch + main push on `worker/telemetry/**`,
-   `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`).
+7. ~~Create D1 database, apply `schema.sql`, uncomment the `[[d1_databases]]` binding.~~
+   → **SKIPPED 2026-08-14** — the self-host Cloudflare worker is not deployed; PostHog
+   cloud is the sole transport. `worker/telemetry/` source remains in-tree as an
+   optional self-host reference but is out of scope for this effort.
+8. ~~Add a deploy workflow + retention cron.~~ → **REVERTED 2026-08-14** —
+   `deploy-telemetry.yml`, the `scheduled` retention cron, and the `[triggers]` entry
+   were removed with the Cloudflare skip.
 
 ### Phase 4 — measurement & reporting
 
