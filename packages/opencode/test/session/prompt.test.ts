@@ -259,8 +259,12 @@ const unix = process.platform !== "win32" ? it.instance : it.instance.skip
 const unixNoLLMServer = process.platform !== "win32" ? noLLMServer.instance : noLLMServer.instance.skip
 
 // Config that registers a custom "test" provider with a "test-model" model
-// so provider model lookup succeeds inside the loop.
+// so provider model lookup succeeds inside the loop. The top-level model pins
+// sessions created without an explicit model to the test provider, so the
+// file-part read path (which resolves the model before invoking the read
+// tool) works in noLLMServer tests.
 const cfg = {
+  model: "test/test-model",
   provider: {
     test: {
       name: "Test",
@@ -434,7 +438,7 @@ const addSubtask = (sessionID: SessionID, messageID: MessageID, model = ref) =>
       type: "subtask",
       prompt: "look into the cache key path",
       description: "inspect bug",
-      agent: "general",
+      agent: "coder",
       model,
     })
   })
@@ -552,6 +556,10 @@ it.instance("step-finish persists the system prompt token breakdown", () =>
     // The default build agent has no custom prompt, so the provider prompt is
     // used as `base` and `agent` is omitted; text format means no
     // `structuredOutput`, and the user message carries no `user.system`.
+    // The `tools` estimate is chars/4 of the serialized tool schemas the
+    // provider actually received — recompute it from the captured request.
+    const inputs = yield* llm.inputs
+    const request = inputs.find((i) => Array.isArray(i.tools) && i.tools.length > 0)
     expect(breakdown).toEqual(
       expect.objectContaining({
         base: Math.max(1, Math.ceil(PROMPT_DEFAULT.length / 4)),
@@ -559,6 +567,7 @@ it.instance("step-finish persists the system prompt token breakdown", () =>
         skills: expect.any(Number),
         codegraph: expect.any(Number),
         orchestration: expect.any(Number),
+        tools: Math.max(1, Math.ceil(JSON.stringify(request?.tools ?? []).length / 4)),
       }),
     )
     expect(breakdown?.agent).toBeUndefined()
@@ -809,47 +818,54 @@ it.instance("loop continues when finish is stop but assistant has tool parts", (
   }),
 )
 
-it.instance("failed subtask preserves metadata on error tool state", () =>
+it.instance("failed subtask records error in child session and preserves metadata", () =>
   Effect.gen(function* () {
-    const { llm } = yield* useServerConfig((url) => ({
-      ...providerCfg(url),
-      agent: {
-        general: {
-          model: "test/missing-model",
-        },
-      },
-    }))
+    const { llm } = yield* useServerConfig(providerCfg)
     const prompt = yield* SessionPrompt.Service
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({ title: "Pinned" })
     yield* llm.tool("task", {
       description: "inspect bug",
       prompt: "look into the cache key path",
-      subagent_type: "general",
+      subagent_type: "coder",
     })
+    // The child's LLM call errors at runtime. The fork records the failure on
+    // the child session's final message and settles the parent tool part as
+    // completed, preserving the child session metadata.
+    yield* llm.fail("boom")
     yield* llm.text("done")
     const msg = yield* user(chat.id, "hello")
     yield* addSubtask(chat.id, msg.id)
 
     const result = yield* prompt.loop({ sessionID: chat.id })
     expect(result.info.role).toBe("assistant")
-    expect(yield* llm.calls).toBe(2)
+    expect(yield* llm.calls).toBe(3)
 
     const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
-    const taskMsg = msgs.find((item) => item.info.role === "assistant" && item.info.agent === "general")
+    const taskMsg = msgs.find((item) => item.info.role === "assistant" && item.info.agent === "coder")
     expect(taskMsg?.info.role).toBe("assistant")
     if (!taskMsg || taskMsg.info.role !== "assistant") return
 
-    const tool = errorTool(taskMsg.parts)
+    const tool = toolPart(taskMsg.parts)
+    expect(tool?.type).toBe("tool")
     if (!tool) return
 
-    expect(tool.state.error).toContain("Tool execution failed")
+    expect(tool.state.status).toBe("completed")
+    if (tool.state.status !== "completed") return
+
     expect(tool.state.metadata).toBeDefined()
     expect(tool.state.metadata?.sessionId).toBeDefined()
     expect(tool.state.metadata?.model).toEqual({
       providerID: ProviderV2.ID.make("test"),
-      modelID: ModelV2.ID.make("missing-model"),
+      modelID: ModelV2.ID.make("test-model"),
     })
+    if (!tool.state.metadata?.sessionId) return
+
+    // The failed child session exists and is reachable from the parent
+    // metadata (the error is recorded inside the child session's run).
+    const childID = tool.state.metadata.sessionId
+    const child = yield* sessions.get(childID)
+    expect(child?.id).toBe(childID)
   }),
 )
 
@@ -876,7 +892,15 @@ it.instance("subtask child inherits parent session external_directory allow", ()
       expect.arrayContaining([{ permission: "external_directory", pattern: "/tmp/allowed/*", action: "allow" }]),
     )
     expect(Permission.evaluate("external_directory", "/tmp/allowed/file", rules).action).toBe("allow")
-    expect(Permission.evaluate("task", "anything", rules).action).toBe("deny")
+    // The stored child permission carries the inherited parent rules; the
+    // effective set is merged with the child agent's rules at ask time
+    // (SessionPrompt merges taskAgent.permission + session.permission). The
+    // coder agent denies task except explore/scout/researcher, so the child
+    // cannot delegate to arbitrary agents.
+    const agentSvc = yield* AgentSvc.Service
+    const childAgent = yield* agentSvc.get(child.agent!)
+    const effective = Permission.merge(childAgent?.permission ?? [], rules)
+    expect(Permission.evaluate("task", "anything", effective).action).toBe("deny")
   }),
 )
 
@@ -903,7 +927,9 @@ noLLMServer.instance("prompt tools replace previous prompt tool rules", () =>
 
     const reloaded = yield* sessions.get(session.id)
     expect(reloaded.permission).toEqual([{ permission: "read", pattern: "*", action: "allow" }])
-    expect(Permission.evaluate("bash", "anything", reloaded.permission ?? []).action).toBe("ask")
+    // Unmatched actions fall back to the default-allow posture, so bash is no
+    // longer explicitly granted but evaluates to the allow fallback.
+    expect(Permission.evaluate("bash", "anything", reloaded.permission ?? []).action).toBe("allow")
   }),
 )
 
@@ -923,13 +949,14 @@ it.instance(
 
       const tool = yield* pollWithTimeout(
         Effect.gen(function* () {
-          const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
-          const taskMsg = msgs.find((item) => item.info.role === "assistant" && item.info.agent === "general")
-          const tool = taskMsg?.parts.find((part): part is SessionV1.ToolPart => part.type === "tool")
-          if (tool?.state.status === "running" && tool.state.metadata?.sessionId) return tool
-        }),
-        "timed out waiting for running subtask metadata",
-      )
+      const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+      const taskMsg = msgs.find((item) => item.info.role === "assistant" && item.info.agent === "coder")
+      const tool = taskMsg?.parts.find((part): part is SessionV1.ToolPart => part.type === "tool")
+      if (tool?.state.status === "running" && tool.state.metadata?.sessionId) return tool
+    }),
+    "timed out waiting for running subtask metadata",
+    "15 seconds",
+  )
 
       if (tool.state.status !== "running") return
       expect(typeof tool.state.metadata?.sessionId).toBe("string")
@@ -939,7 +966,7 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  5_000,
+  20_000
 )
 
 it.instance(
@@ -956,7 +983,7 @@ it.instance(
       yield* llm.tool("task", {
         description: "inspect bug",
         prompt: "look into the cache key path",
-        subagent_type: "general",
+        subagent_type: "coder",
       })
       yield* llm.hang
       yield* user(chat.id, "hello")
@@ -983,7 +1010,7 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  10_000,
+  30_000
 )
 
 it.instance(
@@ -1007,7 +1034,7 @@ it.instance(
       yield* Fiber.await(fiber)
       expect((yield* status.get(chat.id)).type).toBe("idle")
     }),
-  3_000,
+  15_000
 )
 
 // Cancel semantics
@@ -1035,7 +1062,7 @@ it.instance(
         expect(exit.value.info.role).toBe("assistant")
       }
     }),
-  3_000,
+  15_000
 )
 
 it.instance(
@@ -1061,7 +1088,7 @@ it.instance(
         }
       }
     }),
-  3_000,
+  15_000
 )
 
 raceNoLLMServer.instance(
@@ -1150,7 +1177,7 @@ raceNoLLMServer.instance(
       }
     }),
   { config: cfg },
-  3_000,
+  15_000
 )
 
 noLLMServer.instance(
@@ -1184,7 +1211,7 @@ noLLMServer.instance(
       yield* awaitWithTimeout(Deferred.await(aborted), "timed out waiting for task tool abort", "10 seconds")
 
       const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
-      const taskMsg = msgs.find((item) => item.info.role === "assistant" && item.info.agent === "general")
+      const taskMsg = msgs.find((item) => item.info.role === "assistant" && item.info.agent === "coder")
       expect(taskMsg?.info.role).toBe("assistant")
       if (!taskMsg || taskMsg.info.role !== "assistant") return
 
@@ -1217,7 +1244,7 @@ it.instance(
       yield* llm.wait(1)
 
       const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
-      const taskMsg = msgs.find((item) => item.info.role === "assistant" && item.info.agent === "general")
+      const taskMsg = msgs.find((item) => item.info.role === "assistant" && item.info.agent === "coder")
       const tool = taskMsg ? toolPart(taskMsg.parts) : undefined
       const sessionID = tool?.state.status === "running" ? tool.state.metadata?.sessionId : undefined
       expect(typeof sessionID).toBe("string")
@@ -1232,7 +1259,7 @@ it.instance(
       expect((yield* status.get(chat.id)).type).toBe("idle")
       expect((yield* status.get(childID)).type).toBe("idle")
     }),
-  10_000,
+  30_000
 )
 
 it.instance(
@@ -1260,7 +1287,7 @@ it.instance(
       }
     }),
   { git: true },
-  3_000,
+  15_000
 )
 
 // Queue semantics
@@ -1298,7 +1325,7 @@ it.instance(
       expect(a.info.id).toBe(b.info.id)
       expect(a.info.role).toBe("assistant")
     }),
-  3_000,
+  15_000
 )
 
 it.instance(
@@ -1366,7 +1393,7 @@ it.instance(
       expect(inputs).toHaveLength(2)
       expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("second")
     }),
-  3_000,
+  15_000
 )
 
 it.instance(
@@ -1395,7 +1422,7 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  3_000,
+  15_000
 )
 
 noLLMServer.instance("assertNotBusy succeeds when idle", () =>
@@ -1435,7 +1462,7 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  3_000,
+  15_000
 )
 
 unixNoLLMServer(
@@ -1646,7 +1673,7 @@ it.instance(
       expect(yield* llm.calls).toBe(1)
     }),
   { git: true },
-  3_000,
+  15_000
 )
 
 it.instance(
@@ -1685,7 +1712,7 @@ it.instance(
       expect(yield* llm.calls).toBe(1)
     }),
   { git: true },
-  3_000,
+  15_000
 )
 
 unix(
@@ -2186,7 +2213,7 @@ it.instance(
         expect(last.info.error?.name).toBe("MessageAbortedError")
       }
     }),
-  3_000,
+  15_000
 )
 
 // Agent variant

@@ -17,8 +17,8 @@ describe("Permission.evaluate for permission.task", () => {
       action,
     }))
 
-  test("returns ask when no match (default)", () => {
-    expect(Permission.evaluate("task", "code-reviewer", []).action).toBe("ask")
+  test("returns allow when no match (default)", () => {
+    expect(Permission.evaluate("task", "code-reviewer", []).action).toBe("allow")
   })
 
   test("returns deny for explicit deny", () => {
@@ -40,7 +40,7 @@ describe("Permission.evaluate for permission.task", () => {
     const ruleset = createRuleset({ "orchestrator-*": "deny" })
     expect(Permission.evaluate("task", "orchestrator-fast", ruleset).action).toBe("deny")
     expect(Permission.evaluate("task", "orchestrator-slow", ruleset).action).toBe("deny")
-    expect(Permission.evaluate("task", "general", ruleset).action).toBe("ask")
+    expect(Permission.evaluate("task", "general", ruleset).action).toBe("allow")
   })
 
   test("matches wildcard patterns with allow", () => {
@@ -200,8 +200,8 @@ describe("permission.task with real config files", () => {
         const ruleset = Permission.fromConfig(config.permission ?? {})
         expect(Permission.evaluate("task", "general", ruleset).action).toBe("allow")
         expect(Permission.evaluate("task", "code-reviewer", ruleset).action).toBe("deny")
-        // Unspecified agents default to "ask"
-        expect(Permission.evaluate("task", "unknown-agent", ruleset).action).toBe("ask")
+        // Unspecified agents default to "allow"
+        expect(Permission.evaluate("task", "unknown-agent", ruleset).action).toBe("allow")
       }),
     {
       git: true,
