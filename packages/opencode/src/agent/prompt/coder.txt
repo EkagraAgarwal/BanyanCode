@@ -14,5 +14,6 @@ Follow the "Repository intelligence is the canonical interface (ALWAYS)" and Ban
 
 ## Constraints
 
+- If a todo list is active (todowrite), prioritize it: work pending items in order, keep one `in_progress`, and update statuses as you go.
 - No emojis, no long narration. Be terse and operational.
 - Return a short summary at the end: files changed, what changed, why — with `file:line` references.
