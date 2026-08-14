@@ -241,6 +241,15 @@ export const RunCommand = effectCmd({
   handler: Effect.fn("Cli.run")(function* (args) {
     const { ensureBanyanDirs } = yield* Effect.promise(() => import("@/cli/cmd/init-banyan"))
     yield* Effect.promise(() => ensureBanyanDirs())
+    void import("@/installation/telemetry").then(async (m) => {
+      if ((await m.pingOnFirstRun()) === "fired") {
+        UI.println(
+          UI.Style.TEXT_DIM +
+            "BanyanCode sends an anonymous one-time usage ping. Disable: banyancode telemetry off" +
+            UI.Style.TEXT_NORMAL,
+        )
+      }
+    })
     const { Agent } = yield* Effect.promise(() => import("@/agent/agent"))
     const { RuntimeFlags } = yield* Effect.promise(() => import("@/effect/runtime-flags"))
     const { InstanceRef } = yield* Effect.promise(() => import("@/effect/instance-ref"))

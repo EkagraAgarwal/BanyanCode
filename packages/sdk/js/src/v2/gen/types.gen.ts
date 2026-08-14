@@ -2221,11 +2221,18 @@ export type BanyanConfig = {
   banyancode_yolo_mode?: boolean
   banyancode_background_subagents?: boolean
   banyancode_disable_websearch?: boolean
+  banyancode_telemetry?: "on" | "off"
   banyancode_telegram_enabled?: boolean
   banyancode_telegram_bot_token?: string
   banyancode_telegram_webhook_secret?: string
   banyancode_telegram_default_session?: string
   banyancode_max_subagents?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_router?: "off" | "rules"
+  banyancode_route_grep?: boolean
+  banyancode_route_read?: boolean
+  banyancode_route_glob?: boolean
+  banyancode_router_trace?: boolean
+  banyancode_augment_read?: boolean
   banyancode_goal_evaluator_model?: string
   banyancode_max_goal_iterations?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   banyancode_goal_max_time_ms?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -2241,6 +2248,7 @@ export type BanyanConfig = {
   banyancode_mesh_default_provider?: string
   banyancode_mesh_default_model?: string
   banyancode_mesh_subagent_cooldown?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_prompt_cache_key?: "auto" | "off" | string
   /**
    * Enable or configure BanyanCode's LSP servers. Omit or set to false to disable, true to enable built-ins, or an object to enable built-ins with overrides.
    */
@@ -3072,6 +3080,7 @@ export type Agent = {
   }
   variant?: string
   prompt?: string
+  systemPrompt?: "append" | "replace"
   options: {
     [key: string]: unknown
   }

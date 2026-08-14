@@ -28,6 +28,13 @@ describe("BanyanConfig", () => {
     expect(result.$schema).toBe("https://banyan.dev/schema/banyancode.json")
   })
 
+  test("accepts banyancode_telemetry on/off", () => {
+    const on = Schema.decodeSync(BanyanConfig.Info)({ banyancode_telemetry: "on" })
+    expect(on.banyancode_telemetry).toBe("on")
+    const off = Schema.decodeSync(BanyanConfig.Info)({ banyancode_telemetry: "off" })
+    expect(off.banyancode_telemetry).toBe("off")
+  })
+
   test("empty config is valid", () => {
     const result = Schema.decodeSync(BanyanConfig.Info)({})
     expect(result).toEqual({})

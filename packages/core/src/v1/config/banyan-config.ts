@@ -57,6 +57,9 @@ export const Info = Schema.Struct({
   // (env) is the runtime override used by tests and OpenCode-only environments.
   banyancode_background_subagents: Schema.optional(Schema.Boolean),
   banyancode_disable_websearch: Schema.optional(Schema.Boolean),
+  // Install telemetry consent (specs/banyancode/install-telemetry.md Phase 2).
+  // Default on; "off" opts out. Env overrides: BANYANCODE_TELEMETRY=off, DO_NOT_TRACK=1.
+  banyancode_telemetry: Schema.optional(Schema.Union([Schema.Literal("on"), Schema.Literal("off")])),
   banyancode_telegram_enabled: Schema.optional(Schema.Boolean),
   banyancode_telegram_bot_token: Schema.optional(Schema.String),
   banyancode_telegram_webhook_secret: Schema.optional(Schema.String),
