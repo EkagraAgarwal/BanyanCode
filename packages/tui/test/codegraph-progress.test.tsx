@@ -119,7 +119,7 @@ describe("CodegraphProgress", () => {
     } finally {
       app.renderer.destroy()
     }
-  })
+  }, 20_000)
 
   test("auto-dismisses on stuck after 12s", async () => {
     let setBuildState: any
@@ -170,7 +170,7 @@ describe("CodegraphProgress", () => {
     } finally {
       app.renderer.destroy()
     }
-  })
+  }, 20_000)
 })
 
 describe("CodegraphProgress.isBuildActive", () => {

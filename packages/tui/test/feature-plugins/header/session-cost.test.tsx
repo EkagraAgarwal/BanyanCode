@@ -130,17 +130,23 @@ test("header session-cost app_top slot renders with cost data", async () => {
   ), { width: 100, height: 6 })
   // Let the tree mount and the session.updated event land before pumping the
   // renderer (same pattern as status-pills.test.tsx — pumping before the
-  // mount tick leaves the widget unmounted).
+  // mount tick leaves the widget unmounted). Poll until the cost row appears
+  // so the snapshot is taken from a settled frame even under suite load.
   await Bun.sleep(100)
-  await testSetup.renderOnce()
-  await new Promise((r) => setTimeout(r, 0))
-  await testSetup.renderOnce()
-  const snapshot = testSetup
-    .captureCharFrame()
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .join("\n")
-    .trimEnd()
+  let snapshot = ""
+  for (let i = 0; i < 100; i++) {
+    await testSetup.renderOnce()
+    await new Promise((r) => setTimeout(r, 0))
+    await testSetup.renderOnce()
+    snapshot = testSetup
+      .captureCharFrame()
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .join("\n")
+      .trimEnd()
+    if (snapshot.includes("Session: $")) break
+    await Bun.sleep(25)
+  }
   try {
     expect(snapshot).toMatchSnapshot()
   } finally {
