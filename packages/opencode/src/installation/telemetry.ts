@@ -12,15 +12,20 @@ import { Probe, findAllBanyanCodeInstalls } from "./probe"
 
 const INSTALL_FILE = "install.json"
 const RETRY_INTERVAL_MS = 24 * 60 * 60 * 1000
-export const TELEMETRY_ENDPOINT = process.env.BANYANCODE_TELEMETRY_ENDPOINT ?? "https://telemetry.banyan.dev"
+const HEARTBEAT_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000
+// Optional self-hoster fallback endpoint; no baked default so a build with
+// neither a PostHog key nor an explicit endpoint resolves to a silent no-op.
+export const TELEMETRY_ENDPOINT = process.env.BANYANCODE_TELEMETRY_ENDPOINT
+export const POSTHOG_ENDPOINT = "https://us.i.posthog.com/i/v0/e/"
 
 export type TelemetrySetting = "on" | "off"
 export type InstallMethod = "npm" | "pnpm" | "bun" | "homebrew" | "standalone" | "source" | "unknown"
-export type PingOutcome = "disabled" | "idle" | "fired"
+export type PingOutcome = "disabled" | "idle" | "noop" | "fired"
 
 export interface InstallTelemetryState {
   last_attempt?: string
   last_success?: string
+  last_heartbeat?: string
 }
 
 export interface InstallIdentity {
@@ -30,6 +35,7 @@ export interface InstallIdentity {
 
 export interface PingPayload {
   install_id: string
+  event_type: "first_run" | "heartbeat"
   version: string
   channel: string
   os: string
@@ -46,6 +52,16 @@ export function shouldPing(identity: InstallIdentity | undefined, now: number) {
   const parsed = Date.parse(lastAttempt)
   if (Number.isNaN(parsed)) return true
   return now - parsed >= RETRY_INTERVAL_MS
+}
+
+export function shouldHeartbeat(identity: InstallIdentity | undefined, now: number) {
+  if (!identity) return false
+  if (!identity.telemetry.last_success) return false
+  const lastHeartbeat = identity.telemetry.last_heartbeat
+  if (!lastHeartbeat) return true
+  const parsed = Date.parse(lastHeartbeat)
+  if (Number.isNaN(parsed)) return true
+  return now - parsed >= HEARTBEAT_INTERVAL_MS
 }
 
 export function telemetryEnabled(env: NodeJS.ProcessEnv = process.env, setting?: TelemetrySetting) {
@@ -94,6 +110,7 @@ export async function readInstallIdentity(stateDir: string) {
     const state: InstallTelemetryState = {}
     if (telemetry && typeof telemetry.last_attempt === "string") state.last_attempt = telemetry.last_attempt
     if (telemetry && typeof telemetry.last_success === "string") state.last_success = telemetry.last_success
+    if (telemetry && typeof telemetry.last_heartbeat === "string") state.last_heartbeat = telemetry.last_heartbeat
     return { install_id: record.install_id, telemetry: state }
   } catch {
     return undefined
@@ -122,10 +139,12 @@ export async function buildPayload(
   identity: InstallIdentity,
   env: NodeJS.ProcessEnv = process.env,
   probeInstalls?: () => Promise<Probe.BanyanInstall[]>,
+  eventType: "first_run" | "heartbeat" = "first_run",
 ): Promise<PingPayload> {
   const installs = await (probeInstalls ?? (() => findAllBanyanCodeInstalls()))().catch(() => [])
   return {
     install_id: identity.install_id,
+    event_type: eventType,
     version: InstallationVersion,
     channel: InstallationChannel,
     os: process.platform,
@@ -138,18 +157,38 @@ export async function buildPayload(
 export interface PingTransportOptions {
   fetchImpl?: typeof fetch
   endpoint?: string
+  posthogKey?: string
   signal?: AbortSignal
+}
+
+export function transportAvailable(options: PingTransportOptions): boolean {
+  return (
+    Boolean(options.posthogKey ?? process.env.BANYANCODE_POSTHOG_KEY) ||
+    Boolean(options.endpoint ?? process.env.BANYANCODE_TELEMETRY_ENDPOINT ?? TELEMETRY_ENDPOINT)
+  )
 }
 
 export async function ping(payload: PingPayload, options: PingTransportOptions = {}) {
   const fetchImpl = options.fetchImpl ?? fetch
-  const endpoint = options.endpoint ?? TELEMETRY_ENDPOINT
   const signal = options.signal ?? AbortSignal.timeout(3000)
+  const posthogKey = options.posthogKey ?? process.env.BANYANCODE_POSTHOG_KEY
+  const endpoint = options.endpoint ?? process.env.BANYANCODE_TELEMETRY_ENDPOINT ?? TELEMETRY_ENDPOINT
+  if (!posthogKey && !endpoint) return false
+  const { install_id, event_type, ...properties } = payload
+  const body = posthogKey
+    ? JSON.stringify({
+        api_key: posthogKey,
+        distinct_id: install_id,
+        event: event_type === "heartbeat" ? "banyan_heartbeat" : "banyan_install",
+        properties,
+      })
+    : JSON.stringify(payload)
+  const url = posthogKey ? POSTHOG_ENDPOINT : `${endpoint}/ping`
   try {
-    const response = await fetchImpl(`${endpoint}/ping`, {
+    const response = await fetchImpl(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
+      body,
       signal,
     })
     return response.ok
@@ -172,6 +211,7 @@ export async function pingOnFirstRun(options: PingOptions = {}): Promise<PingOut
   const env = options.env ?? process.env
   const setting = await readTelemetrySetting(options.configDir ?? Global.Path.banyan.config)
   if (!telemetryEnabled(env, setting)) return "disabled"
+  if (!transportAvailable(options)) return "noop"
   const identity = (await readInstallIdentity(stateDir)) ?? { install_id: randomUUID(), telemetry: {} }
   if (!shouldPing(identity, (options.now ?? Date.now)())) return "idle"
   const attempted: InstallIdentity = {
@@ -187,6 +227,26 @@ export async function pingOnFirstRun(options: PingOptions = {}): Promise<PingOut
       telemetry: { ...attempted.telemetry, last_success: new Date().toISOString() },
     }
     await writeInstallIdentity(stateDir, succeeded).catch(() => {})
+  }
+  return "fired"
+}
+
+export async function heartbeat(options: PingOptions = {}): Promise<PingOutcome> {
+  const stateDir = options.stateDir ?? Global.Path.banyan.state
+  const env = options.env ?? process.env
+  const setting = await readTelemetrySetting(options.configDir ?? Global.Path.banyan.config)
+  if (!telemetryEnabled(env, setting)) return "disabled"
+  if (!transportAvailable(options)) return "noop"
+  const identity = await readInstallIdentity(stateDir)
+  if (!identity || !shouldHeartbeat(identity, (options.now ?? Date.now)())) return "idle"
+  const payload = await buildPayload(identity, env, options.probeInstalls, "heartbeat")
+  const ok = await ping(payload, options)
+  if (ok) {
+    const updated: InstallIdentity = {
+      ...identity,
+      telemetry: { ...identity.telemetry, last_heartbeat: new Date().toISOString() },
+    }
+    await writeInstallIdentity(stateDir, updated).catch(() => {})
   }
   return "fired"
 }

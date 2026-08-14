@@ -249,6 +249,7 @@ export const RunCommand = effectCmd({
             UI.Style.TEXT_NORMAL,
         )
       }
+      await m.heartbeat()
     })
     const { Agent } = yield* Effect.promise(() => import("@/agent/agent"))
     const { RuntimeFlags } = yield* Effect.promise(() => import("@/effect/runtime-flags"))
