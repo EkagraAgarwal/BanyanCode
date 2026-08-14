@@ -1,0 +1,11 @@
+{
+  "name": "banyancode-telemetry-worker",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute banyancode-telemetry-db --remote --file schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "latest"
+  }
+}

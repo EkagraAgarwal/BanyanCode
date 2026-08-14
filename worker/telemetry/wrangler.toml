@@ -1,0 +1,13 @@
+name = "banyancode-telemetry"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# D1 binding — create the database first, then uncomment and fill in database_id:
+#
+#   wrangler d1 create banyancode-telemetry-db        # prints a database_id UUID
+#   wrangler d1 execute banyancode-telemetry-db --remote --file schema.sql
+#
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "banyancode-telemetry-db"
+# database_id = "<uuid from `wrangler d1 create`>"
