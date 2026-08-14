@@ -373,7 +373,18 @@ for (const item of targets) {
       }
       console.log("Native binding smoke test passed (libsql loaded from embedded binary)")
     } finally {
-      fs.rmSync(smokeDir, { recursive: true, force: true })
+      // The just-killed TUI process can still hold its cwd handle on
+      // Windows; retry the removal briefly instead of failing the build
+      // with EBUSY.
+      for (let attempt = 0; attempt < 10; attempt++) {
+        try {
+          fs.rmSync(smokeDir, { recursive: true, force: true })
+          break
+        } catch (error) {
+          if (attempt === 9) throw error
+          await new Promise((resolve) => setTimeout(resolve, 200))
+        }
+      }
     }
   }
 
