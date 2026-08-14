@@ -144,20 +144,6 @@ const categorizeTokens = (
     assistants.findLast((a) => (a.tokens?.input ?? 0) > 0) ?? assistants[assistants.length - 1]
   const billingIdx = messages.findIndex((m) => isAssistant(m) && m.id === billingAssistant.id)
 
-  let breakdown: Record<string, number> | undefined
-  // The billing assistant's step-finish part may carry a per-source token
-  // breakdown ({ base, agent, user, environment, instructions, skills,
-  // codegraph, orchestration, structuredOutput, tools }) from the provider.
-  // The segments() memo folds these keys into the consolidated rows.
-  for (const part of partsGetter(billingAssistant.id)) {
-    if (!part || (part as any).type !== "step-finish") continue
-    const bd = (part as any).tokens?.breakdown
-    if (bd && typeof bd === "object" && Object.keys(bd).length > 0) {
-      breakdown = { ...(bd as Record<string, number>) }
-      break
-    }
-  }
-
   let filesTokens = 0
   let toolsTokens = 0
   let subagentTokens = 0
@@ -224,127 +210,42 @@ const categorizeTokens = (
   const cacheWrite = tokens.cache?.write ?? 0
   const totalCache = cacheRead + cacheWrite
 
-  // Raw heuristic estimates (unclamped — buildSegments clamps them against
-  // the un-attributed, non-cached input so rows never overlap cache).
+  // Clamp heuristic buckets to basis (input + cache), not just input. This
+  // prevents the categories from collapsing when the conversation is
+  // cache-heavy and inputTotal is small. Cache is implicit in basis; the
+  // cacheRead/cacheWrite return fields are zeroed out to avoid double-counting
+  // in the legend/bar.
+  const basis = inputTotal + totalCache
+
+  const heuristicBuckets = filesTokens + toolsTokens + subagentTokens + userTokens
+  const prompt = Math.max(0, basis - heuristicBuckets)
+  const files = Math.min(filesTokens, basis)
+  const tools = Math.min(toolsTokens, Math.max(0, basis - files))
+  const subagents = Math.min(subagentTokens, Math.max(0, basis - files - tools))
+  const users = Math.min(userTokens, Math.max(0, basis - files - tools - subagents))
+
   return {
     thinking: reasoning,
-    files: filesTokens,
-    tools: toolsTokens,
+    files,
+    tools,
     output,
-    userMessages: userTokens,
-    subagents: subagentTokens,
+    prompt,
+    userMessages: users,
+    subagents,
     cacheRead: 0,
     cacheWrite: 0,
-    breakdown,
-    cache: totalCache,
-    inputTotal,
-    totalCache,
-    // Full context the model saw: input (incl. cached reads) + output +
-    // reasoning. This is the header value and the percentage denominator.
-    basis: inputTotal + totalCache,
-    total: inputTotal + totalCache + output + reasoning,
+    total: inputTotal + output + reasoning + cacheRead + cacheWrite,
   }
 }
+
+// Exported for unit testing — not part of the public API.
+export const __test = { categorizeTokens, sumToolTokens, estimateTokens, allocateBarWidths, taskSpawnPromptTokens }
 
 interface Segment {
   key: string
   label: string
   tokens: number
   color: "primary" | "accent" | "info" | "success" | "warning" | "muted"
-}
-
-// Provider breakdown keys -> target consolidated row. Keys with no entry are
-// ignored; the target rows render in the stable segment order below.
-const BREAKDOWN_MERGE: ReadonlyArray<[string, Segment["key"]]> = [
-  ["base", "system"],
-  ["agent", "system"],
-  ["user", "system"],
-  ["environment", "system"],
-  ["instructions", "system"],
-  ["skills", "system"],
-  ["structuredOutput", "system"],
-  ["codegraph", "codegraphOrchestration"],
-  ["orchestration", "codegraphOrchestration"],
-  ["tools", "toolDefinitions"],
-]
-
-const mergeBreakdown = (
-  breakdown: Record<string, number> | undefined,
-): Partial<Record<Segment["key"], number>> => {
-  const merged: Partial<Record<Segment["key"], number>> = {}
-  if (!breakdown) return merged
-  for (const [key, target] of BREAKDOWN_MERGE) {
-    const tokens = breakdown[key]
-    if (tokens === undefined || tokens <= 0) continue
-    merged[target] = (merged[target] ?? 0) + tokens
-  }
-  return merged
-}
-
-// Residual after the consolidated rows: "Other" appears only when genuinely
-// unaccounted (> 5% of the total context), never negative.
-const withResidual = (segments: ReadonlyArray<Segment>, total: number): Segment[] => {
-  const accounted = segments.reduce((sum, s) => sum + s.tokens, 0)
-  const residual = Math.max(0, total - accounted)
-  if (residual / total > 0.05) {
-    return [...segments, { key: "other", label: "Other", tokens: residual, color: "info" }]
-  }
-  return [...segments]
-}
-
-// Design B: strictly non-overlapping rows that partition the total context
-// (input + cache + output + reasoning). Provider breakdown rows are the
-// authoritative attribution; heuristic buckets clamp to the un-attributed,
-// NON-cached input so they never double-count cache; cache is its own row.
-type Categorization = NonNullable<ReturnType<typeof categorizeTokens>>
-
-const buildSegments = (cat: Categorization): Segment[] => {
-  const breakdownTokens = mergeBreakdown(cat.breakdown)
-  const system = breakdownTokens.system ?? 0
-  const codegraphOrchestration = breakdownTokens.codegraphOrchestration ?? 0
-  const toolDefinitions = breakdownTokens.toolDefinitions ?? 0
-  const breakdownSum = system + codegraphOrchestration + toolDefinitions
-
-  // The heuristic buckets estimate message-part content that includes cached
-  // portions; clamp them to what is left of input after the provider's own
-  // attribution, the user messages, and the cached reads have taken their
-  // share. In cache-heavy sessions this remainder is ~0 and the rows
-  // correctly report nothing — the bar tells the truth via the Cache row.
-  let remaining = Math.max(0, cat.inputTotal - breakdownSum - cat.userMessages - cat.cache)
-  const files = Math.min(cat.files, remaining)
-  remaining = Math.max(0, remaining - files)
-  const tools = Math.min(cat.tools, remaining)
-  remaining = Math.max(0, remaining - tools)
-  const subagents = Math.min(cat.subagents, remaining)
-  remaining = Math.max(0, remaining - subagents)
-  const users = Math.min(cat.userMessages, remaining)
-
-  return withResidual(
-    [
-      { key: "system", label: "System", tokens: system, color: "muted" },
-      { key: "codegraphOrchestration", label: "Codegraph & Orchestration", tokens: codegraphOrchestration, color: "info" },
-      { key: "toolDefinitions", label: "Tool Definitions", tokens: toolDefinitions, color: "info" },
-      { key: "toolCalls", label: "Tool Calls", tokens: tools, color: "warning" },
-      { key: "files", label: "Files", tokens: files, color: "success" },
-      { key: "subagents", label: "Subagents", tokens: subagents, color: "muted" },
-      { key: "conversation", label: "Conversation", tokens: users, color: "accent" },
-      { key: "cache", label: "Cache", tokens: cat.cache, color: "info" },
-      { key: "output", label: "Output", tokens: cat.thinking + cat.output, color: "primary" },
-    ],
-    cat.total,
-  )
-}
-
-// Exported for unit testing — not part of the public API.
-export const __test = {
-  categorizeTokens,
-  sumToolTokens,
-  estimateTokens,
-  allocateBarWidths,
-  taskSpawnPromptTokens,
-  mergeBreakdown,
-  withResidual,
-  buildSegments,
 }
 
 function View(props: { api: TuiPluginApi; session_id: string }) {
@@ -400,7 +301,23 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const segments = createMemo<Segment[]>(() => {
     const cat = categorization()
     if (!cat) return []
-    return buildSegments(cat)
+    const cache = cat.cacheRead + cat.cacheWrite
+    return [
+      { key: "user", label: "User", tokens: cat.userMessages, color: "muted" },
+      { key: "thinking", label: "Thinking", tokens: cat.thinking, color: "accent" },
+      // Residual bucket: system prompt + tool definitions + agent prompt +
+      // memory attachments + codegraph summary + anything the heuristic
+      // (files/tools/subagents/user) couldn't attribute to a named call.
+      // For a long session with memory recall this can easily run 100-300k;
+      // "Other" is honest about the catch-all nature without misleading users
+      // about a single component.
+      { key: "prompt", label: "Other", tokens: cat.prompt, color: "info" },
+      { key: "files", label: "Files", tokens: cat.files, color: "success" },
+      { key: "tools", label: "Tools", tokens: cat.tools, color: "warning" },
+      { key: "subagents", label: "Subagents", tokens: cat.subagents, color: "muted" },
+      { key: "output", label: "Output", tokens: cat.output, color: "primary" },
+      { key: "cache", label: "Cache", tokens: cache, color: "info" },
+    ]
   })
 
   const segColor = (color: Segment["color"]): string => {

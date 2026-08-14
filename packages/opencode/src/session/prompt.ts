@@ -84,10 +84,6 @@ IMPORTANT:
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
-// Rough token estimate (chars/4, min 1 for non-empty) matching the TUI heuristic.
-// Used to label per-source system prompt components in the step-finish breakdown.
-const estimateTokens = (s: string | undefined): number => (s ? Math.max(1, Math.ceil(s.length / 4)) : 0)
-
 function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   // cleanup() marks abandoned tool_use blocks this way after retries/aborts.
   // They are not pending work and must not trigger an assistant-prefill request.
@@ -1419,40 +1415,6 @@ export const layer = Layer.effect(
             ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
-            // Per-source token estimates so the TUI can render the system prompt
-            // as labeled rows instead of one opaque "Other" bucket. Mirrors the
-            // base/agent precedence in LLMRequestPrep.prepare.
-            const systemBreakdown: Record<string, number> = {}
-            if (agent.prompt && agent.systemPrompt !== "append") {
-              systemBreakdown.agent = estimateTokens(agent.prompt)
-            } else {
-              const base = SystemPrompt.provider(model).join("\n")
-              if (base) systemBreakdown.base = estimateTokens(base)
-              if (agent.prompt) systemBreakdown.agent = estimateTokens(agent.prompt)
-            }
-            if (lastUser.system) systemBreakdown.user = estimateTokens(lastUser.system)
-            if (env.length) systemBreakdown.environment = estimateTokens(env.join("\n"))
-            if (instructions.length) systemBreakdown.instructions = estimateTokens(instructions.join("\n"))
-            if (codegraph) systemBreakdown.codegraph = estimateTokens(codegraph)
-            if (banyan) systemBreakdown.orchestration = estimateTokens(banyan)
-            if (skills) systemBreakdown.skills = estimateTokens(skills)
-            if (format.type === "json_schema") systemBreakdown.structuredOutput = estimateTokens(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
-            if (Object.keys(tools).length) {
-              // Mirror the AI SDK's activeTools filter (llm.ts drops the
-              // "invalid" repair tool before streaming) so the estimate
-              // reflects the schemas actually sent to the provider.
-              const implTools = Object.entries(tools)
-                .filter(([name]) => name !== "invalid")
-                .map(([name, t]) => ({
-                  type: "function",
-                  function: {
-                    name,
-                    description: t.description,
-                    parameters: (t.inputSchema as { jsonSchema?: unknown }).jsonSchema ?? {},
-                  },
-                }))
-              systemBreakdown.tools = estimateTokens(JSON.stringify(implTools))
-            }
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -1464,7 +1426,6 @@ export const layer = Layer.effect(
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
-              ...(Object.keys(systemBreakdown).length > 0 ? { systemBreakdown } : {}),
             }).pipe(
               Effect.catchCause((cause) =>
                 Effect.gen(function* () {

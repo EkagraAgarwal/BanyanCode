@@ -546,9 +546,6 @@ export type StepFinishPart = {
       read: number
       write: number
     }
-    breakdown?: {
-      [key: string]: number
-    }
   }
 }
 
