@@ -224,31 +224,25 @@ const categorizeTokens = (
   const cacheWrite = tokens.cache?.write ?? 0
   const totalCache = cacheRead + cacheWrite
 
-  // Clamp heuristic buckets to basis (input + cache), not just input. This
-  // prevents the categories from collapsing when the conversation is
-  // cache-heavy and inputTotal is small. Cache is implicit in basis; the
-  // cacheRead/cacheWrite return fields are zeroed out to avoid double-counting
-  // in the legend/bar, while `cache` carries the real sum for the cache chip.
-  const basis = inputTotal + totalCache
-
-  const files = Math.min(filesTokens, basis)
-  const tools = Math.min(toolsTokens, Math.max(0, basis - files))
-  const subagents = Math.min(subagentTokens, Math.max(0, basis - files - tools))
-  const users = Math.min(userTokens, Math.max(0, basis - files - tools - subagents))
-
+  // Raw heuristic estimates (unclamped — buildSegments clamps them against
+  // the un-attributed, non-cached input so rows never overlap cache).
   return {
     thinking: reasoning,
-    files,
-    tools,
+    files: filesTokens,
+    tools: toolsTokens,
     output,
-    userMessages: users,
-    subagents,
+    userMessages: userTokens,
+    subagents: subagentTokens,
     cacheRead: 0,
     cacheWrite: 0,
     breakdown,
-    cache: cacheRead + cacheWrite,
-    basis,
-    total: inputTotal + output + reasoning,
+    cache: totalCache,
+    inputTotal,
+    totalCache,
+    // Full context the model saw: input (incl. cached reads) + output +
+    // reasoning. This is the header value and the percentage denominator.
+    basis: inputTotal + totalCache,
+    total: inputTotal + totalCache + output + reasoning,
   }
 }
 
@@ -288,14 +282,57 @@ const mergeBreakdown = (
 }
 
 // Residual after the consolidated rows: "Other" appears only when genuinely
-// unaccounted (> 5% of basis), never negative.
-const withResidual = (segments: ReadonlyArray<Segment>, basis: number): Segment[] => {
+// unaccounted (> 5% of the total context), never negative.
+const withResidual = (segments: ReadonlyArray<Segment>, total: number): Segment[] => {
   const accounted = segments.reduce((sum, s) => sum + s.tokens, 0)
-  const residual = Math.max(0, basis - accounted)
-  if (residual / basis > 0.05) {
+  const residual = Math.max(0, total - accounted)
+  if (residual / total > 0.05) {
     return [...segments, { key: "other", label: "Other", tokens: residual, color: "info" }]
   }
   return [...segments]
+}
+
+// Design B: strictly non-overlapping rows that partition the total context
+// (input + cache + output + reasoning). Provider breakdown rows are the
+// authoritative attribution; heuristic buckets clamp to the un-attributed,
+// NON-cached input so they never double-count cache; cache is its own row.
+type Categorization = NonNullable<ReturnType<typeof categorizeTokens>>
+
+const buildSegments = (cat: Categorization): Segment[] => {
+  const breakdownTokens = mergeBreakdown(cat.breakdown)
+  const system = breakdownTokens.system ?? 0
+  const codegraphOrchestration = breakdownTokens.codegraphOrchestration ?? 0
+  const toolDefinitions = breakdownTokens.toolDefinitions ?? 0
+  const breakdownSum = system + codegraphOrchestration + toolDefinitions
+
+  // The heuristic buckets estimate message-part content that includes cached
+  // portions; clamp them to what is left of input after the provider's own
+  // attribution, the user messages, and the cached reads have taken their
+  // share. In cache-heavy sessions this remainder is ~0 and the rows
+  // correctly report nothing — the bar tells the truth via the Cache row.
+  let remaining = Math.max(0, cat.inputTotal - breakdownSum - cat.userMessages - cat.cache)
+  const files = Math.min(cat.files, remaining)
+  remaining = Math.max(0, remaining - files)
+  const tools = Math.min(cat.tools, remaining)
+  remaining = Math.max(0, remaining - tools)
+  const subagents = Math.min(cat.subagents, remaining)
+  remaining = Math.max(0, remaining - subagents)
+  const users = Math.min(cat.userMessages, remaining)
+
+  return withResidual(
+    [
+      { key: "system", label: "System", tokens: system, color: "muted" },
+      { key: "codegraphOrchestration", label: "Codegraph & Orchestration", tokens: codegraphOrchestration, color: "info" },
+      { key: "toolDefinitions", label: "Tool Definitions", tokens: toolDefinitions, color: "info" },
+      { key: "toolCalls", label: "Tool Calls", tokens: tools, color: "warning" },
+      { key: "files", label: "Files", tokens: files, color: "success" },
+      { key: "subagents", label: "Subagents", tokens: subagents, color: "muted" },
+      { key: "conversation", label: "Conversation", tokens: users, color: "accent" },
+      { key: "cache", label: "Cache", tokens: cat.cache, color: "info" },
+      { key: "output", label: "Output", tokens: cat.thinking + cat.output, color: "primary" },
+    ],
+    cat.total,
+  )
 }
 
 // Exported for unit testing — not part of the public API.
@@ -307,6 +344,7 @@ export const __test = {
   taskSpawnPromptTokens,
   mergeBreakdown,
   withResidual,
+  buildSegments,
 }
 
 function View(props: { api: TuiPluginApi; session_id: string }) {
@@ -362,37 +400,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const segments = createMemo<Segment[]>(() => {
     const cat = categorization()
     if (!cat) return []
-    const breakdownTokens = mergeBreakdown(cat.breakdown)
-    const rows: Segment[] = [
-      {
-        key: "system",
-        label: "System",
-        tokens: breakdownTokens.system ?? 0,
-        color: "muted",
-      },
-      {
-        key: "codegraphOrchestration",
-        label: "Codegraph & Orchestration",
-        tokens: breakdownTokens.codegraphOrchestration ?? 0,
-        color: "info",
-      },
-      {
-        key: "toolDefinitions",
-        label: "Tool Definitions",
-        tokens: breakdownTokens.toolDefinitions ?? 0,
-        color: "info",
-      },
-      { key: "toolCalls", label: "Tool Calls", tokens: cat.tools, color: "warning" },
-      { key: "files", label: "Files", tokens: cat.files, color: "success" },
-      {
-        key: "conversation",
-        label: "Conversation",
-        tokens: cat.userMessages + cat.thinking + cat.output,
-        color: "accent",
-      },
-      { key: "subagents", label: "Subagents", tokens: cat.subagents, color: "muted" },
-    ]
-    return withResidual(rows, cat.basis)
+    return buildSegments(cat)
   })
 
   const segColor = (color: Segment["color"]): string => {
@@ -495,17 +503,6 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
                   )
                 }}
               </For>
-              {/* Cache is folded into basis (input + cache), so the source
-                  rows above already include it; this chip only reports how
-                  much of that total came from cache. It is informational —
-                  never a % segment — so legend proportions stay correct. */}
-              <Show when={tb().cache > 0}>
-                <box flexDirection="row" justifyContent="space-between" width="100%">
-                  <text fg={toHex(theme().textMuted)}>
-                    {formatTokensCompact(tb().cache)} cached · included in input
-                  </text>
-                </box>
-              </Show>
             </box>
           </box>
         )}

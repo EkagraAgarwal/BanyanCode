@@ -37,6 +37,7 @@ const {
   estimateTokens,
   mergeBreakdown,
   withResidual,
+  buildSegments,
 } = (ctxModule.__test ?? ctxModule.default?.__test) as {
   categorizeTokens: any
   sumToolTokens: any
@@ -45,6 +46,7 @@ const {
   estimateTokens: any
   mergeBreakdown: any
   withResidual: any
+  buildSegments: any
 }
 
 const fixtureUser = {
@@ -223,6 +225,8 @@ test("context widget source contains concise single-line category labels", () =>
     "Files",
     "Conversation",
     "Subagents",
+    "Cache",
+    "Output",
     "Other",
   ]) {
     expect(source).toContain(label)
@@ -245,19 +249,18 @@ test("context widget folds provider breakdown keys into consolidated rows", () =
   expect(source).not.toContain("Overhead")
 })
 
-test("cache is a chip, never a bar segment or percentage row", () => {
+test("cache is a bar segment with its own row, never a percentage chip", () => {
   const source = require("fs").readFileSync(
     require("path").resolve(__dirname, "../../../src/feature-plugins/sidebar/context.tsx"),
     "utf8",
   )
-  // The segments() memo (source of both the bar and the legend rows) must not
-  // emit a cache segment — cache is folded into basis and reported separately.
-  expect(source).not.toMatch(/key:\s*"cache"/)
-  // The chip renders when cache > 0 and is informational text only.
-  expect(source).toMatch(/tb\(\)\.cache\s*>\s*0/)
-  expect(source).toContain("cached · included in input")
-  expect(source).not.toMatch(/label:\s*"Cache"/)
-  expect(source).not.toMatch(/tb\(\)\.cache\s*\/\s*tb\(\)\.total/)
+  // Design B: cache is a first-class non-overlapping segment (own bar slice
+  // and legend row), so heuristic buckets never double-count it.
+  expect(source).toMatch(/key:\s*"cache"/)
+  expect(source).toMatch(/label:\s*"Cache"/)
+  // The old "cached · included in input" chip is gone — cache has a row.
+  expect(source).not.toContain("cached · included in input")
+  expect(source).not.toMatch(/tb\(\)\.cache\s*>\s*0/)
 })
 
 test("context widget no longer uses the old 'Memory' label", () => {
@@ -451,12 +454,12 @@ describe("categorizeTokens", () => {
     expect(sumToolTokens(tool)).toBe(estimateTokens(JSON.stringify({ cmd: "ls" })) + estimateTokens("hello world"))
   })
 
-  test("total = input + output + reasoning, cache excluded from the denominator", () => {
+  test("total = input + cache + output + reasoning (full context used)", () => {
     const cat = categorizeTokens([fixtureUser as any, fixtureAssistant as any], partsGetter)
-    expect(cat!.total).toBe(5000 + 3000 + 1000)
+    expect(cat!.total).toBe(5000 + 250 + 75 + 3000 + 1000)
   })
 
-  test("heuristic buckets are clamped to basis (input + cache)", () => {
+  test("categorizeTokens returns raw heuristic estimates; buildSegments clamps them", () => {
     const hugeParts = [
       {
         id: "huge",
@@ -475,14 +478,24 @@ describe("categorizeTokens", () => {
     const cat = categorizeTokens(
       [fixtureUser as any, fixtureAssistant as any],
       (id: string) => (id === "msg-1" ? hugeParts : fixtureUserParts),
-    )
-    const basis = 5000 + 250 + 75 // input + cache.read + cache.write
-    expect(cat!.basis).toBe(basis)
-    expect(cat!.files).toBeLessThanOrEqual(basis)
-    expect(cat!.files + cat!.tools + cat!.subagents + cat!.userMessages).toBeLessThanOrEqual(basis)
-    // cacheRead/cacheWrite are zeroed in the return; cache is implicit in basis.
-    expect(cat!.cacheRead).toBe(0)
-    expect(cat!.cacheWrite).toBe(0)
+    )!
+    // Raw estimate preserved in categorizeTokens (100_000 chars / 4).
+    expect(cat.files).toBe(25_000)
+    // buildSegments clamps the file row to the un-attributed non-cached
+    // input: inputTotal (5000) - breakdown (0) - userMessages - cache (325).
+    const segs = buildSegments(cat)
+    const filesRow = segs.find((s: any) => s.key === "files")
+    expect(filesRow.tokens).toBeLessThanOrEqual(5000 - 325)
+    // Rows never exceed the total context; percentages can never pass 100%.
+    const accounted = segs.reduce((sum: number, s: any) => sum + s.tokens, 0)
+    expect(accounted).toBeLessThanOrEqual(cat.total)
+    for (const s of segs) {
+      expect(s.tokens / cat.total).toBeLessThanOrEqual(1)
+    }
+    // cacheRead/cacheWrite are zeroed in the return; cache rides its own row.
+    expect(cat.cacheRead).toBe(0)
+    expect(cat.cacheWrite).toBe(0)
+    expect(segs.find((s: any) => s.key === "cache").tokens).toBe(325)
   })
 
   test("Output sums tokens.output across all assistant messages", () => {
@@ -527,23 +540,32 @@ describe("categorizeTokens", () => {
     const cat = categorizeTokens(
       [fixtureUser as any, fixtureAssistant as any],
       (id: string) => (id === "msg-1" ? breakdownAssistantParts : fixtureUserParts),
-    )
-    expect(cat).not.toBeNull()
-    expect(cat!.breakdown).toEqual(fixtureBreakdown)
-    expect(cat!.breakdown!.tools).toBe(300)
+    )!
+    expect(cat.breakdown).toEqual(fixtureBreakdown)
+    expect(cat.breakdown!.tools).toBe(300)
     // basis = input (5000) + cache (250 + 75) = 5325.
-    expect(cat!.basis).toBe(5000 + 250 + 75)
-    expect(cat!.total).toBe(5000 + 3000 + 1000)
+    expect(cat.basis).toBe(5000 + 250 + 75)
+    // total = full context used, cache included.
+    expect(cat.total).toBe(5000 + 250 + 75 + 3000 + 1000)
+    const segs = buildSegments(cat)
+    const byKey = Object.fromEntries(segs.map((s: any) => [s.key, s.tokens]))
+    expect(byKey.system).toBe(150) // base 100 + agent 50
+    expect(byKey.codegraphOrchestration).toBe(200)
+    expect(byKey.toolDefinitions).toBe(300)
+    expect(byKey.cache).toBe(325)
+    expect(byKey.output).toBe(4000) // output 3000 + reasoning 1000
   })
 
-  test("cache tokens are reported as a legend-only value while cacheRead/cacheWrite stay zeroed", () => {
-    const cat = categorizeTokens([fixtureUser as any, fixtureAssistant as any], partsGetter)
-    expect(cat!.cache).toBe(250 + 75)
-    expect(cat!.cacheRead).toBe(0)
-    expect(cat!.cacheWrite).toBe(0)
+  test("cache tokens are reported as a dedicated Cache row while cacheRead/cacheWrite stay zeroed", () => {
+    const cat = categorizeTokens([fixtureUser as any, fixtureAssistant as any], partsGetter)!
+    expect(cat.cache).toBe(250 + 75)
+    expect(cat.cacheRead).toBe(0)
+    expect(cat.cacheWrite).toBe(0)
+    const segs = buildSegments(cat)
+    expect(segs.find((s: any) => s.key === "cache").tokens).toBe(325)
   })
 
-  test("context widget does not collapse heuristic buckets when cache dominates", () => {
+  test("cache-heavy sessions clamp heuristic rows to zero and show Cache as the truth", () => {
     const cacheHeavyAssistant = {
       id: "msg-1",
       type: "assistant" as const,
@@ -577,13 +599,87 @@ describe("categorizeTokens", () => {
     const cat = categorizeTokens(
       [fixtureUser as any, cacheHeavyAssistant as any],
       (id: string) => (id === "msg-1" ? fileHeavyParts : fixtureUserParts),
-    )
-    // The bug was: files clamped to inputTotal (100). With basis = input + cache,
-    // files keep their true magnitude (5000).
-    expect(cat!.files).toBe(5000)
-    expect(cat!.cacheRead).toBe(0)
-    expect(cat!.cacheWrite).toBe(0)
-    expect(cat!.total).toBe(300)
+    )!
+    // Raw estimate preserved (the estimate itself is not clamped).
+    expect(cat.files).toBe(5000)
+    expect(cat.cache).toBe(5000)
+    expect(cat.total).toBe(100 + 5000 + 200)
+    // Design B: the file row clamps to the un-attributed NON-cached input
+    // (100 - 0 - userMessages - 5000 = 0); cache owns the bar.
+    const segs = buildSegments(cat)
+    const byKey = Object.fromEntries(segs.map((s: any) => [s.key, s.tokens]))
+    expect(byKey.files).toBe(0)
+    expect(byKey.cache).toBe(5000)
+    const accounted = segs.reduce((sum: number, s: any) => sum + s.tokens, 0)
+    expect(accounted).toBeLessThanOrEqual(cat.total)
+    for (const s of segs) {
+      expect(s.tokens / cat.total).toBeLessThanOrEqual(1)
+    }
+  })
+
+  test("real-world cache-heavy session: percentages stay sane and header shows total context used", () => {
+    // Reproduction of the reported bug: CONTEXT 67.3k / 1M (7%) with a 346.6k
+    // cache and nonsense percentages (>100%). Under Design B the header and
+    // every row use the FULL context (input + cache + output + reasoning).
+    const assistant = {
+      id: "msg-1",
+      type: "assistant" as const,
+      role: "assistant" as const,
+      tokens: {
+        input: 67_300,
+        output: 300,
+        reasoning: 100,
+        cache: { read: 346_000, write: 600 },
+      },
+      modelID: "test-model",
+      providerID: "test-provider",
+      time: { created: 0, completed: 1000 },
+    }
+    const toolParts = [
+      {
+        id: "part-read",
+        sessionID: "session_test",
+        messageID: "msg-1",
+        type: "tool" as const,
+        callID: "read",
+        tool: "read",
+        state: {
+          status: "completed" as const,
+          output: "y".repeat(80_000),
+          content: [{ type: "text" as const, text: "y".repeat(80_000) }],
+        },
+      },
+    ]
+    const userParts = [
+      {
+        id: "part-u1",
+        sessionID: "session_test",
+        messageID: "msg-u1",
+        type: "text" as const,
+        text: "z".repeat(4_000),
+      },
+    ]
+    const cat = categorizeTokens(
+      [fixtureUser as any, assistant as any],
+      (id: string) => (id === "msg-1" ? toolParts : userParts),
+    )!
+    const totalContext = 67_300 + 346_600 + 300 + 100
+    expect(cat.total).toBe(totalContext)
+    // The file estimate (80_000/4 = 20_000) exceeds the un-attributed
+    // non-cached input (67_300 - 20_000 user chars/4 - 346_600 = 0), so the
+    // file row clamps to zero and cache tells the truth.
+    const segs = buildSegments(cat)
+    const byKey = Object.fromEntries(segs.map((s: any) => [s.key, s.tokens]))
+    expect(byKey.files).toBe(0)
+    expect(byKey.cache).toBe(346_600)
+    let accounted = 0
+    for (const s of segs) {
+      accounted += s.tokens
+      expect(s.tokens / cat.total).toBeLessThanOrEqual(1)
+    }
+    expect(accounted).toBeLessThanOrEqual(cat.total)
+    // The header percentage (contextPercent) is total/limit — same total.
+    expect(cat.total / 1_000_000).toBeLessThan(0.5)
   })
 })
 
