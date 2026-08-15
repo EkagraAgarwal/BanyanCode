@@ -374,15 +374,22 @@ for (const item of targets) {
       console.log("Native binding smoke test passed (libsql loaded from embedded binary)")
     } finally {
       // The just-killed TUI process can still hold its cwd handle on
-      // Windows; retry the removal briefly instead of failing the build
-      // with EBUSY.
-      for (let attempt = 0; attempt < 10; attempt++) {
+      // Windows; retry the removal with a longer backoff window instead of
+      // failing the build with EBUSY. If the handle is still held after the
+      // window (seen twice on windows-x64-baseline runners), log a warning
+      // and continue — a leaked temp dir in the runner's %TEMP% is
+      // harmless, while failing the build here blocks the entire publish
+      // matrix for every platform.
+      for (let attempt = 0; attempt < 30; attempt++) {
         try {
           fs.rmSync(smokeDir, { recursive: true, force: true })
           break
         } catch (error) {
-          if (attempt === 9) throw error
-          await new Promise((resolve) => setTimeout(resolve, 200))
+          if (attempt === 29) {
+            console.warn(`smoke-dir cleanup failed (EBUSY) after ${attempt + 1} attempts: ${smokeDir}`)
+          } else {
+            await new Promise((resolve) => setTimeout(resolve, 500))
+          }
         }
       }
     }
