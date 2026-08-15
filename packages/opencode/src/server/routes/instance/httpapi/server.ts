@@ -316,6 +316,21 @@ export function createRoutes(
         ),
       ) as unknown as Layer.Layer<never, never, never>,
     ),
+    // Headless CLI `run` sessions execute in the createRoutes runtime (not
+    // AppLayer), so the task tool's serviceOption(SubagentConsumerService)
+    // would resolve None and spawned subagents would get no peer-message
+    // consumer. Mount the consumer here too — Effect's memoMap dedupes the
+    // leaf layers it provides (SubagentBus/MemoryRepo/SubagentMessagesRepo/
+    // MeshCoordinator/SubagentPlans) so the SAME bus/mesh/messages instances
+    // the mesh tools use are shared, with no double-consumer risk. EventV2 is
+    // provided explicitly because the consumer's MeshCoordinator requires it
+    // and this nested provideMerge builds before the big provide([...]) list
+    // below reaches EventV2.defaultLayer (mirrors app-runtime.ts:203).
+    Layer.provideMerge(
+      Banyan.subagentConsumerDefaultLayer.pipe(
+        Layer.provide(EventV2.defaultLayer),
+      ) as unknown as Layer.Layer<never, never, never>,
+    ),
     Layer.provideMerge(
       PermissionBridge.layer.pipe(Layer.provide(Permission.defaultLayer)) as unknown as Layer.Layer<
         never,

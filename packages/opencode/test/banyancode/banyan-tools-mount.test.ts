@@ -201,6 +201,21 @@ describe("createRoutes reachability", () => {
       ),
     ).pipe(
       Layer.provideMerge(PermissionBridge.layer.pipe(Layer.provide(permissionLayer))),
+      // Mirrors the createRoutes wiring added for the SubagentConsumer gap:
+      // the headless CLI `run` path resolves the consumer via serviceOption
+      // inside the createRoutes runtime, so the consumer's defaultLayer must
+      // be merged into this stack. `Layer.provide(dbLayer)` keeps the repos
+      // it internally provides (SubagentBus/MemoryRepo/SubagentMessagesRepo/
+      // MeshCoordinator/SubagentPlans) on the tmp DB; `EventV2.defaultLayer`
+      // is provided explicitly because the consumer's MeshCoordinator
+      // requires it and the nested provideMerge builds before the base
+      // mergeAll's EventV2 is reachable (mirrors app-runtime.ts:203).
+      Layer.provideMerge(
+        Banyan.subagentConsumerDefaultLayer.pipe(
+          Layer.provide(EventV2.defaultLayer),
+          Layer.provide(dbLayer),
+        ),
+      ),
     )
     return Layer.mergeAll(dbLayer, FSUtil.defaultLayer, Global.defaultLayer, permissionLayer).pipe(
       Layer.provideMerge(routesCatalog),
@@ -217,6 +232,21 @@ describe("createRoutes reachability", () => {
       for (const id of BanyanToolsManifest.BANYAN_PUBLIC_TOOL_IDS) {
         expect(listed.has(id)).toBe(true)
       }
+    }) as unknown as Effect.Effect<void, never, Scope.Scope>,
+  )
+
+  // Regression for the SubagentConsumer wiring gap: the task tool spawns
+  // subagents via `Effect.serviceOption(SubagentConsumer.Service)` inside the
+  // createRoutes runtime. Pre-fix, createRoutes never merged the consumer's
+  // defaultLayer, so headless CLI `run` sessions got None and spawned
+  // subagents had no peer-message consumer. This asserts the createRoutes
+  // stack (hand-rebuilt from the same building blocks) resolves the service;
+  // the source-level drift guard below pins server.ts/app-runtime.ts to the
+  // actual merge.
+  it.effect("exposes the SubagentConsumer through the createRoutes catalog stack", () =>
+    Effect.gen(function* () {
+      const consumerOption = yield* Effect.serviceOption(Banyan.SubagentConsumer)
+      expect(consumerOption._tag).toBe("Some")
     }) as unknown as Effect.Effect<void, never, Scope.Scope>,
   )
 
@@ -253,5 +283,21 @@ describe("runtime composition drift guard", () => {
     expect(appRuntime).toContain("codegraphReadinessDefaultLayer")
     expect(server).toContain("codegraphReadinessDefaultLayer")
     expect(banyanToolsMount).toContain("codegraphReadinessDefaultLayer")
+  })
+
+  // Regression for the SubagentConsumer wiring gap: the consumer's defaultLayer
+  // is mounted in BOTH runtimes. AppLayer had it; createRoutes did not, so the
+  // headless CLI `run` path (sessions execute in the createRoutes runtime)
+  // resolved `Effect.serviceOption(SubagentConsumer.Service)` as None and
+  // spawned subagents ran without a peer-message consumer. This guard fails CI
+  // if either seam drops the layer.
+  bunIt("AppLayer and createRoutes both mount subagentConsumerDefaultLayer", () => {
+    const appRuntime = readFileSync(path.join(import.meta.dir, "../../src/effect/app-runtime.ts"), "utf8")
+    const server = readFileSync(
+      path.join(import.meta.dir, "../../src/server/routes/instance/httpapi/server.ts"),
+      "utf8",
+    )
+    expect(appRuntime).toContain("subagentConsumerDefaultLayer")
+    expect(server).toContain("subagentConsumerDefaultLayer")
   })
 })
