@@ -233,7 +233,7 @@ describe("ModelsDev Service", () => {
       expect(result.after).toEqual(fixture2)
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBe(1)
-      expect(final.calls[0].url).toContain("/api.json")
+      expect(final.calls[0].url).toBe("https://models.opencode.ai/api.json")
       expect(final.calls[0].userAgent).toContain("/cli")
     }),
   )

@@ -140,6 +140,29 @@ describe("plugin.codex", () => {
     await enabled.dispose?.()
   })
 
+  test.each([
+    ["gpt-6-astra", true],
+    ["gpt-6", true],
+    ["gpt-6.0-astra", true],
+    ["gpt-10", true],
+    ["gpt-5.10-astra", true],
+    ["gpt-5.5-astra", true],
+    ["gpt-5.4-astra", false],
+    ["gpt-5", false],
+    ["not-a-gpt-model", false],
+  ])("filters OAuth model %s by GPT major and minor versions", async (id, allowed) => {
+    const hooks = await CodexAuthPlugin({} as never)
+    const provider = {
+      models: {
+        [id]: { id, api: { id }, limit: {}, cost: {}, options: {} },
+      },
+    }
+
+    const models = await hooks.provider!.models!(provider as never, { auth: { type: "oauth" } } as never)
+
+    expect(Object.keys(models)).toEqual(allowed ? [id] : [])
+  })
+
   test("deduplicates concurrent Codex token refreshes", async () => {
     let auth = {
       type: "oauth" as const,

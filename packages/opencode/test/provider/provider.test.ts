@@ -303,6 +303,17 @@ it.instance("getModel returns model for valid provider/model", () =>
   }),
 )
 
+it.instance("getModel resolves openai/gpt-6-astra from the catalog", () =>
+  Effect.gen(function* () {
+    yield* set("OPENAI_API_KEY", "test-api-key")
+    const provider = yield* Provider.Service
+    const model = yield* provider.getModel(ProviderV2.ID.openai, ModelV2.ID.make("gpt-6-astra"))
+    expect(String(model.providerID)).toBe("openai")
+    expect(String(model.id)).toBe("gpt-6-astra")
+    expect(model.api.id).toBe("gpt-6-astra")
+  }),
+)
+
 it.instance("getModel throws ModelNotFoundError for invalid model", () =>
   Effect.gen(function* () {
     yield* set("ANTHROPIC_API_KEY", "test-api-key")
