@@ -54,6 +54,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { RepositoryWave2 } from "@opencode-ai/core/tool/repository-wave2"
+import { GenerateImageTool } from "./generate-image"
 
 export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
   return providerID === ProviderV2.ID.opencode || flags.exa || flags.parallel
@@ -109,6 +110,7 @@ export const layer = Layer.effect(
     const agents = yield* Agent.Service
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
+    const provider = yield* Provider.Service
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
@@ -118,6 +120,7 @@ export const layer = Layer.effect(
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
     const systeminfo = yield* SysteminfoTool
+    const generateImage = yield* GenerateImageTool
     const webfetch = yield* WebFetchTool
     const websearch = yield* WebSearchTool
     const shell = yield* ShellTool
@@ -235,6 +238,7 @@ export const layer = Layer.effect(
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
           systeminfo: Tool.init(systeminfo),
+          generateImage: Tool.init(generateImage),
         })
 
         return {
@@ -255,6 +259,7 @@ export const layer = Layer.effect(
             tool.skill,
             tool.patch,
             tool.systeminfo,
+            tool.generateImage,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
           ],
@@ -289,7 +294,11 @@ export const layer = Layer.effect(
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
+      const imageAvailable = Object.values(yield* provider.list()).some((provider) =>
+        Object.values(provider.models).some((model) => model.capabilities.output.image),
+      )
       const filtered = (yield* all()).filter((tool) => {
+        if (tool.id === GenerateImageTool.id) return imageAvailable
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
         }

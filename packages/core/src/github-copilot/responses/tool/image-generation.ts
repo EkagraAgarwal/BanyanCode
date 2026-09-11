@@ -23,7 +23,36 @@ export const imageGenerationArgsSchema = z
 
 export const imageGenerationOutputSchema = z.object({
   result: z.string(),
+  attachments: z
+    .array(
+      z.object({
+        type: z.literal("file"),
+        mime: z.string(),
+        url: z.string(),
+      }),
+    )
+    .optional(),
 })
+
+function imageMime(result: string) {
+  if (result.startsWith("/9j/")) return "image/jpeg"
+  if (result.startsWith("UklGR")) return "image/webp"
+  return "image/png"
+}
+
+export function imageGenerationOutput(result: string) {
+  const mime = imageMime(result)
+  return {
+    result,
+    attachments: [
+      {
+        type: "file" as const,
+        mime,
+        url: `data:${mime};base64,${result}`,
+      },
+    ],
+  } satisfies z.infer<typeof imageGenerationOutputSchema>
+}
 
 type ImageGenerationArgs = {
   /**

@@ -27,6 +27,27 @@ function providerMetadata(value: unknown): ProviderMetadata | undefined {
   return Schema.is(ProviderMetadata)(value) ? value : undefined
 }
 
+function generatedFile(data: unknown, mime: unknown, filename: unknown) {
+  if (typeof mime !== "string" || !/^[\w!#$&^_.+-]+\/[\w!#$&^_.+-]+$/.test(mime)) return
+  const base64 =
+    typeof data === "string"
+      ? data.startsWith("data:") && data.includes(",")
+        ? data.slice(data.indexOf(",") + 1)
+        : data.startsWith("data:")
+          ? undefined
+          : data
+      : data instanceof Uint8Array
+        ? btoa(Array.from(data, (byte) => String.fromCharCode(byte)).join(""))
+        : undefined
+  if (!base64 || base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) return
+  try {
+    atob(base64)
+  } catch {
+    return
+  }
+  return { mime, url: `data:${mime};base64,${base64}`, ...(typeof filename === "string" ? { filename } : {}) }
+}
+
 // Temporary AI SDK bridge: Copilot billing survives only in raw provider chunks here.
 // Move this extraction into @opencode-ai/llm when Copilot is handled by the native runtime.
 function copilotTotalNanoAiu(value: unknown) {
@@ -110,7 +131,7 @@ export function toLLMEvents(
 
     case "finish":
       return Effect.sync(() => {
-        const events = [
+        const events: LLMEvent[] = [
           LLMEvent.finish({
             reason: finishReason(event.finishReason),
             usage: usage(event.totalUsage),
@@ -235,7 +256,7 @@ export function toLLMEvents(
       return Effect.sync(() => {
         const name = state.toolNames[event.toolCallId] ?? "unknown"
         delete state.toolNames[event.toolCallId]
-        return [
+        const events: LLMEvent[] = [
           LLMEvent.toolResult({
             id: event.toolCallId,
             name,
@@ -244,6 +265,7 @@ export function toLLMEvents(
             providerMetadata: providerMetadata(event.providerMetadata),
           }),
         ]
+        return events
       })
 
     case "tool-error":
@@ -261,12 +283,23 @@ export function toLLMEvents(
         ]
       })
 
+    case "file": {
+      if (!event.file) return Effect.succeed([])
+      const generated = event.file
+      const raw = generated as unknown as Record<string, unknown>
+      const file = generatedFile(
+        raw.base64 ?? raw.uint8Array,
+        generated.mediaType,
+        raw.filename,
+      )
+      return file ? Effect.succeed([LLMEvent.file(file)]) : Effect.succeed([])
+    }
+
     case "error":
       return Effect.fail(event.error)
 
     case "abort":
     case "source":
-    case "file":
     case "tool-output-denied":
     case "tool-approval-request":
       return Effect.succeed([])

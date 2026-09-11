@@ -356,6 +356,31 @@ describe("session.llm.ai-sdk adapter", () => {
     })
   })
 
+  test("preserves valid AI SDK file output and rejects malformed output", async () => {
+    const events = await adapt([
+      uncheckedAdapterEvent({ type: "file", file: { base64: "aGVsbG8=", mediaType: "image/png", filename: "image.png" } }),
+      uncheckedAdapterEvent({ type: "file", file: { base64: "not-base64", mediaType: "image/png" } }),
+      uncheckedAdapterEvent({ type: "file", file: { base64: "aGVsbG8=", mediaType: "invalid" } }),
+    ])
+    expect(events).toEqual([
+      { type: "file", mime: "image/png", url: "data:image/png;base64,aGVsbG8=", filename: "image.png" },
+    ])
+  })
+
+  test("preserves provider image-generation tool replay without duplicating its attachment", async () => {
+    const events = await adapt([
+      uncheckedAdapterEvent({ type: "tool-input-start", id: "image-1", toolName: "image_generation" }),
+      uncheckedAdapterEvent({
+        type: "tool-result",
+        toolCallId: "image-1",
+        toolName: "image_generation",
+        output: { result: "aGVsbG8=", attachments: [{ mime: "image/png", url: "data:image/png;base64,aGVsbG8=" }] },
+        providerExecuted: true,
+      }),
+    ])
+    expect(events.map((event) => event.type)).toEqual(["tool-input-start", "tool-result"])
+  })
+
   test("emits undefined usage when every AI SDK usage field is missing", async () => {
     // If every numeric field is undefined the translator should signal "no usage info"
     // by emitting undefined, not by polluting the event with usage: {}. Downstream cost

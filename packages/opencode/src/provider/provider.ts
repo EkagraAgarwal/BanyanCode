@@ -9,7 +9,7 @@ import { Npm } from "@opencode-ai/core/npm"
 import { Hash } from "@opencode-ai/core/util/hash"
 import { Plugin } from "../plugin"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
-import { type LanguageModelV3 } from "@ai-sdk/provider"
+import { type ImageModelV3, type LanguageModelV3 } from "@ai-sdk/provider"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Auth } from "../auth"
 import { Env } from "../env"
@@ -33,6 +33,17 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
+
+function isImageModel(value: unknown): value is ImageModelV3 {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "specificationVersion" in value &&
+    value.specificationVersion === "v3" &&
+    "doGenerate" in value &&
+    typeof value.doGenerate === "function"
+  )
+}
 
 function wrapSSE(res: Response, ms: number, ctl: AbortController) {
   if (typeof ms !== "number" || ms <= 0) return res
@@ -100,6 +111,7 @@ function googleVertexAnthropicBaseURL(project: string | undefined, location: str
 
 type BundledSDK = {
   languageModel(modelId: string): LanguageModelV3
+  imageModel?: (modelId: string) => ImageModelV3
   chat?: (modelId: string) => LanguageModelV3
   responses?: (modelId: string) => LanguageModelV3
 }
@@ -1110,6 +1122,7 @@ export interface Interface {
   readonly getProvider: (providerID: ProviderV2.ID) => Effect.Effect<Info>
   readonly getModel: (providerID: ProviderV2.ID, modelID: ModelV2.ID) => Effect.Effect<Model, ModelNotFoundError>
   readonly getLanguage: (model: Model) => Effect.Effect<LanguageModelV3, ModelNotFoundError>
+  readonly getImage: (model: Model) => Effect.Effect<ImageModelV3, ModelNotFoundError>
   readonly closest: (
     providerID: ProviderV2.ID,
     query: string[],
@@ -1817,6 +1830,24 @@ export const layer = Layer.effect(
       )
     })
 
+    const getImage = Effect.fn("Provider.getImage")(function* (model: Model) {
+      const s = yield* InstanceState.get(state)
+      const envs = yield* env.all()
+      return yield* Effect.tryPromise({
+        try: async (): Promise<ImageModelV3> => {
+          const sdk = await resolveSDK(model, s, envs)
+          const imageResolver = "imageModel" in sdk ? sdk.imageModel : undefined
+          if (typeof imageResolver !== "function") {
+            throw new Error(`Provider ${model.providerID} does not expose an image model resolver`)
+          }
+          const resolved = imageResolver(model.api.id)
+          if (!isImageModel(resolved)) throw new Error(`Provider ${model.providerID} returned an invalid image model`)
+          return resolved
+        },
+        catch: (cause) => new ModelNotFoundError({ modelID: model.id, providerID: model.providerID, cause }),
+      })
+    })
+
     const closest = Effect.fn("Provider.closest")(function* (providerID: ProviderV2.ID, query: string[]) {
       const s = yield* InstanceState.get(state)
       const provider = s.providers[providerID]
@@ -1933,7 +1964,7 @@ export const layer = Layer.effect(
       }
     })
 
-    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
+    return Service.of({ list, getProvider, getModel, getLanguage, getImage, closest, getSmallModel, defaultModel })
   }),
 )
 

@@ -1225,6 +1225,49 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("preserves only completed OpenAI image-generation results as files", () =>
+    Effect.gen(function* () {
+      const completed = {
+        type: "image_generation_call",
+        id: "img_1",
+        status: "completed",
+        result: "aGVsbG8=",
+      }
+      const partial = {
+        type: "image_generation_call",
+        id: "img_2",
+        status: "in_progress",
+        result: "aGVsbG8=",
+      }
+      const invalid = {
+        type: "image_generation_call",
+        id: "img_3",
+        status: "completed",
+        result: "not-base64",
+      }
+      const jpeg = {
+        type: "image_generation_call",
+        id: "img_4",
+        status: "completed",
+        result: "/9j/AAAA",
+      }
+      const body = sseEvents(
+        { type: "response.output_item.done", item: completed },
+        { type: "response.output_item.done", item: partial },
+        { type: "response.output_item.done", item: invalid },
+        { type: "response.output_item.done", item: jpeg },
+        { type: "response.completed", response: { usage: { input_tokens: 5, output_tokens: 1 } } },
+      )
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.events.filter((event) => event.type === "tool-call" || event.type === "tool-result")).toHaveLength(8)
+      expect(response.events.filter((event) => event.type === "file")).toEqual([
+        { type: "file", mime: "image/png", url: "data:image/png;base64,aGVsbG8=" },
+        { type: "file", mime: "image/jpeg", url: "data:image/jpeg;base64,/9j/AAAA" },
+      ])
+    }),
+  )
+
   it.effect("lowers user image content", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(

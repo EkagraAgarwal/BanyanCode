@@ -29,6 +29,7 @@ import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, 
 import { Prompt, type PromptRef } from "../../component/prompt"
 import type {
   AssistantMessage,
+  FilePart,
   Part,
   Provider,
   ToolPart,
@@ -1662,6 +1663,7 @@ const PART_MAPPING = {
   text: TextPart,
   tool: ToolPart,
   reasoning: ReasoningPart,
+  file: AssistantFilePart,
 }
 
 const INLINE_TOOL_ICON_WIDTH = 2
@@ -1795,6 +1797,21 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   )
 }
 
+function AssistantFilePart(props: { part: FilePart }) {
+  const { theme } = useTheme()
+  const label = createMemo(() => (props.part.mime.startsWith("image/") ? "img" : props.part.mime))
+  const filename = createMemo(() => props.part.filename || "generated file")
+
+  return (
+    <box paddingLeft={3} marginTop={1} flexShrink={0}>
+      <text fg={theme.textMuted}>
+        <span style={{ bg: theme.accent, fg: theme.background }}> {label()} </span>
+        <span style={{ bg: theme.backgroundElement, fg: theme.textMuted }}> {filename()} </span>
+      </text>
+    </box>
+  )
+}
+
 // Pending messages moved to individual tool pending functions
 
 function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMessage }) {
@@ -1805,6 +1822,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
   const shouldHide = createMemo(() => {
     if (ctx.showDetails()) return false
     if (props.part.state.status !== "completed") return false
+    if (props.part.state.attachments?.length) return false
     return true
   })
 
@@ -1872,6 +1890,11 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
           <GenericTool {...toolprops} />
         </Match>
       </Switch>
+      <Show when={props.part.state.status === "completed"}>
+        <For each={props.part.state.status === "completed" ? props.part.state.attachments : undefined}>
+          {(attachment) => <AssistantFilePart part={attachment} />}
+        </For>
+      </Show>
     </Show>
   )
 }

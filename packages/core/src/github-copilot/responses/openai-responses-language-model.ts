@@ -23,7 +23,7 @@ import type { OpenAIConfig } from "./openai-config"
 import { openaiFailedResponseHandler } from "./openai-error"
 import { codeInterpreterInputSchema, codeInterpreterOutputSchema } from "./tool/code-interpreter"
 import { fileSearchOutputSchema } from "./tool/file-search"
-import { imageGenerationOutputSchema } from "./tool/image-generation"
+import { imageGenerationOutput, imageGenerationOutputSchema } from "./tool/image-generation"
 import { convertToOpenAIResponsesInput } from "./convert-to-openai-responses-input"
 import { mapOpenAIResponseFinishReason } from "./map-openai-responses-finish-reason"
 import type { OpenAIResponsesIncludeOptions, OpenAIResponsesIncludeValue } from "./openai-responses-api-types"
@@ -548,9 +548,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
             type: "tool-result",
             toolCallId: part.id,
             toolName: "image_generation",
-            result: {
-              result: part.result,
-            } satisfies z.infer<typeof imageGenerationOutputSchema>,
+            result: imageGenerationOutput(part.result),
           })
 
           break
@@ -946,6 +944,11 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
                   toolName: "image_generation",
                   input: "{}",
                   providerExecuted: true,
+                  providerMetadata: {
+                    openai: {
+                      itemId: value.item.id,
+                    },
+                  },
                 })
               } else if (value.item.type === "message") {
                 // Start a stable text part for this assistant message
@@ -1082,8 +1085,13 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
                   toolCallId: value.item.id,
                   toolName: "image_generation",
                   result: {
-                    result: value.item.result,
+                    ...imageGenerationOutput(value.item.result),
                   } satisfies z.infer<typeof imageGenerationOutputSchema>,
+                  providerMetadata: {
+                    openai: {
+                      itemId: value.item.id,
+                    },
+                  },
                 })
               } else if (value.item.type === "local_shell_call") {
                 ongoingToolCalls[value.output_index] = undefined
@@ -1146,14 +1154,8 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
                 })
               }
             } else if (isResponseImageGenerationCallPartialImageChunk(value)) {
-              controller.enqueue({
-                type: "tool-result",
-                toolCallId: value.item_id,
-                toolName: "image_generation",
-                result: {
-                  result: value.partial_image_b64,
-                } satisfies z.infer<typeof imageGenerationOutputSchema>,
-              })
+              // Partial images are previews only. Emitting them as tool results
+              // would settle the hosted call before its final output item.
             } else if (isResponseCodeInterpreterCallCodeDeltaChunk(value)) {
               const toolCall = ongoingToolCalls[value.output_index]
 

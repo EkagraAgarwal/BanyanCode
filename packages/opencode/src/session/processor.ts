@@ -219,7 +219,7 @@ export const layer = Layer.effect(
             status: "completed",
             input: match.part.state.input,
             output: output.output,
-            metadata: output.metadata,
+            metadata: { ...match.part.metadata, ...output.metadata },
             title: output.title,
             time: { start: match.part.state.time.start, end: Date.now() },
             attachments: output.attachments,
@@ -348,18 +348,42 @@ export const layer = Layer.effect(
       })
 
       const isFilePart = (value: unknown): value is SessionV1.FilePart => Schema.is(SessionV1.FilePart)(value)
+      const filePart = (value: unknown): SessionV1.FilePart | undefined => {
+        if (isFilePart(value)) return value
+        if (!isRecord(value) || (value.type !== undefined && value.type !== "file")) return undefined
+        if (typeof value.mime !== "string" || typeof value.url !== "string") return undefined
+        return {
+          id: PartID.ascending(),
+          messageID: ctx.assistantMessage.id,
+          sessionID: ctx.assistantMessage.sessionID,
+          type: "file",
+          mime: value.mime,
+          url: value.url,
+          filename: typeof value.filename === "string" ? value.filename : undefined,
+        }
+      }
 
       const toolResultOutput = (
         value: Extract<StreamEvent, { type: "tool-result" }>,
       ): { title: string; metadata: Record<string, any>; output: string; attachments?: SessionV1.FilePart[] } => {
-        if (isRecord(value.result.value) && typeof value.result.value.output === "string") {
-          return {
-            title: typeof value.result.value.title === "string" ? value.result.value.title : value.name,
-            metadata: isRecord(value.result.value.metadata) ? value.result.value.metadata : {},
-            output: value.result.value.output,
-            attachments: Array.isArray(value.result.value.attachments)
-              ? value.result.value.attachments.filter(isFilePart)
-              : undefined,
+        if (isRecord(value.result.value)) {
+          const output =
+            typeof value.result.value.output === "string"
+              ? value.result.value.output
+              : typeof value.result.value.result === "string"
+                ? value.result.value.result
+                : undefined
+          if (output !== undefined) {
+            return {
+              title: typeof value.result.value.title === "string" ? value.result.value.title : value.name,
+              metadata: isRecord(value.result.value.metadata) ? value.result.value.metadata : {},
+              output,
+              attachments: Array.isArray(value.result.value.attachments)
+                ? value.result.value.attachments
+                    .map((item: unknown) => filePart(item))
+                    .filter((item: SessionV1.FilePart | undefined): item is SessionV1.FilePart => item !== undefined)
+                : undefined,
+            }
           }
         }
         return {
@@ -425,6 +449,34 @@ export const layer = Layer.effect(
             }
             yield* finishReasoning(value.id)
             return
+
+          case "file": {
+            const part = {
+              id: PartID.ascending(),
+              messageID: ctx.assistantMessage.id,
+              sessionID: ctx.assistantMessage.sessionID,
+              type: "file",
+              mime: value.mime,
+              url: value.url,
+              filename: value.filename,
+            } satisfies SessionV1.FilePart
+            const normalized = yield* (
+              part.mime.startsWith("image/")
+                ? image.normalize(part).pipe(
+                    Effect.catchIf(
+                      (error) => error instanceof Image.ResizerUnavailableError,
+                      () => Effect.succeed(part),
+                    ),
+                  )
+                : Effect.succeed(part)
+            ).pipe(Effect.exit)
+            if (Exit.isFailure(normalized)) {
+              yield* Effect.logWarning("discarding invalid generated file", { mime: part.mime })
+              return
+            }
+            yield* session.updatePart(normalized.value)
+            return
+          }
 
           case "tool-input-start":
             if (ctx.assistantMessage.summary) {

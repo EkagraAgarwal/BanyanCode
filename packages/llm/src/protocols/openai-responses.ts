@@ -190,6 +190,7 @@ const OpenAIResponsesStreamItem = Schema.Struct({
   outputs: Schema.optional(Schema.Unknown),
   server_label: Schema.optional(Schema.String),
   output: Schema.optional(Schema.Unknown),
+  result: Schema.optional(Schema.Unknown),
   error: Schema.optional(Schema.Unknown),
   encrypted_content: optionalNull(Schema.String),
 })
@@ -580,12 +581,18 @@ const hostedToolResult = (item: OpenAIResponsesStreamItem) => {
   return isError ? { type: "error" as const, value: item.error } : { type: "json" as const, value: item }
 }
 
+const imageMime = (result: string) => {
+  if (result.startsWith("/9j/")) return "image/jpeg"
+  if (result.startsWith("UklGR")) return "image/webp"
+  return "image/png"
+}
+
 const hostedToolEvents = (
   item: OpenAIResponsesStreamItem & { type: HostedToolType; id: string },
 ): ReadonlyArray<LLMEvent> => {
   const tool = HOSTED_TOOLS[item.type]
   const providerMetadata = openaiMetadata({ itemId: item.id })
-  return [
+  const events: LLMEvent[] = [
     LLMEvent.toolCall({
       id: item.id,
       name: tool.name,
@@ -601,6 +608,19 @@ const hostedToolEvents = (
       providerMetadata,
     }),
   ]
+  if (item.type === "image_generation_call" && item.status === "completed" && typeof item.result === "string") {
+    const result = item.result
+    if (result.length > 0 && result.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(result)) {
+      try {
+        atob(result)
+        const mime = imageMime(result)
+        events.push(LLMEvent.file({ mime, url: `data:${mime};base64,${result}` }))
+      } catch {
+        // Ignore malformed provider output; the hosted tool result remains replayable.
+      }
+    }
+  }
+  return events
 }
 
 type StepResult = readonly [ParserState, ReadonlyArray<LLMEvent>]
