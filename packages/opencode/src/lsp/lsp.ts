@@ -70,6 +70,15 @@ export const Status = Schema.Struct({
   disabledReason: Schema.optional(Schema.String).annotate({
     description: "Human-readable reason the server is disabled (omitted when enabled).",
   }),
+  clientCount: Schema.optional(Schema.Number).annotate({
+    description: "Attached clients for this server (1 for a connected entry, 0 otherwise).",
+  }),
+  rssBytes: Schema.optional(Schema.Number).annotate({
+    description: "Best-effort process-tree RSS in bytes for the attached client.",
+  }),
+  pid: Schema.optional(Schema.Number).annotate({
+    description: "OS pid of the attached language server process.",
+  }),
 }).annotate({ identifier: "LSPStatus" })
 export type Status = typeof Status.Type
 
@@ -172,11 +181,97 @@ const filterExperimentalServers = (servers: Record<string, LSPServer.Info>, flag
   }
 }
 
+export const DEFAULT_LSP_IDLE_TIMEOUT_MS = 5 * 60 * 1000
+
+export function resolveLspIdleTimeoutMs(raw?: unknown) {
+  if (raw === 0) return 0
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return DEFAULT_LSP_IDLE_TIMEOUT_MS
+  return Math.floor(raw)
+}
+
+const clientKey = (root: string, serverID: string) => root + serverID
+
+function mergeServerInitialization(
+  serverID: string,
+  handleInit: Record<string, unknown> | undefined,
+  item: { initialization?: Record<string, unknown>; maxMemoryMb?: unknown },
+) {
+  if (serverID !== "typescript") return item.initialization ?? handleInit
+  const itemInit = item.initialization
+  const handleTs = handleInit?.["tsserver"]
+  const itemTs = itemInit?.["tsserver"]
+  const explicit =
+    typeof itemTs === "object" && itemTs !== null
+      ? (itemTs as Record<string, unknown>)["maxTsServerMemory"]
+      : undefined
+  const maxTsServerMemory =
+    typeof explicit === "number" && Number.isFinite(explicit) && explicit > 0
+      ? Math.floor(Math.min(Math.max(explicit, 256), 16384))
+      : LSPServer.resolveTypescriptMaxMemoryMb(item.maxMemoryMb)
+  return {
+    ...(handleInit ?? {}),
+    ...(itemInit ?? {}),
+    tsserver: {
+      ...(typeof handleTs === "object" && handleTs !== null ? (handleTs as Record<string, unknown>) : {}),
+      ...(typeof itemTs === "object" && itemTs !== null ? (itemTs as Record<string, unknown>) : {}),
+      maxTsServerMemory,
+    },
+  }
+}
+
+async function shutdownClient(client: LSPClient.Info) {
+  await client.shutdown().catch(() => {})
+}
+
+async function readProcessTreeRss(pid?: number) {
+  if (!pid || !Number.isFinite(pid) || pid <= 0 || process.platform === "win32") return undefined
+  try {
+    const out = await Process.text(["ps", "-o", "pid=,ppid=,rss="], { nothrow: true })
+    if (out.code !== 0) return undefined
+    const rows: { pid: number; ppid: number; rssKb: number }[] = []
+    for (const line of out.text.split("\n")) {
+      const parts = line.trim().split(/\s+/)
+      if (parts.length < 3) continue
+      const rowPid = Number.parseInt(parts[0] ?? "", 10)
+      const rowPpid = Number.parseInt(parts[1] ?? "", 10)
+      const rowRss = Number.parseInt(parts[2] ?? "", 10)
+      if (!Number.isFinite(rowPid) || !Number.isFinite(rowPpid) || !Number.isFinite(rowRss)) continue
+      rows.push({ pid: rowPid, ppid: rowPpid, rssKb: rowRss })
+    }
+    if (!rows.some((row) => row.pid === pid)) return undefined
+    const children = new Map<number, number[]>()
+    for (const row of rows) {
+      const list = children.get(row.ppid) ?? []
+      list.push(row.pid)
+      children.set(row.ppid, list)
+    }
+    const rssByPid = new Map(rows.map((row) => [row.pid, row.rssKb] as const))
+    let totalKb = 0
+    const queue = [pid]
+    const seen = new Set([pid])
+    while (queue.length > 0) {
+      const current = queue.pop() as number
+      totalKb += rssByPid.get(current) ?? 0
+      for (const child of children.get(current) ?? []) {
+        if (seen.has(child)) continue
+        seen.add(child)
+        queue.push(child)
+      }
+    }
+    return totalKb * 1024
+  } catch {
+    return undefined
+  }
+}
+
 interface State {
   clients: LSPClient.Info[]
   servers: Record<string, LSPServer.Info>
   broken: Set<string>
   spawning: Map<string, Promise<LSPClient.Info | undefined>>
+  lastActivity: Map<string, number>
+  clientPid: Map<string, number>
+  idleTimeoutMs: number
   // Per-server disabled reasons harvested from `banyancode_lsp`. Allows the
   // TUI sidebar to surface "typescript: disabled" without the user having
   // to dig through the global banyancode config dialog.
@@ -232,7 +327,10 @@ export const layer = Layer.effect(
         if (!lsp) {
           yield* Effect.logInfo("all LSPs are disabled")
         } else {
-          for (const server of Object.values(LSPServer)) {
+          for (const candidate of Object.values(LSPServer)) {
+            if (!candidate || typeof candidate !== "object" || !("id" in candidate) || !("spawn" in candidate))
+              continue
+            const server = candidate as LSPServer.Info
             servers[server.id] = server
           }
 
@@ -257,7 +355,10 @@ export const layer = Layer.effect(
                         cwd: root,
                         env: { ...process.env, ...item.env },
                       }),
-                      initialization: item.initialization,
+                      initialization:
+                        name === "typescript"
+                          ? mergeServerInitialization(name, undefined, item)
+                          : item.initialization,
                     })
                   : existing?.spawn
                     ? async (root, ctx, flags) => {
@@ -265,7 +366,7 @@ export const layer = Layer.effect(
                         if (!handle) return undefined
                         return {
                           ...handle,
-                          initialization: item.initialization ?? handle.initialization,
+                          initialization: mergeServerInitialization(name, handle.initialization, item),
                         }
                       }
                     : async () => undefined,
@@ -294,13 +395,16 @@ export const layer = Layer.effect(
           servers,
           broken: new Set(),
           spawning: new Map(),
+          lastActivity: new Map(),
+          clientPid: new Map(),
+          idleTimeoutMs: resolveLspIdleTimeoutMs(banyanConfig.banyancode_lsp_idle_timeout_ms),
           disabled,
           configEnabled: Boolean(lsp),
         }
 
         yield* Effect.addFinalizer(() =>
           Effect.promise(async () => {
-            await Promise.all(s.clients.map((client) => client.shutdown()))
+            await Promise.all(s.clients.map((client) => shutdownClient(client)))
           }),
         )
 
@@ -316,6 +420,23 @@ export const layer = Layer.effect(
         const extension = path.parse(file).ext || file
         const result: LSPClient.Info[] = []
         let updated = 0
+
+        if (s.idleTimeoutMs > 0) {
+          const now = Date.now()
+          const idle: LSPClient.Info[] = []
+          for (const client of s.clients) {
+            const at = s.lastActivity.get(clientKey(client.root, client.serverID)) ?? now
+            if (now - at > s.idleTimeoutMs) idle.push(client)
+          }
+          if (idle.length > 0) {
+            s.clients = s.clients.filter((c) => !idle.includes(c))
+            for (const client of idle) {
+              s.lastActivity.delete(clientKey(client.root, client.serverID))
+              s.clientPid.delete(clientKey(client.root, client.serverID))
+            }
+            await Promise.all(idle.map((client) => shutdownClient(client)))
+          }
+        }
 
         async function schedule(server: LSPServer.Info, root: string, key: string) {
           const handle = await server
@@ -347,10 +468,13 @@ export const layer = Layer.effect(
           const existing = s.clients.find((x) => x.root === root && x.serverID === server.id)
           if (existing) {
             await Process.stop(handle.process)
+            s.lastActivity.set(key, Date.now())
             return existing
           }
 
           s.clients.push(client)
+          s.lastActivity.set(key, Date.now())
+          if (typeof handle.process.pid === "number") s.clientPid.set(key, handle.process.pid)
           return client
         }
 
@@ -363,6 +487,7 @@ export const layer = Layer.effect(
 
           const match = s.clients.find((x) => x.root === root && x.serverID === server.id)
           if (match) {
+            s.lastActivity.set(root + server.id, Date.now())
             result.push(match)
             continue
           }
@@ -371,6 +496,7 @@ export const layer = Layer.effect(
           if (inflight) {
             const client = await inflight
             if (!client) continue
+            s.lastActivity.set(root + server.id, Date.now())
             result.push(client)
             continue
           }
@@ -406,6 +532,8 @@ export const layer = Layer.effect(
 
     const runAll = Effect.fnUntraced(function* <T>(fn: (client: LSPClient.Info) => Promise<T>) {
       const s = yield* InstanceState.get(state)
+      const now = Date.now()
+      for (const client of s.clients) s.lastActivity.set(clientKey(client.root, client.serverID), now)
       return yield* Effect.promise(() => Promise.all(s.clients.map((x) => fn(x))))
     })
 
@@ -422,7 +550,10 @@ export const layer = Layer.effect(
       const newServers: Record<string, LSPServer.Info> = {}
 
       if (lsp) {
-        for (const server of Object.values(LSPServer)) {
+        for (const candidate of Object.values(LSPServer)) {
+          if (!candidate || typeof candidate !== "object" || !("id" in candidate) || !("spawn" in candidate))
+            continue
+          const server = candidate as LSPServer.Info
           newServers[server.id] = server
         }
 
@@ -446,7 +577,8 @@ export const layer = Layer.effect(
                       cwd: root,
                       env: { ...process.env, ...item.env },
                     }),
-                    initialization: item.initialization,
+                    initialization:
+                      name === "typescript" ? mergeServerInitialization(name, undefined, item) : item.initialization,
                   })
                 : existing?.spawn
                   ? async (root, ctx, flags) => {
@@ -454,7 +586,7 @@ export const layer = Layer.effect(
                       if (!handle) return undefined
                       return {
                         ...handle,
-                        initialization: item.initialization ?? handle.initialization,
+                        initialization: mergeServerInitialization(name, handle.initialization, item),
                       }
                     }
                   : async () => undefined,
@@ -475,6 +607,7 @@ export const layer = Layer.effect(
       s.servers = newServers
       s.disabled = disabled
       s.configEnabled = Boolean(lsp)
+      s.idleTimeoutMs = resolveLspIdleTimeoutMs(banyanConfig.banyancode_lsp_idle_timeout_ms)
       s.broken.clear()
 
       // Shutdown any clients that are no longer configured
@@ -486,7 +619,11 @@ export const layer = Layer.effect(
       }
       if (toRemove.length > 0) {
         s.clients = s.clients.filter((c) => !toRemove.includes(c))
-        yield* Effect.promise(() => Promise.all(toRemove.map((c) => c.shutdown())))
+        for (const client of toRemove) {
+          s.lastActivity.delete(clientKey(client.root, client.serverID))
+          s.clientPid.delete(clientKey(client.root, client.serverID))
+        }
+        yield* Effect.promise(() => Promise.all(toRemove.map((c) => shutdownClient(c))))
       }
 
       yield* events.publish(Event.Updated, {})
@@ -505,10 +642,18 @@ export const layer = Layer.effect(
       const s = yield* InstanceState.get(state)
       const result: Status[] = []
       const seen = new Set<string>()
+      const rssByKey = yield* Effect.promise(() =>
+        Promise.all(
+          s.clients.map((client) => readProcessTreeRss(s.clientPid.get(clientKey(client.root, client.serverID)))),
+        ),
+      )
       // Currently-attached clients first (status: connected).
-      for (const client of s.clients) {
+      for (const [index, client] of s.clients.entries()) {
         const server = s.servers[client.serverID]
         seen.add(client.serverID)
+        const clientCount = s.clients.filter((c) => c.serverID === client.serverID).length
+        const rssBytes = rssByKey[index]
+        const pid = s.clientPid.get(clientKey(client.root, client.serverID))
         result.push({
           id: client.serverID,
           name: server?.id ?? client.serverID,
@@ -518,6 +663,9 @@ export const layer = Layer.effect(
           languages: server ? languagesForServer(server) : [],
           inert: false,
           disabled: false,
+          clientCount,
+          ...(rssBytes !== undefined ? { rssBytes } : {}),
+          ...(pid !== undefined ? { pid } : {}),
         })
       }
       // Then configured servers that failed to spawn (status: error)
@@ -535,6 +683,7 @@ export const layer = Layer.effect(
             languages: languagesForServer(server),
             inert: false,
             disabled: false,
+            clientCount: 0,
           })
         }
       }
@@ -550,6 +699,7 @@ export const layer = Layer.effect(
           languages: languagesForServer(server),
           inert: true,
           disabled: false,
+          clientCount: 0,
         })
       }
       // Then any server the user explicitly disabled in banyancode_lsp
@@ -565,6 +715,7 @@ export const layer = Layer.effect(
           inert: true,
           disabled: true,
           disabledReason: reason,
+          clientCount: 0,
         })
       }
       return result
@@ -604,6 +755,9 @@ export const layer = Layer.effect(
           }),
         ).catch(() => {}),
       )
+      const s = yield* InstanceState.get(state)
+      const now = Date.now()
+      for (const client of clients) s.lastActivity.set(clientKey(client.root, client.serverID), now)
     })
 
     const diagnostics = Effect.fn("LSP.diagnostics")(function* () {

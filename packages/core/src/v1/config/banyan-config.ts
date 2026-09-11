@@ -128,6 +128,10 @@ export const Info = Schema.Struct({
     description:
       "Enable or configure BanyanCode's LSP servers. Omit or set to false to disable, true to enable built-ins, or an object to enable built-ins with overrides.",
   }),
+  banyancode_lsp_idle_timeout_ms: Schema.optional(Schema.Number).annotate({
+    description:
+      "Idle timeout in ms after which an unused LSP client is shut down. Restart is transparent on next use. 0 disables idle shutdown.",
+  }),
   // Phase 6 (Verifier): per-project overrides for the typecheck/test/lint/
   // compile shell commands the verifier tools invoke. When unset, each tool
   // falls back to its default command (e.g. `bunx tsc --noEmit`). Commands

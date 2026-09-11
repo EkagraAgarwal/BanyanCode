@@ -116,6 +116,13 @@ export const Deno: Info = {
   },
 }
 
+export const DEFAULT_TSSERVER_MAX_MEMORY_MB = 2048
+
+export function resolveTypescriptMaxMemoryMb(raw?: unknown) {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return DEFAULT_TSSERVER_MAX_MEMORY_MB
+  return Math.floor(Math.min(Math.max(raw, 256), 16384))
+}
+
 export const Typescript: Info = {
   id: "typescript",
   root: NearestRoot(
@@ -136,9 +143,12 @@ export const Typescript: Info = {
     })
     return {
       process: proc,
+      // Memory is bounded through typescript-language-server's supported
+      // initializationOptions; V8 flags on the spawn argv are not honored here.
       initialization: {
         tsserver: {
           path: tsserver,
+          maxTsServerMemory: DEFAULT_TSSERVER_MAX_MEMORY_MB,
         },
       },
     }

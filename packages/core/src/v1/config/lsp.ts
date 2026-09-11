@@ -9,11 +9,13 @@ export const Disabled = Schema.Struct({
 export const Entry = Schema.Union([
   Disabled,
   Schema.Struct({
-    command: Schema.mutable(Schema.Array(Schema.String)),
+    command: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
     extensions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
     disabled: Schema.optional(Schema.Boolean),
     env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
     initialization: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+    maxMemoryMb: Schema.optional(Schema.Number),
+    idleTimeoutMs: Schema.optional(Schema.Number),
   }),
 ]).pipe((schema) => schema)
 
