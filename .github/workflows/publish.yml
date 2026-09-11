@@ -245,7 +245,10 @@ jobs:
       - name: Upload signed BanyanCode Windows artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: banyancode-windows-x64
+          # Keep this distinct from the unsigned build artifact. Artifact names
+          # are immutable, and downloading duplicate names can select the wrong
+          # archive for the release upload step.
+          name: banyancode-windows-x64-signed
           path: |
             packages/opencode/dist/banyancode-windows-x64.zip
             packages/opencode/dist/banyancode-windows-x64
