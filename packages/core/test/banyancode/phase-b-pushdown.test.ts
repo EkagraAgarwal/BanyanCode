@@ -162,6 +162,7 @@ const buildCountingRepoLayer = (counters: PushdownCounters, panicOnListAllNodes:
         getFile: inner.getFile,
         getFileByPath: inner.getFileByPath,
         listAllFiles: inner.listAllFiles,
+        listFilesPage: inner.listFilesPage,
         deleteAllDerivedEdges: inner.deleteAllDerivedEdges,
         fileIDsByServiceName: inner.fileIDsByServiceName,
         putNode: inner.putNode,
@@ -179,6 +180,7 @@ const buildCountingRepoLayer = (counters: PushdownCounters, panicOnListAllNodes:
             }
             return yield* inner.listAllNodes()
           }),
+        listNodesPage: inner.listNodesPage,
         queryNodes: inner.queryNodes,
         searchNodes: inner.searchNodes,
         searchNodesLight: (input) =>
@@ -200,6 +202,7 @@ const buildCountingRepoLayer = (counters: PushdownCounters, panicOnListAllNodes:
         putEdges: inner.putEdges,
         getEdge: inner.getEdge,
         listAllEdges: inner.listAllEdges,
+        listEdgesPage: inner.listEdgesPage,
         listEdgesByNode: inner.listEdgesByNode,
         edgesFrom: inner.edgesFrom,
         edgesTo: inner.edgesTo,

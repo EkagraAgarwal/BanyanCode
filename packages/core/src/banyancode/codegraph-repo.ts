@@ -1,6 +1,6 @@
 export * as CodegraphRepo from "./codegraph-repo"
 
-import { and, eq, inArray, notInArray, or, sql } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, notInArray, or, sql } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
 import { Cause, Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
@@ -136,6 +136,17 @@ export interface Interface {
   readonly getFile: (id: string) => Effect.Effect<CodegraphFile | undefined, never, never>
   readonly getFileByPath: (path: string) => Effect.Effect<CodegraphFile | undefined, never, never>
   readonly listAllFiles: () => Effect.Effect<CodegraphFile[], never, never>
+  /**
+   * Keyset page over codegraph_files ordered by id ascending. `cursor` is
+   * the last id of the previous page; `nextCursor` is undefined on the last
+   * page. Prefer this (or countFiles for cardinality) over listAllFiles
+   * when the graph is large — one page stays resident instead of every row.
+   */
+  readonly listFilesPage: (input: { cursor?: string; limit?: number }) => Effect.Effect<
+    { files: CodegraphFile[]; nextCursor: string | undefined },
+    never,
+    never
+  >
   readonly putNode: (node: CodegraphNode) => Effect.Effect<void, never, never>
   readonly putNodes: (nodes: CodegraphNode[]) => Effect.Effect<void, never, never>
   readonly getNode: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
@@ -144,6 +155,16 @@ export interface Interface {
   readonly listNodesByFile: (fileID: string) => Effect.Effect<CodegraphNode[], never, never>
   readonly listNodesByKind: (kind: string) => Effect.Effect<CodegraphNode[], never, never>
   readonly listAllNodes: () => Effect.Effect<CodegraphNode[], never, never>
+  /**
+   * Keyset page over codegraph_nodes ordered by id ascending. Same
+   * peak-RAM contract as listFilesPage: stream large graphs page by page
+   * instead of materializing listAllNodes.
+   */
+  readonly listNodesPage: (input: { cursor?: string; limit?: number }) => Effect.Effect<
+    { nodes: CodegraphNode[]; nextCursor: string | undefined },
+    never,
+    never
+  >
   readonly queryNodes: (input: { function?: string; kind?: string }) => Effect.Effect<CodegraphNode[], never, never>
   readonly searchNodes: (input: { name?: string; kind?: string; limit?: number }) => Effect.Effect<CodegraphNode[], never, never>
   /** Like searchNodes but without the `code` field — suitable for callers that only need metadata. */
@@ -196,6 +217,15 @@ export interface Interface {
   readonly putEdges: (edges: CodegraphEdge[]) => Effect.Effect<void, never, never>
   readonly getEdge: (id: string) => Effect.Effect<CodegraphEdge | undefined, never, never>
   readonly listAllEdges: () => Effect.Effect<CodegraphEdge[], never, never>
+  /**
+   * Keyset page over codegraph_edges ordered by id ascending. Same
+   * peak-RAM contract as listFilesPage.
+   */
+  readonly listEdgesPage: (input: { cursor?: string; limit?: number }) => Effect.Effect<
+    { edges: CodegraphEdge[]; nextCursor: string | undefined },
+    never,
+    never
+  >
   readonly listEdgesByNode: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesFrom: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesTo: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
@@ -382,17 +412,53 @@ export const layer = Layer.effect(
       }
     })
 
+    const listFilesPage = Effect.fn("CodegraphRepo.listFilesPage")(function* (input: {
+      cursor?: string
+      limit?: number
+    }) {
+      const limit = Math.min(Math.max(input.limit ?? 500, 1), 5000)
+      const rows = yield* (
+        input.cursor !== undefined
+          ? db
+              .select()
+              .from(CodegraphFilesTable)
+              .where(gt(CodegraphFilesTable.id, input.cursor))
+              .orderBy(asc(CodegraphFilesTable.id))
+              .limit(limit)
+              .all()
+          : db.select().from(CodegraphFilesTable).orderBy(asc(CodegraphFilesTable.id)).limit(limit).all()
+      ).pipe(Effect.orDie)
+      return {
+        files: rows.map((row) => ({
+          id: row.id,
+          path: row.path,
+          contentHash: row.content_hash,
+          language: row.language,
+          indexedAt: row.indexed_at,
+          sizeBytes: row.size_bytes,
+          mtimeMs: row.mtime_ms,
+        })),
+        nextCursor: rows.length === limit ? rows.at(-1)?.id : undefined,
+      }
+    })
+
+    // Compat wrapper: same result as the old single-SELECT listAllFiles
+    // (now ordered by id), streamed page by page so only one page is
+    // resident at a time during the fetch. Prefer listFilesPage directly
+    // for large graphs.
     const listAllFiles = Effect.fn("CodegraphRepo.listAllFiles")(function* () {
-      const rows = yield* db.select().from(CodegraphFilesTable).all().pipe(Effect.orDie)
-      return rows.map((row) => ({
-        id: row.id,
-        path: row.path,
-        contentHash: row.content_hash,
-        language: row.language,
-        indexedAt: row.indexed_at,
-        sizeBytes: row.size_bytes,
-        mtimeMs: row.mtime_ms,
-      }))
+      const all: CodegraphFile[] = []
+      let cursor: string | undefined = undefined
+      for (;;) {
+        const page: { files: CodegraphFile[]; nextCursor: string | undefined } = yield* listFilesPage({
+          cursor,
+          limit: 1000,
+        })
+        for (const file of page.files) all.push(file)
+        if (page.nextCursor === undefined) break
+        cursor = page.nextCursor
+      }
+      return all
     })
 
     const putNode = Effect.fn("CodegraphRepo.putNode")(function* (node: CodegraphNode) {
@@ -487,9 +553,42 @@ export const layer = Layer.effect(
       return rows.map(rowToNode)
     })
 
+    const listNodesPage = Effect.fn("CodegraphRepo.listNodesPage")(function* (input: {
+      cursor?: string
+      limit?: number
+    }) {
+      const limit = Math.min(Math.max(input.limit ?? 500, 1), 5000)
+      const rows = yield* (
+        input.cursor !== undefined
+          ? db
+              .select()
+              .from(CodegraphNodesTable)
+              .where(gt(CodegraphNodesTable.id, input.cursor))
+              .orderBy(asc(CodegraphNodesTable.id))
+              .limit(limit)
+              .all()
+          : db.select().from(CodegraphNodesTable).orderBy(asc(CodegraphNodesTable.id)).limit(limit).all()
+      ).pipe(Effect.orDie)
+      return {
+        nodes: rows.map(rowToNode),
+        nextCursor: rows.length === limit ? rows.at(-1)?.id : undefined,
+      }
+    })
+
+    // Compat wrapper over listNodesPage; see listAllFiles.
     const listAllNodes = Effect.fn("CodegraphRepo.listAllNodes")(function* () {
-      const rows = yield* db.select().from(CodegraphNodesTable).all().pipe(Effect.orDie)
-      return rows.map(rowToNode)
+      const all: CodegraphNode[] = []
+      let cursor: string | undefined = undefined
+      for (;;) {
+        const page: { nodes: CodegraphNode[]; nextCursor: string | undefined } = yield* listNodesPage({
+          cursor,
+          limit: 1000,
+        })
+        for (const node of page.nodes) all.push(node)
+        if (page.nextCursor === undefined) break
+        cursor = page.nextCursor
+      }
+      return all
     })
 
     const putEdge = Effect.fn("CodegraphRepo.putEdge")(function* (edge: CodegraphEdge) {
@@ -529,18 +628,47 @@ export const layer = Layer.effect(
       }
     })
 
+    const listEdgesPage = Effect.fn("CodegraphRepo.listEdgesPage")(function* (input: {
+      cursor?: string
+      limit?: number
+    }) {
+      const limit = Math.min(Math.max(input.limit ?? 500, 1), 5000)
+      const rows = yield* (
+        input.cursor !== undefined
+          ? db
+              .select()
+              .from(CodegraphEdgesTable)
+              .where(gt(CodegraphEdgesTable.id, input.cursor))
+              .orderBy(asc(CodegraphEdgesTable.id))
+              .limit(limit)
+              .all()
+          : db.select().from(CodegraphEdgesTable).orderBy(asc(CodegraphEdgesTable.id)).limit(limit).all()
+      ).pipe(Effect.orDie)
+      return {
+        edges: rows.map((row) => ({
+          id: row.id,
+          fromNodeID: row.from_node_id,
+          toNodeID: row.to_node_id,
+          kind: row.kind as CodegraphEdge["kind"],
+        })),
+        nextCursor: rows.length === limit ? rows.at(-1)?.id : undefined,
+      }
+    })
+
+    // Compat wrapper over listEdgesPage; see listAllFiles.
     const listAllEdges = Effect.fn("CodegraphRepo.listAllEdges")(function* () {
-      const rows = yield* db
-        .select()
-        .from(CodegraphEdgesTable)
-        .all()
-        .pipe(Effect.orDie)
-      return rows.map((row) => ({
-        id: row.id,
-        fromNodeID: row.from_node_id,
-        toNodeID: row.to_node_id,
-        kind: row.kind as CodegraphEdge["kind"],
-      }))
+      const all: CodegraphEdge[] = []
+      let cursor: string | undefined = undefined
+      for (;;) {
+        const page: { edges: CodegraphEdge[]; nextCursor: string | undefined } = yield* listEdgesPage({
+          cursor,
+          limit: 1000,
+        })
+        for (const edge of page.edges) all.push(edge)
+        if (page.nextCursor === undefined) break
+        cursor = page.nextCursor
+      }
+      return all
     })
 
     const listEdgesByNode = Effect.fn("CodegraphRepo.listEdgesByNode")(function* (nodeID: string) {
@@ -1730,6 +1858,7 @@ export const layer = Layer.effect(
       getFile,
       getFileByPath,
       listAllFiles,
+      listFilesPage,
       putNode,
       putNodes,
       getNode,
@@ -1738,6 +1867,7 @@ export const layer = Layer.effect(
       listNodesByFile,
       listNodesByKind,
       listAllNodes,
+      listNodesPage,
       queryNodes,
       searchNodes,
       searchNodesLight,
@@ -1755,6 +1885,7 @@ export const layer = Layer.effect(
       putEdges,
       getEdge,
       listAllEdges,
+      listEdgesPage,
       listEdgesByNode,
       edgesFrom,
       edgesTo,

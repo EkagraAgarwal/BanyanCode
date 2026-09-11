@@ -136,6 +136,57 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphIndexer") {}
 
+// Peak-RAM budget for the parse→persist pipeline. parsedQueue (below) is the
+// bounded producer-consumer between parse fibers (producers) and the single
+// drain fiber (consumer); the persist batch bounds how many parsed files the
+// drain holds before flushing to SQLite. Both keep the build's live set
+// O(queue + batch) instead of O(total files).
+export const PARSED_QUEUE_CAPACITY = 128
+export const PERSIST_BATCH_DEFAULT = 25
+export const PARSE_CONCURRENCY_DEFAULT = 8
+export const PARSE_CONCURRENCY_MAX = 32
+
+const clampInt = (value: number, min: number, max: number, fallback: number): number => {
+  if (!Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, Math.floor(value)))
+}
+
+// Parse-fanout budget. BANYANCODE_INDEX_CONCURRENCY overrides; default 8
+// preserves current throughput. Adaptive (on unless
+// BANYANCODE_INDEX_ADAPTIVE=0) steps the fanout down under heap pressure so
+// a large monorepo build degrades gracefully instead of OOMing.
+export const resolveParseConcurrency = (): number => {
+  const base = clampInt(
+    Number(process.env.BANYANCODE_INDEX_CONCURRENCY ?? PARSE_CONCURRENCY_DEFAULT),
+    1,
+    PARSE_CONCURRENCY_MAX,
+    PARSE_CONCURRENCY_DEFAULT,
+  )
+  if (process.env.BANYANCODE_INDEX_ADAPTIVE === "0") return base
+  const heapUsed = process.memoryUsage().heapUsed
+  if (heapUsed > 1_500_000_000) return Math.max(1, Math.floor(base / 2))
+  if (heapUsed > 800_000_000) return Math.max(2, Math.floor((base * 3) / 4))
+  return base
+}
+
+export const resolvePersistBatchSize = (): number =>
+  clampInt(
+    Number(process.env.BANYANCODE_INDEX_PERSIST_BATCH ?? PERSIST_BATCH_DEFAULT),
+    1,
+    200,
+    PERSIST_BATCH_DEFAULT,
+  )
+
+// Bounded iterator over an already-walked candidate list. Yields fixed-size
+// slices so the parse phase can be fed chunk-by-chunk, keeping only the
+// current chunk's closures live instead of one closure per file.
+export function* streamCandidateBatches<T>(candidates: readonly T[], batchSize: number): Generator<readonly T[]> {
+  const size = Math.max(1, Math.floor(batchSize))
+  for (let i = 0; i < candidates.length; i += size) {
+    yield candidates.slice(i, i + size)
+  }
+}
+
 const DEFAULT_IGNORED = [
   "node_modules",
   "dist",
@@ -315,7 +366,7 @@ export const layer = Layer.effect(
           else if (entry.type === "file") fileNames.push(entry.name)
         }
         const subResults = yield* Effect.all(dirNames.map((name) => walkSubdir(path.join(dir, name))), {
-          concurrency: 8,
+          concurrency: resolveParseConcurrency(),
           discard: false,
         })
         let skippedBySize = 0
@@ -323,7 +374,11 @@ export const layer = Layer.effect(
         let skippedByBanyanignore = 0
         const files: CandidateFile[] = []
         for (const sub of subResults) {
-          files.push(...sub.files)
+          // Element-wise append: `files.push(...sub.files)` spreads the
+          // child array as call arguments (arg-list blowup on large dirs)
+          // and holds both arrays fully live; the loop keeps peak at one
+          // element.
+          for (const f of sub.files) files.push(f)
           skippedBySize += sub.skippedBySize
           skippedByGitignore += sub.skippedByGitignore
           skippedByBanyanignore += sub.skippedByBanyanignore
@@ -1377,7 +1432,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         yield* input.onProgress({ file: "", done: 0, total })
       }
 
-      const parsedQueue = yield* Queue.bounded<ParsedFile>(128)
+      const parsedQueue = yield* Queue.bounded<ParsedFile>(PARSED_QUEUE_CAPACITY)
       const skippedParsed = (relativePath: string): ParsedFile => ({
         file: { id: "", path: "", contentHash: "", language: "", indexedAt: 0 },
         nodes: [],
@@ -1412,55 +1467,75 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         })
       }
 
+      // Bounded-batch persist: the drain holds at most persistBatch parsed
+      // files before flushing to SQLite, so the live set stays O(batch)
+      // instead of growing with the build. Each flush drops its batch so
+      // parsed node/edge arrays become GC-eligible promptly.
+      const persistBatch = resolvePersistBatchSize()
       const drainParsedQueue = Effect.gen(function* () {
         let processed = 0
+        let batch: ParsedFile[] = []
+        const flushBatch = Effect.gen(function* () {
+          const pending = batch
+          batch = []
+          for (const parsed of pending) {
+            yield* repo.writeFileGraph({
+              file: parsed.file,
+              nodes: parsed.nodes,
+              edges: parsed.edges,
+              ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.gen(function* () {
+                  yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
+                    cause: Cause.pretty(cause),
+                  })
+                  yield* repo
+                    .recordParseError({ path: parsed.relativePath, cause: Cause.pretty(cause), indexedAt: Date.now() })
+                    .pipe(
+                      Effect.catchCause((innerCause) =>
+                        Effect.logWarning(`recordParseError insert failed for ${parsed.relativePath}`, {
+                          cause: Cause.pretty(innerCause),
+                        }),
+                      ),
+                    )
+                  yield* Ref.update(skippedRef, (n) => n + 1)
+                  yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
+                }),
+              ),
+            )
+          }
+        })
         while (processed < total) {
           const parsed = yield* Queue.take(parsedQueue)
           processed++
           if (parsed.skipped) continue
-          yield* repo.writeFileGraph({
-            file: parsed.file,
-            nodes: parsed.nodes,
-            edges: parsed.edges,
-            ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
-          }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.gen(function* () {
-                yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
-                  cause: Cause.pretty(cause),
-                })
-                yield* repo
-                  .recordParseError({ path: parsed.relativePath, cause: Cause.pretty(cause), indexedAt: Date.now() })
-                  .pipe(
-                    Effect.catchCause((innerCause) =>
-                      Effect.logWarning(`recordParseError insert failed for ${parsed.relativePath}`, {
-                        cause: Cause.pretty(innerCause),
-                      }),
-                    ),
-                  )
-                yield* Ref.update(skippedRef, (n) => n + 1)
-                yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
-              }),
-            ),
-          )
+          batch.push(parsed)
           if (parsed.nodes.length > 0) {
             yield* Ref.update(indexedRef, (n) => n + 1)
             yield* Ref.update(symbolsIndexedRef, (n) => n + parsed.nodes.length)
           }
+          if (batch.length >= persistBatch) yield* flushBatch
           if (processed % CHECKPOINT_EVERY === 0) {
             yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
           }
         }
+        if (batch.length > 0) yield* flushBatch
       })
 
       const parseStart = Date.now()
-      yield* Effect.all(
-        [
-          Effect.forEach(codeFiles, parseFiber, { concurrency: 8, discard: true }),
-          drainParsedQueue,
-        ],
-        { concurrency: 2, discard: true },
-      ).pipe(Effect.ensuring(Queue.shutdown(parsedQueue)))
+      // Chunked producer: feed the bounded queue in slices so only the
+      // current chunk's parse closures are live; concurrency is
+      // configurable/adaptive (default 8 preserves current throughput).
+      const feedParseQueue = Effect.gen(function* () {
+        for (const chunk of streamCandidateBatches(codeFiles, 1000)) {
+          yield* Effect.forEach(chunk, parseFiber, { concurrency: resolveParseConcurrency(), discard: true })
+          if (yield* Ref.get(cancelled)) break
+        }
+      })
+      yield* Effect.all([feedParseQueue, drainParsedQueue], { concurrency: 2, discard: true }).pipe(
+        Effect.ensuring(Queue.shutdown(parsedQueue)),
+      )
       yield* Effect.logDebug(`codegraph: parse+drain took ${Date.now() - parseStart}ms`)
       const checkpointStart = Date.now()
       yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
@@ -1778,7 +1853,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         yield* input.onProgress({ file: "", done: 0, total })
       }
 
-      const parsedQueue = yield* Queue.bounded<ParsedFile>(128)
+      const parsedQueue = yield* Queue.bounded<ParsedFile>(PARSED_QUEUE_CAPACITY)
       const skippedParsedFn = (relativePath: string): ParsedFile => ({
         file: { id: "", path: "", contentHash: "", language: "", indexedAt: 0 },
         nodes: [],

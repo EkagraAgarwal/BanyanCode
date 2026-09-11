@@ -6,6 +6,7 @@ import { parseTypeScript } from "./typescript"
 import { parsePython } from "./python"
 import {
   TreeSitterUnavailableError,
+  ensureGrammarForExt,
   withTreeSitter,
 } from "./tree-sitter"
 import type { Language, Node, Parser, Query, QueryCapture, QueryMatch, Tree } from "web-tree-sitter"
@@ -293,11 +294,18 @@ const runQueryAndExtract = (
 ): { edges: ParsedEdge[]; syntaxError: { line: number; message: string } | null } => {
   const tree = refs.parser.parse(content)
   if (!tree) return { edges: [], syntaxError: null }
-  return {
-    edges: buildQueryOnTree(tree, refs.query, fileID),
-    // Phase 0 tree-sitter: report ERROR / MISSING nodes so the indexer can
-    // record a real parse error (Wave-5 goal) while still indexing this file.
-    syntaxError: tree.rootNode ? findSyntaxError(tree.rootNode) : null,
+  // The extracted edges/syntax error are plain data (no live Node refs), so
+  // the per-parse Tree is deleted here — otherwise every parsed file leaks
+  // one tree's wasm heap for the process lifetime.
+  try {
+    return {
+      edges: buildQueryOnTree(tree, refs.query, fileID),
+      // Phase 0 tree-sitter: report ERROR / MISSING nodes so the indexer can
+      // record a real parse error (Wave-5 goal) while still indexing this file.
+      syntaxError: tree.rootNode ? findSyntaxError(tree.rootNode) : null,
+    }
+  } finally {
+    tree.delete()
   }
 }
 
@@ -327,6 +335,8 @@ export const parseTypeScriptWithTreeSitter = (
   Effect.gen(function* () {
     const querySource = querySourceCached(".ts")
     if (querySource === "") return parseTypeScript(content, fileID)
+    // Lazy grammar trigger: loads the TS grammar on first encountered use.
+    yield* ensureGrammarForExt(".ts")
     return yield* withTreeSitter((state) => {
       const parser = state.parser.parsersByExt.get(".ts")
       const language = state.parser.languagesByExt.get(".ts") as Language | undefined
@@ -355,6 +365,8 @@ export const parsePythonWithTreeSitter = (
   Effect.gen(function* () {
     const querySource = querySourceCached(".py")
     if (querySource === "") return parsePython(content, fileID)
+    // Lazy grammar trigger: loads the Python grammar on first encountered use.
+    yield* ensureGrammarForExt(".py")
     return yield* withTreeSitter((state) => {
       const parser = state.parser.parsersByExt.get(".py")
       const language = state.parser.languagesByExt.get(".py") as Language | undefined
@@ -382,6 +394,7 @@ export const parseTypeScriptWithTreeSitterIncremental = (
   Effect.gen(function* () {
     const querySource = querySourceCached(".ts")
     if (querySource === "") return { result: parseTypeScript(content, fileID), tree: undefined }
+    yield* ensureGrammarForExt(".ts").pipe(Effect.ignore)
     return yield* withTreeSitter((state) => {
       const parser = state.parser.parsersByExt.get(".ts")
       const language = state.parser.languagesByExt.get(".ts") as Language | undefined
@@ -414,6 +427,7 @@ export const parsePythonWithTreeSitterIncremental = (
   Effect.gen(function* () {
     const querySource = querySourceCached(".py")
     if (querySource === "") return { result: parsePython(content, fileID), tree: undefined }
+    yield* ensureGrammarForExt(".py").pipe(Effect.ignore)
     return yield* withTreeSitter((state) => {
       const parser = state.parser.parsersByExt.get(".py")
       const language = state.parser.languagesByExt.get(".py") as Language | undefined
@@ -603,22 +617,30 @@ export const parseLanguageWithTreeSitter = (
   Effect.gen(function* () {
     const mapping = getWalkerMapping(ext)
     if (!mapping) return regexFallback()
+    // Lazy grammar trigger for the 13 AST-walk languages.
+    yield* ensureGrammarForExt(ext)
     return yield* withTreeSitter((state) => {
       const parser = state.parser.parsersByExt.get(ext)
       if (!parser) return regexFallback()
+      // Per-parse Tree deleted in `finally`: only plain-data walked nodes
+      // escape (see runQueryAndExtract).
       const tree = parser.parse(content)
-      const rootNode = tree?.rootNode
-      if (!rootNode) return regexFallback()
-      const walked = walkNodeTree(rootNode, mapping, fileID)
-      const regex = regexFallback()
-      const syntaxError = findSyntaxError(rootNode)
-      return {
-        ...regex,
-        nodes: walked.length > 0 ? walked : regex.nodes,
-        // Phase 0 tree-sitter: mark the backend so the indexer can stamp
-        // node derivation (tree-sitter-v1) exactly like the TS/PY path.
-        backend: "tree-sitter" as const,
-        ...(syntaxError ? { syntaxError } : {}),
+      try {
+        const rootNode = tree?.rootNode
+        if (!rootNode) return regexFallback()
+        const walked = walkNodeTree(rootNode, mapping, fileID)
+        const regex = regexFallback()
+        const syntaxError = findSyntaxError(rootNode)
+        return {
+          ...regex,
+          nodes: walked.length > 0 ? walked : regex.nodes,
+          // Phase 0 tree-sitter: mark the backend so the indexer can stamp
+          // node derivation (tree-sitter-v1) exactly like the TS/PY path.
+          backend: "tree-sitter" as const,
+          ...(syntaxError ? { syntaxError } : {}),
+        }
+      } finally {
+        tree?.delete()
       }
     })
   })
@@ -627,6 +649,9 @@ export const validateQueryFile = (ext: string): Effect.Effect<boolean, TreeSitte
   Effect.gen(function* () {
     const querySource = yield* loadQuerySourceOrEmpty(ext)
     if (querySource === "") return false
+    // Best-effort lazy load: ignored so unsupported extensions keep the
+    // historical `false` contract instead of failing.
+    yield* ensureGrammarForExt(ext).pipe(Effect.ignore)
     return yield* withTreeSitter((state) => {
       const language = state.parser.languagesByExt.get(ext) as Language | undefined
       const Query = state.parser.Query

@@ -28,7 +28,9 @@ const makeMockRepo = (options: {
     CodegraphRepo.Service,
     CodegraphRepo.Service.of({
       listAllNodes: () => Effect.succeed(options.nodes ?? []),
+      listNodesPage: () => Effect.succeed({ nodes: options.nodes ?? [], nextCursor: undefined }),
       listAllFiles: () => Effect.succeed(options.files ?? []),
+      listFilesPage: () => Effect.succeed({ files: options.files ?? [], nextCursor: undefined }),
       getMeta: () => Effect.succeed(options.meta),
       getFileByPath: (p) => Effect.succeed(options.files?.find((f) => f.path === p)),
       nodeByID: (id) => Effect.succeed(options.nodes?.find((n) => n.id === id)),
@@ -51,6 +53,7 @@ const makeMockRepo = (options: {
       putEdge: () => Effect.void,
       getEdge: () => Effect.succeed(undefined),
       listAllEdges: () => Effect.succeed([]),
+      listEdgesPage: () => Effect.succeed({ edges: [], nextCursor: undefined }),
       listEdgesByNode: () => Effect.succeed([]),
       deleteFile: () => Effect.void,
       deleteDerivedEdgesForFiles: () => Effect.succeed([]),

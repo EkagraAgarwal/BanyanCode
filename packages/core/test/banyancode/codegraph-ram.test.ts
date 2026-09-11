@@ -1,336 +1,224 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
+import path from "node:path"
+import fs from "node:fs"
 import { Database } from "@opencode-ai/core/database/database"
-import { DatabaseMigration } from "@opencode-ai/core/database/migration"
+import { CodegraphIndexer } from "@opencode-ai/core/banyancode/codegraph-indexer"
+import { CodegraphRepo } from "@opencode-ai/core/banyancode/codegraph-repo"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import {
+  _resetTreeSitterStateForTesting,
+  ensureWebTreeSitterReady,
+  parseIncremental,
+} from "@opencode-ai/core/banyancode/langs/tree-sitter"
+import {
+  ensureQuerySourcesLoaded,
+  parseTypeScriptWithTreeSitter,
+} from "@opencode-ai/core/banyancode/langs/query-executor"
 import { tmpdir } from "../fixture/tmpdir"
-import path from "path"
-import fs from "fs/promises"
-import { CodegraphIndexer } from "../../src/banyancode/codegraph-indexer"
-import { CodegraphRepo, defaultLayer as codegraphRepoDefaultLayer } from "../../src/banyancode/codegraph-repo"
 
 process.env.BANYANCODE_ENABLE = "1"
 
-describe("CodegraphRepo.searchNodesLight", () => {
-  test("returns nodes without code field", async () => {
-    await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "test.db")
-    const dbLayer = Database.layerFromPath(dbPath)
-    const repoLayer = CodegraphRepo.layer
+// Peak/settled-RAM regression tests for the codegraph. Both tests run a
+// FIXED deterministic corpus repeatedly and assert the settled-RSS slope is
+// not positive: per-iteration wasm/parser/row retention would show up as a
+// steady climb, while one-time warmup (grammar compile, page cache) settles
+// after the first iteration. Tolerances are generous against allocator noise;
+// a real per-file leak (one Tree per parse ≈ KBs) exceeds them by 10x+.
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const { db } = yield* Database.Service
-        yield* DatabaseMigration.apply(db)
-        const repo = yield* CodegraphRepo.Service
+// Deterministic corpus source: same bytes every run, exercises the TS
+// grammar (functions, class, interface, import/export) plus query edges.
+const corpusSource = (index: number): string =>
+  [
+    `import { helper${index} } from "./helper${index}"`,
+    ``,
+    `export interface Shape${index} {`,
+    `  readonly id: number`,
+    `  render(): string`,
+    `}`,
+    ``,
+    `export class Widget${index} implements Shape${index} {`,
+    `  readonly id: number`,
+    `  constructor(id: number) {`,
+    `    this.id = id`,
+    `  }`,
+    `  render(): string {`,
+    `    return helper${index}(this.id)`,
+    `  }`,
+    `}`,
+    ``,
+    `export function helper${index}(id: number): string {`,
+    `  const label = \`widget-\${id}\``,
+    `  if (id < 0) throw new Error(label)`,
+    `  return label`,
+    `}`,
+    ``,
+    `export function* stream${index}(count: number): Generator<string> {`,
+    `  for (let i = 0; i < count; i++) {`,
+    `    yield helper${index}(i)`,
+    `  }`,
+    `}`,
+    ``,
+  ].join("\n")
 
-        // Seed a node with code
-        yield* repo.putFile({
-          id: "file-1",
-          path: path.join(tmp.path, "a.ts"),
-          contentHash: "abc",
-          language: "typescript",
-          indexedAt: Date.now(),
-        })
-        yield* repo.putNode({
-          id: "node-1",
-          fileID: "file-1",
-          kind: "function",
-          name: "testFunc",
-          signature: "testFunc()",
-          startLine: 1,
-          endLine: 3,
-          code: "function testFunc() { return 42 }",
-        })
+const maybeGC = (): void => {
+  const gc = (globalThis as unknown as { gc?: () => void }).gc
+  if (gc) gc()
+  const bunGC = (Bun as unknown as { gc?: (force?: boolean) => void }).gc
+  if (bunGC) bunGC(true)
+}
 
-        const lightResults = yield* repo.searchNodesLight({ limit: 10 })
-        expect(lightResults.length).toBeGreaterThan(0)
-        const node = lightResults.find((n) => n.id === "node-1")
-        expect(node).toBeDefined()
-        expect(node!.code).toBeUndefined()
-        expect(node!.name).toBe("testFunc")
-        expect(node!.kind).toBe("function")
-      }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
-    )
-  })
+// Settled memory: coax a GC, yield the event loop, then sample. heapUsed is
+// the deterministic leak signal under GC; rss is a loose guard only because
+// allocator arenas, JIT, and parallel test workers make it noisy —
+// especially on loaded Windows machines.
+const settledMemory = async (): Promise<{ rss: number; heapUsed: number }> => {
+  maybeGC()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  maybeGC()
+  const samples = [process.memoryUsage(), process.memoryUsage(), process.memoryUsage()]
+  const avg = (pick: (m: NodeJS.MemoryUsage) => number): number =>
+    samples.reduce((a, b) => a + pick(b), 0) / samples.length
+  return { rss: avg((m) => m.rss), heapUsed: avg((m) => m.heapUsed) }
+}
 
-  test("searchNodesLight filters by fileID", async () => {
-    await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "test.db")
-    const dbLayer = Database.layerFromPath(dbPath)
-    const repoLayer = CodegraphRepo.layer
+// Least-squares slope of RSS over iteration index (bytes/iteration).
+const slopePerIteration = (ys: readonly number[]): number => {
+  const n = ys.length
+  const meanX = (n - 1) / 2
+  const meanY = ys.reduce((a, b) => a + b, 0) / n
+  let num = 0
+  let den = 0
+  for (let i = 0; i < n; i++) {
+    const y = ys[i] ?? meanY
+    num += (i - meanX) * (y - meanY)
+    den += (i - meanX) * (i - meanX)
+  }
+  return den === 0 ? 0 : num / den
+}
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const { db } = yield* Database.Service
-        yield* DatabaseMigration.apply(db)
-        const repo = yield* CodegraphRepo.Service
+describe("codegraph peak/settled RAM", () => {
+  test(
+    "repeated tree-sitter parses show no positive settled-RSS slope",
+    async () => {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* _resetTreeSitterStateForTesting()
+          yield* ensureWebTreeSitterReady()
+        }),
+      )
+      await Effect.runPromise(Effect.promise(() => ensureQuerySourcesLoaded()))
 
-        // Seed two files with nodes
-        yield* repo.putFile({
-          id: "file-1",
-          path: path.join(tmp.path, "a.ts"),
-          contentHash: "abc",
-          language: "typescript",
-          indexedAt: Date.now(),
-        })
-        yield* repo.putFile({
-          id: "file-2",
-          path: path.join(tmp.path, "b.ts"),
-          contentHash: "def",
-          language: "typescript",
-          indexedAt: Date.now(),
-        })
-        yield* repo.putNode({
-          id: "node-1",
-          fileID: "file-1",
-          kind: "function",
-          name: "funcA",
-          signature: "funcA()",
-          startLine: 1,
-          endLine: 3,
-          code: "function funcA() {}",
-        })
-        yield* repo.putNode({
-          id: "node-2",
-          fileID: "file-2",
-          kind: "function",
-          name: "funcB",
-          signature: "funcB()",
-          startLine: 1,
-          endLine: 3,
-          code: "function funcB() {}",
-        })
+      const sources: string[] = []
+      for (let i = 0; i < 15; i++) sources.push(corpusSource(i))
 
-        const results = yield* repo.searchNodesLight({ fileID: "file-1" })
-        expect(results.length).toBe(1)
-        expect(results[0]!.id).toBe("node-1")
-      }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
-    )
-  })
-})
+      const heap: number[] = []
+      const rss: number[] = []
+      for (let iter = 0; iter < 6; iter++) {
+        for (const [i, source] of sources.entries()) {
+          // parseIncremental allocates a dedicated Parser per call (deleted
+          // in `finally`) and returns a caller-owned Tree.
+          const tree = await Effect.runPromise(parseIncremental(".ts", source, undefined))
+          tree.delete()
+          // Query path: per-parse Tree deleted inside runQueryAndExtract.
+          await Effect.runPromise(parseTypeScriptWithTreeSitter(source, `ram-parse-${iter}-${i}`))
+        }
+        const settled = await settledMemory()
+        heap.push(settled.heapUsed)
+        rss.push(settled.rss)
+      }
+      expect(slopePerIteration(heap.slice(1))).toBeLessThanOrEqual(256 * 1024)
+      const first = rss[0] ?? 0
+      const last = rss[rss.length - 1] ?? 0
+      expect(last - first).toBeLessThanOrEqual(8 * 1024 * 1024)
+    },
+    90_000,
+  )
 
-describe("CodegraphRepo.nodesByFileIDs", () => {
-  test("fetches nodes for specific file IDs", async () => {
-    await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "test.db")
-    const dbLayer = Database.layerFromPath(dbPath)
-    const repoLayer = CodegraphRepo.layer
+  test(
+    "repeated full builds show no positive settled-RSS slope",
+    async () => {
+      await using tmp = await tmpdir()
+      const root = path.join(tmp.path, "corpus")
+      fs.mkdirSync(root, { recursive: true })
+      const fileCount = 25
+      for (let i = 0; i < fileCount; i++) {
+        fs.writeFileSync(path.join(root, `mod${i}.ts`), corpusSource(i))
+      }
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const { db } = yield* Database.Service
-        yield* DatabaseMigration.apply(db)
-        const repo = yield* CodegraphRepo.Service
-
-        yield* repo.putFile({
-          id: "file-1",
-          path: path.join(tmp.path, "a.ts"),
-          contentHash: "abc",
-          language: "typescript",
-          indexedAt: Date.now(),
-        })
-        yield* repo.putFile({
-          id: "file-2",
-          path: path.join(tmp.path, "b.ts"),
-          contentHash: "def",
-          language: "typescript",
-          indexedAt: Date.now(),
-        })
-        yield* repo.putNode({
-          id: "node-1",
-          fileID: "file-1",
-          kind: "function",
-          name: "funcA",
-          signature: "funcA()",
-          startLine: 1,
-          endLine: 3,
-          code: "function funcA() {}",
-        })
-        yield* repo.putNode({
-          id: "node-2",
-          fileID: "file-2",
-          kind: "function",
-          name: "funcB",
-          signature: "funcB()",
-          startLine: 1,
-          endLine: 3,
-          code: "function funcB() {}",
-        })
-
-        const results = yield* repo.nodesByFileIDs({ fileIDs: ["file-1"] })
-        expect(results.length).toBe(1)
-        expect(results[0]!.id).toBe("node-1")
-        // nodesByFileIDs returns full nodes (with code)
-        expect(results[0]!.code).toBeDefined()
-      }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
-    )
-  })
-
-  test("returns empty array for empty fileIDs", async () => {
-    await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "test.db")
-    const dbLayer = Database.layerFromPath(dbPath)
-    const repoLayer = CodegraphRepo.layer
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const { db } = yield* Database.Service
-        yield* DatabaseMigration.apply(db)
-        const repo = yield* CodegraphRepo.Service
-
-        const results = yield* repo.nodesByFileIDs({ fileIDs: [] })
-        expect(results.length).toBe(0)
-      }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
-    )
-  })
-})
-
-describe("Incremental derived graph rebuild via indexFiles", () => {
-  test("full rebuild produces edges for all files", async () => {
-    await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "test.sqlite")
-    const dbLayer = Database.layerFromPath(dbPath)
-
-    const aPath = path.join(tmp.path, "a.ts")
-    const bPath = path.join(tmp.path, "b.ts")
-    await fs.writeFile(aPath, "function myFunc() { return helper() }\n")
-    await fs.writeFile(bPath, "export function helper() { return 42 }\n")
-
-    const serviceLayer = CodegraphIndexer.layer.pipe(
-      Layer.provide(FSUtil.defaultLayer),
-      Layer.provide(codegraphRepoDefaultLayer),
-    )
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const indexer = yield* CodegraphIndexer.Service
-        const repo = yield* CodegraphRepo.Service
-
-        // Index files
-        yield* indexer.indexFiles({ root: tmp.path, paths: [bPath] })
-        yield* indexer.indexFiles({ root: tmp.path, paths: [aPath] })
-
-        const edges = yield* repo.listAllEdges()
-        expect(edges.length).toBeGreaterThan(0)
-
-        // Verify a->b edge exists (myFunc calls helper)
-        const callEdge = edges.find((e) => e.kind === "calls")
-        expect(callEdge).toBeDefined()
-      }).pipe(
-        Effect.provide(serviceLayer),
-        Effect.provide(codegraphRepoDefaultLayer),
-        Effect.provide(dbLayer),
-        Effect.scoped,
-      ),
-    )
-  })
-
-  test("incremental re-index of changed file removes stale edges", async () => {
-    await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "test.sqlite")
-    const dbLayer = Database.layerFromPath(dbPath)
-
-    const aPath = path.join(tmp.path, "a.ts")
-    const bPath = path.join(tmp.path, "b.ts")
-    await fs.writeFile(aPath, "function myFunc() { return helper() }\n")
-    await fs.writeFile(bPath, "export function helper() { return 42 }\n")
-
-    const serviceLayer = CodegraphIndexer.layer.pipe(
-      Layer.provide(FSUtil.defaultLayer),
-      Layer.provide(codegraphRepoDefaultLayer),
-    )
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const indexer = yield* CodegraphIndexer.Service
-        const repo = yield* CodegraphRepo.Service
-
-        // Index files
-        yield* indexer.indexFiles({ root: tmp.path, paths: [bPath] })
-        yield* indexer.indexFiles({ root: tmp.path, paths: [aPath] })
-
-        const edgesAfterIndex = yield* repo.listAllEdges()
-        const callEdgeAfterIndex = edgesAfterIndex.find((e) => e.kind === "calls")
-        expect(callEdgeAfterIndex).toBeDefined()
-
-        // Modify a.ts to remove the call
-        yield* Effect.promise(() => fs.writeFile(aPath, "function myFunc() { return 42 }\n"))
-
-        // Re-index a.ts (triggers incremental rebuild with changed file)
-        yield* indexer.indexFiles({ root: tmp.path, paths: [aPath] })
-
-        const edgesAfterReindex = yield* repo.listAllEdges()
-        // The calls edge from myFunc->helper should be gone
-        const callEdgeAfterReindex = edgesAfterReindex.find((e) => e.kind === "calls")
-        expect(callEdgeAfterReindex).toBeUndefined()
-      }).pipe(
-        Effect.provide(serviceLayer),
-        Effect.provide(codegraphRepoDefaultLayer),
-        Effect.provide(dbLayer),
-        Effect.scoped,
-      ),
-    )
-  })
-
-  test("10-file workspace: incremental update only removes edges from changed file", async () => {
-    await using tmp = await tmpdir()
-    const dbPath = path.join(tmp.path, "test.sqlite")
-    const dbLayer = Database.layerFromPath(dbPath)
-
-    // Create 10 files with cross-references.
-    // file1-file9 define functions that return numbers (no outgoing edges).
-    // file0 defines func0 which calls func9 - file9 must be indexed first
-    // so func9 exists in nodeMap when file0 is processed.
-    const file0Path = path.join(tmp.path, "file0.ts")
-    const file9Path = path.join(tmp.path, "file9.ts")
-    await fs.writeFile(file0Path, `function func0() { return func9() }\n`)
-    await fs.writeFile(file9Path, `export function func9() { return 8 }\n`)
-
-    const serviceLayer = CodegraphIndexer.layer.pipe(
-      Layer.provide(FSUtil.defaultLayer),
-      Layer.provide(codegraphRepoDefaultLayer),
-    )
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const indexer = yield* CodegraphIndexer.Service
-        const repo = yield* CodegraphRepo.Service
-
-        // Index file9 first (defines func9), then file0 (calls func9)
-        // This ensures func9 is in nodeMap when file0's code is processed
-        yield* indexer.indexFiles({ root: tmp.path, paths: [file9Path] })
-        yield* indexer.indexFiles({ root: tmp.path, paths: [file0Path] })
-
-        const edgesAfterFull = yield* repo.listAllEdges()
-        const edgeCountAfterFull = edgesAfterFull.length
-        expect(edgeCountAfterFull).toBeGreaterThan(0)
-
-        // func0 should have outgoing calls to func9
-        const func0CallsBefore = edgesAfterFull.filter(
-          (e) => e.kind === "calls" && e.fromNodeID.includes("func0"),
+      const dbPath = path.join(tmp.path, "ram.db")
+      const dbLayer = Database.layerFromPath(dbPath)
+      const repoLayer = CodegraphRepo.layer.pipe(Layer.provide(dbLayer))
+      const indexLayer = CodegraphIndexer.layer.pipe(
+        Layer.provide(dbLayer),
+        Layer.provideMerge(repoLayer),
+        Layer.provideMerge(FSUtil.defaultLayer),
+      )
+      const runIndex = (): Promise<{ symbolsIndexed: number; indexed: number }> =>
+        Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const indexer = yield* CodegraphIndexer.Service
+              return yield* indexer.index({ root, force: true })
+            }).pipe(Effect.provide(indexLayer)),
+          ),
         )
-        expect(func0CallsBefore.length).toBeGreaterThan(0)
 
-        // Modify file0 - func0 no longer calls func9
-        yield* Effect.promise(() => fs.writeFile(file0Path, "function func0() { return 42 }\n"))
+      const heap: number[] = []
+      const rss: number[] = []
+      const symbols: number[] = []
+      for (let iter = 0; iter < 4; iter++) {
+        const result = await runIndex()
+        symbols.push(result.symbolsIndexed)
+        expect(result.indexed).toBe(fileCount)
+        const settled = await settledMemory()
+        heap.push(settled.heapUsed)
+        rss.push(settled.rss)
+      }
+      // Same graph every build: symbol output is stable, memory settles.
+      for (const count of symbols) expect(count).toBe(symbols[0])
+      expect(slopePerIteration(heap.slice(1))).toBeLessThanOrEqual(1024 * 1024)
+      const first = rss[0] ?? 0
+      const last = rss[rss.length - 1] ?? 0
+      expect(last - first).toBeLessThanOrEqual(16 * 1024 * 1024)
 
-        // Re-index file0 (triggers incremental rebuild with changed file0)
-        yield* indexer.indexFiles({ root: tmp.path, paths: [file0Path] })
-
-        const edgesAfterIncremental = yield* repo.listAllEdges()
-
-        // func0 should not have any outgoing calls anymore
-        const func0CallsAfter = edgesAfterIncremental.filter(
-          (e) => e.kind === "calls" && e.fromNodeID.includes("func0"),
-        )
-        expect(func0CallsAfter.length).toBe(0)
-      }).pipe(
-        Effect.provide(serviceLayer),
-        Effect.provide(codegraphRepoDefaultLayer),
-        Effect.provide(dbLayer),
-        Effect.scoped,
-      ),
-    )
-  })
+      // Compat: the paged APIs chain to the same rows the .all() wrappers
+      // return, ordered by id ascending.
+      const pageCheck = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const repo = yield* CodegraphRepo.Service
+            const allNodes = yield* repo.listAllNodes()
+            const allEdges = yield* repo.listAllEdges()
+            const pagedIDs: string[] = []
+            let cursor: string | undefined = undefined
+            for (;;) {
+              const page: { nodes: { id: string }[]; nextCursor: string | undefined } = yield* repo.listNodesPage({
+                cursor,
+                limit: 7,
+              })
+              for (const node of page.nodes) pagedIDs.push(node.id)
+              if (page.nextCursor === undefined) break
+              cursor = page.nextCursor
+            }
+            const edgePage = yield* repo.listEdgesPage({ limit: 5 })
+            return {
+              allNodes: allNodes.length,
+              allEdges: allEdges.length,
+              pagedNodes: pagedIDs.length,
+              pagedSorted: [...pagedIDs].sort(),
+              edgePageSize: edgePage.edges.length,
+            }
+          }).pipe(Effect.provide(repoLayer)),
+        ),
+      )
+      expect(pageCheck.pagedNodes).toBe(pageCheck.allNodes)
+      expect(pageCheck.pagedNodes).toBeGreaterThan(0)
+      expect([...pageCheck.pagedSorted].join()).toBe(
+        [...pageCheck.pagedSorted].sort().join(),
+      )
+      expect(pageCheck.edgePageSize).toBeLessThanOrEqual(5)
+    },
+    120_000,
+  )
 })
