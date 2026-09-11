@@ -3,7 +3,7 @@ import { InstanceRuntime } from "@/project/instance-runtime"
 import { Rpc } from "@/util/rpc"
 import { upgrade } from "@/cli/upgrade"
 import { Config } from "@/config/config"
-import { GlobalBus } from "@/bus/global"
+import { GlobalBus, type GlobalEvent } from "@/bus/global"
 import { ServerAuth } from "@/server/auth"
 import { writeHeapSnapshot } from "node:v8"
 import { Heap } from "@/cli/heap"
@@ -22,10 +22,13 @@ void import("@/installation/telemetry").then(async (m) => {
   await m.heartbeat()
 })
 
-// Subscribe to global events and forward them via RPC
-GlobalBus.on("event", (event) => {
+// Subscribe to global events and forward them via RPC. The handler is named
+// so shutdown can unsubscribe it — otherwise the worker leaks the listener
+// across server restarts in the same process.
+const onGlobalEvent = (event: GlobalEvent) => {
   Rpc.emit("global.event", event)
-})
+}
+GlobalBus.on("event", onGlobalEvent)
 
 let server: Awaited<ReturnType<typeof Server.listen>> | undefined
 
@@ -89,6 +92,7 @@ export const rpc = {
     }
   },
   async shutdown() {
+    GlobalBus.off("event", onGlobalEvent)
     await InstanceRuntime.disposeAllInstances()
     if (server) await server.stop(true)
   },

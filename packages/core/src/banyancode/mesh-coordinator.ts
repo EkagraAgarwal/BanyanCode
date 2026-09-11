@@ -633,6 +633,26 @@ export const layer = Layer.effect(
       })
     })
 
+    // Idempotent per-parent finalizer shared by the GC sweep (and any
+    // future dispose path): interrupts every registered consumer fiber and
+    // removes the entry. Fiber.interrupt is idempotent and deleting a
+    // missing key is a no-op, so concurrent or repeated sweeps converge on
+    // zero surviving fibers/handles instead of double-counting.
+    const sweepParent = (parentSessionID: SessionSchema.ID, parent: TrackedParent) =>
+      Effect.gen(function* () {
+        let interrupted = 0
+        for (const [, fiber] of parent.consumerHandles) {
+          yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
+          interrupted++
+        }
+        yield* Ref.update(trackedParentsRef, (m) => {
+          const next = new Map(m)
+          next.delete(parentSessionID)
+          return next
+        })
+        return interrupted
+      })
+
     const runGarbageCollection: Interface["runGarbageCollection"] = Effect.fn(
       "MeshCoordinator.runGarbageCollection",
     )(function* () {
@@ -645,18 +665,7 @@ export const layer = Layer.effect(
         const shouldSweep = parent.status === "ended" || now - parent.lastSeenAt > GC_AGE_MS
         if (!shouldSweep) continue
 
-        // Interrupt all registered consumer fibers.
-        for (const [, fiber] of parent.consumerHandles) {
-          yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
-          interrupted++
-        }
-
-        // Remove the entry.
-        yield* Ref.update(trackedParentsRef, (m) => {
-          const next = new Map(m)
-          next.delete(parentSessionID)
-          return next
-        })
+        interrupted += yield* sweepParent(parentSessionID, parent)
         swept++
       }
 

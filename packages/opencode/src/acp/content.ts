@@ -5,6 +5,12 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 
 export type PromptPart = SessionV1.TextPartInput | SessionV1.FilePartInput
 
+// Predictable bound on inline base64 payloads (~6MB decoded). The gate runs
+// BEFORE any `data:...;base64,${...}` concatenation so an oversized input
+// never materializes a second giant string, and oversized blobs prefer a
+// URI/file ref where the block carries one instead of inlining.
+export const MAX_INLINE_BASE64_CHARS = 8 * 1024 * 1024
+
 export type ReplayPart =
   | {
       type: "text"
@@ -40,6 +46,7 @@ export function contentBlockToParts(block: ContentBlock): PromptPart[] {
 
     case "image":
       if (block.data) {
+        if (block.data.length > MAX_INLINE_BASE64_CHARS) return oversizedImageRef(block)
         return [
           {
             type: "file",
@@ -50,6 +57,7 @@ export function contentBlockToParts(block: ContentBlock): PromptPart[] {
         ]
       }
       if (block.uri?.startsWith("data:")) {
+        if (block.uri.length > MAX_INLINE_BASE64_CHARS) return []
         return [
           {
             type: "file",
@@ -79,6 +87,7 @@ export function contentBlockToParts(block: ContentBlock): PromptPart[] {
         return [{ type: "text", text: block.resource.text }]
       }
       if (block.resource.mimeType) {
+        if (block.resource.blob.length > MAX_INLINE_BASE64_CHARS) return oversizedResourceRef(block.resource)
         return [
           {
             type: "file",
@@ -131,8 +140,35 @@ export function partToContentChunks(part: ReplayPart): ContentChunk[] {
   }
 }
 
-function resourceLinkToPart(link: ResourceLink): PromptPart {
-  const parsed = uriToFilePart(link.uri, link.mimeType ?? "text/plain", link.name)
+// Oversized image data prefers the block's own URI ref (http/file) over
+// inlining; without a usable URI the block is dropped to keep the bound.
+function oversizedImageRef(block: Extract<ContentBlock, { type: "image" }>): PromptPart[] {
+  const uri = block.uri
+  if (uri && !uri.startsWith("data:")) {
+    return [
+      {
+        type: "file",
+        url: uri,
+        filename: filenameFromUri(uri) ?? "image",
+        mime: block.mimeType,
+      },
+    ]
+  }
+  return []
+}
+
+// Oversized resource blobs prefer the resource URI as a file ref when it
+// resolves to one; otherwise dropped to keep the bound.
+function oversizedResourceRef(resource: {
+  uri: string
+  mimeType?: string | null
+  blob: string
+}): PromptPart[] {
+  const part = uriToFilePart(resource.uri, resource.mimeType ?? "application/octet-stream", filenameFromUri(resource.uri))
+  return part.type === "file" ? [part] : []
+}
+
+function resourceLinkToPart(link: ResourceLink): PromptPart {  const parsed = uriToFilePart(link.uri, link.mimeType ?? "text/plain", link.name)
   if (parsed.type === "file") return parsed
   return { type: "text", text: parsed.text }
 }
@@ -182,6 +218,11 @@ function filePartToContentChunks(part: Extract<ReplayPart, { type: "file" }>): C
     ]
   }
   if (!part.url.startsWith("data:")) return []
+
+  // Gate before decodeDataUrl/Buffer.from so replaying an oversized part
+  // never allocates the decoded bytes; the oversized intermediate is dropped.
+  const base64Length = part.url.length - part.url.indexOf(",") - 1
+  if (base64Length > MAX_INLINE_BASE64_CHARS) return []
 
   const data = decodeDataUrl(part.url)
   if (!data) return []

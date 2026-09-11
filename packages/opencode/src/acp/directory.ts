@@ -47,6 +47,10 @@ export interface Interface {
   readonly get: (directory: string) => Effect.Effect<Snapshot, ACPError.Error>
   readonly refresh: (directory: string) => Effect.Effect<Snapshot, ACPError.Error>
   readonly variants: (snapshot: Snapshot, model: DefaultModel) => ModelVariants | undefined
+  // Diagnostics: number of cached directory snapshots. The cache is keyed
+  // by directory (one entry per distinct directory, never evicted), so this
+  // is the growth signal to watch instead of a preemptive bound.
+  readonly size: () => Effect.Effect<number>
 }
 
 export class Loader extends Context.Service<Loader, LoaderInterface>()("@opencode/ACPDirectoryLoader") {}
@@ -195,6 +199,9 @@ export const layer = Layer.effect(
       get,
       refresh,
       variants,
+      size: Effect.fn("ACPDirectory.size")(function* () {
+        return (yield* SynchronizedRef.get(snapshots)).size
+      }),
     })
   }),
 )

@@ -57,7 +57,11 @@ import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useLeaderActive, u
 import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
-import { readLocalAttachment } from "./local-attachment"
+import {
+  MAX_LOCAL_ATTACHMENT_BYTES,
+  MAX_PASTE_ATTACHMENT_BASE64_CHARS,
+  readLocalAttachment,
+} from "./local-attachment"
 import { normalizeImportPath, pastedFilepath } from "../../util/import-path"
 export type PromptProps = {
   sessionID?: string
@@ -1488,6 +1492,15 @@ export function Prompt(props: PromptProps) {
         return
       }
       if (attachment?.type === "binary") {
+        // Gate on raw bytes BEFORE base64 conversion so an oversized file
+        // never materializes the ~4/3x intermediate string.
+        if (attachment.content.byteLength > MAX_LOCAL_ATTACHMENT_BYTES) {
+          toast.show({
+            message: `Attachment ${filename ?? "image"} exceeds the ${MAX_LOCAL_ATTACHMENT_BYTES / 1024 / 1024}MB paste limit and was skipped.`,
+            variant: "error",
+          })
+          return
+        }
         await pasteAttachment({
           filename,
           filepath,
@@ -1517,6 +1530,17 @@ export function Prompt(props: PromptProps) {
   }
 
   async function pasteAttachment(file: { filename?: string; filepath?: string; content: string; mime: string }) {
+    // Size gate before the `data:...` URL concatenation below: an oversized
+    // payload is refused here so neither this frame nor the call site retains
+    // a second giant string. File refs are not supported by the session
+    // prompt path, so there is no fallback — the paste is skipped with a toast.
+    if (file.content.length > MAX_PASTE_ATTACHMENT_BASE64_CHARS) {
+      toast.show({
+        message: `Attachment ${file.filename ?? "image"} exceeds the ${MAX_LOCAL_ATTACHMENT_BYTES / 1024 / 1024}MB paste limit and was skipped.`,
+        variant: "error",
+      })
+      return
+    }
     const currentOffset = input.cursorOffset
     const extmarkStart = currentOffset
     const pdf = file.mime === "application/pdf"

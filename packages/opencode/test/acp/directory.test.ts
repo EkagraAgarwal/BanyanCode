@@ -167,6 +167,19 @@ describe("ACP directory snapshot", () => {
     }).pipe(Effect.provide(fakeLayer([]))),
   )
 
+  it.effect("size exposes the cached snapshot count for diagnostics", () => {
+    const calls: string[] = []
+    return Effect.gen(function* () {
+      const directory = yield* Directory.Service
+      expect(yield* directory.size()).toBe(0)
+      yield* directory.get("alpha")
+      yield* directory.get("beta")
+      expect(yield* directory.size()).toBe(2)
+      yield* directory.refresh("alpha")
+      expect(yield* directory.size()).toBe(2)
+    }).pipe(Effect.provide(fakeLayer(calls)))
+  })
+
   it.effect("falls back when the default mode is not available", () =>
     Effect.sync(() => {
       expect(

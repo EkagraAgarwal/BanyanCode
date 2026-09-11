@@ -163,18 +163,26 @@ export const layer = Layer.effect(
 
         if (disabled) return cache
 
+        // Instance scope is enforced per event below (`_ctx.directory`).
+        // `events.listen` returns an Unsubscribe that must run on disposal —
+        // it does not self-register a finalizer — so collect every handle
+        // and release them before the scope-close finalizer above runs
+        // (finalizers run LIFO, so this later registration runs first).
+        const unsubscribes: Array<Effect.Effect<void>> = []
         const watch = <D extends EventV2.Definition>(
           def: D,
           fn: (data: EventV2.Data<D>) => Effect.Effect<void, unknown>,
         ) =>
-          events.listen((event) => {
-            if (event.type !== def.type || event.location?.directory !== _ctx.directory) return Effect.void
-            return fn(event.data as EventV2.Data<D>).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logError("share subscriber failed", { type: def.type, cause: cause }),
-              ),
-            )
-          })
+          events
+            .listen((event) => {
+              if (event.type !== def.type || event.location?.directory !== _ctx.directory) return Effect.void
+              return fn(event.data as EventV2.Data<D>).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logError("share subscriber failed", { type: def.type, cause: cause }),
+                ),
+              )
+            })
+            .pipe(Effect.tap((unsubscribe) => Effect.sync(() => void unsubscribes.push(unsubscribe))))
 
         yield* watch(Session.Event.Updated, (data) =>
           Effect.gen(function* () {
@@ -198,6 +206,10 @@ export const layer = Layer.effect(
           sync(data.sessionID, [{ type: "session_diff", data: structuredClone(data.diff) as SDK.SnapshotFileDiff[] }]),
         )
         yield* watch(Session.Event.Deleted, (data) => remove(data.sessionID))
+
+        yield* Effect.addFinalizer(() =>
+          Effect.forEach(unsubscribes, (unsubscribe) => unsubscribe, { discard: true }),
+        )
 
         return cache
       }),

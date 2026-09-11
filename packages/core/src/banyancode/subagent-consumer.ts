@@ -50,6 +50,21 @@ export const layer = Layer.effect(
     const messages = yield* SubagentMessagesRepo.Service
     const mesh = yield* MeshCoordinator.Service
 
+    // Idempotent per-consumer finalizer shared by every terminal path
+    // (kill message, loop return, error, interrupt). Queue.shutdown and
+    // unregisterConsumer are both safe to call repeatedly, so kill/GC and
+    // the loop's `finally` converge here instead of duplicating teardown.
+    const finalizeConsumer = (input: { sessionID: SessionSchema.ID; agent: string }, queue: Queue.Queue<SubagentMessage>) =>
+      Effect.gen(function* () {
+        // Shut the per-session queue down explicitly so the bus's
+        // subscribe() cleanup (which was moved out of `bus.subscribe`
+        // because it needed a scope) still runs when the consumer
+        // fiber exits. Safe to call repeatedly — Queue.shutdown is
+        // idempotent.
+        yield* Queue.shutdown(queue)
+        yield* mesh.unregisterConsumer(input.sessionID, input.agent)
+      })
+
     const loop = (
       input: { sessionID: SessionSchema.ID; agent: string; plan?: PlanDefinition },
       queue: Queue.Queue<SubagentMessage>,
@@ -128,7 +143,6 @@ export const layer = Layer.effect(
               }
               case "kill": {
                 yield* messages.markDelivered(msg.id, Date.now())
-                yield* mesh.unregisterConsumer(input.sessionID, input.agent)
                 return
               }
               case "checkpoint":
@@ -141,13 +155,7 @@ export const layer = Layer.effect(
             yield* messages.markDelivered(msg.id, Date.now())
           }
         } finally {
-          // Shut the per-session queue down explicitly so the bus's
-          // subscribe() cleanup (which was moved out of `bus.subscribe`
-          // because it needed a scope) still runs when the consumer
-          // fiber exits. Safe to call repeatedly — Queue.shutdown is
-          // idempotent.
-          yield* Queue.shutdown(queue)
-          yield* mesh.unregisterConsumer(input.sessionID, input.agent)
+          yield* finalizeConsumer(input, queue)
         }
       })
 

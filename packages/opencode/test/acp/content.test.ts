@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { ContentBlock } from "@agentclientprotocol/sdk"
 import { pathToFileURL } from "node:url"
-import { contentBlockToParts, partsToContentChunks, promptContentToParts } from "../../src/acp/content"
+import { contentBlockToParts, partsToContentChunks, promptContentToParts, MAX_INLINE_BASE64_CHARS } from "../../src/acp/content"
 
 describe("acp content conversion", () => {
   test("plain text block becomes a text part", () => {
@@ -155,6 +155,81 @@ describe("acp content conversion", () => {
   test("unsupported blocks are ignored", () => {
     expect(promptContentToParts([{ type: "audio", data: "AAAA", mimeType: "audio/wav" }])).toEqual([])
     expect(promptContentToParts([{ type: "unknown", text: "skip" } as unknown as ContentBlock])).toEqual([])
+  })
+})
+
+describe("acp inline size bound", () => {
+  const oversized = "A".repeat(MAX_INLINE_BASE64_CHARS + 1)
+
+  test("oversized image data prefers the block URI ref over inlining", () => {
+    expect(
+      contentBlockToParts({
+        type: "image",
+        data: oversized,
+        mimeType: "image/png",
+        uri: "https://example.com/assets/big.png",
+      }),
+    ).toEqual([
+      {
+        type: "file",
+        url: "https://example.com/assets/big.png",
+        filename: "big.png",
+        mime: "image/png",
+      },
+    ])
+  })
+
+  test("oversized image data without a usable URI is dropped", () => {
+    expect(contentBlockToParts({ type: "image", data: oversized, mimeType: "image/png" })).toEqual([])
+    expect(
+      contentBlockToParts({
+        type: "image",
+        data: oversized,
+        mimeType: "image/png",
+        uri: `data:image/png;base64,${oversized}`,
+      }),
+    ).toEqual([])
+  })
+
+  test("oversized data URI images are dropped before conversion", () => {
+    expect(
+      contentBlockToParts({
+        type: "image",
+        data: "",
+        mimeType: "image/png",
+        uri: `data:image/png;base64,${oversized}`,
+      }),
+    ).toEqual([])
+  })
+
+  test("oversized resource blobs prefer the resource URI file ref, else dropped", () => {
+    expect(
+      contentBlockToParts({
+        type: "resource",
+        resource: { uri: "file:///tmp/big.pdf", mimeType: "application/pdf", blob: oversized },
+      }),
+    ).toEqual([
+      {
+        type: "file",
+        url: "file:///tmp/big.pdf",
+        filename: "big.pdf",
+        mime: "application/pdf",
+      },
+    ])
+    expect(
+      contentBlockToParts({
+        type: "resource",
+        resource: { uri: "data:application/pdf;base64,x", mimeType: "application/pdf", blob: oversized },
+      }),
+    ).toEqual([])
+  })
+
+  test("replaying an oversized data URL part allocates nothing and yields no chunks", () => {
+    expect(
+      partsToContentChunks([
+        { type: "file", url: `data:image/png;base64,${oversized}`, filename: "big.png", mime: "image/png" },
+      ]),
+    ).toEqual([])
   })
 })
 

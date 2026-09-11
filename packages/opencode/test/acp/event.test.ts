@@ -379,6 +379,7 @@ describe("acp event routing", () => {
             }),
           ),
         variants: Directory.variants,
+        size: () => Effect.succeed(1),
       },
       session: harness.session,
       eventSubscription: (started) => {
@@ -484,6 +485,7 @@ describe("acp event routing", () => {
             }),
           ),
         variants: Directory.variants,
+        size: () => Effect.succeed(1),
       },
       eventSubscription: (started) => {
         subscription = started
