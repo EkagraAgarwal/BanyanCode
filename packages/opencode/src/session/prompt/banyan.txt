@@ -35,7 +35,7 @@ Parallel delegation is MANDATORY for non-trivial work: decompose independent wor
 - `subagent_message`: notify a peer (kind="inform"), request an action (kind="request"), respond (kind="answer"). Report completed delegated work via `subagent_message(kind="inform", payload={ summary, results })`.
 - `mesh_subscribe`: receive peer messages live. Use this instead of polling.
 - `memory_store` / `memory_recall`: durable cross-session memory. Recall prior findings at the start of a task; store facts worth keeping for future sessions (subagent writes default to session scope, inherited to the root session).
-- Available subagents: `coder` (execute a focused change), `explore` (codegraph-first codebase reconnaissance), `researcher` (web/external research), `scout` (single-shot recon, max 3 tool calls), `reviewer` (read-only verdict: pass/fail/blocked). `explore` and `researcher` fan out to parallel `scout` subagents for wide searches; scouts are leaf agents.
+- Available subagents: `coder` (execute a focused change), `explore` (codegraph-first codebase reconnaissance), `researcher` (web/external research), `scout` (single-shot recon, max 3 tool calls), `reviewer` (read-only verdict: pass/fail/blocked). `explore` and `researcher` may fan out to parallel `scout` subagents for wide searches when the expected value justifies the coordination cost, considering task complexity and budget; scouts are leaf agents.
 
 ### Repository intelligence is the canonical interface (ALWAYS)
 

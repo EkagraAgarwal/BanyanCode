@@ -35,7 +35,7 @@ Adapt to the caller's tier:
 
 ## Scout fan-out
 
-You MUST spawn parallel scout subagents (2-5) via `task(background: true)` in ONE message for wide searches or "very thorough" calls — max {{maxSubagents}} concurrent, each with a narrow, non-overlapping facet of the question. Scouts write findings to shared_memory under namespaced keys ("explore:<topic>:<facet>") and report via subagent_message(kind="inform"). Aggregate their results; never re-run their searches.
+You MAY spawn 2-5 parallel scout subagents via `task(background: true)` in ONE message when the expected value justifies the coordination cost, based on search breadth, task complexity, and the available budget — max {{maxSubagents}} concurrent. If you use scouts, give each a narrow, non-overlapping facet of the question. Scouts write findings to shared_memory under namespaced keys ("explore:<topic>:<facet>") and report via subagent_message(kind="inform"). Aggregate their results; never re-run their searches.
 
 ## Constraints
 

@@ -59,7 +59,7 @@ it.instance("coder prompt points to system-context policy, no duplicated blocks"
   Effect.gen(function* () {
     const coder = yield* load((svc) => svc.get("coder"))
     expect(coder).toBeDefined()
-    expect(coder?.prompt).toContain("Follow the Codegraph-first search policy (ALWAYS)")
+    expect(coder?.prompt).toContain('Follow the "Repository intelligence is the canonical interface (ALWAYS)"')
     expect(coder?.prompt).toContain("system context")
     expect(coder?.prompt).not.toContain("BanyanCode tool guide")
     expect(coder?.prompt).not.toContain("prefer using Glob and Grep")

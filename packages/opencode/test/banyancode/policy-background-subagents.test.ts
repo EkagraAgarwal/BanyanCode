@@ -246,15 +246,17 @@ describe("banyan orchestration block — SystemPrompt.banyan()", () => {
   )
 })
 
-describe("explore and researcher — parallel scout fan-out rendered with maxSubagents", () => {
-  it.instance("explore prompt references parallel scout fan-out + resolved maxSubagents", () =>
+describe("explore and researcher — discretionary parallel scout fan-out rendered with maxSubagents", () => {
+  it.instance("explore prompt makes scout fan-out discretionary + resolves maxSubagents", () =>
     Effect.gen(function* () {
       const _ = yield* TestInstance
       const explore = yield* Agent.Service.use((svc) => svc.get("explore"))
       expect(explore).toBeDefined()
       if (!explore) return
       const prompt = explore.prompt ?? ""
-      expect(prompt).toContain("You MUST spawn parallel scout subagents")
+      expect(prompt).toContain("You MAY spawn 2-5 parallel scout subagents")
+      expect(prompt).toContain("expected value")
+      expect(prompt).not.toMatch(/\bMUST\b.*parallel scout subagents/)
       expect(prompt).toContain("background: true")
       // {{maxSubagents}} must be rendered — no literal placeholder survives.
       expect(prompt).not.toContain("{{maxSubagents}}")
@@ -262,14 +264,16 @@ describe("explore and researcher — parallel scout fan-out rendered with maxSub
     }),
   )
 
-  it.instance("researcher prompt references parallel scout fan-out + resolved maxSubagents", () =>
+  it.instance("researcher prompt makes scout fan-out discretionary + resolves maxSubagents", () =>
     Effect.gen(function* () {
       const _ = yield* TestInstance
       const researcher = yield* Agent.Service.use((svc) => svc.get("researcher"))
       expect(researcher).toBeDefined()
       if (!researcher) return
       const prompt = researcher.prompt ?? ""
-      expect(prompt).toContain("You MUST spawn parallel scout subagents")
+      expect(prompt).toContain("You MAY spawn 2-5 parallel scout subagents")
+      expect(prompt).toContain("expected value")
+      expect(prompt).not.toMatch(/\bMUST\b.*parallel scout subagents/)
       expect(prompt).toContain("background: true")
       expect(prompt).not.toContain("{{maxSubagents}}")
       expect(prompt).toMatch(/max \d+ concurrent/)
