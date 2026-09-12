@@ -2,14 +2,17 @@ import { ToolOutput, type LLMEvent, type ProviderMetadata, type ToolResultValue,
 import { DateTime, Effect } from "effect"
 import { EventV2 } from "../../event"
 import { ModelV2 } from "../../model"
+import * as TokenAttribution from "../../banyancode/token-attribution"
 import { SessionEvent } from "../event"
 import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 
 type Input = {
   readonly sessionID: SessionSchema.ID
+  readonly parentSessionID?: SessionSchema.ID
   readonly agent: string
   readonly model: ModelV2.Ref
+  readonly tokenAttribution?: TokenAttribution.Interface
 }
 
 const safe = (value: number | undefined) => Math.max(0, Number.isFinite(value) ? (value ?? 0) : 0)
@@ -66,6 +69,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
   const timestamp = DateTime.now
   let assistantMessageID: SessionMessage.ID | undefined
   let providerFailed = false
+  const startedAt = Date.now()
 
   const startAssistant = Effect.fnUntraced(function* () {
     if (assistantMessageID !== undefined) return assistantMessageID
@@ -375,14 +379,29 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
       }
       case "step-finish":
         yield* flush()
+        const assistantMessageID = yield* startAssistant()
         yield* events.publish(SessionEvent.Step.Ended, {
           sessionID: input.sessionID,
           timestamp: yield* timestamp,
-          assistantMessageID: yield* startAssistant(),
+          assistantMessageID,
           finish: event.reason,
           cost: 0,
           tokens: tokens(event.usage),
         })
+        if (input.tokenAttribution && event.usage) {
+          yield* input.tokenAttribution.record({
+            callID: assistantMessageID,
+            modelID: input.model.id,
+            provider: input.model.providerID,
+            sessionID: input.sessionID,
+            parentSessionID: input.parentSessionID,
+            agentRole: input.agent,
+            startedAt,
+            durationMs: Date.now() - startedAt,
+            status: "success",
+            usage: event.usage,
+          })
+        }
         return
       case "finish":
         return

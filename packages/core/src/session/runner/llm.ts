@@ -11,6 +11,7 @@ import { OpenAIOptions } from "@opencode-ai/llm/protocols/utils/openai-options"
 import { Cause, DateTime, Effect, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { BanyanConfigService } from "../../banyancode/banyan-config"
+import * as TokenAttribution from "../../banyancode/token-attribution"
 import { BanyanConfig } from "../../v1/config/banyan-config"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
@@ -234,12 +235,14 @@ export const layer = Layer.effect(
         return yield* Effect.die(rebuildPreparedTurn())
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
+        parentSessionID: session.parentID,
         agent: agent.id,
         model: {
           id: ModelV2.ID.make(model.id),
           providerID: ProviderV2.ID.make(model.provider),
           ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
         },
+        tokenAttribution: Option.getOrUndefined(yield* Effect.serviceOption(TokenAttribution.Service)),
       })
       const withPublication = Semaphore.makeUnsafe(1).withPermit
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>

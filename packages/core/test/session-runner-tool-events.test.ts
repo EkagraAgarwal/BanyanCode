@@ -8,11 +8,12 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { createLLMEventPublisher } from "@opencode-ai/core/session/runner/publish-llm-event"
+import * as TokenAttribution from "@opencode-ai/core/banyancode/token-attribution"
 
 const sessionID = SessionV2.ID.make("ses_tool_event_test")
 const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
 
-const capture = () => {
+const capture = (tokenAttribution?: TokenAttribution.Interface) => {
   const published: Array<{ readonly type: string; readonly data: unknown }> = []
   const events = EventV2.Service.of({
     publish: (definition, data) =>
@@ -45,6 +46,7 @@ const capture = () => {
         id: ModelV2.ID.make("model"),
         providerID: ProviderV2.ID.make("provider"),
       },
+      tokenAttribution,
     }),
   }
 }
@@ -124,4 +126,36 @@ test("old success event data containing result still decodes", () => {
     provider: { executed: false },
   })
   expect(decoded.result).toMatchObject({ type: "content" })
+})
+
+test("step finish records local token attribution when supplied", async () => {
+  const recorded = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const attribution = yield* TokenAttribution.Service
+        const { publisher } = capture(attribution)
+        yield* publisher.publish(
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "stop",
+            usage: {
+              inputTokens: 100,
+              nonCachedInputTokens: 80,
+              cacheReadInputTokens: 20,
+              outputTokens: 30,
+              totalTokens: 130,
+            },
+          }),
+        )
+        return yield* attribution.recent()
+      }).pipe(Effect.provide(TokenAttribution.layer({ maxEvents: 2 }))),
+    ),
+  )
+  expect(recorded).toHaveLength(1)
+  expect(recorded[0]).toMatchObject({
+    sessionID,
+    agentRole: "build",
+    inputTokens: 100,
+    uncachedInputTokens: 80,
+  })
 })

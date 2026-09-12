@@ -45,6 +45,7 @@ import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SystemContextBuiltIns } from "./system-context/builtins"
 import { FetchHttpClient } from "effect/unstable/http"
+import * as TokenAttribution from "./banyancode/token-attribution"
 
 export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("@opencode/example/LocationServiceMap", {
   lookup: (ref: Location.Ref) => {
@@ -85,6 +86,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       // them here makes the interception live in the V2 runner context.
       repositoryGatewayDefaultLayer,
       investigationStateDefaultLayer,
+      TokenAttribution.defaultLayer,
     )
     const image = Image.layer.pipe(Layer.provide(services))
     const mutation = FileMutation.locationLayer.pipe(Layer.provide(services))

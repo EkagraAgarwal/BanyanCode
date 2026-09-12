@@ -176,6 +176,18 @@ export {
 } from "./trace-collector"
 export type { TraceEvent, Interface as TraceCollectorInterface } from "./trace-collector"
 export {
+  Service as TokenAttribution,
+  layer as tokenAttributionLayer,
+  defaultLayer as tokenAttributionDefaultLayer,
+} from "./token-attribution"
+export type {
+  TokenAttributionInput,
+  TokenAttributionEvent,
+  TokenAttributionStatus,
+  Options as TokenAttributionOptions,
+  Interface as TokenAttributionInterface,
+} from "./token-attribution"
+export {
   Service as RuntimeCallGraph,
   layer as runtimeCallGraphLayer,
   defaultLayer as runtimeCallGraphDefaultLayer,
