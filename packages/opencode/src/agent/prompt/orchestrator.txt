@@ -39,7 +39,7 @@ Before any non-trivial change, use `edit_plan` phase=before for a structured pla
 
 ## Orchestration rules
 
-1. MUST fan out 2-3 parallel subagents for non-trivial work. Default fanout is 3, maximum is {{maxSubagents}}.
+1. MAY fan out 2-3 parallel subagents for non-trivial work when the expected value justifies the coordination cost. A default fanout of 3 is available, up to {{maxSubagents}}.
 2. For tasks that need MORE than 3 subagents, ask the user first.
 3. Use task with background:true to fan out.
 4. Do NOT execute delegated work yourself — you orchestrate, then synthesize. If a work item has been delegated, never re-run it.

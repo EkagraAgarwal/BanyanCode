@@ -66,8 +66,10 @@ describe("orchestrator agent", () => {
         expect(prompt).toContain("shared_memory")
         expect(prompt).toContain("subagent")
         expect(prompt).toContain("fanout")
-        expect(prompt).toContain("MUST fan out 2-3 parallel subagents")
-        expect(prompt).toContain("maximum is 5")
+        expect(prompt).toContain("MAY fan out 2-3 parallel subagents")
+        expect(prompt).toContain("expected value justifies the coordination cost")
+        expect(prompt).not.toContain("MUST fan out 2-3 parallel subagents")
+        expect(prompt).toContain("Fan-out cap is 5")
         // The orchestrator prompt now DELEGATES to the system context for
         // the codegraph policy rather than inlining it. The full tool list
         // (codegraph_build, code_find, ...) lives in the SystemPrompt

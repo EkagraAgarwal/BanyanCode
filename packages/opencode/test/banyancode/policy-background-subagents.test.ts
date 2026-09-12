@@ -135,8 +135,10 @@ describe("prose agents — stripped the inline policy block, point to system con
       const prompt = orchestrator.prompt ?? ""
       expect(prompt).toContain("Repository intelligence is the canonical interface (ALWAYS)")
       expect(prompt).toContain("system context")
-      expect(prompt).toContain("MUST fan out 2-3 parallel subagents")
-      expect(prompt).toContain("maximum is 5")
+      expect(prompt).toContain("MAY fan out 2-3 parallel subagents")
+      expect(prompt).toContain("expected value justifies the coordination cost")
+      expect(prompt).not.toContain("MUST fan out 2-3 parallel subagents")
+      expect(prompt).toContain("Fan-out cap is 5")
       // Orchestrator-specific orchestration prose is preserved.
       expect(prompt).toContain("## Orchestration rules")
       expect(prompt).toContain("background:true")
@@ -303,7 +305,7 @@ describe("orchestrator — also rendered with {{maxSubagents}}", () => {
       expect(orchestrator).toBeDefined()
       if (!orchestrator) return
       const prompt = orchestrator.prompt ?? ""
-      expect(prompt).toContain("maximum is 5")
+      expect(prompt).toContain("Fan-out cap is 5")
       expect(prompt).not.toContain("{{maxSubagents}}")
     }),
   )
