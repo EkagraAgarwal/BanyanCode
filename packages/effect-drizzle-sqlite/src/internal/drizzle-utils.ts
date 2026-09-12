@@ -27,12 +27,10 @@ export function getViewSelectedFieldsRuntime(view: SQLiteViewBase) {
 }
 
 export function jitCompatCheck(isEnabled: boolean | undefined) {
-  if (!isEnabled) return false
-  try {
-    return new Function("input", '"use strict"; return input;')(true) === true
-  } catch {
-    return false
-  }
+  // The Effect adapter does not provide Drizzle's code-generation runtime. Keep
+  // the compatibility hook, but always use the interpreter-based mapper rather
+  // than probing or enabling dynamic code generation with `new Function`.
+  return false
 }
 
 export function orderSelectedFields<TColumn extends Column>(

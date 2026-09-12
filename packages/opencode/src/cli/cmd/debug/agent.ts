@@ -17,7 +17,7 @@ export const AgentCommand = effectCmd({
       })
       .option("params", {
         type: "string",
-        description: "Tool params as JSON or a JS object literal",
+        description: "Tool params as a JSON object",
       }),
   handler: (args) =>
     Effect.gen(function* () {

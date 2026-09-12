@@ -1,0 +1,21 @@
+[scanner]
+ignore_paths = [
+  "**/dist/**",
+  "**/.turbo/**",
+  "**/node_modules/**",
+  ".opencode/**",
+  "packages/sdk/src/gen/**",
+  "packages/opencode/src/generated/**",
+  "packages/desktop/**",
+  "packages/web/**",
+  "packages/app/**",
+  "packages/storybook/**",
+  "packages/console/**",
+  "packages/ui/**",
+  "packages/opencode/src/product/**",
+  "packages/tui/src/theme/**",
+  "github/README.md",
+  "packages/core/src/banyancode/langs/c.ts",
+  "packages/**/test/*",
+  "packages/slack/.env.example",
+]

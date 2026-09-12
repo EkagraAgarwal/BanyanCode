@@ -10,6 +10,12 @@ import { Effect } from "effect"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { isSqlError } from "effect/unstable/sql/SqlError"
 import { EffectDrizzleSqlite } from "../src"
+import { jitCompatCheck } from "../src/internal/drizzle-utils"
+
+test("does not enable dynamic mapper generation", () => {
+  expect(jitCompatCheck(true)).toBe(false)
+  expect(jitCompatCheck(undefined)).toBe(false)
+})
 
 const users = sqliteTable("users", {
   id: integer().primaryKey({ autoIncrement: true }),
