@@ -12,9 +12,8 @@ Generated snapshot of all visible agents, their system prompts, tools, and mesh 
 |---|---|---|---|---|---|
 | `build` | primary | yes | no | "The default agent. Executes tools based on configured permissions." | **none** (provider default) |
 | `plan` | primary | yes | no | "Plan mode. Disallows all edit tools." | **none** (provider default) |
-| `general` | subagent | yes | no | "General-purpose agent for researching complex questions and executing multi-step tasks." | `packages/opencode/src/agent/prompt/general.txt` |
 | `orchestrator` | primary | yes | no | "Decomposes complex tasks, fans out to parallel subagents, coordinates via shared memory and peer messages." | `packages/opencode/src/agent/prompt/orchestrator.txt` |
-| `coder` | subagent | yes | no | "Focused executor agent. Makes targeted code changes using codegraph-first analysis. Single task, no delegation." | `packages/opencode/src/agent/prompt/coder.txt` |
+| `coder` | subagent | yes | no | "Focused executor agent. Makes targeted code changes using codegraph-first analysis. Single task, recon-only delegation to explore/researcher." | `packages/opencode/src/agent/prompt/coder.txt` |
 | `explore` | subagent | yes | no | "Fast agent specialized for exploring codebases." | `packages/opencode/src/agent/prompt/explore.txt` |
 | `scout` | subagent | yes | no | "Fast reconnaissance agent. Single shot, return within 3 tool calls." | `packages/opencode/src/agent/prompt/scout.txt` |
 | `researcher` | subagent | yes | no | "Read-only subagent. Performs free web search via DuckDuckGo and reads external docs." | `packages/opencode/src/agent/prompt/researcher.txt` |
@@ -28,19 +27,20 @@ Hidden agents (`compaction`, `title`, `summary`) are excluded from the TUI agent
 
 | Agent | `task` (spawn) | `subagent_message` | `mesh_control` | `mesh_subscribe` |
 |---|---|---|---|---|
-| `orchestrator` | researcher/coder/explore/general/scout | allow | allow | allow |
-| `coder` | explore, scout | allow | deny | allow |
-| `explore` | scout | allow | deny | allow |
-| `scout` | deny | allow | deny | allow |
-| `researcher` | scout | allow | deny | allow |
-| `general` | explore, scout, researcher | allow | deny | allow |
-| `build` (default) | explore, scout, general | allow | deny | allow |
-| `plan` | deny | deny | deny | deny |
+| `orchestrator` | researcher/coder/explore/scout | allow | allow | allow |
+| `coder` | explore, researcher | allow | deny | allow |
+| `explore` | deny (leaf) | allow | deny | allow |
+| `scout` | deny (leaf) | allow | deny | allow |
+| `researcher` | deny (leaf) | allow | deny | allow |
+| `build` (default) | explore, scout | allow | deny | allow |
+| `plan` | explore, scout, researcher | deny | deny | deny |
 
 ## Key notes
 
-- All visible agents (primary + subagent) now reference codegraph-first search in their effective system prompt via `SystemPrompt.codegraph()` (PR C).
+- All visible agents (primary + subagent) now reference codegraph-first search in their effective system prompt via `SystemPrompt.codegraph()`.
 - The `build` agent prompt is the upstream provider default (anthropic.txt / gpt.txt / etc.). It picks up the codegraph block from the system prompt pipeline at runtime.
+- Scout fan-out removed: `explore`, `researcher`, and `scout` are leaf subagents (`task: deny`). Only `orchestrator`, `build`, `plan`, and `coder` (recon-only to explore/researcher) may spawn.
+- `explore` is read-only with `bash: deny`; `scout` has `websearch_free: allow` for non-code recon.
 - `coder` no longer denies `subagent_message` or `mesh_subscribe`. It can reply to the orchestrator and listen to peer streams.
 - `mesh_control` (steer / kill / plan_for) remains orchestrator-only. Subagents can subscribe to messages but cannot steer or kill peers.
 

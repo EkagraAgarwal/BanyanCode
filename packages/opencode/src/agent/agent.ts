@@ -279,7 +279,7 @@ export const layer = Layer.effect(
                 grep: "allow",
                 glob: "allow",
                 list: "allow",
-                bash: "allow",
+                bash: "deny",
                 webfetch: "allow",
                 websearch: "allow",
                 read: "allow",
@@ -329,10 +329,7 @@ export const layer = Layer.effect(
 
                 repository_ownership: "allow",
                 external_directory: readonlyExternalDirectory,
-                task: {
-                  "*": "deny",
-                  scout: "allow",
-                },
+                task: "deny",
               }),
               user,
             ),
@@ -344,7 +341,7 @@ export const layer = Layer.effect(
           },
           coder: {
             name: "coder",
-            description: `Focused executor agent. Makes targeted code changes using codegraph-first analysis. Single task, no delegation.`,
+            description: `Focused executor agent. Makes targeted code changes using codegraph-first analysis. Single task, recon-only delegation to explore/researcher.`,
             mode: "subagent",
             native: true,
             prompt: PROMPT_CODER,
@@ -390,7 +387,6 @@ export const layer = Layer.effect(
                 task: {
                   "*": "deny",
                   explore: "allow",
-                  scout: "allow",
                   researcher: "allow",
                 },
               }),
@@ -412,6 +408,7 @@ export const layer = Layer.effect(
                 glob: "allow",
                 list: "allow",
                 webfetch: "allow",
+                websearch_free: "allow",
                 memory_store: "allow",
                 memory_recall: "allow",
                 memory_list: "allow",
@@ -637,10 +634,7 @@ export const layer = Layer.effect(
                 banyan_typecheck: "allow",
                 banyan_test: "allow",
                 banyan_lint: "allow",
-                task: {
-                  "*": "deny",
-                  scout: "allow",
-                },
+                task: "deny",
               }),
               user,
             ),

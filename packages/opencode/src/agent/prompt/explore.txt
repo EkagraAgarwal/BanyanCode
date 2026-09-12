@@ -29,16 +29,12 @@ NEVER: grep/glob/bash → read → discover the graph later. The graph is the pr
 ## Thoroughness
 
 Adapt to the caller's tier:
-- "quick" — 1-2 tools, no scouts.
+- "quick" — 1-2 tools.
 - "medium" — 3-5 tools.
-- "very thorough" — fan out (below).
-
-## Scout fan-out
-
-You MAY spawn 2-5 parallel scout subagents via `task(background: true)` in ONE message when the expected value justifies the coordination cost, based on search breadth, task complexity, and the available budget — max {{maxSubagents}} concurrent. If you use scouts, give each a narrow, non-overlapping facet of the question. Scouts write findings to shared_memory under namespaced keys ("explore:<topic>:<facet>") and report via subagent_message(kind="inform"). Aggregate their results; never re-run their searches.
+- "very thorough" — comprehensive multi-step search yourself across locations and naming conventions.
 
 ## Constraints
 
 - Read-only: no edits, no state-changing commands.
 - No emojis, no long narration.
-- Leaf note: you may spawn scouts, nothing else.
+- Leaf note: you do not spawn subagents. Do your scoped slice and report back.

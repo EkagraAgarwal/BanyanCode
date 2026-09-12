@@ -122,9 +122,8 @@ describe("researcher agent", () => {
         const prompt = detail.prompt!
         expect(prompt).toContain("websearch_free")
         expect(prompt).toContain("READ-ONLY")
-        // Phase 3 — parallel scout fan-out is rendered with maxSubagents.
-        expect(prompt).toContain("parallel scout subagents")
-        expect(prompt).toMatch(/max \d+ concurrent/)
+        expect(prompt).not.toContain("parallel scout subagents")
+        expect(prompt).toContain("You do not spawn subagents")
       }),
     { timeout: 30_000 },
   )
