@@ -82,6 +82,9 @@ type PullRequest = {
   title: string
   url: string
   createdAt: string
+  author: {
+    login: string
+  } | null
   reactionGroups: Array<{
     content: string
     users: {
@@ -148,7 +151,12 @@ async function main() {
   const recentCount = prs.filter((pr) => new Date(pr.createdAt) >= cutoff).length
   const matching = prs
     .map((pr) => ({ ...pr, positiveReactions: positiveReactionCount(pr) }))
-    .filter((pr) => new Date(pr.createdAt) < cutoff && pr.positiveReactions < threshold)
+    .filter(
+      (pr) =>
+        pr.author?.login !== "dependabot[bot]" &&
+        new Date(pr.createdAt) < cutoff &&
+        pr.positiveReactions < threshold,
+    )
   const candidates = matching.filter((pr) => !hasPriorCleanup(pr))
   const selected = maxClose === undefined ? candidates : candidates.slice(0, maxClose)
 
@@ -205,6 +213,9 @@ async function fetchOpenPullRequests() {
               title
               url
               createdAt
+              author {
+                login
+              }
               reactionGroups {
                 content
                 users {

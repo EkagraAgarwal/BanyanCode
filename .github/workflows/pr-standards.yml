@@ -18,6 +18,12 @@ jobs:
             const pr = context.payload.pull_request;
             const login = pr.user.login;
 
+            // Dependabot PRs are exempt from issue-first and PR standards checks.
+            if (login === 'dependabot[bot]') {
+              console.log(`Skipping: PR #${pr.number} was created by Dependabot`);
+              return;
+            }
+
             // Skip PRs older than Feb 18, 2026 at 6PM EST (Feb 19, 2026 00:00 UTC)
             const cutoff = new Date('2026-02-19T00:00:00Z');
             const prCreated = new Date(pr.created_at);
@@ -164,6 +170,12 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const login = pr.user.login;
+
+            // Dependabot PRs are exempt from PR template compliance checks.
+            if (login === 'dependabot[bot]') {
+              console.log(`Skipping: PR #${pr.number} was created by Dependabot`);
+              return;
+            }
 
             // Skip PRs older than Feb 18, 2026 at 6PM EST (Feb 19, 2026 00:00 UTC)
             const cutoff = new Date('2026-02-19T00:00:00Z');
