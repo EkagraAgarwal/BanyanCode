@@ -30,9 +30,9 @@ jobs:
       matrix:
         include:
           - system: x86_64-linux
-            runner: blacksmith-4vcpu-ubuntu-2404
+            runner: ubuntu-24.04
           - system: aarch64-linux
-            runner: blacksmith-4vcpu-ubuntu-2404-arm
+            runner: ubuntu-24.04-arm
           - system: x86_64-darwin
             runner: macos-15-intel
           - system: aarch64-darwin
@@ -57,10 +57,15 @@ jobs:
           trap 'rm -f "$BUILD_LOG"' EXIT
 
           HASH=""
+          CURRENT_HASH="$(jq -r --arg sys "$SYSTEM" '.nodeModules[$sys] // empty' nix/hashes.json)"
           MAX_ATTEMPTS=3
           for ((ATTEMPT = 1; ATTEMPT <= MAX_ATTEMPTS; ATTEMPT++)); do
-            # Build with fakeHash to trigger hash mismatch and reveal correct hash
-            nix build ".#packages.${SYSTEM}.node_modules_updater" --no-link 2>&1 | tee "$BUILD_LOG" || true
+            # A matching hash succeeds without printing a mismatch; a fake or stale hash prints the correct one.
+            if nix build ".#packages.${SYSTEM}.node_modules_updater" --no-link 2>&1 | tee "$BUILD_LOG"; then
+              HASH="$CURRENT_HASH"
+              echo "Existing hash confirmed for ${SYSTEM}: $HASH"
+              break
+            fi
 
             HASH="$(nix run --inputs-from . nixpkgs#gnugrep -- -oP 'got:\s*\Ksha256-[A-Za-z0-9+/=]+' "$BUILD_LOG" | tail -n1 || true)"
 
@@ -91,7 +96,7 @@ jobs:
   update-hashes:
     needs: compute-hash
     if: github.event_name != 'pull_request'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
