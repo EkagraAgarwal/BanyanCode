@@ -262,8 +262,9 @@ export const layer = Layer.effect(
       sessionID: SessionID
       session: Session.Info
       msgs: SessionV1.WithParts[]
+      runID: string
     }) {
-      const { task, model, lastUser, sessionID, session, msgs } = input
+      const { task, model, lastUser, sessionID, session, msgs, runID } = input
       const ctx = yield* InstanceState.context
       const promptOps = yield* ops()
       const { task: taskTool } = yield* registry.named()
@@ -331,7 +332,7 @@ export const layer = Layer.effect(
           sessionID,
           abort: taskAbort.signal,
           callID: part.callID,
-          extra: { bypassAgentCheck: true, promptOps },
+             extra: { bypassAgentCheck: true, promptOps, runID },
           messages: msgs,
           metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
             Effect.gen(function* () {
@@ -1141,7 +1142,7 @@ export const layer = Layer.effect(
       }
 
       if (input.noReply === true) return message
-      return yield* loop({ sessionID: input.sessionID })
+       return yield* loop({ sessionID: input.sessionID, runID: input.runID })
     })
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
@@ -1152,8 +1153,9 @@ export const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
-    const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
-      function* (sessionID: SessionID) {
+    const runLoop: (sessionID: SessionID, runID: string, rootSessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn(
+      "SessionPrompt.run",
+    )(function* (sessionID: SessionID, runID: string, rootSessionID: SessionID) {
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
@@ -1252,8 +1254,8 @@ export const layer = Layer.effect(
           }
           const task = tasks.pop()
 
-          if (task?.type === "subtask") {
-            yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
+           if (task?.type === "subtask") {
+             yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs, runID })
             continue
           }
 
@@ -1330,6 +1332,9 @@ export const layer = Layer.effect(
             .create({
               assistantMessage: msg,
               sessionID,
+              runID,
+              parentSessionID: session.parentID,
+              rootSessionID,
               model,
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
@@ -1342,6 +1347,8 @@ export const layer = Layer.effect(
             const tools = yield* SessionTools.resolve({
               agent,
               session,
+              runID,
+              rootSessionID,
               model,
               processor: handle,
               bypassAgentCheck,
@@ -1493,7 +1500,56 @@ export const layer = Layer.effect(
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
-      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
+      const runID = input.runID ?? crypto.randomUUID()
+      const startedAt = Date.now()
+      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      let rootSession = session
+      while (rootSession.parentID) {
+        const parent = yield* sessions.get(rootSession.parentID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+        if (!parent) break
+        rootSession = parent
+      }
+      const telemetryOption = Option.getOrUndefined(yield* Effect.serviceOption(Banyan.AgentEfficiencyTelemetry))
+      const recordTelemetry = (event: {
+        readonly eventType: Banyan.AgentEfficiencyEventType
+        readonly status: "started" | "succeeded" | "failed" | "aborted"
+        readonly durationMs?: number
+      }) => {
+        if (!telemetryOption) return Effect.void
+        return Effect.exit(
+          telemetryOption.record({
+            schemaVersion: 1,
+            eventID: `run:${runID}:${event.eventType}`,
+             eventType: event.eventType as Banyan.AgentEfficiencyEventType,
+            occurredAt: Date.now(),
+            runID,
+            sessionID: input.sessionID,
+            parentSessionID: session.parentID,
+            rootSessionID: rootSession.id,
+            agentInstanceID: input.sessionID,
+            agentRole: session.agent ?? "unknown",
+            status: event.status,
+            ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
+          }),
+        ).pipe(Effect.asVoid)
+      }
+
+      yield* recordTelemetry({ eventType: "run.started", status: "started" }).pipe(Effect.forkDetach)
+      return yield* state
+        .ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID, runID, rootSession.id))
+        .pipe(
+          Effect.onExit((exit) =>
+            recordTelemetry({
+              eventType: Exit.isSuccess(exit)
+                ? "run.finished"
+                : Exit.hasInterrupts(exit)
+                  ? "run.aborted"
+                  : "run.failed",
+              status: Exit.isSuccess(exit) ? "succeeded" : Exit.hasInterrupts(exit) ? "aborted" : "failed",
+              durationMs: Date.now() - startedAt,
+            }).pipe(Effect.forkDetach),
+          ),
+        )
     })
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
@@ -1731,9 +1787,13 @@ const ModelRef = Schema.Struct({
   providerID: ProviderV2.ID,
   modelID: ModelV2.ID,
 })
+const RunID = Schema.String.check(
+  Schema.isPattern(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+)
 
 export const PromptInput = Schema.Struct({
   sessionID: SessionID,
+  runID: Schema.optional(RunID),
   messageID: Schema.optional(MessageID),
   model: Schema.optional(ModelRef),
   agent: Schema.optional(Schema.String),
@@ -1758,6 +1818,7 @@ export type PromptInput = Schema.Schema.Type<typeof PromptInput>
 
 export class LoopInput extends Schema.Class<LoopInput>("SessionPrompt.LoopInput")({
   sessionID: SessionID,
+  runID: Schema.optional(RunID),
 }) {}
 
 export const ShellInput = Schema.Struct({

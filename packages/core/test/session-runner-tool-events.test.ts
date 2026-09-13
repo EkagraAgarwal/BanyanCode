@@ -9,11 +9,12 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { createLLMEventPublisher } from "@opencode-ai/core/session/runner/publish-llm-event"
 import * as TokenAttribution from "@opencode-ai/core/banyancode/token-attribution"
+import * as AgentEfficiencyTelemetry from "@opencode-ai/core/banyancode/agent-efficiency-telemetry"
 
 const sessionID = SessionV2.ID.make("ses_tool_event_test")
 const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
 
-const capture = (tokenAttribution?: TokenAttribution.Interface) => {
+const capture = (tokenAttribution?: TokenAttribution.Interface, telemetry?: AgentEfficiencyTelemetry.Interface) => {
   const published: Array<{ readonly type: string; readonly data: unknown }> = []
   const events = EventV2.Service.of({
     publish: (definition, data) =>
@@ -47,9 +48,45 @@ const capture = (tokenAttribution?: TokenAttribution.Interface) => {
         providerID: ProviderV2.ID.make("provider"),
       },
       tokenAttribution,
+      telemetry,
     }),
   }
 }
+
+test("model lifecycle telemetry is best effort and normalized", async () => {
+  const recorded: AgentEfficiencyTelemetry.AgentEfficiencyEvent[] = []
+  const telemetry = AgentEfficiencyTelemetry.Service.of({
+    record: (event) => Effect.sync(() => void recorded.push(event)),
+    flush: () => Effect.void,
+    recent: () => Effect.succeed(recorded),
+    count: () => Effect.succeed(recorded.length),
+    prune: () => Effect.void,
+  })
+  const { publisher } = capture(undefined, telemetry)
+  await Effect.runPromise(
+    publisher.publish(
+      LLMEvent.stepFinish({
+        index: 0,
+        reason: "stop",
+        usage: { inputTokens: 100, nonCachedInputTokens: 80, cacheReadInputTokens: 20, outputTokens: 30, totalTokens: 130 },
+      }),
+    ),
+  )
+  expect(recorded.map((event) => event.eventType)).toEqual(["model.started", "model.finished"])
+  expect(recorded[1]).toMatchObject({
+    status: "succeeded",
+    metadata: {
+      provider: "provider",
+      requested_model: "model",
+      input_tokens: 100,
+      uncached_input_tokens: 80,
+      cached_input_tokens: 20,
+      output_tokens: 30,
+      total_tokens: 130,
+      stop_reason: "stop",
+    },
+  })
+})
 
 const call = LLMEvent.toolCall({ id: "call-image", name: "read", input: { path: "pixel.png" } })
 const result = LLMEvent.toolResult({

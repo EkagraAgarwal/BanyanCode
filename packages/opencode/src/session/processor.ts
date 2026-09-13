@@ -2,7 +2,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Image } from "@/image/image"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema, Option } from "effect"
 import * as Stream from "effect/Stream"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
@@ -31,6 +31,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import * as DateTime from "effect/DateTime"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ToolOutput, Usage, type LLMEvent } from "@opencode-ai/llm"
+import { Banyan } from "@opencode-ai/core/banyancode"
 
 const DOOM_LOOP_THRESHOLD = 3
 export type Result = "compact" | "stop" | "continue"
@@ -56,6 +57,9 @@ export interface Handle {
 type Input = {
   assistantMessage: SessionV1.Assistant
   sessionID: SessionID
+  runID?: string
+  parentSessionID?: SessionID
+  rootSessionID?: SessionID
   model: Provider.Model
 }
 
@@ -110,6 +114,7 @@ export const layer = Layer.effect(
     const database = yield* Database.Service
 
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
+      const telemetryOption = yield* Effect.serviceOption(Banyan.AgentEfficiencyTelemetry)
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.
@@ -130,6 +135,52 @@ export const layer = Layer.effect(
       }
       const mirrorAssistant = flags.experimentalEventSystem && !input.assistantMessage.summary
       let aborted = false
+      let modelCallID = crypto.randomUUID()
+      let telemetryUsage:
+        | {
+            readonly inputTokens?: number
+            readonly nonCachedInputTokens?: number
+            readonly outputTokens?: number
+            readonly reasoningTokens?: number
+            readonly cacheReadInputTokens?: number
+            readonly cacheWriteInputTokens?: number
+            readonly totalTokens?: number
+          }
+        | undefined
+      let telemetryCost: number | undefined
+      let telemetryFinishReason: string | undefined
+      let telemetryLatencyMs: number | undefined
+      let telemetryErrorCategory: string | undefined
+      let retryCount = 0
+
+      const recordTelemetry = (event: {
+        eventType: Banyan.AgentEfficiencyEventType
+        status: "started" | "succeeded" | "failed" | "aborted"
+        durationMs?: number
+        errorCategory?: string
+        metadata?: Record<string, unknown>
+      }) => {
+        if (Option.isNone(telemetryOption)) return Effect.void
+        return Effect.exit(
+          telemetryOption.value.record({
+            schemaVersion: 1,
+            eventID: `model:${modelCallID}:${event.eventType}`,
+            eventType: event.eventType,
+            occurredAt: Date.now(),
+            runID: input.runID ?? input.sessionID,
+            sessionID: input.sessionID,
+            parentSessionID: input.parentSessionID,
+            rootSessionID: input.rootSessionID,
+            agentInstanceID: input.sessionID,
+            agentRole: input.assistantMessage.agent,
+            modelCallID,
+            status: event.status,
+            ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
+            ...(event.errorCategory === undefined ? {} : { errorCategory: event.errorCategory.slice(0, 64) }),
+            ...(event.metadata === undefined ? {} : { metadata: event.metadata }),
+          }),
+        ).pipe(Effect.asVoid)
+      }
 
       const parse = (e: unknown) =>
         MessageV2.fromError(e, {
@@ -726,6 +777,7 @@ export const layer = Layer.effect(
           }
 
           case "provider-error":
+            telemetryErrorCategory = "provider_error"
             throw new Error(value.message)
 
           case "step-start":
@@ -755,8 +807,12 @@ export const layer = Layer.effect(
               usage: value.usage ?? new Usage({}),
               metadata: value.providerMetadata,
             })
+            telemetryUsage = value.usage
+            telemetryCost = usage.cost
+            telemetryFinishReason = value.reason
             const now = Date.now()
             const stepDurationMs = ctx.stepStartedAt !== undefined ? now - ctx.stepStartedAt : 0
+            telemetryLatencyMs = stepDurationMs > 0 ? stepDurationMs : undefined
             const ttftMs =
               ctx.firstTextAt !== undefined && ctx.stepStartedAt !== undefined
                 ? ctx.firstTextAt - ctx.stepStartedAt
@@ -996,6 +1052,7 @@ export const layer = Layer.effect(
         const error = parse(e)
         yield* flushV2Fragments()
         if (SessionV1.ContextOverflowError.isInstance(error)) {
+          telemetryErrorCategory = "context_overflow"
           if ((yield* config.get()).compaction?.auto === false && !ctx.assistantMessage.summary) {
             ctx.assistantMessage.error = error
             ctx.assistantMessage.finish = "error"
@@ -1021,14 +1078,15 @@ export const layer = Layer.effect(
             })
           }
         }
-ctx.assistantMessage.error = error
-          ctx.assistantMessage.finish = "error"
-          yield* events.publish(Session.Event.Error, {
-            sessionID: ctx.assistantMessage.sessionID,
-            error: ctx.assistantMessage.error,
-          })
-          yield* status.set(ctx.sessionID, { type: "idle" })
+        telemetryErrorCategory ??= "model_error"
+        ctx.assistantMessage.error = error
+        ctx.assistantMessage.finish = "error"
+        yield* events.publish(Session.Event.Error, {
+          sessionID: ctx.assistantMessage.sessionID,
+          error: ctx.assistantMessage.error,
         })
+        yield* status.set(ctx.sessionID, { type: "idle" })
+      })
 
       const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
         yield* Effect.logInfo("process", {
@@ -1037,6 +1095,24 @@ ctx.assistantMessage.error = error
         })
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
+        aborted = false
+        modelCallID = crypto.randomUUID()
+        telemetryUsage = undefined
+        telemetryCost = undefined
+        telemetryFinishReason = undefined
+        telemetryLatencyMs = undefined
+        telemetryErrorCategory = undefined
+        retryCount = 0
+        const startedAt = Date.now()
+        yield* recordTelemetry({
+          eventType: "model.started",
+          status: "started",
+          metadata: {
+            assistant_message_id: input.assistantMessage.id,
+            provider: input.model.providerID,
+            requested_model: input.model.id,
+          },
+        }).pipe(Effect.forkDetach)
 
         return yield* Effect.gen(function* () {
           yield* Effect.gen(function* () {
@@ -1069,6 +1145,8 @@ ctx.assistantMessage.error = error
                 provider: input.model.providerID,
                 parse,
                 set: (info) => {
+                  retryCount = Math.max(retryCount, info.attempt)
+                  telemetryErrorCategory = undefined
                   // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
                   const event = mirrorAssistant
                     ? events.publish(SessionEvent.Retried, {
@@ -1097,7 +1175,46 @@ ctx.assistantMessage.error = error
               }),
             ),
             Effect.catch(halt),
-            Effect.ensuring(cleanup()),
+            Effect.ensuring(
+              Effect.gen(function* () {
+                yield* cleanup()
+                const status = aborted ? "aborted" : telemetryErrorCategory ? "failed" : "succeeded"
+                yield* recordTelemetry({
+                  eventType: `model.${status === "succeeded" ? "finished" : status}`,
+                  status,
+                  durationMs: Date.now() - startedAt,
+                  errorCategory: aborted ? "interrupted" : telemetryErrorCategory,
+                  metadata: {
+                    assistant_message_id: input.assistantMessage.id,
+                    provider: input.model.providerID,
+                    requested_model: input.model.id,
+                    ...(telemetryFinishReason === undefined ? {} : { stop_reason: telemetryFinishReason }),
+                    ...(telemetryLatencyMs === undefined ? {} : { latency_ms: telemetryLatencyMs }),
+                    ...(retryCount === 0 ? {} : { retry_count: retryCount }),
+                    ...(telemetryUsage === undefined
+                      ? {}
+                      : {
+                          input_tokens: telemetryUsage.inputTokens,
+                          uncached_input_tokens:
+                            telemetryUsage.nonCachedInputTokens ??
+                            (telemetryUsage.inputTokens === undefined ||
+                            telemetryUsage.cacheReadInputTokens === undefined ||
+                            telemetryUsage.cacheWriteInputTokens === undefined
+                              ? undefined
+                              : telemetryUsage.inputTokens -
+                                telemetryUsage.cacheReadInputTokens -
+                                telemetryUsage.cacheWriteInputTokens),
+                          output_tokens: telemetryUsage.outputTokens,
+                          reasoning_tokens: telemetryUsage.reasoningTokens,
+                          cached_input_tokens: telemetryUsage.cacheReadInputTokens,
+                          cache_write_tokens: telemetryUsage.cacheWriteInputTokens,
+                          total_tokens: telemetryUsage.totalTokens,
+                        }),
+                    ...(telemetryCost === undefined ? {} : { total_cost: telemetryCost }),
+                  },
+                }).pipe(Effect.forkDetach)
+              }),
+            ),
           )
 
           if (ctx.needsCompaction) return "compact"

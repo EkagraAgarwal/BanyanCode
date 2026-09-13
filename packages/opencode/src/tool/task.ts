@@ -164,6 +164,7 @@ export const TaskTool = Tool.define(
       const session = params.task_id
         ? yield* sessions.get(SessionID.make(params.task_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
+      const isFreshSpawn = !session
       const parent = yield* sessions.get(ctx.sessionID)
       const childPermission = deriveSubagentSessionPermission({
         parentSessionPermission: parent.permission ?? [],
@@ -199,6 +200,40 @@ export const TaskTool = Tool.define(
             ),
           ],
         }))
+
+      const parentRunID = typeof ctx.extra?.runID === "string" ? ctx.extra.runID : undefined
+      const childRunID = parentRunID ?? crypto.randomUUID()
+      const telemetryOption = yield* Effect.serviceOption(Banyan.AgentEfficiencyTelemetry)
+      const recordTelemetry = (input: {
+        eventType: Banyan.AgentEfficiencyEventType
+        status?: "started" | "succeeded" | "failed" | "aborted"
+        durationMs?: number
+        runID?: string
+      }): Effect.Effect<void, never, never> => {
+        if (Option.isNone(telemetryOption)) return Effect.void
+        return Effect.exit(
+          telemetryOption.value.record({
+            schemaVersion: 1,
+            eventID: `agent:${nextSession.id}:${ctx.callID}:${input.eventType}`,
+            eventType: input.eventType,
+            occurredAt: Date.now(),
+            runID: input.runID ?? childRunID,
+            sessionID: nextSession.id,
+            parentSessionID: ctx.sessionID,
+            agentInstanceID: nextSession.id,
+            agentRole: next.name,
+            taskID: nextSession.id,
+            toolCallID: ctx.callID,
+            status: input.status,
+            durationMs: input.durationMs,
+            metadata: { background: runInBackground, parentAgent: ctx.agent },
+          }),
+        ).pipe(Effect.asVoid)
+      }
+
+      if (isFreshSpawn) {
+        yield* recordTelemetry({ eventType: "agent.spawned", runID: childRunID }).pipe(Effect.forkDetach)
+      }
 
       // Start a SubagentConsumer for this new subagent session so it can
       // receive peer messages addressed to it (replies, kills, plans, etc).
@@ -296,19 +331,37 @@ export const TaskTool = Tool.define(
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
-        const parts = yield* ops.resolvePromptParts(params.prompt)
-        const result = yield* ops.prompt({
-          messageID: MessageID.ascending(),
-          sessionID: nextSession.id,
-          model: {
-            modelID: ModelV2.ID.make(model.modelID),
-            providerID: ProviderV2.ID.make(model.providerID),
-          },
-          variant: next.model ? undefined : variant,
-          agent: next.name,
-          parts,
-        })
-        return result.parts.findLast((item) => item.type === "text")?.text ?? ""
+        const startedAt = Date.now()
+        yield* recordTelemetry({ eventType: "agent.started", status: "started", runID: childRunID }).pipe(Effect.forkDetach)
+        return yield* Effect.gen(function* () {
+          const parts = yield* ops.resolvePromptParts(params.prompt)
+          const result = yield* ops.prompt({
+            messageID: MessageID.ascending(),
+            sessionID: nextSession.id,
+            runID: childRunID,
+            model: {
+              modelID: ModelV2.ID.make(model.modelID),
+              providerID: ProviderV2.ID.make(model.providerID),
+            },
+            variant: next.model ? undefined : variant,
+            agent: next.name,
+            parts,
+          })
+          return result.parts.findLast((item) => item.type === "text")?.text ?? ""
+        }).pipe(
+          Effect.onExit((exit) =>
+            recordTelemetry({
+              eventType: Exit.isSuccess(exit)
+                ? "agent.finished"
+                : Exit.hasInterrupts(exit)
+                  ? "agent.aborted"
+                  : "agent.failed",
+              status: Exit.isSuccess(exit) ? "succeeded" : Exit.hasInterrupts(exit) ? "aborted" : "failed",
+              durationMs: Date.now() - startedAt,
+              runID: childRunID,
+            }).pipe(Effect.forkDetach),
+          ),
+        )
       })
 
       const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (

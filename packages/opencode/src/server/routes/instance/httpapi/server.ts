@@ -268,6 +268,7 @@ export function createRoutes(
       Skill.defaultLayer,
       Todo.defaultLayer,
       ToolRegistry.defaultLayer,
+      Banyan.agentEfficiencyTelemetryDefaultLayer(),
       Vcs.defaultLayer,
       Workspace.defaultLayer,
       Worktree.appLayer,

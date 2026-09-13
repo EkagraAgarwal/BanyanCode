@@ -60,6 +60,12 @@ export const Info = Schema.Struct({
   // Install telemetry consent (specs/banyancode/install-telemetry.md Phase 2).
   // Default on; "off" opts out. Env overrides: BANYANCODE_TELEMETRY=off, DO_NOT_TRACK=1.
   banyancode_telemetry: Schema.optional(Schema.Union([Schema.Literal("on"), Schema.Literal("off")])),
+  // Detailed agent-efficiency telemetry is local-only and independent from
+  // install telemetry. It is enabled by default so local run reports work;
+  // set it to "off" to avoid writing the telemetry ledger.
+  banyancode_agent_telemetry: Schema.optional(Schema.Union([Schema.Literal("on"), Schema.Literal("off")])),
+  banyancode_agent_telemetry_retention_days: Schema.optional(Schema.Number),
+  banyancode_agent_telemetry_max_events: Schema.optional(Schema.Number),
   banyancode_telegram_enabled: Schema.optional(Schema.Boolean),
   banyancode_telegram_bot_token: Schema.optional(Schema.String),
   banyancode_telegram_webhook_secret: Schema.optional(Schema.String),
@@ -195,4 +201,3 @@ export type AgentConfig = typeof Info.Type extends { agent?: infer A }
       ? T
       : never
   : never
-
