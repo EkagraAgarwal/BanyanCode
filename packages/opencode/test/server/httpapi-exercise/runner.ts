@@ -248,7 +248,7 @@ function fakeLlmConfig(url: string): Partial<ConfigV1.Info> {
           },
         },
         options: {
-          apiKey: "test-key",
+          apiKey: "<test-key>",
           baseURL: url,
         },
       },

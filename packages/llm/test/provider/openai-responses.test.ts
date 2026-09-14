@@ -160,7 +160,7 @@ describe("OpenAI Responses route", () => {
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
         LLM.updateRequest(request, {
-          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responsesWebSocket(
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "<provider-credential>" }).responsesWebSocket(
             "gpt-4.1-mini",
           ),
         }),
@@ -208,7 +208,7 @@ describe("OpenAI Responses route", () => {
       )
       const response = yield* LLMClient.generate(
         LLM.request({
-          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responsesWebSocket(
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "<provider-credential>" }).responsesWebSocket(
             "gpt-4.1-mini",
           ),
           prompt: "Say hello.",
@@ -216,7 +216,7 @@ describe("OpenAI Responses route", () => {
       ).pipe(Effect.provide(LLMClient.layer.pipe(Layer.provide(deps))))
 
       expect(response.text).toBe("Hi")
-      expect(opened).toEqual([{ url: "wss://api.openai.test/v1/responses", authorization: "Bearer test" }])
+      expect(opened).toEqual([{ url: "wss://api.openai.test/v1/responses", authorization: "Bearer <provider-credential>" }])
       expect(closed).toBe(true)
       expect(sent).toHaveLength(1)
       expect(JSON.parse(sent[0])).toEqual({
@@ -268,8 +268,8 @@ describe("OpenAI Responses route", () => {
         LLM.updateRequest(request, {
           model: Azure.configure({
             baseURL: "https://opencode-test.openai.azure.com/openai/v1/",
-            apiKey: "azure-key",
-            headers: { authorization: "Bearer stale" },
+            apiKey: "<azure-credential>",
+            headers: { authorization: "Bearer <stale-credential>" },
           }).responses("gpt-4.1-mini"),
         }),
       ).pipe(
@@ -278,7 +278,7 @@ describe("OpenAI Responses route", () => {
             Effect.gen(function* () {
               const web = yield* HttpClientRequest.toWeb(input.request).pipe(Effect.orDie)
               expect(web.url).toBe("https://opencode-test.openai.azure.com/openai/v1/responses?api-version=v1")
-              expect(web.headers.get("api-key")).toBe("azure-key")
+              expect(web.headers.get("api-key")).toBe("<azure-credential>")
               expect(web.headers.get("authorization")).toBeNull()
               return input.respond(sseEvents({ type: "response.completed", response: {} }), {
                 headers: { "content-type": "text/event-stream" },
@@ -316,7 +316,7 @@ describe("OpenAI Responses route", () => {
       LLM.updateRequest(request, {
         model: OpenAI.configure({
           baseURL: "https://api.openai.test/v1/",
-          auth: Auth.bearer("oauth-token"),
+          auth: Auth.bearer("<oauth-credential>"),
         }).responses("gpt-4.1-mini"),
       }),
     ).pipe(
@@ -324,7 +324,7 @@ describe("OpenAI Responses route", () => {
         dynamicResponse((input) =>
           Effect.gen(function* () {
             const web = yield* HttpClientRequest.toWeb(input.request).pipe(Effect.orDie)
-            expect(web.headers.get("authorization")).toBe("Bearer oauth-token")
+            expect(web.headers.get("authorization")).toBe("Bearer <oauth-credential>")
             return input.respond(sseEvents({ type: "response.completed", response: {} }), {
               headers: { "content-type": "text/event-stream" },
             })

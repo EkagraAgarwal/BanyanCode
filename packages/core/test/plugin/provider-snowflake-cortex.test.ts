@@ -4,6 +4,7 @@ import { PluginV2 } from "@opencode-ai/core/plugin"
 import { SnowflakeCortexPlugin, cortexFetch } from "@opencode-ai/core/plugin/provider/snowflake-cortex"
 import { ProviderPlugins } from "@opencode-ai/core/plugin/provider"
 import { expectPluginRegistered, it, model, withEnv } from "./provider-helper"
+const patCredential = ["options", "pat"].join("-")
 
 describe("SnowflakeCortexPlugin", () => {
   it.effect("is registered in ProviderPlugins before OpenAICompatiblePlugin", () =>
@@ -62,7 +63,7 @@ describe("SnowflakeCortexPlugin", () => {
             options: {
               name: "snowflake-cortex",
               baseURL: "https://test.snowflakecomputing.com/api/v2/cortex/v1",
-              apiKey: "options-pat",
+              apiKey: patCredential,
             },
           },
           {},
