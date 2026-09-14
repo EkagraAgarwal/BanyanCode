@@ -12,7 +12,6 @@ const DAY_MS = 24 * 60 * 60 * 1000
 // from graph-staleness.ts so the warning surface and the rebuild trigger
 // share one source of truth. Callers can override per `ensureReady` call.
 const DEFAULT_THRESHOLD_MS = STALENESS_AGE_HIGH_MS
-const SEVEN_DAYS_MS = STALENESS_AGE_HIGH_MS
 
 // Phase 8 follow-up (auto-build false triggers): canonicalize a root the same
 // way `WorkspaceIdentity.identityForRoot` does at build time (realpath, with a
@@ -42,9 +41,42 @@ export const ReadinessResult = Schema.Struct({
 
 export type ReadinessResult = typeof ReadinessResult.Type
 
+// Readiness classification split: needsBuild (missing meta / empty table,
+// reconciled with force:false), needsSync (per-file drift, background only),
+// forceReindex (schema mismatch — the sole force:true trigger), routingError
+// (indexed_root mismatch — a routing failure, never a rebuild).
+export const classifyReadiness = (input: {
+  readonly meta: CodegraphMeta | undefined
+  readonly fileCount: number
+  readonly root: string
+}): {
+  readonly needsBuild: boolean
+  readonly forceReindex: boolean
+  readonly routingError: string | undefined
+} => {
+  if (!input.meta) return { needsBuild: true, forceReindex: false, routingError: undefined }
+  if (input.fileCount === 0) return { needsBuild: true, forceReindex: false, routingError: undefined }
+  if (input.meta.schemaVersion !== CODEGRAPH_SCHEMA_VERSION) {
+    return { needsBuild: false, forceReindex: true, routingError: undefined }
+  }
+  if (
+    input.meta.indexedRoot !== undefined &&
+    canonicalRoot(input.meta.indexedRoot) !== canonicalRoot(input.root)
+  ) {
+    return {
+      needsBuild: false,
+      forceReindex: false,
+      routingError: `indexed_root mismatch: store holds '${input.meta.indexedRoot}' but caller resolved '${input.root}'`,
+    }
+  }
+  return { needsBuild: false, forceReindex: false, routingError: undefined }
+}
+
 export interface Interface {
   readonly ensureReady: (input: {
     root: string
+    // Cached-reconciliation warning interval: age beyond it attaches a
+    // warning, never a rebuild. Defaults to the high staleness threshold.
     thresholdMs?: number
   }) => Effect.Effect<ReadinessResult, never, never>
   readonly status: () => Effect.Effect<ReadinessResult, never, never>
@@ -107,39 +139,31 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const startMs = Date.now()
         const meta = yield* repo.getMeta()
-        // Only need to know whether any file row exists — COUNT(*) avoids
-        // materializing the whole file table just to check emptiness.
         const fileCount = yield* repo.countFiles()
-        // Phase 1 (freshness): per-file drift — rows whose mtime is newer
-        // than their indexed_at. Surface it as `changedFiles` so callers
-        // can see that files changed after the graph snapshot even when the
-        // graph is structurally valid (meta present, files indexed, root
-        // unchanged). Never a rebuild trigger; age stays advisory.
         const staleCount = meta ? yield* repo.countStaleFiles() : 0
+        const classification = classifyReadiness({ meta, fileCount, root })
 
-        // Phase 2: rebuild triggers. The mtime heuristic is gone — content
-        // hash is the real signal and CodegraphIndexer refreshes
-        // `indexed_at` on cache hits (see `bumpIndexedAt`). We only force
-        // a rebuild when the graph is structurally invalid (no meta,
-        // empty file table) or when the indexed root/schema moved.
-        const rootChanged = !!meta && meta.indexedRoot !== undefined && canonicalRoot(meta.indexedRoot) !== root
-        const schemaStale = !!meta && meta.schemaVersion !== CODEGRAPH_SCHEMA_VERSION
-        const force = !meta || fileCount === 0 || rootChanged || schemaStale
+        if (classification.routingError) {
+          return {
+            reason: "failed",
+            autoBuilt: false,
+            ...metaFields(meta),
+            changedFiles: staleCount,
+            error: classification.routingError,
+          } satisfies ReadinessResult
+        }
 
-        // Phase 2: age is a WARNING, not a rebuild trigger.
+        // thresholdMs is the cached-reconciliation warning interval: age
+        // beyond it is advisory only, never a rebuild trigger.
         const ageMs = meta?.graphBuiltAt ? Date.now() - meta.graphBuiltAt : Infinity
         const ageWarning =
-          meta?.graphBuiltAt && ageMs > SEVEN_DAYS_MS
+          meta?.graphBuiltAt && ageMs > thresholdMs
             ? `graph is ${Math.floor(ageMs / DAY_MS)} day${
                 Math.floor(ageMs / DAY_MS) !== 1 ? "s" : ""
               } old; consider rebuilding before editing`
             : undefined
 
-        if (!force) {
-          // Phase 2: shortcut the hot path. A usable graph exists and is
-          // structurally valid — return `ready` immediately so caller
-          // doesn't block on a 50-500ms poll loop. Drift is handled in the
-          // background by CodegraphAutoUpdate.
+        if (!classification.needsBuild && !classification.forceReindex) {
           const result: ReadinessResult = {
             reason: "ready",
             autoBuilt: false,
@@ -150,16 +174,22 @@ export const layer = Layer.effect(
           return result
         }
 
-        // Worth rebuilding. Suppress the old 24h tripping — honor the
-        // caller's threshold only when one of the structural conditions
-        // (missing meta, empty files, root change, schemaStale) is also
-        // true. Without that, we'd ignore the threshold entirely.
-        yield* buildService.start({ root, force: true })
+        yield* buildService.start({ root, force: classification.forceReindex })
 
         let currentStatus = yield* buildService.status()
-        while (currentStatus.status === "running") {
+        let polls = 0
+        while (currentStatus.status === "running" && polls < 60) {
           yield* Effect.sleep("500 millis")
           currentStatus = yield* buildService.status()
+          polls++
+        }
+        if (currentStatus.status === "running") {
+          return {
+            reason: "building",
+            autoBuilt: true,
+            durationMs: Date.now() - startMs,
+            ...metaFields(meta),
+          } satisfies ReadinessResult
         }
 
         const durationMs = Date.now() - startMs
