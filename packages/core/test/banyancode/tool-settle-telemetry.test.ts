@@ -14,6 +14,7 @@ import { Tool } from "@opencode-ai/core/tool/tool"
 import { ToolCall } from "@opencode-ai/llm"
 import { randomUUID } from "node:crypto"
 import { ToolTelemetry, type ToolRuntimeEvent } from "../../src/banyancode/tool-telemetry"
+import * as AgentEfficiencyTelemetry from "../../src/banyancode/agent-efficiency-telemetry"
 
 const sessionID = "ses_phase1_5_settle"
 const messageID = "msg_phase1_5_settle"
@@ -168,7 +169,7 @@ describe("Tool.settle telemetry", () => {
     expect(executed!.validatedInput).toEqual({ foo: "bar" })
   })
 
-  test("settle succeeds without Telemetry in scope", async () => {
+test("settle succeeds without Telemetry in scope", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const tool = Tool.make({
@@ -209,4 +210,36 @@ describe("Tool.settle telemetry", () => {
     const raw = captured.current.find((e) => e.kind === "raw")!
     expect(raw.rawInput).toEqual(callInput)
   })
+})
+
+test("emits sanitized agent-efficiency lifecycle events", async () => {
+  const captured: { current: ToolRuntimeEvent[] } = { current: [] }
+  const efficiencyEvents: AgentEfficiencyTelemetry.AgentEfficiencyEvent[] = []
+  const efficiency = AgentEfficiencyTelemetry.Service.of({
+    record: (event) => Effect.sync(() => void efficiencyEvents.push(event)),
+    flush: () => Effect.void,
+    recent: () => Effect.succeed(efficiencyEvents),
+    count: () => Effect.succeed(efficiencyEvents.length),
+    prune: () => Effect.void,
+  })
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const tool = Tool.make({
+        description: "efficiency lifecycle",
+        input: Schema.Struct({ query: Schema.String }),
+        output: Schema.Struct({ ok: Schema.Literal(true) }),
+        execute: () => Effect.succeed({ ok: true as const }),
+      })
+      yield* Tool.settle(tool, makeCall("efficiency_tool", { query: "secret" }), makeContext())
+    }).pipe(
+      Effect.provideService(ToolTelemetry.Service, buildCaptureService(captured)),
+      Effect.provideService(AgentEfficiencyTelemetry.Service, efficiency),
+    ),
+  )
+
+  expect(efficiencyEvents.map((event) => event.eventType)).toEqual(["tool.started", "tool.finished"])
+  expect(efficiencyEvents[0]).not.toHaveProperty("rawInput")
+  expect(efficiencyEvents[0]?.metadata).toEqual({ tool_name: "efficiency_tool", model: "unknown" })
+  expect(efficiencyEvents[1]?.durationMs).toBeGreaterThanOrEqual(0)
 })

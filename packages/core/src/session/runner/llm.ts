@@ -11,6 +11,7 @@ import { OpenAIOptions } from "@opencode-ai/llm/protocols/utils/openai-options"
 import { Cause, DateTime, Effect, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { BanyanConfigService } from "../../banyancode/banyan-config"
+import * as AgentEfficiencyTelemetry from "../../banyancode/agent-efficiency-telemetry"
 import * as TokenAttribution from "../../banyancode/token-attribution"
 import { BanyanConfig } from "../../v1/config/banyan-config"
 import { Config } from "../../config"
@@ -108,6 +109,13 @@ export const layer = Layer.effect(
       if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
       return session
     })
+    const getRootSession: (session: SessionSchema.Info) => Effect.Effect<SessionSchema.Info> = Effect.fn(
+      "SessionRunner.getRootSession",
+    )(function* (session: SessionSchema.Info) {
+      if (!session.parentID) return session
+      const parent = yield* store.get(session.parentID)
+      return parent ? yield* getRootSession(parent) : session
+    })
 
     const getContext = Effect.fn("SessionRunner.getContext")(function* (sessionID: SessionSchema.ID) {
       return yield* store.context(sessionID)
@@ -178,6 +186,7 @@ export const layer = Layer.effect(
       recoverOverflow?: typeof compaction.compactAfterOverflow,
     ) {
       const session = yield* getSession(sessionID)
+      const rootSession = yield* getRootSession(session)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
       const agent = yield* agents.select(session.agent)
@@ -234,15 +243,19 @@ export const layer = Layer.effect(
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(rebuildPreparedTurn())
       const publisher = createLLMEventPublisher(events, {
-        sessionID: session.id,
-        parentSessionID: session.parentID,
-        agent: agent.id,
+         sessionID: session.id,
+         parentSessionID: session.parentID,
+         rootSessionID: rootSession.id,
+         runID: rootSession.id,
+         agentInstanceID: session.id,
+         agent: agent.id,
         model: {
           id: ModelV2.ID.make(model.id),
           providerID: ProviderV2.ID.make(model.provider),
           ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
         },
         tokenAttribution: Option.getOrUndefined(yield* Effect.serviceOption(TokenAttribution.Service)),
+        telemetry: Option.getOrUndefined(yield* Effect.serviceOption(AgentEfficiencyTelemetry.Service)),
       })
       const withPublication = Semaphore.makeUnsafe(1).withPermit
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
@@ -250,6 +263,7 @@ export const layer = Layer.effect(
       let overflowFailure: ProviderErrorEvent | undefined
       if (!(yield* SessionContextEpoch.current(db, session.id, agent.id, system.revision)))
         return yield* Effect.die(rebuildPreparedTurn())
+      yield* publisher.startTelemetry()
       const providerStream = llm.stream(request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
@@ -266,9 +280,12 @@ export const layer = Layer.effect(
             const assistantMessageID = yield* publisher.assistantMessageID(event.id)
             yield* Effect.uninterruptibleMask((restore) =>
               restore(
-                toolMaterialization.settle({
-                  sessionID: session.id,
-                  agent: agent.id,
+                 toolMaterialization.settle({
+                   sessionID: session.id,
+                   runID: rootSession.id,
+                   parentSessionID: session.parentID,
+                   rootSessionID: rootSession.id,
+                   agent: agent.id,
                   assistantMessageID,
                   call: event,
                 }),
@@ -301,8 +318,10 @@ export const layer = Layer.effect(
             !publisher.hasAssistantStarted() &&
             isContextOverflowFailure(overflowFailure ?? failure) &&
             (yield* restore(recoverOverflow({ sessionID: session.id, entries, model, request })))
-          )
+          ) {
+            yield* withPublication(publisher.finish("failed", { errorCategory: "context_overflow" }))
             return yield* Effect.die(continueAfterOverflowCompaction)
+          }
           if (overflowFailure) yield* publish(overflowFailure)
           const llmFailure = failure instanceof LLMError ? failure : undefined
           if (llmFailure && !publisher.hasProviderError()) {
@@ -321,6 +340,7 @@ export const layer = Layer.effect(
           if (settled._tag === "Failure" && isQuestionRejected(settled.cause)) {
             yield* FiberSet.clear(toolFibers)
             yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
+            yield* publisher.finish("aborted", { errorCategory: "question_rejected" })
             return yield* Effect.interrupt
           }
           if (
@@ -339,8 +359,17 @@ export const layer = Layer.effect(
             yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
           if (stream._tag === "Success" && !publisher.hasProviderError())
             yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
-          if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
-          if (settled._tag === "Failure") return yield* Effect.failCause(settled.cause)
+          if (stream._tag === "Failure") {
+            yield* publisher.finish(Cause.hasInterrupts(stream.cause) ? "aborted" : "failed", {
+              errorCategory: Cause.hasInterrupts(stream.cause) ? "interrupted" : "provider_stream",
+            })
+            return yield* Effect.failCause(stream.cause)
+          }
+          if (settled._tag === "Failure") {
+            yield* publisher.finish("failed", { errorCategory: "tool_execution" })
+            return yield* Effect.failCause(settled.cause)
+          }
+          yield* publisher.finish("succeeded")
           return !publisher.hasProviderError() && needsContinuation
         }),
       )

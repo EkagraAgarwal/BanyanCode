@@ -109,6 +109,9 @@ const definitionToAITool = (
           )
           const settlement = yield* materialization.settle({
             sessionID: ctx.sessionID as never,
+            runID: ctx.runID,
+            parentSessionID: ctx.parentSessionID as never,
+            rootSessionID: ctx.rootSessionID as never,
             agent: ctx.agent as never,
             assistantMessageID: ctx.assistantMessageID as never,
             call: {
@@ -177,5 +180,4 @@ export const layer: Layer.Layer<Service, never, never> = Layer.succeed(
       buildTools({ catalog, ctx })) as never,
   } as never,
 )
-
 

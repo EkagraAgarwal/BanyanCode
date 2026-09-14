@@ -14,6 +14,9 @@ import type { EffectBridge } from "@/effect/bridge"
  */
 export interface ToolMaterializationContext {
   readonly sessionID: string
+  readonly runID?: string
+  readonly parentSessionID?: string
+  readonly rootSessionID?: string
   readonly assistantMessageID: string
   readonly agent: string
   readonly model: Parameters<typeof ProviderTransform.schema>[0]
