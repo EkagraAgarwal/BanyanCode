@@ -267,4 +267,53 @@ describe("codegraph-worktree", () => {
 
     expect(capturedRoot.current).toBe(explicitRoot)
   })
+
+  test("resolveEffectiveRoot prefers explicit > worktree > repo-walk > cwd", async () => {
+    await using tmp = await tmpdir()
+    const { resolveEffectiveRoot } = await import("../../src/banyancode/workspace-identity")
+    const explicit = path.join(tmp.path, "explicit")
+    const thunk = path.join(tmp.path, "thunk")
+    await fs.mkdir(explicit, { recursive: true })
+    await fs.mkdir(thunk, { recursive: true })
+
+    const byExplicit = resolveEffectiveRoot({ explicitRoot: explicit, worktree: thunk, cwd: thunk })
+    expect(byExplicit._tag).toBe("Ok")
+    if (byExplicit._tag === "Ok") {
+      expect(byExplicit.root).toBe(explicit)
+      expect(byExplicit.source).toBe("explicit")
+    }
+
+    const byWorktree = resolveEffectiveRoot({ worktree: thunk, cwd: tmp.path })
+    expect(byWorktree._tag).toBe("Ok")
+    if (byWorktree._tag === "Ok") {
+      expect(byWorktree.root).toBe(thunk)
+      expect(byWorktree.source).toBe("worktree")
+    }
+  })
+
+  test("resolveEffectiveRoot walks up to a repo root and rejects invalid workspaces", async () => {
+    await using tmp = await tmpdir()
+    const { resolveEffectiveRoot } = await import("../../src/banyancode/workspace-identity")
+    const repoRoot = path.join(tmp.path, "repo")
+    const nested = path.join(repoRoot, "packages", "core", "src")
+    await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true })
+    await fs.mkdir(nested, { recursive: true })
+
+    const walked = resolveEffectiveRoot({ cwd: nested })
+    expect(walked._tag).toBe("Ok")
+    if (walked._tag === "Ok") {
+      expect(walked.root).toBe(repoRoot)
+      expect(walked.source).toBe("repo-walk")
+    }
+
+    const missing = resolveEffectiveRoot({ explicitRoot: path.join(tmp.path, "nope") })
+    expect(missing._tag).toBe("InvalidWorkspace")
+    if (missing._tag === "InvalidWorkspace") {
+      expect(missing.diagnostic.kind).toBe("invalid-workspace")
+    }
+
+    const fsRoot = path.parse(tmp.path).root
+    const atFsRoot = resolveEffectiveRoot({ explicitRoot: fsRoot })
+    expect(atFsRoot._tag).toBe("InvalidWorkspace")
+  })
 })
