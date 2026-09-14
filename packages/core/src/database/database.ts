@@ -227,6 +227,35 @@ export function layerFromRoot(root: string) {
   return layerFromPath(deriveBanyanDbPath(banyanDir, root).dbPath)
 }
 
+// Root-keyed bundle cache: one Database layer per canonical root so
+// alternating tool calls between two workspaces never flip a shared store.
+// Canonicalization (realpath + win32 case fold) matches
+// WorkspaceIdentity.canonicalizeRoot; channel suffix + root hashing are
+// preserved because every entry funnels through layerFromRoot.
+const rootBundleCache = new Map<string, ReturnType<typeof layerFromRoot>>()
+
+const canonicalBundleKey = (root: string): string => {
+  try {
+    const real = fs.realpathSync.native(root)
+    return process.platform === "win32" ? real.replace(/\//g, "\\").toLowerCase() : real
+  } catch {
+    return root
+  }
+}
+
+export function layerFromRootCached(root: string) {
+  const key = canonicalBundleKey(root)
+  const existing = rootBundleCache.get(key)
+  if (existing) return existing
+  const layer = layerFromRoot(root)
+  rootBundleCache.set(key, layer)
+  return layer
+}
+
+export function clearRootBundleCache() {
+  rootBundleCache.clear()
+}
+
 export const defaultLayer = Layer.unwrap(
   Effect.gen(function* () {
     return layerFromPath(path())

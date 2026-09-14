@@ -2,7 +2,6 @@ export * as CodeFindTool from "./code-find"
 
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
-import path from "path"
 import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import type { Interface as CodegraphAnalyzerInterface } from "../banyancode/codegraph-analyzer"
 import type { Interface as CodegraphReadinessInterface } from "../banyancode/codegraph-readiness"
@@ -114,7 +113,12 @@ export const makeCodeFindTool = (deps: {
   // code-find tool runs against an unbuilt or stale graph, so the agent
   // does not waste a turn on empty/incorrect data.
   const ensureGraphReady = Effect.gen(function* () {
-    const ready = yield* deps.readiness.ensureReady({ root: path.resolve(process.cwd()) })
+    const effective = Banyan.WorkspaceIdentity.resolveEffectiveRoot({ cwd: process.cwd() })
+    if (effective._tag === "InvalidWorkspace") {
+      yield* Effect.logWarning(`code_find: ${effective.diagnostic.message}`)
+      return { reason: "failed", autoBuilt: false, error: effective.diagnostic.message } as const
+    }
+    const ready = yield* deps.readiness.ensureReady({ root: effective.root })
     if (ready.reason === "failed") {
       yield* Effect.logWarning(`code_find: readiness failed: ${ready.error ?? "unknown"}`)
     }

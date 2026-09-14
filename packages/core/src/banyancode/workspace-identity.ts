@@ -1,7 +1,7 @@
 export * as WorkspaceIdentity from "./workspace-identity"
 
 import { existsSync, realpathSync, statSync } from "node:fs"
-import { isAbsolute, join, relative, resolve } from "node:path"
+import { isAbsolute, join, parse, relative, resolve } from "node:path"
 import { deriveBanyanDbPath, findContainingBanyanDir } from "../database/banyan-db-path"
 
 // Phase 7 follow-up: a pure, synchronous workspace-identity helper that
@@ -87,6 +87,73 @@ export const identityForRootStrict = (rawRoot: string): WorkspaceIdentity => {
     // ignore; dbPath will still be returned so diagnostics can carry it
   }
   return base
+}
+
+export const canonicalizeRoot = (input: string): string => {
+  const real = sanitizeRoot(input)
+  return process.platform === "win32" ? real.replace(/\//g, "\\").toLowerCase() : real
+}
+
+export type EffectiveRootSource = "explicit" | "worktree" | "repo-walk" | "cwd"
+
+export type EffectiveRoot =
+  | { readonly _tag: "Ok"; readonly root: string; readonly source: EffectiveRootSource }
+  | { readonly _tag: "InvalidWorkspace"; readonly diagnostic: { readonly kind: string; readonly message: string } }
+
+const invalid = (message: string): EffectiveRoot => ({
+  _tag: "InvalidWorkspace",
+  diagnostic: { kind: "invalid-workspace", message },
+})
+
+const findRepoRoot = (startDir: string): string | undefined => {
+  let dir = resolve(startDir)
+  const { root: fsRoot } = parse(dir)
+  let current = dir
+  while (current !== fsRoot) {
+    try {
+      if (statSync(join(current, ".git")).isDirectory()) return current
+    } catch {
+      // keep walking
+    }
+    current = resolve(current, "..")
+  }
+  current = dir
+  while (current !== fsRoot) {
+    try {
+      if (statSync(join(current, "package.json")).isFile()) return current
+    } catch {
+      // keep walking
+    }
+    current = resolve(current, "..")
+  }
+  return undefined
+}
+
+export const resolveEffectiveRoot = (input: {
+  readonly explicitRoot?: string | undefined
+  readonly worktree?: string | undefined
+  readonly cwd?: string | undefined
+}): EffectiveRoot => {
+  const cwd = input.cwd ?? process.cwd()
+  const candidate = input.explicitRoot ?? input.worktree ?? findRepoRoot(cwd) ?? cwd
+  const source: EffectiveRootSource = input.explicitRoot
+    ? "explicit"
+    : input.worktree
+      ? "worktree"
+      : findRepoRoot(cwd) !== undefined && candidate !== cwd
+        ? "repo-walk"
+        : "cwd"
+  if (!candidate || candidate.trim() === "") return invalid("workspace root must be a non-empty path")
+  const root = sanitizeRoot(candidate)
+  const { root: fsRoot } = parse(root)
+  if (root === fsRoot) return invalid(`workspace root '${candidate}' resolves to a filesystem root; pass a workspace directory instead`)
+  try {
+    if (!existsSync(root)) return invalid(`workspace root '${candidate}' does not exist`)
+    if (!statSync(root).isDirectory()) return invalid(`workspace root '${candidate}' is not a directory`)
+  } catch {
+    return invalid(`workspace root '${candidate}' is not accessible`)
+  }
+  return { _tag: "Ok", root, source }
 }
 
 export const isInsideWorkspace = (root: string, candidate: string): boolean => {

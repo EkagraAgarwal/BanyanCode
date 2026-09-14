@@ -518,10 +518,17 @@ export const makePreflightTool = (deps: {
             agent: context.agent,
             source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
           })
-          const root = input.root ?? findRepoRoot(process.cwd()) ?? process.cwd()
-          const ready = yield* deps.readiness.ensureReady({ root: path.resolve(root) })
-          if (ready.reason === "failed") {
-            yield* Effect.logWarning(`preflight: readiness failed: ${ready.error ?? "unknown"}`)
+          const effective = Banyan.WorkspaceIdentity.resolveEffectiveRoot({
+            explicitRoot: input.root ?? undefined,
+            cwd: process.cwd(),
+          })
+          if (effective._tag === "InvalidWorkspace") {
+            yield* Effect.logWarning(`preflight: ${effective.diagnostic.message}`)
+          } else {
+            const ready = yield* deps.readiness.ensureReady({ root: effective.root })
+            if (ready.reason === "failed") {
+              yield* Effect.logWarning(`preflight: readiness failed: ${ready.error ?? "unknown"}`)
+            }
           }
           return yield* computePreflight(
             { repo: deps.repo, analyzer: deps.analyzer, intel: deps.intel },

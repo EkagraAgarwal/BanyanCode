@@ -2,7 +2,6 @@ export * as BlastRadiusTool from "./blast-radius"
 
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
-import path from "path"
 import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import type { Interface as CodegraphAnalyzerInterface } from "../banyancode/codegraph-analyzer"
 import type { Interface as CodegraphReadinessInterface } from "../banyancode/codegraph-readiness"
@@ -218,9 +217,14 @@ export const makeBlastRadiusTool = (deps: {
             agent: context.agent,
             source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
           })
-          const ready = yield* deps.readiness.ensureReady({ root: path.resolve(process.cwd()) })
-          if (ready.reason === "failed") {
-            yield* Effect.logWarning(`blast_radius: readiness failed: ${ready.error ?? "unknown"}`)
+          const effective = Banyan.WorkspaceIdentity.resolveEffectiveRoot({ cwd: process.cwd() })
+          if (effective._tag === "InvalidWorkspace") {
+            yield* Effect.logWarning(`blast_radius: ${effective.diagnostic.message}`)
+          } else {
+            const ready = yield* deps.readiness.ensureReady({ root: effective.root })
+            if (ready.reason === "failed") {
+              yield* Effect.logWarning(`blast_radius: readiness failed: ${ready.error ?? "unknown"}`)
+            }
           }
           return yield* computeBlastRadius({ repo: deps.repo, analyzer: deps.analyzer, intel: deps.intel }, input)
         }),
