@@ -11,7 +11,7 @@
  * before tools run by hooking into start-step, but the AI SDK executes
  * tools internally during multi-step processing before emitting events.
  */
-import { expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import fs from "fs/promises"
@@ -271,3 +271,17 @@ it.live("tool execution produces non-empty session diff (snapshot race)", () =>
     { git: true, config: providerCfg },
   ),
 )
+
+describe("snapshot worktree scoping", () => {
+  test("escaping and absolute paths never become snapshot pathspecs", async () => {
+    const { __test } = await import("@/snapshot")
+    expect(__test.isSafePathspec("C:/Users/x/file.txt")).toBe(false)
+    expect(__test.isSafePathspec("D:repo/file.txt")).toBe(false)
+    expect(__test.isSafePathspec("../../outside.txt")).toBe(false)
+    expect(__test.isSafePathspec("sub/dir/ok.txt")).toBe(true)
+    // Existing malformed D:/ / C./ directories on disk are never created by
+    // the snapshot layer: unsafe rows are filtered, not written, and nothing
+    // here removes them.
+    expect(__test.toWorktreePathspec("sub\\dir\\ok.txt")).toBe("sub/dir/ok.txt")
+  })
+})
