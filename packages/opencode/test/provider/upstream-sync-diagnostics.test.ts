@@ -148,7 +148,7 @@ describe("PR 3: provider loader produces expected variants for reasoning models"
     {
       config: {
         provider: {
-          minimax: { options: { apiKey: "test-fixture-key" } },
+          minimax: { options: { apiKey: "<test-fixture-key>" } },
         },
       },
     },
@@ -188,7 +188,7 @@ describe("PR 3: provider loader produces expected variants for reasoning models"
     {
       config: {
         provider: {
-          deepseek: { options: { apiKey: "test-fixture-key" } },
+          deepseek: { options: { apiKey: "<test-fixture-key>" } },
         },
       },
     },

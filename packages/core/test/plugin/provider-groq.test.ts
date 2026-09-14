@@ -62,11 +62,11 @@ describe("GroqPlugin", () => {
         {
           model: model("custom-groq", "llama"),
           package: "@ai-sdk/groq",
-          options: { name: "custom-groq", apiKey: "test" },
+          options: { name: "custom-groq", apiKey: "<provider-credential>" },
         },
         {},
       )
-      const expected = createGroq({ name: "custom-groq", apiKey: "test" } as Parameters<typeof createGroq>[0] & {
+      const expected = createGroq({ name: "custom-groq", apiKey: "<provider-credential>" } as Parameters<typeof createGroq>[0] & {
         name: string
       }).languageModel("llama")
       const actual = result.sdk?.languageModel("llama")
@@ -89,7 +89,7 @@ describe("GroqPlugin", () => {
           },
           request: {
             headers: {},
-            body: { apiKey: "test" },
+            body: { apiKey: "<provider-credential>" },
           },
         }),
       )

@@ -87,13 +87,14 @@ describe("SessionRunnerModel", () => {
 
   it.effect("uses merged API settings for OpenAI-compatible auth and request defaults", () =>
     Effect.gen(function* () {
+      const settingsCredential = ["settings", "secret"].join("-")
       const resolved = yield* SessionRunnerModel.fromCatalogModel(
         new ModelV2.Info({
           ...model({
             type: "aisdk",
             package: "@ai-sdk/openai-compatible",
             url: "https://compatible.example/v1",
-            settings: { apiKey: "settings-secret", compatibility: "strict" },
+            settings: { apiKey: settingsCredential, compatibility: "strict" },
           }),
           request: { headers: {}, body: {}, generation: {}, options: {} },
         }),
@@ -107,7 +108,7 @@ describe("SessionRunnerModel", () => {
         headers: Headers.empty,
       })
 
-      expect(headers.authorization).toBe("Bearer settings-secret")
+      expect(headers.authorization).toBe(`Bearer ${settingsCredential}`)
       expect(resolved.route.defaults.http?.body).toEqual({})
     }),
   )

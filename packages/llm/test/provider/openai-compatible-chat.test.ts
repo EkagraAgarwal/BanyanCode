@@ -94,7 +94,7 @@ describe("OpenAI-compatible Chat route", () => {
     Effect.gen(function* () {
       expect(
         providerFamilies.map(([provider, family]) => {
-          const model = family.configure({ apiKey: "test-key" }).model(`${provider}-model`)
+          const model = family.configure({ apiKey: "<provider-credential>" }).model(`${provider}-model`)
           return {
             id: String(model.id),
             provider: String(model.provider),
@@ -113,7 +113,7 @@ describe("OpenAI-compatible Chat route", () => {
 
       const custom = OpenAICompatible.deepseek
         .configure({
-          apiKey: "test-key",
+          apiKey: "<provider-credential>",
           baseURL: "https://custom.deepseek.test/v1",
         })
         .model("deepseek-chat")

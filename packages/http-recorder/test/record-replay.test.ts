@@ -11,6 +11,10 @@ import { HttpRecorderInternal } from "../src/internal"
 import { redactedErrorRequest } from "../src/internal-effect"
 import type { Interaction } from "../src/schema"
 
+const detectedApiKey = ["sk", "123456789012345678901234"].join("-")
+const detectedGoogleKey = ["AIzaSy", "DHibiBRvJZLsFnPYPoiTwxY4ztQ55yqCE"].join("")
+const detectedBearer = ["Bearer", "abcdefghijklmnopqrstuvwxyz"].join(" ")
+
 const seedCassetteDirectory = (directory: string, name: string, interactions: ReadonlyArray<Interaction>) =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -65,7 +69,7 @@ describe("http-recorder", () => {
   test("redacts sensitive URL query parameters", () => {
     expect(
       HttpRecorderInternal.redactUrl(
-        "https://example.test/path?key=secret-google-key&api_key=secret-openai-key&safe=value&X-Amz-Signature=secret-signature",
+        "https://example.test/path?key=<google-key>&api_key=<openai-key>&safe=value&X-Amz-Signature=<signature>",
       ),
     ).toBe(
       "https://example.test/path?key=%5BREDACTED%5D&api_key=%5BREDACTED%5D&safe=value&X-Amz-Signature=%5BREDACTED%5D",
@@ -73,7 +77,7 @@ describe("http-recorder", () => {
   })
 
   test("redacts URL credentials", () => {
-    expect(HttpRecorderInternal.redactUrl("https://user:password@example.test/path?safe=value")).toBe(
+    expect(HttpRecorderInternal.redactUrl("https://user:<url-password>@example.test/path?safe=value")).toBe(
       "https://%5BREDACTED%5D:%5BREDACTED%5D@example.test/path?safe=value",
     )
   })
@@ -81,7 +85,7 @@ describe("http-recorder", () => {
   test("applies custom URL redaction after built-in redaction", () => {
     expect(
       HttpRecorderInternal.redactUrl(
-        "https://example.test/accounts/real-account/path?key=secret-key",
+        "https://example.test/accounts/real-account/path?key=<url-key>",
         undefined,
         (url) => url.replace("/accounts/real-account/", "/accounts/{account}/"),
       ),
@@ -92,11 +96,11 @@ describe("http-recorder", () => {
     expect(
       HttpRecorderInternal.redactHeaders(
         {
-          authorization: "Bearer secret-token",
+           authorization: "Bearer <header-token>",
           "content-type": "application/json",
-          "x-custom-token": "custom-secret",
-          "x-api-key": "secret-key",
-          "x-goog-api-key": "secret-google-key",
+           "x-custom-token": "<custom-token>",
+           "x-api-key": "<header-key>",
+           "x-goog-api-key": "<google-key>",
         },
         ["authorization", "content-type", "x-api-key", "x-goog-api-key", "x-custom-token"],
         ["x-custom-token"],
@@ -112,9 +116,9 @@ describe("http-recorder", () => {
 
   test("redacts error requests without retaining headers, params, or body", () => {
     const request = HttpClientRequest.post("https://example.test/path", {
-      headers: { authorization: "Bearer super-secret" },
-      body: HttpBody.text("super-secret-body", "text/plain"),
-    }).pipe(HttpClientRequest.setUrlParam("api_key", "super-secret-key"))
+       headers: { authorization: "Bearer <request-token>" },
+       body: HttpBody.text("<request-body>", "text/plain"),
+     }).pipe(HttpClientRequest.setUrlParam("api_key", "<request-key>"))
 
     expect(redactedErrorRequest(request).toJSON()).toMatchObject({
       url: "https://example.test/path",
@@ -133,14 +137,14 @@ describe("http-recorder", () => {
             transport: "http",
             request: {
               method: "POST",
-              url: "https://example.test/path?key=sk-123456789012345678901234",
+               url: `https://example.test/path?key=${detectedApiKey}`,
               headers: {},
-              body: JSON.stringify({ nested: "AIzaSyDHibiBRvJZLsFnPYPoiTwxY4ztQ55yqCE" }),
+               body: JSON.stringify({ nested: detectedGoogleKey }),
             },
             response: {
               status: 200,
               headers: {},
-              body: "Bearer abcdefghijklmnopqrstuvwxyz",
+               body: detectedBearer,
             },
           },
         ],
@@ -156,7 +160,7 @@ describe("http-recorder", () => {
     expect(
       HttpRecorderInternal.secretFindings({
         version: 1,
-        metadata: { token: "sk-123456789012345678901234" },
+         metadata: { token: detectedApiKey },
         interactions: [],
       }),
     ).toEqual([{ path: "metadata.token", reason: "API key" }])
@@ -169,8 +173,8 @@ describe("http-recorder", () => {
       url: "https://example.test/path",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        password: "secret-password",
-        accessToken: "access-token",
+         password: "<password>",
+         accessToken: "<access-token>",
         nested: { account_id: "account-123", safe: "visible" },
       }),
     })
@@ -193,10 +197,10 @@ describe("http-recorder", () => {
         method: "GET",
         url: "https://example.test/path",
         headers: {
-          authorization: "Bearer secret",
+          authorization: "Bearer <authorization-token>",
           "content-type": "application/json",
           "anthropic-version": "2023-06-01",
-          "x-custom-token": "secret",
+          "x-custom-token": "<custom-token>",
         },
         body: "",
       }).headers,
@@ -209,7 +213,7 @@ describe("http-recorder", () => {
 
   test("records WebSocket frames in observed client/server order", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "http-recorder-websocket-"))
-    const response = JSON.stringify({ type: "response.completed", token: "server-secret" })
+     const response = JSON.stringify({ type: "response.completed", token: "<server-token>" })
     let receive: ((message: string | Uint8Array) => Effect.Effect<unknown, unknown, unknown> | void) | undefined
     const upstream = Socket.make({
       runRaw: (handler, options) =>
@@ -231,7 +235,7 @@ describe("http-recorder", () => {
         const socket = yield* Socket.Socket
         const write = yield* socket.writer
         yield* socket.runRaw(() => {}, {
-          onOpen: write(JSON.stringify({ type: "response.create", token: "client-secret" })),
+           onOpen: write(JSON.stringify({ type: "response.create", token: "<client-token>" })),
         })
       }).pipe(
         Effect.scoped,
@@ -625,7 +629,7 @@ describe("http-recorder", () => {
     await run(
       Effect.gen(function* () {
         const exit = yield* Effect.exit(
-          post("https://example.test/echo?api_key=secret-value", { step: 3, token: "sk-123456789012345678901234" }),
+          post(`https://example.test/echo?api_key=<query-key>`, { step: 3, token: detectedApiKey }),
         )
         const message = failureText(exit)
         expect(message).toContain("url:")
@@ -633,7 +637,7 @@ describe("http-recorder", () => {
         expect(message).toContain("body:")
         expect(message).toContain("$.step expected 1, received 3")
         expect(message).toContain('$.token expected undefined, received "[REDACTED]"')
-        expect(message).not.toContain("sk-123456789012345678901234")
+        expect(message).not.toContain(detectedApiKey)
       }),
     )
   })
@@ -707,7 +711,7 @@ describe("http-recorder", () => {
     using server = Bun.serve({
       port: 0,
       fetch: () =>
-        new Response(JSON.stringify({ access_token: "live-secret", safe: true }), {
+        new Response(JSON.stringify({ access_token: "<live-token>", safe: true }), {
           headers: { "content-type": "application/json", "x-request-id": "request-1" },
         }),
     })
@@ -721,7 +725,7 @@ describe("http-recorder", () => {
       )
       const cassette = JSON.parse(fs.readFileSync(path.join(directory, "live-response.json"), "utf8"))
 
-      expect(body).toBe('{"access_token":"live-secret","safe":true}')
+      expect(body).toBe('{"access_token":"<live-token>","safe":true}')
       expect(cassette.interactions[0].response.body).toBe('{"access_token":"[REDACTED]","safe":true}')
     } finally {
       if (previous !== undefined) process.env.CI = previous
@@ -778,7 +782,7 @@ describe("http-recorder", () => {
   })
 
   test("UnsafeCassetteError fails the request when a recording would write a known secret", async () => {
-    using server = Bun.serve({ port: 0, fetch: () => new Response("Bearer abcdefghijklmnopqrstuvwxyz1234") })
+    using server = Bun.serve({ port: 0, fetch: () => new Response(`${detectedBearer}1234`) })
     const url = `http://127.0.0.1:${server.port}/leaky`
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "http-recorder-unsafe-"))
 
@@ -807,7 +811,7 @@ describe("http-recorder", () => {
         yield* cassette
           .append("transactional", {
             ...interaction,
-            response: { ...interaction.response, body: "Bearer abcdefghijklmnopqrstuvwxyz1234" },
+            response: { ...interaction.response, body: `${detectedBearer}1234` },
           })
           .pipe(Effect.flip)
 

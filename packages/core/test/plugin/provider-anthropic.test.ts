@@ -60,7 +60,7 @@ describe("AnthropicPlugin", () => {
         {
           model: model("custom-anthropic", "claude-sonnet-4-5"),
           package: "@ai-sdk/anthropic",
-          options: { name: "custom-anthropic", apiKey: "test" },
+          options: { name: "custom-anthropic", apiKey: "<provider-credential>" },
         },
         {},
       )
@@ -87,7 +87,7 @@ describe("AnthropicPlugin", () => {
         {
           model: model("anthropic", "claude-sonnet-4-5"),
           package: "@ai-sdk/anthropic",
-          options: { name: "anthropic", apiKey: "test" },
+          options: { name: "anthropic", apiKey: "<provider-credential>" },
         },
         {},
       )
