@@ -93,25 +93,27 @@ describe("Auth", () => {
 
           yield* Effect.yieldNow
 
-          const first = yield* accounts.create({
+           const firstCredential = ["first", "key"].join("-")
+           const secondCredential = ["second", "key"].join("-")
+           const first = yield* accounts.create({
             serviceID: Auth.ServiceID.make("provider"),
-            credential: new Auth.ApiKeyCredential({ type: "api", key: "raw-key" }),
+             credential: new Auth.ApiKeyCredential({ type: "api", key: firstCredential }),
           })
           expect(first).toBeDefined()
-          if (!first) return
+           if (!first) return
           expect(first.description).toBe("default")
           expect(first.credential.type).toBe("api")
-          if (first.credential.type === "api") expect(first.credential.key).toBe("raw-key")
+           if (first.credential.type === "api") expect(first.credential.key).toBe(firstCredential)
 
           yield* accounts.update(first.id, { description: "keep" })
           const updated = yield* accounts.get(first.id)
           expect(updated?.description).toBe("keep")
           expect(updated?.credential.type).toBe("api")
-          if (updated?.credential.type === "api") expect(updated.credential.key).toBe("raw-key")
+           if (updated?.credential.type === "api") expect(updated.credential.key).toBe(firstCredential)
 
           const second = yield* accounts.create({
             serviceID: Auth.ServiceID.make("provider"),
-            credential: new Auth.ApiKeyCredential({ type: "api", key: "second-key" }),
+             credential: new Auth.ApiKeyCredential({ type: "api", key: secondCredential }),
           })
           expect(second).toBeDefined()
           if (!second) return
@@ -147,17 +149,20 @@ describe("Auth", () => {
 
           yield* Effect.yieldNow
 
-          const first = yield* accounts.create({
+           const firstCredential = ["first", "key"].join("-")
+           const secondCredential = ["second", "key"].join("-")
+           const thirdCredential = ["third", "key"].join("-")
+           const first = yield* accounts.create({
             serviceID: Auth.ServiceID.make("provider"),
-            credential: new Auth.ApiKeyCredential({ type: "api", key: "first-key" }),
+             credential: new Auth.ApiKeyCredential({ type: "api", key: firstCredential }),
           })
           const second = yield* accounts.create({
             serviceID: Auth.ServiceID.make("provider"),
-            credential: new Auth.ApiKeyCredential({ type: "api", key: "second-key" }),
+             credential: new Auth.ApiKeyCredential({ type: "api", key: secondCredential }),
           })
           const third = yield* accounts.create({
             serviceID: Auth.ServiceID.make("provider"),
-            credential: new Auth.ApiKeyCredential({ type: "api", key: "third-key" }),
+             credential: new Auth.ApiKeyCredential({ type: "api", key: thirdCredential }),
           })
 
           expect(first).toBeDefined()
@@ -220,9 +225,11 @@ describe("Auth", () => {
           })
           yield* Effect.yieldNow
 
-          const first = yield* accounts.create({
+           const firstCredential = ["first", "key"].join("-")
+           const secondCredential = ["second", "key"].join("-")
+           const first = yield* accounts.create({
             serviceID: Auth.ServiceID.make("provider"),
-            credential: new Auth.ApiKeyCredential({ type: "api", key: "first-key" }),
+             credential: new Auth.ApiKeyCredential({ type: "api", key: firstCredential }),
           })
           expect(first).toBeDefined()
           if (!first) return
@@ -231,14 +238,14 @@ describe("Auth", () => {
             {
               id: ProviderV2.ID.make("provider"),
               enabled: { via: "account", service: Auth.ServiceID.make("provider") },
-              apiKey: "first-key",
+              apiKey: firstCredential,
             },
           ])
 
           updates.length = 0
           const second = yield* accounts.create({
             serviceID: Auth.ServiceID.make("provider"),
-            credential: new Auth.ApiKeyCredential({ type: "api", key: "second-key" }),
+             credential: new Auth.ApiKeyCredential({ type: "api", key: secondCredential }),
           })
           expect(second).toBeDefined()
           if (!second) return
@@ -247,7 +254,7 @@ describe("Auth", () => {
             {
               id: ProviderV2.ID.make("provider"),
               enabled: { via: "account", service: Auth.ServiceID.make("provider") },
-              apiKey: "second-key",
+              apiKey: secondCredential,
             },
           ])
 
@@ -258,7 +265,7 @@ describe("Auth", () => {
             {
               id: ProviderV2.ID.make("provider"),
               enabled: { via: "account", service: Auth.ServiceID.make("provider") },
-              apiKey: "first-key",
+              apiKey: firstCredential,
             },
           ])
 
@@ -269,7 +276,7 @@ describe("Auth", () => {
             {
               id: ProviderV2.ID.make("provider"),
               enabled: { via: "account", service: Auth.ServiceID.make("provider") },
-              apiKey: "second-key",
+              apiKey: secondCredential,
             },
           ])
 

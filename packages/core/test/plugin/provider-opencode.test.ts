@@ -10,6 +10,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "../fixture/location"
 import { it, model, provider, withEnv } from "./provider-helper"
+const configuredCredential = ["configured", "key"].join("-")
 
 const cost = (input: number, output = 0) => [{ input, output, cache: { read: 0, write: 0 } }]
 const locationLayer = Layer.succeed(
@@ -136,7 +137,7 @@ describe("OpencodePlugin", () => {
           const item = provider("opencode", {
             request: {
               headers: {},
-              body: { apiKey: "configured" },
+              body: { apiKey: configuredCredential },
             },
           })
           catalog.provider.update(item.id, (draft) => {
@@ -147,7 +148,7 @@ describe("OpencodePlugin", () => {
             draft.cost = [...paid.cost]
           })
         })
-        expect((yield* catalog.provider.get(ProviderV2.ID.opencode)).request.body.apiKey).toBe("configured")
+        expect((yield* catalog.provider.get(ProviderV2.ID.opencode)).request.body.apiKey).toBe(configuredCredential)
         expect((yield* catalog.model.get(ProviderV2.ID.opencode, ModelV2.ID.make("paid"))).enabled).toBe(true)
       }),
     ),

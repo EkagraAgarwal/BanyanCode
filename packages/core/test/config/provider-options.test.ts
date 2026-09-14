@@ -5,8 +5,8 @@ describe("ConfigProviderOptionsV1", () => {
   test("keeps raw provider and request options unchanged", () => {
     const lowerer = ConfigProviderOptionsV1.get("custom-provider")
 
-    expect(lowerer.provider({ apiKey: "secret", headers: { "x-test": "1" }, nested: { camelCase: true } })).toEqual({
-      body: { apiKey: "secret", headers: { "x-test": "1" }, nested: { camelCase: true } },
+    expect(lowerer.provider({ apiKey: "<config-credential>", headers: { "x-test": "1" }, nested: { camelCase: true } })).toEqual({
+      body: { apiKey: "<config-credential>", headers: { "x-test": "1" }, nested: { camelCase: true } },
     })
     expect(lowerer.request({ nested: { camelCase: true } })).toEqual({ nested: { camelCase: true } })
   })
@@ -20,7 +20,7 @@ describe("ConfigProviderOptionsV1", () => {
 
     expect(
       lowerer.provider({
-        apiKey: "secret",
+         apiKey: "<config-credential>",
         baseURL: "https://openai.example/v1",
         organization: "org",
         project: "project",
@@ -31,7 +31,7 @@ describe("ConfigProviderOptionsV1", () => {
     ).toEqual({
       url: "https://openai.example/v1",
       headers: {
-        Authorization: "Bearer secret",
+        Authorization: "Bearer <config-credential>",
         "OpenAI-Organization": "org",
         "OpenAI-Project": "project",
         "x-test": "1",

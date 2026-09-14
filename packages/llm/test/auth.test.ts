@@ -29,9 +29,9 @@ describe("Auth", () => {
       const headers = yield* Auth.config("OPENAI_API_KEY")
         .bearer()
         .apply(input)
-        .pipe(withEnv({ OPENAI_API_KEY: "sk-test" }))
+        .pipe(withEnv({ OPENAI_API_KEY: "<configured-credential>" }))
 
-      expect(headers.authorization).toBe("Bearer sk-test")
+      expect(headers.authorization).toBe("Bearer <configured-credential>")
       expect(headers["x-existing"]).toBe("yes")
     }),
   )
@@ -39,12 +39,12 @@ describe("Auth", () => {
   it.effect("falls back between credential sources before rendering", () =>
     Effect.gen(function* () {
       const headers = yield* Auth.config("PRIMARY_KEY")
-        .orElse(Auth.value("fallback-key"))
+        .orElse(Auth.value("<fallback-credential>"))
         .pipe(Auth.header("x-api-key"))
         .apply(input)
         .pipe(withEnv({}))
 
-      expect(headers["x-api-key"]).toBe("fallback-key")
+      expect(headers["x-api-key"]).toBe("<fallback-credential>")
       expect(headers["x-existing"]).toBe("yes")
     }),
   )
@@ -52,29 +52,29 @@ describe("Auth", () => {
   it.effect("composes header auth in sequence", () =>
     Effect.gen(function* () {
       const headers = yield* Auth.headers({ "x-tenant-id": "tenant-1" })
-        .andThen(Auth.bearer("gateway-token"))
+        .andThen(Auth.bearer("<gateway-credential>"))
         .apply(input)
 
       expect(headers["x-tenant-id"]).toBe("tenant-1")
-      expect(headers.authorization).toBe("Bearer gateway-token")
+      expect(headers.authorization).toBe("Bearer <gateway-credential>")
       expect(headers["x-existing"]).toBe("yes")
     }),
   )
 
   it.effect("renders a direct secret as a custom header", () =>
     Effect.gen(function* () {
-      const headers = yield* Auth.header("api-key", "direct-key").apply(input)
+      const headers = yield* Auth.header("api-key", "<direct-credential>").apply(input)
 
-      expect(headers["api-key"]).toBe("direct-key")
+      expect(headers["api-key"]).toBe("<direct-credential>")
       expect(headers["x-existing"]).toBe("yes")
     }),
   )
 
   it.effect("renders bearer auth into a custom header", () =>
     Effect.gen(function* () {
-      const headers = yield* Auth.bearerHeader("cf-aig-authorization", "gateway-token").apply(input)
+      const headers = yield* Auth.bearerHeader("cf-aig-authorization", "<gateway-credential>").apply(input)
 
-      expect(headers["cf-aig-authorization"]).toBe("Bearer gateway-token")
+      expect(headers["cf-aig-authorization"]).toBe("Bearer <gateway-credential>")
       expect(headers["x-existing"]).toBe("yes")
     }),
   )
@@ -83,11 +83,11 @@ describe("Auth", () => {
     Effect.gen(function* () {
       const headers = yield* Auth.config("OPENAI_API_KEY")
         .bearer()
-        .orElse(Auth.headers({ authorization: "Bearer supplied" }))
+        .orElse(Auth.headers({ authorization: "Bearer <supplied-credential>" }))
         .apply(input)
         .pipe(withEnv({}))
 
-      expect(headers.authorization).toBe("Bearer supplied")
+      expect(headers.authorization).toBe("Bearer <supplied-credential>")
       expect(headers["x-existing"]).toBe("yes")
     }),
   )

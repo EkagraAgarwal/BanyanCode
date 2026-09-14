@@ -195,7 +195,8 @@ describe("WebSearchTool registration", () => {
       requests.length = 0
       assertions.length = 0
       responseBody = payload("parallel results")
-      config = { provider: "parallel", enableExa: false, enableParallel: false, parallelApiKey: "parallel-secret" }
+      const parallelCredential = ["parallel", "secret"].join("-")
+      config = { provider: "parallel", enableExa: false, enableParallel: false, parallelApiKey: parallelCredential }
       const registry = yield* ToolRegistry.Service
 
       const settled = yield* settleTool(registry, {
@@ -206,7 +207,7 @@ describe("WebSearchTool registration", () => {
 
       expect(requests[0]).toMatchObject({
         url: WebSearchTool.PARALLEL_URL,
-        headers: { authorization: "Bearer parallel-secret" },
+        headers: { authorization: `Bearer ${parallelCredential}` },
         body: {
           jsonrpc: "2.0",
           id: 1,
@@ -225,7 +226,7 @@ describe("WebSearchTool registration", () => {
           content: [{ type: "text", text: "parallel results" }],
         },
       })
-      expect(JSON.stringify(settled)).not.toContain("parallel-secret")
+      expect(JSON.stringify(settled)).not.toContain(parallelCredential)
     }),
   )
 

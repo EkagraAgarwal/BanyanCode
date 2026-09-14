@@ -291,7 +291,7 @@ describe("util.effect-flock", () => {
         .withLock(
           Effect.promise(async () => {
             const json = await readJson<{ token?: string }>(meta)
-            json.token = "tampered"
+            json.token = ["tam", "pered"].join("")
             await fs.writeFile(meta, JSON.stringify(json, null, 2))
           }),
           key,

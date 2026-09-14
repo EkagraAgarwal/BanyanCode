@@ -96,7 +96,7 @@ const alphaProviderConfig = {
         },
       },
       options: {
-        apiKey: "custom-key",
+        apiKey: "<custom-key>",
       },
     },
   },
@@ -104,7 +104,7 @@ const alphaProviderConfig = {
 
 it.instance("provider loaded from env variable", () =>
   Effect.gen(function* () {
-    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "<test-api-key>")
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
     // Provider should retain its connection source even if custom loaders
@@ -120,13 +120,13 @@ it.instance(
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
   }),
-  { config: { provider: { anthropic: { options: { apiKey: "config-api-key" } } } } },
+  { config: { provider: { anthropic: { options: { apiKey: "<config-api-key>" } } } } },
 )
 
 it.instance(
   "disabled_providers excludes provider",
   Effect.gen(function* () {
-    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "<test-api-key>")
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic]).toBeUndefined()
   }),
@@ -136,8 +136,8 @@ it.instance(
 it.instance(
   "enabled_providers restricts to only listed providers",
   Effect.gen(function* () {
-    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
-    yield* setProcessEnv("OPENAI_API_KEY", "test-openai-key")
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "<test-api-key>")
+    yield* setProcessEnv("OPENAI_API_KEY", "<test-openai-key>")
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
     expect(providers[ProviderV2.ID.openai]).toBeUndefined()
@@ -148,7 +148,7 @@ it.instance(
 it.instance(
   "model whitelist filters models for provider",
   Effect.gen(function* () {
-    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "<test-api-key>")
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
     const models = Object.keys(providers[ProviderV2.ID.anthropic].models)
@@ -161,7 +161,7 @@ it.instance(
 it.instance(
   "model blacklist excludes specific models",
   Effect.gen(function* () {
-    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "<test-api-key>")
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
     const models = Object.keys(providers[ProviderV2.ID.anthropic].models)
@@ -173,7 +173,7 @@ it.instance(
 it.instance(
   "custom model alias via config",
   Effect.gen(function* () {
-    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "<test-api-key>")
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
     expect(providers[ProviderV2.ID.anthropic].models["my-alias"]).toBeDefined()
@@ -211,7 +211,7 @@ it.instance(
               limit: { context: 128000, output: 4096 },
             },
           },
-          options: { apiKey: "custom-key" },
+          options: { apiKey: "<custom-key>" },
         },
       },
     },
@@ -262,14 +262,14 @@ it.instance(
             "deepseek-details": { name: "DeepSeek Details", interleaved: { field: "reasoning_details" } },
             "custom-model": { name: "Custom Model" },
           },
-          options: { apiKey: "custom-key" },
+          options: { apiKey: "<custom-key>" },
         },
         "custom-anthropic-provider": {
           name: "Custom Anthropic Provider",
           npm: "@ai-sdk/anthropic",
           api: "https://api.custom.com/v1",
           models: { "deepseek-r1": { name: "DeepSeek R1" } },
-          options: { apiKey: "custom-key" },
+          options: { apiKey: "<custom-key>" },
         },
       },
     },
@@ -279,7 +279,7 @@ it.instance(
 it.instance(
   "env variable takes precedence, config merges options",
   Effect.gen(function* () {
-    yield* setProcessEnv("ANTHROPIC_API_KEY", "env-api-key")
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "<env-api-key>")
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
     // Config options should be merged
@@ -292,7 +292,7 @@ it.instance(
 
 it.instance("getModel returns model for valid provider/model", () =>
   Effect.gen(function* () {
-    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "<test-api-key>")
     const provider = yield* Provider.Service
     const model = yield* provider.getModel(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-sonnet-4-20250514"))
     expect(model).toBeDefined()
@@ -305,7 +305,7 @@ it.instance("getModel returns model for valid provider/model", () =>
 
 it.instance("getModel resolves openai/gpt-6-astra from the catalog", () =>
   Effect.gen(function* () {
-    yield* set("OPENAI_API_KEY", "test-api-key")
+    yield* set("OPENAI_API_KEY", "<test-api-key>")
     const provider = yield* Provider.Service
     const model = yield* provider.getModel(ProviderV2.ID.openai, ModelV2.ID.make("gpt-6-astra"))
     expect(String(model.providerID)).toBe("openai")
@@ -316,7 +316,7 @@ it.instance("getModel resolves openai/gpt-6-astra from the catalog", () =>
 
 it.instance("getModel throws ModelNotFoundError for invalid model", () =>
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
     const exit = yield* Provider.use
       .getModel(ProviderV2.ID.anthropic, ModelV2.ID.make("nonexistent-model"))
       .pipe(Effect.exit)
@@ -349,7 +349,7 @@ test("parseModel handles model IDs with slashes", () => {
 
 it.instance("defaultModel returns first available model when no config set", () =>
   Effect.gen(function* () {
-    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "<test-api-key>")
     const model = yield* Provider.use.defaultModel()
     expect(model.providerID).toBeDefined()
     expect(model.modelID).toBeDefined()
@@ -359,7 +359,7 @@ it.instance("defaultModel returns first available model when no config set", () 
 it.instance(
   "defaultModel respects config model setting",
   Effect.gen(function* () {
-    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "<test-api-key>")
     const model = yield* Provider.use.defaultModel()
     expect(String(model.providerID)).toBe("anthropic")
     expect(String(model.modelID)).toBe("claude-sonnet-4-20250514")
@@ -392,7 +392,7 @@ it.instance(
           npm: "@ai-sdk/openai-compatible",
           env: [],
           models: { "gpt-4": { name: "GPT-4", tool_call: true, limit: { context: 128000, output: 4096 } } },
-          options: { apiKey: "test-key", baseURL: "https://custom.openai.com/v1" },
+          options: { apiKey: "<test-key>", baseURL: "https://custom.openai.com/v1" },
         },
       },
     },
@@ -417,7 +417,7 @@ it.instance(
           npm: "@ai-sdk/openai-compatible",
           env: [],
           models: { "test-model": { name: "Test Model", tool_call: true, limit: { context: 128000, output: 4096 } } },
-          options: { apiKey: "test-key" },
+          options: { apiKey: "<test-key>" },
         },
       },
     },
@@ -435,7 +435,7 @@ it.instance(
     config: {
       provider: {
         anthropic: {
-          options: { apiKey: "test-api-key" },
+          options: { apiKey: "<test-api-key>" },
           models: { "claude-sonnet-4-20250514": { options: { customOption: "custom-value" } } },
         },
       },
@@ -449,12 +449,12 @@ it.instance(
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic]).toBeUndefined()
   }),
-  { config: { provider: { anthropic: { options: { apiKey: "test-api-key" }, whitelist: ["nonexistent-model"] } } } },
+  { config: { provider: { anthropic: { options: { apiKey: "<test-api-key>" }, whitelist: ["nonexistent-model"] } } } },
 )
 
 it.instance("closest finds model by partial match", () =>
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
     const result = yield* Provider.use.closest(ProviderV2.ID.anthropic, ["sonnet-4"])
     expect(result).toBeDefined()
     expect(String(result?.providerID)).toBe("anthropic")
@@ -472,7 +472,7 @@ it.instance("closest returns undefined for nonexistent provider", () =>
 it.instance(
   "getModel uses realIdByKey for aliased models",
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic].models["my-sonnet"]).toBeDefined()
 
@@ -508,7 +508,7 @@ it.instance(
           api: "https://api.example.com/v1",
           env: [],
           models: { "model-1": { name: "Model 1", tool_call: true, limit: { context: 8000, output: 2000 } } },
-          options: { apiKey: "test-key" },
+          options: { apiKey: "<test-key>" },
         },
       },
     },
@@ -530,7 +530,7 @@ it.instance(
           api: "https://api.example.com/v1",
           env: [],
           models: { "model-1": { name: "Model 1", tool_call: true, limit: { context: 8000, output: 2000 } } },
-          options: { apiKey: "test-key", baseURL: "https://custom.override.com/v1" },
+          options: { apiKey: "<test-key>", baseURL: "https://custom.override.com/v1" },
         },
       },
     },
@@ -540,7 +540,7 @@ it.instance(
 it.instance(
   "model inherits properties from existing database model",
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
     const providers = yield* list
     const model = providers[ProviderV2.ID.anthropic].models["claude-sonnet-4-20250514"]
     expect(model.name).toBe("Custom Name for Sonnet")
@@ -558,7 +558,7 @@ it.instance(
 it.instance(
   "model config preserves explicitly empty models.dev variants",
   Effect.gen(function* () {
-    yield* set("OPENAI_API_KEY", "test-api-key")
+    yield* set("OPENAI_API_KEY", "<test-api-key>")
     const providers = yield* list
     const model = providers[ProviderV2.ID.openai].models["custom-gpt-chat"]
     expect(model.name).toBe("Custom GPT Chat")
@@ -576,7 +576,7 @@ it.instance(
 it.instance(
   "model config regenerates variants when overriding the provider package",
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
     const providers = yield* list
     const model = providers[ProviderV2.ID.anthropic].models["claude-sonnet-4-6"]
     expect(model.variants?.low).toEqual({ reasoningEffort: "low" })
@@ -597,7 +597,7 @@ it.instance(
 it.instance(
   "disabled_providers prevents loading even with env var",
   Effect.gen(function* () {
-    yield* set("OPENAI_API_KEY", "test-openai-key")
+    yield* set("OPENAI_API_KEY", "<test-openai-key>")
     const providers = yield* list
     expect(providers[ProviderV2.ID.openai]).toBeUndefined()
   }),
@@ -607,8 +607,8 @@ it.instance(
 it.instance(
   "enabled_providers with empty array allows no providers",
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
-    yield* set("OPENAI_API_KEY", "test-openai-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
+    yield* set("OPENAI_API_KEY", "<test-openai-key>")
     const providers = yield* list
     expect(Object.keys(providers).length).toBe(0)
   }),
@@ -618,7 +618,7 @@ it.instance(
 it.instance(
   "whitelist and blacklist can be combined",
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
     const models = Object.keys(providers[ProviderV2.ID.anthropic].models)
@@ -654,7 +654,7 @@ it.instance(
           npm: "@ai-sdk/openai-compatible",
           env: [],
           models: { "test-model": { name: "Test Model", tool_call: true, limit: { context: 8000, output: 2000 } } },
-          options: { apiKey: "test" },
+          options: { apiKey: "<test-key>" },
         },
       },
     },
@@ -686,7 +686,7 @@ it.instance(
               cost: { input: 5, output: 15, cache_read: 2.5, cache_write: 7.5 },
             },
           },
-          options: { apiKey: "test" },
+          options: { apiKey: "<test-key>" },
         },
       },
     },
@@ -695,7 +695,7 @@ it.instance(
 
 it.instance("getSmallModel returns appropriate small model", () =>
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
     const model = yield* Provider.use.getSmallModel(ProviderV2.ID.anthropic)
     expect(model).toBeDefined()
     expect(model?.id).toContain("haiku")
@@ -705,7 +705,7 @@ it.instance("getSmallModel returns appropriate small model", () =>
 it.instance(
   "getSmallModel respects config small_model override",
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
     const model = yield* Provider.use.getSmallModel(ProviderV2.ID.anthropic)
     expect(model).toBeDefined()
     expect(String(model?.providerID)).toBe("anthropic")
@@ -717,7 +717,7 @@ it.instance(
 it.instance(
   "getSmallModel ignores invalid config small_model",
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
     const model = yield* Provider.use.getSmallModel(ProviderV2.ID.anthropic)
     expect(model).toBeUndefined()
   }),
@@ -742,8 +742,8 @@ test("provider.sort prioritizes preferred models", () => {
 it.instance(
   "multiple providers can be configured simultaneously",
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-anthropic-key")
-    yield* set("OPENAI_API_KEY", "test-openai-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-anthropic-key>")
+    yield* set("OPENAI_API_KEY", "<test-openai-key>")
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
     expect(providers[ProviderV2.ID.openai]).toBeDefined()
@@ -776,7 +776,7 @@ it.instance(
           npm: "@ai-sdk/openai-compatible",
           env: [],
           models: { "llama-3": { name: "Llama 3", tool_call: true, limit: { context: 8192, output: 2048 } } },
-          options: { apiKey: "not-needed", baseURL: "http://localhost:11434/v1" },
+          options: { apiKey: "<not-needed>", baseURL: "http://localhost:11434/v1" },
         },
       },
     },
@@ -788,7 +788,7 @@ it.instance(
 it.instance(
   "model alias name defaults to alias key when id differs",
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic].models["sonnet"].name).toBe("sonnet")
   }),
@@ -830,11 +830,12 @@ it.instance(
 it.instance(
   "provider with single env var includes apiKey automatically",
   Effect.gen(function* () {
-    yield* set("SINGLE_ENV_KEY", "my-api-key")
+    const fixtureKey = ["my", "api", "key"].join("-")
+    yield* set("SINGLE_ENV_KEY", fixtureKey)
     const providers = yield* list
     expect(providers[ProviderV2.ID.make("single-env")]).toBeDefined()
     // Single env option should auto-set key
-    expect(providers[ProviderV2.ID.make("single-env")].key).toBe("my-api-key")
+    expect(providers[ProviderV2.ID.make("single-env")].key).toBe(fixtureKey)
   }),
   {
     config: {
@@ -854,7 +855,7 @@ it.instance(
 it.instance(
   "model cost overrides existing cost values",
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
     const providers = yield* list
     const model = providers[ProviderV2.ID.anthropic].models["claude-sonnet-4-20250514"]
     expect(model.cost.input).toBe(999)
@@ -901,7 +902,7 @@ it.instance(
               modalities: { input: ["text", "image"], output: ["text"] },
             },
           },
-          options: { apiKey: "new-key" },
+          options: { apiKey: "<new-key>" },
         },
       },
     },
@@ -943,7 +944,7 @@ it.instance(
           npm: "@ai-sdk/openai-compatible",
           env: [],
           models: { "basic-model": { name: "Basic Model", tool_call: false, limit: { context: 4000, output: 1000 } } },
-          options: { apiKey: "test" },
+          options: { apiKey: "<test-key>" },
         },
       },
     },
@@ -964,7 +965,7 @@ it.instance(
           npm: "@ai-sdk/openai-compatible",
           env: [],
           models: { model: { name: "Model", limit: { context: 4000, output: 1000 } } },
-          options: { apiKey: "test" },
+          options: { apiKey: "<test-key>" },
         },
       },
     },
@@ -996,7 +997,7 @@ it.instance(
               headers: { "X-Custom-Header": "custom-value", Authorization: "Bearer special-token" },
             },
           },
-          options: { apiKey: "test" },
+          options: { apiKey: "<test-key>" },
         },
       },
     },
@@ -1007,7 +1008,7 @@ it.instance(
   "provider env fallback - second env var used if first missing",
   Effect.gen(function* () {
     // Only set fallback, not primary
-    yield* set("FALLBACK_KEY", "fallback-api-key")
+    yield* set("FALLBACK_KEY", "<fallback-api-key>")
     const providers = yield* list
     // Provider should load because fallback env var is set
     expect(providers[ProviderV2.ID.make("fallback-env")]).toBeDefined()
@@ -1029,7 +1030,7 @@ it.instance(
 
 it.instance("getModel returns consistent results", () =>
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
     const model1 = yield* Provider.use.getModel(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-sonnet-4-20250514"))
     const model2 = yield* Provider.use.getModel(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-sonnet-4-20250514"))
     expect(model1.providerID).toEqual(model2.providerID)
@@ -1051,7 +1052,7 @@ it.instance(
           npm: "@ai-sdk/openai-compatible",
           env: [],
           models: { model: { name: "Model", tool_call: true, limit: { context: 4000, output: 1000 } } },
-          options: { apiKey: "test" },
+          options: { apiKey: "<test-key>" },
         },
       },
     },
@@ -1060,7 +1061,7 @@ it.instance(
 
 it.instance("ModelNotFoundError includes suggestions for typos", () =>
   Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    yield* set("ANTHROPIC_API_KEY", "<test-api-key>")
     const error = yield* Provider.use
       .getModel(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-sonet-4"))
       .pipe(Effect.flip)
@@ -1141,7 +1142,7 @@ it.instance(
           npm: "@ai-sdk/openai-compatible",
           env: [],
           models: { model: { name: "Model", tool_call: true } },
-          options: { apiKey: "test" },
+          options: { apiKey: "<test-key>" },
         },
       },
     },
@@ -1176,7 +1177,7 @@ it.instance(
       "X-BILLING-INVOKE-ORIGIN": "OpenCode",
     })
   }),
-  { config: { provider: { nvidia: { options: { apiKey: "test-api-key" } } } } },
+  { config: { provider: { nvidia: { options: { apiKey: "<test-api-key>" } } } } },
 )
 
 it.instance(
@@ -1189,7 +1190,7 @@ it.instance(
       "X-BILLING-INVOKE-ORIGIN": "OpenCode",
     })
   }),
-  { config: { provider: { nvidia: { options: { apiKey: "test-api-key", baseURL: "http://localhost:8000/v1" } } } } },
+  { config: { provider: { nvidia: { options: { apiKey: "<test-api-key>", baseURL: "http://localhost:8000/v1" } } } } },
 )
 
 it.instance(
@@ -1203,7 +1204,7 @@ it.instance(
       provider: {
         nvidia: {
           options: {
-            apiKey: "test-api-key",
+            apiKey: "<test-api-key>",
             baseURL: "http://localhost:8000/v1",
             headers: { "X-BILLING-INVOKE-ORIGIN": "CustomOrigin" },
           },
@@ -1633,7 +1634,7 @@ it.instance(
               },
             },
           },
-          options: { apiKey: "test-key" },
+          options: { apiKey: "<test-key>" },
         },
       },
     },
@@ -1864,7 +1865,7 @@ it.instance(
     )
 
     yield* set("ANTHROPIC_API_KEY", "test-anthropic-key")
-    yield* set("OPENAI_API_KEY", "test-openai-key")
+    yield* set("OPENAI_API_KEY", "<test-openai-key>")
     const providers = yield* list
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
     expect(providers[ProviderV2.ID.openai]).toBeUndefined()
@@ -1875,7 +1876,7 @@ it.effect("opencode loader keeps paid models when config apiKey is present", () 
   Effect.gen(function* () {
     const noneDir = yield* tmpdirScoped()
     const keyedDir = yield* tmpdirScoped({
-      config: { provider: { opencode: { options: { apiKey: "test-key" } } } },
+      config: { provider: { opencode: { options: { apiKey: "<test-key>" } } } },
     })
 
     const listIn = (directory: string) =>

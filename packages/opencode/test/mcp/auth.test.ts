@@ -62,14 +62,14 @@ test("serializes concurrent auth file updates across service instances", async (
 
       yield* Effect.all(
         [
-          first.updateTokens("posthog", { accessToken: "access-token" }, "https://mcp.posthog.com/mcp"),
+          first.updateTokens("posthog", { accessToken: "<access-token>" }, "https://mcp.posthog.com/mcp"),
           second.updateClientInfo("posthog", { clientId: "client-id" }, "https://mcp.posthog.com/mcp"),
         ],
         { concurrency: "unbounded" },
       )
 
       const entry = yield* first.get("posthog")
-      expect(entry?.tokens?.accessToken).toBe("access-token")
+      expect(entry?.tokens?.accessToken).toBe("<access-token>")
       expect(entry?.clientInfo?.clientId).toBe("client-id")
       expect(entry?.serverUrl).toBe("https://mcp.posthog.com/mcp")
       expect(() => JSON.parse(file.raw())).not.toThrow()
