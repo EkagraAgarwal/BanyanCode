@@ -10,6 +10,7 @@ import { BanyanConfigService } from "./banyan-config"
 import { CodegraphBuildService } from "./codegraph-build-service"
 import { CodegraphIndexer } from "./codegraph-indexer"
 import { CodegraphRepo } from "./codegraph-repo"
+import { probeFileDrift } from "./graph-staleness"
 
 export const State = Schema.Struct({
   status: Schema.Literals(["idle", "watching", "draining", "paused"]),
@@ -48,6 +49,22 @@ export interface Interface {
     type: "banyancode.codegraph.auto-update.progress"
     properties: ProgressState
   }>
+  // Bounded flush: drain up to maxPaths pending paths for root (or all
+  // pending when root is omitted) via indexFiles/removeFiles. Never starts
+  // a full build; returns per-root discovered/indexed/removed/cached counts.
+  readonly flush: (input?: {
+    readonly root?: string
+    readonly maxPaths?: number
+  }) => Effect.Effect<{ discovered: number; indexed: number; removed: number; cached: number; pending: number }, never, never>
+  // Periodic reconciliation: probe indexed rows for size+mtime drift and
+  // deleted files, enqueue the drifted paths, and wake the drain. New files
+  // on disk are picked up by the watcher; this covers edits/deletes the
+  // watcher missed while paused or offline.
+  readonly reconcile: (input?: { readonly root?: string }) => Effect.Effect<
+    { discovered: number; changed: number; removed: number; cached: number },
+    never,
+    never
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphAutoUpdate") {}
@@ -84,6 +101,8 @@ export const layer: Layer.Layer<
         state: () => Ref.get(stateRef),
         events: () => events,
         progressEvents: () => progressEvents,
+        flush: () => Effect.succeed({ discovered: 0, indexed: 0, removed: 0, cached: 0, pending: 0 }),
+        reconcile: () => Effect.succeed({ discovered: 0, changed: 0, removed: 0, cached: 0 }),
       })
     }
 
@@ -429,6 +448,74 @@ export const layer: Layer.Layer<
       state: () => Ref.get(stateRef),
       events: () => eventsQueue,
       progressEvents: () => progressEventsQueue,
+      flush: (input = {}) =>
+        Effect.gen(function* () {
+          const meta = yield* repo.getMeta().pipe(Effect.orElseSucceed(() => undefined))
+          const root = input.root ?? meta?.indexedRoot
+          if (!root) return { discovered: 0, indexed: 0, removed: 0, cached: 0, pending: (yield* Ref.get(pendingRef)).size }
+          const maxPaths = Math.max(1, Math.min(MAX_BATCH_PATHS, input.maxPaths ?? MAX_BATCH_PATHS))
+          const snapshot = yield* Ref.getAndUpdate(pendingRef, (pending) => {
+            const next = new Map(pending)
+            let taken = 0
+            for (const key of next.keys()) {
+              if (taken >= maxPaths) break
+              if (key === root || key.startsWith(root + path.sep)) {
+                next.delete(key)
+                taken++
+              }
+            }
+            return next
+          })
+          const batch = [...snapshot.entries()]
+            .filter(([filePath]) => filePath === root || filePath.startsWith(root + path.sep))
+            .slice(0, maxPaths)
+          if (batch.length === 0) {
+            return { discovered: 0, indexed: 0, removed: 0, cached: 0, pending: (yield* Ref.get(pendingRef)).size }
+          }
+          const removals = batch.filter(([, change]) => change === "unlink").map(([filePath]) => filePath)
+          const additions = batch.filter(([, change]) => change !== "unlink").map(([filePath]) => filePath)
+          const excludePatterns = yield* Ref.get(excludePatternsRef)
+          let indexed = 0
+          let cached = 0
+          if (removals.length > 0) {
+            yield* indexer.removeFiles({ root, paths: removals }).pipe(Effect.ignore)
+          }
+          if (additions.length > 0) {
+            const result = yield* indexer
+              .indexFiles({ root, paths: additions, excludePatterns })
+              .pipe(Effect.orElseSucceed(() => ({ indexed: 0, skipped: additions.length, parseErrors: [] })))
+            indexed = result.indexed
+            cached = result.skipped
+          }
+          yield* recomputeStatus()
+          return {
+            discovered: 0,
+            indexed,
+            removed: removals.length,
+            cached,
+            pending: (yield* Ref.get(pendingRef)).size,
+          }
+        }),
+      reconcile: (input = {}) =>
+        Effect.gen(function* () {
+          const meta = yield* repo.getMeta().pipe(Effect.orElseSucceed(() => undefined))
+          const root = input.root ?? meta?.indexedRoot
+          if (!root) return { discovered: 0, changed: 0, removed: 0, cached: 0 }
+          const probe = yield* probeFileDrift(repo)
+          const inScope = (filePath: string) => filePath === root || filePath.startsWith(root + path.sep)
+          const changed = probe.changedPaths.filter(inScope)
+          const removed = probe.removedPaths.filter(inScope)
+          if (changed.length > 0 || removed.length > 0) {
+            yield* Ref.update(pendingRef, (pending) => {
+              const next = new Map(pending)
+              for (const filePath of changed) next.set(filePath, "change")
+              for (const filePath of removed) next.set(filePath, "unlink")
+              return next
+            })
+            yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
+          }
+          return { discovered: 0, changed: changed.length, removed: removed.length, cached: probe.cached }
+        }),
     })
   }),
 )
