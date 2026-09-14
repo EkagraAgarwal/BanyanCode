@@ -109,6 +109,11 @@ export const resolveGraphTargetStrict = (
 ): Effect.Effect<ResolutionResult, never, never> =>
   Effect.gen(function* () {
     const target = input.target.trim()
+    // C/C++ spells qualification with `::` (Foo::bar); the graph stores the
+    // leaf name (bar) with the parent scope recoverable from sibling nodes.
+    // Normalize to the `.` spelling so the qualified-split and scoped
+    // fallbacks below treat both spellings identically.
+    const qualified = target.replace(/::/g, ".")
     if (!target) {
       return {
         _tag: "Miss" as const,
@@ -187,8 +192,8 @@ export const resolveGraphTargetStrict = (
     //    here would fall through to step 4 unscoped and pick an arbitrary
     //    `put` across the whole graph.
     let parentFileIDs: ReadonlySet<string> | undefined
-    if (target.includes(".")) {
-      const parts = target.split(".")
+    if (qualified.includes(".")) {
+      const parts = qualified.split(".")
       const leaf = parts[parts.length - 1] ?? ""
       const parentName = parts.slice(0, -1).join(".")
       if (leaf && parentName) {
@@ -248,8 +253,8 @@ export const resolveGraphTargetStrict = (
     // FTS failures are treated as a miss (this step must never break
     // resolution); an empty `parentFileIDs` (no parent found) filters out
     // every hit, so the step contributes nothing for unresolved parents.
-    if (target.includes(".") && parentFileIDs !== undefined && repo.ftsSearchNodes) {
-      const leaf = target.split(".").pop()!.toLowerCase()
+    if (qualified.includes(".") && parentFileIDs !== undefined && repo.ftsSearchNodes) {
+      const leaf = qualified.split(".").pop()!.toLowerCase()
       const ftsHitsRaw = yield* repo
         .ftsSearchNodes({ query: leaf, limit: 20 })
         .pipe(Effect.catchCause(() => Effect.succeed([])))
@@ -271,8 +276,8 @@ export const resolveGraphTargetStrict = (
     //    generic. Outside a scope, the original `isShortLeaf` gate stands so
     //    unscoped short targets like bare `put` still fail over to name-like
     //    rather than matching every `put` repo-wide.
-    const lowerTarget = target.toLowerCase()
-    const leaf = target.includes(".") ? target.split(".").pop()!.toLowerCase() : lowerTarget
+    const lowerTarget = qualified.toLowerCase()
+    const leaf = qualified.includes(".") ? qualified.split(".").pop()!.toLowerCase() : lowerTarget
     const scoped = parentFileIDs !== undefined && parentFileIDs.size > 0
     const isShortLeaf = leaf.length < 6
     const nameMatches = (n: CodegraphNode): boolean => {

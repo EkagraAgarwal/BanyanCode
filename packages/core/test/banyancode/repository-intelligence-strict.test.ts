@@ -202,8 +202,7 @@ describe("RepositoryIntelligence Strict Diagnostic Policy", () => {
   // service tags (Phase 1) AND the depth-1 bucket is dropped here (Phase 4),
   // `repository_tests` for a `Service`-shaped symbol resolves to the right
   // file and surfaces the test nodes that reference the leaf method.
-  test("repository_tests returns ≥1 test for a Service-shaped symbol after Phase 1 resolver widening", async () => {
-    await using tmp = await tmpdir()
+  test("repository_tests returns ≥1 test for a Service-shaped symbol after Phase 1 resolver widening", async () => {    await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.db")
     const dbLayer = Database.layerFromPath(dbPath)
 
@@ -299,6 +298,90 @@ describe("RepositoryIntelligence Strict Diagnostic Policy", () => {
         expect(result.tests.length).toBeGreaterThanOrEqual(1)
         const ids = result.tests.map((t) => t.id)
         expect(ids).toContain("fMemTest:case")
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("strict resolver returns target-not-resolved on exact miss without keyword fallback", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+    const { resolveGraphTargetStrict } = await import("../../src/banyancode/symbol-resolver")
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+        yield* repo.putFile({ id: "file-1", path: "src/real.ts", contentHash: "h1", language: "typescript", indexedAt: 1 })
+        yield* repo.putNode({ id: "node-1", fileID: "file-1", kind: "class", name: "RealClass", signature: "class RealClass", startLine: 1, endLine: 10, code: "class RealClass {}" })
+
+        const miss = yield* resolveGraphTargetStrict(repo, { target: "NoSuchSymbol", allowKeywordFallback: false })
+        expect(miss._tag).toBe("Miss")
+        if (miss._tag === "Miss") {
+          expect(miss.value.tried).toContain("tag-fallback")
+          expect(miss.value.tried).toContain("name-exact")
+          expect(miss.value.tried).not.toContain("code-substring")
+          expect(miss.value.tried).not.toContain("name-like")
+        }
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("C++ qualified target resolves through the :: spelling (C_TYPE_TOKEN regression)", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+    const { resolveGraphTargetPure } = await import("../../src/banyancode/symbol-resolver")
+    const { parseC } = await import("../../src/banyancode/langs/c")
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+        const content = `class Player {\npublic:\n    int score() const { return pts; }\n};\n\nint Player::win_count() const {\n    return wins;\n}\n`
+        const parsed = parseC(content, "file-cpp")
+        expect(parsed.nodes.map((n) => n.name)).toContain("win_count")
+        yield* repo.putFile({ id: "file-cpp", path: "src/player.cpp", contentHash: "h", language: "cpp", indexedAt: 1 })
+        for (const n of parsed.nodes) {
+          yield* repo.putNode({
+            id: `n-${n.name}-${n.startLine}`,
+            fileID: "file-cpp",
+            kind: n.kind as "class",
+            name: n.name,
+            signature: "",
+            startLine: n.startLine,
+            endLine: n.endLine,
+            code: content,
+          })
+        }
+
+        const resolved = yield* resolveGraphTargetPure(repo, { target: "Player::win_count" })
+        expect(resolved._tag).toBe("Ok")
+        if (resolved._tag === "Ok") {
+          expect(resolved.value.node.name).toBe("win_count")
+          expect(resolved.value.derivation).toBe("qualified-split")
+        }
+      }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
+  test("fresh query performs zero writes (no meta row, no file rows)", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.db")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
+        const repo = yield* CodegraphRepo.Service
+        const ri = yield* RepositoryIntelligence.Service
+        const result = yield* ri.query({ query: "AnythingAtAll" })
+        expect(result.status).toBe("failed")
+        expect(yield* repo.getMeta()).toBeUndefined()
+        expect(yield* repo.countFiles()).toBe(0)
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
