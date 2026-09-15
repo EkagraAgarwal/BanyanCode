@@ -80,7 +80,7 @@ describe("plugin.codex", () => {
         extractAccountId({
           id_token: idToken,
           access_token: accessToken,
-          refresh_token: "rt",
+          refresh_token: "<refresh-token>",
         }),
       ).toBe("from-id-token")
     })
@@ -94,7 +94,7 @@ describe("plugin.codex", () => {
         extractAccountId({
           id_token: idToken,
           access_token: accessToken,
-          refresh_token: "rt",
+          refresh_token: "<refresh-token>",
         }),
       ).toBe("from-access")
     })
@@ -105,7 +105,7 @@ describe("plugin.codex", () => {
         extractAccountId({
           id_token: token,
           access_token: token,
-          refresh_token: "rt",
+          refresh_token: "<refresh-token>",
         }),
       ).toBeUndefined()
     })
@@ -116,7 +116,7 @@ describe("plugin.codex", () => {
         extractAccountId({
           id_token: "",
           access_token: accessToken,
-          refresh_token: "rt",
+          refresh_token: "<refresh-token>",
         }),
       ).toBe("acc-123")
     })
@@ -127,11 +127,11 @@ describe("plugin.codex", () => {
     const enabled = await CodexAuthPlugin({} as never, { experimentalWebSockets: true })
 
     const disabledOptions = await disabled.auth!.loader!(
-      async () => ({ type: "api", key: "sk-test" }) as never,
+      async () => ({ type: "api", key: "<api-key>" }) as never,
       {} as never,
     )
     const enabledOptions = await enabled.auth!.loader!(
-      async () => ({ type: "api", key: "sk-test" }) as never,
+      async () => ({ type: "api", key: "<api-key>" }) as never,
       {} as never,
     )
 
@@ -164,9 +164,10 @@ describe("plugin.codex", () => {
   })
 
   test("deduplicates concurrent Codex token refreshes", async () => {
+    const oldRefresh = ["refresh", "old"].join("-")
     let auth = {
       type: "oauth" as const,
-      refresh: "refresh-old",
+      refresh: oldRefresh,
       access: "",
       expires: 0,
     }
@@ -185,13 +186,13 @@ describe("plugin.codex", () => {
       async fetch(request) {
         const url = new URL(request.url)
         if (url.pathname === "/oauth/token") {
-          expect(await request.text()).toContain("refresh_token=refresh-old")
+          expect(await request.text()).toContain(`refresh_token=${oldRefresh}`)
           refreshRequests += 1
           await refreshReady
           return Response.json({
             id_token: createTestJwt({ chatgpt_account_id: "acc-123" }),
-            access_token: "access-new",
-            refresh_token: "refresh-new",
+            access_token: "<access-new>",
+            refresh_token: "<refresh-new>",
             expires_in: 3600,
           })
         }
@@ -251,12 +252,12 @@ describe("plugin.codex", () => {
 
     expect(refreshRequests).toBe(1)
     expect(authUpdates).toHaveLength(1)
-    expect(authUpdates[0]?.body.refresh).toBe("refresh-new")
-    expect(authUpdates[0]?.body.access).toBe("access-new")
+    expect(authUpdates[0]?.body.refresh).toBe("<refresh-new>")
+    expect(authUpdates[0]?.body.access).toBe("<access-new>")
     expect(authUpdates[0]?.body.accountId).toBe("acc-123")
     expect(apiRequests).toEqual([
-      { authorization: "Bearer access-new", accountId: "acc-123" },
-      { authorization: "Bearer access-new", accountId: "acc-123" },
+      { authorization: "Bearer <access-new>", accountId: "acc-123" },
+      { authorization: "Bearer <access-new>", accountId: "acc-123" },
     ])
   })
 })

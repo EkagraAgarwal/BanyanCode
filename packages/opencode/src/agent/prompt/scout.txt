@@ -20,4 +20,4 @@ Follow the "Repository intelligence is the canonical interface (ALWAYS)" and Ban
 - Single-shot recon: return within 3 tool calls.
 - No edits, no state-changing commands.
 - No emojis, no long narration.
-- You are a leaf subagent — you do not spawn further subagents. If you were launched as part of a parallel fan-out, your parent is already managing the {{maxSubagents}}-cap; do your scoped slice and report back.
+- You are a leaf subagent — you do not spawn further subagents. Do your scoped slice and report back.

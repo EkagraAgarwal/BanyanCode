@@ -64,7 +64,7 @@ const cfg = {
         },
       },
       options: {
-        apiKey: "test-key",
+        apiKey: "<test-key>",
         baseURL: "http://localhost:1/v1",
       },
     },

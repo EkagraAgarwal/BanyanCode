@@ -93,7 +93,7 @@ it.instance(
   "Bedrock: loads when bearer token from auth.json is present",
   () =>
     Effect.gen(function* () {
-      yield* withAuthJson(JSON.stringify({ "amazon-bedrock": { type: "api", key: "test-bearer-token" } }))
+      yield* withAuthJson(JSON.stringify({ "amazon-bedrock": { type: "api", key: "<test-bearer-token>" } }))
       yield* set("AWS_PROFILE", "")
       yield* set("AWS_ACCESS_KEY_ID", "")
       yield* set("AWS_BEARER_TOKEN_BEDROCK", "")
@@ -127,7 +127,7 @@ it.instance(
     config: {
       provider: {
         "amazon-bedrock": {
-          options: { region: "us-east-2", apiKey: "test-bearer-token" },
+          options: { region: "us-east-2", apiKey: "<test-bearer-token>" },
           models: {
             "openai.gpt-5.5": {
               ...mantleModelConfig,
@@ -147,7 +147,7 @@ it.instance(
   "Bedrock Mantle: GPT OSS safeguard uses Chat Completions and Mantle base path",
   () =>
     Effect.gen(function* () {
-      yield* set("AWS_BEARER_TOKEN_BEDROCK", "test-bearer-token")
+      yield* set("AWS_BEARER_TOKEN_BEDROCK", "<test-bearer-token>")
       const model = yield* Provider.use.getModel(
         ProviderV2.ID.amazonBedrock,
         ModelV2.ID.make("openai.gpt-oss-safeguard-120b"),

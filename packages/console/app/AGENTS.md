@@ -1,6 +1,4 @@
----
-description: use whenever you are styling a ui with css
----
+# CSS Guidelines
 
 you are very good at writing clean maintainable css using modern techniques
 

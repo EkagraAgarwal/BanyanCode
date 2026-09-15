@@ -13,7 +13,7 @@ const original = {
   envPassword: process.env.OPENCODE_SERVER_PASSWORD,
   envUsername: process.env.OPENCODE_SERVER_USERNAME,
 }
-const auth = { username: "opencode", password: "listen-secret" }
+const auth = { username: "opencode", password: "<listen-password>" }
 const testPty = process.platform === "win32" ? test.skip : test
 
 afterEach(async () => {

@@ -23,37 +23,37 @@ describe("ServerAuth", () => {
   })
 
   test("defaults to the opencode username", () => {
-    Flag.OPENCODE_SERVER_PASSWORD = "secret"
+    Flag.OPENCODE_SERVER_PASSWORD = "<server-password>"
     Flag.OPENCODE_SERVER_USERNAME = undefined
 
     expect(ServerAuth.headers()).toEqual({
-      Authorization: `Basic ${Buffer.from("opencode:secret").toString("base64")}`,
+      Authorization: `Basic ${Buffer.from("opencode:<server-password>").toString("base64")}`,
     })
   })
 
   test("uses the configured username", () => {
-    Flag.OPENCODE_SERVER_PASSWORD = "secret"
+    Flag.OPENCODE_SERVER_PASSWORD = "<server-password>"
     Flag.OPENCODE_SERVER_USERNAME = "alice"
 
     expect(ServerAuth.headers()).toEqual({
-      Authorization: `Basic ${Buffer.from("alice:secret").toString("base64")}`,
+      Authorization: `Basic ${Buffer.from("alice:<server-password>").toString("base64")}`,
     })
   })
 
   test("prefers explicit credentials", () => {
-    Flag.OPENCODE_SERVER_PASSWORD = "secret"
+    Flag.OPENCODE_SERVER_PASSWORD = "<server-password>"
     Flag.OPENCODE_SERVER_USERNAME = "alice"
 
-    expect(ServerAuth.headers({ password: "cli-secret", username: "bob" })).toEqual({
-      Authorization: `Basic ${Buffer.from("bob:cli-secret").toString("base64")}`,
+    expect(ServerAuth.headers({ password: "<cli-password>", username: "bob" })).toEqual({
+      Authorization: `Basic ${Buffer.from("bob:<cli-password>").toString("base64")}`,
     })
   })
 
   test("validates decoded credentials against effect config", () => {
-    const config = { password: Option.some("secret"), username: "alice" }
+    const config = { password: Option.some("<server-password>"), username: "alice" }
 
     expect(ServerAuth.required(config)).toBe(true)
-    expect(ServerAuth.authorized({ username: "alice", password: Redacted.make("secret") }, config)).toBe(true)
-    expect(ServerAuth.authorized({ username: "opencode", password: Redacted.make("secret") }, config)).toBe(false)
+    expect(ServerAuth.authorized({ username: "alice", password: Redacted.make("<server-password>") }, config)).toBe(true)
+    expect(ServerAuth.authorized({ username: "opencode", password: Redacted.make("<server-password>") }, config)).toBe(false)
   })
 })

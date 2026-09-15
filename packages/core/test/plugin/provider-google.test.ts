@@ -22,7 +22,7 @@ describe("GooglePlugin", () => {
         {
           model: model("custom-google", "gemini"),
           package: "@ai-sdk/google",
-          options: { name: "custom-google", apiKey: "test" },
+          options: { name: "custom-google", apiKey: "<provider-credential>" },
         },
         {},
       )
@@ -58,7 +58,7 @@ describe("GooglePlugin", () => {
           },
           request: {
             headers: {},
-            body: { apiKey: "test" },
+            body: { apiKey: "<provider-credential>" },
           },
         }),
       )

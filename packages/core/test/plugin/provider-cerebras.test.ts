@@ -59,11 +59,11 @@ describe("CerebrasPlugin", () => {
         {
           model: model("custom-cerebras", "llama-4-scout-17b-16e-instruct"),
           package: "@ai-sdk/cerebras",
-          options: { name: "custom-cerebras", apiKey: "test" },
+          options: { name: "custom-cerebras", apiKey: "<provider-credential>" },
         },
         {},
       )
-      expect(cerebrasOptions).toEqual([{ name: "custom-cerebras", apiKey: "test" }])
+      expect(cerebrasOptions).toEqual([{ name: "custom-cerebras", apiKey: "<provider-credential>" }])
       expect(result.sdk.languageModel("llama-4-scout-17b-16e-instruct").provider).toBe("custom-cerebras")
     }),
   )
@@ -78,11 +78,11 @@ describe("CerebrasPlugin", () => {
         {
           model: model("custom-cerebras", "llama-4-scout-17b-16e-instruct"),
           package: "@ai-sdk/cerebras",
-          options: { name: "configured-cerebras", apiKey: "test" },
+          options: { name: "configured-cerebras", apiKey: "<provider-credential>" },
         },
         {},
       )
-      expect(cerebrasOptions).toEqual([{ name: "configured-cerebras", apiKey: "test" }])
+      expect(cerebrasOptions).toEqual([{ name: "configured-cerebras", apiKey: "<provider-credential>" }])
     }),
   )
 
@@ -96,7 +96,7 @@ describe("CerebrasPlugin", () => {
         {
           model: model("custom-cerebras", "llama-4-scout-17b-16e-instruct"),
           package: "@ai-sdk/groq",
-          options: { name: "custom-cerebras", apiKey: "test" },
+          options: { name: "custom-cerebras", apiKey: "<provider-credential>" },
         },
         {},
       )
