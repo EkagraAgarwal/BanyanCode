@@ -39,6 +39,19 @@ jobs:
               const isPR = !!item.pull_request;
               const kind = isPR ? 'PR' : 'issue';
 
+              if (isPR) {
+                const { data: pullRequest } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: item.number,
+                });
+
+                if (pullRequest.user.login === 'dependabot[bot]') {
+                  core.info(`Skipping: PR #${item.number} was created by Dependabot`);
+                  continue;
+                }
+              }
+
               const { data: comments } = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,

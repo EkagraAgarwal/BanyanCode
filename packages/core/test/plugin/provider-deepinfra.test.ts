@@ -56,12 +56,12 @@ describe("DeepInfraPlugin", () => {
         {
           model: model("custom-deepinfra", "model"),
           package: "@ai-sdk/deepinfra",
-          options: { name: "custom-deepinfra", apiKey: "test" },
+          options: { name: "custom-deepinfra", apiKey: "<provider-credential>" },
         },
         {},
       )
       expect(result.sdk.languageModel("model").provider).toBe("custom-deepinfra.chat")
-      expect(deepinfraOptions).toEqual([{ name: "custom-deepinfra", apiKey: "test" }])
+      expect(deepinfraOptions).toEqual([{ name: "custom-deepinfra", apiKey: "<provider-credential>" }])
     }),
   )
 
@@ -75,12 +75,12 @@ describe("DeepInfraPlugin", () => {
         {
           model: model("deepinfra", "model"),
           package: "@ai-sdk/deepinfra",
-          options: { name: "deepinfra", apiKey: "test" },
+          options: { name: "deepinfra", apiKey: "<provider-credential>" },
         },
         {},
       )
       expect(result.sdk.languageModel("model").provider).toBe("deepinfra.chat")
-      expect(deepinfraOptions).toEqual([{ name: "deepinfra", apiKey: "test" }])
+      expect(deepinfraOptions).toEqual([{ name: "deepinfra", apiKey: "<provider-credential>" }])
     }),
   )
 

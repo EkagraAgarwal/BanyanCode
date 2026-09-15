@@ -25,7 +25,6 @@ Available subagents (via the task tool):
 
 Follow the "Repository intelligence is the canonical interface (ALWAYS)" and BanyanCode orchestration sections in your system context.
 
-## Graph readiness is a precondition for delegation
 ## Mesh
 
 - mesh_control: checkin, steer, kill, plan_for, review — manage subagents.

@@ -27,7 +27,7 @@ void mock.module("google-auth-library", () => ({
     async getClient() {
       return {
         async getAccessToken() {
-          return { token: "vertex-token" }
+          return { token: "<vertex-credential>" }
         },
       }
     }
@@ -319,7 +319,7 @@ describe("GoogleVertexPlugin", () => {
       expect(fetchCalls).toHaveLength(1)
       expect(googleAuthOptions).toEqual([{ scopes: ["https://www.googleapis.com/auth/cloud-platform"] }])
       expect(fetchCalls[0].input).toBe("https://vertex.example")
-      expect(new Headers(fetchCalls[0].init?.headers).get("authorization")).toBe("Bearer vertex-token")
+      expect(new Headers(fetchCalls[0].init?.headers).get("authorization")).toBe("Bearer <vertex-credential>")
       expect(new Headers(fetchCalls[0].init?.headers).get("x-test")).toBe("1")
     }),
   )

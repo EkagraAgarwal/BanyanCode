@@ -229,7 +229,7 @@ describe.concurrent("core.share", () => {
 
     expect(async () => {
       await Share.sync({
-        share: { id: share.id, secret: "invalid-secret" },
+        share: { id: share.id, secret: "<invalid-secret>" },
         data,
       })
     }).toThrow()
@@ -248,7 +248,7 @@ describe.concurrent("core.share", () => {
 
     expect(async () => {
       await Share.sync({
-        share: { id: "non-existent-id", secret: "some-secret" },
+        share: { id: "non-existent-id", secret: "<some-secret>" },
         data,
       })
     }).toThrow()

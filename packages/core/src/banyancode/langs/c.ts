@@ -9,20 +9,20 @@ const DEFINE_REGEX = /(?:^|\n)\s*#\s*define\s+([A-Za-z_]\w*)/g
 
 const C_QUALIFIERS =
   "(?:static|inline|extern|virtual|constexpr|consteval|constinit|const|volatile|unsigned|signed|register|thread_local|restrict|mutable|friend|explicit|noreturn|_Noreturn)\\s+"
-const C_TYPE_TOKEN = "[A-Za-z_]\\w*(?:::[A-Za-z_]\\w*)?(?:\\s*<[^>]*>)?(?:\\s*[*&]+\\s*|\\s+)"
+const C_TYPE_PATTERN = "[A-Za-z_]\\w*(?:::[A-Za-z_]\\w*)?(?:\\s*<[^>]*>)?(?:\\s*[*&]+\\s*|\\s+)"
 const C_FN_SUFFIX = "(?:const|noexcept\\s*\\([^)]*\\)|noexcept|override|final|volatile|throw\\s*\\([^)]*\\)|__attribute__\\s*\\([^)]*\\)|\\s)*"
 // A definition ends with `{` (a declaration ends with `;` and is dropped). The
 // name allows `Foo::bar` qualification for out-of-line C++ methods.
 const FUNCTION_DEF_REGEX = new RegExp(
-  `(?:^|\\n)\\s*(?:template\\s*<[^>]*>\\s*)?(?:${C_QUALIFIERS})*(?:${C_TYPE_TOKEN})+((?:[A-Za-z_]\\w*::)*[A-Za-z_]\\w*)\\s*\\(([^;{}]*)\\)\\s*${C_FN_SUFFIX}([{;])`,
+  `(?:^|\\n)\\s*(?:template\\s*<[^>]*>\\s*)?(?:${C_QUALIFIERS})*(?:${C_TYPE_PATTERN})+((?:[A-Za-z_]\\w*::)*[A-Za-z_]\\w*)\\s*\\(([^;{}]*)\\)\\s*${C_FN_SUFFIX}([{;])`,
   "g",
 )
 const METHOD_REGEX = new RegExp(
-  `(?:^|\\n)\\s+(?:${C_QUALIFIERS})*(?:${C_TYPE_TOKEN})*([A-Za-z_]\\w*)\\s*\\(([^;{}]*)\\)\\s*${C_FN_SUFFIX}\\{`,
+  `(?:^|\\n)\\s+(?:${C_QUALIFIERS})*(?:${C_TYPE_PATTERN})*([A-Za-z_]\\w*)\\s*\\(([^;{}]*)\\)\\s*${C_FN_SUFFIX}\\{`,
   "g",
 )
 const GLOBAL_VAR_REGEX = new RegExp(
-  `(?:^|\\n)\\s*(?:${C_QUALIFIERS})*(?:${C_TYPE_TOKEN})+([A-Za-z_]\\w*)\\s*(?:=|\\[|;)`,
+  `(?:^|\\n)\\s*(?:${C_QUALIFIERS})*(?:${C_TYPE_PATTERN})+([A-Za-z_]\\w*)\\s*(?:=|\\[|;)`,
   "g",
 )
 

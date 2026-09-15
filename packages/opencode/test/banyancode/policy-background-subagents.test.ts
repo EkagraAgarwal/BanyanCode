@@ -248,41 +248,34 @@ describe("banyan orchestration block — SystemPrompt.banyan()", () => {
   )
 })
 
-describe("explore and researcher — discretionary parallel scout fan-out rendered with maxSubagents", () => {
-  it.instance("explore prompt makes scout fan-out discretionary + resolves maxSubagents", () =>
+describe("explore and researcher — no scout fan-out, leaf subagents", () => {
+  it.instance("explore prompt has no scout fan-out", () =>
     Effect.gen(function* () {
       const _ = yield* TestInstance
       const explore = yield* Agent.Service.use((svc) => svc.get("explore"))
       expect(explore).toBeDefined()
       if (!explore) return
       const prompt = explore.prompt ?? ""
-      expect(prompt).toContain("You MAY spawn 2-5 parallel scout subagents")
-      expect(prompt).toContain("expected value")
-      expect(prompt).not.toMatch(/\bMUST\b.*parallel scout subagents/)
-      expect(prompt).toContain("background: true")
-      // {{maxSubagents}} must be rendered — no literal placeholder survives.
+      expect(prompt).not.toContain("parallel scout subagents")
       expect(prompt).not.toContain("{{maxSubagents}}")
-      expect(prompt).toMatch(/max \d+ concurrent/)
+      expect(prompt).toContain("you do not spawn subagents")
     }),
   )
 
-  it.instance("researcher prompt makes scout fan-out discretionary + resolves maxSubagents", () =>
+  it.instance("researcher prompt has no scout fan-out", () =>
     Effect.gen(function* () {
       const _ = yield* TestInstance
       const researcher = yield* Agent.Service.use((svc) => svc.get("researcher"))
       expect(researcher).toBeDefined()
       if (!researcher) return
       const prompt = researcher.prompt ?? ""
-      expect(prompt).toContain("You MAY spawn 2-5 parallel scout subagents")
-      expect(prompt).toContain("expected value")
-      expect(prompt).not.toMatch(/\bMUST\b.*parallel scout subagents/)
-      expect(prompt).toContain("background: true")
+      expect(prompt).not.toContain("parallel scout subagents")
       expect(prompt).not.toContain("{{maxSubagents}}")
-      expect(prompt).toMatch(/max \d+ concurrent/)
+      expect(prompt).toContain("You do not spawn subagents")
     }),
   )
 
-  it.instance("scout prompt no longer contains the literal {{maxSubagents}} placeholder", () =>
+  it.instance("scout prompt is leaf with no placeholder", () =>
     Effect.gen(function* () {
       const _ = yield* TestInstance
       const scout = yield* Agent.Service.use((svc) => svc.get("scout"))
@@ -290,9 +283,20 @@ describe("explore and researcher — discretionary parallel scout fan-out render
       if (!scout) return
       const prompt = scout.prompt ?? ""
       expect(prompt).not.toContain("{{maxSubagents}}")
-      // The forward-looking mention of the cap survives rendering.
-      expect(prompt).toContain("managing the")
-      expect(prompt).toMatch(/\d+-cap/)
+      expect(prompt).not.toContain("parallel scout subagents")
+      expect(prompt).toContain("you do not spawn further subagents")
+    }),
+  )
+
+  it.instance("explore/researcher deny task spawn", () =>
+    Effect.gen(function* () {
+      const _ = yield* TestInstance
+      for (const name of ["explore", "researcher"] as const) {
+        const agent = yield* Agent.Service.use((svc) => svc.get(name))
+        expect(agent).toBeDefined()
+        if (!agent) continue
+        expect(Permission.evaluate("task", "scout", agent.permission).action).toBe("deny")
+      }
     }),
   )
 })
