@@ -43,7 +43,7 @@ it.instance(
   "digitalocean provider autoloads from DIGITALOCEAN_ACCESS_TOKEN",
   () =>
     withEnv(
-      { DIGITALOCEAN_ACCESS_TOKEN: "test-token" },
+      { DIGITALOCEAN_ACCESS_TOKEN: "<test-token>" },
       Effect.gen(function* () {
         const provider = yield* Provider.Service
         const providers = yield* provider.list()
@@ -110,7 +110,7 @@ it.instance(
   "digitalocean provider.models passes through base models when no auth metadata",
   () =>
     withEnv(
-      { DIGITALOCEAN_ACCESS_TOKEN: "test-token" },
+      { DIGITALOCEAN_ACCESS_TOKEN: "<test-token>" },
       Effect.gen(function* () {
         const provider = yield* Provider.Service
         const providers = yield* provider.list()

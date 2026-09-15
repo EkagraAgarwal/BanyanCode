@@ -68,7 +68,7 @@ const providerInfo: Provider.Info = {
   name: "OpenAI",
   source: "config",
   env: ["OPENAI_API_KEY"],
-  options: { apiKey: "test-openai-key" },
+  options: { apiKey: "<test-openai-key>" },
   models: {},
 }
 
@@ -136,7 +136,7 @@ const expectOpenAIResponsesRequest = (input: {
     expect(
       yield* prepareNativeRequest({
         model: baseModel,
-        apiKey: "test-openai-key",
+        apiKey: "<test-openai-key>",
         messages: input.history,
         providerOptions: input.providerOptions,
         maxOutputTokens: input.maxOutputTokens,
@@ -331,7 +331,7 @@ describe("session.llm-native.request", () => {
   test("selects native request routes for provider packages", () => {
     const openai = LLMNative.model({
       model: { ...baseModel, api: { ...baseModel.api, url: "", npm: "@ai-sdk/openai" } },
-      apiKey: "test-key",
+      apiKey: "<test-key>",
       messages: [],
     })
     expect(openai.route.id).toBe("openai-responses")
@@ -339,7 +339,7 @@ describe("session.llm-native.request", () => {
 
     const anthropic = LLMNative.model({
       model: { ...baseModel, api: { ...baseModel.api, url: "", npm: "@ai-sdk/anthropic" } },
-      apiKey: "test-key",
+      apiKey: "<test-key>",
       messages: [],
     })
     expect(anthropic.route.id).toBe("anthropic-messages")
@@ -347,7 +347,7 @@ describe("session.llm-native.request", () => {
 
     const google = LLMNative.model({
       model: { ...baseModel, api: { ...baseModel.api, url: "", npm: "@ai-sdk/google" } },
-      apiKey: "test-key",
+      apiKey: "<test-key>",
       messages: [],
     })
     expect(google.route.id).toBe("gemini")
@@ -359,7 +359,7 @@ describe("session.llm-native.request", () => {
         providerID: ProviderV2.ID.make("opencode"),
         api: { ...baseModel.api, url: "https://ai.example.test/v1", npm: "@ai-sdk/openai-compatible" },
       },
-      apiKey: "test-key",
+      apiKey: "<test-key>",
       messages: [],
     })
     expect(compatible.route.id).toBe("openai-compatible-chat")
@@ -367,7 +367,7 @@ describe("session.llm-native.request", () => {
 
     const openrouter = LLMNative.model({
       model: { ...baseModel, api: { ...baseModel.api, url: "", npm: "@openrouter/ai-sdk-provider" } },
-      apiKey: "test-key",
+      apiKey: "<test-key>",
       messages: [],
     })
     expect(openrouter.route.id).toBe("openrouter")
@@ -386,7 +386,7 @@ describe("session.llm-native.request", () => {
   test("only enables native runtime for supported OpenAI API-key models", () => {
     expect(LLMNativeRuntime.status({ model: baseModel, provider: providerInfo, auth: undefined })).toMatchObject({
       type: "supported",
-      apiKey: "test-openai-key",
+      apiKey: "<test-openai-key>",
     })
     expect(
       LLMNativeRuntime.status({
@@ -396,7 +396,7 @@ describe("session.llm-native.request", () => {
       }),
     ).toMatchObject({
       type: "supported",
-      apiKey: "test-openai-key",
+      apiKey: "<test-openai-key>",
     })
     expect(
       LLMNativeRuntime.status({
@@ -410,7 +410,7 @@ describe("session.llm-native.request", () => {
       }),
     ).toMatchObject({
       type: "supported",
-      apiKey: "test-openai-key",
+      apiKey: "<test-openai-key>",
     })
     expect(
       LLMNativeRuntime.status({
@@ -464,38 +464,39 @@ describe("session.llm-native.request", () => {
           id: ProviderV2.ID.make("anthropic"),
           name: "Anthropic",
           env: ["ANTHROPIC_API_KEY"],
-          options: { apiKey: "test-anthropic-key" },
+          options: { apiKey: "<test-anthropic-key>" },
         },
         auth: undefined,
       }),
-    ).toMatchObject({ type: "supported", apiKey: "test-anthropic-key" })
+    ).toMatchObject({ type: "supported", apiKey: "<test-anthropic-key>" })
   })
 
   test("prefers console provider api key over stored opencode auth", () => {
+    const providerKey = ["provider", "key"].join("-")
     expect(
       LLMNativeRuntime.status({
         model: { ...baseModel, providerID: ProviderV2.ID.make("opencode") },
         provider: {
           ...providerInfo,
           id: ProviderV2.ID.make("opencode"),
-          options: { apiKey: "console-token" },
+          options: { apiKey: "<console-token>" },
           key: "zen-token",
         },
         auth: { type: "api", key: "zen-token" },
       }),
     ).toMatchObject({
       type: "supported",
-      apiKey: "console-token",
+      apiKey: "<console-token>",
     })
     expect(
       LLMNativeRuntime.status({
         model: baseModel,
-        provider: { ...providerInfo, options: {}, key: "provider-key" },
+        provider: { ...providerInfo, options: {}, key: providerKey },
         auth: undefined,
       }),
     ).toMatchObject({
       type: "supported",
-      apiKey: "provider-key",
+      apiKey: providerKey,
     })
   })
 

@@ -96,7 +96,7 @@ describe("OpenAI Chat route", () => {
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
         LLM.request({
-          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).chat("gpt-4o-mini"),
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "<provider-credential>" }).chat("gpt-4o-mini"),
           prompt: "think",
           providerOptions: { openai: { reasoningEffort: "low" } },
         }),
@@ -132,8 +132,8 @@ describe("OpenAI Chat route", () => {
       LLM.updateRequest(request, {
         model: Azure.configure({
           baseURL: "https://opencode-test.openai.azure.com/openai/v1/",
-          apiKey: "azure-key",
-          headers: { authorization: "Bearer stale" },
+          apiKey: "<azure-credential>",
+          headers: { authorization: "Bearer <stale-credential>" },
         }).chat("gpt-4o-mini"),
       }),
     ).pipe(
@@ -142,7 +142,7 @@ describe("OpenAI Chat route", () => {
           Effect.gen(function* () {
             const web = yield* HttpClientRequest.toWeb(input.request).pipe(Effect.orDie)
             expect(web.url).toBe("https://opencode-test.openai.azure.com/openai/v1/chat/completions?api-version=v1")
-            expect(web.headers.get("api-key")).toBe("azure-key")
+            expect(web.headers.get("api-key")).toBe("<azure-credential>")
             expect(web.headers.get("authorization")).toBeNull()
             return input.respond(sseEvents(deltaChunk({}, "stop")), {
               headers: { "content-type": "text/event-stream" },

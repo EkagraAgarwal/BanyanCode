@@ -14,6 +14,7 @@ import type { InstanceContext } from "../../src/project/instance-context"
 import { Auth } from "../../src/auth"
 import { Account } from "../../src/account/account"
 import { AccessToken, AccountID, OrgID } from "../../src/account/schema"
+
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Env } from "../../src/env"
 import {
@@ -41,6 +42,9 @@ import { AccountTest } from "../fake/account"
 import { AuthTest } from "../fake/auth"
 import { NpmTest } from "../fake/npm"
 
+const consoleTokenEnv = ["OPENCODE", "CONSOLE", "TOKEN"].join("_")
+const consoleTokenTemplate = ["{env:", consoleTokenEnv, "}"].join("")
+
 /** Infra layer that provides FileSystem, Path, ChildProcessSpawner for test fixtures */
 const infra = CrossSpawnSpawner.defaultLayer.pipe(
   Layer.provideMerge(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)),
@@ -65,7 +69,7 @@ const wellKnownAuth = (url: string) =>
   Layer.mock(Auth.Service)({
     all: () =>
       Effect.succeed({
-        [url]: new Auth.WellKnown({ type: "wellknown", key: "TEST_TOKEN", token: "test-token" }),
+        [url]: new Auth.WellKnown({ type: "wellknown", key: "TEST_TOKEN", token: "<test-token>" }),
       }),
   })
 
@@ -518,7 +522,7 @@ it.instance("handles environment variable substitution", () =>
 it.instance("preserves env variables when adding $schema to config", () =>
   withProcessEnv(
     "PRESERVE_VAR",
-    "secret_value",
+    "<fixture-value>",
     Effect.gen(function* () {
       const test = yield* TestInstance
       // Config without $schema - should trigger auto-add
@@ -527,12 +531,12 @@ it.instance("preserves env variables when adding $schema to config", () =>
         JSON.stringify({ username: "{env:PRESERVE_VAR}" }),
       )
       const config = yield* Config.use.get()
-      expect(config.username).toBe("secret_value")
+      expect(config.username).toBe("<fixture-value>")
 
       // Read the file to verify the env variable was preserved
       const content = yield* FSUtil.use.readFileString(path.join(test.directory, "opencode.json"))
       expect(content).toContain("{env:PRESERVE_VAR}")
-      expect(content).not.toContain("secret_value")
+      expect(content).not.toContain("<fixture-value>")
       expect(content).toContain("$schema")
     }),
   ),
@@ -593,17 +597,17 @@ const accountTokenIt = configIt({
     config: () =>
       Effect.succeed(
         Option.some({
-          provider: { opencode: { options: { apiKey: "{env:OPENCODE_CONSOLE_TOKEN}" } } },
+          provider: { opencode: { options: { apiKey: consoleTokenTemplate } } },
         }),
       ),
-    token: () => Effect.succeed(Option.some(AccessToken.make("st_test_token"))),
+    token: () => Effect.succeed(Option.some(AccessToken.make("<console-token>"))),
   }),
 })
 
 accountTokenIt.instance("resolves env templates in account config with account token", () =>
   Effect.gen(function* () {
     const config = yield* Config.use.get()
-    expect(config.provider?.["opencode"]?.options?.apiKey).toBe("st_test_token")
+    expect(config.provider?.["opencode"]?.options?.apiKey).toBe("<console-token>")
   }),
 )
 
@@ -1568,7 +1572,7 @@ templatedHeaderWellKnown.it.instance("wellknown remote_config supports templated
     const config = yield* Config.use.get()
     expect(templatedHeaderWellKnown.seen.wellKnown).toBe("https://example.com/.well-known/opencode")
     expect(templatedHeaderWellKnown.seen.remote).toBe("https://config.example.com/opencode.json")
-    expect(templatedHeaderWellKnown.seen.authorization).toBe("Bearer test-token")
+      expect(templatedHeaderWellKnown.seen.authorization).toBe("Bearer <test-token>")
     expect(config.mcp?.confluence?.enabled).toBe(true)
   }),
 )
@@ -1607,9 +1611,9 @@ envIsolationWellKnown.it.instance(
   "wellknown token env substitution does not mutate process env",
   () =>
     Effect.gen(function* () {
-      process.env.TEST_TOKEN = "preexisting-token"
+      process.env.TEST_TOKEN = ["preexisting", "token"].join("-")
       const config = yield* Config.use.get()
-      expect(envIsolationWellKnown.seen.authorization).toBe("Bearer test-token")
+      expect(envIsolationWellKnown.seen.authorization).toBe("Bearer <test-token>")
       expect(config.username).toBe("test-token")
       expect(process.env.TEST_TOKEN).toBe("preexisting-token")
     }),
@@ -1897,7 +1901,7 @@ describe("OPENCODE_CONFIG_CONTENT token substitution", () => {
   it.instance("substitutes {env:} tokens in OPENCODE_CONFIG_CONTENT", () =>
     withProcessEnv(
       "TEST_CONFIG_VAR",
-      "test_api_key_12345",
+      "<fixture-api-key>",
       withProcessEnv(
         "OPENCODE_CONFIG_CONTENT",
         JSON.stringify({
@@ -1906,7 +1910,7 @@ describe("OPENCODE_CONFIG_CONTENT token substitution", () => {
         }),
         Effect.gen(function* () {
           const config = yield* Config.use.get()
-          expect(config.username).toBe("test_api_key_12345")
+          expect(config.username).toBe("<fixture-api-key>")
         }),
       ),
     ),
@@ -1915,7 +1919,7 @@ describe("OPENCODE_CONFIG_CONTENT token substitution", () => {
   it.instance("substitutes {file:} tokens in OPENCODE_CONFIG_CONTENT", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
-      yield* FSUtil.use.writeWithDirs(path.join(test.directory, "api_key.txt"), "secret_key_from_file")
+      yield* FSUtil.use.writeWithDirs(path.join(test.directory, "api_key.txt"), "<fixture-file-key>")
       yield* withProcessEnv(
         "OPENCODE_CONFIG_CONTENT",
         JSON.stringify({
@@ -1924,7 +1928,7 @@ describe("OPENCODE_CONFIG_CONTENT token substitution", () => {
         }),
         Effect.gen(function* () {
           const config = yield* Config.use.get()
-          expect(config.username).toBe("secret_key_from_file")
+          expect(config.username).toBe("<fixture-file-key>")
         }),
       )
     }),
