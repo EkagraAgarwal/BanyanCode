@@ -3,6 +3,7 @@ export * as Tool from "./tool"
 import { ToolDefinition, ToolFailure, ToolOutput, type ToolCall } from "@opencode-ai/llm"
 import { Effect, JsonSchema, Schema } from "effect"
 import type { AgentV2 } from "../agent"
+import * as AgentEfficiencyTelemetry from "../banyancode/agent-efficiency-telemetry"
 import { Service as AdaptedCatalog } from "../banyancode/adapted-catalog"
 import { Service as ToolTelemetry } from "../banyancode/tool-telemetry"
 import type { ToolRuntimeEvent } from "../banyancode/tool-telemetry"
@@ -41,6 +42,9 @@ export const resolveContract = (contract: ToolContract | undefined): ResolvedCon
 
 export interface Context {
   readonly sessionID: SessionSchema.ID
+  readonly runID?: string
+  readonly parentSessionID?: SessionSchema.ID
+  readonly rootSessionID?: SessionSchema.ID
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
   readonly toolCallID: string
@@ -126,6 +130,7 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
     settle: (call, context) =>
       Effect.gen(function* () {
         const telemetryOpt = yield* Effect.serviceOption(ToolTelemetry)
+        const efficiencyTelemetryOpt = yield* Effect.serviceOption(AgentEfficiencyTelemetry.Service)
         const adaptedCatalogOpt = yield* Effect.serviceOption(AdaptedCatalog)
         const toolID = call.name
         const sessionID = context.sessionID
@@ -143,6 +148,38 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
           telemetryOpt._tag === "Some"
             ? telemetryOpt.value.recordEvent(event)
             : Effect.void
+
+        const recordEfficiency = (input: {
+          readonly eventType: AgentEfficiencyTelemetry.AgentEfficiencyEventType
+          readonly status: AgentEfficiencyTelemetry.TelemetryStatus
+          readonly occurredAt?: number
+          readonly durationMs?: number
+          readonly errorCategory?: string
+        }) => {
+          if (efficiencyTelemetryOpt._tag === "None") return Effect.void
+          return Effect.exit(
+            efficiencyTelemetryOpt.value.record({
+              schemaVersion: 1,
+              eventID: `tool:${toolCallID}:${input.eventType}`,
+              eventType: input.eventType,
+              occurredAt: input.occurredAt ?? Date.now(),
+              runID: context.runID ?? sessionID,
+              sessionID,
+              parentSessionID: context.parentSessionID,
+              rootSessionID: context.rootSessionID,
+              agentInstanceID: sessionID,
+              agentRole: agent,
+              modelCallID: context.assistantMessageID,
+              toolCallID,
+              status: input.status,
+              ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
+              ...(input.errorCategory === undefined ? {} : { errorCategory: input.errorCategory }),
+              metadata: { tool_name: toolID, model: modelID },
+            }),
+          ).pipe(Effect.asVoid)
+        }
+
+        yield* recordEfficiency({ eventType: "tool.started", status: "started", occurredAt: startedAt })
 
         yield* record({
           kind: "raw",
@@ -186,6 +223,12 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
             latencyMs: Date.now() - startedAt,
             success: false,
             errorMessage: runtimeResult.error ?? `Invalid tool input: runtime failed`,
+          })
+          yield* recordEfficiency({
+            eventType: "tool.failed",
+            status: "failed",
+            durationMs: Date.now() - startedAt,
+            errorCategory: "invalid_input",
           })
           return yield* Effect.fail(
             new ToolFailure({
@@ -237,11 +280,16 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
             ),
           ),
           Effect.tap((output) => {
-            const usage = adaptedCatalogOpt._tag === "Some" ? adaptedCatalogOpt.value.recordUsage(toolID, sessionID) : Effect.void
+            const usage =
+              adaptedCatalogOpt._tag === "Some" ? adaptedCatalogOpt.value.recordUsage(toolID, sessionID) : Effect.void
             const outputStr = JSON.stringify(output)
             const outputSize = outputStr.length
-            const fallbackUsed = (output && typeof output === "object" && "fallbackUsed" in output) ? !!(output as any).fallbackUsed : undefined
-            const degraded = (output && typeof output === "object" && "degraded" in output) ? !!(output as any).degraded : undefined
+            const fallbackUsed =
+              output && typeof output === "object" && "fallbackUsed" in output
+                ? !!(output as any).fallbackUsed
+                : undefined
+            const degraded =
+              output && typeof output === "object" && "degraded" in output ? !!(output as any).degraded : undefined
             return usage.pipe(
               Effect.flatMap(() =>
                 record({
@@ -266,6 +314,13 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
                   retryNeeded,
                 }),
               ),
+              Effect.andThen(
+                recordEfficiency({
+                  eventType: "tool.finished",
+                  status: "succeeded",
+                  durationMs: Date.now() - startedAt,
+                }),
+              ),
             )
           }),
           Effect.tapError((error) =>
@@ -287,7 +342,16 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
               success: false,
               errorMessage: error.message,
               retryNeeded,
-            }),
+            }).pipe(
+              Effect.andThen(
+                recordEfficiency({
+                  eventType: "tool.failed",
+                  status: "failed",
+                  durationMs: Date.now() - startedAt,
+                  errorCategory: "execution_error",
+                }),
+              ),
+            ),
           ),
           Effect.map((output) => ({
             structured: output,

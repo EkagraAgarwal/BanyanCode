@@ -1,5 +1,6 @@
 import { ToolOutput, type LLMEvent, type ProviderMetadata, type ToolResultValue, type Usage } from "@opencode-ai/llm"
 import { DateTime, Effect } from "effect"
+import * as AgentEfficiencyTelemetry from "../../banyancode/agent-efficiency-telemetry"
 import { EventV2 } from "../../event"
 import { ModelV2 } from "../../model"
 import * as TokenAttribution from "../../banyancode/token-attribution"
@@ -10,12 +11,19 @@ import { SessionSchema } from "../schema"
 type Input = {
   readonly sessionID: SessionSchema.ID
   readonly parentSessionID?: SessionSchema.ID
+  readonly rootSessionID?: SessionSchema.ID
+  readonly runID?: string
+  readonly agentInstanceID?: string
   readonly agent: string
   readonly model: ModelV2.Ref
   readonly tokenAttribution?: TokenAttribution.Interface
+  readonly telemetry?: AgentEfficiencyTelemetry.Interface
 }
 
 const safe = (value: number | undefined) => Math.max(0, Number.isFinite(value) ? (value ?? 0) : 0)
+
+const optionalSafe = (value: number | undefined) =>
+  value === undefined || !Number.isFinite(value) ? undefined : Math.max(0, Math.floor(value))
 
 const tokens = (usage: Usage | undefined) => {
   const reasoning = safe(usage?.reasoningTokens)
@@ -26,6 +34,31 @@ const tokens = (usage: Usage | undefined) => {
     output: safe(usage?.visibleOutputTokens),
     reasoning,
     cache: { read, write },
+  }
+}
+
+const usageMetadata = (usage: Usage | undefined): Record<string, unknown> => {
+  if (!usage) return {}
+  const inputTokens = optionalSafe(usage.inputTokens)
+  const outputTokens = optionalSafe(usage.outputTokens)
+  const uncachedInputTokens = optionalSafe(
+    usage.nonCachedInputTokens ??
+      (usage.inputTokens === undefined || usage.cacheReadInputTokens === undefined || usage.cacheWriteInputTokens === undefined
+        ? undefined
+        : usage.inputTokens - usage.cacheReadInputTokens - usage.cacheWriteInputTokens),
+  )
+  const cachedInputTokens = optionalSafe(usage.cacheReadInputTokens)
+  const cacheWriteTokens = optionalSafe(usage.cacheWriteInputTokens)
+  const reasoningTokens = optionalSafe(usage.reasoningTokens)
+  const totalTokens = optionalSafe(usage.totalTokens)
+  return {
+    ...(inputTokens === undefined ? {} : { input_tokens: inputTokens }),
+    ...(uncachedInputTokens === undefined ? {} : { uncached_input_tokens: uncachedInputTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cached_input_tokens: cachedInputTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cache_write_tokens: cacheWriteTokens }),
+    ...(outputTokens === undefined ? {} : { output_tokens: outputTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoning_tokens: reasoningTokens }),
+    ...(totalTokens === undefined ? {} : { total_tokens: totalTokens }),
   }
 }
 
@@ -70,6 +103,57 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
   let assistantMessageID: SessionMessage.ID | undefined
   let providerFailed = false
   const startedAt = Date.now()
+  const modelCallID = crypto.randomUUID()
+  let terminal = false
+  let started = false
+
+  const recordTelemetry = (event: AgentEfficiencyTelemetry.AgentEfficiencyEvent) =>
+    input.telemetry ? Effect.exit(input.telemetry.record(event)).pipe(Effect.asVoid) : Effect.void
+  const telemetryEvent = (
+    eventType: AgentEfficiencyTelemetry.AgentEfficiencyEventType,
+    status: AgentEfficiencyTelemetry.TelemetryStatus,
+    extra: Record<string, unknown> = {},
+  ) => {
+    const { durationMs, errorCategory, ...metadata } = extra
+    return recordTelemetry({
+      schemaVersion: 1,
+      eventID: `model:${modelCallID}:${eventType}`,
+      eventType,
+      occurredAt: Date.now(),
+      runID: input.runID ?? input.sessionID,
+      sessionID: input.sessionID,
+      parentSessionID: input.parentSessionID,
+      rootSessionID: input.rootSessionID,
+      agentInstanceID: input.agentInstanceID ?? input.sessionID,
+      agentRole: input.agent,
+      modelCallID,
+      status,
+      ...(durationMs === undefined ? {} : { durationMs: Number(durationMs) }),
+      ...(errorCategory === undefined ? {} : { errorCategory: String(errorCategory).slice(0, 64) }),
+      ...(Object.keys(metadata).length === 0 ? {} : { metadata }),
+    })
+  }
+
+  const finishTelemetry = Effect.fnUntraced(function* (
+    status: AgentEfficiencyTelemetry.TelemetryStatus,
+    extra: Record<string, unknown> = {},
+  ) {
+    if (terminal) return
+    terminal = true
+    yield* telemetryEvent(`model.${status === "succeeded" ? "finished" : status}`, status, {
+      durationMs: Date.now() - startedAt,
+      ...extra,
+    })
+  })
+
+  const startTelemetry = Effect.fnUntraced(function* () {
+    if (started) return
+    started = true
+    yield* telemetryEvent("model.started", "started", {
+      provider: input.model.providerID,
+      requested_model: input.model.id,
+    })
+  })
 
   const startAssistant = Effect.fnUntraced(function* () {
     if (assistantMessageID !== undefined) return assistantMessageID
@@ -224,6 +308,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     event: LLMEvent,
     outputPaths: ReadonlyArray<string> = [],
   ) {
+    yield* startTelemetry()
     switch (event.type) {
       case "step-start":
         return
@@ -388,6 +473,13 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
           cost: 0,
           tokens: tokens(event.usage),
         })
+        yield* finishTelemetry("succeeded", {
+          provider: input.model.providerID,
+          requested_model: input.model.id,
+          ...usageMetadata(event.usage),
+          latency_ms: Date.now() - startedAt,
+          stop_reason: event.reason,
+        })
         if (input.tokenAttribution && event.usage) {
           yield* input.tokenAttribution.record({
             callID: assistantMessageID,
@@ -404,6 +496,12 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         }
         return
       case "finish":
+        yield* finishTelemetry("succeeded", {
+          provider: input.model.providerID,
+          requested_model: input.model.id,
+          ...usageMetadata(event.usage),
+          stop_reason: event.reason,
+        })
         return
       case "provider-error":
         providerFailed = true
@@ -413,6 +511,11 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
           timestamp: yield* timestamp,
           assistantMessageID: yield* startAssistant(),
           error: { type: "unknown", message: event.message },
+        })
+        yield* finishTelemetry("failed", {
+          provider: input.model.providerID,
+          requested_model: input.model.id,
+          errorCategory: "provider_error",
         })
         return
     }
@@ -424,7 +527,9 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     failUnsettledTools,
     hasAssistantStarted: () => assistantMessageID !== undefined,
     hasProviderError: () => providerFailed,
+    finish: finishTelemetry,
     startAssistant,
+    startTelemetry,
     assistantMessageID: assistantMessageIDForTool,
   }
 }

@@ -16,6 +16,16 @@ import { Permission } from "@/permission"
 import { Config } from "@/config/config"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { BanyanToolsMount } from "@/effect/banyan-tools-mount"
+import {
+  assertSameStoreOrFail,
+  canonicalDbRoot,
+  databaseLayerForRoot,
+  dedupeReadinessForRoot,
+  disposeWorkspaceLayers,
+} from "@/effect/banyan-tools-mount"
+import { WorkspaceIdentity } from "@opencode-ai/core/banyancode/workspace-identity"
+import { mkdtempSync, mkdirSync } from "fs"
+import { tmpdir } from "os"
 import { PermissionBridge } from "@/effect/permission-bridge"
 import { testEffect } from "../lib/effect"
 import { readFileSync } from "fs"
@@ -299,5 +309,75 @@ describe("runtime composition drift guard", () => {
     )
     expect(appRuntime).toContain("subagentConsumerDefaultLayer")
     expect(server).toContain("subagentConsumerDefaultLayer")
+  })
+})
+
+describe("root-keyed database layers", () => {
+  const makeRoot = () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "banyan-mount-a-"))
+    mkdirSync(path.join(dir, ".banyancode"), { recursive: true })
+    return dir
+  }
+
+  bunIt("isolates root A vs B, caches per canonical root, and ignores cwd", () => {
+    const rootA = makeRoot()
+    const rootB = makeRoot()
+    try {
+      const layerA1 = databaseLayerForRoot(rootA)
+      const layerA2 = databaseLayerForRoot(canonicalDbRoot(rootA))
+      expect(layerA2).toBe(layerA1)
+      expect(databaseLayerForRoot(rootB)).not.toBe(layerA1)
+
+      const dbA = WorkspaceIdentity.identityForRoot(rootA).dbPath
+      const dbB = WorkspaceIdentity.identityForRoot(rootB).dbPath
+      expect(dbA).not.toBe(dbB)
+
+      const prevCwd = process.cwd()
+      process.chdir(rootB)
+      try {
+        expect(WorkspaceIdentity.identityForRoot(rootA).dbPath).toBe(dbA)
+        expect(databaseLayerForRoot(rootA)).toBe(layerA1)
+      } finally {
+        process.chdir(prevCwd)
+      }
+
+      disposeWorkspaceLayers(rootA)
+      disposeWorkspaceLayers(rootB)
+    } finally {
+      disposeWorkspaceLayers(rootA)
+      disposeWorkspaceLayers(rootB)
+    }
+  })
+
+  bunIt("indexed_root mismatch is a wrong-store failure, not a rebuild", () => {
+    const rootA = makeRoot()
+    const rootB = makeRoot()
+    try {
+      expect(() => assertSameStoreOrFail(rootA, undefined)).not.toThrow()
+      assertSameStoreOrFail(rootA, canonicalDbRoot(rootA))
+      expect(() => assertSameStoreOrFail(rootA, rootB)).toThrow("Wrong store")
+    } finally {
+      disposeWorkspaceLayers(rootA)
+      disposeWorkspaceLayers(rootB)
+    }
+  })
+
+  bunIt("shares one in-flight readiness per root", async () => {
+    const root = makeRoot()
+    try {
+      let calls = 0
+      const run = () =>
+        dedupeReadinessForRoot(root, async () => {
+          calls += 1
+          await new Promise((resolve) => setTimeout(resolve, 5))
+          return calls
+        })
+      const [first, second] = await Promise.all([run(), run()])
+      expect(first).toBe(1)
+      expect(second).toBe(1)
+      expect(calls).toBe(1)
+    } finally {
+      disposeWorkspaceLayers(root)
+    }
   })
 })

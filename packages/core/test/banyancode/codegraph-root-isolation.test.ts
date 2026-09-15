@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Console, Effect, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { tmpdir } from "../fixture/tmpdir"
-import { mkdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, writeFileSync, symlinkSync } from "node:fs"
 import { join } from "node:path"
 import { CodegraphBuildService, layer as buildServiceLayer } from "../../src/banyancode/codegraph-build-service"
 import { CodegraphIndexer } from "../../src/banyancode/codegraph-indexer"
@@ -234,5 +234,73 @@ describe("CodegraphWorkspaceIsolation", () => {
         expect(meta?.indexedRoot).toBe(root)
       }).pipe(Effect.provide(codegraphRepoDefaultLayer), Effect.provide(dbLayer), Effect.scoped),
     )
+  })
+
+  test("alternating roots never flip indexed_root when bound via layerFromRootCached", async () => {
+    await using tmp = await tmpdir()
+    const rootA = join(tmp.path, "ws-a")
+    const rootB = join(tmp.path, "ws-b")
+    mkdirSync(join(rootA, ".banyancode"), { recursive: true })
+    mkdirSync(join(rootB, ".banyancode"), { recursive: true })
+    Database.clearRootBundleCache()
+
+    const layerA1 = Database.layerFromRootCached(rootA)
+    const layerA2 = Database.layerFromRootCached(rootA)
+    const layerB = Database.layerFromRootCached(rootB)
+    expect(layerA1).toBe(layerA2)
+    expect((layerA1 as unknown) === (layerB as unknown)).toBe(false)
+
+    const stampMeta = (indexedRoot: string) =>
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo.Service
+        yield* repo.setMeta({
+          id: "singleton",
+          graphBuiltAt: Date.now(),
+          graphVersion: 1,
+          graphCoverage: 1,
+          totalFiles: 0,
+          totalNodes: 0,
+          totalEdges: 0,
+          schemaVersion: 1,
+          indexedRoot,
+        })
+      })
+
+    for (let i = 0; i < 3; i++) {
+      await Effect.runPromise(
+        stampMeta(rootA).pipe(Effect.provide(codegraphRepoDefaultLayer), Effect.provide(layerA1), Effect.scoped),
+      )
+      await Effect.runPromise(
+        stampMeta(rootB).pipe(Effect.provide(codegraphRepoDefaultLayer), Effect.provide(layerB), Effect.scoped),
+      )
+    }
+
+    const readMeta = (layer: ReturnType<typeof Database.layerFromRootCached>) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          return yield* repo.getMeta()
+        }).pipe(Effect.provide(codegraphRepoDefaultLayer), Effect.provide(layer), Effect.scoped),
+      )
+    expect((await readMeta(layerA1))?.indexedRoot).toBe(rootA)
+    expect((await readMeta(layerB))?.indexedRoot).toBe(rootB)
+    Database.clearRootBundleCache()
+  })
+
+  test("symlink spellings of the same root share one cached bundle", async () => {
+    await using tmp = await tmpdir()
+    const root = join(tmp.path, "ws")
+    mkdirSync(join(root, ".banyancode"), { recursive: true })
+    const link = join(tmp.path, "ws-link")
+    try {
+      symlinkSync(root, link, "dir")
+    } catch {
+      symlinkSync(root, link)
+    }
+    Database.clearRootBundleCache()
+    const direct = Database.layerFromRootCached(root)
+    const viaLink = Database.layerFromRootCached(link)
+    expect(viaLink === (direct as unknown)).toBe(true)
+    Database.clearRootBundleCache()
   })
 })

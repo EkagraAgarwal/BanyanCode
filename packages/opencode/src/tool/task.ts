@@ -11,6 +11,8 @@ import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
 import { Effect, Exit, Option, Schema, Scope } from "effect"
+import path from "node:path"
+import { existsSync, statSync } from "node:fs"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
@@ -60,6 +62,14 @@ const BaseParameterFields = {
       "This should only be set if you mean to resume a previous task (you can pass a prior task_id and the task will continue the same subagent session as before instead of creating a fresh one)",
   }),
   command: Schema.optional(Schema.String).annotate({ description: "The command that triggered this task" }),
+  workspace: Schema.optional(Schema.String).annotate({
+    description:
+      "Optional workspace root override for the child session. Must be an existing directory. Never inferred from the prompt or workdir — when omitted the child inherits the parent session's workspace.",
+  }),
+  worktree: Schema.optional(Schema.String).annotate({
+    description:
+      "Optional worktree root override for the child session (alias for workspace; worktree wins when both are set). Must be an existing directory; nonexistent or escaping paths are rejected.",
+  }),
   plan: Schema.optional(
     Schema.Struct({
       title: Schema.String,
@@ -89,16 +99,44 @@ function renderOutput(input: {
   state: "running" | "completed" | "error"
   summary?: string
   text: string
+  worktree?: string
 }) {
   const tag = input.state === "error" ? "task_error" : "task_result"
   return [
-    `<task id="${input.sessionID}" state="${input.state}">`,
+    `<task id="${input.sessionID}" state="${input.state}"${input.worktree ? ` worktree="${input.worktree}"` : ""}>`,
     ...(input.summary ? [`<summary>${input.summary}</summary>`] : []),
     `<${tag}>`,
     input.text,
     `</${tag}>`,
     "</task>",
   ].join("\n")
+}
+
+// Resolve the effective worktree for a child session. Only the explicit
+// `workspace` / `worktree` params (validated here) or the parent session's
+// directory (inherited workspace) ever decide the target — the prompt text,
+// message workdir, and process.cwd() are never consulted. Throws on
+// nonexistent, non-directory, or escaping (unresolved `..`) targets.
+export const resolveTaskWorktreeTarget = (
+  input: { workspace?: string; worktree?: string },
+  baseDirectory: string,
+): string | undefined => {
+  const raw = input.worktree ?? input.workspace
+  if (!raw) return undefined
+  if (raw.includes("\0")) throw new Error(`TaskTool: workspace target contains a null byte`)
+  const resolved = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(baseDirectory, raw)
+  if (!path.isAbsolute(resolved) || resolved.split(path.sep).includes("..")) {
+    throw new Error(`TaskTool: workspace target escapes the workspace: ${raw}`)
+  }
+  let isDirectory = false
+  try {
+    isDirectory = statSync(resolved).isDirectory()
+  } catch {
+    throw new Error(`TaskTool: workspace target does not exist: ${raw}`)
+  }
+  if (!isDirectory) throw new Error(`TaskTool: workspace target is not a directory: ${raw}`)
+  if (!existsSync(resolved)) throw new Error(`TaskTool: workspace target does not exist: ${raw}`)
+  return resolved
 }
 
 export const TaskTool = Tool.define(
@@ -164,7 +202,16 @@ export const TaskTool = Tool.define(
       const session = params.task_id
         ? yield* sessions.get(SessionID.make(params.task_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
+      const isFreshSpawn = !session
       const parent = yield* sessions.get(ctx.sessionID)
+      // Workspace inheritance: the effective worktree is the validated
+      // explicit target or the parent session's directory. Never cwd.
+      const target = yield* Effect.try({
+        try: () =>
+          resolveTaskWorktreeTarget({ workspace: params.workspace, worktree: params.worktree }, parent.directory),
+        catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+      })
+      const effectiveWorktree = target ?? parent.directory
       const childPermission = deriveSubagentSessionPermission({
         parentSessionPermission: parent.permission ?? [],
         subagent: next,
@@ -188,6 +235,7 @@ export const TaskTool = Tool.define(
           parentID: ctx.sessionID,
           title: params.description + ` (@${next.name} subagent)`,
           agent: next.name,
+          ...(target ? { directory: target, path: "" } : {}),
           permission: [
             ...childPermission,
             ...childToolDenies.filter(
@@ -199,6 +247,40 @@ export const TaskTool = Tool.define(
             ),
           ],
         }))
+
+      const parentRunID = typeof ctx.extra?.runID === "string" ? ctx.extra.runID : undefined
+      const childRunID = parentRunID ?? crypto.randomUUID()
+      const telemetryOption = yield* Effect.serviceOption(Banyan.AgentEfficiencyTelemetry)
+      const recordTelemetry = (input: {
+        eventType: Banyan.AgentEfficiencyEventType
+        status?: "started" | "succeeded" | "failed" | "aborted"
+        durationMs?: number
+        runID?: string
+      }): Effect.Effect<void, never, never> => {
+        if (Option.isNone(telemetryOption)) return Effect.void
+        return Effect.exit(
+          telemetryOption.value.record({
+            schemaVersion: 1,
+            eventID: `agent:${nextSession.id}:${ctx.callID}:${input.eventType}`,
+            eventType: input.eventType,
+            occurredAt: Date.now(),
+            runID: input.runID ?? childRunID,
+            sessionID: nextSession.id,
+            parentSessionID: ctx.sessionID,
+            agentInstanceID: nextSession.id,
+            agentRole: next.name,
+            taskID: nextSession.id,
+            toolCallID: ctx.callID,
+            status: input.status,
+            durationMs: input.durationMs,
+            metadata: { background: runInBackground, parentAgent: ctx.agent },
+          }),
+        ).pipe(Effect.asVoid)
+      }
+
+      if (isFreshSpawn) {
+        yield* recordTelemetry({ eventType: "agent.spawned", runID: childRunID }).pipe(Effect.forkDetach)
+      }
 
       // Start a SubagentConsumer for this new subagent session so it can
       // receive peer messages addressed to it (replies, kills, plans, etc).
@@ -283,6 +365,7 @@ export const TaskTool = Tool.define(
       const metadata = {
         parentSessionId: ctx.sessionID,
         sessionId: nextSession.id,
+        worktree: effectiveWorktree,
         model,
         ...(runInBackground ? { background: true } : {}),
       }
@@ -296,19 +379,37 @@ export const TaskTool = Tool.define(
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
-        const parts = yield* ops.resolvePromptParts(params.prompt)
-        const result = yield* ops.prompt({
-          messageID: MessageID.ascending(),
-          sessionID: nextSession.id,
-          model: {
-            modelID: ModelV2.ID.make(model.modelID),
-            providerID: ProviderV2.ID.make(model.providerID),
-          },
-          variant: next.model ? undefined : variant,
-          agent: next.name,
-          parts,
-        })
-        return result.parts.findLast((item) => item.type === "text")?.text ?? ""
+        const startedAt = Date.now()
+        yield* recordTelemetry({ eventType: "agent.started", status: "started", runID: childRunID }).pipe(Effect.forkDetach)
+        return yield* Effect.gen(function* () {
+          const parts = yield* ops.resolvePromptParts(params.prompt)
+          const result = yield* ops.prompt({
+            messageID: MessageID.ascending(),
+            sessionID: nextSession.id,
+            runID: childRunID,
+            model: {
+              modelID: ModelV2.ID.make(model.modelID),
+              providerID: ProviderV2.ID.make(model.providerID),
+            },
+            variant: next.model ? undefined : variant,
+            agent: next.name,
+            parts,
+          })
+          return result.parts.findLast((item) => item.type === "text")?.text ?? ""
+        }).pipe(
+          Effect.onExit((exit) =>
+            recordTelemetry({
+              eventType: Exit.isSuccess(exit)
+                ? "agent.finished"
+                : Exit.hasInterrupts(exit)
+                  ? "agent.aborted"
+                  : "agent.failed",
+              status: Exit.isSuccess(exit) ? "succeeded" : Exit.hasInterrupts(exit) ? "aborted" : "failed",
+              durationMs: Date.now() - startedAt,
+              runID: childRunID,
+            }).pipe(Effect.forkDetach),
+          ),
+        )
       })
 
       const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (
@@ -328,6 +429,7 @@ export const TaskTool = Tool.define(
                 text: renderOutput({
                   sessionID: nextSession.id,
                   state,
+                  worktree: effectiveWorktree,
                   summary:
                     state === "completed"
                       ? `Background task completed: ${params.description}`
@@ -371,6 +473,7 @@ export const TaskTool = Tool.define(
           output: renderOutput({
             sessionID: nextSession.id,
             state: "running",
+            worktree: effectiveWorktree,
             summary: "Background task updated",
             text: BACKGROUND_UPDATED,
           }),
@@ -403,6 +506,7 @@ export const TaskTool = Tool.define(
           output: renderOutput({
             sessionID: nextSession.id,
             state: "running",
+            worktree: effectiveWorktree,
             summary: "Background task started",
             text: BACKGROUND_STARTED,
           }),
@@ -435,7 +539,12 @@ export const TaskTool = Tool.define(
               return {
                 title: params.description,
                 metadata,
-                output: renderOutput({ sessionID: nextSession.id, state: "completed", text: "" }),
+                output: renderOutput({
+                  sessionID: nextSession.id,
+                  state: "completed",
+                  worktree: effectiveWorktree,
+                  text: "",
+                }),
               }
             }
             if (result.metadata?.background === true) return backgroundResult()
@@ -444,7 +553,12 @@ export const TaskTool = Tool.define(
             return {
               title: params.description,
               metadata,
-              output: renderOutput({ sessionID: nextSession.id, state: "completed", text: result.output ?? "" }),
+              output: renderOutput({
+                sessionID: nextSession.id,
+                state: "completed",
+                worktree: effectiveWorktree,
+                text: result.output ?? "",
+              }),
             }
           }),
         (_, exit) =>

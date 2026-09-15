@@ -49,12 +49,12 @@ describe("GatewayPlugin", () => {
         {
           model: model("vercel", "anthropic/claude-sonnet-4"),
           package: "@ai-sdk/gateway",
-          options: { name: "vercel", apiKey: "test-key" },
+          options: { name: "vercel", apiKey: "<provider-credential>" },
         },
         {},
       )
 
-      expect(gatewayCalls).toEqual([{ name: "vercel", apiKey: "test-key" }])
+      expect(gatewayCalls).toEqual([{ name: "vercel", apiKey: "<provider-credential>" }])
       expect(result.sdk.languageModel("anthropic/claude-sonnet-4").provider).toBe("vercel")
     }),
   )

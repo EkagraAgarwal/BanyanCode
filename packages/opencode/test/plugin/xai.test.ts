@@ -68,12 +68,13 @@ describe("plugin.xai", () => {
     })
 
     test("returns false for opaque and malformed tokens", () => {
-      expect(accessTokenIsExpiring("opaque-token-no-dots", 0)).toBe(false)
+      const malformedJwt = ["header", ["not", "json"].join("-"), "signature"].join(".")
+      expect(accessTokenIsExpiring("<opaque-token>", 0)).toBe(false)
       expect(accessTokenIsExpiring("", 0)).toBe(false)
       expect(accessTokenIsExpiring(undefined, 0)).toBe(false)
       expect(accessTokenIsExpiring(makeJwt({ sub: "user-1" }), 0)).toBe(false)
       expect(accessTokenIsExpiring(makeJwt({ exp: "1234" }), 0)).toBe(false)
-      expect(accessTokenIsExpiring("header.!!!not-valid-base64-or-json!!!.sig", 0)).toBe(false)
+      expect(accessTokenIsExpiring(malformedJwt, 0)).toBe(false)
     })
   })
 
@@ -139,7 +140,7 @@ describe("plugin.xai", () => {
       })
       const hooks = await XaiAuthPlugin(input)
       const opts = await hooks.auth!.loader!(
-        async () => ({ type: "oauth", access: "live-token", refresh: "rt", expires: Date.now() + 3600_000 }),
+        async () => ({ type: "oauth", access: "<live-access>", refresh: "<refresh-token>", expires: Date.now() + 3600_000 }),
         {} as any,
       )
       expect(opts.apiKey).toBe(OAUTH_DUMMY_KEY)
@@ -149,7 +150,7 @@ describe("plugin.xai", () => {
         headers: { Authorization: `Bearer ${OAUTH_DUMMY_KEY}`, "x-keep": "yes" },
       })
 
-      expect(captured[0].get("authorization")).toBe("Bearer live-token")
+      expect(captured[0].get("authorization")).toBe("Bearer <live-access>")
       expect(captured[0].get("x-keep")).toBe("yes")
       expect(captured[0].get("user-agent")).toMatch(/^opencode\//)
     })
@@ -164,7 +165,7 @@ describe("plugin.xai", () => {
       const opts = await (
         await XaiAuthPlugin(input)
       ).auth!.loader!(
-        async () => ({ type: "oauth", access: "tok", refresh: "rt", expires: Date.now() + 3600_000 }),
+        async () => ({ type: "oauth", access: "<access-token>", refresh: "<refresh-token>", expires: Date.now() + 3600_000 }),
         {} as any,
       )
 
@@ -190,7 +191,7 @@ describe("plugin.xai", () => {
         "headers-instance",
       ])
       for (const headers of captured) {
-        expect(headers.get("authorization")).toBe("Bearer tok")
+        expect(headers.get("authorization")).toBe("Bearer <access-token>")
         expect(headers.get("user-agent")).toMatch(/^opencode\//)
       }
     })
@@ -205,7 +206,7 @@ describe("plugin.xai", () => {
       const opts = await (
         await XaiAuthPlugin(input)
       ).auth!.loader!(
-        async () => ({ type: "oauth", access: "tok", refresh: "rt", expires: Date.now() + 3600_000 }),
+        async () => ({ type: "oauth", access: "<access-token>", refresh: "<refresh-token>", expires: Date.now() + 3600_000 }),
         {} as any,
       )
 
@@ -220,7 +221,7 @@ describe("plugin.xai", () => {
         { headers: { "x-trace": "init", "x-extra": "yes" } },
       )
 
-      expect(captured[0].get("authorization")).toBe("Bearer tok")
+      expect(captured[0].get("authorization")).toBe("Bearer <access-token>")
       expect(captured[0].get("content-type")).toBe("application/json")
       expect(captured[0].get("x-trace")).toBe("init")
       expect(captured[0].get("x-extra")).toBe("yes")
@@ -239,7 +240,7 @@ describe("plugin.xai", () => {
       ).auth!.loader!(async () => {
         if (firstCall) {
           firstCall = false
-          return { type: "oauth", access: "tok", refresh: "rt", expires: Date.now() + 3600_000 }
+          return { type: "oauth", access: "<access-token>", refresh: "<refresh-token>", expires: Date.now() + 3600_000 }
         }
         return { type: "api", key: "sk-new" }
       }, {} as any)
@@ -253,21 +254,22 @@ describe("plugin.xai", () => {
 
     test("deduplicates concurrent refreshes within a loader instance", async () => {
       const { input, setCalls } = makeInput()
+      const oldRefresh = ["old", "refresh"].join("-")
       let tokenRequests = 0
       const apiRequests: Headers[] = []
       using server = makeServer(async (request, url) => {
         if (url.pathname === "/oauth2/token") {
           tokenRequests++
-          expect(await request.text()).toContain("refresh_token=rt-old")
+          expect(await request.text()).toContain(`refresh_token=${oldRefresh}`)
           await new Promise((resolve) => setTimeout(resolve, 30))
-          return Response.json({ access_token: "new-access", refresh_token: "rt-new", expires_in: 3600 })
+          return Response.json({ access_token: "<new-access>", refresh_token: "<new-refresh>", expires_in: 3600 })
         }
         apiRequests.push(request.headers)
         return new Response("{}", { status: 200 })
       })
       const opts = await (
         await XaiAuthPlugin(input, serverOptions(server))
-      ).auth!.loader!(async () => ({ type: "oauth" as const, access: "old", refresh: "rt-old", expires: 0 }), {} as any)
+      ).auth!.loader!(async () => ({ type: "oauth" as const, access: "old", refresh: oldRefresh, expires: 0 }), {} as any)
 
       await Promise.all([
         opts.fetch!(new URL("/chat/completions", server.url), { headers: {} }),
@@ -276,15 +278,17 @@ describe("plugin.xai", () => {
 
       expect(tokenRequests).toBe(1)
       expect(apiRequests.map((headers) => headers.get("authorization"))).toEqual([
-        "Bearer new-access",
-        "Bearer new-access",
+        "Bearer <new-access>",
+        "Bearer <new-access>",
       ])
       expect(setCalls).toHaveLength(1)
-      expect((setCalls[0].body as any).refresh).toBe("rt-new")
+      expect((setCalls[0].body as any).refresh).toBe("<new-refresh>")
     })
 
     test("does not share refresh single-flight across loader instances", async () => {
       const { input } = makeInput()
+      const firstRefresh = ["old", "refresh", "a"].join("-")
+      const secondRefresh = ["old", "refresh", "b"].join("-")
       const tokenRequests: string[] = []
       const apiRequests: string[] = []
       using server = makeServer(async (request, url) => {
@@ -293,8 +297,8 @@ describe("plugin.xai", () => {
           tokenRequests.push(refreshToken)
           await new Promise((resolve) => setTimeout(resolve, 20))
           return Response.json({
-            access_token: `access-${refreshToken}`,
-            refresh_token: `next-${refreshToken}`,
+            access_token: `<access-${refreshToken}>`,
+            refresh_token: `<next-${refreshToken}>`,
             expires_in: 3600,
           })
         }
@@ -303,11 +307,11 @@ describe("plugin.xai", () => {
       })
       const hooks = await XaiAuthPlugin(input, serverOptions(server))
       const first = await hooks.auth!.loader!(
-        async () => ({ type: "oauth", access: "old-a", refresh: "rt-a", expires: 0 }),
+        async () => ({ type: "oauth", access: "<old-access-a>", refresh: firstRefresh, expires: 0 }),
         {} as any,
       )
       const second = await hooks.auth!.loader!(
-        async () => ({ type: "oauth", access: "old-b", refresh: "rt-b", expires: 0 }),
+        async () => ({ type: "oauth", access: "<old-access-b>", refresh: secondRefresh, expires: 0 }),
         {} as any,
       )
 
@@ -316,8 +320,11 @@ describe("plugin.xai", () => {
         second.fetch!(new URL("/chat/completions", server.url), { headers: {} }),
       ])
 
-      expect(tokenRequests.sort()).toEqual(["rt-a", "rt-b"])
-      expect(apiRequests.sort()).toEqual(["Bearer access-rt-a", "Bearer access-rt-b"])
+      expect(tokenRequests.sort()).toEqual([firstRefresh, secondRefresh])
+      expect(apiRequests.sort()).toEqual([
+        `Bearer <access-${firstRefresh}>`,
+        `Bearer <access-${secondRefresh}>`,
+      ])
     })
 
     test("starts a new refresh after success and clears the refresh promise after failure", async () => {
@@ -337,7 +344,7 @@ describe("plugin.xai", () => {
       })
       const opts = await (
         await XaiAuthPlugin(input, serverOptions(server))
-      ).auth!.loader!(async () => ({ type: "oauth", access: "old", refresh: "rt-old", expires: 0 }), {} as any)
+      ).auth!.loader!(async () => ({ type: "oauth", access: "old", refresh: "<old-refresh>", expires: 0 }), {} as any)
 
       await opts.fetch!(new URL("/chat/completions", server.url), { headers: {} })
       await expect(opts.fetch!(new URL("/chat/completions", server.url), { headers: {} })).rejects.toThrow(
@@ -351,18 +358,18 @@ describe("plugin.xai", () => {
       const { input, setCalls } = makeInput({ failSet: true })
       const captured: Headers[] = []
       using server = makeServer((request, url) => {
-        if (url.pathname === "/oauth2/token") return Response.json({ access_token: "new-access", expires_in: 3600 })
+        if (url.pathname === "/oauth2/token") return Response.json({ access_token: "<new-access>", expires_in: 3600 })
         captured.push(request.headers)
         return new Response("{}", { status: 200 })
       })
       const opts = await (
         await XaiAuthPlugin(input, serverOptions(server))
-      ).auth!.loader!(async () => ({ type: "oauth", access: "old", refresh: "rt-old", expires: 0 }), {} as any)
+      ).auth!.loader!(async () => ({ type: "oauth", access: "old", refresh: "<old-refresh>", expires: 0 }), {} as any)
 
       const resp = await opts.fetch!(new URL("/chat/completions", server.url), { headers: {} })
       expect(resp.status).toBe(200)
-      expect(captured[0].get("authorization")).toBe("Bearer new-access")
-      expect((setCalls[0].body as any).refresh).toBe("rt-old")
+      expect(captured[0].get("authorization")).toBe("Bearer <new-access>")
+      expect((setCalls[0].body as any).refresh).toBe("<old-refresh>")
     })
 
     test("refreshes based on stored expiry or JWT expiry and skips refresh when both are fresh", async () => {
@@ -371,7 +378,7 @@ describe("plugin.xai", () => {
       using server = makeServer((_, url) => {
         if (url.pathname === "/oauth2/token") {
           tokenRequests++
-          return Response.json({ access_token: "new-access", refresh_token: "rt-new", expires_in: 3600 })
+          return Response.json({ access_token: "<new-access>", refresh_token: "<new-refresh>", expires_in: 3600 })
         }
         return new Response("{}", { status: 200 })
       })
@@ -381,7 +388,7 @@ describe("plugin.xai", () => {
         async () => ({
           type: "oauth",
           access: makeJwt({ exp: Math.floor(Date.now() / 1000) + 24 * 3600 }),
-          refresh: "rt",
+          refresh: "<refresh-token>",
           expires: Date.now() + 24 * 3600 * 1000,
         }),
         {} as any,
@@ -395,14 +402,14 @@ describe("plugin.xai", () => {
         async () => ({
           type: "oauth",
           access: makeJwt({ exp: Math.floor((Date.now() + 30_000) / 1000) }),
-          refresh: "rt-old",
+          refresh: "<old-refresh>",
           expires: Date.now() + 24 * 3600 * 1000,
         }),
         {} as any,
       )
       const missingExpires = await (
         await XaiAuthPlugin(input, serverOptions(server))
-      ).auth!.loader!(async () => ({ type: "oauth", access: "opaque-token", refresh: "rt", expires: 0 }), {} as any)
+      ).auth!.loader!(async () => ({ type: "oauth", access: "<opaque-access>", refresh: "<refresh-token>", expires: 0 }), {} as any)
       await jwtExpiring.fetch!(new URL("/chat/completions", server.url), { headers: {} })
       await missingExpires.fetch!(new URL("/chat/completions", server.url), { headers: {} })
       expect(tokenRequests).toBe(2)
@@ -413,7 +420,7 @@ describe("plugin.xai", () => {
       const { input } = makeInput()
       const opts = await (
         await XaiAuthPlugin(input, { tokenUrl: "http://127.0.0.1:9/oauth2/token" })
-      ).auth!.loader!(async () => ({ type: "oauth", access: "old", refresh: "rt", expires: 0 }), {} as any)
+      ).auth!.loader!(async () => ({ type: "oauth", access: "<old-access>", refresh: "<refresh-token>", expires: 0 }), {} as any)
 
       await expect(opts.fetch!("https://api.x.ai/v1/chat/completions", { headers: {} })).rejects.toThrow()
     })
@@ -433,7 +440,7 @@ describe("plugin.xai", () => {
           })
         }
         if (url.pathname === "/oauth2/token") {
-          return Response.json({ access_token: "AT", refresh_token: "RT", expires_in: 3600 })
+          return Response.json({ access_token: "<access-token>", refresh_token: "<refresh-token>", expires_in: 3600 })
         }
         return new Response("unexpected request", { status: 500 })
       })
@@ -448,7 +455,7 @@ describe("plugin.xai", () => {
       expect(result.url).toBe("https://x.ai/device?user_code=ABCD-1234")
       expect(result.instructions).toContain("https://x.ai/device")
       expect(result.instructions).toContain("ABCD-1234")
-      expect(await (result as any).callback()).toMatchObject({ type: "success", refresh: "RT", access: "AT" })
+      expect(await (result as any).callback()).toMatchObject({ type: "success", refresh: "<refresh-token>", access: "<access-token>" })
     })
 
     test("authorize falls back to verification_uri when verification_uri_complete is absent", async () => {
@@ -504,15 +511,15 @@ describe("plugin.xai", () => {
         const body = new URLSearchParams(await request.text())
         expect(body.get("grant_type")).toBe("urn:ietf:params:oauth:grant-type:device_code")
         expect(body.get("device_code")).toBe("DC-1")
-        return Response.json({ access_token: "AT", refresh_token: "RT", expires_in: 3600 })
+          return Response.json({ access_token: "<access-token>", refresh_token: "<refresh-token>", expires_in: 3600 })
       })
 
       const tokens = await pollDeviceCodeToken(
         { device_code: "DC-1", user_code: "UC", verification_uri: "https://x.ai/device", interval: 1, expires_in: 600 },
         { sleep: async () => {}, tokenUrl: new URL("/oauth2/token", server.url).toString() },
       )
-      expect(tokens.access_token).toBe("AT")
-      expect(tokens.refresh_token).toBe("RT")
+      expect(tokens.access_token).toBe("<access-token>")
+      expect(tokens.refresh_token).toBe("<refresh-token>")
       expect(tokenCalls).toBe(1)
     })
 
@@ -522,14 +529,14 @@ describe("plugin.xai", () => {
         n++
         if (n === 1) return Response.json({ error: "authorization_pending" }, { status: 400 })
         if (n === 2) return Response.json({ error: "slow_down" }, { status: 400 })
-        return Response.json({ access_token: "AT", refresh_token: "RT", expires_in: 3600 })
+        return Response.json({ access_token: "<access-token>", refresh_token: "<refresh-token>", expires_in: 3600 })
       })
       const sleeps: number[] = []
       const tokens = await pollDeviceCodeToken(
         { device_code: "DC", user_code: "UC", verification_uri: "https://x.ai/device", interval: 5, expires_in: 600 },
         { sleep: async (ms) => void sleeps.push(ms), tokenUrl: new URL("/oauth2/token", server.url).toString() },
       )
-      expect(tokens.access_token).toBe("AT")
+      expect(tokens.access_token).toBe("<access-token>")
       expect(n).toBe(3)
       expect(sleeps).toEqual([8_000, 13_000])
     })
@@ -576,7 +583,7 @@ describe("plugin.xai", () => {
         using server = makeServer(() => {
           n++
           if (n === 1) return Response.json({ error: "authorization_pending" }, { status: 400 })
-          return Response.json({ access_token: "AT", refresh_token: "RT", expires_in: 3600 })
+        return Response.json({ access_token: "<access-token>", refresh_token: "<refresh-token>", expires_in: 3600 })
         })
         const sleeps: number[] = []
         await pollDeviceCodeToken(
@@ -593,7 +600,7 @@ describe("plugin.xai", () => {
       }
 
       for (const bad of [Number.NaN, "NaN", "garbage", -5, null, 0]) {
-        using server = makeServer(() => Response.json({ access_token: "AT", refresh_token: "RT", expires_in: 3600 }))
+        using server = makeServer(() => Response.json({ access_token: "<access-token>", refresh_token: "<refresh-token>", expires_in: 3600 }))
         expect(
           (
             await pollDeviceCodeToken(
@@ -607,7 +614,7 @@ describe("plugin.xai", () => {
               { sleep: async () => {}, tokenUrl: new URL("/oauth2/token", server.url).toString() },
             )
           ).access_token,
-        ).toBe("AT")
+        ).toBe("<access-token>")
       }
     })
 

@@ -470,6 +470,8 @@ export interface Interface {
     metadata?: typeof Metadata.Type
     permission?: PermissionV1.Ruleset
     workspaceID?: WorkspaceV2.ID
+    directory?: string
+    path?: string
   }) => Effect.Effect<Info>
   readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
@@ -726,13 +728,20 @@ export const layer: Layer.Layer<
       metadata?: typeof Metadata.Type
       permission?: PermissionV1.Ruleset
       workspaceID?: WorkspaceV2.ID
+      directory?: string
+      path?: string
     }) {
       const ctx = yield* InstanceState.context
       const workspace = yield* InstanceState.workspaceID
+      // An explicit directory roots the child at its own worktree (used by
+      // the task tool's validated workspace/worktree target so fs, snapshot,
+      // and codegraph share one root). Otherwise inherit the ambient context.
+      const directory = input?.directory ?? ctx.directory
+      const targetPath = input?.path ?? (input?.directory ? "" : sessionPath(ctx.worktree, ctx.directory))
       return yield* createNext({
         parentID: input?.parentID,
-        directory: ctx.directory,
-        path: sessionPath(ctx.worktree, ctx.directory),
+        directory,
+        path: targetPath,
         title: input?.title,
         agent: input?.agent,
         model: input?.model,

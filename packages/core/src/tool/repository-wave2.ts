@@ -1,6 +1,5 @@
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
-import path from "path"
 import { Banyan, isStale } from "../banyancode"
 import { countStaleFilesFor } from "../banyancode/graph-staleness"
 import { traced } from "../observability/trace"
@@ -478,9 +477,13 @@ export const locationLayer = Layer.effectDiscard(
     const ensureGraphReady = (input: { readonly [key: string]: unknown }, toolLabel: string) =>
       Effect.gen(function* () {
         const ws = input.workspace as { worktree?: string } | undefined
-        const rootHint = typeof ws?.worktree === "string" ? ws.worktree : undefined
-        const resolvedRoot = rootHint ?? process.cwd()
-        const ready = yield* readiness.ensureReady({ root: path.resolve(resolvedRoot) })
+        const worktree = typeof ws?.worktree === "string" ? ws.worktree : undefined
+        const resolved = Banyan.WorkspaceIdentity.resolveEffectiveRoot({ worktree, cwd: process.cwd() })
+        if (resolved._tag === "InvalidWorkspace") {
+          yield* Effect.logWarning(`${toolLabel}: ${resolved.diagnostic.message}`)
+          return { reason: "failed", autoBuilt: false, error: resolved.diagnostic.message } as const
+        }
+        const ready = yield* readiness.ensureReady({ root: resolved.root })
         if (ready.reason === "failed") {
           yield* Effect.logWarning(`${toolLabel}: readiness failed: ${ready.error ?? "unknown"}`)
         }

@@ -187,6 +187,27 @@ export type {
   Options as TokenAttributionOptions,
   Interface as TokenAttributionInterface,
 } from "./token-attribution"
+export { AgentEfficiencyTelemetryTable } from "./agent-efficiency-telemetry.sql"
+export {
+  Service as AgentEfficiencyTelemetryRepo,
+  layer as agentEfficiencyTelemetryRepoLayer,
+  defaultLayer as agentEfficiencyTelemetryRepoDefaultLayer,
+} from "./agent-efficiency-telemetry-repo"
+export type { Interface as AgentEfficiencyTelemetryRepoInterface } from "./agent-efficiency-telemetry-repo"
+export {
+  Service as AgentEfficiencyTelemetry,
+  layer as agentEfficiencyTelemetryLayer,
+  defaultLayer as agentEfficiencyTelemetryDefaultLayer,
+  sanitizeAgentEfficiencyEvent,
+} from "./agent-efficiency-telemetry"
+export type {
+  AgentEfficiencyEvent,
+  AgentEfficiencyEventType,
+  TelemetryMetadata,
+  TelemetryStatus,
+  Options as AgentEfficiencyTelemetryOptions,
+  Interface as AgentEfficiencyTelemetryInterface,
+} from "./agent-efficiency-telemetry"
 export {
   Service as RuntimeCallGraph,
   layer as runtimeCallGraphLayer,

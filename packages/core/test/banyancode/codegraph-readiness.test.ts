@@ -630,8 +630,7 @@ describe("CodegraphReadiness", () => {
   })
 
   // Phase 2: a healthy graph (fresh + adequate coverage) reports "ready".
-  test("status() returns ready when the graph is healthy", async () => {
-    await using tmp = await tmpdir()
+  test("status() returns ready when the graph is healthy", async () => {    await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "readiness-status-ready.db")
     const layer = buildReadinessLayer(dbPath)
     const { CodegraphRepo } = await import("@opencode-ai/core/banyancode/codegraph-repo")
@@ -674,6 +673,168 @@ describe("CodegraphReadiness", () => {
       expect(exit.value.graphCoverage).toBe(0.9)
       expect(exit.value.totalFiles).toBe(42)
       expect(exit.value.graphBuiltAt).toBe(now)
+    }
+  })
+
+  test("classifyReadiness splits needsBuild / forceReindex / routingError", async () => {
+    const { classifyReadiness } = await import("@opencode-ai/core/banyancode/codegraph-readiness")
+    const base = {
+      id: "singleton",
+      graphBuiltAt: Date.now(),
+      graphVersion: 1,
+      graphCoverage: 1,
+      totalFiles: 1,
+      totalNodes: 0,
+      totalEdges: 0,
+      schemaVersion: CODEGRAPH_SCHEMA_VERSION,
+      indexedRoot: "/ws/a",
+    }
+    expect(classifyReadiness({ meta: undefined, fileCount: 0, root: "/ws/a" }).needsBuild).toBe(true)
+    expect(classifyReadiness({ meta: base, fileCount: 0, root: "/ws/a" }).needsBuild).toBe(true)
+    const staleSchema = classifyReadiness({
+      meta: { ...base, schemaVersion: CODEGRAPH_SCHEMA_VERSION - 1 },
+      fileCount: 1,
+      root: "/ws/a",
+    })
+    expect(staleSchema.forceReindex).toBe(true)
+    expect(staleSchema.needsBuild).toBe(false)
+    const routed = classifyReadiness({ meta: base, fileCount: 1, root: "/ws/b" })
+    expect(routed.routingError).toBeDefined()
+    expect(routed.needsBuild).toBe(false)
+    expect(routed.forceReindex).toBe(false)
+    const healthy = classifyReadiness({ meta: base, fileCount: 1, root: "/ws/a" })
+    expect(healthy).toEqual({ needsBuild: false, forceReindex: false, routingError: undefined })
+  })
+
+  test("ensureReady returns failed (no rebuild) on indexed_root mismatch", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "readiness-routing.db")
+    const rootA = path.join(tmp.path, "ws-a")
+    const rootB = path.join(tmp.path, "ws-b")
+    fs.mkdirSync(rootA, { recursive: true })
+    fs.mkdirSync(rootB, { recursive: true })
+
+    const layer = buildReadinessLayer(dbPath)
+    const { CodegraphRepo } = await import("@opencode-ai/core/banyancode/codegraph-repo")
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          yield* repo.putFile({
+            id: "f1",
+            path: path.join(rootA, "a.ts"),
+            contentHash: "h1",
+            language: "typescript",
+            indexedAt: Date.now(),
+          })
+          yield* repo.setMeta({
+            id: "singleton",
+            graphBuiltAt: Date.now(),
+            graphVersion: 1,
+            graphCoverage: 1,
+            totalFiles: 1,
+            totalNodes: 0,
+            totalEdges: 0,
+            schemaVersion: CODEGRAPH_SCHEMA_VERSION,
+            indexedRoot: rootA,
+          })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* CodegraphReadiness.Service
+          return yield* svc.ensureReady({ root: rootB })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    expect(Exit.isSuccess(exit)).toBe(true)
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.reason).toBe("failed")
+      expect(exit.value.autoBuilt).toBe(false)
+      expect(exit.value.error).toContain("indexed_root mismatch")
+    }
+
+    const meta = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          return yield* repo.getMeta()
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+    expect(meta?.indexedRoot).toBe(rootA)
+  })
+
+  test("thresholdMs controls the age-warning interval", async () => {
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "readiness-threshold.db")
+    const repoDir = path.join(tmp.path, "src")
+    const filePath = path.join(repoDir, "a.ts")
+    fs.mkdirSync(repoDir, { recursive: true })
+    fs.writeFileSync(filePath, "export const a = 1\n")
+
+    const layer = buildReadinessLayer(dbPath)
+    const { CodegraphRepo } = await import("@opencode-ai/core/banyancode/codegraph-repo")
+    const twoDaysMs = 2 * 24 * 60 * 60 * 1000
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          yield* repo.putFile({
+            id: "f1",
+            path: filePath,
+            contentHash: "h1",
+            language: "typescript",
+            indexedAt: Date.now() - twoDaysMs,
+          })
+          yield* repo.setMeta({
+            id: "singleton",
+            graphBuiltAt: Date.now() - twoDaysMs,
+            graphVersion: 1,
+            graphCoverage: 1,
+            totalFiles: 1,
+            totalNodes: 0,
+            totalEdges: 0,
+            schemaVersion: CODEGRAPH_SCHEMA_VERSION,
+            indexedRoot: repoDir,
+          })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+
+    const warned = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* CodegraphReadiness.Service
+          return yield* svc.ensureReady({ root: repoDir, thresholdMs: 24 * 60 * 60 * 1000 })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+    expect(Exit.isSuccess(warned)).toBe(true)
+    if (Exit.isSuccess(warned)) {
+      expect(warned.value.reason).toBe("ready")
+      expect(warned.value.autoBuilt).toBe(false)
+      expect(warned.value.warning).toBeDefined()
+    }
+
+    const quiet = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const svc = yield* CodegraphReadiness.Service
+          return yield* svc.ensureReady({ root: repoDir, thresholdMs: 30 * 24 * 60 * 60 * 1000 })
+        }).pipe(Effect.provide(layer)),
+      ),
+    )
+    expect(Exit.isSuccess(quiet)).toBe(true)
+    if (Exit.isSuccess(quiet)) {
+      expect(quiet.value.reason).toBe("ready")
+      expect(quiet.value.warning).toBeUndefined()
     }
   })
 })

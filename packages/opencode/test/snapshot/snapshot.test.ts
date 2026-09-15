@@ -1,4 +1,4 @@
-import { afterEach, expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { $ } from "bun"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -1148,3 +1148,35 @@ it.instance(
   }),
   { git: true },
 )
+
+describe("worktree pathspec hygiene", () => {
+  const { isSafePathspec, toWorktreePathspec } = Snapshot.__test
+
+  test("accepts plain worktree-relative paths", () => {
+    expect(isSafePathspec("a.txt")).toBe(true)
+    expect(isSafePathspec("sub/dir/b.txt")).toBe(true)
+    expect(isSafePathspec("sub\\dir\\c.txt")).toBe(true)
+  })
+
+  test("rejects absolute and escaping paths", () => {
+    expect(isSafePathspec("/etc/passwd")).toBe(false)
+    expect(isSafePathspec("../outside.txt")).toBe(false)
+    expect(isSafePathspec("sub/../../outside.txt")).toBe(false)
+    expect(isSafePathspec("")).toBe(false)
+    expect(isSafePathspec("a\0b")).toBe(false)
+  })
+
+  test("rejects Windows drive-letter and UNC paths (D./ and C./ regressions)", () => {
+    expect(isSafePathspec("C:/Users/x/file.txt")).toBe(false)
+    expect(isSafePathspec("C:\\Users\\x\\file.txt")).toBe(false)
+    expect(isSafePathspec("D:foo")).toBe(false)
+    expect(isSafePathspec("D:/repo/file.txt")).toBe(false)
+    expect(isSafePathspec("//server/share/file.txt")).toBe(false)
+  })
+
+  test("normalizes backslashes and ./ prefixes", () => {
+    expect(toWorktreePathspec("sub\\dir\\b.txt")).toBe("sub/dir/b.txt")
+    expect(toWorktreePathspec("./a.txt")).toBe("a.txt")
+    expect(toWorktreePathspec("a.txt")).toBe("a.txt")
+  })
+})

@@ -32,6 +32,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
   model: Provider.Model
   session: Session.Info
+  runID?: string
+  rootSessionID?: string
   processor: Pick<SessionProcessor.Handle, "message" | "updateToolCall" | "completeToolCall">
   bypassAgentCheck: boolean
   messages: SessionV1.WithParts[]
@@ -50,7 +52,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     abort: options.abortSignal!,
     messageID: input.processor.message.id,
     callID: options.toolCallId,
-    extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck, promptOps: input.promptOps },
+    extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck, promptOps: input.promptOps, runID: input.runID },
     agent: input.agent.name,
     messages: input.messages,
     metadata: (val) =>
@@ -195,6 +197,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       ) => Effect.Effect<Materialization, never, never>
     )(catalog, {
       sessionID: input.session.id,
+      runID: input.runID,
+      parentSessionID: input.session.parentID,
+      rootSessionID: input.rootSessionID,
       assistantMessageID: input.processor.message.id,
       agent: input.agent.name,
       model: input.model,

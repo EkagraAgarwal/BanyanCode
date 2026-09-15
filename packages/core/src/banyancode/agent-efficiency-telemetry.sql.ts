@@ -1,0 +1,38 @@
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
+
+export const AgentEfficiencyTelemetryTable = sqliteTable(
+  "agent_efficiency_telemetry",
+  {
+    event_id: text().primaryKey(),
+    schema_version: integer().notNull(),
+    event_type: text().notNull(),
+    occurred_at: integer().notNull(),
+    run_id: text().notNull(),
+    session_id: text(),
+    parent_session_id: text(),
+    root_session_id: text(),
+    agent_instance_id: text(),
+    agent_role: text(),
+    depth: integer(),
+    task_id: text(),
+    benchmark_id: text(),
+    experiment_id: text(),
+    experiment_variant: text(),
+    model_call_id: text(),
+    tool_call_id: text(),
+    finding_id: text(),
+    parent_event_id: text(),
+    status: text(),
+    duration_ms: integer(),
+    error_category: text(),
+    metadata: text({ mode: "json" }).$type<{ _v: 1; data: Record<string, unknown> }>(),
+  },
+  (table) => [
+    index("agent_efficiency_telemetry_run_idx").on(table.run_id, table.occurred_at),
+    index("agent_efficiency_telemetry_session_idx").on(table.session_id, table.occurred_at),
+    index("agent_efficiency_telemetry_agent_idx").on(table.agent_instance_id, table.occurred_at),
+    index("agent_efficiency_telemetry_type_idx").on(table.event_type, table.occurred_at),
+    index("agent_efficiency_telemetry_time_idx").on(table.occurred_at),
+    index("agent_efficiency_telemetry_status_idx").on(table.status, table.occurred_at),
+  ],
+)

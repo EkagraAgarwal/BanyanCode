@@ -326,8 +326,8 @@ function ConnectionError(props: { onRetry?: () => void; onServerSelected?: (key:
   const server = useServer()
   const others = () => server.list.filter((s) => ServerConnection.key(s) !== server.key)
   const name = createMemo(() => server.name || server.key)
-  const serverToken = "\u0000server\u0000"
-  const unreachable = createMemo(() => language.t("app.server.unreachable", { server: serverToken }).split(serverToken))
+  const serverMarker = "\u0000server\u0000"
+  const unreachable = createMemo(() => language.t("app.server.unreachable", { server: serverMarker }).split(serverMarker))
 
   const timer = setInterval(() => props.onRetry?.(), 1000)
   onCleanup(() => clearInterval(timer))

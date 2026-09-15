@@ -59,6 +59,26 @@ const WARN_INTERVAL_MS = 30_000
 const shouldThrottle = (lastRun: number | undefined, now: number, minIntervalMs: number) =>
   lastRun !== undefined && now - lastRun < minIntervalMs
 
+// Git pathspec hygiene: every candidate that reaches git (or path.join) must
+// be a worktree-relative forward-slash path. Absolute paths, drive-letter
+// paths (`C:/...`, `C:\...`, `D:...`), UNC roots, and `..` escapes are
+// rejected so a malformed git row can never materialize as a `D/` or `C./`
+// directory inside the worktree. Pure so it can be unit-tested.
+const isSafePathspec = (candidate: string): boolean => {
+  if (!candidate || candidate.includes("\0")) return false
+  const normalized = candidate.replaceAll("\\", "/")
+  if (normalized.startsWith("/") || normalized.startsWith("//")) return false
+  if (/^[A-Za-z]:(\/|$)/.test(normalized) || /^[A-Za-z]:/.test(candidate)) return false
+  if (path.isAbsolute(candidate)) return false
+  if (normalized.split("/").includes("..")) return false
+  return true
+}
+
+const toWorktreePathspec = (candidate: string): string => {
+  const normalized = candidate.replaceAll("\\", "/")
+  return normalized.startsWith("./") ? normalized.slice(2) : normalized
+}
+
 // Conservative detection of the "file changed while git was hashing" failure
 // (`git add` exits 128 with "fatal: confused by unstable object source data"
 // or an index-pack variant). Deliberately narrow: unrelated git errors still
@@ -113,6 +133,20 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           vcs: ctx.project.vcs,
         }
 
+        // All git invocations run with cwd=state.worktree (the canonical
+        // root) and worktree-relative pathspecs. The session directory may be
+        // a subdir of the worktree; scope directory-scoped listings to it via
+        // an explicit pathspec so a child session rooted at a temp worktree
+        // (directory == worktree) snapshots only that worktree. A directory
+        // outside the worktree falls back to "." (whole worktree) rather than
+        // a `..` escape.
+        const scopePrefix = path.relative(state.worktree, state.directory).replaceAll("\\", "/")
+        const scope =
+          scopePrefix === "" || scopePrefix.startsWith("..") || path.isAbsolute(scopePrefix) ? "." : scopePrefix
+
+        const sanitize = (list: string[]) =>
+          Array.from(new Set(list.map(toWorktreePathspec).filter(isSafePathspec)))
+
         const args = (cmd: string[]) => ["--git-dir", state.gitdir, "--work-tree", state.worktree, ...cmd]
 
         const feed = (list: string[]) => list.join("\0") + "\0"
@@ -153,7 +187,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               "-z",
             ],
             {
-              cwd: state.directory,
+              cwd: state.worktree,
               stdin: feed(files),
             },
           )
@@ -169,7 +203,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               ...args(["rm", "--cached", "-f", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"]),
             ],
             {
-              cwd: state.directory,
+              cwd: state.worktree,
               stdin: feed(files),
             },
           )
@@ -187,7 +221,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           const result = yield* git(
             [...cfg, ...args(["add", "--all", "--sparse", "--pathspec-from-file=-", "--pathspec-file-nul"])],
             {
-              cwd: state.directory,
+              cwd: state.worktree,
               stdin: feed(files),
             },
           )
@@ -302,11 +336,11 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
 
           const [diff, other] = yield* Effect.all(
             [
-              git([...quote, ...args(["diff-files", "--name-only", "-z", "--", "."])], {
-                cwd: state.directory,
+              git([...quote, ...args(["diff-files", "--name-only", "-z", "--", scope])], {
+                cwd: state.worktree,
               }),
-              git([...quote, ...args(["ls-files", "--others", "--exclude-standard", "-z", "--", "."])], {
-                cwd: state.directory,
+              git([...quote, ...args(["ls-files", "--others", "--exclude-standard", "-z", "--", scope])], {
+                cwd: state.worktree,
               }),
             ],
             { concurrency: 2 },
@@ -322,8 +356,8 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             return false
           }
 
-          const tracked = diff.text.split("\0").filter(Boolean)
-          const untracked = other.text.split("\0").filter(Boolean)
+          const tracked = sanitize(diff.text.split("\0").filter(Boolean))
+          const untracked = sanitize(other.text.split("\0").filter(Boolean))
           const all = Array.from(new Set([...tracked, ...untracked]))
           if (!all.length) return true
 
@@ -345,7 +379,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             (yield* Effect.all(
               allow.map((item) =>
                 fs
-                  .stat(path.join(state.directory, item))
+                  .stat(path.join(state.worktree, item))
                   .pipe(Effect.catch(() => Effect.void))
                   .pipe(
                     Effect.map((stat) => {
@@ -371,7 +405,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             Effect.gen(function* () {
               if (!(yield* enabled())) return
               if (!(yield* exists(state.gitdir))) return
-              const result = yield* git(args(["gc", `--prune=${prune}`]), { cwd: state.directory })
+              const result = yield* git(args(["gc", `--prune=${prune}`]), { cwd: state.worktree })
               if (result.code !== 0) {
                 yield* Effect.logWarning("cleanup failed", {
                   exitCode: result.code,
@@ -407,9 +441,9 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
                 yield* Effect.logInfo("initialized")
               }
               yield* add()
-              const result = yield* git(args(["write-tree"]), { cwd: state.directory })
+              const result = yield* git(args(["write-tree"]), { cwd: state.worktree })
               const hash = result.text.trim()
-              yield* Effect.logInfo("tracking", { hash, cwd: state.directory, git: state.gitdir })
+              yield* Effect.logInfo("tracking", { hash, cwd: state.worktree, git: state.gitdir })
               return hash
             }),
           )
@@ -420,20 +454,22 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             Effect.gen(function* () {
               yield* add()
               const result = yield* git(
-                [...quote, ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", "."])],
+                [...quote, ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", scope])],
                 {
-                  cwd: state.directory,
+                  cwd: state.worktree,
                 },
               )
               if (result.code !== 0) {
                 yield* Effect.logWarning("failed to get diff", { hash, exitCode: result.code })
                 return { hash, files: [] }
               }
-              const files = result.text
-                .trim()
-                .split("\n")
-                .map((x) => x.trim())
-                .filter(Boolean)
+              const files = sanitize(
+                result.text
+                  .trim()
+                  .split("\n")
+                  .map((x) => x.trim())
+                  .filter(Boolean),
+              )
 
               // Hide ignored-file removals from the user-facing patch output.
               const ignored = yield* ignore(files)
@@ -483,17 +519,15 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
                 for (const file of item.files) {
                   if (seen.has(file)) continue
                   seen.add(file)
-                  ops.push({
-                    hash: item.hash,
-                    file,
-                    rel: path.relative(state.worktree, file).replaceAll("\\", "/"),
-                  })
+                  const rel = toWorktreePathspec(path.relative(state.worktree, file).replaceAll("\\", "/"))
+                  if (!isSafePathspec(rel)) continue
+                  ops.push({ hash: item.hash, file, rel })
                 }
               }
 
               const single = Effect.fnUntraced(function* (op: (typeof ops)[number]) {
                 yield* Effect.logInfo("reverting", { file: op.file, hash: op.hash })
-                const result = yield* git([...core, ...args(["checkout", op.hash, "--", op.file])], {
+                const result = yield* git([...core, ...args(["checkout", op.hash, "--", op.rel])], {
                   cwd: state.worktree,
                 })
                 if (result.code === 0) return
@@ -562,7 +596,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
                 if (list.length) {
                   yield* Effect.logInfo("reverting", { hash: first.hash, files: list.length })
                   const result = yield* git(
-                    [...core, ...args(["checkout", first.hash, "--", ...list.map((item) => item.file)])],
+                    [...core, ...args(["checkout", first.hash, "--", ...list.map((item) => item.rel)])],
                     {
                       cwd: state.worktree,
                     },
@@ -596,7 +630,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           return yield* locked(
             Effect.gen(function* () {
               yield* add()
-              const result = yield* git([...quote, ...args(["diff", "--cached", "--no-ext-diff", hash, "--", "."])], {
+              const result = yield* git([...quote, ...args(["diff", "--cached", "--no-ext-diff", hash, "--", scope])], {
                 cwd: state.worktree,
               })
               if (result.code !== 0) {
@@ -672,7 +706,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
 
                   const batch = yield* appProcess.run(
                     ChildProcess.make("git", [...cfg, ...args(["cat-file", "--batch"])], {
-                      cwd: state.directory,
+                      cwd: state.worktree,
                       extendEnv: true,
                     }),
                     { stdin: refs.map((item) => item.ref).join("\n") + "\n" },
@@ -754,21 +788,23 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               const status = new Map<string, "added" | "deleted" | "modified">()
 
               const statuses = yield* git(
-                [...quote, ...args(["diff", "--no-ext-diff", "--name-status", "--no-renames", from, to, "--", "."])],
-                { cwd: state.directory },
+                [...quote, ...args(["diff", "--no-ext-diff", "--name-status", "--no-renames", from, to, "--", scope])],
+                { cwd: state.worktree },
               )
 
               for (const line of statuses.text.trim().split("\n")) {
                 if (!line) continue
                 const [code, file] = line.split("\t")
                 if (!code || !file) continue
-                status.set(file, code.startsWith("A") ? "added" : code.startsWith("D") ? "deleted" : "modified")
+                const spec = toWorktreePathspec(file)
+                if (!isSafePathspec(spec)) continue
+                status.set(spec, code.startsWith("A") ? "added" : code.startsWith("D") ? "deleted" : "modified")
               }
 
               const numstat = yield* git(
-                [...quote, ...args(["diff", "--no-ext-diff", "--no-renames", "--numstat", from, to, "--", "."])],
+                [...quote, ...args(["diff", "--no-ext-diff", "--no-renames", "--numstat", from, to, "--", scope])],
                 {
-                  cwd: state.directory,
+                  cwd: state.worktree,
                 },
               )
 
@@ -779,13 +815,15 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
                 .flatMap((line) => {
                   const [adds, dels, file] = line.split("\t")
                   if (!file) return []
+                  const spec = toWorktreePathspec(file)
+                  if (!isSafePathspec(spec)) return []
                   const binary = adds === "-" && dels === "-"
                   const additions = binary ? 0 : parseInt(adds)
                   const deletions = binary ? 0 : parseInt(dels)
                   return [
                     {
-                      file,
-                      status: status.get(file) ?? "modified",
+                      file: spec,
+                      status: status.get(spec) ?? "modified",
                       binary,
                       additions: Number.isFinite(additions) ? additions : 0,
                       deletions: Number.isFinite(deletions) ? deletions : 0,
@@ -875,7 +913,7 @@ export const defaultLayer = layer.pipe(
 
 export const node = LayerNode.make(layer, [FSUtil.node, AppProcess.node, Config.node])
 
-// Test-only surface for the pure throttle/detection helpers.
-export const __test = { shouldThrottle, isUnstableSourceError }
+// Test-only surface for the pure throttle/detection/pathspec helpers.
+export const __test = { shouldThrottle, isUnstableSourceError, isSafePathspec, toWorktreePathspec }
 
 export * as Snapshot from "."

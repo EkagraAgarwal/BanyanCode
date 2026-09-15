@@ -37,7 +37,7 @@ function cloudflareEnv(overrides: Record<string, string | undefined> = {}) {
   return {
     CLOUDFLARE_ACCOUNT_ID: "env-account",
     CLOUDFLARE_GATEWAY_ID: "env-gateway",
-    CLOUDFLARE_API_TOKEN: "env-token",
+    CLOUDFLARE_API_TOKEN: "<provider-credential>",
     CF_AIG_TOKEN: undefined,
     ...overrides,
   }
@@ -72,7 +72,7 @@ describe("CloudflareAIGatewayPlugin", () => {
       {
         CLOUDFLARE_ACCOUNT_ID: "acct",
         CLOUDFLARE_GATEWAY_ID: "gateway",
-        CLOUDFLARE_API_TOKEN: "token",
+        CLOUDFLARE_API_TOKEN: "<provider-credential>",
         CF_AIG_TOKEN: undefined,
       },
       () =>
@@ -121,7 +121,7 @@ describe("CloudflareAIGatewayPlugin", () => {
         expect(aiGatewayCalls[0]).toEqual({
           accountId: "env-account",
           gateway: "env-gateway",
-          apiKey: "env-token",
+          apiKey: "<provider-credential>",
           options: {
             metadata: { invoked_by: "test", project: "opencode" },
             cacheTtl: 300,
@@ -182,7 +182,7 @@ describe("CloudflareAIGatewayPlugin", () => {
               name: "cloudflare-ai-gateway",
               accountId: "auth-account",
               gateway: "auth-gateway",
-              apiKey: "auth-token",
+              apiKey: "<auth-credential>",
             },
           },
           {},
@@ -191,7 +191,7 @@ describe("CloudflareAIGatewayPlugin", () => {
         expect(aiGatewayCalls[0]).toMatchObject({
           accountId: "env-account",
           gateway: "env-gateway",
-          apiKey: "env-token",
+          apiKey: "<provider-credential>",
         })
       }),
     ),
@@ -219,7 +219,7 @@ describe("CloudflareAIGatewayPlugin", () => {
                 name: "cloudflare-ai-gateway",
                 accountId: "auth-account",
                 gatewayId: "auth-gateway",
-                apiKey: "auth-token",
+                apiKey: "<auth-credential>",
               },
             },
             {},
@@ -228,14 +228,14 @@ describe("CloudflareAIGatewayPlugin", () => {
           expect(aiGatewayCalls[0]).toMatchObject({
             accountId: "auth-account",
             gateway: "auth-gateway",
-            apiKey: "auth-token",
+            apiKey: "<auth-credential>",
           })
         }),
     ),
   )
 
   it.effect("falls back to CF_AIG_TOKEN when CLOUDFLARE_API_TOKEN is unset", () =>
-    withEnv(cloudflareEnv({ CLOUDFLARE_API_TOKEN: undefined, CF_AIG_TOKEN: "cf-aig-token" }), () =>
+    withEnv(cloudflareEnv({ CLOUDFLARE_API_TOKEN: undefined, CF_AIG_TOKEN: "<gateway-credential>" }), () =>
       Effect.gen(function* () {
         resetCalls()
         const plugin = yield* PluginV2.Service
@@ -251,7 +251,7 @@ describe("CloudflareAIGatewayPlugin", () => {
           {},
         )
 
-        expect(aiGatewayCalls[0]).toMatchObject({ apiKey: "cf-aig-token" })
+        expect(aiGatewayCalls[0]).toMatchObject({ apiKey: "<gateway-credential>" })
       }),
     ),
   )

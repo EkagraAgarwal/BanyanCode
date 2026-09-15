@@ -2,8 +2,6 @@ export * as CodegraphTools from "./codegraph"
 
 import { ToolFailure } from "@opencode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
-import { existsSync } from "node:fs"
-import path from "node:path"
 import { Banyan } from "../banyancode"
 import { traced } from "../observability/trace"
 import { CodegraphNodeSchema, GraphMeta } from "../banyancode/types"
@@ -16,31 +14,6 @@ import { formatNodes } from "./codegraph-format"
 import { optionalBoolean, optionalNumber, optionalString } from "./tool-schema"
 
 const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
-
-function findRepoRoot(startDir: string): string | undefined {
-  let dir = path.resolve(startDir)
-  const { root: fsRoot } = path.parse(dir)
-  
-  // First pass: look specifically for .git to find the true workspace/monorepo root
-  let current = dir
-  while (current !== fsRoot) {
-    if (existsSync(path.join(current, ".git"))) {
-      return current
-    }
-    current = path.dirname(current)
-  }
-  
-  // Second pass: fallback to package.json if not a git repository
-  current = dir
-  while (current !== fsRoot) {
-    if (existsSync(path.join(current, "package.json"))) {
-      return current
-    }
-    current = path.dirname(current)
-  }
-  
-  return undefined
-}
 
 const name_build = "codegraph_build"
 export const name_remove = "codegraph_remove"
@@ -314,9 +287,13 @@ export const locationLayer = Layer.effectDiscard(
     // inside the readiness service per workspace root.
     const ensureGraphReady = (input: { readonly [key: string]: unknown }, toolLabel: string) =>
       Effect.gen(function* () {
-        const rootHint = typeof input.root === "string" ? input.root : undefined
-        const resolvedRoot = rootHint ?? findRepoRoot(process.cwd()) ?? process.cwd()
-        const ready = yield* readiness.ensureReady({ root: path.resolve(resolvedRoot) })
+        const explicitRoot = typeof input.root === "string" ? input.root : undefined
+        const resolved = Banyan.WorkspaceIdentity.resolveEffectiveRoot({ explicitRoot, cwd: process.cwd() })
+        if (resolved._tag === "InvalidWorkspace") {
+          yield* Effect.logWarning(`${toolLabel}: ${resolved.diagnostic.message}`)
+          return { reason: "failed", autoBuilt: false, error: resolved.diagnostic.message } as const
+        }
+        const ready = yield* readiness.ensureReady({ root: resolved.root })
         if (ready.reason === "failed") {
           yield* Effect.logWarning(`${toolLabel}: readiness failed: ${ready.error ?? "unknown"}`)
         }
@@ -387,21 +364,17 @@ export const locationLayer = Layer.effectDiscard(
                   source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
                 })
 
-                let resolvedRoot: string | undefined = input.root
-                if (!resolvedRoot) {
-                  const ws = findRepoRoot(process.cwd())
-                  if (ws) {
-                    resolvedRoot = ws
-                    yield* Effect.logWarning(
-                      `codegraph_build: input.root not provided; walked up from CWD to repo root: ${ws}`,
-                    )
-                  } else {
-                    yield* Effect.logWarning(
-                      `codegraph_build: input.root not provided and no .git/package.json marker found from CWD ${process.cwd()}; falling back to process.cwd()`,
-                    )
-                  }
+                const effective = Banyan.WorkspaceIdentity.resolveEffectiveRoot({
+                  explicitRoot: input.root ?? undefined,
+                  cwd: process.cwd(),
+                })
+                if (effective._tag === "InvalidWorkspace") {
+                  return yield* Effect.fail(new ToolFailure({ message: `codegraph_build: ${effective.diagnostic.message}` }))
                 }
-                const root = path.resolve(resolvedRoot ?? process.cwd())
+                if (effective.source !== "explicit") {
+                  yield* Effect.logWarning(`codegraph_build: input.root not provided; resolved via ${effective.source}: ${effective.root}`)
+                }
+                const root = effective.root
                 yield* buildService.start({ root, force: input.force ?? false })
 
                 let currentStatus = yield* buildService.status()

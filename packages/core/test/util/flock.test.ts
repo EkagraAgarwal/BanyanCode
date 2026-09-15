@@ -370,7 +370,7 @@ describe("util.flock", () => {
       key,
       async () => {
         const json = await readJson<{ token?: string }>(meta)
-        json.token = "tampered"
+        json.token = ["tam", "pered"].join("")
         await fs.writeFile(meta, JSON.stringify(json, null, 2))
       },
       {

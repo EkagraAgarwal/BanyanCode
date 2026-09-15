@@ -218,8 +218,7 @@ describe("CodegraphAutoUpdate", () => {
     )
   })
 
-  test("converges to watching when the indexer reports skipped paths (no requeue spin)", async () => {
-    await using tmp = await tmpdir()
+  test("converges to watching when the indexer reports skipped paths (no requeue spin)", async () => {    await using tmp = await tmpdir()
     const root = path.join(tmp.path, "workspace")
     const dbLayer = Database.layerFromPath(path.join(tmp.path, "auto.sqlite"))
     const filteredIndexer = Layer.succeed(
@@ -259,6 +258,79 @@ describe("CodegraphAutoUpdate", () => {
         const state = yield* svc.state()
         expect(state.status).toBe("watching")
         expect(state.pending).toBe(0)
+      }).pipe(Effect.provide(layer), Effect.provide(dbLayer), Effect.scoped) as any,
+    )
+  })
+
+  test("flush drains pending paths per root via indexFiles/removeFiles without a build", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "workspace")
+    const dbLayer = Database.layerFromPath(path.join(tmp.path, "auto.sqlite"))
+    const calls = { index: [], remove: [] } as { index: Array<{ paths: string[] }>; remove: Array<{ paths: string[] }> }
+    const starts: Array<{ root: string; excludePatterns?: readonly string[] }> = []
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const events = yield* EventV2.Service
+        const svc = yield* CodegraphAutoUpdate.Service
+        const changed = path.join(root, "changed.ts")
+        const deleted = path.join(root, "deleted.ts")
+        yield* events.publish(Watcher.Event.Updated, { file: changed, event: "change" }, { location: { directory: root as never } })
+        yield* events.publish(Watcher.Event.Updated, { file: deleted, event: "unlink" }, { location: { directory: root as never } })
+        yield* Effect.sleep(200)
+        const result = yield* svc.flush({ root })
+        expect(result.indexed).toBe(1)
+        expect(result.removed).toBe(1)
+        expect(calls.index).toHaveLength(1)
+        expect(calls.index[0].paths).toEqual([changed])
+        expect(calls.remove).toHaveLength(1)
+        expect(calls.remove[0].paths).toEqual([deleted])
+        expect(starts).toHaveLength(0)
+        expect((yield* svc.state()).pending).toBe(0)
+      }).pipe(Effect.provide(testLayer({ indexedRoot: root, calls, starts, config: { banyancode_codegraph_watch_debounce_ms: 5000 } })), Effect.provide(dbLayer), Effect.scoped) as any,
+    )
+  })
+
+  test("reconcile reports size+mtime drift and deleted files with discovered/indexed/removed/cached counts", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "workspace")
+    fs.mkdirSync(root, { recursive: true })
+    const kept = path.join(root, "kept.ts")
+    const touched = path.join(root, "touched.ts")
+    const gone = path.join(root, "gone.ts")
+    fs.writeFileSync(kept, "export const kept = 1\n")
+    fs.writeFileSync(touched, "export const touched = 1\n")
+    const keptStat = fs.statSync(kept)
+    const { createHash } = await import("node:crypto")
+    const hashOf = (s: string) => createHash("sha256").update(s).digest("hex")
+
+    const rows = [
+      { id: "f-kept", path: kept, contentHash: hashOf("export const kept = 1\n"), language: "typescript", indexedAt: Date.now(), sizeBytes: keptStat.size, mtimeMs: keptStat.mtimeMs },
+      { id: "f-touched", path: touched, contentHash: hashOf("changed content\n"), language: "typescript", indexedAt: Date.now(), sizeBytes: 1, mtimeMs: 1 },
+      { id: "f-gone", path: gone, contentHash: "h", language: "typescript", indexedAt: Date.now() },
+    ]
+    const fullRepo = Layer.succeed(
+      CodegraphRepo.Service,
+      CodegraphRepo.Service.of({
+        getMeta: () => Effect.succeed({ indexedRoot: root } as never),
+        listAllFiles: () => Effect.succeed(rows as never),
+      } as unknown as CodegraphRepo.Interface),
+    )
+    const dbLayer = Database.layerFromPath(path.join(tmp.path, "auto.sqlite"))
+    const layer = CodegraphAutoUpdate.layer.pipe(
+      Layer.provideMerge(EventV2.defaultLayer),
+      Layer.provideMerge(makeMockIndexer()),
+      Layer.provideMerge(fullRepo),
+      Layer.provideMerge(makeBuildService([])),
+      Layer.provideMerge(makeConfig({ banyancode_codegraph_watch_debounce_ms: 5000 })),
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* CodegraphAutoUpdate.Service
+        const result = yield* svc.reconcile({ root })
+        expect(result.cached).toBe(1)
+        expect(result.changed).toBe(1)
+        expect(result.removed).toBe(1)
+        expect(result.discovered).toBe(0)
       }).pipe(Effect.provide(layer), Effect.provide(dbLayer), Effect.scoped) as any,
     )
   })

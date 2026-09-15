@@ -44,7 +44,7 @@ const openAIConfig = (model: ModelsDev.Provider["models"][string], baseURL: stri
           [model.id]: JSON.parse(JSON.stringify(configModel)) as ConfigModel,
         },
         options: {
-          apiKey: "test-openai-key",
+          apiKey: "<test-openai-key>",
           baseURL,
         },
       },
@@ -832,7 +832,7 @@ describe("session.llm.stream", () => {
 
         expect(url.pathname.startsWith("/v1/")).toBe(true)
         expect(url.pathname.endsWith("/chat/completions")).toBe(true)
-        expect(headers.get("Authorization")).toBe("Bearer test-key")
+        expect(headers.get("Authorization")).toBe("Bearer <test-key>")
 
         expect(body.model).toBe(resolved.api.id)
         expect(body.temperature).toBe(0.4)
@@ -851,7 +851,7 @@ describe("session.llm.stream", () => {
         enabled_providers: [vivgridFixture.providerID],
         provider: {
           [vivgridFixture.providerID]: {
-            options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
+            options: { apiKey: "<test-key>", baseURL: `${state.server!.url.origin}/v1` },
           },
         },
       }),
@@ -914,7 +914,7 @@ describe("session.llm.stream", () => {
         enabled_providers: [alibabaQwenFixture.providerID],
         provider: {
           [alibabaQwenFixture.providerID]: {
-            options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
+            options: { apiKey: "<test-key>", baseURL: `${state.server!.url.origin}/v1` },
           },
         },
       }),
@@ -982,7 +982,7 @@ describe("session.llm.stream", () => {
         enabled_providers: [alibabaQwenFixture.providerID],
         provider: {
           [alibabaQwenFixture.providerID]: {
-            options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
+            options: { apiKey: "<test-key>", baseURL: `${state.server!.url.origin}/v1` },
           },
         },
       }),
@@ -1243,7 +1243,7 @@ describe("session.llm.stream", () => {
 
         const capture = yield* Effect.promise(() => request)
         expect(capture.url.pathname.endsWith("/responses")).toBe(true)
-        expect(capture.headers.get("Authorization")).toBe("Bearer test-openai-key")
+        expect(capture.headers.get("Authorization")).toBe("Bearer <test-openai-key>")
         expect(capture.body.model).toBe(model.id)
         expect(capture.body.stream).toBe(true)
         expect((capture.body.reasoning as { effort?: string } | undefined)?.effort).toBe("high")
@@ -1450,7 +1450,7 @@ describe("session.llm.stream", () => {
               npm: "@ai-sdk/openai",
               api: "https://api.openai.com/v1",
               models: { [model.id]: JSON.parse(JSON.stringify(model)) as ConfigModel },
-              options: { apiKey: "test-openai-key", baseURL: `${state.server!.url.origin}/v1` },
+              options: { apiKey: "<test-openai-key>", baseURL: `${state.server!.url.origin}/v1` },
             },
           },
         }
@@ -1646,7 +1646,7 @@ describe("session.llm.stream", () => {
         enabled_providers: [minimaxFixture.providerID],
         provider: {
           [minimaxFixture.providerID]: {
-            options: { apiKey: "test-anthropic-key", baseURL: `${state.server!.url.origin}/v1` },
+            options: { apiKey: "<test-anthropic-key>", baseURL: `${state.server!.url.origin}/v1` },
           },
         },
       }),
@@ -1871,7 +1871,7 @@ describe("session.llm.stream", () => {
               npm: "@ai-sdk/anthropic",
               api: "https://api.anthropic.com/v1",
               models: { [model.id]: configModel(model) as ConfigModel },
-              options: { apiKey: "test-anthropic-key", baseURL: `${state.server!.url.origin}/v1` },
+            options: { apiKey: "<test-anthropic-key>", baseURL: `${state.server!.url.origin}/v1` },
             },
           },
         }
@@ -1948,7 +1948,7 @@ describe("session.llm.stream", () => {
         enabled_providers: [geminiFixture.providerID],
         provider: {
           [geminiFixture.providerID]: {
-            options: { apiKey: "test-google-key", baseURL: `${state.server!.url.origin}/v1beta` },
+            options: { apiKey: "<test-google-key>", baseURL: `${state.server!.url.origin}/v1beta` },
           },
         },
       }),

@@ -87,8 +87,8 @@ export {}
 //     JSON.stringify({
 //       gitlab: {
 //         type: "oauth",
-//         access: "test-access-token",
-//         refresh: "test-refresh-token",
+//         access: "<test-access-token>",
+//         refresh: "<test-refresh-token>",
 //         expires: Date.now() + 3600000,
 //       },
 //     }),
@@ -153,7 +153,7 @@ export {}
 //             gitlab: {
 //               options: {
 //                 instanceUrl: "https://gitlab.company.internal",
-//                 apiKey: "glpat-internal-token",
+//                 apiKey: "<gitlab-api-key>",
 //               },
 //             },
 //           },
@@ -184,7 +184,7 @@ export {}
 //           provider: {
 //             gitlab: {
 //               options: {
-//                 apiKey: "config-token",
+//                 apiKey: "<config-token>",
 //               },
 //             },
 //           },

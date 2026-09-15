@@ -22,6 +22,9 @@ import { Tools } from "./tools"
 
 export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
+  readonly runID?: string
+  readonly parentSessionID?: SessionSchema.ID
+  readonly rootSessionID?: SessionSchema.ID
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
   readonly call: ToolCall
@@ -199,6 +202,9 @@ const registryLayer = Layer.effect(
       }
       const pending = yield* settle(registration.tool, input.call, {
         sessionID: input.sessionID,
+        runID: input.runID,
+        parentSessionID: input.parentSessionID,
+        rootSessionID: input.rootSessionID,
         agent: input.agent,
         assistantMessageID: input.assistantMessageID,
         toolCallID: input.call.id,

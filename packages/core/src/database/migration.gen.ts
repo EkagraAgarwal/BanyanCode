@@ -21,5 +21,6 @@ export const migrations = (
     import("./migration/20260804120000_codegraph_tool_usage"),
     import("./migration/20260806120000_add_session_id"),
     import("./migration/20260809120000_memory_entries_fts_trigram"),
+    import("./migration/20260912120000_agent_efficiency_telemetry"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]
