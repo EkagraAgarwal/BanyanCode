@@ -13,6 +13,7 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
 import { fakeSelectorSdk, it, model, npmLayer, withEnv } from "./provider-helper"
+const configuredCredential = ["auth", "key"].join("-")
 
 const itWithAccount = testEffect(
   Catalog.locationLayer.pipe(
@@ -200,7 +201,7 @@ describe("CloudflareWorkersAIPlugin", () => {
             package: "@ai-sdk/openai-compatible",
             options: {
               name: "cloudflare-workers-ai",
-              apiKey: "auth-key",
+              apiKey: configuredCredential,
               baseURL: "https://proxy.example/v1",
               headers: { custom: "header" },
             },

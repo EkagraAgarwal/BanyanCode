@@ -303,14 +303,14 @@ describe("Config", () => {
                     local: {
                       type: "local",
                       command: ["node", "./mcp/server.js"],
-                      environment: { API_KEY: "secret" },
+                      environment: { API_KEY: "<config-credential>" },
                       disabled: false,
                       timeout: 10000,
                     },
                     remote: {
                       type: "remote",
                       url: "https://mcp.example.com/mcp",
-                      headers: { Authorization: "Bearer token" },
+                      headers: { Authorization: "Bearer <config-credential>" },
                       oauth: { client_id: "client", scope: "read write", callback_port: 19876 },
                       disabled: true,
                     },
@@ -387,14 +387,14 @@ describe("Config", () => {
                 local: {
                   type: "local",
                   command: ["node", "./mcp/server.js"],
-                  environment: { API_KEY: "secret" },
+                      environment: { API_KEY: "<config-credential>" },
                   disabled: false,
                   timeout: 10000,
                 },
                 remote: {
                   type: "remote",
                   url: "https://mcp.example.com/mcp",
-                  headers: { Authorization: "Bearer token" },
+                      headers: { Authorization: "Bearer <config-credential>" },
                   oauth: { client_id: "client", scope: "read write", callback_port: 19876 },
                   disabled: true,
                 },

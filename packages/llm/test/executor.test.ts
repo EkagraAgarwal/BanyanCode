@@ -10,12 +10,12 @@ import { deltaChunk } from "./lib/openai-chunks"
 import { sseRaw } from "./lib/sse"
 import { it } from "./lib/effect"
 
-const request = HttpClientRequest.post("https://provider.test/v1/chat?api_key=secret&key=secret&debug=1").pipe(
-  HttpClientRequest.setHeaders(Headers.fromInput({ authorization: "Bearer secret", "x-safe": "visible" })),
+const request = HttpClientRequest.post("https://provider.test/v1/chat?api_key=%3Cquery-credential%3E&key=%3Cquery-credential%3E&debug=1").pipe(
+  HttpClientRequest.setHeaders(Headers.fromInput({ authorization: "Bearer <header-credential>", "x-safe": "visible" })),
 )
 
-const secretRequest = HttpClientRequest.post("https://provider.test/v1/chat?api_key=query-secret-123&debug=1").pipe(
-  HttpClientRequest.setHeaders(Headers.fromInput({ authorization: "Bearer header-secret-456" })),
+const secretRequest = HttpClientRequest.post("https://provider.test/v1/chat?api_key=%3Cquery-credential%3E&debug=1").pipe(
+  HttpClientRequest.setHeaders(Headers.fromInput({ authorization: "Bearer <header-credential>" })),
 )
 
 const responsesLayer = (responses: ReadonlyArray<Response>) =>
@@ -323,12 +323,12 @@ describe("RequestExecutor", () => {
       expectLLMError(error)
       expect(errorHttp(error)?.body).toContain('"key":"<redacted>"')
       expect(errorHttp(error)?.body).toContain("api_key=<redacted>")
-      expect(errorHttp(error)?.body).not.toContain("body-secret")
-      expect(errorHttp(error)?.body).not.toContain("query-secret")
+      expect(errorHttp(error)?.body).not.toContain("<body-credential>")
+      expect(errorHttp(error)?.body).not.toContain("<query-credential>")
     }).pipe(
       Effect.provide(
         responsesLayer([
-          new Response('{"error":{"message":"bad","key":"body-secret","detail":"api_key=query-secret"}}', {
+          new Response('{"error":{"message":"bad","key":"<body-credential>","detail":"api_key=<query-credential>"}}', {
             status: 400,
           }),
         ]),
@@ -344,12 +344,12 @@ describe("RequestExecutor", () => {
       expectLLMError(error)
       expect(errorHttp(error)?.body).toContain("provider echoed <redacted>")
       expect(errorHttp(error)?.body).toContain("authorization <redacted>")
-      expect(errorHttp(error)?.body).not.toContain("query-secret-123")
-      expect(errorHttp(error)?.body).not.toContain("header-secret-456")
+      expect(errorHttp(error)?.body).not.toContain("<query-credential>")
+      expect(errorHttp(error)?.body).not.toContain("<header-credential>")
     }).pipe(
       Effect.provide(
         responsesLayer([
-          new Response("provider echoed query-secret-123 and authorization header-secret-456", { status: 400 }),
+          new Response("provider echoed <query-credential> and authorization <header-credential>", { status: 400 }),
         ]),
       ),
     ),

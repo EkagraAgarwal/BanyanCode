@@ -36,6 +36,7 @@ await $`mkdir -p ./dist/${WRAPPER_NAME}`
 await $`mkdir -p ./dist/${WRAPPER_NAME}/bin`
 await $`cp ./script/postinstall.mjs ./dist/${WRAPPER_NAME}/postinstall.mjs`
 await Bun.file(`./dist/${WRAPPER_NAME}/LICENSE`).write(await Bun.file("../../LICENSE").text())
+await Bun.file(`./dist/${WRAPPER_NAME}/README.md`).write(await Bun.file("./README.md").text())
 await Bun.file(`./dist/${WRAPPER_NAME}/bin/${WRAPPER_NAME}.js`).write(shimScript(binaries))
 
 await Bun.file(`./dist/${WRAPPER_NAME}/package.json`).write(

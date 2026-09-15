@@ -44,7 +44,7 @@ describe("GitLabPlugin", () => {
     withEnv(
       {
         GITLAB_INSTANCE_URL: undefined,
-        GITLAB_TOKEN: "env-token",
+        GITLAB_TOKEN: "<env-credential>",
       },
       () =>
         Effect.gen(function* () {
@@ -58,7 +58,7 @@ describe("GitLabPlugin", () => {
           )
           expect(gitlabSDKOptions).toHaveLength(1)
           expect(gitlabSDKOptions[0].instanceUrl).toBe("https://gitlab.com")
-          expect(gitlabSDKOptions[0].apiKey).toBe("env-token")
+          expect(gitlabSDKOptions[0].apiKey).toBe("<env-credential>")
           expect(gitlabSDKOptions[0].aiGatewayHeaders).toMatchObject({
             "anthropic-beta": "context-1m-2025-08-07",
           })
@@ -98,7 +98,7 @@ describe("GitLabPlugin", () => {
     withEnv(
       {
         GITLAB_INSTANCE_URL: "https://env.gitlab.example",
-        GITLAB_TOKEN: "env-token",
+        GITLAB_TOKEN: "<env-credential>",
       },
       () =>
         Effect.gen(function* () {
@@ -113,7 +113,7 @@ describe("GitLabPlugin", () => {
               options: {
                 name: "gitlab",
                 instanceUrl: "https://configured.gitlab.example",
-                apiKey: "configured-token",
+                apiKey: "<configured-credential>",
                 aiGatewayHeaders: {
                   "anthropic-beta": "configured-beta",
                   "x-gitlab-test": "1",
@@ -127,7 +127,7 @@ describe("GitLabPlugin", () => {
             {},
           )
           expect(gitlabSDKOptions[0].instanceUrl).toBe("https://configured.gitlab.example")
-          expect(gitlabSDKOptions[0].apiKey).toBe("configured-token")
+          expect(gitlabSDKOptions[0].apiKey).toBe("<configured-credential>")
           expect(gitlabSDKOptions[0].aiGatewayHeaders).toMatchObject({
             "anthropic-beta": "configured-beta",
             "x-gitlab-test": "1",
@@ -159,7 +159,7 @@ describe("GitLabPlugin", () => {
   itWithAccount.effect("uses active account API token over GITLAB_TOKEN", () =>
     withEnv(
       {
-        GITLAB_TOKEN: "env-token",
+        GITLAB_TOKEN: "<env-credential>",
       },
       () =>
         Effect.gen(function* () {
@@ -170,7 +170,7 @@ describe("GitLabPlugin", () => {
           const events = yield* EventV2.Service
           yield* accounts.create({
             serviceID: Auth.ServiceID.make("gitlab"),
-            credential: new Auth.ApiKeyCredential({ type: "api", key: "account-token" }),
+            credential: new Auth.ApiKeyCredential({ type: "api", key: "<account-credential>" }),
           })
           yield* plugin.add({
             ...AccountPlugin,
@@ -194,7 +194,7 @@ describe("GitLabPlugin", () => {
             },
             {},
           )
-          expect(gitlabSDKOptions[0].apiKey).toBe("account-token")
+            expect(gitlabSDKOptions[0].apiKey).toBe("<account-credential>")
         }),
     ),
   )
@@ -216,7 +216,7 @@ describe("GitLabPlugin", () => {
             credential: new Auth.OAuthCredential({
               type: "oauth",
               refresh: "refresh-token",
-              access: "account-oauth-token",
+              access: "<oauth-credential>",
               expires: 9999999999999,
             }),
           })
@@ -242,7 +242,7 @@ describe("GitLabPlugin", () => {
             },
             {},
           )
-          expect(gitlabSDKOptions[0].apiKey).toBe("account-oauth-token")
+            expect(gitlabSDKOptions[0].apiKey).toBe("<oauth-credential>")
         }),
     ),
   )

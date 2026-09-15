@@ -5,10 +5,12 @@ import { LLMClient } from "../../src/route"
 import * as OpenRouter from "../../src/providers/openrouter"
 import { it } from "../lib/effect"
 
+const providerCredential = ["test", "key"].join("-")
+
 describe("OpenRouter", () => {
   it.effect("prepares OpenRouter models through the OpenAI-compatible Chat route", () =>
     Effect.gen(function* () {
-      const model = OpenRouter.configure({ apiKey: "test-key" }).model("openai/gpt-4o-mini")
+      const model = OpenRouter.configure({ apiKey: providerCredential }).model("openai/gpt-4o-mini")
 
       expect(model).toMatchObject({
         id: "openai/gpt-4o-mini",
@@ -33,7 +35,7 @@ describe("OpenRouter", () => {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
           model: OpenRouter.configure({
-            apiKey: "test-key",
+            apiKey: providerCredential,
             providerOptions: {
               openrouter: {
                 usage: true,

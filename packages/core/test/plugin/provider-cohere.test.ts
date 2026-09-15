@@ -51,14 +51,14 @@ describe("CoherePlugin", () => {
         {
           model: model("custom-cohere", "command-r-plus"),
           package: "@ai-sdk/cohere",
-          options: { name: "custom-cohere", apiKey: "test", baseURL: "https://cohere.example" },
+          options: { name: "custom-cohere", apiKey: "<provider-credential>", baseURL: "https://cohere.example" },
         },
         {},
       )
 
       expect(cohereOptions.at(-1)).toEqual({
         name: "custom-cohere",
-        apiKey: "test",
+        apiKey: "<provider-credential>",
         baseURL: "https://cohere.example",
       })
       expect(result.sdk?.languageModel("command-r-plus").provider).toBe("custom-cohere.chat")

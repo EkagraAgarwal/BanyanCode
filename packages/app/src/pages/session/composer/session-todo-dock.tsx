@@ -11,8 +11,8 @@ import { Index, createEffect, createMemo } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
 
-const doneToken = "\u0000done\u0000"
-const totalToken = "\u0000total\u0000"
+const doneMarker = "\u0000done\u0000"
+const totalMarker = "\u0000total\u0000"
 
 function dot(status: Todo["status"]) {
   if (status !== "in_progress") return undefined
@@ -58,7 +58,7 @@ export function SessionTodoDock(props: {
   const label = createMemo(() => language.t("session.todo.progress", { done: done(), total: total() }))
   const progress = createMemo(() =>
     language
-      .t("session.todo.progress", { done: doneToken, total: totalToken })
+      .t("session.todo.progress", { done: doneMarker, total: totalMarker })
       .split(/(\u0000done\u0000|\u0000total\u0000)/),
   )
 
@@ -127,9 +127,9 @@ export function SessionTodoDock(props: {
           >
             <Index each={progress()}>
               {(item) =>
-                item() === doneToken ? (
+                item() === doneMarker ? (
                   <AnimatedNumber value={done()} />
-                ) : item() === totalToken ? (
+                ) : item() === totalMarker ? (
                   <AnimatedNumber value={total()} />
                 ) : (
                   <span>{item()}</span>

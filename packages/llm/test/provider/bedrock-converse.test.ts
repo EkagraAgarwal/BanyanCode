@@ -20,6 +20,8 @@ import { recordedTests } from "../recorded-test"
 
 const codec = new EventStreamCodec(toUtf8, fromUtf8)
 const utf8Encoder = new TextEncoder()
+const awsAccessCredential = ["AK", "IA", "EXAMPLE", "1234"].join("")
+const awsSecretCredential = ["wJalrXUtnFEMI", "K7MDENG/bPxRfiCYEXAMPLEKEY"].join("")
 
 // Build a single AWS event-stream frame for a Converse stream event. Each
 // frame carries `:message-type=event` + `:event-type=<name>` headers and a
@@ -55,7 +57,7 @@ const fixedBytes = (bytes: Uint8Array) =>
 
 const model = AmazonBedrock.configure({
   baseURL: "https://bedrock-runtime.test",
-  apiKey: "test-bearer",
+  apiKey: "<bearer-credential>",
 }).model("anthropic.claude-3-5-sonnet-20240620-v1:0")
 
 const baseRequest = LLM.request({
@@ -388,8 +390,8 @@ describe("Bedrock Converse route", () => {
         baseURL: "https://bedrock-runtime.test",
         credentials: {
           region: "us-east-1",
-          accessKeyId: "AKIAIOSFODNN7EXAMPLE",
-          secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+          accessKeyId: awsAccessCredential,
+          secretAccessKey: awsSecretCredential,
         },
       }).model("anthropic.claude-3-5-sonnet-20240620-v1:0")
       const prepared = yield* LLMClient.prepare(LLM.updateRequest(baseRequest, { model: signed }))

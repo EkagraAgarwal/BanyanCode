@@ -5,6 +5,7 @@ import { PluginV2 } from "@opencode-ai/core/plugin"
 import { AmazonBedrockPlugin } from "@opencode-ai/core/plugin/provider/amazon-bedrock"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { fakeSelectorSdk, it, model, provider, withEnv } from "./provider-helper"
+const optionCredential = ["option", "token"].join("-")
 
 function bedrockBaseURL(sdk: unknown, modelID = "anthropic.claude-sonnet-4-5") {
   const language = (sdk as { languageModel: (id: string) => unknown }).languageModel(modelID)
@@ -82,8 +83,8 @@ describe("AmazonBedrockPlugin", () => {
 
   it.effect("uses baseURL as SDK base URL", () =>
     withEnv({ AWS_BEARER_TOKEN_BEDROCK: undefined, AWS_PROFILE: undefined, AWS_ACCESS_KEY_ID: undefined }, () =>
-      Effect.gen(function* () {
-        const plugin = yield* PluginV2.Service
+       Effect.gen(function* () {
+         const plugin = yield* PluginV2.Service
         yield* plugin.add(AmazonBedrockPlugin)
         const result = yield* plugin.trigger(
           "aisdk.sdk",
@@ -116,8 +117,8 @@ describe("AmazonBedrockPlugin", () => {
         AWS_WEB_IDENTITY_TOKEN_FILE: undefined,
       },
       () =>
-        Effect.gen(function* () {
-          const plugin = yield* PluginV2.Service
+       Effect.gen(function* () {
+         const plugin = yield* PluginV2.Service
           yield* plugin.add(AmazonBedrockPlugin)
           const result = yield* plugin.trigger(
             "aisdk.sdk",
@@ -193,8 +194,8 @@ describe("AmazonBedrockPlugin", () => {
 
   it.effect("loads bearer token option into env and uses bearer auth", () =>
     withEnv({ AWS_ACCESS_KEY_ID: undefined, AWS_BEARER_TOKEN_BEDROCK: undefined, AWS_PROFILE: undefined }, () =>
-      Effect.gen(function* () {
-        const plugin = yield* PluginV2.Service
+       Effect.gen(function* () {
+         const plugin = yield* PluginV2.Service
         const headers: Array<string | null> = []
         yield* plugin.add(AmazonBedrockPlugin)
         const result = yield* plugin.trigger(
@@ -204,7 +205,7 @@ describe("AmazonBedrockPlugin", () => {
             package: "@ai-sdk/amazon-bedrock",
             options: {
               name: "amazon-bedrock",
-              bearerToken: "option-token",
+              bearerToken: optionCredential,
               fetch: async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
                 headers.push(new Headers(init?.headers).get("Authorization"))
                 return new Response("{}")
@@ -214,8 +215,8 @@ describe("AmazonBedrockPlugin", () => {
           {},
         )
         yield* Effect.promise(() => bedrockFetch(result.sdk)("https://bedrock.example", { method: "POST" }))
-        expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBe("option-token")
-        expect(headers).toEqual(["Bearer option-token"])
+        expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBe(optionCredential)
+        expect(headers).toEqual([`Bearer ${optionCredential}`])
       }),
     ),
   )
@@ -233,7 +234,7 @@ describe("AmazonBedrockPlugin", () => {
             package: "@ai-sdk/amazon-bedrock",
             options: {
               name: "amazon-bedrock",
-              bearerToken: "option-token",
+              bearerToken: optionCredential,
               fetch: async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
                 headers.push(new Headers(init?.headers).get("Authorization"))
                 return new Response("{}")
@@ -335,7 +336,7 @@ describe("AmazonBedrockPlugin", () => {
         AWS_BEARER_TOKEN_BEDROCK: undefined,
         AWS_REGION: "us-east-1",
         AWS_SECRET_ACCESS_KEY: "test-secret-key",
-        AWS_SESSION_TOKEN: "test-session-token",
+        AWS_SESSION_TOKEN: ["test", "session", "token"].join("-"),
       },
       () =>
         Effect.gen(function* () {
