@@ -111,6 +111,66 @@ export interface Options {
   readonly defaultTtlMs?: number
 }
 
+export const OPENCODE_ALIAS_IDS = ["opencode", "opencode-go"] as const
+export const OPENCODE_CANONICAL_ID = "opencode-go"
+export const OPENCODE_CANONICAL_NAME = "OpenCode"
+
+export const CODEX_OAUTH_NAME = "ChatGPT"
+export const OPENAI_API_NAME = "OpenAI"
+
+/** Fallback display names so raw lowercase provider IDs never reach the UI. */
+const BUILT_IN_CANONICAL_NAMES: Record<string, string> = {
+  "opencode": OPENCODE_CANONICAL_NAME,
+  "opencode-go": OPENCODE_CANONICAL_NAME,
+  "openai": OPENAI_API_NAME,
+  "openai-codex": CODEX_OAUTH_NAME,
+  "codex": CODEX_OAUTH_NAME,
+  "anthropic": "Anthropic",
+  "openrouter": "OpenRouter",
+  "github-copilot": "GitHub Copilot",
+  "gemini": "Gemini",
+  "kimi-for-coding": "Kimi",
+  "moonshotai": "Kimi",
+  "zhipuai-coding-plan": "Zhipu",
+  "zhipu": "Zhipu",
+  "zhipuai": "Zhipu",
+  "zai": "Zhipu",
+  "minimax-cn-coding-plan": "MiniMax",
+  "minimax": "MiniMax",
+}
+
+export const isOpenCodeAlias = (providerID: string): boolean =>
+  (OPENCODE_ALIAS_IDS as readonly string[]).includes(providerID)
+
+/** Collapse `opencode`/`opencode-go` to a single canonical target ID. */
+export const canonicalProviderID = (providerID: string): string =>
+  isOpenCodeAlias(providerID) ? OPENCODE_CANONICAL_ID : providerID
+
+const isCodexID = (providerID: string): boolean =>
+  providerID === "openai" || providerID === "openai-codex" || providerID === "codex"
+
+/**
+ * Canonical display name for a usage snapshot.
+ * - `opencode`/`opencode-go` always render as `OpenCode`.
+ * - Codex IDs render as `ChatGPT` for OAuth and `OpenAI` for API-key/rate-limit.
+ * - Custom provider names (configured name differs from the ID) are preserved.
+ * - Otherwise fall back to the built-in canonical map so raw lowercase IDs
+ *   never reach the UI when a built-in name is known.
+ */
+export const canonicalDisplayName = (
+  providerID: string,
+  configuredName?: string,
+  authType?: string,
+): string => {
+  if (isOpenCodeAlias(providerID)) return OPENCODE_CANONICAL_NAME
+  if (isCodexID(providerID)) return authType === "oauth" ? CODEX_OAUTH_NAME : OPENAI_API_NAME
+  if (configuredName && configuredName.length > 0 && configuredName !== providerID) return configuredName
+  return BUILT_IN_CANONICAL_NAMES[providerID] ?? configuredName ?? providerID
+}
+
+export const matchesProviderID = (targetID: string, requestedID: string): boolean =>
+  targetID === requestedID || canonicalProviderID(targetID) === canonicalProviderID(requestedID)
+
 interface Target {
   readonly providerID: string
   readonly displayName: string
@@ -230,31 +290,86 @@ export const layerWithOptions = (
             // the target carries (spec credential precedence).
             const optionsFor = (providerID: string): Record<string, unknown> => {
               const own = byID.get(providerID)?.options ?? {}
-              if (providerID === "opencode" || providerID === "opencode-go") {
-                const sibling = byID.get(providerID === "opencode" ? "opencode-go" : "opencode")?.options ?? {}
+              if (isOpenCodeAlias(providerID)) {
+                const siblingID = providerID === "opencode" ? "opencode-go" : "opencode"
+                const sibling = byID.get(siblingID)?.options ?? {}
                 return { ...sibling, ...own }
               }
               return { ...(own ?? {}) }
             }
-            const targets: Target[] = []
+            // Collapse alias IDs to one canonical target so the API never
+            // emits duplicated snapshots (e.g. `opencode` + `opencode-go`).
+            const grouped = new Map<string, string[]>()
             for (const providerID of ids) {
-              const info = byID.get(providerID)
-              const stored = authFor(providerID, auths)
-              const effective = stored ?? ephemeralApiAuth(info)
-              targets.push({
-                providerID,
-                displayName: info?.name ?? providerID,
-                auth: effective,
-                options: optionsFor(providerID),
-                accountKey: accountKeyFor(effective),
-                adapter: listAdapters().find((item) =>
-                  item.supports({
-                    providerID,
-                    hasAuth: effective !== undefined,
-                    authType: effective?.type,
-                  }),
-                ),
-              })
+              const canonical = canonicalProviderID(providerID)
+              const group = grouped.get(canonical) ?? []
+              group.push(providerID)
+              grouped.set(canonical, group)
+            }
+            const targets: Target[] = []
+            for (const [canonicalID, members] of grouped) {
+              if (canonicalID === OPENCODE_CANONICAL_ID) {
+                // Deterministic alias precedence, independent of map
+                // insertion order: env > opencode-go config > opencode
+                // config > opencode-go auth > opencode auth.
+                const goInfo = byID.get("opencode-go")
+                const legacyInfo = byID.get("opencode")
+                const mergedOptions = { ...(legacyInfo?.options ?? {}), ...(goInfo?.options ?? {}) }
+                // Cache identity must track the credential the adapter will
+                // actually send (`resolveOpenCodeGoApiKey`: env, then merged
+                // config apiKey, then auth key), so ephemeral Auth.Api
+                // entries for env/config keys come before stored auth:
+                // switching the used key changes the accountKey even when
+                // stored auth is unchanged. Ephemeral keys are in-memory
+                // only — hashed into the accountKey, never persisted via
+                // `Auth.Service.set` (the Go adapter never calls persistAuth).
+                const envKey = process.env.OPENCODE_API_KEY
+                const effective =
+                  (envKey && envKey.length > 0 ? new Auth.Api({ type: "api", key: envKey }) : undefined) ??
+                  ephemeralApiAuth(goInfo) ??
+                  ephemeralApiAuth(legacyInfo) ??
+                  auths["opencode-go"] ??
+                  auths["opencode"]
+                const displayName = canonicalDisplayName(
+                  canonicalID,
+                  goInfo?.name ?? legacyInfo?.name,
+                  effective?.type,
+                )
+                targets.push({
+                  providerID: canonicalID,
+                  displayName,
+                  auth: effective,
+                  options: mergedOptions,
+                  accountKey: accountKeyFor(effective),
+                  adapter: listAdapters().find((item) =>
+                    item.supports({
+                      providerID: canonicalID,
+                      hasAuth: effective !== undefined,
+                      authType: effective?.type,
+                    }),
+                  ),
+                })
+                continue
+              }
+              for (const providerID of members) {
+                const info = byID.get(providerID)
+                const stored = authFor(providerID, auths)
+                const effective = stored ?? ephemeralApiAuth(info)
+                targets.push({
+                  providerID,
+                  displayName: canonicalDisplayName(providerID, info?.name, effective?.type),
+                  auth: effective,
+                  options: optionsFor(providerID),
+                  accountKey: accountKeyFor(effective),
+                  adapter: listAdapters().find((item) =>
+                    item.supports({
+                      providerID,
+                      hasAuth: effective !== undefined,
+                      authType: effective?.type,
+                    }),
+                  ),
+                })
+              }
             }
             return targets
           }),
@@ -403,7 +518,7 @@ export const layerWithOptions = (
         Effect.gen(function* () {
           const targets = yield* discover()
           const filtered =
-            providerID === undefined ? targets : targets.filter((item) => item.providerID === providerID)
+            providerID === undefined ? targets : targets.filter((item) => matchesProviderID(item.providerID, providerID))
           const result = yield* Effect.forEach(filtered, refreshOne, {
             concurrency: Banyan.PROVIDER_USAGE_MAX_CONCURRENCY,
           })

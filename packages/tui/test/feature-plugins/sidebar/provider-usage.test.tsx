@@ -7,13 +7,23 @@ import SidebarProviderUsage, {
   PROVIDER_USAGE_ORDER,
   PROVIDER_USAGE_POLL_MS,
   asciiBar,
+  canonicalDisplayNameFor,
+  canonicalProviderID,
+  dedupeSnapshots,
+  displayNameFor,
   formatBalance,
   formatCountdown,
+  isSameProvider,
   orderSnapshots,
+  quotaColorFor,
+  quotaToneFor,
   remainderText,
   statusLine,
+  truncateText,
+  windowParts,
   windowPercent,
   windowRowText,
+  windowRowTextForWidth,
   View,
   type ProviderUsageSnapshot,
 } from "../../../src/feature-plugins/sidebar/provider-usage"
@@ -274,6 +284,82 @@ test("empty snapshots render nothing and fail silently", async () => {
   } finally {
     destroy()
   }
+})
+
+test("opencode aliases dedupe to one canonical OpenCode row", () => {
+  const list = [
+    snap({ providerID: "opencode", displayName: "opencode", status: "available" }),
+    snap({ providerID: "opencode-go", displayName: "opencode-go", status: "stale" }),
+  ]
+  expect(canonicalProviderID("opencode")).toBe("opencode-go")
+  expect(isSameProvider("opencode", "opencode-go")).toBe(true)
+  expect(isSameProvider("opencode", "openai")).toBe(false)
+  const deduped = dedupeSnapshots(list)
+  expect(deduped).toHaveLength(1)
+  // Even though the legacy `opencode` item won on status rank, the surviving
+  // row carries the canonical ID and label.
+  expect(deduped[0]?.providerID).toBe("opencode-go")
+  expect(deduped[0]?.displayName).toBe("OpenCode")
+  expect(deduped.map(displayNameFor)).toEqual(["OpenCode"])
+})
+
+test("active-provider backfill is alias-aware and canonical", () => {
+  const list = [snap({ providerID: "opencode-go", displayName: "OpenCode", status: "available" })]
+  // Active session uses the other alias: no duplicate backfill row.
+  expect(orderSnapshots(list, "opencode").map((s) => s.providerID)).toEqual(["opencode-go"])
+  expect(orderSnapshots(list, "opencode")).toHaveLength(1)
+  // Missing active provider backfills the canonical ID/label.
+  const backfilled = orderSnapshots([], "opencode")
+  expect(backfilled).toHaveLength(1)
+  expect(backfilled.map((s) => s.providerID)).toEqual(["opencode-go"])
+  expect(backfilled.map(displayNameFor)).toEqual(["OpenCode"])
+})
+
+test("canonical names never show raw lowercase IDs", () => {
+  expect(canonicalDisplayNameFor("opencode", "opencode")).toBe("OpenCode")
+  expect(canonicalDisplayNameFor("opencode-go", "opencode-go")).toBe("OpenCode")
+  expect(canonicalDisplayNameFor("openai", "OpenAI")).toBe("OpenAI")
+  expect(canonicalDisplayNameFor("anthropic", "anthropic")).toBe("Anthropic")
+  expect(displayNameFor(snap({ providerID: "custom", displayName: "Custom" }))).toBe("Custom")
+})
+
+test("quota tones follow remaining thresholds and map to theme colors", () => {
+  expect(quotaToneFor(80)).toBe("healthy")
+  expect(quotaToneFor(41)).toBe("healthy")
+  expect(quotaToneFor(40)).toBe("moderate")
+  expect(quotaToneFor(16)).toBe("moderate")
+  expect(quotaToneFor(15)).toBe("low")
+  expect(quotaToneFor(0)).toBe("low")
+  expect(quotaToneFor(undefined)).toBe("unavailable")
+  const theme = { success: "#00ff00", warning: "#ffaa00", error: "#ff0000", textMuted: "#888888" }
+  expect(quotaColorFor("healthy", theme)).toBe("#00ff00")
+  expect(quotaColorFor("moderate", theme)).toBe("#ffaa00")
+  expect(quotaColorFor("low", theme)).toBe("#ff0000")
+  expect(quotaColorFor("unavailable", theme)).toBe("#888888")
+})
+
+test("windowParts splits label, bar, remainder, and countdown", () => {
+  const w = { id: "w", label: "5h", kind: "quota" as const, remainingPercent: 68, resetsAt: 2 * 3600_000 + 14 * 60_000 }
+  const parts = windowParts(w, 0)
+  expect(parts.label).toBe("5h")
+  expect(parts.bar).toBe(asciiBar(68))
+  expect(parts.remainder).toBe("68%")
+  expect(parts.countdown).toBe("2h14m")
+  const bare = windowParts({ id: "x", label: "req", kind: "quota" as const }, 0)
+  expect(bare.label).toBe("req")
+  expect(bare.bar).toBe("░".repeat(9))
+  expect(bare.remainder).toBeUndefined()
+  expect(bare.countdown).toBeUndefined()
+})
+
+test("narrow rendering helpers truncate to one row", () => {
+  expect(truncateText("OpenCode", 32)).toBe("OpenCode")
+  const truncated = truncateText("a".repeat(50), 10)
+  expect(truncated.length).toBe(10)
+  expect(truncated.endsWith("…")).toBe(true)
+  const w = { id: "w", label: "5h", kind: "quota" as const, remainingPercent: 68, resetsAt: 2 * 3600_000 }
+  expect(windowRowTextForWidth(w, 0).length).toBeGreaterThan(0)
+  expect(windowRowTextForWidth(w, 0, 8).length).toBeLessThanOrEqual(8)
 })
 
 test("slot plugin registers order 135 via sidebar_content", async () => {
