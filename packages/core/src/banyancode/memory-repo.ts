@@ -1,6 +1,6 @@
 export * as MemoryRepo from "./memory-repo"
 
-import { and, eq, isNotNull, lt, sql } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { MemoryEntriesTable } from "./memory.sql"
@@ -150,6 +150,66 @@ const mapRowToEntry = (row: typeof MemoryEntriesTable.$inferSelect): MemoryEntry
 /** Shared row→entry mapper. MemoryService consumes this to avoid a second copy. */
 export const mapMemoryRowToEntry = mapRowToEntry
 
+type ProjectedMemoryRow = Omit<typeof MemoryEntriesTable.$inferSelect, "value">
+
+const listProjection = {
+  id: MemoryEntriesTable.id,
+  key: MemoryEntriesTable.key,
+  context: MemoryEntriesTable.context,
+  tags: MemoryEntriesTable.tags,
+  scope: MemoryEntriesTable.scope,
+  session_id: MemoryEntriesTable.session_id,
+  created_at: MemoryEntriesTable.created_at,
+  expires_at: MemoryEntriesTable.expires_at,
+  agent_id: MemoryEntriesTable.agent_id,
+  version: MemoryEntriesTable.version,
+  updated_at: MemoryEntriesTable.updated_at,
+  namespace: MemoryEntriesTable.namespace,
+  kind: MemoryEntriesTable.kind,
+  title: MemoryEntriesTable.title,
+  body: MemoryEntriesTable.body,
+  status: MemoryEntriesTable.status,
+}
+
+/**
+ * list/search skip the JSONB `value` column so large tables don't
+ * materialize every envelope. The denormalized kind/title/body/status carry
+ * the display-critical fields; `value` is re-synthesized as an envelope so
+ * downstream JSON.stringify/unwrap callers keep working.
+ */
+const mapProjectedRowToEntry = (row: ProjectedMemoryRow): MemoryEntry => {
+  const kind = (row.kind ?? "observation") as MemoryPayloadV1["kind"]
+  const status = (row.status ?? "active") as MemoryPayloadV1["status"]
+  return {
+    id: row.id,
+    key: row.key,
+    value: encodeMemoryValue({
+      kind,
+      title: row.title ?? row.key,
+      body: row.body ?? "",
+      source: { type: "system" },
+      confidence: "low",
+      importance: "low",
+      status,
+      tags: row.tags,
+    }),
+    context: row.context ?? undefined,
+    tags: row.tags,
+    scope: row.scope as "global" | "session",
+    sessionID: row.session_id ?? undefined,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at ?? undefined,
+    agentID: row.agent_id ?? undefined,
+    version: row.version,
+    updatedAt: row.updated_at,
+    namespace: row.namespace ?? undefined,
+    kind: row.kind ?? undefined,
+    title: row.title ?? undefined,
+    body: row.body ?? undefined,
+    status: row.status ?? undefined,
+  }
+}
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -254,7 +314,7 @@ export const layer = Layer.effect(
 
     const list = Effect.fn("MemoryRepo.list")(function* (scope: "global" | "session", sessionID?: string) {
       const rows = yield* db
-        .select()
+        .select(listProjection)
         .from(MemoryEntriesTable)
         .where(
           scope === "global"
@@ -263,7 +323,7 @@ export const layer = Layer.effect(
         )
         .all()
         .pipe(Effect.orDie)
-      return rows.map(mapRowToEntry)
+      return rows.map(mapProjectedRowToEntry)
     })
 
     const forget = Effect.fn("MemoryRepo.forget")(function* (id: string) {
@@ -294,7 +354,7 @@ export const layer = Layer.effect(
       key: string,
     ) {
       const rows = yield* db
-        .select()
+        .select(listProjection)
         .from(MemoryEntriesTable)
         .where(
           scope === "global"
@@ -307,7 +367,7 @@ export const layer = Layer.effect(
         )
         .all()
         .pipe(Effect.orDie)
-      return rows.map(mapRowToEntry)
+      return rows.map(mapProjectedRowToEntry)
     })
 
     /**
@@ -558,13 +618,12 @@ export const layer = Layer.effect(
 
     const vacuum = Effect.fn("MemoryRepo.vacuum")(function* () {
       const now = Date.now()
-      const result = yield* db
-        .delete(MemoryEntriesTable)
-        .where(and(isNotNull(MemoryEntriesTable.expires_at), lt(MemoryEntriesTable.expires_at, now)))
-        .returning()
-        .run()
-        .pipe(Effect.orDie)
-      return result.length
+      const expiredWhere = sql`${MemoryEntriesTable.expires_at} IS NOT NULL AND ${MemoryEntriesTable.expires_at} < ${now}`
+      const total = yield* db.get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM \`memory_entries\` WHERE ${expiredWhere}`).pipe(
+        Effect.orDie,
+      )
+      yield* db.delete(MemoryEntriesTable).where(expiredWhere).run().pipe(Effect.orDie)
+      return total?.c ?? 0
     })
 
     return Service.of({ put, get, resolveRootSessionID, getLatestSessionScoped, list, forget, forgetByKey, search, searchRanked, vacuum, update })

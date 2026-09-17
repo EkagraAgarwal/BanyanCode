@@ -509,7 +509,7 @@ const treeSitterParseWithFallback = (
       }),
     ),
   )
-const CHECKPOINT_EVERY = 1000
+const CHECKPOINT_EVERY = 250
 type CandidateFile = {
   readonly path: string
   readonly sizeBytes: number
@@ -897,7 +897,7 @@ const indexCandidateFileCore = (
         signature: relativePath,
         startLine: 1,
         endLine: lineCount,
-        code: content,
+        code: content.slice(0, 4000),
         derivation: "regex-v1",
       })
     }
@@ -1478,33 +1478,43 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         const flushBatch = Effect.gen(function* () {
           const pending = batch
           batch = []
-          for (const parsed of pending) {
-            yield* repo.writeFileGraph({
-              file: parsed.file,
-              nodes: parsed.nodes,
-              edges: parsed.edges,
-              ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
-            }).pipe(
-              Effect.catchCause((cause) =>
-                Effect.gen(function* () {
-                  yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
-                    cause: Cause.pretty(cause),
-                  })
-                  yield* repo
-                    .recordParseError({ path: parsed.relativePath, cause: Cause.pretty(cause), indexedAt: Date.now() })
-                    .pipe(
-                      Effect.catchCause((innerCause) =>
-                        Effect.logWarning(`recordParseError insert failed for ${parsed.relativePath}`, {
-                          cause: Cause.pretty(innerCause),
-                        }),
-                      ),
-                    )
-                  yield* Ref.update(skippedRef, (n) => n + 1)
-                  yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
-                }),
-              ),
+          // One transaction per persistBatch: writeFileGraph nests its own
+          // transaction as a savepoint, so per-file catch-cause logging is
+          // preserved while the per-file commit+fsync cost drops to 1 tx per
+          // batch (same pattern as the orphan-chunk prune below).
+          yield* database.db
+            .transaction(() =>
+              Effect.gen(function* () {
+                for (const parsed of pending) {
+                  yield* repo.writeFileGraph({
+                    file: parsed.file,
+                    nodes: parsed.nodes,
+                    edges: parsed.edges,
+                    ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
+                  }).pipe(
+                    Effect.catchCause((cause) =>
+                      Effect.gen(function* () {
+                        yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
+                          cause: Cause.pretty(cause),
+                        })
+                        yield* repo
+                          .recordParseError({ path: parsed.relativePath, cause: Cause.pretty(cause), indexedAt: Date.now() })
+                          .pipe(
+                            Effect.catchCause((innerCause) =>
+                              Effect.logWarning(`recordParseError insert failed for ${parsed.relativePath}`, {
+                                cause: Cause.pretty(innerCause),
+                              }),
+                            ),
+                          )
+                        yield* Ref.update(skippedRef, (n) => n + 1)
+                        yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
+                      }),
+                    ),
+                  )
+                }
+              }),
             )
-          }
+            .pipe(Effect.orDie)
         })
         while (processed < total) {
           const parsed = yield* Queue.take(parsedQueue)

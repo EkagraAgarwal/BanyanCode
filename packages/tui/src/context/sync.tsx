@@ -39,6 +39,12 @@ const emptyConsoleState: ConsoleState = {
   switchableOrgCount: 0,
 }
 
+// Bounded in-memory windows: per-session messages already cap at 100 below;
+// sessions themselves cap at active + last 3 and parts cap per message so the
+// store stops growing with session count x messages x parts.
+const MAX_SESSIONS_IN_MEMORY = 4
+const MAX_PARTS_PER_MESSAGE = 50
+
 function search<T>(items: T[], target: string, key: (item: T) => string) {
   let left = 0
   let right = items.length - 1
@@ -145,6 +151,57 @@ export const {
     }
     const touchPart = (sessionID: string, partID: string) => {
       hydratingSessions.get(sessionID)?.parts.add(partID)
+    }
+
+    const sessionRecency: string[] = []
+    const touchSessionRecency = (sessionID: string) => {
+      const at = sessionRecency.indexOf(sessionID)
+      if (at !== -1) sessionRecency.splice(at, 1)
+      sessionRecency.push(sessionID)
+    }
+    const evictColdSessions = () => {
+      const overflow = sessionRecency.length - MAX_SESSIONS_IN_MEMORY
+      if (overflow <= 0) return
+      const cold = sessionRecency.slice(0, overflow)
+      batch(() => {
+        for (const sessionID of cold) {
+          const messages = store.message[sessionID] ?? []
+          setStore(
+            "message",
+            produce((draft) => {
+              delete draft[sessionID]
+            }),
+          )
+          if (messages.length === 0) continue
+          setStore(
+            "part",
+            produce((draft) => {
+              for (const message of messages) delete draft[message.id]
+            }),
+          )
+        }
+      })
+      sessionRecency.splice(0, cold.length)
+    }
+    const dropSessionMessages = (sessionID: string) => {
+      const messages = store.message[sessionID] ?? []
+      batch(() => {
+        setStore(
+          "message",
+          produce((draft) => {
+            delete draft[sessionID]
+          }),
+        )
+        if (messages.length === 0) return
+        setStore(
+          "part",
+          produce((draft) => {
+            for (const message of messages) delete draft[message.id]
+          }),
+        )
+      })
+      const at = sessionRecency.indexOf(sessionID)
+      if (at !== -1) sessionRecency.splice(at, 1)
     }
 
     function sessionListQuery(): { scope?: "project"; path?: string } {
@@ -263,10 +320,13 @@ export const {
               }),
             )
           }
+          dropSessionMessages(event.properties.info.id)
           break
         }
         case "session.updated": {
           const result = search(store.session, event.properties.info.id, (s) => s.id)
+          touchSessionRecency(event.properties.info.id)
+          evictColdSessions()
           if (result.found) {
             setStore("session", result.index, reconcile(event.properties.info))
             break
@@ -303,6 +363,8 @@ export const {
 
         case "message.updated": {
           touchMessage(event.properties.info.sessionID, event.properties.info.id)
+          touchSessionRecency(event.properties.info.sessionID)
+          evictColdSessions()
           const messages = store.message[event.properties.info.sessionID]
           if (!messages) {
             setStore("message", event.properties.info.sessionID, [event.properties.info])
@@ -371,6 +433,8 @@ export const {
         }
         case "message.part.updated": {
           touchPart(event.properties.part.sessionID, event.properties.part.id)
+          touchSessionRecency(event.properties.part.sessionID)
+          evictColdSessions()
           const parts = store.part[event.properties.part.messageID]
           if (!parts) {
             setStore("part", event.properties.part.messageID, [event.properties.part])
@@ -388,6 +452,16 @@ export const {
               draft.splice(result.index, 0, event.properties.part)
             }),
           )
+          const afterInsert = store.part[event.properties.part.messageID]
+          if (afterInsert.length > MAX_PARTS_PER_MESSAGE) {
+            setStore(
+              "part",
+              event.properties.part.messageID,
+              produce((draft) => {
+                draft.splice(0, draft.length - MAX_PARTS_PER_MESSAGE)
+              }),
+            )
+          }
           break
         }
 
@@ -659,13 +733,15 @@ export const {
                       (part) => tracker.parts.has(part.id) && !parts.some((item) => item.id === part.id),
                     ),
                   )
-                  draft.part[message.info.id] = parts
+                  draft.part[message.info.id] = parts.slice(-MAX_PARTS_PER_MESSAGE)
                 }
                 for (const message of removed) delete draft.part[message.id]
                 draft.message[sessionID] = visible
                 draft.session_diff[sessionID] = diff.data ?? []
               }),
             )
+            touchSessionRecency(sessionID)
+            evictColdSessions()
             fullSyncedSessions.add(sessionID)
           })().finally(() => {
             syncingSessions.delete(sessionID)
