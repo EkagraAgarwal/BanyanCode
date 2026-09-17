@@ -4,7 +4,7 @@
   "description": "BanyanCode - multi-agent development tool with parallel subagents, cross-session memory, and a code-aware research loop.",
   "private": true,
   "type": "module",
-  "packageManager": "bun@1.4.3",
+  "packageManager": "bun@1.4.2",
   "scripts": {
     "dev": "bun run --cwd packages/opencode --conditions=browser src/index.ts",
     "dev:desktop": "bun --cwd packages/desktop dev",
