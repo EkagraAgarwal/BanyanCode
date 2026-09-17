@@ -115,7 +115,7 @@ export const layer = Layer.effect(
           set: { id: sql`id` },
         })
         .returning({ id: SubagentMessagesTable.id, created_at: SubagentMessagesTable.created_at })
-        .run() as any) as Effect.Effect<Array<{ id: string; created_at: number }>, never, never>
+        .all() as any) as Effect.Effect<Array<{ id: string; created_at: number }>, never, never>
 
       const row = rows[0]
       if (!row) throw new Error("publishOrFetch: no row returned")

@@ -928,6 +928,21 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         },
       },
       {
+        name: "swarm.toggle",
+        title: "Toggle swarm mode",
+        category: "BanyanCode",
+        slashName: "swarm",
+        run: () => {
+          void sdk.client.session.command({
+            sessionID: route.data.type === "session" ? route.data.sessionID : "",
+            command: "swarm",
+            arguments: "",
+          })
+          toast.show({ message: "Toggling swarm mode...", variant: "info" })
+          dialog.clear()
+        },
+      },
+      {
         name: "subagents.max_subagents",
         title: "Set max concurrent subagents",
         category: "BanyanCode",

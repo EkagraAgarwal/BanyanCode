@@ -10,6 +10,7 @@ import { MCP } from "../mcp"
 import { Skill } from "../skill"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { SWARM_MODE_KEY, readSwarmMode, swarmToggleMessage } from "@opencode-ai/core/banyancode/swarm-waves"
 import { Database } from "@opencode-ai/core/database/database"
 import { GlobalBus } from "@/bus/global"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -107,6 +108,7 @@ export const Default = {
   REPOSITORY_OWNERSHIP: "repository-ownership",
   WEBSEARCH_FREE: "websearch-free",
   YOLO: "yolo",
+  SWARM: "swarm",
   MAX_SUBAGENTS: "max-subagents",
   REFRESH_MODELS: "refresh-models",
   LSP: "lsp",
@@ -489,6 +491,36 @@ export const layer = Layer.effect(
               },
             })
             return { kind: "terminal" as const, message: `YOLO mode is now ${newValue ? "on" : "off"}.` }
+          }),
+        hints: [],
+      }
+      commands[Default.SWARM] = {
+        name: Default.SWARM,
+        description: "toggle swarm mode (fan-out coder waves capped by max-subagents)",
+        source: "command",
+        get template() {
+          return "Toggle swarm mode."
+        },
+        execute: () =>
+          Effect.gen(function* () {
+            const banyanOption = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+            if (Option.isNone(banyanOption)) {
+              return { kind: "terminal" as const, message: "Swarm toggle skipped: BanyanConfigService is unavailable." }
+            }
+            const banyan = banyanOption.value
+            const current = yield* banyan.get()
+            // SWARM_MODE_KEY is owned by a peer slice; read via the shared
+            // helper until it lands in BanyanConfig.Info, then drop the cast.
+            const newValue = !readSwarmMode(current)
+            yield* banyan.update({ [SWARM_MODE_KEY]: newValue } as unknown as Partial<typeof current>)
+            GlobalBus.emit("event", {
+              directory: "global",
+              payload: {
+                type: "banyancode.config.updated" as any,
+                properties: { scope: "global" },
+              },
+            })
+            return { kind: "terminal" as const, message: swarmToggleMessage(newValue) }
           }),
         hints: [],
       }

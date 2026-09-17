@@ -89,7 +89,7 @@ export function Home() {
         </box>
         <box width="100%" maxWidth={promptMaxWidth()} paddingTop={1} flexShrink={0}>
           <text fg={theme.textMuted}>
-            Codegraph: Type /codegraph-build to index your code.
+            Codegraph: Type /codegraph-build to index your code. Swarm: /swarm toggles fan-out waves.
           </text>
         </box>
         <pluginRuntime.Slot name="home_bottom" />
