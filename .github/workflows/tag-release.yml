@@ -108,15 +108,16 @@ jobs:
           fi
 
           if [ "${EXISTS}" = "true" ]; then
-            # Compare CalVer lexically (works inside a year; cross-year
-            # monotonicity also holds because YY is 2 digits).
-            if [ "${CURRENT}" \< "${LATEST_VERSION}" ]; then
-              echo "::warning::current version ${CURRENT} is lower than existing tag v${LATEST_VERSION}; refusing to overwrite published release."
-              exit 1
-            fi
+            # Compare CalVer version-aware (sort -V handles multi-digit
+            # patch, e.g. 26.09.10 > 26.09.9, where lexical compare fails).
             if [ "${CURRENT}" = "${LATEST_VERSION}" ]; then
               echo "Tag v${LATEST_VERSION} already on the remote; idempotent skip."
               exit 0
+            fi
+            NEWEST="$(printf '%s\n%s\n' "${LATEST_VERSION}" "${CURRENT}" | sort -V | tail -n 1)"
+            if [ "${NEWEST}" != "${CURRENT}" ]; then
+              echo "::warning::current version ${CURRENT} is lower than existing tag v${LATEST_VERSION}; refusing to overwrite published release."
+              exit 1
             fi
           fi
 
