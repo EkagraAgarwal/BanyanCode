@@ -5,7 +5,11 @@
  * key. Credential precedence: `OPENCODE_API_KEY` env, then
  * `provider.opencode-go` / `provider.opencode` config options, then the
  * active `opencode-go` auth entry, then the legacy `opencode` auth entry.
- * Normalizes rolling, weekly, and monthly windows. The endpoint does not
+ *
+ * Live contract (verified against the endpoint): `{ usage: { rolling,
+ * weekly, monthly } }` where each window carries `percent` (used percent,
+ * 0-100) and an ISO-string `resetsAt`. Durations are implied by the window
+ * key (rolling = 5h, weekly = 1w, monthly = 1mo). The endpoint does not
  * return a credit balance, so none is inferred.
  */
 
@@ -16,8 +20,13 @@ import type { Adapter, AdapterContext } from "../usage"
 export const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage"
 export const OPENCODE_GO_PROVIDER_IDS = ["opencode", "opencode-go"] as const
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null
+const WINDOW_DEFS = [
+  { field: "rolling", durationSeconds: 18_000 },
+  { field: "weekly", durationSeconds: 604_800 },
+  { field: "monthly", durationSeconds: 2_592_000 },
+] as const
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null
 
 const toFiniteNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined
@@ -38,36 +47,81 @@ const pickString = (entry: Record<string, unknown>, names: ReadonlyArray<string>
   return undefined
 }
 
-/** Upstream window entries accept snake_case and camelCase field names. */
-const toWindowInput = (key: string, entry: Record<string, unknown>): Banyan.NormalizeWindowInput => ({
+/** Reset timestamps arrive as epoch seconds/millis or ISO strings. Strings
+ * are parsed to epoch millis here; numerics pass through untouched so the
+ * shared normalizer applies its seconds-vs-millis rule. */
+const toResetsAt = (value: unknown): number | undefined => {
+  const numeric = toFiniteNumber(value)
+  if (numeric !== undefined) return numeric
+  if (typeof value === "string" && value.length > 0) {
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? undefined : parsed
+  }
+  return undefined
+}
+
+const RESET_NAMES = ["resetsAt", "resets_at", "reset_at", "resetAt", "resets", "reset"] as const
+
+/** Window entries accept the live `percent` field plus the legacy
+ * snake_case/camelCase percent names. Explicit durations win; envelope
+ * windows fall back to the key-implied duration. */
+const toWindowInput = (
+  key: string,
+  entry: Record<string, unknown>,
+  durationSeconds?: number,
+): Banyan.NormalizeWindowInput => ({
   id: pickString(entry, ["id"]) ?? key,
   label: pickString(entry, ["label", "name", "title"]),
   kind: "quota",
-  usedPercent: pickNumber(entry, ["used_percent", "usedPercent", "used"]),
+  usedPercent: pickNumber(entry, ["percent", "used_percent", "usedPercent", "used"]),
   remainingPercent: pickNumber(entry, ["remaining_percent", "remainingPercent"]),
-  resetsAt: pickNumber(entry, ["resets_at", "resetsAt", "reset_at", "resetAt", "resets", "reset"]),
-  durationSeconds: pickNumber(entry, ["duration_seconds", "durationSeconds", "duration", "window_seconds"]),
+  resetsAt: (() => {
+    for (const name of RESET_NAMES) {
+      const parsed = toResetsAt(entry[name])
+      if (parsed !== undefined) return parsed
+    }
+    return undefined
+  })(),
+  durationSeconds:
+    pickNumber(entry, ["duration_seconds", "durationSeconds", "duration", "window_seconds"]) ?? durationSeconds,
   limit: pickNumber(entry, ["limit", "total"]),
   remaining: pickNumber(entry, ["remaining", "left"]),
 })
 
-const collectEntries = (payload: unknown): Array<{ key: string; entry: Record<string, unknown> }> => {
+/** Live shape first: `{ usage: { rolling, weekly, monthly } }`. Falls back
+ * to the legacy `windows` array, then to a top-level rolling/weekly/monthly
+ * map. Anything else yields no entries and the caller fails upstream. */
+const collectEntries = (
+  payload: unknown,
+): Array<{ key: string; entry: Record<string, unknown>; durationSeconds?: number }> => {
   if (!isRecord(payload)) return []
-  for (const container of ["windows", "limits", "usage"]) {
-    const value = payload[container]
-    if (Array.isArray(value)) {
-      return value
-        .filter((item) => isRecord(item))
-        .map((entry, index) => ({
-          key: pickString(entry, ["id", "label", "name"]) ?? `${container}-${index}`,
-          entry,
-        }))
+  const usage = payload["usage"]
+  if (isRecord(usage)) {
+    const entries: Array<{ key: string; entry: Record<string, unknown>; durationSeconds?: number }> = []
+    for (const def of WINDOW_DEFS) {
+      const entry = usage[def.field]
+      if (isRecord(entry)) entries.push({ key: def.field, entry, durationSeconds: def.durationSeconds })
     }
+    for (const [key, value] of Object.entries(usage)) {
+      if (isRecord(value) && !WINDOW_DEFS.some((def) => def.field === key)) entries.push({ key, entry: value })
+    }
+    return entries
   }
-  // Object-map shape: { rolling: {...}, weekly: {...}, monthly: {...} }.
-  const entries: Array<{ key: string; entry: Record<string, unknown> }> = []
+  const windows = payload["windows"]
+  if (Array.isArray(windows)) {
+    return windows
+      .filter((item) => isRecord(item))
+      .map((entry, index) => ({
+        key: pickString(entry, ["id", "label", "name"]) ?? `windows-${index}`,
+        entry,
+      }))
+  }
+  // Legacy object-map shape: { rolling: {...}, weekly: {...}, monthly: {...} }.
+  const entries: Array<{ key: string; entry: Record<string, unknown>; durationSeconds?: number }> = []
   for (const [key, value] of Object.entries(payload)) {
-    if (isRecord(value)) entries.push({ key, entry: value })
+    if (!isRecord(value)) continue
+    const def = WINDOW_DEFS.find((item) => item.field === key)
+    entries.push(def ? { key, entry: value, durationSeconds: def.durationSeconds } : { key, entry: value })
   }
   return entries
 }
@@ -92,7 +146,9 @@ export const normalizeOpenCodeGoUsage = (
     displayName: input.displayName,
     status: "available",
     confidence: "exact",
-    windows: entries.map(({ key, entry }) => Banyan.normalizeWindow(toWindowInput(key, entry))),
+    windows: entries.map(({ key, entry, durationSeconds }) =>
+      Banyan.normalizeWindow(toWindowInput(key, entry, durationSeconds)),
+    ),
     fetchedAt: input.fetchedAt ?? Date.now(),
   })
 }

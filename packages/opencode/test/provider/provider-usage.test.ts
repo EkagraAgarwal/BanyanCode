@@ -707,3 +707,92 @@ describe("ProviderUsage.Service", () => {
     }),
   )
 })
+
+describe("ProviderUsage.Service without instance context", () => {
+  beforeEach(() => {
+    ProviderUsage.resetUsageAdapters()
+  })
+
+  // Mirrors the real Provider.list failure on /global/* routes, which run
+  // without InstanceContextMiddleware: InstanceState dies on the missing
+  // InstanceRef. Discovery must keep auth-derived targets instead of
+  // collapsing to an empty list (which the TUI backfills as unsupported).
+  const noInstanceLayer = (auths: Record<string, Auth.Info>, fetchImpl: FetchImpl) =>
+    ProviderUsage.layerWithOptions({ fetchImpl }).pipe(
+      Layer.provide(
+        Layer.mock(Auth.Service, {
+          all: () => Effect.succeed(auths),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(Provider.Service, {
+          list: () => Effect.die(new Error("InstanceRef not provided")),
+        }),
+      ),
+    )
+
+  const it = testEffect(Layer.empty as Layer.Layer<never>)
+
+  it.effect("auth-backed opencode-go and openai OAuth stay available when Provider.list dies", () =>
+    Effect.gen(function* () {
+      const fetchImpl = stubFetch((url) => {
+        if (url.includes("opencode.ai")) return jsonResponse(goFixture)
+        if (url.includes("chatgpt.com")) return jsonResponse(codexFixture)
+        return jsonResponse({}, 404)
+      })
+      const layer = noInstanceLayer(
+        {
+          "opencode-go": authApi("go-key"),
+          openai: oauth("<access-valid>", Date.now() + 3_600_000, "acc-1"),
+        },
+        fetchImpl,
+      )
+      const snapshots = yield* ProviderUsage.Service.pipe(
+        Effect.flatMap((service) => service.refresh()),
+        Effect.provide(layer),
+      )
+      const byId = Object.fromEntries(snapshots.map((s) => [s.providerID, s]))
+      expect(Object.keys(byId).sort()).toEqual(["openai", "opencode-go"])
+      expect(byId["opencode-go"].status).toBe("available")
+      expect(byId["opencode-go"].windows).toHaveLength(3)
+      expect(byId["openai"].status).toBe("available")
+      expect(byId["openai"].windows.length).toBeGreaterThan(0)
+      const serialized = JSON.stringify(snapshots)
+      expect(serialized).not.toContain("go-key")
+      expect(serialized).not.toContain("<access-valid>")
+    }),
+  )
+
+  it.effect("a dying Auth.all still leaves provider-configured targets discoverable", () =>
+    Effect.gen(function* () {
+      const fetchImpl = stubFetch((url) => {
+        if (url.includes("opencode.ai")) return jsonResponse(goFixture)
+        return jsonResponse({}, 404)
+      })
+      const layer = ProviderUsage.layerWithOptions({ fetchImpl }).pipe(
+        Layer.provide(
+          Layer.mock(Auth.Service, {
+            all: () => Effect.die(new Error("auth store unavailable")),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(Provider.Service, {
+            list: () =>
+              Effect.succeed({
+                opencode: providerInfo("opencode", "OpenCode Go"),
+              }),
+          }),
+        ),
+      )
+      const snapshots = yield* ProviderUsage.Service.pipe(
+        Effect.flatMap((service) => service.refresh()),
+        Effect.provide(layer),
+      )
+      // No credentials anywhere: the Go adapter reports unauthenticated
+      // instead of dropping the configured provider.
+      expect(snapshots.map((s) => s.providerID)).toEqual(["opencode"])
+      expect(snapshots[0].status).toBe("unauthenticated")
+      expect(snapshots[0].displayName).toBe("OpenCode Go")
+    }),
+  )
+})

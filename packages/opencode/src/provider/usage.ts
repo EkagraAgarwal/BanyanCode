@@ -214,13 +214,13 @@ export const layerWithOptions = (
       // provider client-side, so a provider disabled after its session started
       // is still represented instead of silently dropped.
       const discover = (): Effect.Effect<Target[], never, never> =>
-        Effect.all([auth.all(), provider.list()], { concurrency: 2 }).pipe(
-          Effect.catchCause(() =>
-            Effect.succeed([
-              {} as Record<string, Auth.Info>,
-              {} as Record<string, Provider.Info>,
-            ] as const),
-          ),
+        Effect.all(
+          [
+            auth.all().pipe(Effect.catchCause(() => Effect.succeed({} as Record<string, Auth.Info>))),
+            provider.list().pipe(Effect.catchCause(() => Effect.succeed({} as Record<string, Provider.Info>))),
+          ],
+          { concurrency: 2 },
+        ).pipe(
           Effect.map(([auths, providers]) => {
             const byID = new Map<string, Provider.Info>(Object.entries(providers))
             const ids = new Set<string>([...Object.keys(auths), ...byID.keys()])

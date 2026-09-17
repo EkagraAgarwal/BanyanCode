@@ -6,6 +6,7 @@ import { ProviderUsage } from "@/provider/usage"
 import type { Adapter, AdapterContext, FetchImpl } from "@/provider/usage"
 import { AnthropicAdapter, normalizeAnthropicUsage } from "@/provider/usage/anthropic"
 import { CopilotAdapter, normalizeCopilotUsage } from "@/provider/usage/github-copilot"
+import { normalizeOpenCodeGoUsage, OpenCodeGoAdapter } from "@/provider/usage/opencode-go"
 import { KimiAdapter, normalizeKimiUsage } from "@/provider/usage/kimi"
 import { MiniMaxAdapter, normalizeMiniMaxRemains } from "@/provider/usage/minimax"
 import { normalizeZhipuQuota, ZhipuAdapter } from "@/provider/usage/zhipu"
@@ -14,6 +15,14 @@ const anthropicFixture = {
   five_hour: { utilization: 0.68, resets_at: "2026-09-17T10:00:00Z" },
   seven_day: { utilization: 39, resets_at: 1_786_000_000 },
   seven_day_sonnet: { utilization: 0.1, resets_at: "2026-09-20T00:00:00Z" },
+}
+
+const openCodeGoFixture = {
+  usage: {
+    rolling: { percent: 68, resetsAt: "2026-09-17T10:00:00Z" },
+    weekly: { percent: 39, resetsAt: "2026-09-24T00:00:00Z" },
+    monthly: { percent: 75, resetsAt: "2026-10-01T00:00:00Z" },
+  },
 }
 
 const copilotFixture = {
@@ -107,6 +116,72 @@ const fetchError = async (adapter: Adapter, ctx: AdapterContext) =>
   Effect.runPromise(Effect.flip(adapter.fetch(ctx)))
 
 describe("remaining provider-usage adapters", () => {
+  test("opencode-go live envelope normalizes rolling/weekly/monthly windows", () => {
+    const snapshot = normalizeOpenCodeGoUsage(openCodeGoFixture, {
+      providerID: "opencode",
+      displayName: "OpenCode Go",
+    })
+    expect(snapshot.status).toBe("available")
+    expect(snapshot.confidence).toBe("exact")
+    expect(snapshot.windows).toHaveLength(3)
+    const byId = Object.fromEntries(snapshot.windows.map((w) => [w.id, w]))
+    expect(byId["rolling"].label).toBe("5h")
+    expect(byId["rolling"].usedPercent).toBe(68)
+    expect(byId["rolling"].remainingPercent).toBe(32)
+    expect(byId["rolling"].durationSeconds).toBe(18_000)
+    expect(byId["rolling"].resetsAt).toBe(Date.parse("2026-09-17T10:00:00Z"))
+    expect(byId["weekly"].label).toBe("1w")
+    expect(byId["weekly"].usedPercent).toBe(39)
+    expect(byId["weekly"].remainingPercent).toBe(61)
+    expect(byId["weekly"].durationSeconds).toBe(604_800)
+    expect(byId["weekly"].resetsAt).toBe(Date.parse("2026-09-24T00:00:00Z"))
+    expect(byId["monthly"].label).toBe("1mo")
+    expect(byId["monthly"].usedPercent).toBe(75)
+    expect(byId["monthly"].remainingPercent).toBe(25)
+    expect(byId["monthly"].durationSeconds).toBe(2_592_000)
+    expect(byId["monthly"].resetsAt).toBe(Date.parse("2026-10-01T00:00:00Z"))
+    expect(snapshot.balance).toBeUndefined()
+  })
+
+  test("opencode-go retains the legacy windows array with numeric resets", () => {
+    const snapshot = normalizeOpenCodeGoUsage(
+      {
+        windows: [{ id: "rolling", duration_seconds: 18_000, used_percent: 68, resets_at: 1_786_000_000 }],
+      },
+      { providerID: "opencode", displayName: "OpenCode Go" },
+    )
+    expect(snapshot.windows).toHaveLength(1)
+    expect(snapshot.windows[0].label).toBe("5h")
+    expect(snapshot.windows[0].usedPercent).toBe(68)
+    expect(snapshot.windows[0].remainingPercent).toBe(32)
+    expect(snapshot.windows[0].resetsAt).toBe(1_786_000_000_000)
+  })
+
+  test("opencode-go explicit durations override key-implied defaults", () => {
+    const snapshot = normalizeOpenCodeGoUsage(
+      {
+        usage: {
+          rolling: {
+            percent: 25,
+            resetsAt: "2026-09-18T10:00:00Z",
+            durationSeconds: 86_400,
+          },
+        },
+      },
+      { providerID: "opencode-go", displayName: "OpenCode Go" },
+    )
+    expect(snapshot.windows[0].durationSeconds).toBe(86_400)
+    expect(snapshot.windows[0].label).toBe("24h")
+  })
+
+  test("opencode-go rejects empty envelopes and non-record payloads", () => {
+    const input = { providerID: "opencode", displayName: "OpenCode Go" }
+    expect(() => normalizeOpenCodeGoUsage({}, input)).toThrow("no usage windows")
+    expect(() => normalizeOpenCodeGoUsage({ usage: {} }, input)).toThrow("no usage windows")
+    expect(() => normalizeOpenCodeGoUsage({ usage: { rolling: null } }, input)).toThrow("no usage windows")
+    expect(() => normalizeOpenCodeGoUsage("boom", input)).toThrow("unrecognized usage payload")
+  })
+
   test("anthropic fixture normalizes session and weekly windows, preserves extras", () => {
     const snapshot = normalizeAnthropicUsage(anthropicFixture, { providerID: "anthropic", displayName: "Anthropic" })
     expect(snapshot.status).toBe("available")
@@ -238,7 +313,7 @@ describe("remaining provider-usage adapters", () => {
     expect(MiniMaxAdapter.supports({ providerID: "minimax-cn-coding-plan", hasAuth: false })).toBe(true)
   })
 
-  test("all five adapters are registered built-ins", () => {
+  test("all six adapters are registered built-ins", () => {
     const ids = ProviderUsage.listAdapters().map((a) => a.id)
     for (const id of [
       "banyan-usage-anthropic",
@@ -246,9 +321,16 @@ describe("remaining provider-usage adapters", () => {
       "banyan-usage-kimi",
       "banyan-usage-zhipu",
       "banyan-usage-minimax",
+      "banyan-usage-opencode-go",
     ]) {
       expect(ids).toContain(id)
     }
+  })
+
+  test("opencode-go supports both provider ids regardless of auth", () => {
+    expect(OpenCodeGoAdapter.supports({ providerID: "opencode", hasAuth: true, authType: "api" })).toBe(true)
+    expect(OpenCodeGoAdapter.supports({ providerID: "opencode-go", hasAuth: false })).toBe(true)
+    expect(OpenCodeGoAdapter.supports({ providerID: "openai", hasAuth: false })).toBe(false)
   })
 
   test("oauth adapters reject api keys as unsupported, not as quota", async () => {
