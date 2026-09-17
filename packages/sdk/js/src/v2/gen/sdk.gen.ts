@@ -144,6 +144,10 @@ import type {
   GlobalMeshStatusResponses,
   GlobalPreflightErrors,
   GlobalPreflightResponses,
+  GlobalProviderUsageListErrors,
+  GlobalProviderUsageListResponses,
+  GlobalProviderUsageRefreshErrors,
+  GlobalProviderUsageRefreshResponses,
   GlobalSafeRenameErrors,
   GlobalSafeRenameResponses,
   GlobalSessionImportErrors,
@@ -1722,6 +1726,49 @@ export class Mesh extends HeyApiClient {
   }
 }
 
+export class ProviderUsage extends HeyApiClient {
+  /**
+   * List provider usage snapshots
+   *
+   * Return cached normalized provider usage snapshots for every configured or connected provider. Works without an active session. Never contains credentials, raw headers, or raw provider errors.
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      GlobalProviderUsageListResponses,
+      GlobalProviderUsageListErrors,
+      ThrowOnError
+    >({ url: "/global/provider-usage", ...options })
+  }
+
+  /**
+   * Refresh provider usage snapshots
+   *
+   * Force a refresh of provider usage snapshots for all providers, or for one provider when `providerID` is supplied. Works without an active session.
+   */
+  public refresh<ThrowOnError extends boolean = false>(
+    parameters?: {
+      providerID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "providerID" }] }])
+    return (options?.client ?? this.client).post<
+      GlobalProviderUsageRefreshResponses,
+      GlobalProviderUsageRefreshErrors,
+      ThrowOnError
+    >({
+      url: "/global/provider-usage/refresh",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Session2 extends HeyApiClient {
   /**
    * Import session from transcript
@@ -2202,6 +2249,11 @@ export class Global extends HeyApiClient {
   private _mesh?: Mesh
   get mesh(): Mesh {
     return (this._mesh ??= new Mesh({ client: this.client }))
+  }
+
+  private _providerUsage?: ProviderUsage
+  get providerUsage(): ProviderUsage {
+    return (this._providerUsage ??= new ProviderUsage({ client: this.client }))
   }
 
   private _session?: Session2
@@ -5211,6 +5263,7 @@ export class Session3 extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
+      runID?: string
       messageID?: string
       model?: {
         providerID: string
@@ -5236,6 +5289,7 @@ export class Session3 extends HeyApiClient {
             { in: "path", key: "sessionID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "body", key: "runID" },
             { in: "body", key: "messageID" },
             { in: "body", key: "model" },
             { in: "body", key: "agent" },
@@ -5564,6 +5618,7 @@ export class Session3 extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
+      runID?: string
       messageID?: string
       model?: {
         providerID: string
@@ -5589,6 +5644,7 @@ export class Session3 extends HeyApiClient {
             { in: "path", key: "sessionID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "body", key: "runID" },
             { in: "body", key: "messageID" },
             { in: "body", key: "model" },
             { in: "body", key: "agent" },

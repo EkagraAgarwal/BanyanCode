@@ -19,6 +19,7 @@ import { Plugin } from "@/plugin"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Provider } from "@/provider/provider"
 import { ProviderAuth } from "@/provider/auth"
+import { ProviderUsage } from "@/provider/usage"
 import { Agent } from "@/agent/agent"
 import { Skill } from "@/skill"
 import { Discovery } from "@/skill/discovery"
@@ -162,9 +163,19 @@ export const AppLayer = Layer.mergeAll(
       Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
     ),
   ),
+  // Phase 4 (provider usage): folded into the adjacent provideMerge so the
+  // outer pipe stays within its 20-arg overload. Self-contained block —
+  // Auth/Provider defaultLayers bring their own deps (same pattern as
+  // ProviderAuth.defaultLayer), so AppLayer gains no new requirements.
   Layer.provideMerge(
-    Banyan.repositoryIntelligenceDefaultLayer.pipe(
-      Layer.provide(Database.defaultLayer),
+    Layer.mergeAll(
+      Banyan.repositoryIntelligenceDefaultLayer.pipe(
+        Layer.provide(Database.defaultLayer),
+      ),
+      ProviderUsage.layer.pipe(
+        Layer.provide(Auth.defaultLayer),
+        Layer.provide(Provider.defaultLayer),
+      ),
     ),
   ),
   Layer.provideMerge(Banyan.RepositoryGatewayNS.defaultLayer),

@@ -31,12 +31,10 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
   })
 
   return (
-    <box gap={1}>
+    <box gap={0}>
       <Show when={show()}>
         <box
           backgroundColor={theme().backgroundElement}
-          paddingTop={1}
-          paddingBottom={1}
           paddingLeft={2}
           paddingRight={2}
           flexDirection="row"
@@ -45,7 +43,7 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
           <text flexShrink={0} fg={theme().text}>
             ⬖
           </text>
-          <box flexGrow={1} gap={1}>
+          <box flexGrow={1} gap={0}>
             <box flexDirection="row" justifyContent="space-between">
               <text fg={theme().text}>
                 <b>Getting started</b>

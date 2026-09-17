@@ -217,6 +217,60 @@ export const ToolUsageQuery = Schema.Struct({
   session: Schema.optional(Schema.String),
 })
 
+// Phase 4 (provider usage): normalized snapshot wire shape. Mirrors the core
+// `ProviderUsageSnapshot` model from specs/banyancode/provider-usage-sidebar.md.
+// The response carries normalized fields only — never credentials, raw
+// headers, upstream request URLs, or raw provider errors.
+export const ProviderUsageWindow = Schema.Struct({
+  id: Schema.String,
+  label: Schema.String,
+  kind: Schema.Literals(["quota", "rate_limit"]),
+  usedPercent: Schema.optional(Schema.Number),
+  remainingPercent: Schema.optional(Schema.Number),
+  resetsAt: Schema.optional(Schema.Number),
+  durationSeconds: Schema.optional(Schema.Number),
+  limit: Schema.optional(Schema.Number),
+  remaining: Schema.optional(Schema.Number),
+})
+
+export const ProviderUsageSnapshot = Schema.Struct({
+  providerID: Schema.String,
+  displayName: Schema.String,
+  status: Schema.Literals(["available", "stale", "unsupported", "unauthenticated", "error"]),
+  confidence: Schema.Literals(["exact", "reported", "estimated"]),
+  windows: Schema.Array(ProviderUsageWindow),
+  balance: Schema.optional(
+    Schema.Struct({
+      remaining: Schema.Number,
+      currency: Schema.optional(Schema.String),
+    }),
+  ),
+  message: Schema.optional(Schema.String),
+  fetchedAt: Schema.Number,
+})
+
+export const ProviderUsageListResult = Schema.Struct({
+  snapshots: Schema.Array(ProviderUsageSnapshot),
+})
+
+// Refresh body: optional providerID constrained to a safe identifier so
+// path/secret injection cannot reach the service layer. Invalid IDs fail at
+// the schema boundary with a 400 before any handler runs. Deliberately no
+// `.annotate({ identifier })` on this body struct (single-element array
+// decoding hazard); the leaf pattern carries its own identifier instead.
+export const ProviderUsageRefreshInput = Schema.Struct({
+  providerID: Schema.optional(
+    Schema.String.check(
+      Schema.isPattern(/^[a-zA-Z0-9._-]+$/, {
+        identifier: "ProviderUsageProviderID",
+        description: "Provider identifier (letters, digits, '.', '_', '-' only)",
+      }),
+      Schema.isMinLength(1),
+      Schema.isMaxLength(128),
+    ),
+  ),
+})
+
 export const WebSearchFreeInput = WebSearchFreeTool.Input
 export const WebSearchFreeResult = WebSearchFreeTool.Output
 
@@ -273,6 +327,8 @@ export const GlobalPaths = {
   codegraphRemove: "/global/codegraph-remove",
   codegraphStatus: "/global/codegraph-status",
   toolUsage: "/global/tool-usage",
+  providerUsage: "/global/provider-usage",
+  providerUsageRefresh: "/global/provider-usage/refresh",
   startup: "/global/startup",
   banyanConfig: "/global/banyan-config",
   codegraphNodes: "/global/codegraph-nodes",
@@ -647,6 +703,28 @@ export const GlobalApi = HttpApi.make("global").add(
           summary: "Get mesh status",
           description:
             "Read the orchestrator mesh status (peers, pending messages, recent activity) for a given parent session. Works whether or not the session is currently active.",
+        }),
+      ),
+      HttpApiEndpoint.get("providerUsageList", GlobalPaths.providerUsage, {
+        success: described(ProviderUsageListResult, "Cached provider usage snapshots"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.providerUsage.list",
+          summary: "List provider usage snapshots",
+          description:
+            "Return cached normalized provider usage snapshots for every configured or connected provider. Works without an active session. Never contains credentials, raw headers, or raw provider errors.",
+        }),
+      ),
+      HttpApiEndpoint.post("providerUsageRefresh", GlobalPaths.providerUsageRefresh, {
+        payload: ProviderUsageRefreshInput,
+        success: described(ProviderUsageListResult, "Refreshed provider usage snapshots"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.providerUsage.refresh",
+          summary: "Refresh provider usage snapshots",
+          description:
+            "Force a refresh of provider usage snapshots for all providers, or for one provider when `providerID` is supplied. Works without an active session.",
         }),
       ),
     )

@@ -31,6 +31,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
+import { accountKeyForApiKey, observeRateLimitResponse } from "./usage/observer"
 
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
 
@@ -1703,6 +1704,17 @@ export const layer = Layer.effect(
         delete options["chunkTimeout"]
         delete options["headerTimeout"]
 
+        // Rate-limit observation identity. The raw key is never stored; only a
+        // fingerprint-derived account key partitions observations per account.
+        const observedProviderID = model.providerID
+        const observedApiKey =
+          typeof options["apiKey"] === "string"
+            ? (options["apiKey"] as string)
+            : typeof provider.key === "string"
+              ? provider.key
+              : undefined
+        const observedAccountKey = accountKeyForApiKey(observedApiKey)
+
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
           const fetchFn = customFetch ?? fetch
           const opts = init ?? {}
@@ -1725,6 +1737,15 @@ export const layer = Layer.effect(
             // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
             timeout: false,
           }).finally(() => headerTimeoutCtl?.clear())
+
+          // Best-effort rate-limit header observation. Headers only, never the
+          // body; failures must never break the model call. Runs after the
+          // custom fetch so auth-plugin wrappers and error behavior are preserved.
+          try {
+            observeRateLimitResponse(observedProviderID, res.headers as unknown as Headers, {
+              accountKey: observedAccountKey,
+            })
+          } catch {}
 
           if (!chunkAbortCtl) return res
           return wrapSSE(res, chunkTimeout, chunkAbortCtl)

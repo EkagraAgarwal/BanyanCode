@@ -163,6 +163,53 @@ describe("plugin.codex", () => {
     expect(Object.keys(models)).toEqual(allowed ? [id] : [])
   })
 
+  test("sends regular Codex requests with stored OAuth credentials unchanged", async () => {
+    const auth = {
+      type: "oauth" as const,
+      refresh: ["refresh", "stored"].join("-"),
+      access: "<access-valid>",
+      expires: Date.now() + 3_600_000,
+      accountId: "acc-1",
+    }
+    let refreshRequests = 0
+    const apiRequests: { authorization: string | null; accountId: string | null; url: string }[] = []
+
+    using server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/oauth/token") {
+          refreshRequests += 1
+          return Response.json({})
+        }
+        if (url.pathname === "/backend-api/codex/responses") {
+          apiRequests.push({
+            authorization: request.headers.get("authorization"),
+            accountId: request.headers.get("ChatGPT-Account-Id"),
+            url: request.url,
+          })
+          return new Response("{}", { status: 200 })
+        }
+        return new Response("unexpected request", { status: 500 })
+      },
+    })
+
+    const hooks = await CodexAuthPlugin({} as never, {
+      issuer: server.url.origin,
+      codexApiEndpoint: new URL("/backend-api/codex/responses", server.url).toString(),
+    })
+    const loaded = await hooks.auth!.loader!(async () => auth as never, {} as never)
+
+    await loaded.fetch!("https://api.openai.com/v1/responses")
+
+    // No refresh: valid credentials pass through untouched.
+    expect(refreshRequests).toBe(0)
+    expect(apiRequests).toHaveLength(1)
+    expect(apiRequests[0]?.authorization).toBe("Bearer <access-valid>")
+    expect(apiRequests[0]?.accountId).toBe("acc-1")
+    expect(apiRequests[0]?.url).toContain("/backend-api/codex/responses")
+  })
+
   test("deduplicates concurrent Codex token refreshes", async () => {
     const oldRefresh = ["refresh", "old"].join("-")
     let auth = {

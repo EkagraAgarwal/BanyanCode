@@ -5,9 +5,27 @@ import os from "os"
 import { setTimeout as sleep } from "node:timers/promises"
 import { createServer } from "http"
 import { OpenAIWebSocketPool } from "./ws-pool"
+import {
+  CODEX_CLIENT_ID as CODEX_OAUTH_CLIENT_ID,
+  CODEX_DEFAULT_ISSUER,
+  codexSessionFromTokens,
+  extractAccountId,
+  refreshCodexAccessToken,
+} from "./codex-refresh"
 
-const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
-const ISSUER = "https://auth.openai.com"
+export {
+  extractAccountId,
+  extractAccountIdFromClaims,
+  parseJwtClaims,
+  refreshCodexAccessToken,
+  codexSessionFromTokens,
+  type CodexRefreshedSession,
+  type CodexTokenResponse,
+  type IdTokenClaims,
+} from "./codex-refresh"
+
+const CLIENT_ID = CODEX_OAUTH_CLIENT_ID
+const ISSUER = CODEX_DEFAULT_ISSUER
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 const OAUTH_PORT = 1455
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000
@@ -33,45 +51,7 @@ function base64UrlEncode(buffer: ArrayBuffer): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
 }
 
-export interface IdTokenClaims {
-  chatgpt_account_id?: string
-  organizations?: Array<{ id: string }>
-  email?: string
-  "https://api.openai.com/auth"?: {
-    chatgpt_account_id?: string
-  }
-}
-
-export function parseJwtClaims(token: string): IdTokenClaims | undefined {
-  const parts = token.split(".")
-  if (parts.length !== 3) return undefined
-  try {
-    return JSON.parse(Buffer.from(parts[1], "base64url").toString())
-  } catch {
-    return undefined
-  }
-}
-
-export function extractAccountIdFromClaims(claims: IdTokenClaims): string | undefined {
-  return (
-    claims.chatgpt_account_id ||
-    claims["https://api.openai.com/auth"]?.chatgpt_account_id ||
-    claims.organizations?.[0]?.id
-  )
-}
-
-export function extractAccountId(tokens: TokenResponse): string | undefined {
-  if (tokens.id_token) {
-    const claims = parseJwtClaims(tokens.id_token)
-    const accountId = claims && extractAccountIdFromClaims(claims)
-    if (accountId) return accountId
-  }
-  if (tokens.access_token) {
-    const claims = parseJwtClaims(tokens.access_token)
-    return claims ? extractAccountIdFromClaims(claims) : undefined
-  }
-  return undefined
-}
+export type { CodexTokenResponse as TokenResponse } from "./codex-refresh"
 
 function buildAuthorizeUrl(redirectUri: string, pkce: PkceCodes, state: string): string {
   const params = new URLSearchParams({
@@ -89,12 +69,7 @@ function buildAuthorizeUrl(redirectUri: string, pkce: PkceCodes, state: string):
   return `${ISSUER}/oauth/authorize?${params.toString()}`
 }
 
-interface TokenResponse {
-  id_token: string
-  access_token: string
-  refresh_token: string
-  expires_in?: number
-}
+import type { CodexTokenResponse as TokenResponse } from "./codex-refresh"
 
 interface CodexAuthPluginOptions {
   issuer?: string
@@ -116,22 +91,6 @@ async function exchangeCodeForTokens(code: string, redirectUri: string, pkce: Pk
   })
   if (!response.ok) {
     throw new Error(`Token exchange failed: ${response.status}`)
-  }
-  return response.json()
-}
-
-async function refreshAccessToken(refreshToken: string, issuer = ISSUER): Promise<TokenResponse> {
-  const response = await fetch(`${issuer}/oauth/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: CLIENT_ID,
-    }).toString(),
-  })
-  if (!response.ok) {
-    throw new Error(`Token refresh failed: ${response.status}`)
   }
   return response.json()
 }
@@ -439,24 +398,23 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
 
             if (!currentAuth.access || currentAuth.expires < Date.now()) {
               if (!refreshPromise) {
-                refreshPromise = refreshAccessToken(currentAuth.refresh, issuer)
-                  .then(async (tokens) => {
-                    const accountId = extractAccountId(tokens) || authWithAccount.accountId
-                    await input.client.auth.set({
-                      path: { id: "openai" },
-                      body: {
-                        type: "oauth",
-                        refresh: tokens.refresh_token,
-                        access: tokens.access_token,
-                        expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
-                        ...(accountId && { accountId }),
-                      },
-                    })
-                    return {
-                      access: tokens.access_token,
-                      accountId,
-                    }
+                refreshPromise = refreshCodexAccessToken(currentAuth.refresh, { issuer }).then(async (tokens) => {
+                  const session = codexSessionFromTokens(tokens, authWithAccount.accountId)
+                  await input.client.auth.set({
+                    path: { id: "openai" },
+                    body: {
+                      type: "oauth",
+                      refresh: session.refresh,
+                      access: session.access,
+                      expires: session.expires,
+                      ...(session.accountId && { accountId: session.accountId }),
+                    },
                   })
+                  return {
+                    access: session.access,
+                    accountId: session.accountId,
+                  }
+                })
                   .finally(() => {
                     refreshPromise = undefined
                   })

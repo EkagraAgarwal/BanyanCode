@@ -14,8 +14,10 @@ import type { Provider as ProviderV2, Model as ModelV2, Auth } from "@opencode-a
 
 import type { BunShell } from "./shell.js"
 import { type ToolDefinition } from "./tool.js"
+import type { ProviderUsagePluginAdapter } from "./usage.js"
 
 export * from "./tool.js"
+export type { ProviderUsagePluginAdapter, ProviderUsagePluginContext, ProviderUsageSupportsInput } from "./usage.js"
 
 export type ProviderContext = {
   source: "env" | "config" | "custom" | "api"
@@ -214,6 +216,12 @@ export type ProviderHookContext = {
 export type ProviderHook = {
   id: string
   models?: (provider: ProviderV2, ctx: ProviderHookContext) => Promise<Record<string, ModelV2>>
+  /**
+   * Optional usage (quota) adapters for this provider. A custom provider
+   * registers quota support by returning adapters here — no central
+   * registry change needed. See `usage.ts` for the security contract.
+   */
+  usage?: ProviderUsagePluginAdapter | ProviderUsagePluginAdapter[]
 }
 
 /** @deprecated Use AuthOAuthResult instead. */

@@ -104,7 +104,7 @@ function View(props: { api: TuiPluginApi }) {
             </Show>
 
             <Show when={memPercent() !== undefined}>
-              <box flexDirection="column" gap={0} marginTop={1} width="100%">
+              <box flexDirection="column" gap={0} marginTop={0} width="100%">
                 <box flexDirection="row" gap={1}>
                   <text fg={toHex(theme().textMuted)}>Memory</text>
                   <box flexGrow={1}></box>
@@ -117,7 +117,7 @@ function View(props: { api: TuiPluginApi }) {
             </Show>
 
             <Show when={diskPercent() !== undefined}>
-              <box flexDirection="column" gap={0} marginTop={1} width="100%">
+              <box flexDirection="column" gap={0} marginTop={0} width="100%">
                 <box flexDirection="row" gap={1}>
                   <text fg={toHex(theme().textMuted)}>Disk</text>
                   <box flexGrow={1}></box>

@@ -234,6 +234,20 @@ export const layer = Layer.effect(
           )
         }
 
+        // Collect provider usage (quota) adapters from loaded plugin hooks.
+        // Dynamic import: provider/usage pulls in provider/provider, which
+        // imports this module — a static import would cycle. Same pattern as
+        // the Server import above.
+        const usageAdapters = yield* Effect.promise(
+          () => import("../provider/usage/plugin-adapters"),
+        ).pipe(Effect.option)
+        if (usageAdapters._tag === "Some") {
+          const usageSync = usageAdapters.value.syncPluginUsageAdapters(hooks)
+          if (usageSync.skipped.length > 0) {
+            yield* Effect.logWarning("plugin usage adapters skipped", { skipped: usageSync.skipped })
+          }
+        }
+
         // Notify plugins of current config
         for (const hook of hooks) {
           yield* Effect.tryPromise({

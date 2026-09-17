@@ -393,3 +393,39 @@ export type {
 export * as CodegraphSystemSourceNS from "./codegraph-system-source"
 export * as WorkspaceIdentity from "./workspace-identity"
 export type { WorkspaceIdentity as WorkspaceIdentityInterface } from "./workspace-identity"
+export {
+  ProviderUsageWindow,
+  ProviderUsageBalance,
+  ProviderUsageSnapshot,
+  ProviderUsageError,
+  ProviderUsageStatusSchema,
+  ProviderUsageConfidenceSchema,
+  ProviderUsageWindowKindSchema,
+  PROVIDER_USAGE_DEFAULT_TTL_MS,
+  PROVIDER_USAGE_MAX_CONCURRENCY,
+  FIVE_HOURS_SECONDS,
+  DAY_SECONDS,
+  WEEK_SECONDS,
+  MONTH_SECONDS_MIN,
+  MONTH_SECONDS_MAX,
+  classifyDuration,
+  labelForDuration,
+  clampPercent,
+  remainingFromUsed,
+  toEpochMs,
+  normalizeWindow,
+  redactSecrets,
+  isFresh,
+  unsupportedSnapshot,
+  unauthenticatedSnapshot,
+  errorSnapshot,
+  markStale,
+} from "./provider-usage"
+export type {
+  ProviderUsageStatus,
+  ProviderUsageConfidence,
+  ProviderUsageWindowKind,
+  DurationClass,
+  NormalizeWindowInput,
+} from "./provider-usage"
+export * as ProviderUsageNS from "./provider-usage"

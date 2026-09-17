@@ -31,6 +31,7 @@ import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectCopy } from "@opencode-ai/core/project/copy"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
 import { ProviderAuth } from "@/provider/auth"
+import { ProviderUsage } from "@/provider/usage"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Provider } from "@/provider/provider"
 import { PtyTicket } from "@opencode-ai/core/pty/ticket"
@@ -307,6 +308,17 @@ export function createRoutes(
         Banyan.RepositoryGatewayNS.defaultLayer,
         Banyan.InvestigationState.defaultLayer,
       ).pipe(Layer.provide(Banyan.codegraphRepoDefaultLayer), Layer.provide(Database.defaultLayer)),
+    ),
+    // Phase 4 (provider usage): self-contained like the sibling blocks above.
+    // ProviderUsage.layer requires Auth + Provider; both defaultLayers are
+    // self-contained (ProviderAuth.defaultLayer sets the precedent), so this
+    // block adds no new requirements to createRoutes. Same-layer references
+    // dedupe via the shared memoMap, so no duplicate Auth/Provider instances.
+    Layer.provideMerge(
+      ProviderUsage.layer.pipe(
+        Layer.provide(Auth.defaultLayer),
+        Layer.provide(Provider.defaultLayer),
+      ),
     ),
     Layer.provideMerge(
       BanyanToolsMount.attachToCatalog(

@@ -4,7 +4,6 @@ import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, For, Show } from "solid-js"
 import { toHex } from "../../util/color"
-import { RoundedBorder } from "../../ui/border"
 
 const id = "internal:sidebar-context"
 
@@ -368,12 +367,9 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
         {(tb) => (
           <box flexDirection="column" gap={0}>
             <box
-              width={BAR_WIDTH + 2}
-              height={3}
+              width={BAR_WIDTH}
+              height={1}
               marginTop={0}
-              customBorderChars={RoundedBorder.customBorderChars}
-              border={["left", "right", "top", "bottom"]}
-              borderColor={theme().borderSubtle}
               flexDirection="row"
             >
               <Show when={tb().total > 0}>

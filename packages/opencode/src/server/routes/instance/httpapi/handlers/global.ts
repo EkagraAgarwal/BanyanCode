@@ -20,7 +20,7 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodeFindInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, LintInput, PreflightInput, SafeRenameInput, TestRunInput, ToolUsageResult, TypecheckInput, WebSearchFreeInput } from "../groups/global"
+import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodeFindInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, LintInput, PreflightInput, ProviderUsageListResult, ProviderUsageRefreshInput, SafeRenameInput, TestRunInput, ToolUsageResult, TypecheckInput, WebSearchFreeInput } from "../groups/global"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
 import { statusFromMeta } from "@opencode-ai/core/banyancode/codegraph-readiness"
@@ -39,6 +39,7 @@ import type { Interface as EditPlannerInterface } from "@opencode-ai/core/banyan
 import type { Interface as PermissionV2Interface } from "@opencode-ai/core/permission"
 import { Tool as ToolNS } from "@opencode-ai/core/tool/tool"
 import { ToolCall } from "@opencode-ai/llm"
+import { ProviderUsage } from "@/provider/usage"
 import { randomUUID } from "node:crypto"
 
 const websearchFreeDisabled = () => process.env.BANYANCODE_DISABLE_WEBSEARCH === "1"
@@ -388,6 +389,29 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
         ctx.query.session !== undefined ? { session: ctx.query.session } : undefined,
       )
       return { tools: rows } satisfies typeof ToolUsageResult.Type
+    })
+
+    const providerUsageListHandler = Effect.fn("GlobalHttpApi.providerUsageList")(function* () {
+      // /global/* routes run without the session-scoped InstanceContextMiddleware,
+      // so this works with no active session by construction. serviceOption keeps
+      // the route live (empty list) when the ProviderUsage service is absent.
+      const svc = yield* Effect.serviceOption(ProviderUsage.Service)
+      if (Option.isNone(svc)) return { snapshots: [] } satisfies typeof ProviderUsageListResult.Type
+      const snapshots = yield* svc.value.snapshots()
+      return { snapshots: [...snapshots] } satisfies typeof ProviderUsageListResult.Type
+    })
+
+    const providerUsageRefreshHandler = Effect.fn("GlobalHttpApi.providerUsageRefresh")(function* (ctx: {
+      payload: typeof ProviderUsageRefreshInput.Type
+    }) {
+      const svc = yield* Effect.serviceOption(ProviderUsage.Service)
+      if (Option.isNone(svc)) return { snapshots: [] } satisfies typeof ProviderUsageListResult.Type
+      // A syntactically safe but unknown providerID refreshes zero targets and
+      // returns an empty list (200), mirroring `snapshots()` filtering: the
+      // schema boundary already rejects unsafe IDs with 400, while unknown IDs
+      // are simply not discovered. Callers must not treat empty as an error.
+      const snapshots = yield* svc.value.refresh(ctx.payload.providerID)
+      return { snapshots: [...snapshots] } satisfies typeof ProviderUsageListResult.Type
     })
 
     const codegraphStatusHandler = Effect.fn("GlobalHttpApi.codegraphStatus")(function* (ctx: {
@@ -955,6 +979,8 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       .handle("codegraphBuild", codegraphBuildHandler)
       .handle("codegraphStatus", codegraphStatusHandler)
       .handle("toolUsage", toolUsageHandler)
+      .handle("providerUsageList", providerUsageListHandler)
+      .handle("providerUsageRefresh", providerUsageRefreshHandler)
       .handle("codegraphNodes", codegraphNodesHandler)
       .handle("codegraphEdges", codegraphEdgesHandler)
       .handle("banyanAgentSave", banyanAgentSaveHandler)

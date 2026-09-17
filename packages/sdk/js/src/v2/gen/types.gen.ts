@@ -11,13 +11,6 @@ export type Event =
   | EventModelsDevRefreshed
   | EventPluginAdded
   | EventCatalogModelUpdated
-  | EventSessionCreated
-  | EventSessionUpdated
-  | EventSessionDeleted
-  | EventMessageUpdated
-  | EventMessageRemoved
-  | EventMessagePartUpdated
-  | EventMessagePartRemoved
   | EventSessionNextAgentSwitched
   | EventSessionNextModelSwitched
   | EventSessionNextMoved
@@ -49,6 +42,13 @@ export type Event =
   | EventSessionNextCompactionStarted
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
+  | EventSessionCreated
+  | EventSessionUpdated
+  | EventSessionDeleted
+  | EventMessageUpdated
+  | EventMessageRemoved
+  | EventMessagePartUpdated
+  | EventMessagePartRemoved
   | EventPermissionV2Asked
   | EventPermissionV2Replied
   | EventBanyancodeConfigUpdated
@@ -132,6 +132,12 @@ export type MoveSessionError = {
   data: {
     message: string
   }
+}
+
+export type Prompt = {
+  text: string
+  files?: Array<PromptFileAttachment>
+  agents?: Array<PromptAgentAttachment>
 }
 
 export type SnapshotFileDiff = {
@@ -615,12 +621,6 @@ export type Part =
   | RetryPart
   | CompactionPart
 
-export type Prompt = {
-  text: string
-  files?: Array<PromptFileAttachment>
-  agents?: Array<PromptAgentAttachment>
-}
-
 export type Pty = {
   id: string
   title: string
@@ -750,64 +750,6 @@ export type GlobalEvent = {
         type: "catalog.model.updated"
         properties: {
           model: ModelV2Info
-        }
-      }
-    | {
-        id: string
-        type: "session.created"
-        properties: {
-          sessionID: string
-          info: Session
-        }
-      }
-    | {
-        id: string
-        type: "session.updated"
-        properties: {
-          sessionID: string
-          info: Session
-        }
-      }
-    | {
-        id: string
-        type: "session.deleted"
-        properties: {
-          sessionID: string
-          info: Session
-        }
-      }
-    | {
-        id: string
-        type: "message.updated"
-        properties: {
-          sessionID: string
-          info: Message
-        }
-      }
-    | {
-        id: string
-        type: "message.removed"
-        properties: {
-          sessionID: string
-          messageID: string
-        }
-      }
-    | {
-        id: string
-        type: "message.part.updated"
-        properties: {
-          sessionID: string
-          part: Part
-          time: number
-        }
-      }
-    | {
-        id: string
-        type: "message.part.removed"
-        properties: {
-          sessionID: string
-          messageID: string
-          partID: string
         }
       }
     | {
@@ -1202,6 +1144,64 @@ export type GlobalEvent = {
           reason: "auto" | "manual"
           text: string
           recent: string
+        }
+      }
+    | {
+        id: string
+        type: "session.created"
+        properties: {
+          sessionID: string
+          info: Session
+        }
+      }
+    | {
+        id: string
+        type: "session.updated"
+        properties: {
+          sessionID: string
+          info: Session
+        }
+      }
+    | {
+        id: string
+        type: "session.deleted"
+        properties: {
+          sessionID: string
+          info: Session
+        }
+      }
+    | {
+        id: string
+        type: "message.updated"
+        properties: {
+          sessionID: string
+          info: Message
+        }
+      }
+    | {
+        id: string
+        type: "message.removed"
+        properties: {
+          sessionID: string
+          messageID: string
+        }
+      }
+    | {
+        id: string
+        type: "message.part.updated"
+        properties: {
+          sessionID: string
+          part: Part
+          time: number
+        }
+      }
+    | {
+        id: string
+        type: "message.part.removed"
+        properties: {
+          sessionID: string
+          messageID: string
+          partID: string
         }
       }
     | {
@@ -1782,13 +1782,6 @@ export type GlobalEvent = {
         }
       }
     | EventServerInstanceDisposed
-    | SyncEventSessionCreated
-    | SyncEventSessionUpdated
-    | SyncEventSessionDeleted
-    | SyncEventMessageUpdated
-    | SyncEventMessageRemoved
-    | SyncEventMessagePartUpdated
-    | SyncEventMessagePartRemoved
     | SyncEventSessionNextAgentSwitched
     | SyncEventSessionNextModelSwitched
     | SyncEventSessionNextMoved
@@ -1816,6 +1809,13 @@ export type GlobalEvent = {
     | SyncEventSessionNextRetried
     | SyncEventSessionNextCompactionStarted
     | SyncEventSessionNextCompactionEnded
+    | SyncEventSessionCreated
+    | SyncEventSessionUpdated
+    | SyncEventSessionDeleted
+    | SyncEventMessageUpdated
+    | SyncEventMessageRemoved
+    | SyncEventMessagePartUpdated
+    | SyncEventMessagePartRemoved
 }
 
 /**
@@ -2157,7 +2157,7 @@ export type Config = {
               disabled: true
             }
           | {
-              command: Array<string>
+              command?: Array<string>
               extensions?: Array<string>
               disabled?: boolean
               env?: {
@@ -2166,6 +2166,8 @@ export type Config = {
               initialization?: {
                 [key: string]: unknown
               }
+              maxMemoryMb?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              idleTimeoutMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
             }
       }
   instructions?: Array<string>
@@ -2219,6 +2221,16 @@ export type BanyanConfig = {
   banyancode_background_subagents?: boolean
   banyancode_disable_websearch?: boolean
   banyancode_telemetry?: "on" | "off"
+  banyancode_agent_telemetry?: "on" | "off"
+  banyancode_agent_telemetry_retention_days?:
+    | number
+    | "NaN"
+    | "Infinity"
+    | "-Infinity"
+    | "Infinity"
+    | "-Infinity"
+    | "NaN"
+  banyancode_agent_telemetry_max_events?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   banyancode_telegram_enabled?: boolean
   banyancode_telegram_bot_token?: string
   banyancode_telegram_webhook_secret?: string
@@ -2257,7 +2269,7 @@ export type BanyanConfig = {
               disabled: true
             }
           | {
-              command: Array<string>
+              command?: Array<string>
               extensions?: Array<string>
               disabled?: boolean
               env?: {
@@ -2266,8 +2278,14 @@ export type BanyanConfig = {
               initialization?: {
                 [key: string]: unknown
               }
+              maxMemoryMb?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              idleTimeoutMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
             }
       }
+  /**
+   * Idle timeout in ms after which an unused LSP client is shut down. Restart is transparent on next use. 0 disables idle shutdown.
+   */
+  banyancode_lsp_idle_timeout_ms?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   commands?: BanyanCommands
   banyancode_subagents?: Array<{
     name: string
@@ -3102,6 +3120,18 @@ export type LspStatus = {
    */
   disabled: boolean
   disabledReason?: string
+  /**
+   * Attached clients for this server (1 for a connected entry, 0 otherwise).
+   */
+  clientCount?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  /**
+   * Best-effort process-tree RSS in bytes for the attached client.
+   */
+  rssBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  /**
+   * OS pid of the attached language server process.
+   */
+  pid?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type FormatterStatus = {
@@ -3770,113 +3800,6 @@ export type EventServerInstanceDisposed = {
   }
 }
 
-export type SyncEventSessionCreated = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.created.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      info: Session
-    }
-  }
-}
-
-export type SyncEventSessionUpdated = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.updated.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      info: Session
-    }
-  }
-}
-
-export type SyncEventSessionDeleted = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "session.deleted.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      info: Session
-    }
-  }
-}
-
-export type SyncEventMessageUpdated = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.updated.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      info: Message
-    }
-  }
-}
-
-export type SyncEventMessageRemoved = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.removed.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      messageID: string
-    }
-  }
-}
-
-export type SyncEventMessagePartUpdated = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.part.updated.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      part: Part
-      time: number
-    }
-  }
-}
-
-export type SyncEventMessagePartRemoved = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.part.removed.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      messageID: string
-      partID: string
-    }
-  }
-}
-
 export type SyncEventSessionNextAgentSwitched = {
   type: "sync"
   id: string
@@ -4413,6 +4336,113 @@ export type SyncEventSessionNextCompactionEnded = {
       reason: "auto" | "manual"
       text: string
       recent: string
+    }
+  }
+}
+
+export type SyncEventSessionCreated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.created.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      info: Session
+    }
+  }
+}
+
+export type SyncEventSessionUpdated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.updated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      info: Session
+    }
+  }
+}
+
+export type SyncEventSessionDeleted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.deleted.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      info: Session
+    }
+  }
+}
+
+export type SyncEventMessageUpdated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "message.updated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      info: Message
+    }
+  }
+}
+
+export type SyncEventMessageRemoved = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "message.removed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      messageID: string
+    }
+  }
+}
+
+export type SyncEventMessagePartUpdated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "message.part.updated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      part: Part
+      time: number
+    }
+  }
+}
+
+export type SyncEventMessagePartRemoved = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "message.part.removed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      messageID: string
+      partID: string
     }
   }
 }
@@ -5046,71 +5076,6 @@ export type EventCatalogModelUpdated = {
   }
 }
 
-export type EventSessionCreated = {
-  id: string
-  type: "session.created"
-  properties: {
-    sessionID: string
-    info: Session
-  }
-}
-
-export type EventSessionUpdated = {
-  id: string
-  type: "session.updated"
-  properties: {
-    sessionID: string
-    info: Session
-  }
-}
-
-export type EventSessionDeleted = {
-  id: string
-  type: "session.deleted"
-  properties: {
-    sessionID: string
-    info: Session
-  }
-}
-
-export type EventMessageUpdated = {
-  id: string
-  type: "message.updated"
-  properties: {
-    sessionID: string
-    info: Message
-  }
-}
-
-export type EventMessageRemoved = {
-  id: string
-  type: "message.removed"
-  properties: {
-    sessionID: string
-    messageID: string
-  }
-}
-
-export type EventMessagePartUpdated = {
-  id: string
-  type: "message.part.updated"
-  properties: {
-    sessionID: string
-    part: Part
-    time: number
-  }
-}
-
-export type EventMessagePartRemoved = {
-  id: string
-  type: "message.part.removed"
-  properties: {
-    sessionID: string
-    messageID: string
-    partID: string
-  }
-}
-
 export type EventSessionNextAgentSwitched = {
   id: string
   type: "session.next.agent.switched"
@@ -5533,6 +5498,71 @@ export type EventSessionNextCompactionEnded = {
     reason: "auto" | "manual"
     text: string
     recent: string
+  }
+}
+
+export type EventSessionCreated = {
+  id: string
+  type: "session.created"
+  properties: {
+    sessionID: string
+    info: Session
+  }
+}
+
+export type EventSessionUpdated = {
+  id: string
+  type: "session.updated"
+  properties: {
+    sessionID: string
+    info: Session
+  }
+}
+
+export type EventSessionDeleted = {
+  id: string
+  type: "session.deleted"
+  properties: {
+    sessionID: string
+    info: Session
+  }
+}
+
+export type EventMessageUpdated = {
+  id: string
+  type: "message.updated"
+  properties: {
+    sessionID: string
+    info: Message
+  }
+}
+
+export type EventMessageRemoved = {
+  id: string
+  type: "message.removed"
+  properties: {
+    sessionID: string
+    messageID: string
+  }
+}
+
+export type EventMessagePartUpdated = {
+  id: string
+  type: "message.part.updated"
+  properties: {
+    sessionID: string
+    part: Part
+    time: number
+  }
+}
+
+export type EventMessagePartRemoved = {
+  id: string
+  type: "message.part.removed"
+  properties: {
+    sessionID: string
+    messageID: string
+    partID: string
   }
 }
 
@@ -7349,6 +7379,110 @@ export type GlobalMeshStatusResponses = {
 }
 
 export type GlobalMeshStatusResponse = GlobalMeshStatusResponses[keyof GlobalMeshStatusResponses]
+
+export type GlobalProviderUsageListData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/provider-usage"
+}
+
+export type GlobalProviderUsageListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalProviderUsageListError = GlobalProviderUsageListErrors[keyof GlobalProviderUsageListErrors]
+
+export type GlobalProviderUsageListResponses = {
+  /**
+   * Cached provider usage snapshots
+   */
+  200: {
+    snapshots: Array<{
+      providerID: string
+      displayName: string
+      status: "available" | "stale" | "unsupported" | "unauthenticated" | "error"
+      confidence: "exact" | "reported" | "estimated"
+      windows: Array<{
+        id: string
+        label: string
+        kind: "quota" | "rate_limit"
+        usedPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        remainingPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        resetsAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        durationSeconds?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        remaining?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }>
+      balance?: {
+        remaining: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        currency?: string
+      }
+      message?: string
+      fetchedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+  }
+}
+
+export type GlobalProviderUsageListResponse = GlobalProviderUsageListResponses[keyof GlobalProviderUsageListResponses]
+
+export type GlobalProviderUsageRefreshData = {
+  body?: {
+    /**
+     * Provider identifier (letters, digits, '.', '_', '-' only)
+     */
+    providerID?: string
+  }
+  path?: never
+  query?: never
+  url: "/global/provider-usage/refresh"
+}
+
+export type GlobalProviderUsageRefreshErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type GlobalProviderUsageRefreshError = GlobalProviderUsageRefreshErrors[keyof GlobalProviderUsageRefreshErrors]
+
+export type GlobalProviderUsageRefreshResponses = {
+  /**
+   * Refreshed provider usage snapshots
+   */
+  200: {
+    snapshots: Array<{
+      providerID: string
+      displayName: string
+      status: "available" | "stale" | "unsupported" | "unauthenticated" | "error"
+      confidence: "exact" | "reported" | "estimated"
+      windows: Array<{
+        id: string
+        label: string
+        kind: "quota" | "rate_limit"
+        usedPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        remainingPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        resetsAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        durationSeconds?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        remaining?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }>
+      balance?: {
+        remaining: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        currency?: string
+      }
+      message?: string
+      fetchedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+  }
+}
+
+export type GlobalProviderUsageRefreshResponse =
+  GlobalProviderUsageRefreshResponses[keyof GlobalProviderUsageRefreshResponses]
 
 export type RepositoryIntelQueryData = {
   body?: BanyanQueryInput
@@ -10441,6 +10575,7 @@ export type SessionMessagesResponse2 = SessionMessagesResponses[keyof SessionMes
 
 export type SessionPromptData = {
   body?: {
+    runID?: string
     messageID?: string
     model?: {
       providerID: string
@@ -10788,6 +10923,7 @@ export type SessionSummarizeResponse = SessionSummarizeResponses[keyof SessionSu
 
 export type SessionPromptAsyncData = {
   body?: {
+    runID?: string
     messageID?: string
     model?: {
       providerID: string
