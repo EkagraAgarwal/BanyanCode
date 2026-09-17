@@ -30,6 +30,13 @@ for (const filepath of new Bun.Glob("*/package.json").scanSync({ cwd: "./dist" }
   binaries[nested.name] = nested.version
 }
 console.log("binaries", binaries)
+const versions = new Set(Object.values(binaries))
+if (versions.size === 0) {
+  throw new Error("publish: no per-platform dist/*/package.json found; refusing to publish")
+}
+if (versions.size > 1) {
+  throw new Error(`publish: dist package.json versions mismatch: ${JSON.stringify(binaries)}; refusing to publish`)
+}
 const version = Object.values(binaries)[0]
 
 await $`mkdir -p ./dist/${WRAPPER_NAME}`

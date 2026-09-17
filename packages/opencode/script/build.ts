@@ -416,7 +416,10 @@ for (const item of targets) {
 if (Script.release) {
   for (const key of Object.keys(binaries)) {
     if (key.includes("linux")) {
-      await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
+      // Fastest gzip level for release tarballs: binaries are already
+      // compressed, so default level 6 is CPU-only. `bun pm pack` (npm
+      // platform tgzs) is untouched — this only affects GH release assets.
+      await $`tar -I 'gzip -1' -cf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
     }
     // macOS + Windows zips are produced by publish.yml (zip on macos,
     // PowerShell Compress-Archive on Windows) — neither runner has a

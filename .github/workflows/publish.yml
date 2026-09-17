@@ -129,8 +129,8 @@ jobs:
         env:
           OPENCODE_VERSION: ${{ needs.version.outputs.version }}
           # OPENCODE_RELEASE must be true on every shipping build, regardless
-          # of trigger. The build script's `tar -czf` step is gated on this
-          # flag and would skip Linux tarball creation on a workflow_dispatch
+          # of trigger. The build script's Linux tarball step is gated on
+          # this flag and would skip tarball creation on a workflow_dispatch
           # run otherwise (the release script downstream expects those
           # `.tar.gz` files to exist; without them the upload step fails
           # with "no matches found" and the release ships empty).
@@ -152,6 +152,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: banyancode-${{ matrix.target }}
+          # Mixed raw binaries + pre-compressed tarballs/zips: level 1 keeps
+          # raw binaries compact without spending level-6 CPU on archives.
+          compression-level: 1
+          retention-days: 1
           path: |
             packages/opencode/dist/banyancode-${{ matrix.target }}
             packages/opencode/dist/banyancode-${{ matrix.target }}.tar.gz
@@ -161,7 +165,13 @@ jobs:
         if: matrix.os-suffix == 'windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: banyancode-${{ matrix.target }}
+          # `unsigned-` prefix keeps raw Windows builds out of the central
+          # `banyancode-*` download pattern, so the publish job only sees
+          # the final signed/fallback artifact (no unsigned/signed zip
+          # collision, no triage-baseline leak into the download).
+          name: unsigned-banyancode-${{ matrix.target }}
+          compression-level: 1
+          retention-days: 1
           path: |
             packages/opencode/dist/banyancode-${{ matrix.target }}
             packages/opencode/dist/banyancode-${{ matrix.target }}.zip
@@ -173,6 +183,9 @@ jobs:
       - build
     if: github.repository == 'EkagraAgarwal/BanyanCode'
     runs-on: windows-latest
+    outputs:
+      artifact-name: ${{ steps.artifact.outputs.name }}
+      signed: ${{ steps.signing.outputs.enabled }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -181,13 +194,22 @@ jobs:
       - name: Download Windows CLI artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: banyancode-windows-x64
+          name: unsigned-banyancode-windows-x64
           path: packages/opencode/dist
 
       - name: Decide signing path
         id: signing
         shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
         run: |
+          # All six values come from the step env block above (preflight.yml
+          # idiom); secret values stay masked, only the boolean is echoed.
           $hasSigning = $env:AZURE_CLIENT_ID -and $env:AZURE_TENANT_ID -and $env:AZURE_SUBSCRIPTION_ID -and $env:AZURE_TRUSTED_SIGNING_ACCOUNT_NAME -and $env:AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE -and $env:AZURE_TRUSTED_SIGNING_ENDPOINT
           if ($hasSigning) { echo "enabled=true" >> $env:GITHUB_OUTPUT } else { echo "enabled=false" >> $env:GITHUB_OUTPUT }
           Write-Host "Azure signing configured: $hasSigning"
@@ -195,6 +217,10 @@ jobs:
       - name: Azure login
         if: steps.signing.outputs.enabled == 'true'
         uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         with:
           client-id: ${{ env.AZURE_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
@@ -234,24 +260,38 @@ jobs:
         run: |
           Compress-Archive -Path "banyancode-windows-x64\bin\*" -DestinationPath "banyancode-windows-x64.zip" -Force
 
-      - name: Repack BanyanCode Windows archive (unsigned fallback)
-        if: steps.signing.outputs.enabled != 'true'
-        working-directory: packages/opencode/dist
-        shell: pwsh
-        run: |
-          Write-Host "::warning::Windows binaries are NOT signed (Azure credentials missing). Repacking unsigned artifacts."
-          Compress-Archive -Path "banyancode-windows-x64\bin\*" -DestinationPath "banyancode-windows-x64.zip" -Force
-
-      - name: Upload signed BanyanCode Windows artifact
+      - name: Upload final BanyanCode Windows artifact (signed only)
+        if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          # Keep this distinct from the unsigned build artifact. Artifact names
-          # are immutable, and downloading duplicate names can select the wrong
-          # archive for the release upload step.
-          name: banyancode-windows-x64-signed
+          # `final-` prefix keeps this out of the central `banyancode-*`
+          # pattern (Unix only). Publish downloads it explicitly via the
+          # sign-windows `artifact-name` output. Paths inside stay
+          # `banyancode-windows-x64[.zip]` so the release allowlist and
+          # publish.ts see the same layout either way.
+          name: final-banyancode-windows-x64
+          compression-level: 1
+          retention-days: 1
           path: |
             packages/opencode/dist/banyancode-windows-x64.zip
             packages/opencode/dist/banyancode-windows-x64
+
+      - name: Resolve final Windows artifact name
+        id: artifact
+        shell: pwsh
+        run: |
+          # Fast path: when signing secrets are absent there is nothing to
+          # sign, so do NOT repack or upload a duplicate fallback artifact.
+          # Publish downloads the original raw build artifact directly via
+          # this output name. A failed signing attempt (enabled=true) fails
+          # the job instead of silently falling back — this resolve step
+          # never runs and publish never finalizes.
+          if ("${{ steps.signing.outputs.enabled }}" -eq "true") {
+            echo "name=final-banyancode-windows-x64" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "::warning::Windows binaries are NOT signed (Azure credentials missing). Publish will use the unsigned build artifact directly."
+            echo "name=unsigned-banyancode-windows-x64" >> $env:GITHUB_OUTPUT
+          }
 
   publish:
     name: Publish to npm + AUR + Homebrew tap
@@ -259,7 +299,10 @@ jobs:
       - version
       - build
       - sign-windows
-    if: always() && !failure() && !cancelled() && needs.version.outputs.version != ''
+    # Default success-only semantics: run only when all needs succeeded.
+    # No `always()` — a failed build/sign must not reach npm or finalize
+    # the GitHub release. The repository guard keeps forks from running.
+    if: github.repository == 'EkagraAgarwal/BanyanCode' && needs.version.outputs.version != ''
     runs-on: ubuntu-latest
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -274,6 +317,12 @@ jobs:
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+        with:
+          # Publish only packs (`bun pm pack`) and publishes via npm — it
+          # never compiles, so skip the build matrix's cross-platform
+          # `--os="*" --cpu="*"` install. Default (empty) flags install
+          # for the runner OS/CPU only, which is the smallest safe setup.
+          install-flags: ''
 
       - name: Setup Node + npm registry auth
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -289,9 +338,52 @@ jobs:
       - name: Download BanyanCode CLI artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          # Unix artifacts only: raw Windows builds use the
+          # `unsigned-banyancode-*` prefix and the signed final uses
+          # `final-banyancode-windows-x64`, so neither matches this
+          # pattern (no unsigned/signed zip collision, no
+          # triage-baseline leak).
           pattern: banyancode-*
           merge-multiple: true
           path: packages/opencode/dist
+
+      - name: Download Windows baseline npm stub
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          # Triage-only build: needed for the 11th npm platform package
+          # (`banyancode-windows-x64-baseline`), never shipped as a GH
+          # asset (the 10-target allowlist below excludes it).
+          pattern: unsigned-banyancode-windows-x64-baseline
+          merge-multiple: true
+          path: packages/opencode/dist
+
+      - name: Download final Windows artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          # Dynamic fast path: signed `final-banyancode-windows-x64` when
+          # Azure signing ran, otherwise the raw
+          # `unsigned-banyancode-windows-x64` build directly (no duplicate
+          # fallback upload). The raw download brings only the directory
+          # (build runners never zip Windows); the packaging step below
+          # creates the ZIP when signing is disabled. Either way the
+          # on-disk layout ends up `banyancode-windows-x64[.zip]`, so the
+          # release allowlist and publish.ts see the same shape.
+          name: ${{ needs.sign-windows.outputs.artifact-name }}
+          path: packages/opencode/dist
+
+      - name: Package unsigned Windows archive
+        if: needs.sign-windows.outputs.signed != 'true'
+        working-directory: packages/opencode/dist
+        run: |
+          set -euo pipefail
+          # Same bin-contents layout as the signed repack
+          # (`Compress-Archive bin\*`) and the macOS packaging step:
+          # archive entries sit at the zip root. Fastest compression.
+          # The signed path already brings its ZIP, so this runs only
+          # when signing is disabled.
+          cd banyancode-windows-x64/bin
+          zip -1 -r ../../banyancode-windows-x64.zip *
+          test -f ../../banyancode-windows-x64.zip
 
       - name: Upload all release artifacts to GitHub release (draft)
         env:
@@ -316,8 +408,8 @@ jobs:
           shopt -s nullglob
           # Explicit 10-target allowlist. The wildcard `banyancode-*.*`
           # previously picked up banyancode-windows-x64-baseline.zip
-          # (the downstream signing/triage build per AGENTS.md, which
-          # must NOT ship to users), so per the release-readiness
+          # (the 11th npm platform stub per AGENTS.md — the signing source
+          # is windows-x64, not this build; it must NOT ship to users), so per the release-readiness
           # review we enumerate the 10 shipping targets explicitly.
           # Filenames are UNVERSIONED — build.ts packs linux as
           # `<target>.tar.gz` and publish.yml packs mac/windows as
@@ -338,9 +430,14 @@ jobs:
             packages/opencode/dist/banyancode-windows-x64.zip
           )
           echo "Uploading ${#files[@]} shipping assets for $TAG"
+          missing=0
           for f in "${files[@]}"; do
-            [ -f "$f" ] || echo "::warning::missing $f"
+            if [ ! -f "$f" ]; then echo "::error::missing shipping asset $f"; missing=1; fi
           done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::one or more shipping assets missing; refusing to upload"
+            exit 1
+          fi
           if (( ${#files[@]} > 0 )); then
             gh release upload "$TAG" "${files[@]}" --clobber --repo "${{ github.repository }}"
           fi
@@ -356,16 +453,18 @@ jobs:
         run: bun ./packages/opencode/script/publish.ts
 
       - name: Publish release (finalize draft)
-        if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Finalize: not a draft. Stable versions ship as GA (latest) on
-          # both the npm dist-tag (Script.channel) and the GitHub release
-          # `isPrerelease` flag; dev/next (canary/rc/beta) versions ship as
-          # prereleases so they never masquerade as stable.
+          # Finalize only runs after the npm step above succeeded (no
+          # `if: always()`, no `|| true`): a failed npm publish must leave
+          # the GitHub release as a draft, never promote it to GA.
+          # Stable versions ship as GA (latest) on both the npm dist-tag
+          # (Script.channel) and the GitHub release `isPrerelease` flag;
+          # dev/next (canary/rc/beta) versions ship as prereleases so they
+          # never masquerade as stable.
           if [ "${{ needs.version.outputs.channel }}" = "latest" ]; then
-            gh release edit "v${{ needs.version.outputs.version }}" --draft=false --prerelease=false --repo "${{ github.repository }}" || true
+            gh release edit "v${{ needs.version.outputs.version }}" --draft=false --prerelease=false --repo "${{ github.repository }}"
           else
-            gh release edit "v${{ needs.version.outputs.version }}" --draft=false --prerelease=true --repo "${{ github.repository }}" || true
+            gh release edit "v${{ needs.version.outputs.version }}" --draft=false --prerelease=true --repo "${{ github.repository }}"
           fi

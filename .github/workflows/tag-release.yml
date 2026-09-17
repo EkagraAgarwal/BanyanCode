@@ -1,12 +1,20 @@
 # Auto-tag release versions. Triggers on push to main when
 # packages/opencode/package.json changed. Creates an annotated tag `vX.Y.Z`
-# from the current version and pushes it, which then triggers the publish
-# workflow. Idempotent — re-runs with no version change are no-ops.
+# from the current version, pushes it, then explicitly dispatches the publish
+# workflow with the resolved version. The explicit dispatch is required
+# because bot (GITHUB_TOKEN) tag pushes do not trigger `on: push: tags`
+# workflows. Idempotent — re-runs with no version change are no-ops (no tag,
+# no dispatch).
 #
 # `workflow_dispatch` is enabled so operators can manually re-tag HEAD after
 # a fixup commit (e.g. after a hotfix landed before the tag push completed)
 # via `gh workflow run tag-release` without first needing to revert and
 # re-bump the version file.
+#
+# publish.yml keeps its `push: tags: v*` + `workflow_dispatch` triggers as
+# recovery paths (e.g. PAT-created tags, manual backfill), but the normal
+# path is this workflow's explicit dispatch — do not manually tag alongside
+# the bot (see release/AGENTS.md §4).
 name: Tag release
 
 on:
@@ -16,10 +24,13 @@ on:
       - 'packages/opencode/package.json'
   workflow_dispatch:
 
-# Without this the default GITHUB_TOKEN cannot push refs. The workflow
-# only needs contents:write to push a single annotated tag.
+# Without this the default GITHUB_TOKEN cannot push refs or dispatch
+# workflows. The workflow only needs contents:write to push a single
+# annotated tag, plus actions:write to explicitly dispatch publish.yml
+# (bot-created tag pushes do not trigger downstream workflows).
 permissions:
   contents: write
+  actions: write
 
 # Avoid concurrent runs of the same workflow (e.g. a fast push followed
 # by a fixup push within seconds). Each run is idempotent so we could
@@ -82,6 +93,8 @@ jobs:
 
       - name: Tag and push if newer
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           CURRENT="${{ steps.version.outputs.current }}"
@@ -113,4 +126,10 @@ jobs:
           git tag -a "${WANTED_TAG}" -m "BanyanCode ${CURRENT}" HEAD
           git push origin "${WANTED_TAG}"
 
-          echo "Pushed ${WANTED_TAG}; publish.yml will run automatically on the tag push event."
+          # Bot tag pushes do not trigger downstream workflows, so dispatch
+          # publish.yml explicitly with the resolved version. This is the
+          # sole normal trigger — `push: tags` and manual dispatch in
+          # publish.yml remain as recovery paths only. Dispatching here
+          # (only on the creation path above) avoids duplicate runs.
+          echo "Dispatching publish.yml for version ${CURRENT}"
+          gh workflow run publish.yml --ref "${WANTED_TAG}" -f version="${CURRENT}" --repo "${{ github.repository }}"
