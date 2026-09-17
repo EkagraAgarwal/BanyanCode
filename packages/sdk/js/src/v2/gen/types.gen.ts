@@ -2257,6 +2257,8 @@ export type BanyanConfig = {
   banyancode_mesh_default_provider?: string
   banyancode_mesh_default_model?: string
   banyancode_mesh_subagent_cooldown?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  banyancode_thinking_default?: "off" | "low" | "medium" | "high" | "max" | "xhigh" | "ultra" | string
+  banyancode_swarm_mode?: boolean
   banyancode_prompt_cache_key?: "auto" | "off" | string
   /**
    * Enable or configure BanyanCode's LSP servers. Omit or set to false to disable, true to enable built-ins, or an object to enable built-ins with overrides.
@@ -2305,6 +2307,8 @@ export type BanyanConfig = {
       | {
           mode?: "primary" | "subagent" | null
           model?: unknown | null
+          thinking?: "off" | "low" | "medium" | "high" | "max" | "xhigh" | "ultra" | string | null
+          variant?: unknown | null
           permission?: {
             [key: string]: string
           } | null
@@ -6453,6 +6457,8 @@ export type GlobalBanyanAgentOverrideUpdateData = {
       providerID: string
       modelID: string
     }
+    thinking?: string
+    variant?: string
   }
   path?: never
   query?: never
@@ -6820,6 +6826,7 @@ export type GlobalBanyanAgentSaveData = {
     permission?: Array<string>
     tools?: Array<string>
     prompt?: string
+    thinking?: string
   }
   path?: never
   query?: never

@@ -15,7 +15,12 @@ export interface Interface {
   readonly update: (patch: Partial<BanyanConfig.Info>) => Effect.Effect<BanyanConfig.Info, never, never>
   readonly updateAgentOverride: (
     name: string,
-    patch: { enabled?: boolean; model?: { providerID: string; modelID: string } | null },
+    patch: {
+      enabled?: boolean
+      model?: { providerID: string; modelID: string } | null
+      thinking?: string | null
+      variant?: string | null
+    },
   ) => Effect.Effect<BanyanConfig.Info, never, never>
   readonly getAgentOverrides: () => Effect.Effect<BanyanConfig.Info["agent"], never, never>
   readonly updateAgentPrompt: (name: string, prompt: string) => Effect.Effect<BanyanConfig.Info, never, never>
@@ -85,7 +90,7 @@ export const layer = Layer.effect(
     const updateAgentOverride = Effect.fn("BanyanConfig.updateAgentOverride")(
       function* (
         name: string,
-        patch: { enabled?: boolean; model?: { providerID: string; modelID: string } | null },
+        patch: { enabled?: boolean; model?: { providerID: string; modelID: string } | null; thinking?: string | null; variant?: string | null },
       ) {
         return yield* flock
           .withLock(
@@ -102,15 +107,22 @@ export const layer = Layer.effect(
               } else if (patch.model !== undefined) {
                 modelStr = `${patch.model.providerID}/${patch.model.modelID}`
               }
+              // null clears the key (same as model above); undefined leaves it.
+              const thinkingStr = patch.thinking === null ? undefined : (patch.thinking ?? existing.thinking)
+              const variantStr = patch.variant === null ? undefined : (patch.variant ?? existing.variant)
 
               const updated = {
                 ...existing,
                 ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-                ...(patch.model !== undefined || patch.model === null ? { model: modelStr } : {}),
+                ...(patch.model !== undefined ? { model: modelStr } : {}),
+                ...(patch.thinking !== undefined ? { thinking: thinkingStr } : {}),
+                ...(patch.variant !== undefined ? { variant: variantStr } : {}),
               }
 
               if (updated.model === undefined) delete updated.model
               if (updated.enabled === undefined) delete updated.enabled
+              if (updated.thinking === undefined) delete updated.thinking
+              if (updated.variant === undefined) delete updated.variant
 
               const nextAgents = {
                 ...agents,

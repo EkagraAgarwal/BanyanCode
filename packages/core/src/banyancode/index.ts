@@ -356,6 +356,7 @@ export {
 export { Service as BanyanConfigService, layer as banyanConfigServiceLayer, defaultLayer as banyanConfigServiceDefaultLayer } from "./banyan-config"
 export { Service as MaxSubagentsService, layer as maxSubagentsLayer, defaultLayer as maxSubagentsDefaultLayer } from "./max-subagents"
 export * as MaxSubagents from "./max-subagents"
+export * as Thinking from "./thinking"
 export { Schema_URL as BanyanConfigSchemaURL, Info as BanyanConfigInfo, BanyanConfig } from "../v1/config/banyan-config"
 export { isStale, type StaleResult } from "./graph-staleness"
 export * as CodeFindTool from "../tool/code-find"

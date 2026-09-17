@@ -38,10 +38,56 @@ import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Reference } from "@opencode-ai/core/reference"
 import { Location } from "@opencode-ai/core/location"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import type { Interface as BanyanConfigServiceInterface } from "@opencode-ai/core/banyancode/banyan-config"
 import { DEFAULT_MAX_SUBAGENTS } from "@opencode-ai/core/v1/config/banyan-config"
 
 function renderTemplate(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? `{{${key}}}`)
+}
+
+interface BanyanAgentOverride {
+  enabled?: boolean
+  model?: { providerID: string; modelID: string }
+  thinking?: string
+  variant?: string
+}
+
+// Shared by get/list: parse the BanyanConfig agent record once. Extracted so
+// thinking/variant decoration cannot drift between the two copies.
+const buildBanyanOverrideMap = Effect.fnUntraced(function* (
+  banyanConfigOpt: Option.Option<BanyanConfigServiceInterface>,
+) {
+  const overrideMap = new Map<string, BanyanAgentOverride>()
+  if (Option.isSome(banyanConfigOpt)) {
+    const agentRecord = yield* banyanConfigOpt.value.getAgentOverrides()
+    for (const [name, conf] of Object.entries(agentRecord ?? {})) {
+      let model: { providerID: string; modelID: string } | undefined = undefined
+      if (conf.model) {
+        const parts = conf.model.split("/")
+        model = {
+          providerID: parts[0],
+          modelID: parts.slice(1).join("/"),
+        }
+      }
+      overrideMap.set(name, { enabled: conf.enabled, model, thinking: conf.thinking, variant: conf.variant })
+    }
+  }
+  return overrideMap
+})
+
+// Stamp an explicit variant id (escape hatch) or thinking level onto the
+// agent. Downstream seams validate the key (prompt.ts checks
+// full.variants[ag.variant]; withVariant falls back via resolveThinkingVariant),
+// so an unknown level is safely ignored. No global default here — the spawn
+// path applies banyancode_thinking_default.
+const applyBanyanOverride = (info: Info, override: BanyanAgentOverride | undefined): Info => {
+  const frontmatterThinking =
+    typeof (info.options as Record<string, unknown> | undefined)?.thinking === "string"
+      ? ((info.options as Record<string, unknown>).thinking as string)
+      : undefined
+  const variant = override?.variant ?? override?.thinking ?? frontmatterThinking
+  if (!variant) return info
+  return { ...info, variant }
 }
 
 export const Info = Schema.Struct({
@@ -694,21 +740,7 @@ export const layer = Layer.effect(
         }
 
         const get = Effect.fnUntraced(function* (agent: string) {
-          const overrideMap = new Map<string, { enabled?: boolean; model?: { providerID: string; modelID: string } }>()
-          if (banyanConfigOpt._tag === "Some") {
-            const agentRecord = yield* banyanConfigOpt.value.getAgentOverrides()
-            for (const [name, conf] of Object.entries(agentRecord ?? {})) {
-              let model: { providerID: string; modelID: string } | undefined = undefined
-              if (conf.model) {
-                const parts = conf.model.split("/")
-                model = {
-                  providerID: parts[0],
-                  modelID: parts.slice(1).join("/"),
-                }
-              }
-              overrideMap.set(name, { enabled: conf.enabled, model })
-            }
-          }
+          const overrideMap = yield* buildBanyanOverrideMap(banyanConfigOpt)
           const override = overrideMap.get(agent)
           const info = agents[agent]
           if (!info) return undefined
@@ -716,39 +748,27 @@ export const layer = Layer.effect(
           if (override?.enabled === false && info.mode === "subagent") {
             return undefined
           }
+          const decorated = applyBanyanOverride(info, override)
           if (override?.model) {
             return {
-              ...info,
+              ...decorated,
               model: Provider.parseModel(`${override.model.providerID}/${override.model.modelID}`) as Info["model"],
             }
           }
-          return info
+          return decorated
         })
 
         const list = Effect.fnUntraced(function* () {
           const cfg = yield* config.get()
-          const overrideMap = new Map<string, { enabled?: boolean; model?: { providerID: string; modelID: string } }>()
-          if (banyanConfigOpt._tag === "Some") {
-            const agentRecord = yield* banyanConfigOpt.value.getAgentOverrides()
-            for (const [name, conf] of Object.entries(agentRecord ?? {})) {
-              let model: { providerID: string; modelID: string } | undefined = undefined
-              if (conf.model) {
-                const parts = conf.model.split("/")
-                model = {
-                  providerID: parts[0],
-                  modelID: parts.slice(1).join("/"),
-                }
-              }
-              overrideMap.set(name, { enabled: conf.enabled, model })
-            }
-          }
+          const overrideMap = yield* buildBanyanOverrideMap(banyanConfigOpt)
           const disabledNames = new Set<string>()
           for (const [name, override] of overrideMap) {
             if (override.enabled === false) disabledNames.add(name)
           }
           const filtered = values(agents).filter((a) => !(a.mode === "subagent" && disabledNames.has(a.name)))
+          const decorated = filtered.map((a) => applyBanyanOverride(a, overrideMap.get(a.name)))
           const allAgents = sortBy(
-            filtered,
+            decorated,
             [(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "build"), "desc"],
             [(x) => x.name, "asc"],
           )

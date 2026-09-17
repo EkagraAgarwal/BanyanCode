@@ -224,6 +224,8 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       const updated = yield* svc.updateAgentOverride(payload.name, {
         ...(payload.enabled !== undefined ? { enabled: payload.enabled } : {}),
         ...modelPatch,
+        ...(payload.thinking !== undefined ? { thinking: payload.thinking } : {}),
+        ...(payload.variant !== undefined ? { variant: payload.variant } : {}),
       })
 
       const agentSvc = yield* Agent.Service
@@ -576,6 +578,10 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
           ? `permission: { ${ctx.payload.permission.map((key) => `${escapeYamlScalar(key)}: "allow"`).join(", ")} }`
           : null
 
+      // Thinking persists as a frontmatter scalar so the config loader folds
+      // it into the agent's options bag (same fold as systemPrompt).
+      const thinkingLine = ctx.payload.thinking ? `thinking: ${escapeYamlScalar(ctx.payload.thinking)}` : null
+
       const frontmatter: (string | null)[] = [
         "---",
         `name: ${escapeYamlScalar(safeName)}`,
@@ -585,6 +591,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
         modelLine,
         permissionLine,
         toolsLine,
+        thinkingLine,
         "---",
         "",
       ]

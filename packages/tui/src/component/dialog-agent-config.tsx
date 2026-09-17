@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { createSignal, onMount, Show } from "solid-js"
+import { createSignal, For, onMount, Show } from "solid-js"
 import { useDialog } from "../ui/dialog"
 import { useTheme } from "../context/theme"
 import { useSDK } from "../context/sdk"
@@ -14,6 +14,7 @@ export interface AgentConfigInput {
   name?: string
   description?: string
   model?: { providerID: string; modelID: string }
+  thinking?: string
   tools?: string[]
 }
 
@@ -21,9 +22,12 @@ export interface AgentConfigResult {
   name: string
   description: string
   model: { providerID: string; modelID: string } | undefined
+  thinking: string | undefined
   tools: string[]
   enabled: boolean
 }
+
+const THINKING_LEVELS = ["off", "low", "medium", "high", "max", "xhigh", "ultra"]
 
 const TOOL_DESCRIPTIONS: Record<string, string> = {
   read: "Read file contents",
@@ -128,13 +132,14 @@ export function DialogAgentConfig(props: {
   const sdk = useSDK()
   const toast = useToast()
 
-  const [step, setStep] = createSignal<"name" | "description" | "model" | "tools" | "review">("name")
+  const [step, setStep] = createSignal<"name" | "description" | "model" | "thinking" | "tools" | "review">("name")
   const [showModelPicker, setShowModelPicker] = createSignal(false)
   const [name, setName] = createSignal(props.initial?.name ?? "")
   const [description, setDescription] = createSignal(props.initial?.description ?? "")
   const [model, setModel] = createSignal<{ providerID: string; modelID: string } | undefined>(
     props.initial?.model,
   )
+  const [thinking, setThinking] = createSignal<string | undefined>(props.initial?.thinking)
   const [tools, setTools] = createSignal<string[]>(props.initial?.tools ?? [])
   const [toolGroups, setToolGroups] = createSignal<MultiSelectGroup[]>(groupTools(FALLBACK_TOOLS))
   const [toolsLoading, setToolsLoading] = createSignal(true)
@@ -179,7 +184,7 @@ export function DialogAgentConfig(props: {
     setShowModelPicker(true)
   }
 
-  // Model step: enter skips to tools, space opens the model picker.
+  // Model step: enter skips to thinking, space opens the model picker.
   // Bindings are gated off while the inline picker is open (it has its own
   // DialogSelect keymap).
   useBindings(() => ({
@@ -190,7 +195,7 @@ export function DialogAgentConfig(props: {
         name: "dialog.agent-config.model.default",
         title: "Use default model",
         category: "Dialog",
-        run: () => setStep("tools"),
+        run: () => setStep("thinking"),
       },
       {
         name: "dialog.agent-config.model.pick",
@@ -200,8 +205,25 @@ export function DialogAgentConfig(props: {
       },
     ],
     bindings: [
-      { key: "enter", desc: "Use default model", group: "Dialog", cmd: () => setStep("tools") },
+      { key: "enter", desc: "Use default model", group: "Dialog", cmd: () => setStep("thinking") },
       { key: "space", desc: "Open model picker", group: "Dialog", cmd: openModelPicker },
+    ],
+  }))
+
+  // Thinking step: enter keeps the default, clicking a level selects it.
+  useBindings(() => ({
+    enabled: step() === "thinking",
+    priority: 1,
+    commands: [
+      {
+        name: "dialog.agent-config.thinking.default",
+        title: "Use default thinking",
+        category: "Dialog",
+        run: () => setStep("tools"),
+      },
+    ],
+    bindings: [
+      { key: "enter", desc: "Use default thinking", group: "Dialog", cmd: () => setStep("tools") },
     ],
   }))
 
@@ -234,6 +256,7 @@ export function DialogAgentConfig(props: {
         name: finalName,
         description: description().trim(),
         model: model(),
+        thinking: thinking(),
         tools: tools(),
         enabled: true,
       }
@@ -242,6 +265,7 @@ export function DialogAgentConfig(props: {
         name: result.name,
         description: result.description,
         model: result.model,
+        thinking: result.thinking,
         tools: result.tools,
       })
       if (saveResult.error) {
@@ -267,7 +291,7 @@ export function DialogAgentConfig(props: {
 
       <Show when={step() === "name"}>
         <box flexDirection="column" paddingLeft={2} paddingTop={1}>
-          <text fg={toHex(theme.textMuted)}>Step 1/4: Name</text>
+          <text fg={toHex(theme.textMuted)}>Step 1/5: Name</text>
           <text fg={toHex(theme.textMuted)}>lowercase, hyphens, no spaces</text>
           <input
             value={name()}
@@ -281,7 +305,7 @@ export function DialogAgentConfig(props: {
 
       <Show when={step() === "description"}>
         <box flexDirection="column" paddingLeft={2} paddingTop={1}>
-          <text fg={toHex(theme.textMuted)}>Step 2/4: Description</text>
+          <text fg={toHex(theme.textMuted)}>Step 2/5: Description</text>
           <text fg={toHex(theme.textMuted)}>What does this agent do?</text>
           <input
             value={description()}
@@ -301,13 +325,13 @@ export function DialogAgentConfig(props: {
               onSelect={(selectedModel) => {
                 setModel(selectedModel)
                 setShowModelPicker(false)
-                setStep("tools")
+                setStep("thinking")
               }}
             />
           }
         >
           <box flexDirection="column" paddingLeft={2} paddingTop={1}>
-            <text fg={toHex(theme.textMuted)}>Step 3/4: Model (optional)</text>
+            <text fg={toHex(theme.textMuted)}>Step 3/5: Model (optional)</text>
             <text fg={toHex(theme.textMuted)}>Press enter to skip, or pick a model</text>
             <text fg={toHex(theme.text)}>
               Current:{" "}
@@ -318,7 +342,7 @@ export function DialogAgentConfig(props: {
             <box flexDirection="row" gap={1} marginTop={1}>
               <text
                 fg={toHex(theme.success)}
-                onMouseUp={() => setStep("tools")}
+                onMouseUp={() => setStep("thinking")}
               >
                 [enter use default]
               </text>
@@ -333,9 +357,37 @@ export function DialogAgentConfig(props: {
         </Show>
       </Show>
 
+      <Show when={step() === "thinking"}>
+        <box flexDirection="column" paddingLeft={2} paddingTop={1}>
+          <text fg={toHex(theme.textMuted)}>Step 4/5: Thinking (optional)</text>
+          <text fg={toHex(theme.textMuted)}>Press enter for default, or pick a level</text>
+          <text fg={toHex(theme.text)}>Current: {thinking() ?? "(default — medium)"}</text>
+          <box flexDirection="column" marginTop={1}>
+            <For each={THINKING_LEVELS}>
+              {(level) => (
+                <text
+                  fg={toHex(thinking() === level ? theme.success : theme.primary)}
+                  onMouseUp={() => {
+                    setThinking(level)
+                    setStep("tools")
+                  }}
+                >
+                  {thinking() === level ? `● ${level}` : `○ ${level}`}
+                </text>
+              )}
+            </For>
+          </box>
+          <box flexDirection="row" gap={1} marginTop={1}>
+            <text fg={toHex(theme.success)} onMouseUp={() => setStep("tools")}>
+              [enter use default]
+            </text>
+          </box>
+        </box>
+      </Show>
+
       <Show when={step() === "tools"}>
         <DialogMultiSelect
-          title={`Step 4/4: Tools${toolsLoading() ? " (loading...)" : ""}`}
+          title={`Step 5/5: Tools${toolsLoading() ? " (loading...)" : ""}`}
           groups={toolGroups()}
           selected={tools()}
           onConfirm={(selected) => {
@@ -355,6 +407,7 @@ export function DialogAgentConfig(props: {
           <text fg={toHex(theme.textMuted)}>
             Model: {model() ? `${model()!.providerID}/${model()!.modelID}` : "default"}
           </text>
+          <text fg={toHex(theme.textMuted)}>Thinking: {thinking() ?? "default"}</text>
           <text fg={toHex(theme.textMuted)}>Tools: {tools().join(", ") || "(none)"}</text>
           <box flexDirection="row" gap={1} marginTop={2}>
             <text

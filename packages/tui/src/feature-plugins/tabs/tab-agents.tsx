@@ -10,6 +10,7 @@ import { useToast } from "../../ui/toast"
 import { useEvent } from "../../context/event"
 import { DialogAgentConfig } from "../../component/dialog-agent-config"
 import { DialogModel } from "../../component/dialog-model"
+import { DialogThinking } from "../../component/dialog-thinking"
 
 const id = "internal:tab-agents"
 
@@ -65,7 +66,9 @@ function View(props: { api: TuiPluginApi }) {
         return {
           name,
           enabled: conf.enabled,
-          model
+          model,
+          thinking: conf.thinking as string | undefined,
+          variant: conf.variant as string | undefined,
         }
       })
     } catch {
@@ -88,14 +91,22 @@ function View(props: { api: TuiPluginApi }) {
     }
   }
 
-  const [overridesData, setOverridesData] = createSignal<Array<{ name: string; enabled?: boolean; model?: { providerID: string; modelID: string } }>>([])
+  const [overridesData, setOverridesData] = createSignal<Array<{ name: string; enabled?: boolean; model?: { providerID: string; modelID: string }; thinking?: string; variant?: string }>>([])
 
   const [promptsData, setPromptsData] = createSignal<Array<{ name: string; prompt: string }>>([])
+  const [thinkingDefault, setThinkingDefault] = createSignal<string>("medium")
 
   const loadOverrides = async () => {
     const [overrides, prompts] = await Promise.all([loadAgentOverrides(), loadAgentPrompts()])
     setOverridesData(overrides)
     setPromptsData(prompts)
+    try {
+      const result = await props.api.client.global.banyanConfig.get({})
+      const fallback = result?.data?.banyancode_thinking_default
+      if (typeof fallback === "string" && fallback.length > 0) setThinkingDefault(fallback)
+    } catch {
+      // Keep the previous default.
+    }
   }
 
   // Subscribe to config-updated events to re-read overrides and prompts
@@ -116,6 +127,20 @@ function View(props: { api: TuiPluginApi }) {
   const modelFor = (name: string) => {
     const override = overridesData().find((o) => o.name === name)
     return override?.model
+  }
+
+  const thinkingFor = (name: string): string => {
+    const override = overridesData().find((o) => o.name === name)
+    return override?.thinking ?? override?.variant ?? thinkingDefault()
+  }
+
+  const resolvedModelFor = (agent: AgentInfo): { providerID: string; modelID: string } | undefined => {
+    const override = modelFor(agent.name)
+    if (override) return override
+    if (agent.model?.modelID) {
+      return { providerID: agent.model.providerID ?? "", modelID: agent.model.modelID }
+    }
+    return undefined
   }
 
   const isOn = (name: string) => enabledFor(name)
@@ -237,6 +262,49 @@ function View(props: { api: TuiPluginApi }) {
     dialog.replace(() => <DialogAgentConfig />)
   }
 
+  const openThinkingPicker = (name: string, agent: AgentInfo) => {
+    const prior = overridesData().find((o) => o.name === name)
+    dialog.replace(() => (
+      <DialogThinking
+        model={resolvedModelFor(agent)}
+        current={thinkingFor(name)}
+        onSelect={(thinking) => {
+          // Optimistic update
+          setOverridesData((prev) => {
+            const idx = prev.findIndex((o) => o.name === name)
+            if (idx >= 0) {
+              const next = [...prev]
+              next[idx] = { ...next[idx], thinking }
+              return next
+            }
+            return [...prev, { name, thinking }]
+          })
+          // Call endpoint
+          ;(async () => {
+            try {
+              await props.api.client.global.banyanAgentOverride.update({ name, thinking })
+              toast.show({ message: `Saved ${name} override`, variant: "success" })
+            } catch (err) {
+              // Revert to the exact prior entry on failure
+              setOverridesData((prev) => {
+                const idx = prev.findIndex((o) => o.name === name)
+                const next = [...prev]
+                if (prior) {
+                  if (idx >= 0) next[idx] = prior
+                  else next.push(prior)
+                } else if (idx >= 0) {
+                  next.splice(idx, 1)
+                }
+                return next
+              })
+              toast.show({ message: `Failed to update ${name}: ${String(err)}`, variant: "error" })
+            }
+          })()
+        }}
+      />
+    ))
+  }
+
   const modelLabel = (agent: AgentInfo): string => {
     const override = modelFor(agent.name)
     if (override) return `${override.providerID}/${override.modelID}`
@@ -285,6 +353,8 @@ function View(props: { api: TuiPluginApi }) {
                     onToggle={() => {}}
                     modelLabel={modelLabel(prim())}
                     onOpenModel={() => openModelPicker(prim().name)}
+                    thinkingLabel={thinkingFor(prim().name)}
+                    onOpenThinking={() => openThinkingPicker(prim().name, prim())}
                     editingPrompt={editingPrompt() === prim().name}
                     promptValue={promptText(prim())}
                     onStartEditPrompt={() => startEditPrompt(prim().name, promptText(prim()))}
@@ -311,6 +381,8 @@ function View(props: { api: TuiPluginApi }) {
                   onToggle={() => toggle(agent.name)}
                   modelLabel={modelLabel(agent)}
                   onOpenModel={() => openModelPicker(agent.name)}
+                  thinkingLabel={thinkingFor(agent.name)}
+                  onOpenThinking={() => openThinkingPicker(agent.name, agent)}
                   editingPrompt={editingPrompt() === agent.name}
                   promptValue={promptText(agent)}
                   onStartEditPrompt={() => startEditPrompt(agent.name, promptText(agent))}
@@ -354,6 +426,8 @@ function AgentCard(props: {
   onToggle: () => void
   modelLabel: string
   onOpenModel: () => void
+  thinkingLabel: string
+  onOpenThinking: () => void
   editingPrompt: boolean
   promptValue: string
   onStartEditPrompt: () => void
@@ -396,6 +470,10 @@ function AgentCard(props: {
         <text fg={toHex(props.theme.textMuted)}>Model</text>
         <text fg={toHex(props.theme.info)} onMouseUp={props.onOpenModel}>
           {props.modelLabel} ▾
+        </text>
+        <text fg={toHex(props.theme.textMuted)}>· Thinking</text>
+        <text fg={toHex(props.theme.info)} onMouseUp={props.onOpenThinking}>
+          {props.thinkingLabel} ▾
         </text>
         <text fg={toHex(props.theme.textMuted)}>· Prompt</text>
         <text fg={toHex(props.theme.info)} onMouseUp={props.onStartEditPrompt}>

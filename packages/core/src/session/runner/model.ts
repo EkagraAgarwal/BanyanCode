@@ -12,6 +12,7 @@ import { ModelV2 } from "../../model"
 import { ModelRequest } from "../../model-request"
 import { PluginBoot } from "../../plugin/boot"
 import { ProviderV2 } from "../../provider"
+import { Thinking } from "../../banyancode/thinking"
 import { SessionSchema } from "../schema"
 
 export class ModelNotSelectedError extends Schema.TaggedErrorClass<ModelNotSelectedError>()(
@@ -69,13 +70,29 @@ const withDefaults = (model: ModelV2.Info, route: AnyRoute) => {
   })
 }
 
-const withVariant = (model: ModelV2.Info, variantID: ModelV2.VariantID | undefined) => {
+export const withVariant = (model: ModelV2.Info, variantID: ModelV2.VariantID | undefined) => {
   const id = variantID === "default" || variantID === undefined ? model.request.variant : variantID
   const variant = model.variants.find((item) => item.id === id)
-  if (!variant) return model
-  return produce(model, (draft) => {
-    ModelRequest.assign(draft.request, variant)
-  })
+  if (variant) {
+    return produce(model, (draft) => {
+      ModelRequest.assign(draft.request, variant)
+    })
+  }
+  // Thinking-level fallback: the spawn path may pass a thinking level
+  // (off/low/medium/high/max/xhigh/ultra) as the variant. Map it to the
+  // nearest catalog variant id; unknown levels leave the model unchanged.
+  if (typeof id === "string") {
+    const fallback = Thinking.resolveThinkingVariant(id, model.variants.map((item) => item.id))
+    if (fallback !== undefined) {
+      const fallbackVariant = model.variants.find((item) => item.id === fallback)
+      if (fallbackVariant) {
+        return produce(model, (draft) => {
+          ModelRequest.assign(draft.request, fallbackVariant)
+        })
+      }
+    }
+  }
+  return model
 }
 
 const apiName = (model: ModelV2.Info) =>

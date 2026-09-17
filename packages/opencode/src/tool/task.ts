@@ -17,6 +17,9 @@ import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { Thinking } from "@opencode-ai/core/banyancode/thinking"
+import { Provider } from "@/provider/provider"
+import { ProviderTransform } from "@/provider/transform"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Service as SubagentBusService } from "@opencode-ai/core/banyancode/subagent-bus"
@@ -345,10 +348,8 @@ export const TaskTool = Tool.define(
       const variant = msg.info.variant
 
       const banyanCfgOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
-      const banyanAgentMap = Option.isSome(banyanCfgOpt)
-        ? yield* banyanCfgOpt.value.getAgentOverrides()
-        : undefined
-      const entry = banyanAgentMap ? banyanAgentMap[next.name] : undefined
+      const banyanCfg = Option.isSome(banyanCfgOpt) ? yield* banyanCfgOpt.value.get() : undefined
+      const entry = banyanCfg?.agent?.[next.name]
       let model: { providerID: string; modelID: string } | undefined = undefined
       if (entry?.model) {
         const parts = entry.model.split("/")
@@ -362,6 +363,33 @@ export const TaskTool = Tool.define(
           providerID: msg.info.providerID,
         }
       }
+      // Thinking → variant for the child session. Explicit banyan `variant`
+      // wins, then per-agent `thinking`, then the parent session variant,
+      // then banyancode_thinking_default (medium). Resolved against the child
+      // model's variant keys with nearest-fallback; off/unknown resolves to
+      // undefined (omit) so an unsupported level never becomes a 400.
+      // Both prompt seams validate the key again (V1 prompt.ts checks
+      // full.variants[ag.variant]; V2 withVariant falls back), so passing the
+      // raw level when the provider lookup fails is safe.
+      const thinkingEscapeHatch = entry?.variant
+      const thinkingLevel =
+        thinkingEscapeHatch ??
+        Thinking.resolveThinkingLevel(entry?.thinking, banyanCfg?.banyancode_thinking_default ?? variant)
+      let thinkingKeys: string[] | undefined = undefined
+      if (!thinkingEscapeHatch) {
+        const providerOpt = yield* Effect.serviceOption(Provider.Service)
+        if (Option.isSome(providerOpt)) {
+          const full = yield* providerOpt.value
+            .getModel(ProviderV2.ID.make(model.providerID), ModelV2.ID.make(model.modelID))
+            .pipe(Effect.catch(() => Effect.succeed(undefined)))
+          if (full) thinkingKeys = Object.keys(ProviderTransform.variants(full))
+        }
+      }
+      const thinkingVariant = thinkingEscapeHatch
+        ? thinkingEscapeHatch
+        : thinkingKeys
+          ? Thinking.resolveThinkingVariant(thinkingLevel, thinkingKeys)
+          : thinkingLevel
       const metadata = {
         parentSessionId: ctx.sessionID,
         sessionId: nextSession.id,
@@ -391,7 +419,7 @@ export const TaskTool = Tool.define(
               modelID: ModelV2.ID.make(model.modelID),
               providerID: ProviderV2.ID.make(model.providerID),
             },
-            variant: next.model ? undefined : variant,
+            variant: thinkingVariant ?? (next.model ? undefined : variant),
             agent: next.name,
             parts,
           })

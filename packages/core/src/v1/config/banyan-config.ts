@@ -26,6 +26,15 @@ export const DEFAULT_MAX_SUBAGENTS = 5
 export const MAX_SUBAGENTS_LIMIT = 20
 export const DEFAULT_MAX_GOAL_ITERATIONS = 5
 
+// Configurable thinking levels for subagents. Known levels map onto provider
+// variant keys via Thinking.resolveThinkingVariant (ultra->max->high,
+// off->omit); any other string passes through as an explicit variant id and
+// is clamped to the model's variant keys at spawn (never a 400).
+export const THINKING_LEVELS = ["off", "low", "medium", "high", "max", "xhigh", "ultra"] as const
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number]
+export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium"
+const ThinkingLevelSchema = Schema.Union([Schema.Literals([...THINKING_LEVELS]), Schema.String])
+
 // BanyanCode-owned LSP config. Mirrors the opencode `lsp` shape (boolean for
 // built-in enable, record for per-server overrides) so users can disable,
 // enable-all, or customize any built-in LSP from `banyancode.json` without
@@ -119,6 +128,13 @@ export const Info = Schema.Struct({
   banyancode_mesh_default_provider: Schema.optional(Schema.String),
   banyancode_mesh_default_model: Schema.optional(Schema.String),
   banyancode_mesh_subagent_cooldown: Schema.optional(Schema.Number),
+  // Default thinking level for agents without a per-agent `thinking` override.
+  // Resolved at spawn time; "medium" when unset. Read-only consumers (spawn,
+  // TUI picker) fall back to DEFAULT_THINKING_LEVEL.
+  banyancode_thinking_default: Schema.optional(ThinkingLevelSchema),
+  // Swarm mode: when true, the orchestrator may fan out subagents in parallel
+  // waves (consumed read-only by the swarm coordinator). Default false.
+  banyancode_swarm_mode: Schema.optional(Schema.Boolean),
   // Prompt-cache key policy for OpenAI-compatible endpoints. `prompt_cache_key`
   // is only documented by OpenAI/OpenRouter/Mistral; "auto" (default) sends the
   // session id only to those providers, "off" never sends it, and an explicit
@@ -184,6 +200,11 @@ export const Info = Schema.Struct({
       Schema.Struct({
         mode: Schema.optional(Schema.Literals(["primary", "subagent"])),
         model: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+        // Thinking level for this agent (off/low/medium/high/max/xhigh/ultra
+        // or an explicit variant id). An explicit `variant` wins over this.
+        thinking: Schema.optional(ThinkingLevelSchema),
+        // Escape hatch: explicit variant id, wins over `thinking`.
+        variant: Schema.optional(Schema.String.check(Schema.isMaxLength(128))),
         permission: Schema.optional(Schema.Record(Schema.String, Schema.String)),
         options: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
         prompt: Schema.optional(Schema.String.check(Schema.isMaxLength(50_000))),

@@ -1420,6 +1420,8 @@ export class BanyanAgentOverride extends HeyApiClient {
         providerID: string
         modelID: string
       }
+      thinking?: string
+      variant?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1431,6 +1433,8 @@ export class BanyanAgentOverride extends HeyApiClient {
             { in: "body", key: "name" },
             { in: "body", key: "enabled" },
             { in: "body", key: "model" },
+            { in: "body", key: "thinking" },
+            { in: "body", key: "variant" },
           ],
         },
       ],
@@ -1668,6 +1672,7 @@ export class BanyanAgent extends HeyApiClient {
       permission?: Array<string>
       tools?: Array<string>
       prompt?: string
+      thinking?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1684,6 +1689,7 @@ export class BanyanAgent extends HeyApiClient {
             { in: "body", key: "permission" },
             { in: "body", key: "tools" },
             { in: "body", key: "prompt" },
+            { in: "body", key: "thinking" },
           ],
         },
       ],

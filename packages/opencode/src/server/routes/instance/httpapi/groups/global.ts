@@ -106,6 +106,7 @@ export const BanyanAgentSaveInput = Schema.Struct({
     ),
   ),
   prompt: Schema.optional(Schema.String.check(Schema.isMaxLength(50_000))),
+  thinking: Schema.optional(Schema.String.check(Schema.isMaxLength(128))),
 })
 
 export const BanyanAgentSaveResult = Schema.Struct({
@@ -132,6 +133,13 @@ export const BanyanAgentOverrideUpdateInput = Schema.Struct({
       Schema.Null,
     ]),
   ),
+  // Thinking level (off/low/medium/high/max/xhigh/ultra or a variant id).
+  // Null clears the override. Deliberately inline (no .annotate identifier):
+  // structs used as HTTP body fields corrupt single-element array decoding
+  // when extracted into a named $ref.
+  thinking: Schema.optional(Schema.Union([Schema.String.check(Schema.isMaxLength(128)), Schema.Null])),
+  // Explicit variant id escape hatch; wins over thinking. Null clears.
+  variant: Schema.optional(Schema.Union([Schema.String.check(Schema.isMaxLength(128)), Schema.Null])),
 })
 
 export const BanyanAgentPromptUpdateInput = Schema.Struct({
