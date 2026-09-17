@@ -437,10 +437,13 @@ export function Autocomplete(props: {
 
   const commands = createMemo((): AutocompleteOption[] => {
     const results: AutocompleteOption[] = [...slashes()]
+    const seen = new Set(results.map((r) => r.display.trimEnd()))
 
     for (const serverCommand of sync.data.command) {
       if (serverCommand.source === "skill") continue
       const label = serverCommand.source === "mcp" ? ":mcp" : ""
+      if (seen.has("/" + serverCommand.name + label)) continue
+      seen.add("/" + serverCommand.name + label)
       results.push({
         display: "/" + serverCommand.name + label,
         description: serverCommand.description,

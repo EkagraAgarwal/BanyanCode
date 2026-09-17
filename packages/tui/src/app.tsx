@@ -916,7 +916,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         name: "yolo.toggle",
         title: "Toggle YOLO mode",
         category: "BanyanCode",
-        slashName: "yolo",
         run: () => {
           void sdk.client.session.command({
             sessionID: route.data.type === "session" ? route.data.sessionID : "",
@@ -931,7 +930,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         name: "swarm.toggle",
         title: "Toggle swarm mode",
         category: "BanyanCode",
-        slashName: "swarm",
         run: () => {
           void sdk.client.session.command({
             sessionID: route.data.type === "session" ? route.data.sessionID : "",
