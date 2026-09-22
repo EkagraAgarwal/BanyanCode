@@ -394,6 +394,17 @@ export const layer = Layer.effect(
             skippedByBanyanignore++
             continue
           }
+          // Non-indexable paths (notes.txt, *.sqlite-wal sidecars, other
+          // runtime binaries) are dropped uncounted HERE, before the size
+          // check. The post-walk filter (codeFiles = allFiles.filter(
+          // isIndexablePath)) would drop them anyway; classifying them for
+          // size first lets an oversized sidecar — e.g. a test/user SQLite
+          // WAL just over the 1MB default — pollute the tooLarge bucket and
+          // inflate eligibleFiles (which adds skippedBySize to the
+          // graphCoverage denominator). Ignore checks stay first so
+          // gitignored/banyanignored files keep their bucket counts
+          // regardless of indexability.
+          if (!isIndexablePath(fullPath)) continue
           const statOpt = yield* fs.stat(fullPath).pipe(Effect.option)
           if (statOpt._tag === "None") continue
           const stats = statOpt.value

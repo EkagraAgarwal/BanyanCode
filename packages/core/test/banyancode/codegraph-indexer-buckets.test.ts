@@ -125,6 +125,54 @@ describe("CodegraphIndexer buckets", () => {
     expect(Array.isArray(result.parseErrors)).toBe(true)
   })
 
+  test("oversized non-indexable sidecars do not count toward tooLarge", async () => {
+    // Regression: walkDirectory applied the size filter to EVERY
+    // non-ignored file before the isIndexablePath candidacy filter ran,
+    // so an oversized runtime sidecar (e.g. *.sqlite-wal just over the
+    // 1MB default — the size the test DB's WAL lands at on Windows)
+    // leaked into skippedByReason.tooLarge and inflated eligibleFiles.
+    // Non-indexable paths must be dropped uncounted; only indexable
+    // files participate in the size budget.
+    await using tmp = await tmpdir()
+    const dbPath = path.join(tmp.path, "test.sqlite")
+    const dbLayer = Database.layerFromPath(dbPath)
+
+    await fs.writeFile(path.join(tmp.path, "app.sqlite-wal"), "w".repeat(2_000_000))
+    await fs.writeFile(path.join(tmp.path, "data.bin"), "b".repeat(2_000_000))
+    const srcDir = path.join(tmp.path, "src")
+    await fs.mkdir(srcDir, { recursive: true })
+    await fs.writeFile(path.join(srcDir, "keep.ts"), `export function ok() { return 1 }`)
+    await fs.writeFile(path.join(srcDir, "big.ts"), "// " + "x".repeat(2_000_000))
+
+    const serviceLayer = CodegraphIndexer.layer.pipe(
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(codegraphRepoDefaultLayer),
+    )
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const indexer = yield* CodegraphIndexer.Service
+        return yield* indexer.index({ root: tmp.path, force: true, maxFileSizeBytes: 1_048_576 })
+      }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+
+    // Only the indexable big.ts exceeds the budget; the two oversized
+    // non-indexable sidecars are dropped uncounted at walk time.
+    expect(result.skippedByReason.tooLarge).toBe(1)
+    expect(result.indexed).toBe(1)
+    expect(
+      result.skippedByReason.gitignored +
+        result.skippedByReason.banyanignored +
+        result.skippedByReason.artifact +
+        result.skippedByReason.tooLarge +
+        result.skippedByReason.minified +
+        result.skippedByReason.tooLargeParse +
+        result.skippedByReason.cached +
+        result.skippedByReason.readError +
+        result.skippedByReason.parseFailure,
+    ).toBe(result.skipped)
+  })
+
   test("skippedByReason sum equals skipped total (no double-count, no residual bucket)", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.sqlite")

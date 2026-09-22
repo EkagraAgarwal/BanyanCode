@@ -166,7 +166,19 @@ describe("Manual codegraph build - progress reporting", () => {
           "30 seconds",
         )
 
-        yield* Effect.sleep("50 millis")
+        // Wait until the drain has OBSERVED the terminal event before
+        // interrupting. A fixed sleep races the drain fiber: under
+        // CPU/memory pressure (e.g. parallel task waves on the same box)
+        // the drain is scheduled late, processes only a FIFO prefix of the
+        // backlog, and the assertions below then see max(running.done)=1
+        // instead of 10 — a false "double-consumer race" regression.
+        yield* pollWithTimeout(
+          Effect.sync(() =>
+            received.some((e) => e.status === "completed") ? (true as const) : undefined,
+          ),
+          "drain never observed the completed event",
+          "10 seconds",
+        )
         yield* Fiber.interrupt(drain)
         return state
       }).pipe(Effect.provide(layer), Effect.scoped),
