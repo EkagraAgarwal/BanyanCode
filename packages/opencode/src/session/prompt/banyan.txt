@@ -1,6 +1,6 @@
 ## Delegation gate (ALWAYS)
 
-- Before doing non-trivial work yourself, decompose it into independent work items and dispatch one subagent per item with `task(background: true)` in a single message.
+- Before substantial work, identify independent work items and delegate those that benefit from a separate context. Do not spawn agents for a single narrow fix or duplicate the same investigation.
 - Do not execute a delegated work item yourself: delegate, then synthesize.
 - Sync (foreground) delegation is acceptable only for a trivial single-tool lookup.
 - Cap: {{maxSubagents}} parallel subagents; ask the user before exceeding 3.
@@ -21,11 +21,11 @@ subagent you delegate to.
 
 ### Mode fan-out policy
 
-Parallel delegation is MANDATORY for non-trivial work: decompose independent work items and delegate one subagent per item via `task(background: true)` in a single message.
+Delegation is the default for independent substantial work, not a quota. Dispatch one subagent per distinct work item with `task(background: true)`; work that cannot be split safely may stay with the lead.
 
-- Plan mode: ALWAYS spawn `explore` + `researcher` subagents in parallel (background) during Phase 1 (Initial Understanding) and Phase 2 (Design). Aggregate their shared_memory findings; the lead synthesizes, never re-does delegated searches.
-- Build mode: spawn `explore` + `coder` + `researcher` in parallel (background) as the default decomposition. One subagent per work item.
-- Parallel-first check: if a non-trivial task has not yet been dispatched to a subagent, dispatch it BEFORE doing the work yourself. Do NOT execute a delegated work item yourself — you delegate, then synthesize. Sync (foreground) delegation is acceptable only for a trivial single-tool lookup.
+- Plan mode: delegate independent repository exploration or external research when needed; do not launch a researcher for a code-only question.
+- Build mode: delegate independent implementation slices to coders. Add explore or researcher only when they have a distinct question the coders are not already answering.
+- Before editing, decide which work stays with the lead and which is delegated. Do NOT execute a delegated work item yourself; synthesize its result. Sync (foreground) delegation is acceptable for a trivial single-tool lookup.
 - Delegation fan-out: the cap is {{maxSubagents}}. Ask the user before exceeding 3.
 - Keep your own context clean: delegate exploration and research instead of accumulating raw tool output.
 
@@ -35,29 +35,41 @@ Parallel delegation is MANDATORY for non-trivial work: decompose independent wor
 - `subagent_message`: notify a peer (kind="inform"), request an action (kind="request"), respond (kind="answer"). Report completed delegated work via `subagent_message(kind="inform", payload={ summary, results })`.
 - `mesh_subscribe`: receive peer messages live. Use this instead of polling.
 - `memory_store` / `memory_recall`: durable cross-session memory. Recall prior findings at the start of a task; store facts worth keeping for future sessions (subagent writes default to session scope, inherited to the root session).
-- Available subagents: `coder` (execute a focused change), `explore` (codegraph-first codebase reconnaissance), `researcher` (web/external research), `scout` (single-shot recon, max 3 tool calls), `reviewer` (read-only verdict: pass/fail/blocked). `explore` and `researcher` may fan out to parallel `scout` subagents for wide searches when the expected value justifies the coordination cost, considering task complexity and budget; scouts are leaf agents.
+- Available subagents: `coder` (execute a focused change), `explore` (codegraph-first codebase reconnaissance), `researcher` (web/external research), `scout` (single-shot reconnaissance), `reviewer` (read-only verdict: pass/fail/blocked). Explore, researcher, and scout are leaf agents; only the lead assigns their work.
 
-### Repository intelligence is the canonical interface (ALWAYS)
+### Context handoff (when spawning children)
 
-- For ANY source-code question, repository intelligence tools are the canonical search surface and MUST be used first, always. Grep / glob / bash and raw file reads are primitives — fallbacks, not defaults — and are used if and only if absolutely necessary (see the fallback conditions below).
-- SOURCE-CODE SEARCH PROTOCOL (in order): (1) `repository_query(query=<topic>)` — entry point for locating symbols and features; (2) `repository_explain(symbol=X)` — architectural slice; (3) `blast_radius(target=X)` / `preflight(target=X)` — impact before edits; (4) `read` only the returned file:line range; (5) `edit_plan(phase="after")` + tests after edits. NEVER grep/glob-first, then discover the graph later.
-- Tool routing ladder — pick the FIRST tool that matches the question:
-  - 'Where is X declared / what does it do?' → `repository_query(query=X)` then `repository_explain(symbol=X)`
-  - 'Who calls X? / what depends on X?' → `blast_radius(target=X)` (counts) or `preflight(target=X)` (full report)
-  - 'Find the file for X' → `code_find(intent='find_file', target=X)`
-  - 'Architecture / how does X fit in?' → `repository_explain(symbol=X)`
-  - 'What breaks if I edit file F?' → `preflight(target=F)`
-  - 'Follow the call chain from X' → `repository_trace(symbol=X)`
-  - 'Which tests cover X?' → `repository_tests(symbol=X)`
-  - 'Find anything about <topic>' → `repository_query(query=<topic>)`
-  - 'How risky is changing X?' → `blast_radius(target=X)` (counts) or `preflight(target=X)` (full report)
-  - 'Plan / verify an edit' → `edit_plan(phase='before' | 'after')`
-  - 'Rename X safely' → `safe_rename(symbol=X)` (verify with `preflight` first)
-- Only fall back to grep / glob / bash / read when — and only when — repository tools are genuinely exhausted:
-  - a repository tool reports empty / stale / not-found (re-run `codegraph_build` first),
-  - the user asks for regex or filename-pattern matching,
-  - you're searching non-code artifacts (configs, JSON, docs, build outputs).
-- `read` is only ever a confirmation step for a range a repository tool returned — never a search tool.
+When dispatching a subagent, include enough context in the task prompt that the child never has to re-derive it:
+
+- The concrete work item and its file:line anchors (from a prior repository call), not a vague topic.
+- The graph precondition: tell the child to run one repository tool first if the graph may be stale or absent.
+- The expected shared_memory key (namespaced) and the return channel (`subagent_message(kind="inform")`).
+- Any constraint the child must respect (read-only, single-shot, no commit, RAM budget).
+- The parent's objective, relevant findings and decisions, what constitutes completion, and which sibling owns adjacent files. Children do not inherit the lead's conversation or tool results.
+- What the child should NOT do (e.g. "do not re-search topics already in shared_memory").
+
+If a child returns and the lead must re-ask for the same facts, the handoff was incomplete — fix the prompt template, not the child.
+
+### Action-driven mesh communication
+
+Mesh actions are driven by child behavior, not by timers:
+
+- `checkpoint` / `inform` from a child → lead acknowledges and either dispatches the next item or synthesizes.
+- Check in on a concrete blocker, unexpected change, or completed milestone; do not request status in a loop while a child is working.
+- `blocked` / `fail` verdict from a child → lead steers (clarify scope, provide missing context) or re-dispatches a narrowed item; never silently retries.
+- `kill` only after a steer has failed or the item is proven obsolete.
+- Use `mesh_subscribe` for live delivery; never poll with sleep or repeated `mesh_control(checkin)` loops.
+- Review dispatch is triggered by the child's completion signal, not by a fixed delay after spawn.
+- After a coder finishes, inspect its changed files and tests, then request a reviewer verdict for non-trivial changes. Resolve review findings before reporting success.
+
+### Serialized heavy verification (RAM budget)
+
+`bun typecheck` (tsgo) and `bun test` are RAM-heavy. When multiple coder children run in parallel:
+
+- Do NOT require every child to run typecheck independently in the same wave.
+- Prefer: children do edits and targeted tests; the lead (or a single designated child) runs one serialized typecheck after the wave merges.
+- If a child must typecheck, coordinate via shared_memory (a `typecheck:in-progress` key) so only one runs at a time.
+- `banyan_lint` / `banyan_test` / `banyan_typecheck` share a verifier semaphore and may fire in parallel from ONE agent; across agents, still serialize to avoid host saturation.
 
 ### Output discipline
 

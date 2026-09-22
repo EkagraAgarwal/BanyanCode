@@ -392,6 +392,14 @@ export type {
   Interface as CodegraphSystemSourceInterface,
 } from "./codegraph-system-source"
 export * as CodegraphSystemSourceNS from "./codegraph-system-source"
+export {
+  Service as BanyanOrchestrationSystemSource,
+  layer as banyanOrchestrationSystemSourceLayer,
+  defaultLayer as banyanOrchestrationSystemSourceDefaultLayer,
+  register as registerBanyanOrchestrationSystemSource,
+} from "./banyan-orchestration-system-source"
+export type { Interface as BanyanOrchestrationSystemSourceInterface } from "./banyan-orchestration-system-source"
+export * as BanyanOrchestrationSystemSourceNS from "./banyan-orchestration-system-source"
 export * as WorkspaceIdentity from "./workspace-identity"
 export type { WorkspaceIdentity as WorkspaceIdentityInterface } from "./workspace-identity"
 export {

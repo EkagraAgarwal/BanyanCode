@@ -108,6 +108,9 @@ describe("prose agents — stripped the inline policy block, point to system con
       // Body is gone — the prose list of bootstrap rules was duplicated
       // with the SystemPrompt block and is now centralised.
       expect(prompt).not.toContain("last resorts")
+      // RAM-heavy verification coordination with sibling children.
+      expect(prompt).toContain("typecheck:in-progress")
+      expect(prompt).toContain("RAM-heavy")
     }),
   )
 
@@ -237,13 +240,28 @@ describe("banyan orchestration block — SystemPrompt.banyan()", () => {
       const block = yield* SystemPrompt.Service.use((svc) => svc.banyan())
       expect(block).toBeDefined()
       expect(block).toContain("BanyanCode orchestration (ALWAYS)")
-      expect(block).toContain("Parallel delegation is MANDATORY")
+       expect(block).toContain("Delegation is the default for independent substantial work, not a quota")
+       expect(block).toContain("Children do not inherit the lead's conversation or tool results")
+       expect(block).toContain("request a reviewer verdict")
       // {{maxSubagents}} must be rendered — no literal placeholder survives.
       expect(block).not.toContain("{{maxSubagents}}")
       expect(block).toContain("the cap is 5")
       // The mesh contract that the shared-memory scoping fix enables.
       expect(block).toContain("shared_memory")
       expect(block).toContain("inherited to the root session")
+    }),
+  )
+
+  itPolicy.effect("renders the context-handoff, action-driven, and serialized-verification sections", () =>
+    Effect.gen(function* () {
+      const block = yield* SystemPrompt.Service.use((svc) => svc.banyan())
+      expect(block).toBeDefined()
+      expect(block).toContain("Context handoff (when spawning children)")
+      expect(block).toContain("Action-driven mesh communication")
+      expect(block).toContain("Serialized heavy verification (RAM budget)")
+      expect(block).toContain("typecheck:in-progress")
+      expect(block).toContain("never poll with sleep")
+      expect(block).toContain("file:line anchors")
     }),
   )
 })

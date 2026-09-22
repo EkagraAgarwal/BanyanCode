@@ -59,7 +59,10 @@ describe("SystemContextBuiltIns", () => {
       const context = yield* SystemContextRegistry.Service
       const initialized = yield* SystemContext.initialize(yield* context.load())
 
-      expect(initialized.baseline).toBe(
+      // Environment + date are the first two blocks; the codegraph policy
+      // and Banyan orchestration sources (registered when
+      // BANYANCODE_ENABLE is not "0") append after them.
+      expect(initialized.baseline).toContain(
         [
           "Here is some useful information about the environment you are running in:",
           "<env>",
@@ -68,10 +71,15 @@ describe("SystemContextBuiltIns", () => {
           "  Is directory a git repo: yes",
           `  Platform: ${process.platform}`,
           "</env>",
-          "",
-          `Today's date: ${localDate(timestamp)}`,
         ].join("\n"),
       )
+      expect(initialized.baseline).toContain(`Today's date: ${localDate(timestamp)}`)
+      expect(initialized.baseline).toContain("Repository intelligence is the canonical interface")
+      expect(initialized.baseline).toContain("BanyanCode orchestration (ALWAYS)")
+      expect(initialized.baseline.split("## Repository intelligence is the canonical interface (ALWAYS)")).toHaveLength(2)
+      expect(initialized.baseline.split("## BanyanCode orchestration (ALWAYS)")).toHaveLength(2)
+      expect(initialized.snapshot["banyancode/codegraph-policy"]).toBeDefined()
+      expect(initialized.snapshot["banyancode/orchestration"]).toBeDefined()
     }),
   )
 
@@ -107,20 +115,13 @@ describe("SystemContextBuiltIns", () => {
       yield* TestClock.setTime(timestamp)
       const context = yield* SystemContextRegistry.Service
 
-      expect((yield* SystemContext.initialize(yield* context.load())).baseline).toBe(
-        [
-          "Here is some useful information about the environment you are running in:",
-          "<env>",
-          `  Working directory: ${directory}`,
-          `  Workspace root folder: ${projectDirectory}`,
-          "  Is directory a git repo: yes",
-          `  Platform: ${process.platform}`,
-          "</env>",
-          "",
-          `Today's date: ${localDate(timestamp)}`,
-          "",
-          `Instructions from: ${instructionFile}\nBe precise.`,
-        ].join("\n"),
+      const baseline = (yield* SystemContext.initialize(yield* context.load())).baseline
+      expect(baseline).toContain(`Today's date: ${localDate(timestamp)}`)
+      expect(baseline).toContain(`Instructions from: ${instructionFile}\nBe precise.`)
+      // Ambient instructions come after the built-in environment/date and
+      // after the Banyan policy/orchestration sources.
+      expect(baseline.indexOf(`Instructions from: ${instructionFile}`)).toBeGreaterThan(
+        baseline.indexOf(`Today's date: ${localDate(timestamp)}`),
       )
     }),
   )

@@ -5,6 +5,8 @@ import { Location } from "../location"
 import { SystemContext } from "./index"
 import { InstructionContext } from "../instruction-context"
 import { SystemContextRegistry } from "./registry"
+import { CodegraphSystemSource } from "../banyancode/codegraph-system-source"
+import { BanyanOrchestrationSystemSource } from "../banyancode/banyan-orchestration-system-source"
 
 const builtIns = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -37,6 +39,13 @@ const builtIns = Layer.effectDiscard(
     ])
 
     yield* registry.register({ key: SystemContext.Key.make("core/builtins"), load: Effect.succeed(context) })
+    // V2 wiring: ship the codegraph-first policy and the BanyanCode
+    // orchestration block (delegation gate / mode fan-out / mesh discipline /
+    // context handoff / action-driven comms / serialized verification) in
+    // every V2 session baseline. Both register() helpers no-op when
+    // BANYANCODE_ENABLE=0.
+    yield* CodegraphSystemSource.register(registry)
+    yield* BanyanOrchestrationSystemSource.register(registry)
   }),
 )
 

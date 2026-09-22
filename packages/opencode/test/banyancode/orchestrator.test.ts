@@ -79,6 +79,12 @@ describe("orchestrator agent", () => {
         // The background-subagent preference is embodied in the
         // orchestration rules rather than inlined policy.
         expect(prompt).toContain("background:true")
+        // Child-action-driven mesh loop + context handoff + serialized
+        // verification (RAM budget for parallel typecheck runs).
+        expect(prompt).toContain("Context handoff (when spawning children)")
+        expect(prompt).toContain("Action-driven mesh loop")
+        expect(prompt).toContain("Serialized verification (RAM budget)")
+        expect(prompt).toContain("typecheck:in-progress")
       }),
     { timeout: 30_000 },
   )

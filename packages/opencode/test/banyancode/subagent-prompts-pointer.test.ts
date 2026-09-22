@@ -40,6 +40,7 @@ import { Provider } from "@/provider/provider"
 import { Skill } from "@/skill"
 import { SystemPrompt, provider as systemProvider } from "@/session/system"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
+import { ORCHESTRATION_TEXT } from "@opencode-ai/core/banyancode/banyan-orchestration-system-source"
 
 import PLAN_MODE from "../../src/session/prompt/plan-mode.txt"
 
@@ -161,21 +162,53 @@ describe("orchestration-first prompt policy", () => {
     }),
   )
 
-  it.instance("banyan block routes searches through the codegraph-first ladder", () =>
+  it.instance("banyan block leaves the repository-search policy to the separate codegraph source", () =>
     Effect.gen(function* () {
-      const block = yield* (yield* SystemPrompt.Service).banyan()
-      expect(block).toBeDefined()
-      expect(block).toContain("Repository intelligence is the canonical interface")
-      expect(block).toContain("repository_query")
-      expect(block).toContain("repository_explain")
-      expect(block).toContain("blast_radius")
-      expect(block).toContain("preflight")
-      expect(block).toContain("fallbacks, not defaults")
+      const system = yield* SystemPrompt.Service
+      const orchestration = yield* system.banyan()
+      const codegraph = yield* system.codegraph()
+      expect(orchestration).not.toContain("### Repository intelligence is the canonical interface")
+      expect(codegraph).toContain("Repository intelligence is the canonical interface")
+      expect(codegraph).toContain("repository_query")
+      expect(codegraph).toContain("repository_explain")
+      expect(codegraph).toContain("blast_radius")
+      expect(codegraph).toContain("preflight")
     }),
   )
 
-  test("plan-mode.txt launches explore and researcher in parallel and aggregates via shared_memory", () => {
-    expect(PLAN_MODE).toContain("Launch explore and researcher subagents IN PARALLEL")
+  it.instance("V1 and V2 agree on delegation, handoff, review, and leaf-agent boundaries", () =>
+    Effect.gen(function* () {
+      const v1 = yield* (yield* SystemPrompt.Service).banyan()
+      for (const rule of [
+        "Delegation is the default for independent substantial work, not a quota",
+        "Children do not inherit the lead's conversation or tool results",
+        "Explore, researcher, and scout are leaf agents; only the lead assigns their work",
+        "request a reviewer verdict for non-trivial changes",
+        "the cap is 5",
+      ]) {
+        expect(v1).toContain(rule)
+        expect(ORCHESTRATION_TEXT).toContain(rule)
+      }
+      expect(v1).not.toContain("may fan out to parallel `scout`")
+      expect(ORCHESTRATION_TEXT).not.toContain("may fan out to parallel `scout`")
+    }),
+  )
+
+  it.instance("banyan block ships the context-handoff, action-driven, and serialized-verification policy", () =>
+    Effect.gen(function* () {
+      const block = yield* (yield* SystemPrompt.Service).banyan()
+      expect(block).toBeDefined()
+      expect(block).toContain("Context handoff (when spawning children)")
+      expect(block).toContain("Action-driven mesh communication")
+      expect(block).toContain("Serialized heavy verification (RAM budget)")
+      expect(block).toContain("typecheck:in-progress")
+      expect(block).toContain("never poll with sleep")
+      expect(block).toContain("file:line anchors")
+    }),
+  )
+
+  test("plan-mode.txt launches a researcher only for external facts and aggregates via shared_memory", () => {
+    expect(PLAN_MODE).toContain("add a researcher IN PARALLEL only when external facts are needed")
     expect(PLAN_MODE).toContain("background: true")
     expect(PLAN_MODE).toContain("researcher agent in the same parallel batch")
     expect(PLAN_MODE).toContain("shared_memory")

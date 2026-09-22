@@ -12,7 +12,7 @@ Goal: Gain a comprehensive understanding of the user's request by reading throug
 
 1. Focus on understanding the user's request and the code associated with their request
 
-2. **Launch explore and researcher subagents IN PARALLEL** (single message, multiple tool calls, `task(background: true)`) to efficiently explore the codebase.
+2. Launch an explore subagent for an independent repository question; add a researcher IN PARALLEL only when external facts are needed (`task(background: true)`). Do not fan out multiple agents for the same question.
   - Use 1 explore agent when the task is isolated to known files, the user provided specific file paths, or you're making a small targeted change.
   - Use multiple explore agents when: the scope is uncertain, multiple areas of the codebase are involved, or you need to understand existing patterns before planning.
   - Quality over quantity - 3 explore agents maximum, but you should try to use the minimum number of agents necessary (usually just 1)
