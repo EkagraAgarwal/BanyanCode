@@ -36,7 +36,20 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     const handlers = new Set<(event: GlobalEvent) => void>()
     const emitter = {
       emit(_type: "event", event: GlobalEvent) {
-        for (const handler of handlers) handler(event)
+        for (const handler of handlers) {
+          // One throwing subscriber must not abort the remaining handlers,
+          // the rest of flush()'s batched events, or the SSE consume loop
+          // (handleEvent → flush runs synchronously on the stream task) —
+          // that combination dropped message/question events and froze the
+          // chat and prompt after the bounded-store eviction landed.
+          try {
+            handler(event)
+          } catch (error) {
+            console.error("tui event handler failed", {
+              error: error instanceof Error ? error.message : String(error),
+            })
+          }
+        }
       },
       on(_type: "event", handler: (event: GlobalEvent) => void) {
         handlers.add(handler)

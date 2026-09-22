@@ -306,6 +306,9 @@ export function Session() {
 
   createEffect(() => {
     const sessionID = route.sessionID
+    // Pin the viewed session so bounded-store eviction can never blank the
+    // central chat while it is on screen (subagent mesh streams > 4 sessions).
+    sync.session.retain(sessionID)
     void (async () => {
       const previousWorkspace = untrack(() => project.workspace.current())
       const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })

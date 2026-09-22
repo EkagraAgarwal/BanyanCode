@@ -154,17 +154,27 @@ export const {
     }
 
     const sessionRecency: string[] = []
+    // The session currently rendered by the session route. Recency is driven
+    // by events, so with more than MAX_SESSIONS_IN_MEMORY sessions streaming
+    // (orchestrator + subagents) the VIEWED session can be the coldest by
+    // event recency — it must never be evicted while on screen.
+    let retainedSessionID: string | undefined
     const touchSessionRecency = (sessionID: string) => {
       const at = sessionRecency.indexOf(sessionID)
       if (at !== -1) sessionRecency.splice(at, 1)
       sessionRecency.push(sessionID)
     }
     const evictColdSessions = () => {
-      const overflow = sessionRecency.length - MAX_SESSIONS_IN_MEMORY
+      const candidates = sessionRecency.filter((id) => id !== retainedSessionID)
+      const overflow = candidates.length - MAX_SESSIONS_IN_MEMORY
       if (overflow <= 0) return
-      const cold = sessionRecency.slice(0, overflow)
+      const cold = candidates.slice(0, overflow)
       batch(() => {
         for (const sessionID of cold) {
+          // Evicted sessions must be re-synced on next visit; keeping them in
+          // fullSyncedSessions made session.sync() early-return forever and
+          // left the chat permanently empty after eviction.
+          fullSyncedSessions.delete(sessionID)
           const messages = store.message[sessionID] ?? []
           setStore(
             "message",
@@ -181,9 +191,14 @@ export const {
           )
         }
       })
-      sessionRecency.splice(0, cold.length)
+      for (const sessionID of cold) {
+        const at = sessionRecency.indexOf(sessionID)
+        if (at !== -1) sessionRecency.splice(at, 1)
+      }
     }
     const dropSessionMessages = (sessionID: string) => {
+      fullSyncedSessions.delete(sessionID)
+      if (retainedSessionID === sessionID) retainedSessionID = undefined
       const messages = store.message[sessionID] ?? []
       batch(() => {
         setStore(
@@ -419,6 +434,9 @@ export const {
         case "message.removed": {
           touchMessage(event.properties.sessionID, event.properties.messageID)
           const messages = store.message[event.properties.sessionID]
+          // The session's messages may have been evicted; search(undefined)
+          // throws and would abort the whole event batch / SSE delivery.
+          if (!messages) break
           const result = search(messages, event.properties.messageID, (m) => m.id)
           if (result.found) {
             setStore(
@@ -487,6 +505,7 @@ export const {
         case "message.part.removed": {
           touchPart(event.properties.sessionID, event.properties.partID)
           const parts = store.part[event.properties.messageID]
+          if (!parts) break
           const result = search(parts, event.properties.partID, (p) => p.id)
           if (result.found) {
             setStore(
@@ -672,7 +691,12 @@ export const {
           return last.time.completed ? "idle" : "working"
         },
         async sync(sessionID: string) {
-          if (fullSyncedSessions.has(sessionID)) return
+          touchSessionRecency(sessionID)
+          // Early-return only while the session is BOTH marked synced and
+          // actually present in the store. Eviction (and errored fetches)
+          // clear one of the two so the next sync re-hydrates instead of
+          // leaving an empty chat forever.
+          if (fullSyncedSessions.has(sessionID) && store.message[sessionID] !== undefined) return
           const syncing = syncingSessions.get(sessionID)
           if (syncing) return syncing
           const tracker = { messages: new Set<string>(), parts: new Set<string>() }
@@ -742,13 +766,20 @@ export const {
             )
             touchSessionRecency(sessionID)
             evictColdSessions()
-            fullSyncedSessions.add(sessionID)
+            // A failed messages fetch (HTTP error → data undefined) must not
+            // mark the session fully synced, or the first error sticks for
+            // the process lifetime and the chat stays empty.
+            if (messages.data !== undefined) fullSyncedSessions.add(sessionID)
           })().finally(() => {
             syncingSessions.delete(sessionID)
             hydratingSessions.delete(sessionID)
           })
           syncingSessions.set(sessionID, task)
           return task
+        },
+        retain(sessionID: string) {
+          retainedSessionID = sessionID
+          touchSessionRecency(sessionID)
         },
       },
       bootstrap,
