@@ -192,6 +192,21 @@ export const CompactionPart = Schema.Struct({
 }).annotate({ identifier: "CompactionPart" })
 export type CompactionPart = Types.DeepMutable<Schema.Schema.Type<typeof CompactionPart>>
 
+// WS4 reasoning-effort configuration_update (prompt-caching plan). Stored as
+// the first/only part of a synthetic user "marker" message so stateless
+// replay re-sends the OpenAI `{ type: "configuration_update", reasoning:
+// { effort } }` input item at its original position. Only ever ONE marker may
+// be the newest message: applyEffortChange coalesces into it because two
+// adjacent configuration_update items are an API 400.
+export const ConfigurationUpdatePart = Schema.Struct({
+  ...partBase,
+  type: Schema.Literal("configuration_update"),
+  reasoning: Schema.Struct({
+    effort: Schema.String,
+  }),
+}).annotate({ identifier: "ConfigurationUpdatePart" })
+export type ConfigurationUpdatePart = Types.DeepMutable<Schema.Schema.Type<typeof ConfigurationUpdatePart>>
+
 export const SubtaskPart = Schema.Struct({
   ...partBase,
   type: Schema.Literal("subtask"),
@@ -366,6 +381,7 @@ export const Part = Schema.Union([
   AgentPart,
   RetryPart,
   CompactionPart,
+  ConfigurationUpdatePart,
 ]).annotate({ discriminator: "type", identifier: "Part" })
 export type Part =
   | TextPart
@@ -380,6 +396,7 @@ export type Part =
   | AgentPart
   | RetryPart
   | CompactionPart
+  | ConfigurationUpdatePart
 
 const AssistantErrorSchema = Schema.Union([
   AuthError.EffectSchema,

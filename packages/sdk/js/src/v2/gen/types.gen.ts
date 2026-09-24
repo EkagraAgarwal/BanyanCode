@@ -607,6 +607,16 @@ export type CompactionPart = {
   tail_start_id?: string
 }
 
+export type ConfigurationUpdatePart = {
+  id: string
+  sessionID: string
+  messageID: string
+  type: "configuration_update"
+  reasoning: {
+    effort: string
+  }
+}
+
 export type Part =
   | TextPart
   | SubtaskPart
@@ -620,6 +630,7 @@ export type Part =
   | AgentPart
   | RetryPart
   | CompactionPart
+  | ConfigurationUpdatePart
 
 export type Pty = {
   id: string
@@ -2260,6 +2271,9 @@ export type BanyanConfig = {
   banyancode_thinking_default?: "off" | "low" | "medium" | "high" | "max" | "xhigh" | "ultra" | string
   banyancode_swarm_mode?: boolean
   banyancode_prompt_cache_key?: "auto" | "off" | string
+  banyancode_prompt_cache_mode?: "implicit" | "explicit" | "off"
+  banyancode_prompt_cache_diagnostics?: boolean
+  banyancode_prompt_cache_stable_prefix?: boolean
   /**
    * Enable or configure BanyanCode's LSP servers. Omit or set to false to disable, true to enable built-ins, or an object to enable built-ins with overrides.
    */

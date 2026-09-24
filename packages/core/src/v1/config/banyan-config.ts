@@ -142,6 +142,44 @@ export const Info = Schema.Struct({
   banyancode_prompt_cache_key: Schema.optional(
     Schema.Union([Schema.Literal("auto"), Schema.Literal("off"), Schema.NonEmptyString]),
   ),
+  // OpenAI `prompt_cache_options.mode` for GPT-5.6+/GPT-6 (ignored for
+  // non-OpenAI providers and older models). "implicit" (default) emits
+  // `{ mode: "implicit" }`; "off" omits the field entirely. "explicit" is
+  // forwarded as-is, but PR1' sends no explicit breakpoints — per the OpenAI
+  // spec that disables caching until breakpoints land with the stable-prefix
+  // work, so leave it "implicit" unless you know otherwise.
+  banyancode_prompt_cache_mode: Schema.optional(
+    Schema.Union([Schema.Literal("implicit"), Schema.Literal("explicit"), Schema.Literal("off")]),
+  ),
+  // When true, send `prompt_cache_options.comparison_response_id` (previous
+  // completed response id for the session; omitted on the first turn) so
+  // OpenAI returns `prompt_cache_diagnostics` with the first cache-miss
+  // reason. Decoded and logged from the response; never blocks output.
+  banyancode_prompt_cache_diagnostics: Schema.optional(Schema.Boolean),
+  // WS3 stable system-prefix ordering (prompt-caching plan). Default true:
+  // system assembly emits the stable blocks (instructions, codegraph policy
+  // + tool guide, orchestration) before the dynamic tail (env/date, skills,
+  // graph-state). Set false to restore the legacy interleaved order.
+  banyancode_prompt_cache_stable_prefix: Schema.optional(Schema.Boolean),
+  // GPT-5.6+ OpenAI: fire prompt_cache_options.prewarm before first real request (default off).
+  banyancode_prompt_cache_prewarm: Schema.optional(Schema.Boolean),
+  // WS4 mid-conversation reasoning-effort changes (prompt-caching plan).
+  // Default true (undefined = enabled): applyEffortChange persists a
+  // `configuration_update` marker instead of rewriting top-level
+  // reasoning.effort, and the request path pins the top-level effort to the
+  // frozen base once a marker exists. Set false to restore the legacy
+  // top-level-effort rewrite on every thinking change.
+  banyancode_reasoning_configuration_update: Schema.optional(Schema.Boolean),
+  // tool_search / defer_loading (prompt-caching plan; DEFAULT OFF — unset or
+  // false keeps the wire tools array byte-for-byte unchanged so release is
+  // safe). When true, OpenAI gpt-5.4+ Responses requests keep ~15 eager
+  // coding tools load-bearing, mark the remainder `defer_loading: true`, and
+  // append `{ type: "tool_search" }` so deferred parameter schemas inject at
+  // end-of-context instead of riding every turn's input tokens. Ignored for
+  // non-OpenAI providers, pre-5.4 models, small (title/summarize) requests,
+  // and the experimental native LLM runtime (which does not lower
+  // tool_search yet).
+  banyancode_tool_search_defer: Schema.optional(Schema.Boolean),
   // BanyanCode-owned LSP config. True = enable all built-in LSP servers; a
   // record = enable built-ins with per-server overrides (disabled / custom
   // command / env / extensions / initialization). BanyanCode does not read
