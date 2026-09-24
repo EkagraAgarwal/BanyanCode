@@ -1,6 +1,6 @@
 export * as SystemMonitor from "./system-monitor"
 
-import { Context, Effect, Duration, Layer, Queue, Ref, Stream } from "effect"
+import { Cause, Context, Effect, Duration, Layer, Queue, Ref, Stream } from "effect"
 import fs from "node:fs"
 import os from "node:os"
 import { ChildProcess } from "effect/unstable/process"
@@ -91,6 +91,23 @@ const computeCpuPercent = (prev: Map<string, number> | undefined, cur: Map<strin
   return (1 - idleDelta / totalDelta) * 100
 }
 
+/** True when a spawn failed because the binary is missing (ENOENT / NotFound). */
+const isCommandNotFound = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") return false
+  const e = error as {
+    code?: string
+    _tag?: string
+    reason?: unknown
+    cause?: unknown
+    error?: unknown
+  }
+  if (e.code === "ENOENT") return true
+  if (e._tag === "SystemError" && e.reason === "NotFound") return true
+  if (e.cause !== undefined && isCommandNotFound(e.cause)) return true
+  if (e.error !== undefined && isCommandNotFound(e.error)) return true
+  return false
+}
+
 interface CachedStatus {
   value: SystemStatus
   at: number
@@ -106,12 +123,16 @@ interface Cache {
 
 const GPU_CACHE_TTL_MS = 30_000
 const DISK_CACHE_TTL_MS = 5_000
+const STATUS_CACHE_TTL_MS = 1_000
+const TICK_MS = 1_000
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const cache = yield* Ref.make<Cache>({ cached: undefined, gpu: undefined, gpuAt: 0, disk: undefined, diskAt: 0 })
     const cpuPrev = yield* Ref.make<Map<string, number> | undefined>(undefined)
+    // After the first nvidia-smi ENOENT, skip GPU probes for the rest of this layer's lifetime.
+    const gpuDisabled = yield* Ref.make(false)
     const proc = yield* AppProcess.Service
 
     const status: Interface["status"] = () =>
@@ -119,58 +140,68 @@ export const layer = Layer.effect(
         const now = Date.now()
         const snapshot = yield* Ref.get(cache)
 
-        let gpu: { gpuPercent: number; vramUsedBytes: number; gpuTotalBytes: number } | undefined
-        if (snapshot.gpu && now - snapshot.gpuAt < GPU_CACHE_TTL_MS) {
-          gpu = snapshot.gpu
-        } else if (process.platform !== "darwin") {
-          const runResult = yield* proc.run(
-            ChildProcess.make(
-              "nvidia-smi",
-              ["--query-gpu=utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
-              { extendEnv: true, stdin: "ignore" },
-            ),
-            { maxOutputBytes: 1024, maxErrorBytes: 256, timeout: "2 seconds" },
-          ).pipe(
-            Effect.catchCause(() =>
-              Effect.succeed({ exitCode: -1, stdout: { toString: () => "" } } as const),
-            ),
-          )
-          if (runResult.exitCode === 0) {
-            const text = runResult.stdout.toString()
-            const line = text.trim().split("\n")[0]
-            if (line) {
-              const parts = line.split(",").map((s: string) => Number(s.trim()))
-              if (parts.length >= 3 && parts.every(Number.isFinite)) {
-                gpu = { gpuPercent: parts[0], vramUsedBytes: parts[1] * 1024 * 1024, gpuTotalBytes: parts[2] * 1024 * 1024 }
+        let gpu = snapshot.gpu
+        let gpuAt = snapshot.gpuAt
+        const gpuCacheHit = snapshot.gpuAt > 0 && now - snapshot.gpuAt < GPU_CACHE_TTL_MS
+        if (!gpuCacheHit) {
+          gpu = undefined
+          gpuAt = now
+          const disabled = yield* Ref.get(gpuDisabled)
+          if (!disabled && process.platform !== "darwin") {
+            const outcome = yield* proc
+              .run(
+                ChildProcess.make(
+                  "nvidia-smi",
+                  ["--query-gpu=utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
+                  { extendEnv: true, stdin: "ignore" },
+                ),
+                { maxOutputBytes: 1024, maxErrorBytes: 256, timeout: "2 seconds" },
+              )
+              .pipe(
+                Effect.map((result) => ({ tag: "ran" as const, result })),
+                Effect.catchCause((cause) =>
+                  Effect.succeed(
+                    isCommandNotFound(Cause.squash(cause))
+                      ? ({ tag: "enoent" as const })
+                      : ({ tag: "failed" as const }),
+                  ),
+                ),
+              )
+            if (outcome.tag === "enoent") {
+              yield* Ref.set(gpuDisabled, true)
+            } else if (outcome.tag === "ran" && outcome.result.exitCode === 0) {
+              const line = outcome.result.stdout.toString().trim().split("\n")[0]
+              if (line) {
+                const parts = line.split(",").map((s: string) => Number(s.trim()))
+                if (parts.length >= 3 && parts.every(Number.isFinite)) {
+                  gpu = {
+                    gpuPercent: parts[0],
+                    vramUsedBytes: parts[1] * 1024 * 1024,
+                    gpuTotalBytes: parts[2] * 1024 * 1024,
+                  }
+                }
               }
             }
           }
         }
 
-        let disk: { diskUsedBytes?: number; diskTotalBytes?: number } | undefined
-        if (snapshot.disk && now - snapshot.diskAt < DISK_CACHE_TTL_MS) {
-          disk = snapshot.disk
-        } else {
+        let disk = snapshot.disk
+        let diskAt = snapshot.diskAt
+        const diskCacheHit = snapshot.diskAt > 0 && now - snapshot.diskAt < DISK_CACHE_TTL_MS
+        if (!diskCacheHit) {
+          disk = undefined
+          diskAt = now
           const result = yield* readDisk()
           if (Object.keys(result).length > 0) {
             disk = result
           }
         }
 
-        if (snapshot.cached && now - snapshot.cached.at < 1000) {
-          // Persist refreshed disk/gpu cache timestamps even on the warm
-          // early-return path — otherwise the next spin would re-probe
-          // statfs/nvidia-smi as soon as TTL expires (instead of every TTL
-          // window). Disk and GPU are unchanged here, so just bump `at`.
-          if (
-            (snapshot.disk && disk === snapshot.disk && snapshot.diskAt !== now) ||
-            (snapshot.gpu && gpu === snapshot.gpu && snapshot.gpuAt !== now)
-          ) {
-            yield* Ref.set(cache, {
-              ...snapshot,
-              diskAt: snapshot.disk && disk === snapshot.disk ? now : snapshot.diskAt,
-              gpuAt: snapshot.gpu && gpu === snapshot.gpu ? now : snapshot.gpuAt,
-            })
+        if (snapshot.cached && now - snapshot.cached.at < STATUS_CACHE_TTL_MS) {
+          // Persist refreshed disk/gpu cache entries (including failures) on the
+          // warm early-return path so the next spin does not re-probe.
+          if (!gpuCacheHit || !diskCacheHit) {
+            yield* Ref.set(cache, { ...snapshot, gpu, gpuAt, disk, diskAt })
           }
           return {
             ...snapshot.cached.value,
@@ -205,7 +236,7 @@ export const layer = Layer.effect(
             : {}),
         }
 
-        yield* Ref.set(cache, { cached: { value, at: now }, gpu, gpuAt: now, disk, diskAt: now })
+        yield* Ref.set(cache, { cached: { value, at: now }, gpu, gpuAt, disk, diskAt })
         return value
       })
 
@@ -222,7 +253,7 @@ export const layer = Layer.effect(
     // busy-spun the sampler. Use `repeat(spaced)` on the per-tick effect so
     // the schedule actually paces iterations.
     yield* Effect.forkScoped(
-      tick(queue).pipe(Effect.repeat(Schedule.spaced(Duration.millis(100)))),
+      tick(queue).pipe(Effect.repeat(Schedule.spaced(Duration.millis(TICK_MS)))),
     )
 
     const events = (): Effect.Effect<Queue.Dequeue<SystemStatus>, never, never> => Effect.succeed(queue)
@@ -241,6 +272,6 @@ export const layer = Layer.effect(
 
     return Service.of({ status, watch, events })
   }),
-).pipe(Layer.provide(AppProcess.defaultLayer))
+)
 
-export const defaultLayer = layer
+export const defaultLayer = layer.pipe(Layer.provide(AppProcess.defaultLayer))

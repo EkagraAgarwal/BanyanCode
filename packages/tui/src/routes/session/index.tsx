@@ -40,6 +40,7 @@ import type {
 } from "@opencode-ai/sdk/v2"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
+import { createCoalescedAccessor } from "../../util/signal"
 import { webSearchProviderLabel } from "../../util/tool-display"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "../../context/sdk"
@@ -1782,14 +1783,19 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
     }
     return text
   })
+  // Coalesce markdown re-parses while tokens stream (~50ms). Flush
+  // immediately once the part gets time.end so finished messages never
+  // show a stale coalesced frame.
+  const done = createMemo(() => props.part.time?.end !== undefined)
+  const display = createCoalescedAccessor(content, 50, done)
   return (
-    <Show when={content()}>
+    <Show when={display()}>
       <box id={"text-" + props.part.id} paddingLeft={3} flexShrink={0}>
         <markdown
           syntaxStyle={syntax()}
-          streaming={true}
+          streaming={!done()}
           internalBlockMode="top-level"
-          content={content()}
+          content={display()}
           tableOptions={{ style: "grid" }}
           conceal={ctx.conceal()}
           fg={theme.markdownText}

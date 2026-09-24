@@ -601,12 +601,13 @@ export const walkNodeTree = (rootNode: Node, mapping: NodeKindMapping, fileID: s
 /**
  * Phase 5 (Batch 3): tree-sitter AST-walk parse for languages whose grammar
  * has no .scm query bundle (rust … yaml). Walks the parsed AST with the
- * per-extension node-kind mapping, records the first syntax error, and merges
- * onto the regex fallback result — same contract as
- * parseTypeScriptWithTreeSitter: walked nodes replace the regex nodes (they
- * are the same symbols, AST-extracted), regex edges stay (their endpoints
- * use the identical `${fileID}:<kind>:<name>:<line>` id scheme), and the
- * result is stamped backend:"tree-sitter".
+ * per-extension node-kind mapping and records the first syntax error.
+ *
+ * When the walk produces nodes, skip the regex merge entirely — adapter
+ * langs do not need regex edges (derived edges come from rebuildDerivedGraph
+ * scanning node.code). TS/JS/Python keep their regex merge on the `.scm`
+ * path because query edges graft onto regex nodes. Regex runs only when
+ * tree-sitter is unavailable or the walk yields nothing.
  */
 export const parseLanguageWithTreeSitter = (
   ext: string,
@@ -629,13 +630,18 @@ export const parseLanguageWithTreeSitter = (
         const rootNode = tree?.rootNode
         if (!rootNode) return regexFallback()
         const walked = walkNodeTree(rootNode, mapping, fileID)
-        const regex = regexFallback()
         const syntaxError = findSyntaxError(rootNode)
+        if (walked.length > 0) {
+          return {
+            nodes: walked,
+            edges: [],
+            backend: "tree-sitter" as const,
+            ...(syntaxError ? { syntaxError } : {}),
+          }
+        }
+        const regex = regexFallback()
         return {
           ...regex,
-          nodes: walked.length > 0 ? walked : regex.nodes,
-          // Phase 0 tree-sitter: mark the backend so the indexer can stamp
-          // node derivation (tree-sitter-v1) exactly like the TS/PY path.
           backend: "tree-sitter" as const,
           ...(syntaxError ? { syntaxError } : {}),
         }
