@@ -103,6 +103,15 @@ describe("PR C: SystemPrompt.codegraph auto-tools policy", () => {
           expect(missing).toContain("Graph state: missing")
           expect(missing).not.toContain("Graph state: ready")
 
+          // WS3 split: stable part is policy + guide only; the Graph state
+          // line rides in the dynamic part so the assembly seam can place it
+          // after the cacheable prefix.
+          const missingParts = yield* svc.codegraphParts()
+          expect(missingParts).toBeDefined()
+          expect(missingParts?.stable).toContain("Repository intelligence is the canonical interface")
+          expect(missingParts?.stable).not.toContain("Graph state:")
+          expect(missingParts?.dynamic).toContain("Graph state: missing")
+
           const repo = yield* Banyan.CodegraphRepo
           yield* repo.setMeta({
             id: "singleton",
@@ -120,6 +129,15 @@ describe("PR C: SystemPrompt.codegraph auto-tools policy", () => {
           expect(ready).toBeDefined()
           expect(ready).toContain("Graph state: ready (1,204 symbols)")
           expect(ready).toContain("code_find")
+
+          // After the flip only the dynamic part changed; the stable part is
+          // byte-identical (that is the whole point of the split).
+          const readyParts = yield* svc.codegraphParts()
+          expect(readyParts?.stable).toBe(missingParts?.stable)
+          expect(readyParts?.dynamic).toContain("Graph state: ready (1,204 symbols)")
+          expect(ready).toBe(
+            [readyParts?.stable, readyParts?.dynamic].filter((part) => part !== undefined).join("\n\n"),
+          )
         }).pipe(Effect.provide(layer)),
       ),
     )

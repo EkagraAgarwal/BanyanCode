@@ -97,6 +97,75 @@ export const promptCacheKey = (request: LLMRequest) => {
   return typeof value === "string" ? value : undefined
 }
 
+// `prompt_cache_options` is documented for GPT-5.6+ and GPT-6 only; older
+// models 400 on it. Anchored like the AI-SDK-side gate (transform.ts) so
+// "gpt-60" never matches; gpt5 minor >= 6 means 5.6+.
+const GPT5_PROMPT_CACHE_VERSION_RE = /(?:^|\/)gpt-5[.-](\d+)(?:[.-]|$)/
+const GPT6_FAMILY_RE = /(?:^|\/)gpt-6(?:[.-]|$)/
+
+export const supportsPromptCacheOptions = (modelID: string) => {
+  const id = modelID.toLowerCase()
+  if (GPT6_FAMILY_RE.test(id)) return true
+  const match = GPT5_PROMPT_CACHE_VERSION_RE.exec(id)
+  return match !== null && Number(match[1]) >= 6
+}
+
+// Read `prompt_cache_options` from providerOptions.openai, keeping only
+// known-valid fields (defensive: a typo drops the entry instead of poisoning
+// the wire body, same rationale as `include`). An invalid `mode` (e.g. the
+// config value "off", which must omit the field entirely) invalidates the
+// whole object. Returns undefined when nothing valid remains.
+export const promptCacheOptions = (request: LLMRequest) => {
+  const value = options(request)?.prompt_cache_options
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const mode: "implicit" | "explicit" | undefined =
+    record.mode === "implicit" ? "implicit" : record.mode === "explicit" ? "explicit" : undefined
+  if (record.mode !== undefined && mode === undefined) return undefined
+  const ttl = record.ttl === "30m" ? ("30m" as const) : undefined
+  const prewarm = typeof record.prewarm === "boolean" ? record.prewarm : undefined
+  const comparison =
+    typeof record.comparison_response_id === "string" && record.comparison_response_id.length > 0
+      ? record.comparison_response_id
+      : undefined
+  const result = {
+    ...(mode !== undefined ? { mode } : {}),
+    ...(ttl !== undefined ? { ttl } : {}),
+    ...(prewarm !== undefined ? { prewarm } : {}),
+    ...(comparison !== undefined ? { comparison_response_id: comparison } : {}),
+  }
+  return Object.keys(result).length > 0 ? result : undefined
+}
+
+// WS5 sticky tools: forward `tool_choice` from providerOptions.openai
+// ("none" | `{ type: "allowed_tools", mode, tools }`) — the shape
+// ProviderTransform.options emits when callability narrows. Only used when
+// the request has no explicit `toolChoice` (that one wins, e.g.
+// generateObject's named tool). Shape-validated so a typo drops the field
+// instead of poisoning the wire body.
+export const toolChoice = (request: LLMRequest) => {
+  const value = options(request)?.tool_choice
+  if (value === "auto" || value === "none" || value === "required") return value
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (record.type !== "allowed_tools") return undefined
+  // Explicit annotations: the literal ternary widens to `string` under tsgo
+  // when the branches compare against `unknown`, which breaks assignability
+  // to the closed OpenAIResponsesToolChoice schema.
+  const mode: "auto" | "required" | undefined =
+    record.mode === "auto" ? "auto" : record.mode === "required" ? "required" : undefined
+  if (mode === undefined || !Array.isArray(record.tools)) return undefined
+  const tools: { type: "function"; name: string }[] = record.tools.flatMap((entry) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return []
+    const tool = entry as Record<string, unknown>
+    return tool.type === "function" && typeof tool.name === "string" && tool.name.length > 0
+      ? [{ type: "function" as const, name: tool.name }]
+      : []
+  })
+  if (tools.length === 0) return undefined
+  return { type: "allowed_tools" as const, mode, tools }
+}
+
 export const textVerbosity = (request: LLMRequest) => {
   const value = options(request)?.textVerbosity
   return isTextVerbosity(value) ? value : undefined

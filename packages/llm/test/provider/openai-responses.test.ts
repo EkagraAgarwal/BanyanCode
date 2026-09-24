@@ -506,6 +506,83 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("lowers configuration_update carriers to real input items at their position", () =>
+    Effect.gen(function* () {
+      const carrier = (effort: string) => ({
+        role: "user" as const,
+        content: [
+          {
+            type: "text" as const,
+            text: "",
+            providerMetadata: {
+              configurationUpdate: { type: "configuration_update", reasoning: { effort } },
+            },
+          },
+        ],
+      })
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          messages: [Message.user("Before."), carrier("high"), Message.user("After.")],
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([
+        { role: "user", content: [{ type: "input_text", text: "Before." }] },
+        { type: "configuration_update", reasoning: { effort: "high" } },
+        { role: "user", content: [{ type: "input_text", text: "After." }] },
+      ])
+    }),
+  )
+
+  it.effect("forwards providerOptions tool_choice when request.toolChoice is absent", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          prompt: "hi",
+          providerOptions: {
+            openai: {
+              tool_choice: {
+                type: "allowed_tools",
+                mode: "auto",
+                tools: [{ type: "function", name: "read" }],
+              },
+            },
+          },
+        }),
+      )
+
+      expect(prepared.body.tool_choice).toEqual({
+        type: "allowed_tools",
+        mode: "auto",
+        tools: [{ type: "function", name: "read" }],
+      })
+
+      // An explicit request toolChoice (e.g. generateObject's named tool)
+      // wins over the sticky providerOptions hint.
+      const named = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          prompt: "hi",
+          toolChoice: "lookup",
+          providerOptions: { openai: { tool_choice: "none" } },
+        }),
+      )
+      expect(named.body.tool_choice).toEqual({ type: "function", name: "lookup" })
+
+      // Malformed hints are dropped instead of poisoning the body.
+      const malformed = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          prompt: "hi",
+          providerOptions: { openai: { tool_choice: { type: "allowed_tools", mode: "auto", tools: [] } } },
+        }),
+      )
+      expect(malformed.body.tool_choice).toBeUndefined()
+    }),
+  )
+
   it.effect("accepts the full ResponseIncludable union", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(

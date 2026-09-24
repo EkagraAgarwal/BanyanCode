@@ -90,6 +90,13 @@ const OpenAIResponsesInputItem = Schema.Union([
     call_id: Schema.String,
     output: OpenAIResponsesFunctionCallOutput,
   }),
+  // WS4 mid-conversation reasoning-effort change (GPT-6 family). Replayed at
+  // its original position between turns; never adjacent (API 400 — message-v2
+  // coalesces adjacent markers at store-lowering time).
+  Schema.Struct({
+    type: Schema.tag("configuration_update"),
+    reasoning: Schema.Struct({ effort: Schema.String }),
+  }),
 ])
 type OpenAIResponsesInputItem = Schema.Schema.Type<typeof OpenAIResponsesInputItem>
 
@@ -114,6 +121,13 @@ type OpenAIResponsesTool = Schema.Schema.Type<typeof OpenAIResponsesTool>
 const OpenAIResponsesToolChoice = Schema.Union([
   Schema.Literals(["auto", "none", "required"]),
   Schema.Struct({ type: Schema.tag("function"), name: Schema.String }),
+  // WS5 sticky tools: restrict callability without rewriting the frozen
+  // tools array (`tool_choice.allowed_tools` on the wire).
+  Schema.Struct({
+    type: Schema.tag("allowed_tools"),
+    mode: Schema.Literals(["auto", "required"]),
+    tools: Schema.Array(Schema.Struct({ type: Schema.tag("function"), name: Schema.String })),
+  }),
 ])
 
 // Fields shared between the HTTP body and the WebSocket `response.create`
@@ -129,6 +143,17 @@ const OpenAIResponsesCoreFields = {
   store: Schema.optional(Schema.Boolean),
   service_tier: Schema.optional(OpenAIOptions.OpenAIServiceTier),
   prompt_cache_key: Schema.optional(Schema.String),
+  // GPT-5.6+ prompt-caching controls (WS2). `mode: "off"` is config-only and
+  // never appears here — "off" omits the field entirely. `ttl`/`prewarm` are
+  // schema-ready but not emitted until their workstreams ship.
+  prompt_cache_options: Schema.optional(
+    Schema.Struct({
+      mode: Schema.optional(Schema.Literals(["implicit", "explicit"])),
+      ttl: Schema.optional(Schema.Literal("30m")),
+      prewarm: Schema.optional(Schema.Boolean),
+      comparison_response_id: Schema.optional(Schema.String),
+    }),
+  ),
   include: optionalArray(OpenAIOptions.OpenAIResponseIncludable),
   reasoning: Schema.optional(
     Schema.Struct({
@@ -164,7 +189,14 @@ const encodeWebSocketMessage = Schema.encodeSync(Schema.fromJsonString(OpenAIRes
 
 const OpenAIResponsesUsage = Schema.Struct({
   input_tokens: Schema.optional(Schema.Number),
-  input_tokens_details: optionalNull(Schema.Struct({ cached_tokens: Schema.optional(Schema.Number) })),
+  input_tokens_details: optionalNull(
+    Schema.Struct({
+      cached_tokens: Schema.optional(Schema.Number),
+      // GPT-5.6+/GPT-6 report cache-write tokens (billed 1.25x) alongside
+      // reads; disjoint subsets of input_tokens per the pricing model.
+      cache_write_tokens: Schema.optional(Schema.Number),
+    }),
+  ),
   output_tokens: Schema.optional(Schema.Number),
   output_tokens_details: optionalNull(Schema.Struct({ reasoning_tokens: Schema.optional(Schema.Number) })),
   total_tokens: Schema.optional(Schema.Number),
@@ -261,6 +293,13 @@ const invalid = ProviderShared.invalidRequest
 // without server-side retention.
 const isOpenAIProvider = (request: LLMRequest) => request.model.provider === "openai"
 
+// TODO(tool_search): the native path does not lower `defer_loading` on
+// function tools nor a `{ type: "tool_search" }` entry — OpenAIResponsesTool
+// below is a closed function-only struct. LLMRequestPrep closes the
+// banyancode_tool_search_defer gate when experimentalNativeLlm is on, so
+// this schema stays byte-for-byte today. Native parity: widen the tool
+// schema (function ∪ tool_search, optional defer_loading) and thread the
+// defer flag from ToolDefinition providerOptions.openai.deferLoading.
 const lowerTool = (tool: ToolDefinition): OpenAIResponsesTool => ({
   type: "function",
   name: tool.name,
@@ -306,6 +345,22 @@ const hostedToolItemID = (part: ToolResultPart) => {
   return ProviderShared.isRecord(openai) && typeof openai.itemId === "string" && openai.itemId.length > 0
     ? openai.itemId
     : undefined
+}
+
+// WS4: a carrier user message (single empty text part whose providerMetadata
+// carries the update) lowers to the real configuration_update input item at
+// its original position — never an empty user text turn. message-v2 coalesces
+// adjacent markers at store-lowering time, so no two items here can be
+// adjacent on the wire.
+const configurationUpdateItem = (message: LLMRequest["messages"][number]) => {
+  if (message.content.length !== 1) return undefined
+  const part = message.content[0]
+  if (!part || part.type !== "text" || part.text !== "") return undefined
+  const update = part.providerMetadata?.configurationUpdate
+  if (!ProviderShared.isRecord(update) || update.type !== "configuration_update") return undefined
+  const reasoning = update.reasoning
+  if (!ProviderShared.isRecord(reasoning) || typeof reasoning.effort !== "string") return undefined
+  return { type: "configuration_update" as const, reasoning: { effort: reasoning.effort } }
 }
 
 const lowerUserContent = Effect.fn("OpenAIResponses.lowerUserContent")(function* (
@@ -369,6 +424,11 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
     }
 
     if (message.role === "user") {
+      const update = configurationUpdateItem(message)
+      if (update) {
+        input.push(update)
+        continue
+      }
       input.push({ role: "user", content: yield* Effect.forEach(message.content, lowerUserContent) })
       continue
     }
@@ -472,10 +532,18 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
   const verbosity = OpenAIOptions.textVerbosity(request)
   const instructions = OpenAIOptions.instructions(request)
   const serviceTier = OpenAIOptions.serviceTier(request)
+  // prompt_cache_options is OpenAI GPT-5.6+ only — gate here as well as at
+  // emission so a providerOptions passthrough can never reach older models
+  // or compatible deployments through this protocol.
+  const promptCacheOptions =
+    isOpenAIProvider(request) && OpenAIOptions.supportsPromptCacheOptions(request.model.id)
+      ? OpenAIOptions.promptCacheOptions(request)
+      : undefined
   return {
     ...(instructions ? { instructions } : {}),
     ...(stateless ? { store: false } : store !== undefined ? { store } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
+    ...(promptCacheOptions ? { prompt_cache_options: promptCacheOptions } : {}),
     ...(statelessInclude ? { include: statelessInclude } : {}),
     ...(effort || summary ? { reasoning: { effort, summary } } : {}),
     ...(verbosity ? { text: { verbosity } } : {}),
@@ -486,11 +554,17 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
 const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request: LLMRequest) {
   const generation = request.generation
   const options = yield* lowerOptions(request)
+  // WS5: the sticky-tool hint rides providerOptions.openai.tool_choice
+  // (emitted by ProviderTransform.options). An explicit request.toolChoice
+  // (e.g. generateObject's named tool) wins over the hint.
+  const toolChoice = request.toolChoice
+    ? yield* lowerToolChoice(request.toolChoice)
+    : OpenAIOptions.toolChoice(request)
   return {
     model: request.model.id,
     input: yield* lowerMessages(request),
     tools: request.tools.length === 0 ? undefined : request.tools.map(lowerTool),
-    tool_choice: request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined,
+    tool_choice: toolChoice,
     stream: true as const,
     max_output_tokens: generation?.maxTokens,
     temperature: generation?.temperature,
@@ -509,13 +583,18 @@ const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request:
 const mapUsage = (usage: OpenAIResponsesUsage | null | undefined) => {
   if (!usage) return undefined
   const cached = usage.input_tokens_details?.cached_tokens
+  const cacheWrite = usage.input_tokens_details?.cache_write_tokens
   const reasoning = usage.output_tokens_details?.reasoning_tokens
-  const nonCached = ProviderShared.subtractTokens(usage.input_tokens, cached)
+  const nonCached = ProviderShared.subtractTokens(
+    ProviderShared.subtractTokens(usage.input_tokens, cached),
+    cacheWrite,
+  )
   return new Usage({
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens,
     nonCachedInputTokens: nonCached,
     cacheReadInputTokens: cached,
+    cacheWriteInputTokens: cacheWrite,
     reasoningTokens: reasoning,
     totalTokens: ProviderShared.totalTokens(usage.input_tokens, usage.output_tokens, usage.total_tokens),
     providerMetadata: { openai: usage },
@@ -895,14 +974,20 @@ const onOutputItemDone = Effect.fn("OpenAIResponses.onOutputItemDone")(function*
 
 const onResponseFinish = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
   const events: LLMEvent[] = []
+  const response = event.response
+  // `prompt_cache_diagnostics` (first-reason-only cache-miss report) rides
+  // the response object as an extension field; surface it on providerMetadata
+  // so the session processor can log it without blocking output.
+  const cacheDiagnostics = response !== undefined ? response["prompt_cache_diagnostics"] : undefined
   const lifecycle = Lifecycle.finish(state.lifecycle, events, {
     reason: mapFinishReason(event, state.hasFunctionCall),
-    usage: mapUsage(event.response?.usage),
+    usage: mapUsage(response?.usage),
     providerMetadata:
-      event.response?.id || event.response?.service_tier
+      response !== undefined && (response.id || response.service_tier || cacheDiagnostics !== undefined)
         ? openaiMetadata({
-            responseId: event.response.id,
-            serviceTier: event.response.service_tier,
+            responseId: response.id,
+            serviceTier: response.service_tier,
+            ...(cacheDiagnostics !== undefined ? { promptCacheDiagnostics: cacheDiagnostics } : {}),
           })
         : undefined,
   })

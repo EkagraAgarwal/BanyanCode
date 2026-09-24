@@ -205,7 +205,7 @@ function renderToolGuide(tools: ReadonlyArray<CodegraphToolDescription>): string
 // model can tell "graph ready" from "graph absent". `symbols` is the
 // indexer's total-file count (codegraph coverage numerator), rendered with
 // locale separators when present.
-const graphLineFor = (graph: NonNullable<CodegraphSystemInput["graph"]>): string => {
+export const graphLineFor = (graph: NonNullable<CodegraphSystemInput["graph"]>): string => {
   if (graph.state === "ready") {
     const symbols = graph.symbols === undefined ? "N/A" : graph.symbols.toLocaleString()
     return `Graph state: ready (${symbols} symbols) — use code_find/repository_* now.`

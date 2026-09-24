@@ -1410,16 +1410,24 @@ export const layer = Layer.effect(
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
               MessageV2.toModelMessagesEffect(msgs, model),
-              sys.codegraph(tools),
+              sys.codegraphParts(tools),
               sys.banyan(),
             ])
-            const system = [
-              ...env,
-              ...instructions,
-              ...(codegraph ? [codegraph] : []),
-              ...(banyan ? [banyan] : []),
-              ...(skills ? [skills] : []),
-            ]
+            // WS3 gate: stable-prefix ordering (default on). Absent config
+            // service or unset key keeps the new order; `false` restores the
+            // legacy interleaved order byte-for-byte.
+            const banyanConfigOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+            const stablePrefix = Option.isSome(banyanConfigOpt)
+              ? ((yield* banyanConfigOpt.value.get()).banyancode_prompt_cache_stable_prefix ?? true)
+              : true
+            const system = SystemPrompt.assemble({
+              stablePrefix,
+              env,
+              instructions,
+              codegraph,
+              banyan,
+              skills,
+            })
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({

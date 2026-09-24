@@ -42,10 +42,59 @@ export function provider(model: Provider.Model) {
   return [PROMPT_DEFAULT]
 }
 
+// WS3 (prompt-caching plan PR2): the codegraph block split into its static
+// part (policy text + per-session tool guide) and its dynamic part (the
+// one-line Graph state readout, which flips as the graph builds).
+export interface CodegraphParts {
+  readonly stable: string
+  readonly dynamic?: string
+}
+
+// WS3: system assembly seam. With `stablePrefix` (config key
+// `banyancode_prompt_cache_stable_prefix`, default true) the static blocks —
+// instructions, codegraph policy + tool guide, orchestration — emit first so
+// the cacheable prefix survives date rollover and graph-state flips; the
+// volatile tail (env/date, references, skills, graph-state) follows. When
+// false, the legacy interleaved order is preserved byte-for-byte (the
+// codegraph parts rejoin with "\n\n", exactly as CodegraphSystemSource.load
+// renders them).
+export function assemble(input: {
+  readonly stablePrefix: boolean
+  readonly env: ReadonlyArray<string>
+  readonly instructions: ReadonlyArray<string>
+  readonly codegraph?: CodegraphParts
+  readonly banyan?: string
+  readonly skills?: string
+}): string[] {
+  if (input.stablePrefix)
+    return [
+      ...input.instructions,
+      ...(input.codegraph === undefined ? [] : [input.codegraph.stable]),
+      ...(input.banyan === undefined ? [] : [input.banyan]),
+      ...input.env,
+      ...(input.skills === undefined ? [] : [input.skills]),
+      ...(input.codegraph?.dynamic === undefined ? [] : [input.codegraph.dynamic]),
+    ]
+  const codegraphFull =
+    input.codegraph === undefined
+      ? undefined
+      : [input.codegraph.stable, input.codegraph.dynamic]
+          .filter((part): part is string => part !== undefined && part.length > 0)
+          .join("\n\n")
+  return [
+    ...input.env,
+    ...input.instructions,
+    ...(codegraphFull === undefined ? [] : [codegraphFull]),
+    ...(input.banyan === undefined ? [] : [input.banyan]),
+    ...(input.skills === undefined ? [] : [input.skills]),
+  ]
+}
+
 export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
   readonly codegraph: (tools?: Record<string, AITool>) => Effect.Effect<string | undefined>
+  readonly codegraphParts: (tools?: Record<string, AITool>) => Effect.Effect<CodegraphParts | undefined>
   readonly banyan: () => Effect.Effect<string | undefined>
 }
 
@@ -56,6 +105,53 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const skill = yield* Skill.Service
     const locations = yield* LocationServiceMap
+
+    // WS3: compute the codegraph block as { stable, dynamic } so the
+    // assembly seam can place the Graph state line in the dynamic tail
+    // while the policy + tool guide stay in the cacheable prefix.
+    const codegraphParts = Effect.fn("SystemPrompt.codegraphParts")(function* (tools?: Record<string, AITool>) {
+      const enabled = process.env.BANYANCODE_ENABLE !== "0"
+      if (!enabled) return
+      // Map the resolved AI-SDK tool set into the source's
+      // CodegraphToolDescription shape so the rendered guide carries the
+      // per-tool descriptions the model will see in its function list.
+      const descriptions = tools
+        ? Object.entries(tools).map(([id, tool]) => ({
+            id,
+            description: tool.description ?? "",
+          }))
+        : undefined
+
+      // Prefer the BanyanCode source module when it is in scope (e.g. tests
+      // that provide the layer, or future wiring via `defaultLayer`). Falls
+      // back to the exported `POLICY_TEXT` constant when the service is not
+      // available so the V1 prompt still ships the model-facing preference
+      // for graph + repository tools over grep/glob/bash.
+      const source = yield* Effect.serviceOption(Banyan.CodegraphSystemSource)
+
+      // Phase A: read the graph bootstrap state so the rendered policy can
+      // tell the model whether a graph is ready, building, or missing. The
+      // bootstrap service is optional — when it is not in scope (tests that
+      // only provide SystemPrompt.defaultLayer) the Graph state line is
+      // omitted entirely and behavior is unchanged.
+      const bootstrap = yield* Effect.serviceOption(Banyan.CodegraphBootstrap)
+      const graphState = Option.isSome(bootstrap)
+        ? yield* bootstrap.value.status().pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+        : undefined
+
+      const parts: CodegraphParts = yield* Option.match(source, {
+        onSome: (svc) =>
+          Effect.map(
+            descriptions === undefined ? svc.load(undefined) : svc.load({ tools: descriptions }),
+            (stable): CodegraphParts =>
+              graphState === undefined
+                ? { stable }
+                : { stable, dynamic: Banyan.CodegraphSystemSourceNS.graphLineFor(graphState) },
+          ),
+        onNone: () => Effect.succeed({ stable: Banyan.CodegraphSystemSourceNS.POLICY_TEXT }),
+      })
+      return parts
+    })
 
     return Service.of({
       environment: Effect.fn("SystemPrompt.environment")(function* (model: Provider.Model) {
@@ -111,46 +207,18 @@ export const layer = Layer.effect(
         ].join("\n")
       }),
 
+      codegraphParts,
+
+      // Back-compat: the combined block (stable + "\n\n" + dynamic) that
+      // existing callers/tests assert on. Byte-identical to the pre-split
+      // output — CodegraphSystemSource.load joined the same parts the same
+      // way, and the POLICY_TEXT fallback never carried a graph line.
       codegraph: Effect.fn("SystemPrompt.codegraph")(function* (tools?: Record<string, AITool>) {
-        const enabled = process.env.BANYANCODE_ENABLE !== "0"
-        if (!enabled) return
-        // Map the resolved AI-SDK tool set into the source's
-        // CodegraphToolDescription shape so the rendered guide carries the
-        // per-tool descriptions the model will see in its function list.
-        const descriptions = tools
-          ? Object.entries(tools).map(([id, tool]) => ({
-              id,
-              description: tool.description ?? "",
-            }))
-          : undefined
-
-        // Prefer the BanyanCode source module when it is in scope (e.g. tests
-        // that provide the layer, or future wiring via `defaultLayer`). Falls
-        // back to the exported `POLICY_TEXT` constant when the service is not
-        // available so the V1 prompt still ships the model-facing preference
-        // for graph + repository tools over grep/glob/bash.
-        const source = yield* Effect.serviceOption(Banyan.CodegraphSystemSource)
-
-        // Phase A: read the graph bootstrap state so the rendered policy can
-        // tell the model whether a graph is ready, building, or missing. The
-        // bootstrap service is optional — when it is not in scope (tests that
-        // only provide SystemPrompt.defaultLayer) the Graph state line is
-        // omitted entirely and behavior is unchanged.
-        const bootstrap = yield* Effect.serviceOption(Banyan.CodegraphBootstrap)
-        const graphState = Option.isSome(bootstrap)
-          ? yield* bootstrap.value.status().pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-          : undefined
-
-        return yield* Option.match(source, {
-          onSome: (svc) =>
-            descriptions === undefined && graphState === undefined
-              ? svc.load(undefined)
-              : svc.load({
-                  ...(descriptions ? { tools: descriptions } : {}),
-                  ...(graphState ? { graph: graphState } : {}),
-                }),
-          onNone: () => Effect.succeed(Banyan.CodegraphSystemSourceNS.POLICY_TEXT),
-        })
+        const parts = yield* codegraphParts(tools)
+        if (parts === undefined) return undefined
+        return [parts.stable, parts.dynamic]
+          .filter((part): part is string => part !== undefined && part.length > 0)
+          .join("\n\n")
       }),
 
       banyan: Effect.fn("SystemPrompt.banyan")(function* () {
