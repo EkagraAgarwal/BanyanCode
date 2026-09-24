@@ -274,7 +274,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
 
       state.activeVariant = cycleVariant(state.activeVariant, state.variants)
-      saveVariant(state.model, state.activeVariant)
+      saveVariant(state.model, state.activeVariant, state.sessionID || undefined)
       return {
         status: state.activeVariant ? `variant ${state.activeVariant}` : "variant default",
         modelLabel: formatModelLabel(state.model, state.activeVariant, state.providers),
@@ -329,7 +329,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
 
       state.activeVariant = variant
-      saveVariant(state.model, state.activeVariant)
+      saveVariant(state.model, state.activeVariant, state.sessionID || undefined)
       return {
         status: state.activeVariant ? `variant ${state.activeVariant}` : "variant default",
         modelLabel: formatModelLabel(state.model, state.activeVariant, state.providers),
@@ -674,7 +674,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
           const val = args.toLowerCase()
           if (["off", "none", "disabled", "false"].includes(val)) {
             state.activeVariant = undefined
-            saveVariant(state.model, undefined)
+            saveVariant(state.model, undefined, state.sessionID || undefined)
             footer.event({
               type: "variants",
               variants: state.variants,
@@ -699,7 +699,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
             if (state.variants.length > 0) {
               const target = state.variants.includes("high") ? "high" : state.variants[0]
               state.activeVariant = target
-              saveVariant(state.model, target)
+              saveVariant(state.model, target, state.sessionID || undefined)
               footer.event({
                 type: "variants",
                 variants: state.variants,
@@ -731,7 +731,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
           // Any other value
           if (state.variants.includes(val)) {
             state.activeVariant = val
-            saveVariant(state.model, val)
+            saveVariant(state.model, val, state.sessionID || undefined)
             footer.event({
               type: "variants",
               variants: state.variants,

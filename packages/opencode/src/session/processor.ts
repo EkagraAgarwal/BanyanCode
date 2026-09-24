@@ -32,6 +32,7 @@ import * as DateTime from "effect/DateTime"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ToolOutput, Usage, type LLMEvent } from "@opencode-ai/llm"
 import { Banyan } from "@opencode-ai/core/banyancode"
+import { ProviderTransform } from "@/provider/transform"
 
 const DOOM_LOOP_THRESHOLD = 3
 export type Result = "compact" | "stop" | "continue"
@@ -807,6 +808,27 @@ export const layer = Layer.effect(
               usage: value.usage ?? new Usage({}),
               metadata: value.providerMetadata,
             })
+            // Prompt-cache diagnostics (WS0): record this response id as the
+            // comparison baseline for the next turn, and surface a
+            // first-reason cache-miss report when the provider returned one.
+            // Never blocks or alters output. Baseline only tracked for the
+            // OpenAI provider — that is the only emitter of
+            // prompt_cache_options.comparison_response_id.
+            const openaiMeta =
+              ctx.model.providerID === "openai" ? value.providerMetadata?.["openai"] : undefined
+            if (openaiMeta !== undefined) {
+              const responseId = openaiMeta["responseId"]
+              if (typeof responseId === "string" && responseId.length > 0) {
+                ProviderTransform.recordResponseId(ctx.sessionID, responseId)
+              }
+              const cacheDiagnostics = openaiMeta["promptCacheDiagnostics"]
+              if (cacheDiagnostics !== undefined) {
+                yield* Effect.logInfo("prompt cache diagnostics", {
+                  "session.id": ctx.sessionID,
+                  diagnostics: cacheDiagnostics,
+                })
+              }
+            }
             telemetryUsage = value.usage
             telemetryCost = usage.cost
             telemetryFinishReason = value.reason
@@ -966,8 +988,17 @@ export const layer = Layer.effect(
             ctx.currentTextID = undefined
             return
 
-          case "finish":
+          case "finish": {
+            // Fallback baseline record: some runtimes surface responseId only
+            // on the terminal finish event (native emits it on both).
+            if (ctx.model.providerID === "openai") {
+              const responseId = value.providerMetadata?.["openai"]?.["responseId"]
+              if (typeof responseId === "string" && responseId.length > 0) {
+                ProviderTransform.recordResponseId(ctx.sessionID, responseId)
+              }
+            }
             return
+          }
         }
       })
 

@@ -11,6 +11,7 @@ import { Image } from "@/image/image"
 import { Agent } from "../../src/agent/agent"
 import { LLM } from "../../src/session/llm"
 import { SessionCompaction } from "../../src/session/compaction"
+import { SessionEffort } from "@/session/effort"
 import { Token } from "@/util/token"
 import { Permission } from "../../src/permission"
 import { Plugin } from "../../src/plugin"
@@ -1534,6 +1535,147 @@ describe("session.compaction.process", () => {
       expect(part?.type).toBe("compaction")
       expect(part?.tail_start_id).toBe(keep.id)
     }).pipe(withCompaction({ config: cfg({ tail_turns: 2, preserve_recent_tokens: 500 }) })),
+  )
+
+  itCompaction.instance(
+    "strips configuration_update markers from compact input and re-appends effort after compact",
+    () => {
+      const stub = llm()
+      let captured = ""
+      stub.push(reply("summary", (input) => (captured = JSON.stringify(input.messages))))
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        SessionEffort.resetEffortState()
+        SessionEffort.freezeBaseReasoningEffort(session.id, "high")
+        const gpt6 = { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("gpt-6-astra") }
+
+        const hello = yield* ssn.updateMessage({
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID: session.id,
+          agent: "build",
+          model: gpt6,
+          time: { created: Date.now() },
+        })
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: hello.id,
+          sessionID: session.id,
+          type: "text",
+          text: "hello",
+        })
+        const marker = yield* ssn.updateMessage({
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID: session.id,
+          agent: "build",
+          model: gpt6,
+          time: { created: Date.now() },
+        })
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: marker.id,
+          sessionID: session.id,
+          type: "configuration_update",
+          reasoning: { effort: "high" },
+        })
+        const parent = yield* ssn.updateMessage({
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID: session.id,
+          agent: "build",
+          model: gpt6,
+          time: { created: Date.now() },
+        })
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: parent.id,
+          sessionID: session.id,
+          type: "compaction",
+          auto: false,
+        })
+
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+        const result = yield* SessionCompaction.use.process({
+          parentID: parent.id,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+        expect(result).toBe("continue")
+
+        // Marker content never lowers into the summarizer request.
+        expect(captured).toContain("hello")
+        expect(captured).not.toContain("configurationUpdate")
+        expect(captured).not.toContain("configuration_update")
+
+        // Compact ran, and the effective effort was re-appended at the tail so
+        // filterCompacted keeps replaying the configuration_update item.
+        const after = yield* ssn.messages({ sessionID: session.id })
+        expect(after.some((msg) => msg.info.role === "assistant" && msg.info.summary)).toBe(true)
+        expect(after.at(-1)?.parts).toMatchObject([
+          { type: "configuration_update", reasoning: { effort: "high" } },
+        ])
+        const markers = after.filter((msg) => msg.parts.some((part) => part.type === "configuration_update"))
+        expect(markers).toHaveLength(2)
+      }).pipe(
+        withCompaction({
+          llm: stub.layer,
+          provider: ProviderTest.fake({
+            model: ProviderTest.model({
+              id: ModelV2.ID.make("gpt-6-astra"),
+              providerID: ProviderV2.ID.make("test"),
+            }),
+          }),
+        }),
+      )
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "does not re-append effort marker when the model is not configuration_update eligible",
+    Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      SessionEffort.resetEffortState()
+      SessionEffort.freezeBaseReasoningEffort(session.id, "high")
+
+      yield* createUserMessage(session.id, "hello")
+      const marker = yield* ssn.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: session.id,
+        agent: "build",
+        model: ref,
+        time: { created: Date.now() },
+      })
+      yield* ssn.updatePart({
+        id: PartID.ascending(),
+        messageID: marker.id,
+        sessionID: session.id,
+        type: "configuration_update",
+        reasoning: { effort: "high" },
+      })
+      yield* createCompactionMarker(session.id)
+
+      const msgs = yield* ssn.messages({ sessionID: session.id })
+      const parent = msgs.at(-1)?.info.id
+      expect(parent).toBeTruthy()
+      const result = yield* SessionCompaction.use.process({
+        parentID: parent!,
+        messages: msgs,
+        sessionID: session.id,
+        auto: false,
+      })
+
+      expect(result).toBe("continue")
+      const after = yield* ssn.messages({ sessionID: session.id })
+      expect(after.some((msg) => msg.info.role === "assistant" && msg.info.summary)).toBe(true)
+      const markers = after.filter((msg) => msg.parts.some((part) => part.type === "configuration_update"))
+      expect(markers).toHaveLength(1)
+    }).pipe(withCompaction()),
   )
 })
 

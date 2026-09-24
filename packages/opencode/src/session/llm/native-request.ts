@@ -106,6 +106,25 @@ const messages = (input: readonly ModelMessage[]) => {
   const system = input.flatMap((message) => (message.role === "system" ? [SystemPart.make(message.content)] : []))
   const messages = input.flatMap((message) => {
     if (message.role === "system") return []
+    // ProviderTransform.message splits configuration_update carriers into the
+    // raw OpenAI input item; LLM messages are role/content shaped, so re-wrap
+    // the item as a carrier that openai-responses lowerMessages splits back
+    // out into the wire item at the same position.
+    const raw = message as { type?: unknown; reasoning?: unknown }
+    if (raw.type === "configuration_update" && isRecord(raw.reasoning)) {
+      return [
+        Message.make({
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "",
+              providerMetadata: { configurationUpdate: { type: "configuration_update", reasoning: raw.reasoning } },
+            },
+          ],
+        }),
+      ]
+    }
     return [
       Message.make({
         role: message.role,

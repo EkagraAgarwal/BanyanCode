@@ -473,7 +473,44 @@ export function message(msgs: ModelMessage[], model: Provider.Model, options: Re
     })
   }
 
+  // WS4 configuration_update (OpenAI only): split carrier user messages (a
+  // single empty text part carrying the update in providerOptions) into the
+  // real OpenAI input item at their original position — never an empty user
+  // text turn. OpenAI-only: the item type is documented for the GPT-6 family
+  // and other converters have no representation for it. NOTE: on the default
+  // AI SDK path ai's convertToLanguageModelPrompt strips empty user text
+  // parts BEFORE this middleware runs, so a carrier arrives here as a husk
+  // (`content: []`) with the payload already dropped — the husk is removed
+  // below to avoid sending `{ role:"user", content:[] }` (400), and the real
+  // item only reaches the wire via the native runtime (native-request
+  // re-carriers the split item for openai-responses lowerMessages).
+  // TODO: re-check after an @ai-sdk/openai release adds configuration_update
+  // input-item support; implicit-mode caching is unaffected either way.
+  if (model.providerID === "openai" || model.api.npm === "@ai-sdk/openai") {
+    msgs = msgs.flatMap((msg) => {
+      const update = configurationCarrier(msg)
+      if (update) return [update as unknown as ModelMessage]
+      if (msg.role === "user" && Array.isArray(msg.content) && msg.content.length === 0) return []
+      return [msg]
+    })
+  }
+
   return msgs
+}
+
+// Detect a lowered configuration_update carrier and return the real input
+// item it stands for, or undefined when the message is not a carrier.
+function configurationCarrier(msg: ModelMessage) {
+  if (msg.role !== "user" || !Array.isArray(msg.content) || msg.content.length !== 1) return undefined
+  const part = msg.content[0]
+  if (part?.type !== "text" || part.text !== "") return undefined
+  const update = (part as { providerOptions?: Record<string, unknown> }).providerOptions?.configurationUpdate
+  if (typeof update !== "object" || update === null || Array.isArray(update)) return undefined
+  const reasoning = (update as { reasoning?: unknown }).reasoning
+  if (typeof reasoning !== "object" || reasoning === null || Array.isArray(reasoning)) return undefined
+  const effort = (reasoning as { effort?: unknown }).effort
+  if (typeof effort !== "string") return undefined
+  return { type: "configuration_update" as const, reasoning: { effort } }
 }
 
 export function temperature(model: Provider.Model) {
@@ -542,6 +579,36 @@ const GPT5_VERSIONED_PRO_RE = /(?:^|\/)gpt-5[.-]\d+[.-]pro(?:[.-]|$)/
 
 function gpt5Version(apiId: string) {
   return Number(GPT5_VERSION_RE.exec(apiId)?.[1]) || undefined
+}
+
+// `prompt_cache_options` is documented for GPT-5.6+ and GPT-6 only; older
+// models must never receive it (upgrade-guide rule). gpt5Version captures the
+// minor after "gpt-5." so 6+ means 5.6+; the gpt-6 family is matched
+// separately. Anchored like the effort regexes so "gpt-60" never matches.
+const GPT6_FAMILY_RE = /(?:^|\/)gpt-6(?:[.-]|$)/
+
+function supportsPromptCacheOptions(apiId: string) {
+  const id = apiId.toLowerCase()
+  if (GPT6_FAMILY_RE.test(id)) return true
+  const version = gpt5Version(id)
+  return version !== undefined && version >= 6
+}
+
+// Session-scoped id of the last completed OpenAI response, recorded from
+// step-finish/finish provider metadata and re-sent as
+// `prompt_cache_options.comparison_response_id` when cache diagnostics are
+// enabled (WS0). Insertion-ordered Map with a cap — one entry per active
+// session; oldest evicted first (hot-path collections need explicit bounds).
+const lastResponseIds = new Map<string, string>()
+const LAST_RESPONSE_ID_CAP = 1000
+
+export function recordResponseId(sessionID: string, responseID: string) {
+  lastResponseIds.delete(sessionID)
+  lastResponseIds.set(sessionID, responseID)
+  if (lastResponseIds.size > LAST_RESPONSE_ID_CAP) {
+    const oldest = lastResponseIds.keys().next().value
+    if (oldest !== undefined) lastResponseIds.delete(oldest)
+  }
 }
 
 function versionedGpt5ReasoningEfforts(apiId: string) {
@@ -1074,6 +1141,17 @@ export function options(input: {
   model: Provider.Model
   sessionID: string
   providerOptions?: Record<string, any>
+  // OpenAI prompt-caching (WS1/WS2). prepare() resolves both from
+  // BanyanConfig; callers that omit them get the config defaults
+  // (implicit mode, diagnostics off).
+  promptCacheMode?: "implicit" | "explicit" | "off"
+  promptCacheDiagnostics?: boolean
+  // WS5a sticky tools. Absent when the sticky gate is off (non-OpenAI,
+  // cache mode "off", small). allowedTools = currently callable ∩ the
+  // frozen snapshot; toolChoiceHint is "none" when nothing is callable.
+  allowedTools?: readonly string[] | undefined
+  toolChoiceHint?: "none" | undefined
+  toolSnapshot?: { readonly toolNames: readonly string[] } | undefined
 }): Record<string, any> {
   const result: Record<string, any> = {}
 
@@ -1127,6 +1205,57 @@ export function options(input: {
 
   if (input.model.providerID === "openai" || input.providerOptions?.setCacheKey) {
     result["promptCacheKey"] = input.sessionID
+  }
+
+  // OpenAI `prompt_cache_options` (GPT-5.6+/GPT-6, OpenAI provider only —
+  // never for other providers or older models). mode "off" omits the whole
+  // object. comparison_response_id (previous completed response for this
+  // session) is sent only when diagnostics are enabled; omitted on the first
+  // turn. NOTE: @ai-sdk/openai@3.0.67 parses providerOptions.openai through
+  // a closed zod schema (openai-responses-options.ts) whose baseArgs maps
+  // only known fields — unknown keys are stripped, so on the default AI SDK
+  // path this object never reaches the wire today; the native path
+  // (openai-responses lowerOptions) reads the same providerOptions key and
+  // DOES emit it. TODO: re-check after an @ai-sdk/openai upgrade adds
+  // prompt_cache_options support; implicit mode is OpenAI's server default
+  // so the AI SDK path still caches — only diagnostics comparison is lost.
+  const promptCacheMode = input.promptCacheMode ?? "implicit"
+  if (
+    input.model.providerID === "openai" &&
+    promptCacheMode !== "off" &&
+    supportsPromptCacheOptions(input.model.api.id)
+  ) {
+    const comparisonResponseId =
+      input.promptCacheDiagnostics === true ? lastResponseIds.get(input.sessionID) : undefined
+    result["prompt_cache_options"] = {
+      mode: promptCacheMode === "explicit" ? "explicit" : "implicit",
+      ...(comparisonResponseId !== undefined ? { comparison_response_id: comparisonResponseId } : {}),
+    }
+  }
+
+  // WS5 sticky tools (OpenAI only, same gate as the sticky snapshot): when
+  // callability narrows, keep the frozen wire `tools` array byte-stable and
+  // express the restriction through `tool_choice` instead — mutating `tools`
+  // would be a `tools_changed` cache miss. "none" when nothing is callable;
+  // `allowed_tools` when a strict subset of the snapshot is callable; omitted
+  // when the full snapshot is callable (byte-identical to the first turn).
+  // NOTE: like prompt_cache_options, @ai-sdk/openai's closed options schema
+  // strips unknown keys on the default AI SDK path — the native path reads
+  // the same providerOptions key (OpenAIOptions.toolChoice) and DOES emit it.
+  if (input.model.providerID === "openai" && promptCacheMode !== "off") {
+    if (input.toolChoiceHint === "none") {
+      result["tool_choice"] = "none"
+    } else if (
+      input.allowedTools !== undefined &&
+      input.toolSnapshot !== undefined &&
+      input.allowedTools.length < input.toolSnapshot.toolNames.length
+    ) {
+      result["tool_choice"] = {
+        type: "allowed_tools",
+        mode: "auto",
+        tools: input.allowedTools.map((name) => ({ type: "function", name })),
+      }
+    }
   }
 
   if (input.model.api.npm === "@ai-sdk/google" || input.model.api.npm === "@ai-sdk/google-vertex") {

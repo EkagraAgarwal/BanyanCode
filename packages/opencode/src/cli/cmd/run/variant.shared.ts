@@ -12,6 +12,7 @@ import { Context, Effect, Layer } from "effect"
 import { makeRuntime } from "@/effect/run-service"
 import { Global } from "@opencode-ai/core/global"
 import { isRecord } from "@/util/record"
+import { SessionEffort } from "@/session/effort"
 import { createSession, sessionVariant, type RunSession, type SessionMessages } from "./session.shared"
 import type { RunInput, RunProvider } from "./types"
 
@@ -210,6 +211,20 @@ export async function resolveSavedVariant(model: RunInput["model"]): Promise<str
   return runtime.resolveSavedVariant(model)
 }
 
-export function saveVariant(model: RunInput["model"], variant: string | undefined): void {
+// WS4: variant names ARE effort levels ("high"...). When the runtime passes
+// the active session id, fire-and-forget the marker writer so the change
+// lands as a persisted configuration_update instead of a top-level
+// reasoning.effort rewrite (flag-gated + failures swallowed inside
+// applyEffortChangeDetached; gated on gpt-6* eligibility here). Without a
+// sessionID (model.json persistence before any session exists) there is no
+// conversation to mark — skip.
+export function saveVariant(
+  model: RunInput["model"],
+  variant: string | undefined,
+  sessionID?: string,
+): void {
   void runtime.saveVariant(model, variant)
+  if (variant && sessionID && model && SessionEffort.isConfigurationUpdateEligible(model.modelID)) {
+    void SessionEffort.applyEffortChangeDetached(sessionID, variant)
+  }
 }

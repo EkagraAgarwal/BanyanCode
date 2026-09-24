@@ -3,6 +3,7 @@ import type { Message, Part } from "@opencode-ai/sdk/v2"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Context, Effect, Layer, Ref } from "effect"
+import { SessionEffort } from "@/session/effort"
 import * as ACPError from "./error"
 
 export type SelectedModel = {
@@ -141,8 +142,22 @@ export const layer = Layer.effect(
       update(sessionId, (session) => ({ ...session, model })),
     )
 
+    // WS4: variant names ARE effort levels ("high"...) on the GPT-6 family.
+    // After the state update, fire-and-forget the marker writer so the change
+    // lands as a persisted configuration_update instead of a top-level
+    // reasoning.effort rewrite (flag-gated + failures swallowed inside
+    // applyEffortChangeDetached). Gated on eligibility: configuration_update
+    // is documented for gpt-6* only.
     const setVariant: Interface["setVariant"] = Effect.fn("ACP.Session.setVariant")((sessionId, variant) =>
-      update(sessionId, (session) => ({ ...session, variant })),
+      update(sessionId, (session) => ({ ...session, variant })).pipe(
+        Effect.tap((info) =>
+          Effect.sync(() => {
+            if (variant && info.model && SessionEffort.isConfigurationUpdateEligible(info.model.modelID)) {
+              void SessionEffort.applyEffortChangeDetached(sessionId, variant)
+            }
+          }),
+        ),
+      ),
     )
 
     const setMode: Interface["setMode"] = Effect.fn("ACP.Session.setMode")((sessionId, modeId) =>

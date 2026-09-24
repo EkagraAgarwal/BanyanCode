@@ -4565,3 +4565,315 @@ describe("ProviderTransform.providerOptions - ai-gateway-provider", () => {
     expect(result).toEqual({ openaiCompatible: { reasoningEffort: "high" } })
   })
 })
+
+describe("ProviderTransform.options - prompt_cache_options", () => {
+  const sessionID = "test-session-cache"
+
+  const openaiModel = (apiId: string) =>
+    ({
+      id: `openai/${apiId}`,
+      providerID: "openai",
+      api: {
+        id: apiId,
+        url: "https://api.openai.com",
+        npm: "@ai-sdk/openai",
+      },
+      capabilities: {
+        temperature: true,
+        reasoning: true,
+        attachment: true,
+        toolcall: true,
+        input: { text: true, audio: false, image: true, video: false, pdf: true },
+        output: { text: true, audio: false, image: false, video: false, pdf: false },
+        interleaved: false,
+      },
+      cost: { input: 1, output: 1, cache: { read: 0, write: 0 } },
+      limit: { context: 400_000, output: 128_000 },
+      status: "active",
+      options: {},
+      headers: {},
+    }) as any
+
+  test("emits implicit mode for gpt-5.6+ OpenAI models by default", () => {
+    const result = ProviderTransform.options({ model: openaiModel("gpt-5.6-sol"), sessionID })
+    expect(result.prompt_cache_options).toEqual({ mode: "implicit" })
+  })
+
+  test("emits implicit mode for the gpt-6 family", () => {
+    for (const apiId of ["gpt-6", "gpt-6-astra", "gpt-6.0-astra", "gpt-6-sol"]) {
+      const result = ProviderTransform.options({ model: openaiModel(apiId), sessionID })
+      expect(result.prompt_cache_options).toEqual({ mode: "implicit" })
+    }
+  })
+
+  test("emits explicit mode when configured", () => {
+    const result = ProviderTransform.options({
+      model: openaiModel("gpt-5.6"),
+      sessionID,
+      promptCacheMode: "explicit",
+    })
+    expect(result.prompt_cache_options).toEqual({ mode: "explicit" })
+  })
+
+  test("omits prompt_cache_options when mode is off", () => {
+    const result = ProviderTransform.options({
+      model: openaiModel("gpt-5.6"),
+      sessionID,
+      promptCacheMode: "off",
+    })
+    expect(result.prompt_cache_options).toBeUndefined()
+    expect("prompt_cache_options" in result).toBe(false)
+  })
+
+  test("omits prompt_cache_options for pre-5.6 OpenAI models", () => {
+    for (const apiId of ["gpt-4o", "gpt-5", "gpt-5.5", "gpt-5.4-2026-03-05", "o3-mini"]) {
+      const result = ProviderTransform.options({ model: openaiModel(apiId), sessionID })
+      expect(result.prompt_cache_options).toBeUndefined()
+    }
+  })
+
+  test("omits prompt_cache_options for non-OpenAI providers", () => {
+    const anthropicModel = {
+      ...openaiModel("gpt-5.6"),
+      id: "anthropic/claude-sonnet-5",
+      providerID: "anthropic",
+      api: { id: "claude-sonnet-5", url: "https://api.anthropic.com", npm: "@ai-sdk/anthropic" },
+    } as any
+    const result = ProviderTransform.options({ model: anthropicModel, sessionID })
+    expect(result.prompt_cache_options).toBeUndefined()
+  })
+
+  test("omits prompt_cache_options for gpt-5.6 ids on other providers (provider gate)", () => {
+    const azureModel = {
+      ...openaiModel("gpt-5.6"),
+      id: "azure/gpt-5.6",
+      providerID: "azure",
+      api: { id: "gpt-5.6", url: "https://openai.azure.com", npm: "@ai-sdk/azure" },
+    } as any
+    const result = ProviderTransform.options({ model: azureModel, sessionID })
+    expect(result.prompt_cache_options).toBeUndefined()
+  })
+
+  test("does not false-match gpt-60 or gpt-50", () => {
+    expect(ProviderTransform.options({ model: openaiModel("gpt-60"), sessionID }).prompt_cache_options).toBeUndefined()
+    expect(ProviderTransform.options({ model: openaiModel("gpt-50"), sessionID }).prompt_cache_options).toBeUndefined()
+  })
+
+  test("includes comparison_response_id on turn 2+ when diagnostics enabled", () => {
+    ProviderTransform.recordResponseId(sessionID, "resp_prev_123")
+    const result = ProviderTransform.options({
+      model: openaiModel("gpt-5.6"),
+      sessionID,
+      promptCacheDiagnostics: true,
+    })
+    expect(result.prompt_cache_options).toEqual({
+      mode: "implicit",
+      comparison_response_id: "resp_prev_123",
+    })
+  })
+
+  test("omits comparison_response_id on the first turn (no recorded response)", () => {
+    const result = ProviderTransform.options({
+      model: openaiModel("gpt-5.6"),
+      sessionID: "test-session-first-turn",
+      promptCacheDiagnostics: true,
+    })
+    expect(result.prompt_cache_options).toEqual({ mode: "implicit" })
+  })
+
+  test("omits comparison_response_id when diagnostics disabled even if recorded", () => {
+    ProviderTransform.recordResponseId(sessionID, "resp_prev_123")
+    const result = ProviderTransform.options({
+      model: openaiModel("gpt-5.6"),
+      sessionID,
+      promptCacheDiagnostics: false,
+    })
+    expect(result.prompt_cache_options).toEqual({ mode: "implicit" })
+  })
+
+  test("recordResponseId keeps the latest id per session", () => {
+    ProviderTransform.recordResponseId("session-rolling", "resp_1")
+    ProviderTransform.recordResponseId("session-rolling", "resp_2")
+    const result = ProviderTransform.options({
+      model: openaiModel("gpt-5.6"),
+      sessionID: "session-rolling",
+      promptCacheDiagnostics: true,
+    })
+    expect(result.prompt_cache_options).toEqual({ mode: "implicit", comparison_response_id: "resp_2" })
+  })
+})
+
+describe("ProviderTransform.options - WS5 tool_choice", () => {
+  const sessionID = "test-session-toolchoice"
+
+  const openaiModel = (apiId = "gpt-5.2") =>
+    ({
+      id: `openai/${apiId}`,
+      providerID: "openai",
+      api: { id: apiId, url: "https://api.openai.com", npm: "@ai-sdk/openai" },
+      capabilities: {
+        temperature: true,
+        reasoning: true,
+        attachment: true,
+        toolcall: true,
+        input: { text: true, audio: false, image: true, video: false, pdf: true },
+        output: { text: true, audio: false, image: false, video: false, pdf: false },
+        interleaved: false,
+      },
+      cost: { input: 1, output: 1, cache: { read: 0, write: 0 } },
+      limit: { context: 400_000, output: 128_000 },
+      status: "active",
+      options: {},
+      headers: {},
+    }) as any
+
+  const snapshot = (toolNames: string[]) => ({ toolNames })
+
+  test("emits tool_choice none when toolChoiceHint is none (OpenAI, cache on)", () => {
+    const result = ProviderTransform.options({
+      model: openaiModel(),
+      sessionID,
+      toolChoiceHint: "none",
+      allowedTools: [],
+      toolSnapshot: snapshot(["bash", "edit"]),
+    })
+    expect(result.tool_choice).toBe("none")
+  })
+
+  test("emits allowed_tools shape for a strict subset of the snapshot", () => {
+    const result = ProviderTransform.options({
+      model: openaiModel(),
+      sessionID,
+      allowedTools: ["bash"],
+      toolSnapshot: snapshot(["bash", "edit", "read"]),
+    })
+    expect(result.tool_choice).toEqual({
+      type: "allowed_tools",
+      mode: "auto",
+      tools: [{ type: "function", name: "bash" }],
+    })
+  })
+
+  test("omits tool_choice when the full snapshot is callable (first-turn byte parity)", () => {
+    const result = ProviderTransform.options({
+      model: openaiModel(),
+      sessionID,
+      allowedTools: ["bash", "edit"],
+      toolSnapshot: snapshot(["bash", "edit"]),
+    })
+    expect(result.tool_choice).toBeUndefined()
+    expect("tool_choice" in result).toBe(false)
+  })
+
+  test("omits tool_choice when cache mode is off", () => {
+    const result = ProviderTransform.options({
+      model: openaiModel(),
+      sessionID,
+      promptCacheMode: "off",
+      toolChoiceHint: "none",
+      allowedTools: [],
+      toolSnapshot: snapshot(["bash"]),
+    })
+    expect(result.tool_choice).toBeUndefined()
+  })
+
+  test("omits tool_choice for non-OpenAI providers even when the hint is set", () => {
+    const anthropicModel = {
+      ...openaiModel(),
+      id: "anthropic/claude-sonnet-5",
+      providerID: "anthropic",
+      api: { id: "claude-sonnet-5", url: "https://api.anthropic.com", npm: "@ai-sdk/anthropic" },
+    } as any
+    const result = ProviderTransform.options({
+      model: anthropicModel,
+      sessionID,
+      toolChoiceHint: "none",
+      allowedTools: [],
+      toolSnapshot: snapshot(["bash"]),
+    })
+    expect(result.tool_choice).toBeUndefined()
+  })
+})
+
+describe("ProviderTransform.message - configuration_update lowering", () => {
+  const openaiModel = {
+    id: "openai/gpt-6-astra",
+    providerID: "openai",
+    api: { id: "gpt-6-astra", url: "https://api.openai.com", npm: "@ai-sdk/openai" },
+    name: "GPT-6 Astra",
+    capabilities: {
+      temperature: true,
+      reasoning: true,
+      attachment: true,
+      toolcall: true,
+      input: { text: true, audio: false, image: true, video: false, pdf: false },
+      output: { text: true, audio: false, image: false, video: false, pdf: false },
+      interleaved: false,
+    },
+    cost: { input: 1, output: 1, cache: { read: 0, write: 0 } },
+    limit: { context: 400_000, output: 128_000 },
+    status: "active",
+    options: {},
+    headers: {},
+  } as any
+
+  const carrier = (effort: string) =>
+    ({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: "",
+          providerOptions: {
+            configurationUpdate: { type: "configuration_update", reasoning: { effort } },
+          },
+        },
+      ],
+    }) as any
+
+  test("splits the carrier into a real input item at its original position", () => {
+    const msgs = [
+      { role: "user", content: "hello" },
+      carrier("high"),
+      { role: "user", content: "next" },
+    ] as any[]
+    const result = ProviderTransform.message(msgs, openaiModel, {}) as any[]
+    expect(result).toHaveLength(3)
+    expect(result[0]).toEqual({ role: "user", content: "hello" })
+    expect(result[1]).toEqual({ type: "configuration_update", reasoning: { effort: "high" } })
+    expect(result[2]).toEqual({ role: "user", content: "next" })
+  })
+
+  test("drops the stripped carrier husk (user with empty array content)", () => {
+    // On the AI SDK path ai's convertToLanguageModelPrompt removes the empty
+    // text part before the middleware runs; the leftover husk must not reach
+    // the wire as `{ role:"user", content:[] }` (400).
+    const msgs = [
+      { role: "user", content: "hello" },
+      { role: "user", content: [] },
+    ] as any[]
+    const result = ProviderTransform.message(msgs, openaiModel, {}) as any[]
+    expect(result).toEqual([{ role: "user", content: "hello" }])
+  })
+
+  test("leaves carriers intact for non-OpenAI providers (split is OpenAI-only)", () => {
+    const compatibleModel = {
+      ...openaiModel,
+      id: "custom/model",
+      providerID: "custom",
+      api: { id: "model", url: "https://example.com", npm: "@ai-sdk/openai-compatible" },
+    } as any
+    const msgs = [carrier("high")] as any[]
+    const result = ProviderTransform.message(msgs, compatibleModel, {}) as any[]
+    expect(result).toHaveLength(1)
+    expect(result[0]).toEqual(carrier("high"))
+  })
+
+  test("ignores empty user text parts that carry no configuration update", () => {
+    const msgs = [{ role: "user", content: [{ type: "text", text: "" }] }] as any[]
+    // Not a carrier (no providerOptions.configurationUpdate) — passes through;
+    // the empty-array husk rule only applies to content: [] messages.
+    const result = ProviderTransform.message(msgs, openaiModel, {}) as any[]
+    expect(result).toEqual(msgs)
+  })
+})

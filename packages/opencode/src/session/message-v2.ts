@@ -48,6 +48,18 @@ interface FetchDecompressionError extends Error {
 export const SYNTHETIC_ATTACHMENT_PROMPT = "Attached media from tool result:"
 export { isMedia }
 
+/** A lowered configuration_update carrier UIMessage (see toModelMessagesEffect). */
+function isConfigurationCarrier(msg: UIMessage): boolean {
+  if (msg.role !== "user" || msg.parts.length !== 1) return false
+  const part = msg.parts[0]
+  return (
+    part !== undefined &&
+    part.type === "text" &&
+    part.text === "" &&
+    part.providerMetadata?.configurationUpdate !== undefined
+  )
+}
+
 function truncateToolOutput(text: string, maxChars?: number) {
   if (!maxChars || text.length <= maxChars) return text
   const omitted = text.length - maxChars
@@ -205,6 +217,41 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
 
   for (const msg of input) {
     if (msg.parts.length === 0) continue
+
+    // WS4a configuration_update round-trip: the stored part lowers to its own
+    // input item at this message's position — a user turn whose single empty
+    // text part carries the item in providerMetadata, so convertToModelMessages
+    // keeps it in place as
+    // { role:"user", content:[{ type:"text", text:"",
+    //   providerOptions:{ configurationUpdate: <item> }] } ] }.
+    // Wire slices (transform.ts / openai-responses lowerMessages) split that
+    // carrier out into the OpenAI `{ type:"configuration_update", reasoning:
+    // { effort } }` input item; stateless replay re-sends it byte-identically
+    // at its original index. Two adjacent carriers coalesce (last effort
+    // wins) — the API 400s on adjacent configuration_update items, and an
+    // adjacent pair can never have been sent successfully anyway.
+    for (const part of msg.parts) {
+      if (part.type !== "configuration_update") continue
+      const carrier: UIMessage = {
+        id: msg.info.id,
+        role: "user",
+        parts: [
+          {
+            type: "text",
+            text: "",
+            providerMetadata: {
+              configurationUpdate: {
+                type: "configuration_update",
+                reasoning: { effort: part.reasoning.effort },
+              },
+            },
+          },
+        ],
+      }
+      const previous = result.at(-1)
+      if (previous && isConfigurationCarrier(previous)) result[result.length - 1] = carrier
+      else result.push(carrier)
+    }
 
     if (msg.info.role === "user") {
       const userMessage: UIMessage = {

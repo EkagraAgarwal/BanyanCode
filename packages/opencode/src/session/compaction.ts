@@ -7,6 +7,7 @@ import { Provider } from "@/provider/provider"
 import { MessageV2 } from "./message-v2"
 import { Token } from "@/util/token"
 import { SessionProcessor } from "./processor"
+import { SessionEffort } from "./effort"
 import { Agent } from "@/agent/agent"
 import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
@@ -341,7 +342,29 @@ export const layer = Layer.effect(
         ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
         : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
       const cfg = yield* config.get()
-      const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
+      const historyBase =
+        compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
+      // WS4: filterCompacted drops configuration_update markers in the compacted
+      // head from model-facing history, so effort would be lost after this
+      // compact. On effort-eligible models, strip markers from the compaction
+      // input (they must not lower into the summarizer request) and re-append
+      // effective ?? base as a fresh marker once the compact succeeds. Model id
+      // out of scope → marker presence alone is the signal.
+      const lastModelID: string | undefined = userMessage.model?.modelID
+      const handleConfigUpdate =
+        historyBase.some(SessionEffort.isConfigurationUpdateMarker) &&
+        (lastModelID === undefined || SessionEffort.isConfigurationUpdateEligible(lastModelID))
+      const restoreEffort = handleConfigUpdate
+        ? SessionEffort.effectiveReasoningEffort(input.sessionID) ??
+          SessionEffort.baseReasoningEffort(input.sessionID)
+        : undefined
+      const history = handleConfigUpdate
+        ? historyBase.map((msg) =>
+            msg.parts.some((part) => part.type === "configuration_update")
+              ? { ...msg, parts: msg.parts.filter((part) => part.type !== "configuration_update") }
+              : msg,
+          )
+        : historyBase
       const prior = completedCompactions(history)
       const hidden = new Set(prior.flatMap((item) => [item.userIndex, item.assistantIndex]))
       const previousSummary = prior.at(-1)?.summary
@@ -548,6 +571,25 @@ export const layer = Layer.effect(
             })
         }
         yield* events.publish(Event.Compacted, { sessionID: input.sessionID })
+        if (restoreEffort) {
+          // Fresh marker lands after the summary so filterCompacted retains it
+          // and stateless replay keeps sending the configuration_update item.
+          const markerMessage = yield* session.updateMessage({
+            id: MessageID.ascending(),
+            role: "user",
+            sessionID: input.sessionID,
+            time: { created: Date.now() },
+            agent: userMessage.agent,
+            model: userMessage.model,
+          })
+          yield* session.updatePart({
+            id: PartID.ascending(),
+            messageID: markerMessage.id,
+            sessionID: input.sessionID,
+            type: "configuration_update",
+            reasoning: { effort: restoreEffort },
+          })
+        }
       }
       return result
     })

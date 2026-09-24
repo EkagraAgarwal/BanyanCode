@@ -321,4 +321,138 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   return tools
 })
 
+// WS5a sticky per-session tool snapshot (prompt-caching plan WS5). Frozen on
+// the first non-small OpenAI request of a sessionID+modelID key; later
+// permission narrowing shrinks allowedTools instead of the wire `tools` array
+// (mutating wire tools is a `tools_changed` cache miss). Entries are tiny
+// (frozen name lists) and intentionally live for the process lifetime — the
+// model belongs to the snapshot key because the apply_patch/edit/write swap
+// is model-stable.
+export type StickyToolSnapshot = {
+  readonly sessionID: string
+  readonly modelID: string
+  /** Wire tool names in alpha-sorted order, frozen at the first request. */
+  readonly toolNames: readonly string[]
+}
+
+const stickySnapshots = new Map<string, StickyToolSnapshot>()
+
+const stickyKey = (sessionID: string, modelID: string) => `${sessionID}\u0000${modelID}`
+
+export function stickySnapshot(sessionID: string, modelID: string): StickyToolSnapshot | undefined {
+  return stickySnapshots.get(stickyKey(sessionID, modelID))
+}
+
+export function freezeStickySnapshot(
+  sessionID: string,
+  modelID: string,
+  toolNames: readonly string[],
+): StickyToolSnapshot {
+  const snapshot: StickyToolSnapshot = { sessionID, modelID, toolNames: [...toolNames] }
+  stickySnapshots.set(stickyKey(sessionID, modelID), snapshot)
+  return snapshot
+}
+
+/** Test hook — drop every frozen snapshot so sessions re-freeze. */
+export function resetStickySnapshots(): void {
+  stickySnapshots.clear()
+}
+
+// tool_search / defer_loading (prompt-caching plan NEXT; flag
+// `banyancode_tool_search_defer`, default OFF). The eager set is the ~15
+// always-on coding-agent tools the model needs most turns; every other name
+// on the wire gets `defer_loading: true` plus a `{ type: "tool_search" }`
+// entry so its parameter schema loads at end-of-context instead of being
+// billed as input on every turn (gpt-5.4+ Responses only). Names absent
+// from the wire set are simply not classified. apply_patch/edit/multiedit
+// all sit in the set because the registry's gpt- apply_patch↔edit/write swap
+// is model-stable but direction-dependent.
+export const TOOL_SEARCH_EAGER_NAMES: ReadonlySet<string> = new Set([
+  "bash",
+  "read",
+  "edit",
+  "write",
+  "multiedit",
+  "apply_patch",
+  "ls",
+  "grep",
+  "glob",
+  "task",
+  "todowrite",
+  "question",
+  "webfetch",
+  "websearch",
+  "skill",
+])
+
+// Anchored like transform.ts/openai-options gates so "gpt-60"/"gpt-50" never
+// match. tool_search is documented for Responses gpt-5.4 and later (plus the
+// gpt-6 family); "gpt-5" with no minor is 5.0 and stays off.
+const GPT5_TOOL_SEARCH_RE = /(?:^|\/)gpt-5[.-](\d+)(?:[.-]|$)/
+const GPT6_FAMILY_RE = /(?:^|\/)gpt-6(?:[.-]|$)/
+
+export function supportsToolSearchDefer(modelID: string): boolean {
+  const id = modelID.toLowerCase()
+  if (GPT6_FAMILY_RE.test(id)) return true
+  const match = GPT5_TOOL_SEARCH_RE.exec(id)
+  return match !== null && Number(match[1]) >= 4
+}
+
+export function toolSearchSplit(names: readonly string[]): {
+  readonly eager: readonly string[]
+  readonly deferred: readonly string[]
+} {
+  const eager = names.filter((name) => TOOL_SEARCH_EAGER_NAMES.has(name))
+  const deferred = names.filter((name) => !TOOL_SEARCH_EAGER_NAMES.has(name))
+  return { eager, deferred }
+}
+
+// @ai-sdk/openai lowers `providerOptions.openai.deferLoading` on a function
+// tool to wire `defer_loading: true` (prepareResponsesTools), and recognizes
+// this provider-tool descriptor as wire `{ type: "tool_search" }` — the exact
+// output of `openai.tools.toolSearch()`. Constructed inline so request prep
+// never statically imports the OpenAI SDK (provider.ts loads it lazily).
+const toolSearchProviderTool = (): AITool =>
+  ({ type: "provider", id: "openai.tool_search", args: {} }) as unknown as AITool
+
+const withDeferLoading = (def: AITool): AITool =>
+  ({
+    ...def,
+    providerOptions: {
+      ...def.providerOptions,
+      openai: { ...def.providerOptions?.openai, deferLoading: true },
+    },
+  }) as AITool
+
+/**
+ * Split a wire tool record for tool_search defer: non-eager defs get
+ * `providerOptions.openai.deferLoading = true` and a `tool_search` provider
+ * tool is appended (unless a real tool already owns that name). Returns the
+ * original record untouched when nothing is deferred, so an all-eager set
+ * stays byte-for-byte identical.
+ */
+export function applyToolSearchDefer(tools: Record<string, AITool>): {
+  readonly tools: Record<string, AITool>
+  readonly deferred: readonly string[]
+} {
+  const { deferred } = toolSearchSplit(Object.keys(tools))
+  if (deferred.length === 0) return { tools, deferred }
+  const deferredSet = new Set(deferred)
+  const next = Object.fromEntries(
+    Object.entries(tools).map(([name, def]) => (deferredSet.has(name) ? [name, withDeferLoading(def)] : [name, def])),
+  )
+  if (next["tool_search"] === undefined) next["tool_search"] = toolSearchProviderTool()
+  return { tools: next, deferred }
+}
+
+// TODO(tool_search prompt guide): when banyancode_tool_search_defer is on,
+// CodegraphSystemSource's rendered tool guide still presents the FULL
+// catalog as eagerly callable. session/system.ts is out of scope for this
+// slice — a follow-up should teach the guide (via codegraphParts) to mark
+// TOOL_SEARCH_EAGER_NAMES as always-available and note the remainder loads
+// via tool_search (defer_loading), or filter the guide to the eager set.
+// Follow-up 2: the processor/stateless replay must round-trip hosted
+// `tool_search_call` / `tool_search_output` output items (plan.md replay
+// completeness), like encrypted reasoning.
+
 export * as SessionTools from "./tools"
