@@ -1,38 +1,37 @@
 # Goal
 
-Follow-up (verbatim from the active goal): "make banyancode's npm-package CLI work even when the postinstall never runs (npm 11 allow-scripts default-deny, bun global installs which never run postinstall, pnpm). Implement the JS-shim bin (esbuild-style): bin entry becomes ./bin/banyancode.js — a generated polyglot shim that resolves and spawns the platform binary package (banyancode-<platform>-<arch>[-baseline][-musl]) from node_modules at runtime, with AVX2/musl-aware candidate ordering, an ELF/MZ magic-check fast path for a postinstall-copied local binary, a temp npm-install fallback, and the actionable error as last resort. Make postinstall.mjs best-effort (warn, don't fail the install). Update README to reflect that postinstall is now optional. Keep the umbrella tarball platform-invariant (single bin path works for all 11 CI jobs). Commit, push to dev, and publish a dev version (verify banyancode@dev on npm, and verify the published package actually runs with --ignore-scripts)."
+FULL prompt-caching plan (`specs/banyancode/prompt-caching-optimization-plan.md` v4) — user overrode measure gate: implement ALL workstreams, then **dev-channel release** (push `origin/dev` → auto-canary `banyancode@dev`).
 
-Context: iteration 1 (goal 476a247b) shipped the shebang'd placeholder in 26.8.20-dev.77baecc (commits a608ea2a2, f456d235c, 77baecc36). This iteration REPLACES the placeholder with a runtime JS shim so the CLI works without any postinstall. Research (`research:linux-install` in shared_memory) confirms: `bun install -g` is valid syntax but bun never runs postinstall for globals; npm 11.16+ skips unapproved lifecycle scripts; the upstream opencode-ai wrapper shares the same failure modes; the recommended primary fix is the esbuild-style JS shim. Postinstall copy target stays `bin/banyancode.exe` (the shim's fast-path file); bin ENTRY moves to `./bin/banyancode.js`.
+Verbatim condition: Entire prompt-caching plan implemented (PR1′, PR2, WS4 configuration_update, WS5 sticky tools/allowed_tools, WS6 prewarm, WS7 observability incl TUI, tool_search defer) — tests + typecheck green, lead commits each slice separately, push to origin/dev, publish.yml canary succeeds (npm view banyancode@dev shows new version).
 
-## Steps
+## Waves (serialized around transform.ts / banyan-config.ts contention)
 
-1. **Explore** (parallel): verify the shim-layout implications for `installation/probe.ts` (install discovery + `--version` probes), `installation/index.ts` (upgrade spawns `process.execPath`), `cli/cmd/uninstall.ts`, `cli/cmd/pr.ts` spawn, `install.ps1` / repo-root `install` script, and any test that references the old bin shape. With the shim, `process.execPath` inside a running banyancode is the PLATFORM-PACKAGE binary (spawned by the shim), not `<umbrella>/bin/...` — check whether method detection / uninstall / upgrade still behave. Write findings to shared_memory `diagnosis:js-shim`.
-2. **Fix** (coder, parallel): 
-   - New `packages/opencode/script/install-shim.ts` exporting `shimScript(binaries: Record<string,string>): string` — generates `bin/banyancode.js` with: node shebang header (`#!/usr/bin/env node` — npm generates node-dispatching bin shims from it on all platforms), embedded platform-package name→version map, AVX2/musl probe + candidate ordering mirroring `postinstall.mjs` `packageNames()`, ELF/MZ magic-check fast path on the package-local `bin/banyancode.exe` (postinstall-copied), `require.resolve`-based platform-package resolution, temp `npm install --ignore-scripts` fallback, spawn with `stdio: inherit` + exit-code/signal forwarding + spawn-error fallthrough to the next candidate, actionable last-resort error (npm 11 `--allow-scripts` / config key, pnpm `approve-builds`, manual `node postinstall.mjs`).
-   - `publish.ts`: bin field → `./bin/banyancode.js`; write the shim via `shimScript(binaries)`; DELETE the placeholder write; keep copying `postinstall.mjs` + `scripts.postinstall`.
-   - `postinstall.mjs`: best-effort — failures print a warning to stderr and exit 0 instead of throwing (the shim covers the missing-binary case). Keep copy+verify+temp-install logic, target `bin/banyancode.exe`.
-   - Delete `script/install-placeholder.ts` + `test/script/install-placeholder.test.ts`; add `test/script/install-shim.test.ts`: content assertions (polyglot header, embedded package map incl. baseline/musl variants, ELF/MZ magic check, `--allow-scripts` + `node postinstall.mjs` guidance) AND a functional test: write the generated shim + a fake platform-package layout into a tmpdir, run it via `node`, assert the stub binary runs with forwarded args; plus a fast-path test (fake native-magic local bin that fails to exec → falls back to the platform package).
-   - README: rewrite the npm 11+ section — postinstall is best-effort/optional; CLI works via the JS shim even when scripts are skipped; `--allow-scripts`/config key/`pnpm approve-builds` optional (silence warning, enable fast path); manual `node postinstall.mjs` no longer required for function.
-   - Do NOT change `installation/index.ts` (research: `bun install -g` is valid, and the shim makes bun-global work without postinstall — unless explore's findings show a breakage, then fix minimally per those findings).
-3. **Verify** (coder): `bun typecheck` + new tests from `packages/opencode` (never repo root). Report results.
-4. **Commit + push** (lead): stage ONLY the shim files (working tree has unrelated CRLF noise — leave it). Commits: `feat(opencode): JS-shim bin resolves platform binary without postinstall` (shim + publish.ts + postinstall.mjs + tests), `docs(opencode): postinstall is optional; JS shim fallback` (README), `chore: update plan.md ...`. Push to `origin/dev` → auto-canary.
-5. **Verify publish** (lead): publish.yml run success; `npm view banyancode@dev version`; download the tarball and confirm `bin/banyancode.js` + `bin: {banyancode: "./bin/banyancode.js"}`; **end-to-end**: `npm install --ignore-scripts --prefix <tmp> banyancode@dev` then run `<tmp>/node_modules/.bin/banyancode --version` and confirm it prints the version (proves the CLI works with postinstall blocked).
+**Wave 1 (RUNNING)** — two coders:
+1. PR1′: config mode+diagnostics, prompt_cache_options implicit, comparison_response_id, native schema, cache_write usage, tests. Files: banyan-config.ts, transform.ts, openai-responses.ts, tests.
+2. PR2: system stable/dynamic split + stable_prefix key + golden tests. Files: system.ts, banyan-config.ts (one key), tests.
 
-## Exit criteria
+**Wave 2 (after Wave 1 file lists land)** — two coders, disjoint files:
+3. WS5 sticky tools + tool_choice.allowed_tools / none + prompt-guide freeze. Files: session/tools.ts, request.ts resolveTools, tool registry, CodegraphSystemSource. Emit via transform only if Wave 1 left a clear seam; else native + TODO.
+4. WS4 configuration_update: base/effective effort state, append input item, message-v2 round-trip, compaction guard, TUI/ACP hooks, local-state telemetry. Files: message-v2, variant/effort path, dialog-thinking, acp, compaction. Do NOT re-edit config keys Wave 1 added; add only banyancode_reasoning_configuration_update.
 
-## Iteration status
+**Wave 3 (after Wave 2)** — two coders:
+5. WS6 prewarm (banyancode_prompt_cache_prewarm, first-prompt warm call, hash idempotency) + WS7b TUI session-cost hit-rate readout.
+6. tool_search / defer_loading: banyancode_tool_search_defer, <20 eager + namespaces, end-of-context injection, input_tokens measurement notes.
 
-- Iteration 1 (review PASS 2026-08-12): all code work complete — JS-shim bin (`bin/banyancode.js`, `#!/usr/bin/env node`), best-effort postinstall, placeholder removed, `method()` execPath fast-path extended for the platform-package binary layout, README + ARCHITECTURE updated. typecheck pass; shim tests 5 pass / 3 skip (win32) / 0 fail (3 cold runs); win32 runtime proven via manual harness AND the published-package end-to-end below.
-- Review re-verification (2026-08-12, lead): exit criteria 1-5 checked in-repo — `publish.ts:39,46-47` writes `bin/banyancode.js` + bin field; shebang/map/magic/guidance asserted by 5/5 passing content tests; `postinstall.mjs` catch → warn → exit 0; `install-placeholder` grep-clean outside plan.md; README documents postinstall optional. Criterion 6 enforced by pre-push typecheck; 7 lead-verified (canary on npm + `--ignore-scripts` e2e). Known win32 flake: skipped functional tests trip a bun skipIf hook timeout on cold runs (documented in the test comment) — 0 assertion failures.
-- End-to-end (lead): `npm install --ignore-scripts banyancode@dev` in a temp dir → `.cmd` shim and `node bin/banyancode.js` both print `26.08.20-dev.c83c8df` with NO postinstall executed.
-- Shebang lesson (already applied): a `#!/bin/sh` header on the bin target makes npm's shim generator emit shell-dispatching `.cmd` shims on Windows (→ "cannot find the path"); `#!/usr/bin/env node` yields node-dispatching shims on all platforms.
+**Phase Z (lead)**: serialized `bun turbo typecheck --force` or per-pkg typecheck; full package tests; mesh review dispatch; fix findings; separate commits per slice (`feat(opencode): ...`); push `origin/dev`; verify publish.yml run + `npm view banyancode@dev version`.
 
-Reviewer judges **pass** when ALL hold:
+## Parallel-work rules
 
-1. `bin/banyancode.js` is the bin entry (tarball `bin` field `{ banyancode: "./bin/banyancode.js" }`) and its generated content starts with `#!/usr/bin/env node` (npm builds node-dispatching bin shims from a node shebang on ALL platforms; a `#!/bin/sh` header breaks Windows `.cmd` shims which dispatch through nonexistent sh.exe), and embeds the platform package map, ELF/MZ magic fast-path check, and `--allow-scripts`/`node postinstall.mjs` guidance — asserted by unit tests.
-2. Functional test proves the shim resolves + spawns the platform package from node_modules when no postinstall-copied binary exists (tmpdir fixture, stub binary runs with forwarded args).
-3. `postinstall.mjs` is best-effort: failure warns and exits 0 (no install failure).
-4. The placeholder (`install-placeholder.ts`, its test, the placeholder write in publish.ts) is fully removed — grep for `install-placeholder` returns nothing.
-5. README documents postinstall as optional.
-6. `bun typecheck` passes in touched packages; new tests pass.
-7. Commits pushed to `origin/dev`; publish.yml run success; `npm view banyancode@dev version` shows the new canary; the published tarball's bin is the JS shim; and `npm install --ignore-scripts` of the published package followed by `<tmp>/.bin/banyancode --version` prints the version (lead-verified end-to-end).
+- Subagents NEVER commit — return file lists via subagent_message.
+- banyan-config.ts: each wave adds only its own keys; lead resolves conflicts.
+- transform.ts / openai-responses.ts: only Wave 1 + explicit later handoff.
+- No v2-tools changes. No Anthropic wire changes (applyCaching, utils/cache.ts, bedrock, anthropic-messages untouched).
+- RAM: children run targeted tests only; lead runs serialized typecheck after each wave.
+
+## Exit criteria / reviewer pass when
+
+1. All workstreams implemented per plan acceptance criteria (see plan.md sections WS0–WS7, tool_search).
+2. typecheck green across packages/core, packages/opencode, packages/tui, packages/llm; package tests green.
+3. Anthropic fixtures green; OpenAI-only fields provider-gated.
+4. Lead made separate commits per logical slice; pushed origin/dev; publish.yml canary succeeded; npm view banyancode@dev shows new version.
+5. Reviewer pass on the full diff before push.
