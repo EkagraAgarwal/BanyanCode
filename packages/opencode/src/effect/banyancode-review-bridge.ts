@@ -388,10 +388,20 @@ export const applyReviewBridge = Effect.gen(function* () {
   // what makes dispatch survive runtime boundaries (mesh_control runs in the
   // server layer, the bridge in AppRuntime — separate in-memory bus queues)
   // and process restarts (stranded `pending` rows get picked up on boot).
+  // Empty polls back off exponentially (up to ~30s) so idle runtimes don't
+  // burn a SQLite round-trip every 2s; any pending work resets to the base.
   const POLL_INTERVAL_MS = 2000
+  const POLL_MAX_MS = 30_000
   const pollWork = Effect.gen(function* () {
+    let delayMs = POLL_INTERVAL_MS
     while (true) {
       const pending = yield* reviews.listPending()
+      if (pending.length === 0) {
+        yield* Effect.sleep(`${delayMs} millis`)
+        delayMs = Math.min(delayMs * 2, POLL_MAX_MS)
+        continue
+      }
+      delayMs = POLL_INTERVAL_MS
       for (const req of pending) {
         yield* dispatchReview(req.id)
       }

@@ -75,10 +75,24 @@ const DEBOUNCE_MS = 500
 const POLL_MS = 2000
 const DELETE_GRACE_MS = 200
 const MAX_BATCH_PATHS = 200
+const MAX_PENDING_PATHS = 2000
 
 type PendingChange = "add" | "change" | "unlink"
 type PendingEntry = readonly [string, PendingChange]
 type ProgressExtras = Pick<ProgressState, "phase" | "completed" | "total" | "currentFile">
+
+/** Paths that must never wake incremental indexing (SQLite / Banyan data dir). */
+export const isAutoUpdateIgnoredPath = (filePath: string): boolean => {
+  const normalized = filePath.replace(/\\/g, "/")
+  if (normalized.split("/").includes(".banyancode")) return true
+  const base = path.basename(normalized)
+  return (
+    base.endsWith(".db-wal") ||
+    base.endsWith(".db-shm") ||
+    base.endsWith(".db-journal") ||
+    base.endsWith(".db")
+  )
+}
 
 export const layer: Layer.Layer<
   Service,
@@ -129,6 +143,7 @@ export const layer: Layer.Layer<
     const pausedRef = yield* Ref.make(false)
     const wakeQueue = yield* Queue.dropping<void>(1).pipe(Effect.orDie)
     const pendingRef = yield* Ref.make<Map<string, PendingChange>>(new Map())
+    const fullRescanNeededRef = yield* Ref.make(false)
     const graceSeenRef = yield* Ref.make<Set<string>>(new Set())
     const eventsQueue = yield* Queue.dropping<{ type: "banyancode.codegraph.auto-update"; properties: State }>(64).pipe(
       Effect.orDie,
@@ -157,9 +172,10 @@ export const layer: Layer.Layer<
       const paused = yield* Ref.get(pausedRef)
       if (paused) return yield* publish({ status: "paused", pending: 0 })
       const pending = (yield* Ref.get(pendingRef)).size
+      const fullRescan = yield* Ref.get(fullRescanNeededRef)
       yield* publish({
-        status: pending > 0 ? "draining" : "watching",
-        pending,
+        status: pending > 0 || fullRescan ? "draining" : "watching",
+        pending: fullRescan ? Math.max(pending, 1) : pending,
         lastChangeAt: Date.now(),
       })
     })
@@ -245,10 +261,41 @@ export const layer: Layer.Layer<
     const initialBuildTriggeredRef = yield* Ref.make(false)
 
     const processBatch = Effect.fn("CodegraphAutoUpdate.processBatch")(function* () {
+      // Wait for any in-flight full build before draining pending — do not
+      // requeue+sleep forever (that spun CPU/RAM while builds wrote WAL).
+      while ((yield* buildService.status()).status === "running") {
+        yield* Effect.logDebug("codegraph auto-update: waiting for build to complete")
+        yield* Effect.sleep(Duration.millis(POLL_MS))
+      }
+
+      const needsFullRescan = yield* Ref.getAndUpdate(fullRescanNeededRef, () => false)
+      if (needsFullRescan) {
+        yield* Ref.set(pendingRef, new Map())
+        const meta = yield* repo.getMeta()
+        if (meta?.indexedRoot) {
+          const excludePatterns = yield* Ref.get(excludePatternsRef)
+          yield* Effect.logInfo(`codegraph auto-update: pending overflow, full rescan for ${meta.indexedRoot}`)
+          yield* buildService.start({ root: meta.indexedRoot, force: false, excludePatterns }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("codegraph auto-update: overflow rescan failed", { cause: Cause.pretty(cause) }),
+            ),
+          )
+        }
+        yield* recomputeStatus()
+        return
+      }
+
       const collected = yield* Ref.getAndUpdate(pendingRef, () => new Map())
       if (collected.size === 0) return
 
-      const entries = [...collected.entries()]
+      const entries = [...collected.entries()].filter(([filePath]) => !isAutoUpdateIgnoredPath(filePath))
+      // Every path in the batch was ignore-skipped — do not call indexFiles
+      // (which would still listAllFiles + rebuildDerivedGraph before filtering).
+      if (entries.length === 0) {
+        yield* recomputeStatus()
+        return
+      }
+
       const batchEntries = entries.slice(0, MAX_BATCH_PATHS)
       const overflowEntries = entries.slice(MAX_BATCH_PATHS)
       const batch = new Map<string, PendingChange>(batchEntries)
@@ -289,15 +336,6 @@ export const layer: Layer.Layer<
         })
         yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
       })
-
-      const buildState = yield* buildService.status()
-      if (buildState.status === "running") {
-        yield* Effect.logDebug("codegraph auto-update: deferring until build completes")
-        yield* requeue(batchEntries)
-        yield* requeue(overflowEntries)
-        yield* Effect.sleep(Duration.millis(POLL_MS))
-        return
-      }
 
       const meta = yield* repo.getMeta()
       if (!meta || !meta.indexedRoot) {
@@ -391,7 +429,7 @@ export const layer: Layer.Layer<
             const signal = yield* Queue.poll(wakeQueue)
             quiet = Option.isNone(signal)
           }
-          while ((yield* Ref.get(pendingRef)).size > 0) {
+          while ((yield* Ref.get(pendingRef)).size > 0 || (yield* Ref.get(fullRescanNeededRef))) {
             // A single processBatch failure must not kill the drain forever —
             // pendingRef is drained at the top of processBatch, so on failure
             // the loop exits back to Queue.take and stays alive for the next
@@ -418,17 +456,31 @@ export const layer: Layer.Layer<
         yield* refreshConfig()
 
         const data = event.data as { file: string; event: PendingChange }
+        if (isAutoUpdateIgnoredPath(data.file)) return
+
         const meta = yield* repo.getMeta()
         if (meta?.indexedRoot) {
           const norm = (p: string) => process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p)
           if (!event.location?.directory || norm(event.location.directory) !== norm(meta.indexedRoot)) return
         }
 
-        yield* Ref.update(pendingRef, (pending) => {
-          const next = new Map(pending)
-          next.set(data.file, data.event)
-          return next
+        const prev = yield* Ref.getAndUpdate(pendingRef, (pending) => {
+          if (pending.has(data.file) || pending.size < MAX_PENDING_PATHS) {
+            const next = new Map(pending)
+            next.set(data.file, data.event)
+            return next
+          }
+          return pending
         })
+        if (!prev.has(data.file) && prev.size >= MAX_PENDING_PATHS) {
+          // Cap overflow: collapse into a single full-rescan flag instead of
+          // retaining every path (unbounded Map growth under WAL churn).
+          yield* Ref.set(fullRescanNeededRef, true)
+          yield* recomputeStatus()
+          yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
+          return
+        }
+
         if (data.event !== "unlink") yield* Ref.update(graceSeenRef, (seen) => {
           const next = new Set(seen)
           next.delete(data.file)

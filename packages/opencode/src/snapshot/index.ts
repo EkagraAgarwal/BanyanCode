@@ -43,11 +43,14 @@ interface GitResult {
 // start/finish, tool settlement) call add() back-to-back; when a file keeps
 // being rewritten mid-hash (e.g. `.ccsm/*` churn) every attempt fails, so
 // without this the whole worktree gets re-hashed on every settlement.
-// A failed add arms a ADD_INTERVAL_MS window during which the heavy
-// diff/ls-files + stage work is skipped; the next cycle retries. Successful
-// adds are never throttled — the snapshot contract is that the next cycle
-// stages whatever changed.
-const ADD_INTERVAL_MS = 1000
+// A failed add arms a ADD_FAIL_INTERVAL_MS window during which the heavy
+// diff/ls-files + stage work is skipped; the next cycle retries.
+const ADD_FAIL_INTERVAL_MS = 1000
+
+// Successful adds are also throttled: at most one successful stage every
+// ADD_SUCCESS_INTERVAL_MS per gitdir. Settlements fire add() many times per
+// tool turn; without this, large worktrees re-hash on every settlement.
+const ADD_SUCCESS_INTERVAL_MS = 3000
 
 // Rate-limit window for the unstable-source warning per gitdir. The failure
 // itself is a per-cycle skip (the next cycle retries), so only surface it at
@@ -79,6 +82,17 @@ const toWorktreePathspec = (candidate: string): string => {
   return normalized.startsWith("./") ? normalized.slice(2) : normalized
 }
 
+// BanyanCode's local DB/WAL lives under `.banyancode/` and churns during
+// indexing — never stage those into the snapshot gitdir.
+const isBanyancodePath = (candidate: string): boolean => {
+  const normalized = candidate.replaceAll("\\", "/")
+  return (
+    normalized === ".banyancode" ||
+    normalized.startsWith(".banyancode/") ||
+    normalized.includes("/.banyancode/")
+  )
+}
+
 // Conservative detection of the "file changed while git was hashing" failure
 // (`git add` exits 128 with "fatal: confused by unstable object source data"
 // or an index-pack variant). Deliberately narrow: unrelated git errors still
@@ -108,11 +122,13 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
     const appProcess = yield* AppProcess.Service
     const config = yield* Config.Service
     const locks = new Map<string, Semaphore.Semaphore>()
-    // Per-gitdir last-run timestamps: `addThrottle` arms the failure cooldown
-    // for the heavy diff + stage work, `warnThrottle` rate-limits the
-    // unstable-source warning. Keyed by gitdir (layer scope, shared across
-    // instances like `locks`).
-    const addThrottle = new Map<string, number>()
+    // Per-gitdir last-run timestamps: `addFailThrottle` arms the failure
+    // cooldown for the heavy diff + stage work, `addSuccessThrottle` caps
+    // successful adds to one every few seconds, `warnThrottle` rate-limits
+    // the unstable-source warning. Keyed by gitdir (layer scope, shared
+    // across instances like `locks`).
+    const addFailThrottle = new Map<string, number>()
+    const addSuccessThrottle = new Map<string, number>()
     const warnThrottle = new Map<string, number>()
 
     const lock = (key: string) => {
@@ -272,6 +288,9 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           const target = path.join(state.gitdir, "info", "exclude")
           const text = [
             file ? (yield* read(file)).trimEnd() : "",
+            // Always ignore BanyanCode's local data dir — DB/WAL churn must
+            // not enter the snapshot index.
+            ".banyancode/",
             ...list.map((item) => `/${item.replaceAll("\\", "/")}`),
           ]
             .filter(Boolean)
@@ -323,16 +342,20 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
         const add = Effect.fnUntraced(function* () {
           yield* sync()
 
-          // Per-gitdir failure cooldown: after a failed add (typically a file
+          // Per-gitdir cooldowns: after a failed add (typically a file
           // rewritten mid-hash) skip the diff/ls-files + stage work for
-          // ADD_INTERVAL_MS so settlements stop hammering `git add
-          // --all --sparse` on a worktree git can't hash. sync() above always
-          // runs so excludes stay fresh. A skipped call returns true; the
-          // caller hashes/diffs against the last staged state and the next
-          // cycle retries.
+          // ADD_FAIL_INTERVAL_MS so settlements stop hammering `git add
+          // --all --sparse` on a worktree git can't hash. Successful adds
+          // are also capped (ADD_SUCCESS_INTERVAL_MS) so tool settlements
+          // don't re-hash the whole tree every few hundred ms. sync() above
+          // always runs so excludes stay fresh. A skipped call returns true;
+          // the caller hashes/diffs against the last staged state and the
+          // next cycle retries.
           const now = Date.now()
-          const lastFailed = addThrottle.get(state.gitdir)
-          if (shouldThrottle(lastFailed, now, ADD_INTERVAL_MS)) return true
+          const lastFailed = addFailThrottle.get(state.gitdir)
+          if (shouldThrottle(lastFailed, now, ADD_FAIL_INTERVAL_MS)) return true
+          const lastSuccess = addSuccessThrottle.get(state.gitdir)
+          if (shouldThrottle(lastSuccess, now, ADD_SUCCESS_INTERVAL_MS)) return true
 
           const [diff, other] = yield* Effect.all(
             [
@@ -346,7 +369,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             { concurrency: 2 },
           )
           if (diff.code !== 0 || other.code !== 0) {
-            addThrottle.set(state.gitdir, Date.now())
+            addFailThrottle.set(state.gitdir, Date.now())
             yield* Effect.logWarning("failed to list snapshot files", {
               diffCode: diff.code,
               diffStderr: diff.stderr,
@@ -358,7 +381,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
 
           const tracked = sanitize(diff.text.split("\0").filter(Boolean))
           const untracked = sanitize(other.text.split("\0").filter(Boolean))
-          const all = Array.from(new Set([...tracked, ...untracked]))
+          const all = Array.from(new Set([...tracked, ...untracked])).filter((item) => !isBanyancodePath(item))
           if (!all.length) return true
 
           // Resolve source-repo ignore rules against the exact candidate set.
@@ -396,7 +419,11 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           yield* sync(Array.from(block))
           // Stage only the allowed candidate paths so snapshot updates stay scoped.
           const staged = yield* stage(allow.filter((item) => !block.has(item)))
-          if (!staged) addThrottle.set(state.gitdir, Date.now())
+          if (!staged) {
+            addFailThrottle.set(state.gitdir, Date.now())
+            return staged
+          }
+          addSuccessThrottle.set(state.gitdir, Date.now())
           return staged
         })
 
@@ -914,6 +941,14 @@ export const defaultLayer = layer.pipe(
 export const node = LayerNode.make(layer, [FSUtil.node, AppProcess.node, Config.node])
 
 // Test-only surface for the pure throttle/detection/pathspec helpers.
-export const __test = { shouldThrottle, isUnstableSourceError, isSafePathspec, toWorktreePathspec }
+export const __test = {
+  shouldThrottle,
+  isUnstableSourceError,
+  isSafePathspec,
+  toWorktreePathspec,
+  isBanyancodePath,
+  ADD_SUCCESS_INTERVAL_MS,
+  ADD_FAIL_INTERVAL_MS,
+}
 
 export * as Snapshot from "."

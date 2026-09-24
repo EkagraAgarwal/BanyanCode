@@ -46,18 +46,8 @@ function ToastItem(props: { entry: ToastEntry; theme: ReturnType<typeof useTheme
   const theme = () => props.theme
   const entry = props.entry
 
-  let progress = 1
-  let startTime = Date.now()
-  let rafId: number | null = null
-
-  const tick = () => {
-    const elapsed = Date.now() - startTime
-    progress = Math.max(0, 1 - elapsed / entry.duration)
-    rafId = requestAnimationFrame(tick)
-  }
-  rafId = requestAnimationFrame(tick)
-  onCleanup(() => { if (rafId !== null) cancelAnimationFrame(rafId) })
-
+  // Dismiss via setTimeout only — a requestAnimationFrame progress loop kept
+  // opentui in requestLive() at ~60fps for every visible toast.
   createEffect(() => {
     const timer = setTimeout(() => toast.dismiss(entry.id), entry.duration)
     onCleanup(() => clearTimeout(timer))
@@ -90,14 +80,6 @@ function ToastItem(props: { entry: ToastEntry; theme: ReturnType<typeof useTheme
         <text fg={theme().text} wrapMode="word" width="100%">
           {entry.message}
         </text>
-        <box
-          position="absolute"
-          bottom={0}
-          left={0}
-          height={1}
-          width={`${Math.round(progress * 100)}%`}
-          backgroundColor={theme()[entry.variant]}
-        />
       </box>
     </box>
   )

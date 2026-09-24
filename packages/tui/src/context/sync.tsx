@@ -182,6 +182,18 @@ export const {
               delete draft[sessionID]
             }),
           )
+          setStore(
+            "session_diff",
+            produce((draft) => {
+              delete draft[sessionID]
+            }),
+          )
+          setStore(
+            "todo",
+            produce((draft) => {
+              delete draft[sessionID]
+            }),
+          )
           if (messages.length === 0) continue
           setStore(
             "part",
@@ -203,6 +215,18 @@ export const {
       batch(() => {
         setStore(
           "message",
+          produce((draft) => {
+            delete draft[sessionID]
+          }),
+        )
+        setStore(
+          "session_diff",
+          produce((draft) => {
+            delete draft[sessionID]
+          }),
+        )
+        setStore(
+          "todo",
           produce((draft) => {
             delete draft[sessionID]
           }),

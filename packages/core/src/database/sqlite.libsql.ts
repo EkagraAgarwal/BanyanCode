@@ -165,7 +165,8 @@ const nativeLayer = (config: Config) =>
       yield* Effect.promise(() => client.execute({ sql: "PRAGMA journal_mode = WAL", args: [] }))
       yield* Effect.promise(() => client.execute({ sql: "PRAGMA synchronous = NORMAL", args: [] }))
       yield* Effect.promise(() => client.execute({ sql: "PRAGMA busy_timeout = 5000", args: [] }))
-      yield* Effect.promise(() => client.execute({ sql: "PRAGMA cache_size = -64000", args: [] }))
+      // ~16MB page cache (negative = kibibytes); was -64000 (~64MB).
+      yield* Effect.promise(() => client.execute({ sql: "PRAGMA cache_size = -16000", args: [] }))
       yield* Effect.promise(() => client.execute({ sql: "PRAGMA foreign_keys = ON", args: [] }))
       yield* Effect.promise(() => client.execute({ sql: "PRAGMA temp_store = MEMORY", args: [] }))
       // Only set page_size if not already set

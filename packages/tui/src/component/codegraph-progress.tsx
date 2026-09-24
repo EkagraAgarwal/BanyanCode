@@ -94,7 +94,9 @@ export function CodegraphProgress() {
   const dimensions = useTerminalDimensions()
 
   const [now, setNow] = createSignal(Date.now())
+  // Only tick while a build is visible — idle keeps the clock frozen and avoids a 1s timer forever.
   createEffect(() => {
+    if (build.state.status === "idle") return
     const id = setInterval(() => setNow(Date.now()), 1000)
     onCleanup(() => clearInterval(id))
   })

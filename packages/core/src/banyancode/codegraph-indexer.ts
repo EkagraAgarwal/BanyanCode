@@ -704,10 +704,9 @@ const indexCandidateFileCore = (
     } else if (TREE_SITTER_WALK_EXTENSIONS.includes(ext)) {
       // Phase 5 (Batch 3): the 13 AST-walk languages (rust/go/java/c/cpp/
       // csharp/ruby/php/bash/json/zig/toml/yaml) route through
-      // parseLanguageWithTreeSitter with the registry parser as regex
-      // fallback. Same lifecycle as the TS/PY path: derivation stamped
-      // tree-sitter-v1, syntax errors recorded + continue, wasm-unavailable
-      // degrades to the regex result.
+      // parseLanguageWithTreeSitter. When the walk succeeds, regex is NOT
+      // merged (unlike TS/JS/Python `.scm` path). Regex is only the
+      // fallback when wasm is unavailable or the walk yields no nodes.
       outcome = yield* treeSitterParseWithFallback(
         parseLanguageWithTreeSitter(ext, content, fileID, () => parser.parse(content, fileID)),
         () => parser.parse(content, fileID),
@@ -984,27 +983,15 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   ])
   const sourceSet = sourceFileIDs.size > 0 ? sourceFileIDs : null
 
-  // For incremental mode, fetch source nodes WITH code and all other nodes
-  // WITHOUT code. The source set includes dependents so their persisted code
-  // can regenerate edges after a changed endpoint is replaced.
-  // For full rebuild, fetch everything with code (existing path).
-  let allNodesForIndex: CodegraphNode[]
-
-  if (sourceSet && sourceSet.size > 0) {
-    const [sourceNodes, lightNodes] = yield* Effect.all([
-      repo.nodesByFileIDs({ fileIDs: [...sourceSet] }),
-      repo.searchNodesLight({ limit: 100_000 }),
-    ])
-    const sourceIDs = new Set(sourceNodes.map((n) => n.id))
-    // lightNodes already have no `code` field; spread to lose the Omit type
-    allNodesForIndex = [
-      ...sourceNodes,
-      ...lightNodes.filter((n) => !sourceIDs.has(n.id)),
-    ]
-  } else {
-    // Full rebuild
-    allNodesForIndex = yield* repo.searchNodes({ limit: 100_000 })
-  }
+  // Incremental: load ONLY the scoped window (changed files + one-hop
+  // neighbors already collected by the caller). Previously also scanned
+  // searchNodesLight({ limit: 100_000 }) for global name resolution — that
+  // dominated RAM/CPU on large graphs for tiny edits. Full rebuild still
+  // loads the whole graph.
+  const allNodesForIndex: CodegraphNode[] =
+    sourceSet && sourceSet.size > 0
+      ? yield* repo.nodesByFileIDs({ fileIDs: [...sourceSet] })
+      : yield* repo.searchNodes({ limit: 100_000 })
 
   const allFiles = yield* repo.listAllFiles()
   const fileByID = new Map(allFiles.map((f) => [f.id, f]))

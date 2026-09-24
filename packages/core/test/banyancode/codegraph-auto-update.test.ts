@@ -109,6 +109,51 @@ describe("CodegraphAutoUpdate", () => {
     )
   })
 
+  test("ignores .banyancode and SQLite sidecar watcher events", async () => {
+    await using tmp = await tmpdir()
+    const root = path.join(tmp.path, "workspace")
+    const dbLayer = Database.layerFromPath(path.join(tmp.path, "auto.sqlite"))
+    const calls = { index: [], remove: [] } as { index: Array<{ paths: string[] }>; remove: Array<{ paths: string[] }> }
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const events = yield* EventV2.Service
+        const svc = yield* CodegraphAutoUpdate.Service
+        const noise = [
+          path.join(root, ".banyancode", "banyancode.db-wal"),
+          path.join(root, ".banyancode", "banyancode.db-shm"),
+          path.join(root, ".banyancode", "banyancode.db-journal"),
+          path.join(root, ".banyancode", "banyancode.db"),
+          path.join(root, "loose.db-wal"),
+          path.join(root, ".banyancode", "agents", "coder.md"),
+        ]
+        for (const file of noise) {
+          yield* events.publish(
+            Watcher.Event.Updated,
+            { file, event: "change" },
+            { location: { directory: root as never } },
+          )
+        }
+        yield* Effect.sleep(250)
+        expect((yield* svc.state()).pending).toBe(0)
+        expect((yield* svc.state()).status).toBe("idle")
+        expect(calls.index).toHaveLength(0)
+        expect(calls.remove).toHaveLength(0)
+      }).pipe(
+        Effect.provide(testLayer({ indexedRoot: root, calls, config: { banyancode_codegraph_watch_debounce_ms: 100 } })),
+        Effect.provide(dbLayer),
+        Effect.scoped,
+      ) as any,
+    )
+  })
+
+  test("isAutoUpdateIgnoredPath matches .banyancode and *.db* sidecars", () => {
+    expect(CodegraphAutoUpdate.isAutoUpdateIgnoredPath("/repo/.banyancode/banyancode.db-wal")).toBe(true)
+    expect(CodegraphAutoUpdate.isAutoUpdateIgnoredPath("D:\\repo\\.banyancode\\memory.db")).toBe(true)
+    expect(CodegraphAutoUpdate.isAutoUpdateIgnoredPath("/repo/src/foo.ts")).toBe(false)
+    expect(CodegraphAutoUpdate.isAutoUpdateIgnoredPath("/repo/data.db-shm")).toBe(true)
+    expect(CodegraphAutoUpdate.isAutoUpdateIgnoredPath("/repo/data.db-journal")).toBe(true)
+  })
+
   test("publishes a matching synthetic watcher event and enters draining", async () => {
     await using tmp = await tmpdir()
     const root = path.join(tmp.path, "workspace")

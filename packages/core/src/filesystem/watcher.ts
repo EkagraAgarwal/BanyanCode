@@ -20,6 +20,12 @@ declare const OPENCODE_LIBC: string | undefined
 const SUBSCRIBE_TIMEOUT_MS = 10_000
 const WATCH_QUEUE_CAPACITY = 1024
 
+// Watcher-only: do NOT put these in shared Ignore.PATTERNS. Config loaders
+// must still discover `.banyancode/agents` etc. The indexer writes under
+// `.banyancode/*.db*` which would otherwise re-fire file.watcher.updated
+// and feed the codegraph auto-update loop.
+const WATCHER_ONLY_IGNORES = [".banyancode", "**/*.db", "**/*.db-wal", "**/*.db-shm", "**/*.db-journal"]
+
 export const Event = {
   Updated: EventV2.define({
     type: "file.watcher.updated",
@@ -153,7 +159,12 @@ export const layer = Layer.effect(
       .filter((entry): entry is Config.Document => entry.type === "document")
       .flatMap((item) => item.info.watcher?.ignore ?? [])
     yield* Effect.forkScoped(
-      subscribe(location.directory, [...Ignore.PATTERNS, ...config, ...protecteds(location.directory)]),
+      subscribe(location.directory, [
+        ...Ignore.PATTERNS,
+        ...WATCHER_ONLY_IGNORES,
+        ...config,
+        ...protecteds(location.directory),
+      ]),
     )
 
     if (location.vcs?.type === "git") {
