@@ -149,7 +149,7 @@ jobs:
 
       - name: Upload CLI artifacts (Unix)
         if: matrix.os-suffix != 'windows'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: banyancode-${{ matrix.target }}
           # Mixed raw binaries + pre-compressed tarballs/zips: level 1 keeps
@@ -163,7 +163,7 @@ jobs:
 
       - name: Upload Windows CLI artifact
         if: matrix.os-suffix == 'windows'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           # `unsigned-` prefix keeps raw Windows builds out of the central
           # `banyancode-*` download pattern, so the publish job only sees
@@ -262,7 +262,7 @@ jobs:
 
       - name: Upload final BanyanCode Windows artifact (signed only)
         if: steps.signing.outputs.enabled == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           # `final-` prefix keeps this out of the central `banyancode-*`
           # pattern (Unix only). Publish downloads it explicitly via the
