@@ -49,6 +49,7 @@ import { openEditor } from "../../editor"
 import { useDialog } from "../../ui/dialog"
 import { DialogAlert } from "../../ui/dialog-alert"
 import { TodoItem } from "../../component/todo-item"
+import { JevRunTree } from "../../component/jev-tree"
 import { DialogMessage } from "./dialog-message"
 import type { PromptInfo } from "../../component/prompt/history"
 import { DialogConfirm } from "../../ui/dialog-confirm"
@@ -1669,6 +1670,7 @@ const PART_MAPPING = {
   reasoning: ReasoningPart,
   file: AssistantFilePart,
   jev_activity: JevActivityPart,
+  jev_run: JevRunTree,
 }
 
 // Validate even SDK-typed parts at the UI boundary for older persisted rows.

@@ -196,6 +196,27 @@ export const Info = Schema.Struct({
   ),
   // Model override; defaults per backend (jev-latest / typesafe/jev-latest / typesafe-ai/jev).
   banyancode_jev_model: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  // Jev-first exploration tree (jev-explorer): a host-controlled bounded
+  // action loop that may complete eligible read-only turns (explore/scout/
+  // researcher agents) with a code-verified Jev STOP before any model request.
+  // EVERY field is optional and the feature is OFF unless `enabled: true` is
+  // explicitly set AND a Jev key is present — an absent struct falls through
+  // to the normal LLM path byte-for-byte. Budgets are clamped by the engine:
+  // maxDepth 1..12 (default 4), maxNodes 1..64 (default 12), maxJevCalls
+  // >=1 (default 8), timeoutMs 1..10000 per Jev request (default 1500),
+  // runTimeoutMs >=1 whole-run wall clock (default 30000), maxBytes >=1024
+  // across deterministic tool outputs (default 262144).
+  banyancode_jev_tree: Schema.optional(
+    Schema.Struct({
+      enabled: Schema.optional(Schema.Boolean),
+      maxDepth: Schema.optional(Schema.Number),
+      maxNodes: Schema.optional(Schema.Number),
+      maxJevCalls: Schema.optional(Schema.Number),
+      timeoutMs: Schema.optional(Schema.Number),
+      runTimeoutMs: Schema.optional(Schema.Number),
+      maxBytes: Schema.optional(Schema.Number),
+    }),
+  ),
   // Opt-in alternate execution profiles. Jev may select these for fresh
   // read-only subagents; explicit per-agent model/variant overrides still win.
   banyancode_jev_subagent_models: Schema.optional(

@@ -643,6 +643,45 @@ export type JevActivityPart = {
   }
 }
 
+export type JevRunRunId = string
+
+export type JevRunStatus = "running" | "completed" | "handoff" | "failed" | "cancelled"
+
+export type JevRunNodeId = string
+
+export type JevRunEvidence = {
+  path: string
+  lines?: string
+  excerpt?: string
+}
+
+export type JevRunNode = {
+  nodeID: JevRunNodeId
+  parentID?: string
+  actionID: string
+  target: string
+  status: "done" | "failed" | "skipped"
+  evidence?: Array<JevRunEvidence>
+  confidence?: number
+  latencyMs?: number
+}
+
+export type JevRunPart = {
+  id: string
+  sessionID: string
+  messageID: string
+  type: "jev_run"
+  runID: JevRunRunId
+  status: JevRunStatus
+  nodes: Array<JevRunNode>
+  stopReason?: string
+  usage?: {
+    input: number
+    output: number
+    cost?: number
+  }
+}
+
 export type Part =
   | TextPart
   | SubtaskPart
@@ -658,6 +697,7 @@ export type Part =
   | CompactionPart
   | ConfigurationUpdatePart
   | JevActivityPart
+  | JevRunPart
 
 export type Pty = {
   id: string
@@ -2307,6 +2347,15 @@ export type BanyanConfig = {
   banyancode_jev_enabled?: boolean
   banyancode_jev_backend?: "typesafe" | "openrouter" | "vercel"
   banyancode_jev_model?: string
+  banyancode_jev_tree?: {
+    enabled?: boolean
+    maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    maxNodes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    maxJevCalls?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    timeoutMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    runTimeoutMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    maxBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
   banyancode_jev_subagent_models?: {
     [key: string]: {
       model: string

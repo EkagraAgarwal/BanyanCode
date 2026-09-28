@@ -58,6 +58,7 @@ import { eq } from "drizzle-orm"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
+import { JevExplorer } from "@/session/jev-explorer"
 import { LLMEvent } from "@opencode-ai/llm"
 import { Banyan } from "@opencode-ai/core/banyancode"
 
@@ -1159,6 +1160,9 @@ export const layer = Layer.effect(
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
+        let titleForked = false
+        let jevEligible = false
+        let jevTried = false
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1205,14 +1209,28 @@ export const layer = Layer.effect(
             break
           }
 
-          step++
-          if (step === 1)
+          // Idempotent title fork: non-eligible turns keep the original
+          // step===1 timing byte-for-byte; an eligible turn defers the fork
+          // until the Jev-explorer hook below decides whether the LLM path
+          // runs at all (a Jev-completed turn makes no generative call).
+          const ensureTitle = function* () {
+            if (titleForked) return
+            titleForked = true
             yield* title({
               session,
               modelID: lastUser.model.modelID,
               providerID: lastUser.model.providerID,
               history: msgs,
             }).pipe(Effect.ignore, Effect.forkIn(scope))
+          }
+          if (step === 0 && JevExplorer.isExplorerAgent(lastUser.agent))
+            jevEligible = yield* JevExplorer.eligible({
+              agentName: lastUser.agent,
+              format: lastUser.format,
+              fresh: true,
+            })
+          step++
+          if (step === 1 && !jevEligible) yield* ensureTitle()
 
           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID).pipe(
             Effect.catchCause((cause) =>
@@ -1327,6 +1345,63 @@ export const layer = Layer.effect(
             msg.time.completed = Date.now()
             yield* sessions.updateMessage(msg)
           })
+
+          // Jev-first exploration hook: AFTER the assistant message is
+          // persisted, BEFORE processor.create. A `completed` outcome writes
+          // the verified answer text part, finishes the message, and breaks
+          // the loop — zero generative calls (including title/summary). Every
+          // other outcome (handoff/cancelled/ineligible/failed) falls through
+          // to the existing LLM path unchanged, forking the deferred title.
+          if (jevEligible && !jevTried) {
+            jevTried = true
+            const taskText = (msgs.findLast((item) => item.info.id === lastUser.id)?.parts ?? [])
+              .filter((part): part is SessionV1.TextPart => part.type === "text" && !part.ignored && !part.synthetic)
+              .map((part) => part.text)
+              .join("\n")
+            const explorerDeps = yield* JevExplorer.promptDeps({
+              sessionID,
+              messageID: msg.id,
+              agentName: agent.name,
+              permission,
+              ruleset: Permission.merge(agent.permission, session.permission ?? []),
+              root: ctx.worktree,
+            })
+            const explorerOutcome = yield* JevExplorer.attempt({
+              sessionID,
+              messageID: msg.id,
+              runID,
+              agentName: agent.name,
+              task: taskText,
+              format: lastUser.format,
+              deps: explorerDeps,
+            }).pipe(
+              Effect.provideService(Session.Service, sessions),
+              Effect.catchCause((cause) =>
+                Effect.logWarning("jev-explorer attempt failed; falling back to the LLM path", {
+                  "session.id": sessionID,
+                  error: String(Cause.squash(cause)),
+                }).pipe(Effect.as({ type: "handoff" as const })),
+              ),
+            )
+            if (explorerOutcome.type === "completed") {
+              yield* sessions.updatePart({
+                id: PartID.ascending(),
+                sessionID,
+                messageID: msg.id,
+                type: "text",
+                text: explorerOutcome.answer,
+              } satisfies SessionV1.TextPart)
+              msg.finish = "stop"
+              msg.time.completed = Date.now()
+              yield* sessions.updateMessage(msg)
+              yield* Effect.logInfo("jev-explorer completed turn without a model request", {
+                "session.id": sessionID,
+                runID,
+              })
+              break
+            }
+            yield* ensureTitle()
+          }
 
           const handle = yield* processor
             .create({
