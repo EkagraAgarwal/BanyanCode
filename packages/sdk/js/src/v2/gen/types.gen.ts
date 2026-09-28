@@ -617,6 +617,32 @@ export type ConfigurationUpdatePart = {
   }
 }
 
+export type JevOperationId = string
+
+export type JevFeature = string
+
+export type JevActivityStatus = "running" | "completed" | "failed" | "skipped"
+
+export type JevActivityPart = {
+  id: string
+  sessionID: string
+  messageID: string
+  type: "jev_activity"
+  operationID: JevOperationId
+  feature: JevFeature
+  status: JevActivityStatus
+  choice?: string
+  summary?: string
+  latency?: {
+    ms: number
+  }
+  usage?: {
+    input: number
+    output: number
+    cost?: number
+  }
+}
+
 export type Part =
   | TextPart
   | SubtaskPart
@@ -631,6 +657,7 @@ export type Part =
   | RetryPart
   | CompactionPart
   | ConfigurationUpdatePart
+  | JevActivityPart
 
 export type Pty = {
   id: string
@@ -2274,6 +2301,18 @@ export type BanyanConfig = {
   banyancode_prompt_cache_mode?: "implicit" | "explicit" | "off"
   banyancode_prompt_cache_diagnostics?: boolean
   banyancode_prompt_cache_stable_prefix?: boolean
+  banyancode_prompt_cache_prewarm?: boolean
+  banyancode_reasoning_configuration_update?: boolean
+  banyancode_tool_search_defer?: boolean
+  banyancode_jev_enabled?: boolean
+  banyancode_jev_backend?: "typesafe" | "openrouter" | "vercel"
+  banyancode_jev_model?: string
+  banyancode_jev_subagent_models?: {
+    [key: string]: {
+      model: string
+      thinking?: "off" | "low" | "medium" | "high" | "max" | "xhigh" | "ultra" | string
+    }
+  }
   /**
    * Enable or configure BanyanCode's LSP servers. Omit or set to false to disable, true to enable built-ins, or an object to enable built-ins with overrides.
    */

@@ -180,6 +180,33 @@ export const Info = Schema.Struct({
   // and the experimental native LLM runtime (which does not lower
   // tool_search yet).
   banyancode_tool_search_defer: Schema.optional(Schema.Boolean),
+  // Jev (TypeSafe "System One") decision client — see `banyancode/jev.ts`.
+  // Optional and key-gated: with `banyancode_jev_enabled` unset the client only
+  // engages when the selected backend's API key env var is present (default
+  // backend "typesafe": BANYANCODE_JEV_API_KEY or TYPESAFE_API_KEY).
+  // Generic OPENROUTER_API_KEY / AI_GATEWAY_API_KEY are never reused;
+  // an explicit false disables even when a key exists. Credentials
+  // are read from env only in v1 — storing a Jev credential through
+  // Auth.Service (`core/src/auth.ts`) is a documented future step, not wired yet.
+  banyancode_jev_enabled: Schema.optional(Schema.Boolean),
+  // Backend endpoint selection; each speaks the TypeSafe `POST <base>/v1/systemone`
+  // shape. See Jev.ENDPOINTS. Default "typesafe".
+  banyancode_jev_backend: Schema.optional(
+    Schema.Literals(["typesafe", "openrouter", "vercel"]),
+  ),
+  // Model override; defaults per backend (jev-latest / typesafe/jev-latest / typesafe-ai/jev).
+  banyancode_jev_model: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  // Opt-in alternate execution profiles. Jev may select these for fresh
+  // read-only subagents; explicit per-agent model/variant overrides still win.
+  banyancode_jev_subagent_models: Schema.optional(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        model: Schema.String.check(Schema.isMaxLength(256)),
+        thinking: Schema.optional(ThinkingLevelSchema),
+      }),
+    ),
+  ),
   // BanyanCode-owned LSP config. True = enable all built-in LSP servers; a
   // record = enable built-ins with per-server overrides (disabled / custom
   // command / env / extensions / initialization). BanyanCode does not read

@@ -55,6 +55,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { RepositoryWave2 } from "@opencode-ai/core/tool/repository-wave2"
 import { GenerateImageTool } from "./generate-image"
+import { JevJudgeTool } from "./jev-judge"
 
 export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
   return providerID === ProviderV2.ID.opencode || flags.exa || flags.parallel
@@ -121,6 +122,7 @@ export const layer = Layer.effect(
     const plan = yield* PlanExitTool
     const systeminfo = yield* SysteminfoTool
     const generateImage = yield* GenerateImageTool
+    const jevJudge = yield* JevJudgeTool
     const webfetch = yield* WebFetchTool
     const websearch = yield* WebSearchTool
     const shell = yield* ShellTool
@@ -239,6 +241,7 @@ export const layer = Layer.effect(
           plan: Tool.init(plan),
           systeminfo: Tool.init(systeminfo),
           generateImage: Tool.init(generateImage),
+          jevJudge: Tool.init(jevJudge),
         })
 
         return {
@@ -260,6 +263,7 @@ export const layer = Layer.effect(
             tool.patch,
             tool.systeminfo,
             tool.generateImage,
+            tool.jevJudge,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
           ],

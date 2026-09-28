@@ -1668,6 +1668,112 @@ const PART_MAPPING = {
   tool: ToolPart,
   reasoning: ReasoningPart,
   file: AssistantFilePart,
+  jev_activity: JevActivityPart,
+}
+
+// Validate even SDK-typed parts at the UI boundary for older persisted rows.
+type JevActivityPartData = Pick<
+  Extract<Part, { type: "jev_activity" }>,
+  "id" | "operationID" | "feature" | "status" | "choice" | "summary" | "latency" | "usage"
+>
+
+function isJevActivityPart(part: unknown): part is JevActivityPartData {
+  if (typeof part !== "object" || part === null) return false
+  const value = part as Record<string, unknown>
+  return (
+    value.type === "jev_activity" &&
+    typeof value.id === "string" &&
+    typeof value.operationID === "string" &&
+    typeof value.feature === "string" &&
+    (value.status === "running" ||
+      value.status === "completed" ||
+      value.status === "failed" ||
+      value.status === "skipped")
+  )
+}
+
+// Display-only sanitizer: publishers pre-redact choice/summary at the source;
+// this is defense in depth for already-stored rows — strip ANSI + control
+// characters, collapse to a single line, and clamp the rendered size.
+const jevDisplay = (value: string | undefined, max: number) => {
+  if (!value) return ""
+  const cleaned = stripAnsi(value)
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  return cleaned.length > max ? cleaned.slice(0, Math.max(1, max - 1)) + "…" : cleaned
+}
+
+export function JevActivityPart(props: { last: boolean; part: unknown; message: AssistantMessage }) {
+  const { theme } = useTheme()
+  const data = createMemo(() => (isJevActivityPart(props.part) ? props.part : undefined))
+  const id = createMemo(() => "jev-" + (data()?.id ?? ""))
+  const feature = createMemo(() => jevDisplay(data()?.feature, 64))
+  const choice = createMemo(() => jevDisplay(data()?.choice, 120))
+  const summary = createMemo(() => jevDisplay(data()?.summary, 400))
+  const status = createMemo(() => data()?.status)
+  const latency = createMemo(() => {
+    const ms = data()?.latency?.ms
+    return typeof ms === "number" && Number.isFinite(ms) && ms >= 0 ? ms : undefined
+  })
+  const usage = createMemo(() => {
+    const value = data()?.usage
+    if (!value) return ""
+    const input = Number.isFinite(value.input) ? Math.max(0, Math.round(value.input)) : 0
+    const output = Number.isFinite(value.output) ? Math.max(0, Math.round(value.output)) : 0
+    const cost =
+      typeof value.cost === "number" && Number.isFinite(value.cost) && value.cost >= 0
+        ? ` · $${value.cost.toFixed(4)}`
+        : ""
+    return `${input}↑ ${output}↓ tok${cost}`
+  })
+  const statusLabel = createMemo(() => status())
+  const statusColor = createMemo(() =>
+    status() === "completed"
+      ? theme.diffAdded
+      : status() === "failed"
+        ? theme.diffRemoved
+        : status() === "running"
+          ? theme.warning
+          : theme.textMuted,
+  )
+
+  return (
+    <Show when={data()}>
+      <box id={id()} paddingLeft={3} marginTop={1} flexDirection="column" flexShrink={0}>
+        <Switch>
+          <Match when={status() === "running"}>
+            <Spinner color={theme.warning}>{"◇ Jev · " + feature() + " running"}</Spinner>
+          </Match>
+          <Match when={true}>
+            <text fg={theme.textMuted} wrapMode="none">
+              <span style={{ fg: statusColor() }}>
+                {status() === "completed" ? "✓" : status() === "failed" ? "✗" : "–"}{" "}
+              </span>
+              <span style={{ fg: theme.text }}>Jev · {feature()}</span>
+              <span style={{ fg: statusColor() }}> · {statusLabel()}</span>
+              <Show when={latency() !== undefined}>
+                <span> · {Locale.duration(latency()!)}</span>
+              </Show>
+              <Show when={choice()}>
+                <span style={{ fg: theme.text }}> · {choice()}</span>
+              </Show>
+            </text>
+          </Match>
+        </Switch>
+        <Show when={summary()}>
+          <text fg={theme.textMuted} wrapMode="word">
+            {summary()}
+          </text>
+        </Show>
+        <Show when={usage()}>
+          <text fg={theme.textMuted} wrapMode="none">
+            {usage()}
+          </text>
+        </Show>
+      </box>
+    </Show>
+  )
 }
 
 const INLINE_TOOL_ICON_WIDTH = 2
