@@ -61,6 +61,8 @@ export interface FinishInput {
 export interface Handle {
   readonly partID: PartID
   readonly operationID: string
+  /** Stable user-turn identity, shared by all assistant steps in that turn. */
+  readonly turnID: MessageID
   /** Republishes the SAME part id so the part table upserts in place. */
   readonly finish: (input: FinishInput) => Effect.Effect<SessionV1.JevActivityPart, TargetError>
 }
@@ -107,6 +109,7 @@ export const start: (input: StartInput) => Effect.Effect<Handle, TargetError, Se
   return {
     partID,
     operationID: input.operationID,
+    turnID: found.value.info.parentID,
     finish: (outcome: FinishInput) =>
       submit(sessions, {
         id: partID,

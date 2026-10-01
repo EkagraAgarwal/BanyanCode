@@ -368,21 +368,22 @@ export const TaskTool = Tool.define(
       }
       // An alternate is an explicit user-approved generative profile, not Jev
       // itself. Never change a resumed task or a pinned per-agent model/variant.
+      // Routing covers any configured subagent role (explore/scout/coder/…),
+      // gated by the shared `subagent-routing` feature flag: explicit disable,
+      // missing key, or no configured profile all keep the current model.
       const candidate = alternate?.model.split("/")
       const canRoute = Boolean(
         isFreshSpawn &&
         !params.task_id &&
-        (next.name === "explore" || next.name === "scout") &&
         !entry?.model &&
         !entry?.variant &&
         !next.model &&
-        banyanCfg?.banyancode_jev_enabled === true &&
-        Jev.isEnabled(banyanCfg) &&
         candidate &&
         candidate.length > 1 &&
         candidate[0] &&
         candidate.slice(1).join("/") &&
-        alternate?.model !== `${model.providerID}/${model.modelID}`,
+        alternate?.model !== `${model.providerID}/${model.modelID}` &&
+        Jev.feature(banyanCfg ?? {}, process.env, "subagent-routing"),
       )
       let routed = false
       if (canRoute && candidate) {
@@ -403,15 +404,28 @@ export const TaskTool = Tool.define(
             const decision = yield* Effect.promise(() =>
               Jev.decide({
                 state: JSON.stringify({ agent: next.name, task: params.description, prompt: params.prompt.slice(0, 1500) }),
-                question: "Can this read-only subagent task be completed reliably by the configured alternate model? Choose default if uncertain or complex.",
+                question: `Can this ${next.name} subagent task be completed reliably by the configured alternate model? Choose default if uncertain or complex.`,
                 choices: ["default", "alternate"],
                 criteria: {
                   default: "Use the current model for complex, ambiguous, or high-stakes work",
-                  alternate: `Use the configured ${alternate?.model} profile for a straightforward read-only task`,
+                  alternate: `Use the configured ${alternate?.model} profile for a straightforward ${next.name} task`,
                 },
                 config: banyanCfg,
                 timeoutMs: 1500,
+                signal: ctx.abort,
+                sessionID: ctx.sessionID,
+                feature: "subagent-routing",
+                // Turn identity: per-turn budget scopes must not share one
+                // constant (a fixed agent-name scope would block every future
+                // turn after the per-turn call budget is spent).
+                scope: activity.turnID,
               }),
+            ).pipe(
+              Effect.onInterrupt(() =>
+                activity
+                  .finish({ status: "skipped", summary: "interrupted before the routing decision" })
+                  .pipe(Effect.ignore),
+              ),
             )
             const recommended = decision.ok && decision.choice === "alternate" && decision.confidence >= 0.8 &&
               decision.probabilities.alternate - decision.probabilities.default >= 0.2

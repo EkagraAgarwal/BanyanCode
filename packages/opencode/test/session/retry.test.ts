@@ -343,6 +343,104 @@ describe("session.retry.retryable", () => {
       "Usage limit reached. It will reset in 15 minutes. To continue using this model now, enable usage from your available balance",
     )
   })
+
+  test("does not retry insufficient_quota even when provider marks retryable", () => {
+    const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "You exceeded your current quota, please check your plan and billing details.",
+        isRetryable: true,
+        statusCode: 429,
+        responseBody: '{"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}',
+      }).toObject(),
+    )
+    expect(SessionRetry.isTerminalQuotaExhaustion(error)).toBe(true)
+    expect(SessionRetry.retryable(error, retryProvider)).toBeUndefined()
+  })
+
+  test("treats 402 as terminal quota exhaustion", () => {
+    const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "Payment required",
+        isRetryable: true,
+        statusCode: 402,
+      }).toObject(),
+    )
+    expect(SessionRetry.isTerminalQuotaExhaustion(error)).toBe(true)
+    expect(SessionRetry.retryable(error, retryProvider)).toBeUndefined()
+  })
+
+  test("treats billing_hard_limit as terminal but plain billing text as transient", () => {
+    const terminal = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "billing_hard_limit: billing hard limit has been reached",
+        isRetryable: true,
+        statusCode: 400,
+      }).toObject(),
+    )
+    expect(SessionRetry.isTerminalQuotaExhaustion(terminal)).toBe(true)
+    expect(SessionRetry.retryable(terminal, retryProvider)).toBeUndefined()
+
+    const broad = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "billing address invalid",
+        isRetryable: true,
+        statusCode: 400,
+      }).toObject(),
+    )
+    expect(SessionRetry.isTerminalQuotaExhaustion(broad)).toBe(false)
+    expect(SessionRetry.retryable(broad, retryProvider)).toEqual({ message: "billing address invalid" })
+  })
+
+  test("does not treat generic payment/credit text as terminal", () => {
+    for (const message of ["payment required", "out of credit, please top up", "credit balance low"]) {
+      const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+        new SessionV1.APIError({ message, isRetryable: true, statusCode: 429 }).toObject(),
+      )
+      expect(SessionRetry.isTerminalQuotaExhaustion(error)).toBe(false)
+    }
+  })
+
+  test("Free/Go markers are never terminal, even alongside quota text", () => {
+    const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "insufficient_quota: FreeUsageLimitError free tier exhausted",
+        isRetryable: true,
+        statusCode: 429,
+        responseBody: JSON.stringify({
+          type: "error",
+          error: { type: "FreeUsageLimitError", message: "insufficient_quota exceeded" },
+        }),
+      }).toObject(),
+    )
+    expect(SessionRetry.isTerminalQuotaExhaustion(error)).toBe(false)
+    expect(SessionRetry.retryable(error, "opencode")?.action?.reason).toBe("free_tier_limit")
+  })
+
+  test("plain transient 429 without quota signal stays retryable", () => {
+    const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "Too many requests, please slow down",
+        isRetryable: true,
+        statusCode: 429,
+      }).toObject(),
+    )
+    expect(SessionRetry.isTerminalQuotaExhaustion(error)).toBe(false)
+    expect(SessionRetry.retryable(error, retryProvider)).toEqual({
+      message: "Too many requests, please slow down",
+    })
+  })
+
+  test("quota signal on 5xx is terminal while plain 5xx retries", () => {
+    const terminal = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "quota exceeded",
+        isRetryable: false,
+        statusCode: 500,
+      }).toObject(),
+    )
+    expect(SessionRetry.isTerminalQuotaExhaustion(terminal)).toBe(true)
+    expect(SessionRetry.retryable(terminal, retryProvider)).toBeUndefined()
+  })
 })
 
 describe("session.message-v2.fromError", () => {

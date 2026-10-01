@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect"
+import { Cause, Effect, Option, Schema } from "effect"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import type { Info as BanyanConfigInfo } from "@opencode-ai/core/v1/config/banyan-config"
 import { Banyan } from "@opencode-ai/core/banyancode"
@@ -58,6 +58,12 @@ const CANDIDATES_IN_STATE = 20
 const MAX_EVIDENCE_PER_NODE = 6
 const MAX_ANSWER_EVIDENCE = 12
 const DECIDE_ID = "tree"
+// Consecutive dispatched-or-skipped iterations that advance neither depth nor
+// evidence before the run hands off instead of looping to a budget.
+const MAX_IDLE_STREAK = 4
+// Exact raw-text span kept per web citation for verification. Display
+// `excerpt` stays normalized + ellipsized and is never compared.
+const WEB_VERIFY_LEN = 200
 
 const QUESTION =
   "Read-only exploration step. Choose the next bounded action by its exact ID. " +
@@ -117,9 +123,18 @@ export interface AttemptInput {
   readonly deps: Deps
 }
 
+/** Advisory evidence pointers for the V1 caller (bounded, source-linked only — never a proof). */
+export interface HandoffEvidence {
+  readonly path: string
+  readonly lines?: string
+  readonly excerpt?: string
+  readonly graphVersion?: number
+}
+const MAX_HANDOFF_EVIDENCE = 8
+
 export type Outcome =
   | { readonly type: "ineligible" }
-  | { readonly type: "handoff" }
+  | { readonly type: "handoff"; readonly evidence?: readonly HandoffEvidence[] }
   | { readonly type: "cancelled" }
   | { readonly type: "completed"; readonly answer: string }
 
@@ -183,6 +198,8 @@ const SYMBOL_RE = /\b[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+\b/g
 
 interface Evidence extends SessionV1.JevRunNodeEvidence {
   readonly graphVersion?: number
+  /** Exact raw-text span kept for verification; stripped before publish. Display `excerpt` stays normalized. */
+  readonly verify?: string
 }
 
 interface ExplorerNode extends Omit<SessionV1.JevRunNode, "evidence"> {
@@ -226,8 +243,15 @@ const extractEvidence = (value: string, graphVersion: number | undefined): Evide
   return found
 }
 
+const normalizeDisplay = (text: string): string => bound(text.replace(/\s+/g, " ").trim(), 300)
+
 const extractWebEvidence = (url: string, text: string, graphVersion: number | undefined): Evidence[] => [
-  { path: url, excerpt: bound(text.replace(/\s+/g, " ").trim(), 300), ...(graphVersion === undefined ? {} : { graphVersion }) },
+  {
+    path: url,
+    excerpt: normalizeDisplay(text),
+    verify: text.slice(0, WEB_VERIFY_LEN),
+    ...(graphVersion === undefined ? {} : { graphVersion }),
+  },
 ]
 
 const extractCandidates = (value: string): Candidate[] => {
@@ -311,11 +335,21 @@ const toContractNode = (node: ExplorerNode): SessionV1.JevRunNode => {
     ...rest,
     ...(evidence
       ? {
-          evidence: evidence.map(({ graphVersion: _version, ...entry }) => entry),
+          evidence: evidence.map(({ graphVersion: _version, verify: _verify, ...entry }) => entry),
         }
       : {}),
   }
 }
+
+const toHandoffEvidence = (entries: readonly Evidence[]): readonly HandoffEvidence[] =>
+  entries
+    .slice(0, MAX_HANDOFF_EVIDENCE)
+    .map((entry) => ({
+      path: entry.path,
+      ...(entry.lines ? { lines: entry.lines } : {}),
+      ...(entry.excerpt ? { excerpt: entry.excerpt } : {}),
+      ...(entry.graphVersion === undefined ? {} : { graphVersion: entry.graphVersion }),
+    }))
 
 const renderAnswer = (evidence: readonly Evidence[]): string =>
   [
@@ -402,10 +436,22 @@ export const attempt: (input: AttemptInput) => Effect.Effect<Outcome, never, Ses
       )
     })
 
+  const handoffWithEvidence = (): { readonly type: "handoff"; readonly evidence?: readonly HandoffEvidence[] } => {
+    const collected = toHandoffEvidence(nodes.flatMap((node) => node.evidence ?? []))
+    return collected.length > 0 ? { type: "handoff", evidence: collected } : { type: "handoff" }
+  }
+
   const finish = <A>(status: SessionV1.JevRunStatus, reason: string | undefined, outcome: A): Effect.Effect<A> =>
     Effect.gen(function* () {
       settled = true
       yield* publish(status, reason)
+      if (status === "handoff" && typeof outcome === "object" && outcome !== null) {
+        const record = outcome as Record<string, unknown>
+        if (record["type"] === "handoff" && record["evidence"] === undefined) {
+          const collected = toHandoffEvidence(nodes.flatMap((node) => node.evidence ?? []))
+          if (collected.length > 0) return { ...record, evidence: collected } as A
+        }
+      }
       return outcome
     })
 
@@ -480,6 +526,18 @@ export const attempt: (input: AttemptInput) => Effect.Effect<Outcome, never, Ses
     let parentId = "n0"
     let depth = 0
     let counter = 0
+    // Iterations that advance neither depth nor evidence (skipped/deduped/
+    // denied/failed dispatches). Independent of semantic depth; at the bound
+    // the run hands off instead of looping to a budget.
+    let idleStreak = 0
+    const noteIdle = (): Effect.Effect<Outcome | undefined> =>
+      Effect.gen(function* () {
+        idleStreak++
+        if (idleStreak >= MAX_IDLE_STREAK)
+          return yield* finish("handoff", "idle-streak: no progress", handoffWithEvidence())
+        yield* publish("running")
+        return undefined
+      })
 
     while (true) {
       if (input.abort?.aborted) return yield* cancelled()
@@ -536,6 +594,9 @@ export const attempt: (input: AttemptInput) => Effect.Effect<Outcome, never, Ses
         ...(config ? { config } : {}),
         timeoutMs: budgets.timeoutMs,
         ...input.deps.jev,
+        ...(input.abort ? { signal: input.abort } : {}),
+        sessionID: input.sessionID,
+        scope: bound(input.runID, 128),
       }
       const result = yield* (input.deps.decide ?? ((i: Jev.DecideInput) => Effect.promise(() => Jev.decide(i))))(
         decideInput,
@@ -616,8 +677,11 @@ export const attempt: (input: AttemptInput) => Effect.Effect<Outcome, never, Ses
             break
           }
           if (/^https?:\/\//.test(entry.path)) {
+            // Exact raw-span check: display `excerpt` is normalized +
+            // ellipsized and is never compared; `verify` is the raw slice.
             const stored = webTexts.get(entry.path)
-            if (!entry.excerpt || !stored?.includes(entry.excerpt)) {
+            const span = entry.verify
+            if (!span || !stored || !stored.includes(span)) {
               failure = `web-citation-unverified:${bound(entry.path, 80)}`
               break
             }
@@ -668,13 +732,15 @@ export const attempt: (input: AttemptInput) => Effect.Effect<Outcome, never, Ses
       const nodeID = `n${++counter}`
       if (!target) {
         nodes.push({ nodeID, parentID: parentId, actionID: action, target: "", status: "skipped", depth, confidence, latencyMs: result.latencyMs })
-        yield* publish("running")
+        const idle = yield* noteIdle()
+        if (idle) return idle
         continue
       }
       const dedupKey = `${action}\u0000${target}\u0000${graphVersion ?? "none"}`
       if (dedup.has(dedupKey)) {
         nodes.push({ nodeID, parentID: parentId, actionID: action, target: bound(target, 400), status: "skipped", depth, confidence, latencyMs: result.latencyMs })
-        yield* publish("running")
+        const idle = yield* noteIdle()
+        if (idle) return idle
         continue
       }
       dedup.add(dedupKey)
@@ -682,7 +748,8 @@ export const attempt: (input: AttemptInput) => Effect.Effect<Outcome, never, Ses
       const plan = planFor(action, target)
       if (!plan) {
         nodes.push({ nodeID, parentID: parentId, actionID: action, target: bound(target, 400), status: "failed", depth, confidence, latencyMs: result.latencyMs })
-        yield* publish("running")
+        const idle = yield* noteIdle()
+        if (idle) return idle
         continue
       }
       // Budget BEFORE the permission prompt: a run already at max depth
@@ -693,7 +760,8 @@ export const attempt: (input: AttemptInput) => Effect.Effect<Outcome, never, Ses
       const permitted = yield* input.deps.ask(plan.permission, bound(target, 400))
       if (!permitted) {
         nodes.push({ nodeID, parentID: parentId, actionID: action, target: bound(target, 400), status: "failed", depth, confidence, latencyMs: result.latencyMs })
-        yield* publish("running")
+        const idle = yield* noteIdle()
+        if (idle) return idle
         continue
       }
 
@@ -742,12 +810,26 @@ export const attempt: (input: AttemptInput) => Effect.Effect<Outcome, never, Ses
       if (outcome.ok) {
         parentId = nodeID
         depth = nextDepth
+        idleStreak = 0
+        yield* publish("running")
+        continue
       }
-      yield* publish("running")
+      const idle = yield* noteIdle()
+      if (idle) return idle
     }
   })
 
   return yield* body.pipe(
+    Effect.catchCause((cause: Cause.Cause<unknown>) =>
+      Effect.gen(function* () {
+        if (settled) return yield* Effect.die(Cause.squash(cause))
+        yield* Effect.logWarning("jev-explorer: run defect; settling failed part", {
+          "session.id": input.sessionID,
+          error: shortCause(Cause.squash(cause)),
+        })
+        return yield* finish("failed", `run-failed:${shortCause(Cause.squash(cause))}`, handoffWithEvidence())
+      }),
+    ),
     Effect.onInterrupt(() => (settled ? Effect.void : publish("cancelled", "interrupted"))),
   )
 })

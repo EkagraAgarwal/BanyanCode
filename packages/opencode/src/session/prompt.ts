@@ -59,6 +59,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { JevExplorer } from "@/session/jev-explorer"
+import { JevContext } from "@/session/jev-context"
 import { LLMEvent } from "@opencode-ai/llm"
 import { Banyan } from "@opencode-ai/core/banyancode"
 
@@ -1164,6 +1165,16 @@ export const layer = Layer.effect(
         let jevEligible = false
         let jevTried = false
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+        // Actual abort for the Jev explorer pre-request call: the attempt
+        // below races fiber interruption into this controller, so the tree
+        // settles `cancelled` instead of hanging past teardown.
+        // No automatic turn-policy call here by design: the policy is
+        // advisory-only (pins win, model/tools never touched), so consulting
+        // it would pay for a no-op. Turn model routing stays deferred until
+        // pin safety can be proven; the core no-tiers gate already skips
+        // tierless policies without a request.
+        const turnAbort = new AbortController()
+        const abortOnInterrupt = () => Effect.sync(() => turnAbort.abort())
 
         while (true) {
           yield* status.set(sessionID, { type: "busy" })
@@ -1366,22 +1377,26 @@ export const layer = Layer.effect(
               ruleset: Permission.merge(agent.permission, session.permission ?? []),
               root: ctx.worktree,
             })
-            const explorerOutcome = yield* JevExplorer.attempt({
-              sessionID,
-              messageID: msg.id,
-              runID,
-              agentName: agent.name,
-              task: taskText,
-              format: lastUser.format,
-              deps: explorerDeps,
-            }).pipe(
-              Effect.provideService(Session.Service, sessions),
-              Effect.catchCause((cause) =>
-                Effect.logWarning("jev-explorer attempt failed; falling back to the LLM path", {
-                  "session.id": sessionID,
-                  error: String(Cause.squash(cause)),
-                }).pipe(Effect.as({ type: "handoff" as const })),
+            const explorerOutcome = yield* Effect.onInterrupt(
+              JevExplorer.attempt({
+                sessionID,
+                messageID: msg.id,
+                runID,
+                agentName: agent.name,
+                task: taskText,
+                format: lastUser.format,
+                abort: turnAbort.signal,
+                deps: explorerDeps,
+              }).pipe(
+                Effect.provideService(Session.Service, sessions),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("jev-explorer attempt failed; falling back to the LLM path", {
+                    "session.id": sessionID,
+                    error: String(Cause.squash(cause)),
+                  }).pipe(Effect.as({ type: "handoff" as const })),
+                ),
               ),
+              abortOnInterrupt,
             )
             if (explorerOutcome.type === "completed") {
               yield* sessions.updatePart({
@@ -1400,6 +1415,12 @@ export const layer = Layer.effect(
               })
               break
             }
+            // Handoff evidence (exact `JevRunNodeEvidence[]` contract) becomes
+            // a bounded untrusted-data reminder on the in-memory user turn.
+            // This never prunes full results or grants the evidence authority.
+            const handoffEvidence = (explorerOutcome as { readonly evidence?: JevContext.HandoffEvidence }).evidence
+            const handoffReminder = JevContext.renderHandoffReminder(handoffEvidence)
+            if (handoffReminder) JevContext.appendHandoffReminder(msgs, handoffReminder)
             yield* ensureTitle()
           }
 

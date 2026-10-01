@@ -95,11 +95,16 @@ export const JevJudgeTool = Tool.define(
 
           const banyanCfgOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
           const banyanCfg = Option.isSome(banyanCfgOpt) ? yield* banyanCfgOpt.value.get() : undefined
+          // Shared gate: key presence (resolve) AND per-feature enablement
+          // (feature) — the same pair worker C's task route uses for
+          // `subagent-routing`. An explicit `judge: false` override or a
+          // global disable fails safe with no request and no activity.
           const resolution = Jev.resolve(banyanCfg)
-          if (!resolution.enabled) {
+          if (!resolution.enabled || !Jev.feature(banyanCfg ?? {}, process.env, "judge")) {
             const reason =
-              banyanCfg?.banyancode_jev_enabled === false
-                ? "Jev is disabled (banyancode_jev_enabled=false)"
+              banyanCfg?.banyancode_jev_enabled === false ||
+              banyanCfg?.banyancode_jev_features?.["judge"] === false
+                ? "Jev judge is disabled (banyancode_jev_enabled=false or features.judge=false)"
                 : `no Jev API key for the ${resolution.backend} backend (set BANYANCODE_JEV_API_KEY)`
             return { title: TITLE, metadata: { status: "unavailable", reason }, output: failSafe(reason) }
           }
@@ -126,7 +131,17 @@ export const JevJudgeTool = Tool.define(
               question: params.question,
               choices: params.choices,
               config: banyanCfg,
+              signal: ctx.abort,
+              sessionID: ctx.sessionID,
+              feature: "judge",
+              // Turn identity (the live tool-call message), never a fixed
+              // constant: per-turn budget scopes must not block future turns.
+              scope: activity.turnID,
             }),
+          ).pipe(
+            Effect.onInterrupt(() =>
+              activity.finish({ status: "skipped", summary: "interrupted before Jev answered" }).pipe(Effect.ignore),
+            ),
           )
 
           if (!decision.ok) {

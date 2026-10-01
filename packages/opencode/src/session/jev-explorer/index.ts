@@ -5,6 +5,7 @@ export type {
   Budgets,
   Deps,
   EligibilityInput,
+  HandoffEvidence,
   Outcome,
   ToolName,
   ToolOutcome,

@@ -142,6 +142,7 @@ const verifierLayer = Banyan.verifierServiceDefaultLayer.pipe(
 
 export const banyanToolDepsLayer = Layer.mergeAll(
   PermissionBridge.layer.pipe(Layer.provide(Permission.defaultLayer)),
+  Banyan.banyanConfigServiceDefaultLayer,
   FetchHttpClient.layer,
   Layer.succeed(
     Banyan.WorktreeContext,

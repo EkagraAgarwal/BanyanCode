@@ -269,6 +269,25 @@ describe("tool.jev_judge execution", () => {
   )
 
   it.instance(
+    "explicit judge feature disable fails safe with no request",
+    () =>
+      Effect.gen(function* () {
+        setJevEnv({ BANYANCODE_JEV_API_KEY: "test-key" })
+        installFakeJev({ choice: "alternate", confidence: 0.9, probabilities: { default: 0.1, alternate: 0.9 } })
+        const info = yield* JevJudgeTool
+        const judge = yield* info.init()
+        const result = yield* executeJudge(judge, validParams, judgeCtx(), {
+          banyancode_jev_features: { judge: false },
+        })
+        expect(result.output).toContain('status="unavailable"')
+        expect(result.output).toContain("UNANSWERED")
+        expect(result.metadata.status).toBe("unavailable")
+        expect(fetchCalls).toHaveLength(0)
+      }),
+    15_000,
+  )
+
+  it.instance(
     "sends no request when no visible activity can start for the message",
     () =>
       Effect.gen(function* () {
