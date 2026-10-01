@@ -33,7 +33,7 @@ export const DEFAULT_MAX_GOAL_ITERATIONS = 5
 export const THINKING_LEVELS = ["off", "low", "medium", "high", "max", "xhigh", "ultra"] as const
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number]
 export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium"
-const ThinkingLevelSchema = Schema.Union([Schema.Literals([...THINKING_LEVELS]), Schema.String])
+export const ThinkingLevelSchema = Schema.Union([Schema.Literals([...THINKING_LEVELS]), Schema.String])
 
 // BanyanCode-owned LSP config. Mirrors the opencode `lsp` shape (boolean for
 // built-in enable, record for per-server overrides) so users can disable,
@@ -87,9 +87,7 @@ export const Info = Schema.Struct({
   // "rules" = deterministic RulesRouter (gateway ON by default); "off" =
   // NoopRouter passthrough (byte-for-byte behavioral no-op). Opt out
   // explicitly with "off".
-  banyancode_router: Schema.optional(
-    Schema.Union([Schema.Literal("off"), Schema.Literal("rules")]),
-  ),
+  banyancode_router: Schema.optional(Schema.Union([Schema.Literal("off"), Schema.Literal("rules")])),
   // Per-tool routing kill-switches (needle2 gateway plan §4). Absent flag
   // means routing allowed (default true); an explicit false bypasses the
   // gateway entirely for that tool (the settle is byte-identical).
@@ -191,11 +189,49 @@ export const Info = Schema.Struct({
   banyancode_jev_enabled: Schema.optional(Schema.Boolean),
   // Backend endpoint selection; each speaks the TypeSafe `POST <base>/v1/systemone`
   // shape. See Jev.ENDPOINTS. Default "typesafe".
-  banyancode_jev_backend: Schema.optional(
-    Schema.Literals(["typesafe", "openrouter", "vercel"]),
-  ),
+  banyancode_jev_backend: Schema.optional(Schema.Literals(["typesafe", "openrouter", "vercel"])),
   // Model override; defaults per backend (jev-latest / typesafe/jev-latest / typesafe-ai/jev).
   banyancode_jev_model: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  // Turn-routing policy profile. New automatic Jev policies stay off unless
+  // this is "aggressive" or the feature is explicitly enabled per-feature
+  // below. Default (unset): conservative — explicit enables only.
+  banyancode_jev_profile: Schema.optional(Schema.Literals(["conservative", "aggressive"])),
+  // Per-feature overrides for automatic Jev features. Known IDs: judge,
+  // explorer, subagent-routing, turn-routing, context-rerank,
+  // compaction-routing, review-routing. Unknown automatic features default
+  // off outside the aggressive profile. An explicit false always disables.
+  banyancode_jev_features: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+  // Generative model tiers a turn policy may select. `fast`/`strong` are
+  // "provider/model-id" strings; thinking levels reuse ThinkingLevelSchema
+  // and resolve via Thinking.resolveThinkingVariant (never a 400).
+  banyancode_jev_model_tiers: Schema.optional(
+    Schema.Struct({
+      fast: Schema.String.check(Schema.isMaxLength(256)),
+      strong: Schema.String.check(Schema.isMaxLength(256)),
+      fastThinking: Schema.optional(ThinkingLevelSchema),
+      strongThinking: Schema.optional(ThinkingLevelSchema),
+    }),
+  ),
+  // Local turn-policy budgets. perTurnCalls caps Jev requests spent on one
+  // turn-routing decision; perSessionUsd caps tracked spend per session.
+  banyancode_jev_budget: Schema.optional(
+    Schema.Struct({
+      perTurnCalls: Schema.optional(Schema.Number),
+      perSessionUsd: Schema.optional(Schema.Number),
+    }),
+  ),
+  // Jev client bounds. All fields are clamped at runtime by the client;
+  // requests-per-minute is a local limiter, never a provider contract.
+  banyancode_jev_client: Schema.optional(
+    Schema.Struct({
+      maxInflight: Schema.optional(Schema.Number),
+      requestsPerMinute: Schema.optional(Schema.Number),
+      tokensPerMinute: Schema.optional(Schema.Number),
+      cacheMaxEntries: Schema.optional(Schema.Number),
+      cacheTtlMs: Schema.optional(Schema.Number),
+      retries: Schema.optional(Schema.Number),
+    }),
+  ),
   // Jev-first exploration tree (jev-explorer): a host-controlled bounded
   // action loop that may complete eligible read-only turns (explore/scout/
   // researcher agents) with a code-verified Jev STOP before any model request.

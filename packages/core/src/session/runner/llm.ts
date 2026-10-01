@@ -14,6 +14,7 @@ import { BanyanConfigService } from "../../banyancode/banyan-config"
 import * as AgentEfficiencyTelemetry from "../../banyancode/agent-efficiency-telemetry"
 import * as TokenAttribution from "../../banyancode/token-attribution"
 import { BanyanConfig } from "../../v1/config/banyan-config"
+import type { TurnPlan } from "../../banyancode/jev-turn"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
@@ -226,6 +227,14 @@ export const layer = Layer.effect(
       const toolMaterialization = yield* tools.materialize(agent.info?.permissions)
       const banyanConfig = Option.getOrUndefined(yield* Effect.serviceOption(BanyanConfigService.Service))
       const banyan = banyanConfig ? yield* banyanConfig.get() : ({} as BanyanConfig.Info)
+      // No automatic Jev call in this wave: a paid turn-routing answer that
+      // only logs advisory (never changing the authoritative model above)
+      // is bad economics. A future slice may reintroduce `planTurn` only
+      // when the turn is unpinned (no session/agent model override), an
+      // execution tier is configured, and a safe catalog resolver can apply
+      // the selected tier model while preserving cache and model-dependent
+      // request settings. Until then the pure policy seam below
+      // (`lastUserText` / `resolveTurnAdvisory`) stays without I/O.
       const promptCacheKey = OpenAIOptions.promptCacheKeyPolicy(
         banyan.banyancode_prompt_cache_key ?? "auto",
         String(model.provider),
@@ -436,3 +445,28 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer
+
+/**
+ * Latest user text for the turn-routing policy. Scans back to front so a
+ * steering or queue promotion routes the current request, not stale history.
+ */
+export const lastUserText = (
+  messages: ReadonlyArray<{ readonly type: string; readonly text?: string }>,
+): string | undefined => {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message?.type === "user" && typeof message.text === "string" && message.text.trim() !== "") {
+      return message.text
+    }
+  }
+  return undefined
+}
+
+/**
+ * Pure advisory gate (no I/O): explicitly pinned models win and the Jev
+ * plan is dropped. Unpinned turns keep the plan as advisory context. The
+ * runner performs no automatic `planTurn` call in this wave, so returning
+ * a plan here never overrides a pin or changes the authoritative model.
+ */
+export const resolveTurnAdvisory = (pinned: boolean, plan: TurnPlan | undefined): TurnPlan | undefined =>
+  pinned || !plan ? undefined : plan

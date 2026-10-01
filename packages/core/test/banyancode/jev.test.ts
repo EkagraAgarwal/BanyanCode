@@ -1,7 +1,11 @@
-import { describe, expect, test } from "bun:test"
+import { beforeEach, describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { Jev } from "../../src/banyancode/jev"
 import { BanyanConfig } from "../../src/v1/config/banyan-config"
+
+beforeEach(() => {
+  Jev.resetJevStateForTests()
+})
 
 const INPUT = {
   state: "command: rm -rf /tmp/work",

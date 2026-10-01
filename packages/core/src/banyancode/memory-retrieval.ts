@@ -15,15 +15,21 @@
  *   3. Builds an FTS query, runs `MemoryRepo.searchRanked`, and re-ranks the
  *      results using deterministic per-row signals (importance, confidence,
  *      scope match, recency, kind priority, source authority).
- *
- * No embeddings, no LLMs. The signals are intrinsic.
+ *   4. Optionally applies an opt-in Jev semantic rerank ("context-rerank",
+ *      see ./jev-memory.ts) over the lexical order. The lexical signals
+ *      above stay intrinsic and deterministic; Jev only reorders
+ *      non-protected slots, never deletes or promotes entries, and any
+ *      uncertainty falls back to the lexical order.
  */
 
-import { Context, Effect, Layer } from "effect"
+import { Context, Duration, Effect, Layer, Option } from "effect"
 import type { MemoryPayloadV1 } from "./memory-payload"
 import type { MemoryEntry } from "./types"
 import { MemoryRepo } from "./memory-repo"
 import { unwrapMemoryValue } from "./memory-payload"
+import { BanyanConfigService } from "./banyan-config"
+import { Jev } from "./jev"
+import { JevMemory } from "./jev-memory"
 
 export type QueryIntent = "code-centric" | "history" | "preference" | "continuation"
 
@@ -99,6 +105,21 @@ export interface RetrieveInput {
   status?: "active"
   /** Caller-supplied override; bypasses classifier. */
   intentOverride?: QueryIntent
+  /** Injected fetch for the opt-in Jev rerank (tests); real network otherwise. */
+  fetch?: Jev.Fetch
+  /** Env for Jev gating/client (defaults to process.env); avoids global mutation in tests. */
+  env?: Jev.Env
+  /** Per-candidate Jev request deadline in ms (default 3000, clamped 1..10000 by the client). */
+  jevTimeoutMs?: number
+  /**
+   * Jev request scope for turn-budget accounting (NOT the memory visibility
+   * scope above). When the configured budget has perTurnCalls and no
+   * operation scope is supplied, the rerank is fail-safed off rather than
+   * burning a session-global constant scope.
+   */
+  jevScope?: string
+  /** Jev request session identity (defaults to the memory sessionID above). */
+  jevSessionID?: string
 }
 
 export interface RetrieveHit {
@@ -206,9 +227,89 @@ export const layer: Layer.Layer<Service, never, MemoryRepo.Service> = Layer.effe
     }
 
     const repo = yield* MemoryRepo.Service
+    // Capture the optional config service at layer-build time. A call-time
+    // `serviceOption` would always miss: by the time `retrieve()` runs the
+    // outer `Effect.provide(...)` chain has been consumed and the fiber
+    // context is empty, so the Jev gate would stay off even with a configured
+    // layer. Capturing the service reference here keeps fresh `get()` reads
+    // per call while working with the existing provide chains.
+    const configServiceOpt = yield* Effect.serviceOption(BanyanConfigService.Service)
 
     const classify: Interface["classify"] = (input) =>
       Effect.succeed(classifyQuery(input))
+
+    // Opt-in Jev rerank ("context-rerank") over the lexical order above.
+    // Gating: Jev.feature(config, env, "context-rerank") with the ambient
+    // BanyanConfigService when present; absent service, missing key, or an
+    // explicit global disable returns the lexical hits untouched.
+    // Safety: scope/session filtering already happened in searchRanked and is
+    // never re-applied here; all candidates are preserved (no deletion or
+    // promotion); protected (pinned/critical) entries keep their exact slots
+    // and only the remaining slots are reordered by Jev scores; any
+    // uncertainty or failure keeps the original lexical order.
+    const maybeJevRerank = (
+      query: string,
+      scored: RetrieveHit[],
+      input: RetrieveInput,
+    ): Effect.Effect<{ hits: RetrieveHit[]; note?: string }, never, never> =>
+      Effect.gen(function* () {
+        const config: Jev.Config = Option.isSome(configServiceOpt) ? yield* configServiceOpt.value.get() : {}
+        const env = input.env ?? process.env
+        if (!Jev.feature(config, env, JevMemory.FEATURE)) return { hits: scored }
+        // Turn-budget fail-safe: without a caller-supplied operation scope a
+        // configured perTurnCalls budget cannot be enforced per turn, so keep
+        // lexical order instead of charging a session-global constant scope.
+        if (input.jevScope === undefined && config.banyancode_jev_budget?.perTurnCalls !== undefined)
+          return { hits: scored, note: "jev-rerank-skipped:no-scope" }
+        const free = scored.flatMap((hit, index) => (JevMemory.isProtected(hit.entry) ? [] : [{ hit, index }]))
+        if (free.length === 0) return { hits: scored, note: "jev-rerank:all-pinned-preserved" }
+        const shortlist = free.slice(0, JevMemory.MAX_SHORTLIST)
+        const tail = free.slice(JevMemory.MAX_SHORTLIST)
+        const timeoutMs = input.jevTimeoutMs ?? JevMemory.REQUEST_TIMEOUT_MS
+        // One controller for the whole shortlist: the finalizer below aborts
+        // in-flight physical Jev requests on deadline/interrupt so no paid
+        // background request keeps running after we fall back to lexical.
+        const controller = new AbortController()
+        const scores = yield* Effect.forEach(
+          shortlist,
+          (slot) =>
+            Effect.promise(() =>
+              JevMemory.scoreCandidate({
+                query,
+                entry: slot.hit.entry,
+                config,
+                env,
+                fetch: input.fetch,
+                sessionID: input.jevSessionID ?? input.sessionID,
+                scope: input.jevScope ?? JevMemory.DEFAULT_REQUEST_SCOPE,
+                timeoutMs,
+                signal: controller.signal,
+              }),
+            ),
+          { concurrency: JevMemory.MAX_INFLIGHT },
+        ).pipe(
+          Effect.timeout(Duration.millis(JevMemory.RERANK_DEADLINE_MS)),
+          Effect.option,
+          Effect.catchCause(() => Effect.succeed(Option.none())),
+          Effect.ensuring(Effect.sync(() => controller.abort())),
+        )
+        if (Option.isNone(scores)) return { hits: scored, note: "jev-rerank-skipped:deadline" }
+        const ranked = shortlist
+          .map((slot, k) => ({ slot, score: scores.value[k] }))
+          .flatMap((part) => (part.score === undefined ? [] : [{ slot: part.slot, score: part.score }]))
+        if (ranked.length !== shortlist.length) return { hits: scored, note: "jev-rerank-skipped:uncertain" }
+        ranked.sort((a, b) => b.score - a.score || a.slot.index - b.slot.index)
+        const ordered = [...ranked.map((part) => part.slot), ...tail]
+        const hits = scored.map((hit) => hit)
+        ordered.forEach((slot, k) => {
+          const source = slot.hit
+          hits[free[k].index] =
+            k < ranked.length
+              ? { ...source, reasons: [...source.reasons, `jev=${ranked[k].score.toFixed(2)}`] }
+              : source
+        })
+        return { hits, note: `jev-rerank:${ranked.length}-scored` }
+      }).pipe(Effect.catchCause(() => Effect.succeed({ hits: scored })))
 
     const retrieve: Interface["retrieve"] = (input) =>
       Effect.gen(function* () {
@@ -249,10 +350,12 @@ export const layer: Layer.Layer<Service, never, MemoryRepo.Service> = Layer.effe
 
         scored.sort((a, b) => b.rank - a.rank)
 
+        const rerank = yield* maybeJevRerank(input.query, scored, input)
+
         return {
           intent,
-          reasoning: classification.reasons,
-          hits: scored,
+          reasoning: rerank.note ? [...classification.reasons, rerank.note] : classification.reasons,
+          hits: rerank.hits,
           totalHits: ranked.totalHits,
           skipped: false,
         }

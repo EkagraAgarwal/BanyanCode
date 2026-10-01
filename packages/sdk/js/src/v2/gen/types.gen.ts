@@ -2347,6 +2347,28 @@ export type BanyanConfig = {
   banyancode_jev_enabled?: boolean
   banyancode_jev_backend?: "typesafe" | "openrouter" | "vercel"
   banyancode_jev_model?: string
+  banyancode_jev_profile?: "conservative" | "aggressive"
+  banyancode_jev_features?: {
+    [key: string]: boolean
+  }
+  banyancode_jev_model_tiers?: {
+    fast: string
+    strong: string
+    fastThinking?: "off" | "low" | "medium" | "high" | "max" | "xhigh" | "ultra" | string
+    strongThinking?: "off" | "low" | "medium" | "high" | "max" | "xhigh" | "ultra" | string
+  }
+  banyancode_jev_budget?: {
+    perTurnCalls?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    perSessionUsd?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  banyancode_jev_client?: {
+    maxInflight?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    requestsPerMinute?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    tokensPerMinute?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    cacheMaxEntries?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    cacheTtlMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    retries?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
   banyancode_jev_tree?: {
     enabled?: boolean
     maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
