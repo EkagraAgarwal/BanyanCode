@@ -191,6 +191,13 @@ timeout on an earlier combined run; it passed isolated and in the final full
 suite without assertion or timeout changes. No production Jev requests were
 used for these checks.
 
+A test-only follow-up gives the five explorer integration fixtures a finite
+ten-second budget. Instrumented runs showed engine work finishing in 15..90ms
+while different fixtures stalled beyond the default five-second budget on
+Windows. Assertions and production deadlines are unchanged; three focused
+reruns passed with the explicit fixture budget. This follow-up does not change
+the runtime shipped as 26.10.0-dev.a30ffd7 or move its published tag.
+
 ## Release scope
 
 This dev canary delivers the typed bounded client, accounting, configuration,

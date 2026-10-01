@@ -20,6 +20,10 @@ import { testEffect } from "../lib/effect"
 // paid or real Jev request is ever made.
 const it = testEffect(Layer.mergeAll(SessionNs.defaultLayer, Database.defaultLayer))
 
+// Session+Database fixture setup stalls on Windows independently of the
+// deadline-bounded engine. Keep a finite fixture budget without weakening assertions.
+const TIMEOUT_MS = 10_000
+
 const JEV_ENDPOINT = "https://jev.test/v1/systemone"
 const TREE_CONFIG = { banyancode_jev_tree: { enabled: true } } satisfies BanyanConfigInfo
 const KEY_ENV = { BANYANCODE_JEV_API_KEY: "test-key" }
@@ -176,6 +180,7 @@ describe("jev-explorer regression", () => {
       expect(excerpt!.length).toBeLessThanOrEqual(300)
       void session
     }),
+    TIMEOUT_MS,
   )
 
   it.instance("hands off when a web fetch yields no verifiable raw span", () =>
@@ -207,6 +212,7 @@ describe("jev-explorer regression", () => {
       })
       expect(outcome.type).toBe("handoff")
     }),
+    TIMEOUT_MS,
   )
 
   it.instance("hands off after four consecutive skipped iterations without spending every budget", () =>
@@ -253,6 +259,7 @@ describe("jev-explorer regression", () => {
         .find((part) => part.type === "jev_run") as SessionV1.JevRunPart
       expect(run.stopReason).toBe("idle-streak: no progress")
     }),
+    TIMEOUT_MS,
   )
 
   it.instance("threads the abort signal, sessionID, and runID scope into every Jev request", () =>
@@ -295,6 +302,7 @@ describe("jev-explorer regression", () => {
         expect(input.scope).toBe("run_scope_9")
       }
     }),
+    TIMEOUT_MS,
   )
 
   it.instance("carries a bounded advisory evidence array on handoff for the V1 caller", () =>
@@ -335,5 +343,6 @@ describe("jev-explorer regression", () => {
         )
       }
     }),
+    TIMEOUT_MS,
   )
 })
