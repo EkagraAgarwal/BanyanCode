@@ -23,7 +23,7 @@ import { useSync } from "../../context/sync"
 import { useEvent } from "../../context/event"
 import { SplitBorder, RoundedBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
-import { Spinner } from "../../component/spinner"
+import { Spinner, shouldSpinSpinner } from "../../component/spinner"
 import { createSyntaxStyleMemo, generateSubtleSyntax, selectedForeground, useTheme } from "../../context/theme"
 import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "../../component/prompt"
@@ -99,6 +99,11 @@ const GO_UPSELL_WINDOW = 86_400_000 // 24 hrs
 const GO_UPSELL_PROVIDERS = new Set(["opencode", "opencode-go"])
 
 type RetryAction = Extract<SessionStatus, { type: "retry" }>["action"]
+
+function messageIsCompleted(message: { time?: object } | undefined): boolean {
+  if (!message?.time) return false
+  return "completed" in message.time && message.time.completed !== undefined
+}
 
 function goUpsellKeys(action: RetryAction) {
   if (!action) return
@@ -1708,6 +1713,7 @@ const jevDisplay = (value: string | undefined, max: number) => {
 
 export function JevActivityPart(props: { last: boolean; part: unknown; message: AssistantMessage }) {
   const { theme } = useTheme()
+  const sync = useSync()
   const data = createMemo(() => (isJevActivityPart(props.part) ? props.part : undefined))
   const id = createMemo(() => "jev-" + (data()?.id ?? ""))
   const feature = createMemo(() => jevDisplay(data()?.feature, 64))
@@ -1730,6 +1736,15 @@ export function JevActivityPart(props: { last: boolean; part: unknown; message: 
     return `${input}↑ ${output}↓ tok${cost}`
   })
   const statusLabel = createMemo(() => status())
+  // A `running` Jev part from a dead turn must not animate once the owning
+  // message is complete or the session is idle.
+  const spinning = createMemo(() =>
+    shouldSpinSpinner({
+      partRunning: status() === "running",
+      messageCompleted: messageIsCompleted(props.message),
+      sessionStatus: sync.data.session_status[props.message.sessionID],
+    }),
+  )
   const statusColor = createMemo(() =>
     status() === "completed"
       ? theme.diffAdded
@@ -1744,7 +1759,7 @@ export function JevActivityPart(props: { last: boolean; part: unknown; message: 
     <Show when={data()}>
       <box id={id()} paddingLeft={3} marginTop={1} flexDirection="column" flexShrink={0}>
         <Switch>
-          <Match when={status() === "running"}>
+          <Match when={spinning()}>
             <Spinner color={theme.warning}>{"◇ Jev · " + feature() + " running"}</Spinner>
           </Match>
           <Match when={true}>
@@ -1783,6 +1798,7 @@ const INLINE_TOOL_ICON_WIDTH = 2
 export function ReasoningPart(props: { last: boolean; part: SdkReasoningPart; message: AssistantMessage }) {
   const { theme } = useTheme()
   const ctx = use()
+  const sync = useSync()
   // Collapsed by default in hide mode: a single line throughout, so the
   // layout never shifts. Click to open the full markdown block, click to close.
   const [expanded, setExpanded] = createSignal(false)
@@ -1794,6 +1810,16 @@ export function ReasoningPart(props: { last: boolean; part: SdkReasoningPart; me
   // Reasoning is finalized when the server sets `time.end` (see processor.ts).
   // Flips independently of the parent message completing.
   const isDone = createMemo(() => props.part.time.end !== undefined)
+  // Animate only while the part is open, the owning message is open, and the
+  // session is still busy — a reasoning part without `time.end` from a dead
+  // turn must not redraw forever.
+  const spinning = createMemo(() =>
+    shouldSpinSpinner({
+      partRunning: !isDone(),
+      messageCompleted: messageIsCompleted(props.message),
+      sessionStatus: sync.data.session_status[props.part.sessionID],
+    }),
+  )
   const inMinimal = createMemo(() => ctx.thinkingMode() === "hide")
   const duration = createMemo(() => {
     const end = props.part.time.end
@@ -1815,6 +1841,7 @@ export function ReasoningPart(props: { last: boolean; part: SdkReasoningPart; me
             toggleable={inMinimal()}
             open={!inMinimal() || expanded()}
             done={isDone()}
+            spinning={spinning()}
             title={summary().title}
             duration={isDone() ? Locale.duration(duration()) : undefined}
           />
@@ -1841,6 +1868,7 @@ function ReasoningHeader(props: {
   toggleable: boolean
   open: boolean
   done: boolean
+  spinning: boolean
   title: string | null
   duration?: string
 }) {
@@ -1852,7 +1880,7 @@ function ReasoningHeader(props: {
 
   return (
     <Switch>
-      <Match when={!props.done}>
+      <Match when={props.spinning}>
         <box flexDirection="row">
           <Spinner color={fg()}>{props.title ? "Thinking: " + props.title : "Thinking"}</Spinner>
         </box>
@@ -2122,6 +2150,20 @@ function InlineTool(props: {
 
   const failed = createMemo(() => Boolean(error() && !denied()))
   const clickable = createMemo(() => Boolean(props.onClick || failed()))
+  // A `running` part alone must not animate: crashed/aborted turns leave
+  // parts `running` forever, so the owning session must still be busy and
+  // the owning message must still be open.
+  const messageCompleted = createMemo(() => {
+    const messages = sync.data.message[props.part.sessionID] ?? []
+    return messages.some((item) => item.id === props.part.messageID && messageIsCompleted(item))
+  })
+  const spinActive = createMemo(() =>
+    shouldSpinSpinner({
+      partRunning: Boolean(props.spinner),
+      messageCompleted: messageCompleted(),
+      sessionStatus: sync.data.session_status[props.part.sessionID],
+    }),
+  )
   const fg = createMemo(() => {
     if (props.color) return props.color
     if (permission()) return theme.warning
@@ -2144,7 +2186,7 @@ function InlineTool(props: {
       errorExpanded={errorExpanded()}
       complete={props.complete}
       pending={props.pending}
-      spinner={props.spinner}
+      spinner={spinActive()}
       subagent={props.subagent}
       separateAfter={(id) => id !== undefined && ctx.userMessageIDs().has(id)}
       onMouseOver={() => clickable() && setHover(true)}
@@ -2257,8 +2299,20 @@ export function BlockTool(props: {
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
+  const sync = useSync()
   const [hover, setHover] = createSignal(false)
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error : undefined))
+  // Same session-busy + message-open gate as InlineTool. Without a part the
+  // raw spinner flag passes through (no owning session to check against).
+  const spinActive = createMemo(() => {
+    if (!props.part) return Boolean(props.spinner)
+    const messages = sync.data.message[props.part.sessionID] ?? []
+    return shouldSpinSpinner({
+      partRunning: Boolean(props.spinner),
+      messageCompleted: messages.some((item) => item.id === props.part!.messageID && messageIsCompleted(item)),
+      sessionStatus: sync.data.session_status[props.part.sessionID],
+    })
+  })
   return (
     <box
       id={props.part ? "tool-block-" + props.part.id : undefined}
@@ -2285,7 +2339,7 @@ export function BlockTool(props: {
       }}
     >
       <Show
-        when={props.spinner}
+        when={spinActive()}
         fallback={
           <text fg={theme.textMuted}>
             {props.title}

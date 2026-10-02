@@ -2,7 +2,8 @@
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js"
 import stripAnsi from "strip-ansi"
 import { useTheme } from "../context/theme"
-import { Spinner } from "./spinner"
+import { Spinner, shouldSpinSpinner } from "./spinner"
+import { useSync } from "../context/sync"
 import { Locale } from "../util/locale"
 import type { AssistantMessage } from "@opencode-ai/sdk/v2"
 
@@ -147,6 +148,7 @@ const flatten = (nodes: JevRunNode[]): Row[] => {
 
 export function JevRunTree(props: { last: boolean; part: unknown; message: AssistantMessage }) {
   const { theme } = useTheme()
+  const sync = useSync()
   const data = createMemo(() => (isJevRunPart(props.part) ? props.part : undefined))
   const id = createMemo(() => "jev-run-" + (data()?.runID ?? ""))
   const status = createMemo(() => data()?.status)
@@ -178,6 +180,15 @@ export function JevRunTree(props: { last: boolean; part: unknown; message: Assis
     [latency() !== undefined ? Locale.duration(latency()!) : "", usage()].filter(Boolean).join(" · "),
   )
   const header = createMemo(() => `Jev · explore-tree · ${status()} · ${countLabel()}`)
+  // A `running` Jev part from a dead turn must not animate once the owning
+  // message is complete or the session is idle.
+  const spinning = createMemo(() =>
+    shouldSpinSpinner({
+      partRunning: status() === "running",
+      messageCompleted: props.message.time?.completed !== undefined,
+      sessionStatus: sync.data.session_status[props.message.sessionID],
+    }),
+  )
   const statusColor = createMemo(() =>
     status() === "completed"
       ? theme.diffAdded
@@ -207,7 +218,7 @@ export function JevRunTree(props: { last: boolean; part: unknown; message: Assis
     <Show when={data()}>
       <box id={id()} paddingLeft={3} marginTop={1} flexDirection="column" flexShrink={0}>
         <Switch>
-          <Match when={status() === "running"}>
+          <Match when={spinning()}>
             <Spinner color={theme.warning}>{"◇ " + header()}</Spinner>
           </Match>
           <Match when={true}>
