@@ -71,6 +71,14 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionSummary") {}
 
+export function toCountDiffs(diffs: Snapshot.FileDiff[]): Snapshot.FileDiff[] {
+  return diffs.map((item) => ({
+    additions: item.additions,
+    deletions: item.deletions,
+    ...(item.file !== undefined ? { file: item.file } : {}),
+  }))
+}
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -122,7 +130,8 @@ export const layer = Layer.effect(
       const target = messages.find((m) => m.info.id === input.messageID)
       if (!target || target.info.role !== "user") return
       const msgDiffs = yield* computeDiff({ messages })
-      target.info.summary = { ...target.info.summary, diffs: msgDiffs }
+      // Full patches stay available via GET /session/:id/diff; stored summaries keep counts only.
+      target.info.summary = { ...target.info.summary, diffs: toCountDiffs(msgDiffs) }
       yield* sessions.updateMessage(target.info)
     })
 
