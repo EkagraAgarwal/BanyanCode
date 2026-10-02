@@ -1,0 +1,97 @@
+---
+title: BanyanCode MCP Server
+description: Delegate tasks to BanyanCode from Claude Code, Codex, Cursor, or any MCP client
+---
+
+# BanyanCode MCP Server
+
+`banyancode mcp serve` exposes BanyanCode task delegation over MCP (stdio by default, Streamable HTTP with `--http`). A caller starts a task, polls status, and fetches a compact result — BanyanCode runs the agents, memory, and verifier tools on its side.
+
+## Configuration
+
+All keys live in `banyancode.json` under `banyancode_mcp_server` (`BanyanConfig.Info` only, never `opencode.json`). Every slot is optional; an absent struct keeps reject-everything defaults.
+
+```jsonc
+{
+  "banyancode_mcp_server": {
+    "default_agent": "build",
+    "default_model": "provider/model", // optional; falls back to agent/model config
+    "permission": "reject", // reject | edits  (yolo needs --allow-yolo)
+    "max_concurrent_tasks": 4,
+    "result_max_tokens": 1500,
+    "needs_input_timeout_seconds": 600,
+    "tools": ["task", "code", "memory", "verify"] // group allowlist
+  }
+}
+```
+
+Permission policy: `reject` auto-rejects anything not already allowed by config (safe for read-only and analysis tasks). `edits` additionally auto-approves edit/write inside the task cwd or worktree; bash and network still follow the existing config rules. `yolo` is never a config value — it maps to `banyancode_yolo_mode` and is only available when the server was started with `--allow-yolo`, so a caller cannot grant it to itself.
+
+Undecided questions move the task to `needs_input`; the caller answers with `banyan_task_reply`. Unanswered `needs_input` times out to reject after `needs_input_timeout_seconds`.
+
+## Client setup
+
+### Claude Code
+
+```bash
+claude mcp add banyancode -- banyancode mcp serve --cwd .
+```
+
+Or a project `.mcp.json` entry:
+
+```json
+{
+  "mcpServers": {
+    "banyancode": {
+      "command": "banyancode",
+      "args": ["mcp", "serve", "--cwd", "."]
+    }
+  }
+}
+```
+
+When the TUI is open, prefer `--attach http://127.0.0.1:<port>` so tasks show up live.
+
+### Codex
+
+```toml
+# ~/.codex/config.toml
+[mcp_servers.banyancode]
+command = "banyancode"
+args = ["mcp", "serve", "--cwd", "."]
+```
+
+### Cursor
+
+```json
+// .cursor/mcp.json
+{
+  "mcpServers": {
+    "banyancode": {
+      "command": "banyancode",
+      "args": ["mcp", "serve", "--cwd", "."]
+    }
+  }
+}
+```
+
+## Orchestrator recipe
+
+1. The caller writes the plan into memory or `PLAN.md` first, so parallel tasks share context.
+2. Call `banyan_task_start` per task with `isolation: "worktree"` for anything that writes — parallel write tasks then cannot clobber each other (merging stays with the caller). Read-only tasks can share `isolation: "shared"`.
+3. Poll `banyan_task_status` until done (over-cap starts report `status: queued` instead of failing).
+4. Read `banyan_task_result(detail: "summary")` — the summary stays under `result_max_tokens`. Fetch the diff only for review.
+
+## Channel and database note
+
+Session data lives in per-channel SQLite files (`.banyancode/banyancode-<worktree-hash><-channel>.db`): a task started from a canary/dev binary is not visible to the stable binary and vice versa. This isolation is deliberate — dev builds never touch stable data. If a task seems to have "disappeared", check that both ends run the same release channel.
+
+## Zero-work stopgap
+
+Before wiring up MCP, a caller can delegate a single shot with no server at all:
+
+```bash
+banyancode run --format json "summarize the auth flow in packages/core/src/auth.ts"
+```
+
+The JSON result carries the same compact summary shape as `banyan_task_result`, so callers can prototype the parse path before adopting the full start/status/result loop.

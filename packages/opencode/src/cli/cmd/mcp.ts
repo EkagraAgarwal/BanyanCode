@@ -100,6 +100,7 @@ export const McpCommand = cmd({
     yargs
       .command(McpAddCommand)
       .command(McpListCommand)
+      .command(McpServeCommand)
       .command(McpAuthCommand)
       .command(McpLogoutCommand)
       .command(McpDebugCommand)
@@ -663,6 +664,34 @@ export const McpAddCommand = effectCmd({
 
       prompts.outro("MCP server added successfully")
     })
+  }),
+})
+
+export const McpServeCommand = effectCmd({
+  command: "serve",
+  describe: "serve BanyanCode over MCP (stdio transport)",
+  instance: false,
+  builder: (yargs) =>
+    yargs
+      .option("cwd", {
+        describe: "project directory to operate on",
+        type: "string",
+        default: process.cwd(),
+      })
+      .option("attach", {
+        describe: "reuse a running server instead of starting one (e.g. http://127.0.0.1:4096)",
+        type: "string",
+      })
+      .option("allow-yolo", {
+        describe: "permit yolo permission policy for MCP tasks (later phase)",
+        type: "boolean",
+        default: false,
+      }),
+  handler: Effect.fn("Cli.mcp.serve")(function* (args) {
+    const { serveStdio } = yield* Effect.promise(() => import("../../mcp-server/transport-stdio"))
+    yield* Effect.promise(() =>
+      serveStdio({ cwd: args.cwd, attach: args.attach, allowYolo: args["allow-yolo"] }),
+    )
   }),
 })
 
