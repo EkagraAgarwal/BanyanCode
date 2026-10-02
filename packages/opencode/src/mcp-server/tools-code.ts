@@ -18,7 +18,15 @@ import { z } from "zod/v3"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import type { AnyObjectSchema } from "@modelcontextprotocol/sdk/server/zod-compat.js"
 import type { createOpencodeClient } from "@opencode-ai/sdk/v2"
-import { assertInsideRoot } from "./server"
+import { assertInsideRoot, isInsideRoot } from "./paths"
+import {
+  CodeToolOutputSchema,
+  DEFAULT_OUTPUT_CHARS,
+  errorResult,
+  invalidArguments,
+  okResult,
+} from "./output"
+import type { McpToolResult } from "./output"
 
 export type CodeToolsSdk = ReturnType<typeof createOpencodeClient>
 
@@ -96,42 +104,14 @@ export const resolveChangeCheckRoute = (op: ChangeCheckOp): string =>
 export const resolveCodegraphRoute = (op: CodegraphOp): string =>
   op === "status" ? "/global/codegraph-status" : "/global/codegraph-build"
 
-// Pure boolean form of the server's resolved-path guard: every per-request
-// path argument must resolve inside the project root (`..` and absolute
-// escapes are rejected). Handlers use assertInsideRoot and surface the
-// thrown message as a tool error.
-export const isInsideRoot = (root: string, input: string): boolean => {
-  try {
-    assertInsideRoot(root, input)
-    return true
-  } catch {
-    return false
-  }
-}
+// Re-exported from the single guard module so existing import sites keep
+// working; the implementation lives in paths.ts.
+export { assertInsideRoot, isInsideRoot }
 
-// Output cap: tool results are JSON dumps of index rows and can balloon past
-// model context. Truncate to a char budget with an explicit marker.
-export const CODE_TOOL_OUTPUT_MAX_CHARS = 8000
-export const OUTPUT_TRUNCATED_MARKER = "\n…[truncated]"
-
-export const capOutput = (
-  text: string,
-  maxChars: number = CODE_TOOL_OUTPUT_MAX_CHARS,
-): { text: string; truncated: boolean } => {
-  if (text.length <= maxChars) return { text, truncated: false }
-  const budget = Math.max(0, maxChars - OUTPUT_TRUNCATED_MARKER.length)
-  return { text: text.slice(0, budget) + OUTPUT_TRUNCATED_MARKER, truncated: true }
-}
+// Output budget (kept here for compat; the implementation lives in output.ts).
+export const CODE_TOOL_OUTPUT_MAX_CHARS = DEFAULT_OUTPUT_CHARS
 
 type SdkResult = { data?: unknown; error?: unknown }
-
-const safeJson = (value: unknown): string => {
-  try {
-    return JSON.stringify(value, null, 2) ?? "null"
-  } catch {
-    return String(value)
-  }
-}
 
 const describeSdkError = (error: unknown): string => {
   if (typeof error === "string") return error
@@ -145,27 +125,20 @@ const describeSdkError = (error: unknown): string => {
   }
 }
 
-type ToolResult = {
-  content: Array<{ type: "text"; text: string }>
-  isError?: boolean
-}
-
-const ok = (data: unknown): ToolResult => ({ content: [{ type: "text", text: capOutput(safeJson(data)).text }] })
-
-const err = (message: string): ToolResult => ({ content: [{ type: "text", text: message }], isError: true })
-
-const fromSdk = (res: SdkResult): ToolResult =>
-  res.error !== undefined && res.error !== null ? err(`request failed: ${describeSdkError(res.error)}`) : ok(res.data ?? null)
+const fromSdk = (res: SdkResult): McpToolResult =>
+  res.error !== undefined && res.error !== null
+    ? errorResult("UPSTREAM_ERROR", `request failed: ${describeSdkError(res.error)}`)
+    : okResult(res.data ?? null)
 
 // Guard is validation-only: the route resolves the path against the indexed
-// workspace itself. Returns the original input when it stays inside the root,
-// otherwise a tool error for the `..` / absolute escape.
-const guardedPath = (cwd: string, input: string): { path: string } | { error: ToolResult } => {
+// workspace itself. Returns the absolute resolved path when it stays inside
+// the root, otherwise a PATH_ESCAPE tool error for the `..` / absolute /
+// symlink escape.
+const guardedPath = (cwd: string, input: string): { path: string } | { error: McpToolResult } => {
   try {
-    assertInsideRoot(cwd, input)
-    return { path: input }
+    return { path: assertInsideRoot(cwd, input) }
   } catch (error) {
-    return { error: err(error instanceof Error ? error.message : `path escapes project root: ${input}`) }
+    return { error: errorResult("PATH_ESCAPE", error instanceof Error ? error.message : `path escapes project root: ${input}`) }
   }
 }
 
@@ -233,121 +206,26 @@ const RepoCompat = RepoInput as unknown as AnyObjectSchema
 const ChangeCheckCompat = ChangeCheckInput as unknown as AnyObjectSchema
 const CodegraphCompat = CodegraphInput as unknown as AnyObjectSchema
 
+const READ_ONLY_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const
+
+const metaFor = (): Record<string, unknown> => ({ "anthropic/maxResultSizeChars": DEFAULT_OUTPUT_CHARS })
+
 export function registerCodeTools(mcp: McpServer, deps: CodeToolsDeps): void {
-  mcp.registerTool(
-    CodeFindToolName,
-    {
-      description: `Symbol locator across the codebase graph (backed by POST /global/code-find). ${UNTRUSTED}`,
-      inputSchema: CodeFindCompat,
-      annotations: { readOnlyHint: true },
-    },
-    async (args: CodeFindArgs) => {
-      const res = await deps.sdk.global.codeFind({
-        intent: args.intent,
-        target: args.target,
-        ...(args.includeKeywordFallback !== undefined ? { includeKeywordFallback: args.includeKeywordFallback } : {}),
-        ...(args.limit !== undefined ? { limit: args.limit } : {}),
-      })
-      return fromSdk(res)
-    },
-  )
-
-  mcp.registerTool(
-    RepoToolName,
-    {
-      description: `Repository intelligence (backed by POST /global/repository/*, op-selected). ${UNTRUSTED}`,
-      inputSchema: RepoCompat,
-      annotations: { readOnlyHint: true },
-    },
-    async (args: RepoArgs) => {
-      const sdk = deps.sdk.repositoryIntel
-      switch (args.op) {
-        case "query": {
-          if (!args.query) return err(`banyan_repo op "query" requires "query".`)
-          return fromSdk(
-            await sdk.query({
-              banyanQueryInput: {
-                query: args.query,
-                ...(args.limit !== undefined ? { limit: args.limit } : {}),
-              },
-            }),
-          )
-        }
-        case "explain": {
-          if (!args.symbol) return err(`banyan_repo op "explain" requires "symbol".`)
-          return fromSdk(await sdk.explain({ banyanExplainInput: { symbol: args.symbol } }))
-        }
-        case "impact": {
-          if (!args.path) return err(`banyan_repo op "impact" requires "path".`)
-          const guarded = guardedPath(deps.cwd, args.path)
-          if ("error" in guarded) return guarded.error
-          return fromSdk(await sdk.impact({ banyanImpactInput: { path: guarded.path } }))
-        }
-        case "trace": {
-          if (!args.symbol) return err(`banyan_repo op "trace" requires "symbol".`)
-          return fromSdk(
-            await sdk.trace({
-              banyanTraceInput: {
-                symbol: args.symbol,
-                ...(args.depth !== undefined ? { depth: args.depth } : {}),
-                ...(args.limit !== undefined ? { limit: args.limit } : {}),
-              },
-            }),
-          )
-        }
-        case "tests": {
-          if (!args.symbol) return err(`banyan_repo op "tests" requires "symbol".`)
-          return fromSdk(await sdk.tests({ banyanTestsInput: { symbol: args.symbol } }))
-        }
-        case "symbols": {
-          if (!args.query) return err(`banyan_repo op "symbols" requires "query".`)
-          return fromSdk(
-            await sdk.symbols({
-              banyanSymbolsInput: {
-                query: args.query,
-                ...(args.limit !== undefined ? { limit: args.limit } : {}),
-              },
-            }),
-          )
-        }
-        case "relationships": {
-          if (!args.nodeID && !args.path) return err(`banyan_repo op "relationships" requires "nodeID" or "path".`)
-          if (args.path) {
-            const guarded = guardedPath(deps.cwd, args.path)
-            if ("error" in guarded) return guarded.error
-          }
-          return fromSdk(
-            await sdk.relationships({
-              banyanRelationshipsInput: {
-                ...(args.nodeID ? { nodeID: args.nodeID } : {}),
-                ...(args.path ? { path: args.path } : {}),
-                ...(args.depth !== undefined ? { depth: args.depth } : {}),
-              },
-            }),
-          )
-        }
-        case "ownership": {
-          if (!args.path) return err(`banyan_repo op "ownership" requires "path".`)
-          const guarded = guardedPath(deps.cwd, args.path)
-          if ("error" in guarded) return guarded.error
-          return fromSdk(await sdk.ownership({ banyanOwnershipInput: { path: guarded.path } }))
-        }
-        case "slice": {
-          if (!args.focus) return err(`banyan_repo op "slice" requires "focus".`)
-          return fromSdk(await sdk.architecturalSlice({ focus: args.focus }))
-        }
-        default:
-          return err(`unknown banyan_repo op: ${String((args as { op?: unknown }).op)}`)
-      }
-    },
-  )
-
+  // Registration order is alphabetical so tools/list is deterministic.
   mcp.registerTool(
     ChangeCheckToolName,
     {
-      description: `Change safety check (backed by POST /global/preflight and POST /global/blast-radius, op-selected). ${UNTRUSTED}`,
+      title: "Change safety check",
+      description: `Check whether an edit is safe before applying it (backed by POST /global/preflight and POST /global/blast-radius, op-selected). ${UNTRUSTED}`,
       inputSchema: ChangeCheckCompat,
-      annotations: { readOnlyHint: true },
+      outputSchema: CodeToolOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+      _meta: metaFor(),
     },
     async (args: ChangeCheckArgs) => {
       if (args.op === "preflight") {
@@ -368,29 +246,152 @@ export function registerCodeTools(mcp: McpServer, deps: CodeToolsDeps): void {
     },
   )
 
+  mcp.registerTool(
+    CodeFindToolName,
+    {
+      title: "Code symbol finder",
+      description: `Symbol locator across the codebase graph (backed by POST /global/code-find). ${UNTRUSTED}`,
+      inputSchema: CodeFindCompat,
+      outputSchema: CodeToolOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+      _meta: metaFor(),
+    },
+    async (args: CodeFindArgs) => {
+      const res = await deps.sdk.global.codeFind({
+        intent: args.intent,
+        target: args.target,
+        includeKeywordFallback: args.includeKeywordFallback ?? true,
+        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+      })
+      return fromSdk(res)
+    },
+  )
+
   // No readOnlyHint: op=build starts a background index (a state change).
   mcp.registerTool(
     CodegraphToolName,
     {
+      title: "Codegraph index status and builds",
       description: `Codegraph index status and builds (backed by GET /global/codegraph-status and POST /global/codegraph-build, op-selected). ${UNTRUSTED}`,
       inputSchema: CodegraphCompat,
+      outputSchema: CodeToolOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      _meta: metaFor(),
     },
     async (args: CodegraphArgs) => {
-      if (args.root !== undefined) {
-        const guarded = guardedPath(deps.cwd, args.root)
-        if ("error" in guarded) return guarded.error
-      }
+      // /global/* routes run without instance middleware, so the handler
+      // needs an explicit absolute root — resolved here against --cwd.
+      const guarded = guardedPath(deps.cwd, args.root ?? ".")
+      if ("error" in guarded) return guarded.error
       if (args.op === "status") {
-        return fromSdk(
-          await deps.sdk.global.codegraph.status(args.root !== undefined ? { root: args.root } : undefined),
-        )
+        return fromSdk(await deps.sdk.global.codegraph.status({ root: guarded.path }))
       }
       return fromSdk(
         await deps.sdk.global.codegraph.build({
-          ...(args.root !== undefined ? { root: args.root } : {}),
+          root: guarded.path,
           ...(args.force !== undefined ? { force: args.force } : {}),
         }),
       )
+    },
+  )
+
+  mcp.registerTool(
+    RepoToolName,
+    {
+      title: "Repository intelligence",
+      description: `Repository intelligence: query, explain, impact, trace, tests, symbols, relationships, ownership, and architectural slices (backed by POST /global/repository/*, op-selected). ${UNTRUSTED}`,
+      inputSchema: RepoCompat,
+      outputSchema: CodeToolOutputSchema,
+      annotations: READ_ONLY_ANNOTATIONS,
+      _meta: metaFor(),
+    },
+    async (args: RepoArgs) => {
+      const sdk = deps.sdk.repositoryIntel
+      switch (args.op) {
+        case "query": {
+          if (!args.query) return invalidArguments(`banyan_repo op "query" requires "query".`)
+          return fromSdk(
+            await sdk.query({
+              banyanQueryInput: {
+                query: args.query,
+                ...(args.limit !== undefined ? { limit: args.limit } : {}),
+              },
+            }),
+          )
+        }
+        case "explain": {
+          if (!args.symbol) return invalidArguments(`banyan_repo op "explain" requires "symbol".`)
+          return fromSdk(await sdk.explain({ banyanExplainInput: { symbol: args.symbol } }))
+        }
+        case "impact": {
+          if (!args.path) return invalidArguments(`banyan_repo op "impact" requires "path".`)
+          const guarded = guardedPath(deps.cwd, args.path)
+          if ("error" in guarded) return guarded.error
+          return fromSdk(await sdk.impact({ banyanImpactInput: { path: guarded.path } }))
+        }
+        case "trace": {
+          if (!args.symbol) return invalidArguments(`banyan_repo op "trace" requires "symbol".`)
+          return fromSdk(
+            await sdk.trace({
+              banyanTraceInput: {
+                symbol: args.symbol,
+                ...(args.depth !== undefined ? { depth: args.depth } : {}),
+                ...(args.limit !== undefined ? { limit: args.limit } : {}),
+              },
+            }),
+          )
+        }
+        case "tests": {
+          if (!args.symbol) return invalidArguments(`banyan_repo op "tests" requires "symbol".`)
+          return fromSdk(await sdk.tests({ banyanTestsInput: { symbol: args.symbol } }))
+        }
+        case "symbols": {
+          if (!args.query) return invalidArguments(`banyan_repo op "symbols" requires "query".`)
+          return fromSdk(
+            await sdk.symbols({
+              banyanSymbolsInput: {
+                query: args.query,
+                ...(args.limit !== undefined ? { limit: args.limit } : {}),
+              },
+            }),
+          )
+        }
+        case "relationships": {
+          if (!args.nodeID && !args.path) return invalidArguments(`banyan_repo op "relationships" requires "nodeID" or "path".`)
+          let resolvedPath: string | undefined
+          if (args.path) {
+            const guarded = guardedPath(deps.cwd, args.path)
+            if ("error" in guarded) return guarded.error
+            resolvedPath = guarded.path
+          }
+          return fromSdk(
+            await sdk.relationships({
+              banyanRelationshipsInput: {
+                ...(args.nodeID ? { nodeID: args.nodeID } : {}),
+                ...(resolvedPath ? { path: resolvedPath } : {}),
+                ...(args.depth !== undefined ? { depth: args.depth } : {}),
+              },
+            }),
+          )
+        }
+        case "ownership": {
+          if (!args.path) return invalidArguments(`banyan_repo op "ownership" requires "path".`)
+          const guarded = guardedPath(deps.cwd, args.path)
+          if ("error" in guarded) return guarded.error
+          return fromSdk(await sdk.ownership({ banyanOwnershipInput: { path: guarded.path } }))
+        }
+        case "slice": {
+          if (!args.focus) return invalidArguments(`banyan_repo op "slice" requires "focus".`)
+          return fromSdk(await sdk.architecturalSlice({ focus: args.focus }))
+        }
+        default:
+          return invalidArguments(`unknown banyan_repo op: ${String((args as { op?: unknown }).op)}`)
+      }
     },
   )
 }

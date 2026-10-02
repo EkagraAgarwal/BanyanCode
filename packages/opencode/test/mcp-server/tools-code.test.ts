@@ -46,8 +46,6 @@ import path from "path"
 import {
   CODE_TOOL_OUTPUT_MAX_CHARS,
   CodeToolNames,
-  OUTPUT_TRUNCATED_MARKER,
-  capOutput,
   isChangeCheckOp,
   isCodegraphOp,
   isInsideRoot,
@@ -57,6 +55,7 @@ import {
   resolveCodegraphRoute,
   resolveRepoRoute,
 } from "../../src/mcp-server/tools-code"
+import { DEFAULT_OUTPUT_CHARS, truncateStructured } from "../../src/mcp-server/output"
 
 // Fixture graph (mirrors code-find-http.test.ts): one file, function
 // node(s), and a ready meta row (schemaVersion 3) so readiness would
@@ -280,13 +279,16 @@ describe("mcp code tools (Phase 0 slice)", () => {
     expect(isInsideRoot("/repo", "a/../../escape.ts")).toBe(false)
   })
 
-  test("output cap truncates with a marker, passes small text through", () => {
-    const small = capOutput("hello")
-    expect(small).toEqual({ text: "hello", truncated: false })
-    const big = capOutput("x".repeat(CODE_TOOL_OUTPUT_MAX_CHARS + 100))
+  test("output cap truncates structurally, always valid JSON", () => {
+    expect(CODE_TOOL_OUTPUT_MAX_CHARS).toBe(DEFAULT_OUTPUT_CHARS)
+    const small = truncateStructured({ a: 1 })
+    expect(small).toEqual({ data: { a: 1 }, truncated: false, omitted: 0 })
+    const big = truncateStructured({ items: Array.from({ length: 2000 }, (_, n) => `row-${n}-` + "x".repeat(50)) })
     expect(big.truncated).toBe(true)
-    expect(big.text.length).toBeLessThanOrEqual(CODE_TOOL_OUTPUT_MAX_CHARS)
-    expect(big.text.endsWith(OUTPUT_TRUNCATED_MARKER)).toBe(true)
+    expect(big.omitted).toBeGreaterThan(0)
+    const text = JSON.stringify(big.data, null, 2)
+    expect(text.length).toBeLessThanOrEqual(DEFAULT_OUTPUT_CHARS)
+    expect(() => JSON.parse(text)).not.toThrow()
   })
 
   const it = testEffect(Layer.succeedContext(Context.empty() as Context.Context<unknown>))
@@ -493,8 +495,103 @@ describe("mcp code tools (Phase 0 slice)", () => {
           })
           expect(isToolError(capped)).toBe(false)
           const text = toolText(capped)
-          expect(text.length).toBeLessThanOrEqual(CODE_TOOL_OUTPUT_MAX_CHARS + OUTPUT_TRUNCATED_MARKER.length)
-          expect(text.endsWith(OUTPUT_TRUNCATED_MARKER)).toBe(true)
+          expect(text.length).toBeLessThanOrEqual(CODE_TOOL_OUTPUT_MAX_CHARS)
+          const parsed = JSON.parse(text) as { truncated?: boolean; omitted?: number }
+          const structured = (capped as { structuredContent?: { truncated?: boolean; omitted?: number } }).structuredContent
+          expect(structured).toBeDefined()
+          expect(typeof structured?.truncated).toBe("boolean")
+          expect(typeof structured?.omitted).toBe("number")
+          expect(parsed).toBeDefined()
+        }),
+      )
+    }),
+  )
+
+  it.live("protocol: every tool succeeds with minimal args (all optionals omitted)", () =>
+    Effect.gen(function* () {
+      yield* runWithFreshDb((cwd) =>
+        withProtocol(cwd, 1, async (client) => {
+          const found = await client.callTool({
+            name: "banyan_code_find",
+            arguments: { intent: "definition", target: "MyWidget" },
+          })
+          expect(isToolError(found)).toBe(false)
+          expect(toolJson<{ matches: unknown[] }>(found).matches[0]).toBeDefined()
+
+          const status = await client.callTool({ name: "banyan_codegraph", arguments: { op: "status" } })
+          expect(isToolError(status)).toBe(false)
+          expect(["ready", "missing", "stale", "building", "failed"]).toContain(toolJson<{ reason: string }>(status).reason)
+
+          const blast = await client.callTool({
+            name: "banyan_change_check",
+            arguments: { op: "blast_radius", target: "MyWidget" },
+          })
+          expect(isToolError(blast)).toBe(false)
+
+          const query = await client.callTool({ name: "banyan_repo", arguments: { op: "query", query: "MyWidget" } })
+          expect(isToolError(query)).toBe(false)
+
+          const explain = await client.callTool({ name: "banyan_repo", arguments: { op: "explain", symbol: "MyWidget" } })
+          expect(isToolError(explain)).toBe(false)
+        }),
+      )
+    }),
+  )
+
+  it.live("protocol: tools/list carries titles, annotations, outputSchema, _meta in stable order", () =>
+    Effect.gen(function* () {
+      yield* runWithFreshDb((cwd) =>
+        withProtocol(cwd, 1, async (client) => {
+          const first = await client.listTools()
+          const second = await client.listTools()
+          expect(first.tools.map((t) => t.name)).toEqual(second.tools.map((t) => t.name))
+          expect(first.tools.map((t) => t.name)).toEqual([...first.tools.map((t) => t.name)].sort())
+          for (const tool of first.tools) {
+            expect(typeof tool.title).toBe("string")
+            expect(tool.title?.length).toBeGreaterThan(0)
+            expect(tool.annotations?.readOnlyHint).toBe(tool.name !== "banyan_codegraph")
+            expect(tool.annotations?.idempotentHint).toBe(true)
+            expect(tool.annotations?.openWorldHint).toBe(false)
+            expect(tool.annotations?.destructiveHint).toBe(false)
+            expect(tool.outputSchema).toBeDefined()
+            expect(tool.outputSchema?.type).toBe("object")
+            const meta = tool._meta as Record<string, unknown> | undefined
+            expect(meta?.["anthropic/maxResultSizeChars"]).toBe(CODE_TOOL_OUTPUT_MAX_CHARS)
+          }
+        }),
+      )
+    }),
+  )
+
+  it.live("protocol: success results carry structuredContent; bad args are tool errors", () =>
+    Effect.gen(function* () {
+      yield* runWithFreshDb((cwd) =>
+        withProtocol(cwd, 1, async (client) => {
+          const found = await client.callTool({
+            name: "banyan_code_find",
+            arguments: { intent: "definition", target: "MyWidget" },
+          })
+          expect(isToolError(found)).toBe(false)
+          const structured = (found as { structuredContent?: { result?: unknown; truncated?: boolean; omitted?: number } })
+            .structuredContent
+          expect(structured).toBeDefined()
+          expect(structured?.result).toBeDefined()
+          expect(structured?.truncated).toBe(false)
+          expect(structured?.omitted).toBe(0)
+
+          const badEnum = await client
+            .callTool({ name: "banyan_change_check", arguments: { op: "explode", target: "MyWidget" } })
+            .then((result) => result)
+            .catch((error) => {
+              throw new Error(`validation failure escaped as a protocol error: ${String(error)}`)
+            })
+          expect(isToolError(badEnum)).toBe(true)
+          expect(toolText(badEnum).length).toBeGreaterThan(0)
+
+          const missingArg = await client.callTool({ name: "banyan_repo", arguments: { op: "explain" } })
+          expect(isToolError(missingArg)).toBe(true)
+          expect(toolText(missingArg)).toContain("INVALID_ARGUMENTS")
+          expect(toolText(missingArg)).toContain('requires "symbol"')
         }),
       )
     }),
