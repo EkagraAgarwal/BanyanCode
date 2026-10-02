@@ -56,6 +56,39 @@ export const Commands = Schema.Struct({
 
 export type Commands = typeof Commands.Type
 
+// MCP delegation server policy (specs/banyancode/mcp-server-plan.md
+// §Configuration). Every slot is optional; an absent struct keeps
+// reject-everything defaults. "yolo" is deliberately not a config value —
+// escalating past `edits` requires the --allow-yolo process flag so a caller
+// can never grant it to itself.
+export const McpServerPermission = Schema.Literals(["reject", "edits"])
+export type McpServerPermission = typeof McpServerPermission.Type
+
+export const McpServer = Schema.Struct({
+  default_agent: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64))),
+  default_model: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))),
+  permission: Schema.optional(McpServerPermission),
+  max_concurrent_tasks: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32 }))),
+  result_max_tokens: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 32000 }))),
+  needs_input_timeout_seconds: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 60, maximum: 86400 }))),
+  // Group allowlist (e.g. task, code, memory, verify). Entries reuse the
+  // agent-name charset; they are group ids, never filesystem paths.
+  tools: Schema.optional(
+    Schema.Array(
+      Schema.String.check(
+        Schema.isPattern(/^[a-zA-Z0-9._-]+$/, {
+          identifier: "McpToolGroup",
+          description: "MCP tool group (letters, digits, '.', '_', '-' only)",
+        }),
+        Schema.isMinLength(1),
+        Schema.isMaxLength(64),
+      ),
+    ),
+  ),
+}).annotate({ identifier: "BanyanMcpServer" })
+
+export type McpServer = typeof McpServer.Type
+
 export const Info = Schema.Struct({
   $schema: Schema.optional(Schema.String),
   banyancode_openai_compatible_endpoints: Schema.optional(Schema.Array(OpenAICompatibleEndpoint)),
@@ -334,6 +367,12 @@ export const Info = Schema.Struct({
       }),
     ),
   ),
+  // MCP delegation server defaults for `banyancode mcp serve`. Omit for
+  // reject-everything defaults. BanyanConfig only, never ConfigV1.
+  banyancode_mcp_server: Schema.optional(McpServer).annotate({
+    description:
+      "Defaults for `banyancode mcp serve` task delegation (default agent/model, permission policy, concurrency and token caps, tool group allowlist).",
+  }),
 }).annotate({ identifier: "BanyanConfig" })
 
 export type Info = typeof Info.Type
