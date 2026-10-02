@@ -71,6 +71,20 @@ export const McpServer = Schema.Struct({
   max_concurrent_tasks: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32 }))),
   result_max_tokens: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 32000 }))),
   needs_input_timeout_seconds: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 60, maximum: 86400 }))),
+  // Char budget for a single MCP tool result (structural truncation, never
+  // sliced JSON). Falls back to the tool default when unset; env
+  // BANYANCODE_MCP_OUTPUT_CHARS still wins over both when set.
+  output_max_chars: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1000, maximum: 500_000 }))),
+  // Agent/model allowlists for `banyan_task_start` (gap-plan §7.4). Absent
+  // means any configured agent/model; entries are matched exactly against
+  // the tool args. Plain length checks only — no pattern identifier, so the
+  // HttpApi $ref path cannot corrupt single-element arrays (see §2.6).
+  allowed_agents: Schema.optional(
+    Schema.Array(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64))),
+  ),
+  allowed_models: Schema.optional(
+    Schema.Array(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))),
+  ),
   // Group allowlist (e.g. task, code, memory, verify). Entries reuse the
   // agent-name charset; they are group ids, never filesystem paths.
   tools: Schema.optional(
@@ -85,7 +99,7 @@ export const McpServer = Schema.Struct({
       ),
     ),
   ),
-}).annotate({ identifier: "BanyanMcpServer" })
+})
 
 export type McpServer = typeof McpServer.Type
 
