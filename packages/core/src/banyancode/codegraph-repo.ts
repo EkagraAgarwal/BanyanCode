@@ -925,15 +925,32 @@ export const layer = Layer.effect(
       if (!sanitized) return []
       const tokens = expandQueryToTokens(sanitized)
       if (tokens.length === 0) return []
-      // Multi-token queries join terms with AND (all terms must match) so
-      // "session recovery" no longer surfaces every node containing "session"
-      // OR "recovery". When the AND query returns zero hits we re-run with OR
-      // as a recall fallback — a single well-known identifier buried in the
-      // code column is better returned than missed entirely. Single-token
-      // queries always use OR (trivially the same as the bare term).
+      // Multi-token queries keep AND semantics (all terms must match) via
+      // a JS all-tokens filter over the OR union (see below), so
+      // "session recovery" no longer surfaces every node containing
+      // "session" OR "recovery". When the filter returns zero hits we
+      // fall back to the unfiltered OR union — a single well-known
+      // identifier buried in one column is better returned than missed
+      // entirely. Single-token queries always use OR (trivially the
+      // same as the bare term).
       const quote = (t: string) => `"${t}"`
-      const andQuery = tokens.map(quote).join(" AND ")
-      const orQuery = tokens.map(quote).join(" OR ")
+      const namesOrQuery = tokens.map(quote).join(" OR ")
+      // The code table is whole-token indexed (unicode61), so split
+      // sub-tokens alone miss a camelCase identifier that appears
+      // verbatim in a body (e.g. query `xyzzyMarker` → tokens `xyzzy`,
+      // `marker`, but the body token is `xyzzymarker`). Add each
+      // whitespace-separated piece back as a whole-term OR alternative
+      // so full identifiers typed from code still hit. Pieces must be
+      // purely alphanumeric: anything else inside quotes is an FTS5
+      // phrase, and phrases need position lists the code table
+      // (`detail='col'`) does not keep. Kebab/snake/dotted pieces are
+      // skipped — their split tokens already match whole code tokens.
+      const tokenSet = new Set(tokens)
+      const wholePieces = sanitized
+        .split(/\s+/)
+        .map((p) => p.toLowerCase())
+        .filter((p) => p.length >= 3 && /^[a-z0-9]+$/.test(p) && !tokenSet.has(p))
+      const codeOrQuery = [...tokens, ...wholePieces].map(quote).join(" OR ")
       type FTSRow = {
         id: string
         file_id: string
@@ -945,39 +962,33 @@ export const layer = Layer.effect(
         code: string | null
         bm25: number
       }
-      // Phase 3: column-weighted bm25 ranking. In FTS5's `bm25(table, w1, w2, ...)`
+      // Column-weighted bm25 ranking. In FTS5's `bm25(table, w1, w2, ...)`
       // each `wi` is the weight of the i-th column in the BM25 sum; higher
       // weights produce a more-negative bm25 (= better rank) when a term
-      // matches that column. The chosen triple (name=10.0, signature=3.0,
-      // code=1.0) gives a name-only hit the strongest boost, a signature-
-      // only hit a moderate boost, and a code-only hit the smallest boost.
-      //
-      // Why the Plan-3 weights are reversed from a naive "lower weight =
-      // better" reading: FTS5's bm25() returns the NEGATIVE of the weighted
-      // TF-IDF sum, so multiplying a column by 10 makes its matches more
-      // negative (better) by 10x, not worse. Verified empirically against
-      // the bundled libsql FTS5 build (see test/banyancode/fts-bm25-weights.test.ts).
+      // matches that column, because bm25() returns the NEGATIVE of the
+      // weighted TF-IDF sum. Verified empirically against the bundled
+      // libsql FTS5 build (see test/banyancode/fts-bm25-weights.test.ts).
       //
       // Rationale:
       //   - `name` is the most authoritative signal — when an identifier
       //     string appears in `codegraph_nodes.name`, the user almost
       //     certainly means that symbol. weight=10.0 (strongest boost).
-      //   - `signature` is the second most authoritative — method
-      //     declarations live in the signature column when the indexer
-      //     strips the body. weight=3.0 keeps signature-only hits well ahead
-      //     of code-only hits but well behind a real name match.
-      //   - `code` is the noisiest — a word like "function" or "return" is
-      //     in every code body. weight=1.0 makes code-only hits the weakest
-      //     signal so they don't drown the symbol hits.
+      //   - `signature` is second — method declarations live in the
+      //     signature column when the indexer strips the body. weight=3.0.
+      //   - `code` is the noisiest — a word like "function" or "return"
+      //     is in every code body. Code-only hits sort after every
+      //     name/signature hit (source priority, not a cross-table bm25
+      //     comparison — different tokenizers have incomparable IDF
+      //     scales), preserving the old (10.0, 3.0, 1.0) "code is the
+      //     weakest signal" order.
       //
-      // ORDER BY bm25 ASC because FTS5's bm25() returns more-negative values
-      // for better matches (negated sum of term-frequency / inverse-document-
-      // frequency contributions, per the SQLite docs).
-      const runFts = (match: string): Effect.Effect<FTSRow[], never, never> =>
+      // ORDER BY bm25 ASC because FTS5's bm25() returns more-negative
+      // values for better matches.
+      const runNamesFts = (match: string): Effect.Effect<FTSRow[], never, never> =>
         db
           .all<FTSRow>(sql`
             SELECT n.id, n.file_id, n.kind, n.name, n.signature, n.start_line, n.end_line, n.code,
-                   bm25(codegraph_fts, 10.0, 3.0, 1.0) AS bm25
+                   bm25(codegraph_fts, 10.0, 3.0) AS bm25
             FROM codegraph_fts
             INNER JOIN codegraph_nodes n ON n.rowid = codegraph_fts.rowid
             WHERE codegraph_fts MATCH ${match}
@@ -986,13 +997,50 @@ export const layer = Layer.effect(
           `)
           .pipe(Effect.orDie)
 
-      let rows: FTSRow[]
+      // Tolerates pre-split DBs (migration not yet applied): code search
+      // degrades to empty while name/signature search keeps working.
+      const runCodeFts = (match: string): Effect.Effect<FTSRow[], never, never> =>
+        db
+          .all<FTSRow>(sql`
+            SELECT n.id, n.file_id, n.kind, n.name, n.signature, n.start_line, n.end_line, n.code,
+                   bm25(codegraph_fts_code) AS bm25
+            FROM codegraph_fts_code
+            INNER JOIN codegraph_nodes n ON n.rowid = codegraph_fts_code.rowid
+            WHERE codegraph_fts_code MATCH ${match}
+            ORDER BY bm25
+            LIMIT ${limit}
+          `)
+          .pipe(
+            Effect.orDie,
+            Effect.catchCause(() => Effect.succeed([] as FTSRow[])),
+          )
+
+      const namesRows = yield* runNamesFts(namesOrQuery)
+      const codeRows = yield* runCodeFts(codeOrQuery)
+      const namesByID = new Map(namesRows.map((r) => [r.id, r]))
+      const codeByID = new Map(codeRows.map((r) => [r.id, r]))
+      let ids = [...new Set([...namesRows.map((r) => r.id), ...codeRows.map((r) => r.id)])]
       if (tokens.length >= 2) {
-        const andRows = yield* runFts(andQuery)
-        rows = andRows.length > 0 ? andRows : yield* runFts(orQuery)
-      } else {
-        rows = yield* runFts(orQuery)
+        const andIDs = ids.filter((id) => {
+          const row = namesByID.get(id) ?? codeByID.get(id)!
+          const haystack = `${row.name}\n${row.signature ?? ""}\n${row.code ?? ""}`.toLowerCase()
+          return tokens.every((t) => haystack.includes(t))
+        })
+        // Non-empty AND set wins; empty falls back to the OR union so a
+        // single well-known identifier buried in one column is still
+        // returned rather than missed entirely.
+        if (andIDs.length > 0) ids = andIDs
       }
+      const namesFirst = ids
+        .filter((id) => namesByID.has(id))
+        .sort((a, b) => namesByID.get(a)!.bm25 - namesByID.get(b)!.bm25)
+      const codeOnly = ids
+        .filter((id) => !namesByID.has(id))
+        .sort((a, b) => codeByID.get(a)!.bm25 - codeByID.get(b)!.bm25)
+      const rows: FTSRow[] = [
+        ...namesFirst.map((id) => namesByID.get(id)!),
+        ...codeOnly.map((id) => codeByID.get(id)!),
+      ].slice(0, limit)
       return rows.map((row) => ({
         id: row.id,
         fileID: row.file_id,
@@ -1601,12 +1649,41 @@ export const layer = Layer.effect(
       return yield* db.transaction((tx) =>
         Effect.gen(function* () {
           yield* tx.run(sql`DELETE FROM \`codegraph_fts\``)
+          // Pre-split DBs have no code table yet (migration not applied);
+          // rebuild names only instead of failing the whole rebuild.
+          const tables = yield* tx.all<{ name: string }>(
+            sql`SELECT \`name\` FROM \`sqlite_master\` WHERE \`type\` = 'table' AND \`name\` = 'codegraph_fts_code'`,
+          )
+          const hasCodeTable = tables.length > 0
+          if (hasCodeTable) {
+            yield* tx.run(sql`DELETE FROM \`codegraph_fts_code\``)
+          }
 
-          yield* tx.run(sql`
-            INSERT INTO \`codegraph_fts\`(\`rowid\`, \`name\`, \`signature\`, \`code\`)
-            SELECT \`rowid\`, \`name\`, COALESCE(\`signature\`, ''), COALESCE(\`code\`, '')
-            FROM \`codegraph_nodes\`
-          `)
+          // Batched backfill: one INSERT..SELECT per rowid chunk per table
+          // so a large `codegraph_nodes` table does not build either index
+          // in a single statement.
+          const maxRow = yield* tx.get<{ m: number | null }>(
+            sql`SELECT MAX(\`rowid\`) AS m FROM \`codegraph_nodes\``,
+          )
+          const max = maxRow?.m ?? 0
+          const CHUNK = 2000
+          for (let lo = 1; lo <= max; lo += CHUNK) {
+            const hi = lo + CHUNK - 1
+            yield* tx.run(sql`
+              INSERT INTO \`codegraph_fts\`(\`rowid\`, \`name\`, \`signature\`)
+              SELECT \`rowid\`, \`name\`, COALESCE(\`signature\`, '')
+              FROM \`codegraph_nodes\`
+              WHERE \`rowid\` >= ${lo} AND \`rowid\` <= ${hi}
+            `)
+            if (hasCodeTable) {
+              yield* tx.run(sql`
+                INSERT INTO \`codegraph_fts_code\`(\`rowid\`, \`code\`)
+                SELECT \`rowid\`, COALESCE(\`code\`, '')
+                FROM \`codegraph_nodes\`
+                WHERE \`rowid\` >= ${lo} AND \`rowid\` <= ${hi}
+              `)
+            }
+          }
 
           const countResult = yield* tx.get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM \`codegraph_fts\``)
           return { rowsIndexed: countResult?.c ?? 0 }
