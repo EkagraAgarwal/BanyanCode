@@ -5,6 +5,7 @@ import { AppRuntime } from "@/effect/app-runtime"
 import { InstanceRef } from "@/effect/instance-ref"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
+import { SystemMonitorDemand } from "@/effect/banyancode-system-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -64,13 +65,27 @@ function parseBody(body: string) {
 function eventResponse() {
   return Effect.gen(function* () {
     yield* Effect.logInfo("global event connected")
-    const events = Stream.callback<GlobalBusEvent>((queue) => {
-      const handler = (event: GlobalBusEvent) => Queue.offerUnsafe(queue, event)
-      return Effect.acquireRelease(
-        Effect.sync(() => GlobalBus.on("event", handler)),
-        () => Effect.sync(() => GlobalBus.off("event", handler)),
-      )
-    })
+    // An open SSE stream is the only path to system-monitor viewers, so each
+    // connection holds sampling demand for its lifetime. With no viewers the
+    // monitor tick skips sampling entirely (see banyancode-system-bridge.ts).
+    yield* Effect.acquireRelease(
+      Effect.sync(() => SystemMonitorDemand.subscribe()),
+      () => Effect.sync(() => SystemMonitorDemand.unsubscribe()),
+    )
+    // Sliding bound, mirroring the instance event stream: a stalled SSE client
+    // drops the oldest events instead of growing RAM without limit. Sync
+    // envelopes never reach the wire — each duplicates the plain event's data
+    // and SSE consumers (TUI, CLI) drop them after paying full parse cost.
+    const queue = yield* Queue.sliding<GlobalBusEvent>(512)
+    const handler = (event: GlobalBusEvent) => {
+      if (EventV2Bridge.isSyncEnvelope(event)) return
+      Queue.offerUnsafe(queue, event)
+    }
+    yield* Effect.acquireRelease(
+      Effect.sync(() => GlobalBus.on("event", handler)),
+      () => Effect.sync(() => GlobalBus.off("event", handler)),
+    )
+    const events = Stream.fromQueue(queue)
     const heartbeat = Stream.tick("10 seconds").pipe(
       Stream.drop(1),
       Stream.map(() => ({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })),

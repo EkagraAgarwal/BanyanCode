@@ -14,6 +14,14 @@ import { Context, Effect, Layer } from "effect"
 
 export class Service extends Context.Service<Service, EventV2.Interface>()("@opencode/EventV2Bridge") {}
 
+// The duplicate envelope emitted beside every syncable event on GlobalBus.
+// SSE serializers use this to skip the second copy (same data, serialized
+// twice per client); the bus keeps both for compat (legacy sync consumers).
+export function isSyncEnvelope(event: { payload?: unknown }): boolean {
+  if (!event.payload || typeof event.payload !== "object") return false
+  return (event.payload as { type?: unknown }).type === "sync"
+}
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
