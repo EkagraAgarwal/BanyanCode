@@ -1,4 +1,5 @@
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { SystemMonitorDemand } from "@/effect/banyancode-system-bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -34,6 +35,12 @@ function eventResponse(events: EventV2.Interface) {
     const queue = yield* Queue.sliding<EventV2.Payload>(512)
     const unsubscribe = yield* events.listen((event) => Effect.sync(() => Queue.offerUnsafe(queue, event)))
     yield* Effect.addFinalizer(() => unsubscribe)
+    // Instance streams also forward banyancode.system.updated, so they hold
+    // sampling demand like the global stream does.
+    yield* Effect.acquireRelease(
+      Effect.sync(() => SystemMonitorDemand.subscribe()),
+      () => Effect.sync(() => SystemMonitorDemand.unsubscribe()),
+    )
     const stream = Stream.fromQueue(queue).pipe(
       Stream.filter(
         (event) =>

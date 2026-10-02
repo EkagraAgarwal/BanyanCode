@@ -111,7 +111,7 @@ export const AppLayer = Layer.mergeAll(
   Banyan.subagentReviewRequestsRepoDefaultLayer,
   Banyan.subagentPlansRepoDefaultLayer,
   Banyan.subagentConsumerDefaultLayer,
-  Banyan.agentEfficiencyTelemetryDefaultLayer(),
+  Banyan.agentEfficiencyTelemetryDefaultLayer,
   Banyan.systemMonitorDefaultLayer,
   SessionRunState.defaultLayer,
   SessionProcessor.defaultLayer,
