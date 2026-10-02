@@ -19,6 +19,18 @@ export const ServeCommand = effectCmd({
     const server = yield* Effect.promise(() => Server.listen(opts))
     console.log(`opencode server listening on http://${server.hostname}:${server.port}`)
 
+    // Cheap stat-only hint: orphaned .banyancode DBs accumulate GBs and
+    // nothing else cleans them up. Never blocks or fails startup.
+    yield* Effect.promise(() => import("./db-gc")).pipe(
+      Effect.flatMap((gc) =>
+        Effect.sync(() => {
+          const hint = gc.staleDbHint(process.cwd())
+          if (hint) console.error(hint)
+        }),
+      ),
+      Effect.ignore,
+    )
+
     yield* Effect.never
   }),
 })
