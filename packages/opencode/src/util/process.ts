@@ -56,6 +56,21 @@ export class RunFailedError extends Error {
 
 export type Child = ChildProcess & { exited: Promise<number> }
 
+// Narrow deny-list: server auth secrets must never reach spawned children.
+// Canonical spot for the non-tool spawn paths (LSP/system spawns here,
+// pty-preparation and session/prompt import it); tool/shell.ts keeps its own
+// copy via buildShellEnv. Case-insensitive: env vars are case-insensitive on
+// Windows and a lowercase copy would otherwise slip through.
+const SERVER_PASSWORD_KEYS = ["OPENCODE_SERVER_PASSWORD", "BANYANCODE_SERVER_PASSWORD"]
+
+export function scrubServerSecretsFromEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env }
+  for (const key of Object.keys(next)) {
+    if (SERVER_PASSWORD_KEYS.includes(key.toUpperCase())) delete next[key]
+  }
+  return next
+}
+
 export function spawn(cmd: string[], opts: Options = {}): Child {
   if (cmd.length === 0) throw new Error("Command is required")
   opts.abort?.throwIfAborted()
@@ -63,7 +78,7 @@ export function spawn(cmd: string[], opts: Options = {}): Child {
   const proc = launch(cmd[0], cmd.slice(1), {
     cwd: opts.cwd,
     shell: opts.shell,
-    env: opts.env === null ? {} : opts.env ? { ...process.env, ...opts.env } : undefined,
+    env: opts.env === null ? {} : scrubServerSecretsFromEnv({ ...process.env, ...opts.env }),
     stdio: [opts.stdin ?? "ignore", opts.stdout ?? "ignore", opts.stderr ?? "ignore"],
     windowsHide: process.platform === "win32",
   })
