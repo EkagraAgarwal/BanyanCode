@@ -1,10 +1,12 @@
 import "./init-projectors"
 
 import { NodeHttpServer } from "@effect/platform-node"
-import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
+import { Cause, ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { OpenApi } from "effect/unstable/httpapi"
+import { memoMap } from "@opencode-ai/core/effect/memo-map"
 import { createServer } from "node:http"
+import net from "node:net"
 import { MDNS } from "./mdns"
 import { HttpApiApp } from "./routes/instance/httpapi/server"
 import { disposeMiddleware } from "./routes/instance/httpapi/lifecycle"
@@ -29,11 +31,15 @@ type ServerApp = {
   request(input: string | URL | Request, init?: RequestInit): Response | Promise<Response>
 }
 
-type ListenOptions = CorsOptions & {
+export type ListenOptions = CorsOptions & {
   port: number
   hostname: string
   mdns?: boolean
   mdnsDomain?: string
+  // Ephemeral listeners (e.g. MCP in-process servers) must never claim the
+  // well-known 4096 port: bind the OS-assigned free port directly instead
+  // of preferring 4096 first. `banyancode serve` keeps the default behavior.
+  ephemeral?: boolean
 }
 type ListenerState = {
   scope: Scope.Scope
@@ -104,7 +110,12 @@ function listenerLayer(opts: ListenOptions, port: number) {
     disableLogger: true,
     disableListenLog: true,
   }).pipe(
-    Layer.provideMerge(WebSocketTracker.layer),
+    // The tracker holds per-listener socket state with a latching `closing`
+    // flag: sharing it across listeners via the global memoMap below would let
+    // one listener's stop(true) poison every later listener's sockets, so it
+    // is always built fresh. The port-bound serverLayer is already per-call
+    // objects (never memoized); everything else dedupes via the shared map.
+    Layer.provideMerge(Layer.fresh(WebSocketTracker.layer)),
     Layer.provideMerge(serverLayer({ port, hostname: opts.hostname })),
     // Install a fresh `ConfigProvider` per listener so `Config.string(...)`
     // reads reflect the current `process.env`. Effect's default
@@ -116,15 +127,60 @@ function listenerLayer(opts: ListenOptions, port: number) {
 }
 
 function startWithPortFallback(opts: ListenOptions) {
-  if (opts.port !== 0) return startListener(opts, opts.port)
-  // Match the legacy listener port-resolution behavior: explicit `0` prefers
-  // 4096 first, then any free port.
-  return startListener(opts, 4096).pipe(Effect.catch(() => startListener(opts, 0)))
+  return Effect.gen(function* () {
+    // Explicit ports and ephemeral listeners bind exactly once — no fallback,
+    // matching the legacy behavior.
+    if (opts.port !== 0) return yield* startListener(opts, opts.port)
+    // Ephemeral listeners skip the 4096 preference entirely so an MCP child
+    // process started before the TUI can never steal the well-known port.
+    if (opts.ephemeral) return yield* startListener(opts, 0)
+    // Match the legacy listener port-resolution behavior: explicit `0` prefers
+    // 4096 first, then any free port. Probe BEFORE building layers so the
+    // service graph builds exactly once; the old code built the whole graph
+    // per attempt. A one-shot retry remains for the TOCTOU race between probe
+    // and bind — safe with the shared memoMap, whose ref-counted entries from
+    // the failed build are evicted when that attempt's scope closes.
+    const port = yield* probePreferredPort(opts.hostname)
+    if (port === 0) return yield* startListener(opts, 0)
+    return yield* startListener(opts, port).pipe(Effect.catch(() => startListener(opts, 0)))
+  })
+}
+
+// Probe 4096 with a throwaway socket. Only EADDRINUSE falls back to 0 — any
+// other error (e.g. unresolvable hostname) propagates like a bind failure.
+// Note Effect.promise would turn the rejection into an uncatchable defect;
+// tryPromise surfaces it as an UnknownError failure instead.
+function probePreferredPort(hostname: string) {
+  return Effect.tryPromise(() => probePort(4096, hostname)).pipe(
+    Effect.catch((error) => {
+      const cause = Cause.isUnknownError(error) ? error.cause : error
+      return isAddrInUse(cause) ? Effect.succeed(0) : Effect.fail(cause)
+    }),
+  )
+}
+
+function probePort(port: number, hostname: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer()
+    probe.once("error", reject)
+    probe.listen(port, hostname, () => {
+      probe.close(() => resolve(port))
+    })
+  })
+}
+
+function isAddrInUse(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "EADDRINUSE"
 }
 
 function startListener(opts: ListenOptions, port: number) {
   const scope = Scope.makeUnsafe()
-  return Layer.buildWithMemoMap(listenerLayer(opts, port), Layer.makeMemoMapUnsafe(), scope).pipe(
+  // Build on the process-shared memoMap (the same map AppRuntime and the
+  // webHandler use) so the listener reuses the live Database, EventV2,
+  // InstanceStore, codegraph and tool services instead of constructing a
+  // second service graph — and so events forked in AppRuntime publish on the
+  // bus the listener's SSE streams read.
+  return Layer.buildWithMemoMap(listenerLayer(opts, port), memoMap, scope).pipe(
     Effect.provide(HttpApiApp.context),
     Effect.onError(() => Scope.close(scope, Exit.void).pipe(Effect.ignore)),
     Effect.map(
