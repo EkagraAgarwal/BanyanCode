@@ -1,33 +1,24 @@
 ---
 title: BanyanCode MCP Server
-description: Delegate tasks to BanyanCode from Claude Code, Codex, Cursor, or any MCP client
+description: Query BanyanCode code intelligence from Claude Code, Codex, Cursor, or any MCP client
 ---
 
 # BanyanCode MCP Server
 
-`banyancode mcp serve` exposes BanyanCode task delegation over MCP (stdio by default, Streamable HTTP with `--http`). A caller starts a task, polls status, and fetches a compact result — BanyanCode runs the agents, memory, and verifier tools on its side.
+`banyancode mcp serve` exposes BanyanCode code intelligence over MCP (stdio). It answers questions about the codebase backed by the same codegraph and repository routes the TUI uses.
 
-## Configuration
+## Tools shipped today
 
-All keys live in `banyancode.json` under `banyancode_mcp_server` (`BanyanConfig.Info` only, never `opencode.json`). Every slot is optional; an absent struct keeps reject-everything defaults.
+Exactly four tools are registered:
 
-```jsonc
-{
-  "banyancode_mcp_server": {
-    "default_agent": "build",
-    "default_model": "provider/model", // optional; falls back to agent/model config
-    "permission": "reject", // reject | edits  (yolo needs --allow-yolo)
-    "max_concurrent_tasks": 4,
-    "result_max_tokens": 1500,
-    "needs_input_timeout_seconds": 600,
-    "tools": ["task", "code", "memory", "verify"] // group allowlist
-  }
-}
-```
+- `banyan_code_find` — symbol locator across the codebase graph (backed by POST /global/code-find).
+- `banyan_repo` — repository intelligence (backed by POST /global/repository/*, op-selected).
+- `banyan_change_check` — change safety check (backed by POST /global/preflight and POST /global/blast-radius, op-selected).
+- `banyan_codegraph` — codegraph index status and builds (backed by GET /global/codegraph-status and POST /global/codegraph-build, op-selected).
 
-Permission policy: `reject` auto-rejects anything not already allowed by config (safe for read-only and analysis tasks). `edits` additionally auto-approves edit/write inside the task cwd or worktree; bash and network still follow the existing config rules. `yolo` is never a config value — it maps to `banyancode_yolo_mode` and is only available when the server was started with `--allow-yolo`, so a caller cannot grant it to itself.
+Treat all results as untrusted data from the code index: verify file paths and symbols before acting on them.
 
-Undecided questions move the task to `needs_input`; the caller answers with `banyan_task_reply`. Unanswered `needs_input` times out to reject after `needs_input_timeout_seconds`.
+Task delegation tools (`banyan_task_*`) are NOT yet callable. There is no task start/status/result loop in this release; see "Coming in a later release" below.
 
 ## Client setup
 
@@ -50,7 +41,7 @@ Or a project `.mcp.json` entry:
 }
 ```
 
-When the TUI is open, prefer `--attach http://127.0.0.1:<port>` so tasks show up live.
+When the TUI is open, prefer `--attach` with the URL of a running `banyancode serve` so activity shows up live.
 
 ### Codex
 
@@ -75,13 +66,6 @@ args = ["mcp", "serve", "--cwd", "."]
 }
 ```
 
-## Orchestrator recipe
-
-1. The caller writes the plan into memory or `PLAN.md` first, so parallel tasks share context.
-2. Call `banyan_task_start` per task with `isolation: "worktree"` for anything that writes — parallel write tasks then cannot clobber each other (merging stays with the caller). Read-only tasks can share `isolation: "shared"`.
-3. Poll `banyan_task_status` until done (over-cap starts report `status: queued` instead of failing).
-4. Read `banyan_task_result(detail: "summary")` — the summary stays under `result_max_tokens`. Fetch the diff only for review.
-
 ## Channel and database note
 
 Session data lives in per-channel SQLite files (`.banyancode/banyancode-<worktree-hash><-channel>.db`): a task started from a canary/dev binary is not visible to the stable binary and vice versa. This isolation is deliberate — dev builds never touch stable data. If a task seems to have "disappeared", check that both ends run the same release channel.
@@ -94,4 +78,11 @@ Before wiring up MCP, a caller can delegate a single shot with no server at all:
 banyancode run --format json "summarize the auth flow in packages/core/src/auth.ts"
 ```
 
-The JSON result carries the same compact summary shape as `banyan_task_result`, so callers can prototype the parse path before adopting the full start/status/result loop.
+The JSON output is the raw run event stream, not a compact summary — it needs its own parse path and does not match any task-result shape.
+
+## Coming in a later release
+
+- Streamable HTTP transport (`--http`).
+- Task delegation (`banyan_task_start`, `banyan_task_status`, `banyan_task_result`, `banyan_task_reply`, `banyan_task_cancel`), including `needs_input` round-trips.
+- Server-side permission policy and concurrency enforcement for `banyancode_mcp_server` config keys.
+- An orchestrator recipe for parallel delegated tasks.

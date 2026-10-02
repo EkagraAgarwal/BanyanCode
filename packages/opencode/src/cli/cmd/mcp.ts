@@ -674,9 +674,9 @@ export const McpServeCommand = effectCmd({
   builder: (yargs) =>
     yargs
       .option("cwd", {
-        describe: "project directory to operate on",
+        describe: "project directory to operate on (defaults to $CLAUDE_PROJECT_DIR when set)",
         type: "string",
-        default: process.cwd(),
+        default: process.env.CLAUDE_PROJECT_DIR ?? process.cwd(),
       })
       .option("attach", {
         describe: "reuse a running server instead of starting one (e.g. http://127.0.0.1:4096)",
