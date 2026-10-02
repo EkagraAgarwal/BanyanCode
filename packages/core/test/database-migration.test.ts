@@ -73,13 +73,24 @@ describe("DatabaseMigration", () => {
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'codegraph_nodes'`),
         ).toEqual({ name: "codegraph_nodes" })
 
-        // Verify FTS5 virtual table exists
+        // Verify split-FTS5 virtual tables exist (trigram names +
+        // unicode61 code; see 20261002120000_codegraph_fts_split). The
+        // legacy `codegraph_nodes_fts` table from libsql_fresh is dropped
+        // by the split migration — nothing ever queried it.
+        expect(
+          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'codegraph_fts'`),
+        ).toEqual({ name: "codegraph_fts" })
+        expect(
+          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'codegraph_fts_code'`),
+        ).toEqual({ name: "codegraph_fts_code" })
         expect(
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'codegraph_nodes_fts'`),
-        ).toEqual({ name: "codegraph_nodes_fts" })
+        ).toBeUndefined()
 
-        // Verify migration record was inserted
-        expect(yield* db.get(sql`SELECT count(*) as count FROM migration`)).toEqual({ count: migrations.length })
+        // Verify migration record was inserted: one row per SQL migration
+        // plus the S2 code-backfill marker (event/compaction.ts), which
+        // shares the journal but is not a generated SQL migration.
+        expect(yield* db.get(sql`SELECT count(*) as count FROM migration`)).toEqual({ count: migrations.length + 1 })
 
         // Verify WAL journal mode is in effect
         const journalMode = yield* db.get<{ journal_mode: string }>(sql`PRAGMA journal_mode`)

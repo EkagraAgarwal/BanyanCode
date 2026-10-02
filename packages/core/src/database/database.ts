@@ -3,11 +3,13 @@ export * as Database from "./database"
 import { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
 import { layer as sqliteLayer } from "#sqlite"
 import { Cause, Context, Effect, Layer } from "effect"
+import { sql } from "drizzle-orm"
 import { classifySqliteError } from "effect/unstable/sql/SqlError"
 import { Global } from "../global"
 import { Flag } from "../flag/flag"
 import { isAbsolute, join } from "path"
 import { DatabaseMigration } from "./migration"
+import { runStartupMaintenance } from "../event/compaction"
 import { LayerNode } from "../effect/layer-node"
 import fs from "node:fs"
 import { channelSuffix, deriveBanyanDbPath, findContainingBanyanDir } from "./banyan-db-path"
@@ -34,12 +36,39 @@ const open = (filename: string) =>
     yield* db.run("PRAGMA journal_mode = WAL")
     yield* db.run("PRAGMA synchronous = NORMAL")
     yield* db.run("PRAGMA busy_timeout = 5000")
+    // New files get incremental vacuum mode so future deletes produce
+    // reclaimable freelist pages instead of dead weight. No-op on existing
+    // files until a one-time full VACUUM rebuilds them (see S3 `db gc`).
+    yield* db.run("PRAGMA auto_vacuum = INCREMENTAL")
     // ~16MB page cache (negative = kibibytes); was -64000 (~64MB) which
     // stacked across every worktree/channel DB handle.
     yield* db.run("PRAGMA cache_size = -16000")
     yield* db.run("PRAGMA foreign_keys = ON")
     yield* db.run("PRAGMA wal_checkpoint(PASSIVE)")
     yield* DatabaseMigration.apply(db)
+    // Checkpoint first: in WAL mode just-dropped index pages sit in the
+    // WAL until checkpointed, so freelist_count would under-report them.
+    yield* db.run("PRAGMA wal_checkpoint(TRUNCATE)")
+    // One-time reclaim after migrations that drop large indexes (the
+    // codegraph FTS split drops the trigram code index; DROP TABLE
+    // leaves free pages and the file only shrinks on VACUUM). VACUUM
+    // cannot run inside the migration transaction, so it happens here,
+    // gated on freelist size — steady-state opens pay one PRAGMA and
+    // each bloat episode pays one VACUUM. ~5000 pages ≈ 20 MB at the
+    // default 4 KiB page size.
+    const freelist = yield* db.get<{ freelist_count: number }>(sql`PRAGMA freelist_count`)
+    if ((freelist?.freelist_count ?? 0) > 5000) {
+      process.stderr.write(
+        `[database] reclaiming ${freelist!.freelist_count} free pages with VACUUM (one-time post-migration compaction)\n`,
+      )
+      yield* db.run("VACUUM")
+    }
+    // Steady-state pass: bounded incremental_vacuum only, never a full
+    // VACUUM here (a no-op after the block above; reclaims a little when
+    // below its threshold). Failures must not break open.
+    yield* runStartupMaintenance(db).pipe(
+      Effect.catchCause((cause) => Effect.logWarning("startup db maintenance skipped", { cause: String(cause) })),
+    )
 
     return db
   })

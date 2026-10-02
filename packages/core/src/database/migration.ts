@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm"
 import { Effect, Semaphore } from "effect"
 import type { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
 import { migrations } from "./migration.gen"
+import { STRIP_PATCH_BODIES_BACKFILL_ID, stripSnapshotPatchBodies } from "../event/compaction"
 
 type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0]
@@ -15,7 +16,36 @@ export type Migration = {
 }
 
 export function apply(db: Database) {
-  return lock.withPermit(applyOnly(db, migrations))
+  return lock.withPermit(
+    Effect.gen(function* () {
+      yield* applyOnly(db, migrations)
+      yield* applyCodeBackfills(db)
+    }),
+  )
+}
+
+// Code backfills share the `migration` journal with SQL migrations (same
+// id/marker convention) but run outside a single wrapping transaction:
+// each batch commits on its own, so a multi-GB rewrite never holds one
+// giant journal. Entries are idempotent and safe to re-run; the marker is
+// recorded only after the full pass completes, so an interrupted run
+// resumes (re-scanning, skipping already-rewritten rows) on next open.
+// Not registered in migration.gen.ts: that registry is generated from
+// drizzle SQL dirs, and a code-only entry would trip its --check.
+function applyCodeBackfills(db: Database) {
+  return Effect.gen(function* () {
+    const completed = new Set(
+      (yield* db.all<{ id: string }>(sql`SELECT id FROM ${sql.identifier("migration")}`)).map((row) => row.id),
+    )
+    if (completed.has(STRIP_PATCH_BODIES_BACKFILL_ID)) return
+    if (!process.env.OPENCODE_SKIP_MIGRATIONS) {
+      const report = yield* stripSnapshotPatchBodies(db)
+      yield* Effect.logInfo("strip snapshot patch bodies complete", { ...report })
+    }
+    yield* db.run(
+      sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${STRIP_PATCH_BODIES_BACKFILL_ID}, ${Date.now()})`,
+    )
+  })
 }
 
 export function applyOnly(db: Database, input: Migration[]) {
