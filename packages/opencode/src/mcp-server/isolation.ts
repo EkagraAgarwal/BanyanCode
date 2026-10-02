@@ -136,16 +136,12 @@ export class McpTaskTracker {
     this.slots.delete(taskId)
     const index = this.queue.indexOf(taskId)
     if (index >= 0) this.queue.splice(index, 1)
-    const nextId = this.queue.shift()
-    if (nextId !== undefined) {
+    while (this.runningCount < this.effectiveCap) {
+      const nextId = this.queue.shift()
+      if (nextId === undefined) return
       const next = this.slots.get(nextId)
-      if (next !== undefined && this.runningCount < this.effectiveCap) {
-        this.slots.set(nextId, { ...next, status: "running" })
-      } else if (nextId !== undefined && next === undefined) {
-        return
-      } else if (next !== undefined) {
-        this.queue.unshift(nextId)
-      }
+      if (next === undefined) continue
+      this.slots.set(nextId, { ...next, status: "running" })
     }
   }
 
@@ -155,8 +151,12 @@ export class McpTaskTracker {
 
   // Stdio disconnect aborts the task; with --attach it keeps running on the
   // attached server and stays pickable again by task_id.
-  onDisconnect(taskId: string, opts: { readonly attached: boolean }): "aborted" | "kept" {
+  onDisconnect(
+    taskId: string,
+    opts: { readonly attached: boolean; readonly abortRunning?: (taskId: string) => void },
+  ): "aborted" | "kept" {
     if (opts.attached) return "kept"
+    opts.abortRunning?.(taskId)
     this.finish(taskId)
     return "aborted"
   }

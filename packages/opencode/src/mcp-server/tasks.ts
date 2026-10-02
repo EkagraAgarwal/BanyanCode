@@ -15,7 +15,15 @@
 // caller decisions never grant permissions beyond the active policy.
 
 import { buildCompactResult, DEFAULT_RESULT_MAX_TOKENS } from "./result"
-import type { CompactResult, DiffFileInput, ResultDetail } from "./result"
+import type {
+  CompactResult,
+  DiffFileInput,
+  MemoryEntryInput,
+  ResultDetail,
+  VerificationInput,
+  WorktreeInput,
+} from "./result"
+import type { EnginePermissionRuleset } from "./task-engine"
 
 export type TaskStatus = "queued" | "running" | "needs_input" | "done" | "failed" | "cancelled"
 
@@ -42,6 +50,7 @@ export interface TaskStartInput {
   plan?: { title: string; steps: TaskPlanStep[]; exitCriteria: string }
   files?: string[]
   isolation?: "shared" | "worktree"
+  worktree?: WorktreeInput
   permission?: PermissionPolicy
   wait_seconds?: number
 }
@@ -63,6 +72,7 @@ export interface TaskRecord {
   origin: "mcp"
   permission: PermissionPolicy
   isolation: "shared" | "worktree"
+  worktree?: WorktreeInput
   createdAt: number
   updatedAt: number
   elapsedMs: number
@@ -94,7 +104,15 @@ export interface SessionMessage {
 }
 
 export interface SessionClient {
-  createSession(input: { title?: string; metadata: Record<string, string> }): Promise<{ id: string }>
+  // Creation-time overrides (E1): per-task agent/model/permission ruleset
+  // from the engine; the SDK implementation merges them with its defaults.
+  createSession(input: {
+    title?: string
+    metadata: Record<string, string>
+    agent?: string
+    model?: string
+    permission?: EnginePermissionRuleset
+  }): Promise<{ id: string }>
   promptAsync(input: { sessionID: string; prompt: string; agent?: string; model?: string }): Promise<void>
   prompt(input: { sessionID: string; prompt: string; agent?: string; model?: string }): Promise<void>
   abort(input: { sessionID: string }): Promise<void>
@@ -290,6 +308,7 @@ export async function taskStart(
   }
   if (input.agent !== undefined) task = { ...task, agent: input.agent }
   if (input.model !== undefined) task = { ...task, model: input.model }
+  if (input.worktree !== undefined) task = { ...task, worktree: input.worktree }
   store.tasks.set(task.task_id, task)
 
   // Over-cap starts queue instead of failing.
@@ -376,16 +395,24 @@ export async function taskCancel(store: TaskStore, client: SessionClient, task_i
   return touch(store, task, { status: "cancelled", cancelled: true, lastActivity: "cancelled" })
 }
 
+export interface TaskResultExtra {
+  cursor?: string
+  worktree?: WorktreeInput
+  verification?: VerificationInput
+  memory?: MemoryEntryInput[]
+}
+
 export async function taskResult(
   store: TaskStore,
   client: SessionClient,
   task_id: string,
   detail: ResultDetail = "summary",
+  extra: TaskResultExtra = {},
 ): Promise<CompactResult> {
   const task = store.tasks.get(task_id)
   if (!task) throw new Error(`unknown task_id: ${task_id}`)
   const [msgs, diffFiles, todos, pending, subs, cost] = await Promise.all([
-    client.messages({ sessionID: task_id, limit: 20 }),
+    client.messages({ sessionID: task_id, limit: detail === "transcript" ? 200 : 20 }),
     client.diff({ sessionID: task_id }),
     client.todo({ sessionID: task_id }),
     client.pending({ sessionID: task_id }),
@@ -394,20 +421,30 @@ export async function taskResult(
   ])
   const finalMessage = [...msgs].reverse().find((msg) => msg.role === "assistant")?.text
   const openTodos = todos.filter((item) => item.status !== "completed")
+  // The worktree path comes from the caller (task engine) or the stored
+  // record. It is omitted when unknown — never the session ID.
+  const worktree = extra.worktree ?? task.worktree
   return buildCompactResult(
     {
       task_id,
       status: task.status,
       ...(finalMessage !== undefined ? { finalMessage } : {}),
       diffFiles,
+      ...(detail === "transcript" ? { transcript: msgs.map((msg) => ({ role: msg.role, text: msg.text })) } : {}),
+      ...(extra.verification !== undefined ? { verification: extra.verification } : {}),
       todos: openTodos,
       openQuestions: pending.map((item) => ({ requestID: item.requestID, question: item.title })),
       cost: cost.cost,
       tokensByModel: cost.tokensByModel,
       subagentCount: subs.length,
-      worktree: task.isolation === "worktree" ? task_id : undefined,
+      ...(extra.memory !== undefined ? { memory: extra.memory } : {}),
+      ...(worktree !== undefined ? { worktree } : {}),
     },
-    { maxTokens: store.resultMaxTokens, detail },
+    {
+      maxTokens: store.resultMaxTokens,
+      detail,
+      ...(extra.cursor !== undefined ? { cursor: extra.cursor } : {}),
+    },
   )
 }
 
