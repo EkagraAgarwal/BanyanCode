@@ -238,8 +238,7 @@ export const layer = (options: Options = {}) =>
     }),
   )
 
-export const defaultLayer = (options?: Options) =>
-  layer(options).pipe(
-    Layer.provide(AgentEfficiencyTelemetryRepo.defaultLayer),
-    Layer.provide(BanyanConfigService.defaultLayer),
-  )
+export const defaultLayer = layer().pipe(
+  Layer.provide(AgentEfficiencyTelemetryRepo.defaultLayer),
+  Layer.provide(BanyanConfigService.defaultLayer),
+)
