@@ -983,16 +983,6 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   ])
   const sourceSet = sourceFileIDs.size > 0 ? sourceFileIDs : null
 
-  // Incremental: load ONLY the scoped window (changed files + one-hop
-  // neighbors already collected by the caller). Previously also scanned
-  // searchNodesLight({ limit: 100_000 }) for global name resolution — that
-  // dominated RAM/CPU on large graphs for tiny edits. Full rebuild still
-  // loads the whole graph.
-  const allNodesForIndex: CodegraphNode[] =
-    sourceSet && sourceSet.size > 0
-      ? yield* repo.nodesByFileIDs({ fileIDs: [...sourceSet] })
-      : yield* repo.searchNodes({ limit: 100_000 })
-
   const allFiles = yield* repo.listAllFiles()
   const fileByID = new Map(allFiles.map((f) => [f.id, f]))
   const fileDir = (filePath: string) => path.dirname(filePath).replace(/\\/g, "/")
@@ -1004,27 +994,6 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     const list = filesByDir.get(dir) ?? []
     list.push(file)
     filesByDir.set(dir, list)
-  }
-
-  const nodeMap = new Map<string, CodegraphNode[]>()
-  const nodeByID = new Map<string, CodegraphNode>()
-  const nodesByFileID = new Map<string, CodegraphNode[]>()
-  const BATCH_SIZE = 500
-
-  for (let batchStart = 0; batchStart < allNodesForIndex.length; batchStart += BATCH_SIZE) {
-    if (yield* Ref.get(cancelled)) break
-    const batchEnd = Math.min(batchStart + BATCH_SIZE, allNodesForIndex.length)
-    const batch = allNodesForIndex.slice(batchStart, batchEnd)
-
-    for (const node of batch) {
-      const list = nodeMap.get(node.name) ?? []
-      list.push(node)
-      nodeMap.set(node.name, list)
-      nodeByID.set(node.id, node)
-      const fileList = nodesByFileID.get(node.fileID) ?? []
-      fileList.push(node)
-      nodesByFileID.set(node.fileID, fileList)
-    }
   }
 
   const fileByPath = new Map(allFiles.map((f) => [f.path.replace(/\\/g, "/"), f]))
@@ -1057,6 +1026,84 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     return candidates
       .map((candidate) => fileByPath.get(candidate))
       .filter((file): file is CodegraphFile => file !== undefined)
+  }
+
+  // Incremental: edge SOURCES are the scoped window (changed files + one-hop
+  // dependents already collected by the caller). Previously the node LOAD
+  // window was the same set — that dominated RAM/CPU less than the old
+  // searchNodesLight({ limit: 100_000 }) scan, but it dropped every
+  // cross-file edge whose TARGET lives in an unchanged, non-dependent file:
+  // the target nodes were never loaded, so the import-scope and same-dir
+  // peer lookups below resolved to nothing and the edge was never
+  // re-derived (while the delete pass had already removed the old one).
+  // The load window is therefore the source set PLUS one hop of
+  // resolution targets (same-dir peers, import-resolved files, and files
+  // already connected by an edge). These extra nodes are targets only —
+  // the sourceSet guards below still decide which files emit edges, so
+  // import-scoped precision is unchanged. Full rebuild still loads the
+  // whole graph.
+  let allNodesForIndex: CodegraphNode[]
+  if (sourceSet && sourceSet.size > 0) {
+    const sourceNodes = yield* repo.nodesByFileIDs({ fileIDs: [...sourceSet] })
+    const extraFileIDs = new Set<string>()
+    // Same-dir peers: the no-import fallback resolves callees from the
+    // owner's directory, so every peer file's nodes must be resolvable.
+    for (const fileID of sourceSet) {
+      const owner = fileByID.get(fileID)
+      if (!owner) continue
+      for (const peer of filesByDir.get(fileDir(owner.path)) ?? []) {
+        if (!sourceSet.has(peer.id)) extraFileIDs.add(peer.id)
+      }
+    }
+    // Import targets: a source file's explicit relative imports may live in
+    // any directory, outside the peer set above.
+    for (const node of sourceNodes) {
+      if (node.kind !== "file" || !node.code || !sourceSet.has(node.fileID)) continue
+      const owner = fileByID.get(node.fileID)
+      if (!owner) continue
+      for (const match of node.code.matchAll(/import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["']([^"']+)["']/g)) {
+        const specifier = match[1]
+        if (!specifier) continue
+        for (const target of deriveModuleCandidates(owner.path, specifier)) {
+          if (!sourceSet.has(target.id)) extraFileIDs.add(target.id)
+        }
+      }
+    }
+    // Edge neighbors: files already connected to the source frontier in
+    // either direction (covers reference targets reached without an import,
+    // e.g. test files exercising an impl in another directory).
+    const neighbors = yield* repo.dependentsOfFiles({ fileIDs: [...sourceSet] })
+    for (const neighborID of neighbors) {
+      if (!sourceSet.has(neighborID)) extraFileIDs.add(neighborID)
+    }
+    allNodesForIndex = sourceNodes
+    if (extraFileIDs.size > 0) {
+      const extraNodes = yield* repo.nodesByFileIDs({ fileIDs: [...extraFileIDs] })
+      allNodesForIndex = [...sourceNodes, ...extraNodes]
+    }
+  } else {
+    allNodesForIndex = yield* repo.searchNodes({ limit: 100_000 })
+  }
+
+  const nodeMap = new Map<string, CodegraphNode[]>()
+  const nodeByID = new Map<string, CodegraphNode>()
+  const nodesByFileID = new Map<string, CodegraphNode[]>()
+  const BATCH_SIZE = 500
+
+  for (let batchStart = 0; batchStart < allNodesForIndex.length; batchStart += BATCH_SIZE) {
+    if (yield* Ref.get(cancelled)) break
+    const batchEnd = Math.min(batchStart + BATCH_SIZE, allNodesForIndex.length)
+    const batch = allNodesForIndex.slice(batchStart, batchEnd)
+
+    for (const node of batch) {
+      const list = nodeMap.get(node.name) ?? []
+      list.push(node)
+      nodeMap.set(node.name, list)
+      nodeByID.set(node.id, node)
+      const fileList = nodesByFileID.get(node.fileID) ?? []
+      fileList.push(node)
+      nodesByFileID.set(node.fileID, fileList)
+    }
   }
 
   const referenceEdges: { fromNodeID: string; toNodeID: string; kind: "imports" | "calls" | "extends" | "references" }[] = []
