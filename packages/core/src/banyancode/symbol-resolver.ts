@@ -164,6 +164,16 @@ export const resolveGraphTargetStrict = (
         return [...nonTest, ...test]
       })
 
+    // 0) Node ID passthrough: code_find returns node IDs and the tool
+    //    descriptions advertise them as valid targets, so an ID that exists in
+    //    the graph resolves to exactly that node.
+    if (target.includes(":")) {
+      const byID = yield* repo.nodeByID(target)
+      if (byID && filterByKind([byID]).length > 0 && filterByFile([byID]).length > 0) {
+        return toResult([byID], "name-exact")
+      }
+    }
+
     // 1) Context.Service tag lookup — covers BanyanCode's dominant pattern.
     const tagHitsRaw = filterByKind(filterByFile(yield* repo.findSymbolsByServiceTag(target)))
     const tagHits = dedupeByID(tagHitsRaw)

@@ -84,13 +84,52 @@ function endLineFor(offsets: readonly number[], endOffset: number): number {
 const OPEN_SCAN_BOUND = 8192
 const BRACE_SCAN_BOUND = 65536
 
+// FUNCTION_REGEX stops at the opening `(`. A `{` inside the parameter list
+// (`opts: Opts = {}`, destructuring) or a type-literal return type
+// (`Promise<{ a: 1 }>`) must not be mistaken for the body brace, so skip the
+// balanced parameter list and any return-type annotation first.
+function skipFunctionSignature(content: string, afterOpenParen: number): number {
+  let i = afterOpenParen
+  let depth = 1
+  while (i < content.length && depth > 0) {
+    const ch = content[i]!
+    if (ch === "(") depth++
+    else if (ch === ")") depth--
+    i++
+  }
+  if (depth > 0) return afterOpenParen
+  let j = i
+  while (j < content.length && /\s/.test(content[j]!)) j++
+  if (content[j] !== ":") return i
+  let nest = 0
+  for (let k = j + 1; k < Math.min(j + OPEN_SCAN_BOUND, content.length); k++) {
+    const ch = content[k]!
+    if (ch === "<" || ch === "(" || ch === "[") nest++
+    else if (ch === ">" && content[k - 1] !== "=") nest--
+    else if (ch === ")" || ch === "]") nest--
+    else if (ch === "{") {
+      if (nest > 0) {
+        nest++
+        continue
+      }
+      let p = k - 1
+      while (p > j && /\s/.test(content[p]!)) p--
+      if (!"|&:,<".includes(content[p]!)) return k
+      nest++
+    } else if (ch === "}") nest--
+    else if (ch === ";" && nest <= 0) return k
+  }
+  return i
+}
+
 function getTSNodeBody(
   content: string,
   offsets: readonly number[],
   matchIndex: number,
   matchText: string,
+  bodyScanStart?: number,
 ): { code: string; endLine: number } {
-  const afterMatchIndex = matchIndex + matchText.length
+  const afterMatchIndex = bodyScanStart ?? matchIndex + matchText.length
   const openLimit = Math.min(afterMatchIndex + OPEN_SCAN_BOUND, content.length)
   let firstBrace = -1
   let firstSemicolon = -1
@@ -373,7 +412,13 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
   for (const match of content.matchAll(FUNCTION_REGEX)) {
     const name = match[1]
     const startLine = declStartLine(content, offsets, match.index)
-    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0])
+    const { code, endLine } = getTSNodeBody(
+      content,
+      offsets,
+      match.index,
+      match[0],
+      skipFunctionSignature(content, match.index + match[0].length),
+    )
     const effectMatch = code.match(EFFECT_FN_REGEX)
     const signature = effectMatch ? effectMatch[1] : match[0].trim()
     nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
