@@ -23,12 +23,20 @@ export const workspaceID = Effect.gen(function* () {
 
 export const directory = Effect.map(context, (ctx) => ctx.directory)
 
+export interface MakeOptions {
+  // Bounds the per-service directory cache. Defaults to unbounded; instances
+  // are reclaimed by InstanceStore's guarded idle eviction (which invalidates
+  // through disposeDirectory), so a bound here is a backstop, not the policy.
+  readonly capacity?: number
+}
+
 export const make = <A, E = never, R = never>(
   init: (ctx: InstanceContext) => Effect.Effect<A, E, R | Scope.Scope>,
+  options: MakeOptions = {},
 ): Effect.Effect<InstanceState<A, E, Exclude<R, Scope.Scope>>, never, R | Scope.Scope> =>
   Effect.gen(function* () {
     const cache = yield* ScopedCache.make<string, A, E, R>({
-      capacity: Number.POSITIVE_INFINITY,
+      capacity: options.capacity ?? Number.POSITIVE_INFINITY,
       lookup: () =>
         Effect.gen(function* () {
           return yield* init(yield* context)
