@@ -5,8 +5,9 @@
 // against it via ServerAuth.headers. Code tools (tools-code.ts) and task
 // tools (tools-task.ts) register group-conditionally per the
 // banyancode_mcp_server `tools` allowlist; the TaskEngine is wired with the
-// real SDK SessionClient, the policy ruleset builder, and session-metadata
-// rehydrate lookup.
+// real SDK SessionClient, the policy ruleset builder, session-metadata
+// rehydrate lookup, and the live SSE event source (in-process /event,
+// attach /global/event) plus the safety-net sweep.
 
 import path from "path"
 import { stat } from "node:fs/promises"
@@ -14,9 +15,9 @@ import { randomBytes } from "node:crypto"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import type { BanyanConfig } from "@opencode-ai/core/v1/config/banyan-config"
-import type { PermissionRuleset } from "@opencode-ai/sdk/v2"
+import type { createOpencodeClient, Event as SdkEvent, PermissionRuleset } from "@opencode-ai/sdk/v2"
 import type { TaskEngine } from "./task-engine"
-import type { EngineEventSource, EngineSessionClient, EngineSessionLookup } from "./task-engine"
+import type { EngineEvent, EngineEventSource, EngineSessionClient, EngineSessionLookup } from "./task-engine"
 import type { SessionClient } from "./tasks"
 import { resolveOutputChars } from "./output"
 import { DEFAULT_RESULT_MAX_TOKENS } from "./result"
@@ -33,6 +34,9 @@ export type McpBootstrapOptions = {
   defaultModel?: string
   permission?: "reject" | "edits" | "yolo"
   maxConcurrentTasks?: number
+  // Test/CLI override for the engine needs_input timeout (ms). Wins over
+  // the stored banyancode_mcp_server value.
+  needsInputTimeoutMs?: number
   toolGroups?: string[]
 }
 
@@ -186,6 +190,150 @@ export function mcpSessionMetadata(input: {
 }): Record<string, string> {
   return { policy: input.policy, isolation: input.isolation ?? "shared", ...input.metadata, origin: "mcp" }
 }
+// Live engine event source (W1.1, plan spec §2.3): maps the real SDK
+// event stream onto EngineEvent. In-process mode drains
+// `sdk.event.subscribe` (raw Event items, same shape run.ts consumes);
+// `--attach` mode drains `sdk.global.event` (GlobalEvent envelopes with
+// a `payload` field, same shape acp/event.ts consumes). No directory
+// filter in attach mode: session IDs are unique per server and the
+// engine ignores sessions it does not own (child resolution is scoped
+// to live tasks), so cross-directory noise is dropped at apply time.
+export type EngineEventSourceMode = "in-process" | "attach"
+
+type OpencodeSdkClient = ReturnType<typeof createOpencodeClient>
+
+function describeSessionError(error: unknown): string {
+  if (error === null || typeof error !== "object") return "session error"
+  const record = error as { name?: unknown; data?: unknown }
+  const name = typeof record.name === "string" && record.name ? record.name : "session error"
+  const data = record.data as { message?: unknown } | undefined
+  if (data && typeof data.message === "string" && data.message) return `${name}: ${data.message}`
+  return name
+}
+
+export function mapSdkEventToEngineEvent(raw: SdkEvent): EngineEvent | undefined {
+  switch (raw.type) {
+    case "session.status": {
+      const status = raw.properties.status.type
+      if (status !== "busy" && status !== "idle" && status !== "retry") return undefined
+      return { type: "session.status", sessionID: raw.properties.sessionID, status }
+    }
+    case "session.idle":
+      return { type: "session.idle", sessionID: raw.properties.sessionID }
+    case "session.error": {
+      const sessionID = raw.properties.sessionID
+      if (typeof sessionID !== "string" || !sessionID) return undefined
+      return { type: "session.error", sessionID, message: describeSessionError(raw.properties.error) }
+    }
+    case "permission.asked": {
+      const asked = raw.properties
+      const title = `${asked.permission} ${asked.patterns.join(" ")}`.trim()
+      return {
+        type: "permission.asked",
+        sessionID: asked.sessionID,
+        request: { requestID: asked.id, kind: "permission", title, askedAt: Date.now() },
+      }
+    }
+    case "question.asked": {
+      const asked = raw.properties
+      const first = asked.questions[0]
+      return {
+        type: "question.asked",
+        sessionID: asked.sessionID,
+        request: {
+          requestID: asked.id,
+          kind: "question",
+          title: first?.header ?? first?.question ?? "question",
+          detail: asked.questions.map((entry) => entry.question).join("\n"),
+          askedAt: Date.now(),
+        },
+      }
+    }
+    default:
+      return undefined
+  }
+}
+
+type SseStream = { stream: AsyncIterable<unknown> }
+
+function unwrapStreamEvent(item: unknown): SdkEvent | undefined {
+  if (item === null || typeof item !== "object") return undefined
+  const holder = item as { payload?: unknown; type?: unknown }
+  const candidate = holder.payload !== undefined && holder.payload !== null ? holder.payload : item
+  if (candidate === null || typeof candidate !== "object") return undefined
+  if (typeof (candidate as { type?: unknown }).type !== "string") return undefined
+  return candidate as SdkEvent
+}
+
+const EVENT_STREAM_RETRY_MS = 1_000
+
+// One producer, one consumer: the engine's enqueue/drain is the only
+// reader. The loop pulls with a manual iterator and NEVER aborts or
+// returns the SSE generator: it is always suspended at a yield when we
+// drop it, and a suspended generator has no in-flight read — so nothing
+// can reject unobserved later. (Aborting the fetch mid-read rejects
+// inside Bun's pipeThrough machinery where no catch can observe it,
+// which surfaces as an unhandled rejection and fails `bun test`.)
+// In-process shutdown closes the socket via listener.stop(); attach-mode
+// close leaves one idle socket to the server, which dies with the
+// process.
+function subscribeToSse(open: () => Promise<SseStream>): EngineEventSource {
+  return {
+    subscribe: (handler) => {
+      let stopped = false
+      let retry: ReturnType<typeof setTimeout> | undefined
+      void (async () => {
+        while (!stopped) {
+          try {
+            const sub = await open()
+            if (stopped) break
+            const iterator = sub.stream[Symbol.asyncIterator]()
+            while (!stopped) {
+              const next = await iterator.next()
+              if (next.done || stopped) break
+              const raw = unwrapStreamEvent(next.value)
+              if (!raw) continue
+              const mapped = mapSdkEventToEngineEvent(raw)
+              if (mapped) handler(mapped)
+            }
+          } catch {
+            // The stream broke (server restart, reset) or the iterator
+            // settled while stopping. Reconnect below; the engine sweep
+            // covers the gap.
+          }
+          if (stopped) break
+          await new Promise<void>((resolve) => {
+            retry = setTimeout(resolve, EVENT_STREAM_RETRY_MS)
+            if (typeof retry.unref === "function") retry.unref()
+          })
+        }
+      })()
+      return () => {
+        stopped = true
+        if (retry !== undefined) clearTimeout(retry)
+      }
+    },
+  }
+}
+
+export function createEngineEventSource(input: {
+  sdk: OpencodeSdkClient
+  directory?: string
+  mode: EngineEventSourceMode
+}): EngineEventSource {
+  if (input.mode === "attach") {
+    return subscribeToSse(async () => {
+      const sub = await input.sdk.global.event()
+      return sub as unknown as SseStream
+    })
+  }
+  return subscribeToSse(async () => {
+    const params = input.directory !== undefined ? { directory: input.directory } : undefined
+    const sub = await input.sdk.event.subscribe(params)
+    return sub as unknown as SseStream
+  })
+}
+
 // Fail-closed guard for --attach: the attached server's own worktree must
 // equal --cwd or be an ancestor of it, otherwise the server would resolve
 // requests against a different base than the paths we validate. Probed
@@ -307,6 +455,31 @@ export async function createMcpServer(opts: McpBootstrapOptions = {}): Promise<M
       rejectQuestion: (input) => sessions.rejectQuestion(input),
       replyQuestion: (input) => sessions.replyQuestion(input),
       writeMetadata,
+      // Child-session tree for engine event attribution (W1.1): subagent
+      // asks arrive with the child session ID, and the engine resolves
+      // them to the root task handle. Mirrors SdkSessionClient.tree.
+      listChildren: async (input) => {
+        const seen = new Set<string>()
+        const out: string[] = []
+        const walk = async (id: string): Promise<void> => {
+          let kids: Array<{ id?: unknown }>
+          try {
+            const result = await sdk.session.children({ sessionID: id, directory: cwd })
+            if (!("data" in result) || !Array.isArray(result.data)) return
+            kids = result.data as Array<{ id?: unknown }>
+          } catch {
+            return
+          }
+          for (const kid of kids) {
+            if (typeof kid.id !== "string" || kid.id === id || seen.has(kid.id)) continue
+            seen.add(kid.id)
+            out.push(kid.id)
+            await walk(kid.id)
+          }
+        }
+        await walk(input.sessionID)
+        return out
+      },
     }
     const lookup: EngineSessionLookup = {
       findSession: async (input) => {
@@ -333,15 +506,18 @@ export async function createMcpServer(opts: McpBootstrapOptions = {}): Promise<M
         return out
       },
     }
-    // No live event drain yet: the engine's refresh-on-status path covers
-    // every transition (pending auto-reject, needs_input timers, done
-    // detection), so task_status stays correct without SSE. Wiring
-    // sdk.event.subscribe (in-process) / global.event (--attach) into an
-    // EngineEventSource is follow-up work that needs no engine change.
-    const events: EngineEventSource = { subscribe: () => () => {} }
+    // Live event drain (W1.1): in-process mode subscribes to the owned
+    // server's /event stream, attach mode to its /global/event stream.
+    // The engine's refresh-on-status path stays as the safety net under
+    // the 5–10 s sweep; SSE is the fast path, not the only path.
+    const events = createEngineEventSource({
+      sdk,
+      directory: cwd,
+      mode: opts.attach !== undefined ? "attach" : "in-process",
+    })
     const engine = new TaskEngine(engineClient, lookup, events, {
       maxConcurrentTasks: config.maxConcurrentTasks,
-      needsInputTimeoutMs: config.needsInputTimeoutMs,
+      needsInputTimeoutMs: opts.needsInputTimeoutMs ?? config.needsInputTimeoutMs,
     })
     if (isToolGroupEnabled(config.toolGroups, "code")) registerCodeTools(mcp, { sdk, cwd })
     registerTaskTools(mcp, {
@@ -380,7 +556,17 @@ export async function createMcpServer(opts: McpBootstrapOptions = {}): Promise<M
     await assertAttachedServerCovers({ baseUrl, cwd, headers })
     const engine = await wire(sdk)
     log(`attached to running server at ${baseUrl} (cwd ${cwd})`)
-    return { mcp, sdk, baseUrl, cwd, config, engine, cleanup: async () => {} }
+    return {
+      mcp,
+      sdk,
+      baseUrl,
+      cwd,
+      config,
+      engine,
+      cleanup: async () => {
+        engine?.close()
+      },
+    }
   }
 
   // In-process mode owns this process: chdir BEFORE the listener starts so
@@ -419,6 +605,9 @@ export async function createMcpServer(opts: McpBootstrapOptions = {}): Promise<M
     config,
     engine,
     cleanup: async () => {
+      // Close the engine first: it owns the SSE subscription and the
+      // sweep timer, and neither may outlive the listener.
+      engine?.close()
       await listener.stop(true).catch(() => {})
     },
   }

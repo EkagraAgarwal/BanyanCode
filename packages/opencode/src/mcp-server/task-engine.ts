@@ -15,6 +15,13 @@
 // - "done" requires an assistant message newer than the prompt AND an idle
 //   session (or a session.idle event for this prompt) — fixes the
 //   promptAsync race (§3.2).
+// - Events for child sessions (subagent asks) resolve to the root task
+//   handle through the session tree (W1.1): apply() falls back to
+//   resolveChildHandle, which lists children per non-terminal task and
+//   caches hits in sessionToHandle (misses in a bounded TTL cache).
+// - Safety-net sweep (W1.1): while any task is non-terminal a single
+//   interval refreshes every running/needs_input handle then dequeues.
+//   The timer stops when nothing is non-terminal and restarts on start.
 // - needs_input timeout is a server-side timer started on question.asked,
 //   not on caller poll (§3.5).
 // - Queue state persists in session metadata `mcp_state: "queued"` so it
@@ -94,6 +101,11 @@ export interface EngineSessionClient {
   rejectQuestion(input: { sessionID: string; requestID: string; message?: string }): Promise<void>
   replyQuestion(input: { sessionID: string; requestID: string; message: string }): Promise<void>
   writeMetadata(input: { sessionID: string; metadata: Record<string, string> }): Promise<void>
+  // Child-session tree for event attribution (W1.1): the engine resolves
+  // events from subagent sessions to the root task handle. Optional so
+  // in-memory harnesses keep compiling; without it only root-session
+  // events are attributed.
+  listChildren?(input: { sessionID: string }): Promise<string[]>
 }
 
 // Session lookup for rehydrate (§4.4): find the session behind a handle,
@@ -159,12 +171,22 @@ const QUEUED_STATE_VALUE = "queued"
 export interface TaskEngineOptions {
   maxConcurrentTasks: number
   needsInputTimeoutMs?: number
+  // Safety-net sweep cadence (W1.1). Defaults to 7_500 ms (inside the
+  // 5–10 s window). Clamped to >= 1_000 ms.
+  sweepIntervalMs?: number
   now?: () => number
   onWorktreeCleanup?: (input: { handle: string; sessionID: string }) => void | Promise<void>
   eventQueueBound?: number
 }
 
 export const DEFAULT_NEEDS_INPUT_TIMEOUT_MS = 600_000
+const DEFAULT_SWEEP_INTERVAL_MS = 7_500
+const MIN_SWEEP_INTERVAL_MS = 1_000
+// Negative child-resolution cache: bounds wasted tree walks for events
+// from sessions this engine does not own (attach mode sees every
+// session on the server). Self-corrects when a child appears later.
+const UNKNOWN_SESSION_TTL_MS = 30_000
+const UNKNOWN_SESSION_BOUND = 500
 const DEFAULT_EVENT_QUEUE_BOUND = 1024
 
 export class UnknownTaskError extends Error {
@@ -185,9 +207,15 @@ export class TaskEngine {
   private closed = false
   private readonly unsubscribe: () => void
   private droppedEvents = 0
+  // Safety-net sweep (W1.1): one interval, owned by the engine, stopped
+  // when no task is non-terminal.
+  private sweepTimer: ReturnType<typeof setInterval> | undefined
+  // Child sessions already attributed to a handle, plus recent misses.
+  private readonly unknownSessions = new Map<string, number>()
 
   readonly maxConcurrentTasks: number
   readonly needsInputTimeoutMs: number
+  readonly sweepIntervalMs: number
   private readonly now: () => number
   private readonly onWorktreeCleanup: (input: { handle: string; sessionID: string }) => void | Promise<void>
   private readonly eventQueueBound: number
@@ -200,6 +228,7 @@ export class TaskEngine {
   ) {
     this.maxConcurrentTasks = opts.maxConcurrentTasks
     this.needsInputTimeoutMs = opts.needsInputTimeoutMs ?? DEFAULT_NEEDS_INPUT_TIMEOUT_MS
+    this.sweepIntervalMs = Math.max(opts.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS, MIN_SWEEP_INTERVAL_MS)
     this.now = opts.now ?? Date.now
     this.onWorktreeCleanup = opts.onWorktreeCleanup ?? (() => {})
     this.eventQueueBound = opts.eventQueueBound ?? DEFAULT_EVENT_QUEUE_BOUND
@@ -210,9 +239,14 @@ export class TaskEngine {
     return this.droppedEvents
   }
 
+  get sweepActive(): boolean {
+    return this.sweepTimer !== undefined
+  }
+
   close(): void {
     this.closed = true
     this.unsubscribe()
+    this.stopSweepTimer()
     for (const timer of this.needsInputTimers.values()) clearTimeout(timer)
     this.needsInputTimers.clear()
     for (const [handle, waiters] of this.stateWaiters) {
@@ -287,9 +321,11 @@ export class TaskEngine {
         sessionID: record.sessionID,
         metadata: { [QUEUED_STATE_KEY]: QUEUED_STATE_VALUE },
       })
+      this.ensureSweepTimer()
       return this.patch(record.handle, { status: "queued" })
     }
     await this.launch(record.handle, input)
+    this.ensureSweepTimer()
     return this.get(record.handle)
   }
 
@@ -441,6 +477,7 @@ export class TaskEngine {
     this.records.set(handle, record)
     this.sessionToHandle.set(sessionID, handle)
     await this.refresh(handle)
+    this.updateSweepTimer()
     return this.get(handle)
   }
 
@@ -450,6 +487,7 @@ export class TaskEngine {
     const next: TaskRecord = { ...record, ...patch, updatedAt: this.now() }
     this.records.set(handle, next)
     this.notifyStateWaiters(handle, next)
+    this.updateSweepTimer()
     return { ...next }
   }
 
@@ -494,6 +532,89 @@ export class TaskEngine {
     }
   }
 
+  private hasNonTerminalTasks(): boolean {
+    for (const record of this.records.values()) {
+      if (record.status === "queued" || record.status === "running" || record.status === "needs_input") return true
+    }
+    return false
+  }
+
+  private ensureSweepTimer(): void {
+    if (this.closed || this.sweepTimer !== undefined || !this.hasNonTerminalTasks()) return
+    this.sweepTimer = setInterval(() => {
+      void this.sweepAll()
+    }, this.sweepIntervalMs)
+    if (typeof this.sweepTimer.unref === "function") this.sweepTimer.unref()
+  }
+
+  private stopSweepTimer(): void {
+    if (this.sweepTimer !== undefined) clearInterval(this.sweepTimer)
+    this.sweepTimer = undefined
+  }
+
+  private updateSweepTimer(): void {
+    if (!this.hasNonTerminalTasks()) this.stopSweepTimer()
+    else this.ensureSweepTimer()
+  }
+
+  // Safety-net sweep (W1.1): refresh every active handle, then dequeue.
+  // Events drive the common path; this only covers missed SSE. Stops
+  // itself when nothing is non-terminal.
+  private async sweepAll(): Promise<void> {
+    if (this.closed) return
+    for (const [handle, record] of [...this.records]) {
+      if (this.closed) return
+      if (record.status !== "running" && record.status !== "needs_input") continue
+      try {
+        await this.refresh(handle)
+      } catch {
+        // Next handle; the following sweep retries this one.
+      }
+    }
+    if (this.closed) return
+    try {
+      await this.dequeueNext()
+    } catch {
+      // Retry on the next sweep.
+    }
+    this.updateSweepTimer()
+  }
+
+  // Attribute a child (subagent) session to its root task handle (W1.1).
+  // Hits are cached in sessionToHandle; misses in a bounded TTL map so
+  // foreign sessions on a shared server cost one tree walk per TTL.
+  private async resolveChildHandle(sessionID: string): Promise<string | undefined> {
+    const at = this.now()
+    const negativeAt = this.unknownSessions.get(sessionID)
+    if (negativeAt !== undefined && at - negativeAt < UNKNOWN_SESSION_TTL_MS) return undefined
+    if (typeof this.client.listChildren !== "function") return undefined
+    for (const record of this.records.values()) {
+      if (record.status === "cancelled" || record.status === "done" || record.status === "failed") continue
+      if (record.sessionID === sessionID) {
+        this.sessionToHandle.set(sessionID, record.handle)
+        this.unknownSessions.delete(sessionID)
+        return record.handle
+      }
+      let children: string[] = []
+      try {
+        children = await this.client.listChildren({ sessionID: record.sessionID })
+      } catch {
+        continue
+      }
+      if (children.includes(sessionID)) {
+        this.sessionToHandle.set(sessionID, record.handle)
+        this.unknownSessions.delete(sessionID)
+        return record.handle
+      }
+    }
+    this.unknownSessions.set(sessionID, at)
+    if (this.unknownSessions.size > UNKNOWN_SESSION_BOUND) {
+      const oldest = this.unknownSessions.keys().next()
+      if (!oldest.done) this.unknownSessions.delete(oldest.value)
+    }
+    return undefined
+  }
+
   private clearNeedsInputTimer(handle: string): void {
     const timer = this.needsInputTimers.get(handle)
     if (timer !== undefined) clearTimeout(timer)
@@ -506,13 +627,16 @@ export class TaskEngine {
     const delay = Math.max(0, this.needsInputTimeoutMs - elapsed)
     const timer = setTimeout(() => {
       this.needsInputTimers.delete(handle)
-      void this.expireNeedsInput(handle, pending.requestID)
+      // Swallowed: expiry is best-effort (the sweep retries). Without the
+      // catch a post-close expiry becomes an unhandled rejection.
+      void this.expireNeedsInput(handle, pending.requestID).catch(() => {})
     }, delay)
     if (typeof timer.unref === "function") timer.unref()
     this.needsInputTimers.set(handle, timer)
   }
 
   private async expireNeedsInput(handle: string, requestID: string): Promise<void> {
+    if (this.closed) return
     const record = this.records.get(handle)
     if (!record || record.pendingQuestion?.requestID !== requestID) return
     const pending = record.pendingQuestion
@@ -541,7 +665,15 @@ export class TaskEngine {
     try {
       while (this.eventQueue.length > 0) {
         const event = this.eventQueue.shift()
-        if (event) await this.apply(event)
+        if (!event) continue
+        // One bad event (session deleted mid-flight, connection reset)
+        // must neither kill the loop nor surface as an unhandled
+        // rejection: the sweep retries whatever was missed.
+        try {
+          await this.apply(event)
+        } catch {
+          // Dropped by design; see droppedEvents for the bounded queue.
+        }
       }
     } finally {
       this.draining = false
@@ -549,8 +681,12 @@ export class TaskEngine {
   }
 
   private async apply(event: EngineEvent): Promise<void> {
-    const handle = this.sessionToHandle.get(event.sessionID)
-    if (!handle) return
+    let handle = this.sessionToHandle.get(event.sessionID)
+    if (!handle) {
+      const resolved = await this.resolveChildHandle(event.sessionID)
+      if (!resolved) return
+      handle = resolved
+    }
     const record = this.records.get(handle)
     if (!record || record.status === "cancelled" || record.status === "done" || record.status === "failed") return
 
