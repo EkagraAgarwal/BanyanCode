@@ -31,8 +31,78 @@ function extract(messages: SessionV1.WithParts[]) {
   return paths
 }
 
+// R8 per-step caches. `system()` / `systemPaths()` run on every loop step; without
+// caching each step re-runs glob/find discovery, re-reads every AGENTS.md / CLAUDE.md,
+// and HTTP-fetches every remote instruction URL (5 s timeout each).
+//
+// Staleness windows:
+// - Local discovery + file bodies: INSTRUCTION_DISCOVERY_TTL_MS (5 s). A new, deleted,
+//   or edited instruction file is picked up after at most 5 s. Changes to the
+//   `config.instructions` list change the cache key and invalidate immediately.
+// - Remote URL bodies: REMOTE_INSTRUCTION_TTL_MS (60 s) on success. Failures
+//   (timeout / network error) are cached as empty for REMOTE_INSTRUCTION_NEGATIVE_TTL_MS
+//   (10 s) so a down host stalls at most one step per 10 s without hiding recovery.
+//   Failures are never stored with the success TTL.
+// - All caches live in InstanceState: per project directory, dropped on instance dispose.
+//   `invalidate()` drops them immediately and is the hook point for a future
+//   config/watcher subscription (no cheap event plumbing exists today, hence the TTLs).
+export const INSTRUCTION_DISCOVERY_TTL_MS = 5_000
+export const REMOTE_INSTRUCTION_TTL_MS = 60_000
+export const REMOTE_INSTRUCTION_NEGATIVE_TTL_MS = 10_000
+
+export class TtlCache<K, V> {
+  private readonly entries = new Map<K, { value: V; expiresAt: number }>()
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly maxSize = 64,
+  ) {}
+  get(key: K): V | undefined {
+    const entry = this.entries.get(key)
+    if (!entry) return undefined
+    if (entry.expiresAt <= this.now()) {
+      this.entries.delete(key)
+      return undefined
+    }
+    return entry.value
+  }
+  set(key: K, value: V, ttlMs: number): void {
+    if (!this.entries.has(key) && this.entries.size >= this.maxSize) {
+      const oldest = this.entries.keys().next()
+      if (!oldest.done) this.entries.delete(oldest.value)
+    }
+    this.entries.set(key, { value, expiresAt: this.now() + ttlMs })
+  }
+  delete(key: K): void {
+    this.entries.delete(key)
+  }
+  clear(): void {
+    this.entries.clear()
+  }
+  get size(): number {
+    return this.entries.size
+  }
+}
+
+export interface RemoteInstructionCache {
+  readonly get: (url: string) => string | undefined
+  readonly setSuccess: (url: string, body: string) => void
+  readonly setFailure: (url: string) => void
+  readonly clear: () => void
+}
+
+export function createRemoteInstructionCache(now: () => number = Date.now): RemoteInstructionCache {
+  const cache = new TtlCache<string, string>(now)
+  return {
+    get: (url) => cache.get(url),
+    setSuccess: (url, body) => cache.set(url, body, REMOTE_INSTRUCTION_TTL_MS),
+    setFailure: (url) => cache.set(url, "", REMOTE_INSTRUCTION_NEGATIVE_TTL_MS),
+    clear: () => cache.clear(),
+  }
+}
+
 export interface Interface {
   readonly clear: (messageID: MessageID) => Effect.Effect<void>
+  readonly invalidate: () => Effect.Effect<void>
   readonly systemPaths: () => Effect.Effect<Set<string>, FSUtil.Error>
   readonly system: () => Effect.Effect<string[], FSUtil.Error>
   readonly find: (dir: string) => Effect.Effect<string | undefined, FSUtil.Error>
@@ -72,6 +142,12 @@ export const layer: Layer.Layer<
         Effect.succeed({
           // Track which instruction files have already been attached for a given assistant message.
           claims: new Map<MessageID, Set<string>>(),
+          // R8 caches: discovery keyed by the resolved instructions list (config edits
+          // invalidate immediately, fs changes within the TTL); system output keyed the
+          // same way; remote bodies keyed by URL with success/negative TTLs.
+          discovery: new TtlCache<string, Set<string>>(),
+          system: new TtlCache<string, string[]>(),
+          remote: createRemoteInstructionCache(),
         }),
       ),
     )
@@ -93,13 +169,21 @@ export const layer: Layer.Layer<
     })
 
     const fetch = Effect.fnUntraced(function* (url: string) {
+      const s = yield* InstanceState.get(state)
+      const cached = s.remote.get(url)
+      if (cached !== undefined) return cached
       const res = yield* http.execute(HttpClientRequest.get(url)).pipe(
         Effect.timeout(5000),
         Effect.catch(() => Effect.succeed(null)),
       )
-      if (!res) return ""
+      if (!res) {
+        s.remote.setFailure(url)
+        return ""
+      }
       const body = yield* res.arrayBuffer.pipe(Effect.catch(() => Effect.succeed(new ArrayBuffer(0))))
-      return new TextDecoder().decode(body)
+      const text = new TextDecoder().decode(body)
+      s.remote.setSuccess(url, text)
+      return text
     })
 
     const clear = Effect.fn("Instruction.clear")(function* (messageID: MessageID) {
@@ -107,8 +191,19 @@ export const layer: Layer.Layer<
       s.claims.delete(messageID)
     })
 
+    const invalidate = Effect.fn("Instruction.invalidate")(function* () {
+      const s = yield* InstanceState.get(state)
+      s.discovery.clear()
+      s.system.clear()
+      s.remote.clear()
+    })
+
     const systemPaths = Effect.fn("Instruction.systemPaths")(function* () {
       const config = yield* cfg.get()
+      const key = JSON.stringify(config.instructions ?? [])
+      const s = yield* InstanceState.get(state)
+      const cached = s.discovery.get(key)
+      if (cached) return new Set(cached)
       const ctx = yield* InstanceState.context
       const paths = new Set<string>()
 
@@ -149,11 +244,16 @@ export const layer: Layer.Layer<
         }
       }
 
-      return paths
+      s.discovery.set(key, paths, INSTRUCTION_DISCOVERY_TTL_MS)
+      return new Set(paths)
     })
 
     const system = Effect.fn("Instruction.system")(function* () {
       const config = yield* cfg.get()
+      const key = JSON.stringify(config.instructions ?? [])
+      const s = yield* InstanceState.get(state)
+      const cached = s.system.get(key)
+      if (cached) return [...cached]
       const paths = yield* systemPaths()
       const urls = (config.instructions ?? []).filter(
         (item) => item.startsWith("https://") || item.startsWith("http://"),
@@ -162,10 +262,12 @@ export const layer: Layer.Layer<
       const files = yield* Effect.forEach(Array.from(paths), read, { concurrency: 8 })
       const remote = yield* Effect.forEach(urls, fetch, { concurrency: 4 })
 
-      return [
+      const result = [
         ...Array.from(paths).flatMap((item, i) => (files[i] ? [`Instructions from: ${item}\n${files[i]}`] : [])),
         ...urls.flatMap((item, i) => (remote[i] ? [`Instructions from: ${item}\n${remote[i]}`] : [])),
       ]
+      s.system.set(key, result, INSTRUCTION_DISCOVERY_TTL_MS)
+      return result
     })
 
     const find = Effect.fn("Instruction.find")(function* (dir: string) {
@@ -220,7 +322,7 @@ export const layer: Layer.Layer<
       return results
     })
 
-    return Service.of({ clear, systemPaths, system, find, resolve })
+    return Service.of({ clear, invalidate, systemPaths, system, find, resolve })
   }),
 )
 
