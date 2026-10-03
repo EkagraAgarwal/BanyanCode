@@ -238,6 +238,8 @@ async function waitForSettled(engine: TaskEngine, handle: string, waitSeconds: n
   return record
 }
 
+const MAX_ERROR_CHARS = 2000
+
 type StatusView = {
   task_id: string
   status: string
@@ -249,6 +251,8 @@ type StatusView = {
   // code when it failed, and the worktree checkout for isolated tasks (C2).
   cost: number
   errorCode?: string
+  // Failure reason (engine session.error message / budget abort), capped at MAX_ERROR_CHARS.
+  error?: string
   worktree?: { name: string; directory: string; branch: string }
   createdAt: number
   updatedAt: number
@@ -275,6 +279,7 @@ const statusView = (record: TaskRecord): StatusView => {
   if (record.agent !== undefined) view.agent = record.agent
   if (record.model !== undefined) view.model = record.model
   if (record.errorCode !== undefined) view.errorCode = record.errorCode
+  if (record.error !== undefined) view.error = record.error.slice(0, MAX_ERROR_CHARS)
   if (record.worktree !== undefined) view.worktree = { ...record.worktree }
   if (record.pendingQuestion !== undefined) {
     const pending: StatusView["pendingQuestion"] = {
@@ -621,6 +626,9 @@ async function readCompactResult(
       subagentCount: subagents.length,
       ...(verification !== undefined ? { verification } : {}),
       ...(memory.length > 0 ? { memory } : {}),
+      ...(record.status === "failed" && record.error !== undefined
+        ? { error: record.error.slice(0, MAX_ERROR_CHARS) }
+        : {}),
       ...(record.worktree !== undefined
         ? { worktree: { path: record.worktree.directory, branch: record.worktree.branch } }
         : {}),

@@ -450,6 +450,28 @@ describe("mcp task tools", () => {
     })
   })
 
+  test("failed tasks carry the failure reason in status and result (F4)", async () => {
+    await withTaskProtocol(freshTaskSetup(), async ({ fake, engine }, client) => {
+      const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "doomed" } })
+      const taskID = toolJson<{ task_id: string }>(started).task_id
+      const sessionID = engine.get(taskID).sessionID
+      fake.emit({ type: "session.error", sessionID, message: "Model not found: nope/unknown" })
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      const status = toolJson<{ status: string; error?: string }>(
+        await client.callTool({ name: "banyan_task_status", arguments: { task_id: taskID } }),
+      )
+      expect(status.status).toBe("failed")
+      expect(status.error).toBe("Model not found: nope/unknown")
+
+      const result = toolJson<{ status: string; error?: string }>(
+        await client.callTool({ name: "banyan_task_result", arguments: { task_id: taskID } }),
+      )
+      expect(result.status).toBe("failed")
+      expect(result.error).toBe("Model not found: nope/unknown")
+    })
+  })
+
   test("task_result builds the compact result with transcript paging", async () => {
     await withTaskProtocol(freshTaskSetup(), async ({ fake, engine }, client) => {
       const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "do work" } })

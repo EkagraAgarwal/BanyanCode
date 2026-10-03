@@ -67,6 +67,8 @@ export interface CompactResultInput {
   subagentCount?: number
   memory?: MemoryEntryInput[]
   worktree?: WorktreeInput
+  // Failure reason for failed tasks; callers cap its length.
+  error?: string
 }
 
 export interface TranscriptPage {
@@ -92,6 +94,7 @@ export interface CompactResult {
   subagentCount?: number
   memory?: MemoryEntryInput[]
   worktree?: WorktreeInput
+  error?: string
   estimatedTokens: number
   /** Deprecated alias of estimatedTokens, kept for older readers. */
   tokens: number
@@ -176,7 +179,8 @@ export function buildCompactResult(input: CompactResultInput, opts: BuildResultO
     estimateTokens(JSON.stringify(input.openQuestions ?? [])) +
     estimateTokens(JSON.stringify(input.tokensByModel ?? {})) +
     estimateTokens(JSON.stringify(input.memory ?? [])) +
-    estimateTokens(JSON.stringify(input.worktree ?? null))
+    estimateTokens(JSON.stringify(input.worktree ?? null)) +
+    estimateTokens(input.error ?? "")
 
   // Trim the file list first: top N by churn, keeping room for the summary.
   const fitsWith = (files: DiffFileInput[]): boolean =>
@@ -274,6 +278,7 @@ export function buildCompactResult(input: CompactResultInput, opts: BuildResultO
   if (input.subagentCount !== undefined) rendered.subagentCount = input.subagentCount
   if (input.memory !== undefined) rendered.memory = input.memory
   if (input.worktree !== undefined) rendered.worktree = input.worktree
+  if (input.error !== undefined) rendered.error = input.error
 
   // Enforce the overall cap against the serialized JSON, trimming in
   // priority order: patches, summary, files, then the transcript page.
