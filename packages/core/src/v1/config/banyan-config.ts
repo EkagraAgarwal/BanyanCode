@@ -69,6 +69,10 @@ export const McpServer = Schema.Struct({
   default_model: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))),
   permission: Schema.optional(McpServerPermission),
   max_concurrent_tasks: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32 }))),
+  // Default per-task USD spend cap for delegated MCP tasks (C6). A
+  // per-start budgetUsd wins over this; the engine aborts the task with
+  // errorCode "BUDGET" when the root + child session spend trips it.
+  task_budget_usd: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1000 }))),
   result_max_tokens: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 32000 }))),
   needs_input_timeout_seconds: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 60, maximum: 86400 }))),
   // Char budget for a single MCP tool result (structural truncation, never

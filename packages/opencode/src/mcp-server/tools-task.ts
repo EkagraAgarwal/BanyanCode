@@ -19,7 +19,8 @@ import { TaskEngine, UnknownTaskError } from "./task-engine"
 import type { TaskRecord } from "./task-engine"
 import { assertYoloAllowed, buildRuleset } from "./policy"
 import type { PermissionPolicy } from "./policy"
-import { buildCompactResult, DEFAULT_RESULT_MAX_TOKENS } from "./result"
+import { buildCompactResult, aggregateVerification, DEFAULT_RESULT_MAX_TOKENS } from "./result"
+import type { VerifierToolPartInput } from "./result"
 import {
   CodeToolOutputSchema,
   errorResult,
@@ -80,6 +81,11 @@ export type TaskToolsDeps = {
   // Lazily read so the name reflects the connected client: at registration
   // time initialize has not run yet and getClientVersion() is undefined.
   getMcpClientName: () => string
+  // Memory backfill for banyan_task_result (C3/C4 seam, wired in
+  // server.ts): session + global entries tagged origin:mcp. Optional so
+  // existing fakes keep compiling; absent means the result carries no
+  // memory refs.
+  listMemory?: (input: { sessionID: string }) => Promise<Array<{ id: string; title?: string }>>
   config: TaskToolsConfig
 }
 
@@ -227,6 +233,11 @@ type StatusView = {
   isolation: string
   agent?: string
   model?: string
+  // Accumulated USD spend for the task (C6), the machine-readable failure
+  // code when it failed, and the worktree checkout for isolated tasks (C2).
+  cost: number
+  errorCode?: string
+  worktree?: { name: string; directory: string; branch: string }
   createdAt: number
   updatedAt: number
   elapsedMs: number
@@ -244,12 +255,15 @@ const statusView = (record: TaskRecord): StatusView => {
     status: record.status,
     permission: record.permission,
     isolation: record.isolation,
+    cost: record.cost,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     elapsedMs: record.updatedAt - record.createdAt,
   }
   if (record.agent !== undefined) view.agent = record.agent
   if (record.model !== undefined) view.model = record.model
+  if (record.errorCode !== undefined) view.errorCode = record.errorCode
+  if (record.worktree !== undefined) view.worktree = { ...record.worktree }
   if (record.pendingQuestion !== undefined) {
     const pending: StatusView["pendingQuestion"] = {
       kind: record.pendingQuestion.kind,
@@ -361,13 +375,25 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
         if ("error" in resolved) return resolved.error
         const record = resolved.record
         const sessionID = record.sessionID
-        const [messages, diffFiles, todos, cost, subagents] = await Promise.all([
-          sessions.messages({ sessionID, limit: 200 }),
-          sessions.diff({ sessionID }),
-          sessions.todo({ sessionID }),
-          sessions.cost({ sessionID }),
-          sessions.subagents({ sessionID }),
+        // Per-task SDK root (C2): worktree tasks scope every read to the
+        // checkout, mirroring the engine's dirForRecord. Memory reads need
+        // no scope (the memory routes are location-wide).
+        const scope = record.worktree !== undefined ? { directory: record.worktree.directory } : {}
+        const [messages, diffFiles, todos, cost, subagents, parts, memory] = await Promise.all([
+          sessions.messages({ sessionID, limit: 200, ...scope }),
+          sessions.diff({ sessionID, ...scope }),
+          sessions.todo({ sessionID, ...scope }),
+          sessions.cost({ sessionID, ...scope }),
+          sessions.subagents({ sessionID, ...scope }),
+          // Legacy fakes predate the port method: without it the
+          // verification field stays absent, same as a transcript with no
+          // verifier parts.
+          typeof sessions.toolParts === "function"
+            ? sessions.toolParts({ sessionID, ...scope })
+            : Promise.resolve([] as VerifierToolPartInput[]),
+          deps.listMemory !== undefined ? deps.listMemory({ sessionID }) : Promise.resolve([]),
         ])
+        const verification = aggregateVerification(parts)
         const assistantTexts = messages.filter((msg) => msg.role === "assistant" && msg.text.length > 0)
         const compact = buildCompactResult(
           {
@@ -382,6 +408,11 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
             cost: cost.cost,
             tokensByModel: cost.tokensByModel,
             subagentCount: subagents.length,
+            ...(verification !== undefined ? { verification } : {}),
+            ...(memory.length > 0 ? { memory } : {}),
+            ...(record.worktree !== undefined
+              ? { worktree: { path: record.worktree.directory, branch: record.worktree.branch } }
+              : {}),
           },
           {
             maxTokens: config.resultMaxTokens,

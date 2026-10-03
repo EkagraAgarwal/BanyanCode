@@ -49,6 +49,8 @@ export type ResolvedMcpServerConfig = {
   resultMaxTokens: number
   needsInputTimeoutMs: number
   outputChars: number
+  // Default per-task USD spend cap (C6); a per-start budgetUsd wins over it.
+  taskBudgetUsd: number
   allowedAgents?: string[]
   allowedModels?: string[]
   // undefined = every group enabled.
@@ -115,6 +117,35 @@ export function isToolGroupEnabled(groups: string[] | undefined, group: string):
   return groups.includes(group)
 }
 
+// Pure policy selection (C1 gate): yolo is inexpressible via stored
+// config — the schema bars it (see McpServerPermission in
+// core/src/v1/config/banyan-config.ts) and this clamp collapses a raw
+// "yolo" value (hand-edited JSON, older binary) to reject rather than
+// letting it reach the ruleset builder. The only path to yolo is the
+// explicit process gate: the --allow-yolo CLI flag (or BANYANCODE_MCP_
+// ALLOW_YOLO=1 for tests, resolved by the caller into allowYolo), which
+// both permits AND selects yolo when no explicit permission override
+// picks another policy. An explicit override always wins; the hard gate
+// (assertYoloAllowed at boot and per task-start) still throws when the
+// final policy is yolo without the flag.
+export function resolveMcpPermission(input: {
+  stored?: string | undefined
+  override?: "reject" | "edits" | "yolo" | undefined
+  allowYolo: boolean
+}): "reject" | "edits" | "yolo" {
+  if (input.override !== undefined) return input.override
+  if (input.allowYolo) return "yolo"
+  if (input.stored === "edits") return "edits"
+  return "reject"
+}
+
+// Env escape hatch for tests (the CLI always passes an explicit boolean,
+// so this only fires for direct API use). Mirrors the BANYANCODE_MCP_*
+// env convention from the design doc.
+export function readAllowYoloEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env["BANYANCODE_MCP_ALLOW_YOLO"]?.toLowerCase()
+  return raw === "1" || raw === "true"
+}
 // Read banyancode_mcp_server through Banyan.BanyanConfigService (never
 // Config.Service.getGlobal().banyancode_*, which fails typecheck — those
 // keys live in BanyanConfig.Info). Unreadable config falls back to
@@ -122,12 +153,13 @@ export function isToolGroupEnabled(groups: string[] | undefined, group: string):
 export async function resolveMcpServerConfig(
   overrides: Pick<
     McpBootstrapOptions,
-    "defaultAgent" | "defaultModel" | "permission" | "maxConcurrentTasks" | "toolGroups"
+    "defaultAgent" | "defaultModel" | "permission" | "maxConcurrentTasks" | "toolGroups" | "allowYolo"
   > = {},
 ): Promise<ResolvedMcpServerConfig> {
   const { Banyan } = await import("@opencode-ai/core/banyancode")
   const { Effect } = await import("effect")
   const { DEFAULT_MAX_SUBAGENTS } = await import("@opencode-ai/core/v1/config/banyan-config")
+  const { DEFAULT_TASK_BUDGET_USD } = await import("./task-engine")
   const stored = await Effect.runPromise(
     Effect.gen(function* () {
       const svc = yield* Banyan.BanyanConfigService
@@ -135,7 +167,11 @@ export async function resolveMcpServerConfig(
     }).pipe(Effect.provide(Banyan.banyanConfigServiceDefaultLayer)),
   ).catch(() => ({} as BanyanConfig.Info))
   const mcpCfg = stored.banyancode_mcp_server
-  const permission = overrides.permission ?? mcpCfg?.permission ?? "reject"
+  const permission = resolveMcpPermission({
+    stored: mcpCfg?.permission,
+    override: overrides.permission,
+    allowYolo: overrides.allowYolo ?? false,
+  })
   const cap = Math.min(
     mcpCfg?.max_concurrent_tasks ?? DEFAULT_MAX_SUBAGENTS,
     stored.banyancode_max_subagents ?? DEFAULT_MAX_SUBAGENTS,
@@ -146,6 +182,7 @@ export async function resolveMcpServerConfig(
     resultMaxTokens: mcpCfg?.result_max_tokens ?? DEFAULT_RESULT_MAX_TOKENS,
     needsInputTimeoutMs: (mcpCfg?.needs_input_timeout_seconds ?? DEFAULT_NEEDS_INPUT_TIMEOUT_MS / 1000) * 1000,
     outputChars: mcpCfg?.output_max_chars ?? resolveOutputChars(),
+    taskBudgetUsd: mcpCfg?.task_budget_usd ?? DEFAULT_TASK_BUDGET_USD,
   }
   const defaultAgent = overrides.defaultAgent ?? mcpCfg?.default_agent
   if (defaultAgent !== undefined) resolved.defaultAgent = defaultAgent
@@ -170,6 +207,19 @@ function readSessionMetadata(data: unknown): Record<string, string> {
     if (typeof value === "string") out[key] = value
   }
   return out
+}
+
+// Memory list responses carry the entries in data with an error beside
+// it. Missing/empty data is an empty list; a real error throws so the
+// fetch fails the same way the other banyan_task_result fetches do.
+function readMemoryEntries(result: unknown): Array<{ id: unknown; title?: unknown; tags?: unknown }> {
+  const res = result as { data?: unknown; error?: unknown }
+  if (res.error !== undefined && res.error !== null) {
+    const detail = res.error instanceof Error ? res.error.message : JSON.stringify(res.error)
+    throw new Error(`memory.list failed: ${detail}`)
+  }
+  if (!("data" in res) || !Array.isArray(res.data)) return []
+  return res.data as Array<{ id: unknown; title?: unknown; tags?: unknown }>
 }
 
 // B7 session identity: every MCP-owned session carries an `[mcp]` title
@@ -220,6 +270,13 @@ export function mapSdkEventToEngineEvent(raw: SdkEvent): EngineEvent | undefined
     }
     case "session.idle":
       return { type: "session.idle", sessionID: raw.properties.sessionID }
+    // Budget ledger feed (C6): session.updated carries the cumulative USD
+    // spend in info.cost. Non-number costs map to nothing — the sweep covers
+    // the gap.
+    case "session.updated": {
+      const c = raw.properties.info?.cost
+      return typeof c === "number" ? { type: "session.cost", sessionID: raw.properties.sessionID, cost: c } : undefined
+    }
     case "session.error": {
       const sessionID = raw.properties.sessionID
       if (typeof sessionID !== "string" || !sessionID) return undefined
@@ -376,16 +433,28 @@ export async function createMcpServer(opts: McpBootstrapOptions = {}): Promise<M
   const mcp = new McpServer({ name: "banyancode", version: InstallationVersion })
   const { registerCodeTools } = await import("./tools-code")
   const { registerTaskTools } = await import("./tools-task")
+  const { registerVerifyMemoryTools } = await import("./tools-verify-memory")
   const { TaskEngine } = await import("./task-engine")
+  const { createGitWorktreeManager } = await import("./worktree")
   const { buildRuleset, assertYoloAllowed } = await import("./policy")
   const { createSdkSessionClient, splitModelRef } = await import("./session-client")
 
-  const config = await resolveMcpServerConfig(opts)
-  assertYoloAllowed(opts.allowYolo ?? false, config.permission)
+  const config = await resolveMcpServerConfig({ ...opts, allowYolo: opts.allowYolo ?? readAllowYoloEnv() })
+  const allowYolo = opts.allowYolo ?? readAllowYoloEnv()
+  assertYoloAllowed(allowYolo, config.permission)
 
   const wire = async (sdk: ReturnType<typeof createOpencodeClient>): Promise<TaskEngine | undefined> => {
+    // Verify + memory tools (C3/C4) share one registration function for two
+    // groups, so the gate is either-on: hiding both groups skips it, listing
+    // either registers both. Per-tool gating would need the split inside
+    // tools-verify-memory.ts (sibling-owned).
+    const maybeRegisterVerifyMemoryTools = (): void => {
+      if (!isToolGroupEnabled(config.toolGroups, "verify") && !isToolGroupEnabled(config.toolGroups, "memory")) return
+      registerVerifyMemoryTools(mcp, { sdk, cwd, outputChars: config.outputChars })
+    }
     if (!isToolGroupEnabled(config.toolGroups, "task")) {
       if (isToolGroupEnabled(config.toolGroups, "code")) registerCodeTools(mcp, { sdk, cwd })
+      maybeRegisterVerifyMemoryTools()
       log(`tool group allowlist hides the task tools (groups: ${(config.toolGroups ?? []).join(",")})`)
       return undefined
     }
@@ -413,13 +482,20 @@ export async function createMcpServer(opts: McpBootstrapOptions = {}): Promise<M
     // session.update replaces metadata wholesale, so every write is a
     // read-merge-write. Shared by the engine (queue/done markers) and the
     // task tools (mcp_handle backfill).
-    const writeMetadata = async (input: { sessionID: string; metadata: Record<string, string> }): Promise<void> => {
-      const got = await sdk.session.get({ sessionID: input.sessionID, directory: cwd })
+    const writeMetadata = async (input: {
+      sessionID: string
+      metadata: Record<string, string>
+      directory?: string
+    }): Promise<void> => {
+      // Per-task SDK root (C2): the engine spreads dirForRecord (the
+      // worktree checkout) into this call; shared tasks fall back to cwd.
+      const directory = input.directory ?? cwd
+      const got = await sdk.session.get({ sessionID: input.sessionID, directory })
       if (!("data" in got) || got.data === undefined || got.data === null) {
         throw new Error(`session.get returned no data for ${input.sessionID}`)
       }
       const merged = { ...readSessionMetadata(got.data), ...input.metadata }
-      const updated = await sdk.session.update({ sessionID: input.sessionID, directory: cwd, metadata: merged })
+      const updated = await sdk.session.update({ sessionID: input.sessionID, directory, metadata: merged })
       if ("error" in updated && updated.error !== undefined && updated.error !== null) {
         throw new Error(`session.update failed for ${input.sessionID}: ${JSON.stringify(updated.error)}`)
       }
@@ -436,6 +512,9 @@ export async function createMcpServer(opts: McpBootstrapOptions = {}): Promise<M
           metadata: mcpSessionMetadata({ policy: config.permission, metadata: input.metadata }),
           ...(input.agent !== undefined ? { agent: input.agent } : {}),
           ...(input.model !== undefined ? { model: input.model } : {}),
+          // Per-task SDK root (C2): the engine passes the allocated
+          // worktree checkout here so the session is rooted there.
+          ...(input.directory !== undefined ? { directory: input.directory } : {}),
           ...(input.permission !== undefined
             ? {
                 permission: input.permission.map((row) => ({
@@ -461,10 +540,12 @@ export async function createMcpServer(opts: McpBootstrapOptions = {}): Promise<M
       listChildren: async (input) => {
         const seen = new Set<string>()
         const out: string[] = []
+        // Per-task SDK root (C2), mirroring writeMetadata above.
+        const directory = input.directory ?? cwd
         const walk = async (id: string): Promise<void> => {
           let kids: Array<{ id?: unknown }>
           try {
-            const result = await sdk.session.children({ sessionID: id, directory: cwd })
+            const result = await sdk.session.children({ sessionID: id, directory })
             if (!("data" in result) || !Array.isArray(result.data)) return
             kids = result.data as Array<{ id?: unknown }>
           } catch {
@@ -518,13 +599,39 @@ export async function createMcpServer(opts: McpBootstrapOptions = {}): Promise<M
     const engine = new TaskEngine(engineClient, lookup, events, {
       maxConcurrentTasks: config.maxConcurrentTasks,
       needsInputTimeoutMs: opts.needsInputTimeoutMs ?? config.needsInputTimeoutMs,
+      // Worktree isolation (C2) plus the default per-task USD cap (C6; a
+      // per-start budgetUsd wins over it).
+      worktrees: createGitWorktreeManager(cwd),
+      taskBudgetUsd: config.taskBudgetUsd,
     })
     if (isToolGroupEnabled(config.toolGroups, "code")) registerCodeTools(mcp, { sdk, cwd })
+    maybeRegisterVerifyMemoryTools()
+    // Memory backfill for banyan_task_result (C3/C4 seam): session + global
+    // entries tagged origin:mcp. The list route has no tag filter, so the
+    // tag match happens here; failures propagate like the other result
+    // fetches (UPSTREAM_ERROR).
+    const listMemory = async (input: { sessionID: string }): Promise<Array<{ id: string; title?: string }>> => {
+      const [scoped, global] = await Promise.all([
+        sdk.memory.list({ banyanMemoryListInput: { scope: "session", sessionID: input.sessionID } }),
+        sdk.memory.list({ banyanMemoryListInput: { scope: "global" } }),
+      ])
+      const rows = [...readMemoryEntries(scoped), ...readMemoryEntries(global)]
+      const seen = new Set<string>()
+      const out: Array<{ id: string; title?: string }> = []
+      for (const entry of rows) {
+        if (typeof entry.id !== "string" || seen.has(entry.id)) continue
+        if (!Array.isArray(entry.tags) || !entry.tags.includes("origin:mcp")) continue
+        seen.add(entry.id)
+        out.push(typeof entry.title === "string" ? { id: entry.id, title: entry.title } : { id: entry.id })
+      }
+      return out
+    }
     registerTaskTools(mcp, {
       engine,
       sessions,
       directory: cwd,
       updateMetadata: writeMetadata,
+      listMemory,
       // Read lazily: at registration time initialize has not run yet, so
       // the client version is still undefined (§8.1 notes it becomes
       // per-request clientInfo on modern transports — this is the v1 API).
@@ -536,7 +643,7 @@ export async function createMcpServer(opts: McpBootstrapOptions = {}): Promise<M
       },
       config: {
         permission: config.permission,
-        allowYolo: opts.allowYolo ?? false,
+        allowYolo,
         ...(config.allowedAgents !== undefined ? { allowedAgents: config.allowedAgents } : {}),
         ...(config.allowedModels !== undefined ? { allowedModels: config.allowedModels } : {}),
         resultMaxTokens: config.resultMaxTokens,

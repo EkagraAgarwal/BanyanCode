@@ -31,6 +31,8 @@ const CLI_ENTRY = path.join(PACKAGE_DIR, "src/index.ts")
     "banyan_repo",
     "banyan_change_check",
     "banyan_codegraph",
+    "banyan_memory",
+    "banyan_verify",
     "banyan_task_start",
     "banyan_task_status",
     "banyan_task_result",

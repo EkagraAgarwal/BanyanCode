@@ -159,12 +159,14 @@ describe("mcp stdio with --cwd != process cwd (real CLI)", () => {
             "banyan_change_check",
             "banyan_code_find",
             "banyan_codegraph",
+            "banyan_memory",
             "banyan_repo",
             "banyan_task_cancel",
             "banyan_task_reply",
             "banyan_task_result",
             "banyan_task_start",
             "banyan_task_status",
+            "banyan_verify",
           ].sort(),
         )
 
