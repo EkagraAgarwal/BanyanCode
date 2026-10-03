@@ -109,4 +109,64 @@ describe("tui sync memory bounds", () => {
       app.renderer.destroy()
     }
   })
+
+  test("part store keeps only the tail 50 messages parts per session", async () => {
+    await using tmp = await tmpdir()
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const { app, emit, sync } = await mount(undefined, tmp.path)
+
+    try {
+      const sessionID = "ses_tail_cap"
+      for (let i = 0; i < 60; i++) {
+        const id = `msg_tail_${String(i).padStart(2, "0")}`
+        emit(global({ id: `evt_tail_msg_${i}`, type: "message.updated", properties: { sessionID, info: messageFor(sessionID, id) } }))
+        emit(
+          global({
+            id: `evt_tail_part_${i}`,
+            type: "message.part.updated",
+            properties: { sessionID, time: i, part: partFor(sessionID, id, `prt_tail_${String(i).padStart(2, "0")}`) },
+          }),
+        )
+      }
+      await wait(() => Object.keys(sync.data.part).length === 50)
+
+      // Messages stay; only parts outside the tail window are evicted.
+      expect(sync.data.message[sessionID]).toHaveLength(60)
+      expect(Object.keys(sync.data.part)).toHaveLength(50)
+      expect(sync.data.part["msg_tail_00"]).toBeUndefined()
+      expect(sync.data.part["msg_tail_09"]).toBeUndefined()
+      expect(sync.data.part["msg_tail_10"]).toHaveLength(1)
+      expect(sync.data.part["msg_tail_59"]).toHaveLength(1)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("message.removed drops orphan parts", async () => {
+    await using tmp = await tmpdir()
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const { app, emit, sync } = await mount(undefined, tmp.path)
+
+    try {
+      const sessionID = "ses_orphan"
+      const messageID = "msg_orphan"
+      emit(global({ id: "evt_orphan_msg", type: "message.updated", properties: { sessionID, info: messageFor(sessionID, messageID) } }))
+      emit(
+        global({
+          id: "evt_orphan_part",
+          type: "message.part.updated",
+          properties: { sessionID, time: 1, part: partFor(sessionID, messageID, "prt_orphan") },
+        }),
+      )
+      await wait(() => sync.data.part[messageID]?.length === 1)
+
+      emit(global({ id: "evt_orphan_removed", type: "message.removed", properties: { sessionID, messageID } }))
+      await wait(() => sync.data.part[messageID] === undefined)
+
+      expect(sync.data.message[sessionID]).toHaveLength(0)
+      expect(sync.data.part[messageID]).toBeUndefined()
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 })
