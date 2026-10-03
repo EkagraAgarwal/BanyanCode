@@ -329,4 +329,167 @@ export function buildCompactResult(input: CompactResultInput, opts: BuildResultO
   return rendered
 }
 
+// Verification aggregation (Milestone C5, gap-plan §5 C5).
+//
+// A task's `verification` field is sourced from verifier tool parts in the
+// session transcript. The agent-side verifier tools are `banyan_test`,
+// `banyan_typecheck` and `banyan_lint` (packages/core/src/tool/{test,
+// typecheck,lint}.ts); `banyan_verify` is the MCP verify tool name and is
+// accepted for forward-compat with C3. Only settled runs count: parts still
+// `pending`/`running` are ignored. With no verifier parts the field stays
+// absent — aggregateVerification returns undefined and the caller omits it,
+// never fabricating a pass.
+//
+// The input is structural (not SessionV1.ToolPart) so this module stays
+// dependency-free: the caller maps each tool part to { tool, status,
+// output, error } where output is the completed state's output string and
+// error is the error state's message.
+
+export const VERIFIER_TOOL_NAMES = ["banyan_test", "banyan_typecheck", "banyan_lint", "banyan_verify"] as const
+export type VerifierToolName = (typeof VERIFIER_TOOL_NAMES)[number]
+
+export const isVerifierTool = (tool: string): boolean =>
+  (VERIFIER_TOOL_NAMES as ReadonlyArray<string>).includes(tool)
+
+// `banyan_test` -> `test`; unknown verifier names keep their full name.
+export const verifierKindForTool = (tool: string): string =>
+  tool.startsWith("banyan_") ? tool.slice("banyan_".length) : tool
+
+export interface VerifierToolPartInput {
+  tool: string
+  status: string
+  output?: string
+  error?: string
+}
+
+export const DEFAULT_VERIFICATION_MAX_FAILURES = 10
+
+// One failure line is capped so a single huge line cannot blow the result
+// budget (the aggregated field is bounded: kinds + counts + N short lines,
+// already covered by the verification share of fixedOverhead).
+const VERIFICATION_FAILURE_LINE_MAX_CHARS = 500
+
+const toNonNegativeCount = (value: unknown): number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0
+
+const firstNonEmptyLines = (text: string | undefined, max: number): string[] => {
+  if (!text || max <= 0) return []
+  return text
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0)
+    .slice(0, max)
+    .map((line) =>
+      line.length > VERIFICATION_FAILURE_LINE_MAX_CHARS
+        ? line.slice(0, VERIFICATION_FAILURE_LINE_MAX_CHARS) + "…[truncated]"
+        : line,
+    )
+}
+
+interface VerifierRun {
+  kind: string
+  passed: boolean
+  passedCount: number
+  failedCount: number
+  skippedCount: number
+  failures: string[]
+}
+
+// The completed state's output is the tool's output object serialized as a
+// string: { status, summary: { passed, failed, skipped }, rawOutput? }.
+// Older/diagnostic rows may instead carry the toModelOutput text rendering
+// (`status=failed passed=8 failed=2 ...`), so parse that as a fallback.
+function parseVerifierRun(tool: string, status: string, output: string | undefined, error: string | undefined): VerifierRun {
+  const kind = verifierKindForTool(tool)
+  if (status === "error") {
+    return { kind, passed: false, passedCount: 0, failedCount: 0, skippedCount: 0, failures: firstNonEmptyLines(error, DEFAULT_VERIFICATION_MAX_FAILURES) }
+  }
+  if (!output) return { kind, passed: true, passedCount: 0, failedCount: 0, skippedCount: 0, failures: [] }
+  try {
+    const parsed = JSON.parse(output) as {
+      status?: unknown
+      summary?: unknown
+      rawOutput?: unknown
+    }
+    const runStatus = typeof parsed.status === "string" ? parsed.status : "passed"
+    const summary = (parsed.summary ?? {}) as Record<string, unknown>
+    const run: VerifierRun = {
+      kind,
+      passed: runStatus === "passed",
+      passedCount: toNonNegativeCount(summary["passed"]),
+      failedCount: toNonNegativeCount(summary["failed"]),
+      skippedCount: toNonNegativeCount(summary["skipped"]),
+      failures: [],
+    }
+    if (!run.passed && typeof parsed.rawOutput === "string") {
+      run.failures = firstNonEmptyLines(parsed.rawOutput, DEFAULT_VERIFICATION_MAX_FAILURES)
+    }
+    return run
+  } catch {
+    const runStatus = /status\s*=\s*(\w+)/.exec(output)?.[1] ?? "passed"
+    const count = (name: string): number => {
+      const match = new RegExp(`${name}\\s*=\\s*(\\d+)`).exec(output)
+      return match?.[1] !== undefined ? Number.parseInt(match[1], 10) : 0
+    }
+    const passed = runStatus === "passed"
+    return {
+      kind,
+      passed,
+      passedCount: count("passed"),
+      failedCount: count("failed"),
+      skippedCount: count("skipped"),
+      failures: passed ? [] : firstNonEmptyLines(output, DEFAULT_VERIFICATION_MAX_FAILURES),
+    }
+  }
+}
+
+export function aggregateVerification(
+  parts: VerifierToolPartInput[],
+  maxFailures: number = DEFAULT_VERIFICATION_MAX_FAILURES,
+): VerificationInput | undefined {
+  const runs: VerifierRun[] = []
+  for (const part of parts) {
+    if (!isVerifierTool(part.tool)) continue
+    if (part.status !== "completed" && part.status !== "error") continue
+    const run = parseVerifierRun(part.tool, part.status, part.output, part.error)
+    if (maxFailures >= 0 && run.failures.length > maxFailures) run.failures = run.failures.slice(0, maxFailures)
+    runs.push(run)
+  }
+  if (runs.length === 0) return undefined
+  const kinds: string[] = []
+  for (const run of runs) {
+    if (!kinds.includes(run.kind)) kinds.push(run.kind)
+  }
+  const totals = new Map<string, { passed: number; failed: number; skipped: number }>()
+  for (const run of runs) {
+    const current = totals.get(run.kind) ?? { passed: 0, failed: 0, skipped: 0 }
+    current.passed += run.passedCount
+    current.failed += run.failedCount
+    current.skipped += run.skippedCount
+    totals.set(run.kind, current)
+  }
+  const counts = kinds
+    .map((kind) => {
+      const total = totals.get(kind) ?? { passed: 0, failed: 0, skipped: 0 }
+      const base = `${kind}: ${total.passed} passed, ${total.failed} failed`
+      return total.skipped > 0 ? `${base}, ${total.skipped} skipped` : base
+    })
+    .join("; ")
+  const failures: string[] = []
+  for (const run of runs) {
+    for (const failure of run.failures) {
+      if (failures.length >= maxFailures) break
+      failures.push(failure)
+    }
+    if (failures.length >= maxFailures) break
+  }
+  const result: VerificationInput = {
+    kind: kinds.length === 1 ? (kinds[0] ?? "verify") : kinds.join("+"),
+    passed: runs.every((run) => run.passed),
+  }
+  if (counts.length > 0) result.counts = counts
+  if (failures.length > 0) result.failures = failures
+  return result
+}
+
 export * as McpResult from "./result"
