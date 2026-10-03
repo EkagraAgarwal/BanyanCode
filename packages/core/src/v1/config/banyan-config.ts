@@ -56,8 +56,7 @@ export const Commands = Schema.Struct({
 
 export type Commands = typeof Commands.Type
 
-// MCP delegation server policy (specs/banyancode/mcp-server-plan.md
-// §Configuration). Every slot is optional; an absent struct keeps
+// MCP delegation server policy. Every slot is optional; an absent struct keeps
 // reject-everything defaults. "yolo" is deliberately not a config value —
 // escalating past `edits` requires the --allow-yolo process flag so a caller
 // can never grant it to itself.
@@ -79,7 +78,7 @@ export const McpServer = Schema.Struct({
   // sliced JSON). Falls back to the tool default when unset; env
   // BANYANCODE_MCP_OUTPUT_CHARS still wins over both when set.
   output_max_chars: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1000, maximum: 500_000 }))),
-  // Agent/model allowlists for `banyan_task_start` (gap-plan §7.4). Absent
+  // Agent/model allowlists for `banyan_task_start`. Absent
   // means any configured agent/model; entries are matched exactly against
   // the tool args. Plain length checks only — no pattern identifier, so the
   // HttpApi $ref path cannot corrupt single-element arrays (see §2.6).
