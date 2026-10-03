@@ -2,19 +2,12 @@ export * as McpVerifyMemory from "./tools-verify-memory"
 
 import path from "node:path"
 import { stat } from "node:fs/promises"
-import { z } from "zod/v3"
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import type { AnyObjectSchema } from "@modelcontextprotocol/sdk/server/zod-compat.js"
+import { z } from "zod"
+import type { McpServer } from "@modelcontextprotocol/server"
 import type { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import { Schema } from "effect"
 import { assertInsideRoot } from "./paths"
-import {
-  CodeToolOutputSchema,
-  errorResult,
-  invalidArguments,
-  okResult,
-  resolveOutputChars,
-} from "./output"
+import { CodeToolOutputSchema, errorResult, invalidArguments, okResult, resolveOutputChars } from "./output"
 import type { McpToolResult } from "./output"
 
 export const VerifyKinds = ["typecheck", "test", "lint"] as const
@@ -95,8 +88,7 @@ export const resolveVerifyRoute = (kind: VerifyKind): string => {
 export const McpMemoryOps = ["recall", "search", "store", "get", "summary"] as const
 export type McpMemoryOp = (typeof McpMemoryOps)[number]
 
-export const isMcpMemoryOp = (op: string): op is McpMemoryOp =>
-  (McpMemoryOps as ReadonlyArray<string>).includes(op)
+export const isMcpMemoryOp = (op: string): op is McpMemoryOp => (McpMemoryOps as ReadonlyArray<string>).includes(op)
 
 export const resolveMemoryRoute = (op: McpMemoryOp): string => `/global/memory/${op}`
 
@@ -138,7 +130,9 @@ export const checkMemoryStoreLimits = (input: {
   return undefined
 }
 
-export const tagMemoryStore = <T extends MemoryStoreRequest>(input: T): T & { readonly origin: typeof MEMORY_ORIGIN } => ({
+export const tagMemoryStore = <T extends MemoryStoreRequest>(
+  input: T,
+): T & { readonly origin: typeof MEMORY_ORIGIN } => ({
   ...input,
   tags: [...(input.tags ?? []), `origin:${MEMORY_ORIGIN}`],
   origin: MEMORY_ORIGIN,
@@ -152,7 +146,7 @@ export const tagMemoryStore = <T extends MemoryStoreRequest>(input: T): T & { re
 //   banyan_verify  -> POST /global/typecheck | POST /global/test-run | POST /global/lint (kind-selected)
 //   banyan_memory  -> POST /global/memory/* (op-selected: recall/search/store/get/summary)
 //
-// Schemas are zod/v3 (the one MCP-facing dialect, gap-plan §4.7); the
+// Schemas are zod v4 (the one MCP-facing dialect, gap-plan §4.7); the
 // Effect Schema structs above stay for compat. Handlers use the structured
 // result/err helpers from output.ts. Registration order is alphabetical for
 // deterministic tools/list.
@@ -286,24 +280,32 @@ export const resolveVerifyRoot = async (
   try {
     return { root: assertInsideRoot(cwd, raw) }
   } catch (error) {
-    return { error: errorResult("PATH_ESCAPE", error instanceof Error ? error.message : `path escapes project root: ${raw}`) }
+    return {
+      error: errorResult("PATH_ESCAPE", error instanceof Error ? error.message : `path escapes project root: ${raw}`),
+    }
   }
 }
 
 const VerifyInput = z.object({
-  kind: z.enum(["typecheck", "test", "lint"]).describe("typecheck runs the type checker, test runs the test runner for path, lint runs the project lint."),
+  kind: z
+    .enum(["typecheck", "test", "lint"])
+    .describe("typecheck runs the type checker, test runs the test runner for path, lint runs the project lint."),
   path: z
     .string()
     .min(1)
     .max(512)
     .optional()
-    .describe("File path or glob relative to the project root (required for kind test; forwarded as-is — absolute paths are rejected)."),
+    .describe(
+      "File path or glob relative to the project root (required for kind test; forwarded as-is — absolute paths are rejected).",
+    ),
   directory: z
     .string()
     .min(1)
     .max(512)
     .optional()
-    .describe("Project root override, e.g. a task worktree path. Relative stays inside the server directory; absolute must exist. Defaults to the server directory."),
+    .describe(
+      "Project root override, e.g. a task worktree path. Relative stays inside the server directory; absolute must exist. Defaults to the server directory.",
+    ),
   framework: z
     .enum(["bun", "jest", "vitest", "mocha"])
     .optional()
@@ -317,8 +319,6 @@ const VerifyInput = z.object({
     .describe("How many failure lines to return (first-N). Defaults to 10."),
 })
 type VerifyArgs = z.infer<typeof VerifyInput>
-
-const VerifyCompat = VerifyInput as unknown as AnyObjectSchema
 
 // --- memory: scope + store payload ------------------------------------------
 
@@ -368,7 +368,11 @@ export const buildMemoryStorePayload = (input: MemoryStorePayloadInput): Record<
 }
 
 const MemoryInput = z.object({
-  op: z.enum(["recall", "search", "store", "get", "summary"]).describe("recall looks up by exact key, search full-texts, store writes, get fetches by id, summary returns the digest view."),
+  op: z
+    .enum(["recall", "search", "store", "get", "summary"])
+    .describe(
+      "recall looks up by exact key, search full-texts, store writes, get fetches by id, summary returns the digest view.",
+    ),
   key: z
     .string()
     .min(2)
@@ -384,13 +388,29 @@ const MemoryInput = z.object({
     .regex(MEMORY_ID_PATTERN, "must match [a-z0-9][a-z0-9-]{4,63}")
     .optional()
     .describe("Entry id (required for get; optional for store — the server mints one when omitted)."),
-  value: z.unknown().optional().describe("Stored value (required for store). JSON-serializable; capped at 32 KiB serialized."),
+  value: z
+    .unknown()
+    .optional()
+    .describe("Stored value (required for store). JSON-serializable; capped at 32 KiB serialized."),
   context: z.string().min(1).max(2048).optional().describe("Extra context recorded alongside a store."),
-  tags: z.array(z.string().min(1).max(MEMORY_TAG_MAX_CHARS)).max(MEMORY_TAGS_MAX).optional().describe("Tags for a store (origin:mcp is added automatically)."),
-  scope: z.enum(["global", "session"]).optional().describe("Project scope defaults to global. session requires sessionID."),
+  tags: z
+    .array(z.string().min(1).max(MEMORY_TAG_MAX_CHARS))
+    .max(MEMORY_TAGS_MAX)
+    .optional()
+    .describe("Tags for a store (origin:mcp is added automatically)."),
+  scope: z
+    .enum(["global", "session"])
+    .optional()
+    .describe("Project scope defaults to global. session requires sessionID."),
   sessionID: z.string().min(1).max(128).optional().describe("Owning session for session-scoped reads/writes."),
   limit: z.number().int().min(1).max(100).optional().describe("Max hits for search. Defaults to 25."),
-  maxItems: z.number().int().min(1).max(100).optional().describe("Max digest items per section for summary. Defaults to 25."),
+  maxItems: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Max digest items per section for summary. Defaults to 25."),
   kind: z
     .enum([
       "preference",
@@ -410,11 +430,12 @@ const MemoryInput = z.object({
     ])
     .optional()
     .describe("Kind filter for search."),
-  status: z.enum(["pending", "active", "superseded", "rejected", "expired"]).optional().describe("Status filter for search."),
+  status: z
+    .enum(["pending", "active", "superseded", "rejected", "expired"])
+    .optional()
+    .describe("Status filter for search."),
 })
 type MemoryArgs = z.infer<typeof MemoryInput>
-
-const MemoryCompat = MemoryInput as unknown as AnyObjectSchema
 
 // --- registration ------------------------------------------------------------
 
@@ -450,7 +471,7 @@ export function registerVerifyMemoryTools(mcp: McpServer, deps: VerifyMemoryTool
       title: "Project memory recall and store",
       description:
         "Project-scoped memory: recall by exact key, full-text search, store (tagged origin:mcp), fetch by id, and digest summary. Stores default to global scope so an agent inside a task can recall them by key.",
-      inputSchema: MemoryCompat,
+      inputSchema: MemoryInput,
       outputSchema: CodeToolOutputSchema,
       annotations: {
         readOnlyHint: false,
@@ -542,7 +563,10 @@ export function registerVerifyMemoryTools(mcp: McpServer, deps: VerifyMemoryTool
             return invalidArguments(`unknown banyan_memory op: ${String((args as { op?: unknown }).op)}`)
         }
       } catch (error) {
-        return errorResult("UPSTREAM_ERROR", `banyan_memory failed: ${error instanceof Error ? error.message : String(error)}`)
+        return errorResult(
+          "UPSTREAM_ERROR",
+          `banyan_memory failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
       }
     },
   )
@@ -553,7 +577,7 @@ export function registerVerifyMemoryTools(mcp: McpServer, deps: VerifyMemoryTool
       title: "Run typecheck, tests, or lint",
       description:
         "Run the project's verifier (typecheck over the whole project, test for one file, lint) with the project root defaulting to the server directory or an explicit worktree path. Returns counts plus the first-N failure lines, never full logs.",
-      inputSchema: VerifyCompat,
+      inputSchema: VerifyInput,
       outputSchema: CodeToolOutputSchema,
       annotations: {
         readOnlyHint: false,
@@ -641,7 +665,10 @@ export function registerVerifyMemoryTools(mcp: McpServer, deps: VerifyMemoryTool
           outputChars,
         )
       } catch (error) {
-        return errorResult("UPSTREAM_ERROR", `banyan_verify failed: ${error instanceof Error ? error.message : String(error)}`)
+        return errorResult(
+          "UPSTREAM_ERROR",
+          `banyan_verify failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
       }
     },
   )

@@ -14,18 +14,11 @@
 // serializes plain JSON bodies with no $ref extraction, so `["packages"]`
 // survives the real HTTP layer untouched.
 
-import { z } from "zod/v3"
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import type { AnyObjectSchema } from "@modelcontextprotocol/sdk/server/zod-compat.js"
+import { z } from "zod"
+import type { McpServer } from "@modelcontextprotocol/server"
 import type { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import { assertInsideRoot, isInsideRoot } from "./paths"
-import {
-  CodeToolOutputSchema,
-  DEFAULT_OUTPUT_CHARS,
-  errorResult,
-  invalidArguments,
-  okResult,
-} from "./output"
+import { CodeToolOutputSchema, DEFAULT_OUTPUT_CHARS, errorResult, invalidArguments, okResult } from "./output"
 import type { McpToolResult } from "./output"
 
 export type CodeToolsSdk = ReturnType<typeof createOpencodeClient>
@@ -72,8 +65,7 @@ export const isRepoOp = (op: string): op is RepoOp => (RepoOps as ReadonlyArray<
 export const isChangeCheckOp = (op: string): op is ChangeCheckOp =>
   (ChangeCheckOps as ReadonlyArray<string>).includes(op)
 
-export const isCodegraphOp = (op: string): op is CodegraphOp =>
-  (CodegraphOps as ReadonlyArray<string>).includes(op)
+export const isCodegraphOp = (op: string): op is CodegraphOp => (CodegraphOps as ReadonlyArray<string>).includes(op)
 
 export const resolveRepoRoute = (op: RepoOp): string => {
   switch (op) {
@@ -138,18 +130,24 @@ const guardedPath = (cwd: string, input: string): { path: string } | { error: Mc
   try {
     return { path: assertInsideRoot(cwd, input) }
   } catch (error) {
-    return { error: errorResult("PATH_ESCAPE", error instanceof Error ? error.message : `path escapes project root: ${input}`) }
+    return {
+      error: errorResult("PATH_ESCAPE", error instanceof Error ? error.message : `path escapes project root: ${input}`),
+    }
   }
 }
 
 // Closed value sets are native z.enums: they serialize to an `enum` keyword
 // in the advertised JSON schema (which the protocol tests assert) and keep
-// tsgo's generic inference over registerTool shallow. Inputs use zod/v3 to
-// match the MCP SDK's ZodRawShapeCompat.
+// generic inference over registerTool shallow. Inputs use zod v4 (the repo
+// catalog and @modelcontextprotocol/server 2.x resolve the same copy), so
+// the schema instances below are passed to registerTool directly — v2
+// accepts any Standard Schema object, no compat casts.
 const CodeFindInput = z.object({
   intent: z
     .enum(["definition", "callers", "dependents", "impact", "find_file"])
-    .describe("Search kind: definition locates the symbol, callers/dependents/impact traverse it, find_file locates a file."),
+    .describe(
+      "Search kind: definition locates the symbol, callers/dependents/impact traverse it, find_file locates a file.",
+    ),
   target: z.string().min(1).max(512).describe("Symbol name (e.g. 'MemoryRepo.update'), filename, or node ID."),
   includeKeywordFallback: z
     .boolean()
@@ -165,7 +163,12 @@ const RepoInput = z.object({
     .describe("query|explain|impact|trace|tests|symbols|relationships|ownership|slice."),
   query: z.string().min(1).max(1024).optional().describe("Free-text query (query, symbols)."),
   symbol: z.string().min(1).max(512).optional().describe("Symbol name (explain, trace, tests)."),
-  path: z.string().min(1).max(512).optional().describe("File path inside the project root (impact, relationships, ownership)."),
+  path: z
+    .string()
+    .min(1)
+    .max(512)
+    .optional()
+    .describe("File path inside the project root (impact, relationships, ownership)."),
   nodeID: z.string().min(1).max(512).optional().describe("Codegraph node ID (relationships)."),
   focus: z.string().min(1).max(512).optional().describe("Symbol to explain (slice)."),
   depth: z.number().int().min(1).max(8).optional().describe("Traversal depth (trace, relationships)."),
@@ -178,33 +181,23 @@ const ChangeCheckInput = z.object({
     .enum(["preflight", "blast_radius"])
     .describe("preflight for the full decision report, blast_radius for counts only."),
   target: z.string().min(1).max(512).describe("Symbol name or node ID the edit targets."),
-  action: z
-    .enum(["rename", "modify", "delete"])
+  action: z.enum(["rename", "modify", "delete"]).optional().describe("Planned edit kind (preflight only)."),
+  depth: z
+    .number()
+    .int()
+    .min(1)
+    .max(8)
     .optional()
-    .describe("Planned edit kind (preflight only)."),
-  depth: z.number().int().min(1).max(8).optional().describe("Traversal depth preview (preflight depth / blast_radius maxDepth)."),
+    .describe("Traversal depth preview (preflight depth / blast_radius maxDepth)."),
 })
 type ChangeCheckArgs = z.infer<typeof ChangeCheckInput>
 
 const CodegraphInput = z.object({
-  op: z
-    .enum(["status", "build"])
-    .describe("status reads persisted readiness, build kicks off a background index."),
+  op: z.enum(["status", "build"]).describe("status reads persisted readiness, build kicks off a background index."),
   root: z.string().min(1).max(512).optional().describe("Workspace root. Defaults to the project root."),
   force: z.boolean().optional().describe("Force a full reindex (build only)."),
 })
 type CodegraphArgs = z.infer<typeof CodegraphInput>
-
-// Widened aliases for registration. The MCP SDK resolves zod to its own
-// isolated copy (4.4.3) while this package resolves the catalog copy (4.1.8),
-// so the precise object types above are structurally alike but not identical
-// to the SDK's compat types, and relating them sends tsgo into excessively
-// deep instantiation. The cast keeps the identical runtime schema instances;
-// handlers below keep the precise arg types via z.infer.
-const CodeFindCompat = CodeFindInput as unknown as AnyObjectSchema
-const RepoCompat = RepoInput as unknown as AnyObjectSchema
-const ChangeCheckCompat = ChangeCheckInput as unknown as AnyObjectSchema
-const CodegraphCompat = CodegraphInput as unknown as AnyObjectSchema
 
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -222,7 +215,7 @@ export function registerCodeTools(mcp: McpServer, deps: CodeToolsDeps): void {
     {
       title: "Change safety check",
       description: `Check whether an edit is safe before applying it (backed by POST /global/preflight and POST /global/blast-radius, op-selected). ${UNTRUSTED}`,
-      inputSchema: ChangeCheckCompat,
+      inputSchema: ChangeCheckInput,
       outputSchema: CodeToolOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
       _meta: metaFor(),
@@ -251,7 +244,7 @@ export function registerCodeTools(mcp: McpServer, deps: CodeToolsDeps): void {
     {
       title: "Code symbol finder",
       description: `Symbol locator across the codebase graph (backed by POST /global/code-find). ${UNTRUSTED}`,
-      inputSchema: CodeFindCompat,
+      inputSchema: CodeFindInput,
       outputSchema: CodeToolOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
       _meta: metaFor(),
@@ -273,7 +266,7 @@ export function registerCodeTools(mcp: McpServer, deps: CodeToolsDeps): void {
     {
       title: "Codegraph index status and builds",
       description: `Codegraph index status and builds (backed by GET /global/codegraph-status and POST /global/codegraph-build, op-selected). ${UNTRUSTED}`,
-      inputSchema: CodegraphCompat,
+      inputSchema: CodegraphInput,
       outputSchema: CodeToolOutputSchema,
       annotations: {
         readOnlyHint: false,
@@ -305,7 +298,7 @@ export function registerCodeTools(mcp: McpServer, deps: CodeToolsDeps): void {
     {
       title: "Repository intelligence",
       description: `Repository intelligence: query, explain, impact, trace, tests, symbols, relationships, ownership, and architectural slices (backed by POST /global/repository/*, op-selected). ${UNTRUSTED}`,
-      inputSchema: RepoCompat,
+      inputSchema: RepoInput,
       outputSchema: CodeToolOutputSchema,
       annotations: READ_ONLY_ANNOTATIONS,
       _meta: metaFor(),
@@ -362,7 +355,8 @@ export function registerCodeTools(mcp: McpServer, deps: CodeToolsDeps): void {
           )
         }
         case "relationships": {
-          if (!args.nodeID && !args.path) return invalidArguments(`banyan_repo op "relationships" requires "nodeID" or "path".`)
+          if (!args.nodeID && !args.path)
+            return invalidArguments(`banyan_repo op "relationships" requires "nodeID" or "path".`)
           let resolvedPath: string | undefined
           if (args.path) {
             const guarded = guardedPath(deps.cwd, args.path)

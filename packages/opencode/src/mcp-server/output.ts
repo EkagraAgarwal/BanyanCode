@@ -7,9 +7,7 @@
 // `outputSchema` plus a short text rendering, and `isError` results with
 // stable `code` strings callers can branch on.
 
-import { z } from "zod/v3"
-import type { AnyObjectSchema } from "@modelcontextprotocol/sdk/server/zod-compat.js"
-
+import { z } from "zod"
 // Default budget. Another wave owns the deep config plumbing; until then
 // an explicit arg or env overrides the default without touching call sites.
 export const DEFAULT_OUTPUT_CHARS = 8000
@@ -40,12 +38,16 @@ export type McpToolResult = {
 // Declared as `outputSchema` on every code tool. `result` stays unconstrained
 // (index rows vary per op) while the envelope fields are typed; the SDK
 // validates `structuredContent` against this on every non-error result.
-const OutputSchemaInput = z.object({
-  result: z.unknown().describe("Truncated tool payload (arrays / entries / long strings shrunk to fit the output budget)."),
+// Single-zod: the repo catalog and @modelcontextprotocol/server 2.x resolve
+// the same zod v4 copy, so the schema instance is passed directly — no
+// compat casts.
+export const CodeToolOutputSchema = z.object({
+  result: z
+    .unknown()
+    .describe("Truncated tool payload (arrays / entries / long strings shrunk to fit the output budget)."),
   truncated: z.boolean().describe("True when the payload was shrunk to fit the output budget."),
   omitted: z.number().int().min(0).describe("Array items plus object entries dropped by truncation."),
 })
-export const CodeToolOutputSchema = OutputSchemaInput as unknown as AnyObjectSchema
 
 const renderJson = (value: unknown): string => {
   try {

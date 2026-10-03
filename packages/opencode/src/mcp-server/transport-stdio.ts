@@ -1,10 +1,19 @@
 // Stdio transport entry for `banyancode mcp serve`.
 //
-// Stdout discipline: stdout belongs to the JSON-RPC stream owned by
-// StdioServerTransport. This module never writes to stdout (no
+// Stdout discipline: stdout belongs to the JSON-RPC stream owned by the
+// stdio transport. This module never writes to stdout (no
 // console.log/println); diagnostics go to stderr via log().
+//
+// Dual-era (gap-plan D0): serving goes through v2 `serveStdio` with a
+// factory over the prebuilt McpServer. The opening exchange pins the
+// connection era — a 2026-07-28 `server/discover` opening serves modern
+// per-request `_meta`, a legacy `initialize` opening serves 2025-era
+// clients — from the same tool registrations. The default
+// `legacy: "serve"` keeps both; a legacy-only or modern-only server is
+// not an option (modern-only clients fail against legacy-only servers).
 
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
+import { stdin, stdout } from "node:process"
+import { StdioServerTransport, serveStdio as serveMcpStdio } from "@modelcontextprotocol/server/stdio"
 import { InstanceRuntime } from "@/project/instance-runtime"
 import { createMcpServer, log, type McpBootstrapOptions } from "./server"
 
@@ -57,14 +66,25 @@ export async function serveStdio(opts: StdioServeOptions = {}): Promise<void> {
     abortOwnedSessions: opts.abortOwnedSessions,
     serverCleanup: cleanup,
   })
-  const transport = new StdioServerTransport()
+  // One stdio connection pins one factory instance for its lifetime, so the
+  // prebuilt server is served directly. serveStdio owns the transport: it
+  // starts it, receives every inbound message, and closes it when done.
+  //
+  // The streams are passed explicitly from node:process rather than relying
+  // on the transport defaults: v2 reads its default stdio streams through
+  // an environment-conditioned `process` shim, and any run under
+  // `--conditions=browser` (dev CLI, stdio e2e spawn) resolves the browser
+  // stub whose stdin/stdout getters throw. Explicit streams bypass the
+  // stub under every condition set; the packaged binary is unaffected.
+  const transport = new StdioServerTransport(stdin, stdout)
+  const handle = serveMcpStdio(() => mcp, { transport })
 
   let closed = false
   const shutdown = async () => {
     if (closed) return
     closed = true
     try {
-      await transport.close()
+      await handle.close()
     } catch {
       // closing a broken stdio pipe must not throw past the CLI handler
     }
@@ -73,7 +93,6 @@ export async function serveStdio(opts: StdioServeOptions = {}): Promise<void> {
   process.on("SIGINT", () => void shutdown().then(() => process.exit(0)))
   process.on("SIGTERM", () => void shutdown().then(() => process.exit(0)))
 
-  await mcp.connect(transport)
   log("stdio transport connected")
 
   await new Promise<void>((resolve) => {

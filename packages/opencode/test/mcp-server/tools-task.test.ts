@@ -8,9 +8,9 @@
 // No mocked transports, no mocked engine.
 
 import { describe, expect, test } from "bun:test"
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
+import { Client } from "@modelcontextprotocol/client"
+import { McpServer } from "@modelcontextprotocol/server"
+import { MCP_ERAS, forEachEra, withEraClient } from "./era-harness"
 import { TaskEngine } from "../../src/mcp-server/task-engine"
 import type {
   EngineEvent,
@@ -19,19 +19,24 @@ import type {
   EngineSessionLookup,
   PendingQuestion,
 } from "../../src/mcp-server/task-engine"
-import {
-  TaskToolNames,
-  registerTaskTools,
-} from "../../src/mcp-server/tools-task"
+import { TaskToolNames, registerTaskTools } from "../../src/mcp-server/tools-task"
 import type { TaskToolsConfig, TaskToolsDeps } from "../../src/mcp-server/tools-task"
 import { newTaskHandle, assertHandleShape } from "../../src/mcp-server/task-handle"
 import type { SessionClient, SessionMessage } from "../../src/mcp-server/types"
 import type { DiffFileInput } from "../../src/mcp-server/result"
-import { isToolGroupEnabled, mcpSessionMetadata, mcpSessionTitle, resolveMcpServerConfig } from "../../src/mcp-server/server"
+import {
+  isToolGroupEnabled,
+  mcpSessionMetadata,
+  mcpSessionTitle,
+  resolveMcpServerConfig,
+} from "../../src/mcp-server/server"
 
 // One store implementing both ports (engine lifecycle + tasks-port reads).
 class FakeSessions implements EngineSessionClient {
-  sessions = new Map<string, { prompts: string[]; busy: boolean; assistant: string[]; metadata: Record<string, string>; title?: string }>()
+  sessions = new Map<
+    string,
+    { prompts: string[]; busy: boolean; assistant: string[]; metadata: Record<string, string>; title?: string }
+  >()
   pendingBySession = new Map<string, PendingQuestion[]>()
   permissionReplies: Array<{ sessionID: string; reply: string }> = []
   questionReplies: Array<{ sessionID: string; message: string }> = []
@@ -82,7 +87,13 @@ class FakeSessions implements EngineSessionClient {
   }) {
     this.createdInputs.push(input)
     const id = `ses_test_${this.next++}`
-    this.sessions.set(id, { prompts: [], busy: false, assistant: [], metadata: { ...input.metadata }, title: input.title })
+    this.sessions.set(id, {
+      prompts: [],
+      busy: false,
+      assistant: [],
+      metadata: { ...input.metadata },
+      title: input.title,
+    })
     return { id }
   }
 
@@ -184,27 +195,50 @@ const depsFor = (engine: TaskEngine, fake: FakeSessions, patch?: Partial<TaskToo
   config: baseConfig(patch),
 })
 
-// One connected protocol pair: real McpServer with the task tools registered
-// plus a real MCP Client on the other end of the linked InMemoryTransport
-// pair. Server connects first (see tools-code.test.ts): connecting the
-// client first deadlocks on `initialize`.
-async function withTaskProtocol<A>(
-  deps: TaskToolsDeps,
-  body: (client: Client) => Promise<A>,
-): Promise<A> {
+// One connected protocol pair per era (gap-plan D0): legacy (`initialize`
+// over InMemoryTransport) and modern (`server/discover` then per-request
+// `_meta` through an in-process handler). Fixtures are fresh per era —
+// engines, handles and the shared-writer guard are process state, so
+// reusing one engine across eras would reject the second era's
+// write-capable shared start (correct server behavior, but a polluted
+// test). One engine serves both surfaces within an era. Failures are
+// tagged with the era that failed.
+export type TaskFixtures = { fake: FakeSessions; engine: TaskEngine; deps: TaskToolsDeps }
+
+const taskClientInfo = { name: "tools-task-test-client", version: "0.0.0-test" } as const
+
+const buildTaskServer = (deps: TaskToolsDeps): McpServer => {
   const mcp = new McpServer({ name: "banyancode-test", version: "0.0.0-test" })
   registerTaskTools(mcp, deps)
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-  const client = new Client({ name: "tools-task-test-client", version: "0.0.0-test" })
-  await mcp.connect(serverTransport)
-  await client.connect(clientTransport)
-  try {
-    return await body(client)
-  } finally {
-    await client.close().catch(() => {})
-    await mcp.close().catch(() => {})
+  return mcp
+}
+
+async function withTaskProtocol(
+  setup: () => TaskFixtures,
+  body: (fx: TaskFixtures, client: Client) => Promise<unknown>,
+): Promise<void> {
+  for (const era of MCP_ERAS) {
+    const fx = setup()
+    try {
+      await withEraClient(
+        era,
+        () => buildTaskServer(fx.deps),
+        taskClientInfo,
+        (client) => body(fx, client),
+      )
+    } finally {
+      fx.engine.close()
+    }
   }
 }
+
+const freshTaskSetup =
+  (patch?: Partial<TaskToolsConfig>, opts?: { maxConcurrentTasks?: number }): (() => TaskFixtures) =>
+  () => {
+    const fake = new FakeSessions()
+    const engine = setupEngine(fake, opts)
+    return { fake, engine, deps: depsFor(engine, fake, patch) }
+  }
 
 type McpTextResult = {
   content: Array<{ type: string; text: string }>
@@ -223,307 +257,273 @@ const isToolError = (result: unknown): boolean => (result as McpTextResult).isEr
 
 describe("mcp task tools", () => {
   test("lists the five banyan_task_ tools in stable alphabetical order", async () => {
-    const fake = new FakeSessions()
-    const engine = setupEngine(fake)
-    try {
-      await withTaskProtocol(depsFor(engine, fake), async (client) => {
-        const first = await client.listTools()
-        const second = await client.listTools()
-        expect(first.tools.map((t) => t.name)).toEqual([...TaskToolNames])
-        expect(first.tools.map((t) => t.name)).toEqual([...first.tools.map((t) => t.name)].sort())
-        expect(second.tools.map((t) => t.name)).toEqual(first.tools.map((t) => t.name))
-        for (const tool of first.tools) {
-          expect(typeof tool.title).toBe("string")
-          expect(tool.title?.length).toBeGreaterThan(0)
-          expect(tool.description).toContain("UNKNOWN_TASK")
-          expect(tool.annotations?.readOnlyHint).toBe(false)
-          expect(tool.annotations?.openWorldHint).toBe(false)
-          expect(tool.annotations?.destructiveHint).toBe(tool.name === "banyan_task_cancel")
-          expect(tool.outputSchema).toBeDefined()
-          expect(tool.outputSchema?.type).toBe("object")
-          const meta = tool._meta as Record<string, unknown> | undefined
-          expect(meta?.["anthropic/maxResultSizeChars"]).toBe(8000)
-        }
-      })
-    } finally {
-      engine.close()
-    }
+    await withTaskProtocol(freshTaskSetup(), async (_fx, client) => {
+      const first = await client.listTools()
+      const second = await client.listTools()
+      expect(first.tools.map((t) => t.name)).toEqual([...TaskToolNames])
+      expect(first.tools.map((t) => t.name)).toEqual([...first.tools.map((t) => t.name)].sort())
+      expect(second.tools.map((t) => t.name)).toEqual(first.tools.map((t) => t.name))
+      for (const tool of first.tools) {
+        expect(typeof tool.title).toBe("string")
+        expect(tool.title?.length).toBeGreaterThan(0)
+        expect(tool.description).toContain("UNKNOWN_TASK")
+        expect(tool.annotations?.readOnlyHint).toBe(false)
+        expect(tool.annotations?.openWorldHint).toBe(false)
+        expect(tool.annotations?.destructiveHint).toBe(tool.name === "banyan_task_cancel")
+        expect(tool.outputSchema).toBeDefined()
+        expect(tool.outputSchema?.type).toBe("object")
+        const meta = tool._meta as Record<string, unknown> | undefined
+        expect(meta?.["anthropic/maxResultSizeChars"]).toBe(8000)
+      }
+    })
   })
 
   test("lifecycle smoke: start → status → cancel", async () => {
-    const fake = new FakeSessions()
-    const engine = setupEngine(fake)
-    try {
-      await withTaskProtocol(depsFor(engine, fake), async (client) => {
-        const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "do the thing" } })
-        expect(isToolError(started)).toBe(false)
-        const startBody = toolJson<{ task_id: string; status: string }>(started)
-        // Opaque handle: btask_ shape, never the raw ses_ id (E0).
-        assertHandleShape(startBody.task_id)
-        expect(startBody.task_id).not.toContain("ses_")
-        expect(startBody.status).toBe("running")
+    await withTaskProtocol(freshTaskSetup(), async ({ fake, engine }, client) => {
+      const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "do the thing" } })
+      expect(isToolError(started)).toBe(false)
+      const startBody = toolJson<{ task_id: string; status: string }>(started)
+      // Opaque handle: btask_ shape, never the raw ses_ id (E0).
+      assertHandleShape(startBody.task_id)
+      expect(startBody.task_id).not.toContain("ses_")
+      expect(startBody.status).toBe("running")
 
-        // B7 (engine side): origin/mcp_client metadata flow into the created
-        // session; the [mcp] title prefix and policy/isolation defaults are
-        // applied by the server wiring adapter (unit-tested below).
-        const record = engine.get(startBody.task_id)
-        const stored = fake.sessions.get(record.sessionID)!
-        expect(stored.metadata["origin"]).toBe("mcp")
-        expect(stored.metadata["mcp_client"]).toBe("test-client")
-        // mcp_handle binding (E2): the engine writes it at start; the
-        // tools layer repairs it when the write did not land.
-        expect(stored.metadata["mcp_handle"]).toBe(startBody.task_id)
-        // Creation-time ruleset passthrough (E1): the server policy reaches
-        // session creation as a built ruleset.
-        const created = fake.createdInputs.at(-1)!
-        expect(created.permission).toBeDefined()
-        expect(created.permission!.length).toBeGreaterThan(0)
+      // B7 (engine side): origin/mcp_client metadata flow into the created
+      // session; the [mcp] title prefix and policy/isolation defaults are
+      // applied by the server wiring adapter (unit-tested below).
+      const record = engine.get(startBody.task_id)
+      const stored = fake.sessions.get(record.sessionID)!
+      expect(stored.metadata["origin"]).toBe("mcp")
+      expect(stored.metadata["mcp_client"]).toBe("test-client")
+      // mcp_handle binding (E2): the engine writes it at start; the
+      // tools layer repairs it when the write did not land.
+      expect(stored.metadata["mcp_handle"]).toBe(startBody.task_id)
+      // Creation-time ruleset passthrough (E1): the server policy reaches
+      // session creation as a built ruleset.
+      const created = fake.createdInputs.at(-1)!
+      expect(created.permission).toBeDefined()
+      expect(created.permission!.length).toBeGreaterThan(0)
 
-        const status = await client.callTool({ name: "banyan_task_status", arguments: { task_id: startBody.task_id } })
-        expect(isToolError(status)).toBe(false)
-        expect(toolJson<{ task_id: string; status: string }>(status).status).toBe("running")
+      const status = await client.callTool({ name: "banyan_task_status", arguments: { task_id: startBody.task_id } })
+      expect(isToolError(status)).toBe(false)
+      expect(toolJson<{ task_id: string; status: string }>(status).status).toBe("running")
 
-        const cancelled = await client.callTool({ name: "banyan_task_cancel", arguments: { task_id: startBody.task_id } })
-        expect(isToolError(cancelled)).toBe(false)
-        expect(toolJson<{ task_id: string; status: string }>(cancelled).status).toBe("cancelled")
+      const cancelled = await client.callTool({ name: "banyan_task_cancel", arguments: { task_id: startBody.task_id } })
+      expect(isToolError(cancelled)).toBe(false)
+      expect(toolJson<{ task_id: string; status: string }>(cancelled).status).toBe("cancelled")
 
-        const after = await client.callTool({ name: "banyan_task_status", arguments: { task_id: startBody.task_id } })
-        expect(toolJson<{ status: string }>(after).status).toBe("cancelled")
-      })
-    } finally {
-      engine.close()
-    }
+      const after = await client.callTool({ name: "banyan_task_status", arguments: { task_id: startBody.task_id } })
+      expect(toolJson<{ status: string }>(after).status).toBe("cancelled")
+    })
   })
 
   test("unknown handles are UNKNOWN_TASK with recovery text", async () => {
-    const fake = new FakeSessions()
-    const engine = setupEngine(fake)
-    try {
-      await withTaskProtocol(depsFor(engine, fake), async (client) => {
-        for (const taskID of ["nope", newTaskHandle()]) {
-          const unknown = await client.callTool({ name: "banyan_task_status", arguments: { task_id: taskID } })
-          expect(isToolError(unknown)).toBe(true)
-          expect(toolText(unknown)).toContain("UNKNOWN_TASK")
-          expect(toolText(unknown)).toContain("banyan_task_start")
-        }
-      })
-    } finally {
-      engine.close()
-    }
+    await withTaskProtocol(freshTaskSetup(), async (_fx, client) => {
+      for (const taskID of ["nope", newTaskHandle()]) {
+        const unknown = await client.callTool({ name: "banyan_task_status", arguments: { task_id: taskID } })
+        expect(isToolError(unknown)).toBe(true)
+        expect(toolText(unknown)).toContain("UNKNOWN_TASK")
+        expect(toolText(unknown)).toContain("banyan_task_start")
+      }
+    })
   })
 
   test("reply uses the typed decision, not free-text matching", async () => {
-    const fake = new FakeSessions()
-    const engine = setupEngine(fake)
-    try {
-      await withTaskProtocol(depsFor(engine, fake, { permission: "edits" }), async (client) => {
-        const started = await client.callTool({
-          name: "banyan_task_start",
-          arguments: { prompt: "edit things", permission: "edits" },
-        })
-        expect(isToolError(started)).toBe(false)
-        const taskID = toolJson<{ task_id: string }>(started).task_id
-        const sessionID = engine.get(taskID).sessionID
-        fake.pendingBySession.set(sessionID, [
-          { requestID: "perm-1", kind: "permission", title: "write file", askedAt: Date.now() },
-        ])
-
-        const status = await client.callTool({ name: "banyan_task_status", arguments: { task_id: taskID } })
-        expect(toolJson<{ status: string }>(status).status).toBe("needs_input")
-
-        // The message text contains "approve" twice; the typed decision
-        // (reject) is the only signal the engine may use.
-        const replied = await client.callTool({
-          name: "banyan_task_reply",
-          arguments: { task_id: taskID, decision: "reject", message: "approve approve" },
-        })
-        expect(isToolError(replied)).toBe(false)
-        expect(fake.permissionReplies.at(-1)?.reply).toBe("reject")
-
-        // Approving a question without an answer message is an argument error.
-        fake.pendingBySession.set(sessionID, [
-          { requestID: "q-1", kind: "question", title: "which file?", askedAt: Date.now() },
-        ])
-        await client.callTool({ name: "banyan_task_status", arguments: { task_id: taskID } })
-        const missing = await client.callTool({
-          name: "banyan_task_reply",
-          arguments: { task_id: taskID, decision: "approve" },
-        })
-        expect(isToolError(missing)).toBe(true)
-        expect(toolText(missing)).toContain("INVALID_ARGUMENTS")
+    await withTaskProtocol(freshTaskSetup({ permission: "edits" }), async ({ fake, engine }, client) => {
+      const started = await client.callTool({
+        name: "banyan_task_start",
+        arguments: { prompt: "edit things", permission: "edits" },
       })
-    } finally {
-      engine.close()
-    }
+      expect(isToolError(started)).toBe(false)
+      const taskID = toolJson<{ task_id: string }>(started).task_id
+      const sessionID = engine.get(taskID).sessionID
+      fake.pendingBySession.set(sessionID, [
+        { requestID: "perm-1", kind: "permission", title: "write file", askedAt: Date.now() },
+      ])
+
+      const status = await client.callTool({ name: "banyan_task_status", arguments: { task_id: taskID } })
+      expect(toolJson<{ status: string }>(status).status).toBe("needs_input")
+
+      // The message text contains "approve" twice; the typed decision
+      // (reject) is the only signal the engine may use.
+      const replied = await client.callTool({
+        name: "banyan_task_reply",
+        arguments: { task_id: taskID, decision: "reject", message: "approve approve" },
+      })
+      expect(isToolError(replied)).toBe(false)
+      expect(fake.permissionReplies.at(-1)?.reply).toBe("reject")
+
+      // Approving a question without an answer message is an argument error.
+      fake.pendingBySession.set(sessionID, [
+        { requestID: "q-1", kind: "question", title: "which file?", askedAt: Date.now() },
+      ])
+      await client.callTool({ name: "banyan_task_status", arguments: { task_id: taskID } })
+      const missing = await client.callTool({
+        name: "banyan_task_reply",
+        arguments: { task_id: taskID, decision: "approve" },
+      })
+      expect(isToolError(missing)).toBe(true)
+      expect(toolText(missing)).toContain("INVALID_ARGUMENTS")
+    })
   })
 
   test("agent/model allowlists and permission mismatch are enforced", async () => {
-    const fake = new FakeSessions()
-    const engine = setupEngine(fake)
-    try {
-      await withTaskProtocol(
-        depsFor(engine, fake, { allowedAgents: ["build"], allowedModels: ["test/model"] }),
-        async (client) => {
-          const badAgent = await client.callTool({
-            name: "banyan_task_start",
-            arguments: { prompt: "x", agent: "evil" },
-          })
-          expect(isToolError(badAgent)).toBe(true)
-          expect(toolText(badAgent)).toContain("POLICY_REJECTED")
+    await withTaskProtocol(
+      freshTaskSetup({ allowedAgents: ["build"], allowedModels: ["test/model"] }),
+      async (_fx, client) => {
+        const badAgent = await client.callTool({
+          name: "banyan_task_start",
+          arguments: { prompt: "x", agent: "evil" },
+        })
+        expect(isToolError(badAgent)).toBe(true)
+        expect(toolText(badAgent)).toContain("POLICY_REJECTED")
 
-          const badModel = await client.callTool({
-            name: "banyan_task_start",
-            arguments: { prompt: "x", model: "evil/model" },
-          })
-          expect(isToolError(badModel)).toBe(true)
-          expect(toolText(badModel)).toContain("POLICY_REJECTED")
+        const badModel = await client.callTool({
+          name: "banyan_task_start",
+          arguments: { prompt: "x", model: "evil/model" },
+        })
+        expect(isToolError(badModel)).toBe(true)
+        expect(toolText(badModel)).toContain("POLICY_REJECTED")
 
-          const mismatch = await client.callTool({
-            name: "banyan_task_start",
-            arguments: { prompt: "x", permission: "edits" },
-          })
-          expect(isToolError(mismatch)).toBe(true)
-          expect(toolText(mismatch)).toContain("INVALID_ARGUMENTS")
+        const mismatch = await client.callTool({
+          name: "banyan_task_start",
+          arguments: { prompt: "x", permission: "edits" },
+        })
+        expect(isToolError(mismatch)).toBe(true)
+        expect(toolText(mismatch)).toContain("INVALID_ARGUMENTS")
 
-          const yolo = await client.callTool({
-            name: "banyan_task_start",
-            arguments: { prompt: "x", permission: "yolo" },
-          })
-          expect(isToolError(yolo)).toBe(true)
-          expect(toolText(yolo)).toContain("POLICY_REJECTED")
-          expect(toolText(yolo)).toContain("--allow-yolo")
-        },
-      )
-    } finally {
-      engine.close()
-    }
+        const yolo = await client.callTool({
+          name: "banyan_task_start",
+          arguments: { prompt: "x", permission: "yolo" },
+        })
+        expect(isToolError(yolo)).toBe(true)
+        expect(toolText(yolo)).toContain("POLICY_REJECTED")
+        expect(toolText(yolo)).toContain("--allow-yolo")
+      },
+    )
   })
 
   test("wait_seconds is capped at 50 by the schema", async () => {
-    const fake = new FakeSessions()
-    const engine = setupEngine(fake)
-    try {
-      await withTaskProtocol(depsFor(engine, fake), async (client) => {
-        const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "slow work" } })
-        const taskID = toolJson<{ task_id: string }>(started).task_id
-        const rejected = await client
-          .callTool({ name: "banyan_task_status", arguments: { task_id: taskID, wait_seconds: 500 } })
-          .then((result) => (isToolError(result) ? ("rejected" as const) : ("accepted" as const)))
-          .catch(() => "rejected" as const)
-        expect(rejected).toBe("rejected")
+    await withTaskProtocol(freshTaskSetup(), async (_fx, client) => {
+      const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "slow work" } })
+      const taskID = toolJson<{ task_id: string }>(started).task_id
+      const rejected = await client
+        .callTool({ name: "banyan_task_status", arguments: { task_id: taskID, wait_seconds: 500 } })
+        .then((result) => (isToolError(result) ? ("rejected" as const) : ("accepted" as const)))
+        .catch(() => "rejected" as const)
+      expect(rejected).toBe("rejected")
 
-        // A 1 s long-poll stays far under the 120 s auto-background threshold.
-        const before = Date.now()
-        const waited = await client.callTool({
-          name: "banyan_task_status",
-          arguments: { task_id: taskID, wait_seconds: 1 },
-        })
-        const elapsed = Date.now() - before
-        expect(isToolError(waited)).toBe(false)
-        expect(toolJson<{ status: string }>(waited).status).toBe("running")
-        expect(elapsed).toBeGreaterThanOrEqual(900)
-        expect(elapsed).toBeLessThan(10_000)
+      // A 1 s long-poll stays far under the 120 s auto-background threshold.
+      const before = Date.now()
+      const waited = await client.callTool({
+        name: "banyan_task_status",
+        arguments: { task_id: taskID, wait_seconds: 1 },
       })
-    } finally {
-      engine.close()
-    }
+      const elapsed = Date.now() - before
+      expect(isToolError(waited)).toBe(false)
+      expect(toolJson<{ status: string }>(waited).status).toBe("running")
+      expect(elapsed).toBeGreaterThanOrEqual(900)
+      expect(elapsed).toBeLessThan(10_000)
+    })
   })
 
   test("status long-poll returns on the state change, not the deadline (E4)", async () => {
-    const fake = new FakeSessions()
-    const engine = setupEngine(fake)
-    try {
-      await withTaskProtocol(depsFor(engine, fake), async (client) => {
-        const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "quick work" } })
-        const taskID = toolJson<{ task_id: string }>(started).task_id
-        const sessionID = engine.get(taskID).sessionID
-        // Finish the task mid-poll: the 10 s long-poll must resolve on the
-        // transition, far short of its deadline.
-        setTimeout(() => {
-          fake.finish(sessionID, "all done")
-          fake.emit({ type: "session.idle", sessionID })
-        }, 100)
-        const before = Date.now()
-        const waited = await client.callTool({
-          name: "banyan_task_status",
-          arguments: { task_id: taskID, wait_seconds: 10 },
-        })
-        const elapsed = Date.now() - before
-        expect(isToolError(waited)).toBe(false)
-        expect(toolJson<{ status: string }>(waited).status).toBe("done")
-        expect(elapsed).toBeLessThan(5000)
+    await withTaskProtocol(freshTaskSetup(), async ({ fake, engine }, client) => {
+      const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "quick work" } })
+      const taskID = toolJson<{ task_id: string }>(started).task_id
+      const sessionID = engine.get(taskID).sessionID
+      // Finish the task mid-poll: the 10 s long-poll must resolve on the
+      // transition, far short of its deadline.
+      setTimeout(() => {
+        fake.finish(sessionID, "all done")
+        fake.emit({ type: "session.idle", sessionID })
+      }, 100)
+      const before = Date.now()
+      const waited = await client.callTool({
+        name: "banyan_task_status",
+        arguments: { task_id: taskID, wait_seconds: 10 },
       })
-    } finally {
-      engine.close()
-    }
+      const elapsed = Date.now() - before
+      expect(isToolError(waited)).toBe(false)
+      expect(toolJson<{ status: string }>(waited).status).toBe("done")
+      expect(elapsed).toBeLessThan(5000)
+    })
   })
 
   test("task_result builds the compact result with transcript paging", async () => {
-    const fake = new FakeSessions()
-    const engine = setupEngine(fake)
-    try {
-      await withTaskProtocol(depsFor(engine, fake), async (client) => {
-        const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "do work" } })
-        const taskID = toolJson<{ task_id: string }>(started).task_id
-        fake.finish(engine.get(taskID).sessionID, "all done")
+    await withTaskProtocol(freshTaskSetup(), async ({ fake, engine }, client) => {
+      const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "do work" } })
+      const taskID = toolJson<{ task_id: string }>(started).task_id
+      fake.finish(engine.get(taskID).sessionID, "all done")
 
-        const summary = await client.callTool({ name: "banyan_task_result", arguments: { task_id: taskID } })
-        expect(isToolError(summary)).toBe(false)
-        const compact = toolJson<{
-          task_id: string
-          status: string
-          filesChanged: Array<{ path: string }>
-          totalAdditions: number
-          estimatedTokens: number
-          cost: number
-          subagentCount: number
-        }>(summary)
-        expect(compact.task_id).toBe(taskID)
-        expect(compact.filesChanged[0]?.path).toBe("src/widget.ts")
-        expect(compact.totalAdditions).toBe(10)
-        expect(compact.estimatedTokens).toBeGreaterThan(0)
-        expect(compact.cost).toBe(0.01)
-        expect(compact.subagentCount).toBe(1)
-        // The raw session id never leaks to the caller.
-        expect(JSON.stringify(compact)).not.toContain("ses_test_")
+      const summary = await client.callTool({ name: "banyan_task_result", arguments: { task_id: taskID } })
+      expect(isToolError(summary)).toBe(false)
+      const compact = toolJson<{
+        task_id: string
+        status: string
+        filesChanged: Array<{ path: string }>
+        totalAdditions: number
+        estimatedTokens: number
+        cost: number
+        subagentCount: number
+      }>(summary)
+      expect(compact.task_id).toBe(taskID)
+      expect(compact.filesChanged[0]?.path).toBe("src/widget.ts")
+      expect(compact.totalAdditions).toBe(10)
+      expect(compact.estimatedTokens).toBeGreaterThan(0)
+      expect(compact.cost).toBe(0.01)
+      expect(compact.subagentCount).toBe(1)
+      // The raw session id never leaks to the caller.
+      expect(JSON.stringify(compact)).not.toContain("ses_test_")
 
-        const transcript = await client.callTool({
-          name: "banyan_task_result",
-          arguments: { task_id: taskID, detail: "transcript" },
-        })
-        expect(isToolError(transcript)).toBe(false)
-        const page = toolJson<{ transcript: { messages: Array<{ index: number; role: string }> } }>(transcript)
-        expect(page.transcript.messages.length).toBe(2)
-        expect(page.transcript.messages[0]?.index).toBe(0)
+      const transcript = await client.callTool({
+        name: "banyan_task_result",
+        arguments: { task_id: taskID, detail: "transcript" },
       })
-    } finally {
-      engine.close()
-    }
+      expect(isToolError(transcript)).toBe(false)
+      const page = toolJson<{ transcript: { messages: Array<{ index: number; role: string }> } }>(transcript)
+      expect(page.transcript.messages.length).toBe(2)
+      expect(page.transcript.messages[0]?.index).toBe(0)
+    })
   })
 
   test("a restarted engine rehydrates the handle from session metadata", async () => {
-    const fake = new FakeSessions()
-    const first = setupEngine(fake)
-    let taskID = ""
-    try {
-      await withTaskProtocol(depsFor(first, fake), async (client) => {
-        const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "long work" } })
-        taskID = toolJson<{ task_id: string }>(started).task_id
-      })
-    } finally {
-      first.close()
-    }
-    const second = setupEngine(fake)
-    try {
-      await withTaskProtocol(depsFor(second, fake), async (client) => {
-        const status = await client.callTool({ name: "banyan_task_status", arguments: { task_id: taskID } })
-        expect(isToolError(status)).toBe(false)
-        expect(toolJson<{ task_id: string; status: string }>(status)).toEqual(
-          expect.objectContaining({ task_id: taskID, status: "running" }),
+    // Both phases run inside each era: the first engine starts the task,
+    // the second rehydrates it from the shared session store.
+    for (const era of MCP_ERAS) {
+      const fake = new FakeSessions()
+      const first = setupEngine(fake)
+      let taskID = ""
+      try {
+        await withEraClient(
+          era,
+          () => buildTaskServer(depsFor(first, fake)),
+          taskClientInfo,
+          async (client) => {
+            const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "long work" } })
+            taskID = toolJson<{ task_id: string }>(started).task_id
+          },
         )
-      })
-    } finally {
-      second.close()
+      } finally {
+        first.close()
+      }
+      const second = setupEngine(fake)
+      try {
+        await withEraClient(
+          era,
+          () => buildTaskServer(depsFor(second, fake)),
+          taskClientInfo,
+          async (client) => {
+            const status = await client.callTool({ name: "banyan_task_status", arguments: { task_id: taskID } })
+            expect(isToolError(status)).toBe(false)
+            expect(toolJson<{ task_id: string; status: string }>(status)).toEqual(
+              expect.objectContaining({ task_id: taskID, status: "running" }),
+            )
+          },
+        )
+      } finally {
+        second.close()
+      }
     }
   })
 
@@ -534,15 +534,11 @@ describe("mcp task tools", () => {
     expect(isToolGroupEnabled([], "code")).toBe(false)
 
     // The disabled branch registers nothing task-shaped: a server wired
-    // without registerTaskTools lists zero banyan_task_* tools. (With zero
-    // tools total the SDK server answers Method not found — that also
-    // proves nothing task-shaped is listed.)
-    const mcp = new McpServer({ name: "banyancode-test", version: "0.0.0-test" })
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-    const client = new Client({ name: "tools-task-test-client", version: "0.0.0-test" })
-    await mcp.connect(serverTransport)
-    await client.connect(clientTransport)
-    try {
+    // without registerTaskTools lists zero banyan_task_* tools, in both
+    // eras. (With zero tools total the legacy server answers Method not
+    // found — that also proves nothing task-shaped is listed.)
+    const buildEmpty = () => new McpServer({ name: "banyancode-test", version: "0.0.0-test" })
+    await forEachEra(buildEmpty, { name: "tools-task-test-client", version: "0.0.0-test" }, async (client) => {
       let names: string[] = []
       let methodNotFound = false
       try {
@@ -553,10 +549,7 @@ describe("mcp task tools", () => {
       }
       expect(names.filter((n) => n.startsWith("banyan_task_"))).toEqual([])
       expect(names.length === 0 || methodNotFound).toBe(true)
-    } finally {
-      await client.close().catch(() => {})
-      await mcp.close().catch(() => {})
-    }
+    })
   })
 
   test("B7 session identity helpers: [mcp] title prefix and metadata defaults", async () => {
@@ -570,9 +563,7 @@ describe("mcp task tools", () => {
       origin: "mcp",
     })
     // Engine-supplied markers win over the defaults; origin is forced.
-    expect(
-      mcpSessionMetadata({ policy: "reject", metadata: { origin: "spoof", mcp_state: "running" } }),
-    ).toEqual({
+    expect(mcpSessionMetadata({ policy: "reject", metadata: { origin: "spoof", mcp_state: "running" } })).toEqual({
       policy: "reject",
       isolation: "shared",
       mcp_state: "running",

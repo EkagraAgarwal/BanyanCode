@@ -18,9 +18,9 @@ import { Context, Effect, Layer, Option } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { NodeHttpServer } from "@effect/platform-node"
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
+import { Client } from "@modelcontextprotocol/client"
+import { McpServer } from "@modelcontextprotocol/server"
+import { forEachEra } from "./era-harness"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { Database } from "@opencode-ai/core/database/database"
@@ -186,15 +186,17 @@ const toolJson = <T>(result: unknown): T => JSON.parse(toolText(result)) as T
 
 const isToolError = (result: unknown): boolean => (result as McpTextResult).isError === true
 
-// One connected protocol pair per live test: real McpServer with the code
-// tools registered (backed by the real in-process HTTP server via the typed
-// SDK client) plus a real MCP Client on the other end of the linked
-// InMemoryTransport pair.
-const withProtocol = <A>(
+// One connected protocol pair per live test, run TWICE (gap-plan D0):
+// as a legacy client (`initialize` over the InMemoryTransport linked pair)
+// and as a modern client (`server/discover` then per-request `_meta` through
+// an in-process fetch-shimmed handler). The real McpServer carries the code
+// tools in both legs, backed by the real in-process HTTP server via the
+// typed SDK client. Failures are tagged with the era that failed.
+const withProtocol = (
   cwd: string,
   seedCount: number,
-  body: (client: Client) => Promise<A>,
-): Effect.Effect<A, unknown, unknown> =>
+  body: (client: Client) => Promise<unknown>,
+): Effect.Effect<void, unknown, unknown> =>
   Effect.gen(function* () {
     const server = yield* HttpServer.HttpServer
     const baseUrl = HttpServer.formatAddress(server.address)
@@ -206,21 +208,14 @@ const withProtocol = <A>(
     }
     yield* repo.setMeta({ ...FIXTURE_META, totalNodes: seedCount })
 
-    const mcp = new McpServer({ name: "banyancode-test", version: "0.0.0-test" })
-    registerCodeTools(mcp, { sdk, cwd })
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-    const client = new Client({ name: "tools-code-test-client", version: "0.0.0-test" })
-    // Server first: client.connect sends `initialize` and waits for the
-    // response, so connecting the client before the server deadlocks (the
-    // server side would never get to drain the queued message).
-    yield* Effect.promise(() => mcp.connect(serverTransport))
-    yield* Effect.promise(() => client.connect(clientTransport))
-    try {
-      return yield* Effect.promise(() => body(client))
-    } finally {
-      yield* Effect.promise(() => client.close().catch(() => {}))
-      yield* Effect.promise(() => mcp.close().catch(() => {}))
+    const buildServer = () => {
+      const mcp = new McpServer({ name: "banyancode-test", version: "0.0.0-test" })
+      registerCodeTools(mcp, { sdk, cwd })
+      return mcp
     }
+    yield* Effect.promise(() =>
+      forEachEra(buildServer, { name: "tools-code-test-client", version: "0.0.0-test" }, body),
+    )
   })
 
 const runWithFreshDb = <A>(body: (cwd: string) => Effect.Effect<A, unknown, unknown>) =>
@@ -243,7 +238,17 @@ const runWithFreshDb = <A>(body: (cwd: string) => Effect.Effect<A, unknown, unkn
 
 describe("mcp code tools (Phase 0 slice)", () => {
   test("op guards accept exactly the documented ops", () => {
-    for (const op of ["query", "explain", "impact", "trace", "tests", "symbols", "relationships", "ownership", "slice"]) {
+    for (const op of [
+      "query",
+      "explain",
+      "impact",
+      "trace",
+      "tests",
+      "symbols",
+      "relationships",
+      "ownership",
+      "slice",
+    ]) {
       expect(isRepoOp(op)).toBe(true)
     }
     expect(isRepoOp("forget")).toBe(false)
@@ -497,7 +502,8 @@ describe("mcp code tools (Phase 0 slice)", () => {
           const text = toolText(capped)
           expect(text.length).toBeLessThanOrEqual(CODE_TOOL_OUTPUT_MAX_CHARS)
           const parsed = JSON.parse(text) as { truncated?: boolean; omitted?: number }
-          const structured = (capped as { structuredContent?: { truncated?: boolean; omitted?: number } }).structuredContent
+          const structured = (capped as { structuredContent?: { truncated?: boolean; omitted?: number } })
+            .structuredContent
           expect(structured).toBeDefined()
           expect(typeof structured?.truncated).toBe("boolean")
           expect(typeof structured?.omitted).toBe("number")
@@ -520,7 +526,9 @@ describe("mcp code tools (Phase 0 slice)", () => {
 
           const status = await client.callTool({ name: "banyan_codegraph", arguments: { op: "status" } })
           expect(isToolError(status)).toBe(false)
-          expect(["ready", "missing", "stale", "building", "failed"]).toContain(toolJson<{ reason: string }>(status).reason)
+          expect(["ready", "missing", "stale", "building", "failed"]).toContain(
+            toolJson<{ reason: string }>(status).reason,
+          )
 
           const blast = await client.callTool({
             name: "banyan_change_check",
@@ -531,7 +539,10 @@ describe("mcp code tools (Phase 0 slice)", () => {
           const query = await client.callTool({ name: "banyan_repo", arguments: { op: "query", query: "MyWidget" } })
           expect(isToolError(query)).toBe(false)
 
-          const explain = await client.callTool({ name: "banyan_repo", arguments: { op: "explain", symbol: "MyWidget" } })
+          const explain = await client.callTool({
+            name: "banyan_repo",
+            arguments: { op: "explain", symbol: "MyWidget" },
+          })
           expect(isToolError(explain)).toBe(false)
         }),
       )
@@ -572,8 +583,9 @@ describe("mcp code tools (Phase 0 slice)", () => {
             arguments: { intent: "definition", target: "MyWidget" },
           })
           expect(isToolError(found)).toBe(false)
-          const structured = (found as { structuredContent?: { result?: unknown; truncated?: boolean; omitted?: number } })
-            .structuredContent
+          const structured = (
+            found as { structuredContent?: { result?: unknown; truncated?: boolean; omitted?: number } }
+          ).structuredContent
           expect(structured).toBeDefined()
           expect(structured?.result).toBeDefined()
           expect(structured?.truncated).toBe(false)

@@ -13,9 +13,10 @@ import { Context, Effect, Layer, Option } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { NodeHttpServer } from "@effect/platform-node"
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
+import { Client } from "@modelcontextprotocol/client"
+import { McpServer } from "@modelcontextprotocol/server"
+import { MCP_ERAS, withEraClient } from "./era-harness"
+import type { McpEra } from "./era-harness"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { AppProcess } from "@opencode-ai/core/process"
@@ -240,26 +241,31 @@ const toolJson = <T>(result: unknown): T => JSON.parse(toolText(result)) as T
 
 const isToolError = (result: unknown): boolean => (result as McpTextResult).isError === true
 
-const withProtocol = <A>(
+const withProtocol = (
   cwd: string,
-  body: (client: Client) => Promise<A>,
-): Effect.Effect<A, unknown, unknown> =>
+  body: (era: McpEra, client: Client) => Promise<unknown>,
+): Effect.Effect<void, unknown, unknown> =>
   Effect.gen(function* () {
     const server = yield* HttpServer.HttpServer
     const baseUrl = HttpServer.formatAddress(server.address)
     const sdk = createOpencodeClient({ baseUrl })
 
-    const mcp = new McpServer({ name: "banyancode-test", version: "0.0.0-test" })
-    registerVerifyMemoryTools(mcp, { sdk, cwd })
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-    const client = new Client({ name: "verify-memory-test-client", version: "0.0.0-test" })
-    yield* Effect.promise(() => mcp.connect(serverTransport))
-    yield* Effect.promise(() => client.connect(clientTransport))
-    try {
-      return yield* Effect.promise(() => body(client))
-    } finally {
-      yield* Effect.promise(() => client.close().catch(() => {}))
-      yield* Effect.promise(() => mcp.close().catch(() => {}))
+    const buildServer = () => {
+      const mcp = new McpServer({ name: "banyancode-test", version: "0.0.0-test" })
+      registerVerifyMemoryTools(mcp, { sdk, cwd })
+      return mcp
+    }
+    // Dual-era (gap-plan D0): legacy `initialize` + modern
+    // `server/discover` with per-request `_meta`. The era is threaded into
+    // the body so stateful cases (memory store) can key per era — the
+    // memory store is shared across both legs of one test. Failures are
+    // tagged with the era that failed.
+    for (const era of MCP_ERAS) {
+      yield* Effect.promise(() =>
+        withEraClient(era, buildServer, { name: "verify-memory-test-client", version: "0.0.0-test" }, (client) =>
+          body(era, client),
+        ),
+      )
     }
   })
 
@@ -302,7 +308,7 @@ describe("mcp verify + memory tools (C3 + C4)", () => {
   it.live("protocol: lists banyan_memory + banyan_verify with titles, annotations, outputSchema, _meta", () =>
     Effect.gen(function* () {
       yield* runWithFreshDb((cwd) =>
-        withProtocol(cwd, async (client) => {
+        withProtocol(cwd, async (_era, client) => {
           const { tools } = await client.listTools()
           expect(tools.map((t) => t.name).sort()).toEqual([...VerifyMemoryToolNames].sort())
           expect(tools.map((t) => t.name)).toEqual([...tools.map((t) => t.name)].sort())
@@ -332,7 +338,7 @@ describe("mcp verify + memory tools (C3 + C4)", () => {
   it.live("protocol: banyan_verify test kind returns counts + first-N failures for a failing repo", () =>
     Effect.gen(function* () {
       yield* runWithFreshDb((cwd) =>
-        withProtocol(cwd, async (client) => {
+        withProtocol(cwd, async (_era, client) => {
           const target = path.join(cwd, "target-repo")
           await mkdir(target, { recursive: true })
           const { failing } = await seedTargetRepo(target)
@@ -390,7 +396,7 @@ describe("mcp verify + memory tools (C3 + C4)", () => {
   it.live("protocol: banyan_verify lint kind returns a well-formed summary on a scriptless repo", () =>
     Effect.gen(function* () {
       yield* runWithFreshDb((cwd) =>
-        withProtocol(cwd, async (client) => {
+        withProtocol(cwd, async (_era, client) => {
           const target = path.join(cwd, "lint-repo")
           await mkdir(target, { recursive: true })
           await Bun.write(path.join(target, "package.json"), JSON.stringify({ name: "lint-target" }))
@@ -419,8 +425,11 @@ describe("mcp verify + memory tools (C3 + C4)", () => {
   it.live("protocol: banyan_memory store/recall/get/search/summary round-trip with origin:mcp", () =>
     Effect.gen(function* () {
       yield* runWithFreshDb((cwd) =>
-        withProtocol(cwd, async (client) => {
-          const key = "mcp:verify-probe"
+        withProtocol(cwd, async (era, client) => {
+          // Era-unique key: the memory store is shared across both legs of
+          // this test, so each era stores under its own key and recall
+          // still returns exactly the entry it stored.
+          const key = `mcp:verify-probe-${era}`
           const stored = await client.callTool({
             name: "banyan_memory",
             arguments: { op: "store", key, value: { fact: "probe marker seven" }, tags: ["probe"] },

@@ -12,7 +12,7 @@
 import path from "path"
 import { stat } from "node:fs/promises"
 import { randomBytes } from "node:crypto"
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
+import { McpServer } from "@modelcontextprotocol/server"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import type { BanyanConfig } from "@opencode-ai/core/v1/config/banyan-config"
 import type { createOpencodeClient, Event as SdkEvent, PermissionRuleset } from "@opencode-ai/sdk/v2"
@@ -165,7 +165,7 @@ export async function resolveMcpServerConfig(
       const svc = yield* Banyan.BanyanConfigService
       return yield* svc.get()
     }).pipe(Effect.provide(Banyan.banyanConfigServiceDefaultLayer)),
-  ).catch(() => ({} as BanyanConfig.Info))
+  ).catch(() => ({}) as BanyanConfig.Info)
   const mcpCfg = stored.banyancode_mcp_server
   const permission = resolveMcpPermission({
     stored: mcpCfg?.permission,
@@ -633,13 +633,13 @@ export async function createMcpServer(opts: McpBootstrapOptions = {}): Promise<M
       updateMetadata: writeMetadata,
       listMemory,
       // Read lazily: at registration time initialize has not run yet, so
-      // the client version is still undefined (§8.1 notes it becomes
-      // per-request clientInfo on modern transports — this is the v1 API).
-      // Probed structurally: the SDK declares getClientVersion on the
-      // Protocol base, not on the McpServer public type.
+      // the client version is still undefined. On legacy connections this
+      // returns the initialize-scoped clientInfo; on modern (2026-07-28)
+      // requests the SDK backfills it per request from the validated
+      // per-request `_meta` envelope — either way the handler-time read
+      // below sees the calling client.
       getMcpClientName: () => {
-        const probe = mcp as unknown as { getClientVersion?: () => { name?: string } | undefined }
-        return probe.getClientVersion?.()?.name ?? "unknown"
+        return mcp.server.getClientVersion()?.name ?? "unknown"
       },
       config: {
         permission: config.permission,

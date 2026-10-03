@@ -6,27 +6,21 @@
 // the engine (never the raw `ses_` id); unknown or expired handles return a
 // coded UNKNOWN_TASK error so the model can recover by starting a new task.
 //
-// Schemas are zod/v3 (the one MCP-facing dialect); handlers use the
+// Schemas are zod v4 (the one MCP-facing dialect, shared with the SDK); handlers use the
 // structured result/err helpers from output.ts and the compact result
 // builder from result.ts. Task tools are NOT readOnly — only cancel carries
 // destructiveHint. Registration order is alphabetical for deterministic
 // tools/list.
 
-import { z } from "zod/v3"
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import type { AnyObjectSchema } from "@modelcontextprotocol/sdk/server/zod-compat.js"
+import { z } from "zod"
+import type { McpServer } from "@modelcontextprotocol/server"
 import { TaskEngine, UnknownTaskError } from "./task-engine"
 import type { TaskRecord } from "./task-engine"
 import { assertYoloAllowed, buildRuleset } from "./policy"
 import type { PermissionPolicy } from "./policy"
 import { buildCompactResult, aggregateVerification, DEFAULT_RESULT_MAX_TOKENS } from "./result"
 import type { VerifierToolPartInput } from "./result"
-import {
-  CodeToolOutputSchema,
-  errorResult,
-  invalidArguments,
-  okResult,
-} from "./output"
+import { CodeToolOutputSchema, errorResult, invalidArguments, okResult } from "./output"
 import type { McpToolResult } from "./output"
 import type { SessionClient } from "./types"
 
@@ -101,11 +95,15 @@ const TaskStartInput = z.object({
   isolation: z
     .enum(["shared", "worktree"])
     .optional()
-    .describe("Recorded on the task. Worktree isolation lands in a later release; tasks share the project directory for now."),
+    .describe(
+      "Recorded on the task. Worktree isolation lands in a later release; tasks share the project directory for now.",
+    ),
   permission: z
     .enum(["reject", "edits", "yolo"])
     .optional()
-    .describe("Must equal the server policy (reject by default). yolo additionally needs the server flag --allow-yolo."),
+    .describe(
+      "Must equal the server policy (reject by default). yolo additionally needs the server flag --allow-yolo.",
+    ),
   wait_seconds: z
     .number()
     .int()
@@ -134,13 +132,20 @@ const TaskResultInput = z.object({
     .enum(["summary", "diff", "transcript"])
     .optional()
     .describe("summary carries counts alone, diff adds patches, transcript pages the session transcript."),
-  cursor: z.string().min(1).max(32).optional().describe("Transcript page cursor from a previous result (detail transcript only)."),
+  cursor: z
+    .string()
+    .min(1)
+    .max(32)
+    .optional()
+    .describe("Transcript page cursor from a previous result (detail transcript only)."),
 })
 type TaskResultArgs = z.infer<typeof TaskResultInput>
 
 const TaskReplyInput = z.object({
   task_id: z.string().min(1).max(128).describe("Opaque handle returned by banyan_task_start."),
-  decision: z.enum(["approve", "reject"]).describe("Typed decision for the pending permission or question. No free-text matching."),
+  decision: z
+    .enum(["approve", "reject"])
+    .describe("Typed decision for the pending permission or question. No free-text matching."),
   message: z
     .string()
     .min(1)
@@ -154,15 +159,6 @@ const TaskCancelInput = z.object({
   task_id: z.string().min(1).max(128).describe("Opaque handle returned by banyan_task_start."),
 })
 type TaskCancelArgs = z.infer<typeof TaskCancelInput>
-
-// Widened aliases for registration (same zod/SDK-copy rationale as
-// tools-code.ts: the SDK resolves its own zod copy, so the precise object
-// types would send tsgo into deep instantiation).
-const TaskStartCompat = TaskStartInput as unknown as AnyObjectSchema
-const TaskStatusCompat = TaskStatusInput as unknown as AnyObjectSchema
-const TaskResultCompat = TaskResultInput as unknown as AnyObjectSchema
-const TaskReplyCompat = TaskReplyInput as unknown as AnyObjectSchema
-const TaskCancelCompat = TaskCancelInput as unknown as AnyObjectSchema
 
 const NON_READ_ONLY_ANNOTATIONS = {
   readOnlyHint: false,
@@ -304,7 +300,7 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
     {
       title: "Cancel a delegated task",
       description: `Abort a running or queued delegated task and free its concurrency slot. ${HANDLE_LIFETIME}`,
-      inputSchema: TaskCancelCompat,
+      inputSchema: TaskCancelInput,
       outputSchema: CodeToolOutputSchema,
       annotations: {
         ...NON_READ_ONLY_ANNOTATIONS,
@@ -329,7 +325,7 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
     {
       title: "Reply to a task waiting for input",
       description: `Answer the pending permission or question on a needs_input task with a typed decision. An approve on a permission grants only that ask and never widens the server policy. ${HANDLE_LIFETIME}`,
-      inputSchema: TaskReplyCompat,
+      inputSchema: TaskReplyInput,
       outputSchema: CodeToolOutputSchema,
       annotations: NON_READ_ONLY_ANNOTATIONS,
       _meta: metaFor(outputChars),
@@ -361,7 +357,7 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
     {
       title: "Compact result of a delegated task",
       description: `Bounded summary of a delegated task: file change counts, verification outcome, todos, cost, and (with detail transcript) a paged transcript. Never the full transcript. ${HANDLE_LIFETIME}`,
-      inputSchema: TaskResultCompat,
+      inputSchema: TaskResultInput,
       outputSchema: CodeToolOutputSchema,
       annotations: {
         ...NON_READ_ONLY_ANNOTATIONS,
@@ -432,7 +428,7 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
     {
       title: "Start a delegated task",
       description: `Delegate a task to a subagent session and return an opaque task handle for banyan_task_status/result/reply/cancel. A queued task starts when a concurrency slot frees. ${HANDLE_LIFETIME}`,
-      inputSchema: TaskStartCompat,
+      inputSchema: TaskStartInput,
       outputSchema: CodeToolOutputSchema,
       annotations: NON_READ_ONLY_ANNOTATIONS,
       _meta: metaFor(outputChars),
@@ -483,7 +479,7 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
     {
       title: "Status of a delegated task",
       description: `Poll a delegated task: running, queued, needs_input (with the pending question), done, failed, or cancelled. wait_seconds long-polls up to 50 s. ${HANDLE_LIFETIME}`,
-      inputSchema: TaskStatusCompat,
+      inputSchema: TaskStatusInput,
       outputSchema: CodeToolOutputSchema,
       annotations: {
         ...NON_READ_ONLY_ANNOTATIONS,
