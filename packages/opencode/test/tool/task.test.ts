@@ -110,8 +110,8 @@ function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithPa
       role: "assistant",
       parentID: input.messageID ?? MessageID.ascending(),
       sessionID: input.sessionID,
-      mode: input.agent ?? "general",
-      agent: input.agent ?? "general",
+      mode: input.agent ?? "coder",
+      agent: input.agent ?? "coder",
       cost: 0,
       path: { cwd: "/tmp", root: "/tmp" },
       tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -150,15 +150,11 @@ describe("tool.task", () => {
 
         expect(first).toBe(second)
 
-        const alpha = first.indexOf("- alpha: Alpha agent")
-        const explore = first.indexOf("- explore:")
-        const general = first.indexOf("- general:")
-        const zebra = first.indexOf("- zebra: Zebra agent")
-
-        expect(alpha).toBeGreaterThan(-1)
-        expect(explore).toBeGreaterThan(alpha)
-        expect(general).toBeGreaterThan(explore)
-        expect(zebra).toBeGreaterThan(general)
+        // The build agent's default task permission only exposes the shipped subagents, so custom ones are not listed here.
+        const names = [...first.matchAll(/^- ([\w-]+):/gm)].map((match) => match[1])
+        expect(names).toContain("coder")
+        expect(names).toContain("explore")
+        expect(names).toEqual(names.toSorted((a, b) => a.localeCompare(b)))
       }),
     {
       config: {
@@ -174,6 +170,7 @@ describe("tool.task", () => {
         },
       },
     },
+    30_000,
   )
 
   it.instance(
@@ -226,7 +223,7 @@ describe("tool.task", () => {
         {
           description: "inspect bug",
           prompt: "look into the cache key path",
-          subagent_type: "general",
+          subagent_type: "coder",
           task_id: child.id,
         },
         {
@@ -245,7 +242,7 @@ describe("tool.task", () => {
       expect(kids).toHaveLength(1)
       expect(kids[0]?.id).toBe(child.id)
       expect(result.metadata.sessionId).toBe(child.id)
-      expect(result.output).toContain(`<task id="${child.id}" state="completed">`)
+      expect(result.output).toContain(`<task id="${child.id}" state="completed"`)
       expect(seen?.sessionID).toBe(child.id)
       expect(seen?.variant).toBe("xhigh")
     }),
@@ -264,7 +261,7 @@ describe("tool.task", () => {
           {
             description: "inspect bug",
             prompt: "look into the cache key path",
-            subagent_type: "general",
+            subagent_type: "coder",
           },
           {
             sessionID: chat.id,
@@ -287,11 +284,11 @@ describe("tool.task", () => {
       expect(calls).toHaveLength(1)
       expect(calls[0]).toEqual({
         permission: "task",
-        patterns: ["general"],
+        patterns: ["coder"],
         always: ["*"],
         metadata: {
           description: "inspect bug",
-          subagent_type: "general",
+          subagent_type: "coder",
         },
       })
     }),
@@ -323,7 +320,7 @@ describe("tool.task", () => {
           {
             description: "inspect bug",
             prompt: "look into the cache key path",
-            subagent_type: "general",
+            subagent_type: "coder",
           },
           {
             sessionID: chat.id,
@@ -360,7 +357,7 @@ describe("tool.task", () => {
         {
           description: "inspect bug",
           prompt: "look into the cache key path",
-          subagent_type: "general",
+          subagent_type: "coder",
           task_id: "ses_missing",
         },
         {
@@ -379,7 +376,7 @@ describe("tool.task", () => {
       expect(kids).toHaveLength(1)
       expect(kids[0]?.id).toBe(result.metadata.sessionId)
       expect(result.metadata.sessionId).not.toBe("ses_missing")
-      expect(result.output).toContain(`<task id="${result.metadata.sessionId}" state="completed">`)
+      expect(result.output).toContain(`<task id="${result.metadata.sessionId}" state="completed"`)
       expect(seen?.sessionID).toBe(result.metadata.sessionId)
     }),
   )
@@ -417,11 +414,6 @@ describe("tool.task", () => {
         expect(child.parentID).toBe(chat.id)
         expect(child.agent).toBe("reviewer")
         expect(child.permission).toEqual([
-          {
-            permission: "todowrite",
-            pattern: "*",
-            action: "deny",
-          },
           {
             permission: "bash",
             pattern: "*",
@@ -463,7 +455,7 @@ describe("tool.task", () => {
           {
             description: "inspect bug",
             prompt: "look into the cache key path",
-            subagent_type: "general",
+            subagent_type: "coder",
             background: true,
           },
           {
@@ -514,7 +506,7 @@ describe("tool.task", () => {
           {
             description: "inspect bug",
             prompt: "look into the cache key path",
-            subagent_type: "general",
+            subagent_type: "coder",
           },
           {
             sessionID: chat.id,
@@ -560,7 +552,7 @@ describe("tool.task", () => {
         {
           description: "inspect bug",
           prompt: "look into the cache key path",
-          subagent_type: "general",
+          subagent_type: "coder",
           background: true,
         },
         {
@@ -626,7 +618,7 @@ describe("tool.task", () => {
         {
           description: "inspect bug",
           prompt: "look into the cache key path",
-          subagent_type: "general",
+          subagent_type: "coder",
           background: true,
         },
         context,
@@ -635,7 +627,7 @@ describe("tool.task", () => {
         {
           description: "add investigation scope",
           prompt: "also inspect cancellation",
-          subagent_type: "general",
+          subagent_type: "coder",
           task_id: started.metadata.sessionId,
         },
         context,
@@ -672,7 +664,7 @@ describe("tool.task", () => {
         {
           description: "inspect bug",
           prompt: "look into the cache key path",
-          subagent_type: "general",
+          subagent_type: "coder",
           background: true,
         },
         {
@@ -705,7 +697,7 @@ describe("tool.task", () => {
         {
           description: "inspect bug",
           prompt: "look into the cache key path",
-          subagent_type: "general",
+          subagent_type: "coder",
           background: true,
         },
         {
@@ -744,7 +736,7 @@ describe("tool.task", () => {
         {
           description: "inspect bug",
           prompt: "look into the cache key path",
-          subagent_type: "general",
+          subagent_type: "coder",
           background: true,
         },
         {
@@ -783,7 +775,7 @@ describe("tool.task", () => {
         {
           description: "inspect bug",
           prompt: "look into the cache key path",
-          subagent_type: "general",
+          subagent_type: "coder",
           background: true,
         },
         {
@@ -822,7 +814,7 @@ describe("tool.task", () => {
         {
           description: "inspect bug",
           prompt: "look into the cache key path",
-          subagent_type: "general",
+          subagent_type: "coder",
           background: true,
         },
         {

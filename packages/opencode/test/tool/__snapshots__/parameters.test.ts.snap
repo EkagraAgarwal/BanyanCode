@@ -330,6 +330,47 @@ exports[`tool parameters JSON Schema (wire shape) task 1`] = `
       "description": "A short (3-5 words) description of the task",
       "type": "string",
     },
+    "plan": {
+      "description": "An optional plan to send to the subagent at session start",
+      "properties": {
+        "exitCriteria": {
+          "type": "string",
+        },
+        "steps": {
+          "items": {
+            "properties": {
+              "content": {
+                "type": "string",
+              },
+              "status": {
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed",
+                  "cancelled",
+                ],
+                "type": "string",
+              },
+            },
+            "required": [
+              "content",
+              "status",
+            ],
+            "type": "object",
+          },
+          "type": "array",
+        },
+        "title": {
+          "type": "string",
+        },
+      },
+      "required": [
+        "title",
+        "steps",
+        "exitCriteria",
+      ],
+      "type": "object",
+    },
     "prompt": {
       "description": "The task for the agent to perform",
       "type": "string",
@@ -340,6 +381,14 @@ exports[`tool parameters JSON Schema (wire shape) task 1`] = `
     },
     "task_id": {
       "description": "This should only be set if you mean to resume a previous task (you can pass a prior task_id and the task will continue the same subagent session as before instead of creating a fresh one)",
+      "type": "string",
+    },
+    "workspace": {
+      "description": "Optional workspace root override for the child session. Must be an existing directory. Never inferred from the prompt or workdir — when omitted the child inherits the parent session's workspace.",
+      "type": "string",
+    },
+    "worktree": {
+      "description": "Optional worktree root override for the child session (alias for workspace; worktree wins when both are set). Must be an existing directory; nonexistent or escaping paths are rejected.",
       "type": "string",
     },
   },

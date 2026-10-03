@@ -112,6 +112,8 @@ describe("tool.assertExternalDirectory", () => {
           const { requests, ctx } = makeCtx()
 
           const outerTmp = yield* tmpdirScoped()
+          // The drive-less alt path resolves against the cwd's drive, so this only holds when the tmpdir shares it.
+          if (path.parse(process.cwd()).root.toLowerCase() !== path.parse(outerTmp).root.toLowerCase()) return
           yield* Effect.promise(() => Bun.write(path.join(outerTmp, "outside.txt"), "x"))
 
           const target = path.join(outerTmp, "outside.txt")

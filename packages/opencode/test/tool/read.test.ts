@@ -185,6 +185,8 @@ describe("tool.read external_directory permission", () => {
     it.live("normalizes read permission paths on Windows", () =>
       Effect.gen(function* () {
         const dir = yield* tmpdirScoped({ git: true })
+        // The drive-less alt path resolves against the cwd's drive, so this only holds when the tmpdir shares it.
+        if (path.parse(process.cwd()).root.toLowerCase() !== path.parse(dir).root.toLowerCase()) return
         yield* put(path.join(dir, "test.txt"), "hello world")
 
         const { items, next } = asks()
@@ -258,10 +260,11 @@ describe("tool.read external_directory permission", () => {
 
 describe("tool.read env file permissions", () => {
   const cases: [string, boolean][] = [
-    [".env", true],
-    [".env.local", true],
-    [".env.production", true],
-    [".env.development.local", true],
+    // .env reads are intentionally auto-allowed for every agent since 2ecb67212f (src/agent/agent.ts).
+    [".env", false],
+    [".env.local", false],
+    [".env.production", false],
+    [".env.development.local", false],
     [".env.example", false],
     [".envrc", false],
     ["environment.ts", false],
