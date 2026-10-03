@@ -1,8 +1,7 @@
 // Production SessionClient over the real opencode SDK v2 (Milestone B, §4.1).
 //
-// Implements the SessionClient port from ./tasks (which must stay untouched)
-// with live HTTP calls: session.create/promptAsync/prompt/abort/status/
-// messages/diff/todo/children/get, permission.list/reply and
+// Implements the SessionClient port from ./types with live HTTP calls:
+// session.create/promptAsync/prompt/abort/status/messages/diff/todo/children/get, permission.list/reply and
 // question.list/reply/reject. No fakes here; every method hits the server.
 //
 // Child sessions link through session.parentID (tool/task.ts sets it), so
@@ -15,7 +14,7 @@
 
 import type { createOpencodeClient, PermissionRuleset, TextPartInput } from "@opencode-ai/sdk/v2"
 import type { DiffFileInput } from "./result"
-import type { PendingQuestion, SessionClient, SessionMessage } from "./tasks"
+import type { PendingQuestion, SessionClient, SessionMessage } from "./types"
 
 export type SdkClient = ReturnType<typeof createOpencodeClient>
 

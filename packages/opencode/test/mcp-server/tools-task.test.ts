@@ -25,7 +25,7 @@ import {
 } from "../../src/mcp-server/tools-task"
 import type { TaskToolsConfig, TaskToolsDeps } from "../../src/mcp-server/tools-task"
 import { newTaskHandle, assertHandleShape } from "../../src/mcp-server/task-handle"
-import type { SessionClient, SessionMessage } from "../../src/mcp-server/tasks"
+import type { SessionClient, SessionMessage } from "../../src/mcp-server/types"
 import type { DiffFileInput } from "../../src/mcp-server/result"
 import { isToolGroupEnabled, mcpSessionMetadata, mcpSessionTitle, resolveMcpServerConfig } from "../../src/mcp-server/server"
 

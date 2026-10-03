@@ -27,7 +27,7 @@ import {
   okResult,
 } from "./output"
 import type { McpToolResult } from "./output"
-import type { SessionClient } from "./tasks"
+import type { SessionClient } from "./types"
 
 export const TaskCancelToolName = "banyan_task_cancel" as const
 export const TaskReplyToolName = "banyan_task_reply" as const
