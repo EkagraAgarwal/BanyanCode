@@ -6,6 +6,7 @@ import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
 import { useToast } from "../../ui/toast"
 import { errorMessage } from "../../util/error"
+import { createTimeoutTracker } from "../../util/timers"
 import {
   confirmWorkspaceFileChanges,
   openWorkspaceSelect,
@@ -24,6 +25,10 @@ export function usePromptWorkspace(sessionID?: string) {
   const [creating, setCreating] = createSignal(false)
   const [creatingDots, setCreatingDots] = createSignal(3)
   const [notice, setNotice] = createSignal<string>()
+  // The warp notice auto-dismisses; the timer is tracked so unmount (or a
+  // second warp) cannot fire setNotice on a disposed owner.
+  const noticeTimers = createTimeoutTracker()
+  onCleanup(() => noticeTimers.dispose())
 
   async function create(selection: Extract<WorkspaceSelection, { type: "new" }>) {
     setCreating(true)
@@ -96,10 +101,12 @@ export function usePromptWorkspace(sessionID?: string) {
 
   function showNotice(name: string) {
     setNotice(`Warped to ${name}`)
-    setTimeout(() => setNotice(undefined), 4000)
+    noticeTimers.dispose()
+    noticeTimers.later(4000, () => setNotice(undefined))
   }
 
   function clearNotice() {
+    noticeTimers.dispose()
     setNotice(undefined)
   }
 
