@@ -38,12 +38,19 @@ function createWorkerFetch(client: RpcClient): typeof fetch {
   return fn as typeof fetch
 }
 
-function createEventSource(client: RpcClient): EventSource {
+function createEventSource(client: RpcClient): EventSource & { setVisibleSessions: (sessionIDs: string[]) => void } {
   return {
     subscribe: async (handler) => {
       return client.on<GlobalEvent>("global.event", (e) => {
         handler(e)
       })
+    },
+    // Report the displayed sessions so the worker can drop other sessions'
+    // events before they cross the boundary. Fire-and-forget with a bound:
+    // old workers lack this method and never reply, which would otherwise
+    // leave a pending call behind per navigation.
+    setVisibleSessions: (sessionIDs: string[]) => {
+      withTimeout(client.call("setVisibleSessions", { sessionIDs }), 1000).catch(() => {})
     },
   }
 }

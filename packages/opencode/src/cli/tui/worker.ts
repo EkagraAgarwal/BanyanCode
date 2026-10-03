@@ -25,8 +25,53 @@ void import("@/installation/telemetry").then(async (m) => {
 // Subscribe to global events and forward them via RPC. The handler is named
 // so shutdown can unsubscribe it — otherwise the worker leaks the listener
 // across server restarts in the same process.
+//
+// Worker-side pre-filtering (protocol v2, backward compatible):
+// - `sync` duplicate envelopes are dropped here; the TUI drops them anyway.
+// - Session events outside the visible set (reported by the TUI thread via
+//   the `setVisibleSessions` RPC) are dropped before crossing the boundary.
+//   Until the TUI reports, the filter stays inactive (pass-through).
+// - Mergeable per-token deltas (text/reasoning/tool-input) are coalesced
+//   per part over a ~33ms window; consumers append (`+=`) so one merged
+//   delta renders identically to the fragments.
+// - Anything the classifier cannot understand is passed through, never
+//   dropped, so unknown future event shapes cannot stall the TUI.
+const visibleSessionIDs = new Set<string>()
+let hasVisibleFilter = false
+
+const forwardEvent = (event: GlobalEvent) => {
+  try {
+    Rpc.emit("global.event", event)
+  } catch (error) {
+    console.error("[tui-worker] event forward failed", error instanceof Error ? error.message : String(error))
+  }
+}
+
+const coalescer = Rpc.createCoalescer(forwardEvent)
+
 const onGlobalEvent = (event: GlobalEvent) => {
-  Rpc.emit("global.event", event)
+  let forward: boolean
+  try {
+    forward = Rpc.shouldForward(event, hasVisibleFilter ? visibleSessionIDs : undefined)
+  } catch {
+    forward = true
+  }
+  if (!forward) return
+  try {
+    const key = Rpc.deltaKey(event)
+    if (key !== undefined) {
+      coalescer.push(key, event)
+      return
+    }
+    // Non-delta: flush buffered deltas first so cross-boundary order is
+    // preserved (e.g. deltas before their `.ended` boundary event).
+    coalescer.flush()
+    forwardEvent(event)
+  } catch {
+    // Degrade to pass-through: a coalescing failure must not drop the event
+    // or break this subscriber (which would stall every TUI update).
+    forwardEvent(event)
+  }
 }
 GlobalBus.on("event", onGlobalEvent)
 
@@ -93,8 +138,25 @@ export const rpc = {
   },
   async shutdown() {
     GlobalBus.off("event", onGlobalEvent)
+    coalescer.flush()
     await InstanceRuntime.disposeAllInstances()
     if (server) await server.stop(true)
+  },
+  // Sessions currently displayed by the TUI thread. Unknown to old TUI
+  // threads (which never call this); malformed input keeps the previous
+  // filter so a bad call cannot start dropping events.
+  async setVisibleSessions(input: { sessionIDs: string[] }) {
+    const ids = Array.isArray(input?.sessionIDs)
+      ? input.sessionIDs.filter((id): id is string => typeof id === "string")
+      : undefined
+    if (ids === undefined) return { ok: true as const }
+    visibleSessionIDs.clear()
+    for (const id of ids) visibleSessionIDs.add(id)
+    hasVisibleFilter = true
+    // Admitted buffer was accepted under the old filter; emit it rather
+    // than holding it past the filter change.
+    coalescer.flush()
+    return { ok: true as const }
   },
 }
 
