@@ -38,6 +38,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import { Effect } from "effect"
 import type { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
 import { EventTable } from "./sql"
+import type { EventV2 } from "../event"
 
 type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
 
@@ -162,8 +163,8 @@ export function compactSnapshots(db: Database, options?: CompactOptions): Effect
 
       const seen = new Set<string>()
       const horizonFloor = group.maxSeq - config.horizonSeqs
-      const deletable: Array<{ id: string; size: number }> = []
-      const horizonKept: Array<{ id: string; seq: number; size: number }> = []
+      const deletable: Array<{ id: EventV2.ID; size: number }> = []
+      const horizonKept: Array<{ id: EventV2.ID; seq: number; size: number }> = []
       let retainedRows = 0
       let retainedBytes = 0
       for (const row of rows) {
