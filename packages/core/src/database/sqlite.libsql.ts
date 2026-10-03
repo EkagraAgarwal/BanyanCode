@@ -71,6 +71,22 @@ const hintGarbageCollection = (): void => {
 
 const TRANSIENT_RETRIES = 5
 
+// Retry backoff on a real timer, NOT `Effect.sleep`: test layers run under
+// `TestClock` (see test/lib/effect.ts `testEnv`), whose clock only advances
+// manually, so a sleep-based backoff never resolves when a transient
+// SQLITE_BUSY/LOCKED fires there. The teardown checkpoint deterministically
+// hits SQLITE_LOCKED (build-time statements are still unfinalized — the
+// libsql driver reclaims them via GC), which hung every suite using a
+// Database layer in post-body teardown. Worst case is ~155ms of real delay
+// per operation; interruption clears the timer.
+const realDelay = (millis: number): Effect.Effect<void> =>
+  Effect.callback<void>((resume) => {
+    const timeoutId = setTimeout(() => {
+      resume(Effect.void)
+    }, millis)
+    return Effect.sync(() => clearTimeout(timeoutId))
+  })
+
 const withTransientRetry = <A>(runEffect: () => Effect.Effect<A, unknown>): Effect.Effect<A, unknown> => {
   const attempt = (left: number): Effect.Effect<A, unknown> =>
     Effect.catchIf(
@@ -79,7 +95,7 @@ const withTransientRetry = <A>(runEffect: () => Effect.Effect<A, unknown>): Effe
       () =>
         Effect.suspend(() => {
           hintGarbageCollection()
-          return Effect.sleep(`${Math.min(5 * 2 ** (TRANSIENT_RETRIES - left), 80)} millis`).pipe(
+          return realDelay(Math.min(5 * 2 ** (TRANSIENT_RETRIES - left), 80)).pipe(
             Effect.andThen(attempt(left - 1)),
           )
         }),
