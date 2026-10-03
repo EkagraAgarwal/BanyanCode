@@ -669,7 +669,7 @@ export const McpAddCommand = effectCmd({
 
 export const McpServeCommand = effectCmd({
   command: "serve",
-  describe: "serve BanyanCode over MCP (stdio transport)",
+  describe: "serve BanyanCode over MCP (stdio transport, or --http for stateless Streamable HTTP)",
   instance: false,
   builder: (yargs) =>
     yargs
@@ -686,8 +686,39 @@ export const McpServeCommand = effectCmd({
         describe: "permit yolo permission policy for MCP tasks (later phase)",
         type: "boolean",
         default: false,
+      })
+      .option("http", {
+        describe: "serve over stateless Streamable HTTP instead of stdio (loopback bind, bearer token required)",
+        type: "boolean",
+        default: false,
+      })
+      .option("port", {
+        describe: "port for --http (default: ephemeral)",
+        type: "number",
+      })
+      .option("hostname", {
+        describe: "hostname for --http (default: 127.0.0.1; non-loopback needs --token too)",
+        type: "string",
+      })
+      .option("token", {
+        describe: "bearer token for --http (default: $BANYANCODE_MCP_TOKEN, else a generated per-process token)",
+        type: "string",
       }),
   handler: Effect.fn("Cli.mcp.serve")(function* (args) {
+    if (args.http) {
+      const { serveHttp } = yield* Effect.promise(() => import("../../mcp-server/transport-http"))
+      yield* Effect.promise(() =>
+        serveHttp({
+          cwd: args.cwd,
+          attach: args.attach,
+          allowYolo: args["allow-yolo"],
+          port: args.port,
+          hostname: args.hostname,
+          token: args.token,
+        }),
+      )
+      return
+    }
     const { serveStdio } = yield* Effect.promise(() => import("../../mcp-server/transport-stdio"))
     yield* Effect.promise(() =>
       serveStdio({ cwd: args.cwd, attach: args.attach, allowYolo: args["allow-yolo"] }),
