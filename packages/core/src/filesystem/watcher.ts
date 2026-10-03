@@ -3,7 +3,7 @@ export * as Watcher from "./watcher"
 // @ts-ignore
 import { createWrapper } from "@parcel/watcher/wrapper"
 import type ParcelWatcher from "@parcel/watcher"
-import { Cause, Context, Effect, Fiber, Layer, Queue, Schema, Stream } from "effect"
+import { Cause, Context, Duration, Effect, Fiber, Layer, Queue, Schema, Stream } from "effect"
 import path from "path"
 import { Config } from "../config"
 import { EventV2 } from "../event"
@@ -19,6 +19,10 @@ declare const OPENCODE_LIBC: string | undefined
 
 const SUBSCRIBE_TIMEOUT_MS = 10_000
 const WATCH_QUEUE_CAPACITY = 1024
+// Bursts of Parcel callbacks for the same path (save storms, build output)
+// collapse to one publish per path within this window.
+const COALESCE_WINDOW = Duration.millis(50)
+const COALESCE_MAX_EVENTS = 256
 
 // Watcher-only: do NOT put these in shared Ignore.PATTERNS. Config loaders
 // must still discover `.banyancode/agents` etc. The indexer writes under
@@ -36,8 +40,18 @@ export const Event = {
   }),
 }
 
-type FileChange = { file: string; event: "add" | "change" | "unlink" }
+export type FileChange = { file: string; event: "add" | "change" | "unlink" }
 type QueueEvent = { kind: "change"; change: FileChange } | { kind: "error"; cause: unknown }
+
+// Last-wins per path: a burst of Parcel updates for the same file (add then
+// several changes, change then unlink) publishes once with the final state.
+// Downstream consumers (EventV2 listeners, SSE fanout, codegraph auto-update)
+// only ever see the coalesced event, never the raw burst.
+export function coalesceFileChanges(changes: ReadonlyArray<FileChange>): FileChange[] {
+  const latest = new Map<string, FileChange>()
+  for (const change of changes) latest.set(change.file, change)
+  return [...latest.values()]
+}
 
 const watcher = lazy((): typeof import("@parcel/watcher") | undefined => {
   try {
@@ -93,26 +107,40 @@ export const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const git = yield* Git.Service
 
-    // Queue + bounded drain fiber pattern. Parcel callbacks fire on a native
-    // thread and cannot await Effect — we offer each batch into a bounded
-    // queue (one short fiber per Parcel callback batch, not per event) and a
-    // single forkScoped drain fiber publishes through EventV2 in the layer's
-    // Effect context, which gives the publish call access to Location.Service
-    // for event stamping. Replaces the per-event `Effect.runForkWith` that
-    // spawned one fiber per Parcel update (banned per AGENTS.md lesson
-    // "Hot-path callbacks that need Effect queue handoff").
-    const queue = yield* Queue.bounded<QueueEvent>(WATCH_QUEUE_CAPACITY)
+    // Sliding queue + synchronous offers + coalescing drain. Parcel callbacks
+    // fire on a native thread and cannot await Effect, so the callback uses
+    // `offerUnsafe` (never suspends, no fiber at all) and a single forkScoped
+    // drain fiber publishes through EventV2 in the layer's Effect context,
+    // which gives the publish call access to Location.Service for event
+    // stamping. The sliding queue drops the oldest entries under pressure
+    // instead of suspending a per-batch fiber (unbounded fiber growth when
+    // the queue is full) or growing memory without bound. The drain groups
+    // bursts within COALESCE_WINDOW and publishes one event per path, so
+    // raw watcher bursts never reach the SSE fanout or the TUI.
+    const queue = yield* Queue.sliding<QueueEvent>(WATCH_QUEUE_CAPACITY)
     const subscriptions: ParcelWatcher.AsyncSubscription[] = []
     const drainFiber = yield* Effect.forkScoped(
       Stream.fromQueue(queue).pipe(
-        Stream.mapEffect((event) => {
-          switch (event.kind) {
-            case "change":
-              return events.publish(Event.Updated, event.change)
-            case "error":
-              return Effect.logWarning("watcher parcel callback error", { cause: Cause.pretty(Cause.fail(event.cause)) })
-          }
-        }, { concurrency: 1 }),
+        Stream.groupedWithin(COALESCE_MAX_EVENTS, COALESCE_WINDOW),
+        Stream.mapEffect(
+          (batch) =>
+            Effect.gen(function* () {
+              const items = Array.from(batch)
+              for (const item of items) {
+                if (item.kind === "error") {
+                  yield* Effect.logWarning("watcher parcel callback error", {
+                    cause: Cause.pretty(Cause.fail(item.cause)),
+                  })
+                }
+              }
+              for (const change of coalesceFileChanges(
+                items.flatMap((item) => (item.kind === "change" ? [item.change] : [])),
+              )) {
+                yield* events.publish(Event.Updated, change)
+              }
+            }),
+          { concurrency: 1 },
+        ),
         Stream.runDrain,
       ),
     )
@@ -126,21 +154,17 @@ export const layer = Layer.effect(
 
     const callback: ParcelWatcher.SubscribeCallback = (error, updates) => {
       if (error) {
-        Effect.runFork(Queue.offer(queue, { kind: "error", cause: error }).pipe(Effect.ignore))
+        Queue.offerUnsafe(queue, { kind: "error", cause: error })
         return
       }
-      // One short fiber per Parcel batch (NOT per event). All updates from this
-      // batch are offered sequentially inside the fiber; bounded Queue is the
-      // backpressure window so a flood can't spawn unbounded fibers.
-      Effect.runFork(
-        Effect.gen(function* () {
-          for (const update of updates) {
-            const event: "add" | "change" | "unlink" =
-              update.type === "create" ? "add" : update.type === "delete" ? "unlink" : "change"
-            yield* Queue.offer(queue, { kind: "change", change: { file: update.path, event } }).pipe(Effect.ignore)
-          }
-        }),
-      )
+      // Fully synchronous: no runFork per batch. A sliding queue never
+      // backpressures, so a flood drops the oldest entries instead of
+      // parking a fiber per batch (unbounded fiber growth).
+      for (const update of updates) {
+        const event: "add" | "change" | "unlink" =
+          update.type === "create" ? "add" : update.type === "delete" ? "unlink" : "change"
+        Queue.offerUnsafe(queue, { kind: "change", change: { file: update.path, event } })
+      }
     }
 
     const subscribe = (directory: string, ignore: string[]) => {
