@@ -28,7 +28,7 @@ describe("mcp paths guard", () => {
     await using outer = await tmpdir()
     const secret = path.join(outer.path, "secret.txt")
     await writeFile(secret, "secret")
-    await symlink(outer.path, path.join(tmp.path, "link"), "dir")
+    await symlink(outer.path, path.join(tmp.path, "link"), process.platform === "win32" ? "junction" : "dir")
     expect(isInsideRoot(tmp.path, "link/secret.txt")).toBe(false)
     expect(() => assertInsideRoot(tmp.path, "link/secret.txt")).toThrow("escapes")
   })
@@ -38,7 +38,7 @@ describe("mcp paths guard", () => {
     const inner = path.join(tmp.path, "inner")
     await mkdir(inner, { recursive: true })
     await writeFile(path.join(inner, "ok.txt"), "ok")
-    await symlink(inner, path.join(tmp.path, "alias"), "dir")
+    await symlink(inner, path.join(tmp.path, "alias"), process.platform === "win32" ? "junction" : "dir")
     expect(isInsideRoot(tmp.path, "alias/ok.txt")).toBe(true)
   })
 
