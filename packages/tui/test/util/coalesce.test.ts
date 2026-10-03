@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { decideCoalesceFlush } from "../../src/util/signal"
+import { coalesceMsForLength, decideCoalesceFlush, PART_RENDER_COALESCE_MS } from "../../src/util/signal"
 
 describe("decideCoalesceFlush", () => {
   test("flushes immediately when flushNow is true", () => {
@@ -48,5 +48,21 @@ describe("decideCoalesceFlush", () => {
         timerPending: true,
       }),
     ).toEqual({ action: "skip" })
+  })
+})
+
+describe("coalesceMsForLength", () => {
+  test("small parts render at the trailing-batch interval", () => {
+    expect(coalesceMsForLength(0)).toBe(PART_RENDER_COALESCE_MS)
+    expect(coalesceMsForLength(4096)).toBe(PART_RENDER_COALESCE_MS)
+  })
+
+  test("huge outputs back off monotonically", () => {
+    const mid = coalesceMsForLength(16_384)
+    const large = coalesceMsForLength(65_536)
+    const huge = coalesceMsForLength(1_000_000)
+    expect(mid).toBeGreaterThan(PART_RENDER_COALESCE_MS)
+    expect(large).toBeGreaterThanOrEqual(mid)
+    expect(huge).toBeGreaterThanOrEqual(large)
   })
 })

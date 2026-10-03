@@ -24,7 +24,7 @@ import { useEvent } from "../../context/event"
 import { SplitBorder, RoundedBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { Spinner, shouldSpinSpinner } from "../../component/spinner"
-import { createSyntaxStyleMemo, generateSubtleSyntax, selectedForeground, useTheme } from "../../context/theme"
+import { selectedForeground, useTheme } from "../../context/theme"
 import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "../../component/prompt"
 import type {
@@ -40,7 +40,7 @@ import type {
 } from "@opencode-ai/sdk/v2"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
-import { createCoalescedAccessor } from "../../util/signal"
+import { createCoalescedAccessor, PART_RENDER_COALESCE_MS } from "../../util/signal"
 import { webSearchProviderLabel } from "../../util/tool-display"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "../../context/sdk"
@@ -81,7 +81,7 @@ import { useTuiConfig } from "../../config"
 import { useClipboard } from "../../context/clipboard"
 import { nextThinkingMode, reasoningSummary, useThinkingMode, type ThinkingMode } from "../../context/thinking"
 import { getScrollAcceleration } from "../../util/scroll"
-import { collapseToolOutput } from "../../util/collapse-tool-output"
+import { markdownStreamWindow, tailToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
 import { getRevertDiffFiles } from "../../util/revert-diff"
@@ -1796,7 +1796,7 @@ export function JevActivityPart(props: { last: boolean; part: unknown; message: 
 const INLINE_TOOL_ICON_WIDTH = 2
 
 export function ReasoningPart(props: { last: boolean; part: SdkReasoningPart; message: AssistantMessage }) {
-  const { theme } = useTheme()
+  const { theme, subtleSyntax } = useTheme()
   const ctx = use()
   const sync = useSync()
   // Collapsed by default in hide mode: a single line throughout, so the
@@ -1810,6 +1810,10 @@ export function ReasoningPart(props: { last: boolean; part: SdkReasoningPart; me
   // Reasoning is finalized when the server sets `time.end` (see processor.ts).
   // Flips independently of the parent message completing.
   const isDone = createMemo(() => props.part.time.end !== undefined)
+  // V3/T5: coalesce reasoning deltas — only the last state renders per 33ms
+  // window while streaming; flush immediately once time.end lands so the
+  // finished state is never a stale frame.
+  const display = createCoalescedAccessor(content, PART_RENDER_COALESCE_MS, isDone)
   // Animate only while the part is open, the owning message is open, and the
   // session is still busy — a reasoning part without `time.end` from a dead
   // turn must not redraw forever.
@@ -1825,8 +1829,9 @@ export function ReasoningPart(props: { last: boolean; part: SdkReasoningPart; me
     const end = props.part.time.end
     return end === undefined ? 0 : Math.max(0, end - props.part.time.start)
   })
-  const summary = createMemo(() => reasoningSummary(content()))
-  const syntax = createSyntaxStyleMemo(() => generateSubtleSyntax(theme))
+  const summary = createMemo(() => reasoningSummary(display()))
+  // V3/T5: shared theme subtleSyntax — never allocate a per-part native
+  // SyntaxStyle (each one is a native object kept for up to 100 messages).
 
   const toggle = () => {
     if (!inMinimal()) return
@@ -1834,7 +1839,7 @@ export function ReasoningPart(props: { last: boolean; part: SdkReasoningPart; me
   }
 
   return (
-    <Show when={content()}>
+    <Show when={display()}>
       <box id={"text-" + props.part.id} paddingLeft={3} marginTop={1} flexDirection="column" flexShrink={0}>
         <box onMouseUp={toggle}>
           <ReasoningHeader
@@ -1852,8 +1857,8 @@ export function ReasoningPart(props: { last: boolean; part: SdkReasoningPart; me
               filetype="markdown"
               drawUnstyledText={false}
               streaming={!isDone()}
-              syntaxStyle={syntax()}
-              content={summary().body}
+              syntaxStyle={subtleSyntax()}
+              content={isDone() ? summary().body : markdownStreamWindow(summary().body, false)}
               conceal={ctx.conceal()}
               fg={theme.textMuted}
             />
@@ -1924,14 +1929,17 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   // show a stale coalesced frame.
   const done = createMemo(() => props.part.time?.end !== undefined)
   const display = createCoalescedAccessor(content, 50, done)
+  // V3/T8: length-scaled markdown window — huge streaming bodies re-lex only
+  // the tail window per flush; finished parts render in full.
+  const rendered = createMemo(() => (done() ? display() : markdownStreamWindow(display(), false)))
   return (
-    <Show when={display()}>
+    <Show when={rendered()}>
       <box id={"text-" + props.part.id} paddingLeft={3} flexShrink={0}>
         <markdown
           syntaxStyle={syntax()}
           streaming={!done()}
           internalBlockMode="top-level"
-          content={display()}
+          content={rendered()}
           tableOptions={{ style: "grid" }}
           conceal={ctx.conceal()}
           fg={theme.markdownText}
@@ -2056,11 +2064,14 @@ function GenericTool(props: ToolProps) {
   const ctx = use()
   const output = createMemo(() => props.output?.trim() ?? "")
   const [expanded, setExpanded] = createSignal(false)
+  // V3/T8: output tail cap — render only the last N KB/lines of huge
+  // outputs so split + layout stay bounded. Small outputs are untouched.
+  const tail = createMemo(() => tailToolOutput(output()))
   // Single-line collapsed view: show the first line + an inline pill
   // indicating how many more lines are hidden. Click toggles expand.
-  const allLines = createMemo(() => output().split("\n"))
-  const overflowCount = createMemo(() => Math.max(0, allLines().length - 1))
-  const hasOverflow = createMemo(() => overflowCount() > 0)
+  const allLines = createMemo(() => tail().output.split("\n"))
+  const overflowCount = createMemo(() => Math.max(0, allLines().length - 1) + tail().omittedLines)
+  const hasOverflow = createMemo(() => overflowCount() > 0 || tail().overflow)
   const preview = createMemo(() => allLines()[0] ?? "")
   const titleText = createMemo(() => input(props.input))
   // Title should fit on one line. If it's too long, truncate with an ellipsis.
@@ -2098,8 +2109,13 @@ function GenericTool(props: ToolProps) {
               }
             >
               <text fg={theme.text} wrapMode="word">
-                {output()}
+                {tail().output}
               </text>
+              <Show when={tail().overflow}>
+                <text fg={theme.textMuted} marginTop={0}>
+                  {"… " + tail().omittedLines + " head lines omitted · showing tail"}
+                </text>
+              </Show>
               <Show when={hasOverflow()}>
                 <text fg={theme.textMuted} marginTop={0}>
                   {"↕ click to collapse"}
@@ -2361,13 +2377,20 @@ function Shell(props: ToolProps) {
   const pathFormatter = usePathFormatter()
   const ctx = use()
   const isRunning = createMemo(() => props.part.state.status === "running")
-  const output = createMemo(() => stripAnsi(stringValue(props.metadata.output)?.trim() ?? ""))
+  const rawOutput = createMemo(() => stripAnsi(stringValue(props.metadata.output)?.trim() ?? ""))
+  const outputDone = createMemo(() => props.part.state.status !== "running")
+  // V3/T8: 33ms trailing batch for streaming shell output — only the last
+  // state renders per window — plus a tail cap so huge outputs split + lay
+  // out only their last N KB/lines. Finished output renders in full unless
+  // it exceeds the cap.
+  const coalescedOutput = createCoalescedAccessor(rawOutput, PART_RENDER_COALESCE_MS, outputDone)
+  const tail = createMemo(() => tailToolOutput(coalescedOutput()))
   const [expanded, setExpanded] = createSignal(false)
   // Same 1-line collapsed layout as GenericTool: first line + inline pill
   // showing the remaining line count. Click toggles expand.
-  const allLines = createMemo(() => output().split("\n"))
-  const overflowCount = createMemo(() => Math.max(0, allLines().length - 1))
-  const hasOverflow = createMemo(() => overflowCount() > 0)
+  const allLines = createMemo(() => tail().output.split("\n"))
+  const overflowCount = createMemo(() => Math.max(0, allLines().length - 1) + tail().omittedLines)
+  const hasOverflow = createMemo(() => overflowCount() > 0 || tail().overflow)
   const preview = createMemo(() => allLines()[0] ?? "")
 
   const workdirDisplay = createMemo(() => {
@@ -2415,8 +2438,13 @@ function Shell(props: ToolProps) {
                 }
               >
                 <text fg={theme.text} wrapMode="word">
-                  {output()}
+                  {tail().output}
                 </text>
+                <Show when={tail().overflow}>
+                  <text fg={theme.textMuted} marginTop={0}>
+                    {"… " + tail().omittedLines + " head lines omitted · showing tail"}
+                  </text>
+                </Show>
                 <Show when={hasOverflow()}>
                   <text fg={theme.textMuted} marginTop={0}>
                     {"↕ click to collapse"}
@@ -2433,6 +2461,27 @@ function Shell(props: ToolProps) {
         </InlineTool>
       </Match>
     </Switch>
+  )
+}
+
+// V3/T8: lazy diffs — huge diff/code views mount only on demand, so a long
+// session with dozens of file edits doesn't pay tree-sitter highlight +
+// layout per view. Small diffs (the common case) mount exactly as before.
+const LAZY_DIFF_AUTO_MOUNT_CHARS = 20_000
+
+function useLazyDiff(content: () => string) {
+  const [expanded, setExpanded] = createSignal(false)
+  const auto = createMemo(() => content().length <= LAZY_DIFF_AUTO_MOUNT_CHARS)
+  const visible = createMemo(() => auto() || expanded())
+  return { auto, visible, setExpanded }
+}
+
+function LazyDiffPlaceholder(props: { lines: number; onExpand: () => void }) {
+  const { theme } = useTheme()
+  return (
+    <box paddingLeft={1} onMouseUp={props.onExpand}>
+      <text fg={theme.textMuted}>{"Diff " + props.lines + " lines · click to view"}</text>
+    </box>
   )
 }
 
@@ -2454,6 +2503,8 @@ function Write(props: ToolProps) {
   })
 
   const label = createMemo(() => `Diff · ${pathFormatter.format(stringValue(props.input.filePath) ?? "")}`)
+  const lazy = useLazyDiff(code)
+  const codeLines = createMemo(() => code().split("\n").length)
 
   return (
     <Switch>
@@ -2465,15 +2516,20 @@ function Write(props: ToolProps) {
           permissionRequestID={permissionRequestID()}
         >
           <BlockTool title={"# Wrote " + pathFormatter.format(stringValue(props.input.filePath))} part={props.part}>
-            <line_number fg={theme.textMuted} minWidth={3} paddingRight={1}>
-              <code
-                conceal={false}
-                fg={theme.text}
-                filetype={filetype(stringValue(props.input.filePath))}
-                syntaxStyle={syntax()}
-                content={code()}
-              />
-            </line_number>
+            <Show
+              when={lazy.visible()}
+              fallback={<LazyDiffPlaceholder lines={codeLines()} onExpand={() => lazy.setExpanded(true)} />}
+            >
+              <line_number fg={theme.textMuted} minWidth={3} paddingRight={1}>
+                <code
+                  conceal={false}
+                  fg={theme.text}
+                  filetype={filetype(stringValue(props.input.filePath))}
+                  syntaxStyle={syntax()}
+                  content={code()}
+                />
+              </line_number>
+            </Show>
             <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.filePath) ?? ""} />
           </BlockTool>
         </MessageBlock>
@@ -2714,6 +2770,8 @@ function Edit(props: ToolProps) {
   const ft = createMemo(() => filetype(stringValue(props.input.filePath)))
 
   const diffContent = createMemo(() => stringValue(props.metadata.diff) ?? "")
+  const lazy = useLazyDiff(diffContent)
+  const diffLines = createMemo(() => diffContent().split("\n").length)
 
   return (
     <Switch>
@@ -2725,27 +2783,32 @@ function Edit(props: ToolProps) {
           permissionRequestID={permissionRequestID()}
         >
           <BlockTool title={"← Edit " + pathFormatter.format(stringValue(props.input.filePath))} part={props.part}>
-            <box paddingLeft={1}>
-              <diff
-                diff={diffContent()}
-                view={view()}
-                filetype={ft()}
-                syntaxStyle={syntax()}
-                showLineNumbers={true}
-                width="100%"
-                wrapMode={ctx.diffWrapMode()}
-                fg={theme.text}
-                addedBg={theme.diffAddedBg}
-                removedBg={theme.diffRemovedBg}
-                contextBg={theme.diffContextBg}
-                addedSignColor={theme.diffHighlightAdded}
-                removedSignColor={theme.diffHighlightRemoved}
-                lineNumberFg={theme.diffLineNumber}
-                lineNumberBg={theme.diffContextBg}
-                addedLineNumberBg={theme.diffAddedLineNumberBg}
-                removedLineNumberBg={theme.diffRemovedLineNumberBg}
-              />
-            </box>
+            <Show
+              when={lazy.visible()}
+              fallback={<LazyDiffPlaceholder lines={diffLines()} onExpand={() => lazy.setExpanded(true)} />}
+            >
+              <box paddingLeft={1}>
+                <diff
+                  diff={diffContent()}
+                  view={view()}
+                  filetype={ft()}
+                  syntaxStyle={syntax()}
+                  showLineNumbers={true}
+                  width="100%"
+                  wrapMode={ctx.diffWrapMode()}
+                  fg={theme.text}
+                  addedBg={theme.diffAddedBg}
+                  removedBg={theme.diffRemovedBg}
+                  contextBg={theme.diffContextBg}
+                  addedSignColor={theme.diffHighlightAdded}
+                  removedSignColor={theme.diffHighlightRemoved}
+                  lineNumberFg={theme.diffLineNumber}
+                  lineNumberBg={theme.diffContextBg}
+                  addedLineNumberBg={theme.diffAddedLineNumberBg}
+                  removedLineNumberBg={theme.diffRemovedLineNumberBg}
+                />
+              </box>
+            </Show>
             <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.filePath) ?? ""} />
           </BlockTool>
         </MessageBlock>
@@ -2781,28 +2844,36 @@ function ApplyPatch(props: ToolProps) {
   })
 
   function Diff(p: { diff: string; filePath: string }) {
+    const lazy = useLazyDiff(() => p.diff)
     return (
-      <box paddingLeft={1}>
-        <diff
-          diff={p.diff}
-          view={view()}
-          filetype={filetype(p.filePath)}
-          syntaxStyle={syntax()}
-          showLineNumbers={true}
-          width="100%"
-          wrapMode={ctx.diffWrapMode()}
-          fg={theme.text}
-          addedBg={theme.diffAddedBg}
-          removedBg={theme.diffRemovedBg}
-          contextBg={theme.diffContextBg}
-          addedSignColor={theme.diffHighlightAdded}
-          removedSignColor={theme.diffHighlightRemoved}
-          lineNumberFg={theme.diffLineNumber}
-          lineNumberBg={theme.diffContextBg}
-          addedLineNumberBg={theme.diffAddedLineNumberBg}
-          removedLineNumberBg={theme.diffRemovedLineNumberBg}
-        />
-      </box>
+      <Show
+        when={lazy.visible()}
+        fallback={
+          <LazyDiffPlaceholder lines={p.diff.split("\n").length} onExpand={() => lazy.setExpanded(true)} />
+        }
+      >
+        <box paddingLeft={1}>
+          <diff
+            diff={p.diff}
+            view={view()}
+            filetype={filetype(p.filePath)}
+            syntaxStyle={syntax()}
+            showLineNumbers={true}
+            width="100%"
+            wrapMode={ctx.diffWrapMode()}
+            fg={theme.text}
+            addedBg={theme.diffAddedBg}
+            removedBg={theme.diffRemovedBg}
+            contextBg={theme.diffContextBg}
+            addedSignColor={theme.diffHighlightAdded}
+            removedSignColor={theme.diffHighlightRemoved}
+            lineNumberFg={theme.diffLineNumber}
+            lineNumberBg={theme.diffContextBg}
+            addedLineNumberBg={theme.diffAddedLineNumberBg}
+            removedLineNumberBg={theme.diffRemovedLineNumberBg}
+          />
+        </box>
+      </Show>
     )
   }
 
