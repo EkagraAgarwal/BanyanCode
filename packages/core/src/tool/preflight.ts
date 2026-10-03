@@ -8,6 +8,7 @@ import path from "node:path"
 import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import type { Interface as CodegraphAnalyzerInterface } from "../banyancode/codegraph-analyzer"
 import type { Interface as CodegraphReadinessInterface } from "../banyancode/codegraph-readiness"
+import { ensureReadyBounded } from "../banyancode/codegraph-readiness"
 import type { Interface as RepositoryIntelligenceInterface } from "../banyancode/repository-intelligence/service"
 import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan, isStale } from "../banyancode"
@@ -120,26 +121,6 @@ function isDocPath(p: string): boolean {
 }
 function isConfigPath(p: string): boolean {
   return CONFIG_PATH_PATTERNS.some((re) => re.test(p))
-}
-
-function findRepoRoot(startDir: string): string | undefined {
-  let dir = path.resolve(startDir)
-  const { root: fsRoot } = path.parse(dir)
-  let current: string | undefined = dir
-  while (current !== undefined && current !== fsRoot) {
-    if (existsSync(path.join(current, ".git"))) return current
-    const parent = path.dirname(current)
-    if (parent === current) break
-    current = parent
-  }
-  current = dir
-  while (current !== undefined && current !== fsRoot) {
-    if (existsSync(path.join(current, "package.json"))) return current
-    const parent = path.dirname(current)
-    if (parent === current) break
-    current = parent
-  }
-  return undefined
 }
 
 async function readDirSafe(dir: string): Promise<string[]> {
@@ -262,7 +243,7 @@ export const computePreflight = (
   input: typeof Input.Type,
 ): Effect.Effect<typeof Output.Type, never, never> =>
   Effect.gen(function* () {
-    const repoRoot = input.root ?? findRepoRoot(process.cwd()) ?? process.cwd()
+    const repoRoot = input.root ?? Banyan.WorkspaceIdentity.findRepoRoot(process.cwd()) ?? process.cwd()
     const now = Date.now()
 
     const resolution = yield* resolveGraphTargetPure(deps.repo, { target: input.target })
@@ -525,7 +506,7 @@ export const makePreflightTool = (deps: {
           if (effective._tag === "InvalidWorkspace") {
             yield* Effect.logWarning(`preflight: ${effective.diagnostic.message}`)
           } else {
-            const ready = yield* deps.readiness.ensureReady({ root: effective.root })
+            const ready = yield* ensureReadyBounded(deps.readiness, { root: effective.root })
             if (ready.reason === "failed") {
               yield* Effect.logWarning(`preflight: readiness failed: ${ready.error ?? "unknown"}`)
             }

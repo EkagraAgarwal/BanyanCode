@@ -5,6 +5,7 @@ import { Effect, Layer, Schema } from "effect"
 import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import type { Interface as CodegraphAnalyzerInterface } from "../banyancode/codegraph-analyzer"
 import type { Interface as CodegraphReadinessInterface } from "../banyancode/codegraph-readiness"
+import { ensureReadyBounded } from "../banyancode/codegraph-readiness"
 import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan, isStale } from "../banyancode"
 import { countStaleFilesFor } from "../banyancode/graph-staleness"
@@ -118,7 +119,7 @@ export const makeCodeFindTool = (deps: {
       yield* Effect.logWarning(`code_find: ${effective.diagnostic.message}`)
       return { reason: "failed", autoBuilt: false, error: effective.diagnostic.message } as const
     }
-    const ready = yield* deps.readiness.ensureReady({ root: effective.root })
+    const ready = yield* ensureReadyBounded(deps.readiness, { root: effective.root })
     if (ready.reason === "failed") {
       yield* Effect.logWarning(`code_find: readiness failed: ${ready.error ?? "unknown"}`)
     }

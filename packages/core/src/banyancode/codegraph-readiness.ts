@@ -117,6 +117,32 @@ export const statusFromMeta = (meta: CodegraphMeta | undefined): ReadinessResult
   return { reason: "ready", autoBuilt: false, ...metaFields(meta) }
 }
 
+const readyWaitMs = () => {
+  const parsed = Number(process.env.BANYANCODE_CODEGRAPH_READY_WAIT_MS)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10_000
+}
+
+/**
+ * `ensureReady` awaits a synchronous full build on a missing graph, which would block a
+ * request for the whole index. Bound the wait; the build keeps running in its detached fiber.
+ */
+export const ensureReadyBounded = (
+  readiness: Interface,
+  input: { root: string; thresholdMs?: number },
+): Effect.Effect<ReadinessResult> =>
+  readiness.ensureReady(input).pipe(
+    Effect.timeoutOption(readyWaitMs()),
+    Effect.map((result) =>
+      result._tag === "Some"
+        ? result.value
+        : ({
+            reason: "failed",
+            autoBuilt: true,
+            error: `codegraph build in progress for ${input.root}; results may be incomplete — retry shortly`,
+          } satisfies ReadinessResult),
+    ),
+  )
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {

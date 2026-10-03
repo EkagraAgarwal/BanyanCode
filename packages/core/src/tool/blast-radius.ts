@@ -5,6 +5,7 @@ import { Effect, Layer, Schema } from "effect"
 import type { Interface as CodegraphRepoInterface } from "../banyancode/codegraph-repo"
 import type { Interface as CodegraphAnalyzerInterface } from "../banyancode/codegraph-analyzer"
 import type { Interface as CodegraphReadinessInterface } from "../banyancode/codegraph-readiness"
+import { ensureReadyBounded } from "../banyancode/codegraph-readiness"
 import type { Interface as RepositoryIntelligenceInterface } from "../banyancode/repository-intelligence/service"
 import type { Interface as PermissionV2Interface } from "../permission"
 import { Banyan, isStale } from "../banyancode"
@@ -221,7 +222,7 @@ export const makeBlastRadiusTool = (deps: {
           if (effective._tag === "InvalidWorkspace") {
             yield* Effect.logWarning(`blast_radius: ${effective.diagnostic.message}`)
           } else {
-            const ready = yield* deps.readiness.ensureReady({ root: effective.root })
+            const ready = yield* ensureReadyBounded(deps.readiness, { root: effective.root })
             if (ready.reason === "failed") {
               yield* Effect.logWarning(`blast_radius: readiness failed: ${ready.error ?? "unknown"}`)
             }

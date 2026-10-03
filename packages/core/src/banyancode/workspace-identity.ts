@@ -1,6 +1,7 @@
 export * as WorkspaceIdentity from "./workspace-identity"
 
 import { existsSync, realpathSync, statSync } from "node:fs"
+import { homedir } from "node:os"
 import { isAbsolute, join, parse, relative, resolve } from "node:path"
 import { deriveBanyanDbPath, findContainingBanyanDir } from "../database/banyan-db-path"
 
@@ -105,48 +106,69 @@ const invalid = (message: string): EffectiveRoot => ({
   diagnostic: { kind: "invalid-workspace", message },
 })
 
-const findRepoRoot = (startDir: string): string | undefined => {
-  let dir = resolve(startDir)
+const samePath = (a: string, b: string): boolean =>
+  process.platform === "win32" ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b)
+
+// The home directory (or any ancestor) is never a project root: a stray ~/package.json
+// would otherwise make every marker-less folder under home resolve to the whole home dir.
+export const findRepoRoot = (startDir: string, home: string = homedir()): string | undefined => {
+  const dir = resolve(startDir)
   const { root: fsRoot } = parse(dir)
-  let current = dir
-  while (current !== fsRoot) {
-    try {
-      if (statSync(join(current, ".git")).isDirectory()) return current
-    } catch {
-      // keep walking
+  const walk = (marker: string, isMarker: (p: string) => boolean): string | undefined => {
+    let current = dir
+    while (current !== fsRoot && !samePath(current, home) && !isAncestor(current, home)) {
+      if (isMarker(join(current, marker))) return current
+      current = resolve(current, "..")
     }
-    current = resolve(current, "..")
+    return undefined
   }
-  current = dir
-  while (current !== fsRoot) {
-    try {
-      if (statSync(join(current, "package.json")).isFile()) return current
-    } catch {
-      // keep walking
-    }
-    current = resolve(current, "..")
-  }
-  return undefined
+  return (
+    walk(".git", (p) => {
+      try {
+        return statSync(p).isDirectory()
+      } catch {
+        return false
+      }
+    }) ??
+    walk("package.json", (p) => {
+      try {
+        return statSync(p).isFile()
+      } catch {
+        return false
+      }
+    })
+  )
+}
+
+const isAncestor = (candidate: string, descendant: string): boolean => {
+  const rel = relative(resolve(candidate), resolve(descendant))
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)
 }
 
 export const resolveEffectiveRoot = (input: {
   readonly explicitRoot?: string | undefined
   readonly worktree?: string | undefined
   readonly cwd?: string | undefined
+  readonly home?: string | undefined
 }): EffectiveRoot => {
   const cwd = input.cwd ?? process.cwd()
-  const candidate = input.explicitRoot ?? input.worktree ?? findRepoRoot(cwd) ?? cwd
+  const home = input.home ?? homedir()
+  const repoRoot = findRepoRoot(cwd, home)
+  const candidate = input.explicitRoot ?? input.worktree ?? repoRoot ?? cwd
   const source: EffectiveRootSource = input.explicitRoot
     ? "explicit"
     : input.worktree
       ? "worktree"
-      : findRepoRoot(cwd) !== undefined && candidate !== cwd
+      : repoRoot !== undefined && candidate !== cwd
         ? "repo-walk"
         : "cwd"
   if (!candidate || candidate.trim() === "") return invalid("workspace root must be a non-empty path")
   const root = sanitizeRoot(candidate)
   const { root: fsRoot } = parse(root)
   if (root === fsRoot) return invalid(`workspace root '${candidate}' resolves to a filesystem root; pass a workspace directory instead`)
+  if (samePath(root, home)) {
+    return invalid(`workspace root '${candidate}' is the user home directory; open a project directory instead`)
+  }
   try {
     if (!existsSync(root)) return invalid(`workspace root '${candidate}' does not exist`)
     if (!statSync(root).isDirectory()) return invalid(`workspace root '${candidate}' is not a directory`)
