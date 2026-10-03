@@ -10,7 +10,7 @@ import * as LSPServer from "./server"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { Process } from "@/util/process"
 import { spawn as lspspawn } from "./launch"
-import { Effect, Layer, Context, Schema, Option } from "effect"
+import { Effect, Layer, Context, Schema, Option, Duration, Schedule, Cause } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { containsPath } from "@/project/instance-context"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
@@ -182,11 +182,19 @@ const filterExperimentalServers = (servers: Record<string, LSPServer.Info>, flag
 }
 
 export const DEFAULT_LSP_IDLE_TIMEOUT_MS = 5 * 60 * 1000
+export const DEFAULT_LSP_SWEEP_MS = 60 * 1000
 
 export function resolveLspIdleTimeoutMs(raw?: unknown) {
   if (raw === 0) return 0
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return DEFAULT_LSP_IDLE_TIMEOUT_MS
   return Math.floor(raw)
+}
+
+export function resolveLspSweepMs(raw?: unknown) {
+  const value = typeof raw === "string" ? Number(raw) : raw
+  if (value === 0) return 0
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return DEFAULT_LSP_SWEEP_MS
+  return Math.floor(value)
 }
 
 const clientKey = (root: string, serverID: string) => root + serverID
@@ -221,6 +229,26 @@ function mergeServerInitialization(
 
 async function shutdownClient(client: LSPClient.Info) {
   await client.shutdown().catch(() => {})
+}
+
+// Shuts down clients idle past the state's timeout. Shared by the lazy check
+// in getClients (next file touch) and the periodic sweep fiber, so RSS never
+// lingers when no files are touched.
+async function shutdownIdleClients(s: State) {
+  if (s.idleTimeoutMs <= 0) return
+  const now = Date.now()
+  const idle: LSPClient.Info[] = []
+  for (const client of s.clients) {
+    const at = s.lastActivity.get(clientKey(client.root, client.serverID)) ?? now
+    if (now - at > s.idleTimeoutMs) idle.push(client)
+  }
+  if (idle.length === 0) return
+  s.clients = s.clients.filter((c) => !idle.includes(c))
+  for (const client of idle) {
+    s.lastActivity.delete(clientKey(client.root, client.serverID))
+    s.clientPid.delete(clientKey(client.root, client.serverID))
+  }
+  await Promise.all(idle.map((client) => shutdownClient(client)))
 }
 
 async function readProcessTreeRss(pid?: number) {
@@ -408,6 +436,22 @@ export const layer = Layer.effect(
           }),
         )
 
+        // Periodic idle sweep so server RSS doesn't linger when no files are
+        // touched. `s` is fully constructed here; the fiber only reuses the
+        // same shutdown path as getClients, and dies with the instance scope.
+        // Env-tunable via BANYANCODE_LSP_SWEEP_MS (0 disables).
+        const sweepMs = resolveLspSweepMs(process.env.BANYANCODE_LSP_SWEEP_MS)
+        if (sweepMs > 0) {
+          yield* Effect.promise(() => shutdownIdleClients(s)).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("LSP idle sweep failed", { cause: Cause.pretty(cause) }),
+            ),
+            Effect.repeat(Schedule.spaced(Duration.millis(sweepMs))),
+            Effect.delay(Duration.millis(sweepMs)),
+            Effect.forkScoped,
+          )
+        }
+
         return s
       }),
     )
@@ -421,22 +465,7 @@ export const layer = Layer.effect(
         const result: LSPClient.Info[] = []
         let updated = 0
 
-        if (s.idleTimeoutMs > 0) {
-          const now = Date.now()
-          const idle: LSPClient.Info[] = []
-          for (const client of s.clients) {
-            const at = s.lastActivity.get(clientKey(client.root, client.serverID)) ?? now
-            if (now - at > s.idleTimeoutMs) idle.push(client)
-          }
-          if (idle.length > 0) {
-            s.clients = s.clients.filter((c) => !idle.includes(c))
-            for (const client of idle) {
-              s.lastActivity.delete(clientKey(client.root, client.serverID))
-              s.clientPid.delete(clientKey(client.root, client.serverID))
-            }
-            await Promise.all(idle.map((client) => shutdownClient(client)))
-          }
-        }
+        await shutdownIdleClients(s)
 
         async function schedule(server: LSPServer.Info, root: string, key: string) {
           const handle = await server
