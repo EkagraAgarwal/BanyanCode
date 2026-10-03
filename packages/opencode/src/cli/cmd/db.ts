@@ -4,6 +4,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { Effect } from "effect"
 import { sql } from "drizzle-orm"
 import { effectCmd } from "../effect-cmd"
+import { DbCompactCommand } from "./db-compact"
 import { DbGcCommand } from "./db-gc"
 
 const QueryCommand = effectCmd({
@@ -57,7 +58,7 @@ export const DbCommand = effectCmd({
   describe: "database tools",
   instance: false,
   builder: (yargs: Argv) => {
-    return yargs.command(QueryCommand).command(PathCommand).command(DbGcCommand).demandCommand()
+    return yargs.command(QueryCommand).command(PathCommand).command(DbGcCommand).command(DbCompactCommand).demandCommand()
   },
   handler: Effect.fn("Cli.db")(function* () {}),
 })

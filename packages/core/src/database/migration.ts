@@ -19,7 +19,6 @@ export function apply(db: Database) {
   return lock.withPermit(
     Effect.gen(function* () {
       yield* applyOnly(db, migrations)
-      yield* applyCodeBackfills(db)
     }),
   )
 }
@@ -30,9 +29,10 @@ export function apply(db: Database) {
 // giant journal. Entries are idempotent and safe to re-run; the marker is
 // recorded only after the full pass completes, so an interrupted run
 // resumes (re-scanning, skipping already-rewritten rows) on next open.
-// Not registered in migration.gen.ts: that registry is generated from
+// Never run from `apply()` (a multi-GB rewrite must not block open): the background
+// maintenance fiber and `banyancode db compact` call it. Not registered in migration.gen.ts: that registry is generated from
 // drizzle SQL dirs, and a code-only entry would trip its --check.
-function applyCodeBackfills(db: Database) {
+export function applyCodeBackfills(db: Database) {
   return Effect.gen(function* () {
     const completed = new Set(
       (yield* db.all<{ id: string }>(sql`SELECT id FROM ${sql.identifier("migration")}`)).map((row) => row.id),
