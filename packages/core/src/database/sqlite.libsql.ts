@@ -41,6 +41,57 @@ interface SqliteConnection extends Connection {
   readonly export: Effect.Effect<Uint8Array, SqlError>
 }
 
+// SQLITE_BUSY (5) / SQLITE_LOCKED (6) are transient: the libsql driver's
+// prepared statements are reclaimed by GC rather than finalized after use,
+// so a COMMIT can race collection ("cannot commit transaction - SQL
+// statements in progress"), and a second connection can briefly hold a table
+// lock ("database table is locked"). Neither invokes the `busy_timeout`
+// handler, so retry here with a GC hint + backoff instead of failing fast.
+const TRANSIENT_SQLITE_CODES = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"])
+const TRANSIENT_SQLITE_RAW_CODES = new Set([5, 6])
+
+const isTransientSqliteError = (cause: unknown): boolean => {
+  if (typeof cause !== "object" || cause === null) return false
+  const record = cause as { code?: unknown; rawCode?: unknown; message?: unknown }
+  if (typeof record.code === "string" && TRANSIENT_SQLITE_CODES.has(record.code)) return true
+  if (typeof record.rawCode === "number" && TRANSIENT_SQLITE_RAW_CODES.has(record.rawCode)) return true
+  const message = typeof record.message === "string" ? record.message : ""
+  return message.startsWith("SQLITE_BUSY") || message.startsWith("SQLITE_LOCKED")
+}
+
+// Nudge GC so abandoned native statement handles (which block COMMIT until
+// finalized) are reclaimed before the retry. Best-effort; never throws.
+const hintGarbageCollection = (): void => {
+  try {
+    ;(globalThis as { Bun?: { gc?: (force?: boolean) => void } }).Bun?.gc?.(true)
+  } catch {
+    // A GC hint must never break a query.
+  }
+}
+
+const TRANSIENT_RETRIES = 5
+
+const withTransientRetry = <A>(runEffect: () => Effect.Effect<A, unknown>): Effect.Effect<A, unknown> => {
+  const attempt = (left: number): Effect.Effect<A, unknown> =>
+    Effect.catchIf(
+      runEffect(),
+      (cause) => left > 0 && isTransientSqliteError(cause),
+      () =>
+        Effect.suspend(() => {
+          hintGarbageCollection()
+          return Effect.sleep(`${Math.min(5 * 2 ** (TRANSIENT_RETRIES - left), 80)} millis`).pipe(
+            Effect.andThen(attempt(left - 1)),
+          )
+        }),
+    )
+  return attempt(TRANSIENT_RETRIES)
+}
+
+const failedToExecute = (cause: unknown) =>
+  new SqlError({
+    reason: classifySqliteError(cause, { message: "Failed to execute statement", operation: "execute" }),
+  })
+
 const make = (options: Config) =>
   Effect.gen(function* () {
     const native = (yield* Sqlite.Native) as LibsqlClient
@@ -51,28 +102,26 @@ const make = (options: Config) =>
       : undefined
 
     const run = (query: string, params: ReadonlyArray<unknown> = []) =>
-      Effect.tryPromise({
-        try: async () => {
-          const result = await native.execute({ sql: query, args: params as any[] })
-          return result.rows as Array<Record<string, unknown>>
-        },
-        catch: (cause) =>
-          new SqlError({
-            reason: classifySqliteError(cause, { message: "Failed to execute statement", operation: "execute" }),
-          }),
-      })
+      withTransientRetry(() =>
+        Effect.tryPromise({
+          try: async () => {
+            const result = await native.execute({ sql: query, args: params as any[] })
+            return result.rows as Array<Record<string, unknown>>
+          },
+          catch: (cause) => cause,
+        }),
+      ).pipe(Effect.mapError(failedToExecute))
 
     const runValues = (query: string, params: ReadonlyArray<unknown> = []) =>
-      Effect.tryPromise({
-        try: async () => {
-          const result = await native.execute({ sql: query, args: params as any[] })
-          return result.rows.map((row) => Object.values(row)) as Array<unknown[]>
-        },
-        catch: (cause) =>
-          new SqlError({
-            reason: classifySqliteError(cause, { message: "Failed to execute statement", operation: "execute" }),
-          }),
-      })
+      withTransientRetry(() =>
+        Effect.tryPromise({
+          try: async () => {
+            const result = await native.execute({ sql: query, args: params as any[] })
+            return result.rows.map((row) => Object.values(row)) as Array<unknown[]>
+          },
+          catch: (cause) => cause,
+        }),
+      ).pipe(Effect.mapError(failedToExecute))
 
     const exportDb = Effect.tryPromise({
       try: async () => {
@@ -137,6 +186,31 @@ const make = (options: Config) =>
     return client
   })
 
+// Direct native executes (startup PRAGMAs, teardown checkpoint) go through the
+// same transient retry as queries. Unlike `Effect.promise` — whose rejection
+// is a *defect* that `Effect.ignore` cannot swallow — this maps failures to
+// `SqlError`, so teardown stays infallible via `Effect.ignore`. Startup
+// PRAGMAs are converted back to defects with `Effect.orDie` at the layer
+// build boundary below, keeping the layer's declared error channel `never`
+// (matching the pre-retry `Effect.promise` behavior); only the runtime query
+// paths (run/runValues) keep typed `SqlError` failures.
+const runNative = (client: LibsqlClient, sql: string) =>
+  withTransientRetry(() =>
+    Effect.tryPromise({
+      try: () => client.execute({ sql, args: [] }),
+      catch: (cause) => cause,
+    }),
+  ).pipe(Effect.mapError(failedToExecute))
+
+const closeClient = (client: LibsqlClient) =>
+  Effect.sync(() => {
+    try {
+      client.close()
+    } catch {
+      // Close is best-effort during teardown (e.g. already-closed handle).
+    }
+  })
+
 const nativeLayer = (config: Config) =>
   Layer.effect(
     Sqlite.Native,
@@ -154,28 +228,29 @@ const nativeLayer = (config: Config) =>
       // external sqlite3) may hold in-flight WAL transactions, and TRUNCATE
       // resets the WAL out from under them, corrupting the DB.
       yield* Effect.addFinalizer(() =>
-        Effect.gen(function* () {
-          yield* Effect.promise(() => client.execute({ sql: "PRAGMA wal_checkpoint(PASSIVE)", args: [] })).pipe(
-            Effect.ignore,
-          )
-          client.close()
-        }),
+        runNative(client, "PRAGMA wal_checkpoint(PASSIVE)").pipe(
+          Effect.ignore,
+          Effect.andThen(closeClient(client)),
+        ),
       )
       // Apply PRAGMAs at startup
-      yield* Effect.promise(() => client.execute({ sql: "PRAGMA journal_mode = WAL", args: [] }))
-      yield* Effect.promise(() => client.execute({ sql: "PRAGMA synchronous = NORMAL", args: [] }))
-      yield* Effect.promise(() => client.execute({ sql: "PRAGMA busy_timeout = 5000", args: [] }))
+      yield* runNative(client, "PRAGMA journal_mode = WAL")
+      yield* runNative(client, "PRAGMA synchronous = NORMAL")
+      yield* runNative(client, "PRAGMA busy_timeout = 5000")
       // ~16MB page cache (negative = kibibytes); was -64000 (~64MB).
-      yield* Effect.promise(() => client.execute({ sql: "PRAGMA cache_size = -16000", args: [] }))
-      yield* Effect.promise(() => client.execute({ sql: "PRAGMA foreign_keys = ON", args: [] }))
-      yield* Effect.promise(() => client.execute({ sql: "PRAGMA temp_store = MEMORY", args: [] }))
+      yield* runNative(client, "PRAGMA cache_size = -16000")
+      yield* runNative(client, "PRAGMA foreign_keys = ON")
+      yield* runNative(client, "PRAGMA temp_store = MEMORY")
       // Only set page_size if not already set
-      const pageSizeResult = yield* Effect.promise(() => client.execute({ sql: "PRAGMA page_size", args: [] }))
+      const pageSizeResult = yield* runNative(client, "PRAGMA page_size")
       if (pageSizeResult.rows.length === 0 || pageSizeResult.rows[0]["page_size"] === 0) {
-        yield* Effect.promise(() => client.execute({ sql: "PRAGMA page_size = 8192", args: [] }))
+        yield* runNative(client, "PRAGMA page_size = 8192")
       }
       return client
-    }),
+      // Construction boundary: startup PRAGMA failures become defects so the
+      // layer's declared error channel stays `never`. Runtime query paths
+      // (run/runValues) keep their typed SqlError errors untouched.
+    }).pipe(Effect.orDie),
   )
 
 const sqliteLayer = (config: Config) => Layer.effect(SqlClient.SqlClient, make(config))
