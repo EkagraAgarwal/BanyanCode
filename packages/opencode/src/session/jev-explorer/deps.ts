@@ -395,7 +395,12 @@ export const promptDeps: (input: PromptDepsInput) => Effect.Effect<Deps, never, 
         const text = truncateToBytes(JSON.stringify(result.value), req.maxBytes)
         return { ok: true, value: text, json: result.value, bytes: utf8Length(text) }
       }
-      const value = truncateToBytes(result.value, req.maxBytes)
+      // `text` settlements carry `unknown` at the type level (and `content`
+      // settlements fall through here too) — coerce the same way
+      // ToolOutput.fromResultValue does before applying the byte cap.
+      const raw = result.value
+      const rendered = typeof raw === "string" ? raw : (JSON.stringify(raw) ?? String(raw))
+      const value = truncateToBytes(rendered, req.maxBytes)
       return { ok: true, value, bytes: utf8Length(value) }
     }).pipe(
       Effect.catchCause(() => Effect.succeed({ ok: false, value: "tool dispatch failed", bytes: 0 } satisfies ToolOutcome)),

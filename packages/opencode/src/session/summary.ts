@@ -121,7 +121,17 @@ export const layer = Layer.effect(
       })
       yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: [] })
       if ((yield* config.get()).snapshot === false) return
-      const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
+      // Fast path for the common case (summarize targets the latest user
+      // turn): the target and every message newer than it fit in a small
+      // newest-first window, so a bounded fetch returns exactly what the
+      // full-scan filter would. Falls back to the full scan when the target
+      // is older.
+      const recentLimit = 25
+      const recent = yield* sessions.messages({ sessionID: input.sessionID, limit: recentLimit }).pipe(Effect.orDie)
+      const all =
+        recent.find((m) => m.info.id === input.messageID) !== undefined
+          ? recent
+          : yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
       if (!all.length) return
 
       const messages = all.filter(
@@ -137,9 +147,13 @@ export const layer = Layer.effect(
 
     const diff = Effect.fn("SessionSummary.diff")(function* (input: { sessionID: SessionID; messageID?: MessageID }) {
       if (!input.messageID) return []
-      const message = (yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).find(
-        (item) => item.info.id === input.messageID,
-      )
+      const wanted = input.messageID
+      const recent = yield* sessions.messages({ sessionID: input.sessionID, limit: 25 }).pipe(Effect.orDie)
+      const message =
+        recent.find((item) => item.info.id === wanted) ??
+        (yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).find(
+          (item) => item.info.id === wanted,
+        )
       if (!message || message.info.role !== "user") return []
       const diffs = message.info.summary?.diffs ?? []
       return diffs.map((item) => {

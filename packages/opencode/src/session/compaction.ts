@@ -123,12 +123,36 @@ function splitTurn(input: {
   return Effect.gen(function* () {
     if (input.budget <= 0) return undefined
     if (input.turn.end - input.turn.start <= 1) return undefined
+    // R12: convert the turn ONCE, then answer every candidate start with an
+    // O(1) prefix-sum lookup instead of a full toModelMessages + stringify
+    // per candidate (previously O(n) conversions for an n-message turn).
+    const source = input.messages.slice(input.turn.start, input.turn.end)
+    const converted = yield* MessageV2.toModelMessagesEffect(source, input.model)
+    if (converted.length === 0) {
+      // Degenerate turn (everything filters out of model history): keep the
+      // exact per-candidate loop so behavior is unchanged on this path.
+      for (let start = input.turn.start + 1; start < input.turn.end; start++) {
+        const size = yield* input.estimate({
+          messages: input.messages.slice(start, input.turn.end),
+          model: input.model,
+        })
+        if (size > input.budget) continue
+        return {
+          start,
+          id: input.messages[start]!.info.id,
+        } satisfies Tail
+      }
+      return undefined
+    }
+    const prefix = prefixSums(converted.map((msg) => JSON.stringify(msg).length))
     for (let start = input.turn.start + 1; start < input.turn.end; start++) {
-      const size = yield* input.estimate({
-        messages: input.messages.slice(start, input.turn.end),
-        model: input.model,
+      const cstart = proportionalConvertedIndex({
+        sourceStart: input.turn.start,
+        sourceEnd: input.turn.end,
+        sourceIndex: start,
+        convertedLength: converted.length,
       })
-      if (size > input.budget) continue
+      if (suffixTokensFromPrefix(prefix, cstart) > input.budget) continue
       return {
         start,
         id: input.messages[start]!.info.id,
@@ -136,6 +160,44 @@ function splitTurn(input: {
     }
     return undefined
   })
+}
+
+// Cumulative char counts: prefix[0] === 0, prefix[i+1] === prefix[i] + sizes[i].
+// Lets tail selection answer every candidate window in O(1) after one scan.
+export function prefixSums(sizes: readonly number[]): number[] {
+  const prefix = new Array<number>(sizes.length + 1).fill(0)
+  for (let i = 0; i < sizes.length; i++) prefix[i + 1] = prefix[i]! + sizes[i]!
+  return prefix
+}
+
+// Exact Token.estimate(JSON.stringify(converted.slice(cstart))) derived from
+// a prefix sum, without re-stringifying: JSON of an n-item slice is the
+// items joined with "," wrapped in "[" "]", and Token is len/4 rounded.
+export function suffixTokensFromPrefix(prefix: readonly number[], cstart: number): number {
+  const total = prefix[prefix.length - 1]!
+  const count = prefix.length - 1 - cstart
+  if (count <= 0) return 0
+  const chars = total - prefix[cstart]! + (count - 1) + 2
+  return Math.max(0, Math.round(chars / 4))
+}
+
+// Maps a source-message candidate index onto the converted model-message
+// array. Conversion preserves source order (splits/injections stay in
+// place), so a proportional index is a monotonic heuristic: larger start
+// never maps to a smaller converted index, preserving first-fit semantics.
+// Exact alignment is context-dependent (carrier coalescing at the slice
+// boundary), hence the tolerance test against the naive per-slice estimate.
+export function proportionalConvertedIndex(input: {
+  sourceStart: number
+  sourceEnd: number
+  sourceIndex: number
+  convertedLength: number
+}): number {
+  if (input.convertedLength <= 0) return 0
+  const span = input.sourceEnd - input.sourceStart
+  if (span <= 0) return 0
+  const frac = (input.sourceIndex - input.sourceStart) / span
+  return Math.min(input.convertedLength, Math.max(0, Math.floor(frac * input.convertedLength)))
 }
 
 export interface Interface {
