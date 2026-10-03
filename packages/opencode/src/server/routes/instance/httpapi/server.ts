@@ -309,6 +309,8 @@ export function createRoutes(
         Banyan.InvestigationState.defaultLayer,
       ).pipe(Layer.provide(Banyan.codegraphRepoDefaultLayer), Layer.provide(Database.defaultLayer)),
     ),
+    Layer.provideMerge(Banyan.codegraphAnalyzerDefaultLayer),
+    Layer.provideMerge(Banyan.codegraphRepoDefaultLayer.pipe(Layer.provide(Database.defaultLayer))),
     // Phase 4 (provider usage): self-contained like the sibling blocks above.
     // ProviderUsage.layer requires Auth + Provider; both defaultLayers are
     // self-contained (ProviderAuth.defaultLayer sets the precedent), so this

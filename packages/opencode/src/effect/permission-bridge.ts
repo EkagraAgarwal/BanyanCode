@@ -66,6 +66,8 @@ export const bridge = Layer.effect(
         input.action.startsWith("repository_") ||
         input.action === "edit_plan" ||
         input.action === "code_find" ||
+        input.action === "preflight" ||
+        input.action === "blast_radius" ||
         input.action === "websearch_free"
       ) {
         return
@@ -82,6 +84,8 @@ export const bridge = Layer.effect(
         input.action.startsWith("repository_") ||
         input.action === "edit_plan" ||
         input.action === "code_find" ||
+        input.action === "preflight" ||
+        input.action === "blast_radius" ||
         input.action === "websearch_free"
       ) {
         return { id, effect: "allow" as const } satisfies PermissionV2.AskResult
