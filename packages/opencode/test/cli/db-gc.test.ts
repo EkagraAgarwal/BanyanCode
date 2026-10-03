@@ -2,10 +2,13 @@ import { describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { sanitizeRoot, shortHash } from "@opencode-ai/core/database/banyan-db-path"
+import yargs from "yargs"
 import {
+  DbGcCommand,
   deleteOrphans,
   orphanBytes,
   orphanFamilies,
+  runDbGc,
   scanBanyanDir,
   staleDbHint,
   STALE_DB_HINT_THRESHOLD_BYTES,
@@ -119,5 +122,42 @@ describe("stale db hint", () => {
     await handle.close()
     const hint = staleDbHint(tmp.path)
     expect(hint).toContain("banyancode db gc")
+  })
+})
+
+describe("db gc flags", () => {
+  const files = (tag: string) => ({
+    [`banyancode-${tag}.db`]: Buffer.alloc(10, 1),
+    [`banyancode-${tag}-dev.db`]: Buffer.alloc(10, 2),
+    "banyancode-deadbeefcafe.db": Buffer.alloc(100, 3),
+    "banyancode-deadbeefcafe.db-wal": Buffer.alloc(50, 4),
+  })
+  const run = async (flags: { yes?: boolean; dryRun?: boolean }) => {
+    await using tmp = await tmpdir()
+    const tag = tagFor(tmp.path)
+    const banyanDir = path.join(tmp.path, ".banyancode")
+    await seed(banyanDir, files(tag))
+    runDbGc({ yes: flags.yes ?? false, dryRun: flags.dryRun, root: tmp.path })
+    return { remaining: (await fs.readdir(banyanDir)).sort(), tag }
+  }
+
+  test("--yes alone deletes orphans and keeps current-worktree databases", async () => {
+    const { remaining, tag } = await run({ yes: true })
+    expect(remaining).toEqual([`banyancode-${tag}-dev.db`, `banyancode-${tag}.db`].sort())
+  })
+
+  test("no flags deletes nothing", async () => {
+    expect((await run({})).remaining).toHaveLength(4)
+  })
+
+  test("--yes --dry-run deletes nothing", async () => {
+    expect((await run({ yes: true, dryRun: true })).remaining).toHaveLength(4)
+  })
+
+  test("--yes leaves dry-run unset when parsed by the command builder", async () => {
+    if (typeof DbGcCommand.builder !== "function") throw new Error("expected a builder function")
+    const parsed = (await DbGcCommand.builder(yargs([]))).parseSync(["--yes"])
+    expect(parsed.yes).toBe(true)
+    expect(parsed["dry-run"]).toBeUndefined()
   })
 })

@@ -1,7 +1,7 @@
 import type { Argv } from "yargs"
 import { Effect } from "effect"
 import { existsSync, readdirSync, statSync, unlinkSync } from "node:fs"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { channelSuffix, findContainingBanyanDir, sanitizeRoot, shortHash } from "@opencode-ai/core/database/banyan-db-path"
 import { effectCmd } from "../effect-cmd"
 import { UI } from "../ui"
@@ -167,6 +167,38 @@ const printListing = (listing: ClassifiedListing): void => {
   UI.println(`Orphan candidates: ${orphans.length} file(s), ${formatBytes(bytes)}`)
 }
 
+/** Core of `db gc`: lists, then deletes orphans only when `yes` is set and `dryRun` is not. Returns the deletion result, if any. */
+export const runDbGc = (args: { yes: boolean; dryRun?: boolean; root?: string }): GcResult | undefined => {
+  const root = args.root ?? process.cwd()
+  const cwd = resolve(root)
+  const banyanDir = findContainingBanyanDir(cwd) ?? join(cwd, ".banyancode")
+  if (!existsSync(banyanDir)) {
+    UI.println(`No .banyancode directory at ${banyanDir}; nothing to collect.`)
+    return undefined
+  }
+  const listing = scanBanyanDir(banyanDir, cwd)
+  printListing(listing)
+  const orphans = orphanFamilies(listing)
+  if (orphans.length === 0) {
+    UI.println("Nothing to delete.")
+    return undefined
+  }
+  if (args.dryRun === true || !args.yes) {
+    UI.println("")
+    UI.println("Dry run: nothing deleted. Re-run with `--yes` to delete the orphans above.")
+    UI.println("The current worktree's databases in every channel are always protected.")
+    return undefined
+  }
+  const { deleted, reclaimedBytes } = deleteOrphans(banyanDir, orphans)
+  UI.println("")
+  UI.println(
+    UI.Style.TEXT_SUCCESS +
+      `Deleted ${deleted.length} file(s), reclaimed ${formatBytes(reclaimedBytes)}.` +
+      UI.Style.TEXT_NORMAL,
+  )
+  return { deleted, reclaimedBytes }
+}
+
 export const DbGcCommand = effectCmd({
   command: "gc",
   describe: "list orphaned banyancode databases and delete them only with --yes (dry-run by default)",
@@ -180,41 +212,13 @@ export const DbGcCommand = effectCmd({
       })
       .option("dry-run", {
         type: "boolean",
-        default: true,
-        describe: "list what would be deleted without deleting (default true; --yes overrides)",
+        describe: "list what would be deleted without deleting, even with --yes",
       })
       .option("root", {
         type: "string",
         describe: "project root whose worktree hash identifies current databases (defaults to cwd)",
       }),
-  handler: Effect.fn("Cli.db.gc")(function* (args: { yes: boolean; "dry-run": boolean; root?: string }) {
-    const root = args.root ?? process.cwd()
-    const { resolve } = yield* Effect.promise(() => import("node:path"))
-    const cwd = resolve(root)
-    const banyanDir = findContainingBanyanDir(cwd) ?? join(cwd, ".banyancode")
-    if (!existsSync(banyanDir)) {
-      UI.println(`No .banyancode directory at ${banyanDir}; nothing to collect.`)
-      return
-    }
-    const listing = scanBanyanDir(banyanDir, cwd)
-    printListing(listing)
-    const orphans = orphanFamilies(listing)
-    if (orphans.length === 0) {
-      UI.println("Nothing to delete.")
-      return
-    }
-    if (!args.yes || args["dry-run"]) {
-      UI.println("")
-      UI.println("Dry run (default): nothing deleted. Re-run with `--yes --no-dry-run` to delete the orphans above.")
-      UI.println("The current worktree's databases in every channel are always protected.")
-      return
-    }
-    const { deleted, reclaimedBytes } = deleteOrphans(banyanDir, orphans)
-    UI.println("")
-    UI.println(
-      UI.Style.TEXT_SUCCESS +
-        `Deleted ${deleted.length} file(s), reclaimed ${formatBytes(reclaimedBytes)}.` +
-        UI.Style.TEXT_NORMAL,
-    )
+  handler: Effect.fn("Cli.db.gc")(function* (args: { yes: boolean; "dry-run"?: boolean; root?: string }) {
+    runDbGc({ yes: args.yes, dryRun: args["dry-run"], root: args.root })
   }),
 })
