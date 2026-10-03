@@ -162,11 +162,21 @@ export interface Interface {
   readonly project: <D extends Definition>(definition: D, projector: Projector<D>) => Effect.Effect<void>
   readonly replay: (
     event: SerializedEvent,
-    options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
+    options?: {
+      readonly publish?: boolean
+      readonly ownerID?: string
+      readonly strictOwner?: boolean
+      readonly allowGaps?: boolean
+    },
   ) => Effect.Effect<void>
   readonly replayAll: (
     events: SerializedEvent[],
-    options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
+    options?: {
+      readonly publish?: boolean
+      readonly ownerID?: string
+      readonly strictOwner?: boolean
+      readonly allowGaps?: boolean
+    },
   ) => Effect.Effect<string | undefined>
   readonly remove: (aggregateID: string) => Effect.Effect<void>
   readonly claim: (aggregateID: string, ownerID: string) => Effect.Effect<void>
@@ -219,6 +229,7 @@ export const layerWith = (options?: LayerOptions) =>
           readonly aggregateID: string
           readonly ownerID?: string
           readonly strictOwner?: boolean
+          readonly allowGaps?: boolean
         },
         commit?: (seq: number) => Effect.Effect<void>,
       ) {
@@ -309,7 +320,7 @@ export const layerWith = (options?: LayerOptions) =>
                             return
                           }
                           const seq = input?.seq ?? latest + 1
-                          if (input && seq !== latest + 1) {
+                          if (input && seq !== latest + 1 && input.allowGaps !== true) {
                             yield* Effect.die(
                               new InvalidSyncEventError({
                                 type: event.type,
@@ -317,6 +328,11 @@ export const layerWith = (options?: LayerOptions) =>
                               }),
                             )
                           }
+                          // With allowGaps the missing prefix is assumed compacted
+                          // (S1 keeps latest snapshots with original seqs): the
+                          // sequence fast-forwards and only retained rows apply.
+                          // Default stays strict so a lost live-sync message
+                          // still dies loudly instead of diverging silently.
                           const stored = yield* db
                             .select({ aggregateID: EventTable.aggregate_id, seq: EventTable.seq })
                             .from(EventTable)
@@ -452,7 +468,12 @@ export const layerWith = (options?: LayerOptions) =>
 
       function replay(
         event: SerializedEvent,
-        options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
+        options?: {
+          readonly publish?: boolean
+          readonly ownerID?: string
+          readonly strictOwner?: boolean
+          readonly allowGaps?: boolean
+        },
       ) {
         return Effect.gen(function* () {
           const definition = syncRegistry.get(event.type)
@@ -473,6 +494,7 @@ export const layerWith = (options?: LayerOptions) =>
               aggregateID: event.aggregateID,
               ownerID: options?.ownerID,
               strictOwner: options?.strictOwner,
+              allowGaps: options?.allowGaps,
             })
             if (committed && options?.publish) {
               yield* notify({ ...payload, seq: committed.seq }, true)
@@ -483,7 +505,12 @@ export const layerWith = (options?: LayerOptions) =>
 
       function replayAll(
         events: SerializedEvent[],
-        options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
+        options?: {
+          readonly publish?: boolean
+          readonly ownerID?: string
+          readonly strictOwner?: boolean
+          readonly allowGaps?: boolean
+        },
       ) {
         return Effect.gen(function* () {
           const source = events[0]?.aggregateID
@@ -497,15 +524,21 @@ export const layerWith = (options?: LayerOptions) =>
             )
           }
           const start = events[0]?.seq ?? 0
-          for (const [index, event] of events.entries()) {
-            const seq = start + index
-            if (event.seq !== seq) {
-              yield* Effect.die(
-                new InvalidSyncEventError({
-                  type: event.type,
-                  message: `Replay sequence mismatch at index ${index}: expected ${seq}, got ${event.seq}`,
-                }),
-              )
+          // allowGaps skips the contiguity pre-check: a compacted history is
+          // ordered but not contiguous. Each replay still guards ordering
+          // (stale rows hit the idempotent/diverged check, forward rows
+          // fast-forward), so an unsorted batch still dies loudly below.
+          if (options?.allowGaps !== true) {
+            for (const [index, event] of events.entries()) {
+              const seq = start + index
+              if (event.seq !== seq) {
+                yield* Effect.die(
+                  new InvalidSyncEventError({
+                    type: event.type,
+                    message: `Replay sequence mismatch at index ${index}: expected ${seq}, got ${event.seq}`,
+                  }),
+                )
+              }
             }
           }
           for (const event of events) {

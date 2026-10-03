@@ -70,3 +70,49 @@ describe("BanyanConfig", () => {
     ).toThrow()
   })
 })
+
+describe("BanyanConfig.banyancode_jev_tree", () => {
+  test("absent struct is valid and stays undefined (feature off)", () => {
+    const result = Schema.decodeSync(BanyanConfig.Info)({})
+    expect(result.banyancode_jev_tree).toBeUndefined()
+  })
+
+  test("accepts the fully populated budget struct", () => {
+    const result = Schema.decodeSync(BanyanConfig.Info)({
+      banyancode_jev_tree: {
+        enabled: true,
+        maxDepth: 4,
+        maxNodes: 12,
+        maxJevCalls: 8,
+        timeoutMs: 1500,
+        runTimeoutMs: 30000,
+        maxBytes: 262144,
+      },
+    })
+    expect(result.banyancode_jev_tree).toEqual({
+      enabled: true,
+      maxDepth: 4,
+      maxNodes: 12,
+      maxJevCalls: 8,
+      timeoutMs: 1500,
+      runTimeoutMs: 30000,
+      maxBytes: 262144,
+    })
+  })
+
+  test("every budget field is optional; only `enabled` gates the feature", () => {
+    const minimal = Schema.decodeSync(BanyanConfig.Info)({ banyancode_jev_tree: { enabled: true } })
+    expect(minimal.banyancode_jev_tree).toEqual({ enabled: true })
+    const budgetsOnly = Schema.decodeSync(BanyanConfig.Info)({ banyancode_jev_tree: { maxDepth: 6 } })
+    expect(budgetsOnly.banyancode_jev_tree?.enabled).toBeUndefined()
+  })
+
+  test("rejects wrong field types", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(BanyanConfig.Info)({ banyancode_jev_tree: { enabled: "yes" } }),
+    ).toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(BanyanConfig.Info)({ banyancode_jev_tree: { maxNodes: "twelve" } }),
+    ).toThrow()
+  })
+})

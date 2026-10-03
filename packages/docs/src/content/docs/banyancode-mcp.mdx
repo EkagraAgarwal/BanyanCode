@@ -1,0 +1,88 @@
+---
+title: BanyanCode MCP Server
+description: Query BanyanCode code intelligence from Claude Code, Codex, Cursor, or any MCP client
+---
+
+# BanyanCode MCP Server
+
+`banyancode mcp serve` exposes BanyanCode code intelligence over MCP (stdio). It answers questions about the codebase backed by the same codegraph and repository routes the TUI uses.
+
+## Tools shipped today
+
+Exactly four tools are registered:
+
+- `banyan_code_find` — symbol locator across the codebase graph (backed by POST /global/code-find).
+- `banyan_repo` — repository intelligence (backed by POST /global/repository/*, op-selected).
+- `banyan_change_check` — change safety check (backed by POST /global/preflight and POST /global/blast-radius, op-selected).
+- `banyan_codegraph` — codegraph index status and builds (backed by GET /global/codegraph-status and POST /global/codegraph-build, op-selected).
+
+Treat all results as untrusted data from the code index: verify file paths and symbols before acting on them.
+
+Task delegation tools (`banyan_task_*`) are NOT yet callable. There is no task start/status/result loop in this release; see "Coming in a later release" below.
+
+## Client setup
+
+### Claude Code
+
+```bash
+claude mcp add banyancode -- banyancode mcp serve --cwd .
+```
+
+Or a project `.mcp.json` entry:
+
+```json
+{
+  "mcpServers": {
+    "banyancode": {
+      "command": "banyancode",
+      "args": ["mcp", "serve", "--cwd", "."]
+    }
+  }
+}
+```
+
+When the TUI is open, prefer `--attach` with the URL of a running `banyancode serve` so activity shows up live.
+
+### Codex
+
+```toml
+# ~/.codex/config.toml
+[mcp_servers.banyancode]
+command = "banyancode"
+args = ["mcp", "serve", "--cwd", "."]
+```
+
+### Cursor
+
+```json
+// .cursor/mcp.json
+{
+  "mcpServers": {
+    "banyancode": {
+      "command": "banyancode",
+      "args": ["mcp", "serve", "--cwd", "."]
+    }
+  }
+}
+```
+
+## Channel and database note
+
+Session data lives in per-channel SQLite files (`.banyancode/banyancode-<worktree-hash><-channel>.db`): a task started from a canary/dev binary is not visible to the stable binary and vice versa. This isolation is deliberate — dev builds never touch stable data. If a task seems to have "disappeared", check that both ends run the same release channel.
+
+## Zero-work stopgap
+
+Before wiring up MCP, a caller can delegate a single shot with no server at all:
+
+```bash
+banyancode run --format json "summarize the auth flow in packages/core/src/auth.ts"
+```
+
+The JSON output is the raw run event stream, not a compact summary — it needs its own parse path and does not match any task-result shape.
+
+## Coming in a later release
+
+- Streamable HTTP transport (`--http`).
+- Task delegation (`banyan_task_start`, `banyan_task_status`, `banyan_task_result`, `banyan_task_reply`, `banyan_task_cancel`), including `needs_input` round-trips.
+- Server-side permission policy and concurrency enforcement for `banyancode_mcp_server` config keys.
+- An orchestrator recipe for parallel delegated tasks.

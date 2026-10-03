@@ -37,6 +37,7 @@ const mockCodegraphRepoLayer = Layer.succeed(
         totalEdges: 500,
         schemaVersion: 1,
       }),
+    listNodesLightPage: () => Effect.succeed({ nodes: [], nextCursor: undefined }),
     listAllNodes: () =>
       Effect.succeed([
         { id: "n1", fileID: "f1", kind: "function" as const, name: "login", startLine: 1, endLine: 10 },
@@ -288,6 +289,7 @@ describe("code_find", () => {
       CodegraphRepo.Service,
       CodegraphRepo.Service.of({
         getMeta: () => Effect.succeed(meta),
+        listNodesLightPage: () => Effect.succeed({ nodes: [], nextCursor: undefined }),
         listAllNodes: () => Effect.succeed([loginNode]),
         listAllFiles: () => Effect.succeed([fileF]),
         getFileByPath: () => Effect.succeed(undefined),
@@ -387,6 +389,7 @@ describe("code_find", () => {
       CodegraphRepo.Service,
       CodegraphRepo.Service.of({
         getMeta: () => Effect.succeed(meta),
+        listNodesLightPage: () => Effect.succeed({ nodes: [], nextCursor: undefined }),
         listAllNodes: () => Effect.succeed([loginNode]),
         listAllFiles: () => Effect.succeed([fileF]),
         getFileByPath: () => Effect.succeed(undefined),
@@ -504,6 +507,7 @@ describe("code_find", () => {
       CodegraphRepo.Service,
       CodegraphRepo.Service.of({
         getMeta: () => Effect.succeed(meta),
+        listNodesLightPage: () => Effect.succeed({ nodes: [], nextCursor: undefined }),
         listAllNodes: () => Effect.succeed([authClass, loginMethod]),
         listAllFiles: () => Effect.succeed([authFile]),
         getFileByPath: () => Effect.succeed(undefined),

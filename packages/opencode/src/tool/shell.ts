@@ -254,6 +254,73 @@ function tail(text: string, maxLines: number, maxBytes: number) {
   }
 }
 
+// Trailing throttle for streaming tool-part progress writes. Every
+// `ctx.metadata` call funnels into `Session.updatePart`, which does a
+// `structuredClone` plus a durable `PartUpdated` write — one durable write
+// per stdout chunk without this. `offer` coalesces rapid chunks to one
+// flush per `intervalMs`; `takePending` flushes the trailing state so the
+// final part always lands. `now` is injectable for deterministic tests.
+export const STREAMING_METADATA_FLUSH_INTERVAL_MS = 200
+
+export type StreamingMetadataThrottle = {
+  offer: (output: string) => boolean
+  takePending: () => string | undefined
+  markFlushed: () => void
+  readonly pending: string | undefined
+}
+
+export function createStreamingMetadataThrottle(
+  intervalMs = STREAMING_METADATA_FLUSH_INTERVAL_MS,
+  now: () => number = Date.now,
+): StreamingMetadataThrottle {
+  // Leading edge: the first chunk flushes immediately so progress appears
+  // without delay; later chunks coalesce to one flush per interval.
+  let lastFlush: number | undefined
+  let pending: string | undefined
+  return {
+    offer(output) {
+      pending = output
+      const at = now()
+      if (lastFlush !== undefined && at - lastFlush < intervalMs) return false
+      lastFlush = at
+      pending = undefined
+      return true
+    },
+    takePending() {
+      const out = pending
+      pending = undefined
+      if (out !== undefined) lastFlush = now()
+      return out
+    },
+    markFlushed() {
+      pending = undefined
+      lastFlush = now()
+    },
+    get pending() {
+      return pending
+    },
+  }
+}
+
+// Running byte total for the accumulated `full` buffer, so the spill check
+// does not re-measure the whole buffer with `Buffer.byteLength(full)` on
+// every chunk (O(n^2) over a long output up to maxBytes).
+export function createByteCounter() {
+  let total = 0
+  return {
+    add(text: string) {
+      total += Buffer.byteLength(text, "utf-8")
+      return total
+    },
+    reset() {
+      total = 0
+    },
+    get total() {
+      return total
+    },
+  }
+}
+
 const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boolean) {
   const tree = yield* Effect.promise(() => parser().then((p) => (ps ? p.ps : p.bash).parse(command)))
   if (!tree) throw new Error("Failed to parse command")
@@ -295,6 +362,20 @@ const ask = Effect.fn("ShellTool.ask")(function* (
     },
   })
 })
+
+// Narrow deny-list: server auth secrets must never reach agent-spawned shells.
+// An agent with bash allowed could otherwise curl the loopback server with the
+// password and approve its own permission requests. Kept to the two keys
+// actually used; broader *_API_KEY scrubbing is undecided (gap-plan §7.5).
+const SERVER_PASSWORD_KEYS = ["OPENCODE_SERVER_PASSWORD", "BANYANCODE_SERVER_PASSWORD"]
+
+export function buildShellEnv(base: NodeJS.ProcessEnv, extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ...extra }
+  for (const key of Object.keys(env)) {
+    if (SERVER_PASSWORD_KEYS.includes(key.toUpperCase())) delete env[key]
+  }
+  return env
+}
 
 function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv) {
   if (process.platform === "win32" && Shell.ps(shell)) {
@@ -425,10 +506,7 @@ export const ShellTool = Tool.define(
         { cwd, sessionID: ctx.sessionID, callID: ctx.callID },
         { env: {} },
       )
-      return {
-        ...process.env,
-        ...extra.env,
-      }
+      return buildShellEnv(process.env, extra.env)
     })
 
     const run = Effect.fn("ShellTool.run")(function* (
@@ -486,6 +564,9 @@ export const ShellTool = Tool.define(
         },
       })
 
+      const progress = createStreamingMetadataThrottle()
+      const fullBytes = createByteCounter()
+
       const code: number | null = yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Effect.addFinalizer(closeSink)
@@ -509,7 +590,7 @@ export const ShellTool = Tool.define(
                 sink?.write(chunk)
               } else {
                 full += chunk
-                if (Buffer.byteLength(full, "utf-8") > limits.maxBytes) {
+                if (fullBytes.add(chunk) > limits.maxBytes) {
                   return trunc.write(full).pipe(
                     Effect.andThen((next) =>
                       Effect.sync(() => {
@@ -517,6 +598,7 @@ export const ShellTool = Tool.define(
                         cut = true
                         sink = createWriteStream(next, { flags: "a" })
                         full = ""
+                        fullBytes.reset()
                       }),
                     ),
                     Effect.andThen(
@@ -527,10 +609,12 @@ export const ShellTool = Tool.define(
                         },
                       }),
                     ),
+                    Effect.andThen(Effect.sync(() => progress.markFlushed())),
                   )
                 }
               }
 
+              if (!progress.offer(last)) return Effect.void
               return ctx.metadata({
                 metadata: {
                   output: last,
@@ -567,6 +651,19 @@ export const ShellTool = Tool.define(
           return exit.kind === "exit" ? exit.code : null
         }),
       ).pipe(Effect.orDie)
+
+      // Trailing flush: coalesced chunks between the last throttled write
+      // and process exit still land. Runs on every path that reaches here
+      // (success, non-zero exit, abort, timeout).
+      const pending = progress.takePending()
+      if (pending !== undefined) {
+        yield* ctx.metadata({
+          metadata: {
+            output: pending,
+            description: input.description,
+          },
+        })
+      }
 
       const meta: string[] = []
       if (expired) {

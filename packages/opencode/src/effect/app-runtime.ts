@@ -111,7 +111,7 @@ export const AppLayer = Layer.mergeAll(
   Banyan.subagentReviewRequestsRepoDefaultLayer,
   Banyan.subagentPlansRepoDefaultLayer,
   Banyan.subagentConsumerDefaultLayer,
-  Banyan.agentEfficiencyTelemetryDefaultLayer(),
+  Banyan.agentEfficiencyTelemetryDefaultLayer,
   Banyan.systemMonitorDefaultLayer,
   SessionRunState.defaultLayer,
   SessionProcessor.defaultLayer,
@@ -286,6 +286,13 @@ AppRuntime.runFork(
         "codegraph: refusing to replay startup index at filesystem root; run codegraph_build with an explicit root",
       )
       return
+    }
+    // W1.4: scope the watch toggle to the indexed project. A project that
+    // disabled auto-update must not pay for a startup catch-up index either.
+    const banyanOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
+    if (Option.isSome(banyanOpt)) {
+      const cfg = yield* banyanOpt.value.get(meta.indexedRoot)
+      if (cfg.banyancode_codegraph_watch_enabled === false) return
     }
     const files = yield* repoOpt.value.listAllFiles()
     if (files.length === 0) return

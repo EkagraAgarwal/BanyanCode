@@ -90,6 +90,101 @@ const sumToolTokens = (tool: any): number => {
 const isSyntheticText = (p: any): boolean =>
   p?.synthetic === true || p?.ignored === true
 
+// Incremental accounting: categorizeTokens re-runs on every parts change
+// event (including per-token streaming deltas). Without a cache each run
+// re-stringifies every tool part's input/output. The fingerprint below is a
+// structural walk that reads O(nodes) small fields — string lengths, key
+// counts — without serializing payload bytes, so unchanged parts cost one
+// Map lookup and only added/updated parts pay the stringify. A hit implies
+// an identical estimate: string contributors feed estimateTokens by length
+// only, and object contributors are captured by key names + per-value
+// fingerprints (escape-only mutations of equal-length strings can shift the
+// true value by <1 token; every other change is exact).
+const MAX_PART_TOKEN_ENTRIES = 2000
+const PART_TOKEN_BUDGET = 500
+const PART_TOKEN_DEPTH = 6
+interface PartTokenCacheEntry {
+  fingerprint: string
+  tokens: number
+}
+const partTokenCache = new Map<string, PartTokenCacheEntry>()
+let partTokenComputes = 0
+
+const fingerprintValue = (value: unknown, budget: { remaining: number }, depth: number): string | null => {
+  if (budget.remaining <= 0 || depth > PART_TOKEN_DEPTH) return null
+  budget.remaining -= 1
+  if (value === null) return "null"
+  if (value === undefined) return "undef"
+  if (typeof value === "string") return `s${value.length}`
+  if (typeof value === "number" || typeof value === "boolean") return `p${String(value).length}`
+  if (Array.isArray(value)) {
+    const items: string[] = [`a${value.length}`]
+    for (const item of value) {
+      const f = fingerprintValue(item, budget, depth + 1)
+      if (f === null) return null
+      items.push(f)
+    }
+    return items.join(";")
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>
+    const keys = Object.keys(record)
+    const items: string[] = [`o${keys.length}`]
+    for (const key of keys) {
+      const f = fingerprintValue(record[key], budget, depth + 1)
+      if (f === null) return null
+      items.push(`${key.length}:${f}`)
+    }
+    return items.join(";")
+  }
+  return "other"
+}
+
+const fingerprintToolPart = (tool: any): string | null => {
+  const s = tool?.state ?? tool
+  if (!s) return "empty"
+  const budget = { remaining: PART_TOKEN_BUDGET }
+  const parts = [`st:${String(s.status)}`]
+  for (const key of ["input", "output", "content", "attachments", "error", "result"] as const) {
+    const f = fingerprintValue(s[key], budget, 0)
+    if (f === null) return null
+    parts.push(`${key}=${f}`)
+  }
+  return parts.join("|")
+}
+
+const cachedSumToolTokens = (tool: any): number => {
+  const id = (tool as any)?.id
+  if (typeof id !== "string" || id.length === 0) return sumToolTokens(tool)
+  const fingerprint = fingerprintToolPart(tool)
+  // Over budget (giant metadata shapes): recompute every time, never cache
+  // a fingerprint that cannot see the whole value.
+  if (fingerprint === null) return sumToolTokens(tool)
+  const hit = partTokenCache.get(`tool:${id}`)
+  if (hit && hit.fingerprint === fingerprint) return hit.tokens
+  partTokenComputes += 1
+  const tokens = sumToolTokens(tool)
+  if (partTokenCache.size >= MAX_PART_TOKEN_ENTRIES) partTokenCache.clear()
+  partTokenCache.set(`tool:${id}`, { fingerprint, tokens })
+  return tokens
+}
+
+const cachedTaskSpawnPromptTokens = (tool: any): number => {
+  const id = (tool as any)?.id
+  if (typeof id !== "string" || id.length === 0) return taskSpawnPromptTokens(tool)
+  const s = (tool as any)?.state ?? tool
+  const input = s?.input
+  const fingerprint = typeof input === "string" ? `s${input.length}` : (fingerprintValue(input, { remaining: PART_TOKEN_BUDGET }, 0) ?? "uncacheable")
+  if (fingerprint === "uncacheable") return taskSpawnPromptTokens(tool)
+  const hit = partTokenCache.get(`task:${id}`)
+  if (hit && hit.fingerprint === fingerprint) return hit.tokens
+  partTokenComputes += 1
+  const tokens = taskSpawnPromptTokens(tool)
+  if (partTokenCache.size >= MAX_PART_TOKEN_ENTRIES) partTokenCache.clear()
+  partTokenCache.set(`task:${id}`, { fingerprint, tokens })
+  return tokens
+}
+
 const textFromUserPart = (p: any): string => {
   if (typeof p?.text === "string") return p.text
   if (Array.isArray(p?.content)) {
@@ -189,10 +284,10 @@ const categorizeTokens = (
       const toolName = t.name ?? t.tool ?? ""
       if (!toolName) continue
       if (toolName === "task") {
-        subagentTokens += taskSpawnPromptTokens(t)
+        subagentTokens += cachedTaskSpawnPromptTokens(t)
         continue
       }
-      const est = sumToolTokens(t)
+      const est = cachedSumToolTokens(t)
       if (FILES_TOOLS.has(toolName)) filesTokens += est
       else toolsTokens += est
     }
@@ -238,7 +333,24 @@ const categorizeTokens = (
 }
 
 // Exported for unit testing — not part of the public API.
-export const __test = { categorizeTokens, sumToolTokens, estimateTokens, allocateBarWidths, taskSpawnPromptTokens }
+export const __test = {
+  categorizeTokens,
+  sumToolTokens,
+  estimateTokens,
+  allocateBarWidths,
+  taskSpawnPromptTokens,
+  cachedSumToolTokens,
+  cachedTaskSpawnPromptTokens,
+  fingerprintToolPart,
+  partTokenCacheStats: (): { entries: number; computes: number } => ({
+    entries: partTokenCache.size,
+    computes: partTokenComputes,
+  }),
+  clearPartTokenCache: (): void => {
+    partTokenCache.clear()
+    partTokenComputes = 0
+  },
+}
 
 interface Segment {
   key: string

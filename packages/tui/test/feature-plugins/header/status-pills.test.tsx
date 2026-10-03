@@ -9,6 +9,10 @@ import { ThemeProvider } from "../../../src/context/theme"
 import { KVProvider } from "../../../src/context/kv"
 import { TuiConfigProvider } from "../../../src/config"
 import { SDKProvider } from "../../../src/context/sdk"
+import { SyncProvider } from "../../../src/context/sync"
+import { ProjectProvider } from "../../../src/context/project"
+import { ExitProvider } from "../../../src/context/exit"
+import { ArgsProvider } from "../../../src/context/args"
 import { createEventSource, createFetch, directory } from "../../fixture/tui-sdk"
 import { RGBA } from "@opentui/core"
 
@@ -75,19 +79,27 @@ async function setupHarness(status?: GraphStatusMock) {
   }
 
   const Harness = () => (
-    <TestTuiContexts>
-      <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
-        <TuiConfigProvider config={createTuiResolvedConfig()}>
+    <ExitProvider exit={console.error}>
+      <TestTuiContexts>
+        <ArgsProvider>
           <KVProvider>
-            <ThemeProvider mode="dark">
-              <box width={120} height={4}>
-                <View api={api} />
-              </box>
-            </ThemeProvider>
+            <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+              <ProjectProvider>
+                <SyncProvider>
+                  <TuiConfigProvider config={createTuiResolvedConfig()}>
+                    <ThemeProvider mode="dark">
+                      <box width={120} height={4}>
+                        <View api={api} />
+                      </box>
+                    </ThemeProvider>
+                  </TuiConfigProvider>
+                </SyncProvider>
+              </ProjectProvider>
+            </SDKProvider>
           </KVProvider>
-        </TuiConfigProvider>
-      </SDKProvider>
-    </TestTuiContexts>
+        </ArgsProvider>
+      </TestTuiContexts>
+    </ExitProvider>
   )
 
   const app = await testRender(() => <Harness />, { width: 120, height: 4 })
@@ -337,6 +349,40 @@ describe("header status-pills (graph meta truth)", () => {
     try {
       await expectLabel("Graph: built")
       expect(statusCalls).toBe(2)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  // §12-item-5 regression: the "N active" pill derives from the live
+  // session_status map in the sync store. It used to do a full session.list
+  // per update while reading a session_status field that does not exist on
+  // the plugin state, so it rendered "0 active" forever.
+  test("active pill derives from live session_status (busy → 1 active)", async () => {
+    const { app, emit, expectLabel } = await setupHarness()
+    try {
+      await expectLabel("0 active")
+      emit("session.status", { sessionID: "ses-1", status: { type: "busy" } })
+      await expectLabel("1 active")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("active pill counts busy + retry, drops sessions back to idle", async () => {
+    const { app, emit, expectLabel } = await setupHarness()
+    try {
+      await expectLabel("0 active")
+      emit("session.status", { sessionID: "ses-1", status: { type: "busy" } })
+      emit("session.status", {
+        sessionID: "ses-2",
+        status: { type: "retry", attempt: 1, message: "rate limited", next: Date.now() + 1000 },
+      })
+      await expectLabel("2 active")
+      emit("session.status", { sessionID: "ses-1", status: { type: "idle" } })
+      await expectLabel("1 active")
+      emit("session.status", { sessionID: "ses-2", status: { type: "idle" } })
+      await expectLabel("0 active")
     } finally {
       app.renderer.destroy()
     }

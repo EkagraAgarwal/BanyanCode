@@ -33,7 +33,7 @@ export const DEFAULT_MAX_GOAL_ITERATIONS = 5
 export const THINKING_LEVELS = ["off", "low", "medium", "high", "max", "xhigh", "ultra"] as const
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number]
 export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium"
-const ThinkingLevelSchema = Schema.Union([Schema.Literals([...THINKING_LEVELS]), Schema.String])
+export const ThinkingLevelSchema = Schema.Union([Schema.Literals([...THINKING_LEVELS]), Schema.String])
 
 // BanyanCode-owned LSP config. Mirrors the opencode `lsp` shape (boolean for
 // built-in enable, record for per-server overrides) so users can disable,
@@ -55,6 +55,57 @@ export const Commands = Schema.Struct({
 }).annotate({ identifier: "BanyanCommands" })
 
 export type Commands = typeof Commands.Type
+
+// MCP delegation server policy (specs/banyancode/mcp-server-plan.md
+// §Configuration). Every slot is optional; an absent struct keeps
+// reject-everything defaults. "yolo" is deliberately not a config value —
+// escalating past `edits` requires the --allow-yolo process flag so a caller
+// can never grant it to itself.
+export const McpServerPermission = Schema.Literals(["reject", "edits"])
+export type McpServerPermission = typeof McpServerPermission.Type
+
+export const McpServer = Schema.Struct({
+  default_agent: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64))),
+  default_model: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))),
+  permission: Schema.optional(McpServerPermission),
+  max_concurrent_tasks: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 32 }))),
+  // Default per-task USD spend cap for delegated MCP tasks (C6). A
+  // per-start budgetUsd wins over this; the engine aborts the task with
+  // errorCode "BUDGET" when the root + child session spend trips it.
+  task_budget_usd: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1000 }))),
+  result_max_tokens: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 32000 }))),
+  needs_input_timeout_seconds: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 60, maximum: 86400 }))),
+  // Char budget for a single MCP tool result (structural truncation, never
+  // sliced JSON). Falls back to the tool default when unset; env
+  // BANYANCODE_MCP_OUTPUT_CHARS still wins over both when set.
+  output_max_chars: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1000, maximum: 500_000 }))),
+  // Agent/model allowlists for `banyan_task_start` (gap-plan §7.4). Absent
+  // means any configured agent/model; entries are matched exactly against
+  // the tool args. Plain length checks only — no pattern identifier, so the
+  // HttpApi $ref path cannot corrupt single-element arrays (see §2.6).
+  allowed_agents: Schema.optional(
+    Schema.Array(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64))),
+  ),
+  allowed_models: Schema.optional(
+    Schema.Array(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256))),
+  ),
+  // Group allowlist (e.g. task, code, memory, verify). Entries reuse the
+  // agent-name charset; they are group ids, never filesystem paths.
+  tools: Schema.optional(
+    Schema.Array(
+      Schema.String.check(
+        Schema.isPattern(/^[a-zA-Z0-9._-]+$/, {
+          identifier: "McpToolGroup",
+          description: "MCP tool group (letters, digits, '.', '_', '-' only)",
+        }),
+        Schema.isMinLength(1),
+        Schema.isMaxLength(64),
+      ),
+    ),
+  ),
+})
+
+export type McpServer = typeof McpServer.Type
 
 export const Info = Schema.Struct({
   $schema: Schema.optional(Schema.String),
@@ -87,9 +138,7 @@ export const Info = Schema.Struct({
   // "rules" = deterministic RulesRouter (gateway ON by default); "off" =
   // NoopRouter passthrough (byte-for-byte behavioral no-op). Opt out
   // explicitly with "off".
-  banyancode_router: Schema.optional(
-    Schema.Union([Schema.Literal("off"), Schema.Literal("rules")]),
-  ),
+  banyancode_router: Schema.optional(Schema.Union([Schema.Literal("off"), Schema.Literal("rules")])),
   // Per-tool routing kill-switches (needle2 gateway plan §4). Absent flag
   // means routing allowed (default true); an explicit false bypasses the
   // gateway entirely for that tool (the settle is byte-identical).
@@ -180,6 +229,92 @@ export const Info = Schema.Struct({
   // and the experimental native LLM runtime (which does not lower
   // tool_search yet).
   banyancode_tool_search_defer: Schema.optional(Schema.Boolean),
+  // Jev (TypeSafe "System One") decision client — see `banyancode/jev.ts`.
+  // Optional and key-gated: with `banyancode_jev_enabled` unset the client only
+  // engages when the selected backend's API key env var is present (default
+  // backend "typesafe": BANYANCODE_JEV_API_KEY or TYPESAFE_API_KEY).
+  // Generic OPENROUTER_API_KEY / AI_GATEWAY_API_KEY are never reused;
+  // an explicit false disables even when a key exists. Credentials
+  // are read from env only in v1 — storing a Jev credential through
+  // Auth.Service (`core/src/auth.ts`) is a documented future step, not wired yet.
+  banyancode_jev_enabled: Schema.optional(Schema.Boolean),
+  // Backend endpoint selection; each speaks the TypeSafe `POST <base>/v1/systemone`
+  // shape. See Jev.ENDPOINTS. Default "typesafe".
+  banyancode_jev_backend: Schema.optional(Schema.Literals(["typesafe", "openrouter", "vercel"])),
+  // Model override; defaults per backend (jev-latest / typesafe/jev-latest / typesafe-ai/jev).
+  banyancode_jev_model: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  // Turn-routing policy profile. New automatic Jev policies stay off unless
+  // this is "aggressive" or the feature is explicitly enabled per-feature
+  // below. Default (unset): conservative — explicit enables only.
+  banyancode_jev_profile: Schema.optional(Schema.Literals(["conservative", "aggressive"])),
+  // Per-feature overrides for automatic Jev features. Known IDs: judge,
+  // explorer, subagent-routing, turn-routing, context-rerank,
+  // compaction-routing, review-routing. Unknown automatic features default
+  // off outside the aggressive profile. An explicit false always disables.
+  banyancode_jev_features: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+  // Generative model tiers a turn policy may select. `fast`/`strong` are
+  // "provider/model-id" strings; thinking levels reuse ThinkingLevelSchema
+  // and resolve via Thinking.resolveThinkingVariant (never a 400).
+  banyancode_jev_model_tiers: Schema.optional(
+    Schema.Struct({
+      fast: Schema.String.check(Schema.isMaxLength(256)),
+      strong: Schema.String.check(Schema.isMaxLength(256)),
+      fastThinking: Schema.optional(ThinkingLevelSchema),
+      strongThinking: Schema.optional(ThinkingLevelSchema),
+    }),
+  ),
+  // Local turn-policy budgets. perTurnCalls caps Jev requests spent on one
+  // turn-routing decision; perSessionUsd caps tracked spend per session.
+  banyancode_jev_budget: Schema.optional(
+    Schema.Struct({
+      perTurnCalls: Schema.optional(Schema.Number),
+      perSessionUsd: Schema.optional(Schema.Number),
+    }),
+  ),
+  // Jev client bounds. All fields are clamped at runtime by the client;
+  // requests-per-minute is a local limiter, never a provider contract.
+  banyancode_jev_client: Schema.optional(
+    Schema.Struct({
+      maxInflight: Schema.optional(Schema.Number),
+      requestsPerMinute: Schema.optional(Schema.Number),
+      tokensPerMinute: Schema.optional(Schema.Number),
+      cacheMaxEntries: Schema.optional(Schema.Number),
+      cacheTtlMs: Schema.optional(Schema.Number),
+      retries: Schema.optional(Schema.Number),
+    }),
+  ),
+  // Jev-first exploration tree (jev-explorer): a host-controlled bounded
+  // action loop that may complete eligible read-only turns (explore/scout/
+  // researcher agents) with a code-verified Jev STOP before any model request.
+  // EVERY field is optional and the feature is OFF unless `enabled: true` is
+  // explicitly set AND a Jev key is present — an absent struct falls through
+  // to the normal LLM path byte-for-byte. Budgets are clamped by the engine:
+  // maxDepth 1..12 (default 4), maxNodes 1..64 (default 12), maxJevCalls
+  // >=1 (default 8), timeoutMs 1..10000 per Jev request (default 1500),
+  // runTimeoutMs >=1 whole-run wall clock (default 30000), maxBytes >=1024
+  // across deterministic tool outputs (default 262144).
+  banyancode_jev_tree: Schema.optional(
+    Schema.Struct({
+      enabled: Schema.optional(Schema.Boolean),
+      maxDepth: Schema.optional(Schema.Number),
+      maxNodes: Schema.optional(Schema.Number),
+      maxJevCalls: Schema.optional(Schema.Number),
+      timeoutMs: Schema.optional(Schema.Number),
+      runTimeoutMs: Schema.optional(Schema.Number),
+      maxBytes: Schema.optional(Schema.Number),
+    }),
+  ),
+  // Opt-in alternate execution profiles. Jev may select these for fresh
+  // read-only subagents; explicit per-agent model/variant overrides still win.
+  banyancode_jev_subagent_models: Schema.optional(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        model: Schema.String.check(Schema.isMaxLength(256)),
+        thinking: Schema.optional(ThinkingLevelSchema),
+      }),
+    ),
+  ),
   // BanyanCode-owned LSP config. True = enable all built-in LSP servers; a
   // record = enable built-ins with per-server overrides (disabled / custom
   // command / env / extensions / initialization). BanyanCode does not read
@@ -250,6 +385,12 @@ export const Info = Schema.Struct({
       }),
     ),
   ),
+  // MCP delegation server defaults for `banyancode mcp serve`. Omit for
+  // reject-everything defaults. BanyanConfig only, never ConfigV1.
+  banyancode_mcp_server: Schema.optional(McpServer).annotate({
+    description:
+      "Defaults for `banyancode mcp serve` task delegation (default agent/model, permission policy, concurrency and token caps, tool group allowlist).",
+  }),
 }).annotate({ identifier: "BanyanConfig" })
 
 export type Info = typeof Info.Type

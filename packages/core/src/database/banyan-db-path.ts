@@ -38,6 +38,12 @@ export const sanitizeRoot = (input: string): string => {
 const legacyDbPath = (): boolean =>
   process.env.BANYANCODE_LEGACY_DB_PATH === "1" || process.env.BANYANCODE_LEGACY_DB_PATH === "true"
 
+// Test hermeticity override: when `BANYANCODE_PROJECT_DB_DIR` is set (to a
+// temp dir by `packages/opencode/test/preload.ts`), per-root DBs are placed
+// in that directory instead of `<root>/.banyancode/`. The filename/hash
+// scheme is unchanged, so roots stay isolated from each other — they just no
+// longer contend with a real banyancode process running in the repo under
+// test. Empty/whitespace-only values are treated as unset.
 export const channelSuffix = (): string => {
   const disabled =
     ["latest", "beta", "prod"].includes(InstallationChannel) ||
@@ -67,7 +73,9 @@ export const deriveBanyanDbPath = (banyanDir: string, root: string): BanyanDbPat
   const canonicalRoot = sanitizeRoot(root)
   const tag = legacy ? "" : shortHash(canonicalRoot)
   const filename = legacy ? `banyancode${suffix}.db` : `banyancode-${tag}${suffix}.db`
-  return { canonicalRoot, tag, legacy, channelSuffix: suffix, filename, dbPath: join(banyanDir, filename) }
+  const override = process.env.BANYANCODE_PROJECT_DB_DIR?.trim()
+  const baseDir = override ? override : banyanDir
+  return { canonicalRoot, tag, legacy, channelSuffix: suffix, filename, dbPath: join(baseDir, filename) }
 }
 
 // Walk up from `startDir` looking for an existing `.banyancode` marker

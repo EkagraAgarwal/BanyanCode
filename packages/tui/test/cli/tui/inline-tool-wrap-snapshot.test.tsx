@@ -7,8 +7,12 @@ import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createEventSource, createFetch, directory } from "../../fixture/tui-sdk"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { TuiConfigProvider } from "../../../src/config"
+import { ArgsProvider } from "../../../src/context/args"
+import { ExitProvider } from "../../../src/context/exit"
 import { KVProvider } from "../../../src/context/kv"
+import { ProjectProvider } from "../../../src/context/project"
 import { SDKProvider } from "../../../src/context/sdk"
+import { SyncProvider } from "../../../src/context/sync"
 import { ThemeProvider } from "../../../src/context/theme"
 import {
   BlockTool,
@@ -43,17 +47,25 @@ function Harness(props: { children: any }) {
   const calls = createFetch()
   return (
     <TestTuiContexts>
-      <KVProvider>
-        <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
-          <TuiConfigProvider config={config}>
-            <ThemeProvider mode="dark">
-              <KeymapProvider keymap={mockKeymap}>
-                {props.children}
-              </KeymapProvider>
-            </ThemeProvider>
-          </TuiConfigProvider>
-        </SDKProvider>
-      </KVProvider>
+      <ExitProvider exit={console.error}>
+        <ArgsProvider>
+          <KVProvider>
+            <SDKProvider url="http://test" directory={directory} events={events.source} fetch={calls.fetch}>
+              <ProjectProvider>
+                <SyncProvider>
+                  <TuiConfigProvider config={config}>
+                    <ThemeProvider mode="dark">
+                      <KeymapProvider keymap={mockKeymap}>
+                        {props.children}
+                      </KeymapProvider>
+                    </ThemeProvider>
+                  </TuiConfigProvider>
+                </SyncProvider>
+              </ProjectProvider>
+            </SDKProvider>
+          </KVProvider>
+        </ArgsProvider>
+      </ExitProvider>
     </TestTuiContexts>
   )
 }

@@ -5,7 +5,7 @@ import { Effect, Layer } from "effect"
 import { sql } from "drizzle-orm"
 import { CodegraphRepo } from "../../src/banyancode/codegraph-repo"
 import { Database } from "@opencode-ai/core/database/database"
-import ftsMigration from "../../src/database/migration/20260707120000_codegraph_fts"
+import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 
 process.env.BANYANCODE_ENABLE = "1"
 
@@ -22,27 +22,6 @@ afterEach(() => {
   }
 })
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const applyFtsMigration = (db: any) =>
-  Effect.gen(function* () {
-    yield* db.run(
-      sql`CREATE TABLE IF NOT EXISTS ${sql.identifier("migration")} (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`,
-    )
-    const completed = new Set(
-      (yield* db.all(sql`SELECT id FROM ${sql.identifier("migration")}`)).map((row: { id: string }) => row.id),
-    )
-    if (!completed.has(ftsMigration.id)) {
-      yield* db.transaction((tx: any) =>
-        Effect.gen(function* () {
-          yield* ftsMigration.up(tx)
-          yield* tx.run(
-            sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed) VALUES(${ftsMigration.id}, ${Date.now()})`,
-          )
-        }),
-      )
-    }
-  })
-
 describe("codegraph-fts5", () => {
   test("rebuildFtsIndex reports 3 rowsIndexed after inserting 3 nodes", async () => {
     await using tmp = await tmpdir()
@@ -55,7 +34,7 @@ describe("codegraph-fts5", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const { db } = yield* Database.Service
-        yield* applyFtsMigration(db)
+        yield* DatabaseMigration.apply(db)
       }).pipe(Effect.provide(dbLayer)) as unknown as Effect.Effect<void, never, never>,
     )
 
@@ -103,29 +82,23 @@ describe("codegraph-fts5", () => {
 
         const result = yield* repo.rebuildFtsIndex()
         expect(result.rowsIndexed).toBe(3)
-      }).pipe(Effect.provide(repoLayer), Effect.scoped),
+      }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
 
-  test("FTS5 table is queryable via raw SQL after rebuild", async () => {
+  test("code-only term is searchable via ftsSearchNodes after rebuild (lives in the code table)", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "codegraph.sqlite")
 
     process.env.OPENCODE_DB = dbPath
 
     const dbLayer = Database.layerFromPath(dbPath)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const { db } = yield* Database.Service
-        yield* applyFtsMigration(db)
-      }).pipe(Effect.provide(dbLayer)) as unknown as Effect.Effect<void, never, never>,
-    )
-
     const repoLayer = CodegraphRepo.layer.pipe(Layer.provide(dbLayer))
 
-    const rows = await Effect.runPromise(
+    const hits = await Effect.runPromise(
       Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
         const repo = yield* CodegraphRepo.Service
 
         yield* repo.putFile({
@@ -147,17 +120,25 @@ describe("codegraph-fts5", () => {
         })
 
         yield* repo.rebuildFtsIndex()
-        return yield* Effect.gen(function* () {
-          const { db } = yield* Database.Service
-          const result = yield* db
-            .all(sql`SELECT name FROM \`codegraph_fts\` WHERE \`codegraph_fts\` MATCH 'frobulator'`)
-            .pipe(Effect.orDie)
-          return result as Array<{ name: string }>
-        }).pipe(Effect.provide(dbLayer))
-      }).pipe(Effect.provide(repoLayer), Effect.scoped),
+
+        // The term lives only in `code`: the names table must not match
+        // it (code left the trigram index in the FTS split), while the
+        // code table does.
+        const namesHits = (yield* db
+          .all(sql`SELECT rowid FROM \`codegraph_fts\` WHERE \`codegraph_fts\` MATCH 'frobulator'`)
+          .pipe(Effect.orDie)) as Array<{ rowid: number }>
+        expect(namesHits.length).toBe(0)
+        const codeHits = (yield* db
+          .all(sql`SELECT rowid FROM \`codegraph_fts_code\` WHERE \`codegraph_fts_code\` MATCH 'frobulator'`)
+          .pipe(Effect.orDie)) as Array<{ rowid: number }>
+        expect(codeHits.length).toBeGreaterThan(0)
+
+        return yield* repo.ftsSearchNodes({ query: "frobulator" })
+      }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
     )
 
-    expect(rows.length).toBeGreaterThan(0)
+    expect(hits.length).toBeGreaterThan(0)
+    expect(hits.some((h) => h.id === "node-searchable")).toBe(true)
   })
 
   test("trigger fires on putNode insertion - new node is immediately findable via FTS5", async () => {
@@ -167,18 +148,12 @@ describe("codegraph-fts5", () => {
     process.env.OPENCODE_DB = dbPath
 
     const dbLayer = Database.layerFromPath(dbPath)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const { db } = yield* Database.Service
-        yield* applyFtsMigration(db)
-      }).pipe(Effect.provide(dbLayer)) as unknown as Effect.Effect<void, never, never>,
-    )
-
     const repoLayer = CodegraphRepo.layer.pipe(Layer.provide(dbLayer))
 
     await Effect.runPromise(
       Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.apply(db)
         const repo = yield* CodegraphRepo.Service
 
         yield* repo.putFile({
@@ -199,17 +174,12 @@ describe("codegraph-fts5", () => {
           code: "function xyzzyMarker() {}",
         })
 
-        const rows = yield* Effect.gen(function* () {
-          const { db } = yield* Database.Service
-          return yield* db
-            .all(sql`SELECT name FROM \`codegraph_fts\` WHERE \`codegraph_fts\` MATCH 'xyzzyMarker'`)
-            .pipe(Effect.orDie)
-        }).pipe(Effect.provide(dbLayer))
-
-        expect(rows.length).toBe(1)
-        const row = rows[0] as { name: string }
-        expect(row.name).toBe("triggerTestFunction")
-      }).pipe(Effect.provide(repoLayer), Effect.scoped),
+        // No rebuild: the insert triggers must have populated both FTS
+        // tables synchronously.
+        const hits = yield* repo.ftsSearchNodes({ query: "xyzzyMarker" })
+        expect(hits.length).toBe(1)
+        expect(hits[0]!.name).toBe("triggerTestFunction")
+      }).pipe(Effect.provide(repoLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
 })

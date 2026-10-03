@@ -10,8 +10,7 @@ import {
   type Renderable,
 } from "@opentui/core"
 import type { CommandContext } from "@opentui/keymap"
-import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
-import "opentui-spinner/solid"
+import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match, For } from "solid-js"
 import path from "path"
 import { useLocal } from "../../context/local"
 import { Flag } from "@opencode-ai/core/flag/flag"
@@ -19,7 +18,8 @@ import { tint, useTheme } from "../../context/theme"
 import { EmptyBorder, RoundedBorder, SplitBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
-import { Spinner } from "../spinner"
+import { Spinner, useSpinnerTick } from "../spinner"
+import type { ColorGenerator } from "opentui-spinner"
 import { useSDK } from "../../context/sdk"
 import { useRoute } from "../../context/route"
 import { useProject } from "../../context/project"
@@ -131,6 +131,28 @@ function formatEditorContext(selection: EditorSelection) {
 }
 
 let stashed: { prompt: PromptInfo; cursor: number } | undefined
+
+// Knight-rider status glyph driven by the shared spinner clock instead of a
+// private interval. Mounts only while the session is busy (see the
+// `status().type !== "idle"` Match below), so no timer runs while idle.
+function StatusSpinner(props: { frames: string[]; color: ColorGenerator }) {
+  const tick = useSpinnerTick()
+  const frame = () => {
+    if (props.frames.length === 0) return ""
+    return props.frames[tick() % props.frames.length] ?? ""
+  }
+  return (
+    <text>
+      <For each={frame().split("")}>
+        {(glyph, index) => (
+          <span style={{ fg: props.color(tick(), index(), props.frames.length, Math.max(1, frame().length)) }}>
+            {glyph}
+          </span>
+        )}
+      </For>
+    </text>
+  )
+}
 
 export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
@@ -1801,7 +1823,7 @@ export function Prompt(props: PromptProps) {
                 <box flexShrink={0} flexDirection="row" gap={1}>
                   <box marginLeft={1}>
                     <Show when={kv.get("animations_enabled", true)} fallback={<text fg={theme.textMuted}>[⋯]</text>}>
-                      <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={100} />
+                      <StatusSpinner frames={spinnerDef().frames} color={spinnerDef().color} />
                     </Show>
                   </box>
                   <box flexDirection="row" gap={1} flexShrink={0}>

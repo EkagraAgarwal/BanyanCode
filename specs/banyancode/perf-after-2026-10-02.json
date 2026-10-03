@@ -1,0 +1,128 @@
+{
+  "probe": "perf-probe.ts v1 (§11.6 Wave-2 gate)",
+  "generatedAt": "2026-10-03T07:31:53.762Z",
+  "machine": {
+    "platform": "win32",
+    "arch": "x64",
+    "cpus": 16,
+    "totalMemBytes": 16366768128
+  },
+  "tree": {
+    "commit": "fc714535b4",
+    "cwd": "D:\\OpenCode\\packages\\opencode"
+  },
+  "config": {
+    "idleSeconds": 60,
+    "files": 200,
+    "port": 0
+  },
+  "dbPre": {
+    "totalBytes": 0,
+    "files": [],
+    "eventRows": null,
+    "eventBytes": null
+  },
+  "dbScopeNote": "scratch dbs/ (BANYANCODE_PROJECT_DB_DIR override — every per-root DB lands here) plus project/repo .banyancode dirs (expected empty: marker walk-up is bypassed by the override); serve is pure-idle with no client requests, so idle writes ≈ 0 is expected",
+  "servePort": 4096,
+  "serve": {
+    "started": true,
+    "port": 4096,
+    "samples": 60,
+    "peakRssBytes": 319467520,
+    "steadyRssBytes": 302588314,
+    "p95RssBytes": 319467520,
+    "cpuSeconds": 0.77,
+    "cpuPctOneCore": 1.28,
+    "wallSeconds": 60
+  },
+  "dbPostIdle": {
+    "totalBytes": 626688,
+    "files": [
+      {
+        "name": "banyancode-592e966773db-local.db",
+        "bytes": 593920
+      },
+      {
+        "name": "banyancode-592e966773db-local.db-shm",
+        "bytes": 32768
+      },
+      {
+        "name": "banyancode-592e966773db-local.db-wal",
+        "bytes": 0
+      }
+    ],
+    "eventRows": 0,
+    "eventBytes": 0
+  },
+  "sessionReplay": {
+    "skipped": true,
+    "reason": "no recorded http-recorder cassette for the §11.6 shape (long bash output + 50-turn conversation) exists in this repo; replay phase not implemented"
+  },
+  "index": {
+    "files": 200,
+    "runs": [
+      {
+        "name": "full-200",
+        "wallMs": 4539,
+        "peakRssBytes": 398028800,
+        "exitCode": 0,
+        "timedOut": false,
+        "tail": "\u001b[90m  root:   C:\\Users\\ekagr\\AppData\\Local\\Temp\\perf-probe-CD9GI5\\repo\u001b[0m\r\n\u001b[90m  db:     C:\\Users\\ekagr\\AppData\\Local\\Temp\\perf-probe-CD9GI5\\dbs\\banyancode-592e966773db-local.db\u001b[0m\r\n\u001b[90m  force:  true\u001b[0m\r\n\r\n\u001b[92m✓ codegraph built (indexed 201, skipped 0, 1.4s)\u001b[0m",
+        "dbPath": "C:\\Users\\ekagr\\AppData\\Local\\Temp\\perf-probe-CD9GI5\\dbs\\banyancode-592e966773db-local.db",
+        "wallSeconds": 4.5
+      },
+      {
+        "name": "repeat-full-200",
+        "wallMs": 4576,
+        "peakRssBytes": 367464448,
+        "exitCode": 0,
+        "timedOut": false,
+        "tail": "\u001b[90m  root:   C:\\Users\\ekagr\\AppData\\Local\\Temp\\perf-probe-CD9GI5\\repo\u001b[0m\r\n\u001b[90m  db:     C:\\Users\\ekagr\\AppData\\Local\\Temp\\perf-probe-CD9GI5\\dbs\\banyancode-592e966773db-local.db\u001b[0m\r\n\u001b[90m  force:  true\u001b[0m\r\n\r\n\u001b[92m✓ codegraph built (indexed 201, skipped 0, 1.3s)\u001b[0m",
+        "dbPath": "C:\\Users\\ekagr\\AppData\\Local\\Temp\\perf-probe-CD9GI5\\dbs\\banyancode-592e966773db-local.db",
+        "wallSeconds": 4.6
+      },
+      {
+        "name": "incremental-200",
+        "wallMs": 4448,
+        "peakRssBytes": 397414400,
+        "exitCode": 0,
+        "timedOut": false,
+        "tail": "\u001b[90m  root:   C:\\Users\\ekagr\\AppData\\Local\\Temp\\perf-probe-CD9GI5\\repo\u001b[0m\r\n\u001b[90m  db:     C:\\Users\\ekagr\\AppData\\Local\\Temp\\perf-probe-CD9GI5\\dbs\\banyancode-592e966773db-local.db\u001b[0m\r\n\u001b[90m  force:  false\u001b[0m\r\n\r\n\u001b[92m✓ codegraph built (indexed 200, skipped 1, 1.2s)\u001b[0m",
+        "dbPath": "C:\\Users\\ekagr\\AppData\\Local\\Temp\\perf-probe-CD9GI5\\dbs\\banyancode-592e966773db-local.db",
+        "wallSeconds": 4.4
+      }
+    ],
+    "rssGrowthIdenticalRunsBytes": -30564352,
+    "note": "runs[0] vs runs[1] are the two identical indexing runs (§11.6/C1: expect no RSS growth); runs[2] is the incremental reindex of changed files"
+  },
+  "dbPostIndex": {
+    "totalBytes": 1792984,
+    "files": [
+      {
+        "name": "banyancode-592e966773db-local.db",
+        "bytes": 1245184
+      },
+      {
+        "name": "banyancode-592e966773db-local.db-wal",
+        "bytes": 515032
+      },
+      {
+        "name": "banyancode-592e966773db-local.db-shm",
+        "bytes": 32768
+      }
+    ],
+    "eventRows": 0,
+    "eventBytes": 0
+  },
+  "targets": {
+    "idleCpuPctOneCore": 1.28,
+    "idleCpuTarget": "< 0.5% of one core",
+    "idleCpuPass": false,
+    "durableWritesPerSecStreamingBash": null,
+    "durableWritesNote": "unmeasured: session-replay skipped (no cassette)",
+    "eventBytesPerSessionVsPreQ0": null,
+    "eventBytesNote": "unmeasured: needs pre-Q0 baseline DB for comparison",
+    "rssGrowthIdenticalRunsBytes": -30564352,
+    "rssGrowthPass": true
+  }
+}

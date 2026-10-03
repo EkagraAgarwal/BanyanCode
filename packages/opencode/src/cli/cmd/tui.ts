@@ -38,12 +38,19 @@ function createWorkerFetch(client: RpcClient): typeof fetch {
   return fn as typeof fetch
 }
 
-function createEventSource(client: RpcClient): EventSource {
+function createEventSource(client: RpcClient): EventSource & { setVisibleSessions: (sessionIDs: string[]) => void } {
   return {
     subscribe: async (handler) => {
       return client.on<GlobalEvent>("global.event", (e) => {
         handler(e)
       })
+    },
+    // Report the displayed sessions so the worker can drop other sessions'
+    // events before they cross the boundary. Fire-and-forget with a bound:
+    // old workers lack this method and never reply, which would otherwise
+    // leave a pending call behind per navigation.
+    setVisibleSessions: (sessionIDs: string[]) => {
+      withTimeout(client.call("setVisibleSessions", { sessionIDs }), 1000).catch(() => {})
     },
   }
 }
@@ -131,30 +138,80 @@ export const TuiThreadCommand = cmd({
       }
       const cwd = Filesystem.resolve(process.cwd())
 
-      const worker = new Worker(file)
-      const client = Rpc.client<typeof rpc>(worker)
-      // The fullscreen TUI runs with OpenTUI in externalOutputMode "passthrough"
-      // so any stderr write from a worker crash overwrites the rendered frame.
-      // Keep the handler non-fatal: a single stderr line is acceptable, the file
-      // logger still records the full crash via the parent process's
-      // uncaughtException handler, and the next request will surface a fresh
-      // connection error if the worker is actually dead.
-      worker.onerror = (error) => {
-        console.error("[tui] worker error", error?.message ?? error)
-      }
-      worker.onmessageerror = () => {}
-      const reload = () => {
-        client.call("reload", undefined).catch(() => {})
-      }
-      process.on("SIGUSR2", reload)
+      // V6 in-process mode (BANYANCODE_TUI_IN_PROCESS=1, default off): run
+      // the server in-process — GlobalBus directly, app.fetch directly, no
+      // Worker hop. The dynamic import keeps the server graph out of the
+      // default worker path. The worker remains the default.
+      const inProcess = process.env.BANYANCODE_TUI_IN_PROCESS === "1"
 
-      let stopped = false
-      const stop = async () => {
-        if (stopped) return
-        stopped = true
-        process.off("SIGUSR2", reload)
-        await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
-        worker.terminate()
+      type InternalTransport = {
+        fetch: typeof fetch
+        events: EventSource & { setVisibleSessions: (sessionIDs: string[]) => void }
+      }
+      type ServerNetwork = { port: number; hostname: string; mdns?: boolean; cors?: string[] }
+      let getServerURL: (network: ServerNetwork) => Promise<string>
+      let getInternalTransport: () => InternalTransport
+      let runUpgradeCheck: (directory: string) => Promise<unknown>
+      let takeSnapshot: () => Promise<string>
+      let reload: () => void
+      let stop: () => Promise<void>
+
+      if (inProcess) {
+        const { createInProcessTransport } = await import("../tui/in-process")
+        const backend = createInProcessTransport({
+          // Non-fatal, mirroring worker.onerror below: a stderr line is
+          // acceptable, the TUI survives, and the next request retries
+          // against re-initialized state via the recoverable connection
+          // error the boundary throws.
+          onError: (error) => {
+            console.error("[tui] in-process error", error instanceof Error ? error.message : String(error))
+          },
+        })
+        getServerURL = async (network) => (await backend.server(network)).url
+        getInternalTransport = () => ({ fetch: backend.fetch, events: backend.events })
+        runUpgradeCheck = (directory) => backend.checkUpgrade({ directory })
+        takeSnapshot = () => backend.snapshot() as Promise<string>
+        reload = () => {
+          backend.reload().catch(() => {})
+        }
+        process.on("SIGUSR2", reload)
+        let stopped = false
+        stop = async () => {
+          if (stopped) return
+          stopped = true
+          process.off("SIGUSR2", reload)
+          await backend.shutdown()
+        }
+      } else {
+        const worker = new Worker(file)
+        const client = Rpc.client<typeof rpc>(worker)
+        // The fullscreen TUI runs with OpenTUI in externalOutputMode "passthrough"
+        // so any stderr write from a worker crash overwrites the rendered frame.
+        // Keep the handler non-fatal: a single stderr line is acceptable, the file
+        // logger still records the full crash via the parent process's
+        // uncaughtException handler, and the next request will surface a fresh
+        // connection error if the worker is actually dead.
+        worker.onerror = (error) => {
+          console.error("[tui] worker error", error?.message ?? error)
+        }
+        worker.onmessageerror = () => {}
+        reload = () => {
+          client.call("reload", undefined).catch(() => {})
+        }
+        process.on("SIGUSR2", reload)
+
+        let stopped = false
+        stop = async () => {
+          if (stopped) return
+          stopped = true
+          process.off("SIGUSR2", reload)
+          await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
+          worker.terminate()
+        }
+        getServerURL = async (network) => (await client.call("server", network)).url
+        getInternalTransport = () => ({ fetch: createWorkerFetch(client), events: createEventSource(client) })
+        runUpgradeCheck = (directory) => client.call("checkUpgrade", { directory })
+        takeSnapshot = () => client.call("snapshot", undefined)
       }
 
       const prompt = await input(args.prompt)
@@ -171,14 +228,13 @@ export const TuiThreadCommand = cmd({
 
       const transport = external
         ? {
-            url: (await client.call("server", network)).url,
+            url: await getServerURL(network),
             fetch: undefined,
             events: undefined,
           }
         : {
             url: "http://opencode.internal",
-            fetch: createWorkerFetch(client),
-            events: createEventSource(client),
+            ...getInternalTransport(),
           }
 
       try {
@@ -195,7 +251,7 @@ export const TuiThreadCommand = cmd({
       }
 
       setTimeout(() => {
-        client.call("checkUpgrade", { directory: cwd }).catch(() => {})
+        runUpgradeCheck(cwd).catch(() => {})
       }, 1000).unref?.()
 
       try {
@@ -216,7 +272,7 @@ export const TuiThreadCommand = cmd({
               url: transport.url,
               async onSnapshot() {
                 const tui = writeHeapSnapshot("tui.heapsnapshot")
-                const server = await client.call("snapshot", undefined)
+                const server = await takeSnapshot()
                 return [tui, server]
               },
               config,

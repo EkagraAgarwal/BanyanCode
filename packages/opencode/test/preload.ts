@@ -86,6 +86,13 @@ delete process.env["OTEL_RESOURCE_ATTRIBUTES"]
 // Use in-memory sqlite
 process.env["OPENCODE_DB"] = ":memory:"
 
+// Hermetic per-root BanyanCode DBs: deriveBanyanDbPath honors this override
+// and places `<repo>/.banyancode/banyancode-<hash>.db` files here instead of
+// in the repo itself, so tests that use the repo as a root never contend
+// with a real banyancode process. Cleaned up with `dir` in afterAll above.
+process.env["BANYANCODE_PROJECT_DB_DIR"] = path.join(dir, "project-dbs")
+await fs.mkdir(path.join(dir, "project-dbs"), { recursive: true })
+
 // Now safe to import from src/
 const { initProjectors } = await import("../src/server/projectors")
 

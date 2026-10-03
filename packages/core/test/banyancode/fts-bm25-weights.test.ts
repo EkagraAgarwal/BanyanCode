@@ -12,9 +12,11 @@ process.env.BANYANCODE_ENABLE = "1"
  * Phase 3 FTS quality — bm25 column-weight regression suite.
  *
  * Locks the contract that the bm25 column weights added in
- * `ftsSearchNodes` (via the `bm25(codegraph_fts, 10.0, 3.0, 1.0)` call)
- * give name matches strictly better scores than signature matches,
- * which are strictly better than code-only matches.
+ * `ftsSearchNodes` (via the `bm25(codegraph_fts, 10.0, 3.0)` call on the
+ * trigram names table, plus source priority for the unicode61 code
+ * table — see 20261002120000_codegraph_fts_split) give name matches
+ * strictly better scores than signature matches, which rank ahead of
+ * code-only matches.
  *
  * Note on the weight convention: FTS5's bm25() returns the NEGATIVE of
  * a weighted TF-IDF sum, so HIGHER weights produce MORE-NEGATIVE bm25
@@ -31,9 +33,9 @@ process.env.BANYANCODE_ENABLE = "1"
  * result list.
  *
  * Seed design: a single row with a unique identifier `alphatermSymbol`
- * carries the term in all three columns (name, signature, code) so
- * term-frequency contribution to bm25 is identical across columns. The
- * bm25 differences then come purely from the column-weight triple, not
+ * carries the term in the indexed name and signature columns so
+ * term-frequency contribution to bm25 is identical across them. The
+ * bm25 differences then come purely from the column-weight pair, not
  * from term-frequency math. The single-row query `alphaterm` returns
  * one hit; the test checks that the column-weighted bm25 value is
  * strictly more-negative than the unweighted `bm25(codegraph_fts)` value
@@ -42,7 +44,9 @@ process.env.BANYANCODE_ENABLE = "1"
  *
  * A second test exercises the weight ORDER via a multi-row seed: a row
  * with the term in `name` and a different row with the term in `code`
- * only, with term-frequency held equal, must rank name-first.
+ * only, with term-frequency held equal, must rank name-first (via
+ * `ftsSearchNodes`, which sorts names-table hits ahead of code-only
+ * hits).
  */
 
 const testLayer = Layer.mergeAll(CodegraphRepo.defaultLayer)
@@ -129,7 +133,7 @@ describe("FTS quality — bm25 column weights", () => {
         // The Phase 3 production call (the contract we want to lock).
         const weightedHits = yield* db
           .all<{ bm25: number }>(sql`
-            SELECT bm25(codegraph_fts, 10.0, 3.0, 1.0) AS bm25
+            SELECT bm25(codegraph_fts, 10.0, 3.0) AS bm25
             FROM codegraph_fts
             INNER JOIN codegraph_nodes n ON n.rowid = codegraph_fts.rowid
             WHERE codegraph_fts MATCH ${`"alphaterm"`}
@@ -157,8 +161,8 @@ describe("FTS quality — bm25 column weights", () => {
 
     // Both bm25 values are negative (FTS5 bm25 is the negative of a
     // weighted sum of TF-IDF contributions; more-negative is better).
-    // The weighted triple (10.0/3.0/1.0) is HIGHER than the unweighted
-    // default (1.0/1.0/1.0), so the name column's contribution is
+    // The weighted pair (10.0/3.0) is HIGHER than the unweighted
+    // default (1.0/1.0), so the name column's contribution is
     // pulled down more, producing a strictly more-negative score.
     expect(weighted).toBeLessThan(0)
     expect(unweighted).toBeLessThan(0)
@@ -170,7 +174,7 @@ describe("FTS quality — bm25 column weights", () => {
     const dbPath = path.join(tmp.path, "test.db")
     const dbLayer = Database.layerFromPath(dbPath)
 
-    const result = await Effect.runPromise(
+    const hits = await Effect.runPromise(
       Effect.gen(function* () {
         const { db } = yield* Database.Service
         yield* DatabaseMigration.apply(db)
@@ -178,34 +182,21 @@ describe("FTS quality — bm25 column weights", () => {
         yield* seedNameVsCode(repo)
 
         // One query, both rows eligible (both contain the term in
-        // exactly one column). The query expansion should produce
-        // just `alphaterm` (no internal splits).
-        const hits = yield* db
-          .all<{ id: string; bm25: number }>(sql`
-            SELECT n.id, bm25(codegraph_fts, 10.0, 3.0, 1.0) AS bm25
-            FROM codegraph_fts
-            INNER JOIN codegraph_nodes n ON n.rowid = codegraph_fts.rowid
-            WHERE codegraph_fts MATCH ${`"alphaterm"`}
-            ORDER BY bm25
-          `)
-          .pipe(Effect.orDie)
-        return hits
+        // exactly one indexed column). The query expansion should
+        // produce just `alphaterm` (no internal splits).
+        return yield* repo.ftsSearchNodes({ query: "alphaterm", limit: 10 })
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
 
-    expect(result.length).toBe(2)
-    // The Phase-3 column weights (name=10.0, code=1.0) must give the
-    // name-only row a strictly more-negative bm25 (= better rank) than
-    // the code-only row. With the unweighted default, code matches
-    // would outrank name matches because the name column is short
-    // (TF saturates faster than the longer code column). The weight
-    // scheme reverses that bias.
-    const byID = new Map(result.map((r) => [r.id, r.bm25]))
-    const nameBm25 = byID.get("row-name-only")
-    const codeBm25 = byID.get("row-code-only")
-    expect(nameBm25).toBeDefined()
-    expect(codeBm25).toBeDefined()
-    expect(nameBm25!).toBeLessThan(codeBm25!)
+    expect(hits.length).toBe(2)
+    // The split-FTS ranking (names-table hits before code-only hits)
+    // must give the name-only row the better rank, just as the old
+    // (name=10.0, code=1.0) weight pair did. With the unweighted
+    // default, code matches would outrank name matches because the name
+    // column is short (TF saturates faster than the longer code
+    // column). The weight scheme reverses that bias.
+    expect(hits[0]!.id).toBe("row-name-only")
+    expect(hits[1]!.id).toBe("row-code-only")
   })
 
   test("bm25 ordering: results from a mixed query are sorted ASC (best first)", async () => {

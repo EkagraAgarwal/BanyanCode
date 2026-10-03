@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Duration, Layer, Queue, Stream } from "effect"
+import { Effect, Duration, Layer, Option, Queue, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import os from "node:os"
 import path from "node:path"
@@ -9,6 +9,18 @@ import { SystemMonitor, readDisk } from "../../src/banyancode/system-monitor"
 process.env.BANYANCODE_ENABLE = "1"
 
 const layer = SystemMonitor.defaultLayer
+
+/** Non-blocking drain: everything currently queued, up to max. */
+const drainAvailable = <A>(queue: Queue.Dequeue<A>, max: number) =>
+  Effect.gen(function* () {
+    const out: Array<A> = []
+    for (let i = 0; i < max; i++) {
+      const next = yield* Queue.poll(queue)
+      if (Option.isNone(next)) break
+      out.push(next.value)
+    }
+    return out
+  })
 
 describe("SystemMonitor", () => {
   test("status() returns expected shape", async () => {
@@ -94,27 +106,34 @@ describe("SystemMonitor", () => {
   })
 
   test("watch(100) emits at least 3 values within 4500ms", async () => {
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const monitor = yield* SystemMonitor.Service
-        const stream = yield* monitor.watch(100)
-        const values: SystemMonitor.SystemStatus[] = []
-        yield* stream.pipe(
-          Stream.take(3),
-          Stream.runForEach((s) => Effect.sync(() => values.push(s))),
-        )
-        return values
-      }).pipe(
-        Effect.provide(layer),
-        Effect.timeout(Duration.millis(4500)),
-      ),
-    )
-    expect(result).toBeTruthy()
-    expect(result.length).toBe(3)
-    for (const v of result) {
-      expect(v.cpuPercent === undefined || typeof v.cpuPercent === "number").toBe(true)
-      expect(typeof v.memoryUsedBytes).toBe("number")
-      expect(typeof v.memoryTotalBytes).toBe("number")
+    // watch() holds a sampler lease for the stream lifetime; the short tick
+    // plus the change-heartbeat (every 10th tick) yields ~3 samples in ~2s.
+    process.env.BANYANCODE_SYSTEM_TICK_MS = "100"
+    try {
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const monitor = yield* SystemMonitor.Service
+          const stream = yield* monitor.watch(100)
+          const values: SystemMonitor.SystemStatus[] = []
+          yield* stream.pipe(
+            Stream.take(3),
+            Stream.runForEach((s) => Effect.sync(() => values.push(s))),
+          )
+          return values
+        }).pipe(
+          Effect.provide(layer),
+          Effect.timeout(Duration.millis(4500)),
+        ),
+      )
+      expect(result).toBeTruthy()
+      expect(result.length).toBe(3)
+      for (const v of result) {
+        expect(v.cpuPercent === undefined || typeof v.cpuPercent === "number").toBe(true)
+        expect(typeof v.memoryUsedBytes).toBe("number")
+        expect(typeof v.memoryTotalBytes).toBe("number")
+      }
+    } finally {
+      delete process.env.BANYANCODE_SYSTEM_TICK_MS
     }
   })
 
@@ -153,16 +172,21 @@ describe("SystemMonitor", () => {
 
     test("watch() keeps emitting regardless of disk probe outcome", async () => {
       const values: SystemMonitor.SystemStatus[] = []
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const monitor = yield* SystemMonitor.Service
-          const stream = yield* monitor.watch(50)
-          yield* stream.pipe(
-            Stream.take(3),
-            Stream.runForEach((s) => Effect.sync(() => values.push(s))),
-          )
-        }).pipe(Effect.provide(layer), Effect.timeout(Duration.seconds(8))),
-      )
+      process.env.BANYANCODE_SYSTEM_TICK_MS = "100"
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const monitor = yield* SystemMonitor.Service
+            const stream = yield* monitor.watch(50)
+            yield* stream.pipe(
+              Stream.take(3),
+              Stream.runForEach((s) => Effect.sync(() => values.push(s))),
+            )
+          }).pipe(Effect.provide(layer), Effect.timeout(Duration.seconds(8))),
+        )
+      } finally {
+        delete process.env.BANYANCODE_SYSTEM_TICK_MS
+      }
       expect(values.length).toBe(3)
       for (const v of values) {
         expect(typeof v.memoryUsedBytes).toBe("number")
@@ -174,38 +198,104 @@ describe("SystemMonitor", () => {
 
   describe("producer tick pacing (regression)", () => {
     // The internal sampler used to be `Effect.forever(tick).pipe(Schedule.spaced(...))`
-    // which busy-spun because `forever` never completes. Tick is now 1000ms.
+    // which busy-spun because `forever` never completes. The tick is now 3s by
+    // default and gated on demand: with no subscriber nothing is sampled.
     test("events queue receives a paced number of samples (no busy-spin)", async () => {
-      const collected = await Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const monitor = yield* SystemMonitor.Service
-            const queue = yield* monitor.events()
-            let count = 0
-            yield* Effect.forkScoped(
-              Effect.forever(
-                Effect.gen(function* () {
-                  yield* Queue.take(queue)
-                  count++
-                }),
-              ),
-            )
-            yield* Effect.sleep(Duration.millis(2500))
-            return count
-          }),
-        ).pipe(Effect.provide(layer)),
-      )
-      // 1000ms spacing → ~2–3 samples in 2500ms (allow slack for CI jitter).
-      // The old busy-spin produced tens of thousands; the old 100ms tick would
-      // have produced ~25.
-      expect(collected).toBeGreaterThanOrEqual(1)
-      expect(collected).toBeLessThan(8)
+      process.env.BANYANCODE_SYSTEM_TICK_MS = "200"
+      try {
+        const collected = await Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const monitor = yield* SystemMonitor.Service
+              const queue = yield* monitor.events()
+              const unsubscribe = yield* monitor.subscribe()
+              let count = 0
+              yield* Effect.forkScoped(
+                Effect.forever(
+                  Effect.gen(function* () {
+                    yield* Queue.take(queue)
+                    count++
+                  }),
+                ),
+              )
+              yield* Effect.sleep(Duration.millis(900))
+              yield* unsubscribe
+              return count
+            }),
+          ).pipe(Effect.provide(layer)),
+        )
+        // 200ms spacing → ~4 ticks in 900ms; change-only publish keeps all but
+        // the first (plus genuine changes). The old busy-spin produced tens of
+        // thousands here.
+        expect(collected).toBeGreaterThanOrEqual(1)
+        expect(collected).toBeLessThan(8)
+      } finally {
+        delete process.env.BANYANCODE_SYSTEM_TICK_MS
+      }
+    })
+
+    test("sampling stops when the subscriber count hits 0 and resumes after resubscribe", async () => {
+      process.env.BANYANCODE_SYSTEM_TICK_MS = "100"
+      try {
+        const stubProcess = Layer.succeed(
+          AppProcess.Service,
+          AppProcess.Service.of({
+            run: () =>
+              Effect.succeed({
+                command: "nvidia-smi",
+                exitCode: 1,
+                stdout: Buffer.alloc(0),
+                stderr: Buffer.from("no gpu here"),
+                stdoutTruncated: false,
+                stderrTruncated: false,
+              }),
+            runStream: () => {
+              throw new Error("unused")
+            },
+          } as unknown as AppProcess.Interface),
+        )
+        await Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const monitor = yield* SystemMonitor.Service
+              const queue = yield* monitor.events()
+
+              const unsubscribe = yield* monitor.subscribe()
+              expect(yield* monitor.subscriberCount()).toBe(1)
+              yield* Effect.sleep(Duration.millis(350))
+              const first = yield* drainAvailable(queue, 10)
+              expect(first.length).toBeGreaterThanOrEqual(1)
+
+              yield* unsubscribe
+              expect(yield* monitor.subscriberCount()).toBe(0)
+              // Drain stragglers from the subscribed era, then prove the
+              // ungated ticks sample nothing new.
+              yield* drainAvailable(queue, 60)
+              yield* Effect.sleep(Duration.millis(350))
+              expect(yield* Queue.size(queue)).toBe(0)
+
+              const resubscribe = yield* monitor.subscribe()
+              expect(yield* monitor.subscriberCount()).toBe(1)
+              yield* Effect.sleep(Duration.millis(350))
+              // Unsubscribing clears the last-published sample, so the first
+              // tick after resubscribe always publishes the current state.
+              const resumed = yield* drainAvailable(queue, 10)
+              expect(resumed.length).toBeGreaterThanOrEqual(1)
+              yield* resubscribe
+            }),
+          ).pipe(Effect.provide(SystemMonitor.layer.pipe(Layer.provide(stubProcess)))),
+        )
+      } finally {
+        delete process.env.BANYANCODE_SYSTEM_TICK_MS
+      }
     })
   })
 
   describe("failed GPU probe caching (regression)", () => {
     // Failed nvidia-smi probes used to skip the gpuAt write (gated on
     // `snapshot.gpu && ...`), so every status() tick re-spawned the binary.
+    // Driven through status() directly: the background tick stays silent
+    // without a subscriber, so this no longer depends on tick timing.
     test("spawns nvidia-smi at most once per TTL when the probe fails", async () => {
       if (process.platform === "darwin") return
 
@@ -235,15 +325,12 @@ describe("SystemMonitor", () => {
         Effect.scoped(
           Effect.gen(function* () {
             const monitor = yield* SystemMonitor.Service
-            // Let the producer tick populate the failed-GPU cache (and absorb
-            // any first-probe race between the tick and an early status()).
-            yield* Effect.sleep(Duration.millis(250))
-            const baseline = runs.filter((c) => c === "nvidia-smi").length
-            expect(baseline).toBeGreaterThanOrEqual(1)
-            expect(baseline).toBeLessThanOrEqual(2)
+            yield* monitor.status()
+            expect(runs.filter((c) => c === "nvidia-smi").length).toBe(1)
 
-            // Further status() calls across the 1s status-cache window must
-            // not re-spawn nvidia-smi while the 30s GPU TTL holds.
+            // Further status() calls across the 1s status-cache window and the
+            // 30s GPU TTL must not re-spawn nvidia-smi. A single non-ENOENT
+            // failure stays well under the circuit-breaker threshold.
             yield* monitor.status()
             yield* Effect.sleep(Duration.millis(1100))
             yield* monitor.status()
@@ -251,10 +338,64 @@ describe("SystemMonitor", () => {
             yield* Effect.sleep(Duration.millis(1100))
             yield* monitor.status()
 
-            expect(runs.filter((c) => c === "nvidia-smi").length).toBe(baseline)
+            expect(runs.filter((c) => c === "nvidia-smi").length).toBe(1)
           }),
         ).pipe(Effect.provide(SystemMonitor.layer.pipe(Layer.provide(failingProcess)))),
       )
+    })
+
+    test("GPU probe circuit-breaker trips after N consecutive non-ENOENT failures", async () => {
+      if (process.platform === "darwin") return
+
+      process.env.BANYANCODE_SYSTEM_GPU_TTL_MS = "50"
+      process.env.BANYANCODE_SYSTEM_GPU_MAX_FAILURES = "3"
+      try {
+        const runs: string[] = []
+        const failingProcess = Layer.succeed(
+          AppProcess.Service,
+          AppProcess.Service.of({
+            run: (command: ChildProcess.Command) =>
+              Effect.sync(() => {
+                if (command._tag === "StandardCommand") runs.push(command.command)
+                return {
+                  command: "nvidia-smi",
+                  exitCode: 1,
+                  stdout: Buffer.alloc(0),
+                  stderr: Buffer.from("NVIDIA-SMI has failed"),
+                  stdoutTruncated: false,
+                  stderrTruncated: false,
+                }
+              }),
+            runStream: () => {
+              throw new Error("unused")
+            },
+          } as unknown as AppProcess.Interface),
+        )
+
+        await Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const monitor = yield* SystemMonitor.Service
+              // 60ms sleeps step past the 50ms GPU TTL (but stay inside the 1s
+              // status cache): each iteration re-probes until the breaker trips.
+              for (let i = 0; i < 8; i++) {
+                yield* monitor.status()
+                yield* Effect.sleep(Duration.millis(60))
+              }
+              expect(runs.filter((c) => c === "nvidia-smi").length).toBe(3)
+
+              // Still disabled after further TTL windows pass: non-ENOENT
+              // failures must not retry forever.
+              yield* Effect.sleep(Duration.millis(120))
+              yield* monitor.status()
+              expect(runs.filter((c) => c === "nvidia-smi").length).toBe(3)
+            }),
+          ).pipe(Effect.provide(SystemMonitor.layer.pipe(Layer.provide(failingProcess)))),
+        )
+      } finally {
+        delete process.env.BANYANCODE_SYSTEM_GPU_TTL_MS
+        delete process.env.BANYANCODE_SYSTEM_GPU_MAX_FAILURES
+      }
     })
   })
 })

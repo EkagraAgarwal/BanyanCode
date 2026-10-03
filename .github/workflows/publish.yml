@@ -400,9 +400,9 @@ jobs:
             # keeps them out of the stable view; the finalize step below
             # re-affirms the flag once assets are uploaded.
             if [ "$CHANNEL" = "latest" ]; then
-              gh release create "$TAG" --draft --generate-notes --title "BanyanCode ${{ needs.version.outputs.version }}" --repo "${{ github.repository }}"
+              gh release create "$TAG" --target "$GITHUB_SHA" --draft --generate-notes --title "BanyanCode ${{ needs.version.outputs.version }}" --repo "${{ github.repository }}"
             else
-              gh release create "$TAG" --draft --prerelease --generate-notes --title "BanyanCode ${{ needs.version.outputs.version }} ($CHANNEL)" --repo "${{ github.repository }}"
+              gh release create "$TAG" --target "$GITHUB_SHA" --draft --prerelease --generate-notes --title "BanyanCode ${{ needs.version.outputs.version }} ($CHANNEL)" --repo "${{ github.repository }}"
             fi
           fi
           shopt -s nullglob

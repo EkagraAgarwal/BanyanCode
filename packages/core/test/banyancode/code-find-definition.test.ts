@@ -33,6 +33,7 @@ const mockCodegraphRepoLayer = Layer.succeed(
         totalEdges: 500,
         schemaVersion: 1,
       }),
+    listNodesLightPage: () => Effect.succeed({ nodes: [], nextCursor: undefined }),
     listAllNodes: () =>
       Effect.succeed([
         { id: "n1", fileID: "f1", kind: "function" as const, name: "login", startLine: 1, endLine: 10 },

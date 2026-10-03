@@ -12,6 +12,7 @@ import InspectorTodo from "./inspector/todo"
 import SidebarSystemStatus from "./sidebar/system-status"
 import SidebarProviderUsage from "./sidebar/provider-usage"
 import SidebarToolUsage from "./sidebar/tool-usage"
+import SidebarJev from "./sidebar/jev"
 import SessionFooter from "./footer/session-footer"
 import AttentionStrip from "../component/attention-strip"
 import HeaderBrand from "./header/brand"
@@ -43,6 +44,7 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     SidebarSystemStatus,
     SidebarProviderUsage,
     SidebarToolUsage,
+    SidebarJev,
     SidebarMcp,
     SidebarFiles,
     SidebarFooter,

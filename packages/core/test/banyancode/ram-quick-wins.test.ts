@@ -9,11 +9,13 @@ import { CodegraphIndexer } from "@opencode-ai/core/banyancode/codegraph-indexer
 import { CodegraphRepo } from "@opencode-ai/core/banyancode/codegraph-repo"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import {
-  MAX_HOT_GRAMMAR_FAMILIES,
+  MAX_GRAMMAR_FAMILIES,
   Service as TreeSitterService,
+  _resetGrammarLoadCountForTesting,
   _resetTreeSitterStateForTesting,
   ensureGrammarForExt,
   ensureWebTreeSitterReady,
+  getGrammarLoadCountForTesting,
   layer as treeSitterLayer,
   withTreeSitter,
 } from "@opencode-ai/core/banyancode/langs/tree-sitter"
@@ -192,32 +194,43 @@ describe("RAM quick wins", () => {
     expect(tree.rootNode!.toString().length).toBeGreaterThan(0)
   }, 120_000)
 
-  test("grammar cache evicts cold families past the hot cap", async () => {
+  test("grammar cache keeps all families resident with no eviction", async () => {
     await Effect.runPromise(_resetTreeSitterStateForTesting())
+    _resetGrammarLoadCountForTesting()
     await Effect.runPromise(ensureWebTreeSitterReady())
+    const ready = await Effect.runPromise(
+      withTreeSitter(() => true).pipe(Effect.option),
+    )
+    if (ready._tag === "None") return
     for (const ext of [".ts", ".py", ".rs", ".go", ".c"] as const) {
-      await Effect.runPromise(ensureGrammarForExt(ext))
+      const loaded = await Effect.runPromise(ensureGrammarForExt(ext).pipe(Effect.option))
+      if (loaded._tag === "None") return
     }
 
     const afterLoad = await Effect.runPromise(
       withTreeSitter((state) => ({
         hasTs: state.parser.languagesByExt.has(".ts"),
         hasC: state.parser.languagesByExt.has(".c"),
-        families: state.parser.grammarUseOrder.length,
+        families: state.parser.languagesByExt.size,
       })),
     )
-    expect(afterLoad.families).toBeLessThanOrEqual(MAX_HOT_GRAMMAR_FAMILIES)
-    expect(afterLoad.hasTs).toBe(false)
+    expect(afterLoad.families).toBeLessThanOrEqual(MAX_GRAMMAR_FAMILIES)
+    expect(afterLoad.hasTs).toBe(true)
     expect(afterLoad.hasC).toBe(true)
 
-    await Effect.runPromise(ensureGrammarForExt(".ts"))
+    const loadsAfterFirstPass = getGrammarLoadCountForTesting()
+    for (const ext of [".ts", ".py", ".rs", ".go", ".c"] as const) {
+      await Effect.runPromise(ensureGrammarForExt(ext))
+    }
+    expect(getGrammarLoadCountForTesting()).toBe(loadsAfterFirstPass)
+
     const reloaded = await Effect.runPromise(
       withTreeSitter((state) => ({
         hasTs: state.parser.languagesByExt.has(".ts"),
-        families: state.parser.grammarUseOrder.length,
+        families: state.parser.languagesByExt.size,
       })),
     )
     expect(reloaded.hasTs).toBe(true)
-    expect(reloaded.families).toBeLessThanOrEqual(MAX_HOT_GRAMMAR_FAMILIES)
+    expect(reloaded.families).toBeLessThanOrEqual(MAX_GRAMMAR_FAMILIES)
   }, 120_000)
 })

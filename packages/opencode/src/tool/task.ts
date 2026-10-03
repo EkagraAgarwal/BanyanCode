@@ -18,6 +18,8 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { Thinking } from "@opencode-ai/core/banyancode/thinking"
+import { Jev } from "@opencode-ai/core/banyancode/jev"
+import { JevActivity } from "@/session/jev-activity"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -350,6 +352,7 @@ export const TaskTool = Tool.define(
       const banyanCfgOpt = yield* Effect.serviceOption(Banyan.BanyanConfigService)
       const banyanCfg = Option.isSome(banyanCfgOpt) ? yield* banyanCfgOpt.value.get() : undefined
       const entry = banyanCfg?.agent?.[next.name]
+      const alternate = banyanCfg?.banyancode_jev_subagent_models?.[next.name]
       let model: { providerID: string; modelID: string } | undefined = undefined
       if (entry?.model) {
         const parts = entry.model.split("/")
@@ -363,6 +366,83 @@ export const TaskTool = Tool.define(
           providerID: msg.info.providerID,
         }
       }
+      // An alternate is an explicit user-approved generative profile, not Jev
+      // itself. Never change a resumed task or a pinned per-agent model/variant.
+      // Routing covers any configured subagent role (explore/scout/coder/…),
+      // gated by the shared `subagent-routing` feature flag: explicit disable,
+      // missing key, or no configured profile all keep the current model.
+      const candidate = alternate?.model.split("/")
+      const canRoute = Boolean(
+        isFreshSpawn &&
+        !params.task_id &&
+        !entry?.model &&
+        !entry?.variant &&
+        !next.model &&
+        candidate &&
+        candidate.length > 1 &&
+        candidate[0] &&
+        candidate.slice(1).join("/") &&
+        alternate?.model !== `${model.providerID}/${model.modelID}` &&
+        Jev.feature(banyanCfg ?? {}, process.env, "subagent-routing"),
+      )
+      let routed = false
+      if (canRoute && candidate) {
+        const providerOpt = yield* Effect.serviceOption(Provider.Service)
+        const available = Option.isSome(providerOpt)
+          ? yield* providerOpt.value
+              .getModel(ProviderV2.ID.make(candidate[0]), ModelV2.ID.make(candidate.slice(1).join("/")))
+              .pipe(Effect.catch(() => Effect.succeed(undefined)))
+          : undefined
+        if (available) {
+          const activity = yield* JevActivity.start({
+            sessionID: ctx.sessionID,
+            messageID: ctx.messageID,
+            operationID: `task:${ctx.callID}`,
+            feature: "subagent-routing",
+          }).pipe(Effect.provideService(Session.Service, sessions), Effect.catch(() => Effect.succeed(undefined)))
+          if (activity) {
+            const decision = yield* Effect.promise(() =>
+              Jev.decide({
+                state: JSON.stringify({ agent: next.name, task: params.description, prompt: params.prompt.slice(0, 1500) }),
+                question: `Can this ${next.name} subagent task be completed reliably by the configured alternate model? Choose default if uncertain or complex.`,
+                choices: ["default", "alternate"],
+                criteria: {
+                  default: "Use the current model for complex, ambiguous, or high-stakes work",
+                  alternate: `Use the configured ${alternate?.model} profile for a straightforward ${next.name} task`,
+                },
+                config: banyanCfg,
+                timeoutMs: 1500,
+                signal: ctx.abort,
+                sessionID: ctx.sessionID,
+                feature: "subagent-routing",
+                // Turn identity: per-turn budget scopes must not share one
+                // constant (a fixed agent-name scope would block every future
+                // turn after the per-turn call budget is spent).
+                scope: activity.turnID,
+              }),
+            ).pipe(
+              Effect.onInterrupt(() =>
+                activity
+                  .finish({ status: "skipped", summary: "interrupted before the routing decision" })
+                  .pipe(Effect.ignore),
+              ),
+            )
+            const recommended = decision.ok && decision.choice === "alternate" && decision.confidence >= 0.8 &&
+              decision.probabilities.alternate - decision.probabilities.default >= 0.2
+            const settled = yield* activity.finish({
+              status: decision.ok ? "completed" : "failed",
+              choice: recommended ? "alternate" : "default",
+              summary: decision.ok ? `Selected ${recommended ? "alternate" : "default"} model` : decision.reason,
+              latency: { ms: decision.latencyMs },
+              usage: decision.ok && decision.usage?.inputTokens !== undefined
+                ? { input: decision.usage.inputTokens, output: decision.usage.outputTokens ?? 0, cost: decision.usage.cost }
+                : undefined,
+            }).pipe(Effect.exit)
+            routed = recommended && Exit.isSuccess(settled)
+            if (routed) model = { providerID: candidate[0], modelID: candidate.slice(1).join("/") }
+          }
+        }
+      }
       // Thinking → variant for the child session. Explicit banyan `variant`
       // wins, then per-agent `thinking`, then the parent session variant,
       // then banyancode_thinking_default (medium). Resolved against the child
@@ -374,7 +454,7 @@ export const TaskTool = Tool.define(
       const thinkingEscapeHatch = entry?.variant
       const thinkingLevel =
         thinkingEscapeHatch ??
-        Thinking.resolveThinkingLevel(entry?.thinking, banyanCfg?.banyancode_thinking_default ?? variant)
+        Thinking.resolveThinkingLevel(routed ? alternate?.thinking : entry?.thinking, banyanCfg?.banyancode_thinking_default ?? variant)
       let thinkingKeys: string[] | undefined = undefined
       if (!thinkingEscapeHatch) {
         const providerOpt = yield* Effect.serviceOption(Provider.Service)

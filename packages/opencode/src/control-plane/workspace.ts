@@ -372,7 +372,11 @@ export const layer = Layer.effect(
                 type: event.type,
                 data: event.data,
               },
-              { publish: true, ownerID: space.id },
+              // History may be compacted (S1 keeps latest snapshots with
+              // original seqs), so gaps in the retained prefix are expected
+              // here. Live SSE replay below stays strict: a gap there means
+              // a lost message and must die loudly, not diverge silently.
+              { publish: true, ownerID: space.id, allowGaps: true },
             )
             .pipe(Effect.provideService(WorkspaceRef, space.id)),
         { discard: true },
