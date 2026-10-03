@@ -263,14 +263,54 @@ export const layer = Layer.effect(
     // the top of `index` and `applyChanges`).
     yield* Effect.promise(() => ensureQuerySourcesLoaded())
 
-    // Nested .gitignore support: per-build cache of compiled patterns keyed by
-    // directory (null = no .gitignore or nothing to add). Populated lazily by
-    // loadDirGitignore during the walk and by applyChanges' ancestor scan.
+    // Nested .gitignore support: cross-build cache of compiled patterns keyed by
+    // directory (null = no .gitignore or nothing to add). Entries are validated
+    // by file signature (size + mtime) on every loadDirGitignore call, so a
+    // changed or deleted .gitignore is recompiled without clearing the whole
+    // map. The old per-build clear() also raced a concurrent index/applyChanges
+    // pair (gap-plan audit 3); sharing one validated map closes that race —
+    // concurrent compiles of the same content are idempotent (last write wins).
     const nestedGitignoreCache = new Map<string, IgnorePattern[] | null>()
+    const nestedGitignoreSig = new Map<string, string>()
+    // Root-level ignore context cache keyed by root + exclude patterns,
+    // validated by the same signature scheme on the two root ignore files.
+    // Incremental batches from the same root hit this on every drain instead
+    // of recompiling every ignore file per batch (gap-plan G1).
+    // (Holder object rather than a bare `let`: TS narrows a `let` initialized
+    // to `undefined` at later read sites, which breaks the cache-hit check.)
+    const rootIgnoreHolder: {
+      current:
+        | {
+          key: string
+          gitSig: string
+          banyanSig: string
+          defaults: readonly IgnorePattern[]
+          rootGit: readonly IgnorePattern[]
+          banyan: readonly IgnorePattern[]
+        }
+        | undefined
+    } = { current: undefined }
+
+    // Cheap change detector for ignore files: "absent" when the file does not
+    // exist, otherwise size + mtimeMs. Callers recompile when the signature
+    // differs from the cached one.
+    const ignoreFileSig = (filePath: string): Effect.Effect<string, never, never> =>
+      Effect.gen(function* () {
+        const statOpt = yield* fs.stat(filePath).pipe(Effect.option)
+        if (statOpt._tag === "None") return "absent"
+        const stats = statOpt.value
+        return `${Number(stats.size)}:${"value" in stats.mtime ? Math.floor(stats.mtime.value.getTime()) : 0}`
+      })
 
     const loadIgnoreContext = (root: string, excludePatterns?: readonly string[]): Effect.Effect<IgnoreContext> => {
       return Effect.gen(function* () {
-        nestedGitignoreCache.clear()
+        const key = `${root} ${(excludePatterns ?? []).join(" ")}`
+        const gitSig = yield* ignoreFileSig(path.join(root, ".gitignore"))
+        const banyanSig = yield* ignoreFileSig(path.join(root, ".banyancode", "ignore"))
+        const cached = rootIgnoreHolder.current
+        if (cached !== undefined && cached.key === key && cached.gitSig === gitSig && cached.banyanSig === banyanSig) {
+          return { root, defaults: cached.defaults, rootGit: cached.rootGit, banyan: cached.banyan, nested: nestedGitignoreCache }
+        }
         const defaults = [...DEFAULT_IGNORED, ...DEFAULT_PRODUCT_EXCLUDES, ...DEFAULT_GENERATED_EXCLUDES]
           .map((raw) => compileIgnorePattern(raw, root))
           .filter((p): p is IgnorePattern => p !== undefined)
@@ -302,15 +342,24 @@ export const layer = Layer.effect(
             if (pattern) banyan.push(pattern)
           }
         }
+        rootIgnoreHolder.current = { key, gitSig, banyanSig, defaults, rootGit, banyan }
         return { root, defaults, rootGit, banyan, nested: nestedGitignoreCache }
       })
     }
 
     const loadDirGitignore = (dir: string): Effect.Effect<void> => {
-      if (nestedGitignoreCache.has(dir)) return Effect.void
       return Effect.gen(function* () {
+        // Signature-validated: unchanged dirs cost one stat instead of a
+        // recompile; changed/deleted .gitignore files recompile on demand.
+        const sig = yield* ignoreFileSig(path.join(dir, ".gitignore"))
+        if (nestedGitignoreCache.has(dir) && nestedGitignoreSig.get(dir) === sig) return
+        if (sig === "absent") {
+          nestedGitignoreCache.set(dir, null)
+          nestedGitignoreSig.set(dir, sig)
+          return
+        }
         const gitignorePath = path.join(dir, ".gitignore")
-        if (yield* fs.existsSafe(gitignorePath)) {
+        {
           const content = yield* fs.readFileStringSafe(gitignorePath).pipe(Effect.orDie)
           const patterns: IgnorePattern[] = []
           if (content) {
@@ -320,8 +369,7 @@ export const layer = Layer.effect(
             }
           }
           nestedGitignoreCache.set(dir, patterns)
-        } else {
-          nestedGitignoreCache.set(dir, null)
+          nestedGitignoreSig.set(dir, sig)
         }
       })
     }
@@ -997,6 +1045,21 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   }
 
   const fileByPath = new Map(allFiles.map((f) => [f.path.replace(/\\/g, "/"), f]))
+  // G4: precomputed once per rebuild — O(1) dir lookups and generated-source
+  // resolution without re-scanning every file per node (the old generated_from
+  // pass was O(G x F) via allFiles.find per generated node).
+  const dirOfFileID = new Map(allFiles.map((f) => [f.id, fileDir(f.path)]))
+  const fileKeyByDirBase = new Map<string, Map<string, CodegraphFile>>()
+  for (const file of allFiles) {
+    const dir = fileDir(file.path)
+    let byBase = fileKeyByDirBase.get(dir)
+    if (!byBase) {
+      byBase = new Map()
+      fileKeyByDirBase.set(dir, byBase)
+    }
+    const base = path.basename(file.path)
+    if (!byBase.has(base)) byBase.set(base, file)
+  }
   const deriveModuleCandidates = (sourcePath: string, specifier: string): ReadonlyArray<CodegraphFile> => {
     if (!specifier) return []
     if (!specifier.startsWith(".") && !specifier.startsWith("/")) return []
@@ -1028,23 +1091,65 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       .filter((file): file is CodegraphFile => file !== undefined)
   }
 
-  // Incremental: edge SOURCES are the scoped window (changed files + one-hop
-  // dependents already collected by the caller). Previously the node LOAD
-  // window was the same set — that dominated RAM/CPU less than the old
-  // searchNodesLight({ limit: 100_000 }) scan, but it dropped every
-  // cross-file edge whose TARGET lives in an unchanged, non-dependent file:
-  // the target nodes were never loaded, so the import-scope and same-dir
-  // peer lookups below resolved to nothing and the edge was never
-  // re-derived (while the delete pass had already removed the old one).
-  // The load window is therefore the source set PLUS one hop of
-  // resolution targets (same-dir peers, import-resolved files, and files
-  // already connected by an edge). These extra nodes are targets only —
-  // the sourceSet guards below still decide which files emit edges, so
-  // import-scoped precision is unchanged. Full rebuild still loads the
-  // whole graph.
-  let allNodesForIndex: CodegraphNode[]
+  // G4 streaming load (gap-plan C6). Two windows, one light-index shape:
+  //   - Incremental (sourceSet): the G6 load window — sources plus one hop of
+  //     resolution targets (same-dir peers, import-resolved files, edge
+  //     neighbors) — loaded with chunked nodesByFileIDs. Bounded by the
+  //     change set; the sourceSet guards in the derive pass still decide
+  //     which files EMIT edges, so import-scoped precision is unchanged.
+  //     These extra nodes are targets only.
+  //   - Full rebuild: NO searchNodes({ limit: 100_000 }) anymore — that held
+  //     every node's code in RAM and silently truncated graphs past 100k
+  //     nodes. Instead page listNodesPage to exhaustion building only the
+  //     light index below (id/fileID/kind/name — node code is never
+  //     retained); full node rows (with code) are streamed one file at a
+  //     time by the driver below, so peak RAM is O(light index + one file).
+  type LightNode = { id: string; fileID: string; kind: CodegraphNodeKind; name: string }
+  const toLight = (node: CodegraphNode): LightNode => ({ id: node.id, fileID: node.fileID, kind: node.kind, name: node.name })
+  const lightByFile = new Map<string, LightNode[]>()
+  const lightByID = new Map<string, LightNode>()
+  const nameIndex = new Map<string, LightNode[]>()
+  const addLight = (light: LightNode): void => {
+    const fileList = lightByFile.get(light.fileID) ?? []
+    fileList.push(light)
+    lightByFile.set(light.fileID, fileList)
+    lightByID.set(light.id, light)
+    const nameList = nameIndex.get(light.name) ?? []
+    nameList.push(light)
+    nameIndex.set(light.name, nameList)
+  }
+  // G4: deterministic docker pick per directory (lowest name, then id). The
+  // old full path iterated searchNodes (ORDER BY name) while the incremental
+  // path used storage order, so multi-docker dirs could diverge between modes.
+  const dockerByDir = new Map<string, LightNode>()
+  const noteDocker = (light: LightNode): void => {
+    if (light.kind !== "docker") return
+    const dir = dirOfFileID.get(light.fileID)
+    if (dir === undefined) return
+    const prev = dockerByDir.get(dir)
+    if (!prev || light.name < prev.name || (light.name === prev.name && light.id < prev.id)) {
+      dockerByDir.set(dir, light)
+    }
+  }
+  // Chunked nodesByFileIDs: a single inArray with an unbounded id list risks
+  // the SQLite variable cap on large change sets (the repo chunks at 900 too).
+  const nodesByFileIDsChunked = (fileIDs: readonly string[]): Effect.Effect<CodegraphNode[], never, never> =>
+    Effect.gen(function* () {
+      const out: CodegraphNode[] = []
+      for (let i = 0; i < fileIDs.length; i += 900) {
+        const chunk = yield* repo.nodesByFileIDs({ fileIDs: fileIDs.slice(i, i + 900) })
+        for (const node of chunk) out.push(node)
+      }
+      return out
+    })
+
+  // Full node rows (WITH code) for edge-source files only. Full rebuilds
+  // stream these one file at a time and never retain them (see the driver
+  // below); the incremental window retains its bounded set for the derive
+  // passes.
+  const fullByFile = new Map<string, CodegraphNode[]>()
   if (sourceSet && sourceSet.size > 0) {
-    const sourceNodes = yield* repo.nodesByFileIDs({ fileIDs: [...sourceSet] })
+    const sourceNodes = yield* nodesByFileIDsChunked([...sourceSet])
     const extraFileIDs = new Set<string>()
     // Same-dir peers: the no-import fallback resolves callees from the
     // owner's directory, so every peer file's nodes must be resolvable.
@@ -1076,33 +1181,37 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     for (const neighborID of neighbors) {
       if (!sourceSet.has(neighborID)) extraFileIDs.add(neighborID)
     }
-    allNodesForIndex = sourceNodes
-    if (extraFileIDs.size > 0) {
-      const extraNodes = yield* repo.nodesByFileIDs({ fileIDs: [...extraFileIDs] })
-      allNodesForIndex = [...sourceNodes, ...extraNodes]
+    const loadedNodes = extraFileIDs.size > 0
+      ? [...sourceNodes, ...(yield* nodesByFileIDsChunked([...extraFileIDs]))]
+      : sourceNodes
+    for (const node of loadedNodes) {
+      if (yield* Ref.get(cancelled)) break
+      const light = toLight(node)
+      addLight(light)
+      noteDocker(light)
+      const fileList = fullByFile.get(node.fileID) ?? []
+      fileList.push(node)
+      fullByFile.set(node.fileID, fileList)
     }
   } else {
-    allNodesForIndex = yield* repo.searchNodes({ limit: 100_000 })
-  }
-
-  const nodeMap = new Map<string, CodegraphNode[]>()
-  const nodeByID = new Map<string, CodegraphNode>()
-  const nodesByFileID = new Map<string, CodegraphNode[]>()
-  const BATCH_SIZE = 500
-
-  for (let batchStart = 0; batchStart < allNodesForIndex.length; batchStart += BATCH_SIZE) {
-    if (yield* Ref.get(cancelled)) break
-    const batchEnd = Math.min(batchStart + BATCH_SIZE, allNodesForIndex.length)
-    const batch = allNodesForIndex.slice(batchStart, batchEnd)
-
-    for (const node of batch) {
-      const list = nodeMap.get(node.name) ?? []
-      list.push(node)
-      nodeMap.set(node.name, list)
-      nodeByID.set(node.id, node)
-      const fileList = nodesByFileID.get(node.fileID) ?? []
-      fileList.push(node)
-      nodesByFileID.set(node.fileID, fileList)
+    // Full rebuild: page the node table to exhaustion for the light index.
+    // No LIMIT cap — every node is indexed exactly once (the 100k truncation
+    // fix). Code crosses the wire one page at a time and is dropped
+    // immediately after projection.
+    let cursor: string | undefined = undefined
+    for (;;) {
+      if (yield* Ref.get(cancelled)) return
+      const page: { nodes: CodegraphNode[]; nextCursor: string | undefined } = yield* repo.listNodesPage({
+        cursor,
+        limit: 1000,
+      })
+      for (const node of page.nodes) {
+        const light = toLight(node)
+        addLight(light)
+        noteDocker(light)
+      }
+      if (page.nextCursor === undefined) break
+      cursor = page.nextCursor
     }
   }
 
@@ -1110,32 +1219,34 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   const crossEdges: { fromNodeID: string; toNodeID: string; kind: CodegraphEdge["kind"] }[] = []
   const referenceEdgeKeys = new Set<string>()
 
-  // For referenceEdges: iterate only nodes that have code and are NOT skipped kinds.
-  // In incremental mode, iterate changed files plus dependent files as edge sources
-  // (untouched files never need an import scope recomputed).
-  const importScopesByFileID = new Map<string, Set<string>>()
-  for (const [fileID, nodes] of nodesByFileID) {
-    if (sourceSet && !sourceSet.has(fileID)) continue
-    const fileNode = nodes.find((node) => node.kind === "file")
+  // Deterministic pick order (G4): the old full path saw nodes in searchNodes
+  // (ORDER BY name) order while the incremental path saw storage order, so
+  // ambiguous multi-candidate picks could diverge between modes. Sorting
+  // picks by (name, id) makes both modes agree.
+  const byNameID = (a: { name: string; id: string }, b: { name: string; id: string }): number =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+
+  // Import scope for one edge-source file, plus `imports` edge emission.
+  // (P8a: one `imports` edge per imported FILE — from the importing file's
+  // file-kind node to the imported file's file-kind node, deduped via
+  // referenceEdgeKeys. The endpoint guard keeps edges from pointing at a
+  // node outside the current index window.) Returns undefined when the file
+  // has no file-node code or no owner — the same short-circuit the old
+  // per-file loop used. An empty (but defined) scope still triggers the
+  // same-dir peer fallback in the caller.
+  const computeImportScope = (fileID: string, fullNodes: readonly CodegraphNode[]): Set<string> | undefined => {
+    const fileNode = fullNodes.find((node) => node.kind === "file")
     const owner = fileByID.get(fileID)
-    if (!fileNode?.code || !owner) continue
+    if (!fileNode?.code || !owner) return undefined
     const scope = new Set<string>()
     for (const match of fileNode.code.matchAll(/import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["']([^"']+)["']/g)) {
       const specifier = match[1]
       if (!specifier) continue
       const importedFiles = deriveModuleCandidates(owner.path, specifier)
       for (const imported of importedFiles) {
-        // Phase 5 (P8a): emit one `imports` edge per imported FILE — from
-        // the importing file's file-kind node to the imported file's
-        // file-kind node. Previously the declared `imports` edge kind was
-        // only used to build the in-scope node set and no edge was ever
-        // emitted, so `imports` never appeared in the graph. Dedup via the
-        // shared referenceEdgeKeys set (distinct `${from}->${to}:imports`
-        // key format) so a file imported by several statements yields one
-        // edge. The endpoint guard (nodeByID.has) keeps the edge from ever
-        // pointing at a node outside the current index window.
         const importedFileNodeID = `${imported.id}:file`
-        if (nodeByID.has(importedFileNodeID)) {
+        const importedLights = lightByFile.get(imported.id) ?? []
+        if (importedLights.some((node) => node.id === importedFileNodeID)) {
           const importKey = `${fileNode.id}->${importedFileNodeID}:imports`
           if (!referenceEdgeKeys.has(importKey)) {
             referenceEdgeKeys.add(importKey)
@@ -1146,229 +1257,278 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
             })
           }
         }
-        const importedNodes = nodesByFileID.get(imported.id) ?? []
-        for (const node of importedNodes) {
+        for (const node of importedLights) {
           if (node.kind === "file") continue
           scope.add(node.id)
         }
       }
     }
-    importScopesByFileID.set(fileID, scope)
+    return scope
   }
 
-  for (const nodeA of allNodesForIndex) {
-    if (
-      !nodeA.code ||
-      nodeA.kind === "test" ||
-      nodeA.kind === "route" ||
-      nodeA.kind === "config" ||
-      nodeA.kind === "build" ||
-      nodeA.kind === "package" ||
-      nodeA.kind === "generated" ||
-      nodeA.kind === "ci" ||
-      nodeA.kind === "docker" ||
-      nodeA.kind === "env" ||
-      nodeA.kind === "doc" ||
-      nodeA.kind === "file"
-    ) {
-      continue
+  const isReferenceSourceKind = (kind: CodegraphNode["kind"]): boolean => {
+    switch (kind) {
+      case "test":
+      case "route":
+      case "config":
+      case "build":
+      case "package":
+      case "generated":
+      case "ci":
+      case "docker":
+      case "env":
+      case "doc":
+      case "file":
+        return false
+      default:
+        return true
     }
+  }
 
-    // Incremental: skip nodeA if its file is neither changed nor a dependent source
-    if (sourceSet && !sourceSet.has(nodeA.fileID)) continue
-
-    const inScopeNodeIDs = new Set<string>()
-    const sameFileNodes = nodesByFileID.get(nodeA.fileID) ?? []
-    for (const n of sameFileNodes) {
-      if (n.id !== nodeA.id && n.kind !== "file") inScopeNodeIDs.add(n.id)
+  // calls/references/extends derivation for one edge-source file. The scope
+  // is built ONCE per file (G4: the old code rebuilt it per node — O(N x
+  // scope)): same-file nodes, plus the import scope, plus the same-dir peer
+  // fallback when the file has no imports.
+  const deriveReferencesForFile = (fileID: string, fullNodes: readonly CodegraphNode[]): void => {
+    const importedScope = computeImportScope(fileID, fullNodes)
+    const scopeIDs = new Set<string>()
+    for (const n of fullNodes) {
+      if (n.kind !== "file") scopeIDs.add(n.id)
     }
-    const importedScope = importScopesByFileID.get(nodeA.fileID)
     if (importedScope) {
-      for (const importedID of importedScope) inScopeNodeIDs.add(importedID)
+      for (const id of importedScope) scopeIDs.add(id)
     }
-    if (!importedScope || importedScope.size === 0) {
-      const owner = fileByID.get(nodeA.fileID)
+    if (importedScope === undefined || importedScope.size === 0) {
+      const owner = fileByID.get(fileID)
       if (owner) {
         const ownerDir = fileDir(owner.path)
-        const peers = filesByDir.get(ownerDir) ?? []
-        for (const file of peers) {
-          if (file.id === owner.id) continue
-          const peerNodes = nodesByFileID.get(file.id) ?? []
-          for (const node of peerNodes) {
-            if (node.kind !== "file") inScopeNodeIDs.add(node.id)
+        for (const peer of filesByDir.get(ownerDir) ?? []) {
+          if (peer.id === fileID) continue
+          for (const node of lightByFile.get(peer.id) ?? []) {
+            if (node.kind !== "file") scopeIDs.add(node.id)
           }
         }
       }
     }
-    const inScopeByName = new Map<string, CodegraphNode[]>()
-    for (const nodeID of inScopeNodeIDs) {
-      const scopedNode = nodeByID.get(nodeID)
-      if (!scopedNode) continue
-      const scoped = inScopeByName.get(scopedNode.name) ?? []
-      scoped.push(scopedNode)
-      inScopeByName.set(scopedNode.name, scoped)
+    const scopeByName = new Map<string, LightNode[]>()
+    for (const id of scopeIDs) {
+      const scoped = lightByID.get(id)
+      if (!scoped) continue
+      const list = scopeByName.get(scoped.name) ?? []
+      list.push(scoped)
+      scopeByName.set(scoped.name, list)
     }
-    // Phase 5 (P8b): strip comment and string-literal regions BEFORE the
-    // identifier scan and kind classification so a comment mentioning a
-    // symbol or a string like `"callBash("` cannot fabricate a
-    // `references`/`calls` edge. The original `nodeA.code` stays on the
-    // node unchanged — the strip is only for edge classification.
-    const strippedCode = stripCommentsAndStrings(nodeA.code)
-    const identifiers = new Set<string>()
-    for (const m of strippedCode.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
-      if (m[0].length >= 3 && inScopeByName.has(m[0])) identifiers.add(m[0])
-    }
-
-    for (const name of identifiers) {
-      const targets = inScopeByName.get(name)
-      if (!targets || targets.length === 0) continue
-
-      for (const nodeB of targets) {
-        if (nodeB.id === nodeA.id) continue
-
-        const kind =
-          nodeA.kind === "class" && strippedCode.includes(`extends ${name}`)
-            ? ("extends" as const)
-            : strippedCode.includes(`${name}(`)
-              ? ("calls" as const)
-              : ("references" as const)
-
-        // Phase 0 tree-sitter (parser mode): the tree-sitter query pass owns
-        // `calls` edges for tree-sitter-parsed files — skip regenerating
-        // them so the parser-emitted edges survive unchanged. references /
-        // extends stay derived for those files.
-        if (kind === "calls" && parserState?.fileIDs.has(nodeA.fileID)) continue
-
-        const key = `${nodeA.id}->${nodeB.id}:${kind}`
-        if (referenceEdgeKeys.has(key)) continue
-        referenceEdgeKeys.add(key)
-        referenceEdges.push({
-          fromNodeID: nodeA.id,
-          toNodeID: nodeB.id,
-          kind,
-        })
+    for (const nodeA of fullNodes) {
+      const code = nodeA.code
+      if (!code || !isReferenceSourceKind(nodeA.kind)) continue
+      // P8b: strip comment and string-literal regions BEFORE the identifier
+      // scan and kind classification so a comment mentioning a symbol or a
+      // string like `"callBash("` cannot fabricate a references/calls edge.
+      // The original `nodeA.code` stays on the node unchanged.
+      const strippedCode = stripCommentsAndStrings(code)
+      const identifiers = new Set<string>()
+      for (const m of strippedCode.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
+        if (m[0].length >= 3 && scopeByName.has(m[0])) identifiers.add(m[0])
       }
-    }
-  }
-
-  // Filter node lists by file set for crossEdges that are scope-limited to changed/dependent files.
-  // In incremental mode, changed and dependent source files are processed.
-  // In full mode, all nodes are processed (sourceSet is null).
-  const configNodes = allNodesForIndex.filter((n) => n.kind === "config" && (!sourceSet || sourceSet.has(n.fileID)))
-  const dockerNodes = allNodesForIndex.filter((n) => n.kind === "docker")
-  const testNodes = allNodesForIndex.filter((n) => n.kind === "test" && (!sourceSet || sourceSet.has(n.fileID)))
-  const routeNodes = allNodesForIndex.filter((n) => n.kind === "route" && (!sourceSet || sourceSet.has(n.fileID)))
-  const generatedNodes = allNodesForIndex.filter((n) => n.kind === "generated" && (!sourceSet || sourceSet.has(n.fileID)))
-
-  for (const testNode of testNodes) {
-    if (yield* Ref.get(cancelled)) {
-      yield* Effect.logWarning("codegraph: cancelled during tested_by")
-      break
-    }
-    const testFile = fileByID.get(testNode.fileID)
-    if (!testFile || !testNode.code) continue
-    const testFileImports = extractTestFileImports(testNode.code)
-    const referenced = new Set<string>()
-    for (const m of testNode.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
-      referenced.add(m[0])
-    }
-    for (const name of referenced) {
-      const candidates = nodeMap.get(name)
-      if (!candidates || candidates.length > 10) continue
-      for (const node of candidates) {
-        if (node.fileID === testNode.fileID) continue
-        if (node.kind === "test") continue
-        const nodeFile = fileByID.get(node.fileID)
-        if (!nodeFile) continue
-        if (/\.(test|spec)\./i.test(nodeFile.path.toLowerCase())) continue
-
-        const targetImport = nodeFile.path.replace(/\.(ts|tsx|js|jsx)$/, "").replace(/^.*\//, "")
-        const importsFile = testFileImports.has(targetImport)
-
-        const callOnlyMatch = !importsFile &&
-          candidates.length === 1 &&
-          (testNode.code ?? "").includes(`${name}(`)
-
-        if (importsFile || callOnlyMatch) {
-          crossEdges.push({ fromNodeID: node.id, toNodeID: testNode.id, kind: "tested_by" })
+      for (const name of identifiers) {
+        const targets = scopeByName.get(name)
+        if (!targets || targets.length === 0) continue
+        for (const nodeB of targets) {
+          if (nodeB.id === nodeA.id) continue
+          const kind =
+            nodeA.kind === "class" && strippedCode.includes(`extends ${name}`)
+              ? ("extends" as const)
+              : strippedCode.includes(`${name}(`)
+                ? ("calls" as const)
+                : ("references" as const)
+          // Parser mode: the tree-sitter query pass owns `calls` edges for
+          // tree-sitter-parsed files — skip regenerating them so the
+          // parser-emitted edges survive unchanged.
+          if (kind === "calls" && parserState?.fileIDs.has(nodeA.fileID)) continue
+          const key = `${nodeA.id}->${nodeB.id}:${kind}`
+          if (referenceEdgeKeys.has(key)) continue
+          referenceEdgeKeys.add(key)
+          referenceEdges.push({ fromNodeID: nodeA.id, toNodeID: nodeB.id, kind })
         }
       }
     }
   }
 
-  for (const cfg of configNodes) {
-    if (yield* Ref.get(cancelled)) {
-      yield* Effect.logWarning("codegraph: cancelled during configured_by")
-      break
-    }
-    const cfgFile = fileByID.get(cfg.fileID)
-    if (!cfgFile) continue
-    const cfgDir = fileDir(cfgFile.path)
-    const cfgBasename = cfgFile.path.replace(/\\/g, "/").split("/").pop() ?? cfgFile.path
-    for (const file of filesByDir.get(cfgDir) ?? []) {
-      if (file.id === cfg.fileID) continue
-      const fromNodes = nodesByFileID.get(file.id) ?? []
-      const fromNode = fromNodes.find(
-        (n) =>
-          n.kind !== "config" &&
-          n.kind !== "docker" &&
-          n.kind !== "package" &&
-          n.kind !== "build" &&
-          n.kind !== "ci" &&
-          n.kind !== "env" &&
-          n.kind !== "doc" &&
-          n.kind !== "test" &&
-          n.kind !== "route" &&
-          n.kind !== "generated",
-      ) ?? fromNodes[0]
-      if (!fromNode) continue
-      const code = fromNode.code ?? ""
-      if (!code.includes(cfgBasename)) continue
-      crossEdges.push({ fromNodeID: fromNode.id, toNodeID: cfg.id, kind: "configured_by" })
+  // Representative node for configured_by from-side: first non-artifact node
+  // by (name, id), else the first node — the deterministic form of the old
+  // per-(config,file) pick.
+  const pickFromNode = <N extends { id: string; name: string; kind: CodegraphNodeKind; code?: string | undefined }>(
+    nodes: readonly N[],
+  ): N | undefined => {
+    if (nodes.length === 0) return undefined
+    const sorted = [...nodes].sort(byNameID)
+    return sorted.find(
+      (n) =>
+        n.kind !== "config" &&
+        n.kind !== "docker" &&
+        n.kind !== "package" &&
+        n.kind !== "build" &&
+        n.kind !== "ci" &&
+        n.kind !== "env" &&
+        n.kind !== "doc" &&
+        n.kind !== "test" &&
+        n.kind !== "route" &&
+        n.kind !== "generated",
+    ) ?? sorted[0]
+  }
+
+  const cfgBasenameOf = (file: CodegraphFile): string =>
+    file.path.replace(/\\/g, "/").split("/").pop() ?? file.path
+
+  const deriveTestedByForFile = (fileID: string, fullNodes: readonly CodegraphNode[]): void => {
+    const testFile = fileByID.get(fileID)
+    if (!testFile) return
+    for (const testNode of fullNodes) {
+      if (testNode.kind !== "test" || !testNode.code) continue
+      const testFileImports = extractTestFileImports(testNode.code)
+      const referenced = new Set<string>()
+      for (const m of testNode.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
+        referenced.add(m[0])
+      }
+      for (const name of referenced) {
+        const candidates = nameIndex.get(name)
+        if (!candidates || candidates.length > 10) continue
+        for (const node of candidates) {
+          if (node.fileID === testNode.fileID) continue
+          if (node.kind === "test") continue
+          const nodeFile = fileByID.get(node.fileID)
+          if (!nodeFile) continue
+          if (/\.(test|spec)\./i.test(nodeFile.path.toLowerCase())) continue
+          const targetImport = nodeFile.path.replace(/\.(ts|tsx|js|jsx)$/, "").replace(/^.*\//, "")
+          const importsFile = testFileImports.has(targetImport)
+          const callOnlyMatch = !importsFile &&
+            candidates.length === 1 &&
+            (testNode.code ?? "").includes(`${name}(`)
+          if (importsFile || callOnlyMatch) {
+            crossEdges.push({ fromNodeID: node.id, toNodeID: testNode.id, kind: "tested_by" })
+          }
+        }
+      }
     }
   }
 
-  for (const cfg of configNodes) {
-    const cfgFile = fileByID.get(cfg.fileID)
-    if (!cfgFile) continue
-    const cfgDir = fileDir(cfgFile.path)
-    const docker = dockerNodes.find((n) => {
-      const f = fileByID.get(n.fileID)
-      return f ? fileDir(f.path) === cfgDir : false
-    })
-    if (docker) crossEdges.push({ fromNodeID: cfg.id, toNodeID: docker.id, kind: "built_by" })
+  // configured_by from-side: this file's representative node against every
+  // config in the same directory (G4: configs resolve via the precomputed
+  // light index, not a per-config scan over every file in the graph).
+  const deriveConfiguredByFromFile = (fileID: string, fullNodes: readonly CodegraphNode[]): void => {
+    const owner = fileByID.get(fileID)
+    if (!owner) return
+    const fromNode = pickFromNode(fullNodes)
+    if (!fromNode) return
+    const code = fromNode.code ?? ""
+    for (const peer of filesByDir.get(fileDir(owner.path)) ?? []) {
+      if (peer.id === fileID) continue
+      for (const cfg of lightByFile.get(peer.id) ?? []) {
+        if (cfg.kind !== "config") continue
+        if (!code.includes(cfgBasenameOf(peer))) continue
+        crossEdges.push({ fromNodeID: fromNode.id, toNodeID: cfg.id, kind: "configured_by" })
+      }
+    }
   }
 
-  if (yield* Ref.get(cancelled)) {
-    yield* Effect.logWarning("codegraph: cancelled before mounts")
-  } else {
-    const routeHandlerRegex = /app\.(?:get|post|put|delete|patch|all|use)\s*\([^,]+,\s*(\w+)\s*\)/g
-    for (const routeNode of routeNodes) {
-      if (!routeNode.code) continue
+  // Incremental only: the config-as-TARGET direction for configs living in a
+  // changed file, against peer files that are NOT edge sources themselves
+  // (source peers are covered by deriveConfiguredByFromFile — skipping them
+  // here avoids duplicate edges). Full rebuilds process every file as a
+  // source, so they never need this pass.
+  const deriveConfiguredByTargets = (fileID: string, fullNodes: readonly CodegraphNode[]): void => {
+    const owner = fileByID.get(fileID)
+    if (!owner) return
+    const peers = filesByDir.get(fileDir(owner.path)) ?? []
+    for (const cfg of fullNodes) {
+      if (cfg.kind !== "config") continue
+      const basename = cfgBasenameOf(owner)
+      for (const peer of peers) {
+        if (peer.id === fileID) continue
+        if (sourceSet?.has(peer.id)) continue
+        const fromNode = pickFromNode(fullByFile.get(peer.id) ?? [])
+        if (!fromNode) continue
+        if (!(fromNode.code ?? "").includes(basename)) continue
+        crossEdges.push({ fromNodeID: fromNode.id, toNodeID: cfg.id, kind: "configured_by" })
+      }
+    }
+  }
+
+  const deriveBuiltByForFile = (fileID: string, fullNodes: readonly CodegraphNode[]): void => {
+    const owner = fileByID.get(fileID)
+    if (!owner) return
+    // G4: O(1) docker lookup per directory (the old code scanned every docker
+    // node per config — O(C x D)).
+    const docker = dockerByDir.get(fileDir(owner.path))
+    if (!docker) return
+    for (const cfg of fullNodes) {
+      if (cfg.kind !== "config") continue
+      crossEdges.push({ fromNodeID: cfg.id, toNodeID: docker.id, kind: "built_by" })
+    }
+  }
+
+  const routeHandlerRegex = /app\.(?:get|post|put|delete|patch|all|use)\s*\([^,]+,\s*(\w+)\s*\)/g
+  const deriveMountsForFile = (fileID: string, fullNodes: readonly CodegraphNode[]): void => {
+    for (const routeNode of fullNodes) {
+      if (routeNode.kind !== "route" || !routeNode.code) continue
       for (const match of routeNode.code.matchAll(routeHandlerRegex)) {
         const handlerName = match[1]
-        const handlers = nodeMap.get(handlerName)
-        const handler = handlers?.find((n) => n.fileID === routeNode.fileID)
+        if (!handlerName) continue
+        const handlers = nameIndex.get(handlerName)
+        const handler = handlers
+          ?.filter((n) => n.fileID === routeNode.fileID)
+          .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0]
         if (handler) crossEdges.push({ fromNodeID: routeNode.id, toNodeID: handler.id, kind: "mounts" })
       }
     }
+  }
 
-    for (const gen of generatedNodes) {
+  const deriveGeneratedForFile = (fileID: string, fullNodes: readonly CodegraphNode[]): void => {
+    const genFile = fileByID.get(fileID)
+    if (!genFile) return
+    const genBase = path.basename(genFile.path).replace(/\.generated(\.[^.]+)$/i, "$1")
+    // G4: O(1) source lookup (the old code scanned every file per generated
+    // node — O(G x F)).
+    const sourceFile = fileKeyByDirBase.get(fileDir(genFile.path))?.get(genBase)
+    if (!sourceFile) return
+    const sourceLights = lightByFile.get(sourceFile.id) ?? []
+    if (sourceLights.length === 0) return
+    const sorted = [...sourceLights].sort(byNameID)
+    const sourceNode = sorted.find((n) => n.kind !== "generated") ?? sorted[0]
+    for (const gen of fullNodes) {
+      if (gen.kind !== "generated") continue
+      if (sourceNode) crossEdges.push({ fromNodeID: gen.id, toNodeID: sourceNode.id, kind: "generated_from" })
+    }
+  }
+
+  // Drivers: incremental rebuilds derive only the source window (plus the
+  // config-target direction for changed configs); full rebuilds stream one
+  // file at a time so full node rows never accumulate in RAM.
+  const deriveSourceFile = (fileID: string, fullNodes: readonly CodegraphNode[]): void => {
+    if (fullNodes.length === 0) return
+    deriveReferencesForFile(fileID, fullNodes)
+    deriveTestedByForFile(fileID, fullNodes)
+    deriveConfiguredByFromFile(fileID, fullNodes)
+    deriveBuiltByForFile(fileID, fullNodes)
+    deriveMountsForFile(fileID, fullNodes)
+    deriveGeneratedForFile(fileID, fullNodes)
+  }
+  if (sourceSet && sourceSet.size > 0) {
+    for (const fileID of sourceSet) {
+      if (yield* Ref.get(cancelled)) break
+      deriveSourceFile(fileID, fullByFile.get(fileID) ?? [])
+    }
+    for (const fileID of sourceSet) {
+      if (yield* Ref.get(cancelled)) break
+      deriveConfiguredByTargets(fileID, fullByFile.get(fileID) ?? [])
+    }
+  } else {
+    for (const file of allFiles) {
       if (yield* Ref.get(cancelled)) {
-        yield* Effect.logWarning("codegraph: cancelled during generated_from")
+        yield* Effect.logWarning("codegraph: cancelled during derived-graph streaming")
         break
       }
-      const genFile = fileByID.get(gen.fileID)
-      if (!genFile) continue
-      const genDir = fileDir(genFile.path)
-      const genBase = path.basename(genFile.path).replace(/\.generated(\.[^.]+)$/i, "$1")
-      const sourceFile = allFiles.find(
-        (f) => fileDir(f.path) === genDir && path.basename(f.path) === genBase,
-      )
-      if (!sourceFile) continue
-      const sourceNodes = nodesByFileID.get(sourceFile.id)
-      const sourceNode = sourceNodes?.find((n) => n.kind !== "generated") ?? sourceNodes?.[0]
-      if (sourceNode) crossEdges.push({ fromNodeID: gen.id, toNodeID: sourceNode.id, kind: "generated_from" })
+      deriveSourceFile(file.id, yield* repo.listNodesByFile(file.id))
     }
   }
 
@@ -1730,31 +1890,68 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     }) {
       yield* Ref.set(cancelled, false)
       const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
-      // Phase 0 tree-sitter: prime the parser bundle once per (incremental)
-      // build — same rationale as the full-build path in `index`.
-      yield* ensureWebTreeSitterReady()
-      // Phase 0 tree-sitter edge-mode switch: read once per build.
+      // Phase 0 tree-sitter edge-mode switch: read once per build (cheap env
+      // read — the expensive `ensureWebTreeSitterReady` prime is deferred
+      // until after filtering proves there is parse work, gap-plan G1).
       const edgeMode = yield* Effect.sync(() => (process.env.BANYANCODE_TS_EDGES === "parser" ? "parser" : "derived"))
       const parserFileIDsRef = yield* Ref.make<Set<string>>(new Set())
       const parserEdgeIDsRef = yield* Ref.make<Set<string>>(new Set())
+      // G1: dedupe + cheap empty-batch return before ANY heavy work
+      // (tree-sitter init, ignore compile, DB reads).
+      const addedInputs = [...new Set(input.addedOrChanged)]
+      const removedInputs = [...new Set(input.removed)]
+      if (addedInputs.length === 0 && removedInputs.length === 0) {
+        return {
+          indexed: 0,
+          removed: 0,
+          skipped: 0,
+          parseErrors: [],
+        }
+      }
+      // G1: cached ignore context (mtime-validated; no per-batch recompile).
       const ignoreCtx = yield* loadIgnoreContext(input.root, input.excludePatterns)
       const removedFileIDs = new Set<string>()
       const filteredRemoved: string[] = []
       const filteredAddedOrChanged: CandidateFile[] = []
       let skippedInputs = 0
+      // G1: path-keyed lookups for exactly the change set instead of a
+      // full-table listAllFiles(). Point selects on the path unique index —
+      // O(change set) instead of O(graph).
       const listStart = Date.now()
-      const existingFilesByPath = new Map((yield* repo.listAllFiles()).map((f) => [f.path, f]))
-      yield* Effect.logDebug(`codegraph: incremental listAllFiles took ${Date.now() - listStart}ms`)
+      const unionPaths = [...new Set([...removedInputs, ...addedInputs])]
+      const fetchedRows = yield* Effect.forEach(
+        unionPaths,
+        (filePath) =>
+          Effect.gen(function* () {
+            const row = yield* repo.getFileByPath(filePath)
+            return row ? ([filePath, row] as const) : undefined
+          }),
+        { concurrency: 16 },
+      )
+      const existingFilesByPath = new Map<string, CodegraphFile>()
+      for (const entry of fetchedRows) {
+        if (entry !== undefined) existingFilesByPath.set(entry[0], entry[1])
+      }
+      yield* Effect.logDebug(`codegraph: incremental path-keyed lookup took ${Date.now() - listStart}ms (${unionPaths.length} paths)`)
 
       // Pre-load every ancestor .gitignore for the change set so the sync
       // decideIgnored checks below see the same nested rules the walker uses.
-      for (const filePath of new Set([...input.removed, ...input.addedOrChanged])) {
-        let dir = path.dirname(filePath)
-        while (dir !== input.root && dir.length > input.root.length) {
-          yield* loadDirGitignore(dir)
-          const parent = path.dirname(dir)
-          if (parent === dir) break
-          dir = parent
+      // loadDirGitignore is signature-validated (one stat on cache hit) and
+      // dirs are deduped per batch, so repeat batches over the same tree are
+      // cheap.
+      {
+        const preloadedDirs = new Set<string>()
+        for (const filePath of unionPaths) {
+          let dir = path.dirname(filePath)
+          while (dir !== input.root && dir.length > input.root.length) {
+            if (!preloadedDirs.has(dir)) {
+              preloadedDirs.add(dir)
+              yield* loadDirGitignore(dir)
+            }
+            const parent = path.dirname(dir)
+            if (parent === dir) break
+            dir = parent
+          }
         }
       }
 
@@ -1762,7 +1959,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
       // their endpoint nodes and edges. This lets removed and replaced files
       // contribute their existing dependents to the later source rebuild.
       const dependencySeedFileIDs = new Set<string>()
-      for (const filePath of new Set([...input.removed, ...input.addedOrChanged])) {
+      for (const filePath of unionPaths) {
         const existing = existingFilesByPath.get(filePath)
         if (existing) dependencySeedFileIDs.add(existing.id)
       }
@@ -1770,7 +1967,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         ? yield* repo.dependentsOfFiles({ fileIDs: [...dependencySeedFileIDs] })
         : []
 
-      for (const filePath of input.removed) {
+      for (const filePath of removedInputs) {
         if (decideIgnored(ignoreCtx, filePath, false) !== "none") {
           const existing = existingFilesByPath.get(filePath)
           if (existing) {
@@ -1797,7 +1994,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         }
       }
 
-      for (const filePath of input.addedOrChanged) {
+      for (const filePath of addedInputs) {
         const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
         if (decideIgnored(ignoreCtx, filePath, false) !== "none") {
           const existing = existingFilesByPath.get(filePath)
@@ -1882,9 +2079,16 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         return {
           indexed: 0,
           removed: 0,
-          skipped: input.addedOrChanged.length + input.removed.length,
+          skipped: addedInputs.length + removedInputs.length,
           parseErrors: [],
         }
+      }
+
+      // G1: prime the parser bundle only when this batch has actual parse
+      // work. Removals-only and fully-filtered batches return above without
+      // ever touching tree-sitter init.
+      if (filteredAddedOrChanged.length > 0) {
+        yield* ensureWebTreeSitterReady()
       }
 
       const skippedRef = yield* Ref.make(0)
@@ -2007,9 +2211,15 @@ const drainParsedQueue = Effect.gen(function* () {
       ).pipe(Effect.ensuring(Queue.shutdown(parsedQueue)))
       yield* Effect.logDebug(`codegraph: incremental parse+drain took ${Date.now() - parseStart}ms`)
 
+      // G1: PASSIVE (not TRUNCATE) on the incremental path. TRUNCATE blocks
+      // writers while it compacts the WAL back to zero bytes; incremental
+      // batches run on every keystroke-save, so a blocking checkpoint per
+      // batch stalls the watcher drain and concurrent readers. PASSIVE
+      // checkpoints what it can without blocking; the full build in `index`
+      // keeps its TRUNCATE as the reclaim point.
       const checkpointStart = Date.now()
-      yield* database.db.run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
-      yield* Effect.logDebug(`codegraph: incremental wal_checkpoint(TRUNCATE) took ${Date.now() - checkpointStart}ms`)
+      yield* database.db.run("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
+      yield* Effect.logDebug(`codegraph: incremental wal_checkpoint(PASSIVE) took ${Date.now() - checkpointStart}ms`)
 
       // Phase 2: refresh `indexed_at` on every file that hit the cache
       // in this incremental build. Same logic as the full-build path —
@@ -2063,6 +2273,9 @@ const drainParsedQueue = Effect.gen(function* () {
 
       const indexed = yield* Ref.get(indexedRef)
       const parsedSkipped = yield* Ref.get(skippedRef)
+      // G1: parse-error read is already bounded repo-side
+      // (codegraph-repo listParseErrors carries LIMIT 500); the slice keeps
+      // the wire shape at 50. No full-table scan here.
       const parseErrors = yield* repo.listParseErrors()
       return {
         indexed,

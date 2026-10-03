@@ -81,10 +81,15 @@ type PendingChange = "add" | "change" | "unlink"
 type PendingEntry = readonly [string, PendingChange]
 type ProgressExtras = Pick<ProgressState, "phase" | "completed" | "total" | "currentFile">
 
-/** Paths that must never wake incremental indexing (SQLite / Banyan data dir). */
+/** Paths that must never wake incremental indexing (SQLite / Banyan data dir, VCS internals). */
 export const isAutoUpdateIgnoredPath = (filePath: string): boolean => {
   const normalized = filePath.replace(/\\/g, "/")
-  if (normalized.split("/").includes(".banyancode")) return true
+  const segments = normalized.split("/")
+  // G1: `.git/**` churn (index.lock, FETCH_HEAD, etc. on every git command)
+  // must not wake the indexer — the walker excludes `.git` via defaults, so
+  // these paths can never produce graph rows anyway.
+  if (segments.includes(".git")) return true
+  if (segments.includes(".banyancode")) return true
   const base = path.basename(normalized)
   return (
     base.endsWith(".db-wal") ||
@@ -361,36 +366,22 @@ export const layer: Layer.Layer<
 
       const root = meta.indexedRoot
       const removals = [...batch].filter(([, change]) => change === "unlink").map(([filePath]) => filePath)
-      const additions = [...batch].filter(([, change]) => change !== "unlink").map(([filePath, change]) => [filePath, change] as const)
+      const additions = [...batch].filter(([, change]) => change !== "unlink").map(([filePath]) => filePath)
       const excludePatterns = yield* Ref.get(excludePatternsRef)
+      const total = removals.length + additions.length
 
-      if (removals.length > 0) {
-        yield* publishProgress({ phase: "preparing", total: removals.length })
-        yield* publishProgress({ phase: "removing", completed: 0, total: removals.length, currentFile: removals[0] })
-        yield* indexer.removeFiles({ root, paths: removals }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("codegraph auto-update: removeFiles failed", { cause: Cause.pretty(cause) }),
-          ),
-        )
-        // Unlink-only paths never reach the add/change cleanup in the listener
-        // (:389-393), so drop them here or graceSeenRef grows without bound on
-        // long-lived watchers. A later unlink for the same path gets a fresh
-        // grace window, which is the desired behavior.
-        yield* Ref.update(graceSeenRef, (seen) => {
-          const next = new Set(seen)
-          for (const filePath of removals) next.delete(filePath)
-          return next
-        })
-        yield* publishProgress({ phase: "removing", completed: removals.length, total: removals.length, currentFile: removals[removals.length - 1] })
-        yield* publishProgress({ phase: "done", completed: removals.length, total: removals.length })
-      }
-
-      if (additions.length > 0) {
-        const paths = additions.map(([filePath]) => filePath)
-        yield* publishProgress({ phase: "preparing", total: paths.length })
-        const result = yield* indexer.indexFiles({
+      // G1: a single applyChanges({ addedOrChanged, removed }) per batch —
+      // one tree-sitter prime, one ignore-context load, one path-keyed DB
+      // pass, one PASSIVE checkpoint, one bumpVersion. The old removeFiles +
+      // indexFiles pair ran all of that twice (two TRUNCATE checkpoints and
+      // two version bumps per batch).
+      if (total > 0) {
+        const allPaths = [...additions, ...removals]
+        yield* publishProgress({ phase: "preparing", total })
+        const result = yield* indexer.applyChanges({
           root,
-          paths,
+          addedOrChanged: additions,
+          removed: removals,
           excludePatterns,
           onProgress: Effect.fn("CodegraphAutoUpdate.indexProgress")(function* ({ file, done, total, currentFile }) {
             yield* publishProgress({ phase: "indexing", completed: done, total, currentFile: currentFile ?? file })
@@ -398,13 +389,24 @@ export const layer: Layer.Layer<
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
-              yield* Effect.logWarning("codegraph auto-update: indexFiles failed", { cause: Cause.pretty(cause) })
-              return { indexed: 0, skipped: 0, parseErrors: [] }
+              yield* Effect.logWarning("codegraph auto-update: applyChanges failed", { cause: Cause.pretty(cause) })
+              return { indexed: 0, removed: 0, skipped: 0, parseErrors: [] }
             }),
           ),
         )
-        yield* publishProgress({ phase: "indexing", completed: result.indexed, total: paths.length, currentFile: paths[paths.length - 1] })
-        yield* publishProgress({ phase: "done", completed: result.indexed, total: paths.length })
+        // Unlink-only paths never reach the add/change cleanup in the listener,
+        // so drop them here or graceSeenRef grows without bound on long-lived
+        // watchers. A later unlink for the same path gets a fresh grace
+        // window, which is the desired behavior.
+        if (removals.length > 0) {
+          yield* Ref.update(graceSeenRef, (seen) => {
+            const next = new Set(seen)
+            for (const filePath of removals) next.delete(filePath)
+            return next
+          })
+        }
+        yield* publishProgress({ phase: "indexing", completed: result.indexed, total, currentFile: allPaths[allPaths.length - 1] })
+        yield* publishProgress({ phase: "done", completed: result.indexed, total })
         // NOTE: do NOT requeue on `result.skipped > 0`. The indexer's `skipped` count
         // is a deterministic aggregate — it includes files filtered out as ignored,
         // oversize, artifact, cached, or genuinely skipped. Requeueing any of those
@@ -527,24 +529,25 @@ export const layer: Layer.Layer<
           const removals = batch.filter(([, change]) => change === "unlink").map(([filePath]) => filePath)
           const additions = batch.filter(([, change]) => change !== "unlink").map(([filePath]) => filePath)
           const excludePatterns = yield* Ref.get(excludePatternsRef)
-          let indexed = 0
-          let cached = 0
-          if (removals.length > 0) {
-            yield* indexer.removeFiles({ root, paths: removals }).pipe(Effect.ignore)
-          }
-          if (additions.length > 0) {
-            const result = yield* indexer
-              .indexFiles({ root, paths: additions, excludePatterns })
-              .pipe(Effect.orElseSucceed(() => ({ indexed: 0, skipped: additions.length, parseErrors: [] })))
-            indexed = result.indexed
-            cached = result.skipped
-          }
+          // G1: single applyChanges — one checkpoint + one bumpVersion.
+          // `removed` reports requested removals (flush contract); the
+          // indexer return carries confirmed indexed/skipped counts.
+          const result = yield* indexer
+            .applyChanges({ root, addedOrChanged: additions, removed: removals, excludePatterns })
+            .pipe(
+              Effect.orElseSucceed(() => ({
+                indexed: 0,
+                removed: 0,
+                skipped: additions.length + removals.length,
+                parseErrors: [],
+              })),
+            )
           yield* recomputeStatus()
           return {
             discovered: 0,
-            indexed,
+            indexed: result.indexed,
             removed: removals.length,
-            cached,
+            cached: result.skipped,
             pending: (yield* Ref.get(pendingRef)).size,
           }
         }),
