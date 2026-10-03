@@ -14,8 +14,16 @@
 
 import { z } from "zod"
 import type { McpServer } from "@modelcontextprotocol/server"
+import {
+  CLIENT_CAPABILITIES_META_KEY,
+  MissingRequiredClientCapabilityError,
+  ProtocolError,
+  ProtocolErrorCode,
+} from "@modelcontextprotocol/server"
+import type { ServerContext } from "@modelcontextprotocol/server"
+import type { ClientCapabilities, Notification, ServerCapabilities } from "@modelcontextprotocol/server"
 import { TaskEngine, UnknownTaskError } from "./task-engine"
-import type { TaskRecord } from "./task-engine"
+import type { TaskRecord, TaskStatus } from "./task-engine"
 import { assertYoloAllowed, buildRuleset } from "./policy"
 import type { PermissionPolicy } from "./policy"
 import { buildCompactResult, aggregateVerification, DEFAULT_RESULT_MAX_TOKENS } from "./result"
@@ -110,7 +118,9 @@ const TaskStartInput = z.object({
     .min(0)
     .max(MAX_TASK_WAIT_SECONDS)
     .optional()
-    .describe("Wait up to N seconds (max 50) for the task to settle past running/queued before returning."),
+    .describe(
+      "Wait up to N seconds (max 50) for the task to settle past running/queued before returning. Ignored when the caller uses the tasks extension (resultType task) — poll tasks/get instead.",
+    ),
 })
 type TaskStartArgs = z.infer<typeof TaskStartInput>
 
@@ -291,9 +301,404 @@ const checkAgentModel = (
   return undefined
 }
 
+// ---------------------------------------------------------------------------
+// Tasks extension (gap-plan Milestone D1, SEP-2663
+// `io.modelcontextprotocol/tasks`).
+//
+// One engine serves both surfaces: the `banyan_task_*` tools stay as the
+// fallback for clients without the extension, and the `tasks/*` extension
+// methods serve clients whose per-request capabilities include it. There is
+// deliberately NO `tasks/list` — the spec removed it so servers cannot leak
+// one caller's task IDs to another.
+//
+// Wire notes (verified against @modelcontextprotocol/server 2.2.0):
+// - The server advertises the extension in `server/discover` capabilities.
+// - `banyan_task_start` returns a `CreateTaskResult` (`resultType: "task"`)
+//   when the per-request envelope carries the extension. The task fields ride
+//   alongside the normal `content`/`structuredContent` — the SDK passes
+//   handler-authored top-level fields through untouched.
+// - `tasks/get`, `tasks/update`, `tasks/cancel` are custom request methods
+//   (the SDK has no first-class tasks runtime); unknown task IDs answer
+//   `-32602`, and callers without the extension answer `-32021`. Transport
+//   caveat: the SDK 2.2.0 modern HTTP entry answers -32601 for the removed
+//   2025 names (tasks/get, tasks/cancel) before Server dispatch, while the
+//   unknown-to-both-eras tasks/update falls through to our handler (with
+//   params.inputResponses lifted to ctx). Stdio/InMemory dispatch reaches
+//   all three; the D3 HTTP work lifts the name gate.
+// - `notifications/tasks` is broadcast best-effort on every status change.
+//   The SDK's serving entries own `subscriptions/listen` streams (the filter
+//   schema drops `taskIds`), so there is no per-subscription filtering here —
+//   polling `tasks/get` is the primary mechanism and notifications are the
+//   fast path for connected (stdio/in-process) clients.
+// ---------------------------------------------------------------------------
+
+export const TasksExtensionID = "io.modelcontextprotocol/tasks" as const
+// Suggested polling cadence for tasks/get (matches the engine's 7.5 s
+// safety-net sweep), and an advisory TTL. Records persist for the process
+// lifetime (plus metadata rehydrate), so the TTL never elapses in practice.
+export const TASK_TTL_MS = 3_600_000
+export const TASK_POLL_INTERVAL_MS = 5_000
+
+export type ExtensionTaskStatus = "working" | "input_required" | "completed" | "cancelled" | "failed"
+
+export function toExtensionStatus(status: TaskStatus): ExtensionTaskStatus {
+  switch (status) {
+    case "queued":
+    case "running":
+      return "working"
+    case "needs_input":
+      return "input_required"
+    case "done":
+      return "completed"
+    case "failed":
+      return "failed"
+    case "cancelled":
+      return "cancelled"
+  }
+}
+
+// True when the request's own capabilities declare the tasks extension.
+// Per-request envelope only (2026-07-28): legacy `initialize` clients never
+// take the extension path — they use the banyan_task_* fallback tools.
+export function hasTasksExtension(ctx: unknown): boolean {
+  const envelope = (ctx as { mcpReq?: { envelope?: Record<string, unknown> } } | undefined)?.mcpReq?.envelope
+  const caps = envelope?.[CLIENT_CAPABILITIES_META_KEY] as { extensions?: Record<string, unknown> } | undefined
+  const extensions = caps?.extensions
+  return !!extensions && typeof extensions === "object" && TasksExtensionID in extensions
+}
+
+export function requireTasksExtension(ctx: unknown): void {
+  if (hasTasksExtension(ctx)) return
+  const requiredCapabilities = { extensions: { [TasksExtensionID]: {} } } as unknown as ClientCapabilities
+  throw new MissingRequiredClientCapabilityError({ requiredCapabilities })
+}
+
+const invalidTaskParams = (message: string): ProtocolError =>
+  new ProtocolError(ProtocolErrorCode.InvalidParams, message)
+
+// D2 seam (MRTR elicitation forms): the inputRequests payload for an
+// input_required task. Keyed by the pending request ID (stable over the
+// task lifetime — keys are never reused). D2 replaces the elicitation stub
+// below with real `elicitation/create` form requests; the key contract and
+// the tasks/update answer shape are unchanged.
+export function buildInputRequests(record: TaskRecord): Record<string, unknown> | undefined {
+  const pending = record.pendingQuestion
+  if (!pending) return undefined
+  const message = pending.detail ? `${pending.title}\n${pending.detail}` : pending.title
+  return {
+    [pending.requestID]: {
+      method: "elicitation/create",
+      params: { message },
+    },
+  }
+}
+
+export type CreateTaskResultShape = {
+  resultType: "task"
+  taskId: string
+  status: "working"
+  statusMessage?: string
+  createdAt: string
+  lastUpdatedAt: string
+  ttlMs: number
+  pollIntervalMs: number
+}
+
+// Returned only after the session exists (durably created): engine.start
+// resolves after createSession + the handle binding, so a tasks/get for the
+// returned taskId resolves immediately.
+export function toCreateTaskResult(record: TaskRecord): CreateTaskResultShape {
+  const shaped: CreateTaskResultShape = {
+    resultType: "task",
+    taskId: record.handle,
+    status: "working",
+    createdAt: new Date(record.createdAt).toISOString(),
+    lastUpdatedAt: new Date(record.updatedAt).toISOString(),
+    ttlMs: TASK_TTL_MS,
+    pollIntervalMs: TASK_POLL_INTERVAL_MS,
+  }
+  if (record.status === "queued") shaped.statusMessage = "queued for a concurrency slot"
+  return shaped
+}
+
+export function toDetailedTask(record: TaskRecord, completedResult?: unknown): Record<string, unknown> {
+  const status = toExtensionStatus(record.status)
+  const base: Record<string, unknown> = {
+    resultType: "complete",
+    taskId: record.handle,
+    status,
+    createdAt: new Date(record.createdAt).toISOString(),
+    lastUpdatedAt: new Date(record.updatedAt).toISOString(),
+    ttlMs: TASK_TTL_MS,
+    pollIntervalMs: TASK_POLL_INTERVAL_MS,
+  }
+  if (record.status === "queued") base["statusMessage"] = "queued for a concurrency slot"
+  switch (status) {
+    case "working":
+    case "cancelled":
+      return base
+    case "input_required": {
+      const requests = buildInputRequests(record)
+      if (requests !== undefined) base["inputRequests"] = requests
+      return base
+    }
+    case "completed":
+      base["result"] = {
+        content: [{ type: "text", text: JSON.stringify(completedResult ?? {}) }],
+        structuredContent: completedResult ?? {},
+      }
+      return base
+    case "failed": {
+      const message = record.error ?? "task failed"
+      base["statusMessage"] = message
+      base["error"] = { code: -32603, message }
+      return base
+    }
+  }
+}
+
+export async function readDetailedTask(deps: TaskToolsDeps, record: TaskRecord): Promise<Record<string, unknown>> {
+  if (record.status !== "done") return toDetailedTask(record)
+  return toDetailedTask(record, await readCompactResult(deps, record))
+}
+
+// Shared compact-result assembly for banyan_task_result and the extension
+// tasks/get (completed). Reads scope to the task's worktree checkout when
+// the task is isolated (C2), mirroring the engine's dirForRecord.
+async function readCompactResult(
+  deps: TaskToolsDeps,
+  record: TaskRecord,
+  opts?: { detail?: "summary" | "diff" | "transcript"; cursor?: string },
+): Promise<Record<string, unknown>> {
+  const sessionID = record.sessionID
+  const scope = record.worktree !== undefined ? { directory: record.worktree.directory } : {}
+  const [messages, diffFiles, todos, cost, subagents, parts, memory] = await Promise.all([
+    deps.sessions.messages({ sessionID, limit: 200, ...scope }),
+    deps.sessions.diff({ sessionID, ...scope }),
+    deps.sessions.todo({ sessionID, ...scope }),
+    deps.sessions.cost({ sessionID, ...scope }),
+    deps.sessions.subagents({ sessionID, ...scope }),
+    // Legacy fakes predate the port method: without it the
+    // verification field stays absent, same as a transcript with no
+    // verifier parts.
+    typeof deps.sessions.toolParts === "function"
+      ? deps.sessions.toolParts({ sessionID, ...scope })
+      : Promise.resolve([] as VerifierToolPartInput[]),
+    deps.listMemory !== undefined ? deps.listMemory({ sessionID }) : Promise.resolve([]),
+  ])
+  const verification = aggregateVerification(parts)
+  const assistantTexts = messages.filter((msg) => msg.role === "assistant" && msg.text.length > 0)
+  return buildCompactResult(
+    {
+      task_id: record.handle,
+      status: record.status,
+      ...(assistantTexts.length > 0 ? { finalMessage: assistantTexts[assistantTexts.length - 1]?.text ?? "" } : {}),
+      diffFiles,
+      transcript: messages.map((msg) => ({ role: msg.role, text: msg.text })),
+      todos,
+      cost: cost.cost,
+      tokensByModel: cost.tokensByModel,
+      subagentCount: subagents.length,
+      ...(verification !== undefined ? { verification } : {}),
+      ...(memory.length > 0 ? { memory } : {}),
+      ...(record.worktree !== undefined
+        ? { worktree: { path: record.worktree.directory, branch: record.worktree.branch } }
+        : {}),
+    },
+    {
+      maxTokens: deps.config.resultMaxTokens,
+      ...(opts?.detail !== undefined ? { detail: opts.detail } : {}),
+      ...(opts?.cursor !== undefined ? { cursor: opts.cursor } : {}),
+    },
+  ) as unknown as Record<string, unknown>
+}
+
+// Map a tasks/update inputResponses entry onto an engine reply. Accepts the
+// D1 answer shape ({decision, message?}) and MRTR elicitation results
+// ({action: accept/decline/cancel, content}). Unknown shapes are caller
+// errors (-32602); a missing entry for the outstanding key is NOT an error —
+// the server ignores it per spec and the task stays input_required.
+export function replyFromInputResponses(
+  entry: unknown,
+  requestID: string,
+): { decision: "approve" | "reject"; message?: string } | undefined {
+  if (entry === undefined) return undefined
+  if (typeof entry === "string") return { decision: "approve", message: entry }
+  if (!entry || typeof entry !== "object") {
+    throw invalidTaskParams(`inputResponses["${requestID}"] must be an object or a string answer`)
+  }
+  const rec = entry as Record<string, unknown>
+  const contentMessage = (content: unknown): string | undefined => {
+    if (typeof content === "string") return content
+    if (!content || typeof content !== "object") return undefined
+    const obj = content as Record<string, unknown>
+    for (const key of ["message", "text", "input"]) {
+      if (typeof obj[key] === "string") return obj[key] as string
+    }
+    return undefined
+  }
+  if (rec["decision"] === "approve" || rec["decision"] === "reject") {
+    const decision = rec["decision"]
+    const message =
+      typeof rec["message"] === "string" ? (rec["message"] as string) : contentMessage(rec["content"])
+    return message !== undefined ? { decision, message } : { decision }
+  }
+  if (rec["action"] === "accept") {
+    const message = contentMessage(rec["content"])
+    return message !== undefined ? { decision: "approve", message } : { decision: "approve" }
+  }
+  if (rec["action"] === "decline" || rec["action"] === "cancel") return { decision: "reject" }
+  throw invalidTaskParams(
+    `inputResponses["${requestID}"] needs decision "approve"|"reject" or action "accept"|"decline"|"cancel"`,
+  )
+}
+
+// Throwing twin of resolveRecord: extension methods answer -32602 for
+// unknown handles (spec MUST for tasks/get, SHOULD for update/cancel),
+// never the tool-shaped UNKNOWN_TASK error.
+async function resolveRecordOrThrow(engine: TaskEngine, taskID: string): Promise<TaskRecord> {
+  try {
+    return await engine.status(taskID)
+  } catch (error) {
+    if (!(error instanceof UnknownTaskError)) throw error
+    try {
+      return await engine.rehydrate(taskID)
+    } catch {
+      throw invalidTaskParams(`unknown task: "${taskID}"`)
+    }
+  }
+}
+
+const TasksGetParams = z.object({ taskId: z.string().min(1).max(128) })
+// inputResponses is optional because the modern HTTP entry lifts it out of
+// params into ctx.mcpReq.inputResponses (MRTR retry seam) before dispatch —
+// a stripped request still validates. The handler merges both sources.
+const TasksUpdateParams = z.object({
+  taskId: z.string().min(1).max(128),
+  inputResponses: z.record(z.string(), z.unknown()).optional(),
+})
+const TasksCancelParams = z.object({ taskId: z.string().min(1).max(128) })
+// Custom-method results carry no runtime validation in the SDK (the schema
+// only types the handler return); passthrough keeps the DetailedTask shape.
+const TasksResultShape = z.object({}).passthrough()
+
+async function pushTaskNotification(
+  mcp: McpServer,
+  deps: TaskToolsDeps,
+  record: TaskRecord,
+  lastSent: Map<string, string>,
+): Promise<void> {
+  const status = toExtensionStatus(record.status)
+  const key = `${status}:${record.pendingQuestion?.requestID ?? ""}`
+  if (lastSent.get(record.handle) === key) return
+  lastSent.set(record.handle, key)
+  try {
+    const detailed = await readDetailedTask(deps, record)
+    const note = { method: "notifications/tasks", params: detailed } as unknown as Notification
+    await mcp.server.notification(note)
+  } catch {
+    // Best-effort broadcast: unconnected (per-request HTTP instances) or
+    // closed servers drop notifications; polling tasks/get stays correct.
+  }
+}
+
+// MRTR lift readers: the modern entry moves params.inputResponses into
+// ctx.mcpReq.inputResponses (dropping malformed entries into
+// droppedInputResponseKeys) before dispatch. Legacy transports leave params
+// untouched. Handlers merge both so answers arrive on every transport.
+function readCtxInputResponses(ctx: unknown): Record<string, unknown> {
+  const lifted = (ctx as { mcpReq?: { inputResponses?: unknown } } | undefined)?.mcpReq?.inputResponses
+  if (!lifted || typeof lifted !== "object" || Array.isArray(lifted)) return {}
+  return lifted as Record<string, unknown>
+}
+
+function readCtxDroppedKeys(ctx: unknown): string[] {
+  const dropped = (ctx as { mcpReq?: { droppedInputResponseKeys?: unknown } } | undefined)?.mcpReq
+    ?.droppedInputResponseKeys
+  return Array.isArray(dropped) ? dropped.filter((key): key is string => typeof key === "string") : []
+}
+
+export type TasksExtensionHandlers = {
+  get: (params: { taskId: string }, ctx: unknown) => Promise<Record<string, unknown>>
+  update: (
+    params: { taskId: string; inputResponses?: Record<string, unknown> },
+    ctx: unknown,
+  ) => Promise<Record<string, unknown>>
+  cancel: (params: { taskId: string }, ctx: unknown) => Promise<Record<string, unknown>>
+}
+
+// Handler units behind the tasks/* methods, exported so tests can drive the
+// real engine flow with a forged per-request envelope (SDK 2.2.0 clients
+// cannot send tasks/* on modern or decode task results — see the header
+// note). registerTasksExtension wires these to the transport.
+export function createTasksExtensionHandlers(deps: TaskToolsDeps): TasksExtensionHandlers {
+  const { engine } = deps
+  return {
+    get: async (params, ctx) => {
+      requireTasksExtension(ctx)
+      const record = await resolveRecordOrThrow(engine, params.taskId)
+      return readDetailedTask(deps, record)
+    },
+    update: async (params, ctx) => {
+      requireTasksExtension(ctx)
+      const record = await resolveRecordOrThrow(engine, params.taskId)
+      if (record.status === "done" || record.status === "failed" || record.status === "cancelled") {
+        return { resultType: "complete" }
+      }
+      const pending = record.pendingQuestion
+      if (record.status !== "needs_input" || !pending) return { resultType: "complete" }
+      const responses = { ...readCtxInputResponses(ctx), ...(params.inputResponses ?? {}) }
+      if (readCtxDroppedKeys(ctx).includes(pending.requestID) && responses[pending.requestID] === undefined) {
+        throw invalidTaskParams(`inputResponses["${pending.requestID}"] was malformed and dropped; resend the answer`)
+      }
+      const reply = replyFromInputResponses(responses[pending.requestID], pending.requestID)
+      if (reply === undefined) return { resultType: "complete" }
+      try {
+        await engine.reply(record.handle, reply)
+      } catch (error) {
+        throw invalidTaskParams(`tasks/update failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      return { resultType: "complete" }
+    },
+    cancel: async (params, ctx) => {
+      requireTasksExtension(ctx)
+      const record = await resolveRecordOrThrow(engine, params.taskId)
+      await engine.cancel(record.handle)
+      return { resultType: "complete" }
+    },
+  }
+}
+
+export function registerTasksExtension(mcp: McpServer, deps: TaskToolsDeps): void {
+  const { engine } = deps
+  const advertisement = { extensions: { [TasksExtensionID]: {} } } as unknown as ServerCapabilities
+  mcp.server.registerCapabilities(advertisement)
+  const handlers = createTasksExtensionHandlers(deps)
+
+  mcp.server.setRequestHandler("tasks/get", { params: TasksGetParams, result: TasksResultShape }, handlers.get)
+
+  mcp.server.setRequestHandler("tasks/update", { params: TasksUpdateParams, result: TasksResultShape }, handlers.update)
+
+  mcp.server.setRequestHandler(
+    "tasks/cancel",
+    { params: TasksCancelParams, result: TasksResultShape },
+    handlers.cancel,
+  )
+
+  // No tasks/list: the spec removed it on purpose (cross-caller handle
+  // leakage). An unregistered method answers -32601 from the SDK itself.
+  const lastSent = new Map<string, string>()
+  engine.onTransition((record) => {
+    void pushTaskNotification(mcp, deps, record, lastSent)
+  })
+}
+
 export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
-  const { engine, sessions, config } = deps
+  const { engine, config } = deps
   const outputChars = config.outputChars
+  // Tasks extension (D1) rides the same registration: one engine serves the
+  // banyan_task_* fallback tools and the tasks/* extension surface.
+  registerTasksExtension(mcp, deps)
   // Registration order is alphabetical so tools/list is deterministic.
   mcp.registerTool(
     TaskCancelToolName,
@@ -369,49 +774,10 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
       try {
         const resolved = await resolveRecord(engine, args.task_id)
         if ("error" in resolved) return resolved.error
-        const record = resolved.record
-        const sessionID = record.sessionID
-        // Per-task SDK root (C2): worktree tasks scope every read to the
-        // checkout, mirroring the engine's dirForRecord. Memory reads need
-        // no scope (the memory routes are location-wide).
-        const scope = record.worktree !== undefined ? { directory: record.worktree.directory } : {}
-        const [messages, diffFiles, todos, cost, subagents, parts, memory] = await Promise.all([
-          sessions.messages({ sessionID, limit: 200, ...scope }),
-          sessions.diff({ sessionID, ...scope }),
-          sessions.todo({ sessionID, ...scope }),
-          sessions.cost({ sessionID, ...scope }),
-          sessions.subagents({ sessionID, ...scope }),
-          // Legacy fakes predate the port method: without it the
-          // verification field stays absent, same as a transcript with no
-          // verifier parts.
-          typeof sessions.toolParts === "function"
-            ? sessions.toolParts({ sessionID, ...scope })
-            : Promise.resolve([] as VerifierToolPartInput[]),
-          deps.listMemory !== undefined ? deps.listMemory({ sessionID }) : Promise.resolve([]),
-        ])
-        const verification = aggregateVerification(parts)
-        const assistantTexts = messages.filter((msg) => msg.role === "assistant" && msg.text.length > 0)
-        const compact = buildCompactResult(
+        const compact = await readCompactResult(
+          deps,
+          resolved.record,
           {
-            task_id: record.handle,
-            status: record.status,
-            ...(assistantTexts.length > 0
-              ? { finalMessage: assistantTexts[assistantTexts.length - 1]?.text ?? "" }
-              : {}),
-            diffFiles,
-            transcript: messages.map((msg) => ({ role: msg.role, text: msg.text })),
-            todos,
-            cost: cost.cost,
-            tokensByModel: cost.tokensByModel,
-            subagentCount: subagents.length,
-            ...(verification !== undefined ? { verification } : {}),
-            ...(memory.length > 0 ? { memory } : {}),
-            ...(record.worktree !== undefined
-              ? { worktree: { path: record.worktree.directory, branch: record.worktree.branch } }
-              : {}),
-          },
-          {
-            maxTokens: config.resultMaxTokens,
             ...(args.detail !== undefined ? { detail: args.detail } : {}),
             ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
           },
@@ -433,7 +799,7 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
       annotations: NON_READ_ONLY_ANNOTATIONS,
       _meta: metaFor(outputChars),
     },
-    async (args: TaskStartArgs) => {
+    async (args: TaskStartArgs, ctx: ServerContext) => {
       const allowlisted = checkAgentModel(args, config)
       if (allowlisted) return allowlisted
       const permission = (args.permission ?? config.permission) as PermissionPolicy
@@ -466,6 +832,14 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
         await deps
           .updateMetadata({ sessionID: started.sessionID, metadata: { mcp_handle: started.handle } })
           .catch(() => {})
+        if (hasTasksExtension(ctx)) {
+          // Tasks-extension surface (D1/SEP-2663): CreateTaskResult
+          // immediately after durable creation. wait_seconds is a
+          // fallback-surface concept — extension clients poll tasks/get.
+          const current = engine.get(started.handle)
+          const shaped = okResult(statusView(current), outputChars)
+          return { ...shaped, ...toCreateTaskResult(current) } as McpToolResult
+        }
         const record = await waitForSettled(engine, started.handle, args.wait_seconds ?? 0)
         return okResult(statusView(record), outputChars)
       } catch (error) {

@@ -276,6 +276,11 @@ export class TaskEngine {
   private closed = false
   private readonly unsubscribe: () => void
   private droppedEvents = 0
+  // Transition subscribers (D1 tasks extension): every record change flows
+  // through patch(), so this is the single funnel for notifications/tasks
+  // broadcasts. Synchronous, best-effort — a throwing subscriber must not
+  // break the engine (each call is guarded).
+  private readonly transitionListeners = new Set<(record: TaskRecord) => void>()
   // Safety-net sweep (W1.1): one interval, owned by the engine, stopped
   // when no task is non-terminal.
   private sweepTimer: ReturnType<typeof setInterval> | undefined
@@ -353,6 +358,18 @@ export class TaskEngine {
     const record = this.records.get(handle)
     if (!record) throw new UnknownTaskError(handle)
     return { ...record }
+  }
+
+  // Subscribe to every record transition (D1 tasks extension
+  // notifications/tasks broadcast). Returns an unsubscribe function. The
+  // listener receives a snapshot; it must not call back into the engine
+  // synchronously (patch callers hold no locks, but re-entrancy would
+  // interleave with the event drain).
+  onTransition(listener: (record: TaskRecord) => void): () => void {
+    this.transitionListeners.add(listener)
+    return () => {
+      this.transitionListeners.delete(listener)
+    }
   }
 
   // Write-capable means it can mutate the shared checkout: any policy
@@ -660,6 +677,15 @@ export class TaskEngine {
     this.records.set(handle, next)
     this.notifyStateWaiters(handle, next)
     this.updateSweepTimer()
+    const snapshot = { ...next }
+    for (const listener of [...this.transitionListeners]) {
+      try {
+        listener(snapshot)
+      } catch {
+        // Best-effort broadcast: a failing subscriber never breaks the
+        // engine drain or the state-waiter funnel.
+      }
+    }
     return { ...next }
   }
 
