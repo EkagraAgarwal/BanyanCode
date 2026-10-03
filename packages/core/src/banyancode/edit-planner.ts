@@ -114,12 +114,11 @@ export const layer = Layer.effect(
     const planBeforeEdit: Interface["planBeforeEdit"] = (input) =>
       Effect.gen(function* () {
         if (input.changeKind === "add") {
-          const allNodes = yield* repo.listAllNodes()
+          // Light projection + server-side filter: SQL LIKE + LIMIT instead
+          // of paging every row (with `code` bodies) and filtering in JS.
+          const similar = yield* repo.searchNodesLight({ name: input.targetSymbol, limit: 10 })
           const allFiles = yield* repo.listAllFiles()
           const filePathMap = new Map<string, string>(allFiles.map((f) => [f.id, f.path]))
-          const similar = allNodes
-            .filter((n) => n.name.toLowerCase().includes(input.targetSymbol.toLowerCase()))
-            .slice(0, 10)
           const graphMeta = yield* repo.getMeta()
           const meta = graphMeta
             ? { graphBuiltAt: graphMeta.graphBuiltAt, graphCoverage: graphMeta.graphCoverage }
@@ -158,7 +157,6 @@ export const layer = Layer.effect(
           }
         }
 
-        const allNodes = yield* repo.listAllNodes()
         const target = input.preResolvedTarget ?? (yield* resolveTarget(repo, input.targetSymbol))
         const graphMeta = yield* repo.getMeta()
 

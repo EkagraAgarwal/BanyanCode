@@ -511,7 +511,19 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
 
     const codegraphNodesHandler = Effect.fn("GlobalHttpApi.codegraphNodes")(function* () {
       const repo = yield* Banyan.CodegraphRepo
-      const [nodes, meta] = yield* Effect.all([repo.listAllNodes(), repo.getMeta()])
+      // Light projection: page WITHOUT the `code` column (bodies dominate
+      // row bytes) and take the total from COUNT(*) instead of the fetched
+      // array length. Same response shape — `code` was always optional.
+      const [meta, total] = yield* Effect.all([repo.getMeta(), repo.countNodes()])
+      const nodes: Array<Omit<Banyan.CodegraphNode, "code">> = []
+      let cursor: string | undefined = undefined
+      for (;;) {
+        const page: { nodes: Array<Omit<Banyan.CodegraphNode, "code">>; nextCursor?: string } =
+          yield* repo.listNodesLightPage({ cursor, limit: 1000 })
+        for (const node of page.nodes) nodes.push(node)
+        if (page.nextCursor === undefined) break
+        cursor = page.nextCursor
+      }
       const graphMeta = meta
         ? {
             graphBuiltAt: meta.graphBuiltAt,
@@ -525,7 +537,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       return {
         nodes,
         meta: graphMeta,
-        total: nodes.length,
+        total,
       }
     })
 
@@ -533,8 +545,19 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       const repo = yield* Banyan.CodegraphRepo
       const nodeID = ctx.query?.nodeID
       if (!nodeID) {
-        const allEdges = yield* repo.listAllEdges()
-        return { edges: allEdges, total: allEdges.length }
+        // Bounded-RAM paging: one 1000-row page resident at a time instead
+        // of a single SELECT * over the whole edges table. Total comes from
+        // COUNT(*) rather than the fetched array length.
+        const total = yield* repo.countEdges()
+        const allEdges: Array<Banyan.CodegraphEdge> = []
+        let cursor: string | undefined = undefined
+        for (;;) {
+          const page: { edges: Array<Banyan.CodegraphEdge>; nextCursor?: string } = yield* repo.listEdgesPage({ cursor, limit: 1000 })
+          for (const edge of page.edges) allEdges.push(edge)
+          if (page.nextCursor === undefined) break
+          cursor = page.nextCursor
+        }
+        return { edges: allEdges, total }
       }
       const [outgoing, incoming] = yield* Effect.all([repo.edgesFrom(nodeID), repo.edgesTo(nodeID)])
       const allEdges = [...outgoing, ...incoming]

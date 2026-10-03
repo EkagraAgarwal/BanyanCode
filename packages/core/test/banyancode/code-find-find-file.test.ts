@@ -57,6 +57,7 @@ const mockCodegraphRepoLayer = Layer.succeed(
     nodeByID: () => Effect.succeed(undefined),
     listNodesByFile: () => Effect.succeed([]),
     listNodesPage: () => Effect.succeed({ nodes: [], nextCursor: undefined }),
+    listNodesLightPage: () => Effect.succeed({ nodes: [], nextCursor: undefined }),
     queryNodes: () => Effect.succeed([]),
     searchNodes: () => Effect.succeed([]),
     countNodes: () => Effect.succeed(0),

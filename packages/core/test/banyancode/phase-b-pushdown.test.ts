@@ -181,6 +181,7 @@ const buildCountingRepoLayer = (counters: PushdownCounters, panicOnListAllNodes:
             return yield* inner.listAllNodes()
           }),
         listNodesPage: inner.listNodesPage,
+        listNodesLightPage: inner.listNodesLightPage,
         queryNodes: inner.queryNodes,
         searchNodes: inner.searchNodes,
         searchNodesLight: (input) =>

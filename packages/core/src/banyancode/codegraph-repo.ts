@@ -165,6 +165,18 @@ export interface Interface {
     never,
     never
   >
+  /**
+   * Keyset page over codegraph_nodes ordered by id ascending, WITHOUT the
+   * `code` column (the expensive part — bodies dominate row bytes). Same
+   * peak-RAM contract as listNodesPage. Prefer this for scans that only
+   * need metadata (names, files, lines); fetch `code` per node via
+   * getNode/nodeByID only when a body is actually needed.
+   */
+  readonly listNodesLightPage: (input: { cursor?: string; limit?: number }) => Effect.Effect<
+    { nodes: Array<Omit<CodegraphNode, "code"> & { code?: never }>; nextCursor: string | undefined },
+    never,
+    never
+  >
   readonly queryNodes: (input: { function?: string; kind?: string }) => Effect.Effect<CodegraphNode[], never, never>
   readonly searchNodes: (input: { name?: string; kind?: string; limit?: number }) => Effect.Effect<CodegraphNode[], never, never>
   /** Like searchNodes but without the `code` field — suitable for callers that only need metadata. */
@@ -571,6 +583,47 @@ export const layer = Layer.effect(
       ).pipe(Effect.orDie)
       return {
         nodes: rows.map(rowToNode),
+        nextCursor: rows.length === limit ? rows.at(-1)?.id : undefined,
+      }
+    })
+
+    // Light projection over listNodesPage: same keyset paging but the
+    // SELECT omits the `code` column, so full-graph scans stay metadata
+    // sized. The row shape matches searchNodesLight (no `code` key).
+    const listNodesLightPage = Effect.fn("CodegraphRepo.listNodesLightPage")(function* (input: {
+      cursor?: string
+      limit?: number
+    }) {
+      const limit = Math.min(Math.max(input.limit ?? 500, 1), 5000)
+      type LightRow = {
+        id: string
+        file_id: string
+        kind: string
+        name: string
+        signature: string | null
+        start_line: number
+        end_line: number
+        is_entrypoint: number
+        in_degree: number
+      }
+      const selectLight = sql`SELECT id, file_id, kind, name, signature, start_line, end_line, is_entrypoint, in_degree FROM codegraph_nodes`
+      const rows = yield* (
+        input.cursor !== undefined
+          ? db.all<LightRow>(sql`${selectLight} WHERE id > ${input.cursor} ORDER BY id ASC LIMIT ${limit}`)
+          : db.all<LightRow>(sql`${selectLight} ORDER BY id ASC LIMIT ${limit}`)
+      ).pipe(Effect.orDie)
+      return {
+        nodes: rows.map((row) => ({
+          id: row.id,
+          fileID: row.file_id,
+          kind: row.kind as CodegraphNode["kind"],
+          name: row.name,
+          signature: row.signature ?? undefined,
+          startLine: row.start_line,
+          endLine: row.end_line,
+          isEntrypoint: row.is_entrypoint as CodegraphNode["isEntrypoint"],
+          inDegree: row.in_degree,
+        })),
         nextCursor: rows.length === limit ? rows.at(-1)?.id : undefined,
       }
     })
@@ -1945,6 +1998,7 @@ export const layer = Layer.effect(
       listNodesByKind,
       listAllNodes,
       listNodesPage,
+      listNodesLightPage,
       queryNodes,
       searchNodes,
       searchNodesLight,
