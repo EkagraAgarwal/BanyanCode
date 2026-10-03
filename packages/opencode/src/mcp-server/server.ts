@@ -438,6 +438,7 @@ export async function createMcpServer(opts: McpBootstrapOptions = {}): Promise<M
   const { createGitWorktreeManager } = await import("./worktree")
   const { buildRuleset, assertYoloAllowed } = await import("./policy")
   const { createSdkSessionClient, splitModelRef } = await import("./session-client")
+  const { createRequestStateService } = await import("./request-state")
 
   const config = await resolveMcpServerConfig({ ...opts, allowYolo: opts.allowYolo ?? readAllowYoloEnv() })
   const allowYolo = opts.allowYolo ?? readAllowYoloEnv()
@@ -632,6 +633,10 @@ export async function createMcpServer(opts: McpBootstrapOptions = {}): Promise<M
       directory: cwd,
       updateMetadata: writeMetadata,
       listMemory,
+      // MRTR requestState sealer (D2/SEP-2322): one 256-bit secret per
+      // server process, held in memory only. Tokens bind principal, task
+      // handle, request ID and a short expiry (the needs_input timeout).
+      requestState: createRequestStateService({ ttlMs: config.needsInputTimeoutMs }),
       // Read lazily: at registration time initialize has not run yet, so
       // the client version is still undefined. On legacy connections this
       // returns the initialize-scoped clientInfo; on modern (2026-07-28)
