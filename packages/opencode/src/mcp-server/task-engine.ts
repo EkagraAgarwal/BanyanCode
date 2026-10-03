@@ -29,10 +29,19 @@
 // - Replies carry typed `decision: "approve" | "reject"` (§3.7).
 
 import { newTaskHandle } from "./task-handle"
+import type { WorktreeManager, WorktreeReleaseDisposition } from "./worktree"
 
 export type TaskStatus = "queued" | "running" | "needs_input" | "done" | "failed" | "cancelled"
 export type PermissionPolicy = "reject" | "edits" | "yolo"
 export type ReplyDecision = "approve" | "reject"
+
+// Per-task worktree checkout recorded on the task (C2). `directory` is the
+// absolute worktree path every SDK call for this task runs with.
+export interface TaskWorktree {
+  name: string
+  directory: string
+  branch: string
+}
 
 export interface PendingQuestion {
   requestID: string
@@ -56,6 +65,15 @@ export interface TaskRecord {
   promptIndex: number
   pendingQuestion?: PendingQuestion
   error?: string
+  // Machine-readable failure code. Set to "BUDGET" when the per-task USD
+  // cap aborts the task (C6); the tool layer maps it to the tool error.
+  errorCode?: string
+  // Accumulated USD spend for the task (root + child sessions), summed from
+  // session.cost events on the engine event source (C6).
+  cost: number
+  // Effective per-task USD cap (per-start override or the engine default).
+  budgetUsd: number
+  worktree?: TaskWorktree
 }
 
 // Structural permission rows carried to session creation (E1). Mirrors
@@ -72,6 +90,10 @@ export type EnginePermissionRuleset = EnginePermissionRule[]
 // Port shape mirrors tasks.ts SessionClient (copied, not imported, to
 // avoid churn while tasks.ts still exists). session-client.ts implements
 // this port against the real SDK.
+//
+// `directory` is the per-task SDK root: worktree tasks pass the allocated
+// worktree path (C2) and every call runs scoped to it. Absent means the
+// server default (cwd).
 export interface EngineSessionMessage {
   role: string
   text: string
@@ -86,26 +108,28 @@ export interface EngineSessionClient {
     model?: string
     // readonly: policy.ts buildRuleset returns the immutable ruleset array.
     permission?: readonly EnginePermissionRule[]
+    directory?: string
   }): Promise<{ id: string }>
-  promptAsync(input: { sessionID: string; prompt: string; agent?: string; model?: string }): Promise<void>
-  abort(input: { sessionID: string }): Promise<void>
-  sessionStatus(input: { sessionID: string }): Promise<"busy" | "idle" | "retry" | "failed">
-  messages(input: { sessionID: string; limit?: number }): Promise<EngineSessionMessage[]>
-  pending(input: { sessionID: string }): Promise<PendingQuestion[]>
+  promptAsync(input: { sessionID: string; prompt: string; agent?: string; model?: string; directory?: string }): Promise<void>
+  abort(input: { sessionID: string; directory?: string }): Promise<void>
+  sessionStatus(input: { sessionID: string; directory?: string }): Promise<"busy" | "idle" | "retry" | "failed">
+  messages(input: { sessionID: string; limit?: number; directory?: string }): Promise<EngineSessionMessage[]>
+  pending(input: { sessionID: string; directory?: string }): Promise<PendingQuestion[]>
   replyPermission(input: {
     sessionID: string
     requestID: string
     reply: "once" | "always" | "reject"
     message?: string
+    directory?: string
   }): Promise<void>
-  rejectQuestion(input: { sessionID: string; requestID: string; message?: string }): Promise<void>
-  replyQuestion(input: { sessionID: string; requestID: string; message: string }): Promise<void>
-  writeMetadata(input: { sessionID: string; metadata: Record<string, string> }): Promise<void>
+  rejectQuestion(input: { sessionID: string; requestID: string; message?: string; directory?: string }): Promise<void>
+  replyQuestion(input: { sessionID: string; requestID: string; message: string; directory?: string }): Promise<void>
+  writeMetadata(input: { sessionID: string; metadata: Record<string, string>; directory?: string }): Promise<void>
   // Child-session tree for event attribution (W1.1): the engine resolves
   // events from subagent sessions to the root task handle. Optional so
   // in-memory harnesses keep compiling; without it only root-session
   // events are attributed.
-  listChildren?(input: { sessionID: string }): Promise<string[]>
+  listChildren?(input: { sessionID: string; directory?: string }): Promise<string[]>
 }
 
 // Session lookup for rehydrate (§4.4): find the session behind a handle,
@@ -118,10 +142,18 @@ export interface EngineSessionLookup {
 // Event source abstraction: in-process mode feeds from the SDK
 // `event.subscribe` SSE stream, attach mode from `global.event`. One
 // producer, one consumer.
+//
+// session.cost carries the CUMULATIVE USD total for one session (root or
+// child), mirroring the Jev per-session budget accounting pattern: the
+// engine keeps a per-session high-water entry per task and sums them, so
+// dropped or reordered events can only delay the cap trip, never double
+// count it. The live mapper derives it from `session.updated` info.cost
+// (server.ts, sibling-owned).
 export type EngineEvent =
   | { type: "session.status"; sessionID: string; status: "busy" | "idle" | "retry" }
   | { type: "session.idle"; sessionID: string }
   | { type: "session.error"; sessionID: string; message: string }
+  | { type: "session.cost"; sessionID: string; cost: number }
   | { type: "permission.asked"; sessionID: string; request: PendingQuestion }
   | { type: "question.asked"; sessionID: string; request: PendingQuestion }
 
@@ -140,6 +172,12 @@ export interface TaskStartInput {
   // creation time even when nobody polls (E1).
   permissionRuleset?: readonly EnginePermissionRule[]
   mcpClient?: string
+  // Requested worktree name for isolation "worktree" (C2). Sanitized by
+  // the worktree manager; a taken name rejects with a suggestion. Absent
+  // means an generated `mcp-<hex>` name.
+  worktreeName?: string
+  // Per-task USD cap override (C6). Falls back to the engine default.
+  budgetUsd?: number
 }
 
 export interface TaskReplyInput {
@@ -175,11 +213,25 @@ export interface TaskEngineOptions {
   // 5–10 s window). Clamped to >= 1_000 ms.
   sweepIntervalMs?: number
   now?: () => number
-  onWorktreeCleanup?: (input: { handle: string; sessionID: string }) => void | Promise<void>
+  onWorktreeCleanup?: (input: {
+    handle: string
+    sessionID: string
+    worktreePath?: string
+    disposition?: WorktreeReleaseDisposition
+  }) => void | Promise<void>
   eventQueueBound?: number
+  // Worktree manager for isolation "worktree" (C2). Starts that request a
+  // worktree fail closed when no manager is configured.
+  worktrees?: WorktreeManager
+  // Default per-task USD cap (C6). A per-start budgetUsd wins over this.
+  taskBudgetUsd?: number
 }
 
 export const DEFAULT_NEEDS_INPUT_TIMEOUT_MS = 600_000
+// Sane default guardrail for unattended caller loops (C6): cheap-model
+// delegation costs cents per task, so 5 USD trips only on runaway spend.
+// Mirror point for the Jev perSessionUsd pattern, which has no default.
+export const DEFAULT_TASK_BUDGET_USD = 5
 const DEFAULT_SWEEP_INTERVAL_MS = 7_500
 const MIN_SWEEP_INTERVAL_MS = 1_000
 // Negative child-resolution cache: bounds wasted tree walks for events
@@ -195,6 +247,23 @@ export class UnknownTaskError extends Error {
     super(`unknown or expired task handle: ${handle}. Start a new task with banyan_task_start.`)
   }
 }
+
+// A second write-capable shared task while one is still active (C2). The
+// suggestion names the fix: retry the start with isolation "worktree".
+export class SharedWriteConflictError extends Error {
+  readonly code = "SHARED_WRITE_CONFLICT" as const
+  readonly suggestion = "worktree" as const
+  constructor(activeHandle: string) {
+    super(
+      `a write-capable shared task (${activeHandle}) is already active; shared tasks would clobber each other's edits. ` +
+        `Retry with isolation "worktree" for an isolated checkout.`,
+    )
+  }
+}
+
+const MCP_WORKTREE_KEY = "mcp_worktree"
+const MCP_WORKTREE_BRANCH_KEY = "mcp_worktree_branch"
+const MCP_WORKTREE_NAME_KEY = "mcp_worktree_name"
 
 export class TaskEngine {
   private readonly records = new Map<string, TaskRecord>()
@@ -216,9 +285,21 @@ export class TaskEngine {
   readonly maxConcurrentTasks: number
   readonly needsInputTimeoutMs: number
   readonly sweepIntervalMs: number
+  readonly taskBudgetUsd: number
   private readonly now: () => number
-  private readonly onWorktreeCleanup: (input: { handle: string; sessionID: string }) => void | Promise<void>
+  private readonly onWorktreeCleanup: (input: {
+    handle: string
+    sessionID: string
+    worktreePath?: string
+    disposition?: WorktreeReleaseDisposition
+  }) => void | Promise<void>
   private readonly eventQueueBound: number
+  private readonly worktrees: WorktreeManager | undefined
+  // Per-task cost ledger (C6): handle -> (sessionID -> cumulative USD).
+  // Mirrors the Jev per-session budget accounting pattern — session.cost
+  // events carry cumulative totals, so the task spend is the sum of the
+  // per-session high-water marks. Pruned when the task settles.
+  private readonly costLedger = new Map<string, Map<string, number>>()
 
   constructor(
     private readonly client: EngineSessionClient,
@@ -232,6 +313,8 @@ export class TaskEngine {
     this.now = opts.now ?? Date.now
     this.onWorktreeCleanup = opts.onWorktreeCleanup ?? (() => {})
     this.eventQueueBound = opts.eventQueueBound ?? DEFAULT_EVENT_QUEUE_BOUND
+    this.worktrees = opts.worktrees
+    this.taskBudgetUsd = opts.taskBudgetUsd ?? DEFAULT_TASK_BUDGET_USD
     this.unsubscribe = eventSource.subscribe((event) => this.enqueue(event))
   }
 
@@ -272,25 +355,77 @@ export class TaskEngine {
     return { ...record }
   }
 
+  // Write-capable means it can mutate the shared checkout: any policy
+  // past `reject`. Used by the C2 shared-writer guard below.
+  private static isWriteCapable(record: Pick<TaskRecord, "isolation" | "permission">): boolean {
+    return record.isolation === "shared" && record.permission !== "reject"
+  }
+
+  private activeSharedWriter(): TaskRecord | undefined {
+    for (const record of this.records.values()) {
+      if (record.status === "cancelled" || record.status === "done" || record.status === "failed") continue
+      if (TaskEngine.isWriteCapable(record)) return record
+    }
+    return undefined
+  }
+
   async start(input: TaskStartInput): Promise<TaskRecord> {
     const permission = input.permission ?? "reject"
+    const isolation = input.isolation ?? "shared"
+    const budgetUsd = input.budgetUsd ?? this.taskBudgetUsd
+    if (!Number.isFinite(budgetUsd) || budgetUsd < 0) {
+      throw new Error(`task budget must be a non-negative USD number, got ${String(input.budgetUsd)}`)
+    }
+    // C2 shared-writer guard: at most one write-capable task runs in the
+    // shared checkout. Read-only (reject) tasks never collide.
+    if (TaskEngine.isWriteCapable({ isolation, permission })) {
+      const active = this.activeSharedWriter()
+      if (active) throw new SharedWriteConflictError(active.handle)
+    }
+    // C2 worktree allocation happens BEFORE session creation so a name
+    // collision rejects without leaving an orphan session behind. Without
+    // a configured manager the request fails closed.
+    let worktree: TaskWorktree | undefined
+    if (isolation === "worktree") {
+      if (!this.worktrees) throw new Error('isolation "worktree" is not configured on this server; retry with isolation "shared"')
+      const allocated = await this.worktrees.allocate({
+        ...(input.worktreeName !== undefined ? { name: input.worktreeName } : {}),
+      })
+      worktree = { name: allocated.name, directory: allocated.directory, branch: allocated.branch }
+    }
     // Opaque high-entropy handle (B9/§8.2), never the raw ses_ id. Minted
     // before creation so it can ride along in the creation metadata (E0).
     const handle = newTaskHandle()
-    const created = await this.client.createSession({
-      title: input.prompt.split("\n")[0]?.slice(0, 80) || "mcp task",
-      metadata: {
-        origin: MCP_ORIGIN,
-        mcp_client: input.mcpClient ?? "unknown",
-        mcp_handle: handle,
-        mcp_state: this.runningSlotsUsed() >= this.maxConcurrentTasks ? QUEUED_STATE_VALUE : "running",
-      },
-      // Creation-time agent/model/ruleset passthrough (E1): the policy
-      // holds from session.create even when nobody polls.
-      ...(input.agent !== undefined ? { agent: input.agent } : {}),
-      ...(input.model !== undefined ? { model: input.model } : {}),
-      ...(input.permissionRuleset !== undefined ? { permission: input.permissionRuleset } : {}),
-    })
+    let created: { id: string }
+    try {
+      created = await this.client.createSession({
+        title: input.prompt.split("\n")[0]?.slice(0, 80) || "mcp task",
+        metadata: {
+          origin: MCP_ORIGIN,
+          mcp_client: input.mcpClient ?? "unknown",
+          mcp_handle: handle,
+          mcp_state: this.runningSlotsUsed() >= this.maxConcurrentTasks ? QUEUED_STATE_VALUE : "running",
+          ...(worktree !== undefined
+            ? {
+                [MCP_WORKTREE_KEY]: worktree.directory,
+                [MCP_WORKTREE_BRANCH_KEY]: worktree.branch,
+                [MCP_WORKTREE_NAME_KEY]: worktree.name,
+              }
+            : {}),
+        },
+        // Creation-time agent/model/ruleset passthrough (E1): the policy
+        // holds from session.create even when nobody polls.
+        ...(input.agent !== undefined ? { agent: input.agent } : {}),
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.permissionRuleset !== undefined ? { permission: input.permissionRuleset } : {}),
+        // C2: the session is rooted at the worktree checkout.
+        ...(worktree !== undefined ? { directory: worktree.directory } : {}),
+      })
+    } catch (error) {
+      // Don't orphan the checkout when session creation fails.
+      if (worktree !== undefined) await this.releaseWorktree(worktree.directory).catch(() => {})
+      throw error
+    }
     const at = this.now()
     const record: TaskRecord = {
       handle,
@@ -298,13 +433,16 @@ export class TaskEngine {
       status: "running",
       mcpClient: input.mcpClient ?? "unknown",
       permission,
-      isolation: input.isolation ?? "shared",
+      isolation,
       createdAt: at,
       updatedAt: at,
       promptIndex: 0,
+      cost: 0,
+      budgetUsd,
     }
     if (input.agent !== undefined) record.agent = input.agent
     if (input.model !== undefined) record.model = input.model
+    if (worktree !== undefined) record.worktree = worktree
     this.records.set(record.handle, record)
     this.sessionToHandle.set(record.sessionID, record.handle)
 
@@ -312,7 +450,20 @@ export class TaskEngine {
     // verbatim: the handle↔session binding is what rehydrate matches on
     // (E2). Best-effort — the live record table stays authoritative.
     await this.client
-      .writeMetadata({ sessionID: record.sessionID, metadata: { [MCP_HANDLE_KEY]: handle } })
+      .writeMetadata({
+        sessionID: record.sessionID,
+        metadata: {
+          [MCP_HANDLE_KEY]: handle,
+          ...(worktree !== undefined
+            ? {
+                [MCP_WORKTREE_KEY]: worktree.directory,
+                [MCP_WORKTREE_BRANCH_KEY]: worktree.branch,
+                [MCP_WORKTREE_NAME_KEY]: worktree.name,
+              }
+            : {}),
+        },
+        ...this.dirForRecord(record),
+      })
       .catch(() => {})
 
     if (this.runningSlotsUsed() > this.maxConcurrentTasks) {
@@ -371,7 +522,7 @@ export class TaskEngine {
     const pending = record.pendingQuestion
     if (!pending) {
       if (!reply.message) throw new Error("task_reply needs message when no question is pending")
-      await this.client.promptAsync({ sessionID: record.sessionID, prompt: reply.message })
+      await this.client.promptAsync({ sessionID: record.sessionID, prompt: reply.message, ...this.dirForRecord(record) })
       return this.patch(handle, { status: "running", promptIndex: record.promptIndex + 1 })
     }
     this.clearNeedsInputTimer(handle)
@@ -380,16 +531,26 @@ export class TaskEngine {
       // approval collapses to reject. No string equality on free text —
       // the typed `decision` field is the only signal.
       const granted = reply.decision === "approve" && record.permission !== "reject" ? "once" : "reject"
-      await this.client.replyPermission({ sessionID: record.sessionID, requestID: pending.requestID, reply: granted })
+      await this.client.replyPermission({
+        sessionID: record.sessionID,
+        requestID: pending.requestID,
+        reply: granted,
+        ...this.dirForRecord(record),
+      })
     } else {
       if (reply.decision === "reject") {
-        await this.client.rejectQuestion({ sessionID: record.sessionID, requestID: pending.requestID })
+        await this.client.rejectQuestion({
+          sessionID: record.sessionID,
+          requestID: pending.requestID,
+          ...this.dirForRecord(record),
+        })
       } else {
         if (!reply.message) throw new Error("task_reply needs message to answer the pending question")
         await this.client.replyQuestion({
           sessionID: record.sessionID,
           requestID: pending.requestID,
           message: reply.message,
+          ...this.dirForRecord(record),
         })
       }
     }
@@ -405,8 +566,8 @@ export class TaskEngine {
     if (record.status === "cancelled" || record.status === "done" || record.status === "failed") return record
     this.clearNeedsInputTimer(handle)
     this.queuedInputs.delete(handle)
-    await this.client.abort({ sessionID: record.sessionID }).catch(() => {})
-    await this.onWorktreeCleanup({ handle, sessionID: record.sessionID })
+    await this.client.abort({ sessionID: record.sessionID, ...this.dirForRecord(record) }).catch(() => {})
+    await this.settleWorktree(handle, true)
     this.patch(handle, { status: "cancelled", pendingQuestion: undefined })
     await this.dequeueNext()
     return this.get(handle)
@@ -473,6 +634,17 @@ export class TaskEngine {
       createdAt: at,
       updatedAt: at,
       promptIndex: 0,
+      cost: 0,
+      budgetUsd: this.taskBudgetUsd,
+    }
+    // A restarted process recovers the worktree binding from the metadata
+    // the engine wrote at start (same E2 pattern as mcp_handle).
+    const worktreeDir = metadata[MCP_WORKTREE_KEY]
+    const worktreeBranch = metadata[MCP_WORKTREE_BRANCH_KEY]
+    const worktreeName = metadata[MCP_WORKTREE_NAME_KEY]
+    if (worktreeDir && worktreeBranch && worktreeName) {
+      record.isolation = "worktree"
+      record.worktree = { name: worktreeName, directory: worktreeDir, branch: worktreeBranch }
     }
     this.records.set(handle, record)
     this.sessionToHandle.set(sessionID, handle)
@@ -508,15 +680,62 @@ export class TaskEngine {
 
   private async launch(handle: string, input: TaskStartInput): Promise<void> {
     const record = this.get(handle)
-    const before = await this.client.messages({ sessionID: record.sessionID })
+    const dir = this.dirForRecord(record)
+    const before = await this.client.messages({ sessionID: record.sessionID, ...dir })
     await this.client.promptAsync({
       sessionID: record.sessionID,
       prompt: input.prompt,
       ...(input.agent !== undefined ? { agent: input.agent } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
+      ...dir,
     })
     this.patch(handle, { status: "running", promptIndex: before.length })
     await this.refresh(handle)
+  }
+
+  // Per-task SDK root (C2): the allocated worktree path, or nothing (the
+  // server default) for shared tasks. Spread into every port call.
+  private dirForRecord(record: TaskRecord): { directory: string } | Record<string, never> {
+    return record.worktree !== undefined ? { directory: record.worktree.directory } : {}
+  }
+
+  private dirForHandle(handle: string): { directory: string } | Record<string, never> {
+    const record = this.records.get(handle)
+    return record ? this.dirForRecord(record) : {}
+  }
+
+  private async releaseWorktree(directory: string): Promise<WorktreeReleaseDisposition | undefined> {
+    if (!this.worktrees) return undefined
+    try {
+      return await this.worktrees.release(directory)
+    } catch {
+      return undefined
+    }
+  }
+
+  // Terminal worktree settlement (C2): release the checkout — clean ones
+  // are removed, dirty ones preserved — then report through the owner
+  // hook. Best-effort: git failures never rewrite the task's terminal
+  // state. `notify` preserves the historical cancel-only hook for shared
+  // tasks; worktree tasks always notify so the owner learns the
+  // disposition. The cost ledger is pruned on every terminal path.
+  private async settleWorktree(handle: string, notify: boolean): Promise<void> {
+    const record = this.records.get(handle)
+    this.costLedger.delete(handle)
+    const directory = record?.worktree?.directory
+    if (!directory) {
+      if (notify && record) await this.onWorktreeCleanup({ handle, sessionID: record.sessionID })
+      return
+    }
+    const disposition = await this.releaseWorktree(directory)
+    if (notify && record) {
+      await this.onWorktreeCleanup({
+        handle,
+        sessionID: record.sessionID,
+        worktreePath: directory,
+        ...(disposition !== undefined ? { disposition } : {}),
+      })
+    }
   }
 
   private async dequeueNext(): Promise<void> {
@@ -526,7 +745,11 @@ export class TaskEngine {
       if (!queued) continue
       this.queuedInputs.delete(handle)
       const record = this.get(handle)
-      await this.client.writeMetadata({ sessionID: record.sessionID, metadata: { [QUEUED_STATE_KEY]: "running" } })
+      await this.client.writeMetadata({
+        sessionID: record.sessionID,
+        metadata: { [QUEUED_STATE_KEY]: "running" },
+        ...this.dirForRecord(record),
+      })
       await this.launch(handle, queued)
       return
     }
@@ -597,7 +820,7 @@ export class TaskEngine {
       }
       let children: string[] = []
       try {
-        children = await this.client.listChildren({ sessionID: record.sessionID })
+        children = await this.client.listChildren({ sessionID: record.sessionID, ...this.dirForRecord(record) })
       } catch {
         continue
       }
@@ -641,9 +864,18 @@ export class TaskEngine {
     if (!record || record.pendingQuestion?.requestID !== requestID) return
     const pending = record.pendingQuestion
     if (pending.kind === "permission") {
-      await this.client.replyPermission({ sessionID: record.sessionID, requestID: pending.requestID, reply: "reject" })
+      await this.client.replyPermission({
+        sessionID: record.sessionID,
+        requestID: pending.requestID,
+        reply: "reject",
+        ...this.dirForHandle(handle),
+      })
     } else {
-      await this.client.rejectQuestion({ sessionID: record.sessionID, requestID: pending.requestID })
+      await this.client.rejectQuestion({
+        sessionID: record.sessionID,
+        requestID: pending.requestID,
+        ...this.dirForHandle(handle),
+      })
     }
     this.patch(handle, { status: "running", pendingQuestion: undefined })
     await this.refresh(handle)
@@ -695,14 +927,32 @@ export class TaskEngine {
         this.clearNeedsInputTimer(handle)
         this.queuedInputs.delete(handle)
         this.patch(handle, { status: "failed", error: event.message, pendingQuestion: undefined })
+        await this.settleWorktree(handle, record.worktree !== undefined)
         await this.dequeueNext()
         return
+      case "session.cost": {
+        // C6: accumulate cumulative per-session totals into the task spend.
+        // Non-finite or negative payloads are ignored, never trusted.
+        if (!Number.isFinite(event.cost) || event.cost < 0) return
+        let sessions = this.costLedger.get(handle)
+        if (!sessions) {
+          sessions = new Map<string, number>()
+          this.costLedger.set(handle, sessions)
+        }
+        sessions.set(event.sessionID, event.cost)
+        let total = 0
+        for (const value of sessions.values()) total += value
+        if (this.records.get(handle)?.cost !== total) this.patch(handle, { cost: total })
+        if (total > record.budgetUsd) await this.abortOverBudget(handle, total)
+        return
+      }
       case "permission.asked":
         if (record.permission === "reject") {
           await this.client.replyPermission({
             sessionID: record.sessionID,
             requestID: event.request.requestID,
             reply: "reject",
+            ...this.dirForHandle(handle),
           })
           this.patch(handle, { status: "running" })
           return
@@ -728,7 +978,8 @@ export class TaskEngine {
   private async refresh(handle: string): Promise<void> {
     const record = this.records.get(handle)
     if (!record || record.status === "cancelled" || record.status === "failed") return
-    const pending = await this.client.pending({ sessionID: record.sessionID })
+    const dir = this.dirForRecord(record)
+    const pending = await this.client.pending({ sessionID: record.sessionID, ...dir })
     const first = pending[0]
     if (first) {
       if (first.kind === "permission" && record.permission === "reject") {
@@ -736,6 +987,7 @@ export class TaskEngine {
           sessionID: record.sessionID,
           requestID: first.requestID,
           reply: "reject",
+          ...dir,
         })
         this.patch(handle, { status: "running", pendingQuestion: undefined })
         return
@@ -747,11 +999,12 @@ export class TaskEngine {
       }
       return
     }
-    const status = await this.client.sessionStatus({ sessionID: record.sessionID })
+    const status = await this.client.sessionStatus({ sessionID: record.sessionID, ...dir })
     if (status === "failed") {
       this.clearNeedsInputTimer(handle)
       this.queuedInputs.delete(handle)
       this.patch(handle, { status: "failed", pendingQuestion: undefined })
+      await this.settleWorktree(handle, record.worktree !== undefined)
       await this.dequeueNext()
       return
     }
@@ -760,7 +1013,7 @@ export class TaskEngine {
       return
     }
     // Idle: done only with an assistant message newer than the prompt.
-    const messages = await this.client.messages({ sessionID: record.sessionID })
+    const messages = await this.client.messages({ sessionID: record.sessionID, ...dir })
     const fresh = messages.slice(record.promptIndex).some((msg) => msg.role === "assistant")
     if (!fresh) {
       if (record.status !== "queued") this.patch(handle, { status: "running" })
@@ -769,7 +1022,26 @@ export class TaskEngine {
     this.clearNeedsInputTimer(handle)
     this.queuedInputs.delete(handle)
     this.patch(handle, { status: "done", pendingQuestion: undefined })
-    await this.client.writeMetadata({ sessionID: record.sessionID, metadata: { [QUEUED_STATE_KEY]: "done" } })
+    await this.settleWorktree(handle, record.worktree !== undefined)
+    await this.client.writeMetadata({ sessionID: record.sessionID, metadata: { [QUEUED_STATE_KEY]: "done" }, ...dir })
+    await this.dequeueNext()
+  }
+
+  // C6 budget trip: abort the session, fail the task with the BUDGET code,
+  // settle the worktree (dirty output is preserved), and free the slot.
+  private async abortOverBudget(handle: string, total: number): Promise<void> {
+    const record = this.records.get(handle)
+    if (!record || record.status === "cancelled" || record.status === "done" || record.status === "failed") return
+    this.clearNeedsInputTimer(handle)
+    this.queuedInputs.delete(handle)
+    await this.client.abort({ sessionID: record.sessionID, ...this.dirForRecord(record) }).catch(() => {})
+    this.patch(handle, {
+      status: "failed",
+      errorCode: "BUDGET",
+      error: `task exceeded its USD cap of $${record.budgetUsd} (spent $${total.toFixed(4)})`,
+      pendingQuestion: undefined,
+    })
+    await this.settleWorktree(handle, record.worktree !== undefined)
     await this.dequeueNext()
   }
 }

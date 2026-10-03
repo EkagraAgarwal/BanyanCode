@@ -13,7 +13,7 @@
 // model field, so it cannot fill the port's model slot.
 
 import type { createOpencodeClient, PermissionRuleset, TextPartInput } from "@opencode-ai/sdk/v2"
-import type { DiffFileInput } from "./result"
+import type { DiffFileInput, VerifierToolPartInput } from "./result"
 import type { PendingQuestion, SessionClient, SessionMessage } from "./types"
 
 export type SdkClient = ReturnType<typeof createOpencodeClient>
@@ -35,6 +35,9 @@ export interface SdkCreateSessionInput {
   agent?: string
   model?: string
   permission?: PermissionRuleset
+  // Per-call SDK root (C2): a worktree task passes its checkout path so the
+  // session is rooted there. Falls back to the construction directory.
+  directory?: string
 }
 
 // "provider/model" (run.ts, provider.ts and tool/task.ts all split on the
@@ -121,13 +124,19 @@ export class SdkSessionClient implements SessionClient {
     return { providerID: fallback.providerID, modelID: fallback.id }
   }
 
+  // Per-call directory override (C2): worktree tasks scope every SDK call
+  // to their checkout; everything else keeps the construction root.
+  private dir(input: { directory?: string }): string {
+    return input.directory ?? this.directory
+  }
+
   async createSession(input: SdkCreateSessionInput): Promise<{ id: string }> {
     const agent = this.resolveAgent(input.agent)
     const model = this.resolveCreateModel(input.model)
     const permission = input.permission ?? this.defaults.permission
     const created = unwrap(
       await this.sdk.session.create({
-        directory: this.directory,
+        directory: this.dir(input),
         ...(input.title !== undefined ? { title: input.title } : {}),
         ...(agent !== undefined ? { agent } : {}),
         ...(model !== undefined ? { model } : {}),
@@ -139,14 +148,14 @@ export class SdkSessionClient implements SessionClient {
     return { id: created.id }
   }
 
-  async promptAsync(input: { sessionID: string; prompt: string; agent?: string; model?: string }): Promise<void> {
+  async promptAsync(input: { sessionID: string; prompt: string; agent?: string; model?: string; directory?: string }): Promise<void> {
     const agent = this.resolveAgent(input.agent)
     const model = this.resolvePromptModel(input.model)
     const parts: Array<TextPartInput> = [{ type: "text", text: input.prompt }]
     unwrapVoid(
       await this.sdk.session.promptAsync({
         sessionID: input.sessionID,
-        directory: this.directory,
+        directory: this.dir(input),
         ...(agent !== undefined ? { agent } : {}),
         ...(model !== undefined ? { model } : {}),
         parts,
@@ -155,14 +164,14 @@ export class SdkSessionClient implements SessionClient {
     )
   }
 
-  async prompt(input: { sessionID: string; prompt: string; agent?: string; model?: string }): Promise<void> {
+  async prompt(input: { sessionID: string; prompt: string; agent?: string; model?: string; directory?: string }): Promise<void> {
     const agent = this.resolveAgent(input.agent)
     const model = this.resolvePromptModel(input.model)
     const parts: Array<TextPartInput> = [{ type: "text", text: input.prompt }]
     unwrapVoid(
       await this.sdk.session.prompt({
         sessionID: input.sessionID,
-        directory: this.directory,
+        directory: this.dir(input),
         ...(agent !== undefined ? { agent } : {}),
         ...(model !== undefined ? { model } : {}),
         parts,
@@ -171,32 +180,33 @@ export class SdkSessionClient implements SessionClient {
     )
   }
 
-  async abort(input: { sessionID: string }): Promise<void> {
+  async abort(input: { sessionID: string; directory?: string }): Promise<void> {
     unwrapVoid(
-      await this.sdk.session.abort({ sessionID: input.sessionID, directory: this.directory }),
+      await this.sdk.session.abort({ sessionID: input.sessionID, directory: this.dir(input) }),
       "session.abort",
     )
   }
 
-  async sessionStatus(input: { sessionID: string }): Promise<"busy" | "idle" | "retry" | "failed"> {
-    const all = unwrap(await this.sdk.session.status({ directory: this.directory }), "session.status")
+  async sessionStatus(input: { sessionID: string; directory?: string }): Promise<"busy" | "idle" | "retry" | "failed"> {
+    const directory = this.dir(input)
+    const all = unwrap(await this.sdk.session.status({ directory }), "session.status")
     const entry = all[input.sessionID]
     if (entry) return entry.type
     // The status map only tracks non-idle sessions (the service deletes
     // idle entries), so a missing entry is idle — provided the session
     // exists at all. session.get 404s for unknown IDs.
-    const existing = await this.sdk.session.get({ sessionID: input.sessionID, directory: this.directory })
+    const existing = await this.sdk.session.get({ sessionID: input.sessionID, directory })
     if (existing.error !== undefined && existing.error !== null) {
       throw new Error(`unknown session: ${input.sessionID}`)
     }
     return "idle"
   }
 
-  async messages(input: { sessionID: string; limit?: number }): Promise<SessionMessage[]> {
+  async messages(input: { sessionID: string; limit?: number; directory?: string }): Promise<SessionMessage[]> {
     const rows = unwrap(
       await this.sdk.session.messages({
         sessionID: input.sessionID,
-        directory: this.directory,
+        directory: this.dir(input),
         ...(input.limit !== undefined ? { limit: input.limit } : {}),
       }),
       "session.messages",
@@ -208,9 +218,9 @@ export class SdkSessionClient implements SessionClient {
     }))
   }
 
-  async diff(input: { sessionID: string }): Promise<DiffFileInput[]> {
+  async diff(input: { sessionID: string; directory?: string }): Promise<DiffFileInput[]> {
     const files = unwrap(
-      await this.sdk.session.diff({ sessionID: input.sessionID, directory: this.directory }),
+      await this.sdk.session.diff({ sessionID: input.sessionID, directory: this.dir(input) }),
       "session.diff",
     )
     const out: DiffFileInput[] = []
@@ -226,28 +236,29 @@ export class SdkSessionClient implements SessionClient {
     return out
   }
 
-  async todo(input: { sessionID: string }): Promise<Array<{ title: string; status: string }>> {
+  async todo(input: { sessionID: string; directory?: string }): Promise<Array<{ title: string; status: string }>> {
     const todos = unwrap(
-      await this.sdk.session.todo({ sessionID: input.sessionID, directory: this.directory }),
+      await this.sdk.session.todo({ sessionID: input.sessionID, directory: this.dir(input) }),
       "session.todo",
     )
     return todos.map((item) => ({ title: item.content, status: item.status }))
   }
 
-  private async tree(sessionID: string): Promise<string[]> {
+  private async tree(sessionID: string, directory: string): Promise<string[]> {
     const children = unwrap(
-      await this.sdk.session.children({ sessionID, directory: this.directory }),
+      await this.sdk.session.children({ sessionID, directory }),
       "session.children",
     )
-    const nested = await Promise.all(children.map((child) => this.tree(child.id)))
+    const nested = await Promise.all(children.map((child) => this.tree(child.id, directory)))
     return [sessionID, ...nested.flat()]
   }
 
-  async pending(input: { sessionID: string }): Promise<PendingQuestion[]> {
-    const owned = new Set(await this.tree(input.sessionID))
+  async pending(input: { sessionID: string; directory?: string }): Promise<PendingQuestion[]> {
+    const directory = this.dir(input)
+    const owned = new Set(await this.tree(input.sessionID, directory))
     const [permissions, questions] = await Promise.all([
-      unwrap(await this.sdk.permission.list({ directory: this.directory }), "permission.list"),
-      unwrap(await this.sdk.question.list({ directory: this.directory }), "question.list"),
+      unwrap(await this.sdk.permission.list({ directory }), "permission.list"),
+      unwrap(await this.sdk.question.list({ directory }), "question.list"),
     ])
     const out: PendingQuestion[] = []
     for (const item of permissions) {
@@ -269,11 +280,12 @@ export class SdkSessionClient implements SessionClient {
     return out
   }
 
-  async subagents(input: { sessionID: string }): Promise<Array<{ agent: string; model: string; status: string }>> {
-    const ids = (await this.tree(input.sessionID)).filter((id) => id !== input.sessionID)
+  async subagents(input: { sessionID: string; directory?: string }): Promise<Array<{ agent: string; model: string; status: string }>> {
+    const directory = this.dir(input)
+    const ids = (await this.tree(input.sessionID, directory)).filter((id) => id !== input.sessionID)
     const [statusResult, getResults] = await Promise.all([
-      this.sdk.session.status({ directory: this.directory }),
-      Promise.all(ids.map((id) => this.sdk.session.get({ sessionID: id, directory: this.directory }))),
+      this.sdk.session.status({ directory }),
+      Promise.all(ids.map((id) => this.sdk.session.get({ sessionID: id, directory }))),
     ])
     const status = unwrap(statusResult, "session.status")
     const infos = getResults.map((result) => unwrap(result, "session.get"))
@@ -284,13 +296,14 @@ export class SdkSessionClient implements SessionClient {
     }))
   }
 
-  async cost(input: { sessionID: string }): Promise<{
+  async cost(input: { sessionID: string; directory?: string }): Promise<{
     cost: number
     tokensByModel: Record<string, { input: number; output: number }>
   }> {
-    const ids = await this.tree(input.sessionID)
+    const directory = this.dir(input)
+    const ids = await this.tree(input.sessionID, directory)
     const rawPages = await Promise.all(
-      ids.map((id) => this.sdk.session.messages({ sessionID: id, directory: this.directory })),
+      ids.map((id) => this.sdk.session.messages({ sessionID: id, directory })),
     )
     const pages = rawPages.map((result) => unwrap(result, "session.messages"))
     let total = 0
@@ -310,17 +323,58 @@ export class SdkSessionClient implements SessionClient {
     return { cost: total, tokensByModel }
   }
 
+  // Raw tool parts across the root session's tree (children included),
+  // mirroring the tree() walk behind pending/cost/subagents. Over the SDK,
+  // part.state arrives as a JSON-encoded string and is decoded here; an
+  // undecodable state still yields a part with status "unknown" so one bad
+  // row can never take down result assembly.
+  async toolParts(input: { sessionID: string; directory?: string }): Promise<VerifierToolPartInput[]> {
+    const directory = this.dir(input)
+    const ids = await this.tree(input.sessionID, directory)
+    const rawPages = await Promise.all(ids.map((id) => this.sdk.session.messages({ sessionID: id, directory })))
+    const pages = rawPages.map((result) => unwrap(result, "session.messages"))
+    const out: VerifierToolPartInput[] = []
+    for (const rows of pages) {
+      for (const row of rows) {
+        const messageParts = (row as { parts?: unknown }).parts
+        if (!Array.isArray(messageParts)) continue
+        for (const part of messageParts) {
+          const candidate = part as { type?: unknown; tool?: unknown; state?: unknown }
+          if (candidate.type !== "tool" || typeof candidate.tool !== "string") continue
+          let decoded: { status?: unknown; output?: unknown; error?: unknown } | undefined
+          if (typeof candidate.state === "string") {
+            try {
+              decoded = JSON.parse(candidate.state) as { status?: unknown; output?: unknown; error?: unknown }
+            } catch {
+              decoded = undefined
+            }
+          } else if (candidate.state !== null && typeof candidate.state === "object") {
+            decoded = candidate.state as { status?: unknown; output?: unknown; error?: unknown }
+          }
+          const entry: VerifierToolPartInput = {
+            tool: candidate.tool,
+            status: typeof decoded?.status === "string" ? decoded.status : "unknown",
+          }
+          if (typeof decoded?.output === "string") entry.output = decoded.output
+          if (typeof decoded?.error === "string") entry.error = decoded.error
+          out.push(entry)
+        }
+      }
+    }
+    return out
+  }
+
   async replyPermission(input: {
     sessionID: string
     requestID: string
     reply: "once" | "always" | "reject"
     message?: string
-  }): Promise<void> {
-    void input.sessionID
+    directory?: string
+  }): Promise<void> {    void input.sessionID
     unwrapVoid(
       await this.sdk.permission.reply({
         requestID: input.requestID,
-        directory: this.directory,
+        directory: this.dir(input),
         reply: input.reply,
         ...(input.message !== undefined ? { message: input.message } : {}),
       }),
@@ -328,16 +382,16 @@ export class SdkSessionClient implements SessionClient {
     )
   }
 
-  async rejectQuestion(input: { sessionID: string; requestID: string; message?: string }): Promise<void> {
+  async rejectQuestion(input: { sessionID: string; requestID: string; message?: string; directory?: string }): Promise<void> {
     void input.sessionID
     void input.message
     unwrapVoid(
-      await this.sdk.question.reject({ requestID: input.requestID, directory: this.directory }),
+      await this.sdk.question.reject({ requestID: input.requestID, directory: this.dir(input) }),
       "question.reject",
     )
   }
 
-  async replyQuestion(input: { sessionID: string; requestID: string; message: string }): Promise<void> {
+  async replyQuestion(input: { sessionID: string; requestID: string; message: string; directory?: string }): Promise<void> {
     void input.sessionID
     // The port carries a single free-text answer; the v1 route takes one
     // answer array per question. Send it as the first question's answer —
@@ -345,7 +399,7 @@ export class SdkSessionClient implements SessionClient {
     unwrapVoid(
       await this.sdk.question.reply({
         requestID: input.requestID,
-        directory: this.directory,
+        directory: this.dir(input),
         answers: [[input.message]],
       }),
       "question.reply",
