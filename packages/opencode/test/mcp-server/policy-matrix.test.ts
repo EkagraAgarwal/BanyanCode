@@ -74,9 +74,14 @@ describe("policy matrix", () => {
     expect(resolved("edits", exploreLike(), "bash", "*")).toBe("deny")
   })
 
-  test("edits over a permissive agent keeps bash allowed from config", () => {
+  test("edits over a permissive agent keeps bash allowed from config, but edits stay scoped to root", () => {
     expect(resolved("edits", buildLike(), "bash", "*")).toBe("allow")
-    expect(resolved("edits", buildLike(), "edit", OUTSIDE)).toBe("allow")
+    // Safe-writes containment (C1): an edits session can never write
+    // outside its root, even when the agent config would allow it.
+    // Production edit asks are worktree-relative (see edit.ts), so the
+    // absolute-outside case is synthetic — the live shape is "../..." and
+    // is pinned in policy-matrix-e2e.test.ts.
+    expect(resolved("edits", buildLike(), "edit", OUTSIDE)).toBe("deny")
   })
 
   test("yolo allows everything except question, even over deny-by-default", () => {

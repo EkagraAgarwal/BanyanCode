@@ -21,6 +21,36 @@ const rejectRows = (): PermissionV1.Rule[] => [
 
 const scopePattern = (root: string): string => `${root.replace(/[/\\]+$/, "")}/**`
 
+// Edit-capable permission names. The edit/write/patch tools all ask as
+// "edit" (see tool/edit.ts, tool/write.ts, tool/apply_patch.ts); the
+// write/patch rows are spec §4.2 ballast for agent configs that key rules
+// on tool IDs.
+const EDIT_PERMISSIONS = ["edit", "write", "patch"] as const
+
+// Production tool asks carry worktree-relative paths
+// (path.relative(worktree, file) in edit.ts/write.ts): inside asks look
+// like "sub/file.txt", outside escapes like "../other/file.txt". The
+// absolute <root>/** rows cover absolute ask patterns (spec §4.2 shape);
+// the relative rows cover the production shape. Order matters: later rows
+// win (findLast), so the broad "*" allow sits before the escape denies,
+// the absolute denies scope absolute patterns to the root, and the scoped
+// re-allow closes the set. Net under `edits`: inside allowed, outside
+// denied — even when the agent config is permissive.
+const editsRows = (root: string): PermissionV1.Rule[] => {
+  const scoped = scopePattern(root)
+  return [
+    ...EDIT_PERMISSIONS.map((permission): PermissionV1.Rule => ({ permission, pattern: scoped, action: "allow" })),
+    ...EDIT_PERMISSIONS.map((permission): PermissionV1.Rule => ({ permission, pattern: "*", action: "allow" })),
+    ...EDIT_PERMISSIONS.map((permission): PermissionV1.Rule => ({ permission, pattern: "../*", action: "deny" })),
+    // Absolute paths outside the root (posix and drive-letter). Production
+    // edit asks are never absolute, so these only fire for absolute ask
+    // patterns or permissive agent configs: containment holds either way.
+    ...EDIT_PERMISSIONS.map((permission): PermissionV1.Rule => ({ permission, pattern: "/*", action: "deny" })),
+    ...EDIT_PERMISSIONS.map((permission): PermissionV1.Rule => ({ permission, pattern: "?:/*", action: "deny" })),
+    ...EDIT_PERMISSIONS.map((permission): PermissionV1.Rule => ({ permission, pattern: scoped, action: "allow" })),
+  ]
+}
+
 export function buildRuleset(policy: PermissionPolicy, root: string): PermissionV1.Ruleset {
   if (policy === "yolo") {
     return [
@@ -30,13 +60,7 @@ export function buildRuleset(policy: PermissionPolicy, root: string): Permission
   }
   const base = rejectRows()
   if (policy === "reject") return base
-  const pattern = scopePattern(root)
-  return [
-    ...base,
-    { permission: "edit", pattern, action: "allow" },
-    { permission: "write", pattern, action: "allow" },
-    { permission: "patch", pattern, action: "allow" },
-  ]
+  return [...base, ...editsRows(root)]
 }
 
 export function appendRuleset(
