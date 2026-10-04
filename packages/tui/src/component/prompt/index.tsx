@@ -1779,25 +1779,27 @@ export function Prompt(props: PromptProps) {
               cursorColor={props.disabled ? theme.backgroundElement : theme.text}
               syntaxStyle={syntax()}
             />
-            <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="flex-start">
+            <box flexDirection="row" flexShrink={0} width="100%" paddingTop={1} gap={1} justifyContent="flex-start">
               <Show when={local.agent.current()} fallback={<box height={1} />}>
                 {(agent) => (
-                  <box flexDirection="row" gap={1}>
-                    <text fg={fadeColor(highlight(), agentMetaAlpha())}>
+                  <box flexDirection="row" gap={1} flexShrink={0}>
+                    <text fg={fadeColor(highlight(), agentMetaAlpha())} wrapMode="none">
                       {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
                     </text>
                     <Show when={store.mode === "normal"}>
-                      <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>·</text>
+                      <text fg={fadeColor(theme.textMuted, modelMetaAlpha())} wrapMode="none">·</text>
                       <text
-                        flexShrink={0}
+                        flexShrink={1}
+                        wrapMode="none"
+                        truncate
                         fg={fadeColor(leader() ? theme.textMuted : theme.text, modelMetaAlpha())}
                       >
                         {local.model.parsed().model}
                       </text>
-                      <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>{currentProviderLabel()}</text>
+                      <text fg={fadeColor(theme.textMuted, modelMetaAlpha())} wrapMode="none" truncate flexShrink={0}>{currentProviderLabel()}</text>
                       <Show when={showVariant()}>
-                        <text fg={fadeColor(theme.textMuted, variantMetaAlpha())}>·</text>
-                        <text>
+                        <text fg={fadeColor(theme.textMuted, variantMetaAlpha())} wrapMode="none">·</text>
+                        <text wrapMode="none" flexShrink={0}>
                           <span style={{ fg: fadeColor(theme.warning, variantMetaAlpha()), bold: true }}>
                             {local.model.variant.current()}
                           </span>
@@ -1811,7 +1813,7 @@ export function Prompt(props: PromptProps) {
           </box>
         </box>
 
-        <box width="100%" flexDirection="row" justifyContent="space-between">
+        <box width="100%" flexDirection="row" flexShrink={0} justifyContent="space-between">
           <Switch>
             <Match when={status().type !== "idle"}>
               <box
@@ -1885,7 +1887,7 @@ export function Prompt(props: PromptProps) {
                     })()}
                   </box>
                 </box>
-                <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
+                <text fg={store.interrupt > 0 ? theme.primary : theme.text} wrapMode="none" truncate>
                   esc{" "}
                   <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
                     {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
@@ -1946,25 +1948,25 @@ export function Prompt(props: PromptProps) {
             <Match when={true}>{props.hint ?? <text />}</Match>
           </Switch>
           <Show when={status().type !== "retry"}>
-            <box gap={1} flexDirection="row">
+            <box gap={1} flexDirection="row" flexShrink={0}>
               <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
                 {(file) => (
-                  <text fg={editorContextLabelState() === "pending" ? theme.secondary : theme.textMuted}>{file()}</text>
+                  <text fg={editorContextLabelState() === "pending" ? theme.secondary : theme.textMuted} wrapMode="none" truncate>{file()}</text>
                 )}
               </Show>
               <Switch>
                 <Match when={store.mode === "normal"}>
-                  <text fg={theme.text}>
+                  <text fg={theme.text} wrapMode="none">
                     {agentShortcut()} <span style={{ fg: theme.textMuted }}>mode</span>
                   </text>
-                  <text fg={theme.text}>
+                  <text fg={theme.text} wrapMode="none">
                     {paletteShortcut()} <span style={{ fg: theme.textMuted }}>commands</span>
                   </text>
-                  <text fg={theme.textMuted}>·</text>
-                  <text fg={theme.text}>{tabShortcut()} <span style={{ fg: theme.textMuted }}>switch tab</span></text>
+                  <text fg={theme.textMuted} wrapMode="none">·</text>
+                  <text fg={theme.text} wrapMode="none">{tabShortcut()} <span style={{ fg: theme.textMuted }}>switch tab</span></text>
                 </Match>
                 <Match when={store.mode === "shell"}>
-                  <text fg={theme.text}>
+                  <text fg={theme.text} wrapMode="none">
                     esc <span style={{ fg: theme.textMuted }}>exit shell mode</span>
                   </text>
                 </Match>
