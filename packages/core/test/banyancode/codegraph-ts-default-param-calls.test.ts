@@ -39,3 +39,23 @@ test("resolver accepts a node id as the target", async () => {
   expect(result.resolved._tag).toBe("Ok")
   if (result.resolved._tag === "Ok") expect(result.resolved.value.nodeID).toBe(result.id)
 })
+
+test("resolver does not treat a Windows drive-letter path as a node id", async () => {
+  let nodeByIDCalls = 0
+  const repo = {
+    findSymbolsByServiceTag: () => Effect.succeed([]),
+    queryNodes: () => Effect.succeed([]),
+    searchNodes: () => Effect.succeed([]),
+    searchNodesLight: () => Effect.succeed([]),
+    nodesByIDs: () => Effect.succeed([]),
+    nodeByID: () => {
+      nodeByIDCalls++
+      return Effect.succeed(undefined)
+    },
+    fileIDsByServiceName: () => Effect.succeed([]),
+    filesByIDs: () => Effect.succeed([]),
+  }
+  const result = await Effect.runPromise(resolveGraphTargetPure(repo as any, { target: "C:\\Users\\test\\file.ts" }))
+  expect(nodeByIDCalls).toBe(0)
+  expect(result._tag).toBe("Miss")
+})

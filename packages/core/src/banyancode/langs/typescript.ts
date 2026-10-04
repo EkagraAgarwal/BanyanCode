@@ -89,9 +89,15 @@ const BRACE_SCAN_BOUND = 65536
 // (`Promise<{ a: 1 }>`) must not be mistaken for the body brace, so skip the
 // balanced parameter list and any return-type annotation first.
 function skipFunctionSignature(content: string, afterOpenParen: number): number {
+  // Bound the paren scan like every other forward scan in this file: an
+  // unbalanced `(` (e.g. inside a comment/string) must not walk to EOF per
+  // function match (O(n²) on large files — observed as a startup-index
+  // freeze on Windows). Fall back to the regex path when unbalanced inside
+  // the budget.
+  const parenLimit = Math.min(afterOpenParen + OPEN_SCAN_BOUND, content.length)
   let i = afterOpenParen
   let depth = 1
-  while (i < content.length && depth > 0) {
+  while (i < parenLimit && depth > 0) {
     const ch = content[i]!
     if (ch === "(") depth++
     else if (ch === ")") depth--

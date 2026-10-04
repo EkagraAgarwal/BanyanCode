@@ -166,8 +166,21 @@ export const resolveGraphTargetStrict = (
 
     // 0) Node ID passthrough: code_find returns node IDs and the tool
     //    descriptions advertise them as valid targets, so an ID that exists in
-    //    the graph resolves to exactly that node.
-    if (target.includes(":")) {
+    //    the graph resolves to exactly that node. Node IDs embed a kind
+    //    segment (`<fileID>:function:<name>:<line>`); a bare colon is NOT
+    //    enough — Windows drive-letter paths (`C:\...`) contain a colon and
+    //    must not pay for (or risk blocking on) a node lookup per resolution.
+    if (
+      target.includes(":function:") ||
+      target.includes(":method:") ||
+      target.includes(":class:") ||
+      target.includes(":type:") ||
+      target.includes(":variable:") ||
+      target.includes(":route:") ||
+      target.includes(":test:") ||
+      target.includes(":file:") ||
+      target.includes(":generated:")
+    ) {
       const byID = yield* repo.nodeByID(target)
       if (byID && filterByKind([byID]).length > 0 && filterByFile([byID]).length > 0) {
         return toResult([byID], "name-exact")
