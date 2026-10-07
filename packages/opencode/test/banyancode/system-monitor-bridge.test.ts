@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { Duration, Effect, Layer, Queue, Ref } from "effect"
-import { applySystemMonitorBridge, SystemMonitorDemand } from "@/effect/banyancode-system-bridge"
+import { Effect, Layer, Queue, Ref } from "effect"
+import { applySystemMonitorBridge } from "@/effect/banyancode-system-bridge"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -18,8 +18,6 @@ const makeMockMonitorService = async (events: Array<SystemStatusQueueEvent>) => 
       status: () => Effect.succeed(events[events.length - 1] ?? ({} as SystemStatus)),
       watch: () => Effect.die("unused"),
       events: () => Effect.succeed(queue),
-      subscribe: () => Effect.succeed(Effect.void),
-      subscriberCount: () => Effect.succeed(0),
     } as any),
   )
 }
@@ -61,9 +59,6 @@ const flagsLayer = (enabled: boolean) =>
 
 describe("system-monitor-bridge", () => {
   test("bridge consumes from queue and publishes events", async () => {
-    SystemMonitorDemand.resetForTests()
-    SystemMonitorDemand.subscribe()
-    try {
     const events: SystemStatusQueueEvent[] = [
       {
         cpuPercent: 20,
@@ -95,9 +90,6 @@ describe("system-monitor-bridge", () => {
     expect(result.length).toBe(2)
     expect((result[0].data as SystemStatus).cpuPercent).toBe(20)
     expect((result[1].data as SystemStatus).cpuPercent).toBe(30)
-    } finally {
-      SystemMonitorDemand.unsubscribe()
-    }
   })
 
   test("bridge no-ops when banyancodeEnable is false", async () => {
@@ -126,9 +118,6 @@ describe("system-monitor-bridge", () => {
   // blocks on offer, and the SYSTEM widget freezes on whatever value it last
   // saw.
   test("bridge survives a transient publish failure and keeps draining", async () => {
-    SystemMonitorDemand.resetForTests()
-    SystemMonitorDemand.subscribe()
-    try {
     const events: SystemStatusQueueEvent[] = [
       {
         cpuPercent: 97,
@@ -168,46 +157,5 @@ describe("system-monitor-bridge", () => {
     expect(result.length).toBe(2)
     expect((result[0].data as SystemStatus).cpuPercent).toBe(20)
     expect((result[1].data as SystemStatus).cpuPercent).toBe(15)
-    } finally {
-      SystemMonitorDemand.unsubscribe()
-    }
-  })
-
-  test("bridge publishes nothing with zero demand and resumes after subscribe", async () => {
-    SystemMonitorDemand.resetForTests()
-    const events: SystemStatusQueueEvent[] = [
-      {
-        cpuPercent: 42,
-        memoryUsedBytes: 8 * 1024 * 1024 * 1024,
-        memoryTotalBytes: 16 * 1024 * 1024 * 1024,
-        platform: "linux",
-      },
-    ]
-    const monitorLayer = await makeMockMonitorService(events)
-    const { published, layer: eventV2Layer } = await makeMockEventV2Bridge("ok")
-
-    const testLayer = Layer.mergeAll(monitorLayer, eventV2Layer, flagsLayer(true))
-
-    // One scope holds the drain loop across both phases: with no subscribers
-    // it must sleep instead of taking; after an SSE-style subscribe the
-    // queued sample is published. Scope close interrupts the loop.
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          yield* Effect.forkScoped(applySystemMonitorBridge.pipe(Effect.provide(testLayer)))
-          yield* Effect.sleep(Duration.millis(300))
-          expect(SystemMonitorDemand.count()).toBe(0)
-          expect(yield* Ref.get(published)).toEqual([])
-
-          yield* Effect.sync(() => SystemMonitorDemand.subscribe())
-          yield* Effect.sleep(Duration.millis(300))
-          const result = yield* Ref.get(published)
-          expect(result.length).toBe(1)
-          expect((result[0].data as SystemStatus).cpuPercent).toBe(42)
-          yield* Effect.sync(() => SystemMonitorDemand.unsubscribe())
-        }),
-      ),
-    )
-    expect(SystemMonitorDemand.count()).toBe(0)
   })
 })

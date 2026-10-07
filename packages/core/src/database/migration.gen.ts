@@ -22,6 +22,5 @@ export const migrations = (
     import("./migration/20260806120000_add_session_id"),
     import("./migration/20260809120000_memory_entries_fts_trigram"),
     import("./migration/20260912120000_agent_efficiency_telemetry"),
-    import("./migration/20261002120000_codegraph_fts_split"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

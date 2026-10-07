@@ -159,10 +159,10 @@ function View(props: { api: TuiPluginApi }) {
   const event = useEvent()
   const sync = useSync()
   const route = useRouteData("session")
+  const [refreshTrigger, setRefreshTrigger] = createSignal(0)
   const [expandedGroups, setExpandedGroups] = createSignal<ReadonlySet<string>>(new Set())
 
-  // Initial seed only; mergedSessions below prefers live sync-store data.
-  const [sessions] = createResource(async () => {
+  const [sessions] = createResource(refreshTrigger, async () => {
     try {
       const result = await props.api.client.session.list({})
       return (result.data ?? []) as SessionItem[]
@@ -171,8 +171,7 @@ function View(props: { api: TuiPluginApi }) {
     }
   })
 
-  // No per-update refetch: the sync store already applies session.updated
-  // events and mergedSessions below prefers live data.
+  onCleanup(event.on("session.updated", () => setRefreshTrigger((n) => n + 1)))
 
   const [meshStatus, setMeshStatus] = createSignal<any>(null)
   const fetchMesh = async () => {

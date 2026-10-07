@@ -99,12 +99,14 @@ const GRAMMAR_EXTENSIONS: Readonly<
   yaml: [".yml", ".yaml"],
 }
 
-// Grammar families load once and are never evicted. Each loaded family holds
-// one wasm instance + one shared Parser; the old LRU (cap 4, evict + reload
-// on miss) churned RSS and CPU on every polyglot indexing pass. More than 16
-// families in one process is not a real workload — the table above defines
-// exactly 16 — so there is no eviction path.
-export const MAX_GRAMMAR_FAMILIES = 16
+export const HEAP_INITIAL_PAGES = 256
+export const HEAP_MAX_PAGES = 4096
+
+// Hot grammar families retained in memory. Each loaded family holds a wasm
+// instance (~10-30MB native heap across all 16 families if every grammar a
+// monorepo touches stays resident), so cold families are evicted LRU-style
+// and reloaded on demand by ensureGrammarForExt.
+export const MAX_HOT_GRAMMAR_FAMILIES = 4
 
 type GrammarKey = Exclude<keyof typeof TREE_SITTER_WASM_SOURCES, "main">
 
@@ -154,6 +156,9 @@ interface LoadedParserBundle {
   // Language. Mutated only by ensureGrammarForExt.
   readonly parsersByExt: Map<string, import("web-tree-sitter").Parser>
   readonly languagesByExt: Map<string, unknown>
+  // MRU-last grammar families for LRU eviction (see MAX_HOT_GRAMMAR_FAMILIES).
+  // Mutated only by ensureGrammarForExt alongside the maps above.
+  readonly grammarUseOrder: GrammarKey[]
 }
 
 export type TreeSitterState =
@@ -242,6 +247,7 @@ export const ensureWebTreeSitterReady = (): Effect.Effect<void, never, never> =>
           assetPaths,
           parsersByExt: new Map<string, import("web-tree-sitter").Parser>(),
           languagesByExt: new Map<string, unknown>(),
+          grammarUseOrder: [],
         } satisfies LoadedParserBundle
       },
       catch: describeError,
@@ -264,31 +270,38 @@ export const _resetTreeSitterStateForTesting = (): Effect.Effect<void, never, ne
 
 // Lazy per-language grammar load. The first parse of an encountered language
 // instantiates its wasm grammar + one shared family Parser; every later
-// parse of the same family reuses them with zero additional loads — there is
-// deliberately no eviction path (see MAX_GRAMMAR_FAMILIES). Concurrent
-// first-use races are benign: the loser detects the winner's registration
-// and drops its own handles without publishing them. Failures surface as
-// TreeSitterUnavailableError so callers fall back to the regex parser.
-//
-// Module-level count of grammar-family wasm loads since process start (or
-// the last _resetGrammarLoadCountForTesting). Incremented once per
-// successful Language.load — cache hits short-circuit before it — so a
-// second indexing pass over already-loaded families must leave it unchanged.
-let grammarLoadCount = 0
-
-export const getGrammarLoadCountForTesting = (): number => grammarLoadCount
-
-export const _resetGrammarLoadCountForTesting = (): void => {
-  grammarLoadCount = 0
+// parse of the same family reuses them. Only MAX_HOT_GRAMMAR_FAMILIES stay
+// resident: loading a new family past the cap evicts the least-recently-used
+// one (parser deleted, ext entries dropped) and the evicted family reloads
+// transparently on next use. Concurrent first-use races are benign: the loser
+// detects the winner's registration and drops its own handles without
+// publishing them. Failures surface as TreeSitterUnavailableError so callers
+// fall back to the regex parser.
+const touchGrammarFamily = (bundle: LoadedParserBundle, grammar: GrammarKey): void => {
+  const order = bundle.grammarUseOrder
+  const at = order.indexOf(grammar)
+  if (at !== -1) order.splice(at, 1)
+  order.push(grammar)
 }
 
-const countLoadedFamilies = (bundle: LoadedParserBundle): number => {
-  let count = 0
-  for (const family of Object.keys(GRAMMAR_EXTENSIONS) as GrammarKey[]) {
-    const firstExt = GRAMMAR_EXTENSIONS[family]?.[0]
-    if (firstExt !== undefined && bundle.languagesByExt.has(firstExt)) count += 1
+const evictColdGrammarFamilies = (bundle: LoadedParserBundle): void => {
+  while (bundle.grammarUseOrder.length >= MAX_HOT_GRAMMAR_FAMILIES) {
+    const cold = bundle.grammarUseOrder.shift()
+    if (cold === undefined) return
+    const exts = GRAMMAR_EXTENSIONS[cold]
+    const parser = bundle.parsersByExt.get(exts[0] ?? "")
+    if (parser) {
+      try {
+        parser.delete()
+      } catch {
+        // Best-effort native teardown; the ext entries are dropped regardless.
+      }
+    }
+    for (const familyExt of exts) {
+      bundle.parsersByExt.delete(familyExt)
+      bundle.languagesByExt.delete(familyExt)
+    }
   }
-  return count
 }
 
 export const ensureGrammarForExt = (
@@ -311,27 +324,24 @@ export const ensureGrammarForExt = (
       return yield* Effect.fail(new TreeSitterUnavailableError(`No grammar for: ${ext}`))
     }
     if (state.parser.languagesByExt.has(ext)) {
+      touchGrammarFamily(state.parser, grammar)
       return
     }
     const assetPath = state.parser.assetPaths.get(grammar)
     if (!assetPath) {
       return yield* Effect.fail(new TreeSitterUnavailableError(`No wasm asset for grammar: ${grammar}`))
     }
-    if (countLoadedFamilies(state.parser) >= MAX_GRAMMAR_FAMILIES) {
-      return yield* Effect.fail(
-        new TreeSitterUnavailableError(`Grammar family cap (${MAX_GRAMMAR_FAMILIES}) exceeded`),
-      )
-    }
     const language = yield* Effect.tryPromise({
       try: () => state.parser.Language.load(assetPath),
       catch: (cause) => new TreeSitterUnavailableError(describeError(cause)),
     })
-    grammarLoadCount += 1
     // Lost a first-use race: the winner already published this family.
-    // Drop our handles without re-registering.
+    // Touch instead of re-registering so the family isn't evicted early.
     if (state.parser.languagesByExt.has(ext)) {
+      touchGrammarFamily(state.parser, grammar)
       return
     }
+    evictColdGrammarFamilies(state.parser)
     // One shared Parser per grammar family so incremental parses
     // (parser.parse(content, oldTree)) stay valid across every extension
     // mapped to the same language.
@@ -341,6 +351,7 @@ export const ensureGrammarForExt = (
       state.parser.parsersByExt.set(familyExt, parser)
       state.parser.languagesByExt.set(familyExt, language)
     }
+    touchGrammarFamily(state.parser, grammar)
   })
 
 export const withTreeSitter = <A>(

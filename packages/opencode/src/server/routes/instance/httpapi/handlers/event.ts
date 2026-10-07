@@ -1,5 +1,4 @@
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { SystemMonitorDemand } from "@/effect/banyancode-system-bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -29,18 +28,9 @@ function eventResponse(events: EventV2.Interface) {
     const workspaceID = yield* InstanceState.workspaceID
     // Listener registration is eager, so events published after this point cannot
     // be lost while the HTTP body fiber is starting or emitting server.connected.
-    // Sliding bound: under bursty SSE fan-out (streaming tokens, tool spam)
-    // drop the oldest events rather than grow unboundedly. Live UI tolerates
-    // occasional drops; an unbounded queue was a RAM spike under load.
-    const queue = yield* Queue.sliding<EventV2.Payload>(512)
+    const queue = yield* Queue.unbounded<EventV2.Payload>()
     const unsubscribe = yield* events.listen((event) => Effect.sync(() => Queue.offerUnsafe(queue, event)))
     yield* Effect.addFinalizer(() => unsubscribe)
-    // Instance streams also forward banyancode.system.updated, so they hold
-    // sampling demand like the global stream does.
-    yield* Effect.acquireRelease(
-      Effect.sync(() => SystemMonitorDemand.subscribe()),
-      () => Effect.sync(() => SystemMonitorDemand.unsubscribe()),
-    )
     const stream = Stream.fromQueue(queue).pipe(
       Stream.filter(
         (event) =>

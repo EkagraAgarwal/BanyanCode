@@ -75,29 +75,10 @@ const DEBOUNCE_MS = 500
 const POLL_MS = 2000
 const DELETE_GRACE_MS = 200
 const MAX_BATCH_PATHS = 200
-const MAX_PENDING_PATHS = 2000
 
 type PendingChange = "add" | "change" | "unlink"
 type PendingEntry = readonly [string, PendingChange]
 type ProgressExtras = Pick<ProgressState, "phase" | "completed" | "total" | "currentFile">
-
-/** Paths that must never wake incremental indexing (SQLite / Banyan data dir, VCS internals). */
-export const isAutoUpdateIgnoredPath = (filePath: string): boolean => {
-  const normalized = filePath.replace(/\\/g, "/")
-  const segments = normalized.split("/")
-  // G1: `.git/**` churn (index.lock, FETCH_HEAD, etc. on every git command)
-  // must not wake the indexer — the walker excludes `.git` via defaults, so
-  // these paths can never produce graph rows anyway.
-  if (segments.includes(".git")) return true
-  if (segments.includes(".banyancode")) return true
-  const base = path.basename(normalized)
-  return (
-    base.endsWith(".db-wal") ||
-    base.endsWith(".db-shm") ||
-    base.endsWith(".db-journal") ||
-    base.endsWith(".db")
-  )
-}
 
 export const layer: Layer.Layer<
   Service,
@@ -148,7 +129,6 @@ export const layer: Layer.Layer<
     const pausedRef = yield* Ref.make(false)
     const wakeQueue = yield* Queue.dropping<void>(1).pipe(Effect.orDie)
     const pendingRef = yield* Ref.make<Map<string, PendingChange>>(new Map())
-    const fullRescanNeededRef = yield* Ref.make(false)
     const graceSeenRef = yield* Ref.make<Set<string>>(new Set())
     const eventsQueue = yield* Queue.dropping<{ type: "banyancode.codegraph.auto-update"; properties: State }>(64).pipe(
       Effect.orDie,
@@ -177,10 +157,9 @@ export const layer: Layer.Layer<
       const paused = yield* Ref.get(pausedRef)
       if (paused) return yield* publish({ status: "paused", pending: 0 })
       const pending = (yield* Ref.get(pendingRef)).size
-      const fullRescan = yield* Ref.get(fullRescanNeededRef)
       yield* publish({
-        status: pending > 0 || fullRescan ? "draining" : "watching",
-        pending: fullRescan ? Math.max(pending, 1) : pending,
+        status: pending > 0 ? "draining" : "watching",
+        pending,
         lastChangeAt: Date.now(),
       })
     })
@@ -266,41 +245,10 @@ export const layer: Layer.Layer<
     const initialBuildTriggeredRef = yield* Ref.make(false)
 
     const processBatch = Effect.fn("CodegraphAutoUpdate.processBatch")(function* () {
-      // Wait for any in-flight full build before draining pending — do not
-      // requeue+sleep forever (that spun CPU/RAM while builds wrote WAL).
-      while ((yield* buildService.status()).status === "running") {
-        yield* Effect.logDebug("codegraph auto-update: waiting for build to complete")
-        yield* Effect.sleep(Duration.millis(POLL_MS))
-      }
-
-      const needsFullRescan = yield* Ref.getAndUpdate(fullRescanNeededRef, () => false)
-      if (needsFullRescan) {
-        yield* Ref.set(pendingRef, new Map())
-        const meta = yield* repo.getMeta()
-        if (meta?.indexedRoot) {
-          const excludePatterns = yield* Ref.get(excludePatternsRef)
-          yield* Effect.logInfo(`codegraph auto-update: pending overflow, full rescan for ${meta.indexedRoot}`)
-          yield* buildService.start({ root: meta.indexedRoot, force: false, excludePatterns }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("codegraph auto-update: overflow rescan failed", { cause: Cause.pretty(cause) }),
-            ),
-          )
-        }
-        yield* recomputeStatus()
-        return
-      }
-
       const collected = yield* Ref.getAndUpdate(pendingRef, () => new Map())
       if (collected.size === 0) return
 
-      const entries = [...collected.entries()].filter(([filePath]) => !isAutoUpdateIgnoredPath(filePath))
-      // Every path in the batch was ignore-skipped — do not call indexFiles
-      // (which would still listAllFiles + rebuildDerivedGraph before filtering).
-      if (entries.length === 0) {
-        yield* recomputeStatus()
-        return
-      }
-
+      const entries = [...collected.entries()]
       const batchEntries = entries.slice(0, MAX_BATCH_PATHS)
       const overflowEntries = entries.slice(MAX_BATCH_PATHS)
       const batch = new Map<string, PendingChange>(batchEntries)
@@ -342,6 +290,15 @@ export const layer: Layer.Layer<
         yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
       })
 
+      const buildState = yield* buildService.status()
+      if (buildState.status === "running") {
+        yield* Effect.logDebug("codegraph auto-update: deferring until build completes")
+        yield* requeue(batchEntries)
+        yield* requeue(overflowEntries)
+        yield* Effect.sleep(Duration.millis(POLL_MS))
+        return
+      }
+
       const meta = yield* repo.getMeta()
       if (!meta || !meta.indexedRoot) {
         const derived = deriveRootFromPending([...batch.keys()])
@@ -366,22 +323,36 @@ export const layer: Layer.Layer<
 
       const root = meta.indexedRoot
       const removals = [...batch].filter(([, change]) => change === "unlink").map(([filePath]) => filePath)
-      const additions = [...batch].filter(([, change]) => change !== "unlink").map(([filePath]) => filePath)
+      const additions = [...batch].filter(([, change]) => change !== "unlink").map(([filePath, change]) => [filePath, change] as const)
       const excludePatterns = yield* Ref.get(excludePatternsRef)
-      const total = removals.length + additions.length
 
-      // G1: a single applyChanges({ addedOrChanged, removed }) per batch —
-      // one tree-sitter prime, one ignore-context load, one path-keyed DB
-      // pass, one PASSIVE checkpoint, one bumpVersion. The old removeFiles +
-      // indexFiles pair ran all of that twice (two TRUNCATE checkpoints and
-      // two version bumps per batch).
-      if (total > 0) {
-        const allPaths = [...additions, ...removals]
-        yield* publishProgress({ phase: "preparing", total })
-        const result = yield* indexer.applyChanges({
+      if (removals.length > 0) {
+        yield* publishProgress({ phase: "preparing", total: removals.length })
+        yield* publishProgress({ phase: "removing", completed: 0, total: removals.length, currentFile: removals[0] })
+        yield* indexer.removeFiles({ root, paths: removals }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("codegraph auto-update: removeFiles failed", { cause: Cause.pretty(cause) }),
+          ),
+        )
+        // Unlink-only paths never reach the add/change cleanup in the listener
+        // (:389-393), so drop them here or graceSeenRef grows without bound on
+        // long-lived watchers. A later unlink for the same path gets a fresh
+        // grace window, which is the desired behavior.
+        yield* Ref.update(graceSeenRef, (seen) => {
+          const next = new Set(seen)
+          for (const filePath of removals) next.delete(filePath)
+          return next
+        })
+        yield* publishProgress({ phase: "removing", completed: removals.length, total: removals.length, currentFile: removals[removals.length - 1] })
+        yield* publishProgress({ phase: "done", completed: removals.length, total: removals.length })
+      }
+
+      if (additions.length > 0) {
+        const paths = additions.map(([filePath]) => filePath)
+        yield* publishProgress({ phase: "preparing", total: paths.length })
+        const result = yield* indexer.indexFiles({
           root,
-          addedOrChanged: additions,
-          removed: removals,
+          paths,
           excludePatterns,
           onProgress: Effect.fn("CodegraphAutoUpdate.indexProgress")(function* ({ file, done, total, currentFile }) {
             yield* publishProgress({ phase: "indexing", completed: done, total, currentFile: currentFile ?? file })
@@ -389,24 +360,13 @@ export const layer: Layer.Layer<
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
-              yield* Effect.logWarning("codegraph auto-update: applyChanges failed", { cause: Cause.pretty(cause) })
-              return { indexed: 0, removed: 0, skipped: 0, parseErrors: [] }
+              yield* Effect.logWarning("codegraph auto-update: indexFiles failed", { cause: Cause.pretty(cause) })
+              return { indexed: 0, skipped: 0, parseErrors: [] }
             }),
           ),
         )
-        // Unlink-only paths never reach the add/change cleanup in the listener,
-        // so drop them here or graceSeenRef grows without bound on long-lived
-        // watchers. A later unlink for the same path gets a fresh grace
-        // window, which is the desired behavior.
-        if (removals.length > 0) {
-          yield* Ref.update(graceSeenRef, (seen) => {
-            const next = new Set(seen)
-            for (const filePath of removals) next.delete(filePath)
-            return next
-          })
-        }
-        yield* publishProgress({ phase: "indexing", completed: result.indexed, total, currentFile: allPaths[allPaths.length - 1] })
-        yield* publishProgress({ phase: "done", completed: result.indexed, total })
+        yield* publishProgress({ phase: "indexing", completed: result.indexed, total: paths.length, currentFile: paths[paths.length - 1] })
+        yield* publishProgress({ phase: "done", completed: result.indexed, total: paths.length })
         // NOTE: do NOT requeue on `result.skipped > 0`. The indexer's `skipped` count
         // is a deterministic aggregate — it includes files filtered out as ignored,
         // oversize, artifact, cached, or genuinely skipped. Requeueing any of those
@@ -431,7 +391,7 @@ export const layer: Layer.Layer<
             const signal = yield* Queue.poll(wakeQueue)
             quiet = Option.isNone(signal)
           }
-          while ((yield* Ref.get(pendingRef)).size > 0 || (yield* Ref.get(fullRescanNeededRef))) {
+          while ((yield* Ref.get(pendingRef)).size > 0) {
             // A single processBatch failure must not kill the drain forever —
             // pendingRef is drained at the top of processBatch, so on failure
             // the loop exits back to Queue.take and stays alive for the next
@@ -458,31 +418,17 @@ export const layer: Layer.Layer<
         yield* refreshConfig()
 
         const data = event.data as { file: string; event: PendingChange }
-        if (isAutoUpdateIgnoredPath(data.file)) return
-
         const meta = yield* repo.getMeta()
         if (meta?.indexedRoot) {
           const norm = (p: string) => process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p)
           if (!event.location?.directory || norm(event.location.directory) !== norm(meta.indexedRoot)) return
         }
 
-        const prev = yield* Ref.getAndUpdate(pendingRef, (pending) => {
-          if (pending.has(data.file) || pending.size < MAX_PENDING_PATHS) {
-            const next = new Map(pending)
-            next.set(data.file, data.event)
-            return next
-          }
-          return pending
+        yield* Ref.update(pendingRef, (pending) => {
+          const next = new Map(pending)
+          next.set(data.file, data.event)
+          return next
         })
-        if (!prev.has(data.file) && prev.size >= MAX_PENDING_PATHS) {
-          // Cap overflow: collapse into a single full-rescan flag instead of
-          // retaining every path (unbounded Map growth under WAL churn).
-          yield* Ref.set(fullRescanNeededRef, true)
-          yield* recomputeStatus()
-          yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
-          return
-        }
-
         if (data.event !== "unlink") yield* Ref.update(graceSeenRef, (seen) => {
           const next = new Set(seen)
           next.delete(data.file)
@@ -529,25 +475,24 @@ export const layer: Layer.Layer<
           const removals = batch.filter(([, change]) => change === "unlink").map(([filePath]) => filePath)
           const additions = batch.filter(([, change]) => change !== "unlink").map(([filePath]) => filePath)
           const excludePatterns = yield* Ref.get(excludePatternsRef)
-          // G1: single applyChanges — one checkpoint + one bumpVersion.
-          // `removed` reports requested removals (flush contract); the
-          // indexer return carries confirmed indexed/skipped counts.
-          const result = yield* indexer
-            .applyChanges({ root, addedOrChanged: additions, removed: removals, excludePatterns })
-            .pipe(
-              Effect.orElseSucceed(() => ({
-                indexed: 0,
-                removed: 0,
-                skipped: additions.length + removals.length,
-                parseErrors: [],
-              })),
-            )
+          let indexed = 0
+          let cached = 0
+          if (removals.length > 0) {
+            yield* indexer.removeFiles({ root, paths: removals }).pipe(Effect.ignore)
+          }
+          if (additions.length > 0) {
+            const result = yield* indexer
+              .indexFiles({ root, paths: additions, excludePatterns })
+              .pipe(Effect.orElseSucceed(() => ({ indexed: 0, skipped: additions.length, parseErrors: [] })))
+            indexed = result.indexed
+            cached = result.skipped
+          }
           yield* recomputeStatus()
           return {
             discovered: 0,
-            indexed: result.indexed,
+            indexed,
             removed: removals.length,
-            cached: result.skipped,
+            cached,
             pending: (yield* Ref.get(pendingRef)).size,
           }
         }),

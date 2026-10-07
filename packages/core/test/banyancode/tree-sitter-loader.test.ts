@@ -3,11 +3,16 @@ import { Effect, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { tmpdir } from "../fixture/tmpdir"
 import path from "path"
-import { TreeSitter } from "../../src/banyancode/langs/tree-sitter"
+import { HEAP_INITIAL_PAGES, HEAP_MAX_PAGES, TreeSitter } from "../../src/banyancode/langs/tree-sitter"
 
 process.env.BANYANCODE_ENABLE = "1"
 
 describe("tree-sitter-loader", () => {
+  test("heap constants are correct per AD-2", () => {
+    expect(HEAP_INITIAL_PAGES).toBe(256)
+    expect(HEAP_MAX_PAGES).toBe(4096)
+  })
+
   test("getLanguage returns a non-null Language for .ts", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.sqlite")

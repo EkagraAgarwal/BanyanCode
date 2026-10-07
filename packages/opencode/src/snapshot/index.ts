@@ -5,7 +5,6 @@ import { formatPatch, structuredPatch } from "diff"
 import path from "path"
 import { AppProcess } from "@opencode-ai/core/process"
 import { InstanceState } from "@/effect/instance-state"
-import { addActiveSnapshot } from "@/effect/instance-registry"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Hash } from "@opencode-ai/core/util/hash"
 import { Config } from "@/config/config"
@@ -44,16 +43,11 @@ interface GitResult {
 // start/finish, tool settlement) call add() back-to-back; when a file keeps
 // being rewritten mid-hash (e.g. `.ccsm/*` churn) every attempt fails, so
 // without this the whole worktree gets re-hashed on every settlement.
-// A failed add arms a ADD_FAIL_INTERVAL_MS window during which the heavy
-// diff/ls-files + stage work is skipped; the next cycle retries.
-const ADD_FAIL_INTERVAL_MS = 1000
-
-// Retained for `Snapshot.__test` compat (its range is pinned by
-// test/snapshot/throttle.test.ts). The success throttle itself was removed:
-// time-throttling staging made track() return stale write-tree hashes for
-// edits made inside the window, so every call now stages fresh and only the
-// failure cooldown below still skips work.
-const ADD_SUCCESS_INTERVAL_MS = 3000
+// A failed add arms a ADD_INTERVAL_MS window during which the heavy
+// diff/ls-files + stage work is skipped; the next cycle retries. Successful
+// adds are never throttled — the snapshot contract is that the next cycle
+// stages whatever changed.
+const ADD_INTERVAL_MS = 1000
 
 // Rate-limit window for the unstable-source warning per gitdir. The failure
 // itself is a per-cycle skip (the next cycle retries), so only surface it at
@@ -64,11 +58,6 @@ const WARN_INTERVAL_MS = 30_000
 // `undefined` (never run) is never throttled. Pure so it can be unit-tested.
 const shouldThrottle = (lastRun: number | undefined, now: number, minIntervalMs: number) =>
   lastRun !== undefined && now - lastRun < minIntervalMs
-
-// Cap for the advisory dirty-hint set per gitdir. Past this the set is
-// dropped and the next add() falls back to the full discovery scan —
-// hints only ever narrow staging, so dropping them is always safe.
-const DIRTY_HINT_CAP = 5000
 
 // Git pathspec hygiene: every candidate that reaches git (or path.join) must
 // be a worktree-relative forward-slash path. Absolute paths, drive-letter
@@ -90,30 +79,6 @@ const toWorktreePathspec = (candidate: string): string => {
   return normalized.startsWith("./") ? normalized.slice(2) : normalized
 }
 
-// BanyanCode's local DB/WAL lives under `.banyancode/` and churns during
-// indexing — never stage those into the snapshot gitdir.
-const isBanyancodePath = (candidate: string): boolean => {
-  const normalized = candidate.replaceAll("\\", "/")
-  return (
-    normalized === ".banyancode" ||
-    normalized.startsWith(".banyancode/") ||
-    normalized.includes("/.banyancode/")
-  )
-}
-
-// Normalize one dirty-hint path to a worktree-relative forward-slash
-// pathspec, or undefined when it is unsafe, outside the worktree, or under
-// BanyanCode's data dir (never staged). Accepts absolute or already-relative
-// paths. Pure so it can be unit-tested.
-const toDirtyHint = (worktree: string, file: string): string | undefined => {
-  if (!file || file.includes("\0")) return
-  const rel = path.isAbsolute(file) ? path.relative(worktree, file).replaceAll("\\", "/") : file
-  const spec = toWorktreePathspec(rel)
-  if (!isSafePathspec(spec)) return
-  if (isBanyancodePath(spec)) return
-  return spec
-}
-
 // Conservative detection of the "file changed while git was hashing" failure
 // (`git add` exits 128 with "fatal: confused by unstable object source data"
 // or an index-pack variant). Deliberately narrow: unrelated git errors still
@@ -132,28 +97,9 @@ export interface Interface {
   readonly revert: (patches: Patch[]) => Effect.Effect<void>
   readonly diff: (hash: string) => Effect.Effect<string>
   readonly diffFull: (from: string, to: string) => Effect.Effect<FileDiff[]>
-  // Advisory dirty set for the hint-driven add() fast path. Currently no
-  // producer feeds it (the file watcher exposes no dirty set), so production
-  // always falls back to the full discovery scan.
-  readonly noteDirty: (files: readonly string[]) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Snapshot") {}
-
-// Brackets a snapshot operation so InstanceStore's idle sweep never evicts
-// the instance mid-run. Masked acquire + guaranteed release, so interruption
-// can never leak the refcount.
-const bracketSnapshot = <A, E, R>(fx: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
-  Effect.gen(function* () {
-    const directory = yield* InstanceState.directory
-    return yield* Effect.uninterruptibleMask((restore) =>
-      Effect.acquireUseRelease(
-        Effect.sync(() => addActiveSnapshot(directory, 1)),
-        () => restore(fx),
-        () => Effect.sync(() => addActiveSnapshot(directory, -1)),
-      ),
-    )
-  })
 
 export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | Config.Service> = Layer.effect(
   Service,
@@ -162,23 +108,12 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
     const appProcess = yield* AppProcess.Service
     const config = yield* Config.Service
     const locks = new Map<string, Semaphore.Semaphore>()
-    // Per-gitdir last-run timestamps: `addFailThrottle` arms the failure
-    // cooldown for the heavy diff + stage work, `warnThrottle` rate-limits
-    // the unstable-source warning. Keyed by gitdir (layer scope, shared
-    // across instances like `locks`).
-    const addFailThrottle = new Map<string, number>()
+    // Per-gitdir last-run timestamps: `addThrottle` arms the failure cooldown
+    // for the heavy diff + stage work, `warnThrottle` rate-limits the
+    // unstable-source warning. Keyed by gitdir (layer scope, shared across
+    // instances like `locks`).
+    const addThrottle = new Map<string, number>()
     const warnThrottle = new Map<string, number>()
-    // Last successful write-tree hash per gitdir. Only a fallback for when
-    // write-tree itself fails (typically mid-churn): track() must still
-    // return a usable tree rather than an empty snapshot. Fresh hashes are
-    // always preferred — this is never consulted on the success path.
-    const lastTree = new Map<string, string>()
-    // Advisory dirty-hint set per gitdir, fed by noteDirty(). Absent or
-    // empty means "no information" — add() falls back to the full scan.
-    const dirtyHints = new Map<string, Set<string>>()
-    // Gitdirs where core.untrackedCache was ensured (pre-existing gitdirs
-    // predate the init-time config below). Once per gitdir per process.
-    const configEnsured = new Set<string>()
 
     const lock = (key: string) => {
       const hit = locks.get(key)
@@ -323,10 +258,11 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
         })
 
         const excludes = Effect.fnUntraced(function* () {
-          // The snapshot gitdir is a plain directory (never a gitfile), so
-          // its exclude file is always <gitdir>/info/exclude — the same path
-          // sync() writes to below. No rev-parse spawn needed.
-          const file = path.join(state.gitdir, "info", "exclude")
+          const result = yield* git(["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], {
+            cwd: state.worktree,
+          })
+          const file = result.text.trim()
+          if (!file) return
           if (!(yield* exists(file))) return
           return file
         })
@@ -336,9 +272,6 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           const target = path.join(state.gitdir, "info", "exclude")
           const text = [
             file ? (yield* read(file)).trimEnd() : "",
-            // Always ignore BanyanCode's local data dir — DB/WAL churn must
-            // not enter the snapshot index.
-            ".banyancode/",
             ...list.map((item) => `/${item.replaceAll("\\", "/")}`),
           ]
             .filter(Boolean)
@@ -387,12 +320,47 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           }
         })
 
-        // Stage exactly the given candidates: resolve ignores, drop
-        // newly-ignored paths from the index, skip oversized untracked files,
-        // stage the rest. Shared by the full discovery scan and the
-        // dirty-hint fast path so both stage identical subsets per input.
-        const stageCandidates = Effect.fnUntraced(function* (all: string[], untracked: Set<string>) {
+        const add = Effect.fnUntraced(function* () {
+          yield* sync()
+
+          // Per-gitdir failure cooldown: after a failed add (typically a file
+          // rewritten mid-hash) skip the diff/ls-files + stage work for
+          // ADD_INTERVAL_MS so settlements stop hammering `git add
+          // --all --sparse` on a worktree git can't hash. sync() above always
+          // runs so excludes stay fresh. A skipped call returns true; the
+          // caller hashes/diffs against the last staged state and the next
+          // cycle retries.
+          const now = Date.now()
+          const lastFailed = addThrottle.get(state.gitdir)
+          if (shouldThrottle(lastFailed, now, ADD_INTERVAL_MS)) return true
+
+          const [diff, other] = yield* Effect.all(
+            [
+              git([...quote, ...args(["diff-files", "--name-only", "-z", "--", scope])], {
+                cwd: state.worktree,
+              }),
+              git([...quote, ...args(["ls-files", "--others", "--exclude-standard", "-z", "--", scope])], {
+                cwd: state.worktree,
+              }),
+            ],
+            { concurrency: 2 },
+          )
+          if (diff.code !== 0 || other.code !== 0) {
+            addThrottle.set(state.gitdir, Date.now())
+            yield* Effect.logWarning("failed to list snapshot files", {
+              diffCode: diff.code,
+              diffStderr: diff.stderr,
+              otherCode: other.code,
+              otherStderr: other.stderr,
+            })
+            return false
+          }
+
+          const tracked = sanitize(diff.text.split("\0").filter(Boolean))
+          const untracked = sanitize(other.text.split("\0").filter(Boolean))
+          const all = Array.from(new Set([...tracked, ...untracked]))
           if (!all.length) return true
+
           // Resolve source-repo ignore rules against the exact candidate set.
           // --no-index keeps this pattern-based even when a path is already tracked.
           const ignored = yield* ignore(all)
@@ -424,115 +392,12 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               { concurrency: 8 },
             )).filter((item): item is string => Boolean(item)),
           )
-          const block = new Set([...untracked].filter((item) => large.has(item)))
+          const block = new Set(untracked.filter((item) => large.has(item)))
           yield* sync(Array.from(block))
           // Stage only the allowed candidate paths so snapshot updates stay scoped.
-          return yield* stage(allow.filter((item) => !block.has(item)))
-        })
-
-        // Hint-driven fast path: stage exactly the dirty set instead of
-        // re-scanning the whole worktree with diff-files + ls-files. The
-        // untracked subset still needs one scoped `ls-files --others` over the
-        // hints so oversized untracked files are excluded exactly like the
-        // full path. Hints outside the session scope are dropped to match the
-        // scoped discovery scan.
-        const stageHinted = Effect.fnUntraced(function* (hints: ReadonlySet<string>) {
-          const scoped = sanitize([...hints]).filter(
-            (item) => !isBanyancodePath(item) && (scope === "." || item === scope || item.startsWith(`${scope}/`)),
-          )
-          if (!scoped.length) return true
-          const other = yield* git(
-            [...quote, ...args(["ls-files", "--others", "--exclude-standard", "-z", "--", ...scoped])],
-            {
-              cwd: state.worktree,
-            },
-          )
-          if (other.code !== 0) return false
-          return yield* stageCandidates(scoped, new Set(sanitize(other.text.split("\0").filter(Boolean))))
-        })
-
-        // Advisory dirty set for the hint-driven fast path. Paths may be
-        // absolute or worktree-relative; anything unsafe, outside the
-        // worktree, or under .banyancode/ is dropped — hints only ever narrow
-        // staging, they can never stage a file the full scan would reject.
-        const noteDirty = Effect.fnUntraced(function* (files: readonly string[]) {
-          if (!files.length) return
-          const seen = dirtyHints.get(state.gitdir) ?? new Set<string>()
-          for (const file of files) {
-            const hint = toDirtyHint(state.worktree, file)
-            if (!hint) continue
-            seen.add(hint)
-          }
-          if (seen.size > DIRTY_HINT_CAP) {
-            dirtyHints.delete(state.gitdir)
-            return
-          }
-          if (seen.size > 0) dirtyHints.set(state.gitdir, seen)
-        })
-
-        // Stages the worktree into the snapshot index. Always runs the full
-        // pipeline so callers observe every edit: track() snapshots current
-        // state, and patch()/diff() answer "what changed since hash". Only
-        // the failure throttle still skips work (git is erroring; the next
-        // cycle retries).
-        const add = Effect.fnUntraced(function* () {
-          yield* sync()
-
-          // Per-gitdir cooldown: after a failed add (typically a file
-          // rewritten mid-hash) skip the diff/ls-files + stage work for
-          // ADD_FAIL_INTERVAL_MS so settlements stop hammering `git add
-          // --all --sparse` on a worktree git can't hash. sync() above
-          // always runs so excludes stay fresh. A skipped call assumes the
-          // index is usable; the caller hashes/diffs against the last staged
-          // state and the next cycle retries.
-          const now = Date.now()
-          const lastFailed = addFailThrottle.get(state.gitdir)
-          if (shouldThrottle(lastFailed, now, ADD_FAIL_INTERVAL_MS)) return
-
-          // Dirty-hint fast path (watcher-driven where reachable). No hints —
-          // the common case until a producer is wired — falls back to the
-          // full discovery scan below.
-          const hints = dirtyHints.get(state.gitdir)
-          if (hints && hints.size > 0) {
-            const staged = yield* stageHinted(hints)
-            if (!staged) {
-              addFailThrottle.set(state.gitdir, Date.now())
-              return
-            }
-            hints.clear()
-            return
-          }
-
-          const [diff, other] = yield* Effect.all(
-            [
-              git([...quote, ...args(["diff-files", "--name-only", "-z", "--", scope])], {
-                cwd: state.worktree,
-              }),
-              git([...quote, ...args(["ls-files", "--others", "--exclude-standard", "-z", "--", scope])], {
-                cwd: state.worktree,
-              }),
-            ],
-            { concurrency: 2 },
-          )
-          if (diff.code !== 0 || other.code !== 0) {
-            addFailThrottle.set(state.gitdir, Date.now())
-            yield* Effect.logWarning("failed to list snapshot files", {
-              diffCode: diff.code,
-              diffStderr: diff.stderr,
-              otherCode: other.code,
-              otherStderr: other.stderr,
-            })
-            return
-          }
-
-          const tracked = sanitize(diff.text.split("\0").filter(Boolean))
-          const untracked = sanitize(other.text.split("\0").filter(Boolean))
-          const all = Array.from(new Set([...tracked, ...untracked])).filter((item) => !isBanyancodePath(item))
-
-          const staged = yield* stageCandidates(all, new Set(untracked))
-          if (!staged) {
-            addFailThrottle.set(state.gitdir, Date.now())
-          }
+          const staged = yield* stage(allow.filter((item) => !block.has(item)))
+          if (!staged) addThrottle.set(state.gitdir, Date.now())
+          return staged
         })
 
         const cleanup = Effect.fnUntraced(function* () {
@@ -563,59 +428,21 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
                 yield* git(["init"], {
                   env: { GIT_DIR: state.gitdir, GIT_WORK_TREE: state.worktree },
                 })
-                // Snapshot-specific git config, written directly instead of
-                // one `git config` spawn per key (eight spawns per fresh
-                // gitdir). Duplicate sections merge per gitconfig rules, so
-                // appending is equivalent to the individual config calls.
-                // fsmonitor stays off: git/index.ts disables it repo-wide and
-                // a daemon must not watch this alternate object store.
-                // feature.manyFiles + index.v4 + index.threads +
-                // untrackedCache keep the first add bounded on very large
-                // worktrees.
-                const config = path.join(state.gitdir, "config")
-                const current = yield* read(config)
-                yield* fs
-                  .writeFileString(
-                    config,
-                    `${current.trimEnd()}\n[core]\n\tautocrlf = false\n\tlongpaths = true\n\tsymlinks = true\n\tfsmonitor = false\n\tuntrackedCache = true\n[feature]\n\tmanyFiles = true\n[index]\n\tversion = 4\n\tthreads = true\n`,
-                  )
-                  .pipe(Effect.orDie)
+                yield* git(["--git-dir", state.gitdir, "config", "core.autocrlf", "false"])
+                yield* git(["--git-dir", state.gitdir, "config", "core.longpaths", "true"])
+                yield* git(["--git-dir", state.gitdir, "config", "core.symlinks", "true"])
+                yield* git(["--git-dir", state.gitdir, "config", "core.fsmonitor", "false"])
+                // Tuning for very large worktrees so the first add stays bounded.
+                yield* git(["--git-dir", state.gitdir, "config", "feature.manyFiles", "true"])
+                yield* git(["--git-dir", state.gitdir, "config", "index.version", "4"])
+                yield* git(["--git-dir", state.gitdir, "config", "index.threads", "true"])
+                yield* git(["--git-dir", state.gitdir, "config", "core.untrackedCache", "true"])
                 yield* seed()
                 yield* Effect.logInfo("initialized")
               }
-              // Pre-existing snapshot gitdirs (created before untrackedCache
-              // was set at init) get it here, once per gitdir per process.
-              // Fresh gitdirs already carry it from the batched init config
-              // above. fsmonitor stays off: git/index.ts disables it
-              // repo-wide and a daemon must not watch this alternate object
-              // store.
-              if (!configEnsured.has(state.gitdir)) {
-                configEnsured.add(state.gitdir)
-                if (existed)
-                  yield* git(["--git-dir", state.gitdir, "config", "core.untrackedCache", "true"]).pipe(Effect.ignore)
-              }
-              // Stage fresh; on a failure-throttle skip the index may be
-              // untouched — hashing it anyway matches the pre-throttle
-              // behavior and still yields a usable tree while the next cycle
-              // retries staging.
               yield* add()
-              let result = yield* git(args(["write-tree"]), { cwd: state.worktree })
-              if (!result.text.trim()) {
-                // A transient spawn failure under load can yield an empty
-                // result; one bounded retry before falling back.
-                result = yield* git(args(["write-tree"]), { cwd: state.worktree })
-              }
+              const result = yield* git(args(["write-tree"]), { cwd: state.worktree })
               const hash = result.text.trim()
-              if (hash) {
-                lastTree.set(state.gitdir, hash)
-                yield* Effect.logInfo("tracking", { hash, cwd: state.worktree, git: state.gitdir })
-                return hash
-              }
-              // write-tree failed (file rewritten mid-hash under churn, or a
-              // broken index after a failed add): fall back to the last known
-              // tree rather than recording an empty snapshot.
-              const previous = lastTree.get(state.gitdir)
-              if (previous) return previous
               yield* Effect.logInfo("tracking", { hash, cwd: state.worktree, git: state.gitdir })
               return hash
             }),
@@ -625,8 +452,6 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
         const patch = Effect.fnUntraced(function* (hash: string) {
           return yield* locked(
             Effect.gen(function* () {
-              // Stage fresh: patch answers "what changed since hash" and must
-              // see every edit, including ones made moments ago.
               yield* add()
               const result = yield* git(
                 [...quote, ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", scope])],
@@ -804,7 +629,6 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
         const diff = Effect.fnUntraced(function* (hash: string) {
           return yield* locked(
             Effect.gen(function* () {
-              // Stage fresh: same staleness reason as patch().
               yield* add()
               const result = yield* git([...quote, ...args(["diff", "--cached", "--no-ext-diff", hash, "--", scope])], {
                 cwd: state.worktree,
@@ -1048,7 +872,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           Effect.forkScoped,
         )
 
-        return { cleanup, track, patch, restore, revert, diff, diffFull, noteDirty }
+        return { cleanup, track, patch, restore, revert, diff, diffFull }
       }),
     )
 
@@ -1060,27 +884,22 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
         return yield* InstanceState.useEffect(state, (s) => s.cleanup())
       }),
       track: Effect.fn("Snapshot.track")(function* () {
-        return yield* bracketSnapshot(InstanceState.useEffect(state, (s) => s.track()))
+        return yield* InstanceState.useEffect(state, (s) => s.track())
       }),
       patch: Effect.fn("Snapshot.patch")(function* (hash: string) {
-        return yield* bracketSnapshot(InstanceState.useEffect(state, (s) => s.patch(hash)))
+        return yield* InstanceState.useEffect(state, (s) => s.patch(hash))
       }),
       restore: Effect.fn("Snapshot.restore")(function* (snapshot: string) {
-        return yield* bracketSnapshot(InstanceState.useEffect(state, (s) => s.restore(snapshot)))
+        return yield* InstanceState.useEffect(state, (s) => s.restore(snapshot))
       }),
       revert: Effect.fn("Snapshot.revert")(function* (patches: Patch[]) {
-        return yield* bracketSnapshot(InstanceState.useEffect(state, (s) => s.revert(patches)))
+        return yield* InstanceState.useEffect(state, (s) => s.revert(patches))
       }),
       diff: Effect.fn("Snapshot.diff")(function* (hash: string) {
-        return yield* bracketSnapshot(InstanceState.useEffect(state, (s) => s.diff(hash)))
+        return yield* InstanceState.useEffect(state, (s) => s.diff(hash))
       }),
       diffFull: Effect.fn("Snapshot.diffFull")(function* (from: string, to: string) {
-        return yield* bracketSnapshot(InstanceState.useEffect(state, (s) => s.diffFull(from, to)))
-      }),
-      noteDirty: Effect.fn("Snapshot.noteDirty")(function* (files: readonly string[]) {
-        // No bracketSnapshot: a synchronous layer-scoped map write, no git
-        // spawn, so an idle-sweep eviction mid-call is harmless.
-        return yield* InstanceState.useEffect(state, (s) => s.noteDirty(files))
+        return yield* InstanceState.useEffect(state, (s) => s.diffFull(from, to))
       }),
     })
   }),
@@ -1095,15 +914,6 @@ export const defaultLayer = layer.pipe(
 export const node = LayerNode.make(layer, [FSUtil.node, AppProcess.node, Config.node])
 
 // Test-only surface for the pure throttle/detection/pathspec helpers.
-export const __test = {
-  shouldThrottle,
-  isUnstableSourceError,
-  isSafePathspec,
-  toWorktreePathspec,
-  isBanyancodePath,
-  toDirtyHint,
-  ADD_SUCCESS_INTERVAL_MS,
-  ADD_FAIL_INTERVAL_MS,
-}
+export const __test = { shouldThrottle, isUnstableSourceError, isSafePathspec, toWorktreePathspec }
 
 export * as Snapshot from "."

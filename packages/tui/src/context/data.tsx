@@ -22,12 +22,7 @@ import type {
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
-import { batch, createSignal, onMount } from "solid-js"
-
-// Mirror sync.tsx bounds so the V2 message store cannot grow without limit.
-const MAX_SESSIONS_IN_MEMORY = 4
-const MAX_MESSAGES_PER_SESSION = 100
-const MAX_PARTS_PER_MESSAGE = 50
+import { createSignal, onMount } from "solid-js"
 
 type LocationData = {
   agent?: AgentV2Info[]
@@ -81,64 +76,15 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       directory: sdk.directory ?? process.cwd(),
     })
 
-    const sessionRecency: string[] = []
-    const touchSessionRecency = (sessionID: string) => {
-      const at = sessionRecency.indexOf(sessionID)
-      if (at !== -1) sessionRecency.splice(at, 1)
-      sessionRecency.push(sessionID)
-    }
-    const trimMessageDraft = (messages: SessionMessage[]) => {
-      if (messages.length > MAX_MESSAGES_PER_SESSION) messages.splice(MAX_MESSAGES_PER_SESSION)
-      for (const item of messages) {
-        if (item.type !== "assistant") continue
-        if (item.content.length <= MAX_PARTS_PER_MESSAGE) continue
-        item.content.splice(0, item.content.length - MAX_PARTS_PER_MESSAGE)
-      }
-    }
-    const evictColdSessions = () => {
-      const overflow = sessionRecency.length - MAX_SESSIONS_IN_MEMORY
-      if (overflow <= 0) return
-      const cold = sessionRecency.splice(0, overflow)
-      batch(() => {
-        for (const sessionID of cold) {
-          setStore(
-            "session",
-            "message",
-            produce((draft) => {
-              delete draft[sessionID]
-            }),
-          )
-          setStore(
-            "session",
-            "permission",
-            produce((draft) => {
-              delete draft[sessionID]
-            }),
-          )
-          setStore(
-            "session",
-            "question",
-            produce((draft) => {
-              delete draft[sessionID]
-            }),
-          )
-        }
-      })
-    }
-
     const message = {
       update(sessionID: string, fn: (messages: SessionMessage[]) => void) {
-        touchSessionRecency(sessionID)
         setStore(
           "session",
           "message",
           produce((draft) => {
-            const messages = (draft[sessionID] ??= [])
-            fn(messages)
-            trimMessageDraft(messages)
+            fn((draft[sessionID] ??= []))
           }),
         )
-        evictColdSessions()
       },
       prepend(messages: SessionMessage[], item: SessionMessage) {
         if (messages.some((existing) => existing.id === item.id)) return
@@ -507,12 +453,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.message[sessionID]
           },
           async refresh(sessionID: string) {
-            touchSessionRecency(sessionID)
             const result = await sdk.client.v2.session.messages({ sessionID }, { throwOnError: true })
-            const messages = [...result.data.data]
-            trimMessageDraft(messages)
-            setStore("session", "message", sessionID, messages)
-            evictColdSessions()
+            setStore("session", "message", sessionID, result.data.data)
           },
         },
         permission: {

@@ -1,6 +1,6 @@
 export * as BanyanConfigService from "./banyan-config"
 
-import { Context, Effect, Layer, Option, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { Global } from "@opencode-ai/core/global"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
@@ -10,7 +10,7 @@ import path from "path"
 export class Service extends Context.Service<Service, Interface>()("@banyancode/BanyanConfig") {}
 
 export interface Interface {
-  readonly get: (directory?: string) => Effect.Effect<BanyanConfig.Info, never, never>
+  readonly get: () => Effect.Effect<BanyanConfig.Info, never, never>
   readonly getGlobal: () => Effect.Effect<BanyanConfig.Info, never, never>
   readonly update: (patch: Partial<BanyanConfig.Info>) => Effect.Effect<BanyanConfig.Info, never, never>
   readonly updateAgentOverride: (
@@ -22,7 +22,7 @@ export interface Interface {
       variant?: string | null
     },
   ) => Effect.Effect<BanyanConfig.Info, never, never>
-  readonly getAgentOverrides: (directory?: string) => Effect.Effect<BanyanConfig.Info["agent"], never, never>
+  readonly getAgentOverrides: () => Effect.Effect<BanyanConfig.Info["agent"], never, never>
   readonly updateAgentPrompt: (name: string, prompt: string) => Effect.Effect<BanyanConfig.Info, never, never>
 }
 
@@ -34,30 +34,7 @@ export const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const flock = yield* EffectFlock.Service
 
-    // W1.3: mtime-invalidated read cache keyed by resolved project directory.
-    // A stat per file is one syscall vs a full read + JSON decode, so cache
-    // hits skip every read. Fingerprint covers mtime + size of all three
-    // candidate files. Writes clear the cache via doWriteConfig (write-hook).
-    const cache = new Map<string, { fingerprint: string; value: BanyanConfig.Info }>()
-    const fingerprintOf = (info: { readonly mtime: Option.Option<Date>; readonly size: unknown } | undefined): string =>
-      info ? `${Option.getOrElse(info.mtime, () => new Date(0)).getTime()}:${String(info.size)}` : "missing"
-
-    const readConfig = Effect.fn("BanyanConfig.readConfig")(function* (directory?: string) {
-      // W1.4: resolve the LOCAL banyancode.json from the instance/project
-      // directory, not process.cwd(). In a multi-project server every project
-      // would otherwise get the launcher's local config. Callers without
-      // instance context omit the argument and keep the legacy cwd behavior.
-      const dir = path.resolve(directory ?? process.cwd())
-      const localPath = path.join(dir, "banyancode.json")
-      const localDotPath = path.join(dir, ".banyancode", "banyancode.json")
-      const stats = yield* Effect.all(
-        [configFile, localPath, localDotPath].map((file) =>
-          fs.stat(file).pipe(Effect.catch(() => Effect.succeed(undefined))),
-        ),
-      )
-      const fingerprint = stats.map(fingerprintOf).join("|")
-      const cached = cache.get(dir)
-      if (cached && cached.fingerprint === fingerprint) return cached.value
+    const readConfig = Effect.fn("BanyanConfig.readConfig")(function* () {
       const text = yield* fs.readFileStringSafe(configFile)
       let globalConfig = {} as BanyanConfig.Info
       if (text) {
@@ -65,29 +42,25 @@ export const layer = Layer.effect(
           Effect.catch(() => Effect.succeed({} as BanyanConfig.Info)),
         )
       }
+      const localPath = path.join(process.cwd(), "banyancode.json")
+      const localDotPath = path.join(process.cwd(), ".banyancode", "banyancode.json")
       let localText = yield* fs.readFileStringSafe(localPath)
       if (!localText) {
         localText = yield* fs.readFileStringSafe(localDotPath)
       }
-      if (!localText) {
-        cache.set(dir, { fingerprint, value: globalConfig })
-        return globalConfig
-      }
+      if (!localText) return globalConfig
       const localConfig = yield* Schema.decodeEffect(Schema.fromJsonString(BanyanConfig.Info))(localText).pipe(
         Effect.catch(() => Effect.succeed({} as BanyanConfig.Info)),
       )
-      const merged = { ...globalConfig, ...localConfig }
-      cache.set(dir, { fingerprint, value: merged })
-      return merged
+      return { ...globalConfig, ...localConfig }
     })
 
     const doWriteConfig = Effect.fn("BanyanConfig.doWriteConfig")(function* (config: BanyanConfig.Info) {
       yield* fs.writeWithDirs(configFile, JSON.stringify(config, null, 2)).pipe(Effect.orDie)
-      cache.clear()
     })
 
-    const get = Effect.fn("BanyanConfig.get")(function* (directory?: string) {
-      return yield* readConfig(directory).pipe(
+    const get = Effect.fn("BanyanConfig.get")(function* () {
+      return yield* readConfig().pipe(
         Effect.catch(() => Effect.succeed({} as BanyanConfig.Info)),
       )
     })
@@ -107,8 +80,8 @@ export const layer = Layer.effect(
       return merged
     })
 
-    const getAgentOverrides = Effect.fn("BanyanConfig.getAgentOverrides")(function* (directory?: string) {
-      const config = yield* readConfig(directory).pipe(
+    const getAgentOverrides = Effect.fn("BanyanConfig.getAgentOverrides")(function* () {
+      const config = yield* readConfig().pipe(
         Effect.catch(() => Effect.succeed({} as BanyanConfig.Info)),
       )
       return config.agent

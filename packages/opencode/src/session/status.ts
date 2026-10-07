@@ -1,7 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceState } from "@/effect/instance-state"
-import { InstanceRef } from "@/effect/instance-ref"
-import { setBusySessions } from "@/effect/instance-registry"
 import { SessionID } from "./schema"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import { Effect, Layer, Context, Schema } from "effect"
@@ -83,14 +81,9 @@ export const layer = Layer.effect(
       if (status.type === "idle") {
         yield* events.publish(Event.Idle, { sessionID })
         data.delete(sessionID)
-      } else {
-        data.set(sessionID, status)
+        return
       }
-      // Report the absolute per-instance busy count so InstanceStore's idle
-      // sweep never evicts a directory with a running session. Absolute, not
-      // incremental, so a missed transition self-heals on the next set().
-      const ref = yield* InstanceRef
-      if (ref) yield* Effect.sync(() => setBusySessions(ref.directory, data.size))
+      data.set(sessionID, status)
     })
 
     return Service.of({ get, list, set })

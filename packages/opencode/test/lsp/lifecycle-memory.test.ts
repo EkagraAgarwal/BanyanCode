@@ -1,15 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
-import os from "os"
 import fs from "fs/promises"
 import { Effect, Layer, Ref, Schema } from "effect"
 import { LSP } from "@/lsp/lsp"
 import * as LSPServer from "@/lsp/server"
-import { EventV2Bridge } from "@/event-v2-bridge"
-import { RuntimeFlags } from "@/effect/runtime-flags"
-import { EventV2 } from "@opencode-ai/core/event"
-import { Database } from "@opencode-ai/core/database/database"
-import { resolveLspIdleTimeoutMs, resolveLspSweepMs } from "@/lsp/lsp"
+import { resolveLspIdleTimeoutMs } from "@/lsp/lsp"
 import { BanyanConfig } from "@opencode-ai/core/v1/config/banyan-config"
 import { ConfigLSPV1 } from "@opencode-ai/core/v1/config/lsp"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -38,22 +33,7 @@ const memoryBanyanLayer = Layer.effect(
   }),
 )
 
-// Per-run event DB so these tests never touch the shared global database
-// file (a live banyancode.exe can hold its lock and fence the run with
-// SQLITE_LOCKED). Mirrors LSP.defaultLayer but swaps the event stack.
-const TEST_DB_PATH = path.join(
-  os.tmpdir(),
-  `opencode-lsp-lifecycle-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`,
-)
-const sweepEventLayer = EventV2.layer.pipe(Layer.provide(Database.layerFromPath(TEST_DB_PATH)))
-const sweepBridgeLayer = EventV2Bridge.layer.pipe(Layer.provide(sweepEventLayer))
-const sweepLspLayer = LSP.layer.pipe(
-  Layer.provide(RuntimeFlags.defaultLayer),
-  Layer.provide(sweepBridgeLayer),
-  Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
-)
-
-const it = testEffect(Layer.mergeAll(sweepLspLayer, CrossSpawnSpawner.defaultLayer, memoryBanyanLayer))
+const it = testEffect(Layer.mergeAll(LSP.defaultLayer, CrossSpawnSpawner.defaultLayer, memoryBanyanLayer))
 
 const fakeServerPath = path.join(__dirname, "../fixture/lsp/fake-lsp-server.js")
 
@@ -91,14 +71,6 @@ describe("LSP memory controls", () => {
     expect(resolveLspIdleTimeoutMs(1500.9)).toBe(1500)
   })
 
-  test("resolveLspSweepMs() defaults, disables, and floors", () => {
-    expect(resolveLspSweepMs(undefined)).toBe(LSP.DEFAULT_LSP_SWEEP_MS)
-    expect(resolveLspSweepMs("fast")).toBe(LSP.DEFAULT_LSP_SWEEP_MS)
-    expect(resolveLspSweepMs(-10)).toBe(LSP.DEFAULT_LSP_SWEEP_MS)
-    expect(resolveLspSweepMs(0)).toBe(0)
-    expect(resolveLspSweepMs("0")).toBe(0)
-    expect(resolveLspSweepMs(1500.9)).toBe(1500)
-  })
   test("resolveTypescriptMaxMemoryMb() falls back to a conservative default", () => {
     expect(LSPServer.resolveTypescriptMaxMemoryMb(undefined)).toBe(LSPServer.DEFAULT_TSSERVER_MAX_MEMORY_MB)
     expect(LSPServer.resolveTypescriptMaxMemoryMb("4gb")).toBe(LSPServer.DEFAULT_TSSERVER_MAX_MEMORY_MB)

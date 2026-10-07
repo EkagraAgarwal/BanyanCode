@@ -3,7 +3,6 @@ import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { useEvent } from "../../context/event"
-import { useSync } from "../../context/sync"
 import { toHex } from "../../util/color"
 import type { Severity } from "../../util/palette"
 
@@ -13,15 +12,7 @@ const id = "internal:header-status-pills"
 
 export function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
-  const sync = useSync()
-  // Active count derives from the live session_status map in the sync store,
-  // which the server keeps current via session.status events. No session.list
-  // fetch: the previous per-update full list read a `session_status` field
-  // that does not exist on the plugin state, so the pill was always 0.
-  const activeSessionCount = createMemo(() => {
-    const statuses = sync.data.session_status ?? {}
-    return Object.values(statuses).filter((status) => status?.type === "busy" || status?.type === "retry").length
-  })
+  const [activeSessionCount, setActiveSessionCount] = createSignal<number>(0)
   const [lastBuildStatus, setLastBuildStatus] = createSignal<"idle" | "running" | "completed" | "failed">("idle")
   // Phase 4: set by persisted status hydration when the server reports a
   // stale graph, cleared by any live build event. Drives the "Graph: stale"
@@ -38,6 +29,9 @@ export function View(props: { api: TuiPluginApi }) {
   const [syncPending, setSyncPending] = createSignal<number>(0)
 
   const ev = useEvent()
+  const unsubSession = ev.on("session.updated" as any, () => refreshSessionCount())
+  onCleanup(unsubSession)
+
   const unsubGraph = ev.on("banyancode.codegraph.build" as any, (evt: any) => {
     // A live build event supersedes any persisted status hydration — the
     // server is talking to us directly now, so drop the reason signal.
@@ -68,6 +62,21 @@ export function View(props: { api: TuiPluginApi }) {
     setSyncPending(typeof evt.properties?.pending === "number" ? evt.properties.pending : 0)
   })
   onCleanup(unsubSync)
+
+  const refreshSessionCount = async () => {
+    try {
+      const list = await props.api.client.session.list({})
+      const sessions = list.data ?? []
+      const statuses = (props.api.state as any).session_status ?? {}
+      const active = sessions.filter((s: any) => {
+        const status = statuses[s.id]
+        return status?.type === "busy" || status?.type === "retry"
+      }).length
+      setActiveSessionCount(active)
+    } catch {
+      setActiveSessionCount(0)
+    }
+  }
 
   // Phase 4: hydrate the pill from the persisted codegraph status endpoint on
   // mount so a BanyanCode restart shows the real graph state instead of "not
@@ -157,6 +166,7 @@ export function View(props: { api: TuiPluginApi }) {
   })
 
   onMount(() => {
+    refreshSessionCount()
     refreshGraphStatusWithRetry()
   })
 

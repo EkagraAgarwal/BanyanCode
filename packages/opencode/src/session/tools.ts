@@ -27,81 +27,6 @@ import type { ToolMaterializationContext } from "@/effect/tool-transport"
 import { BanyanToolsManifest } from "@opencode-ai/core/banyancode/banyan-tools-manifest"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { GatewayV1 } from "./gateway-v1"
-import { TtlCache } from "./instruction"
-
-// R8 per-step caches. `resolve()` runs on every loop step. The registry listing (plugin
-// `tool.definition` triggers + per-tool task-agent descriptions), the catalog
-// materialization (registration snapshot + permission filter), and the MCP tool
-// conversion + async schema resolution are all step-stable, so those prefixes are cached
-// with a short TTL. The per-step execution context (processor message, run bridge,
-// messages array) is still bound fresh on every call: cached defs are only ever
-// re-wrapped into new `tools[id]` closures, never reused as executables, and the MCP
-// branch below builds fresh wrapper objects instead of assigning onto the cached
-// records, so a cache hit can never double-wrap `execute`.
-//
-// Deliberately NOT cached: `transport.buildTools()` output. Its AITool closures capture
-// the step's assistantMessageID, messages, run bridge, and completeToolCall — reusing
-// them across steps would misattribute tool output. Only the underlying
-// `catalog.materialize(permissions)` is memoized; the ctx binding in
-// `definitionToAITool` still runs per step.
-//
-// Staleness window: 5 s for every cache below. A plugin (un)registering tools, an MCP
-// (dis)connect or defs refresh, or a permission/ruleset change is visible after at most
-// 5 s. `resetSessionToolsCaches()` drops everything (tests + future watcher/config
-// hook point; no cheap event plumbing exists today, hence the TTLs). Every map is
-// bounded (TtlCache maxSize) so distinct models/agents/permission shapes cannot grow
-// them without limit.
-export const SESSION_TOOLS_REGISTRY_TTL_MS = 5_000
-export const SESSION_TOOLS_MCP_TTL_MS = 5_000
-export const SESSION_TOOLS_MCP_SCHEMA_TTL_MS = 5_000
-export const SESSION_TOOLS_CATALOG_TTL_MS = 5_000
-
-const MCP_TOOLS_CACHE_KEY = "mcp-tools"
-
-export function registryCacheKey(providerID: string, modelID: string, agentName: string): string {
-  return `${providerID}\u0000${modelID}\u0000${agentName}`
-}
-
-export function mcpSchemaCacheKey(modelID: string, toolKey: string): string {
-  return `${modelID}\u0000${toolKey}`
-}
-
-export function permissionsFingerprint(ruleset: unknown): string {
-  return JSON.stringify(ruleset ?? [])
-}
-
-type EffectSuccess<A> = A extends Effect.Effect<infer S, infer _E, infer _R> ? S : never
-type RegistryInterface = OpencodeToolRegistry.Service["Service"]
-type RegistryListing = EffectSuccess<ReturnType<RegistryInterface["tools"]>>
-type TransformedSchema = ReturnType<typeof ProviderTransform.schema>
-type McpInterface = MCP.Service["Service"]
-type McpToolsRecord = EffectSuccess<ReturnType<McpInterface["tools"]>>
-type CatalogInterface = ToolCatalog.Service["Service"]
-type CatalogMaterialization = EffectSuccess<ReturnType<CatalogInterface["materialize"]>>
-
-const registryCache = new TtlCache<string, { items: RegistryListing; schemas: Map<string, TransformedSchema> }>()
-const mcpToolsCache = new TtlCache<string, McpToolsRecord>()
-const mcpSchemaCache = new TtlCache<string, TransformedSchema>(Date.now, 512)
-const catalogMaterializeCache = new TtlCache<string, CatalogMaterialization>()
-
-export function resetSessionToolsCaches(): void {
-  registryCache.clear()
-  mcpToolsCache.clear()
-  mcpSchemaCache.clear()
-  catalogMaterializeCache.clear()
-}
-
-/** Test hook — cache refs and key builders for unit tests. */
-export const __test = {
-  registryCache,
-  mcpToolsCache,
-  mcpSchemaCache,
-  catalogMaterializeCache,
-  registryCacheKey,
-  mcpSchemaCacheKey,
-  permissionsFingerprint,
-  reset: resetSessionToolsCaches,
-}
 
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
@@ -155,28 +80,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         .pipe(Effect.orDie),
   })
 
-  // R8: the registry listing + transformed schemas are step-stable for a given
-  // provider/model/agent (see module doc above); the `tool()` wrappers below still
-  // close over this step's run bridge, processor, and messages.
-  const registryKey = registryCacheKey(input.model.providerID, input.model.api.id, input.agent.name)
-  let listing = registryCache.get(registryKey)
-  if (!listing) {
-    const items = yield* registry.tools({
-      modelID: ModelV2.ID.make(input.model.api.id),
-      providerID: input.model.providerID,
-      agent: input.agent,
-    })
-    const schemas = new Map<string, TransformedSchema>()
-    for (const item of items) {
-      schemas.set(item.id, ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item)))
-    }
-    listing = { items, schemas }
-    registryCache.set(registryKey, listing, SESSION_TOOLS_REGISTRY_TTL_MS)
-  }
-
-  for (const item of listing.items) {
-    const schema =
-      listing.schemas.get(item.id) ?? ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
+  for (const item of yield* registry.tools({
+    modelID: ModelV2.ID.make(input.model.api.id),
+    providerID: input.model.providerID,
+    agent: input.agent,
+  })) {
+    const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
     tools[item.id] = tool({
       description: item.description,
       inputSchema: jsonSchema(schema),
@@ -281,27 +190,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     ) => Effect.Effect<Materialization, never, never>
     const transport: { buildTools: TransportBuildTools } = transportOption.value as never
     const catalog: CatalogInterface = catalogOption.value
-    // R8: memoize the step-stable `materialize()` (registration snapshot + permission
-    // filter) behind the merged-permission fingerprint. The per-step ctx binding inside
-    // `transport.buildTools` still runs every step — only the catalog scan is skipped.
-    const memoCatalog: CatalogInterface = {
-      ...catalog,
-      materialize: (permissions) =>
-        Effect.gen(function* () {
-          const key = permissionsFingerprint(permissions)
-          const hit = catalogMaterializeCache.get(key)
-          if (hit !== undefined) return hit
-          const mat = yield* catalog.materialize(permissions)
-          catalogMaterializeCache.set(key, mat, SESSION_TOOLS_CATALOG_TTL_MS)
-          return mat
-        }),
-    }
     const materializations: Materialization = yield* (
       transport.buildTools as (
         c: CatalogInterface,
         x: ToolMaterializationContext,
       ) => Effect.Effect<Materialization, never, never>
-    )(memoCatalog, {
+    )(catalog, {
       sessionID: input.session.id,
       runID: input.runID,
       parentSessionID: input.session.parentID,
@@ -337,28 +231,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     }
   }
 
-  // R8: converted MCP tools are step-stable (MCP defs are cached server-side); the cached
-  // record stays pristine — each step wraps a shallow copy, so a cache hit can never
-  // double-wrap `execute`. Only the async schema resolution is memoized per tool + model.
-  let mcpRecord = mcpToolsCache.get(MCP_TOOLS_CACHE_KEY)
-  if (!mcpRecord) {
-    mcpRecord = yield* mcp.tools()
-    mcpToolsCache.set(MCP_TOOLS_CACHE_KEY, mcpRecord, SESSION_TOOLS_MCP_TTL_MS)
-  }
-
-  for (const [key, pristine] of Object.entries(mcpRecord)) {
-    // Per-step copy: the cached record is never mutated.
-    const item = { ...pristine }
+  for (const [key, item] of Object.entries(yield* mcp.tools())) {
     const execute = item.execute
     if (!execute) continue
 
-    const schemaKey = mcpSchemaCacheKey(input.model.api.id, key)
-    let transformed = mcpSchemaCache.get(schemaKey)
-    if (!transformed) {
-      const schema = yield* Effect.promise(() => Promise.resolve(asSchema(item.inputSchema).jsonSchema))
-      transformed = ProviderTransform.schema(input.model, schema)
-      mcpSchemaCache.set(schemaKey, transformed, SESSION_TOOLS_MCP_SCHEMA_TTL_MS)
-    }
+    const schema = yield* Effect.promise(() => Promise.resolve(asSchema(item.inputSchema).jsonSchema))
+    const transformed = ProviderTransform.schema(input.model, schema)
     item.inputSchema = jsonSchema(transformed)
     item.execute = (args, opts) =>
       run.promise(

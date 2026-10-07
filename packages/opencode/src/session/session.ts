@@ -148,10 +148,6 @@ export function toRow(info: Info) {
   }
 }
 
-export function shouldEmitMessageUpdated(prev: string | undefined, next: string) {
-  return prev !== next
-}
-
 function getForkedTitle(title: string): string {
   const match = title.match(/^(.+) \(fork #(\d+)\)$/)
   if (match) {
@@ -686,17 +682,8 @@ export const layer: Layer.Layer<
       }
     })
 
-    const lastMessagePayload = new Map<string, string>()
-
     const updateMessage = <T extends SessionV1.Info>(msg: T): Effect.Effect<T> =>
       Effect.gen(function* () {
-        const serialized = JSON.stringify(msg)
-        if (!shouldEmitMessageUpdated(lastMessagePayload.get(msg.id), serialized)) return msg
-        if (lastMessagePayload.size > 2000) {
-          const oldest = lastMessagePayload.keys().next()
-          if (!oldest.done) lastMessagePayload.delete(oldest.value)
-        }
-        lastMessagePayload.set(msg.id, serialized)
         yield* events.publish(SessionV1.Event.MessageUpdated, { sessionID: msg.sessionID, info: msg })
         return msg
       }).pipe(Effect.withSpan("Session.updateMessage"))

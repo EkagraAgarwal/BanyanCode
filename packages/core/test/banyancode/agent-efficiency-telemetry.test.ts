@@ -42,11 +42,6 @@ const run = (
 }
 
 describe("AgentEfficiencyTelemetry", () => {
-  test("defaultLayer is a shared singleton instance", () => {
-    expect(typeof AgentEfficiencyTelemetry.defaultLayer).not.toBe("function")
-    expect(AgentEfficiencyTelemetry.defaultLayer).toBe(AgentEfficiencyTelemetry.defaultLayer)
-  })
-
   test("sanitizes metadata and idempotently appends", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "telemetry.sqlite")

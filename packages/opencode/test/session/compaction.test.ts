@@ -844,7 +844,6 @@ describe("session.compaction.process", () => {
         }
       }
     }),
-    { timeout: 15_000 },
   )
 
   it.instance(
@@ -878,7 +877,6 @@ describe("session.compaction.process", () => {
       expect(result).toBe("continue")
       expect(seen).toBe(true)
     }),
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -907,7 +905,6 @@ describe("session.compaction.process", () => {
         expect(JSON.stringify(summary.info.error)).toContain("Session too large to compact")
       }
     }).pipe(withCompaction({ result: "compact" })),
-    { timeout: 15_000 },
   )
 
   it.instance(
@@ -939,7 +936,6 @@ describe("session.compaction.process", () => {
         expect(last.parts[0].text).toContain("Continue if you have next steps")
       }
     }),
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -966,7 +962,6 @@ describe("session.compaction.process", () => {
       expect(part?.type).toBe("compaction")
       expect(part?.tail_start_id).toBe(keep.id)
     }).pipe(withCompaction({ config: cfg({ tail_turns: 2, preserve_recent_tokens: 10_000 }) })),
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -993,7 +988,6 @@ describe("session.compaction.process", () => {
       expect(part?.type).toBe("compaction")
       expect(part?.tail_start_id).toBe(keep.id)
     }).pipe(withCompaction({ config: cfg({ tail_turns: 2, preserve_recent_tokens: 100 }) })),
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -1021,7 +1015,6 @@ describe("session.compaction.process", () => {
       }).pipe(withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 1, preserve_recent_tokens: 20 }) }))
     },
     { git: true },
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -1059,7 +1052,6 @@ describe("session.compaction.process", () => {
       }).pipe(withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 1, preserve_recent_tokens: 100 }) }))
     },
     { git: true },
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -1111,7 +1103,6 @@ describe("session.compaction.process", () => {
       }).pipe(withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 1, preserve_recent_tokens: 100 }) }))
     },
     { git: true },
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -1144,7 +1135,6 @@ describe("session.compaction.process", () => {
         ),
       ).toBe(false)
     }).pipe(withCompaction({ plugin: autocontinue(false) })),
-    { timeout: 15_000 },
   )
 
   it.instance(
@@ -1183,7 +1173,6 @@ describe("session.compaction.process", () => {
         last?.parts.some((part) => part.type === "text" && part.text.includes("Attached image/png: cat.png")),
       ).toBe(true)
     }),
-    { timeout: 15_000 },
   )
 
   it.instance(
@@ -1211,7 +1200,6 @@ describe("session.compaction.process", () => {
         expect(last.parts[0].text).toContain("previous request exceeded the provider's size limit")
       }
     }),
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -1262,26 +1250,20 @@ describe("session.compaction.process", () => {
             auto: false,
           })
           .pipe(Effect.forkChild)
-        // Dispose the forked compaction fiber on teardown so a readiness
-        // timeout below cannot leak a 10s-retry-backoff fiber into the next test.
-        yield* Effect.addFinalizer(() => Fiber.interrupt(fiber))
 
-        yield* Deferred.await(ready).pipe(Effect.timeout("10 seconds"))
+        yield* Deferred.await(ready).pipe(Effect.timeout("1 second"))
         const start = Date.now()
         yield* Fiber.interrupt(fiber)
-        const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("10 seconds"))
+        const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("250 millis"))
 
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit)) {
           expect(Cause.hasInterrupts(exit.cause)).toBe(true)
-          // Abort must preempt the 10s retry backoff; 5s still proves that
-          // while tolerating a loaded host (was 250ms, flaked under load).
-          expect(Date.now() - start).toBeLessThan(5_000)
+          expect(Date.now() - start).toBeLessThan(250)
         }
       }).pipe(withCompaction({ llm: stub.layer }))
     },
     { git: true },
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -1302,13 +1284,10 @@ describe("session.compaction.process", () => {
               auto: false,
             })
             .pipe(Effect.forkChild)
-          // Same teardown guarantee as the retry-backoff abort test: never
-          // leak the fiber parked in the plugin's Effect.never.
-          yield* Effect.addFinalizer(() => Fiber.interrupt(fiber))
 
-          yield* Deferred.await(ready).pipe(Effect.timeout("10 seconds"))
+          yield* Deferred.await(ready).pipe(Effect.timeout("1 second"))
           yield* Fiber.interrupt(fiber)
-          const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("10 seconds"))
+          const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("250 millis"))
           const all = yield* ssn.messages({ sessionID: session.id })
 
           expect(Exit.isFailure(exit)).toBe(true)
@@ -1317,7 +1296,6 @@ describe("session.compaction.process", () => {
         }).pipe(withCompaction({ plugin: plugin(ready) }))
       }),
     { git: true },
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -1358,7 +1336,6 @@ describe("session.compaction.process", () => {
       }).pipe(withCompaction({ llm: stub.layer }))
     },
     { git: true },
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -1395,7 +1372,6 @@ describe("session.compaction.process", () => {
       }).pipe(withCompaction({ llm: stub.layer }))
     },
     { git: true },
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -1433,7 +1409,6 @@ describe("session.compaction.process", () => {
       }).pipe(withCompaction({ llm: stub.layer }))
     },
     { git: true },
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -1476,7 +1451,6 @@ describe("session.compaction.process", () => {
       }).pipe(withCompaction({ llm: stub.layer }))
     },
     { git: true },
-    { timeout: 15_000 },
   )
 
   itCompaction.instance("keeps recent pre-compaction turns across repeated compactions", () => {
@@ -1517,7 +1491,7 @@ describe("session.compaction.process", () => {
         filtered.some((msg) => msg.info.role === "user" && msg.parts.some((part) => part.type === "compaction")),
       ).toBe(true)
     }).pipe(withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 2, preserve_recent_tokens: 10_000 }) }))
-  }, { timeout: 15_000 })
+  })
 
   itCompaction.instance(
     "ignores previous summaries when sizing the retained tail",
@@ -1561,7 +1535,6 @@ describe("session.compaction.process", () => {
       expect(part?.type).toBe("compaction")
       expect(part?.tail_start_id).toBe(keep.id)
     }).pipe(withCompaction({ config: cfg({ tail_turns: 2, preserve_recent_tokens: 500 }) })),
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -1659,7 +1632,6 @@ describe("session.compaction.process", () => {
       )
     },
     { git: true },
-    { timeout: 15_000 },
   )
 
   itCompaction.instance(
@@ -1704,7 +1676,6 @@ describe("session.compaction.process", () => {
       const markers = after.filter((msg) => msg.parts.some((part) => part.type === "configuration_update"))
       expect(markers).toHaveLength(1)
     }).pipe(withCompaction()),
-    { timeout: 15_000 },
   )
 })
 
@@ -2001,126 +1972,5 @@ describe("SessionNs.getUsage", () => {
     expect(result.tokens.input).toBe(500)
     expect(result.tokens.cache.read).toBe(200)
     expect(result.tokens.cache.write).toBe(300)
-  })
-})
-
-describe("session.compaction.tail-estimate", () => {
-  const sid = "ses_tail" as SessionID
-  const pid = ProviderV2.ID.make("test")
-  const mid = ModelV2.ID.make("test-model")
-  const tailModel = createModel({ context: 100_000, output: 32_000 })
-
-  function tailUser(id: string, text: string): SessionV1.WithParts {
-    return {
-      info: {
-        id: id as MessageID,
-        sessionID: sid,
-        role: "user",
-        time: { created: 0 },
-        agent: "build",
-        model: { providerID: pid, modelID: mid },
-      } as unknown as SessionV1.User,
-      parts: [
-        {
-          id: `prt_${id}` as PartID,
-          sessionID: sid,
-          messageID: id as MessageID,
-          type: "text",
-          text,
-        },
-      ] as SessionV1.Part[],
-    }
-  }
-
-  function tailAssistant(id: string, parent: string, text: string): SessionV1.WithParts {
-    return {
-      info: {
-        id: id as MessageID,
-        sessionID: sid,
-        role: "assistant",
-        time: { created: 0 },
-        agent: "build",
-        mode: "build",
-        path: { cwd: "/", root: "/" },
-        cost: 0,
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        modelID: mid,
-        providerID: pid,
-        parentID: parent as MessageID,
-        finish: "stop",
-      } as unknown as SessionV1.Assistant,
-      parts: [
-        {
-          id: `prt_${id}` as PartID,
-          sessionID: sid,
-          messageID: id as MessageID,
-          type: "text",
-          text,
-        },
-      ] as SessionV1.Part[],
-    }
-  }
-
-  test("prefixSums accumulates and suffixTokensFromPrefix matches Token.estimate exactly", async () => {
-    const turn = [tailUser("msg_a", "hello"), tailAssistant("msg_b", "msg_a", "world"), tailUser("msg_c", "again")]
-    const converted = await Effect.runPromise(MessageV2.toModelMessagesEffect(turn, tailModel))
-    const chars = converted.map((m) => JSON.stringify(m).length)
-    const prefix = SessionCompaction.prefixSums(chars)
-    expect(prefix).toHaveLength(chars.length + 1)
-    expect(prefix[0]).toBe(0)
-    expect(prefix.at(-1)).toBe(chars.reduce((a, b) => a + b, 0))
-    for (let cstart = 0; cstart < converted.length; cstart++) {
-      const naive = Token.estimate(JSON.stringify(converted.slice(cstart)))
-      expect(SessionCompaction.suffixTokensFromPrefix(prefix, cstart)).toBe(naive)
-    }
-    expect(SessionCompaction.suffixTokensFromPrefix(prefix, converted.length)).toBe(0)
-  })
-
-  test("proportionalConvertedIndex is monotonic and bounded", () => {
-    const idx = (sourceIndex: number) =>
-      SessionCompaction.proportionalConvertedIndex({
-        sourceStart: 4,
-        sourceEnd: 14,
-        sourceIndex,
-        convertedLength: 6,
-      })
-    let prev = -1
-    for (let s = 5; s < 14; s++) {
-      const cur = idx(s)
-      expect(cur).toBeGreaterThanOrEqual(prev)
-      expect(cur).toBeGreaterThanOrEqual(0)
-      expect(cur).toBeLessThanOrEqual(6)
-      prev = cur
-    }
-    expect(SessionCompaction.proportionalConvertedIndex({ sourceStart: 0, sourceEnd: 0, sourceIndex: 0, convertedLength: 3 })).toBe(0)
-    expect(SessionCompaction.proportionalConvertedIndex({ sourceStart: 0, sourceEnd: 4, sourceIndex: 2, convertedLength: 0 })).toBe(0)
-  })
-
-  test("prefix-sum estimate matches naive stringify estimate within tolerance", async () => {
-    // Uniform-ish multi-turn history: the proportional mapping is closest here.
-    const turn: SessionV1.WithParts[] = []
-    for (let t = 0; t < 4; t++) {
-      const u = `msg_u${t}`
-      turn.push(tailUser(u, `question number ${t} `.repeat(20)))
-      turn.push(tailAssistant(`msg_a${t}`, u, `answer number ${t} `.repeat(20)))
-    }
-    const converted = await Effect.runPromise(MessageV2.toModelMessagesEffect(turn, tailModel))
-    expect(converted.length).toBeGreaterThan(0)
-    const prefix = SessionCompaction.prefixSums(converted.map((m) => JSON.stringify(m).length))
-    for (let start = 1; start < turn.length; start++) {
-      const naiveConverted = await Effect.runPromise(
-        MessageV2.toModelMessagesEffect(turn.slice(start), tailModel),
-      )
-      const naive = Token.estimate(JSON.stringify(naiveConverted))
-      if (naive === 0) continue
-      const cstart = SessionCompaction.proportionalConvertedIndex({
-        sourceStart: 0,
-        sourceEnd: turn.length,
-        sourceIndex: start,
-        convertedLength: converted.length,
-      })
-      const fast = SessionCompaction.suffixTokensFromPrefix(prefix, cstart)
-      expect(Math.abs(fast - naive) / naive).toBeLessThan(0.3)
-    }
   })
 })

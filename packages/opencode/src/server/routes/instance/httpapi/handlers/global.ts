@@ -5,7 +5,6 @@ import { AppRuntime } from "@/effect/app-runtime"
 import { InstanceRef } from "@/effect/instance-ref"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
-import { SystemMonitorDemand } from "@/effect/banyancode-system-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -65,27 +64,13 @@ function parseBody(body: string) {
 function eventResponse() {
   return Effect.gen(function* () {
     yield* Effect.logInfo("global event connected")
-    // An open SSE stream is the only path to system-monitor viewers, so each
-    // connection holds sampling demand for its lifetime. With no viewers the
-    // monitor tick skips sampling entirely (see banyancode-system-bridge.ts).
-    yield* Effect.acquireRelease(
-      Effect.sync(() => SystemMonitorDemand.subscribe()),
-      () => Effect.sync(() => SystemMonitorDemand.unsubscribe()),
-    )
-    // Sliding bound, mirroring the instance event stream: a stalled SSE client
-    // drops the oldest events instead of growing RAM without limit. Sync
-    // envelopes never reach the wire — each duplicates the plain event's data
-    // and SSE consumers (TUI, CLI) drop them after paying full parse cost.
-    const queue = yield* Queue.sliding<GlobalBusEvent>(512)
-    const handler = (event: GlobalBusEvent) => {
-      if (EventV2Bridge.isSyncEnvelope(event)) return
-      Queue.offerUnsafe(queue, event)
-    }
-    yield* Effect.acquireRelease(
-      Effect.sync(() => GlobalBus.on("event", handler)),
-      () => Effect.sync(() => GlobalBus.off("event", handler)),
-    )
-    const events = Stream.fromQueue(queue)
+    const events = Stream.callback<GlobalBusEvent>((queue) => {
+      const handler = (event: GlobalBusEvent) => Queue.offerUnsafe(queue, event)
+      return Effect.acquireRelease(
+        Effect.sync(() => GlobalBus.on("event", handler)),
+        () => Effect.sync(() => GlobalBus.off("event", handler)),
+      )
+    })
     const heartbeat = Stream.tick("10 seconds").pipe(
       Stream.drop(1),
       Stream.map(() => ({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })),
@@ -511,19 +496,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
 
     const codegraphNodesHandler = Effect.fn("GlobalHttpApi.codegraphNodes")(function* () {
       const repo = yield* Banyan.CodegraphRepo
-      // Light projection: page WITHOUT the `code` column (bodies dominate
-      // row bytes) and take the total from COUNT(*) instead of the fetched
-      // array length. Same response shape — `code` was always optional.
-      const [meta, total] = yield* Effect.all([repo.getMeta(), repo.countNodes()])
-      const nodes: Array<Omit<Banyan.CodegraphNode, "code">> = []
-      let cursor: string | undefined = undefined
-      for (;;) {
-        const page: { nodes: Array<Omit<Banyan.CodegraphNode, "code">>; nextCursor?: string } =
-          yield* repo.listNodesLightPage({ cursor, limit: 1000 })
-        for (const node of page.nodes) nodes.push(node)
-        if (page.nextCursor === undefined) break
-        cursor = page.nextCursor
-      }
+      const [nodes, meta] = yield* Effect.all([repo.listAllNodes(), repo.getMeta()])
       const graphMeta = meta
         ? {
             graphBuiltAt: meta.graphBuiltAt,
@@ -537,7 +510,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       return {
         nodes,
         meta: graphMeta,
-        total,
+        total: nodes.length,
       }
     })
 
@@ -545,19 +518,8 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       const repo = yield* Banyan.CodegraphRepo
       const nodeID = ctx.query?.nodeID
       if (!nodeID) {
-        // Bounded-RAM paging: one 1000-row page resident at a time instead
-        // of a single SELECT * over the whole edges table. Total comes from
-        // COUNT(*) rather than the fetched array length.
-        const total = yield* repo.countEdges()
-        const allEdges: Array<Banyan.CodegraphEdge> = []
-        let cursor: string | undefined = undefined
-        for (;;) {
-          const page: { edges: Array<Banyan.CodegraphEdge>; nextCursor?: string } = yield* repo.listEdgesPage({ cursor, limit: 1000 })
-          for (const edge of page.edges) allEdges.push(edge)
-          if (page.nextCursor === undefined) break
-          cursor = page.nextCursor
-        }
-        return { edges: allEdges, total }
+        const allEdges = yield* repo.listAllEdges()
+        return { edges: allEdges, total: allEdges.length }
       }
       const [outgoing, incoming] = yield* Effect.all([repo.edgesFrom(nodeID), repo.edgesTo(nodeID)])
       const allEdges = [...outgoing, ...incoming]

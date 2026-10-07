@@ -109,9 +109,6 @@ it.instance(
     }),
   ),
   { git: true },
-  // First test in the file absorbs one-time layer/build cost on top of ~20
-  // git spawns; it needs headroom on slow/loaded hosts.
-  15_000,
 )
 
 it.instance(
@@ -592,8 +589,6 @@ it.live(
       expect(patch2.files).not.toContain(fwd(tmp1.path, "project1.txt"))
     }).pipe(provideInstance(tmp2.path))
   }),
-  // Two full instance setups (git init + commit + snapshot init each).
-  20_000,
 )
 
 it.live(
@@ -682,65 +677,6 @@ it.instance(
       expect(yield* snapshot.track()).toBe(before)
     }),
   ),
-  { git: true },
-)
-
-it.instance(
-  "patch and diff reflect edits made after track (R9 staleness regression)",
-  withTrackedSnapshot(({ tmp, snapshot, before }) =>
-    Effect.gen(function* () {
-      // Staging always runs fresh, so edits made immediately after track()
-      // are visible to diff/patch — never skipped as "throttled".
-      yield* write(`${tmp.path}/one.txt`, "one")
-      yield* write(`${tmp.path}/two.txt`, "two")
-      const diff = yield* snapshot.diff(before)
-      expect(diff).toContain("one.txt")
-      expect(diff).toContain("two.txt")
-      const patch = yield* snapshot.patch(before)
-      expect(patch.files).toContain(fwd(tmp.path, "one.txt"))
-      expect(patch.files).toContain(fwd(tmp.path, "two.txt"))
-    }),
-  ),
-  { git: true },
-)
-
-it.instance(
-  "consecutive track calls always reflect latest edits (no stale reuse)",
-  withTrackedSnapshot(({ tmp, snapshot, before }) =>
-    Effect.gen(function* () {
-      yield* write(`${tmp.path}/late.txt`, "late")
-      // track() stages fresh on every call: the new edit yields a new tree
-      // hash rather than reusing the previous one.
-      const after = yield* snapshot.track()
-      expect(after).toBeTruthy()
-      expect(after).not.toBe(before)
-      expect((yield* snapshot.diffFull(before, after!)).map((d) => d.file)).toContain("late.txt")
-      // patch()/diff() capture the edit against the original hash too.
-      const patch = yield* snapshot.patch(before)
-      expect(patch.files).toContain(fwd(tmp.path, "late.txt"))
-    }),
-  ),
-  { git: true },
-)
-
-it.instance(
-  "dirty hints narrow staging and the hintless fallback catches up",
-  Effect.gen(function* () {
-    const tmp = yield* bootstrap()
-    const snapshot = yield* Snapshot.Service
-    const before = yield* snapshot.track()
-    expect(before).toBeTruthy()
-    yield* write(`${tmp.path}/hinted.txt`, "hinted")
-    yield* write(`${tmp.path}/unhinted.txt`, "unhinted")
-    yield* snapshot.noteDirty([`${tmp.path}/hinted.txt`])
-    const first = yield* snapshot.patch(before!)
-    expect(first.files).toContain(fwd(tmp.path, "hinted.txt"))
-    expect(first.files).not.toContain(fwd(tmp.path, "unhinted.txt"))
-    // Hints are consumed after use: the next call falls back to the full
-    // scan and picks up the unhinted file.
-    const second = yield* snapshot.patch(before!)
-    expect(second.files).toContain(fwd(tmp.path, "unhinted.txt"))
-  }),
   { git: true },
 )
 
@@ -926,8 +862,6 @@ it.instance(
     }
   }),
   { git: true },
-  // 104 mixed text/binary/unicode files across two tracks and a batched diffFull.
-  20_000,
 )
 
 it.instance(
@@ -954,8 +888,6 @@ it.instance(
     )
   }),
   { git: true },
-  // 101 files written twice plus two full tracks and a batched diffFull.
-  20_000,
 )
 
 it.instance(
@@ -1186,8 +1118,6 @@ it.instance(
     for (const file of fresh) expect(yield* exists(file)).toBe(false)
   }),
   { git: true },
-  // 102 files written twice, patched, reverted, and re-read one by one.
-  20_000,
 )
 
 it.instance(
@@ -1217,8 +1147,6 @@ it.instance(
     expect((yield* snapshot.patch(before!)).files).toContain(fwd(tmp.path, "caught-up.txt"))
   }),
   { git: true },
-  // Eight full track cycles plus a churning writer and a 1.1s cooldown sleep.
-  20_000,
 )
 
 describe("worktree pathspec hygiene", () => {
@@ -1250,27 +1178,5 @@ describe("worktree pathspec hygiene", () => {
     expect(toWorktreePathspec("sub\\dir\\b.txt")).toBe("sub/dir/b.txt")
     expect(toWorktreePathspec("./a.txt")).toBe("a.txt")
     expect(toWorktreePathspec("a.txt")).toBe("a.txt")
-  })
-})
-
-describe("dirty hint normalization", () => {
-  const { toDirtyHint } = Snapshot.__test
-  // Absolute fixtures built from the platform runtime so the assertions hold
-  // on win32 and posix alike.
-  const root = path.resolve("snapshot-dirty-test")
-
-  test("accepts worktree-relative and absolute-inside paths", () => {
-    expect(toDirtyHint(root, "a.txt")).toBe("a.txt")
-    expect(toDirtyHint(root, "./a.txt")).toBe("a.txt")
-    expect(toDirtyHint(root, path.join(root, "sub", "b.txt"))).toBe("sub/b.txt")
-  })
-
-  test("drops escapes, outside paths, banyancode paths, and empty input", () => {
-    expect(toDirtyHint(root, "../outside.txt")).toBeUndefined()
-    expect(toDirtyHint(root, path.join(root, "..", "outside.txt"))).toBeUndefined()
-    expect(toDirtyHint(root, path.join(root, ".banyancode", "x.db"))).toBeUndefined()
-    expect(toDirtyHint(root, ".banyancode/x.db")).toBeUndefined()
-    expect(toDirtyHint(root, "")).toBeUndefined()
-    expect(toDirtyHint(root, "a\0b")).toBeUndefined()
   })
 })

@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test"
 import { Rpc } from "../../src/util/rpc"
 
 class FakeWorker {
-  posted: unknown[] = []
+  posted: string[] = []
   onmessage: ((this: Worker, ev: MessageEvent<any>) => any) | null = null
-  postMessage(data: unknown): void {
+  postMessage(data: string): void {
     this.posted.push(data)
   }
   deliver(data: unknown): void {
@@ -133,8 +133,7 @@ describe("Rpc.listen malformed-input hardening", () => {
       await new Promise((r) => setTimeout(r, 10))
       expect(seen).toEqual(["ping:1"])
       expect(replyWorker.posted.length).toBe(1)
-      const raw = replyWorker.posted[0]!
-      const reply = typeof raw === "string" ? JSON.parse(raw) : raw
+      const reply = JSON.parse(replyWorker.posted[0]!)
       expect(reply).toEqual({ type: "rpc.result", result: { ok: true }, id: 9 })
     } finally {
       globalThis.onmessage = originalOnMessage

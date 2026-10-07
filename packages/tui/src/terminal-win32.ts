@@ -64,9 +64,7 @@ let unhook: (() => void) | undefined
  *
  * We combine:
  * - A `setRawMode(...)` hook to re-clear after known raw-mode toggles.
- * - A low-frequency poll (1s) as a backstop for native/external mode changes.
- *   The 1s cadence is deliberate: this timer runs for the life of the process
- *   and a 100ms poll is 9 needless wakeups per second doing nothing.
+ * - A low-frequency poll as a backstop for native/external mode changes.
  */
 export function win32InstallCtrlCGuard() {
   if (process.platform !== "win32") return
@@ -111,7 +109,7 @@ export function win32InstallCtrlCGuard() {
   // Ensure it's cleared immediately too (covers any earlier mode changes).
   later()
 
-  const interval = setInterval(enforce, 1000)
+  const interval = setInterval(enforce, 100)
   interval.unref()
 
   let done = false

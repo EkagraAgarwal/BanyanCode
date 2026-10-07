@@ -576,52 +576,6 @@ export const get = Effect.fn("MessageV2.get")(function* (input: { sessionID: Ses
   }
 })
 
-export interface CompactionBoundary {
-  readonly compactionIndex: number
-  readonly summaryIndex: number
-  readonly tailStartId: MessageID
-  readonly tailIndex: number
-}
-
-// Pure boundary detection over a chronological (oldest-first) history.
-// Extracted from filterCompacted so the streaming fast path and tests can
-// reuse it without duplicating the index math. Returns undefined unless the
-// newest compaction reorders with a retained tail (the only case where a
-// message prefix can be dropped).
-export function detectCompactionBoundary(msgs: readonly WithParts[]): CompactionBoundary | undefined {
-  const compactionIndex = msgs.findLastIndex(
-    (msg) =>
-      msg.info.role === "user" &&
-      msg.parts.some((item): item is CompactionPart => item.type === "compaction" && item.tail_start_id !== undefined),
-  )
-  if (compactionIndex < 0) return undefined
-  const compaction = msgs[compactionIndex]!
-  const part = compaction.parts.find(
-    (item): item is CompactionPart => item.type === "compaction" && item.tail_start_id !== undefined,
-  )
-  if (!part?.tail_start_id) return undefined
-  const summaryIndex = msgs.findIndex(
-    (msg, index) =>
-      index > compactionIndex &&
-      msg.info.role === "assistant" &&
-      msg.info.summary &&
-      msg.info.parentID === compaction.info.id,
-  )
-  if (summaryIndex < 0) return undefined
-  const tailIndex = msgs.findIndex((msg) => msg.info.id === part.tail_start_id)
-  if (tailIndex < 0 || tailIndex >= compactionIndex) return undefined
-  return { compactionIndex, summaryIndex, tailStartId: part.tail_start_id, tailIndex }
-}
-
-// Early-stop predicate for newest-first incremental paging: true once the
-// accumulated prefix already determines the final filterCompacted output,
-// i.e. the newest compaction boundary is fully in hand and every not-yet-
-// fetched (older) message falls in the dropped prefix before tailIndex.
-export function isCompactionPrefixComplete(msgsNewestFirst: readonly WithParts[]): boolean {
-  if (msgsNewestFirst.length === 0) return false
-  return detectCompactionBoundary([...msgsNewestFirst].reverse()) !== undefined
-}
-
 export function filterCompacted(msgs: Iterable<WithParts>) {
   const result = [] as WithParts[]
   const completed = new Set<string>()
@@ -646,41 +600,37 @@ export function filterCompacted(msgs: Iterable<WithParts>) {
       completed.add(msg.info.parentID)
   }
   result.reverse()
-  const boundary = detectCompactionBoundary(result)
-  if (boundary) {
+  const compactionIndex = result.findLastIndex(
+    (msg) =>
+      msg.info.role === "user" &&
+      msg.parts.some((item): item is CompactionPart => item.type === "compaction" && item.tail_start_id !== undefined),
+  )
+  const compaction = result[compactionIndex]
+  const part = compaction?.parts.find(
+    (item): item is CompactionPart => item.type === "compaction" && item.tail_start_id !== undefined,
+  )
+  const summaryIndex = compaction
+    ? result.findIndex(
+        (msg, index) =>
+          index > compactionIndex &&
+          msg.info.role === "assistant" &&
+          msg.info.summary &&
+          msg.info.parentID === compaction.info.id,
+      )
+    : -1
+  const tailIndex = part?.tail_start_id ? result.findIndex((msg) => msg.info.id === part.tail_start_id) : -1
+  if (tailIndex >= 0 && tailIndex < compactionIndex && summaryIndex > compactionIndex) {
     return [
-      ...result.slice(boundary.compactionIndex, boundary.summaryIndex + 1),
-      ...result.slice(boundary.tailIndex, boundary.compactionIndex),
-      ...result.slice(boundary.summaryIndex + 1),
+      ...result.slice(compactionIndex, summaryIndex + 1),
+      ...result.slice(tailIndex, compactionIndex),
+      ...result.slice(summaryIndex + 1),
     ]
   }
   return result
 }
 
 export const filterCompactedEffect = Effect.fnUntraced(function* (sessionID: SessionID) {
-  // Incremental newest-first paging with early stop: once the accumulated
-  // prefix determines the compaction boundary, older messages are all in the
-  // dropped prefix and fetching them is pure waste. Without a compaction
-  // boundary this degrades to the same full scan stream() performs.
-  const size = 50
-  const acc = [] as WithParts[]
-  let before: string | undefined
-  while (true) {
-    const next = yield* page({ sessionID, limit: size, before }).pipe(
-      Effect.catchIf(NotFoundError.isInstance, () =>
-        Effect.succeed({ items: [] as WithParts[], more: false, cursor: undefined }),
-      ),
-    )
-    if (next.items.length === 0) break
-    for (let i = next.items.length - 1; i >= 0; i--) {
-      const item = next.items[i]
-      if (item) acc.push(item)
-    }
-    if (isCompactionPrefixComplete(acc)) break
-    if (!next.more || !next.cursor) break
-    before = next.cursor
-  }
-  return filterCompacted(acc)
+  return filterCompacted(yield* stream(sessionID))
 })
 
 // filterCompacted reorders messages for model consumption

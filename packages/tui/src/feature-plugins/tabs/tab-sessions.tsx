@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createSignal, createResource, createMemo, For, Show } from "solid-js"
+import { createSignal, createResource, createMemo, onCleanup, For, Show } from "solid-js"
 import { useDialog } from "../../ui/dialog"
 import { useRoute } from "../../context/route"
+import { useEvent } from "../../context/event"
 import { useSync } from "../../context/sync"
 import { useProject } from "../../context/project"
 import { useLocal } from "../../context/local"
@@ -40,14 +41,12 @@ export function orderSessions(sessions: SessionItem[], pinnedIDs: string[]): Ses
 
 function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
+  const event = useEvent()
   const dialog = useDialog()
   const route = useRoute()
   const sync = useSync()
   const project = useProject()
   const local = useLocal()
-  // Initial seed only. Live updates arrive through the sync store
-  // (session.updated) and the merged memo below prefers them, so no
-  // per-update full session.list refetch.
   const [refreshTrigger, setRefreshTrigger] = createSignal(0)
 
   const notify = (message: string) => {
@@ -66,6 +65,8 @@ function View(props: { api: TuiPluginApi }) {
       return []
     }
   })
+
+  onCleanup(event.on("session.updated", () => setRefreshTrigger((n) => n + 1)))
 
   const merged = createMemo<SessionItem[]>(() => {
     const live = sync.data.session

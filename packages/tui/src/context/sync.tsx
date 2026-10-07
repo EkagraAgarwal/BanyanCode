@@ -44,11 +44,6 @@ const emptyConsoleState: ConsoleState = {
 // store stops growing with session count x messages x parts.
 const MAX_SESSIONS_IN_MEMORY = 4
 const MAX_PARTS_PER_MESSAGE = 50
-// Per-session parts budget: parts are retained only for the most recent
-// messages (tail-cap). Older messages keep their metadata; evicted parts
-// re-hydrate via session.sync() on the next visit (eviction clears the
-// full-sync marker). Renderers degrade gracefully (`?? []`).
-const MAX_PART_MESSAGES_PER_SESSION = 50
 
 function search<T>(items: T[], target: string, key: (item: T) => string) {
   let left = 0
@@ -159,10 +154,6 @@ export const {
     }
 
     const sessionRecency: string[] = []
-    // Session-indexed parts: messageID -> sessionID so parts eviction can
-    // find a session's part keys without scanning the message list (which
-    // may already be trimmed or absent).
-    const partSession = new Map<string, string>()
     // The session currently rendered by the session route. Recency is driven
     // by events, so with more than MAX_SESSIONS_IN_MEMORY sessions streaming
     // (orchestrator + subagents) the VIEWED session can be the coldest by
@@ -191,18 +182,6 @@ export const {
               delete draft[sessionID]
             }),
           )
-          setStore(
-            "session_diff",
-            produce((draft) => {
-              delete draft[sessionID]
-            }),
-          )
-          setStore(
-            "todo",
-            produce((draft) => {
-              delete draft[sessionID]
-            }),
-          )
           if (messages.length === 0) continue
           setStore(
             "part",
@@ -210,7 +189,6 @@ export const {
               for (const message of messages) delete draft[message.id]
             }),
           )
-          for (const message of messages) partSession.delete(message.id)
         }
       })
       for (const sessionID of cold) {
@@ -229,18 +207,6 @@ export const {
             delete draft[sessionID]
           }),
         )
-        setStore(
-          "session_diff",
-          produce((draft) => {
-            delete draft[sessionID]
-          }),
-        )
-        setStore(
-          "todo",
-          produce((draft) => {
-            delete draft[sessionID]
-          }),
-        )
         if (messages.length === 0) return
         setStore(
           "part",
@@ -248,33 +214,9 @@ export const {
             for (const message of messages) delete draft[message.id]
           }),
         )
-        for (const message of messages) partSession.delete(message.id)
       })
       const at = sessionRecency.indexOf(sessionID)
       if (at !== -1) sessionRecency.splice(at, 1)
-    }
-
-    const evictSessionParts = (sessionID: string) => {
-      const messages = store.message[sessionID]
-      if (!messages) return 0
-      const visible = new Set(messages.slice(-MAX_PART_MESSAGES_PER_SESSION).map((m) => m.id))
-      const stale: string[] = []
-      for (const [messageID, owner] of partSession) {
-        if (owner !== sessionID) continue
-        if (!visible.has(messageID)) stale.push(messageID)
-      }
-      if (stale.length === 0) return 0
-      setStore(
-        "part",
-        produce((draft) => {
-          for (const id of stale) delete draft[id]
-        }),
-      )
-      for (const id of stale) partSession.delete(id)
-      // Evicted parts re-hydrate on the next visit instead of leaving the
-      // tail permanently blank after scrollback.
-      fullSyncedSessions.delete(sessionID)
-      return stale.length
     }
 
     function sessionListQuery(): { scope?: "project"; path?: string } {
@@ -505,15 +447,6 @@ export const {
               }),
             )
           }
-          // Removed messages leave orphan part entries that no eviction pass
-          // would otherwise reclaim (the message list no longer references them).
-          setStore(
-            "part",
-            produce((draft) => {
-              delete draft[event.properties.messageID]
-            }),
-          )
-          partSession.delete(event.properties.messageID)
           break
         }
         case "message.part.updated": {
@@ -521,10 +454,8 @@ export const {
           touchSessionRecency(event.properties.part.sessionID)
           evictColdSessions()
           const parts = store.part[event.properties.part.messageID]
-          partSession.set(event.properties.part.messageID, event.properties.part.sessionID)
           if (!parts) {
             setStore("part", event.properties.part.messageID, [event.properties.part])
-            evictSessionParts(event.properties.part.sessionID)
             break
           }
           const result = search(parts, event.properties.part.id, (p) => p.id)
@@ -549,7 +480,6 @@ export const {
               }),
             )
           }
-          evictSessionParts(event.properties.part.sessionID)
           break
         }
 
@@ -832,24 +762,14 @@ export const {
                 for (const message of removed) delete draft.part[message.id]
                 draft.message[sessionID] = visible
                 draft.session_diff[sessionID] = diff.data ?? []
-                // Keep the session index in step with the merge: drop keys
-                // for messages that fell out of the window, index survivors.
-                for (const message of removed) partSession.delete(message.id)
-                for (const message of messages.data ?? []) {
-                  if (visibleIDs.has(message.info.id)) partSession.set(message.info.id, sessionID)
-                  else partSession.delete(message.info.id)
-                }
               }),
             )
             touchSessionRecency(sessionID)
             evictColdSessions()
-            const evictedParts = evictSessionParts(sessionID)
             // A failed messages fetch (HTTP error → data undefined) must not
             // mark the session fully synced, or the first error sticks for
-            // the process lifetime and the chat stays empty. A session whose
-            // parts were trimmed to the tail budget stays unmarked too, so
-            // the next visit re-hydrates the evicted tail.
-            if (messages.data !== undefined && evictedParts === 0) fullSyncedSessions.add(sessionID)
+            // the process lifetime and the chat stays empty.
+            if (messages.data !== undefined) fullSyncedSessions.add(sessionID)
           })().finally(() => {
             syncingSessions.delete(sessionID)
             hydratingSessions.delete(sessionID)

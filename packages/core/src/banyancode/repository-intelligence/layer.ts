@@ -1,4 +1,4 @@
-import { Effect, Layer, Ref, Semaphore } from "effect"
+import { Effect, Layer } from "effect"
 import { CodegraphRepo } from "../codegraph-repo"
 import type { Interface as CodegraphRepoInterface } from "../codegraph-repo"
 import { resolveGraphTargetPure } from "../symbol-resolver"
@@ -235,10 +235,6 @@ const resolveFileByPath = (
   repo: CodegraphRepoInterface,
   input: string,
   indexedRoot: string | undefined,
-  // Preloaded files table (the shared query context). When present the
-  // suffix fallback scans it instead of running a second listAllFiles —
-  // identical rows, no extra full-table load.
-  files?: readonly CodegraphFile[],
 ): Effect.Effect<CodegraphFile | undefined, never, never> =>
   Effect.gen(function* () {
     const candidates = buildPathCandidates(input, indexedRoot)
@@ -249,7 +245,7 @@ const resolveFileByPath = (
     }
     // Suffix fallback: only if exactly one match (avoid picking an arbitrary
     // file when two absolute paths end with the same suffix).
-    const allFiles = files ?? (yield* repo.listAllFiles())
+    const allFiles = yield* repo.listAllFiles()
     const normInput = input.replace(/\\/g, "/").replace(/^\.\//, "")
     const matches = allFiles.filter((f: CodegraphFile) => {
       const p = f.path.replace(/\\/g, "/")
@@ -269,37 +265,18 @@ export const layer = Layer.effect(
     const repo = yield* CodegraphRepo.Service
     const git = yield* Git
 
-    // Version-keyed single-flight cache for the shared query context (C2/G2).
-    // Every query()/impact() call used to run listAllFiles() +
-    // searchNodesLight({limit:100000}) + getMeta per call. getMeta is a cheap
-    // single-row read; the files table + light node projection are rebuilt
-    // ONLY when meta.graphVersion changed. bumpVersion runs on every
-    // indexer/build-service mutation commit (and recordParseError rows never
-    // affect files/nodes), so the version covers all graph changes. The
-    // semaphore serializes the check-and-rebuild so concurrent callers share
-    // one rebuild instead of each loading the whole graph.
-    const queryContextCache = yield* Ref.make<
-      { readonly version: number | undefined; readonly ctx: QueryContext } | undefined
-    >(undefined)
-    const queryContextGate = yield* Semaphore.make(1)
-
     const findSymbol = (input: {
       name: string
       kind?: CodegraphNode["kind"]
       file?: string
       exact?: boolean
       workspace?: WorkspaceContext
-      // Shared-context shortcuts: when the caller already holds the query
-      // context, pass its files table + indexedRoot so file resolution
-      // reuses them instead of running getMeta/listAllFiles again.
-      files?: readonly CodegraphFile[]
-      indexedRoot?: string
     }): Effect.Effect<{ nodes: CodegraphNode[]; usedFallback: boolean; ambiguity?: { total: number; kept: number } }, never, never> =>
       Effect.gen(function* () {
         let fileID: string | undefined
         if (input.file) {
-          const indexedRoot = input.indexedRoot ?? (yield* repo.getMeta())?.indexedRoot
-          const file = yield* resolveFileByPath(repo as never, input.file, indexedRoot, input.files)
+          const meta = yield* repo.getMeta()
+          const file = yield* resolveFileByPath(repo as never, input.file, meta?.indexedRoot)
           fileID = file?.id
           if (!fileID) return { nodes: [], usedFallback: false }
         }
@@ -617,10 +594,9 @@ export const layer = Layer.effect(
       })
 
     // Load the files table + light node projection + graph meta exactly once
-    // per graphVersion. Every consumer below (findTests, queryWithContext,
-    // impact) shares the cached projection; a repeat call within the same
-    // version costs one getMeta and serves from cache.
-    const loadQueryContextFresh = (): Effect.Effect<QueryContext, never, never> =>
+    // per invocation. Every consumer below (findTests, queryWithContext,
+    // impact) shares this instead of re-running listAllFiles/listAllNodes.
+    const loadQueryContext = (): Effect.Effect<QueryContext, never, never> =>
       Effect.gen(function* () {
         const [allFiles, allNodesLight, meta] = yield* Effect.all([
           repo.listAllFiles(),
@@ -634,23 +610,6 @@ export const layer = Layer.effect(
         return { allFiles, allNodesLight, meta }
       })
 
-    const loadQueryContext = (): Effect.Effect<QueryContext, never, never> =>
-      queryContextGate.withPermits(1)(
-        Effect.gen(function* () {
-          const meta = yield* repo.getMeta()
-          const version = meta?.graphVersion
-          const hit = yield* Ref.get(queryContextCache)
-          if (hit !== undefined && hit.version === version) return hit.ctx
-          const ctx = yield* loadQueryContextFresh()
-          // Re-read the version from the freshly loaded meta: a concurrent
-          // mutation that landed mid-rebuild must not be cached under a
-          // stale key (the next call re-checks and rebuilds again).
-          const freshVersion = ctx.meta?.graphVersion
-          yield* Ref.set(queryContextCache, { version: freshVersion, ctx })
-          return ctx
-        }),
-      )
-
     const queryWithContext = (
       input: {
         query: string
@@ -663,8 +622,8 @@ export const layer = Layer.effect(
         const { allFiles, allNodesLight, meta } = ctx
         const indexedRoot = meta?.indexedRoot
 
-        const fileByPath = yield* resolveFileByPath(repo as never, input.query, indexedRoot, allFiles)
-        const symbolResult = yield* findSymbol({ name: input.query, workspace: input.workspace, files: allFiles, indexedRoot })
+        const fileByPath = yield* resolveFileByPath(repo as never, input.query, indexedRoot)
+        const symbolResult = yield* findSymbol({ name: input.query, workspace: input.workspace })
         const fileMatches: CodegraphNode[] = fileByPath
           ? allNodesLight.filter((n) => n.fileID === fileByPath.id)
           : []
@@ -1042,7 +1001,7 @@ export const layer = Layer.effect(
         // table loads happened twice per impact() call. The `query` string
         // (`input.path`) and workspace are passed through exactly as before.
         const qctx = yield* loadQueryContext()
-        const file = yield* resolveFileByPath(repo as never, input.path, qctx.meta?.indexedRoot, qctx.allFiles)
+        const file = yield* resolveFileByPath(repo as never, input.path, qctx.meta?.indexedRoot)
         if (!file) {
           const ctx = yield* queryWithContext({ query: input.path, workspace: input.workspace }, qctx)
           return yield* slice(ctx)
@@ -1202,11 +1161,7 @@ export const layer = Layer.effect(
       derivation: "tested_by" | "references" | "import" | "substring" | "none"
     }, never, never> =>
       Effect.gen(function* () {
-        // Reuse the shared version-keyed context so the standalone `tests`
-        // entry costs one getMeta on a warm cache instead of a full
-        // listAllFiles + searchNodesLight reload. Same rows either way.
-        const qctx = yield* loadQueryContext()
-        const result = yield* findTests(input, qctx)
+        const result = yield* findTests(input)
         return result
       })
 
@@ -1226,8 +1181,8 @@ export const layer = Layer.effect(
           // Resolve the file by path, then aggregate relationships across every
           // node belonging to that file. This is the path-based fallback for
           // tools that don't have an exact codegraph nodeID handy.
-          const qctx = yield* loadQueryContext()
-          const file = yield* resolveFileByPath(repo as never, input.path, qctx.meta?.indexedRoot, qctx.allFiles)
+          const meta = yield* repo.getMeta()
+          const file = yield* resolveFileByPath(repo as never, input.path, meta?.indexedRoot)
           if (!file) return []
           const fileNodes = yield* repo.listNodesByFile(file.id)
           const seen = new Set<string>()

@@ -32,7 +32,6 @@ import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { McpCatalog } from "./catalog"
-import { exec as nodeExec } from "node:child_process"
 
 const DEFAULT_TIMEOUT = 30_000
 
@@ -396,31 +395,6 @@ export const layer = Layer.effect(
       Effect.catch(() => Effect.succeed([] as number[])),
     )
 
-    // Unix: SIGTERM each grandchild from pgrep. Windows: taskkill /T /F so the
-    // whole process tree dies (pgrep is unavailable and grandchildren otherwise
-    // leak). Matches CrossSpawnSpawner.killGroup.
-    const killTree = Effect.fnUntraced(
-      function* (pid: number) {
-        if (process.platform === "win32") {
-          yield* Effect.promise(
-            () =>
-              new Promise<void>((resolve) => {
-                nodeExec(`taskkill /pid ${pid} /T /F`, { windowsHide: true }, () => resolve())
-              }),
-          )
-          return
-        }
-        const pids = yield* descendants(pid)
-        for (const dpid of pids) {
-          try {
-            process.kill(dpid, "SIGTERM")
-          } catch {}
-        }
-      },
-      Effect.scoped,
-      Effect.catch(() => Effect.void),
-    )
-
     function watch(s: State, name: string, client: MCPClient, bridge: EffectBridge.Shape, timeout?: number) {
       client.setNotificationHandler(LoggingMessageNotificationSchema, (notification) =>
         bridge.promise(serverLog(name, notification.params)),
@@ -501,7 +475,14 @@ export const layer = Layer.effect(
               (client) =>
                 Effect.gen(function* () {
                   const pid = client.transport instanceof StdioClientTransport ? client.transport.pid : null
-                  if (typeof pid === "number") yield* killTree(pid)
+                  if (typeof pid === "number") {
+                    const pids = yield* descendants(pid)
+                    for (const dpid of pids) {
+                      try {
+                        process.kill(dpid, "SIGTERM")
+                      } catch {}
+                    }
+                  }
                   yield* Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
                 }),
               { concurrency: "unbounded" },

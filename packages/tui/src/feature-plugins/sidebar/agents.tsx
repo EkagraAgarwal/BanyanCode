@@ -87,21 +87,9 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const [pollTimer, setPollTimer] = createSignal<ReturnType<typeof setTimeout> | null>(null)
   const [eventFired, setEventFired] = createSignal(false)
 
-  // Async fetches and the fallback timer must not write signals after
-  // unmount. The cleanup below is unconditional (setup-time conditionals
-  // are fragile if the component ever re-executes setup).
-  let disposed = false
-  onCleanup(() => {
-    disposed = true
-    const pending = pollTimer()
-    if (pending) clearTimeout(pending)
-    setPollTimer(null)
-  })
-
   const loadConfig = async () => {
     try {
       const result = await props.api.client.global.banyanConfig.get({})
-      if (disposed) return
       if (result?.data) {
         setMaxSubagents(Number(result.data.banyancode_max_subagents) || 5)
       }
@@ -112,7 +100,6 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const fetchMesh = async () => {
     try {
       const result = await props.api.client.session.mesh({ sessionID: props.session_id })
-      if (disposed) return
       if (result?.data) {
         setMeshStatus(result.data as MeshStatus)
       }
@@ -140,11 +127,13 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   if (!eventFired()) {
     void fetchMesh()
     const timer = setTimeout(() => {
-      if (disposed) return
       setEventFired(true)
       setPollTimer(null)
     }, 5000)
     setPollTimer(timer)
+    onCleanup(() => {
+      if (pollTimer()) clearTimeout(pollTimer()!)
+    })
   }
 
   const peers = createMemo(() => meshStatus()?.peers ?? [])

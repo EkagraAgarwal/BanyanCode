@@ -253,8 +253,7 @@ const nativeLayer = (config: Config) =>
       yield* runNative(client, "PRAGMA journal_mode = WAL")
       yield* runNative(client, "PRAGMA synchronous = NORMAL")
       yield* runNative(client, "PRAGMA busy_timeout = 5000")
-      // ~16MB page cache (negative = kibibytes); was -64000 (~64MB).
-      yield* runNative(client, "PRAGMA cache_size = -16000")
+      yield* runNative(client, "PRAGMA cache_size = -64000")
       yield* runNative(client, "PRAGMA foreign_keys = ON")
       yield* runNative(client, "PRAGMA temp_store = MEMORY")
       // Only set page_size if not already set

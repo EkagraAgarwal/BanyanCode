@@ -29,11 +29,6 @@ const makeMockRepo = (options: {
     CodegraphRepo.Service.of({
       listAllNodes: () => Effect.succeed(options.nodes ?? []),
       listNodesPage: () => Effect.succeed({ nodes: options.nodes ?? [], nextCursor: undefined }),
-      listNodesLightPage: () =>
-        Effect.succeed({
-          nodes: (options.nodes ?? []).map(({ code: _code, ...rest }) => rest),
-          nextCursor: undefined,
-        }),
       listAllFiles: () => Effect.succeed(options.files ?? []),
       listFilesPage: () => Effect.succeed({ files: options.files ?? [], nextCursor: undefined }),
       getMeta: () => Effect.succeed(options.meta),

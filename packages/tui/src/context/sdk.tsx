@@ -61,7 +61,6 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
     let queue: GlobalEvent[] = []
     let timer: Timer | undefined
-    let sleepTimer: ReturnType<typeof setTimeout> | undefined
     let last = 0
     const retryDelay = 1000
     const maxRetryDelay = 30000
@@ -124,16 +123,9 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
           attempt += 1
           if (abort.signal.aborted || ctrl.signal.aborted) break
 
-          // Exponential backoff. The sleep is tracked so unmount cancels it;
-          // otherwise the reconnect loop lingers up to 30s after disposal.
+          // Exponential backoff
           const backoff = Math.min(retryDelay * 2 ** (attempt - 1), maxRetryDelay)
-          await new Promise<void>((resolve) => {
-            sleepTimer = setTimeout(() => {
-              sleepTimer = undefined
-              resolve()
-            }, backoff)
-          })
-          sleepTimer = undefined
+          await new Promise((resolve) => setTimeout(resolve, backoff))
         }
       })().catch(() => {})
     }
@@ -157,8 +149,6 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       abort.abort()
       sse?.abort()
       if (timer) clearTimeout(timer)
-      if (sleepTimer) clearTimeout(sleepTimer)
-      sleepTimer = undefined
       handlers.clear()
     })
 
