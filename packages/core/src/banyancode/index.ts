@@ -438,7 +438,3 @@ export type {
   NormalizeWindowInput,
 } from "./provider-usage"
 export * as ProviderUsageNS from "./provider-usage"
-export * as Jev from "./jev"
-export * as JevLedger from "./jev-ledger"
-export { Service as JevService, layer as jevServiceLayer } from "./jev-service"
-export type { Interface as JevServiceInterface } from "./jev-service"

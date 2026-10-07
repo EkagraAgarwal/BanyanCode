@@ -1,8 +1,7 @@
 export * as MemoryTools from "./memory"
 
 import { ToolFailure } from "@opencode-ai/llm"
-import { Effect, Layer, Option, Schema } from "effect"
-import { JevMemory } from "../banyancode/jev-memory"
+import { Effect, Layer, Schema } from "effect"
 import { Banyan } from "../banyancode"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
@@ -157,7 +156,6 @@ export const locationLayer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const permission = yield* PermissionV2.Service
     const repo = yield* Banyan.MemoryRepo
-    const configService = yield* Effect.serviceOption(Banyan.BanyanConfigService)
 
     yield* tools
       .register({
@@ -416,15 +414,7 @@ input: InputStore,
                 scope,
                 sessionID,
               })
-              const config = Option.isSome(configService) ? yield* configService.value.get() : undefined
-              const entries = yield* JevMemory.rerank({
-                query: input.query,
-                entries: ranked.entries,
-                config,
-                sessionID: context.sessionID,
-                scope: context.runID,
-              })
-              return { entries, degraded: false }
+              return { entries: ranked.entries, degraded: false }
             }).pipe(Effect.mapError(() => new ToolFailure({ message: `memory_search failed` })))
           },
         }),

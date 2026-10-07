@@ -207,99 +207,6 @@ export const ConfigurationUpdatePart = Schema.Struct({
 }).annotate({ identifier: "ConfigurationUpdatePart" })
 export type ConfigurationUpdatePart = Types.DeepMutable<Schema.Schema.Type<typeof ConfigurationUpdatePart>>
 
-// Jev activity/decision marker. Additive, display-only part of the durable UI
-// pipeline: an opencode tool or integration publishes it through
-// `Session.updatePart` (V1 `message.part.updated`), the session projector
-// persists it in the part table, and the TUI renders it under the target
-// assistant message. Contract:
-// - `operationID` is the stable identity of the underlying operation. Republish
-//   with the SAME part `id` (and the same operationID) for
-//   running → completed/failed so the part table upserts and the sync store
-//   reconciles in place instead of duplicating the row.
-// - `choice`/`summary` are display strings the publisher MUST pre-redact (no
-//   raw model transcript, no provider payload). The schema bounds them at the
-//   event commit (encode runs checks) and the TUI strips control characters,
-//   but redaction itself happens at the source.
-// - Never lowered into provider requests: MessageV2.toModelMessagesEffect
-//   converts only allowlisted part types, so this part can neither replay to
-//   the model nor fabricate a provider tool call.
-// - `usage` is informational for display only; projector.usage() only rolls
-//   step-finish parts into session cost/tokens, so this never double-counts.
-export const JevActivityStatus = Schema.Literals(["running", "completed", "failed", "skipped"]).annotate({
-  identifier: "JevActivityStatus",
-})
-export type JevActivityStatus = Schema.Schema.Type<typeof JevActivityStatus>
-
-export const JevActivityPart = Schema.Struct({
-  ...partBase,
-  type: Schema.Literal("jev_activity"),
-  operationID: Schema.String.check(Schema.isMaxLength(128), Schema.isPattern(/\S/, { identifier: "Jev/OperationID" })),
-  feature: Schema.String.check(Schema.isMaxLength(64), Schema.isPattern(/\S/, { identifier: "Jev/Feature" })),
-  status: JevActivityStatus,
-  choice: Schema.optional(Schema.String.check(Schema.isMaxLength(120))),
-  summary: Schema.optional(Schema.String.check(Schema.isMaxLength(400))),
-  latency: Schema.optional(Schema.Struct({ ms: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)) })),
-  usage: Schema.optional(
-    Schema.Struct({
-      input: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-      output: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-      cost: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
-    }),
-  ),
-}).annotate({ identifier: "JevActivityPart" })
-export type JevActivityPart = Types.DeepMutable<Schema.Schema.Type<typeof JevActivityPart>>
-
-// Jev exploration run (jev-explorer): ONE part per host-controlled Jev action
-// tree, upserted in place by a stable part id as nodes accumulate. Display-
-// only, additive to the Part union, and NEVER lowered into provider requests:
-// MessageV2.toModelMessagesEffect converts only its allowlisted part types,
-// so this part can neither replay to the model nor fabricate a provider tool
-// call (covered by a regression test in test/session/jev-explorer.test.ts).
-// Contract bounds enforced here and clamped by the engine: runID <=128,
-// nodes <=64, evidence excerpt <=300, stopReason <=300. `evidence`, `nodes`,
-// and `usage` carry pre-bounded/redacted strings only — never raw tool
-// output, provider payloads, keys, or state secrets.
-export const JevRunNodeEvidence = Schema.Struct({
-  path: Schema.String.check(Schema.isMaxLength(500)),
-  lines: Schema.optional(Schema.String.check(Schema.isMaxLength(40))),
-  excerpt: Schema.optional(Schema.String.check(Schema.isMaxLength(300))),
-}).annotate({ identifier: "JevRunEvidence" })
-export type JevRunNodeEvidence = Types.DeepMutable<Schema.Schema.Type<typeof JevRunNodeEvidence>>
-
-export const JevRunNode = Schema.Struct({
-  nodeID: Schema.String.check(Schema.isMaxLength(64), Schema.isPattern(/\S/, { identifier: "JevRun/NodeID" })),
-  parentID: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
-  actionID: Schema.String.check(Schema.isMaxLength(40)),
-  target: Schema.String.check(Schema.isMaxLength(400)),
-  status: Schema.Literals(["done", "failed", "skipped"]),
-  evidence: Schema.optional(Schema.Array(JevRunNodeEvidence)),
-  confidence: Schema.optional(Schema.Finite),
-  latencyMs: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
-}).annotate({ identifier: "JevRunNode" })
-export type JevRunNode = Types.DeepMutable<Schema.Schema.Type<typeof JevRunNode>>
-
-export const JevRunStatus = Schema.Literals(["running", "completed", "handoff", "failed", "cancelled"]).annotate({
-  identifier: "JevRunStatus",
-})
-export type JevRunStatus = Schema.Schema.Type<typeof JevRunStatus>
-
-export const JevRunPart = Schema.Struct({
-  ...partBase,
-  type: Schema.Literal("jev_run"),
-  runID: Schema.String.check(Schema.isMaxLength(128), Schema.isPattern(/\S/, { identifier: "JevRun/RunID" })),
-  status: JevRunStatus,
-  nodes: Schema.Array(JevRunNode).check(Schema.isMaxLength(64)),
-  stopReason: Schema.optional(Schema.String.check(Schema.isMaxLength(300))),
-  usage: Schema.optional(
-    Schema.Struct({
-      input: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-      output: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-      cost: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))),
-    }),
-  ),
-}).annotate({ identifier: "JevRunPart" })
-export type JevRunPart = Types.DeepMutable<Schema.Schema.Type<typeof JevRunPart>>
-
 export const SubtaskPart = Schema.Struct({
   ...partBase,
   type: Schema.Literal("subtask"),
@@ -475,8 +382,6 @@ export const Part = Schema.Union([
   RetryPart,
   CompactionPart,
   ConfigurationUpdatePart,
-  JevActivityPart,
-  JevRunPart,
 ]).annotate({ discriminator: "type", identifier: "Part" })
 export type Part =
   | TextPart
@@ -492,8 +397,6 @@ export type Part =
   | RetryPart
   | CompactionPart
   | ConfigurationUpdatePart
-  | JevActivityPart
-  | JevRunPart
 
 const AssistantErrorSchema = Schema.Union([
   AuthError.EffectSchema,

@@ -328,10 +328,6 @@ export const layer = Layer.effect(
                 bash: "deny",
                 webfetch: "allow",
                 websearch: "allow",
-                // Explicit allow AFTER the `* deny` above: without this row
-                // Permission.disabled strips jev_judge from explore's wire
-                // tool list entirely (see session/llm/request.ts resolveTools).
-                jev_judge: "allow",
                 read: "allow",
                 codegraph_build: "allow",
                 codegraph_remove: "allow",

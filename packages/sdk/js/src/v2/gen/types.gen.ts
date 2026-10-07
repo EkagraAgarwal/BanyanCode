@@ -617,71 +617,6 @@ export type ConfigurationUpdatePart = {
   }
 }
 
-export type JevOperationId = string
-
-export type JevFeature = string
-
-export type JevActivityStatus = "running" | "completed" | "failed" | "skipped"
-
-export type JevActivityPart = {
-  id: string
-  sessionID: string
-  messageID: string
-  type: "jev_activity"
-  operationID: JevOperationId
-  feature: JevFeature
-  status: JevActivityStatus
-  choice?: string
-  summary?: string
-  latency?: {
-    ms: number
-  }
-  usage?: {
-    input: number
-    output: number
-    cost?: number
-  }
-}
-
-export type JevRunRunId = string
-
-export type JevRunStatus = "running" | "completed" | "handoff" | "failed" | "cancelled"
-
-export type JevRunNodeId = string
-
-export type JevRunEvidence = {
-  path: string
-  lines?: string
-  excerpt?: string
-}
-
-export type JevRunNode = {
-  nodeID: JevRunNodeId
-  parentID?: string
-  actionID: string
-  target: string
-  status: "done" | "failed" | "skipped"
-  evidence?: Array<JevRunEvidence>
-  confidence?: number
-  latencyMs?: number
-}
-
-export type JevRunPart = {
-  id: string
-  sessionID: string
-  messageID: string
-  type: "jev_run"
-  runID: JevRunRunId
-  status: JevRunStatus
-  nodes: Array<JevRunNode>
-  stopReason?: string
-  usage?: {
-    input: number
-    output: number
-    cost?: number
-  }
-}
-
 export type Part =
   | TextPart
   | SubtaskPart
@@ -696,8 +631,6 @@ export type Part =
   | RetryPart
   | CompactionPart
   | ConfigurationUpdatePart
-  | JevActivityPart
-  | JevRunPart
 
 export type Pty = {
   id: string
@@ -2341,49 +2274,6 @@ export type BanyanConfig = {
   banyancode_prompt_cache_mode?: "implicit" | "explicit" | "off"
   banyancode_prompt_cache_diagnostics?: boolean
   banyancode_prompt_cache_stable_prefix?: boolean
-  banyancode_prompt_cache_prewarm?: boolean
-  banyancode_reasoning_configuration_update?: boolean
-  banyancode_tool_search_defer?: boolean
-  banyancode_jev_enabled?: boolean
-  banyancode_jev_backend?: "typesafe" | "openrouter" | "vercel"
-  banyancode_jev_model?: string
-  banyancode_jev_profile?: "conservative" | "aggressive"
-  banyancode_jev_features?: {
-    [key: string]: boolean
-  }
-  banyancode_jev_model_tiers?: {
-    fast: string
-    strong: string
-    fastThinking?: "off" | "low" | "medium" | "high" | "max" | "xhigh" | "ultra" | string
-    strongThinking?: "off" | "low" | "medium" | "high" | "max" | "xhigh" | "ultra" | string
-  }
-  banyancode_jev_budget?: {
-    perTurnCalls?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    perSessionUsd?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  }
-  banyancode_jev_client?: {
-    maxInflight?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    requestsPerMinute?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    tokensPerMinute?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    cacheMaxEntries?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    cacheTtlMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    retries?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  }
-  banyancode_jev_tree?: {
-    enabled?: boolean
-    maxDepth?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    maxNodes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    maxJevCalls?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    timeoutMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    runTimeoutMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    maxBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  }
-  banyancode_jev_subagent_models?: {
-    [key: string]: {
-      model: string
-      thinking?: "off" | "low" | "medium" | "high" | "max" | "xhigh" | "ultra" | string
-    }
-  }
   /**
    * Enable or configure BanyanCode's LSP servers. Omit or set to false to disable, true to enable built-ins, or an object to enable built-ins with overrides.
    */
