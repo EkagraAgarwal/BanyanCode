@@ -18,31 +18,6 @@ export function createDebouncedSignal<T>(value: T, ms: number): [Accessor<T>, (v
 
 export type CoalesceDecision = { action: "flush" } | { action: "schedule"; delayMs: number } | { action: "skip" }
 
-/**
- * Trailing batch window for per-token part updates (V3/T8). Only the last
- * state in each window renders: ~30fps, matching the renderer's frame budget.
- * Text parts keep their own (longer) interval; reasoning and tool-output
- * deltas use this one.
- */
-export const PART_RENDER_COALESCE_MS = 33
-
-const LENGTH_SCALES = [
-  { max: 4_096, ms: PART_RENDER_COALESCE_MS },
-  { max: 16_384, ms: 100 },
-  { max: 65_536, ms: 250 },
-] as const
-
-const LENGTH_SCALE_FALLBACK_MS = 500
-
-/** Length-scaled coalesce interval: huge outputs re-render less often. Pure. */
-export function coalesceMsForLength(chars: number): number {
-  const length = Number.isFinite(chars) ? Math.max(0, Math.floor(chars)) : 0
-  for (const scale of LENGTH_SCALES) {
-    if (length <= scale.max) return scale.ms
-  }
-  return LENGTH_SCALE_FALLBACK_MS
-}
-
 /** Pure scheduler for createCoalescedAccessor — unit-testable without Solid effects. */
 export function decideCoalesceFlush(input: {
   flushNow: boolean

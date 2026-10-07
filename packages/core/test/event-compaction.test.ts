@@ -341,17 +341,19 @@ describe("strip patch bodies (S2)", () => {
     expect(second.rewritten).toBe(0)
   })
 
-  test("explicit backfill records the marker and strips pre-existing rows; open does not run it", async () => {
+  test("startup migration records the backfill marker and strips pre-existing rows", async () => {
     await using tmp = await tmpdir()
     const layer = dbOnly(path.join(tmp.path, "s2m.sqlite"))
     await run(
       Effect.gen(function* () {
         const { db } = yield* Database.Service
-        // Opening the DB must not run the backfill (it blocks startup on large DBs).
-        const before = yield* db.get<{ id: string }>(
+        const marker = yield* db.get<{ id: string }>(
           sql`SELECT id FROM migration WHERE id = ${STRIP_PATCH_BODIES_BACKFILL_ID}`,
         )
-        expect(before).toBeUndefined()
+        expect(marker?.id).toBe(STRIP_PATCH_BODIES_BACKFILL_ID)
+        // Simulate rows written before the backfill ever ran: drop the
+        // marker, insert a patch row, re-apply migrations.
+        yield* db.run(sql`DELETE FROM migration WHERE id = ${STRIP_PATCH_BODIES_BACKFILL_ID}`)
         yield* db.insert(EventSequenceTable).values({ aggregate_id: "ses_s2m", seq: 0 }).run()
         yield* db
           .insert(EventTable)
@@ -366,11 +368,7 @@ describe("strip patch bodies (S2)", () => {
             },
           })
           .run()
-        yield* DatabaseMigration.applyCodeBackfills(db)
-        const marker = yield* db.get<{ id: string }>(
-          sql`SELECT id FROM migration WHERE id = ${STRIP_PATCH_BODIES_BACKFILL_ID}`,
-        )
-        expect(marker?.id).toBe(STRIP_PATCH_BODIES_BACKFILL_ID)
+        yield* DatabaseMigration.apply(db)
         const event = yield* db
           .select({ data: EventTable.data })
           .from(EventTable)

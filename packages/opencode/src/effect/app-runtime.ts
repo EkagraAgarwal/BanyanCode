@@ -8,7 +8,6 @@ import * as Observability from "@opencode-ai/core/observability"
 
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Database } from "@opencode-ai/core/database/database"
-import { DatabaseMaintenance } from "@opencode-ai/core/database/maintenance"
 import { Auth } from "@/auth"
 import { Account } from "@/account/account"
 import { Config } from "@/config/config"
@@ -326,9 +325,6 @@ AppRuntime.runFork(applyMemoryBridge as never)
 AppRuntime.runFork(applyMeshBridge as never)
 AppRuntime.runFork(applyReviewBridge as never)
 AppRuntime.runFork(applySystemMonitorBridge as never)
-
-// Event-log compaction, code backfills and bounded vacuum run off the open path, 30s after start, every 6h.
-AppRuntime.runFork(Database.Service.use((database) => DatabaseMaintenance.loop(database.db)) as never)
 
 /**
  * Assert the canonical tool pipeline is consistent: every registered tool

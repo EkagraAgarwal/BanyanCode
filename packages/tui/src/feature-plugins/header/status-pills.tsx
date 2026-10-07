@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
-import { createMemo, createSignal, onCleanup, onMount, useContext } from "solid-js"
+import { createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { useEvent } from "../../context/event"
-import { SyncContext } from "../../context/sync"
+import { useSync } from "../../context/sync"
 import { toHex } from "../../util/color"
 import type { Severity } from "../../util/palette"
 
@@ -13,21 +13,13 @@ const id = "internal:header-status-pills"
 
 export function View(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
-  // Sync is optional: the pill must not throw when rendered outside a
-  // SyncProvider (e.g. isolated widget tests or surfaces that mount the
-  // header without the full TUI context tree). Fall back to the plugin
-  // state's session_status snapshot so the count degrades to 0 instead of
-  // crashing via the context helper's throw.
-  const sync = useContext(SyncContext)
+  const sync = useSync()
   // Active count derives from the live session_status map in the sync store,
   // which the server keeps current via session.status events. No session.list
   // fetch: the previous per-update full list read a `session_status` field
   // that does not exist on the plugin state, so the pill was always 0.
   const activeSessionCount = createMemo(() => {
-    const statuses =
-      (sync?.data.session_status as Record<string, { type?: string } | undefined> | undefined) ??
-      ((props.api.state as any)?.session_status as Record<string, { type?: string } | undefined> | undefined) ??
-      {}
+    const statuses = sync.data.session_status ?? {}
     return Object.values(statuses).filter((status) => status?.type === "busy" || status?.type === "retry").length
   })
   const [lastBuildStatus, setLastBuildStatus] = createSignal<"idle" | "running" | "completed" | "failed">("idle")

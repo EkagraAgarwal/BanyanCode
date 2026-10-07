@@ -8,7 +8,6 @@ import { ServerAuth } from "@/server/auth"
 import { writeHeapSnapshot } from "node:v8"
 import { Heap } from "@/cli/heap"
 import { AppRuntime } from "@/effect/app-runtime"
-import { SystemMonitorDemand } from "@/effect/banyancode-system-bridge"
 import { Effect } from "effect"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 
@@ -75,9 +74,6 @@ const onGlobalEvent = (event: GlobalEvent) => {
   }
 }
 GlobalBus.on("event", onGlobalEvent)
-// The TUI consumes GlobalBus in-process (no SSE connection), so it must hold
-// system-monitor sampling demand itself or the sidebar never gets data.
-SystemMonitorDemand.subscribe()
 
 let server: Awaited<ReturnType<typeof Server.listen>> | undefined
 
@@ -142,7 +138,6 @@ export const rpc = {
   },
   async shutdown() {
     GlobalBus.off("event", onGlobalEvent)
-    SystemMonitorDemand.unsubscribe()
     coalescer.flush()
     await InstanceRuntime.disposeAllInstances()
     if (server) await server.stop(true)

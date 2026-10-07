@@ -87,9 +87,10 @@ describe("DatabaseMigration", () => {
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'codegraph_nodes_fts'`),
         ).toBeUndefined()
 
-        // Verify migration record was inserted: one row per SQL migration. Code backfills
-        // (event/compaction.ts) run in background maintenance, not on open.
-        expect(yield* db.get(sql`SELECT count(*) as count FROM migration`)).toEqual({ count: migrations.length })
+        // Verify migration record was inserted: one row per SQL migration
+        // plus the S2 code-backfill marker (event/compaction.ts), which
+        // shares the journal but is not a generated SQL migration.
+        expect(yield* db.get(sql`SELECT count(*) as count FROM migration`)).toEqual({ count: migrations.length + 1 })
 
         // Verify WAL journal mode is in effect
         const journalMode = yield* db.get<{ journal_mode: string }>(sql`PRAGMA journal_mode`)
