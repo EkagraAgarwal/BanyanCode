@@ -120,7 +120,8 @@ export const layer = Layer.effect(
         const snapshot = yield* Ref.get(cache)
 
         let gpu: { gpuPercent: number; vramUsedBytes: number; gpuTotalBytes: number } | undefined
-        if (snapshot.gpu && now - snapshot.gpuAt < GPU_CACHE_TTL_MS) {
+        const gpuFresh = now - snapshot.gpuAt < GPU_CACHE_TTL_MS
+        if (gpuFresh) {
           gpu = snapshot.gpu
         } else if (process.platform !== "darwin") {
           const runResult = yield* proc.run(
@@ -148,7 +149,8 @@ export const layer = Layer.effect(
         }
 
         let disk: { diskUsedBytes?: number; diskTotalBytes?: number } | undefined
-        if (snapshot.disk && now - snapshot.diskAt < DISK_CACHE_TTL_MS) {
+        const diskFresh = now - snapshot.diskAt < DISK_CACHE_TTL_MS
+        if (diskFresh) {
           disk = snapshot.disk
         } else {
           const result = yield* readDisk()
@@ -158,18 +160,14 @@ export const layer = Layer.effect(
         }
 
         if (snapshot.cached && now - snapshot.cached.at < 1000) {
-          // Persist refreshed disk/gpu cache timestamps even on the warm
-          // early-return path — otherwise the next spin would re-probe
-          // statfs/nvidia-smi as soon as TTL expires (instead of every TTL
-          // window). Disk and GPU are unchanged here, so just bump `at`.
-          if (
-            (snapshot.disk && disk === snapshot.disk && snapshot.diskAt !== now) ||
-            (snapshot.gpu && gpu === snapshot.gpu && snapshot.gpuAt !== now)
-          ) {
+          // Persist any fresh probe so the next tick doesn't re-probe within the TTL.
+          if (!gpuFresh || !diskFresh) {
             yield* Ref.set(cache, {
               ...snapshot,
-              diskAt: snapshot.disk && disk === snapshot.disk ? now : snapshot.diskAt,
-              gpuAt: snapshot.gpu && gpu === snapshot.gpu ? now : snapshot.gpuAt,
+              gpu,
+              gpuAt: gpuFresh ? snapshot.gpuAt : now,
+              disk,
+              diskAt: diskFresh ? snapshot.diskAt : now,
             })
           }
           return {
@@ -205,7 +203,13 @@ export const layer = Layer.effect(
             : {}),
         }
 
-        yield* Ref.set(cache, { cached: { value, at: now }, gpu, gpuAt: now, disk, diskAt: now })
+        yield* Ref.set(cache, {
+          cached: { value, at: now },
+          gpu,
+          gpuAt: gpuFresh ? snapshot.gpuAt : now,
+          disk,
+          diskAt: diskFresh ? snapshot.diskAt : now,
+        })
         return value
       })
 
