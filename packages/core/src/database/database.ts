@@ -169,6 +169,20 @@ function findProjectRoot(startDir: string): string | undefined {
   return undefined
 }
 
+// Nearest ancestor holding `.git` (dir or worktree file). Unlike
+// findProjectRoot it ignores package.json/opencode.json, so running from a
+// monorepo subfolder (packages/opencode) resolves to the same root as running
+// from the repo root instead of forking a second DB.
+function findGitRoot(startDir: string): string | undefined {
+  let dir = startDir
+  while (true) {
+    if (fs.existsSync(join(dir, ".git"))) return dir
+    const parent = join(dir, "..")
+    if (parent === dir) return undefined
+    dir = parent
+  }
+}
+
 function findOrCreateBanyanProjectDir(startDir: string): string | undefined {
   // findContainingBanyanDir skips a `.banyancode` marker that sits at the
   // filesystem root (e.g. `D:\.banyancode`), so a polluted drive root never
@@ -194,7 +208,9 @@ export function path() {
     return join(Global.Path.data, Flag.OPENCODE_DB)
   }
 
-  const projectBanyanDir = findOrCreateBanyanProjectDir(process.cwd())
+  const cwd = process.cwd()
+  const root = findGitRoot(cwd) ?? cwd
+  const projectBanyanDir = findOrCreateBanyanProjectDir(root)
   if (projectBanyanDir) {
     // BANYANCODE_LEGACY_DB_PATH=1 falls back to the old filename for one
     // release cycle so existing per-project DBs are not silently abandoned.
@@ -202,7 +218,7 @@ export function path() {
     // is shared with WorkspaceIdentity.identityForRoot so the process-wide
     // DB and the codegraph DB agree when the server starts from the
     // workspace root.
-    return deriveBanyanDbPath(projectBanyanDir, process.cwd()).dbPath
+    return deriveBanyanDbPath(projectBanyanDir, root).dbPath
   }
 
   return join(Global.Path.banyan.data, `banyancode${channelSuffix()}.db`)
