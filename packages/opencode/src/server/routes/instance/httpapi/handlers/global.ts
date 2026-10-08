@@ -496,7 +496,10 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
 
     const codegraphNodesHandler = Effect.fn("GlobalHttpApi.codegraphNodes")(function* () {
       const repo = yield* Banyan.CodegraphRepo
-      const [nodes, meta] = yield* Effect.all([repo.listAllNodes(), repo.getMeta()])
+      // Strip `code` (~1KB/node): every TUI consumer re-fetches this on build completion,
+      // and shipping ~22MB of source per fetch stalls the TUI event loop.
+      const [all, meta] = yield* Effect.all([repo.listAllNodes(), repo.getMeta()])
+      const nodes = all.map(({ code: _code, ...node }) => node)
       const graphMeta = meta
         ? {
             graphBuiltAt: meta.graphBuiltAt,
