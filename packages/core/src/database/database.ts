@@ -240,6 +240,8 @@ export function layerFromRoot(root: string) {
   // drive-root marker never hijacks child projects. Fall back to the
   // root-local `.banyancode` when no (non-root) marker exists.
   const banyanDir = findContainingBanyanDir(root) ?? join(root, ".banyancode")
+  // libsql fails with code 14 (CANTOPEN) when the directory is missing.
+  fs.mkdirSync(banyanDir, { recursive: true })
   return layerFromPath(deriveBanyanDbPath(banyanDir, root).dbPath)
 }
 

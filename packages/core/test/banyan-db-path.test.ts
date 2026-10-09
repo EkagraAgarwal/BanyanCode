@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdirSync } from "node:fs"
+import { existsSync, mkdirSync, rmSync } from "node:fs"
 import { join, parse } from "node:path"
 import { findContainingBanyanDir } from "../src/database/banyan-db-path"
 import { tmpdir } from "./fixture/tmpdir"
@@ -41,6 +41,21 @@ describe("findContainingBanyanDir", () => {
     const root = parse(process.cwd()).root
     if (findContainingBanyanDir(root) !== undefined) {
       expect(findContainingBanyanDir(root)).toBe(join(root, ".banyancode"))
+    }
+  })
+})
+
+describe("findContainingBanyanDir drive-root marker", () => {
+  test.skipIf(process.platform !== "win32")("forward-slash start dir does not adopt D:\.banyancode", () => {
+    const drive = parse(process.cwd()).root
+    const marker = join(drive, ".banyancode")
+    const created = !existsSync(marker)
+    if (created) mkdirSync(marker)
+    try {
+      const proj = join(drive, "__banyan_slash_test__")
+      expect(findContainingBanyanDir(proj.split("\\").join("/"))).not.toBe(marker)
+    } finally {
+      if (created) rmSync(marker, { recursive: true, force: true })
     }
   })
 })

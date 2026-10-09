@@ -83,7 +83,10 @@ export const deriveBanyanDbPath = (banyanDir: string, root: string): BanyanDbPat
 // `Database.layerFromRoot` and `WorkspaceIdentity.identityForRoot` so a
 // build bound to an explicit root and a server started from that root agree
 // on the marker directory.
-export const findContainingBanyanDir = (startDir: string): string | undefined => {
+export const findContainingBanyanDir = (start: string): string | undefined => {
+  // Normalize first: `D:/proj` and `D:\proj` must agree on rootOf() or the
+  // drive-root marker check below is bypassed and `D:\.banyancode` hijacks.
+  const startDir = resolve(start)
   let dir = startDir
   while (true) {
     const candidate = join(dir, ".banyancode")
