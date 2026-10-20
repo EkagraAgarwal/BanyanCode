@@ -5,6 +5,7 @@ import fs from "node:fs"
 import os from "os"
 import path from "path"
 import { EventV2 } from "../event"
+import { Global } from "../global"
 import { Watcher } from "../filesystem/watcher"
 import { BanyanConfigService } from "./banyan-config"
 import { CodegraphBuildService } from "./codegraph-build-service"
@@ -55,16 +56,18 @@ export interface Interface {
   readonly flush: (input?: {
     readonly root?: string
     readonly maxPaths?: number
-  }) => Effect.Effect<{ discovered: number; indexed: number; removed: number; cached: number; pending: number }, never, never>
+  }) => Effect.Effect<
+    { discovered: number; indexed: number; removed: number; cached: number; pending: number },
+    never,
+    never
+  >
   // Periodic reconciliation: probe indexed rows for size+mtime drift and
   // deleted files, enqueue the drifted paths, and wake the drain. New files
   // on disk are picked up by the watcher; this covers edits/deletes the
   // watcher missed while paused or offline.
-  readonly reconcile: (input?: { readonly root?: string }) => Effect.Effect<
-    { discovered: number; changed: number; removed: number; cached: number },
-    never,
-    never
-  >
+  readonly reconcile: (input?: {
+    readonly root?: string
+  }) => Effect.Effect<{ discovered: number; changed: number; removed: number; cached: number }, never, never>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@banyancode/CodegraphAutoUpdate") {}
@@ -83,7 +86,11 @@ type ProgressExtras = Pick<ProgressState, "phase" | "completed" | "total" | "cur
 export const layer: Layer.Layer<
   Service,
   never,
-  EventV2.Service | CodegraphIndexer.Service | CodegraphRepo.Service | CodegraphBuildService.Service | BanyanConfigService.Service
+  | EventV2.Service
+  | CodegraphIndexer.Service
+  | CodegraphRepo.Service
+  | CodegraphBuildService.Service
+  | BanyanConfigService.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -96,7 +103,9 @@ export const layer: Layer.Layer<
         type: "banyancode.codegraph.auto-update.progress"
         properties: ProgressState
       }>(64).pipe(Effect.orDie)
-      yield* Effect.addFinalizer(() => Effect.all([Queue.shutdown(events), Queue.shutdown(progressEvents)], { discard: true }))
+      yield* Effect.addFinalizer(() =>
+        Effect.all([Queue.shutdown(events), Queue.shutdown(progressEvents)], { discard: true }),
+      )
       return Service.of({
         state: () => Ref.get(stateRef),
         events: () => events,
@@ -150,7 +159,9 @@ export const layer: Layer.Layer<
 
     const publish = Effect.fn("CodegraphAutoUpdate.publish")(function* (s: State) {
       yield* Ref.set(stateRef, s)
-      yield* Queue.offer(eventsQueue, { type: "banyancode.codegraph.auto-update" as const, properties: s }).pipe(Effect.ignore)
+      yield* Queue.offer(eventsQueue, { type: "banyancode.codegraph.auto-update" as const, properties: s }).pipe(
+        Effect.ignore,
+      )
     })
 
     const recomputeStatus = Effect.fn("CodegraphAutoUpdate.recomputeStatus")(function* () {
@@ -195,6 +206,24 @@ export const layer: Layer.Layer<
     // directory (the home dir commonly carries `.banyancode` / `.git`, which
     // would otherwise hijack the derived root for temp-dir fixtures and
     // deep-tree edits). The common-parent fallback handles marker-less trees.
+    const normPath = (p: string) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p))
+    const samePath = (a: string, b: string) => normPath(a) === normPath(b)
+    const ownDirs = [
+      ...new Set(
+        [
+          Global.Path.data,
+          Global.Path.state,
+          Global.Path.cache,
+          Global.Path.config,
+          ...Object.values(Global.Path.banyan),
+        ].map(normPath),
+      ),
+    ]
+    const isOwnPath = (file: string) => {
+      const target = normPath(file)
+      return ownDirs.some((dir) => target === dir || target.startsWith(dir + path.sep))
+    }
+
     const WORKSPACE_ROOT_MARKERS = [".banyancode"]
     const homeDir = os.homedir()
     const normHome = process.platform === "win32" ? homeDir.toLowerCase() : homeDir
@@ -308,11 +337,13 @@ export const layer: Layer.Layer<
             yield* Ref.set(initialBuildTriggeredRef, true)
             yield* Effect.logInfo(`codegraph auto-update: no indexedRoot, triggering initial build for ${derived}`)
             const excludePatterns = yield* Ref.get(excludePatternsRef)
-            yield* buildService.start({ root: derived, force: false, excludePatterns }).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning("codegraph auto-update: initial build failed", { cause: Cause.pretty(cause) }),
-              ),
-            )
+            yield* buildService
+              .start({ root: derived, force: false, excludePatterns })
+              .pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("codegraph auto-update: initial build failed", { cause: Cause.pretty(cause) }),
+                ),
+              )
           }
         } else {
           yield* Effect.logWarning("codegraph auto-update: could not derive root from pending paths, skipping")
@@ -323,17 +354,21 @@ export const layer: Layer.Layer<
 
       const root = meta.indexedRoot
       const removals = [...batch].filter(([, change]) => change === "unlink").map(([filePath]) => filePath)
-      const additions = [...batch].filter(([, change]) => change !== "unlink").map(([filePath, change]) => [filePath, change] as const)
+      const additions = [...batch]
+        .filter(([, change]) => change !== "unlink")
+        .map(([filePath, change]) => [filePath, change] as const)
       const excludePatterns = yield* Ref.get(excludePatternsRef)
 
       if (removals.length > 0) {
         yield* publishProgress({ phase: "preparing", total: removals.length })
         yield* publishProgress({ phase: "removing", completed: 0, total: removals.length, currentFile: removals[0] })
-        yield* indexer.removeFiles({ root, paths: removals }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("codegraph auto-update: removeFiles failed", { cause: Cause.pretty(cause) }),
-          ),
-        )
+        yield* indexer
+          .removeFiles({ root, paths: removals })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("codegraph auto-update: removeFiles failed", { cause: Cause.pretty(cause) }),
+            ),
+          )
         // Unlink-only paths never reach the add/change cleanup in the listener
         // (:389-393), so drop them here or graceSeenRef grows without bound on
         // long-lived watchers. A later unlink for the same path gets a fresh
@@ -343,29 +378,41 @@ export const layer: Layer.Layer<
           for (const filePath of removals) next.delete(filePath)
           return next
         })
-        yield* publishProgress({ phase: "removing", completed: removals.length, total: removals.length, currentFile: removals[removals.length - 1] })
+        yield* publishProgress({
+          phase: "removing",
+          completed: removals.length,
+          total: removals.length,
+          currentFile: removals[removals.length - 1],
+        })
         yield* publishProgress({ phase: "done", completed: removals.length, total: removals.length })
       }
 
       if (additions.length > 0) {
         const paths = additions.map(([filePath]) => filePath)
         yield* publishProgress({ phase: "preparing", total: paths.length })
-        const result = yield* indexer.indexFiles({
-          root,
-          paths,
-          excludePatterns,
-          onProgress: Effect.fn("CodegraphAutoUpdate.indexProgress")(function* ({ file, done, total, currentFile }) {
-            yield* publishProgress({ phase: "indexing", completed: done, total, currentFile: currentFile ?? file })
-          }),
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              yield* Effect.logWarning("codegraph auto-update: indexFiles failed", { cause: Cause.pretty(cause) })
-              return { indexed: 0, skipped: 0, parseErrors: [] }
+        const result = yield* indexer
+          .indexFiles({
+            root,
+            paths,
+            excludePatterns,
+            onProgress: Effect.fn("CodegraphAutoUpdate.indexProgress")(function* ({ file, done, total, currentFile }) {
+              yield* publishProgress({ phase: "indexing", completed: done, total, currentFile: currentFile ?? file })
             }),
-          ),
-        )
-        yield* publishProgress({ phase: "indexing", completed: result.indexed, total: paths.length, currentFile: paths[paths.length - 1] })
+          })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                yield* Effect.logWarning("codegraph auto-update: indexFiles failed", { cause: Cause.pretty(cause) })
+                return { indexed: 0, skipped: 0, parseErrors: [] }
+              }),
+            ),
+          )
+        yield* publishProgress({
+          phase: "indexing",
+          completed: result.indexed,
+          total: paths.length,
+          currentFile: paths[paths.length - 1],
+        })
         yield* publishProgress({ phase: "done", completed: result.indexed, total: paths.length })
         // NOTE: do NOT requeue on `result.skipped > 0`. The indexer's `skipped` count
         // is a deterministic aggregate — it includes files filtered out as ignored,
@@ -418,9 +465,15 @@ export const layer: Layer.Layer<
         yield* refreshConfig()
 
         const data = event.data as { file: string; event: PendingChange }
+        // BanyanCode's own data/state/cache/config writes (kv.json, logs, DBs)
+        // are never project files, and a home-directory instance is never a
+        // project root: without these guards a session started from ~ (a
+        // dotfiles git repo) kicked off an "initial build" of ~/.local/state.
+        if (isOwnPath(data.file)) return
+        if (event.location?.directory && samePath(event.location.directory, Global.Path.home)) return
         const meta = yield* repo.getMeta()
         if (meta?.indexedRoot) {
-          const norm = (p: string) => process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p)
+          const norm = (p: string) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p))
           if (!event.location?.directory || norm(event.location.directory) !== norm(meta.indexedRoot)) return
         }
 
@@ -429,11 +482,12 @@ export const layer: Layer.Layer<
           next.set(data.file, data.event)
           return next
         })
-        if (data.event !== "unlink") yield* Ref.update(graceSeenRef, (seen) => {
-          const next = new Set(seen)
-          next.delete(data.file)
-          return next
-        })
+        if (data.event !== "unlink")
+          yield* Ref.update(graceSeenRef, (seen) => {
+            const next = new Set(seen)
+            next.delete(data.file)
+            return next
+          })
         yield* recomputeStatus()
         yield* Queue.offer(wakeQueue, undefined).pipe(Effect.ignore)
       }).pipe(
@@ -452,7 +506,8 @@ export const layer: Layer.Layer<
         Effect.gen(function* () {
           const meta = yield* repo.getMeta().pipe(Effect.orElseSucceed(() => undefined))
           const root = input.root ?? meta?.indexedRoot
-          if (!root) return { discovered: 0, indexed: 0, removed: 0, cached: 0, pending: (yield* Ref.get(pendingRef)).size }
+          if (!root)
+            return { discovered: 0, indexed: 0, removed: 0, cached: 0, pending: (yield* Ref.get(pendingRef)).size }
           const maxPaths = Math.max(1, Math.min(MAX_BATCH_PATHS, input.maxPaths ?? MAX_BATCH_PATHS))
           const snapshot = yield* Ref.getAndUpdate(pendingRef, (pending) => {
             const next = new Map(pending)
