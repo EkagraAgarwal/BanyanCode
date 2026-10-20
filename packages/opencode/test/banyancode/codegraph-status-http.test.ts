@@ -108,7 +108,7 @@ const seedHealthyMeta = (root: string) =>
           totalFiles: 1,
           totalNodes: 2,
           totalEdges: 1,
-          schemaVersion: 4,
+          schemaVersion: 5,
           indexedRoot: identity.root,
         })
       }).pipe(Effect.provide(seedLayer)),

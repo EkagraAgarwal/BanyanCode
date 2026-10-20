@@ -124,7 +124,7 @@ describe("CodegraphReadiness", () => {
             totalFiles: 1,
             totalNodes: 0,
             totalEdges: 0,
-            schemaVersion: 4,
+            schemaVersion: 5,
             indexedRoot: repoDir,
           })
           // Update the file's mtime to a fresh timestamp WITHOUT changing
@@ -185,7 +185,7 @@ describe("CodegraphReadiness", () => {
             totalFiles: 1,
             totalNodes: 0,
             totalEdges: 0,
-            schemaVersion: 4,
+            schemaVersion: 5,
             indexedRoot: repoDir,
           })
           // Touch file A with no content change — mtime advances, but
@@ -316,7 +316,7 @@ describe("CodegraphReadiness", () => {
             totalFiles: 1,
             totalNodes: 0,
             totalEdges: 0,
-            schemaVersion: 4,
+            schemaVersion: 5,
             indexedRoot: repoDir,
           })
         }).pipe(Effect.provide(layer)),
@@ -558,7 +558,7 @@ describe("CodegraphReadiness", () => {
             totalFiles: 1,
             totalNodes: 0,
             totalEdges: 0,
-            schemaVersion: 4,
+            schemaVersion: 5,
             indexedRoot: tmp.path,
           })
         }).pipe(Effect.provide(layer)),
@@ -604,7 +604,7 @@ describe("CodegraphReadiness", () => {
             totalFiles: 1,
             totalNodes: 0,
             totalEdges: 0,
-            schemaVersion: 4,
+            schemaVersion: 5,
             indexedRoot: tmp.path,
           })
         }).pipe(Effect.provide(layer)),
@@ -649,7 +649,7 @@ describe("CodegraphReadiness", () => {
             totalFiles: 42,
             totalNodes: 0,
             totalEdges: 0,
-            schemaVersion: 4,
+            schemaVersion: 5,
             indexedRoot: tmp.path,
           })
         }).pipe(Effect.provide(layer)),

@@ -54,7 +54,7 @@ const FIXTURE_META = {
   totalFiles: 1,
   totalNodes: 1,
   totalEdges: 0,
-  schemaVersion: 4,
+  schemaVersion: 5,
 }
 
 // The handler yields PermissionV2.Service directly, so the API layer must

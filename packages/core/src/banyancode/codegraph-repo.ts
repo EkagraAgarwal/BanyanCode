@@ -25,8 +25,9 @@ const MAX_EDGES_PER_INSERT = 5000
 // CodegraphReadiness to detect structural staleness. Keep in sync with the
 // readiness consumer (codegraph-readiness.ts imports this constant — do NOT
 // hardcode the literal in both files).
-// v4: TS arrow-function node ranges were wrong before; force one reindex.
-export const CODEGRAPH_SCHEMA_VERSION = 4
+// v5: TS arrow-function, expression-body and type-alias ranges were wrong
+// before; force one reindex.
+export const CODEGRAPH_SCHEMA_VERSION = 5
 
 // Phase 3 query expansion: split an identifier-style query into its
 // constituent lowercase tokens so a single user query like
