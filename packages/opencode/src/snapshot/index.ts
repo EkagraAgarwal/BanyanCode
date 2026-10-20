@@ -1,5 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Cause, Duration, Effect, Layer, Schedule, Schema, Semaphore, Context } from "effect"
+import { Cause, Duration, Effect, Layer, Option, Schedule, Schema, Semaphore, Context } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { formatPatch, structuredPatch } from "diff"
 import path from "path"
@@ -53,6 +53,14 @@ const ADD_INTERVAL_MS = 1000
 // itself is a per-cycle skip (the next cycle retries), so only surface it at
 // most once per window instead of spamming on every settlement.
 const WARN_INTERVAL_MS = 30_000
+
+// Budget for the per-cycle diff-files + ls-files listing. The prompt loop
+// awaits track() before the first LLM call, so a worktree git cannot list
+// quickly (e.g. a home directory that is itself a git repo) used to stall the
+// session for minutes with no response. Past this budget the gitdir is marked
+// oversized and snapshots are skipped for it for the rest of the process.
+// Read per call so BANYANCODE_SNAPSHOT_LIST_TIMEOUT_MS can tune it.
+const listTimeoutMs = () => Number(process.env.BANYANCODE_SNAPSHOT_LIST_TIMEOUT_MS) || 15_000
 
 // Whether `lastRun` is recent enough that another run should be skipped.
 // `undefined` (never run) is never throttled. Pure so it can be unit-tested.
@@ -114,6 +122,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
     // instances like `locks`).
     const addThrottle = new Map<string, number>()
     const warnThrottle = new Map<string, number>()
+    const oversized = new Set<string>()
 
     const lock = (key: string) => {
       const hit = locks.get(key)
@@ -144,8 +153,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
         const scope =
           scopePrefix === "" || scopePrefix.startsWith("..") || path.isAbsolute(scopePrefix) ? "." : scopePrefix
 
-        const sanitize = (list: string[]) =>
-          Array.from(new Set(list.map(toWorktreePathspec).filter(isSafePathspec)))
+        const sanitize = (list: string[]) => Array.from(new Set(list.map(toWorktreePathspec).filter(isSafePathspec)))
 
         const args = (cmd: string[]) => ["--git-dir", state.gitdir, "--work-tree", state.worktree, ...cmd]
 
@@ -333,8 +341,9 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           const now = Date.now()
           const lastFailed = addThrottle.get(state.gitdir)
           if (shouldThrottle(lastFailed, now, ADD_INTERVAL_MS)) return true
+          if (oversized.has(state.gitdir)) return false
 
-          const [diff, other] = yield* Effect.all(
+          const listed = yield* Effect.all(
             [
               git([...quote, ...args(["diff-files", "--name-only", "-z", "--", scope])], {
                 cwd: state.worktree,
@@ -344,7 +353,16 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               }),
             ],
             { concurrency: 2 },
-          )
+          ).pipe(Effect.timeoutOption(Duration.millis(listTimeoutMs())))
+          if (Option.isNone(listed)) {
+            oversized.add(state.gitdir)
+            yield* Effect.logWarning("snapshot listing exceeded budget; snapshots disabled for this worktree", {
+              worktree: state.worktree,
+              timeoutMs: listTimeoutMs(),
+            })
+            return false
+          }
+          const [diff, other] = listed.value
           if (diff.code !== 0 || other.code !== 0) {
             addThrottle.set(state.gitdir, Date.now())
             yield* Effect.logWarning("failed to list snapshot files", {
@@ -441,6 +459,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
                 yield* Effect.logInfo("initialized")
               }
               yield* add()
+              if (oversized.has(state.gitdir)) return
               const result = yield* git(args(["write-tree"]), { cwd: state.worktree })
               const hash = result.text.trim()
               yield* Effect.logInfo("tracking", { hash, cwd: state.worktree, git: state.gitdir })

@@ -1180,3 +1180,19 @@ describe("worktree pathspec hygiene", () => {
     expect(toWorktreePathspec("a.txt")).toBe("a.txt")
   })
 })
+
+it.instance(
+  "skips snapshots when listing exceeds the budget instead of stalling",
+  Effect.gen(function* () {
+    yield* bootstrap()
+    const snapshot = yield* Snapshot.Service
+    process.env.BANYANCODE_SNAPSHOT_LIST_TIMEOUT_MS = "1"
+    const first = yield* snapshot
+      .track()
+      .pipe(Effect.ensuring(Effect.sync(() => delete process.env.BANYANCODE_SNAPSHOT_LIST_TIMEOUT_MS)))
+    expect(first).toBeUndefined()
+    // Oversized worktrees stay disabled even once the budget is restored.
+    expect(yield* snapshot.track()).toBeUndefined()
+  }),
+  { git: true },
+)
