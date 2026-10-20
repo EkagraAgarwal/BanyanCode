@@ -6,8 +6,11 @@ const CLASS_REGEX = /(?:^|\n)(?!export\s+)class\s+(\w+)(?:\s+extends\s+(\w+))?/g
 const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(/g
 // Allow leading whitespace so layer-internal `const start = ...` (4-space indented
 // inside `Layer.effect(...)`) is indexed. Previously anchored on `(?:^|\n)const`
-// which silently dropped every indented layer const.
-const ARROW_CONST_REGEX = /(?:^|\n)\s*(?:export\s+)?const\s+(\w+)\s*=\s*(async\s+)?(?:\([^)]*\)|[^=>\n]+)\s*=>/g
+// which silently dropped every indented layer const. The optional `: Type`
+// after a parenthesized parameter list admits return-type annotations on
+// multi-line signatures (`(input: {...}): {...} =>`), which were never indexed.
+const ARROW_CONST_REGEX =
+  /(?:^|\n)\s*(?:export\s+)?const\s+(\w+)\s*=\s*(async\s+)?(?:\([^)]*\)(?:\s*:[^=;]{1,500}?)?|[^=>\n]+)\s*=>/g
 const FACTORY_EXPORT_REGEX =
   /(?:^|\n)export\s+const\s+(\w+)\s*=\s*((?:Tool\.define|Layer\.effect|Layer\.succeed|Layer\.scoped|Context\.Service|Context\.Tag|Layer\.mergeAll)(?:<[^>]+>)?)\s*\(/g
 // Allow optional `export ` and indentation between the newline and the
@@ -208,8 +211,29 @@ function getArrowBody(
     return getTSNodeBody(content, offsets, matchIndex, content.substring(matchIndex, braceStart))
   }
 
-  const lineRel = slice.indexOf("\n")
-  const endOffset = lineRel === -1 ? sliceEnd : afterArrow + lineRel
+  // Expression body: it may start on the next line and span lines through
+  // balanced brackets (`Effect.gen(function* () {...})`, `.pipe(...)` chains),
+  // so end at the first `;` or newline at bracket depth 0 instead of the first
+  // newline after `=>`.
+  const bodyStart = sliceEnd - rest.length
+  const exprLimit = Math.min(bodyStart + BRACE_SCAN_BOUND, content.length)
+  let depth = 0
+  let endOffset = exprLimit
+  for (let i = bodyStart; i < exprLimit; i++) {
+    const ch = content[i]!
+    if (ch === "(" || ch === "[" || ch === "{") depth++
+    else if (ch === ")" || ch === "]" || ch === "}") {
+      // A closer below depth 0 belongs to an enclosing call (`f(x => y)`).
+      if (depth === 0) {
+        endOffset = i
+        break
+      }
+      depth--
+    } else if ((ch === "\n" || ch === ";" || ch === ",") && depth === 0) {
+      endOffset = i
+      break
+    }
+  }
   return {
     code: content.substring(matchIndex, endOffset),
     endLine: endLineFor(offsets, endOffset),
