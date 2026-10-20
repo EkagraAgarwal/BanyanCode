@@ -96,9 +96,11 @@ describe("mcp verify + memory (Phase 2)", () => {
       summary: { passed: 3, failed: 0, skipped: 1 },
       durationMs: 5,
       cacheHit: false,
+      rawOutput: " 3 pass\n 0 fail\nRan 4 tests across 1 file.",
     })
     expect(summary.passed).toBe(3)
     expect(summary.failed).toBe(0)
+    expect(summary.failures).toEqual([])
   })
 
   it.live("real HTTP layer: single-element dirs array decodes", () =>

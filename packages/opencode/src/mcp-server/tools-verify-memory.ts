@@ -72,7 +72,12 @@ export const summarizeVerifyResult = (
   passed: toCount(result.summary.passed),
   failed: toCount(result.summary.failed),
   skipped: toCount(result.summary.skipped),
-  failures: firstFailures(result.rawOutput, maxFailures),
+  // A clean run has no failures; the raw head of its output (the pass summary)
+  // read as failure lines to clients.
+  failures:
+    result.status === "passed" && toCount(result.summary.failed) === 0
+      ? []
+      : firstFailures(result.rawOutput, maxFailures),
   durationMs: result.durationMs,
   cacheHit: result.cacheHit,
 })

@@ -106,9 +106,19 @@ const shrinkValue = (
     // cost little, so they always survive; only nested objects/arrays count
     // toward keyCap. Capping in insertion order dropped trailing scalars such
     // as preflight's `risk` while keeping the bulky arrays before it.
+    // Among nested values, keep the smallest first: small maps such as
+    // preflight's fileID -> path `filePaths` carry more per byte than the
+    // bulky caller arrays that usually overflow the budget.
     const isNested = (entry: unknown) => entry !== null && typeof entry === "object"
-    let nestedBudget = keyCap
-    const kept = entries.filter(([, entry]) => !isNested(entry) || nestedBudget-- > 0)
+    const keepNested = new Set(
+      entries
+        .filter(([, entry]) => isNested(entry))
+        .map(([key, entry]) => [key, renderJson(entry).length] as const)
+        .sort((a, b) => a[1] - b[1])
+        .slice(0, keyCap)
+        .map(([key]) => key),
+    )
+    const kept = entries.filter(([key, entry]) => !isNested(entry) || keepNested.has(key))
     state.omitted += entries.length - kept.length
     const out: Record<string, unknown> = {}
     for (const [key, entry] of kept) out[key] = shrinkValue(entry, arrayCap, keyCap, stringCap, state, seen)

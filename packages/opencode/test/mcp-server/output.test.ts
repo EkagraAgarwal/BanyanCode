@@ -18,11 +18,14 @@ describe("mcp output helpers", () => {
       payload[`list${i}`] = Array.from({ length: 50 }, (_, j) => ({ id: `n-${i}-${j}`, pad: "x".repeat(40) }))
     payload["risk"] = "high"
     payload["directCallers"] = 7
+    payload["filePaths"] = { f1: "src/a.ts" }
     const out = truncateStructured(payload, 4000)
     expect(out.truncated).toBe(true)
     const data = out.data as Record<string, unknown>
     expect(data["risk"]).toBe("high")
     expect(data["directCallers"]).toBe(7)
+    // Small nested maps outrank the bulky arrays for the nested budget.
+    expect(data["filePaths"]).toEqual({ f1: "src/a.ts" })
   })
 
   test("small payloads pass through unmarked", () => {
