@@ -83,7 +83,7 @@ const FIXTURE_META = {
   totalFiles: 1,
   totalNodes: 1,
   totalEdges: 0,
-  schemaVersion: 3,
+  schemaVersion: 4,
 }
 
 // Headless allow-all permission: tools run under session "global", which has
