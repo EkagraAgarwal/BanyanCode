@@ -12,6 +12,19 @@ import {
 } from "../../src/mcp-server/output"
 
 describe("mcp output helpers", () => {
+  test("truncation keeps every scalar summary field, even after bulky arrays", () => {
+    const payload: Record<string, unknown> = {}
+    for (let i = 0; i < 12; i++)
+      payload[`list${i}`] = Array.from({ length: 50 }, (_, j) => ({ id: `n-${i}-${j}`, pad: "x".repeat(40) }))
+    payload["risk"] = "high"
+    payload["directCallers"] = 7
+    const out = truncateStructured(payload, 4000)
+    expect(out.truncated).toBe(true)
+    const data = out.data as Record<string, unknown>
+    expect(data["risk"]).toBe("high")
+    expect(data["directCallers"]).toBe(7)
+  })
+
   test("small payloads pass through unmarked", () => {
     expect(truncateStructured({ matches: [{ id: "n-1" }] })).toEqual({
       data: { matches: [{ id: "n-1" }] },
@@ -21,7 +34,9 @@ describe("mcp output helpers", () => {
   })
 
   test("oversized output stays valid JSON with truncated/omitted set", () => {
-    const payload = { matches: Array.from({ length: 5000 }, (_, n) => ({ id: `n-${n}`, name: "Widget", file: "src/widget.ts" })) }
+    const payload = {
+      matches: Array.from({ length: 5000 }, (_, n) => ({ id: `n-${n}`, name: "Widget", file: "src/widget.ts" })),
+    }
     const out = truncateStructured(payload, 8000)
     expect(out.truncated).toBe(true)
     expect(out.omitted).toBeGreaterThan(0)

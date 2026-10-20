@@ -102,7 +102,13 @@ const shrinkValue = (
     }
     seen.add(value)
     const entries = Object.entries(value)
-    const kept = entries.length > keyCap ? entries.slice(0, keyCap) : entries
+    // Scalars (risk, counts, status, ids) are the summary of a payload and
+    // cost little, so they always survive; only nested objects/arrays count
+    // toward keyCap. Capping in insertion order dropped trailing scalars such
+    // as preflight's `risk` while keeping the bulky arrays before it.
+    const isNested = (entry: unknown) => entry !== null && typeof entry === "object"
+    let nestedBudget = keyCap
+    const kept = entries.filter(([, entry]) => !isNested(entry) || nestedBudget-- > 0)
     state.omitted += entries.length - kept.length
     const out: Record<string, unknown> = {}
     for (const [key, entry] of kept) out[key] = shrinkValue(entry, arrayCap, keyCap, stringCap, state, seen)

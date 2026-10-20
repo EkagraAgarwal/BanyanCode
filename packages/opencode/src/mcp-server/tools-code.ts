@@ -117,10 +117,30 @@ const describeSdkError = (error: unknown): string => {
   }
 }
 
+// Graph nodes carry their whole source body in `code`; a single large node
+// (a 1600-line layer) used to eat the output budget and push every other
+// match into truncation. Matches carry path + startLine/endLine, so a short
+// head is enough to recognize the symbol; read the file for the full body.
+const CODE_SNIPPET_CHARS = 600
+const clampCode = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(clampCode)
+  if (value === null || typeof value !== "object") return value
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) =>
+      key === "code" && typeof entry === "string" && entry.length > CODE_SNIPPET_CHARS
+        ? [
+            key,
+            `${entry.slice(0, CODE_SNIPPET_CHARS)}…[${entry.length - CODE_SNIPPET_CHARS} more chars; read the file range]`,
+          ]
+        : [key, clampCode(entry)],
+    ),
+  )
+}
+
 const fromSdk = (res: SdkResult): McpToolResult =>
   res.error !== undefined && res.error !== null
     ? errorResult("UPSTREAM_ERROR", `request failed: ${describeSdkError(res.error)}`)
-    : okResult(res.data ?? null)
+    : okResult(clampCode(res.data ?? null))
 
 // Guard is validation-only: the route resolves the path against the indexed
 // workspace itself. Returns the absolute resolved path when it stays inside
