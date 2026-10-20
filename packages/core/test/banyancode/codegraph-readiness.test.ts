@@ -707,6 +707,24 @@ describe("CodegraphReadiness", () => {
     expect(healthy).toEqual({ needsBuild: false, forceReindex: false, routingError: undefined })
   })
 
+  test("statusFromMeta reports a graph from an older schema as stale, never ready", async () => {
+    const { statusFromMeta } = await import("@opencode-ai/core/banyancode/codegraph-readiness")
+    const meta = {
+      id: "singleton" as const,
+      graphBuiltAt: Date.now(),
+      graphVersion: 1,
+      graphCoverage: 1,
+      totalFiles: 1,
+      totalNodes: 1,
+      totalEdges: 0,
+      schemaVersion: CODEGRAPH_SCHEMA_VERSION - 1,
+    }
+    const stale = statusFromMeta(meta)
+    expect(stale.reason).toBe("stale")
+    expect(stale.warning).toContain("schema")
+    expect(statusFromMeta({ ...meta, schemaVersion: CODEGRAPH_SCHEMA_VERSION }).reason).toBe("ready")
+  })
+
   test("classifyReadiness widens a subdirectory stamp and accepts nested callers", async () => {
     await using tmp = await tmpdir()
     const { classifyReadiness } = await import("@opencode-ai/core/banyancode/codegraph-readiness")

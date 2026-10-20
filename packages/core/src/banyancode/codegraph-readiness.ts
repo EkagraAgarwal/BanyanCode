@@ -112,6 +112,16 @@ export const statusFromMeta = (meta: CodegraphMeta | undefined): ReadinessResult
   if (!meta) {
     return { reason: "missing", autoBuilt: false }
   }
+  // A graph from an older schema answers queries with outdated extraction
+  // until the forced reindex runs, so it must never look "ready".
+  if (meta.schemaVersion !== CODEGRAPH_SCHEMA_VERSION) {
+    return {
+      reason: "stale",
+      autoBuilt: false,
+      ...metaFields(meta),
+      warning: `graph was built with codegraph schema ${meta.schemaVersion ?? "unknown"} (current ${CODEGRAPH_SCHEMA_VERSION}); run a build to reindex`,
+    }
+  }
   const ageMs = Date.now() - meta.graphBuiltAt
   const coverageLow = (meta.graphCoverage ?? 0) < STALENESS_COVERAGE_HIGH
   if (coverageLow || ageMs > STALENESS_AGE_HIGH_MS) {

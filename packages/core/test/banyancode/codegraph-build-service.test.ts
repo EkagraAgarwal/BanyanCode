@@ -6,7 +6,11 @@ import { tmpdir } from "../fixture/tmpdir"
 import path from "path"
 import { CodegraphBuildService, layer } from "../../src/banyancode/codegraph-build-service"
 import { CodegraphIndexer } from "../../src/banyancode/codegraph-indexer"
-import { CodegraphRepo, defaultLayer as codegraphRepoDefaultLayer } from "../../src/banyancode/codegraph-repo"
+import {
+  CodegraphRepo,
+  CODEGRAPH_SCHEMA_VERSION,
+  defaultLayer as codegraphRepoDefaultLayer,
+} from "../../src/banyancode/codegraph-repo"
 
 // Set BANYANCODE_ENABLE for all tests
 process.env.BANYANCODE_ENABLE = "1"
@@ -32,11 +36,13 @@ const makeMockIndexer = (options: {
   }
   indexError?: CodegraphIndexer.CodegraphError
   progressUpdates?: { file: string; done: number; total: number }[]
+  onIndex?: (input: { force?: boolean }) => void
 }) => {
   return Layer.succeed(
     CodegraphIndexer.Service,
     CodegraphIndexer.Service.of({
       index: (input) => {
+        options.onIndex?.(input)
         return Effect.gen(function* () {
           for (const update of options.progressUpdates ?? []) {
             if (input.onProgress) yield* input.onProgress(update)
@@ -104,7 +110,11 @@ describe("CodegraphBuildService", () => {
       indexResult: { indexed: 5, skipped: 2, scannedFiles: 7, eligibleFiles: 7 },
     })
 
-    const serviceLayer = layer.pipe(Layer.provide(mockIndexer), Layer.provide(EventV2.defaultLayer), Layer.provide(CodegraphRepo.defaultLayer))
+    const serviceLayer = layer.pipe(
+      Layer.provide(mockIndexer),
+      Layer.provide(EventV2.defaultLayer),
+      Layer.provide(CodegraphRepo.defaultLayer),
+    )
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -123,6 +133,44 @@ describe("CodegraphBuildService", () => {
     )
   })
 
+  test("a graph from an older schema forces a full reindex even when force is false", async () => {
+    await using tmp = await tmpdir()
+    const dbLayer = Database.layerFromPath(path.join(tmp.path, "test.sqlite"))
+    const forces: Array<boolean | undefined> = []
+    const mockIndexer = makeMockIndexer({
+      indexResult: { indexed: 1, skipped: 0, scannedFiles: 1, eligibleFiles: 1 },
+      onIndex: (input) => forces.push(input.force),
+    })
+    const serviceLayer = layer.pipe(
+      Layer.provide(mockIndexer),
+      Layer.provide(EventV2.defaultLayer),
+      Layer.provideMerge(CodegraphRepo.defaultLayer),
+    )
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CodegraphRepo.Service
+        const service = yield* CodegraphBuildService.Service
+        yield* repo.setMeta({
+          id: "singleton",
+          graphBuiltAt: Date.now(),
+          graphVersion: 1,
+          graphCoverage: 1,
+          totalFiles: 1,
+          totalNodes: 1,
+          totalEdges: 0,
+          schemaVersion: CODEGRAPH_SCHEMA_VERSION - 1,
+        })
+        yield* service.start({ root: tmp.path, force: false })
+        yield* Effect.sleep(100)
+        // Second build: schema now current, so force stays false.
+        yield* service.start({ root: tmp.path, force: false })
+        yield* Effect.sleep(100)
+        expect(forces).toEqual([true, false])
+      }).pipe(Effect.provide(serviceLayer), Effect.provide(dbLayer), Effect.scoped),
+    )
+  })
+
   test("failed build transitions to failed with error message", async () => {
     await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "test.sqlite")
@@ -132,7 +180,11 @@ describe("CodegraphBuildService", () => {
       indexError: new CodegraphIndexer.CodegraphError({ message: "Index failed: parse error" }),
     })
 
-    const serviceLayer = layer.pipe(Layer.provide(mockIndexer), Layer.provide(EventV2.defaultLayer), Layer.provide(CodegraphRepo.defaultLayer))
+    const serviceLayer = layer.pipe(
+      Layer.provide(mockIndexer),
+      Layer.provide(EventV2.defaultLayer),
+      Layer.provide(CodegraphRepo.defaultLayer),
+    )
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -157,7 +209,11 @@ describe("CodegraphBuildService", () => {
 
     const mockIndexer = makeMockIndexer({})
 
-    const serviceLayer = layer.pipe(Layer.provide(mockIndexer), Layer.provide(EventV2.defaultLayer), Layer.provide(CodegraphRepo.defaultLayer))
+    const serviceLayer = layer.pipe(
+      Layer.provide(mockIndexer),
+      Layer.provide(EventV2.defaultLayer),
+      Layer.provide(CodegraphRepo.defaultLayer),
+    )
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -177,7 +233,11 @@ describe("CodegraphBuildService", () => {
       indexResult: { indexed: 5, skipped: 2, scannedFiles: 7, eligibleFiles: 7 },
     })
 
-    const serviceLayer = layer.pipe(Layer.provide(mockIndexer), Layer.provide(EventV2.defaultLayer), Layer.provide(CodegraphRepo.defaultLayer))
+    const serviceLayer = layer.pipe(
+      Layer.provide(mockIndexer),
+      Layer.provide(EventV2.defaultLayer),
+      Layer.provide(CodegraphRepo.defaultLayer),
+    )
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -306,7 +366,11 @@ describe("CodegraphBuildService", () => {
       },
     })
 
-    const serviceLayer = layer.pipe(Layer.provide(mockIndexer), Layer.provide(EventV2.defaultLayer), Layer.provide(CodegraphRepo.defaultLayer))
+    const serviceLayer = layer.pipe(
+      Layer.provide(mockIndexer),
+      Layer.provide(EventV2.defaultLayer),
+      Layer.provide(CodegraphRepo.defaultLayer),
+    )
 
     await Effect.runPromise(
       Effect.gen(function* () {
