@@ -74,7 +74,10 @@ describe("request-state tamper rejection", () => {
   test("flipped signature character fails the MAC", () => {
     const svc = createRequestStateService({ secret: SECRET })
     const token = svc.mint(mintInput)
-    const tampered = token.slice(0, -1) + (token.endsWith("A") ? "B" : "A")
+    // Flip the second-to-last char: the last base64url char of the MAC carries
+    // padding bits, so changing it can decode to identical bytes (flaky).
+    const at = token.length - 2
+    const tampered = token.slice(0, at) + (token[at] === "A" ? "B" : "A") + token.slice(at + 1)
     expect(rejectReason(svc, tampered)).toBe("mac")
   })
 
@@ -99,7 +102,10 @@ describe("request-state tamper rejection", () => {
     const body = Buffer.from(JSON.stringify({ v: 1, principal: "", task: "t", req: "r", exp: 1, nonce: "n" })).toString(
       "base64url",
     )
-    const mac = createHmac("sha256", SECRET).update(`mcp.request-state.v1.${body}`, "utf8").digest().toString("base64url")
+    const mac = createHmac("sha256", SECRET)
+      .update(`mcp.request-state.v1.${body}`, "utf8")
+      .digest()
+      .toString("base64url")
     const svc = createRequestStateService({ secret: SECRET })
     expect(rejectReason(svc, `v1.${body}.${mac}`)).toBe("malformed")
   })
