@@ -8,7 +8,8 @@ const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(
 // inside `Layer.effect(...)`) is indexed. Previously anchored on `(?:^|\n)const`
 // which silently dropped every indented layer const.
 const ARROW_CONST_REGEX = /(?:^|\n)\s*(?:export\s+)?const\s+(\w+)\s*=\s*(async\s+)?(?:\([^)]*\)|[^=>\n]+)\s*=>/g
-const FACTORY_EXPORT_REGEX = /(?:^|\n)export\s+const\s+(\w+)\s*=\s*((?:Tool\.define|Layer\.effect|Layer\.succeed|Layer\.scoped|Context\.Service|Context\.Tag|Layer\.mergeAll)(?:<[^>]+>)?)\s*\(/g
+const FACTORY_EXPORT_REGEX =
+  /(?:^|\n)export\s+const\s+(\w+)\s*=\s*((?:Tool\.define|Layer\.effect|Layer\.succeed|Layer\.scoped|Context\.Service|Context\.Tag|Layer\.mergeAll)(?:<[^>]+>)?)\s*\(/g
 // Allow optional `export ` and indentation between the newline and the
 // `interface` keyword. Real BanyanCode services use
 // `export interface Interface { ... }` as the sibling type of
@@ -200,7 +201,11 @@ function getArrowBody(
   const rest = slice.trimStart()
   if (rest.startsWith("{")) {
     const braceStart = sliceEnd - rest.length
-    return getTSNodeBody(content, offsets, matchIndex, content.substring(matchIndex, braceStart + 1))
+    // Stop BEFORE the body brace: getTSNodeBody scans for the first `{` after
+    // the match, so including it made the scan start at the NEXT brace — an
+    // inner `if {` (range cut short) or the following function (range overrun),
+    // which misattributed call edges to the wrong enclosing node.
+    return getTSNodeBody(content, offsets, matchIndex, content.substring(matchIndex, braceStart))
   }
 
   const lineRel = slice.indexOf("\n")
@@ -235,7 +240,12 @@ function getFactoryBody(
   }
 }
 
-function extractClassMethods(classCode: string, classStartLine: number, fileID: string, className: string): ParsedNode[] {
+function extractClassMethods(
+  classCode: string,
+  classStartLine: number,
+  fileID: string,
+  className: string,
+): ParsedNode[] {
   const methods: ParsedNode[] = []
   const localOffsets = computeLineStartOffsets(classCode)
   for (const match of classCode.matchAll(CLASS_METHOD_REGEX)) {
@@ -427,7 +437,15 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     )
     const effectMatch = code.match(EFFECT_FN_REGEX)
     const signature = effectMatch ? effectMatch[1] : match[0].trim()
-    nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
+    nodes.push({
+      id: `${fileID}:function:${name}:${startLine}`,
+      kind: "function",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
   }
 
   for (const match of content.matchAll(FACTORY_EXPORT_REGEX)) {
@@ -436,7 +454,15 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     const signature = factoryCall.replace(/\s*\($/, "")
     const startLine = declStartLine(content, offsets, match.index)
     const { code, endLine } = getFactoryBody(content, offsets, match.index!, match[0])
-    nodes.push({ id: `${fileID}:factory:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
+    nodes.push({
+      id: `${fileID}:factory:${name}:${startLine}`,
+      kind: "function",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
   }
 
   for (const match of content.matchAll(ARROW_CONST_REGEX)) {
@@ -445,7 +471,15 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     const { code, endLine } = getArrowBody(content, offsets, match.index!, match[0])
     const effectMatch = code.match(EFFECT_FN_REGEX)
     const signature = effectMatch ? effectMatch[1] : match[0].trim()
-    nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
+    nodes.push({
+      id: `${fileID}:function:${name}:${startLine}`,
+      kind: "function",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
   }
 
   for (const match of content.matchAll(EFFECT_FN_CONST_REGEX)) {
@@ -484,7 +518,15 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
         endLine = endLineFor(offsets, braceLimit)
       }
     }
-    nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
+    nodes.push({
+      id: `${fileID}:function:${name}:${startLine}`,
+      kind: "function",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
   }
 
   for (const match of content.matchAll(INTERFACE_REGEX)) {
