@@ -173,6 +173,8 @@ describe("preflight tool", () => {
         expect(missing.target.resolved).toBe(false)
         const noTargetRisk = missing.risks.find((r) => r.kind === "no-target")
         expect(noTargetRisk?.severity).toBe("high")
+        expect(missing.risk).toBe("unknown")
+        expect(missing.filePaths).toEqual({})
       }).pipe(Effect.provide(testLayer), Effect.provide(dbLayer), Effect.scoped),
     )
   })
