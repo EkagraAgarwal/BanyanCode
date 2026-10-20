@@ -95,6 +95,13 @@ export const canonicalizeRoot = (input: string): string => {
   return process.platform === "win32" ? real.replace(/\//g, "\\").toLowerCase() : real
 }
 
+// True when `child` is `parent` or lives underneath it (canonicalized, so
+// casing / separator / symlink spellings of the same tree agree).
+export const isWithinRoot = (child: string, parent: string): boolean => {
+  const rel = relative(canonicalizeRoot(parent), canonicalizeRoot(child))
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))
+}
+
 export type EffectiveRootSource = "explicit" | "worktree" | "repo-walk" | "cwd"
 
 export type EffectiveRoot =
@@ -165,7 +172,8 @@ export const resolveEffectiveRoot = (input: {
   if (!candidate || candidate.trim() === "") return invalid("workspace root must be a non-empty path")
   const root = sanitizeRoot(candidate)
   const { root: fsRoot } = parse(root)
-  if (root === fsRoot) return invalid(`workspace root '${candidate}' resolves to a filesystem root; pass a workspace directory instead`)
+  if (root === fsRoot)
+    return invalid(`workspace root '${candidate}' resolves to a filesystem root; pass a workspace directory instead`)
   if (samePath(root, home)) {
     return invalid(`workspace root '${candidate}' is the user home directory; open a project directory instead`)
   }
@@ -195,7 +203,15 @@ export const isInsideWorkspace = (root: string, candidate: string): boolean => {
 
 export const diagnosisFromMeta = (
   identity: WorkspaceIdentity,
-  meta: { indexedRoot?: string | undefined; totalFiles?: number; totalNodes?: number; totalEdges?: number; graphVersion?: number } | undefined,
+  meta:
+    | {
+        indexedRoot?: string | undefined
+        totalFiles?: number
+        totalNodes?: number
+        totalEdges?: number
+        graphVersion?: number
+      }
+    | undefined,
 ):
   | { status: "no-graph" }
   | { status: "in-scope"; indexedRoot: string }

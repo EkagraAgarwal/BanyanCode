@@ -43,8 +43,9 @@ export type ReadinessResult = typeof ReadinessResult.Type
 
 // Readiness classification split: needsBuild (missing meta / empty table,
 // reconciled with force:false), needsSync (per-file drift, background only),
-// forceReindex (schema mismatch — the sole force:true trigger), routingError
-// (indexed_root mismatch — a routing failure, never a rebuild).
+// forceReindex (schema mismatch, or a store stamped with a subdirectory of the
+// caller root), routingError (unrelated indexed_root — a routing failure,
+// never a rebuild).
 export const classifyReadiness = (input: {
   readonly meta: CodegraphMeta | undefined
   readonly fileCount: number
@@ -59,10 +60,17 @@ export const classifyReadiness = (input: {
   if (input.meta.schemaVersion !== CODEGRAPH_SCHEMA_VERSION) {
     return { needsBuild: false, forceReindex: true, routingError: undefined }
   }
-  if (
-    input.meta.indexedRoot !== undefined &&
-    canonicalRoot(input.meta.indexedRoot) !== canonicalRoot(input.root)
-  ) {
+  if (input.meta.indexedRoot !== undefined && canonicalRoot(input.meta.indexedRoot) !== canonicalRoot(input.root)) {
+    // A caller inside the indexed tree is covered by the graph. A caller
+    // ABOVE it means the store was stamped with a subdirectory (e.g. a server
+    // started from packages/opencode wrote into the git-root DB); widen it by
+    // reindexing at the caller root instead of failing every call forever.
+    if (WorkspaceIdentity.isWithinRoot(input.root, input.meta.indexedRoot)) {
+      return { needsBuild: false, forceReindex: false, routingError: undefined }
+    }
+    if (WorkspaceIdentity.isWithinRoot(input.meta.indexedRoot, input.root)) {
+      return { needsBuild: false, forceReindex: true, routingError: undefined }
+    }
     return {
       needsBuild: false,
       forceReindex: false,
@@ -158,10 +166,7 @@ export const layer = Layer.effect(
     const repo = yield* CodegraphRepo.Service
     const inflight = yield* Ref.make<Map<string, Deferred.Deferred<ReadinessResult, never>>>(new Map())
 
-    const runReadiness = (
-      root: string,
-      thresholdMs: number,
-    ): Effect.Effect<ReadinessResult, never, never> =>
+    const runReadiness = (root: string, thresholdMs: number): Effect.Effect<ReadinessResult, never, never> =>
       Effect.gen(function* () {
         const startMs = Date.now()
         const meta = yield* repo.getMeta()
@@ -260,60 +265,58 @@ export const layer = Layer.effect(
       readonly isOwner: boolean
     }
 
-    const ensureReady: Interface["ensureReady"] = Effect.fn("CodegraphReadiness.ensureReady")(
-      function* (input) {
-        const root = canonicalRoot(input.root)
-        const thresholdMs = input.thresholdMs ?? DEFAULT_THRESHOLD_MS
+    const ensureReady: Interface["ensureReady"] = Effect.fn("CodegraphReadiness.ensureReady")(function* (input) {
+      const root = canonicalRoot(input.root)
+      const thresholdMs = input.thresholdMs ?? DEFAULT_THRESHOLD_MS
 
-        // Create a candidate Deferred eagerly. If we lose the race we still wait
-        // on the winner's Deferred — our candidate is GC'd.
-        const candidate = yield* Deferred.make<ReadinessResult, never>()
+      // Create a candidate Deferred eagerly. If we lose the race we still wait
+      // on the winner's Deferred — our candidate is GC'd.
+      const candidate = yield* Deferred.make<ReadinessResult, never>()
 
-        const winner: Reservation = yield* Ref.modify(inflight, (m) => {
-          const existing = m.get(root)
-          if (existing) {
-            const r: Reservation = { deferred: existing, isOwner: false }
-            return [r, m]
-          }
-          const next = new Map(m)
-          next.set(root, candidate)
-          const r: Reservation = { deferred: candidate, isOwner: true }
-          return [r, next]
-        })
-
-        if (winner.isOwner) {
-          // Sole owner: fork the readiness work. Settle the Deferred ourselves
-          // and clean up the inflight slot whether the work succeeds or fails.
-          yield* Effect.forkDetach(
-            Effect.gen(function* () {
-              const result = yield* runReadiness(root, thresholdMs).pipe(
-                Effect.catchCause((cause) => {
-                  const err = Cause.squash(cause)
-                  const message = err instanceof Error ? err.message : String(err)
-                  const fallback: ReadinessResult = {
-                    reason: "failed",
-                    autoBuilt: true,
-                    error: message,
-                  }
-                  return Effect.succeed(fallback)
-                }),
-              )
-              yield* Deferred.succeed(winner.deferred, result)
-            }).pipe(
-              Effect.ensuring(
-                Ref.update(inflight, (m) => {
-                  const next = new Map(m)
-                  next.delete(root)
-                  return next
-                }),
-              ),
-            ),
-          )
+      const winner: Reservation = yield* Ref.modify(inflight, (m) => {
+        const existing = m.get(root)
+        if (existing) {
+          const r: Reservation = { deferred: existing, isOwner: false }
+          return [r, m]
         }
+        const next = new Map(m)
+        next.set(root, candidate)
+        const r: Reservation = { deferred: candidate, isOwner: true }
+        return [r, next]
+      })
 
-        return yield* Deferred.await(winner.deferred)
-      },
-    )
+      if (winner.isOwner) {
+        // Sole owner: fork the readiness work. Settle the Deferred ourselves
+        // and clean up the inflight slot whether the work succeeds or fails.
+        yield* Effect.forkDetach(
+          Effect.gen(function* () {
+            const result = yield* runReadiness(root, thresholdMs).pipe(
+              Effect.catchCause((cause) => {
+                const err = Cause.squash(cause)
+                const message = err instanceof Error ? err.message : String(err)
+                const fallback: ReadinessResult = {
+                  reason: "failed",
+                  autoBuilt: true,
+                  error: message,
+                }
+                return Effect.succeed(fallback)
+              }),
+            )
+            yield* Deferred.succeed(winner.deferred, result)
+          }).pipe(
+            Effect.ensuring(
+              Ref.update(inflight, (m) => {
+                const next = new Map(m)
+                next.delete(root)
+                return next
+              }),
+            ),
+          ),
+        )
+      }
+
+      return yield* Deferred.await(winner.deferred)
+    })
 
     const status: Interface["status"] = () =>
       Effect.gen(function* () {

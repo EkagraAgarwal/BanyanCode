@@ -11,6 +11,7 @@ import { CodegraphServiceTagsTable } from "./codegraph-service-tags.sql"
 import { CodegraphTracesTable } from "./codegraph-traces.sql"
 import { isTestFilePath } from "./codegraph-paths"
 import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from "./types"
+import { WorkspaceIdentity } from "./workspace-identity"
 
 export type FTSResult = CodegraphNode & { readonly bm25: number }
 
@@ -57,9 +58,7 @@ export const expandQueryToTokens = (query: string): string[] => {
     // Step 2: camelCase boundary split. Insert a space between a lowercase
     // or digit and an uppercase, and between two uppercase letters when
     // followed by a lowercase (handles `XMLParser` → `XML Parser`).
-    const camelSplit = piece
-      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-      .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    const camelSplit = piece.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
     // Step 3: non-alphanumeric runs become separators. `_-./:` etc. all
     // drop out; alphanumerics remain.
     const tokens = camelSplit.split(/[^A-Za-z0-9]+/).filter(Boolean)
@@ -74,7 +73,11 @@ export const expandQueryToTokens = (query: string): string[] => {
   return out
 }
 
-const extractServiceTag = (code: string, nodeID: string, fileID: string): typeof CodegraphServiceTagsTable.$inferInsert | null => {
+const extractServiceTag = (
+  code: string,
+  nodeID: string,
+  fileID: string,
+): typeof CodegraphServiceTagsTable.$inferInsert | null => {
   // Match Context.Service<...>()("tag") or Context.Service<...>( ) ( "tag" ).
   // The non-greedy match for the generic argument list is bounded by a balanced
   // angle-bracket scan so nested generics (e.g. Context.Service<Service<Inner>, Interface>)
@@ -142,11 +145,10 @@ export interface Interface {
    * page. Prefer this (or countFiles for cardinality) over listAllFiles
    * when the graph is large — one page stays resident instead of every row.
    */
-  readonly listFilesPage: (input: { cursor?: string; limit?: number }) => Effect.Effect<
-    { files: CodegraphFile[]; nextCursor: string | undefined },
-    never,
-    never
-  >
+  readonly listFilesPage: (input: {
+    cursor?: string
+    limit?: number
+  }) => Effect.Effect<{ files: CodegraphFile[]; nextCursor: string | undefined }, never, never>
   readonly putNode: (node: CodegraphNode) => Effect.Effect<void, never, never>
   readonly putNodes: (nodes: CodegraphNode[]) => Effect.Effect<void, never, never>
   readonly getNode: (id: string) => Effect.Effect<CodegraphNode | undefined, never, never>
@@ -160,15 +162,23 @@ export interface Interface {
    * peak-RAM contract as listFilesPage: stream large graphs page by page
    * instead of materializing listAllNodes.
    */
-  readonly listNodesPage: (input: { cursor?: string; limit?: number }) => Effect.Effect<
-    { nodes: CodegraphNode[]; nextCursor: string | undefined },
-    never,
-    never
-  >
+  readonly listNodesPage: (input: {
+    cursor?: string
+    limit?: number
+  }) => Effect.Effect<{ nodes: CodegraphNode[]; nextCursor: string | undefined }, never, never>
   readonly queryNodes: (input: { function?: string; kind?: string }) => Effect.Effect<CodegraphNode[], never, never>
-  readonly searchNodes: (input: { name?: string; kind?: string; limit?: number }) => Effect.Effect<CodegraphNode[], never, never>
+  readonly searchNodes: (input: {
+    name?: string
+    kind?: string
+    limit?: number
+  }) => Effect.Effect<CodegraphNode[], never, never>
   /** Like searchNodes but without the `code` field — suitable for callers that only need metadata. */
-  readonly searchNodesLight: (input: { name?: string; kind?: string; fileID?: string; limit?: number }) => Effect.Effect<Array<Omit<CodegraphNode, "code"> & { code?: never }>, never, never>
+  readonly searchNodesLight: (input: {
+    name?: string
+    kind?: string
+    fileID?: string
+    limit?: number
+  }) => Effect.Effect<Array<Omit<CodegraphNode, "code"> & { code?: never }>, never, never>
   /** FTS5 full-text search across symbol names and code, ranked by bm25. */
   readonly ftsSearchNodes: (input: { query: string; limit?: number }) => Effect.Effect<FTSResult[], never, never>
   /** Fetch nodes for a specific set of files. Used by incremental rebuildDerivedGraph. */
@@ -193,11 +203,9 @@ export interface Interface {
    * newest mtime first. Used by the `codegraph_staleness` diagnostic tool to
    * surface which files are driving the stale count.
    */
-  readonly listStaleFiles: (limit: number) => Effect.Effect<
-    ReadonlyArray<{ path: string; mtimeMs: number; indexedAt: number }>,
-    never,
-    never
-  >
+  readonly listStaleFiles: (
+    limit: number,
+  ) => Effect.Effect<ReadonlyArray<{ path: string; mtimeMs: number; indexedAt: number }>, never, never>
   /**
    * Phase 6 (usage surface): read the `codegraph_tool_usage` rows most-used
    * first. Consumers (HTTP `GET /global/tool-usage`, the TUI sidebar widget)
@@ -208,11 +216,9 @@ export interface Interface {
    * rows whose `session_id` matches (the session that most recently used the
    * tool). Omitting the filter keeps the lifetime-aggregate contract.
    */
-  readonly listToolUsage: (input?: { session?: string }) => Effect.Effect<
-    ReadonlyArray<{ toolId: string; useCount: number; lastUsedAt: number }>,
-    never,
-    never
-  >
+  readonly listToolUsage: (input?: {
+    session?: string
+  }) => Effect.Effect<ReadonlyArray<{ toolId: string; useCount: number; lastUsedAt: number }>, never, never>
   readonly putEdge: (edge: CodegraphEdge) => Effect.Effect<void, never, never>
   readonly putEdges: (edges: CodegraphEdge[]) => Effect.Effect<void, never, never>
   readonly getEdge: (id: string) => Effect.Effect<CodegraphEdge | undefined, never, never>
@@ -221,11 +227,10 @@ export interface Interface {
    * Keyset page over codegraph_edges ordered by id ascending. Same
    * peak-RAM contract as listFilesPage.
    */
-  readonly listEdgesPage: (input: { cursor?: string; limit?: number }) => Effect.Effect<
-    { edges: CodegraphEdge[]; nextCursor: string | undefined },
-    never,
-    never
-  >
+  readonly listEdgesPage: (input: {
+    cursor?: string
+    limit?: number
+  }) => Effect.Effect<{ edges: CodegraphEdge[]; nextCursor: string | undefined }, never, never>
   readonly listEdgesByNode: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesFrom: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
   readonly edgesTo: (nodeID: string) => Effect.Effect<CodegraphEdge[], never, never>
@@ -258,7 +263,9 @@ export interface Interface {
    * ids written this build to exempt them from the purge (parser-owned
    * call edges survive); default (derived) mode passes nothing.
    */
-  readonly deleteAllDerivedEdges: (preserveEdgeIDs?: ReadonlySet<string>) => Effect.Effect<readonly string[], never, never>
+  readonly deleteAllDerivedEdges: (
+    preserveEdgeIDs?: ReadonlySet<string>,
+  ) => Effect.Effect<readonly string[], never, never>
   /**
    * Atomically replace one file's worth of graph data: if `previousFileID`
    * is set, delete that file (cascade-removes its nodes/edges); then insert
@@ -273,9 +280,9 @@ export interface Interface {
     edges: CodegraphEdge[]
     previousFileID?: string
   }) => Effect.Effect<void, never, never>
-  readonly clearAll: (
-    input?: { dropFile?: boolean },
-  ) => Effect.Effect<{ sizeBefore: number; sizeAfter: number; droppedFile: boolean }, never, never>
+  readonly clearAll: (input?: {
+    dropFile?: boolean
+  }) => Effect.Effect<{ sizeBefore: number; sizeAfter: number; droppedFile: boolean }, never, never>
   // Phase 3: recompute `codegraph_nodes.in_degree` from
   // `codegraph_edges.to_node_id`. Called by the indexer after the parse
   // pass writes all edges, so the ranker can read the column instead of
@@ -288,7 +295,10 @@ export interface Interface {
    * heuristics that compare mtime to indexed_at would fire forever on
    * those files even though their content was unchanged).
    */
-  readonly bumpIndexedAt: (input: { fileIDs: readonly string[]; indexedAt: number }) => Effect.Effect<void, never, never>
+  readonly bumpIndexedAt: (input: {
+    fileIDs: readonly string[]
+    indexedAt: number
+  }) => Effect.Effect<void, never, never>
   readonly getMeta: () => Effect.Effect<CodegraphMeta | undefined, never, never>
   readonly setMeta: (m: CodegraphMeta) => Effect.Effect<void, never, never>
   readonly bumpVersion: (input: {
@@ -325,7 +335,11 @@ export interface Interface {
     never,
     never
   >
-  readonly recordParseError: (input: { path: string; cause: string; indexedAt: number }) => Effect.Effect<void, unknown, never>
+  readonly recordParseError: (input: {
+    path: string
+    cause: string
+    indexedAt: number
+  }) => Effect.Effect<void, unknown, never>
   readonly listParseErrors: () => Effect.Effect<Array<{ path: string; cause: string; indexedAt: number }>, never, never>
   readonly clearParseErrors: () => Effect.Effect<void, never, never>
   readonly findSymbolsByServiceTag: (tag: string) => Effect.Effect<CodegraphNode[], never, never>
@@ -531,7 +545,7 @@ export const layer = Layer.effect(
         code: row.code ?? undefined,
         isEntrypoint: row.is_entrypoint,
         inDegree: row.in_degree,
-      } as CodegraphNode & { isEntrypoint?: number; inDegree?: number })
+      }) as CodegraphNode & { isEntrypoint?: number; inDegree?: number }
 
     const listNodesByFile = Effect.fn("CodegraphRepo.listNodesByFile")(function* (fileID: string) {
       const rows = yield* db
@@ -709,96 +723,91 @@ export const layer = Layer.effect(
       preserveEdgeIDs?: ReadonlySet<string>
     }) {
       if (input.fileIDs.length === 0) return []
-      return yield* db.transaction((tx) =>
-        Effect.gen(function* () {
-          const nodeIDRows = yield* tx
-            .select({ id: CodegraphNodesTable.id })
-            .from(CodegraphNodesTable)
-            .where(inArray(CodegraphNodesTable.file_id, input.fileIDs))
-            .all()
-            .pipe(Effect.orDie)
-          const nodeIDs = nodeIDRows.map((r) => r.id)
-          if (nodeIDs.length === 0) return []
-          let derivedWhere: SQL | undefined = and(
-            or(
-              inArray(CodegraphEdgesTable.from_node_id, nodeIDs),
-              inArray(CodegraphEdgesTable.to_node_id, nodeIDs),
-            ),
-            or(
-              eq(CodegraphEdgesTable.kind, "calls"),
-              eq(CodegraphEdgesTable.kind, "extends"),
-              eq(CodegraphEdgesTable.kind, "references"),
-              eq(CodegraphEdgesTable.kind, "tested_by"),
-              eq(CodegraphEdgesTable.kind, "configured_by"),
-              eq(CodegraphEdgesTable.kind, "built_by"),
-              eq(CodegraphEdgesTable.kind, "mounts"),
-              eq(CodegraphEdgesTable.kind, "generated_from"),
-            ),
-          )
-          // Phase 0 tree-sitter (parser mode): exempt parser-emitted edge
-          // ids so parser-owned tree-sitter query edges survive the delete.
-          if (input.preserveEdgeIDs && input.preserveEdgeIDs.size > 0) {
-            derivedWhere = and(derivedWhere, notInArray(CodegraphEdgesTable.id, [...input.preserveEdgeIDs]))
-          }
-          const deletedRows = yield* tx
-            .select({ from: CodegraphEdgesTable.from_node_id, to: CodegraphEdgesTable.to_node_id })
-            .from(CodegraphEdgesTable)
-            .where(derivedWhere)
-            .all()
-            .pipe(Effect.orDie)
-          yield* tx
-            .delete(CodegraphEdgesTable)
-            .where(derivedWhere)
-            .run()
-            .pipe(Effect.orDie)
-          const touched = new Set<string>(nodeIDs)
-          for (const row of deletedRows) {
-            touched.add(row.from)
-            touched.add(row.to)
-          }
-          return [...touched]
-        }),
-      ).pipe(Effect.orDie)
+      return yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const nodeIDRows = yield* tx
+              .select({ id: CodegraphNodesTable.id })
+              .from(CodegraphNodesTable)
+              .where(inArray(CodegraphNodesTable.file_id, input.fileIDs))
+              .all()
+              .pipe(Effect.orDie)
+            const nodeIDs = nodeIDRows.map((r) => r.id)
+            if (nodeIDs.length === 0) return []
+            let derivedWhere: SQL | undefined = and(
+              or(inArray(CodegraphEdgesTable.from_node_id, nodeIDs), inArray(CodegraphEdgesTable.to_node_id, nodeIDs)),
+              or(
+                eq(CodegraphEdgesTable.kind, "calls"),
+                eq(CodegraphEdgesTable.kind, "extends"),
+                eq(CodegraphEdgesTable.kind, "references"),
+                eq(CodegraphEdgesTable.kind, "tested_by"),
+                eq(CodegraphEdgesTable.kind, "configured_by"),
+                eq(CodegraphEdgesTable.kind, "built_by"),
+                eq(CodegraphEdgesTable.kind, "mounts"),
+                eq(CodegraphEdgesTable.kind, "generated_from"),
+              ),
+            )
+            // Phase 0 tree-sitter (parser mode): exempt parser-emitted edge
+            // ids so parser-owned tree-sitter query edges survive the delete.
+            if (input.preserveEdgeIDs && input.preserveEdgeIDs.size > 0) {
+              derivedWhere = and(derivedWhere, notInArray(CodegraphEdgesTable.id, [...input.preserveEdgeIDs]))
+            }
+            const deletedRows = yield* tx
+              .select({ from: CodegraphEdgesTable.from_node_id, to: CodegraphEdgesTable.to_node_id })
+              .from(CodegraphEdgesTable)
+              .where(derivedWhere)
+              .all()
+              .pipe(Effect.orDie)
+            yield* tx.delete(CodegraphEdgesTable).where(derivedWhere).run().pipe(Effect.orDie)
+            const touched = new Set<string>(nodeIDs)
+            for (const row of deletedRows) {
+              touched.add(row.from)
+              touched.add(row.to)
+            }
+            return [...touched]
+          }),
+        )
+        .pipe(Effect.orDie)
     })
 
-    const deleteAllDerivedEdges = Effect.fn("CodegraphRepo.deleteAllDerivedEdges")(function* (preserveEdgeIDs?: ReadonlySet<string>) {
-      return yield* db.transaction((tx) =>
-        Effect.gen(function* () {
-          const derivedKinds = [
-            "calls",
-            "extends",
-            "references",
-            "tested_by",
-            "configured_by",
-            "built_by",
-            "mounts",
-            "generated_from",
-          ]
-          let where: SQL | undefined = inArray(CodegraphEdgesTable.kind, derivedKinds)
-          // Phase 0 tree-sitter (parser mode): exempt parser-emitted edge
-          // ids so parser-owned tree-sitter query edges survive the purge.
-          if (preserveEdgeIDs && preserveEdgeIDs.size > 0) {
-            where = and(where, notInArray(CodegraphEdgesTable.id, [...preserveEdgeIDs]))
-          }
-          const deletedRows = yield* tx
-            .select({ from: CodegraphEdgesTable.from_node_id, to: CodegraphEdgesTable.to_node_id })
-            .from(CodegraphEdgesTable)
-            .where(where)
-            .all()
-            .pipe(Effect.orDie)
-          yield* tx
-            .delete(CodegraphEdgesTable)
-            .where(where)
-            .run()
-            .pipe(Effect.orDie)
-          const touched = new Set<string>()
-          for (const row of deletedRows) {
-            touched.add(row.from)
-            touched.add(row.to)
-          }
-          return [...touched]
-        }),
-      ).pipe(Effect.orDie)
+    const deleteAllDerivedEdges = Effect.fn("CodegraphRepo.deleteAllDerivedEdges")(function* (
+      preserveEdgeIDs?: ReadonlySet<string>,
+    ) {
+      return yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const derivedKinds = [
+              "calls",
+              "extends",
+              "references",
+              "tested_by",
+              "configured_by",
+              "built_by",
+              "mounts",
+              "generated_from",
+            ]
+            let where: SQL | undefined = inArray(CodegraphEdgesTable.kind, derivedKinds)
+            // Phase 0 tree-sitter (parser mode): exempt parser-emitted edge
+            // ids so parser-owned tree-sitter query edges survive the purge.
+            if (preserveEdgeIDs && preserveEdgeIDs.size > 0) {
+              where = and(where, notInArray(CodegraphEdgesTable.id, [...preserveEdgeIDs]))
+            }
+            const deletedRows = yield* tx
+              .select({ from: CodegraphEdgesTable.from_node_id, to: CodegraphEdgesTable.to_node_id })
+              .from(CodegraphEdgesTable)
+              .where(where)
+              .all()
+              .pipe(Effect.orDie)
+            yield* tx.delete(CodegraphEdgesTable).where(where).run().pipe(Effect.orDie)
+            const touched = new Set<string>()
+            for (const row of deletedRows) {
+              touched.add(row.from)
+              touched.add(row.to)
+            }
+            return [...touched]
+          }),
+        )
+        .pipe(Effect.orDie)
     })
 
     const nodeByID = Effect.fn("CodegraphRepo.nodeByID")(function* (id: string) {
@@ -855,12 +864,14 @@ export const layer = Layer.effect(
       }
       const whereClause = conditions.length > 0 ? sql`WHERE ${sql.join(conditions, sql` AND `)}` : sql``
       const rows = yield* db
-        .all<typeof CodegraphNodesTable.$inferSelect>(sql`
+        .all<typeof CodegraphNodesTable.$inferSelect>(
+          sql`
           SELECT * FROM codegraph_nodes
           ${whereClause}
           ORDER BY codegraph_nodes.name
           LIMIT ${limit}
-        `)
+        `,
+        )
         .pipe(Effect.orDie)
       return rows.map(rowToNode)
     })
@@ -892,13 +903,15 @@ export const layer = Layer.effect(
           signature: string | null
           start_line: number
           end_line: number
-        }>(sql`
+        }>(
+          sql`
           SELECT id, file_id, kind, name, signature, start_line, end_line
           FROM codegraph_nodes
           ${whereClause}
           ORDER BY codegraph_nodes.name
           LIMIT ${limit}
-        `)
+        `,
+        )
         .pipe(Effect.orDie)
       return rows.map((row) => ({
         id: row.id,
@@ -975,7 +988,8 @@ export const layer = Layer.effect(
       // frequency contributions, per the SQLite docs).
       const runFts = (match: string): Effect.Effect<FTSRow[], never, never> =>
         db
-          .all<FTSRow>(sql`
+          .all<FTSRow>(
+            sql`
             SELECT n.id, n.file_id, n.kind, n.name, n.signature, n.start_line, n.end_line, n.code,
                    bm25(codegraph_fts, 10.0, 3.0, 1.0) AS bm25
             FROM codegraph_fts
@@ -983,7 +997,8 @@ export const layer = Layer.effect(
             WHERE codegraph_fts MATCH ${match}
             ORDER BY bm25
             LIMIT ${limit}
-          `)
+          `,
+          )
           .pipe(Effect.orDie)
 
       let rows: FTSRow[]
@@ -1020,7 +1035,7 @@ export const layer = Layer.effect(
     const filesByIDs = Effect.fn("CodegraphRepo.filesByIDs")(function* (ids: ReadonlyArray<string>) {
       if (ids.length === 0) return []
       const chunkSize = 900
-      const allRows: typeof CodegraphFilesTable.$inferSelect[] = []
+      const allRows: (typeof CodegraphFilesTable.$inferSelect)[] = []
       for (let i = 0; i < ids.length; i += chunkSize) {
         const chunk = ids.slice(i, i + chunkSize)
         const rows = yield* db
@@ -1043,23 +1058,17 @@ export const layer = Layer.effect(
     })
 
     const countNodes = Effect.fn("CodegraphRepo.countNodes")(function* () {
-      const row = yield* db
-        .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_nodes`)
-        .pipe(Effect.orDie)
+      const row = yield* db.get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_nodes`).pipe(Effect.orDie)
       return row?.c ?? 0
     })
 
     const countEdges = Effect.fn("CodegraphRepo.countEdges")(function* () {
-      const row = yield* db
-        .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_edges`)
-        .pipe(Effect.orDie)
+      const row = yield* db.get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_edges`).pipe(Effect.orDie)
       return row?.c ?? 0
     })
 
     const countFiles = Effect.fn("CodegraphRepo.countFiles")(function* () {
-      const row = yield* db
-        .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_files`)
-        .pipe(Effect.orDie)
+      const row = yield* db.get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_files`).pipe(Effect.orDie)
       return row?.c ?? 0
     })
 
@@ -1072,11 +1081,13 @@ export const layer = Layer.effect(
 
     const listStaleFiles = Effect.fn("CodegraphRepo.listStaleFiles")(function* (limit: number) {
       const rows = yield* db
-        .all<{ path: string; mtime_ms: number; indexed_at: number }>(sql`
+        .all<{ path: string; mtime_ms: number; indexed_at: number }>(
+          sql`
           SELECT path, mtime_ms, indexed_at FROM codegraph_files
           WHERE mtime_ms > indexed_at
           ORDER BY mtime_ms DESC LIMIT ${limit}
-        `)
+        `,
+        )
         .pipe(Effect.orDie)
       return rows.map((row) => ({
         path: row.path,
@@ -1087,11 +1098,13 @@ export const layer = Layer.effect(
 
     const listToolUsage = Effect.fn("CodegraphRepo.listToolUsage")(function* (input?: { session?: string }) {
       const rows = yield* db
-        .all<{ tool_id: string; use_count: number; last_used_at: number }>(sql`
+        .all<{ tool_id: string; use_count: number; last_used_at: number }>(
+          sql`
           SELECT tool_id, use_count, last_used_at FROM codegraph_tool_usage
           ${input?.session !== undefined ? sql`WHERE session_id = ${input.session}` : sql``}
           ORDER BY use_count DESC LIMIT 50
-        `)
+        `,
+        )
         .pipe(Effect.orDie)
       return rows.map((row) => ({
         toolId: row.tool_id,
@@ -1122,7 +1135,7 @@ export const layer = Layer.effect(
     const edgesFromBatch = Effect.fn("CodegraphRepo.edgesFromBatch")(function* (ids: ReadonlyArray<string>) {
       if (ids.length === 0) return []
       const chunkSize = 900
-      const allRows: typeof CodegraphEdgesTable.$inferSelect[] = []
+      const allRows: (typeof CodegraphEdgesTable.$inferSelect)[] = []
       for (let i = 0; i < ids.length; i += chunkSize) {
         const chunk = ids.slice(i, i + chunkSize)
         const rows = yield* db
@@ -1144,7 +1157,7 @@ export const layer = Layer.effect(
     const edgesToBatch = Effect.fn("CodegraphRepo.edgesToBatch")(function* (ids: ReadonlyArray<string>) {
       if (ids.length === 0) return []
       const chunkSize = 900
-      const allRows: typeof CodegraphEdgesTable.$inferSelect[] = []
+      const allRows: (typeof CodegraphEdgesTable.$inferSelect)[] = []
       for (let i = 0; i < ids.length; i += chunkSize) {
         const chunk = ids.slice(i, i + chunkSize)
         const rows = yield* db
@@ -1246,7 +1259,10 @@ export const layer = Layer.effect(
           let outcome: boolean
           try {
             outcome = yield* Effect.tryPromise({
-              try: () => Bun.file(filePath).delete().then(() => true as const),
+              try: () =>
+                Bun.file(filePath)
+                  .delete()
+                  .then(() => true as const),
               catch: () => undefined as never,
             })
           } catch {
@@ -1320,44 +1336,52 @@ export const layer = Layer.effect(
 
     const putEdges = Effect.fn("CodegraphRepo.putEdges")(function* (edges: CodegraphEdge[]) {
       if (edges.length === 0) return
-      yield* db.transaction((tx) =>
-        Effect.gen(function* () {
-          for (let i = 0; i < edges.length; i += MAX_EDGES_PER_INSERT) {
-            const batch = edges.slice(i, i + MAX_EDGES_PER_INSERT)
-            yield* tx
-              .insert(CodegraphEdgesTable)
-              .values(
-                batch.map((e) => ({
-                  id: e.id,
-                  from_node_id: e.fromNodeID,
-                  to_node_id: e.toNodeID,
-                  kind: e.kind,
-                })),
-              )
-              .onConflictDoNothing({
-                target: CodegraphEdgesTable.id,
-              })
-              .run()
-              .pipe(Effect.orDie)
-          }
-        }),
-      ).pipe(Effect.orDie)
+      yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            for (let i = 0; i < edges.length; i += MAX_EDGES_PER_INSERT) {
+              const batch = edges.slice(i, i + MAX_EDGES_PER_INSERT)
+              yield* tx
+                .insert(CodegraphEdgesTable)
+                .values(
+                  batch.map((e) => ({
+                    id: e.id,
+                    from_node_id: e.fromNodeID,
+                    to_node_id: e.toNodeID,
+                    kind: e.kind,
+                  })),
+                )
+                .onConflictDoNothing({
+                  target: CodegraphEdgesTable.id,
+                })
+                .run()
+                .pipe(Effect.orDie)
+            }
+          }),
+        )
+        .pipe(Effect.orDie)
     })
 
     // Phase 3: populate `codegraph_nodes.in_degree` from the edges table.
     // One UPDATE-with-correlated-subquery is cheap (one full pass) and the
     // ranker can then read the column directly without a COUNT(*) per
     // candidate during trace().
-    const recomputeInDegree = Effect.fn("CodegraphRepo.recomputeInDegree")(function* (input?: { nodeIDs?: readonly string[] }) {
+    const recomputeInDegree = Effect.fn("CodegraphRepo.recomputeInDegree")(function* (input?: {
+      nodeIDs?: readonly string[]
+    }) {
       const nodeIDs = input?.nodeIDs ? [...new Set(input.nodeIDs)] : []
       if (nodeIDs.length === 0) {
-        yield* db.run(sql`
+        yield* db
+          .run(
+            sql`
           UPDATE \`codegraph_nodes\`
           SET \`in_degree\` = (
             SELECT COUNT(*) FROM \`codegraph_edges\`
             WHERE \`codegraph_edges\`.\`to_node_id\` = \`codegraph_nodes\`.\`id\`
           )
-        `).pipe(Effect.orDie)
+        `,
+          )
+          .pipe(Effect.orDie)
         return
       }
       for (let i = 0; i < nodeIDs.length; i += 900) {
@@ -1386,19 +1410,21 @@ export const layer = Layer.effect(
     }) {
       if (input.fileIDs.length === 0) return
       const chunkSize = 900
-      yield* db.transaction((tx) =>
-        Effect.gen(function* () {
-          for (let i = 0; i < input.fileIDs.length; i += chunkSize) {
-            const chunk = input.fileIDs.slice(i, i + chunkSize)
-            yield* tx
-              .update(CodegraphFilesTable)
-              .set({ indexed_at: input.indexedAt })
-              .where(inArray(CodegraphFilesTable.id, chunk))
-              .run()
-              .pipe(Effect.orDie)
-          }
-        }),
-      ).pipe(Effect.orDie)
+      yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            for (let i = 0; i < input.fileIDs.length; i += chunkSize) {
+              const chunk = input.fileIDs.slice(i, i + chunkSize)
+              yield* tx
+                .update(CodegraphFilesTable)
+                .set({ indexed_at: input.indexedAt })
+                .where(inArray(CodegraphFilesTable.id, chunk))
+                .run()
+                .pipe(Effect.orDie)
+            }
+          }),
+        )
+        .pipe(Effect.orDie)
     })
 
     const bumpVersion = Effect.fn("CodegraphRepo.bumpVersion")(function* (input: {
@@ -1410,75 +1436,72 @@ export const layer = Layer.effect(
       totalEdges?: number
       indexedRoot?: string
     }) {
-      return yield* db.transaction((tx) =>
-        Effect.gen(function* () {
-          const row = yield* tx
-            .select()
-            .from(CodegraphMetaTable)
-            .where(eq(CodegraphMetaTable.id, "singleton"))
-            .get()
-            .pipe(Effect.orDie)
-          const nextVersion = (row?.graph_version ?? 0) + 1
+      return yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const row = yield* tx
+              .select()
+              .from(CodegraphMetaTable)
+              .where(eq(CodegraphMetaTable.id, "singleton"))
+              .get()
+              .pipe(Effect.orDie)
+            const nextVersion = (row?.graph_version ?? 0) + 1
 
-          // Phase 0: derive every count from the database directly rather
-          // than trust caller-supplied numbers. The previous shape let the
-          // build service pass a file count into a node field; we close
-          // that hole here and only honor what SQL `COUNT(*)` reports.
-          const nodeRow = yield* tx
-            .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_nodes`)
-            .pipe(Effect.orDie)
-          const totalNodes = nodeRow?.c ?? 0
+            // Phase 0: derive every count from the database directly rather
+            // than trust caller-supplied numbers. The previous shape let the
+            // build service pass a file count into a node field; we close
+            // that hole here and only honor what SQL `COUNT(*)` reports.
+            const nodeRow = yield* tx
+              .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_nodes`)
+              .pipe(Effect.orDie)
+            const totalNodes = nodeRow?.c ?? 0
 
-          const edgeRow = yield* tx
-            .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_edges`)
-            .pipe(Effect.orDie)
-          const totalEdges = edgeRow?.c ?? 0
+            const edgeRow = yield* tx
+              .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_edges`)
+              .pipe(Effect.orDie)
+            const totalEdges = edgeRow?.c ?? 0
 
-          const fileRow = yield* tx
-            .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_files`)
-            .pipe(Effect.orDie)
-          const totalFilesInGraph = fileRow?.c ?? 0
+            const fileRow = yield* tx
+              .get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM codegraph_files`)
+              .pipe(Effect.orDie)
+            const totalFilesInGraph = fileRow?.c ?? 0
 
-          // Phase 0: graphCoverage measures "fraction of the repo's
-          // eligible candidate files that are present in the graph". The
-          // numerator is rows in `codegraph_files` (so a fully-cached rebuild
-          // scores 1.0), the denominator is the walker-eligible count, with
-          // a guard for empty repos.
-          const denominator = input.eligibleFiles ?? input.scannedFiles ?? 0
-          const rawCoverage = denominator > 0 ? totalFilesInGraph / denominator : 0
-          const coverage = Math.round(rawCoverage * 10000) / 10000
+            // Phase 0: graphCoverage measures "fraction of the repo's
+            // eligible candidate files that are present in the graph". The
+            // numerator is rows in `codegraph_files` (so a fully-cached rebuild
+            // scores 1.0), the denominator is the walker-eligible count, with
+            // a guard for empty repos.
+            const denominator = input.eligibleFiles ?? input.scannedFiles ?? 0
+            const rawCoverage = denominator > 0 ? totalFilesInGraph / denominator : 0
+            const coverage = Math.round(rawCoverage * 10000) / 10000
 
-          const meta: CodegraphMeta = {
-            id: "singleton",
-            graphBuiltAt: Date.now(),
-            graphVersion: nextVersion,
-            graphCoverage: coverage,
-            totalFiles: totalFilesInGraph,
-            totalNodes,
-            totalEdges,
-            // Phase 3: the schema gained `is_entrypoint` and `in_degree`
-            // columns on codegraph_nodes. Bump the schemaVersion so
-            // consumers that compare against it can detect stale graphs.
-            schemaVersion: CODEGRAPH_SCHEMA_VERSION,
-            indexedRoot: input.indexedRoot ?? row?.indexed_root ?? undefined,
-          }
+            const meta: CodegraphMeta = {
+              id: "singleton",
+              graphBuiltAt: Date.now(),
+              graphVersion: nextVersion,
+              graphCoverage: coverage,
+              totalFiles: totalFilesInGraph,
+              totalNodes,
+              totalEdges,
+              // Phase 3: the schema gained `is_entrypoint` and `in_degree`
+              // columns on codegraph_nodes. Bump the schemaVersion so
+              // consumers that compare against it can detect stale graphs.
+              schemaVersion: CODEGRAPH_SCHEMA_VERSION,
+              // Never narrow: an incremental update scoped to a subdirectory
+              // must not overwrite a wider root, or readiness for the wider
+              // root would force a full reindex on its next call.
+              indexedRoot:
+                row?.indexed_root &&
+                input.indexedRoot &&
+                WorkspaceIdentity.isWithinRoot(input.indexedRoot, row.indexed_root)
+                  ? row.indexed_root
+                  : (input.indexedRoot ?? row?.indexed_root ?? undefined),
+            }
 
-          yield* tx
-            .insert(CodegraphMetaTable)
-            .values({
-              id: meta.id,
-              graph_built_at: meta.graphBuiltAt,
-              graph_version: meta.graphVersion,
-              graph_coverage: meta.graphCoverage,
-              total_files: meta.totalFiles,
-              total_nodes: meta.totalNodes,
-              total_edges: meta.totalEdges,
-              schema_version: meta.schemaVersion,
-              indexed_root: meta.indexedRoot ?? null,
-            })
-            .onConflictDoUpdate({
-              target: CodegraphMetaTable.id,
-              set: {
+            yield* tx
+              .insert(CodegraphMetaTable)
+              .values({
+                id: meta.id,
                 graph_built_at: meta.graphBuiltAt,
                 graph_version: meta.graphVersion,
                 graph_coverage: meta.graphCoverage,
@@ -1487,28 +1510,45 @@ export const layer = Layer.effect(
                 total_edges: meta.totalEdges,
                 schema_version: meta.schemaVersion,
                 indexed_root: meta.indexedRoot ?? null,
-              },
-            })
-            .run()
-            .pipe(Effect.orDie)
+              })
+              .onConflictDoUpdate({
+                target: CodegraphMetaTable.id,
+                set: {
+                  graph_built_at: meta.graphBuiltAt,
+                  graph_version: meta.graphVersion,
+                  graph_coverage: meta.graphCoverage,
+                  total_files: meta.totalFiles,
+                  total_nodes: meta.totalNodes,
+                  total_edges: meta.totalEdges,
+                  schema_version: meta.schemaVersion,
+                  indexed_root: meta.indexedRoot ?? null,
+                },
+              })
+              .run()
+              .pipe(Effect.orDie)
 
-          return {
-            graphVersion: nextVersion,
-            coverage,
-            totalNodes,
-            totalEdges,
-            // Phase 1: surface the meta row fields the status pill needs so the
-            // terminal publish doesn't have to re-read them from the DB. The
-            // build event already knows totalFiles/graphBuiltAt at this point
-            // because they were just written into `CodegraphMeta` above.
-            totalFiles: totalFilesInGraph,
-            graphBuiltAt: meta.graphBuiltAt,
-          }
-        })
-      ).pipe(Effect.orDie)
+            return {
+              graphVersion: nextVersion,
+              coverage,
+              totalNodes,
+              totalEdges,
+              // Phase 1: surface the meta row fields the status pill needs so the
+              // terminal publish doesn't have to re-read them from the DB. The
+              // build event already knows totalFiles/graphBuiltAt at this point
+              // because they were just written into `CodegraphMeta` above.
+              totalFiles: totalFilesInGraph,
+              graphBuiltAt: meta.graphBuiltAt,
+            }
+          }),
+        )
+        .pipe(Effect.orDie)
     })
 
-    const recordParseError = Effect.fn("CodegraphRepo.recordParseError")(function* (input: { path: string; cause: string; indexedAt: number }) {
+    const recordParseError = Effect.fn("CodegraphRepo.recordParseError")(function* (input: {
+      path: string
+      cause: string
+      indexedAt: number
+    }) {
       // Don't swallow the error — let it propagate so indexer callers can log
       // and the row is actually inserted. Surface unexpected failures rather
       // than silently losing parse-error visibility.
@@ -1519,7 +1559,9 @@ export const layer = Layer.effect(
         .pipe(
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
-              yield* Effect.logWarning(`codegraph.recordParseError failed for ${input.path}`, { cause: Cause.pretty(cause) })
+              yield* Effect.logWarning(`codegraph.recordParseError failed for ${input.path}`, {
+                cause: Cause.pretty(cause),
+              })
               return yield* Effect.failCause(cause)
             }),
           ),
@@ -1598,20 +1640,22 @@ export const layer = Layer.effect(
     })
 
     const rebuildFtsIndex = Effect.fn("CodegraphRepo.rebuildFtsIndex")(function* () {
-      return yield* db.transaction((tx) =>
-        Effect.gen(function* () {
-          yield* tx.run(sql`DELETE FROM \`codegraph_fts\``)
+      return yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx.run(sql`DELETE FROM \`codegraph_fts\``)
 
-          yield* tx.run(sql`
+            yield* tx.run(sql`
             INSERT INTO \`codegraph_fts\`(\`rowid\`, \`name\`, \`signature\`, \`code\`)
             SELECT \`rowid\`, \`name\`, COALESCE(\`signature\`, ''), COALESCE(\`code\`, '')
             FROM \`codegraph_nodes\`
           `)
 
-          const countResult = yield* tx.get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM \`codegraph_fts\``)
-          return { rowsIndexed: countResult?.c ?? 0 }
-        }),
-      ).pipe(Effect.orDie)
+            const countResult = yield* tx.get<{ c: number }>(sql`SELECT COUNT(*) AS c FROM \`codegraph_fts\``)
+            return { rowsIndexed: countResult?.c ?? 0 }
+          }),
+        )
+        .pipe(Effect.orDie)
     })
 
     const nodeToInsertRow = (n: CodegraphNode) => {
