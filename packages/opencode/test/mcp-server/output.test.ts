@@ -19,6 +19,7 @@ describe("mcp output helpers", () => {
     payload["risk"] = "high"
     payload["directCallers"] = 7
     payload["filePaths"] = { f1: "src/a.ts" }
+    for (let i = 0; i < 8; i++) payload[`empty${i}`] = []
     const out = truncateStructured(payload, 4000)
     expect(out.truncated).toBe(true)
     const data = out.data as Record<string, unknown>

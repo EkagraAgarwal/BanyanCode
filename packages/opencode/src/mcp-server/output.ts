@@ -109,7 +109,9 @@ const shrinkValue = (
     // Among nested values, keep the smallest first: small maps such as
     // preflight's fileID -> path `filePaths` carry more per byte than the
     // bulky caller arrays that usually overflow the budget.
-    const isNested = (entry: unknown) => entry !== null && typeof entry === "object"
+    // Empty containers (`[]`, `{}`) are as cheap as scalars and never count.
+    const isNested = (entry: unknown) =>
+      entry !== null && typeof entry === "object" && Object.keys(entry as object).length > 0
     const keepNested = new Set(
       entries
         .filter(([, entry]) => isNested(entry))
