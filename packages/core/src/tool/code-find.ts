@@ -25,13 +25,7 @@ const banyancodeEnabled = () => process.env.BANYANCODE_ENABLE !== "0"
 export const name = "code_find"
 
 export const Input = Schema.Struct({
-  intent: Schema.Literals([
-    "definition",
-    "callers",
-    "dependents",
-    "impact",
-    "find_file",
-  ]).annotate({
+  intent: Schema.Literals(["definition", "callers", "dependents", "impact", "find_file"]).annotate({
     description:
       "The kind of search to perform on the code graph. " +
       "Pick exactly one based on what the user is asking: " +
@@ -68,12 +62,40 @@ export const Input = Schema.Struct({
     "downstream tool based on `intent`. Always pass both `intent` and `target`.",
 })
 
-export const DerivationSchema = Schema.Literals(["tag-fallback", "name-exact", "qualified-split", "code-substring", "name-like", "fts-bm25"])
+export const DerivationSchema = Schema.Literals([
+  "tag-fallback",
+  "name-exact",
+  "qualified-split",
+  "code-substring",
+  "name-like",
+  "fts-bm25",
+])
 
 const MatchEntrySchema = Schema.Struct({
   node: CodegraphNodeSchema,
   derivation: DerivationSchema,
+  // The node's source file. Nodes only carry an opaque fileID, so without it
+  // every caller (MCP clients, agents) needed a second lookup to act on a match.
+  path: Schema.optional(Schema.String),
 })
+
+// One getFile per distinct fileID across all matches (bounded by `limit`).
+const withMatchPaths = <T extends { readonly matches: ReadonlyArray<{ readonly node: CodegraphNode }> }>(
+  repo: CodegraphRepoInterface,
+  output: T,
+) =>
+  Effect.gen(function* () {
+    const ids = [...new Set(output.matches.map((m) => m.node.fileID))]
+    const files = yield* Effect.forEach(ids, (id) => repo.getFile(id), { concurrency: 8 })
+    const paths = new Map(ids.flatMap((id, i) => (files[i] ? [[id, files[i].path] as const] : [])))
+    return {
+      ...output,
+      matches: output.matches.map((m) => {
+        const file = paths.get(m.node.fileID)
+        return file ? { ...m, path: file } : m
+      }),
+    }
+  })
 
 export const Output = Schema.Struct({
   matches: Schema.Array(MatchEntrySchema),
@@ -132,9 +154,9 @@ export const makeCodeFindTool = (deps: {
       "  top-level symbol locator across the codebase — routes to the right tool\n" +
       "  based on the `intent` you pass.\n" +
       "Examples\n" +
-      "  - \"Find `ToolCatalog`\"\n" +
-      "  - \"Where is `SessionTools.resolve`?\"\n" +
-      "  - \"Open `ConfigLoader`\"\n" +
+      '  - "Find `ToolCatalog`"\n' +
+      '  - "Where is `SessionTools.resolve`?"\n' +
+      '  - "Open `ConfigLoader`"\n' +
       "Returns\n" +
       "  { matches: CodegraphNode[], files: CodegraphFile[], intent: string }\n" +
       "Avoid when\n" +
@@ -153,12 +175,14 @@ export const makeCodeFindTool = (deps: {
       // Only flag derivations that are actually fuzzy matches. tag-fallback
       // is the resolver's step 1 (Context.Service tag lookup) — the
       // highest-precision strategy, not a fallback.
-      const fuzzyDerivation = output.resolvedDerivation
-        && ["code-substring", "name-like", "fts-bm25"].includes(output.resolvedDerivation)
-        ? output.resolvedDerivation
-        : undefined
+      const fuzzyDerivation =
+        output.resolvedDerivation && ["code-substring", "name-like", "fts-bm25"].includes(output.resolvedDerivation)
+          ? output.resolvedDerivation
+          : undefined
       const headerParts = [
-        fuzzyDerivation ? `FALLBACK MATCH (derivation=${fuzzyDerivation}) -- verify before treating as the exact symbol` : null,
+        fuzzyDerivation
+          ? `FALLBACK MATCH (derivation=${fuzzyDerivation}) -- verify before treating as the exact symbol`
+          : null,
         `intent=${output.intent}`,
         `dispatched=${output.dispatchedTo ?? "n/a"}`,
         `matches=${output.matches.length}`,
@@ -169,9 +193,8 @@ export const makeCodeFindTool = (deps: {
       if (output._diagnostic) headerParts.push(`diagnostic=${output._diagnostic}`)
       const header = headerParts.filter((p): p is string => p !== null).join(" ")
       const nodeList = output.matches.map((m) => m.node)
-      const matchesBlock = output.matches.length > 0
-        ? formatNodes(nodeList, "Matches", fileIndex.byID)
-        : "Matches: none."
+      const matchesBlock =
+        output.matches.length > 0 ? formatNodes(nodeList, "Matches", fileIndex.byID) : "Matches: none."
       // Hide the Files block for non-find_file intents with no files —
       // those intents don't try to populate files; printing "Files: none."
       // makes a successful result look partial.
@@ -181,10 +204,12 @@ export const makeCodeFindTool = (deps: {
         : output.files.length > 0
           ? `Files (${output.files.length}):\n${output.files.map((f) => `  ${f.path}`).join("\n")}`
           : "Files: none."
-      return [{
-        type: "text",
-        text: filesBlock ? `${header}\n\n${matchesBlock}\n\n${filesBlock}` : `${header}\n\n${matchesBlock}`,
-      }]
+      return [
+        {
+          type: "text",
+          text: filesBlock ? `${header}\n\n${matchesBlock}\n\n${filesBlock}` : `${header}\n\n${matchesBlock}`,
+        },
+      ]
     },
     execute: (input, context) => {
       const limit = input.limit ?? 50
@@ -193,7 +218,8 @@ export const makeCodeFindTool = (deps: {
         context.sessionID,
         name,
         input,
-        (output) => `intent=${output.intent} dispatched=${output.dispatchedTo ?? "n/a"} matches=${output.matches.length} files=${output.files.length}`,
+        (output) =>
+          `intent=${output.intent} dispatched=${output.dispatchedTo ?? "n/a"} matches=${output.matches.length} files=${output.files.length}`,
         Effect.gen(function* () {
           yield* deps.permission.assert({
             action: name,
@@ -237,13 +263,14 @@ export const makeCodeFindTool = (deps: {
             | { _tag: "Miss" }
           > =>
             Effect.gen(function* () {
-              const result = input.includeKeywordFallback === false
-                ? yield* resolveGraphTargetStrict(deps.repo, {
-                    target,
-                    limit,
-                    allowKeywordFallback: false,
-                  })
-                : yield* resolveGraphTargetPure(deps.repo, { target, limit })
+              const result =
+                input.includeKeywordFallback === false
+                  ? yield* resolveGraphTargetStrict(deps.repo, {
+                      target,
+                      limit,
+                      allowKeywordFallback: false,
+                    })
+                  : yield* resolveGraphTargetPure(deps.repo, { target, limit })
               return result._tag === "Ok" ? result.value : { _tag: "Miss" as const }
             })
 
@@ -272,7 +299,10 @@ export const makeCodeFindTool = (deps: {
               }
               const matches = resolved.candidates.map((n) => ({ node: n, derivation: resolved.derivation }))
               const matched = matches.slice(0, limit)
-              const perFile = yield* countStaleFilesFor(deps.repo, matched.map((m) => m.node.fileID))
+              const perFile = yield* countStaleFilesFor(
+                deps.repo,
+                matched.map((m) => m.node.fileID),
+              )
               const staleGraph = stale.stale || perFile.stale ? ("stale-graph" as const) : undefined
               return {
                 matches: matched,
@@ -310,15 +340,16 @@ export const makeCodeFindTool = (deps: {
               const result = yield* deps.analyzer.callers({ nodeID: resolved.nodeID }).pipe(
                 Effect.matchEffect({
                   onFailure: (err) =>
-                    err._tag === "Banyan/SymbolNotFoundError"
-                      ? Effect.succeed<CodegraphNode[]>([])
-                      : Effect.fail(err),
+                    err._tag === "Banyan/SymbolNotFoundError" ? Effect.succeed<CodegraphNode[]>([]) : Effect.fail(err),
                   onSuccess: (nodes) => Effect.succeed(nodes),
                 }),
               )
               const matches = result.map((n) => ({ node: n, derivation: resolved.derivation }))
               const isEmpty = matches.length === 0
-              const perFile = yield* countStaleFilesFor(deps.repo, matches.map((m) => m.node.fileID))
+              const perFile = yield* countStaleFilesFor(
+                deps.repo,
+                matches.map((m) => m.node.fileID),
+              )
               const _diagnostic = isEmpty
                 ? ("no-edges-found" as const)
                 : stale.stale || perFile.stale
@@ -360,15 +391,16 @@ export const makeCodeFindTool = (deps: {
               const result = yield* deps.analyzer.dependents({ nodeID: resolved.nodeID }).pipe(
                 Effect.matchEffect({
                   onFailure: (err) =>
-                    err._tag === "Banyan/SymbolNotFoundError"
-                      ? Effect.succeed<CodegraphNode[]>([])
-                      : Effect.fail(err),
+                    err._tag === "Banyan/SymbolNotFoundError" ? Effect.succeed<CodegraphNode[]>([]) : Effect.fail(err),
                   onSuccess: (nodes) => Effect.succeed(nodes),
                 }),
               )
               const matches = result.map((n) => ({ node: n, derivation: resolved.derivation }))
               const isEmpty = matches.length === 0
-              const perFile = yield* countStaleFilesFor(deps.repo, matches.map((m) => m.node.fileID))
+              const perFile = yield* countStaleFilesFor(
+                deps.repo,
+                matches.map((m) => m.node.fileID),
+              )
               const _diagnostic = isEmpty
                 ? ("no-edges-found" as const)
                 : stale.stale || perFile.stale
@@ -402,8 +434,7 @@ export const makeCodeFindTool = (deps: {
               // a single symbol whose name equals the filename, missed, and
               // returned `no-edges-found` even when the file had plenty of
               // callers (caveat #2 from the v2 probes).
-              const looksLikeFilePath =
-                /\.[a-z0-9]+$/i.test(input.target) || /[\\/]/.test(input.target)
+              const looksLikeFilePath = /\.[a-z0-9]+$/i.test(input.target) || /[\\/]/.test(input.target)
               if (looksLikeFilePath) {
                 const allFiles = yield* deps.repo.listAllFiles()
                 fileIndex.byID = new Map(allFiles.map((f) => [f.id, f]))
@@ -455,8 +486,7 @@ export const makeCodeFindTool = (deps: {
                       for (const n of nodes) {
                         if (seen.has(n.id)) continue
                         seen.add(n.id)
-                        const bucket: CodegraphNode[] =
-                          dependents.length < limit ? dependents : transitive
+                        const bucket: CodegraphNode[] = dependents.length < limit ? dependents : transitive
                         bucket.push(n)
                       }
                     }
@@ -469,7 +499,10 @@ export const makeCodeFindTool = (deps: {
                   ...aggregated.transitive.map((n) => ({ node: n, derivation: "name-exact" as const })),
                 ].slice(0, limit)
                 const isEmpty = matches.length === 0
-                const perFile = yield* countStaleFilesFor(deps.repo, matches.map((m) => m.node.fileID))
+                const perFile = yield* countStaleFilesFor(
+                  deps.repo,
+                  matches.map((m) => m.node.fileID),
+                )
                 const _diagnostic = isEmpty
                   ? ("no-edges-found" as const)
                   : stale.stale || perFile.stale
@@ -514,7 +547,10 @@ export const makeCodeFindTool = (deps: {
                 ...result.transitive.map((n) => ({ node: n, derivation: resolved.derivation })),
               ].slice(0, limit)
               const isEmpty = matches.length === 0
-              const perFile = yield* countStaleFilesFor(deps.repo, matches.map((m) => m.node.fileID))
+              const perFile = yield* countStaleFilesFor(
+                deps.repo,
+                matches.map((m) => m.node.fileID),
+              )
               const _diagnostic = isEmpty
                 ? ("no-edges-found" as const)
                 : stale.stale || perFile.stale
@@ -534,13 +570,24 @@ export const makeCodeFindTool = (deps: {
             }
             case "find_file": {
               const target = input.target ?? ""
-              if (!target) return { matches: [], files: [], meta, intent: input.intent, dispatchedTo: "codegraph_query", _diagnostic: "empty-target" as const }
+              if (!target)
+                return {
+                  matches: [],
+                  files: [],
+                  meta,
+                  intent: input.intent,
+                  dispatchedTo: "codegraph_query",
+                  _diagnostic: "empty-target" as const,
+                }
               // File rows are only needed here — load them lazily so
               // other intents never pay for the listAllFiles roundtrip.
               const allFiles = yield* deps.repo.listAllFiles()
               fileIndex.byID = new Map(allFiles.map((f) => [f.id, f]))
 
-              const looksLikeFilename = /\.(md|mdx|ts|tsx|js|jsx|mjs|cjs|json|yaml|yml|toml|sql|py|pyw|go|rs|java|kt|c|cpp|cc|cxx|h|hpp|hh|css|html|sh|ps1|vue|svelte|mdx)$/i.test(target)
+              const looksLikeFilename =
+                /\.(md|mdx|ts|tsx|js|jsx|mjs|cjs|json|yaml|yml|toml|sql|py|pyw|go|rs|java|kt|c|cpp|cc|cxx|h|hpp|hh|css|html|sh|ps1|vue|svelte|mdx)$/i.test(
+                  target,
+                )
               const sep = /[\\/]/.test(target) ? `[\\${"/"}]` : ""
 
               let files: { path: string }[]
@@ -565,17 +612,16 @@ export const makeCodeFindTool = (deps: {
                 matches = symbolMatches.slice(0, limit).map((n) => ({ node: n, derivation: "name-exact" as const }))
                 dispatchedTo = files.length > 0 ? "graph" : "glob"
               } else {
-                const symbolMatches = (yield* deps.repo.searchNodesLight({ name: target, limit }))
-                  .filter((n) => n.kind !== "file" && n.name === target)
+                const symbolMatches = (yield* deps.repo.searchNodesLight({ name: target, limit })).filter(
+                  (n) => n.kind !== "file" && n.name === target,
+                )
                 const fileIDs = [...new Set(symbolMatches.map((n) => n.fileID))]
                 matchedFileIDs = fileIDs
                 files = allFiles
                   .filter((f) => fileIDs.includes(f.id))
                   .slice(0, limit)
                   .map((f) => ({ path: f.path }))
-                matches = symbolMatches
-                  .slice(0, limit)
-                  .map((n) => ({ node: n, derivation: "name-exact" as const }))
+                matches = symbolMatches.slice(0, limit).map((n) => ({ node: n, derivation: "name-exact" as const }))
                 dispatchedTo = files.length > 0 ? "graph" : "glob"
                 if (files.length === 0) {
                   files = allFiles
@@ -599,11 +645,13 @@ export const makeCodeFindTool = (deps: {
               }
             }
           }
+        }).pipe(Effect.flatMap((output) => withMatchPaths(deps.repo, output))),
+      ).pipe(
+        Effect.mapError((err) => {
+          if (err instanceof ToolFailure) return err
+          return new ToolFailure({ message: `code_find failed for intent=${input.intent}` })
         }),
-      ).pipe(Effect.mapError((err) => {
-        if (err instanceof ToolFailure) return err
-        return new ToolFailure({ message: `code_find failed for intent=${input.intent}` })
-      }))
+      )
     },
   })
 }

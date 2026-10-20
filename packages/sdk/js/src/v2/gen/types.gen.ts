@@ -6953,6 +6953,7 @@ export type GlobalCodeFindResponses = {
     matches: Array<{
       node: BanyanCodegraphNode
       derivation: "tag-fallback" | "name-exact" | "qualified-split" | "code-substring" | "name-like" | "fts-bm25"
+      path?: string
     }>
     files: Array<{
       path: string

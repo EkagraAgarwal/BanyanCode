@@ -112,13 +112,7 @@ const buildApiLayer = (dbPath: string, codegraphRepoLayer: Layer.Layer<Banyan.Co
 
   return HttpRouter.serve(
     HttpApiBuilder.layer(RootHttpApi).pipe(
-      Layer.provide([
-        controlHandlers,
-        controlPlaneHandlers,
-        globalHandlers,
-        repositoryIntelHandlers,
-        memoryHandlers,
-      ]),
+      Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers, repositoryIntelHandlers, memoryHandlers]),
       Layer.provide([authorizationLayer, schemaErrorLayer]),
       Layer.provide(meshLayer),
       Layer.provide(busLayer),
@@ -191,13 +185,14 @@ describe("code-find HttpApi", () => {
             )
             expect(response.status).toBe(200)
             const body = (yield* response.json) as {
-              matches: Array<{ node: { id: string }; derivation: string }>
+              matches: Array<{ node: { id: string }; derivation: string; path?: string }>
               resolvedNodeID?: string
               resolvedDerivation?: string
               _diagnostic?: string
             }
             expect(body.matches.length).toBeGreaterThan(0)
             expect(body.matches[0]!.node.id).toBe("n-widget")
+            expect(body.matches[0]!.path).toBe(FIXTURE_FILE.path)
             expect(body.resolvedNodeID).toBe("n-widget")
             expect(body.resolvedDerivation).toBe("name-exact")
 
@@ -235,7 +230,11 @@ describe("code-find HttpApi", () => {
             yield* repo.setMeta(FIXTURE_META)
 
             const response = yield* HttpClientRequest.post(GlobalPaths.codeFind).pipe(
-              HttpClientRequest.bodyJson({ intent: "definition", target: "Nope_Not_Indexed_12345", includeKeywordFallback: true }),
+              HttpClientRequest.bodyJson({
+                intent: "definition",
+                target: "Nope_Not_Indexed_12345",
+                includeKeywordFallback: true,
+              }),
               Effect.flatMap(HttpClient.execute),
             )
             expect(response.status).toBe(200)
