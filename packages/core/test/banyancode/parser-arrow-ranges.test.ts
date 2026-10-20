@@ -60,4 +60,23 @@ describe("parseTypeScript arrow-function ranges", () => {
     expect(ranges["bounded"]).toEqual([9, 14])
     expect(ranges["fields"]).toEqual([16, 18])
   })
+  test("type aliases end at their own expression, never at the next function", () => {
+    const source = [
+      `type Change = "add" | "unlink"`,
+      "export type Pair<T> =",
+      "  | readonly [T, T]",
+      "  | undefined",
+      "export const run = (c: Change): Pair<Change> => {",
+      "  return [c, c]",
+      "}",
+    ].join("\n")
+    const nodes = parseTypeScript(source, "fid").nodes
+    const range = (name: string) => {
+      const node = nodes.find((n) => n.name === name)
+      return node ? [node.startLine, node.endLine] : undefined
+    }
+    expect(range("Change")).toEqual([1, 1])
+    expect(range("Pair")).toEqual([2, 4])
+    expect(range("run")).toEqual([5, 7])
+  })
 })

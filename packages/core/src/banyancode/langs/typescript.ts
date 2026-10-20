@@ -19,7 +19,9 @@ const FACTORY_EXPORT_REGEX =
 // `Context.Service<Service, Interface>()`. Previously the anchored
 // `(?:^|\n)interface` regex silently skipped these declarations.
 const INTERFACE_REGEX = /(?:^|\n)\s*(?:export\s+)?interface\s+(\w+)/g
-const TYPE_REGEX = /(?:^|\n)type\s+(\w+)\s*=/g
+// Optional `export`, indentation and generic parameters: exported aliases
+// (`export type Foo<T> = ...`) were never indexed.
+const TYPE_REGEX = /(?:^|\n)\s*(?:export\s+)?type\s+(\w+)(?:<[^=]*?>)?\s*=/g
 const EFFECT_FN_REGEX = /Effect\.fn\s*\(\s*["']([^"']+)["']\s*\)/
 const EFFECT_FN_CONST_REGEX = /const\s+(\w+)\s*=\s*Effect\.fn\s*\(\s*["']([^"']+)["']\s*\)/g
 // Match a single `readonly name(args): ReturnType` member line inside an
@@ -189,6 +191,29 @@ function getTSNodeBody(
 
 const CLASS_METHOD_REGEX = /(?:^|\n)\s+(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::\s*[^{;]+)?\s*\{/g
 
+// End offset of an expression starting at `start`: the first `;`, `,` or
+// newline at bracket depth 0, or a closer that belongs to an enclosing call
+// (`f(x => y)`). A newline whose next line starts with a continuation token
+// (`|` / `&` union members, `.` chains, `?` / `:` ternaries) does not end it.
+function scanExpressionEnd(content: string, start: number): number {
+  const limit = Math.min(start + BRACE_SCAN_BOUND, content.length)
+  let depth = 0
+  for (let i = start; i < limit; i++) {
+    const ch = content[i]!
+    if (ch === "(" || ch === "[" || ch === "{") depth++
+    else if (ch === ")" || ch === "]" || ch === "}") {
+      if (depth === 0) return i
+      depth--
+    } else if ((ch === ";" || ch === ",") && depth === 0) return i
+    else if (ch === "\n" && depth === 0) {
+      let j = i + 1
+      while (j < limit && /[ \t\r]/.test(content[j]!)) j++
+      if (!"|&.?:".includes(content[j] ?? "")) return i
+    }
+  }
+  return limit
+}
+
 function getArrowBody(
   content: string,
   offsets: readonly number[],
@@ -212,28 +237,8 @@ function getArrowBody(
   }
 
   // Expression body: it may start on the next line and span lines through
-  // balanced brackets (`Effect.gen(function* () {...})`, `.pipe(...)` chains),
-  // so end at the first `;` or newline at bracket depth 0 instead of the first
-  // newline after `=>`.
-  const bodyStart = sliceEnd - rest.length
-  const exprLimit = Math.min(bodyStart + BRACE_SCAN_BOUND, content.length)
-  let depth = 0
-  let endOffset = exprLimit
-  for (let i = bodyStart; i < exprLimit; i++) {
-    const ch = content[i]!
-    if (ch === "(" || ch === "[" || ch === "{") depth++
-    else if (ch === ")" || ch === "]" || ch === "}") {
-      // A closer below depth 0 belongs to an enclosing call (`f(x => y)`).
-      if (depth === 0) {
-        endOffset = i
-        break
-      }
-      depth--
-    } else if ((ch === "\n" || ch === ";" || ch === ",") && depth === 0) {
-      endOffset = i
-      break
-    }
-  }
+  // balanced brackets (`Effect.gen(function* () {...})`, `.pipe(...)` chains).
+  const endOffset = scanExpressionEnd(content, sliceEnd - rest.length)
   return {
     code: content.substring(matchIndex, endOffset),
     endLine: endLineFor(offsets, endOffset),
@@ -564,7 +569,12 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
   for (const match of content.matchAll(TYPE_REGEX)) {
     const name = match[1]
     const startLine = declStartLine(content, offsets, match.index)
-    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0])
+    // A type alias body is an expression, never a brace block: getTSNodeBody
+    // would scan ahead to the NEXT `{` (often the following function) and
+    // swallow it, attributing that function's calls to the type.
+    const endOffset = scanExpressionEnd(content, match.index! + match[0].length)
+    const code = content.substring(match.index!, endOffset)
+    const endLine = endLineFor(offsets, endOffset)
     nodes.push({ id: `${fileID}:type:${name}:${startLine}`, kind: "type", name, startLine, endLine, code })
   }
 
