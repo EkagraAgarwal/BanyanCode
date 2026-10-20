@@ -6,7 +6,8 @@ import { Cause, Context, Effect, Layer } from "effect"
 import { classifySqliteError } from "effect/unstable/sql/SqlError"
 import { Global } from "../global"
 import { Flag } from "../flag/flag"
-import { isAbsolute, join } from "path"
+import { isAbsolute, join, resolve } from "path"
+import { homedir } from "node:os"
 import { DatabaseMigration } from "./migration"
 import { LayerNode } from "../effect/layer-node"
 import fs from "node:fs"
@@ -148,7 +149,16 @@ export function layerFromPath(filename: string) {
 
 function findProjectRoot(startDir: string): string | undefined {
   let dir = startDir
-  const markers = [".git", "banyancode.json", "opencode.json", ".banyancode", ".opencode", "package.json", "Cargo.toml", "go.mod"]
+  const markers = [
+    ".git",
+    "banyancode.json",
+    "opencode.json",
+    ".banyancode",
+    ".opencode",
+    "package.json",
+    "Cargo.toml",
+    "go.mod",
+  ]
   while (true) {
     for (const marker of markers) {
       const candidate = join(dir, marker)
@@ -173,9 +183,16 @@ function findProjectRoot(startDir: string): string | undefined {
 // findProjectRoot it ignores package.json/opencode.json, so running from a
 // monorepo subfolder (packages/opencode) resolves to the same root as running
 // from the repo root instead of forking a second DB.
+// A home directory that is itself a git repo (dotfiles) is only the root when
+// started from home itself; otherwise every marker-less folder under home
+// (including temp dirs) would share the home DB.
 function findGitRoot(startDir: string): string | undefined {
+  const home = resolve(homedir())
+  const isHome = (p: string) =>
+    process.platform === "win32" ? resolve(p).toLowerCase() === home.toLowerCase() : resolve(p) === home
   let dir = startDir
   while (true) {
+    if (isHome(dir) && !isHome(startDir)) return undefined
     if (fs.existsSync(join(dir, ".git"))) return dir
     const parent = join(dir, "..")
     if (parent === dir) return undefined
