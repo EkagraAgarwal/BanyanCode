@@ -33,7 +33,7 @@ import path from "node:path"
 // handler binds its OWN root-scoped Database via
 // Database.layerFromRoot(identity.root), so the apiLayer dbPath is only used
 // by the other (unexercised) handlers' deps.
-const buildApiLayer = (dbPath: string) => {
+const buildApiLayer = (dbPath: string, extra: Layer.Layer<never> = Layer.empty) => {
   const dbLayer = Database.layerFromPath(dbPath)
   const repoLayer = Banyan.codegraphRepoDefaultLayer.pipe(Layer.provide(dbLayer))
   const busLayer = Banyan.subagentBusDefaultLayer.pipe(Layer.provide(dbLayer))
@@ -47,13 +47,7 @@ const buildApiLayer = (dbPath: string) => {
 
   return HttpRouter.serve(
     HttpApiBuilder.layer(RootHttpApi).pipe(
-      Layer.provide([
-        controlHandlers,
-        controlPlaneHandlers,
-        globalHandlers,
-        repositoryIntelHandlers,
-        memoryHandlers,
-      ]),
+      Layer.provide([controlHandlers, controlPlaneHandlers, globalHandlers, repositoryIntelHandlers, memoryHandlers]),
       Layer.provide([authorizationLayer, schemaErrorLayer]),
       Layer.provide(meshLayer),
       Layer.provide(busLayer),
@@ -77,6 +71,7 @@ const buildApiLayer = (dbPath: string) => {
     ),
     Layer.provide(ServerAuth.Config.layer({ password: Option.none(), username: "opencode" })),
     Layer.provide(repositoryIntelServiceMocks),
+    Layer.provide(extra),
   )
 }
 
@@ -94,9 +89,7 @@ const seedHealthyMeta = (root: string) =>
     // first runs, so this mirrors production.
     mkdirSync(path.join(root, ".banyancode"), { recursive: true })
     const identity = Banyan.WorkspaceIdentity.identityForRoot(root)
-    const seedLayer = Banyan.codegraphRepoLayer.pipe(
-      Layer.provide(Database.layerFromPath(identity.dbPath)),
-    )
+    const seedLayer = Banyan.codegraphRepoLayer.pipe(Layer.provide(Database.layerFromPath(identity.dbPath)))
     return yield* Effect.scoped(
       Effect.gen(function* () {
         const repo = yield* Banyan.CodegraphRepo
@@ -183,6 +176,40 @@ describe("GET /global/codegraph-status", () => {
     }),
   )
 
+  it.live("reports building while a build for the root is in flight (meta not yet written)", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.promise(() => tmpdir())
+      try {
+        const root = path.join(tmp.path, "building-ws")
+        mkdirSync(path.join(root, ".banyancode"), { recursive: true })
+        const running = Layer.mock(Banyan.CodegraphBuildService)({
+          status: () =>
+            Effect.succeed({
+              status: "running" as const,
+              root: Banyan.WorkspaceIdentity.identityForRoot(root).root,
+              done: 5,
+              total: 10,
+            }),
+          // The status handler never drains the build event queue.
+          events: () => {
+            throw new Error("events() is not used by the status handler")
+          },
+        })
+        const apiLayer = buildApiLayer(path.join(tmp.path, "codegraph-status-http.sqlite"), running)
+
+        const response = yield* HttpClient.execute(
+          HttpClientRequest.get(`${GlobalPaths.codegraphStatus}?root=${encodeURIComponent(root)}`),
+        ).pipe(Effect.provide(apiLayer))
+        expect(response.status).toBe(200)
+        const data = (yield* response.json) as { reason: string; warning?: string }
+        expect(data.reason).toBe("building")
+        expect(data.warning).toContain("5/10")
+      } finally {
+        yield* Effect.promise(() => tmp[Symbol.asyncDispose]())
+      }
+    }),
+  )
+
   it.live("returns 400 when no root is supplied and no instance context exists", () =>
     Effect.gen(function* () {
       const tmp = yield* Effect.promise(() => tmpdir())
@@ -190,7 +217,9 @@ describe("GET /global/codegraph-status", () => {
         const dbPath = path.join(tmp.path, "codegraph-status-http.sqlite")
         const apiLayer = buildApiLayer(dbPath)
 
-        const response = yield* HttpClient.execute(HttpClientRequest.get(GlobalPaths.codegraphStatus)).pipe(Effect.provide(apiLayer))
+        const response = yield* HttpClient.execute(HttpClientRequest.get(GlobalPaths.codegraphStatus)).pipe(
+          Effect.provide(apiLayer),
+        )
         expect(response.status).toBe(400)
         const data = (yield* response.json) as { message?: string }
         expect(data.message).toContain("root")
