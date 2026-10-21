@@ -18,11 +18,11 @@
 
 import { createHash } from "node:crypto"
 import { realpathSync, statSync } from "node:fs"
+import { homedir } from "node:os"
 import { join, parse, resolve } from "node:path"
 import { InstallationChannel } from "../installation/version"
 
-export const shortHash = (s: string): string =>
-  createHash("sha256").update(s).digest("hex").slice(0, 12)
+export const shortHash = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 12)
 
 export const sanitizeRoot = (input: string): string => {
   // Realpath removes 8.3 short-file-name segments and resolves symlinks so
@@ -102,7 +102,13 @@ export const findContainingBanyanDir = (start: string): string | undefined => {
           rootOf(candidate) === rootOf(startDir) &&
           candidate !== join(startDir, ".banyancode") &&
           candidate === join(rootOf(startDir), ".banyancode")
-        if (!isRootLevelMarker) return candidate
+        // Same for a marker in the home directory: running from `~` once
+        // creates `~/.banyancode`, which must not capture every child folder.
+        const home = resolve(homedir())
+        const same = (a: string, b: string) =>
+          process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b
+        const isHomeMarker = same(dir, home) && !same(startDir, home)
+        if (!isRootLevelMarker && !isHomeMarker) return candidate
       }
     } catch {
       // missing or unreachable; keep walking

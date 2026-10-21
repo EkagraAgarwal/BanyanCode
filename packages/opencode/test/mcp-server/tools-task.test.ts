@@ -267,7 +267,9 @@ describe("mcp task tools", () => {
         expect(typeof tool.title).toBe("string")
         expect(tool.title?.length).toBeGreaterThan(0)
         expect(tool.description).toContain("UNKNOWN_TASK")
-        expect(tool.annotations?.readOnlyHint).toBe(false)
+        expect(tool.annotations?.readOnlyHint).toBe(
+          tool.name === "banyan_task_status" || tool.name === "banyan_task_result",
+        )
         expect(tool.annotations?.openWorldHint).toBe(false)
         expect(tool.annotations?.destructiveHint).toBe(tool.name === "banyan_task_cancel")
         expect(tool.outputSchema).toBeDefined()

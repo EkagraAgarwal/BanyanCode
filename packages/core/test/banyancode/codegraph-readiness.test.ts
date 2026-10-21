@@ -124,7 +124,7 @@ describe("CodegraphReadiness", () => {
             totalFiles: 1,
             totalNodes: 0,
             totalEdges: 0,
-            schemaVersion: 3,
+            schemaVersion: 5,
             indexedRoot: repoDir,
           })
           // Update the file's mtime to a fresh timestamp WITHOUT changing
@@ -185,7 +185,7 @@ describe("CodegraphReadiness", () => {
             totalFiles: 1,
             totalNodes: 0,
             totalEdges: 0,
-            schemaVersion: 3,
+            schemaVersion: 5,
             indexedRoot: repoDir,
           })
           // Touch file A with no content change — mtime advances, but
@@ -316,7 +316,7 @@ describe("CodegraphReadiness", () => {
             totalFiles: 1,
             totalNodes: 0,
             totalEdges: 0,
-            schemaVersion: 3,
+            schemaVersion: 5,
             indexedRoot: repoDir,
           })
         }).pipe(Effect.provide(layer)),
@@ -558,7 +558,7 @@ describe("CodegraphReadiness", () => {
             totalFiles: 1,
             totalNodes: 0,
             totalEdges: 0,
-            schemaVersion: 3,
+            schemaVersion: 5,
             indexedRoot: tmp.path,
           })
         }).pipe(Effect.provide(layer)),
@@ -604,7 +604,7 @@ describe("CodegraphReadiness", () => {
             totalFiles: 1,
             totalNodes: 0,
             totalEdges: 0,
-            schemaVersion: 3,
+            schemaVersion: 5,
             indexedRoot: tmp.path,
           })
         }).pipe(Effect.provide(layer)),
@@ -630,7 +630,8 @@ describe("CodegraphReadiness", () => {
   })
 
   // Phase 2: a healthy graph (fresh + adequate coverage) reports "ready".
-  test("status() returns ready when the graph is healthy", async () => {    await using tmp = await tmpdir()
+  test("status() returns ready when the graph is healthy", async () => {
+    await using tmp = await tmpdir()
     const dbPath = path.join(tmp.path, "readiness-status-ready.db")
     const layer = buildReadinessLayer(dbPath)
     const { CodegraphRepo } = await import("@opencode-ai/core/banyancode/codegraph-repo")
@@ -648,7 +649,7 @@ describe("CodegraphReadiness", () => {
             totalFiles: 42,
             totalNodes: 0,
             totalEdges: 0,
-            schemaVersion: 3,
+            schemaVersion: 5,
             indexedRoot: tmp.path,
           })
         }).pipe(Effect.provide(layer)),
@@ -704,6 +705,77 @@ describe("CodegraphReadiness", () => {
     expect(routed.forceReindex).toBe(false)
     const healthy = classifyReadiness({ meta: base, fileCount: 1, root: "/ws/a" })
     expect(healthy).toEqual({ needsBuild: false, forceReindex: false, routingError: undefined })
+  })
+
+  test("statusFromMeta reports a graph from an older schema as stale, never ready", async () => {
+    const { statusFromMeta } = await import("@opencode-ai/core/banyancode/codegraph-readiness")
+    const meta = {
+      id: "singleton" as const,
+      graphBuiltAt: Date.now(),
+      graphVersion: 1,
+      graphCoverage: 1,
+      totalFiles: 1,
+      totalNodes: 1,
+      totalEdges: 0,
+      schemaVersion: CODEGRAPH_SCHEMA_VERSION - 1,
+    }
+    const stale = statusFromMeta(meta)
+    expect(stale.reason).toBe("stale")
+    expect(stale.warning).toContain("schema")
+    expect(statusFromMeta({ ...meta, schemaVersion: CODEGRAPH_SCHEMA_VERSION }).reason).toBe("ready")
+  })
+
+  test("classifyReadiness widens a subdirectory stamp and accepts nested callers", async () => {
+    await using tmp = await tmpdir()
+    const { classifyReadiness } = await import("@opencode-ai/core/banyancode/codegraph-readiness")
+    const parent = path.join(tmp.path, "repo")
+    const child = path.join(parent, "packages", "app")
+    fs.mkdirSync(child, { recursive: true })
+    const meta = (indexedRoot: string) => ({
+      id: "singleton" as const,
+      graphBuiltAt: Date.now(),
+      graphVersion: 1,
+      graphCoverage: 1,
+      totalFiles: 1,
+      totalNodes: 0,
+      totalEdges: 0,
+      schemaVersion: CODEGRAPH_SCHEMA_VERSION,
+      indexedRoot,
+    })
+    expect(classifyReadiness({ meta: meta(child), fileCount: 1, root: parent })).toEqual({
+      needsBuild: false,
+      forceReindex: true,
+      routingError: undefined,
+    })
+    expect(classifyReadiness({ meta: meta(parent), fileCount: 1, root: child })).toEqual({
+      needsBuild: false,
+      forceReindex: false,
+      routingError: undefined,
+    })
+  })
+
+  test("bumpVersion never narrows indexed_root to a subdirectory", async () => {
+    await using tmp = await tmpdir()
+    const parent = path.join(tmp.path, "repo")
+    const child = path.join(parent, "packages", "app")
+    const sibling = path.join(tmp.path, "other")
+    fs.mkdirSync(child, { recursive: true })
+    fs.mkdirSync(sibling, { recursive: true })
+    const { CodegraphRepo } = await import("@opencode-ai/core/banyancode/codegraph-repo")
+
+    const roots = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const repo = yield* CodegraphRepo.Service
+          yield* repo.bumpVersion({ indexedRoot: parent })
+          yield* repo.bumpVersion({ indexedRoot: child })
+          const kept = (yield* repo.getMeta())?.indexedRoot
+          yield* repo.bumpVersion({ indexedRoot: sibling })
+          return { kept, replaced: (yield* repo.getMeta())?.indexedRoot }
+        }).pipe(Effect.provide(buildReadinessLayer(path.join(tmp.path, "narrow.db")))),
+      ),
+    )
+    expect(roots).toEqual({ kept: parent, replaced: sibling })
   })
 
   test("ensureReady returns failed (no rebuild) on indexed_root mismatch", async () => {
@@ -838,4 +910,3 @@ describe("CodegraphReadiness", () => {
     }
   })
 })
-

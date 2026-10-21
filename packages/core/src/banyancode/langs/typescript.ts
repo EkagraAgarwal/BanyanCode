@@ -6,16 +6,22 @@ const CLASS_REGEX = /(?:^|\n)(?!export\s+)class\s+(\w+)(?:\s+extends\s+(\w+))?/g
 const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(/g
 // Allow leading whitespace so layer-internal `const start = ...` (4-space indented
 // inside `Layer.effect(...)`) is indexed. Previously anchored on `(?:^|\n)const`
-// which silently dropped every indented layer const.
-const ARROW_CONST_REGEX = /(?:^|\n)\s*(?:export\s+)?const\s+(\w+)\s*=\s*(async\s+)?(?:\([^)]*\)|[^=>\n]+)\s*=>/g
-const FACTORY_EXPORT_REGEX = /(?:^|\n)export\s+const\s+(\w+)\s*=\s*((?:Tool\.define|Layer\.effect|Layer\.succeed|Layer\.scoped|Context\.Service|Context\.Tag|Layer\.mergeAll)(?:<[^>]+>)?)\s*\(/g
+// which silently dropped every indented layer const. The optional `: Type`
+// after a parenthesized parameter list admits return-type annotations on
+// multi-line signatures (`(input: {...}): {...} =>`), which were never indexed.
+const ARROW_CONST_REGEX =
+  /(?:^|\n)\s*(?:export\s+)?const\s+(\w+)\s*=\s*(async\s+)?(?:\([^)]*\)(?:\s*:[^=;]{1,500}?)?|[^=>\n]+)\s*=>/g
+const FACTORY_EXPORT_REGEX =
+  /(?:^|\n)export\s+const\s+(\w+)\s*=\s*((?:Tool\.define|Layer\.effect|Layer\.succeed|Layer\.scoped|Context\.Service|Context\.Tag|Layer\.mergeAll)(?:<[^>]+>)?)\s*\(/g
 // Allow optional `export ` and indentation between the newline and the
 // `interface` keyword. Real BanyanCode services use
 // `export interface Interface { ... }` as the sibling type of
 // `Context.Service<Service, Interface>()`. Previously the anchored
 // `(?:^|\n)interface` regex silently skipped these declarations.
 const INTERFACE_REGEX = /(?:^|\n)\s*(?:export\s+)?interface\s+(\w+)/g
-const TYPE_REGEX = /(?:^|\n)type\s+(\w+)\s*=/g
+// Optional `export`, indentation and generic parameters: exported aliases
+// (`export type Foo<T> = ...`) were never indexed.
+const TYPE_REGEX = /(?:^|\n)\s*(?:export\s+)?type\s+(\w+)(?:<[^=]*?>)?\s*=/g
 const EFFECT_FN_REGEX = /Effect\.fn\s*\(\s*["']([^"']+)["']\s*\)/
 const EFFECT_FN_CONST_REGEX = /const\s+(\w+)\s*=\s*Effect\.fn\s*\(\s*["']([^"']+)["']\s*\)/g
 // Match a single `readonly name(args): ReturnType` member line inside an
@@ -185,6 +191,29 @@ function getTSNodeBody(
 
 const CLASS_METHOD_REGEX = /(?:^|\n)\s+(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::\s*[^{;]+)?\s*\{/g
 
+// End offset of an expression starting at `start`: the first `;`, `,` or
+// newline at bracket depth 0, or a closer that belongs to an enclosing call
+// (`f(x => y)`). A newline whose next line starts with a continuation token
+// (`|` / `&` union members, `.` chains, `?` / `:` ternaries) does not end it.
+function scanExpressionEnd(content: string, start: number): number {
+  const limit = Math.min(start + BRACE_SCAN_BOUND, content.length)
+  let depth = 0
+  for (let i = start; i < limit; i++) {
+    const ch = content[i]!
+    if (ch === "(" || ch === "[" || ch === "{") depth++
+    else if (ch === ")" || ch === "]" || ch === "}") {
+      if (depth === 0) return i
+      depth--
+    } else if ((ch === ";" || ch === ",") && depth === 0) return i
+    else if (ch === "\n" && depth === 0) {
+      let j = i + 1
+      while (j < limit && /[ \t\r]/.test(content[j]!)) j++
+      if (!"|&.?:".includes(content[j] ?? "")) return i
+    }
+  }
+  return limit
+}
+
 function getArrowBody(
   content: string,
   offsets: readonly number[],
@@ -200,11 +229,16 @@ function getArrowBody(
   const rest = slice.trimStart()
   if (rest.startsWith("{")) {
     const braceStart = sliceEnd - rest.length
-    return getTSNodeBody(content, offsets, matchIndex, content.substring(matchIndex, braceStart + 1))
+    // Stop BEFORE the body brace: getTSNodeBody scans for the first `{` after
+    // the match, so including it made the scan start at the NEXT brace — an
+    // inner `if {` (range cut short) or the following function (range overrun),
+    // which misattributed call edges to the wrong enclosing node.
+    return getTSNodeBody(content, offsets, matchIndex, content.substring(matchIndex, braceStart))
   }
 
-  const lineRel = slice.indexOf("\n")
-  const endOffset = lineRel === -1 ? sliceEnd : afterArrow + lineRel
+  // Expression body: it may start on the next line and span lines through
+  // balanced brackets (`Effect.gen(function* () {...})`, `.pipe(...)` chains).
+  const endOffset = scanExpressionEnd(content, sliceEnd - rest.length)
   return {
     code: content.substring(matchIndex, endOffset),
     endLine: endLineFor(offsets, endOffset),
@@ -235,7 +269,12 @@ function getFactoryBody(
   }
 }
 
-function extractClassMethods(classCode: string, classStartLine: number, fileID: string, className: string): ParsedNode[] {
+function extractClassMethods(
+  classCode: string,
+  classStartLine: number,
+  fileID: string,
+  className: string,
+): ParsedNode[] {
   const methods: ParsedNode[] = []
   const localOffsets = computeLineStartOffsets(classCode)
   for (const match of classCode.matchAll(CLASS_METHOD_REGEX)) {
@@ -427,7 +466,15 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     )
     const effectMatch = code.match(EFFECT_FN_REGEX)
     const signature = effectMatch ? effectMatch[1] : match[0].trim()
-    nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
+    nodes.push({
+      id: `${fileID}:function:${name}:${startLine}`,
+      kind: "function",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
   }
 
   for (const match of content.matchAll(FACTORY_EXPORT_REGEX)) {
@@ -436,7 +483,15 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     const signature = factoryCall.replace(/\s*\($/, "")
     const startLine = declStartLine(content, offsets, match.index)
     const { code, endLine } = getFactoryBody(content, offsets, match.index!, match[0])
-    nodes.push({ id: `${fileID}:factory:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
+    nodes.push({
+      id: `${fileID}:factory:${name}:${startLine}`,
+      kind: "function",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
   }
 
   for (const match of content.matchAll(ARROW_CONST_REGEX)) {
@@ -445,7 +500,15 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     const { code, endLine } = getArrowBody(content, offsets, match.index!, match[0])
     const effectMatch = code.match(EFFECT_FN_REGEX)
     const signature = effectMatch ? effectMatch[1] : match[0].trim()
-    nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
+    nodes.push({
+      id: `${fileID}:function:${name}:${startLine}`,
+      kind: "function",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
   }
 
   for (const match of content.matchAll(EFFECT_FN_CONST_REGEX)) {
@@ -484,7 +547,15 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
         endLine = endLineFor(offsets, braceLimit)
       }
     }
-    nodes.push({ id: `${fileID}:function:${name}:${startLine}`, kind: "function", name, startLine, endLine, signature, code })
+    nodes.push({
+      id: `${fileID}:function:${name}:${startLine}`,
+      kind: "function",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
   }
 
   for (const match of content.matchAll(INTERFACE_REGEX)) {
@@ -498,7 +569,12 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
   for (const match of content.matchAll(TYPE_REGEX)) {
     const name = match[1]
     const startLine = declStartLine(content, offsets, match.index)
-    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0])
+    // A type alias body is an expression, never a brace block: getTSNodeBody
+    // would scan ahead to the NEXT `{` (often the following function) and
+    // swallow it, attributing that function's calls to the type.
+    const endOffset = scanExpressionEnd(content, match.index! + match[0].length)
+    const code = content.substring(match.index!, endOffset)
+    const endLine = endLineFor(offsets, endOffset)
     nodes.push({ id: `${fileID}:type:${name}:${startLine}`, kind: "type", name, startLine, endLine, code })
   }
 

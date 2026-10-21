@@ -2,7 +2,7 @@ export * as CodegraphBuildService from "./codegraph-build-service"
 
 import { Cause, Context, Effect, Fiber, Layer, Queue, Ref, Schema } from "effect"
 import { CodegraphIndexer } from "./codegraph-indexer"
-import { CodegraphRepo } from "./codegraph-repo"
+import { CodegraphRepo, CODEGRAPH_SCHEMA_VERSION } from "./codegraph-repo"
 import { EventV2 } from "../event"
 import { WorkspaceIdentity } from "./workspace-identity"
 
@@ -78,7 +78,12 @@ export interface Interface {
   // cannot redirect graph storage to an arbitrary file. Tests that
   // relied on `dbPath` redirecting the actual DB should now assert on
   // `state.dbPath` after start() to discover where the data went.
-  readonly start: (input: { root: string; force?: boolean; dbPath?: string; excludePatterns?: readonly string[] }) => Effect.Effect<void, never, never>
+  readonly start: (input: {
+    root: string
+    force?: boolean
+    dbPath?: string
+    excludePatterns?: readonly string[]
+  }) => Effect.Effect<void, never, never>
   readonly cancel: () => Effect.Effect<void, never, never>
   readonly forceKill: () => Effect.Effect<{ ok: boolean; message: string }, never, never>
   readonly events: () => Queue.Dequeue<{ type: "banyancode.codegraph.build"; properties: State }>
@@ -93,7 +98,9 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     if (!banyancodeEnabled()) {
       const state = yield* Ref.make<State>({ status: "idle", done: 0, total: 0 })
-      const events = yield* Queue.bounded<{ type: "banyancode.codegraph.build"; properties: State }>(64).pipe(Effect.orDie)
+      const events = yield* Queue.bounded<{ type: "banyancode.codegraph.build"; properties: State }>(64).pipe(
+        Effect.orDie,
+      )
       yield* Effect.addFinalizer(() => Queue.shutdown(events))
       return Service.of({
         status: () => Ref.get(state),
@@ -113,10 +120,13 @@ export const layer = Layer.effect(
     // events are dropped rather than blocking the worker. Per AGENTS.md,
     // do not raise capacity or switch to unbounded — bounded with drop is
     // the correct back-pressure shape for a progress-event stream.
-    const events = yield* Queue.dropping<{ type: "banyancode.codegraph.build"; properties: State }>(64).pipe(Effect.orDie)
+    const events = yield* Queue.dropping<{ type: "banyancode.codegraph.build"; properties: State }>(64).pipe(
+      Effect.orDie,
+    )
     yield* Effect.addFinalizer(() => Queue.shutdown(events))
 
-    const publish = (s: State) => Queue.offer(events, { type: "banyancode.codegraph.build", properties: s }).pipe(Effect.ignore)
+    const publish = (s: State) =>
+      Queue.offer(events, { type: "banyancode.codegraph.build", properties: s }).pipe(Effect.ignore)
 
     // The events queue is drained by the build bridge in
     // packages/opencode/src/effect/banyancode-codegraph-bridge.ts, which
@@ -130,10 +140,7 @@ export const layer = Layer.effect(
         const currentFiber = yield* Ref.get(inFlight)
         // Mirror cancel/forceKill (:283/:303): bound the interrupt so a
         // wedged CPU-bound indexer fiber cannot hang start() forever.
-        if (currentFiber) yield* Fiber.interrupt(currentFiber).pipe(
-          Effect.timeout("2 seconds"),
-          Effect.ignore,
-        )
+        if (currentFiber) yield* Fiber.interrupt(currentFiber).pipe(Effect.timeout("2 seconds"), Effect.ignore)
 
         yield* indexer.cancel()
         // Phase 7 follow-up: canonical storage is derived from the caller-
@@ -149,6 +156,12 @@ export const layer = Layer.effect(
         // comparing `meta.indexedRoot` against a tool-passed root never sees a
         // spurious root change from casing / symlink / separator drift.
         const identity = WorkspaceIdentity.identityForRoot(input.root)
+        // A graph from an older schema must be fully re-extracted: a plain
+        // build skips unchanged files as cached and would stamp the outdated
+        // nodes/edges with the current schema version.
+        const priorMeta = yield* repo.getMeta()
+        const force =
+          (input.force ?? false) || (priorMeta !== undefined && priorMeta.schemaVersion !== CODEGRAPH_SCHEMA_VERSION)
         const initial: State = {
           status: "running",
           root: input.root,
@@ -171,7 +184,7 @@ export const layer = Layer.effect(
         const worker = Effect.gen(function* () {
           const result = yield* indexer.index({
             root: identity.root,
-            force: input.force ?? false,
+            force,
             ...(input.excludePatterns ? { excludePatterns: input.excludePatterns } : {}),
             onProgress: Effect.fn("CodegraphBuildService.onProgress")(function* ({ file, done, total, currentFile }) {
               const basename = file.split("/").pop() ?? file.split("\\").pop() ?? file
@@ -197,12 +210,11 @@ export const layer = Layer.effect(
           // Phase 1: also surface totalFiles and graphBuiltAt so the
           // terminal publish can populate the status pill's `hasGraph`
           // check without re-reading `repo.getMeta()` after the bump.
-          const { graphVersion, coverage, totalNodes, totalEdges, totalFiles, graphBuiltAt } =
-            yield* repo.bumpVersion({
-              eligibleFiles: result.eligibleFiles,
-              scannedFiles: result.scannedFiles,
-              indexedRoot: identity.root,
-            })
+          const { graphVersion, coverage, totalNodes, totalEdges, totalFiles, graphBuiltAt } = yield* repo.bumpVersion({
+            eligibleFiles: result.eligibleFiles,
+            scannedFiles: result.scannedFiles,
+            indexedRoot: identity.root,
+          })
 
           return { result, graphVersion, coverage, totalNodes, totalEdges, totalFiles, graphBuiltAt }
         })
@@ -248,31 +260,32 @@ export const layer = Layer.effect(
             // undefined or stale value for these fields, and the freshest
             // truth lives on `outcome`. Per AGENTS.md: success-only — the
             // failed branch deliberately leaves them unset.
-            const terminal: State = outcome.kind === "completed"
-              ? {
-                  ...current,
-                  status: "completed",
-                  done: outcome.result.indexed + outcome.result.skipped,
-                  total: outcome.result.indexed + outcome.result.skipped,
-                  graphVersion: outcome.graphVersion,
-                  graphCoverage: outcome.coverage,
-                  totalFiles: outcome.totalFiles,
-                  graphBuiltAt: outcome.graphBuiltAt,
-                  result: {
-                    indexed: outcome.result.indexed,
-                    skipped: outcome.result.skipped,
-                    duration_ms: Date.now() - startTime,
-                    symbolsIndexed: outcome.result.symbolsIndexed,
-                    skippedByReason: outcome.result.skippedByReason,
-                  },
-                  parseErrors: outcome.result.parseErrors,
-                }
-              : {
-                  ...current,
-                  status: "failed",
-                  lastProgressAt: Date.now(),
-                  error: outcome.error,
-                }
+            const terminal: State =
+              outcome.kind === "completed"
+                ? {
+                    ...current,
+                    status: "completed",
+                    done: outcome.result.indexed + outcome.result.skipped,
+                    total: outcome.result.indexed + outcome.result.skipped,
+                    graphVersion: outcome.graphVersion,
+                    graphCoverage: outcome.coverage,
+                    totalFiles: outcome.totalFiles,
+                    graphBuiltAt: outcome.graphBuiltAt,
+                    result: {
+                      indexed: outcome.result.indexed,
+                      skipped: outcome.result.skipped,
+                      duration_ms: Date.now() - startTime,
+                      symbolsIndexed: outcome.result.symbolsIndexed,
+                      skippedByReason: outcome.result.skippedByReason,
+                    },
+                    parseErrors: outcome.result.parseErrors,
+                  }
+                : {
+                    ...current,
+                    status: "failed",
+                    lastProgressAt: Date.now(),
+                    error: outcome.error,
+                  }
 
             yield* Ref.set(state, terminal)
             yield* publish(terminal)
@@ -284,10 +297,7 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const fiber = yield* Ref.get(inFlight)
         if (fiber) {
-          yield* Fiber.interrupt(fiber).pipe(
-            Effect.timeout("2 seconds"),
-            Effect.ignore,
-          )
+          yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"), Effect.ignore)
           yield* Ref.set(inFlight, undefined)
           const current = yield* Ref.get(state)
           if (current.status === "running") {
@@ -304,10 +314,7 @@ export const layer = Layer.effect(
         const fiber = yield* Ref.get(inFlight)
         // First try a normal cancel via Fiber.interrupt — works most of the time.
         if (fiber) {
-          yield* Fiber.interrupt(fiber).pipe(
-            Effect.timeout("2 seconds"),
-            Effect.ignore,
-          )
+          yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"), Effect.ignore)
           yield* Ref.set(inFlight, undefined)
         }
         yield* indexer.cancel()
@@ -349,7 +356,10 @@ export const layer = Layer.effect(
                 else resolve({ ok: false, message: "taskkill /F failed (user denied UAC or taskkill not available)" })
               })
             }),
-          catch: (err) => ({ ok: false, message: `force-kill spawn failed: ${err instanceof Error ? err.message : String(err)}` }),
+          catch: (err) => ({
+            ok: false,
+            message: `force-kill spawn failed: ${err instanceof Error ? err.message : String(err)}`,
+          }),
         }).pipe(
           Effect.catchCause(() =>
             Effect.succeed({ ok: false, message: "force-kill: unexpected error in spawn path" } as const),
@@ -364,4 +374,7 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(CodegraphIndexer.defaultLayer), Layer.provide(CodegraphRepo.defaultLayer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(CodegraphIndexer.defaultLayer),
+  Layer.provide(CodegraphRepo.defaultLayer),
+)

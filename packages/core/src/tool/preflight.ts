@@ -96,6 +96,12 @@ export const Output = Schema.Struct({
   eventBridgesAffected: Schema.Array(Schema.Struct({ name: Schema.String, file: Schema.String })),
   httpRoutesAffected: Schema.Array(Schema.Struct({ method: Schema.String, path: Schema.String, file: Schema.String })),
   risks: Schema.Array(RiskSchema),
+  // Highest severity across `risks` ("unknown" when the target is not
+  // resolved): a scalar headline that survives output truncation even when
+  // the nested arrays above are dropped.
+  risk: Schema.Literals(["low", "medium", "high", "unknown"]),
+  // fileID -> path for every node above (nodes only carry an opaque fileID).
+  filePaths: Schema.Record(Schema.String, Schema.String),
   derivation: DerivationLiterals,
   meta: Schema.optional(GraphMeta),
   // Phase 1 (freshness): how many caller files have an mtime newer than
@@ -427,6 +433,20 @@ export const computePreflight = (
       eventBridgesAffected: eventBridges,
       httpRoutesAffected: httpRoutes,
       risks,
+      risk: !resolved
+        ? ("unknown" as const)
+        : risks.some((r) => r.severity === "high")
+          ? ("high" as const)
+          : risks.some((r) => r.severity === "medium")
+            ? ("medium" as const)
+            : ("low" as const),
+      filePaths: Object.fromEntries(
+        [...new Set([primary, ...candidates, ...directCallers, ...transitiveCallers].flatMap((n) => (n ? [n.fileID] : [])))]
+          .flatMap((id) => {
+            const file = allFiles.find((f) => f.id === id)
+            return file ? [[id, file.path] as const] : []
+          }),
+      ),
       derivation: "regex-v1" as const,
       ...(graphMetaOut ? { meta: graphMetaOut } : {}),
       ...(perFileStale.staleFiles > 0 ? { staleFiles: perFileStale.staleFiles } : {}),

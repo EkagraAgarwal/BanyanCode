@@ -6953,6 +6953,7 @@ export type GlobalCodeFindResponses = {
     matches: Array<{
       node: BanyanCodegraphNode
       derivation: "tag-fallback" | "name-exact" | "qualified-split" | "code-substring" | "name-like" | "fts-bm25"
+      path?: string
     }>
     files: Array<{
       path: string
@@ -7056,6 +7057,10 @@ export type GlobalPreflightResponses = {
       severity: "low" | "medium" | "high"
       message: string
     }>
+    risk: "low" | "medium" | "high" | "unknown"
+    filePaths: {
+      [key: string]: string
+    }
     derivation: "regex-v1" | "tree-sitter-v1" | "runtime-v1"
     meta?: {
       graphBuiltAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"

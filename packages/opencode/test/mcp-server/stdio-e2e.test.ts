@@ -323,6 +323,7 @@ describe("mcp stdio e2e (real CLI)", () => {
         expect(client.getProtocolEra()).toBe("modern")
         expect(client.getDiscoverResult()).toBeDefined()
         expect(client.getServerVersion()?.name).toBe("banyancode")
+        expect(client.getInstructions()).toContain("banyan_code_find")
 
         const { tools } = await withTimeout(client.listTools(), 20_000, "modern tools/list")
         expect(tools.map((t) => t.name).sort()).toEqual([...EXPECTED_TOOLS].sort())

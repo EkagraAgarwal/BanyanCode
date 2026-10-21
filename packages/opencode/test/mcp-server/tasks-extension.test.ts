@@ -23,11 +23,7 @@
 import { describe, expect, test } from "bun:test"
 import { z } from "zod"
 import { Client } from "@modelcontextprotocol/client"
-import {
-  CLIENT_CAPABILITIES_META_KEY,
-  McpServer,
-  createMcpHandler,
-} from "@modelcontextprotocol/server"
+import { CLIENT_CAPABILITIES_META_KEY, McpServer, createMcpHandler } from "@modelcontextprotocol/server"
 import { MCP_ERAS, MODERN_PROTOCOL_VERSION, withEraClient } from "./era-harness"
 import { TaskEngine } from "../../src/mcp-server/task-engine"
 import type {
@@ -97,12 +93,7 @@ class FakeSessions implements EngineSessionClient {
     },
   }
 
-  async createSession(input: {
-    title?: string
-    metadata: Record<string, string>
-    agent?: string
-    model?: string
-  }) {
+  async createSession(input: { title?: string; metadata: Record<string, string>; agent?: string; model?: string }) {
     const id = `ses_test_${this.next++}`
     this.sessions.set(id, { prompts: [], busy: false, assistant: [], metadata: { ...input.metadata } })
     return { id }
@@ -232,7 +223,12 @@ async function withPlainBothEras(body: (fx: ExtFixtures, client: Client) => Prom
   for (const era of MCP_ERAS) {
     const fx = freshSetup()
     try {
-      await withEraClient(era, () => buildExtServer(fx.deps), taskClientInfo, (client) => body(fx, client))
+      await withEraClient(
+        era,
+        () => buildExtServer(fx.deps),
+        taskClientInfo,
+        (client) => body(fx, client),
+      )
     } finally {
       fx.engine.close()
     }
@@ -270,9 +266,7 @@ const rawCall = async (
         _meta: {
           "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL_VERSION,
           "io.modelcontextprotocol/clientInfo": { name: "tasks-ext-raw", version: "0.0.0-test" },
-          "io.modelcontextprotocol/clientCapabilities": withExt
-            ? { extensions: { [TasksExtensionID]: {} } }
-            : {},
+          "io.modelcontextprotocol/clientCapabilities": withExt ? { extensions: { [TasksExtensionID]: {} } } : {},
         },
       },
     }),
@@ -286,7 +280,12 @@ const startRawTask = async (
   prompt: string,
   extensions = true,
 ): Promise<RawResponse> =>
-  rawCall(handler, "tools/call", { name: "banyan_task_start", arguments: { prompt } }, { extensions, name: "banyan_task_start" })
+  rawCall(
+    handler,
+    "tools/call",
+    { name: "banyan_task_start", arguments: { prompt } },
+    { extensions, name: "banyan_task_start" },
+  )
 
 describe("tasks extension mapping (pure)", () => {
   test("engine states map onto extension states", () => {
@@ -395,7 +394,9 @@ describe("tasks extension fallback and gate (both eras)", () => {
 })
 
 describe("tasks extension wire (modern raw fetch)", () => {
-  const withRawServer = async (body: (fx: ExtFixtures, handler: { fetch: (req: Request) => Promise<Response> }) => Promise<unknown>): Promise<void> => {
+  const withRawServer = async (
+    body: (fx: ExtFixtures, handler: { fetch: (req: Request) => Promise<Response> }) => Promise<unknown>,
+  ): Promise<void> => {
     const fx = freshSetup()
     const mcp = buildExtServer(fx.deps)
     const handler = createMcpHandler(() => mcp)
@@ -433,31 +434,31 @@ describe("tasks extension wire (modern raw fetch)", () => {
     })
   })
 
-  test("2025-vocabulary names are entry-blocked on SDK 2.2.0 (D3 signal)", async () => {
-    // The SDK's modern entry answers -32601 for the removed 2025 method
-    // names (tasks/get, tasks/cancel, tasks/list) before Server dispatch —
-    // a truly unknown name (tasks/update, acme/*) falls through to our
-    // handlers instead. The handlers below are protocol-reachable on
-    // stdio/InMemory transports and fully covered by the direct-handler
-    // suite plus the raw tasks/update flow; when the SDK (or the D3 HTTP
-    // work) lifts the name gate this pin breaks and the raw tasks/get flow
-    // becomes testable here.
+  test("tasks/get and tasks/cancel reach our handlers over the modern wire", async () => {
+    // SDK 2.2.0 entry-blocked these names with -32601 before Server dispatch;
+    // 2.3.x lifts that gate, so unknown handles now answer -32602 from our
+    // own handlers. tasks/list stays method-not-found (removed from the spec).
     await withRawServer(async (_fx, handler) => {
-      for (const method of ["tasks/get", "tasks/cancel", "tasks/list"] as const) {
-        const params = method === "tasks/list" ? {} : { taskId: "btask_nope" }
-        const name = method === "tasks/list" ? undefined : "btask_nope"
-        const res = await rawCall(handler, method, params, name !== undefined ? { name } : {})
-        expect(res.error?.code).toBe(-32601)
+      for (const method of ["tasks/get", "tasks/cancel", "tasks/update"] as const) {
+        const params =
+          method === "tasks/update" ? { taskId: "btask_nope", inputResponses: {} } : { taskId: "btask_nope" }
+        const res = await rawCall(handler, method, params, { name: "btask_nope" })
+        expect(res.error?.code).toBe(-32602)
+        expect(res.error?.message).toContain("btask_nope")
       }
-      // tasks/update is NOT name-gated: unknown IDs answer -32602 from our
-      // own handler (missing capability or unknown handle surface here).
-      const unknown = await rawCall(
-        handler,
-        "tasks/update",
-        { taskId: "btask_nope", inputResponses: {} },
-        { name: "btask_nope" },
-      )
-      expect(unknown.error?.code).toBe(-32602)
+      const list = await rawCall(handler, "tasks/list", {}, {})
+      expect(list.error?.code).toBe(-32601)
+    })
+  })
+
+  test("tasks/get polls a started task over the modern wire", async () => {
+    await withRawServer(async (_fx, handler) => {
+      const started = await startRawTask(handler, "do the thing")
+      const taskId = started.result?.["taskId"] as string
+      const got = await rawCall(handler, "tasks/get", { taskId }, { name: taskId })
+      expect(got.error).toBeUndefined()
+      expect(got.result?.["taskId"]).toBe(taskId)
+      expect(typeof got.result?.["status"]).toBe("string")
     })
   })
 
@@ -681,27 +682,32 @@ describe("tasks extension notifications (legacy broadcast)", () => {
       if (era !== "legacy") continue
       const fx = freshSetup()
       try {
-        await withEraClient(era, () => buildExtServer(fx.deps), taskClientInfo, async (client) => {
-          const seen: Array<Record<string, unknown>> = []
-          client.setNotificationHandler("notifications/tasks", { params: loose }, (params) => {
-            seen.push(params as Record<string, unknown>)
-          })
-          const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "do work" } })
-          expect(isToolError(started)).toBe(false)
-          const taskId = toolJson<{ task_id: string }>(started).task_id
-          const sessionID = fx.engine.get(taskId).sessionID
-          fx.fake.finish(sessionID, "all done")
-          fx.fake.emit({ type: "session.idle", sessionID })
-          let done: Record<string, unknown> | undefined
-          for (let i = 0; i < 100; i++) {
-            done = seen.find((n) => n["taskId"] === taskId && n["status"] === "completed")
-            if (done) break
-            await new Promise((r) => setTimeout(r, 50))
-          }
-          expect(seen.find((n) => n["taskId"] === taskId && n["status"] === "working")).toBeDefined()
-          expect(done?.["taskId"]).toBe(taskId)
-          expect((done?.["result"] as Record<string, unknown> | undefined)?.["structuredContent"]).toBeDefined()
-        })
+        await withEraClient(
+          era,
+          () => buildExtServer(fx.deps),
+          taskClientInfo,
+          async (client) => {
+            const seen: Array<Record<string, unknown>> = []
+            client.setNotificationHandler("notifications/tasks", { params: loose }, (params) => {
+              seen.push(params as Record<string, unknown>)
+            })
+            const started = await client.callTool({ name: "banyan_task_start", arguments: { prompt: "do work" } })
+            expect(isToolError(started)).toBe(false)
+            const taskId = toolJson<{ task_id: string }>(started).task_id
+            const sessionID = fx.engine.get(taskId).sessionID
+            fx.fake.finish(sessionID, "all done")
+            fx.fake.emit({ type: "session.idle", sessionID })
+            let done: Record<string, unknown> | undefined
+            for (let i = 0; i < 100; i++) {
+              done = seen.find((n) => n["taskId"] === taskId && n["status"] === "completed")
+              if (done) break
+              await new Promise((r) => setTimeout(r, 50))
+            }
+            expect(seen.find((n) => n["taskId"] === taskId && n["status"] === "working")).toBeDefined()
+            expect(done?.["taskId"]).toBe(taskId)
+            expect((done?.["result"] as Record<string, unknown> | undefined)?.["structuredContent"]).toBeDefined()
+          },
+        )
       } finally {
         fx.engine.close()
       }

@@ -50,6 +50,7 @@ import { ShareNext } from "@/share/share-next"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Database } from "@opencode-ai/core/database/database"
+import { AppProcess } from "@opencode-ai/core/process"
 import { Skill } from "@/skill"
 import { Snapshot } from "@/snapshot"
 import { ToolRegistry } from "@/tool/registry"
@@ -293,6 +294,14 @@ export function createRoutes(
           Layer.provide(Layer.mergeAll(FSUtil.defaultLayer, Database.defaultLayer, EventV2.defaultLayer)),
         ),
         Banyan.banyanFilesystemDefaultLayer,
+        // /global/typecheck, /global/test-run and /global/lint (banyan_verify)
+        // yield VerifierService; without it every call 500s with
+        // "Service not found: @banyancode/VerifierService".
+        Banyan.verifierServiceDefaultLayer.pipe(
+          Layer.provide(AppProcess.defaultLayer),
+          Layer.provide(Banyan.banyanConfigServiceDefaultLayer),
+          Layer.provide(Banyan.verificationRepoDefaultLayer.pipe(Layer.provide(Database.defaultLayer))),
+        ),
       ),
     ),
     Layer.provideMerge(
@@ -317,10 +326,7 @@ export function createRoutes(
     // block adds no new requirements to createRoutes. Same-layer references
     // dedupe via the shared memoMap, so no duplicate Auth/Provider instances.
     Layer.provideMerge(
-      ProviderUsage.layer.pipe(
-        Layer.provide(Auth.defaultLayer),
-        Layer.provide(Provider.defaultLayer),
-      ),
+      ProviderUsage.layer.pipe(Layer.provide(Auth.defaultLayer), Layer.provide(Provider.defaultLayer)),
     ),
     Layer.provideMerge(
       BanyanToolsMount.attachToCatalog(
@@ -342,9 +348,11 @@ export function createRoutes(
     // and this nested provideMerge builds before the big provide([...]) list
     // below reaches EventV2.defaultLayer (mirrors app-runtime.ts:203).
     Layer.provideMerge(
-      Banyan.subagentConsumerDefaultLayer.pipe(
-        Layer.provide(EventV2.defaultLayer),
-      ) as unknown as Layer.Layer<never, never, never>,
+      Banyan.subagentConsumerDefaultLayer.pipe(Layer.provide(EventV2.defaultLayer)) as unknown as Layer.Layer<
+        never,
+        never,
+        never
+      >,
     ),
     Layer.provideMerge(
       PermissionBridge.layer.pipe(Layer.provide(Permission.defaultLayer)) as unknown as Layer.Layer<
@@ -353,9 +361,7 @@ export function createRoutes(
         never
       >,
     ),
-    Layer.provideMerge(
-      AiSdkTransportModule.layer as unknown as Layer.Layer<never, never, never>,
-    ),
+    Layer.provideMerge(AiSdkTransportModule.layer as unknown as Layer.Layer<never, never, never>),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provideMerge(Ripgrep.defaultLayer),
     Layer.provide(InstanceLayer.layer),

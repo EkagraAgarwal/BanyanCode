@@ -20,7 +20,27 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
-import { BanyanAgentOverrideUpdateInput, BanyanAgentPromptUpdateInput, BanyanAgentSaveInput, BanyanConfigUpdateInput, BlastRadiusInput, CodeFindInput, CodegraphBuildInput, CodegraphRemoveInput, CodegraphRemoveResult, GlobalUpgradeInput, LintInput, PreflightInput, ProviderUsageListResult, ProviderUsageRefreshInput, SafeRenameInput, TestRunInput, ToolUsageResult, TypecheckInput, WebSearchFreeInput } from "../groups/global"
+import {
+  BanyanAgentOverrideUpdateInput,
+  BanyanAgentPromptUpdateInput,
+  BanyanAgentSaveInput,
+  BanyanConfigUpdateInput,
+  BlastRadiusInput,
+  CodeFindInput,
+  CodegraphBuildInput,
+  CodegraphRemoveInput,
+  CodegraphRemoveResult,
+  GlobalUpgradeInput,
+  LintInput,
+  PreflightInput,
+  ProviderUsageListResult,
+  ProviderUsageRefreshInput,
+  SafeRenameInput,
+  TestRunInput,
+  ToolUsageResult,
+  TypecheckInput,
+  WebSearchFreeInput,
+} from "../groups/global"
 import { Banyan } from "@opencode-ai/core/banyancode"
 import { InvalidRequestError } from "../errors"
 import { statusFromMeta } from "@opencode-ai/core/banyancode/codegraph-readiness"
@@ -303,7 +323,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return response
     })
 
-const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function* (ctx: {
+    const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function* (ctx: {
       payload: typeof CodegraphBuildInput.Type
     }) {
       // /global/* routes run without the session-scoped InstanceContextMiddleware,
@@ -363,11 +383,13 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
             )
             return
           }
-          yield* buildServiceOpt.value.start({ root, force, dbPath }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logError("codegraph-build: start() failed", { cause: Cause.pretty(cause) }),
-            ),
-          )
+          yield* buildServiceOpt.value
+            .start({ root, force, dbPath })
+            .pipe(
+              Effect.catchCause((cause) =>
+                Effect.logError("codegraph-build: start() failed", { cause: Cause.pretty(cause) }),
+              ),
+            )
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.logError("codegraph-build: runFork body crashed", { cause: Cause.pretty(cause) }),
@@ -377,9 +399,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       return { started: true, root, dbPath, banyanDir: identity.banyanDir }
     })
 
-    const toolUsageHandler = Effect.fn("GlobalHttpApi.toolUsage")(function* (ctx: {
-      query: { session?: string }
-    }) {
+    const toolUsageHandler = Effect.fn("GlobalHttpApi.toolUsage")(function* (ctx: { query: { session?: string } }) {
       const repoOpt = yield* Effect.serviceOption(Banyan.CodegraphRepo)
       if (Option.isNone(repoOpt)) {
         // BanyanCode is disabled (no CodegraphRepo in the app runtime): the
@@ -451,7 +471,28 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       // The persisted graph DB is derived from the EXPLICIT root (realpath
       // hash + installation-channel suffix via WorkspaceIdentity.identityForRoot),
       // NOT from server-start process.cwd() — Database.path() and the identity
-      // helper now share one derivation. The status read must bind to that
+      // helper now share one derivation.
+      //
+      // The meta row is only written when a build finishes, so a running
+      // build for this root must be reported from the build service state —
+      // otherwise status says "missing" for the whole build and pollers give up.
+      const buildOpt = yield* Effect.serviceOption(Banyan.CodegraphBuildService)
+      if (Option.isSome(buildOpt)) {
+        const build = yield* buildOpt.value.status()
+        if (
+          build.status === "running" &&
+          build.root !== undefined &&
+          Banyan.WorkspaceIdentity.canonicalizeRoot(build.root) ===
+            Banyan.WorkspaceIdentity.canonicalizeRoot(identity.root)
+        ) {
+          return {
+            reason: "building" as const,
+            autoBuilt: false,
+            warning: `codegraph build in progress: ${build.done}/${build.total} files indexed; poll again shortly`,
+          }
+        }
+      }
+      // The status read must bind to that
       // same canonical file, which is only known per request (query param or
       // instance worktree), so the root-bound layer is built SCOPED here rather
       // than provided at the server.ts assembly boundary. The HttpApi AGENTS.md
@@ -517,7 +558,9 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       }
     })
 
-    const codegraphEdgesHandler = Effect.fn("GlobalHttpApi.codegraphEdges")(function* (ctx: { query: { nodeID?: string } }) {
+    const codegraphEdgesHandler = Effect.fn("GlobalHttpApi.codegraphEdges")(function* (ctx: {
+      query: { nodeID?: string }
+    }) {
       const repo = yield* Banyan.CodegraphRepo
       const nodeID = ctx.query?.nodeID
       if (!nodeID) {
@@ -535,9 +578,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       const fs = yield* FSUtil.Service
 
       const dir = path.join(Global.Path.banyan.config, "agent")
-      yield* fs.ensureDir(dir).pipe(
-        Effect.mapError((e) => new InvalidRequestError({ message: String(e) })),
-      )
+      yield* fs.ensureDir(dir).pipe(Effect.mapError((e) => new InvalidRequestError({ message: String(e) })))
 
       const safeName = ctx.payload.name.replace(/[^a-zA-Z0-9._-]/g, "")
       if (safeName !== ctx.payload.name || safeName.length === 0) {
@@ -551,9 +592,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       const resolvedFile = path.resolve(filePath)
       const resolvedDir = path.resolve(dir)
       if (!resolvedFile.startsWith(resolvedDir + path.sep) && resolvedFile !== resolvedDir) {
-        return yield* Effect.fail(
-          new InvalidRequestError({ message: "Resolved path escapes the agent directory." }),
-        )
+        return yield* Effect.fail(new InvalidRequestError({ message: "Resolved path escapes the agent directory." }))
       }
 
       const escapeYamlScalar = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`
@@ -604,9 +643,9 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
 
       const content = [...frontmatter, ...body].filter(Boolean).join("\n")
 
-      yield* fs.writeFileString(filePath, content).pipe(
-        Effect.mapError((e) => new InvalidRequestError({ message: String(e) })),
-      )
+      yield* fs
+        .writeFileString(filePath, content)
+        .pipe(Effect.mapError((e) => new InvalidRequestError({ message: String(e) })))
 
       const configSvc = yield* Config.Service
       yield* configSvc.invalidate()
@@ -643,17 +682,17 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       const region = ctx.payload.region
       const time = ctx.payload.time
 
-      yield* permission.assert({
-        action: "websearch_free",
-        resources: [query],
-        save: ["*"],
-        metadata: ctx.payload as unknown as Record<string, unknown>,
-        sessionID: "global" as unknown as typeof ctx.payload.query as never,
-        agent: undefined,
-        source: undefined,
-      }).pipe(
-        Effect.mapError((error) => new InvalidRequestError({ message: error.message })),
-      )
+      yield* permission
+        .assert({
+          action: "websearch_free",
+          resources: [query],
+          save: ["*"],
+          metadata: ctx.payload as unknown as Record<string, unknown>,
+          sessionID: "global" as unknown as typeof ctx.payload.query as never,
+          agent: undefined,
+          source: undefined,
+        })
+        .pipe(Effect.mapError((error) => new InvalidRequestError({ message: error.message })))
 
       const url = new URL(WebSearchFreeTool.DDG_URL)
       url.searchParams.set("q", query)
@@ -673,9 +712,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
           Effect.flatMap((res) => res.text),
           Effect.tapError((error) => Effect.logError("websearch_free http error", { error })),
           Effect.mapError((error) =>
-            error instanceof InvalidRequestError
-              ? error
-              : new InvalidRequestError({ message: error.message }),
+            error instanceof InvalidRequestError ? error : new InvalidRequestError({ message: error.message }),
           ),
         )
         .pipe(
@@ -931,9 +968,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       }
     })
 
-    const testRunHandler = Effect.fn("GlobalHttpApi.testRun")(function* (ctx: {
-      payload: typeof TestRunInput.Type
-    }) {
+    const testRunHandler = Effect.fn("GlobalHttpApi.testRun")(function* (ctx: { payload: typeof TestRunInput.Type }) {
       const verifier = yield* Banyan.VerifierService
       const projectRoot = ctx.payload.projectRoot ?? process.cwd()
       const result = yield* verifier.test({
@@ -951,9 +986,7 @@ const codegraphBuildHandler = Effect.fn("GlobalHttpApi.codegraphBuild")(function
       }
     })
 
-    const lintHandler = Effect.fn("GlobalHttpApi.lint")(function* (ctx: {
-      payload: typeof LintInput.Type
-    }) {
+    const lintHandler = Effect.fn("GlobalHttpApi.lint")(function* (ctx: { payload: typeof LintInput.Type }) {
       const verifier = yield* Banyan.VerifierService
       const projectRoot = ctx.payload.projectRoot ?? process.cwd()
       const result = yield* verifier.lint({

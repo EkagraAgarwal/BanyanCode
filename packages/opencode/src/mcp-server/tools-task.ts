@@ -474,11 +474,7 @@ const requestStateFor = (deps: TaskToolsDeps): RequestStateService => deps.reque
 // Mint the requestState binding for a pending question: principal (the
 // connection's MCP client name — one consistent source for mint and
 // verify), task handle, request ID, short expiry.
-export function mintTaskRequestState(
-  deps: TaskToolsDeps,
-  record: TaskRecord,
-  requestID: string,
-): string | undefined {
+export function mintTaskRequestState(deps: TaskToolsDeps, record: TaskRecord, requestID: string): string | undefined {
   try {
     return requestStateFor(deps).mint({
       principal: deps.getMcpClientName(),
@@ -667,8 +663,7 @@ export function replyFromInputResponses(
   }
   if (rec["decision"] === "approve" || rec["decision"] === "reject") {
     const decision = rec["decision"]
-    const message =
-      typeof rec["message"] === "string" ? (rec["message"] as string) : contentMessage(rec["content"])
+    const message = typeof rec["message"] === "string" ? (rec["message"] as string) : contentMessage(rec["content"])
     return message !== undefined ? { decision, message } : { decision }
   }
   if (rec["action"] === "accept") {
@@ -860,11 +855,7 @@ export function registerTasksExtension(mcp: McpServer, deps: TaskToolsDeps): voi
 
   mcp.server.setRequestHandler("tasks/update", { params: TasksUpdateParams, result: TasksResultShape }, handlers.update)
 
-  mcp.server.setRequestHandler(
-    "tasks/cancel",
-    { params: TasksCancelParams, result: TasksResultShape },
-    handlers.cancel,
-  )
+  mcp.server.setRequestHandler("tasks/cancel", { params: TasksCancelParams, result: TasksResultShape }, handlers.cancel)
 
   // No tasks/list: the spec removed it on purpose (cross-caller handle
   // leakage). An unregistered method answers -32601 from the SDK itself.
@@ -952,8 +943,11 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
       description: `Bounded summary of a delegated task: file change counts, verification outcome, todos, cost, and (with detail transcript) a paged transcript. Never the full transcript. ${HANDLE_LIFETIME}`,
       inputSchema: TaskResultInput,
       outputSchema: CodeToolOutputSchema,
+      // Pure read (refresh only re-syncs the cached record), so clients may
+      // run it in parallel and auto-approve it.
       annotations: {
         ...NON_READ_ONLY_ANNOTATIONS,
+        readOnlyHint: true,
         idempotentHint: true,
       },
       _meta: metaFor(outputChars),
@@ -962,14 +956,10 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
       try {
         const resolved = await resolveRecord(engine, args.task_id)
         if ("error" in resolved) return resolved.error
-        const compact = await readCompactResult(
-          deps,
-          resolved.record,
-          {
-            ...(args.detail !== undefined ? { detail: args.detail } : {}),
-            ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
-          },
-        )
+        const compact = await readCompactResult(deps, resolved.record, {
+          ...(args.detail !== undefined ? { detail: args.detail } : {}),
+          ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+        })
         return okResult(compact, outputChars)
       } catch (error) {
         return toError(error, "banyan_task_result")
@@ -1043,8 +1033,11 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
       description: `Poll a delegated task: running, queued, needs_input (with the pending question), done, failed, or cancelled. wait_seconds long-polls up to 50 s. ${HANDLE_LIFETIME}`,
       inputSchema: TaskStatusInput,
       outputSchema: CodeToolOutputSchema,
+      // Pure read (refresh only re-syncs the cached record), so clients may
+      // run it in parallel and auto-approve it.
       annotations: {
         ...NON_READ_ONLY_ANNOTATIONS,
+        readOnlyHint: true,
         idempotentHint: true,
       },
       _meta: metaFor(outputChars),

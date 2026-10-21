@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Queue } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
+import { Global } from "@opencode-ai/core/global"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
 import { CodegraphAutoUpdate } from "@opencode-ai/core/banyancode/codegraph-auto-update"
 import { BanyanConfigService } from "@opencode-ai/core/banyancode/banyan-config"
@@ -187,6 +188,29 @@ describe("CodegraphAutoUpdate", () => {
         yield* Effect.sleep(150)
         expect(starts).toHaveLength(1)
         expect(starts[0].root).toBe(path.join(tmp.path, "foo"))
+      }).pipe(Effect.provide(testLayer({ starts, config: { banyancode_codegraph_watch_debounce_ms: 100 } })), Effect.provide(dbLayer), Effect.scoped) as any,
+    )
+  })
+
+  test("ignores BanyanCode's own state writes and home-directory instances", async () => {
+    await using tmp = await tmpdir()
+    const starts: Array<{ root: string; excludePatterns?: readonly string[] }> = []
+    const dbLayer = Database.layerFromPath(path.join(tmp.path, "auto.sqlite"))
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const events = yield* EventV2.Service
+        yield* events.publish(
+          Watcher.Event.Updated,
+          { file: path.join(Global.Path.banyan.state, "kv.json"), event: "change" },
+          { location: { directory: tmp.path as never } },
+        )
+        yield* events.publish(
+          Watcher.Event.Updated,
+          { file: path.join(tmp.path, "notes", "todo.ts"), event: "add" },
+          { location: { directory: Global.Path.home as never } },
+        )
+        yield* Effect.sleep(150)
+        expect(starts).toHaveLength(0)
       }).pipe(Effect.provide(testLayer({ starts, config: { banyancode_codegraph_watch_debounce_ms: 100 } })), Effect.provide(dbLayer), Effect.scoped) as any,
     )
   })
