@@ -47,6 +47,12 @@ describe("shimScript content", () => {
     }
   })
 
+  test("only resolves a platform package whose version matches the pinned one", () => {
+    // A stale copy in an ancestor node_modules (e.g. ~/node_modules) must not
+    // shadow the pinned version via require.resolve's upward walk.
+    expect(shimScript(fakeBinaries)).toContain('.version !== PACKAGES[name]) return null')
+  })
+
   test("contains ELF and MZ native-magic checks", () => {
     const script = shimScript(fakeBinaries)
     // ELF magic: 0x7f 0x45 0x4c 0x46

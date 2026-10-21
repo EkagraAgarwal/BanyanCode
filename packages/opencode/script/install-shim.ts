@@ -171,6 +171,9 @@ function isNativeExecutable(file) {
 function resolvePlatformBinary(name) {
   try {
     const packageJsonPath = require.resolve(name + "/package.json");
+    // require.resolve walks up the tree: a stale copy in an ancestor
+    // node_modules (e.g. ~/node_modules) must not shadow the pinned version.
+    if (JSON.parse(fs.readFileSync(packageJsonPath, "utf8")).version !== PACKAGES[name]) return null;
     const binPath = path.join(path.dirname(packageJsonPath), "bin", binaryName);
     return fs.existsSync(binPath) ? binPath : null;
   } catch {
@@ -233,11 +236,18 @@ async function main() {
     // Temp-install fallback: fetch the platform package directly.
     const version = PACKAGES[name];
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), "banyancode-shim-"));
-    const result = childProcess.spawnSync(
-      "npm",
-      ["install", "--ignore-scripts", "--no-save", "--loglevel=error", "--prefix", temp, name + "@" + version],
-      { stdio: "ignore", windowsHide: true },
-    );
+    // Node refuses to spawn npm.cmd on Windows without a shell, so this
+    // fallback never ran there. Shell out on Windows with quoted args (temp
+    // paths may contain spaces).
+    const npmArgs = ["install", "--ignore-scripts", "--no-save", "--loglevel=error", "--prefix", temp, name + "@" + version];
+    const result =
+      process.platform === "win32"
+        ? childProcess.spawnSync(
+            "npm",
+            npmArgs.map((arg) => (/[\\s"]/.test(arg) ? '"' + arg.replace(/"/g, '""') + '"' : arg)),
+            { stdio: "ignore", windowsHide: true, shell: true },
+          )
+        : childProcess.spawnSync("npm", npmArgs, { stdio: "ignore", windowsHide: true });
     if (result.status === 0) {
       const installed = path.join(temp, "node_modules", name, "bin", binaryName);
       if (fs.existsSync(installed) && (await trySpawn(installed, args))) return;
