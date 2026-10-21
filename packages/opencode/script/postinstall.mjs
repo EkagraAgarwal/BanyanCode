@@ -118,9 +118,28 @@ function packageNames() {
 
 function resolveBinary(name) {
   const packageJsonPath = require.resolve(`${name}/package.json`)
+  // require.resolve walks up the directory tree, so a stale platform package
+  // in an ancestor node_modules (e.g. ~/node_modules from an old local
+  // install) would win over the pinned version. Only accept an exact match;
+  // otherwise fall through to installPackage, which fetches the pinned one.
+  const expected = packageJson.optionalDependencies?.[name]
+  const found = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")).version
+  if (expected && found !== expected) throw new Error(`${name}@${found} does not match ${expected}`)
   const binaryPath = path.join(path.dirname(packageJsonPath), "bin", sourceBinary)
   if (!fs.existsSync(binaryPath)) throw new Error(`Binary not found at ${binaryPath}`)
   return binaryPath
+}
+
+// Run npm portably. Node refuses to spawn npm.cmd on Windows without a shell,
+// so the fallback install never ran there. Prefer npm's own CLI script
+// (npm_execpath is set for lifecycle scripts) via the running node; otherwise
+// use a shell on Windows with quoted args (temp paths may contain spaces).
+function runNpm(args, stdio) {
+  const cli = process.env.npm_execpath
+  if (cli && cli.endsWith(".js")) return childProcess.spawnSync(process.execPath, [cli, ...args], { stdio, windowsHide: true })
+  if (process.platform !== "win32") return childProcess.spawnSync("npm", args, { stdio, windowsHide: true })
+  const quoted = args.map((arg) => (/[\s"]/.test(arg) ? '"' + arg.replace(/"/g, '""') + '"' : arg))
+  return childProcess.spawnSync("npm", quoted, { stdio, windowsHide: true, shell: true })
 }
 
 function installPackage(name) {
@@ -129,10 +148,9 @@ function installPackage(name) {
 
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "banyancode-install-"))
   try {
-    const result = childProcess.spawnSync(
-      "npm",
+    const result = runNpm(
       ["install", "--ignore-scripts", "--no-save", "--loglevel=error", "--prefix", temp, `${name}@${version}`],
-      { stdio: "inherit", windowsHide: true },
+      "inherit",
     )
     if (result.status !== 0) return
     const packageDir = path.join(temp, "node_modules", name)
