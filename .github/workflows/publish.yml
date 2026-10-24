@@ -192,7 +192,7 @@ jobs:
           ref: ${{ github.ref_name }}
 
       - name: Download Windows CLI artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: unsigned-banyancode-windows-x64
           path: packages/opencode/dist
@@ -336,7 +336,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
 
       - name: Download BanyanCode CLI artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           # Unix artifacts only: raw Windows builds use the
           # `unsigned-banyancode-*` prefix and the signed final uses
@@ -348,7 +348,7 @@ jobs:
           path: packages/opencode/dist
 
       - name: Download Windows baseline npm stub
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           # Triage-only build: needed for the 11th npm platform package
           # (`banyancode-windows-x64-baseline`), never shipped as a GH
@@ -358,7 +358,7 @@ jobs:
           path: packages/opencode/dist
 
       - name: Download final Windows artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           # Dynamic fast path: signed `final-banyancode-windows-x64` when
           # Azure signing ran, otherwise the raw
