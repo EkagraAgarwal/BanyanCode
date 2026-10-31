@@ -1,0 +1,51 @@
+name: banyancode-ci
+
+on:
+  push:
+    branches: [v2-base, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: banyancode
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Full history so the patch ledger can diff against the upstream base commit.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Patch ledger
+        run: bun script/banyancode/patch-ledger.ts
+
+      - name: Patch ledger tests
+        working-directory: script/banyancode
+        run: bun test
+
+      # The plugin packages land in later phases; skip until packages/banyancode exists.
+      - name: Plugin tests
+        if: hashFiles('packages/banyancode/package.json') != ''
+        working-directory: packages/banyancode
+        run: bun test
+
+      - name: Plugin typecheck
+        if: hashFiles('packages/banyancode/package.json') != ''
+        working-directory: packages/banyancode
+        run: bun run typecheck
