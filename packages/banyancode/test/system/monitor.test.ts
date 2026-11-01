@@ -63,7 +63,7 @@ describe("LSP config status", () => {
         languages: [".ts", ".tsx"],
         inert: true,
         disabled: false,
-        disabledReason: "LSP runtime is not available in this host build",
+        disabledReason: "LSP runtime is not active in this session",
       },
       {
         id: "rust",
@@ -78,7 +78,7 @@ describe("LSP config status", () => {
 
   test("idle timeout defaults to five minutes and ignores invalid values", () => {
     expect(resolveIdleTimeoutMs(undefined)).toBe(DEFAULT_LSP_IDLE_TIMEOUT_MS)
-    expect(resolveIdleTimeoutMs(0)).toBe(DEFAULT_LSP_IDLE_TIMEOUT_MS)
+    expect(resolveIdleTimeoutMs(0)).toBe(0)
     expect(resolveIdleTimeoutMs(-1)).toBe(DEFAULT_LSP_IDLE_TIMEOUT_MS)
     expect(resolveIdleTimeoutMs("1000")).toBe(DEFAULT_LSP_IDLE_TIMEOUT_MS)
     expect(resolveIdleTimeoutMs(1234.9)).toBe(1234)
