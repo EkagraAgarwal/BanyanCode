@@ -155,8 +155,8 @@ jobs:
         with:
           bun-version: "1.4.4"
           # The build plugin resolves per-platform native packages for the
-          # cross-compiled targets (musl, arm64), so install every variant.
-          install-flags: '--os="*" --cpu="*"'
+          # cross-compiled targets (musl, arm64), so install every variant, libc included.
+          install-flags: '--os="*" --cpu="*" --libc="*"'
 
       - name: Build ${{ matrix.target }}
         shell: bash
