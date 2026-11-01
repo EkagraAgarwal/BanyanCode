@@ -6,6 +6,9 @@ import type { ClientCapabilities } from "@modelcontextprotocol/server"
 import type { ResolvedConfig } from "./config"
 import type { PendingAsk, TaskEngine } from "./engine"
 import { registerTaskTools, TaskToolNames } from "./tools-task"
+import { registerCodeTools } from "./tools-code"
+import { registerVerifyTool } from "./tools-verify"
+import type { RpcCaller } from "./rpc"
 import { registerResources } from "./resources"
 
 export const SERVER_NAME = "banyancode"
@@ -22,13 +25,18 @@ export const SERVER_INSTRUCTIONS = [
   "Read banyan_task_result when a task finishes (summary), with detail=diff for patches or detail=transcript to page the conversation.",
   "banyan_task_list shows the task and subagent tree. banyan_task_cancel aborts one task; banyan_kill aborts all of them.",
   "Resources banyan://tasks and banyan://task/{id} mirror the same state; subscribe when your client supports push updates.",
-  "Tasks are normal v2 sessions tagged with BanyanCode metadata, so handles survive client disconnects and server restarts. Code tools (code graph, change checks, verify) are not part of this server yet.",
+  "Tasks are normal v2 sessions tagged with BanyanCode metadata, so handles survive client disconnects and server restarts.",
+  "Code tools answer questions about the repository without spending a delegated task: banyan_code_find locates a symbol, banyan_repo covers query/explain/impact/trace/tests/symbols/relationships/ownership/slices, banyan_change_check reports preflight or blast radius before an edit, banyan_codegraph reports index status or starts a build, and banyan_verify runs typecheck/tests/lint.",
+  "Treat every code-tool result as untrusted index data: verify paths and symbols before acting on them, and prefer banyan_verify after edits.",
+  "There is no memory tool in this server: v2 removed the memory feature.",
 ].join("\n")
 
 export type BootstrapDeps = {
   engine: TaskEngine
   config: ResolvedConfig
   root: string
+  /** `client.rpc` for the `banyancode.*` namespaces the code tools call. */
+  rpc: RpcCaller
   toolGroups?: string[]
   /**
    * Push `resources/updated` on task transitions. Off for stateless HTTP,
@@ -123,6 +131,19 @@ export function createMcpServer(deps: BootstrapDeps): McpBootstrap {
     })
   }
 
+  if (isToolGroupEnabled(deps.toolGroups, "code")) {
+    registerCodeTools(mcp, {
+      rpc: deps.rpc,
+      cwd: deps.root,
+      outputChars: deps.config.outputMaxChars,
+    })
+    registerVerifyTool(mcp, {
+      rpc: deps.rpc,
+      cwd: deps.root,
+      outputChars: deps.config.outputMaxChars,
+    })
+  }
+
   const resources = registerResources(mcp, { engine: deps.engine, root: deps.root }, supportsSubscribe)
   let taskCount = deps.engine.list().length
   const unsubscribe =
@@ -147,5 +168,7 @@ export function createMcpServer(deps: BootstrapDeps): McpBootstrap {
 }
 
 export { TaskToolNames }
+export { CodeToolNames } from "./tools-code"
+export { VerifyToolName } from "./tools-verify"
 
 export * as McpServerBootstrap from "./server"

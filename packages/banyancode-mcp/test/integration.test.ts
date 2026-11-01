@@ -27,14 +27,20 @@ type Server = {
   url: string
   password: string
   proc: ReturnType<typeof Bun.spawn>
+  stderr: () => string
 }
 
 const systemEnv = process.env
+// The built binary is branded: BANYANCODE_* is mapped onto the internal
+// OPENCODE_* namespace at boot and every pre-existing OPENCODE_* value is
+// dropped. Isolation therefore has to be expressed in the BanyanCode
+// namespace, and the ambient variables of the outer BanyanCode session are
+// stripped so the test never reaches the real service or data directory.
 const cleanEnv = (): Record<string, string> => {
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(systemEnv)) {
     if (value === undefined) continue
-    if (key === "OPENCODE_CONFIG" || key === "OPENCODE_CONFIG_CONTENT") continue
+    if (key.startsWith("OPENCODE_") || key.startsWith("BANYANCODE_")) continue
     env[key] = value
   }
   return env
@@ -53,22 +59,32 @@ const bootServer = async (): Promise<Server> => {
       XDG_CONFIG_HOME: path.join(root, "config"),
       XDG_STATE_HOME: path.join(root, "state"),
       XDG_CACHE_HOME: path.join(root, "cache"),
-      OPENCODE_CONFIG_DIR: path.join(root, "config"),
-      OPENCODE_TEST_HOME: path.join(root, "home"),
-      OPENCODE_DB: "integration.db",
-      OPENCODE_PASSWORD: password,
-      OPENCODE_CONFIG_PROJECT_DISABLE: "1",
-      OPENCODE_DISABLE_CLAUDE_CODE: "1",
-      OPENCODE_DISABLE_MODELS_FETCH: "1",
-      OPENCODE_DISABLE_FFF: "1",
+      BANYANCODE_CONFIG_DIR: path.join(root, "config"),
+      BANYANCODE_TEST_HOME: path.join(root, "home"),
+      BANYANCODE_DB: "integration.db",
+      BANYANCODE_PASSWORD: password,
+      BANYANCODE_CONFIG_PROJECT_DISABLE: "1",
+      BANYANCODE_DISABLE_CLAUDE_CODE: "1",
+      BANYANCODE_DISABLE_MODELS_FETCH: "1",
+      BANYANCODE_DISABLE_FFF: "1",
       TEMP: path.join(root, "tmp"),
       TMP: path.join(root, "tmp"),
       PWD: project,
     },
     stdin: "pipe",
     stdout: "pipe",
-    stderr: "ignore",
+    stderr: "pipe",
   })
+  let stderr = ""
+  void (async () => {
+    const stream = proc.stderr.getReader()
+    const decode = new TextDecoder()
+    for (;;) {
+      const { value, done } = await stream.read()
+      if (done) return
+      stderr += decode.decode(value)
+    }
+  })()
   const reader = proc.stdout.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
@@ -81,13 +97,13 @@ const bootServer = async (): Promise<Server> => {
     if (line === undefined) continue
     try {
       const parsed = JSON.parse(line) as { url?: string }
-      if (parsed.url !== undefined) return { url: parsed.url, password, proc }
+      if (parsed.url !== undefined) return { url: parsed.url, password, proc, stderr: () => stderr }
     } catch {
       // keep reading
     }
   }
   proc.kill()
-  throw new Error(`server did not print a url; output: ${buffer.slice(0, 2000)}`)
+  throw new Error(`server did not print a url; output: ${buffer.slice(0, 2000)}; stderr: ${stderr.slice(-3000)}`)
 }
 
 const authHeaders = (password: string): Record<string, string> => ({
@@ -181,7 +197,12 @@ describe("real v2 server integration", () => {
         // durable event log.
         const restarted = new TaskEngine({ port, config, root: project, sweepIntervalMs: 60_000 })
         try {
-          const restoredAgain = await restarted.rehydrateAll()
+          const restoredAgain = await restarted.rehydrateAll().catch((error: unknown) => {
+            throw new Error(
+              `rehydrate after restart failed (server exit=${server?.proc.exitCode ?? "alive"}): ` +
+                `${error instanceof Error ? error.message : String(error)}; stderr: ${server?.stderr().slice(-4000) ?? ""}`,
+            )
+          })
           expect(restoredAgain.some((item) => item.handle === record.handle)).toBe(true)
           const after = await restarted.checkup({ cursorState: {} })
           const rebuilt = after.report.tasks.find((item) => item.task_id === record.handle)
@@ -199,6 +220,8 @@ describe("real v2 server integration", () => {
         unsubscribe()
       }
     },
-    180_000,
+    // Session creation and the first (credential-less) run can take minutes on
+    // a loaded machine; the assertions are all bounded by their own deadlines.
+    360_000,
   )
 })

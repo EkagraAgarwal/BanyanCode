@@ -5,12 +5,13 @@
 import path from "node:path"
 import { McpConfig, type ResolvedConfig } from "./config"
 import { assertYoloAllowed, listProfiles } from "./autonomy"
-import { attachOrStart } from "./attach"
-import { createSessionPort } from "./session-client"
+import { attachOrStart, resolveServeCommand, selfCommand } from "./attach"
+import { createSessionPort, makeRpcCaller } from "./session-client"
 import { TaskEngine } from "./engine"
 import { createMcpServer } from "./server"
 import { serveStdio } from "./transport-stdio"
 import { serveHttp } from "./transport-http"
+import { applyInstall, describePlan, isInstallClient, planInstall, InstallClients, type InstallClient } from "./install"
 import { Service } from "@opencode/client/service"
 import { log } from "./logging"
 
@@ -19,6 +20,28 @@ export type MainIO = {
   stderr: (text: string) => void
   cwd: () => string
   env: NodeJS.ProcessEnv
+  /** Ask a yes/no question. Defaults to a stdin prompt; tests inject it. */
+  prompt?: (question: string) => Promise<boolean>
+}
+
+// One line from stdin, re-asked on empty input. Anything but y/yes is "no".
+const readConfirm = async (question: string): Promise<boolean> => {
+  process.stderr.write(`${question} [y/N] `)
+  const reader = Bun.stdin.stream().getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) return false
+      buffer += decoder.decode(value, { stream: true })
+      const newline = buffer.indexOf("\n")
+      if (newline === -1) continue
+      return /^y(es)?$/i.test(buffer.slice(0, newline).trim())
+    }
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 const defaultIO: MainIO = {
@@ -26,6 +49,7 @@ const defaultIO: MainIO = {
   stderr: (text) => process.stderr.write(`${text}\n`),
   cwd: () => process.cwd(),
   env: process.env,
+  prompt: readConfirm,
 }
 
 type Parsed = {
@@ -86,6 +110,7 @@ Usage:
   banyancode mcp serve --http             serve over stateless Streamable HTTP
   banyancode mcp doctor                   check config, service and task state
   banyancode mcp profiles                 list autonomy profiles
+  banyancode mcp install <client> [--yes] write the client config (claude-code|codex|cursor)
 
 Options:
   --cwd <dir>          project directory the tasks run in (default: $CLAUDE_PROJECT_DIR or cwd)
@@ -96,22 +121,25 @@ Options:
   --allow-yolo         permit the yolo autonomy profile (stored config cannot)
   --permission <p>     reject | edits | yolo (overrides stored permission)
   --max-tasks <n>      max concurrent delegated tasks (1-32)
-  --tools <groups>     comma-separated tool groups (default: all; "task" only, for now)
+  --tools <groups>     comma-separated tool groups (default: all; "task", "code")
   --http               Streamable HTTP instead of stdio
   --port <n>           HTTP port (default: ephemeral)
   --hostname <host>    HTTP bind (default 127.0.0.1; non-loopback needs --token)
   --token <token>      HTTP bearer token (default: $BANYANCODE_MCP_TOKEN, else generated)
   --no-rehydrate       skip rebuilding task handles from sessions at startup
+  --yes                install: write without asking (prints the change first)
 
 Environment:
   BANYANCODE_CONFIG, BANYANCODE_CONFIG_DIR   config discovery
   BANYANCODE_SERVER_PASSWORD                 password for --attach
-  BANYANCODE_BIN                             binary for the background service (default: opencode)
+  BANYANCODE_BIN                             binary for the background service (default: this binary)
   BANYANCODE_MCP_SERVE_COMMAND               full serve command override
   BANYANCODE_MCP_ALLOW_YOLO=1                same as --allow-yolo
   BANYANCODE_MCP_TOKEN                       HTTP bearer token
   BANYANCODE_MCP_KILL=1                      runtime kill switch: every tool call fails
 `
+
+const installClients = InstallClients.join("|")
 
 const toolGroups = (parsed: Parsed): string[] | undefined => {
   const raw = flagString(parsed, "tools")
@@ -152,11 +180,17 @@ async function serve(parsed: Parsed, io: MainIO): Promise<number> {
     ...(flagString(parsed, "attach") !== undefined ? { attach: flagString(parsed, "attach")! } : {}),
     ...(flagString(parsed, "password") !== undefined ? { password: flagString(parsed, "password")! } : {}),
     noStart: flagBoolean(parsed, "no-start"),
+    ...(flagString(parsed, "service-file") !== undefined ? { serviceFile: flagString(parsed, "service-file")! } : {}),
     envVars: io.env,
     onStart: (reason) => log(`starting the background service (${reason})`),
   })
   log(`attached to ${target.url} (${target.mode})`)
   const port = createSessionPort({
+    baseUrl: target.baseUrl,
+    ...(target.headers !== undefined ? { headers: target.headers } : {}),
+    root: cwd,
+  })
+  const rpc = makeRpcCaller({
     baseUrl: target.baseUrl,
     ...(target.headers !== undefined ? { headers: target.headers } : {}),
     root: cwd,
@@ -171,6 +205,7 @@ async function serve(parsed: Parsed, io: MainIO): Promise<number> {
     engine,
     config,
     root: cwd,
+    rpc,
     ...(groups !== undefined ? { toolGroups: groups } : {}),
   })
   const shutdown = async () => {
@@ -185,6 +220,7 @@ async function serve(parsed: Parsed, io: MainIO): Promise<number> {
           engine,
           config,
           root: cwd,
+          rpc,
           ...(groups !== undefined ? { toolGroups: groups } : {}),
           watchTransitions: false,
         }).mcp,
@@ -217,6 +253,13 @@ async function doctor(parsed: Parsed, io: MainIO): Promise<number> {
     tool_groups: config?.toolGroups ?? null,
     autonomy: config === undefined ? null : listProfiles(config.autonomy).map((profile) => profile.name),
     service: discovered === undefined ? null : { url: discovered.url, auth: discovered.auth !== undefined },
+    serve_command: (() => {
+      try {
+        return resolveServeCommand(io.env)
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    })(),
     ok: configError === undefined,
   }
   if (configError !== undefined) report.error = configError
@@ -244,6 +287,51 @@ async function doctor(parsed: Parsed, io: MainIO): Promise<number> {
   }
   write(io, report)
   return configError === undefined ? 0 : 1
+}
+
+async function install(parsed: Parsed, io: MainIO): Promise<number> {
+  const requested = parsed.positional[0]
+  if (requested === undefined) {
+    io.stderr(`usage: banyancode mcp install <${installClients}> [--yes]`)
+    return 2
+  }
+  if (!isInstallClient(requested)) {
+    io.stderr(`unknown client "${requested}"; expected one of: ${installClients}`)
+    return 2
+  }
+  const cwd = path.resolve(flagString(parsed, "cwd") ?? io.env["CLAUDE_PROJECT_DIR"] ?? io.cwd())
+  const client: InstallClient = requested
+  const plan = planInstall({ client, cwd, selfCommand: selfCommand(), env: io.env })
+  io.stdout(`BanyanCode MCP install for ${client} (project: ${cwd})`)
+  io.stdout(describePlan(plan))
+  const pending = plan.files.filter((file) => file.changes)
+  if (pending.length === 0) {
+    io.stdout("nothing to write: the client config already matches")
+    return 0
+  }
+  if (!flagBoolean(parsed, "yes")) {
+    const ask = io.prompt
+    if (ask === undefined) {
+      io.stderr("not writing without confirmation; re-run with --yes")
+      return 2
+    }
+    const approved = await ask(`Write ${pending.length} file(s)?`)
+    if (!approved) {
+      io.stderr("aborted; nothing written")
+      return 2
+    }
+  }
+  const written = applyInstall({
+    ...plan,
+    files: pending,
+  })
+  io.stdout(written.map((file) => `wrote ${file}`).join("\n"))
+  if (client === "claude-code") {
+    io.stdout("Restart Claude Code (or run /mcp) to pick up the server and the delegate skill.")
+  } else {
+    io.stdout("Restart the client to pick up the server.")
+  }
+  return 0
 }
 
 function profiles(parsed: Parsed, io: MainIO): number {
@@ -277,11 +365,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2), over
       case "profiles":
         return profiles(parsed, io)
       case "install":
-        io.stderr(
-          "mcp install is not wired yet: point your client at `banyancode mcp serve` " +
-            "(or `banyancode mcp serve --http`) with the project directory as cwd.",
-        )
-        return 2
+        return await install(parsed, io)
       default:
         io.stderr(`unknown command "${parsed.command}"\n\n${HELP}`)
         return 2

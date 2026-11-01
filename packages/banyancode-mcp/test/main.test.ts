@@ -30,8 +30,12 @@ describe("parseArgv", () => {
 })
 
 describe("attach helpers", () => {
-  test("serve command defaults to the upstream binary and honors overrides", () => {
-    expect(resolveServeCommand({})).toEqual(["opencode", "serve", "--service"])
+  test("serve command defaults to this binary and honors overrides", () => {
+    const self = resolveServeCommand({})
+    expect(self.slice(-2)).toEqual(["serve", "--service"])
+    // Never a bare upstream `opencode`: a compiled binary re-execs itself.
+    expect(self[0]).toBe(process.execPath)
+    expect(self.map((part) => part.toLowerCase())).not.toContain("opencode")
     expect(resolveServeCommand({ BANYANCODE_BIN: "banyancode" })).toEqual(["banyancode", "serve", "--service"])
     expect(resolveServeCommand({ BANYANCODE_MCP_SERVE_COMMAND: '"my bin" serve --service' })).toEqual([
       "my bin",

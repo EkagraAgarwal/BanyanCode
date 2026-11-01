@@ -64,6 +64,19 @@ const StartInput = z
     agent: z.string().min(1).max(64).optional().describe("Agent name. Defaults to the server default_agent."),
     model: z.string().min(1).max(256).optional().describe('Model as "provider/model" (or "provider/model#variant").'),
     worktree: WorktreeSchema.optional(),
+    isolation: z
+      .enum(["shared", "worktree"])
+      .optional()
+      .describe(
+        'v1 name for worktree: "worktree" allocates a fresh git worktree via the v2 worktree API, ' +
+          '"shared" runs in the project root. Prefer `worktree` for new callers.',
+      ),
+    permission: z
+      .enum(["reject", "edits", "yolo"])
+      .optional()
+      .describe(
+        "Must equal the server permission policy (reject by default). yolo additionally needs the server flag --allow-yolo.",
+      ),
     autonomy: z
       .string()
       .min(1)
@@ -461,12 +474,22 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
         assertAlive()
         const prompt = args.prompt ?? args.goal
         if (prompt === undefined) return invalidArguments("one of prompt or goal is required")
+        if (args.permission !== undefined && args.permission !== deps.config.permission) {
+          return invalidArguments(
+            `permission "${args.permission}" does not match the server policy "${deps.config.permission}"; ` +
+              "retry without the permission argument",
+          )
+        }
+        // v1's `isolation` maps onto the v2 worktree parameter; "worktree"
+        // really allocates a git worktree now (the v2 worktree API).
+        const worktree =
+          args.worktree ?? (args.isolation === "worktree" ? "new" : args.isolation === "shared" ? "shared" : undefined)
         await notifyProgress(ctx, 0, 1, "starting task")
         const started = await engine.start({
           prompt,
           ...(args.agent !== undefined ? { agent: args.agent } : {}),
           ...(args.model !== undefined ? { model: args.model } : {}),
-          ...(args.worktree !== undefined ? { worktree: args.worktree } : {}),
+          ...(worktree !== undefined ? { worktree } : {}),
           ...(args.autonomy !== undefined ? { autonomy: args.autonomy } : {}),
           ...(args.max_subagents !== undefined ? { maxSubagents: args.max_subagents } : {}),
           ...(args.budget !== undefined ? { budget: args.budget } : {}),

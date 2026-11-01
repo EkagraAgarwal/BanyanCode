@@ -20,6 +20,7 @@ import type {
   SessionMessageInfo,
 } from "@opencode/client"
 import { mapEvent, type EngineEvent, type RawEvent } from "./events"
+import { createRpcCaller, type RpcCaller } from "./rpc"
 
 export type { PermissionRequest } from "@opencode/client"
 
@@ -208,6 +209,10 @@ export function makeClient(options: V2PortOptions): OpenCodeClient {
   })
 }
 
+// Upper bound for one durable-log read (an SSE stream that may stay open for
+// an active session).
+const LOG_READ_TIMEOUT_MS = 10_000
+
 const directoryHeader = (directory: string): Record<string, string> => ({
   "x-opencode-directory": encodeURIComponent(directory),
 })
@@ -217,6 +222,21 @@ export type SessionPortOptions = {
   headers?: Record<string, string>
   /** Directory for sessions whose location is not known yet. */
   root?: string
+}
+
+// `client.rpc` bound to the project directory. Code tools pass the location
+// per call as well; the header keeps the generated client consistent with the
+// session port, which pipelines every call through a per-directory client.
+export function makeRpcCaller(options: SessionPortOptions): RpcCaller {
+  return createRpcCaller(
+    makeClient({
+      baseUrl: options.baseUrl,
+      headers: {
+        ...(options.headers ?? {}),
+        ...(options.root !== undefined ? directoryHeader(options.root) : {}),
+      },
+    }),
+  )
 }
 
 export function createSessionPort(options: SessionPortOptions): SessionPort {
@@ -350,13 +370,27 @@ export function createSessionPort(options: SessionPortOptions): SessionPort {
       return page
     },
     async log(input) {
+      // A durable-log read is an SSE stream. For a session that is still
+      // active the server can keep it open even with follow=false, which used
+      // to stall a whole checkup. Bound the read and keep whatever arrived.
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), LOG_READ_TIMEOUT_MS)
       const events: RawEvent[] = []
-      const stream = client_(input.sessionID).experimental.session.log({
-        sessionID: input.sessionID,
-        ...(input.after !== undefined ? { after: input.after } : {}),
-        follow: false,
-      })
-      for await (const item of stream) events.push(item as unknown as RawEvent)
+      try {
+        const stream = client_(input.sessionID).experimental.session.log(
+          {
+            sessionID: input.sessionID,
+            ...(input.after !== undefined ? { after: input.after } : {}),
+            follow: false,
+          },
+          { signal: controller.signal },
+        )
+        for await (const item of stream) events.push(item as unknown as RawEvent)
+      } catch (error) {
+        if (!controller.signal.aborted) throw error
+      } finally {
+        clearTimeout(timer)
+      }
       return events
     },
     async diff(input) {

@@ -12,6 +12,7 @@ import { createMcpServer, SERVER_INSTRUCTIONS } from "../src/server"
 import { TaskEngine } from "../src/engine"
 import { resolveConfig, type ResolvedConfig } from "../src/config"
 import { createFakePort, event, type FakePort } from "./fake-port"
+import { createFakeRpc } from "./fake-rpc"
 
 const cwd = mkdtempSync(path.join(tmpdir(), "banyancode-mcp-protocol-"))
 
@@ -31,7 +32,7 @@ type Rig = {
 const rig = async (overrides: Partial<ResolvedConfig> = {}): Promise<Rig> => {
   const port = createFakePort({ projects: [{ id: "prj_1", canonical: cwd }] })
   const engine = new TaskEngine({ port, config: config(overrides), root: cwd, sweepIntervalMs: 60_000 })
-  const bootstrap = createMcpServer({ engine, config: config(overrides), root: cwd })
+  const bootstrap = createMcpServer({ engine, config: config(overrides), root: cwd, rpc: createFakeRpc().caller })
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
   await bootstrap.mcp.connect(serverTransport)
   const client = new Client(
@@ -69,15 +70,20 @@ describe("MCP task tools", () => {
     await Promise.all(rigs.splice(0).map((item) => item.close()))
   })
 
-  test("advertises the task tool set and the checkup-loop instructions", async () => {
+  test("advertises the task + code tool set and the checkup-loop instructions", async () => {
     const r = await rig()
     rigs.push(r)
     const tools = await r.client.listTools()
     const names = tools.tools.map((tool) => tool.name).sort()
     expect(names).toEqual(
       [
+        "banyan_change_check",
         "banyan_checkup",
+        "banyan_code_find",
+        "banyan_codegraph",
         "banyan_kill",
+        "banyan_repo",
+        "banyan_verify",
         "banyan_task_cancel",
         "banyan_task_list",
         "banyan_task_reply",
@@ -92,6 +98,8 @@ describe("MCP task tools", () => {
     expect(instructions).toBe(SERVER_INSTRUCTIONS)
     expect(instructions).toContain("banyan_checkup")
     expect(instructions).toContain("cursor")
+    expect(instructions).toContain("banyan_verify")
+    expect(instructions).not.toContain("banyan_memory")
   }, 15_000)
 
   test("start → checkup → status → result → list → cancel", async () => {
@@ -241,5 +249,33 @@ describe("MCP resources", () => {
     const updated = notifications.filter((item) => item.method === "notifications/resources/updated")
     expect(updated.some((item) => item.params?.uri === "banyan://tasks")).toBe(true)
     expect(updated.some((item) => item.params?.uri === `banyan://task/${taskID}`)).toBe(true)
+  }, 15_000)
+
+  test("v1 isolation: worktree allocates a real checkout, permission must match the policy", async () => {
+    const r = await rig({ permission: "reject" })
+    rigs.push(r)
+    const rejected = await r.client.callTool({
+      name: "banyan_task_start",
+      arguments: { prompt: "edit files", permission: "edits" },
+    })
+    expect(rejected.isError).toBe(true)
+    expect(resourceText(rejected.content[0] as { text?: string })).toContain("does not match the server policy")
+
+    const started = await r.client.callTool({
+      name: "banyan_task_start",
+      arguments: { prompt: "edit files", isolation: "worktree", permission: "reject", wait_seconds: 0 },
+    })
+    expect(started.isError).toBeFalsy()
+    expect(structured(started)["isolation"]).toBe("worktree")
+    expect(r.port.calls.createWorktree).toHaveLength(1)
+    expect(r.port.calls.createWorktree[0]?.projectID).toBe("prj_1")
+
+    const shared = await r.client.callTool({
+      name: "banyan_task_start",
+      arguments: { prompt: "read only", isolation: "shared" },
+    })
+    expect(shared.isError).toBeFalsy()
+    expect(structured(shared)["isolation"]).toBe("shared")
+    expect(r.port.calls.createWorktree).toHaveLength(1)
   }, 15_000)
 })

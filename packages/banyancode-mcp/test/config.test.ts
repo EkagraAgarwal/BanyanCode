@@ -120,6 +120,20 @@ describe("resolveConfig", () => {
     expect(config.outputMaxChars).toBe(4000)
   })
 
+  test("the v1 permission policy picks the matching autonomy profile unless one is configured", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "banyancode-mcp-config-"))
+    const missing = path.join(dir, "missing.json")
+    const base = { cwd: dir, configPath: missing, env: {} }
+    expect(resolveConfig({ ...base, permission: "edits" }).autonomy.default).toBe("trusted")
+    expect(resolveConfig({ ...base, permission: "yolo", allowYolo: true }).autonomy.default).toBe("yolo")
+    expect(resolveConfig({ ...base, permission: "reject" }).autonomy.default).toBeUndefined()
+    expect(resolveConfig(base).autonomy.default).toBeUndefined()
+
+    const file = path.join(dir, "banyancode.json")
+    writeFileSync(file, JSON.stringify({ banyancode_mcp_server: { autonomy: { default: "observe" } } }))
+    expect(resolveConfig({ ...base, configPath: file, permission: "edits" }).autonomy.default).toBe("observe")
+  })
+
   test("unparseable files degrade to defaults", () => {
     const root = temp()
     writeFileSync(path.join(root, "banyancode.json"), "{ this is not json")

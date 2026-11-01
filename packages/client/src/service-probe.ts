@@ -37,7 +37,8 @@ function fail(message: string) {
 
 /** The default registration file. */
 export function fallback() {
-  return join(process.env["XDG_STATE_HOME"] ?? join(homedir(), ".local", "state"), "opencode", "service.json")
+  // BanyanCode: never fall back to a stock OpenCode install's registration, which holds its server password.
+  return join(process.env["XDG_STATE_HOME"] ?? join(homedir(), ".local", "state"), "banyancode", "service.json")
 }
 
 /** Whether two registrations describe the same service instance. */

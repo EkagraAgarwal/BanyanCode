@@ -10,6 +10,7 @@ import {
   stopSignal,
   stoppedExitCode,
 } from "./fixture/service-fixture"
+import { fallback } from "../src/service-probe"
 import { accelerate } from "./fixture/service-timing"
 
 const ensure = accelerate(Service.ensure)
@@ -488,3 +489,8 @@ function run<A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) {
 async function status(url: string) {
   return fetch(new URL("/api/info", url), { signal: AbortSignal.timeout(1_000) }).then((response) => response.json())
 }
+
+test("the default registration is BanyanCode's, never a stock OpenCode install's", () => {
+  expect(fallback()).toContain("banyancode")
+  expect(fallback()).not.toContain("opencode")
+})

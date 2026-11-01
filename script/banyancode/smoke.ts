@@ -757,6 +757,56 @@ try {
     })
 
     // ------------------------------------------- 12. stock OpenCode dirs
+    // ---------------------------------------- 12. mcp starts its own service
+    // The path a real harness takes: no --attach, so `mcp serve` has to find or
+    // start the background service itself. A decoy stock OpenCode registration
+    // proves it never attaches to OpenCode's server.
+    await check("mcp serve finds its own service, never stock OpenCode", async () => {
+      const decoy = path.join(homeDir, ".local", "state", "opencode", "service.json")
+      await mkdir(path.dirname(decoy), { recursive: true })
+      await Bun.write(decoy, JSON.stringify({ id: "decoy", version: "0", url: "http://127.0.0.1:9", pid: 1, password: "decoy" }))
+      const proc = Bun.spawn([binary, "mcp", "serve", "--cwd", projectDir], {
+        cwd: projectDir,
+        env: childEnv(),
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const stderr = new Response(proc.stderr).text()
+      const watchdog = setTimeout(() => proc.kill(), 90_000)
+      try {
+        proc.stdin.write(
+          `${JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "0.0.0" } },
+          })}${String.fromCharCode(10)}`,
+        )
+        proc.stdin.flush()
+        const first = await proc.stdout.getReader().read()
+        const line = new TextDecoder().decode(first.value).trim()
+        if (!line.includes('"serverInfo"')) throw new Error(`no initialize response: ${line.slice(0, 200)}`)
+        await stop(proc)
+        const log = await stderr
+        if (log.includes("127.0.0.1:9")) throw new Error("attached to the stock OpenCode registration")
+        return log.split(String.fromCharCode(10)).find((item) => item.includes("attached to"))?.trim() ?? "initialized"
+      } finally {
+        clearTimeout(watchdog)
+        await stop(proc).catch(() => undefined)
+        // Only the service this run started: its pid comes from its own registration.
+        const registration = path.join(homeDir, ".local", "state", "banyancode", `service-${expected?.channel ?? "dev"}.json`)
+        const info = (await Bun.file(registration).json().catch(() => undefined)) as { pid?: number } | undefined
+        if (info?.pid) {
+          try {
+            process.kill(info.pid)
+          } catch {
+            // Already gone.
+          }
+        }
+      }
+    })
+
     await check("stock OpenCode dirs untouched", async () => {
       const changes = [
         ...diffSnapshot(stockBefore.config, await snapshot(stockConfigDir)).map((change) => `.config/opencode/${change}`),

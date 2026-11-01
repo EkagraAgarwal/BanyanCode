@@ -8,6 +8,7 @@
 
 import { Service } from "@opencode/client/service"
 import type { Endpoint } from "@opencode/client/service"
+import path from "node:path"
 
 export type AttachTarget = {
   baseUrl: string
@@ -24,7 +25,7 @@ export type AttachOptions = {
   password?: string
   /** Refuse to spawn a background service (--no-start). */
   noStart?: boolean
-  /** Registration file override (tests). */
+  /** Registration file. The CLI passes its channel's file; dev and next builds don't share `service.json`. */
   serviceFile?: string
   /** Environment passed to the spawned service. */
   env?: Record<string, string>
@@ -37,15 +38,49 @@ export const SERVE_COMMAND_ENV = "BANYANCODE_MCP_SERVE_COMMAND" as const
 export const BIN_ENV = "BANYANCODE_BIN" as const
 export const PASSWORD_ENV = "BANYANCODE_SERVER_PASSWORD" as const
 
-// v2-base still ships upstream branding, so the default binary is `opencode`.
-// When the BanyanCode rename lands, set BANYANCODE_BIN=banyancode (or this
-// default changes with it).
+// The command that re-invokes THIS binary. Mirrors
+// `packages/cli/src/util/process.ts: selfCommand`: a compiled binary executes
+// itself; a script run under bun/node executes the interpreter with the CLI
+// entrypoint. A bare `opencode` is never used — that may be the upstream binary
+// or nothing at all.
+const ENTRYPOINT = process.argv[1] ? path.resolve(process.argv[1]) : undefined
+
+export function selfCommand(): string[] {
+  const runtime = path.basename(process.execPath, path.extname(process.execPath)).toLowerCase()
+  if (runtime !== "bun" && runtime !== "node" && runtime !== "nodejs") return [process.execPath]
+  if (ENTRYPOINT === undefined) {
+    throw new Error(
+      "cannot resolve the CLI entrypoint for the background service; set BANYANCODE_BIN or BANYANCODE_MCP_SERVE_COMMAND",
+    )
+  }
+  if (runtime === "node" || runtime === "nodejs") return [process.execPath, ...nodeFlags(), ENTRYPOINT]
+  return [process.execPath, ENTRYPOINT]
+}
+
+function nodeFlags(): string[] {
+  return process.execArgv.flatMap((arg, index, args) => {
+    if (index > 0 && args[index - 1] === "--conditions") return []
+    if (arg === "--conditions") return args[index + 1] ? [arg, args[index + 1]] : []
+    if (arg.startsWith("--conditions=")) return [arg]
+    if (
+      arg === "--experimental-ffi" ||
+      arg === "--use-system-ca" ||
+      arg === "--enable-source-maps" ||
+      arg === "--no-addons"
+    ) {
+      return [arg]
+    }
+    if (arg === "--no-warnings" || arg.startsWith("--disable-warning=")) return [arg]
+    return []
+  })
+}
+
 export function resolveServeCommand(env: NodeJS.ProcessEnv = process.env): string[] {
   const explicit = env[SERVE_COMMAND_ENV]
   if (explicit !== undefined && explicit.trim() !== "") return splitCommand(explicit)
   const bin = env[BIN_ENV]
   if (bin !== undefined && bin.trim() !== "") return [bin, "serve", "--service"]
-  return ["opencode", "serve", "--service"]
+  return [...selfCommand(), "serve", "--service"]
 }
 
 function splitCommand(raw: string): string[] {
@@ -109,7 +144,7 @@ export async function attachOrStart(options: AttachOptions = {}): Promise<Attach
   if (options.noStart === true) {
     throw new Error(
       "no BanyanCode background service is running and --no-start was passed; " +
-        "start one with `opencode serve --service` or pass --attach <url>",
+        "start one with `banyancode serve --service` or pass --attach <url>",
     )
   }
   options.onStart?.("missing")

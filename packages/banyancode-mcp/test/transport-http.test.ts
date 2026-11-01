@@ -11,6 +11,7 @@ import { TaskEngine } from "../src/engine"
 import { resolveConfig } from "../src/config"
 import { startHttp, type HttpHandle } from "../src/transport-http"
 import { createFakePort } from "./fake-port"
+import { createFakeRpc } from "./fake-rpc"
 
 const cwd = mkdtempSync(path.join(tmpdir(), "banyancode-mcp-http-"))
 const TOKEN = "test-token"
@@ -20,7 +21,8 @@ const rig = async (): Promise<{ http: HttpHandle; engine: TaskEngine; close: () 
   const port = createFakePort()
   const engine = new TaskEngine({ port, config, root: cwd, sweepIntervalMs: 60_000 })
   const http = await startHttp({
-    create: () => createMcpServer({ engine, config, root: cwd, watchTransitions: false }).mcp,
+    create: () =>
+      createMcpServer({ engine, config, root: cwd, rpc: createFakeRpc().caller, watchTransitions: false }).mcp,
     port: 0,
     token: TOKEN,
   })
@@ -86,7 +88,7 @@ describe("Streamable HTTP transport", () => {
     const engine = new TaskEngine({ port, config, root: cwd })
     await expect(
       startHttp({
-        create: () => createMcpServer({ engine, config, root: cwd }).mcp,
+        create: () => createMcpServer({ engine, config, root: cwd, rpc: createFakeRpc().caller }).mcp,
         hostname: "0.0.0.0",
       }),
     ).rejects.toThrow(/refusing non-loopback bind/)

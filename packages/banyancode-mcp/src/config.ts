@@ -227,17 +227,21 @@ export function resolveConfig(overrides: ConfigOverrides): ResolvedConfig {
       stored = {}
     }
   }
-  const autonomy: AutonomyConfig = {
-    default: stored.autonomy?.default,
-    auto_answer_after_seconds:
-      stored.autonomy?.auto_answer_after_seconds ?? DEFAULT_AUTO_ANSWER_AFTER_SECONDS,
-    profiles: stored.autonomy?.profiles ?? {},
-  }
   const permission = resolvePermission({
     stored: stored.permission,
     ...(overrides.permission !== undefined ? { override: overrides.permission } : {}),
     allowYolo: overrides.allowYolo ?? readAllowYoloEnv(env),
   })
+  const autonomy: AutonomyConfig = {
+    // v1 `--permission edits|yolo` granted those rights directly, so they pick the matching profile
+    // unless banyancode.json names one. `reject` keeps the default, which asks the caller.
+    default:
+      stored.autonomy?.default ??
+      (permission === "edits" ? "trusted" : permission === "yolo" ? "yolo" : undefined),
+    auto_answer_after_seconds:
+      stored.autonomy?.auto_answer_after_seconds ?? DEFAULT_AUTO_ANSWER_AFTER_SECONDS,
+    profiles: stored.autonomy?.profiles ?? {},
+  }
   const maxConcurrentTasks =
     overrides.maxConcurrentTasks ??
     positiveInt(env["BANYANCODE_MCP_MAX_TASKS"]) ??
