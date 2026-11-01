@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { realpathSync } from "node:fs"
 import { join, resolve } from "node:path"
+import { Global } from "@opencode/util/global"
 
 export const shortHash = (input: string): string => createHash("sha256").update(input).digest("hex").slice(0, 12)
 
@@ -32,18 +33,19 @@ export interface ProjectDbPathInput {
 }
 
 /**
- * v1 naming idea: one SQLite file per project, named
- * `banyancode-<sha256(realpath(project)).slice(0,12)>.db` under
- * `<project>/.banyancode/`.
+ * One SQLite file per project, named
+ * `banyancode-<sha256(realpath(project)).slice(0,12)>.db` under the product
+ * data directory (`<data>/projects/`), not inside the project: v2 keeps
+ * locations open until shutdown, and an open handle inside the repo would stop
+ * Windows users from moving or deleting the repo while BanyanCode runs.
  *
- * `BANYANCODE_PROJECT_DB_DIR` is the test-hermeticity escape hatch v1 used:
- * it moves the file out of the workspace while keeping the same hashed
+ * `BANYANCODE_PROJECT_DB_DIR` overrides the directory and keeps the hashed
  * filename, so two test roots never collide with a real running binary.
  */
 export const resolveProjectDbPath = (input: ProjectDbPathInput): ProjectDbPath => {
   const root = canonicalRoot(input.projectRoot)
   const override = (input.env ?? process.env).BANYANCODE_PROJECT_DB_DIR?.trim()
-  const directory = override && override.length > 0 ? override : join(root, ".banyancode")
+  const directory = override && override.length > 0 ? override : join(Global.Path.data, "projects")
   const filename = `banyancode-${shortHash(root)}.db`
   return { root, directory, filename, dbPath: join(directory, filename) }
 }

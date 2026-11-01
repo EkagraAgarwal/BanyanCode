@@ -10,6 +10,7 @@ import { migrations } from "../src/storage/migrations.js"
 import type { NativeDatabase } from "../src/storage/native.js"
 import { resolveProjectDbPath } from "../src/storage/paths.js"
 import { Storage } from "../src/storage/index.js"
+import { Global } from "@opencode/util/global"
 
 const withTemp = async (fn: (directory: string) => Promise<void>) => {
   const directory = await mkdtemp(join(tmpdir(), "banyancode-storage-"))
@@ -45,18 +46,27 @@ const insertNode = (db: NativeDatabase) => {
 }
 
 describe("banyancode storage", () => {
-  test("project db path is <project>/.banyancode/banyancode-<12 hex>.db", async () => {
+  test("project db path is <data>/projects/banyancode-<12 hex>.db, outside the project", async () => {
     await withTemp(async (directory) => {
       const resolved = resolveProjectDbPath({ projectRoot: directory, env: {} })
       expect(resolved.filename).toMatch(/^banyancode-[a-f0-9]{12}\.db$/)
-      expect(resolved.directory).toBe(join(resolved.root, ".banyancode"))
+      expect(resolved.directory).toBe(join(Global.Path.data, "projects"))
+      expect(resolved.dbPath.startsWith(resolved.root)).toBe(false)
       expect(resolved.dbPath).toBe(join(resolved.directory, resolved.filename))
+    })
+  })
+
+  test("BANYANCODE_PROJECT_DB_DIR overrides the directory and keeps the hashed filename", async () => {
+    await withTemp(async (directory) => {
+      const resolved = resolveProjectDbPath({ projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } })
+      expect(resolved.directory).toBe(directory)
+      expect(resolved.filename).toMatch(/^banyancode-[a-f0-9]{12}\.db$/)
     })
   })
 
   test("migrations apply once and are idempotent", async () => {
     await withTemp(async (directory) => {
-      const resolved = resolveProjectDbPath({ projectRoot: directory, env: {} })
+      const resolved = resolveProjectDbPath({ projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } })
       const db = await openDatabase(resolved.dbPath)
       try {
         const first = applyMigrations(db)
@@ -103,7 +113,7 @@ describe("banyancode storage", () => {
 
   test("codegraph_nodes_fts trigram matches substrings and follows triggers", async () => {
     await withTemp(async (directory) => {
-      const resolved = resolveProjectDbPath({ projectRoot: directory, env: {} })
+      const resolved = resolveProjectDbPath({ projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } })
       const db = await openDatabase(resolved.dbPath)
       try {
         applyMigrations(db)
@@ -152,7 +162,7 @@ describe("banyancode storage", () => {
       const result = await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const storage = yield* Storage.open({ projectRoot: directory, env: {} })
+            const storage = yield* Storage.open({ projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } })
             const rows = yield* storage.query<{ count: number }>("SELECT COUNT(*) AS count FROM banyancode_migrations")
             return { path: storage.path, version: storage.schemaVersion, count: rows[0]?.count }
           }),
