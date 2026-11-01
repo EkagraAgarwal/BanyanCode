@@ -8,6 +8,7 @@ import { BanyanConfig, setConfigUpdatedListener, summarize, updateConfig, type L
 import { register as registerGateway } from "./gateway/index.js"
 import { empty as emptyCodegraphPort, make as makeCodegraphPort } from "./integration/codegraph-port.js"
 import { make as makeCodegraphQuery } from "./integration/codegraph-query.js"
+import { withJsonSafeRpc } from "./integration/json-rpc.js"
 import { register as registerIntel } from "./intel/index.js"
 import { register as registerLsp } from "./lsp/index.js"
 import { register as registerMesh } from "./mesh/index.js"
@@ -65,7 +66,8 @@ const isolated = (name: string, effect: Effect.Effect<void, never, Scope.Scope>)
 
 export default Plugin.define({
   id: PLUGIN_ID,
-  effect: Effect.fn(function* (ctx) {
+  effect: Effect.fn(function* (host) {
+    const ctx = withJsonSafeRpc(host)
     const projectRoot = ctx.location.project.canonical || ctx.location.project.directory
     // v1 parity: `BANYANCODE_ENABLE=0` disables every BanyanCode tool, policy
     // and feature. Only the status surface stays: it is what a user checks to
