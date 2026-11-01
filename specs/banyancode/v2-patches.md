@@ -45,6 +45,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/cli/script/build.ts` | branding | build-time CLI name banyancode; bakes in the install telemetry key | — |
 | `packages/cli/src/config/config.ts` | hook | BANYANCODE_TUI_CONFIG overlays cli.json | — |
 | `packages/core/src/snapshot.ts` | fix | capture time budget, so a huge worktree can't stall a session | — |
+| `packages/core/test/snapshot.test.ts` | fix | covers the capture time budget | — |
 | `packages/cli/script/postinstall.mjs` | branding | user-visible install errors say BanyanCode; temp dir is banyancode-install-* | — |
 | `packages/cli/src/brand-env.ts` | branding | maps BANYANCODE_* onto the internal OPENCODE_* namespace at CLI entry | — |
 | `packages/cli/src/commands/commands.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
