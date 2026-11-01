@@ -48,7 +48,10 @@ export const acquireFileLock = async (lockPath: string, options: FileLockOptions
         },
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+      // Windows returns EPERM (and occasionally EBUSY) instead of EEXIST when
+      // `wx` races another writer; both are contention, not a hard failure.
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== "EEXIST" && code !== "EPERM" && code !== "EBUSY") throw error
       const info = await stat(lockPath).catch(() => undefined)
       if (info && Date.now() - info.mtimeMs > staleMs) {
         await rm(lockPath, { force: true })

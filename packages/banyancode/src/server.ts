@@ -12,6 +12,7 @@ import { register as registerIntel } from "./intel/index.js"
 import { register as registerMesh } from "./mesh/index.js"
 import { Definition, Status } from "./rpc.js"
 import { Storage } from "./storage/index.js"
+import { register as registerSystem } from "./system/index.js"
 import { register as registerTelemetry } from "./telemetry/index.js"
 import { register as registerVerify } from "./verify/index.js"
 import { PLUGIN_ID, VERSION } from "./version.js"
@@ -25,7 +26,7 @@ import { register as registerYolo } from "./yolo/index.js"
  * deps)` entry point; this file only builds the shared storage/config/codegraph
  * dependencies and composes them. A workstream that throws during registration
  * is logged and skipped: optional features (websearch, telemetry, cache, yolo,
- * mesh, verify) must never prevent the host from booting. Codegraph is built
+ * mesh, verify, system) must never prevent the host from booting. Codegraph is built
  * once and shared: a failure there degrades intel/gateway to an empty graph
  * instead of aborting the plugin.
  */
@@ -151,5 +152,7 @@ export default Plugin.define({
     yield* isolated("yolo", registerYolo(ctx, { config }))
     yield* isolated("cache", registerCache(ctx, deps))
     yield* isolated("mesh", registerMesh(ctx, deps))
+    // After mesh: the persisted /max-subagents command replaces the in-memory one.
+    yield* isolated("system", registerSystem(ctx, deps))
   }),
 })

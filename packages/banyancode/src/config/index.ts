@@ -1,7 +1,22 @@
 export * as BanyanConfig from "./service.js"
+export {
+  AGENT_NAME_PATTERN,
+  agentFilePath,
+  decodeConfig,
+  isSafeAgentName,
+  removeAgentOverride,
+  saveAgent,
+  targetFile as targetConfigFile,
+  update as updateConfig,
+  updateAgentOverride,
+  updateAgentPrompt,
+} from "./writer.js"
+export type { AgentOverridePatch, AgentSaveInput, AgentSaveResult, WriteResult, WriteTarget } from "./writer.js"
 export { globalConfigDir, load, projectConfigDirs, summarize } from "./loader.js"
 export type { ConfigError, ConfigScope, ConfigSource, LoadInput, Loaded, Summary, UnknownKeys } from "./loader.js"
 export { parseJsonc, stripJsonc } from "./jsonc.js"
+export { patchTopLevel, remove as removeConfigPath, set as setConfigPath } from "./edit.js"
+export type { Value } from "./edit.js"
 export {
   AgentConfig,
   AgentKeys,
