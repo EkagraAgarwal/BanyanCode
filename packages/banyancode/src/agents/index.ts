@@ -1,8 +1,9 @@
 import type { Context } from "@opencode/plugin/effect/plugin"
+import { Goal } from "@opencode/schema/goal"
 import { Effect, type Scope, Schedule, Stream } from "effect"
 import type { Loaded } from "../config/index.js"
 import { apply, loadVariants, snapshot, type AgentState } from "./apply.js"
-import { makeGoalTool } from "./goal-tool.js"
+import { makeGoalTool, settingsFromConfig } from "./goal-tool.js"
 import { register as registerOrchestration } from "./orchestration.js"
 
 export interface AgentDeps {
@@ -48,9 +49,25 @@ export const register = (ctx: Context, deps: AgentDeps): Effect.Effect<void, nev
   Effect.gen(function* () {
     const state: { current?: AgentState; fingerprint?: string } = {}
 
+    // v1's goal tuning keys are accepted by the config schema but v2's goal
+    // plugin owns the loop, so push them over its RPC whenever they change.
+    const goals = ctx.rpc(Goal.Definition)
+    let goalSettings: string | undefined
+    const configureGoal = (config: Loaded["config"]) =>
+      Effect.gen(function* () {
+        const next = settingsFromConfig(config)
+        const key = JSON.stringify(next)
+        if (key === goalSettings) return
+        yield* goals.configure(next)
+        goalSettings = key
+      }).pipe(
+        Effect.catchCause((cause) => Effect.logWarning("banyancode: failed to configure the goal loop", { cause })),
+      )
+
     /** Rebuild the snapshot; true when anything the transform depends on changed. */
     const refresh = Effect.gen(function* () {
       const loaded = yield* deps.config.get()
+      yield* configureGoal(loaded.config)
       const variants = yield* loadVariants(ctx.model)
       const next = snapshot(loaded.config, variants)
       const nextFingerprint = fingerprint(loaded, next)

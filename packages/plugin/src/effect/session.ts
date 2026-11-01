@@ -8,7 +8,7 @@ import type { SessionInbox } from "@opencode/schema/session-inbox"
 import type { SessionError } from "@opencode/schema/session-error"
 import type { SessionMessage } from "@opencode/schema/session-message"
 import type { TokenUsage } from "@opencode/schema/token-usage"
-import type { JsonSchema, Types } from "effect"
+import type { Effect, JsonSchema, Types } from "effect"
 import type { ModelHooks } from "./registration.js"
 
 export interface SessionPrompt {
@@ -198,26 +198,38 @@ export interface SessionHooks {
   readonly "experimental.idle": SessionIdle
 }
 
-export type SessionDomain = Pick<
-  SessionApi<unknown>,
-  | "list"
-  | "create"
-  | "get"
-  | "remove"
-  | "switchAgent"
-  | "switchModel"
-  | "prompt"
-  | "generate"
-  | "command"
-  | "compact"
-  | "synthetic"
-  | "interrupt"
-  | "update"
-  | "move"
-  | "context"
-  // v1 `banyancode.mesh.background`: stop the session's running work and let it idle.
-  | "background"
+export type SessionDomain = Omit<
+  Pick<
+    SessionApi<unknown>,
+    | "list"
+    | "create"
+    | "get"
+    | "remove"
+    | "switchAgent"
+    | "switchModel"
+    | "prompt"
+    | "generate"
+    | "command"
+    | "compact"
+    | "synthetic"
+    | "interrupt"
+    | "update"
+    | "move"
+    | "context"
+    // v1 `banyancode.mesh.background`: stop the session's running work and let it idle.
+    | "background"
+  >,
+  "generate"
 > &
   Pick<ExperimentalSessionApi<unknown>, "wait" | "instructions"> & {
+    /**
+     * Generates text from Session context like the Session API, with an optional model override: the BanyanCode goal
+     * reviewer asks with `banyancode_goal_evaluator_model` instead of the Session's model.
+     */
+    readonly generate: (input: {
+      readonly sessionID: Session.ID
+      readonly prompt: string
+      readonly model?: Model.Ref
+    }) => Effect.Effect<{ readonly text: string }, unknown>
     readonly hook: ModelHooks<SessionHooks>
   }

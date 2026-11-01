@@ -368,11 +368,19 @@ describe("banyancode agent registration", () => {
   test("register applies the definitions and reloads on config.updated", async () => {
     await withTemp(async (directory) => {
       const file = join(directory, "banyancode.json")
-      await writeFile(file, JSON.stringify({ agent: { coder: { prompt: "OLD" } } }))
+      await writeFile(
+        file,
+        JSON.stringify({
+          agent: { coder: { prompt: "OLD" } },
+          banyancode_max_goal_iterations: 3,
+          banyancode_goal_evaluator_model: "cheap/fast",
+        }),
+      )
       const config = BanyanConfig.make({ directory, projectRoot: directory, globalDir: join(directory, "missing") })
       const harness = makeEditor()
       let transform: ((editor: AgentEditor) => void) | undefined
       let reloads = 0
+      const goalSettings: unknown[] = []
       const ctx = {
         agent: {
           transform: (callback: (editor: AgentEditor) => void) =>
@@ -414,9 +422,20 @@ describe("banyancode agent registration", () => {
         session: {
           hook: () => Effect.sync(() => ({ dispose: Effect.void })),
         },
-        rpc: Object.assign(() => ({ get: () => Effect.succeed(null) }), {
-          register: () => Effect.sync(() => ({ dispose: Effect.void, events: { emit: () => Effect.void } })),
-        }),
+        // The goal plugin client: `register` pushes `banyancode.json`'s goal tuning once per change.
+        rpc: Object.assign(
+          () => ({
+            get: () => Effect.succeed(null),
+            configure: (input: unknown) =>
+              Effect.sync(() => {
+                goalSettings.push(input)
+                return input
+              }),
+          }),
+          {
+            register: () => Effect.sync(() => ({ dispose: Effect.void, events: { emit: () => Effect.void } })),
+          },
+        ),
         permission: { assert: () => Effect.void },
       } as unknown as Context
 
@@ -427,6 +446,10 @@ describe("banyancode agent registration", () => {
       expect(harness.agents.has("coder")).toBe(true)
       expect(harness.agents.get("coder")?.system).toBe("NEW")
       expect(reloads).toBeGreaterThanOrEqual(1)
+      // v1's goal keys reach the goal plugin instead of being accepted and ignored.
+      expect(goalSettings[0]).toEqual({ maxRounds: 3, evaluatorModel: "cheap/fast" })
+      // Dropping a key in the file clears the override, because `configure` replaces the set.
+      expect(goalSettings.at(-1)).toEqual({})
     })
   })
 })

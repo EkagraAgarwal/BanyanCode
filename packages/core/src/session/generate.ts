@@ -14,6 +14,7 @@ import { SessionModelRequest } from "./model-request.js"
 import { ModelRetry } from "../model-retry.js"
 import type { SessionRunnerModel } from "./runner/model.js"
 import type { SessionSchema } from "./schema.js"
+import type { Model } from "@opencode/schema/model"
 
 export type Error =
   | AgentNotFoundError
@@ -22,10 +23,14 @@ export type Error =
   | AIError
   | FileSystem.DirectoryNotFoundError
 
-/** Generates text from current Session context without mutating the Session. */
+/**
+ * Generates text from current Session context without mutating the Session. `model` resolves instead of the
+ * Session's model for this call, without switching the Session over.
+ */
 export const generate = Effect.fn("SessionGenerate.generate")(function* (input: {
   session: SessionSchema.Info
   prompt: string
+  model?: Model.Ref
 }) {
   const instances = yield* Instance.Service
   const database = yield* Database.Service
@@ -35,7 +40,9 @@ export const generate = Effect.fn("SessionGenerate.generate")(function* (input: 
     yield* Plugin.awaitActivation
     const context = yield* SessionContext.Service
     const selection = yield* context.select(input.session.id)
-    const model = yield* context.resolveModel(selection.session)
+    const model = yield* context.resolveModel(
+      input.model === undefined ? selection.session : { ...selection.session, model: input.model },
+    )
     const history = yield* SessionHistory.preview(database.db, selection.session.id, selection.instructions, model.ref)
     const transcript = SessionModelRequest.baseTranscript({
       agent: selection.agent.info,

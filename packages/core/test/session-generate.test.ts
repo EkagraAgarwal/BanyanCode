@@ -28,6 +28,7 @@ import { InstructionBuiltIns } from "@opencode/core/instructions/builtins"
 import { Location } from "@opencode/core/location"
 import { McpInstructions } from "@opencode/core/mcp/instructions"
 import { ID } from "@opencode/core/model"
+import { Model } from "@opencode/schema/model"
 import { Project } from "@opencode/core/project"
 import { Provider } from "@opencode/core/provider"
 import { ReferenceInstructions } from "@opencode/core/reference/instructions"
@@ -87,13 +88,19 @@ const client = Layer.mock(LLMClient.Service)({
     }),
 })
 const models = Layer.mock(SessionRunnerModel.Service)({
-  resolve: () =>
+  // Honour a Session's explicit model so a test can prove `generate` routes an override to the provider.
+  resolve: (session) =>
     Effect.succeed(
-      SessionRunnerModel.resolved(model, {
-        capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
-        cost: [],
-        limit: { context: 200_000, output: 32_000 },
-      }),
+      SessionRunnerModel.resolved(
+        session.model
+          ? LanguageModel.make({ id: session.model.id, provider: session.model.providerID, route: OpenAIChat.route })
+          : model,
+        {
+          capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+          cost: [],
+          limit: { context: 200_000, output: 32_000 },
+        },
+      ),
     ),
 })
 const builtins = Layer.mock(InstructionBuiltIns.Service, {
@@ -450,4 +457,24 @@ it.effect(
       expect(yield* durableState(db, sessionID)).toEqual(before)
     }),
   { timeout: 15_000 },
+)
+
+it.effect("resolves an explicit generation model without switching the Session", () =>
+  Effect.gen(function* () {
+    requests.length = 0
+    instruction = "Initial context"
+    const { db, bus, instructions, session, instances } = yield* setup
+    yield* InstructionState.prepare(db, bus, instructions, sessionID)
+    const override = Model.Ref.make({ id: Model.ID.make("cheap"), providerID: Provider.ID.make("test") })
+
+    const result = yield* SessionGenerate.generate({ session, prompt: "Review this", model: override }).pipe(
+      Effect.provideService(Instance.Service, instances),
+    )
+
+    expect(result).toBe("Transient answer")
+    // The provider sees the override, not the Session's model.
+    expect(requests).toHaveLength(1)
+    expect(String(requests[0]?.model.id)).toBe("cheap")
+    expect(String(requests[0]?.model.provider)).toBe("test")
+  }),
 )

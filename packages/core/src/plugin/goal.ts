@@ -4,6 +4,8 @@ import { isContextOverflowFailure, Message } from "@opencode/ai/effect"
 import { define } from "@opencode/plugin/effect/plugin"
 import type { SessionIdleBackground } from "@opencode/plugin/effect/session"
 import { Goal } from "@opencode/schema/goal"
+import { Model } from "@opencode/schema/model"
+import { Provider } from "@opencode/schema/provider"
 import { Session } from "@opencode/schema/session"
 import { isExactRootFallback } from "@opencode/util/session-title-fallback"
 import { Cause, Clock, DateTime, Duration, Effect, FiberMap, Option, Schema, Stream } from "effect"
@@ -44,9 +46,51 @@ export const Plugin = define({
       return Option.getOrUndefined(decodeState(yield* ctx.storage.get(PREFIX + sessionID)))
     })
 
+    // `banyancode.json` tuning arrives through `configure`; every field is optional and an unset field keeps v2's
+    // stock behavior. `configure` replaces the set, so dropping a key in the file restores the stock default.
+    let settings: Goal.Settings = {}
+    // A goal left active by an earlier process resumes paused, so the wall-clock budget only spans this process.
+    const started = new Map<Session.ID, number>()
+
     const rpc = yield* ctx.rpc
       .register(Goal.Definition, {
         get: (input) => read(input.sessionID).pipe(Effect.map((goal) => goal ?? null)),
+        configure: (input): Effect.Effect<Goal.Settings> =>
+          Effect.sync(() => {
+            settings = input
+            return settings
+          }),
+        // The BanyanCode `goal` tool's `record_review` action: one verdict counts as one round, and the same round
+        // budget that bounds the loop stops it, mirroring v1's `banyancode_max_goal_iterations` auto-block.
+        review: (input): Effect.Effect<Goal.State | null> =>
+          Effect.gen(function* () {
+            const goal = yield* read(input.sessionID)
+            if (goal === undefined || goal.status !== "active") return goal ?? null
+            const rounds = goal.rounds + 1
+            const cap = settings.maxRounds ?? goal.maxRounds
+            const capped = rounds >= cap && input.verdict !== "pass"
+            const next: State = capped
+              ? {
+                  ...goal,
+                  status: "paused",
+                  rounds,
+                  reason: "max iterations reached",
+                  updatedAt: yield* Clock.currentTimeMillis,
+                }
+              : { ...goal, rounds, reason: input.reason, updatedAt: yield* Clock.currentTimeMillis }
+            yield* write(Session.ID.make(input.sessionID), next)
+            return next
+          }),
+        // `complete` / `block` from the orchestrator end the loop. v2 has no `blocked` status, so `block` arrives
+        // here as `paused` with the blocking reason: the loop stops, and the user can resume it.
+        settle: (input): Effect.Effect<Goal.State | null> =>
+          Effect.gen(function* () {
+            const goal = yield* read(input.sessionID)
+            if (goal === undefined) return null
+            if (goal.status !== "active") return goal
+            yield* settle(Session.ID.make(input.sessionID), goal, input.status, input.reason)
+            return (yield* read(input.sessionID)) ?? null
+          }),
       })
       .pipe(Effect.orDie)
 
@@ -120,7 +164,9 @@ export const Plugin = define({
         wait:
           shells.length === 0 ? "" : '{"verdict":"wait","reason":"<the running shell whose result the goal needs>"}\n',
       })
-      const attempt = ctx.session.generate({ sessionID, prompt }).pipe(
+      // v1's `banyancode_goal_evaluator_model` asked the reviewer with its own model; the same override applies here.
+      const model = parseModel(settings.evaluatorModel)
+      const attempt = ctx.session.generate({ sessionID, prompt, ...(model ? { model } : {}) }).pipe(
         Effect.map((result) => {
           const verdict = parseVerdict(result.text)
           // "wait" is only offered while a shell runs; without one, nothing would wake the Session to judge again.
@@ -151,8 +197,26 @@ export const Plugin = define({
         background.some((work) => (work.kind === "subagent" || work.kind === "image") && work.sessionID === sessionID)
       )
         return
-      if (goal.rounds >= goal.maxRounds)
-        return yield* settle(sessionID, goal, "paused", `Reached the limit of ${goal.maxRounds} rounds`)
+      // v1's `banyancode_goal_max_time_ms`: the run's wall clock, checked between rounds. A goal seeded before this
+      // process (or by a plugin write) starts its clock on its first pass, since earlier processes pause their goals.
+      const budget = settings.maxTimeMs
+      if (budget !== undefined && budget > 0) {
+        const now = yield* Clock.currentTimeMillis
+        const from = started.get(sessionID) ?? now
+        started.set(sessionID, from)
+        if (now - from >= budget)
+          return yield* settle(
+            sessionID,
+            goal,
+            "paused",
+            `Reached the goal time limit of ${Duration.format(Duration.millis(budget))}`,
+          )
+      }
+      // v1's `banyancode_max_goal_iterations`: the configured cap wins over the goal's own snapshot, so a config
+      // change reaches a goal that is already running.
+      const maxRounds = settings.maxRounds ?? goal.maxRounds
+      if (goal.rounds >= maxRounds)
+        return yield* settle(sessionID, goal, "paused", `Reached the limit of ${maxRounds} rounds`)
 
       // Only the Session's own shells wake it when they finish. A subagent's leftover shell wakes the subagent, so
       // waiting on it would leave this Session idle until the wait limit pauses the goal.
@@ -179,6 +243,25 @@ export const Plugin = define({
         return yield* settle(sessionID, latest, "paused", "The goal reviewer gave no usable verdict")
       if (verdict.verdict === "wait") return
       if (verdict.verdict === "done") return yield* settle(sessionID, latest, "complete", verdict.reason)
+      // v1's `banyancode_goal_auto_retry_on_block`: keep looping on a blocked verdict instead of surfacing it, as v1
+      // retried until its iteration cap. Resetting the stall counter is deliberate: the round budget bounds retries,
+      // so an identical blocked reason does not end a run the orchestrator asked to retry.
+      if (verdict.verdict === "blocked" && settings.autoRetryOnBlock === true) {
+        const next = {
+          ...latest,
+          rounds: latest.rounds + 1,
+          stalls: 0,
+          reason: verdict.reason,
+          updatedAt: yield* Clock.currentTimeMillis,
+        }
+        if (!(yield* replace(sessionID, latest, next))) return
+        yield* ctx.session.synthetic({
+          sessionID,
+          text: continuation(next, [verdict.reason, verdict.next_step && `Next step: ${verdict.next_step}`]),
+          metadata: { source: "goal", goalID: next.id },
+        })
+        return
+      }
       if (verdict.verdict !== "continue") return yield* settle(sessionID, latest, "paused", verdict.reason)
 
       const stalled = sameReason(latest.reason, verdict.reason) || !(yield* usedTools(sessionID, latest.id))
@@ -285,8 +368,10 @@ export const Plugin = define({
       .pipe(
         Stream.runForEach((event) => {
           const sessionID = event.data.sessionID
-          if (event.type === "session.deleted")
+          if (event.type === "session.deleted") {
+            started.delete(sessionID)
             return FiberMap.remove(timers, sessionID).pipe(Effect.andThen(ctx.storage.remove(PREFIX + sessionID)))
+          }
           if (event.type === "session.step.started" || event.type === "session.step.ended")
             return touch(sessionID).pipe(
               Effect.catchCause((cause) => Effect.logWarning("failed to note goal activity", { sessionID, cause })),
@@ -369,11 +454,12 @@ export const Plugin = define({
                 status: "active",
                 // The resume continuation is the first round of the new budget.
                 rounds: 1,
-                maxRounds: goal.maxRounds,
+                maxRounds: settings.maxRounds ?? goal.maxRounds,
                 boot: boot(),
                 updatedAt: yield* Clock.currentTimeMillis,
               }
               yield* write(input.sessionID, resumed)
+              started.set(input.sessionID, resumed.updatedAt)
               return yield* ctx.session.synthetic({
                 sessionID: input.sessionID,
                 text: continuation(resumed, ["The user resumed the goal."]),
@@ -382,6 +468,7 @@ export const Plugin = define({
             }
             if (control === "clear") {
               if (!goal) return yield* Effect.fail(new Error("No goal is set."))
+              started.delete(input.sessionID)
               return yield* write(input.sessionID, undefined)
             }
 
@@ -394,11 +481,12 @@ export const Plugin = define({
               objective: text,
               status: "active",
               rounds: 0,
-              maxRounds: MAX_ROUNDS,
+              maxRounds: settings.maxRounds ?? MAX_ROUNDS,
               boot: boot(),
               updatedAt: yield* Clock.currentTimeMillis,
             }
             yield* write(input.sessionID, created)
+            started.set(input.sessionID, created.updatedAt)
             const session = yield* ctx.session.get({ sessionID: input.sessionID })
             // Titles come from the first user message, and a notice kickoff is not one, so name the Session here.
             if (
@@ -460,6 +548,18 @@ function sameReason(previous: string | undefined, next: string) {
 function describe(goal: State) {
   const status = goal.status === "active" ? "Goal active" : goal.status === "paused" ? "Goal paused" : "Goal achieved"
   return [`${status}: ${goal.objective}`, goal.reason].filter(Boolean).join("\n")
+}
+
+// `provider/model` from `banyancode_goal_evaluator_model`. A malformed value falls back to the Session's model,
+// matching v1, where an unusable override was ignored rather than failing the review.
+function parseModel(value: string | undefined) {
+  if (!value) return undefined
+  const slash = value.indexOf("/")
+  if (slash <= 0 || slash === value.length - 1) return undefined
+  return Model.Ref.make({
+    providerID: Provider.ID.make(value.slice(0, slash)),
+    id: Model.ID.make(value.slice(slash + 1)),
+  })
 }
 
 // Reviewers sometimes wrap the JSON in a code fence or add a sentence around it.

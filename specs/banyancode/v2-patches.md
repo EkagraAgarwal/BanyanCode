@@ -188,3 +188,10 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/core/src/session/model-request.ts` | hook | orders volatile system parts after stable ones so a change can't cut the cached prefix | — |
 | `packages/core/test/session-model-request-hooks.test.ts` | hook | pins stable-before-volatile ordering | — |
 | `packages/core/test/session-runner.test.ts` | hook | proves v2 keeps the cached prefix across a thinking change (`banyancode_reasoning_configuration_update`) | — |
+| `packages/core/test/preload.ts` | hook | core tests don't start the plugin's background codegraph build | — |
+| `packages/schema/src/goal.ts` | hook | `Goal.Settings` and `configure`/`review`/`settle` RPC methods | — |
+| `packages/core/src/plugin/goal.ts` | hook | goal loop honours pushed settings (rounds, wall clock, blocked retry, evaluator model) and serves review and settle | — |
+| `packages/core/src/session.ts` | hook | optional `model` on `Session.generate` | — |
+| `packages/core/src/session/generate.ts` | hook | resolves the explicit generate model | — |
+| `packages/core/test/plugin/goal-settings.test.ts` | hook | proves each goal setting changes behaviour | — |
+| `packages/core/test/session-generate.test.ts` | fix | proves the generate model override reaches the provider | — |

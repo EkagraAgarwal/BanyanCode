@@ -144,7 +144,6 @@ describe("provider usage adapters", () => {
         targets: () =>
           Effect.succeed([target({ providerID: "openrouter", credential: key("sk-openrouter-secret") })]),
         endpoints: endpointsFor(base),
-        now: () => now,
       }),
     )
     const first = await Effect.runPromise(usage.snapshots())
