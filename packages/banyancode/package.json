@@ -9,6 +9,12 @@
     ".": "./src/server.ts",
     "./server": "./src/server.ts",
     "./rpc": "./src/rpc.ts",
+    "./rpc/codegraph": "./src/codegraph/rpc.ts",
+    "./rpc/intel": "./src/intel/rpc.ts",
+    "./rpc/mesh": "./src/mesh/rpc.ts",
+    "./rpc/usage": "./src/telemetry/rpc.ts",
+    "./rpc/verify": "./src/verify/rpc.ts",
+    "./rpc/system": "./src/system/rpc.ts",
     "./config": "./src/config/index.ts",
     "./storage": "./src/storage/index.ts",
     "./grammar": "./src/grammar.ts"
