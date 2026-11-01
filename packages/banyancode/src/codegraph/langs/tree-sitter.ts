@@ -23,7 +23,7 @@ import { Context, Effect, Layer, Ref } from "effect"
 import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { runtimeWasmPath, typescriptWasmPath } from "#grammar-assets"
+import { grammarWasmPaths, runtimeWasmPath } from "#grammar-assets"
 
 export const HEAP_INITIAL_PAGES = 256
 export const HEAP_MAX_PAGES = 4096
@@ -48,11 +48,11 @@ type GrammarKey =
   | "yaml"
 
 /**
- * Asset filename per grammar family. `typescript` is the only grammar vendored
- * in the repo today; the rest must be copied into
- * `packages/banyancode/assets/` from their npm packages (see the migration
- * report for the exact node_modules paths). A missing file is a graceful
- * per-language degradation to the regex parser, never a crash.
+ * Asset filename per grammar family. All 16 grammars are vendored in
+ * `packages/banyancode/assets/` and imported by `grammar-assets.bun.ts` so the
+ * compiled binary embeds them; the Node build reads the same files from disk.
+ * A missing file is a graceful per-language degradation to the regex parser,
+ * never a crash.
  */
 export const GRAMMAR_ASSET_FILES: Readonly<Record<GrammarKey, string>> = Object.freeze({
   typescript: "tree-sitter-typescript.wasm",
@@ -110,12 +110,19 @@ export const assetDirectory = (): string =>
   dirname(runtimeWasmPath)
 
 /**
- * Resolve the wasm path for a grammar family. TypeScript is special-cased to
- * the bundled `#grammar-assets` path (that is the one Bun's compiled binary
- * embeds); everything else is a sibling file in the assets directory.
+ * Resolve the wasm path for a grammar family. Every grammar comes from the
+ * bundled `#grammar-assets` map (Bun's compiled binary embeds all of them).
+ * The directory overrides stay supported for the Node build and for tests that
+ * stage their own wasm files.
  */
-export const grammarWasmPath = (grammar: GrammarKey): string =>
-  grammar === "typescript" ? typescriptWasmPath : join(assetDirectory(), GRAMMAR_ASSET_FILES[grammar])
+export const grammarWasmPath = (grammar: GrammarKey): string => {
+  const override =
+    process.env.BANYANCODE_GRAMMAR_DIR ??
+    process.env.BANYANCODE_WASM_DIR ??
+    process.env.OPENCODE_NODE_ASSETS_DIR
+  if (override !== undefined) return join(override, GRAMMAR_ASSET_FILES[grammar])
+  return grammarWasmPaths[grammar]
+}
 
 export interface ParseTree {
   rootNode: {

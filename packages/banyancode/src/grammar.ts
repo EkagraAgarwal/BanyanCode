@@ -12,8 +12,8 @@ let ready: Promise<void> | undefined
 
 /**
  * Loads the tree-sitter runtime plus the TypeScript grammar and parses a tiny
- * program. Workstream 3a will add the remaining 16 grammars; this probe keeps
- * the asset path and wasm initialisation honest in the skeleton.
+ * program. `packages/banyancode/assets/` carries all 16 grammars; the full
+ * contract test lives in `test/grammar.test.ts`.
  */
 export async function probe(): Promise<GrammarProbe> {
   ready ??= Parser.init({ wasmBinary: await readFile(runtimeWasmPath) })

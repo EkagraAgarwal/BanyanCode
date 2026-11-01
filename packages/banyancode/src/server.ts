@@ -1,39 +1,54 @@
 import { Plugin } from "@opencode/plugin/effect"
 import { Tool } from "@opencode/schema/tool"
-import { Effect, Schema } from "effect"
+import { Cause, Effect, Schema, type Scope } from "effect"
+import { register as registerAgents } from "./agents/index.js"
+import { register as registerCache } from "./cache/index.js"
+import { makeServices as makeCodegraphServices, register as registerCodegraph } from "./codegraph/index.js"
 import { BanyanConfig, summarize } from "./config/index.js"
+import { register as registerGateway } from "./gateway/index.js"
+import { empty as emptyCodegraphPort, make as makeCodegraphPort } from "./integration/codegraph-port.js"
+import { make as makeCodegraphQuery } from "./integration/codegraph-query.js"
+import { register as registerIntel } from "./intel/index.js"
+import { register as registerMesh } from "./mesh/index.js"
 import { Definition, Status } from "./rpc.js"
 import { Storage } from "./storage/index.js"
+import { register as registerTelemetry } from "./telemetry/index.js"
+import { register as registerVerify } from "./verify/index.js"
 import { PLUGIN_ID, VERSION } from "./version.js"
+import { register as registerWebsearch } from "./websearch/index.js"
+import { register as registerYolo } from "./yolo/index.js"
 
 /**
- * BanyanCode server plugin skeleton.
+ * BanyanCode server plugin.
  *
- * Phase 2 owns storage, config and the RPC/tool surface. The feature
- * workstreams plug in here without moving this file:
- *
- *   TODO(3a codegraph): `src/codegraph/` — indexer, readiness, watcher bridge,
- *        `/codegraph-*` commands, system-prompt policy.
- *   TODO(3b memory): dropped in v2; no server module will be added.
- *   TODO(3c intel/verify): `src/intel/`, `src/verify/` — preflight,
- *        blast_radius, safe_rename, edit_plan, test/typecheck/lint.
- *   TODO(3d agents): `src/agents/` — orchestrator/coder/scout/researcher/
- *        reviewer transforms and DuckDuckGo websearch.
- *   TODO(3e gateway): `src/gateway/` — route_grep/read/glob, tool telemetry,
- *        prompt-cache tuning, yolo mode, LSP caps.
- *   TODO(3f mesh): `src/mesh/` — subagent messages/plans/reviews on the tables
- *        already created by the storage migrations, plus `/goal` and `/swarm`.
- *   TODO(3g TUI): `packages/banyancode-tui` consumes the `banyancode.*` RPC
- *        methods and `rpc.banyancode.*` events; no server module here.
- *   TODO(3h parity): Telegram and trace keys are already accepted by
- *        `BanyanConfig`; wire their consumers when the workstream lands.
+ * Every feature workstream owns its registrations behind a `register(ctx,
+ * deps)` entry point; this file only builds the shared storage/config/codegraph
+ * dependencies and composes them. A workstream that throws during registration
+ * is logged and skipped: optional features (websearch, telemetry, cache, yolo,
+ * mesh, verify) must never prevent the host from booting. Codegraph is built
+ * once and shared: a failure there degrades intel/gateway to an empty graph
+ * instead of aborting the plugin.
  */
+
+/** Logs a workstream failure and keeps booting; interrupts still propagate. */
+const isolated = (name: string, effect: Effect.Effect<void, never, Scope.Scope>) =>
+  effect.pipe(
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.interrupt
+        : Effect.logWarning(`banyancode: ${name} registration failed; feature skipped`, {
+            cause: Cause.pretty(cause),
+          }),
+    ),
+  )
+
 export default Plugin.define({
   id: PLUGIN_ID,
   effect: Effect.fn(function* (ctx) {
     const projectRoot = ctx.location.project.canonical || ctx.location.project.directory
     const storage = yield* Storage.open({ projectRoot }).pipe(Effect.orDie)
     const config = BanyanConfig.make({ directory: ctx.location.directory, projectRoot })
+    const deps = { storage, config }
 
     const status: Effect.Effect<Status> = Effect.gen(function* () {
       const loaded = yield* config.get()
@@ -98,5 +113,43 @@ export default Plugin.define({
         })
       })
       .pipe(Effect.orDie)
+
+    // 3a — build the graph repository once; intel/gateway reuse the same instance.
+    const codegraph = yield* makeCodegraphServices(ctx, deps).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : Effect.logWarning("banyancode: codegraph services failed; intel/gateway use an empty graph", {
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as(undefined)),
+      ),
+    )
+    const port = codegraph === undefined ? emptyCodegraphPort : makeCodegraphPort(codegraph.repo)
+
+    yield* isolated(
+      "codegraph",
+      registerCodegraph(ctx, { ...deps, ...(codegraph === undefined ? {} : { services: codegraph }) }),
+    )
+    yield* isolated("intel", registerIntel(ctx, { ...deps, codegraph: port }))
+    yield* isolated("verify", registerVerify(ctx, { ...deps, codegraph: port }))
+    yield* isolated("agents", registerAgents(ctx, { config }))
+    yield* isolated("websearch", registerWebsearch(ctx, { config }))
+
+    // 3e — the gateway may only rewrite onto tools that are actually registered.
+    const availableTools = yield* ctx.tool.list().pipe(
+      Effect.map((tools) => new Set(tools.map((tool) => tool.id))),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("banyancode: tool catalog unavailable; gateway rewrites disabled", {
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as(new Set<string>())),
+      ),
+    )
+    const query = codegraph === undefined ? {} : makeCodegraphQuery(codegraph.repo, { availableTools })
+    yield* isolated("gateway", registerGateway(ctx, { ...deps, codegraph: query }))
+
+    yield* isolated("telemetry", registerTelemetry(ctx, deps))
+    yield* isolated("yolo", registerYolo(ctx, { config }))
+    yield* isolated("cache", registerCache(ctx, deps))
+    yield* isolated("mesh", registerMesh(ctx, deps))
   }),
 })

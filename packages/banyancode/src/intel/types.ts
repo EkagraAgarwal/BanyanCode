@@ -3,10 +3,9 @@ import { Schema } from "effect"
 /**
  * Graph row shapes and tool/RPC payload schemas for repository intelligence.
  *
- * These mirror the v1 declarations in
- * `D:\OpenCode\packages\core\src\banyancode\types.ts` (same field names, same
- * node/edge kinds) so the ported tools return exactly the payload the v1
- * tools returned. The codegraph workstream owns the storage tables; this
+ * These mirror the v1 declarations (`packages/core/src/banyancode/types.ts`
+ * in v1; same field names, same node/edge kinds) so the ported tools return
+ * exactly the payload the v1 tools returned. The codegraph workstream owns the storage tables; this
  * module never imports `src/codegraph`.
  */
 

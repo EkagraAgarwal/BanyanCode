@@ -95,6 +95,7 @@ const BANYAN_TOOLS: readonly string[] = [
   "banyan_typecheck",
   "banyan_test",
   "banyan_lint",
+  "banyan_compile",
   "banyan_tool_search",
   "system_status",
   "systeminfo",

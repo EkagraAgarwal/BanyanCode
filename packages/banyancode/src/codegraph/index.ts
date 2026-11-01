@@ -68,6 +68,8 @@ export { POLICY_TEXT } from "./system-policy.js"
 export interface RegisterDeps {
   readonly storage: Storage.Interface
   readonly config: BanyanConfig.Interface
+  /** Services built once by `makeServices` and shared with the intel/gateway ports. */
+  readonly services?: Services
 }
 
 /** Every tool id this workstream registers, in registration order. */
@@ -88,18 +90,28 @@ export const TOOL_IDS = [
   name_find_http_routes,
 ] as const
 
-export const register = (
-  ctx: Context,
-  deps: RegisterDeps,
-): Effect.Effect<void, never, Scope.Scope> =>
+export interface Services {
+  readonly projectRoot: string
+  readonly repo: ReturnType<typeof makeRepo>
+  readonly indexer: Effect.Success<ReturnType<typeof makeIndexer>>
+  readonly buildService: Effect.Success<ReturnType<typeof makeBuildService>>
+  readonly autoUpdate: Effect.Success<ReturnType<typeof makeAutoUpdate>>
+  readonly readiness: Effect.Success<ReturnType<typeof makeReadiness>>
+  readonly bootstrap: Effect.Success<ReturnType<typeof makeBootstrap>>
+  readonly analyzer: ReturnType<typeof makeAnalyzer>
+  readonly search: ReturnType<typeof makeService>
+  readonly structural: ReturnType<typeof makeStructural>
+}
+
+/**
+ * Build the workstream's services exactly once. `server.ts` calls this first,
+ * derives the intel `CodegraphPort` / gateway `CodegraphQuery` from the shared
+ * `repo`, and hands the same object back to `register` so nothing is built
+ * twice.
+ */
+export const makeServices = (ctx: Context, deps: RegisterDeps): Effect.Effect<Services, never, Scope.Scope> =>
   Effect.gen(function* () {
-    // v1 contract: `BANYANCODE_ENABLE=0` disables the whole workstream
-    // (tools, RPC, watcher, bootstrap). The plugin still loads.
-    if (process.env.BANYANCODE_ENABLE === "0") return
-
     const projectRoot = ctx.location.project.canonical || ctx.location.project.directory
-
-    // ── services ────────────────────────────────────────────────────────────
     const repo = makeRepo(deps.storage)
     const indexer = yield* makeIndexer(repo, deps.storage)
     const buildService = yield* makeBuildService({ indexer, repo, dbPath: () => deps.storage.path })
@@ -134,9 +146,31 @@ export const register = (
           Effect.orElseSucceed(() => true),
         ),
     })
-    const analyzer = makeAnalyzer(repo)
-    const search = makeService(repo)
-    const structural = makeStructural(repo)
+    return {
+      projectRoot,
+      repo,
+      indexer,
+      buildService,
+      autoUpdate,
+      readiness,
+      bootstrap,
+      analyzer: makeAnalyzer(repo),
+      search: makeService(repo),
+      structural: makeStructural(repo),
+    }
+  })
+
+export const register = (
+  ctx: Context,
+  deps: RegisterDeps,
+): Effect.Effect<void, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    // v1 contract: `BANYANCODE_ENABLE=0` disables the whole workstream
+    // (tools, RPC, watcher, bootstrap). The plugin still loads.
+    if (process.env.BANYANCODE_ENABLE === "0") return
+
+    const { repo, buildService, autoUpdate, readiness, bootstrap, analyzer, search, structural, projectRoot } =
+      deps.services ?? (yield* makeServices(ctx, deps))
 
     const excludePatterns = () =>
       deps.config.get().pipe(

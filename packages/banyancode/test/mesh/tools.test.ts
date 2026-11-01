@@ -147,9 +147,10 @@ const runTool = async (
   }
 
 describe("mesh RPC surface", () => {
-  test("owns the banyancode.mesh namespace with status, sessionStatus, limits, and status.updated", () => {
+  test("owns the banyancode.mesh namespace with status, sessionStatus, limits, background, and status.updated", () => {
     expect(Definition.id).toBe("banyancode.mesh")
     expect(Object.keys(Definition.methods).sort()).toEqual([
+      "background",
       "limits.get",
       "limits.set",
       "sessionStatus",
@@ -285,7 +286,11 @@ describe("mesh tools on a real plugin database", () => {
 
   test("mesh RPC status reports the session tree", async () => {
     await withHarness(async (harness) => {
-      const rpc = handlers({ mesh: harness.mesh })
+      const stopped: string[] = []
+      const rpc = handlers({
+        mesh: harness.mesh,
+        background: (sessionID) => Effect.sync(() => void stopped.push(sessionID)),
+      })
       const rpcContext = { error: () => { throw new Error("unexpected rpc error") } } as never
       const status = await Effect.runPromise(rpc.status({}, rpcContext))
       expect(status.roots).toHaveLength(1)
@@ -298,6 +303,9 @@ describe("mesh tools on a real plugin database", () => {
       const limits = await Effect.runPromise(rpc["limits.get"]({}, rpcContext))
       expect(limits.maxSubagents).toBe(5)
       expect(limits.maxSubagentsLimit).toBe(20)
+
+      await Effect.runPromise(rpc.background({ sessionID: "child" }, rpcContext))
+      expect(stopped).toEqual(["child"])
     })
   })
 })

@@ -13,7 +13,7 @@
  */
 export const isTestFilePath = (input: string): boolean => {
   if (!input) return false
-  // Windows paths come in as `D:\OpenCode\packages\...`; normalize to forward slashes
+  // Windows paths come in with backslashes (v1 repositories); normalize to forward slashes
   // so the regex anchors (which use `/`) match consistently across platforms.
   const path = input.replace(/\\/g, "/")
   if (/\.test\.[^./]+$/.test(path)) return true

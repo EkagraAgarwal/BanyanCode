@@ -11,5 +11,27 @@ const assets =
   process.env.OPENCODE_NODE_ASSETS_DIR ??
   join(dirname(fileURLToPath(import.meta.url)), "..", "assets")
 
-export const runtimeWasmPath = join(assets, "tree-sitter.wasm")
-export const typescriptWasmPath = join(assets, "tree-sitter-typescript.wasm")
+const file = (name: string) => join(assets, name)
+
+export const runtimeWasmPath = file("tree-sitter.wasm")
+export const typescriptWasmPath = file("tree-sitter-typescript.wasm")
+
+/** Grammar family → wasm path, matching `GRAMMAR_ASSET_FILES`. */
+export const grammarWasmPaths: Readonly<Record<string, string>> = {
+  typescript: typescriptWasmPath,
+  javascript: file("tree-sitter-javascript.wasm"),
+  python: file("tree-sitter-python.wasm"),
+  rust: file("tree-sitter-rust.wasm"),
+  go: file("tree-sitter-go.wasm"),
+  c: file("tree-sitter-c.wasm"),
+  cpp: file("tree-sitter-cpp.wasm"),
+  java: file("tree-sitter-java.wasm"),
+  csharp: file("tree-sitter-c_sharp.wasm"),
+  ruby: file("tree-sitter-ruby.wasm"),
+  php: file("tree-sitter-php_only.wasm"),
+  bash: file("tree-sitter-bash.wasm"),
+  json: file("tree-sitter-json.wasm"),
+  zig: file("tree-sitter-zig.wasm"),
+  toml: file("tree-sitter-toml.wasm"),
+  yaml: file("tree-sitter-yaml.wasm"),
+}

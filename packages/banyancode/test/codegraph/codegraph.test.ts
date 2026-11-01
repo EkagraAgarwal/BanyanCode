@@ -247,17 +247,17 @@ describe("codegraph parsing backends", () => {
     })
   })
 
-  test("a missing grammar degrades to the regex parser instead of failing the build", async () => {
+  test("every vendored grammar parses without degrading to the regex parser", async () => {
     await withTemp(async (directory) => {
-      // Python is not vendored yet (see the migration report); the parse must
-      // record `tree-sitter unavailable: grammar wasm missing: ...` and keep
-      // going with the regex parser.
+      // Python used to be the missing-grammar fixture; all 16 grammars are
+      // vendored now, so the tree-sitter backend must parse it cleanly.
       await write(directory, "py/app.py", "def greet(name):\n    return name\n")
       await withServices(directory, ({ repo, indexer }) =>
         Effect.gen(function* () {
           const result = yield* indexer.index({ root: directory, force: true })
           expect(result.indexed).toBe(1)
-          expect(result.parseErrors[0]?.cause).toContain("grammar wasm missing")
+          expect(result.skippedByReason.parseFailure).toBe(0)
+          expect(result.parseErrors).toEqual([])
           const nodes = yield* repo.queryNodes({ function: "greet", kind: "function" })
           expect(nodes).toHaveLength(1)
         }),

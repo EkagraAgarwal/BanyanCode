@@ -1,10 +1,9 @@
 /**
  * Fresh v2 schema for the BanyanCode plugin database.
  *
- * Ported from the v1 drizzle declarations in
- * `D:\OpenCode\packages\core\src\banyancode\*.sql.ts` and the v1 migrations in
- * `D:\OpenCode\packages\core\src\database\migration\`. Memory tables are
- * deliberately absent (the memory feature is dropped in v2).
+ * Ported from the v1 drizzle declarations (`packages/core/src/banyancode/*.sql.ts`
+ * in v1) and the v1 migrations (`packages/core/src/database/migration/`).
+ * Memory tables are deliberately absent (the memory feature is dropped in v2).
  *
  * The list is ordered and append-only: never edit a shipped migration, add a
  * new one. `applyMigrations` records each id in `banyancode_migrations`.
