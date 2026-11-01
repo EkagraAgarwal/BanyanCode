@@ -1,5 +1,6 @@
 import type { Context } from "@opencode/plugin/effect/plugin"
 import { Effect, Ref, Result } from "effect"
+import { update as updateConfig, type WriteTarget } from "../config/writer.js"
 import { runningForRoot } from "./limits.js"
 import { lastAssistantText } from "./review.js"
 import type { MeshService } from "./service.js"
@@ -168,6 +169,12 @@ const spawnSwarm = (deps: {
     return { created, failures }
   })
 
+/** Same target shape `src/system/index.ts:writeTarget` uses. */
+const writeTarget = (ctx: Context): WriteTarget => ({
+  directory: ctx.location.directory,
+  projectRoot: ctx.location.project.canonical || ctx.location.project.directory,
+})
+
 export const registerCommands = (
   ctx: Context,
   deps: { readonly mesh: MeshService; readonly sessions: SessionPort },
@@ -184,6 +191,19 @@ export const registerCommands = (
 
             if (text.length === 0) {
               const next = yield* deps.mesh.setSwarmMode(!limits.swarmMode)
+              // v1 persisted the toggle in `banyancode.json`. The in-memory
+              // flag alone resets on the next plugin activation.
+              yield* Effect.promise(() =>
+                updateConfig(writeTarget(ctx), { banyancode_swarm_mode: next.swarmMode }),
+              ).pipe(
+                Effect.catchCause(() =>
+                  deps.sessions.synthetic({
+                    sessionID: input.sessionID,
+                    text: "Swarm mode changed for this session, but writing banyancode.json failed.",
+                    description: "Swarm mode",
+                  }),
+                ),
+              )
               yield* deps.sessions.synthetic({
                 sessionID: input.sessionID,
                 text: `Swarm mode is now ${next.swarmMode ? "on" : "off"}.`,

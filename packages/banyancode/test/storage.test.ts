@@ -64,6 +64,49 @@ describe("banyancode storage", () => {
     })
   })
 
+  test("non-stable channels add a db suffix; latest/beta/prod and the override do not", async () => {
+    await withTemp(async (directory) => {
+      const latest = resolveProjectDbPath({ projectRoot: directory, env: {}, channel: "latest" })
+      expect(latest.filename).toMatch(/^banyancode-[a-f0-9]{12}\.db$/)
+      expect(latest.channelSuffix).toBe("")
+
+      const dev = resolveProjectDbPath({ projectRoot: directory, env: {}, channel: "dev" })
+      expect(dev.filename).toMatch(/^banyancode-[a-f0-9]{12}-dev\.db$/)
+      expect(dev.channelSuffix).toBe("-dev")
+
+      const next = resolveProjectDbPath({ projectRoot: directory, env: {}, channel: "26.08.11-dev.abc1234" })
+      expect(next.filename).toMatch(/^banyancode-[a-f0-9]{12}-26\.08\.11-dev\.abc1234\.db$/)
+
+      const sanitized = resolveProjectDbPath({ projectRoot: directory, env: {}, channel: "dev/local" })
+      expect(sanitized.filename.endsWith("-dev-local.db")).toBe(true)
+
+      const disabled = resolveProjectDbPath({
+        projectRoot: directory,
+        env: { BANYANCODE_DISABLE_CHANNEL_DB: "1" },
+        channel: "dev",
+      })
+      expect(disabled.filename).toMatch(/^banyancode-[a-f0-9]{12}\.db$/)
+    })
+  })
+
+  test("Storage.open accepts a channel and opens the suffixed path", async () => {
+    await withTemp(async (directory) => {
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const storage = yield* Storage.open({
+              projectRoot: directory,
+              env: { BANYANCODE_PROJECT_DB_DIR: directory },
+              channel: "dev",
+            })
+            return storage.path
+          }),
+        ),
+      )
+      expect(result.endsWith("-dev.db")).toBe(true)
+    })
+  })
+
   test("migrations apply once and are idempotent", async () => {
     await withTemp(async (directory) => {
       const resolved = resolveProjectDbPath({ projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } })

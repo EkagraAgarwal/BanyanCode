@@ -4,11 +4,12 @@ import { Cause, Effect, Schema, type Scope } from "effect"
 import { register as registerAgents } from "./agents/index.js"
 import { register as registerCache } from "./cache/index.js"
 import { makeServices as makeCodegraphServices, register as registerCodegraph } from "./codegraph/index.js"
-import { BanyanConfig, summarize } from "./config/index.js"
+import { BanyanConfig, setConfigUpdatedListener, summarize, updateConfig, type Loaded } from "./config/index.js"
 import { register as registerGateway } from "./gateway/index.js"
 import { empty as emptyCodegraphPort, make as makeCodegraphPort } from "./integration/codegraph-port.js"
 import { make as makeCodegraphQuery } from "./integration/codegraph-query.js"
 import { register as registerIntel } from "./intel/index.js"
+import { register as registerLsp } from "./lsp/index.js"
 import { register as registerMesh } from "./mesh/index.js"
 import { Definition, Status } from "./rpc.js"
 import { Storage } from "./storage/index.js"
@@ -31,6 +32,25 @@ import { register as registerYolo } from "./yolo/index.js"
  * instead of aborting the plugin.
  */
 
+/**
+ * Body of `banyancode.config.update` (v1 `PATCH /global/banyan-config`).
+ * Exported so the RPC body can be tested without booting every workstream.
+ */
+export const handleConfigUpdate = (
+  config: BanyanConfig.Interface,
+  target: { readonly directory: string; readonly projectRoot: string },
+  input: { readonly config: Readonly<Record<string, unknown>>; readonly scope?: "global" | "project" },
+): Effect.Effect<Loaded> =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() =>
+      updateConfig(
+        { scope: input.scope ?? "global", directory: target.directory, projectRoot: target.projectRoot },
+        input.config,
+      ),
+    )
+    return yield* config.get()
+  })
+
 /** Logs a workstream failure and keeps booting; interrupts still propagate. */
 const isolated = (name: string, effect: Effect.Effect<void, never, Scope.Scope>) =>
   effect.pipe(
@@ -47,7 +67,11 @@ export default Plugin.define({
   id: PLUGIN_ID,
   effect: Effect.fn(function* (ctx) {
     const projectRoot = ctx.location.project.canonical || ctx.location.project.directory
-    const storage = yield* Storage.open({ projectRoot }).pipe(Effect.orDie)
+    // v1 parity: `BANYANCODE_ENABLE=0` disables every BanyanCode tool, policy
+    // and feature. Only the status surface stays: it is what a user checks to
+    // confirm the plugin loaded and why everything else is off.
+    const enabled = process.env.BANYANCODE_ENABLE !== "0"
+    const storage = yield* Storage.open({ projectRoot, channel: ctx.app.channel }).pipe(Effect.orDie)
     const config = BanyanConfig.make({ directory: ctx.location.directory, projectRoot })
     const deps = { storage, config }
 
@@ -73,21 +97,34 @@ export default Plugin.define({
       } satisfies Status
     })
 
-    yield* ctx.rpc
+    const describeConfig = (loaded: Loaded) => ({
+      config: loaded.config,
+      sources: loaded.sources.map((source) => source.file),
+      unknownKeys: loaded.unknownKeys.map((entry) => ({ file: entry.file, keys: [...entry.keys] })),
+      errors: loaded.errors.map((entry) => ({ file: entry.file, message: entry.message })),
+    })
+
+    const rpc = yield* ctx.rpc
       .register(Definition, {
         status: () => status,
-        "config.get": () =>
-          config.get().pipe(
-            Effect.map((loaded) => ({
-              config: loaded.config,
-              sources: loaded.sources.map((source) => source.file),
-              unknownKeys: loaded.unknownKeys.map((entry) => ({ file: entry.file, keys: [...entry.keys] })),
-              errors: loaded.errors.map((entry) => ({ file: entry.file, message: entry.message })),
-            })),
+        "config.get": () => config.get().pipe(Effect.map(describeConfig)),
+        "config.update": (input) =>
+          handleConfigUpdate(config, { directory: ctx.location.directory, projectRoot }, input).pipe(
+            Effect.map(describeConfig),
           ),
       })
       // ctx.rpc.register has an `unknown` error channel (spike finding).
       .pipe(Effect.orDie)
+
+    // Bridge the writer's process-local `config.updated` notification to the
+    // plugin RPC event (host emits it as `rpc.banyancode.config.updated`).
+    {
+      const context = yield* Effect.context<never>()
+      setConfigUpdatedListener((event) => {
+        Effect.runForkWith(context)(rpc.events.emit("config.updated", event))
+      })
+      yield* Effect.addFinalizer(() => Effect.sync(() => setConfigUpdatedListener(undefined)))
+    }
 
     const execute = (): Effect.Effect<Tool.Result<typeof Status>, Tool.Error> =>
       status.pipe(
@@ -114,6 +151,10 @@ export default Plugin.define({
         })
       })
       .pipe(Effect.orDie)
+
+    // `BANYANCODE_ENABLE=0`: status RPC + `banyan_status` tool only. No graph,
+    // no policy, no mesh, no verifier, no telemetry, no commands.
+    if (!enabled) return
 
     // 3a — build the graph repository once; intel/gateway reuse the same instance.
     const codegraph = yield* makeCodegraphServices(ctx, deps).pipe(
@@ -154,5 +195,6 @@ export default Plugin.define({
     yield* isolated("mesh", registerMesh(ctx, deps))
     // After mesh: the persisted /max-subagents command replaces the in-memory one.
     yield* isolated("system", registerSystem(ctx, deps))
+    yield* isolated("lsp", registerLsp(ctx, deps))
   }),
 })

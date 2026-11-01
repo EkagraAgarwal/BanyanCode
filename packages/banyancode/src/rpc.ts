@@ -60,6 +60,27 @@ export const ConfigGetOutput = Schema.Struct({
 export type ConfigGetOutput = typeof ConfigGetOutput.Type
 
 /**
+ * `PATCH /global/banyan-config` parity: a top-level patch of `banyancode.json`.
+ * `undefined` in the record skips a key; `null` deletes it (same contract as
+ * the writer). The response is the re-read effective config, so callers never
+ * have to issue a second `config.get`.
+ */
+export const ConfigUpdateInput = Schema.Struct({
+  config: Schema.Record(Schema.String, Schema.Unknown),
+  scope: Schema.optional(Schema.Literals(["global", "project"])),
+}).annotate({ identifier: "Banyan.ConfigUpdateInput" })
+
+export type ConfigUpdateInput = typeof ConfigUpdateInput.Type
+
+/** Payload of the v1 `banyancode.config.updated` event (host prefixes `rpc.banyancode.`). */
+export const ConfigUpdated = Schema.Struct({
+  scope: Schema.optional(Schema.Literals(["global", "project"])),
+  file: Schema.optional(Schema.String),
+}).annotate({ identifier: "Banyan.ConfigUpdated" })
+
+export type ConfigUpdated = typeof ConfigUpdated.Type
+
+/**
  * Plugin-owned RPC surface. Workstreams 3a-3h add their namespaces here
  * (`codegraph.*`, `intel.*`, `verify.*`, `mesh.*`, ...); events are emitted as
  * `rpc.banyancode.*` by the host.
@@ -75,6 +96,12 @@ export const Definition = Rpc.define({
       input: Schema.Struct({}),
       output: ConfigGetOutput,
     },
+    "config.update": {
+      input: ConfigUpdateInput,
+      output: ConfigGetOutput,
+    },
   },
-  events: {},
+  events: {
+    "config.updated": { schema: ConfigUpdated },
+  },
 })

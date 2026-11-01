@@ -2,6 +2,8 @@ import type { Context } from "@opencode/plugin/effect/plugin"
 import { Effect, type Scope, Schedule, Stream } from "effect"
 import type { Loaded } from "../config/index.js"
 import { apply, loadVariants, snapshot, type AgentState } from "./apply.js"
+import { makeGoalTool } from "./goal-tool.js"
+import { register as registerOrchestration } from "./orchestration.js"
 
 export interface AgentDeps {
   readonly config: { readonly get: () => Effect.Effect<Loaded> }
@@ -65,6 +67,17 @@ export const register = (ctx: Context, deps: AgentDeps): Effect.Effect<void, nev
     yield* ctx.agent.transform((editor) => {
       if (state.current !== undefined) apply(editor, state.current)
     })
+
+    // v1 parity: the orchestration policy block is appended for every agent,
+    // rendered from the current `banyancode_max_subagents`.
+    yield* registerOrchestration(ctx, deps)
+
+    // v1 `goal` tool bridged onto v2's native goal mode.
+    yield* ctx.tool
+      .transform((editor) => {
+        editor.add(makeGoalTool(ctx))
+      })
+      .pipe(Effect.orDie)
 
     yield* ctx.event.subscribe({ types: ["config.updated", "model.updated", "filesystem.changed"] }).pipe(
       Stream.filter((event) => event.type !== "filesystem.changed" || isBanyanConfig(event.data.file)),

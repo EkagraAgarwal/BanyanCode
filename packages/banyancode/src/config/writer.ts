@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { Option, Schema } from "effect"
 import { withFileLock } from "../storage/lock.js"
 import { patchTopLevel, remove, set } from "./edit.js"
+import { notifyConfigUpdated } from "./events.js"
 import { globalConfigDir, load, type Loaded } from "./loader.js"
 import { parseJsonc } from "./jsonc.js"
 import { Info, type Info as BanyanConfigInfo } from "./schema.js"
@@ -137,6 +138,9 @@ const lockedEdit = async (
     const current = await readText(file)
     const next = edit(current)
     if (next !== current) await writeAtomic(file, next.endsWith("\n") ? next : `${next}\n`)
+    // v1 parity: every config write publishes `banyancode.config.updated`, so
+    // other clients refresh without polling. Only after a landed write.
+    if (next !== current) notifyConfigUpdated({ scope: target.scope ?? "global", file })
     return readBack(target, file, next)
   })
 }
@@ -278,6 +282,7 @@ export const saveAgent = async (target: WriteTarget, input: AgentSaveInput): Pro
     const body = input.prompt ? [input.prompt] : [`# ${input.name}`, "", input.description ?? ""]
     await writeAtomic(filePath, [...frontmatter, ...body].filter(Boolean).join("\n"))
   })
+  notifyConfigUpdated({ scope: "global", file: filePath })
   return { ok: true, filePath }
 }
 

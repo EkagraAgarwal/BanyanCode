@@ -3,6 +3,7 @@ import { Effect, type Scope } from "effect"
 import type { Interface as ConfigInterface } from "../config/service.js"
 import type { Interface as StorageInterface } from "../storage/service.js"
 import type { CodegraphPort } from "./codegraph-port.js"
+import { registerCommands } from "./commands.js"
 import { makeEditPlanner } from "./edit-planner.js"
 import { Definition, handlers } from "./rpc.js"
 import { make } from "./service.js"
@@ -42,9 +43,13 @@ export const register = (ctx: Context, deps: IntelDeps): Effect.Effect<void, nev
     yield* ctx.rpc
       .register(Definition, handlers({ port: deps.codegraph, intel, planner }))
       .pipe(Effect.orDie)
+
+    // `/repository-*` slash commands (v1 command templates).
+    yield* registerCommands(ctx)
   })
 
 export { Definition as IntelRpcDefinition, NAMES as INTEL_TOOL_NAMES }
+export { REPOSITORY_COMMANDS, REPOSITORY_COMMAND_NAMES, commandText, registerCommands } from "./commands.js"
 export type { CodegraphPort } from "./codegraph-port.js"
 export { make as makeRepositoryIntelligence }
 export type { Interface as RepositoryIntelligence } from "./service.js"

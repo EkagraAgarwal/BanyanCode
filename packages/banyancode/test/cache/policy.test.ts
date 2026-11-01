@@ -97,3 +97,70 @@ describe("prompt cache policy", () => {
     expect(oldOpenAI.body.prompt_cache_key).toBe("ses_abc")
   })
 })
+
+describe("banyancode_tool_search_defer (v1 port)", () => {
+  const tools = [
+    { type: "function", name: "shell", parameters: {} },
+    { type: "function", name: "repository_query", parameters: {} },
+    { type: "function", name: "preflight", parameters: {} },
+  ]
+
+  test("default off leaves the tool record byte-identical", () => {
+    const plan = planBody({
+      config: config(),
+      providerID: "openai",
+      modelID: "gpt-5.6",
+      sessionID: "ses_abc",
+      body: { tools },
+    })
+    expect(plan.body.tools).toEqual(tools)
+    expect(plan.toolSearchDeferred).toEqual([])
+  })
+
+  test("eager tools stay inline; the rest defer and a tool_search entry is added", () => {
+    const plan = planBody({
+      config: config({ banyancode_tool_search_defer: true }),
+      providerID: "openai",
+      modelID: "gpt-5.6",
+      sessionID: "ses_abc",
+      body: { tools },
+    })
+    const wire = plan.body.tools as { type: string; name?: string; defer_loading?: boolean }[]
+    expect(wire.find((tool) => tool.name === "shell")!.defer_loading).toBeUndefined()
+    expect(wire.find((tool) => tool.name === "repository_query")!.defer_loading).toBe(true)
+    expect(wire.at(-1)).toEqual({ type: "tool_search" })
+    expect(plan.toolSearchDeferred).toEqual(["repository_query", "preflight"])
+  })
+
+  test("provider and model gates stay closed off-openai and pre-5.4", () => {
+    const anthropic = planBody({
+      config: config({ banyancode_tool_search_defer: true }),
+      providerID: "anthropic",
+      modelID: "gpt-5.6",
+      sessionID: "ses_abc",
+      body: { tools },
+    })
+    expect(anthropic.body.tools).toEqual(tools)
+
+    const older = planBody({
+      config: config({ banyancode_tool_search_defer: true }),
+      providerID: "openai",
+      modelID: "gpt-5.3",
+      sessionID: "ses_abc",
+      body: { tools },
+    })
+    expect(older.body.tools).toEqual(tools)
+  })
+
+  test("a real tool_search entry is not duplicated", () => {
+    const plan = planBody({
+      config: config({ banyancode_tool_search_defer: true }),
+      providerID: "openai",
+      modelID: "gpt-6",
+      sessionID: "ses_abc",
+      body: { tools: [...tools, { type: "tool_search" }] },
+    })
+    const wire = plan.body.tools as { type: string }[]
+    expect(wire.filter((tool) => tool.type === "tool_search")).toHaveLength(1)
+  })
+})

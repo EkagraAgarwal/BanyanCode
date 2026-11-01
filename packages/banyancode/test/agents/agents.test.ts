@@ -142,6 +142,8 @@ describe("banyancode agents", () => {
     const { agents } = materialize(state())
     const rules = agents.get("build")!.permissions
     expect(lastEffect(rules, "question")).toBe("allow")
+    // v1 `goal` tool stays usable for primary agents.
+    expect(lastEffect(rules, "goal")).toBe("allow")
     expect(lastEffect(rules, "subagent", "coder")).toBe("allow")
     expect(lastEffect(rules, "subagent", "explore")).toBe("allow")
     expect(lastEffect(rules, "subagent", "reviewer")).toBe("deny")
@@ -152,6 +154,10 @@ describe("banyancode agents", () => {
 
   test("explore, scout and reviewer are read-only after the deny", () => {
     const { agents } = materialize(state())
+    for (const id of ["explore", "scout"]) {
+      // A read-only subagent never owns a goal loop (v1 explore denied `goal` too).
+      expect(lastEffect(agents.get(id)!.permissions, "goal")).toBe("deny")
+    }
     for (const id of ["explore", "scout", "reviewer"]) {
       const rules = agents.get(id)!.permissions
       expect(lastEffect(rules, "edit", "src/a.ts")).toBe("deny")
@@ -397,6 +403,21 @@ describe("banyancode agent registration", () => {
               }),
             ),
         },
+        // Orchestration policy hook + `goal` tool registration.
+        tool: {
+          transform: (callback: (editor: { namespace: () => void; add: () => void }) => void) =>
+            Effect.sync(() => {
+              callback({ namespace: () => {}, add: () => {} })
+              return { dispose: Effect.void }
+            }),
+        },
+        session: {
+          hook: () => Effect.sync(() => ({ dispose: Effect.void })),
+        },
+        rpc: Object.assign(() => ({ get: () => Effect.succeed(null) }), {
+          register: () => Effect.sync(() => ({ dispose: Effect.void, events: { emit: () => Effect.void } })),
+        }),
+        permission: { assert: () => Effect.void },
       } as unknown as Context
 
       await Effect.runPromise(

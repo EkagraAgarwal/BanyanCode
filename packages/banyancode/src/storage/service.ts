@@ -30,6 +30,8 @@ export class Service extends Context.Service<Service, Interface>()("@banyancode/
 export interface OpenInput {
   readonly projectRoot: string
   readonly env?: NodeJS.ProcessEnv
+  /** Host installation channel (`ctx.app.channel`); non-stable channels isolate plugin data. */
+  readonly channel?: string
 }
 
 /**

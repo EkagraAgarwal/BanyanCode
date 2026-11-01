@@ -9,6 +9,6 @@ test("server entry defines the built-in banyancode plugin", () => {
 
 test("rpc definition owns the banyancode namespace and skeleton methods", () => {
   expect(Definition.id).toBe("banyancode")
-  expect(Object.keys(Definition.methods)).toEqual(["status", "config.get"])
-  expect(Object.keys(Definition.events)).toEqual([])
+  expect(Object.keys(Definition.methods)).toEqual(["status", "config.get", "config.update"])
+  expect(Object.keys(Definition.events)).toEqual(["config.updated"])
 })

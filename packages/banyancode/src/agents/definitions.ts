@@ -140,6 +140,8 @@ export const definitions = (maxSubagents: number): readonly AgentSpec[] => {
       // v1 parity: no custom prompt; the provider prompt applies.
       permissions: [
         allow("question"),
+        // v1 `goal` tool (v2 default permissions would otherwise ask).
+        allow("goal"),
         deny("subagent"),
         allow("subagent", "explore"),
         allow("subagent", "scout"),
@@ -249,6 +251,7 @@ export const definitions = (maxSubagents: number): readonly AgentSpec[] => {
         allow("subagent", "reviewer"),
         allow("todowrite"),
         allow("question"),
+        allow("goal"),
         ...allows(BANYAN_TOOLS),
         ...allows(MESH_TOOLS),
       ],

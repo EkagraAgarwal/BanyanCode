@@ -1,7 +1,7 @@
-export * as UsageRpc from "./rpc.js"
-
 import { Rpc } from "@opencode/schema/rpc"
 import { Schema } from "effect"
+import { AgentEfficiencyEvent, AgentReport } from "./agent-telemetry.js"
+import { ProviderUsageList } from "./provider-usage.js"
 import { TokenUsageEvent } from "./tokens.js"
 
 const ToolUsageRow = Schema.Struct({
@@ -18,10 +18,33 @@ const TokenUsageResult = Schema.Struct({
   events: Schema.Array(TokenUsageEvent),
 }).annotate({ identifier: "Banyan.TokenUsageResult" })
 
+const ProviderRefreshInput = Schema.Struct({
+  providerID: Schema.optional(
+    Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9._-]+$/), Schema.isMaxLength(128)),
+  ),
+}).annotate({ identifier: "Banyan.ProviderUsageRefreshInput" })
+
+const AgentFilterInput = Schema.Struct({
+  runID: Schema.optional(Schema.String),
+  sessionID: Schema.optional(Schema.String),
+  since: Schema.optional(Schema.Number),
+  limit: Schema.optional(Schema.Number),
+}).annotate({ identifier: "Banyan.AgentTelemetryFilter" })
+
+const AgentExportResult = Schema.Struct({
+  jsonl: Schema.String,
+  count: Schema.Number,
+  events: Schema.Array(AgentEfficiencyEvent),
+}).annotate({ identifier: "Banyan.AgentTelemetryExport" })
+
 /**
- * Plugin-owned usage surface. Mirrors v1's `GET /global/tool-usage` payload
- * (`toolUsage`) and exposes the token-attribution ring (`tokenUsage`).
- * Provider quota snapshots stay in workstream 3g.
+ * Plugin-owned usage surface. Mirrors v1's `GET /global/tool-usage`,
+ * `GET /global/provider-usage`, `POST /global/provider-usage/refresh` and the
+ * `banyancode telemetry agent-report|agent-export` commands.
+ *
+ * `providers` / `providersRefresh` are the names the TUI provider panel
+ * already calls; `providerList` / `providerRefresh` are aliases matching the
+ * v1 route names in the parity table.
  */
 export const Definition = Rpc.define({
   id: "banyancode.usage",
@@ -36,6 +59,37 @@ export const Definition = Rpc.define({
         since: Schema.optional(Schema.Number),
       }),
       output: TokenUsageResult,
+    },
+    providers: {
+      input: Schema.Struct({}),
+      output: ProviderUsageList,
+    },
+    providersRefresh: {
+      input: ProviderRefreshInput,
+      output: ProviderUsageList,
+    },
+    providerList: {
+      input: Schema.Struct({}),
+      output: ProviderUsageList,
+    },
+    providerRefresh: {
+      input: ProviderRefreshInput,
+      output: ProviderUsageList,
+    },
+    "telemetry.agentReport": {
+      input: AgentFilterInput,
+      output: AgentReport,
+    },
+    "telemetry.agentExport": {
+      input: AgentFilterInput,
+      output: AgentExportResult,
+    },
+    "telemetry.agentPrune": {
+      input: Schema.Struct({
+        retentionMs: Schema.optional(Schema.Number),
+        maxEvents: Schema.optional(Schema.Number),
+      }),
+      output: Schema.Struct({ ok: Schema.Boolean }),
     },
   },
   events: {},

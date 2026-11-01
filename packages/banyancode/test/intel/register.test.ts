@@ -26,6 +26,7 @@ const makeContext = () => {
   const tools: Tool.Info[] = []
   const rpc: RegisteredRpc[] = []
   const namespaces: string[] = []
+  const commands: string[] = []
   const ctx = {
     permission: { assert: () => Effect.void },
     tool: {
@@ -48,8 +49,20 @@ const makeContext = () => {
           return { dispose: Effect.void, events: { emit: () => Effect.void } }
         }),
     },
+    // `/repository-*` command registration added by workstream intel.
+    command: {
+      transform: (fn: (editor: { add: (definition: { name: string }) => void }) => void) =>
+        Effect.sync(() =>
+          fn({
+            add: (definition) => {
+              commands.push(definition.name)
+            },
+          }),
+        ),
+    },
+    session: { prompt: () => Effect.void },
   }
-  return { ctx: ctx as unknown as Context, tools, rpc, namespaces }
+  return { ctx: ctx as unknown as Context, tools, rpc, namespaces, commands }
 }
 
 const codegraph = makeFixture({ files: [], nodes: [], edges: [] }).port
@@ -85,6 +98,19 @@ describe("workstream 3c registration", () => {
       expect(tool.options?.namespace).toBeUndefined()
       expect(tool.options?.permission).toBe(tool.name)
     }
+
+    expect(harness.commands.sort()).toEqual(
+      [
+        "repository-query",
+        "repository-explain",
+        "repository-trace",
+        "repository-impact",
+        "repository-tests",
+        "repository-symbols",
+        "repository-relationships",
+        "repository-ownership",
+      ].sort(),
+    )
 
     expect(harness.rpc.length).toBe(1)
     expect(harness.rpc[0]?.definition.id).toBe("banyancode.intel")
