@@ -1,4 +1,5 @@
 import { logo } from "../logo"
+import { cliName } from "../brand"
 
 const reset = "\x1b[0m"
 const bold = "\x1b[1m"
@@ -33,10 +34,10 @@ export function epilogue(input: { readonly session?: SessionEpilogue; readonly u
     ...wordmark("  "),
     "",
     ...(input.updatedVersion
-      ? [`  ${dim}Run ${reset}${bold}opencode${reset}${dim} to use ${reset}${bold}${input.updatedVersion}${reset}`, ""]
+      ? [`  ${dim}Run ${reset}${bold}${cliName}${reset}${dim} to use ${reset}${bold}${input.updatedVersion}${reset}`, ""]
       : []),
     ...(input.session
-      ? [row("Session", input.session.title), row("Continue", `opencode -s ${input.session.sessionID}`), ""]
+      ? [row("Session", input.session.title), row("Continue", `${cliName} -s ${input.session.sessionID}`), ""]
       : []),
   ].join("\n")
 }

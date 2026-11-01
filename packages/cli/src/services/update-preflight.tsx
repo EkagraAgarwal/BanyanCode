@@ -7,6 +7,7 @@ import { OPENCODE_VERSION } from "../version"
 import "@opencode/tui/component/spinner-renderable"
 import { SPINNER_FRAMES } from "@opencode/tui/component/spinner"
 import { go } from "@opencode/tui/logo"
+import { displayName } from "../brand"
 import { setTimeout } from "node:timers/promises"
 import {
   batch,
@@ -22,7 +23,7 @@ import {
   untrack,
 } from "solid-js"
 
-const stages = ["Keeping your session safe", "Starting the new background service", "Loading OpenCode"] as const
+const stages = ["Keeping your session safe", "Starting the new background service", `Loading ${displayName}`] as const
 const stageFloor = 480
 const transitionDuration = 420
 const completionHold = 650
@@ -327,7 +328,7 @@ function UpdateFooter(props: {
   const statusSweep = createSweep()
   const runningHeader = () =>
     phrase(
-      ["OpenCode", colors.muted, true],
+      [displayName, colors.muted, true],
       ["is updating", colors.muted],
       ...(props.from
         ? ([
@@ -339,11 +340,11 @@ function UpdateFooter(props: {
       [OPENCODE_VERSION, colors.accent],
     )
   const completedHeader = phrase(
-    ["OpenCode", colors.muted, true],
+    [displayName, colors.muted, true],
     ["updated to", colors.muted],
     [OPENCODE_VERSION, colors.accent],
   )
-  const pausedHeader = phrase(["OpenCode", colors.muted, true], ["update paused", colors.muted])
+  const pausedHeader = phrase([displayName, colors.muted, true], ["update paused", colors.muted])
   const outcomeStatus = () =>
     props.outcome() === "success"
       ? [...styled("✓", colors.success), ...styled(" Ready", colors.text)]

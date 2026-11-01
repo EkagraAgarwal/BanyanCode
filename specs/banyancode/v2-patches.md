@@ -94,3 +94,63 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/util/src/global.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
 | `packages/util/src/product.ts` | branding | single product identity constant (app, config names, project dir, db, CLI name, env prefix) | — |
 | `packages/util/test/global.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/cli/src/acp/agent.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/acp/error.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/acp/service.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/acp/translate.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/brand.ts` | branding | display name and repo, docs and issue URLs | — |
+| `packages/cli/src/commands/handlers/acp.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/commands/handlers/default.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/commands/handlers/mcp/auth.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/commands/handlers/pair.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/commands/handlers/stats.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/commands/handlers/uninstall.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/commands/handlers/upgrade.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/config/schema.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/mini-host.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/mini.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/server-process.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/services/remote-tunnel.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/services/retained-image.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/services/service-config.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/services/update-preflight.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/services/updater.ts` | branding | upgrades resolve and install npm banyancode; upstream-only WinGet path removed | — |
+| `packages/cli/test/acp/error.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/cli/test/acp/lifecycle.subprocess.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/cli/test/acp/session.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/cli/test/config.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/cli/test/mini.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/cli/test/pair-remote-consent.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/cli/test/retained-image.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/cli/test/stats.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/cli/test/updater-install.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/tui/src/app.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/attention.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/brand.ts` | branding | display name and repo, docs and issue URLs | — |
+| `packages/tui/src/component/dialog-pair.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/component/dialog-update.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/component/error-component.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/component/logo.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/component/terminal-pane.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/config/index.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/context/program-status.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/feature-plugins/sidebar/footer.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/feature-plugins/system/stats.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/logo.ts` | branding | BanyanCode 5x5 block wordmark | — |
+| `packages/tui/src/mini/footer.permission.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/mini/footer.prompt.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/mini/runtime.lifecycle.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/mini/splash.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/routes/session/permission.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/util/error-details.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/util/error.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/util/presentation.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/test/app-lifecycle.test.tsx` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/tui/test/cli/tui/dialog-mcp.test.tsx` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/tui/test/component/dialog-update.test.tsx` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/tui/test/context/program-status.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/tui/test/feature-plugins/sidebar-footer.test.tsx` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/tui/test/mini/blocker.responsive.test.tsx` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/tui/test/mini/footer.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/tui/test/mini/splash.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/tui/test/util/presentation.test.ts` | fix | test expectation follows the BanyanCode text and names | — |

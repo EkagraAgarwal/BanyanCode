@@ -1,4 +1,5 @@
 import type { ProgramStatus, ProgramStatusKind } from "@opentui/core"
+import { Product } from "@opencode/util/product"
 import { createHash } from "node:crypto"
 import { createEffect, onCleanup } from "solid-js"
 
@@ -7,7 +8,7 @@ export type PendingSession = { id: string; title?: string } & (
   | { state: "working" }
 )
 
-const APP = "opencode"
+const APP = Product.app
 const ROOT = ""
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()

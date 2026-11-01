@@ -4,6 +4,7 @@ import { OpenCode, type IntegrationInfo, type IntegrationOAuthMethod, type McpSe
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { Service } from "@opencode/client/effect/service"
+import { cliName, configName } from "../../../brand"
 import { ServerConnection } from "../../../services/server-connection"
 import { selectIntegration, type IntegrationChoice } from "../../../ui/integration-picker"
 import { handlePromptErrors, prompt, requireInteractive } from "../../../ui/prompt"
@@ -29,7 +30,7 @@ const authenticate = Effect.fn("cli.mcp.auth.run")(function* (name?: string) {
   if (!name && choices.length === 0) {
     log.warn("No OAuth-capable MCP servers configured")
     log.info(
-      `Remote MCP servers support OAuth by default. Add one with \`opencode mcp add\` or in opencode.json:\n${exampleConfig}`,
+      `Remote MCP servers support OAuth by default. Add one with \`${cliName} mcp add\` or in ${configName}:\n${exampleConfig}`,
     )
     outro("Done")
     return

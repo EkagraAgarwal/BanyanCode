@@ -1,4 +1,5 @@
 import type { MiniFrontendInput } from "@opencode/tui/mini"
+import { cliName } from "./brand"
 import { createModelPreferenceRepository } from "@opencode/tui/model-preference"
 import fs from "node:fs"
 import { readFile } from "node:fs/promises"
@@ -6,7 +7,7 @@ import path from "node:path"
 import { ReadStream } from "node:tty"
 import { OPENCODE_VERSION } from "./version"
 
-export const INTERACTIVE_INPUT_ERROR = "opencode mini requires a controlling terminal for input"
+export const INTERACTIVE_INPUT_ERROR = `${cliName} mini requires a controlling terminal for input`
 
 export type InteractiveStdin = {
   stdin: NodeJS.ReadStream

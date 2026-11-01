@@ -121,7 +121,7 @@ serviceTest(
         process.platform !== "win32" && Bun.which("lsof") ? `PID ${process.pid} (` : "another process"
       }`,
     )
-    expect(conflict).toContain("opencode service set port <port>")
+    expect(conflict).toContain("banyancode service set port <port>")
     expect(await servers(home)).toEqual([])
     expect(await Bun.file(home.registration).exists()).toBe(false)
 

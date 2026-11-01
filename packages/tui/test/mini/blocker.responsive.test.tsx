@@ -257,7 +257,7 @@ test("roomy rejection keeps the editor and confirmation hints inline", async () 
     expect(confirm.y).toBe(editor.y)
     expect(confirm.x).toBeGreaterThanOrEqual(editor.x + editor.width)
     expect(app.captureCharFrame()).toContain("esc cancel")
-    expect(app.captureCharFrame()).toContain("Tell OpenCode what to do differently")
+    expect(app.captureCharFrame()).toContain("Tell BanyanCode what to do differently")
   } finally {
     app.renderer.destroy()
   }

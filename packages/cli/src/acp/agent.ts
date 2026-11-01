@@ -12,6 +12,7 @@ import {
 import type { OpenCodeClient } from "@opencode/client/effect"
 import { Cause, Deferred, Effect, Ref, type Scope } from "effect"
 import { ACPCapabilities } from "./capabilities"
+import { cliName } from "../brand"
 import { ACPCatalog } from "./catalog"
 import { ACPClient } from "./client"
 import { ACPConnection } from "./connection"
@@ -55,7 +56,7 @@ export const connect = Effect.fnUntraced(function* (client: OpenCodeClient, stre
       )
       return (ctx: HandlerContext<Params>) => run(handler(ctx))
     }
-  const app = agent({ name: "opencode" })
+  const app = agent({ name: cliName })
   const request = <Method extends AgentRequestMethod>(
     method: Method,
     make: (name: string) => AgentRequestHandlersByMethod[Method],

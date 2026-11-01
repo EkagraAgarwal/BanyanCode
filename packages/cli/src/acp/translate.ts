@@ -7,6 +7,7 @@ import { TokenUsage } from "@opencode/schema/token-usage"
 import { ACPChild } from "./child"
 import { ACPCompaction } from "./compaction"
 import { ACPError } from "./error"
+import { displayName } from "../brand"
 import {
   completedToolUpdate,
   errorToolUpdate,
@@ -139,7 +140,7 @@ export function failure(state: TurnState) {
   if (error?.type === "provider.auth") return new ACPError.AuthRequiredError()
   if (error && error.type !== "aborted" && error.type !== "provider.content-filter") {
     return new ACPError.ServiceFailureError({
-      safeMessage: error.message || "OpenCode prompt failed",
+      safeMessage: error.message || `${displayName} prompt failed`,
       service: "session",
       errorName: error.type,
     })

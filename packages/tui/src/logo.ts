@@ -1,6 +1,22 @@
+// Ported from the v1 BanyanCode wordmark (commit "redo logo as 5x5 block
+// letters for legibility"): five-row block glyphs, five characters per glyph.
 export const logo = {
-  left: ["                   ", "█▀▀█ █▀▀█ █▀▀█ █▀▀▄", "█__█ █__█ █^^^ █__█", "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀~~▀"],
-  right: ["             ▄     ", "█▀▀▀ █▀▀█ █▀▀█ █▀▀█", "█___ █__█ █__█ █^^^", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"],
+  left: [
+    "                             ",
+    "█████  ███  █   █ █   █  ███ ",
+    "█   █  █   █ ██  █  █ █   █  ",
+    "█████ █████ █ █ █   █   █   ",
+    "█   █  █   █ █  ██   █   █   ",
+    "█████ █   █ █   █  █  █████ ",
+  ],
+  right: [
+    "                             ",
+    "█   █  ████  ███  ████  █████",
+    "██  █  █     █   █ █   █ █    ",
+    "█ █ █  █     █   █ █   █ █    ",
+    "█  ██  █     █   █ █   █ █    ",
+    "█   █  ████   ███   ███  █████",
+  ],
 }
 
 export const go = {

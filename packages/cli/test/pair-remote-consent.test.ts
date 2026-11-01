@@ -110,9 +110,9 @@ test("pair --remote without a terminal fails before enabling anything, and help 
   expect(pair.exitCode).toBe(1)
   expect(pair.output).toBe(
     [
-      "This will expose your OpenCode server to the internet.",
+      "This will expose your BanyanCode server to the internet.",
       "Traffic is end-to-end encrypted, and access requires your server password.",
-      "To pair locally instead, run `opencode pair` without the --remote flag.",
+      "To pair locally instead, run `banyancode pair` without the --remote flag.",
       "Run interactively or pass --yes to continue.",
       "",
     ].join(os.EOL),
