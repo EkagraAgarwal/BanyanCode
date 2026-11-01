@@ -92,12 +92,12 @@ async function cli(args: string[], env: Record<string, string> = {}, entry = "fi
         cwd: path.join(import.meta.dir, ".."),
         env: {
           ...process.env,
-          OPENCODE_TEST_HOME: root,
+          BANYANCODE_TEST_HOME: root,
           XDG_DATA_HOME: path.join(root, "data"),
           XDG_CONFIG_HOME: path.join(root, "config"),
           XDG_CACHE_HOME: path.join(root, "cache"),
           XDG_STATE_HOME: path.join(root, "state"),
-          OPENCODE_DISABLE_AUTOUPDATE: "1",
+          BANYANCODE_DISABLE_AUTOUPDATE: "1",
           ...env,
         },
         stdout: "pipe",
@@ -113,7 +113,7 @@ async function cli(args: string[], env: Record<string, string> = {}, entry = "fi
       .split("\n")
       .filter((line) => line.startsWith("EVENT "))
       .map((line) => JSON.parse(line.slice(6)))
-    expect(await Bun.file(path.join(root, "state", "opencode", "service-local.json")).exists()).toBe(false)
+    expect(await Bun.file(path.join(root, "state", "banyancode", "service-local.json")).exists()).toBe(false)
     return { stdout, stderr, exitCode, events }
   } finally {
     await rm(root, { recursive: true, force: true })

@@ -11,7 +11,7 @@ it.live("waits for plugin initialization before listing models", () =>
     const tmp = yield* Effect.acquireDisposable(Effect.promise(() => tmpdir("opencode-model-endpoint-")))
     yield* Effect.promise(() =>
       fs.writeFile(
-        path.join(tmp.path, "opencode.json"),
+        path.join(tmp.path, "banyancode.json"),
         JSON.stringify({
           providers: {
             custom: {

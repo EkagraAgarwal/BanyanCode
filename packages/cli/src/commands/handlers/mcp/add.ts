@@ -4,6 +4,7 @@ import { readFile, stat, writeFile } from "node:fs/promises"
 import { Effect, Option } from "effect"
 import { applyEdits, modify } from "jsonc-parser"
 import { Global } from "@opencode/util/global"
+import { Product } from "@opencode/util/product"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 
@@ -39,10 +40,10 @@ export default Runtime.handler(
 
 export async function resolveConfigPath(directory: string) {
   const candidates = [
-    path.join(directory, "opencode.json"),
-    path.join(directory, "opencode.jsonc"),
-    path.join(directory, ".opencode", "opencode.json"),
-    path.join(directory, ".opencode", "opencode.jsonc"),
+    path.join(directory, Product.configNames[0]),
+    path.join(directory, Product.configNames[1]),
+    path.join(directory, Product.projectDir, Product.configNames[0]),
+    path.join(directory, Product.projectDir, Product.configNames[1]),
   ]
   for (const candidate of candidates) {
     if (

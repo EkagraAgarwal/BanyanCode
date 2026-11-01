@@ -25,12 +25,12 @@ it.live("manages schedules through the experimental API when enabled and honors 
     const disabled = path.join(dir, "disabled")
     yield* Effect.promise(async () => {
       await Promise.all([global, enabled, disabled].map((item) => fs.mkdir(item, { recursive: true })))
-      await fs.writeFile(path.join(enabled, "opencode.json"), JSON.stringify({ experimental: { schedules: true } }))
-      await fs.writeFile(path.join(disabled, "opencode.json"), JSON.stringify({ experimental: { schedules: false } }))
+      await fs.writeFile(path.join(enabled, "banyancode.json"), JSON.stringify({ experimental: { schedules: true } }))
+      await fs.writeFile(path.join(disabled, "banyancode.json"), JSON.stringify({ experimental: { schedules: false } }))
     })
     const handler = yield* ServerFetch.make({
       app: { version: "test" },
-      database: { path: path.join(dir, "opencode.db") },
+      database: { path: path.join(dir, "banyancode.db") },
       config: { directory: global, project: true, claude: false },
       models: { fetch: false },
       fs: { filewatcher: false },
@@ -112,7 +112,7 @@ it.live("manages schedules through the experimental API when enabled and honors 
       const askDir = path.join(dir, "ask")
       await fs.mkdir(askDir, { recursive: true })
       await fs.writeFile(
-        path.join(askDir, "opencode.json"),
+        path.join(askDir, "banyancode.json"),
         JSON.stringify({ experimental: { schedules: true }, permission: { shell: "ask" } }),
       )
       const askSession = await api.session.create({ location: { directory: askDir } })
@@ -153,7 +153,7 @@ it.live("ticks due schedules in standalone ServerProcess.start without lifecycle
     const api = OpenCode.make({ baseUrl: server.base, headers: server.headers })
 
     yield* Effect.promise(async () => {
-      await fs.writeFile(path.join(dir, "opencode.json"), JSON.stringify({ experimental: { schedules: true }, permission: { shell: "allow" } }))
+      await fs.writeFile(path.join(dir, "banyancode.json"), JSON.stringify({ experimental: { schedules: true }, permission: { shell: "allow" } }))
       const session = await api.session.create({ location: { directory: dir } })
       const created = await api.experimental.schedule.create({
         sessionID: session.id,
@@ -183,7 +183,7 @@ it.live("elects one scheduler leader when two server processes boot against a du
     const dbPath = path.join(dir, "shared.db")
     const marker = path.join(dir, "runs.txt")
     yield* Effect.promise(() =>
-      fs.writeFile(path.join(dir, "opencode.json"), JSON.stringify({ experimental: { schedules: true }, permission: { shell: "allow" } })),
+      fs.writeFile(path.join(dir, "banyancode.json"), JSON.stringify({ experimental: { schedules: true }, permission: { shell: "allow" } })),
     )
 
     // Seed an active schedule in a short-lived scope so it falls due while no server is running.

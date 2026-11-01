@@ -1,5 +1,6 @@
 import { Argument, Flag, GlobalFlag } from "effect/cli"
 import { Schema } from "effect"
+import { Product } from "@opencode/util/product"
 import { Spec } from "../framework/spec"
 import { Updater } from "../services/updater"
 
@@ -45,7 +46,7 @@ const PermissionParams = {
   ),
 }
 
-const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME : "opencode", {
+const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME : Product.cliName, {
   description: "OpenCode command line interface",
   params: {
     ...ServerParams,

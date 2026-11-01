@@ -161,7 +161,7 @@ describe("boot work", () => {
       const tmp = yield* tmpdirScoped()
       yield* Effect.promise(() => initRepo(tmp.path))
       yield* Effect.promise(() =>
-        Bun.write(path.join(tmp.path, "opencode.json"), JSON.stringify({ providers: { azure: {} } })),
+        Bun.write(path.join(tmp.path, "banyancode.json"), JSON.stringify({ providers: { azure: {} } })),
       )
       const executable = gitExecutable()
       counters.gitSpawns = []

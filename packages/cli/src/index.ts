@@ -1,5 +1,9 @@
 #!/usr/bin/env bun
 
+// Must stay first: rewrites BANYANCODE_* into the internal OPENCODE_* namespace
+// before any other module evaluates and reads process.env.
+import "./brand-env"
+
 import { ensurePluginRuntime } from "@opencode/plugin/runtime"
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { Cause, Effect } from "effect"

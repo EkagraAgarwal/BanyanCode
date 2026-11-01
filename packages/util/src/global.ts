@@ -8,9 +8,9 @@ import { Context, Effect, Layer } from "effect"
 import { roots } from "#global-roots"
 import { Flock } from "./flock.js"
 import { makeGlobalNode } from "./effect/app-node.js"
+import { Product } from "./product.js"
 
-const app = "opencode"
-const { data, cache, config, state, tmp } = roots(app)
+const { data, cache, config, state, tmp } = roots(Product.app)
 
 const paths = {
   get home() {

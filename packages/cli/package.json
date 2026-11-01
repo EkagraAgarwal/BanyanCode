@@ -6,7 +6,8 @@
   "license": "MIT",
   "bin": {
     "opencode": "./bin/opencode.cjs",
-    "opencode2": "./bin/opencode2.cjs"
+    "opencode2": "./bin/opencode2.cjs",
+    "banyancode": "./bin/opencode.cjs"
   },
   "files": [
     "bin"

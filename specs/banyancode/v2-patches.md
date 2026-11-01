@@ -41,3 +41,56 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `.github/workflows/*` | ci | upstream workflows removed; BanyanCode CI replaces them | — |
 | `packages/core/src/plugin/internal.ts` | hook | register `@banyancode/plugin` as a guarded built-in (`post` list + `guarded` set) | — |
 | `packages/core/package.json` | hook | workspace dependency on `@banyancode/plugin` for the built-in import | — |
+| `packages/cli/package.json` | branding | adds the banyancode bin alias | — |
+| `packages/cli/script/build.ts` | branding | build-time CLI name banyancode | — |
+| `packages/cli/src/brand-env.ts` | branding | maps BANYANCODE_* onto the internal OPENCODE_* namespace at CLI entry | — |
+| `packages/cli/src/commands/commands.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
+| `packages/cli/src/commands/handlers/mcp/add.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
+| `packages/cli/src/database-path.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
+| `packages/cli/src/env-map.ts` | branding | maps BANYANCODE_* onto the internal OPENCODE_* namespace at CLI entry | — |
+| `packages/cli/src/index.ts` | branding | imports brand-env first so the env rewrite precedes every module | — |
+| `packages/cli/test/acp/subprocess.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/cli/test/auth.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/cli/test/debug-config.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/cli/test/debug-heap-dump.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/cli/test/debug-paths.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/cli/test/env-map.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/cli/test/fixture/environment.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/cli/test/mcp-auth-choices.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/cli/test/server-connection.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/cli/test/service-lifecycle.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/cli/test/service.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/cli/test/upgrade.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/src/config.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
+| `packages/core/src/config/discovery.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
+| `packages/core/src/plugin/plan.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
+| `packages/core/test/boot-work.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/config/command-subagent.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/config/config.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/config/reload.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/config/watch.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/formatter.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/instance-vanilla.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/location-layer.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/plugin/plan.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/plugin/supervisor-reload.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/session-move.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/subagent-lifetime.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/tool-shell.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/tool-subagent.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/core/test/worktree.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/server/test/artifact.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/server/test/config.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/server/test/fs.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/server/test/generate.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/server/test/media.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/server/test/model.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/server/test/schedule.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/server/test/worktree.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/tui/src/plugin/discovery.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
+| `packages/tui/src/util/config-directories.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
+| `packages/tui/test/plugin-discovery.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/tui/test/theme.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
+| `packages/util/src/global.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
+| `packages/util/src/product.ts` | branding | single product identity constant (app, config names, project dir, db, CLI name, env prefix) | — |
+| `packages/util/test/global.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |

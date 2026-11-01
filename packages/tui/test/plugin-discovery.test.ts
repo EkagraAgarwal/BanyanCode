@@ -3,8 +3,8 @@ import { mergePluginTargets } from "../src/plugin/discovery"
 
 test("deduplicates equivalent local plugin targets while retaining the final source", () => {
   const directory = "/project"
-  const discovered = { entry: "/project/.opencode/plugins/example", install: true, optional: true }
-  const server = { entry: "./.opencode/plugins/example", install: false, optional: true }
+  const discovered = { entry: "/project/.banyancode/plugins/example", install: true, optional: true }
+  const server = { entry: "./.banyancode/plugins/example", install: false, optional: true }
 
   expect(mergePluginTargets([discovered, server], directory)).toEqual([server])
 })
