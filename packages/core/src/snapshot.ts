@@ -2,7 +2,7 @@ export * as Snapshot from "./snapshot.js"
 
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import path from "path"
-import { Clock, Context, Effect, Fiber, Layer, Schema, Scope } from "effect"
+import { Clock, Context, Duration, Effect, Fiber, Layer, Option, Schema, Scope } from "effect"
 import { FileDiff } from "@opencode/schema/file-diff"
 import { FSUtil } from "@opencode/util/fs-util"
 import { Git } from "./git.js"
@@ -125,8 +125,13 @@ const layer = Layer.effect(
       )
     })
 
+    // Tools wait for the start snapshot, so a worktree git cannot capture quickly (a home directory that is itself a
+    // repository, say) would stall the session. Past this budget snapshots stop for the rest of the process. It covers
+    // hashing as well as listing, so it is longer than v1's 15 second listing budget.
+    let overBudget = false
     const capture = Effect.fn("Snapshot.capture")(function* () {
-      if (!enabled()) return undefined
+      if (!enabled() || overBudget) return undefined
+      const budget = Number(process.env.OPENCODE_SNAPSHOT_LIST_TIMEOUT_MS) || 60_000
       return yield* Effect.gen(function* () {
         const repo = yield* repository
         const tree = yield* git.tree.capture({
@@ -138,6 +143,18 @@ const layer = Layer.effect(
         yield* packWhenDue(repo.snapshotRepository)
         return ID.make(tree)
       }).pipe(
+        Effect.timeoutOption(Duration.millis(budget)),
+        Effect.flatMap(
+          Option.match({
+            onSome: (tree) => Effect.succeed<ID | undefined>(tree),
+            onNone: () => {
+              overBudget = true
+              return Effect.logWarning("snapshot capture over budget, skipping snapshots", { budget }).pipe(
+                Effect.as(undefined),
+              )
+            },
+          }),
+        ),
         Effect.catch((cause) => Effect.logWarning("failed to capture snapshot", { cause }).pipe(Effect.as(undefined))),
       )
     })

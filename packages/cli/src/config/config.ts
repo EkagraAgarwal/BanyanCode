@@ -32,6 +32,12 @@ export const layer = Layer.effect(
     const content = process.env.OPENCODE_CLI_CONFIG_CONTENT
       ? Option.getOrUndefined(decode(parseRecord(process.env.OPENCODE_CLI_CONFIG_CONTENT)))
       : undefined
+    // BANYANCODE_TUI_CONFIG names a file that overlays cli.json, as it overlaid tui.json in v1.
+    const override = process.env.OPENCODE_TUI_CONFIG
+      ? Option.getOrUndefined(
+          decode(parseRecord(yield* fs.readFileString(process.env.OPENCODE_TUI_CONFIG).pipe(Effect.orElseSucceed(() => "")))),
+        )
+      : undefined
 
     const readJson = Effect.fnUntraced(function* () {
       const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => undefined))
@@ -62,7 +68,7 @@ export const layer = Layer.effect(
         ),
       )
     const load = Effect.fnUntraced(function* (migration?: Info) {
-      return merge(migration ?? Option.getOrUndefined(decode(yield* readJson())), content)
+      return merge(migration ?? Option.getOrUndefined(decode(yield* readJson())), override, content)
     })
 
     const get = Effect.fn("cli.config.get")(() =>
@@ -104,7 +110,7 @@ export const layer = Layer.effect(
           const config = Option.getOrUndefined(decode(parse(updated, errors, { allowTrailingComma: true })))
           if (errors.length || config === undefined) return yield* Effect.fail(new Error("Invalid CLI config update"))
           yield* write(updated.endsWith("\n") ? updated : updated + "\n")
-          return merge(config, content)
+          return merge(config, override, content)
         }),
       ).pipe(Effect.mapError((cause) => new Error("Failed to update CLI config", { cause }))),
     )

@@ -82,6 +82,56 @@ describe("Snapshot", () => {
     ),
   )
 
+  testEffect(Layer.empty).live("stops capturing for the process once a capture runs over budget", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          const project = path.join(tmp.path, "project")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(project)
+            await fs.writeFile(path.join(project, "tracked.txt"), "one\n")
+            await initGit(project)
+          })
+
+          const git = yield* Git.Service.pipe(Effect.provide(AppNodeBuilder.build(Git.node)))
+          let stuck = false
+          let captures = 0
+          const instrumented = Git.Service.of({
+            ...git,
+            tree: {
+              ...git.tree,
+              capture: (input) => {
+                if (!stuck) return git.tree.capture(input)
+                captures++
+                return Effect.never
+              },
+            },
+          })
+          const layer = AppNodeBuilder.build(Snapshot.node, [
+            Location.node.replace(Location.boundNode(Location.Ref.make({ directory: AbsolutePath.make(project) }))),
+            Global.node.replace(Global.layerWith({ data: tmp.path, config: path.join(tmp.path, "config") })),
+            Git.node.replace(Layer.succeed(Git.Service, instrumented)),
+          ])
+
+          yield* Effect.gen(function* () {
+            const snapshot = yield* Snapshot.Service
+            expect(yield* snapshot.capture()).toBeDefined()
+
+            stuck = true
+            process.env.OPENCODE_SNAPSHOT_LIST_TIMEOUT_MS = "20"
+            expect(yield* snapshot.capture()).toBeUndefined()
+            expect(yield* snapshot.capture()).toBeUndefined()
+            expect(captures).toBe(1)
+          }).pipe(
+            Effect.provide(layer),
+            Effect.ensuring(Effect.sync(() => delete process.env.OPENCODE_SNAPSHOT_LIST_TIMEOUT_MS)),
+          )
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
   testEffect(Layer.empty).live("captures and restores Location-scoped changes", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

@@ -116,6 +116,29 @@ test("merges inline CLI config content over the global config", async () => {
   }
 })
 
+test("overlays the file named by the TUI config variable without writing to it", async () => {
+  await using directory = await tmpdir()
+  const file = path.join(directory.path, "cli.json")
+  const overlay = path.join(directory.path, "overlay.json")
+  await Bun.write(file, JSON.stringify({ animations: true, mouse: true }))
+  await Bun.write(overlay, JSON.stringify({ animations: false }))
+  process.env.OPENCODE_TUI_CONFIG = overlay
+
+  try {
+    const loaded = await run(
+      directory.path,
+      Effect.gen(function* () {
+        const service = yield* Config.Service
+        return yield* service.get()
+      }),
+    )
+    expect(loaded).toMatchObject({ animations: false, mouse: true })
+    expect(await Bun.file(file).json()).toMatchObject({ animations: true })
+  } finally {
+    delete process.env.OPENCODE_TUI_CONFIG
+  }
+})
+
 test("reads the legacy tabs toggle without rewriting it", async () => {
   await using directory = await tmpdir()
   const file = path.join(directory.path, "cli.json")

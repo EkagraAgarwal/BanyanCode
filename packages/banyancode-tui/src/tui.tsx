@@ -290,6 +290,7 @@ export default Plugin.define({
           description: "Re-sync the model catalog for this location",
           group: "BanyanCode",
           palette: true,
+          slash: { name: "refresh-models" },
           async run() {
             const location = context.location
             if (!location) {

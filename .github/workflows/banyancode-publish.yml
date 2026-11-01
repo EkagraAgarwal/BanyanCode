@@ -1,16 +1,11 @@
 # BanyanCode release pipeline (v2 base).
 #
-# TRIGGERS: workflow_dispatch only until the v2 cutover (migration plan Phase 6).
-# Add these at cutover, in this exact shape:
-#
-#   on:
-#     push:
-#       tags: ["v[0-9]*"]      # NOT "v*" — `v*` matched `v1-final` and started a bogus publish
-#       branches: ["dev"]      # dev canary (channel=dev, `-dev.<sha7>`, npm dist-tag `dev`)
-#     workflow_dispatch: ...
-#
-# Never widen the tag glob to `v*`. `tag-release.yml` is the only normal tag
-# creator; it dispatches this workflow explicitly with the resolved version.
+# TRIGGERS:
+#   tag v[0-9]*            publishes that version. NOT "v*": it matched `v1-final`
+#                          and started a bogus publish. Never widen this glob.
+#   branch release-check   builds and packs every target, publishes nothing.
+#   workflow_dispatch      needs this file on the default branch, so it only
+#                          works after the v2 cutover (migration plan Phase 6).
 #
 # Behavior:
 #   dry_run=true (default)  build + pack + `npm pack` inspection, publishes nothing
@@ -24,6 +19,9 @@ name: banyancode-publish
 run-name: "banyancode publish ${{ inputs.version || github.sha }} (${{ inputs.channel }}, dry_run=${{ inputs.dry_run }})"
 
 on:
+  push:
+    tags: ["v[0-9]*"]
+    branches: ["release-check"]
   workflow_dispatch:
     inputs:
       version:
@@ -79,7 +77,16 @@ jobs:
           # tracks the upstream OpenCode release and is rewritten by every merge.
           BASE="$(node -p "require('./script/banyancode/version.json').version")"
           INPUT_VERSION="${{ inputs.version }}"
-          INPUT_CHANNEL="${{ inputs.channel }}"
+          INPUT_CHANNEL="${{ inputs.channel || 'auto' }}"
+          DRY_RUN="${{ inputs.dry_run }}"
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            case "${GITHUB_REF}" in
+              refs/tags/v*)  INPUT_VERSION="${GITHUB_REF_NAME#v}"; DRY_RUN=false ;;
+              *)             INPUT_VERSION="${BASE}-dev.${GITHUB_SHA:0:7}"; DRY_RUN=true ;;
+            esac
+          fi
+          # Publishing has to be asked for: anything unexpected stays a dry run.
+          if [ "${DRY_RUN}" != "false" ]; then DRY_RUN=true; fi
 
           VERSION="${INPUT_VERSION}"
           if [ -z "${VERSION}" ]; then
@@ -112,8 +119,8 @@ jobs:
 
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
-          echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
-          echo "Resolved ${VERSION} (channel ${CHANNEL}, dry_run ${{ inputs.dry_run }})"
+          echo "dry_run=${DRY_RUN}" >> "$GITHUB_OUTPUT"
+          echo "Resolved ${VERSION} (channel ${CHANNEL}, dry_run ${DRY_RUN})"
 
   build:
     name: Build ${{ matrix.target }}
@@ -159,6 +166,7 @@ jobs:
           # build.ts reads the target from OPENCODE_TARGET (there is no --target flag in v2).
           OPENCODE_TARGET: ${{ matrix.target }}
           OPENCODE_RELEASE: "true"
+          BANYANCODE_POSTHOG_KEY: ${{ secrets.BANYANCODE_POSTHOG_KEY }}
         run: bun ./packages/cli/script/build.ts --skip-install
 
       - name: Upload CLI artifact (Unix)
@@ -358,7 +366,7 @@ jobs:
             echo "Release $TAG exists; uploading new assets."
           else
             gh release create "$TAG" --target "$GITHUB_SHA" --draft $PRERELEASE \
-              --generate-notes --title "BanyanCode ${VERSION}" --repo "$GH_REPO"
+              --notes-file script/banyancode/release-notes.md --title "BanyanCode ${VERSION}" --repo "$GH_REPO"
           fi
 
       - name: Upload release assets

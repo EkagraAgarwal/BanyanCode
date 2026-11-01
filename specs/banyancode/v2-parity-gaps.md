@@ -1,5 +1,7 @@
 # BanyanCode v2 parity gaps
 
+**Closed.** Every row below was implemented or replaced, rechecked against the code on 2026-11-01. The known differences that remain are in [v2-progress.md](v2-progress.md). This file is kept as the record of the audit.
+
 Status: **audit snapshot**, 2026-11-01, on `v2-base` at `2daf10b3e1` plus the
 in-flight worktree (other workstreams were actively editing while this audit
 ran). Scope: all 370 rows in `specs/banyancode/v2-parity.md`.
