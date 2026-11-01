@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@banyancode/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "BanyanCode MCP delegation server: outer harnesses hand BanyanCode whole tasks, then check up on them",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts",
+    "./engine": "./src/engine.ts",
+    "./client": "./src/session-client.ts"
+  },
+  "scripts": {
+    "typecheck": "bun check --no-script -p tsconfig.test.json",
+    "typecheck:tsc": "tsc --noEmit -p tsconfig.test.json",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.3.1",
+    "@opencode/client": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native": "catalog:",
+    "typescript": "catalog:"
+  }
+}
