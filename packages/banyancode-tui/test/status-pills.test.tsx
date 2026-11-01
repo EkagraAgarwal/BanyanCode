@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { StatusPills, graphPill } from "../src/components/status/pills"
+import { StatusPills, graphPill, packPills, pillBudget, statusPills } from "../src/components/status/pills"
 import type { CodegraphLive } from "../src/data/live"
 import { codegraphLive, context, meshLive, mount, meshNode, session, systemLive } from "./harness"
 
@@ -11,7 +11,7 @@ async function frameOf(codegraph: CodegraphLive) {
         <StatusPills context={context()} codegraph={codegraph} mesh={meshLive()} system={systemLive()} />
       </box>
     ),
-    { width: 80, height: 4 },
+    { width: 120, height: 4 },
   )
   try {
     return app.captureCharFrame()
@@ -98,7 +98,7 @@ test("status pills render the built graph and live agent count", async () => {
         system={systemLive()}
       />
     ),
-    { width: 80, height: 4 },
+    { width: 120, height: 4 },
   )
 
   try {
@@ -110,9 +110,50 @@ test("status pills render the built graph and live agent count", async () => {
   }
 })
 
-test("status pills render when a graph namespace is unavailable", async () => {
+test("status pills stay silent when a graph namespace is unavailable", async () => {
   const frame = await frameOf(codegraphLive({ availability: "unavailable" }))
-  expect(frame).toContain("Graph: —")
+  expect(frame).not.toContain("Graph")
+  expect(frame.trim()).toBe("")
+})
+
+test("status pills never render a zero count or crowd a narrow footer", async () => {
+  const app = await mount(
+    () => (
+      <box flexDirection="row">
+        <StatusPills
+          context={context()}
+          codegraph={codegraphLive({ readiness: { reason: "ready", autoBuilt: false } })}
+          mesh={meshLive()}
+          system={systemLive()}
+        />
+      </box>
+    ),
+    { width: 44, height: 4 },
+  )
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).not.toContain("0 active")
+    expect(frame.trim()).toBe("")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("pill width budget reserves the host footer and packs in priority order", () => {
+  expect(pillBudget(44)).toBe(0)
+  expect(pillBudget(72)).toBe(0)
+  expect(pillBudget(100)).toBe(28)
+  expect(pillBudget(160)).toBe(88)
+  const pills = statusPills({
+    activeAgents: 2,
+    graph: { label: "Graph: built", severity: "success" },
+    lsp: { enabled: true, connected: 1 },
+    yolo: false,
+    swarm: false,
+  })
+  expect(pills.map((pill) => pill.label)).toEqual(["Graph: built", "● 2 active"])
+  expect(packPills(pills, 20).map((pill) => pill.id)).toEqual(["graph"])
+  expect(packPills(pills, 0)).toEqual([])
 })
 
 test("status pills keep the v1 LSP, yolo and swarm indicators", async () => {
@@ -126,12 +167,12 @@ test("status pills keep the v1 LSP, yolo and swarm indicators", async () => {
           yolo: true,
           lsp: {
             enabled: true,
-            servers: [{ id: "typescript", status: "connected", languages: ["typescript"], inert: false, disabled: false }],
+            servers: [{ id: "typescript", status: "configured", languages: ["typescript"], inert: false, disabled: false }],
           },
         })}
       />
     ),
-    { width: 100, height: 4 },
+    { width: 160, height: 4 },
   )
   try {
     const frame = app.captureCharFrame()
@@ -140,5 +181,55 @@ test("status pills keep the v1 LSP, yolo and swarm indicators", async () => {
     expect(frame).toContain("[swarm]")
   } finally {
     app.renderer.destroy()
+  }
+})
+
+test("session status never renders a zero attention count", async () => {
+  const { SessionStatus } = await import("../src/components/status/session-status")
+  const root = session({ id: "ses_zero", title: "zero" })
+  const app = await mount(() => <SessionStatus context={context({ sessions: [root] })} sessionID="ses_zero" />, {
+    width: 100,
+    height: 4,
+  })
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).not.toContain("need attention")
+    expect(frame.trim()).toBe("")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("session status shows attention only when non-zero and wide enough", async () => {
+  const { SessionStatus } = await import("../src/components/status/session-status")
+  const root = session({ id: "ses_attention", title: "attention" })
+  const base = context({ sessions: [root] })
+  const withPermission = {
+    ...base,
+    data: {
+      ...base.data,
+      session: {
+        ...base.data.session,
+        permission: {
+          ...base.data.session.permission,
+          list: () => [{ id: "perm_1" }, { id: "perm_2" }] as never,
+        },
+      },
+    },
+  } as typeof base
+  const wide = await mount(() => <SessionStatus context={withPermission} sessionID="ses_attention" />, {
+    width: 100,
+    height: 4,
+  })
+  const narrow = await mount(() => <SessionStatus context={withPermission} sessionID="ses_attention" />, {
+    width: 44,
+    height: 4,
+  })
+  try {
+    expect(wide.captureCharFrame()).toContain("▲ 2 need attention")
+    expect(narrow.captureCharFrame().trim()).toBe("")
+  } finally {
+    wide.renderer.destroy()
+    narrow.renderer.destroy()
   }
 })

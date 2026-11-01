@@ -1,5 +1,6 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import { createMemo, Show } from "solid-js"
+import { useTerminalDimensions } from "@opentui/solid"
 import type { CodegraphLive, MeshLive, SystemLive } from "../../data/live"
 import type { AutoUpdateState, BuildState, GraphMeta, ReadinessResult } from "../../data/pending-rpc"
 import type { Availability } from "../../data/rpc"
@@ -12,7 +13,43 @@ export interface GraphPillState {
   readonly severity: PillSeverity
 }
 
+export interface StatusPill {
+  readonly id: "agents" | "lsp" | "graph" | "yolo" | "swarm"
+  readonly label: string
+  readonly severity: PillSeverity
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000
+
+/** Columns the host needs for its own footer hints and the location label. */
+export const HOST_FOOTER_RESERVE = 72
+/** Below this width the plugin yields the footer completely. */
+export const PLUGIN_FOOTER_MIN_WIDTH = HOST_FOOTER_RESERVE
+
+/**
+ * Width budget for plugin pills. The host footer (agent/commands hints) and the
+ * location label share one row with this slot, so the plugin only spends what
+ * is left after reserving the host's side. At narrow widths the budget is 0:
+ * the plugin renders nothing instead of crowding out host text.
+ */
+export function pillBudget(width: number): number {
+  if (!Number.isFinite(width) || width < PLUGIN_FOOTER_MIN_WIDTH) return 0
+  return Math.floor(width) - HOST_FOOTER_RESERVE
+}
+
+/** Greedy left-to-right pack: keeps the highest-priority pills that fit the budget. */
+export function packPills(pills: readonly StatusPill[], budget: number): StatusPill[] {
+  if (budget <= 0) return []
+  const kept: StatusPill[] = []
+  let used = 0
+  for (const pill of pills) {
+    const cost = pill.label.length + (kept.length > 0 ? 2 : 0)
+    if (used + cost > budget) continue
+    kept.push(pill)
+    used += cost
+  }
+  return kept
+}
 
 /**
  * Ported from v1 `status-pills.tsx` (`graphState` memo). Persisted readiness
@@ -73,9 +110,46 @@ export function activePeers(mesh: MeshLive, rootSessionID: string | undefined): 
   return root.children.filter((node) => node.state === "running" || node.state === "retry").length
 }
 
+/** True when the graph state is worth a footer pill. Neutral/unknown is silent. */
+export function graphPillVisible(state: GraphPillState): boolean {
+  return state.severity !== "neutral"
+}
+
+/**
+ * Every pill the footer could show, highest signal first. Zero counts and
+ * off-by-default switches are never included: a fresh session renders no
+ * plugin footer content at all.
+ */
+export function statusPills(input: {
+  readonly activeAgents: number
+  readonly graph: GraphPillState
+  readonly lsp?: { readonly enabled: boolean; readonly connected: number } | undefined
+  readonly yolo?: boolean | undefined
+  readonly swarm?: boolean | undefined
+}): StatusPill[] {
+  const pills: StatusPill[] = []
+  if (graphPillVisible(input.graph)) {
+    pills.push({ id: "graph", label: input.graph.label, severity: input.graph.severity })
+  }
+  if (input.activeAgents > 0) {
+    pills.push({ id: "agents", label: `● ${input.activeAgents} active`, severity: "success" })
+  }
+  if (input.lsp !== undefined) {
+    if (!input.lsp.enabled) pills.push({ id: "lsp", label: "● LSP off", severity: "error" })
+    else if (input.lsp.connected === 0) pills.push({ id: "lsp", label: "● LSP", severity: "warning" })
+  }
+  if (input.yolo === true) pills.push({ id: "yolo", label: "[yolo]", severity: "error" })
+  if (input.swarm === true) pills.push({ id: "swarm", label: "[swarm]", severity: "error" })
+  return pills
+}
+
 /**
  * v1 rendered this cluster at `app_top`. v2 splits it into
  * `prompt.footer.status` (in a session) and `home.footer.status` (home).
+ *
+ * The footer row also carries host hints and the location label, so this
+ * component is width-aware: it reserves the host's columns, drops low-priority
+ * pills that do not fit, and renders nothing when the terminal is narrow.
  */
 export function StatusPills(props: {
   readonly context: Context
@@ -85,6 +159,7 @@ export function StatusPills(props: {
   readonly system: SystemLive
 }) {
   const theme = () => palette(props.context.theme)
+  const dimensions = useTerminalDimensions()
 
   const activeAgents = createMemo(() => {
     const sessionID = props.sessionID
@@ -106,62 +181,36 @@ export function StatusPills(props: {
     }),
   )
 
-  // v1 header status pills: green = connected, yellow = enabled/no server
-  // attached yet, red = disabled, muted = not hydrated yet.
-  const lspConnected = createMemo(
-    () => (props.system.lsp()?.servers ?? []).filter((server) => server.status === "connected" && !server.disabled),
-  )
-  const lspEnabled = createMemo(() => props.system.lsp()?.enabled === true)
-  const lspColor = () => {
-    if (props.system.lsp() === undefined) return theme().muted
-    if (!lspEnabled()) return theme().error
-    return lspConnected().length > 0 ? theme().success : theme().warning
-  }
-
-  const toggleYolo = async () => {
-    const next = !(props.system.yolo() === true)
-    const result = await props.system.setYolo(next)
-    if (!result.ok) {
-      props.context.ui.toast.show({
-        message: result.message ?? "YOLO toggle is not available on this server",
-        variant: "warning",
-      })
+  const lsp = createMemo(() => {
+    const status = props.system.lsp()
+    if (status === undefined) return undefined
+    return {
+      enabled: status.enabled,
+      connected: status.servers.filter((server) => server.status === "connected" && !server.disabled).length,
     }
-  }
+  })
 
-  const agentsColor = () => (activeAgents() > 0 ? theme().success : theme().muted)
+  const candidates = createMemo(() =>
+    statusPills({
+      activeAgents: activeAgents(),
+      graph: graph(),
+      lsp: lsp(),
+      yolo: props.system.yolo(),
+      swarm: props.mesh.swarmMode(),
+    }),
+  )
+
+  const visible = createMemo(() => packPills(candidates(), pillBudget(dimensions().width)))
 
   return (
-    <box flexDirection="row" gap={2} alignItems="center">
-      <box flexDirection="row" flexShrink={0} gap={1}>
-        <text fg={agentsColor()}>●</text>
-        <text fg={theme().muted}>{activeAgents()} active</text>
+    <Show when={visible().length > 0}>
+      <box flexDirection="row" gap={2} alignItems="center" flexShrink={0}>
+        {visible().map((pill) => (
+          <text fg={severityColor(theme(), pill.severity)} flexShrink={0}>
+            {pill.label}
+          </text>
+        ))}
       </box>
-      <box flexDirection="row" flexShrink={0} gap={1}>
-        <text fg={lspColor()}>●</text>
-        <text fg={theme().muted}>LSP</text>
-      </box>
-      <box flexDirection="row" flexShrink={0} gap={1}>
-        <text fg={severityColor(theme(), graph().severity)}>●</text>
-        <text fg={theme().muted}>{graph().label}</text>
-      </box>
-      <text
-        flexShrink={0}
-        fg={props.system.yolo() === true ? theme().error : theme().muted}
-        onMouseUp={() => void toggleYolo()}
-      >
-        [yolo]
-      </text>
-      <text
-        flexShrink={0}
-        fg={props.mesh.swarmMode() === true ? theme().error : theme().muted}
-        onMouseUp={() => void props.mesh.refreshLimits()}
-      >
-        [swarm]
-      </text>
-      <Show when={props.codegraph.autoUpdate()?.status === "draining" && props.codegraph.autoUpdate()!.pending > 0}>
-        <text fg={theme().muted}>·</text>
-      </Show>
-    </box>
+    </Show>
   )
 }

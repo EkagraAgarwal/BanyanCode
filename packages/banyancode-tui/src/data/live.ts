@@ -62,6 +62,18 @@ export interface MeshLive {
   readonly limits: Accessor<MeshLimits | undefined>
   readonly swarmMode: Accessor<boolean | undefined>
   refreshLimits(): Promise<void>
+  setLimits(input: { readonly maxSubagents?: number; readonly swarmMode?: boolean }): Promise<Attempt<MeshLimits>>
+  steer(input: {
+    readonly parentSessionID: string
+    readonly targetAgent: string
+    readonly instruction: string
+    readonly priority?: "low" | "normal" | "high"
+  }): Promise<Attempt<{ readonly delivered: number }>>
+  kill(input: {
+    readonly parentSessionID: string
+    readonly targetAgent: string
+    readonly reason: string
+  }): Promise<Attempt<{ readonly killed: number }>>
 }
 
 export interface LspServerStatus {
@@ -321,7 +333,7 @@ export function createLive(context: Context): Live {
   const [meshAvailability, setMeshAvailability] = createSignal<Availability>("unknown")
   const [meshError, setMeshError] = createSignal<string | undefined>(undefined)
   const [meshRoots, setMeshRoots] = createSignal<ReadonlyMap<string, MeshNode>>(new Map())
-  const [limits, setLimits] = createSignal<MeshLimits | undefined>(undefined)
+  const [limits, setLimitsValue] = createSignal<MeshLimits | undefined>(undefined)
 
   const storeRoots = (roots: readonly MeshNode[]) => {
     const next = new Map(meshRoots())
@@ -345,7 +357,49 @@ export function createLive(context: Context): Live {
     const result = await attempt(() => rpc.mesh["limits.get"]({}))
     if (disposed) return
     setMeshAvailability(availabilityOf(result))
-    if (result.ok) setLimits(result.value)
+    if (result.ok) setLimitsValue(result.value)
+  }
+
+  const setLimits = async (input: {
+    readonly maxSubagents?: number
+    readonly swarmMode?: boolean
+  }): Promise<Attempt<MeshLimits>> => {
+    const result = await attempt(() => rpc.mesh["limits.set"](input))
+    if (disposed) return result.ok ? { ok: true, value: result.value.limits } : result
+    if (!result.ok) {
+      if (!result.unavailable) setMeshError(result.message)
+      return result
+    }
+    setLimitsValue(result.value.limits)
+    setMeshAvailability("available")
+    if (!result.value.ok) {
+      const message = result.value.error ?? "Limits were not saved"
+      setMeshError(message)
+      return { ok: false, unavailable: false, message }
+    }
+    setMeshError(undefined)
+    return { ok: true, value: result.value.limits }
+  }
+
+  const steer = async (input: {
+    readonly parentSessionID: string
+    readonly targetAgent: string
+    readonly instruction: string
+    readonly priority?: "low" | "normal" | "high"
+  }) => {
+    const result = await attempt(() => rpc.mesh.steer(input))
+    if (!disposed && result.ok) setMeshAvailability("available")
+    return result
+  }
+
+  const kill = async (input: {
+    readonly parentSessionID: string
+    readonly targetAgent: string
+    readonly reason: string
+  }) => {
+    const result = await attempt(() => rpc.mesh.kill(input))
+    if (!disposed && result.ok) setMeshAvailability("available")
+    return result
   }
 
   const onMesh = rpc.mesh.events.on("status.updated", (event) => {
@@ -451,7 +505,10 @@ export function createLive(context: Context): Live {
   }
 
   const refreshProviders = async (force = false) => {
-    const result = await attempt(() => (force ? rpc.usage.providersRefresh({}) : rpc.usage.providers({})))
+    // v1 route names (`providerList` / `providerRefresh`) are the server's
+    // shipped methods now; the old `providers`/`providersRefresh` aliases were
+    // a placeholder while the namespace did not exist.
+    const result = await attempt(() => (force ? rpc.usage.providerRefresh({}) : rpc.usage.providerList({})))
     if (disposed) return
     setProvidersAvailability(availabilityOf(result))
     if (!result.ok) {
@@ -518,6 +575,9 @@ export function createLive(context: Context): Live {
       limits,
       swarmMode: () => limits()?.swarmMode,
       refreshLimits,
+      setLimits,
+      steer,
+      kill,
     },
     system: {
       availability: sysAvailability,

@@ -44,8 +44,27 @@ export function CodegraphProgress(props: {
   const [now, setNow] = createSignal(Date.now())
   const [hidden, setHidden] = createSignal(false)
 
-  const timer = setInterval(() => setNow(Date.now()), 1000)
-  onCleanup(() => clearInterval(timer))
+  // Tick only while a build can actually change (running/stuck detection).
+  // An idle or hidden progress widget must cost nothing.
+  let timer: ReturnType<typeof setInterval> | undefined
+  const stopTimer = () => {
+    if (timer === undefined) return
+    clearInterval(timer)
+    timer = undefined
+  }
+  createEffect(
+    on(
+      () => props.codegraph.build()?.status,
+      (status) => {
+        stopTimer()
+        if (status !== "running") return
+        setNow(Date.now())
+        timer = setInterval(() => setNow(Date.now()), 1000)
+      },
+      { defer: false },
+    ),
+  )
+  onCleanup(stopTimer)
 
   const build = createMemo(() => props.codegraph.build())
   const status = createMemo(() => {

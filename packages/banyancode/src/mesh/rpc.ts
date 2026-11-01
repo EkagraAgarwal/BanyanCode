@@ -78,6 +78,19 @@ const limitsOutput = (limits: {
   maxSubagentsDefault: DEFAULT_MAX_SUBAGENTS,
 })
 
+export const SteerInput = Schema.Struct({
+  parentSessionID: Schema.String,
+  targetAgent: Schema.String,
+  instruction: Schema.String.check(Schema.isMaxLength(50_000)),
+  priority: Schema.optional(Schema.Literals(["low", "normal", "high"])),
+})
+
+export const KillInput = Schema.Struct({
+  parentSessionID: Schema.String,
+  targetAgent: Schema.String,
+  reason: Schema.String.check(Schema.isMaxLength(2_000)),
+})
+
 export const Definition = Rpc.define({
   id: "banyancode.mesh",
   methods: {
@@ -103,6 +116,14 @@ export const Definition = Rpc.define({
       input: Schema.Struct({ sessionID: Schema.String }),
       output: Schema.Void,
     },
+    steer: {
+      input: SteerInput,
+      output: Schema.Struct({ delivered: Schema.Number }),
+    },
+    kill: {
+      input: KillInput,
+      output: Schema.Struct({ killed: Schema.Number }),
+    },
   },
   events: {
     "status.updated": {
@@ -125,6 +146,8 @@ export const handlers = (deps: HandlerDeps): RpcHandlers<typeof Definition> => (
   sessionStatus: (input) => deps.mesh.status({ sessionID: input.sessionID, scope: "session" }).pipe(Effect.orDie),
   "limits.get": () => deps.mesh.limits().pipe(Effect.map(limitsOutput), Effect.orDie),
   background: (input) => deps.background(input.sessionID).pipe(Effect.orDie),
+  steer: (input) => deps.mesh.steer(input).pipe(Effect.orDie),
+  kill: (input) => deps.mesh.kill(input).pipe(Effect.orDie),
   "limits.set": (input) =>
     Effect.gen(function* () {
       if (input.maxSubagents !== undefined) {

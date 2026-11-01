@@ -266,6 +266,18 @@ export function meshLive(input: {
     limits: accessor(limits),
     swarmMode: accessor(input.swarmMode),
     refreshLimits: noop,
+    setLimits: async (next) => ({
+      ok: true,
+      value: {
+        maxSubagents: next.maxSubagents ?? limits?.maxSubagents ?? 5,
+        backgroundSubagents: true,
+        swarmMode: next.swarmMode ?? limits?.swarmMode ?? false,
+        maxSubagentsLimit: 20,
+        maxSubagentsDefault: 5,
+      },
+    }),
+    steer: async () => ({ ok: true, value: { delivered: 1 } }),
+    kill: async () => ({ ok: true, value: { killed: 1 } }),
   }
 }
 

@@ -6,14 +6,11 @@
  * a portable definition (`StandardSchemaV1`), because `client.rpc()` only
  * accepts portable schemas while the server definitions are Effect codecs.
  *
- * One namespace is deliberately local because the server side does not exist
- * yet:
+ * One surface intentionally extends a shipped definition:
  *
- * - `banyancode.usage.providers` / `providersRefresh` — v1
- *   `GET /global/provider-usage` and `POST /global/provider-usage/refresh`;
- *   the v2 `banyancode.usage` namespace only ships `toolUsage`/`tokenUsage`.
- *   The extra methods are merged into the real definition, so they stay
- *   `rpc.method_not_found` until the server adds them.
+ * - `banyancode.usage.providers` / `providersRefresh` are legacy aliases kept
+ *   for older servers. The canonical `providerList` / `providerRefresh`
+ *   methods now ship in the real definition, and `live.usage` calls those.
  *
  * Import cost (verified with `bun build --target=bun`): the codegraph/intel
  * definitions pull their computation modules (`node:fs`, `node:path`,
@@ -126,10 +123,14 @@ export type IntelSlice = TypeOf<(typeof IntelDefinition.methods)["explain"]["out
 
 export const MeshRpc: PortableDefinitionOf<typeof MeshDefinition> = portableDefinition(MeshDefinition)
 
+export type MeshSteerInput = TypeOf<(typeof MeshDefinition.methods)["steer"]["input"]>
+export type MeshKillInput = TypeOf<(typeof MeshDefinition.methods)["kill"]["input"]>
+
 export type MeshStatusOutput = TypeOf<(typeof MeshDefinition.methods)["status"]["output"]>
 export type MeshNode = MeshStatusOutput["roots"][number]
 export type MeshTokens = MeshNode["tokens"]
 export type MeshLimits = TypeOf<(typeof MeshDefinition.methods)["limits.get"]["output"]>
+export type MeshLimitsSetOutput = TypeOf<(typeof MeshDefinition.methods)["limits.set"]["output"]>
 
 // ---------------------------------------------------------------------------
 // banyancode.usage — real toolUsage/tokenUsage + v1 provider-usage placeholder

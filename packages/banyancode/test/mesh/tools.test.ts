@@ -151,10 +151,12 @@ describe("mesh RPC surface", () => {
     expect(Definition.id).toBe("banyancode.mesh")
     expect(Object.keys(Definition.methods).sort()).toEqual([
       "background",
+      "kill",
       "limits.get",
       "limits.set",
       "sessionStatus",
       "status",
+      "steer",
     ])
     expect(Object.keys(Definition.events)).toEqual(["status.updated"])
   })
@@ -306,6 +308,30 @@ describe("mesh tools on a real plugin database", () => {
 
       await Effect.runPromise(rpc.background({ sessionID: "child" }, rpcContext))
       expect(stopped).toEqual(["child"])
+    })
+  })
+
+  test("mesh RPC steer and kill reach the mesh service", async () => {
+    await withHarness(async (harness) => {
+      const calls: string[] = []
+      const rpc = handlers({
+        mesh: {
+          ...harness.mesh,
+          steer: (input) => Effect.sync(() => (calls.push(`steer:${input.targetAgent}:${input.instruction}`), { delivered: 1 })),
+          kill: (input) => Effect.sync(() => (calls.push(`kill:${input.targetAgent}:${input.reason}`), { killed: 1 })),
+        },
+        background: () => Effect.void,
+      })
+      const rpcContext = { error: () => { throw new Error("unexpected rpc error") } } as never
+      const steered = await Effect.runPromise(
+        rpc.steer({ parentSessionID: "root", targetAgent: "coder", instruction: "focus" }, rpcContext),
+      )
+      const killed = await Effect.runPromise(
+        rpc.kill({ parentSessionID: "root", targetAgent: "coder", reason: "done" }, rpcContext),
+      )
+      expect(steered.delivered).toBe(1)
+      expect(killed.killed).toBe(1)
+      expect(calls).toEqual(["steer:coder:focus", "kill:coder:done"])
     })
   })
 })

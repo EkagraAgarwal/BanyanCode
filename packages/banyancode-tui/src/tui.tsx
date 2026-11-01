@@ -17,6 +17,13 @@ import { SystemPanel } from "./components/sidebar/system-status"
 import { ToolUsagePanel } from "./components/sidebar/tool-usage"
 import { InspectorPage, InspectorPanel } from "./components/panels/inspector"
 import { cycleView, openView } from "./components/panels/nav"
+import { HomeStrip } from "./components/home/home-strip"
+import {
+  applyVariantCommand,
+  openAgentControl,
+  openAgentModel,
+  openMaxSubagents,
+} from "./components/dialogs/actions"
 
 /**
  * BanyanCode TUI plugin.
@@ -101,6 +108,13 @@ export default Plugin.define({
       render: () => (
         <StatusPills context={context} codegraph={live.codegraph} mesh={live.mesh} system={live.system} />
       ),
+    })
+
+    // v1 home tip + progress overlay → appended below the host home footer so
+    // the host row keeps its width at every terminal size.
+    context.ui.slot({
+      append: "home.footer",
+      render: () => <HomeStrip context={context} codegraph={live.codegraph} />,
     })
 
     // v1 floating codegraph overlay → v2 composer rail.
@@ -235,14 +249,103 @@ export default Plugin.define({
           },
         },
         {
+          // v1 id + slash: the control dialog with steer/kill, not the tab.
           id: "agent.tree",
           title: "Agent tree",
-          description: "Show the session's subagent tree",
+          description: "Steer or kill a subagent in this session's tree",
           group: "BanyanCode",
           palette: true,
           slash: { name: "agent-tree" },
+          async run() {
+            await openAgentControl(context, live)
+          },
+        },
+        {
+          id: "agent.tree.panel",
+          title: "Agent tree: full view",
+          description: "Open the session's subagent tree panel",
+          group: "BanyanCode",
+          palette: true,
           run() {
             openView(context, PANEL.agents)
+          },
+        },
+        {
+          // v1 `agent.model` / `/agent-model`.
+          id: "agent.model",
+          title: "Pick model for orchestrator or subagent",
+          description: "Choose the model that an agent uses",
+          group: "BanyanCode",
+          palette: true,
+          slash: { name: "agent-model" },
+          async run() {
+            await openAgentModel(context, live)
+          },
+        },
+        {
+          // v1 `models.refresh`. v2 exposes no model-refresh RPC; re-syncing
+          // the current location's host catalog is the available equivalent.
+          id: "models.refresh",
+          title: "Refresh models catalog",
+          description: "Re-sync the model catalog for this location",
+          group: "BanyanCode",
+          palette: true,
+          async run() {
+            const location = context.location
+            if (!location) {
+              notify("No location is ready yet", "warning")
+              return
+            }
+            await context.data.location.model.sync(location)
+            notify("Models catalog refreshed", "success")
+          },
+        },
+        {
+          // v1 `yolo.toggle`.
+          id: "yolo.toggle",
+          title: "Toggle YOLO mode",
+          description: "Turn BanyanCode YOLO mode on or off",
+          group: "BanyanCode",
+          palette: true,
+          async run() {
+            if (live.system.yoloAvailability() === "unknown") await live.system.refreshYolo()
+            const next = live.system.yolo() !== true
+            report(await live.system.setYolo(next), `YOLO mode ${next ? "enabled" : "disabled"}`)
+          },
+        },
+        {
+          // v1 `swarm.toggle`.
+          id: "swarm.toggle",
+          title: "Toggle swarm mode",
+          description: "Turn BanyanCode swarm fan-out on or off",
+          group: "BanyanCode",
+          palette: true,
+          async run() {
+            if (live.mesh.limits() === undefined) await live.mesh.refreshLimits()
+            const next = live.mesh.swarmMode() !== true
+            report(await live.mesh.setLimits({ swarmMode: next }), `Swarm mode ${next ? "enabled" : "disabled"}`)
+          },
+        },
+        {
+          // v1 `subagents.max_subagents`.
+          id: "subagents.max_subagents",
+          title: "Set max concurrent subagents",
+          description: "Open the 1-20 max-subagents dialog",
+          group: "BanyanCode",
+          palette: true,
+          async run() {
+            await openMaxSubagents(context, live)
+          },
+        },
+        {
+          // v1 `/thinking` (`/variant` and `/reasoning` are aliases).
+          id: "thinking.set",
+          title: "Set reasoning variant",
+          description: "Read or set the current model's thinking variant",
+          group: "BanyanCode",
+          slash: { name: "thinking", aliases: ["variant", "reasoning"], arguments: true },
+          run(input) {
+            applyVariantCommand(context, input ?? "")
           },
         },
         {
