@@ -2,13 +2,13 @@
 import { expect, test } from "bun:test"
 import { StatusPills, graphPill } from "../src/components/status/pills"
 import type { CodegraphLive } from "../src/data/live"
-import { codegraphLive, context, meshLive, mount, meshNode, session } from "./harness"
+import { codegraphLive, context, meshLive, mount, meshNode, session, systemLive } from "./harness"
 
 async function frameOf(codegraph: CodegraphLive) {
   const app = await mount(
     () => (
       <box flexDirection="row">
-        <StatusPills context={context()} codegraph={codegraph} mesh={meshLive()} />
+        <StatusPills context={context()} codegraph={codegraph} mesh={meshLive()} system={systemLive()} />
       </box>
     ),
     { width: 80, height: 4 },
@@ -95,6 +95,7 @@ test("status pills render the built graph and live agent count", async () => {
             children: [meshNode({ sessionID: "ses_child", state: "running" })],
           }),
         })}
+        system={systemLive()}
       />
     ),
     { width: 80, height: 4 },
@@ -112,4 +113,32 @@ test("status pills render the built graph and live agent count", async () => {
 test("status pills render when a graph namespace is unavailable", async () => {
   const frame = await frameOf(codegraphLive({ availability: "unavailable" }))
   expect(frame).toContain("Graph: —")
+})
+
+test("status pills keep the v1 LSP, yolo and swarm indicators", async () => {
+  const app = await mount(
+    () => (
+      <StatusPills
+        context={context()}
+        codegraph={codegraphLive({ readiness: { reason: "ready", autoBuilt: false } })}
+        mesh={meshLive({ swarmMode: true })}
+        system={systemLive({
+          yolo: true,
+          lsp: {
+            enabled: true,
+            servers: [{ id: "typescript", status: "connected", languages: ["typescript"], inert: false, disabled: false }],
+          },
+        })}
+      />
+    ),
+    { width: 100, height: 4 },
+  )
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("LSP")
+    expect(frame).toContain("[yolo]")
+    expect(frame).toContain("[swarm]")
+  } finally {
+    app.renderer.destroy()
+  }
 })

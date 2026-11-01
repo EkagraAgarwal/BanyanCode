@@ -5,10 +5,15 @@ import { formatMoney } from "../../data/format"
 import { sessionAge } from "../../data/messages"
 import { palette, type Palette } from "../../theme"
 
-export function orderSessions(sessions: readonly SessionInfo[]): SessionInfo[] {
-  return sessions
+export function orderSessions(sessions: readonly SessionInfo[], pinned: readonly string[] = []): SessionInfo[] {
+  const starred = new Set(pinned)
+  const ordered = sessions
     .filter((session) => !session.parentID && session.time.archived === undefined)
     .sort((a, b) => b.time.updated - a.time.updated)
+  return [
+    ...ordered.filter((session) => starred.has(session.id)),
+    ...ordered.filter((session) => !starred.has(session.id)),
+  ]
 }
 
 function dotColor(context: Context, session: SessionInfo, theme: Palette) {
@@ -25,7 +30,18 @@ function dotColor(context: Context, session: SessionInfo, theme: Palette) {
  */
 export function SessionsView(props: { readonly context: Context }) {
   const theme = () => palette(props.context.theme)
-  const sessions = createMemo(() => orderSessions(props.context.data.session.list()))
+  const [pinned, setPinned] = props.context.storage.store("banyancode.sessions", {
+    initial: { pinned: [] as string[] },
+  })
+  const sessions = createMemo(() => orderSessions(props.context.data.session.list(), pinned.pinned))
+  const isPinned = (sessionID: string) => pinned.pinned.includes(sessionID)
+  const togglePin = async (sessionID: string) => {
+    await setPinned((draft) => {
+      draft.pinned = draft.pinned.includes(sessionID)
+        ? draft.pinned.filter((id) => id !== sessionID)
+        : [...draft.pinned, sessionID]
+    })
+  }
   const children = (parentID: string) =>
     props.context.data.session.list().filter((session) => session.parentID === parentID)
 
@@ -34,6 +50,16 @@ export function SessionsView(props: { readonly context: Context }) {
       props.context.location ? { location: { directory: props.context.location.directory } } : {},
     )
     props.context.ui.router.navigate({ type: "session", sessionID: created.id })
+  }
+
+  const rename = async (session: SessionInfo) => {
+    const value = await props.context.ui.dialog.prompt({
+      title: "Rename session",
+      value: session.title ?? "",
+    })
+    if (value === undefined) return
+    await props.context.client.session.update({ sessionID: session.id, title: value })
+    props.context.ui.toast.show({ message: "Session renamed", variant: "success" })
   }
 
   const remove = async (session: SessionInfo) => {
@@ -87,6 +113,12 @@ export function SessionsView(props: { readonly context: Context }) {
                   <box flexDirection="row" gap={1} alignItems="center">
                     <text fg={dotColor(props.context, session, theme())}>●</text>
                     <text
+                      fg={isPinned(session.id) ? theme().accent : theme().muted}
+                      onMouseUp={() => void togglePin(session.id)}
+                    >
+                      {isPinned(session.id) ? "★" : "☆"}
+                    </text>
+                    <text
                       fg={theme().text}
                       flexGrow={1}
                       onMouseUp={() =>
@@ -111,6 +143,9 @@ export function SessionsView(props: { readonly context: Context }) {
                       }
                     >
                       continue
+                    </text>
+                    <text fg={theme().info} onMouseUp={() => void rename(session)}>
+                      rename
                     </text>
                     <text fg={theme().error} onMouseUp={() => void remove(session)}>
                       delete

@@ -41,8 +41,9 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `.github/workflows/*` | ci | upstream workflows removed; BanyanCode CI replaces them | — |
 | `packages/core/src/plugin/internal.ts` | hook | register `@banyancode/plugin` as a guarded built-in (`post` list + `guarded` set) | — |
 | `packages/core/package.json` | hook | workspace dependency on `@banyancode/plugin` for the built-in import | — |
-| `packages/cli/package.json` | branding | adds the banyancode bin alias | — |
+| `packages/cli/package.json` | branding | banyancode bin alias; `pack`/`publish` scripts point at `script/banyancode/{pack,publish}.ts` | — |
 | `packages/cli/script/build.ts` | branding | build-time CLI name banyancode | — |
+| `packages/cli/script/postinstall.mjs` | branding | user-visible install errors say BanyanCode; temp dir is banyancode-install-* | — |
 | `packages/cli/src/brand-env.ts` | branding | maps BANYANCODE_* onto the internal OPENCODE_* namespace at CLI entry | — |
 | `packages/cli/src/commands/commands.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
 | `packages/cli/src/commands/handlers/mcp/add.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
@@ -154,3 +155,13 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/mini/footer.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
 | `packages/tui/test/mini/splash.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
 | `packages/tui/test/util/presentation.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/core/src/permission.ts` | hook | deliver a configured deny to the `permission.evaluate` hook so a plugin (yolo) can override it; policy hooks still run later | — |
+| `packages/core/src/tool.ts` | fix | resolve a hook-rewritten tool name on the Code Mode inner-call path, not just direct calls | — |
+| `packages/core/src/plugin/host.ts` | hook | wire `session.background` into the plugin Context (v1 `banyancode.mesh.background`) | — |
+| `packages/plugin/src/effect/session.ts` | hook | expose `background` on the plugin SessionDomain | — |
+| `packages/plugin/src/promise/session.ts` | hook | mirror the `background` SessionDomain addition for promise plugins | — |
+| `packages/core/test/permission.test.ts` | fix | cover hook override of a configured deny and a later policy deny winning | — |
+| `packages/core/test/plugin/tool-input-repair-integration.test.ts` | fix | cover Code Mode resolving a hook-rewritten tool | — |
+| `packages/tui/src/plugin/builtins.ts` | hook | registers the BanyanCode TUI plugin as a built-in | — |
+| `packages/tui/package.json` | hook | workspace dependency on `@banyancode/tui` for the built-in import | — |
+| `packages/tui/test/builtins-banyancode.test.ts` | hook | pins the built-in registration | — |

@@ -13,6 +13,9 @@ import { GraphExplorer } from "../inspector/graph-explorer"
 import { PendingActions } from "../inspector/pending-actions"
 import { TodoPanel } from "../inspector/todo"
 import { AgentTreeView } from "./agents"
+import { ConfigView } from "./config"
+import { CodegraphCanvas } from "./graph"
+import { SessionTabs, viewKeyForPanel } from "./nav"
 import { SessionsView } from "./sessions"
 
 const RAIL_WIDTH = 13
@@ -33,11 +36,13 @@ function content(props: {
     if (name === PANEL.details) return <AgentDetails context={props.context} sessionID={props.sessionID} />
     if (name === PANEL.todos) return <TodoPanel context={props.context} sessionID={props.sessionID} />
     if (name === PANEL.graph) return <GraphExplorer context={props.context} codegraph={props.live.codegraph} />
+    if (name === PANEL.canvas) return <CodegraphCanvas context={props.context} codegraph={props.live.codegraph} />
     if (name === PANEL.pending) return <PendingActions context={props.context} sessionID={props.sessionID} />
     if (name === PANEL.sessions) return <SessionsView context={props.context} />
     if (name === PANEL.agents) {
       return <AgentTreeView context={props.context} sessionID={props.sessionID} mesh={props.live.mesh} />
     }
+    if (name === PANEL.config) return <ConfigView context={props.context} live={props.live} />
     if (name === PANEL.trace) {
       return <IntelTracePanel context={props.context} sessionID={props.sessionID} intel={props.live.intel} />
     }
@@ -94,25 +99,28 @@ export function InspectorPanel(props: {
   )
 
   return (
-    <box flexDirection={stacked() ? "column" : "row"} flexGrow={1} minWidth={0} minHeight={0}>
-      {rail}
-      <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
-        <box flexDirection="row" justifyContent="space-between" alignItems="center">
-          <text fg={theme().muted}>{RAIL.find((item) => item.name === active())?.title ?? ""}</text>
-          <box flexDirection="row" gap={2}>
-            <text fg={theme().muted} onMouseUp={props.panel.toggleFullscreen}>
-              {props.panel.presentation === "fullscreen" ? "restore" : "fullscreen"}
-            </text>
-            <text fg={theme().muted} onMouseUp={props.panel.close}>
-              close
-            </text>
+    <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0}>
+      <SessionTabs context={props.context} active={viewKeyForPanel(active())} />
+      <box flexDirection={stacked() ? "column" : "row"} flexGrow={1} minWidth={0} minHeight={0}>
+        {rail}
+        <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
+          <box flexDirection="row" justifyContent="space-between" alignItems="center">
+            <text fg={theme().muted}>{RAIL.find((item) => item.name === active())?.title ?? ""}</text>
+            <box flexDirection="row" gap={2}>
+              <text fg={theme().muted} onMouseUp={props.panel.toggleFullscreen}>
+                {props.panel.presentation === "fullscreen" ? "restore" : "fullscreen"}
+              </text>
+              <text fg={theme().muted} onMouseUp={props.panel.close}>
+                close
+              </text>
+            </box>
           </box>
+          <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
+            <box flexDirection="column" paddingTop={1}>
+              {content({ context: props.context, live: props.live, sessionID: props.panel.sessionID, active: active() })}
+            </box>
+          </scrollbox>
         </box>
-        <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
-          <box flexDirection="column" paddingTop={1}>
-            {content({ context: props.context, live: props.live, sessionID: props.panel.sessionID, active: active() })}
-          </box>
-        </scrollbox>
       </box>
     </box>
   )
@@ -132,6 +140,7 @@ export function InspectorPage(props: {
 
   return (
     <box flexDirection="column" flexGrow={1} minHeight={0}>
+      <SessionTabs context={props.context} active={viewKeyForPanel(active())} />
       <box
         flexDirection="row"
         gap={1}

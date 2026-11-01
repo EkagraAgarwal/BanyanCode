@@ -1,27 +1,34 @@
 /**
- * Local RPC definitions for server namespaces the TUI needs before the server
- * package exports them.
+ * BanyanCode RPC definitions for the TUI.
  *
- * `packages/banyancode/package.json` currently exports only `.`/`./rpc`, so
- * `@banyancode/plugin/rpc` exposes `banyancode` (status, config.get). The
- * codegraph / mesh / intel definitions already exist in-tree
- * (`packages/banyancode/src/{codegraph,mesh,intel}/rpc.ts`) but are not
- * exported; these are copies of the parts the TUI consumes.
+ * The server package (`@banyancode/plugin`) is the source of truth: every
+ * namespace below is imported from `@banyancode/plugin/rpc*` and wrapped into
+ * a portable definition (`StandardSchemaV1`), because `client.rpc()` only
+ * accepts portable schemas while the server definitions are Effect codecs.
  *
- * Swap path once `packages/banyancode/package.json` exports them
- * (`./codegraph-rpc`, `./mesh-rpc`, `./intel-rpc`): delete the local
- * definitions here and re-export the real ones through a portable wrapper,
- * exactly like `CoreRpc` in `./rpc.ts` (`client.rpc` only accepts Standard
- * Schema / JSON Schema, and the server definitions are Effect codecs).
+ * One namespace is deliberately local because the server side does not exist
+ * yet:
  *
- * `usage`, `system`, and the intel `trace` method do not exist server-side yet.
- * Their shapes preserve the v1 HTTP payloads:
- *   GET /global/tool-usage            → usage.tools
- *   GET /global/provider-usage        → usage.providers
- *   POST /global/provider-usage/refresh → usage.providersRefresh
- *   banyancode.system.updated event   → system.updated
- *   GET /global/trace (never shipped) → intel.trace
+ * - `banyancode.usage.providers` / `providersRefresh` — v1
+ *   `GET /global/provider-usage` and `POST /global/provider-usage/refresh`;
+ *   the v2 `banyancode.usage` namespace only ships `toolUsage`/`tokenUsage`.
+ *   The extra methods are merged into the real definition, so they stay
+ *   `rpc.method_not_found` until the server adds them.
+ *
+ * Import cost (verified with `bun build --target=bun`): the codegraph/intel
+ * definitions pull their computation modules (`node:fs`, `node:path`,
+ * `node:crypto`, `node:os`) and `banyancode.system` pulls the config writer
+ * (`node:fs/promises`, `node:path`) — all runtime-safe under Bun. None of them
+ * imports `bun:sqlite` or `node:child_process`; storage and the verifier
+ * service are imported type-only by those RPC files.
  */
+import { Definition as BanyanDefinition } from "@banyancode/plugin/rpc"
+import { Definition as CodegraphDefinition } from "@banyancode/plugin/rpc/codegraph"
+import { Definition as IntelDefinition } from "@banyancode/plugin/rpc/intel"
+import { Definition as MeshDefinition } from "@banyancode/plugin/rpc/mesh"
+import { Definition as UsageDefinition } from "@banyancode/plugin/rpc/usage"
+import { Definition as SystemDefinition } from "@banyancode/plugin/rpc/system"
+import { Definition as VerifyDefinition } from "@banyancode/plugin/rpc/verify"
 import { Rpc } from "@opencode/schema/rpc"
 import { Schema } from "effect"
 
@@ -30,292 +37,102 @@ import { Schema } from "effect"
  * Effect codecs are wrapped so `client.rpc(definition)` keeps full type
  * inference while the transport only sees a Standard Schema.
  */
-const std = Schema.toStandardSchemaV1
-
-// ---------------------------------------------------------------------------
-// banyancode.codegraph — mirror of packages/banyancode/src/codegraph/rpc.ts
-// ---------------------------------------------------------------------------
-
-export const BuildState = Schema.Struct({
-  status: Schema.Literals(["idle", "running", "completed", "failed", "cancelled"]),
-  root: Schema.optional(Schema.String),
-  banyanDir: Schema.optional(Schema.String),
-  dbPath: Schema.optional(Schema.String),
-  done: Schema.Number,
-  total: Schema.Number,
-  currentFile: Schema.optional(Schema.String),
-  startedAt: Schema.optional(Schema.Number),
-  lastProgressAt: Schema.optional(Schema.Number),
-  lastCompletedFile: Schema.optional(Schema.String),
-  lastCompletedPath: Schema.optional(Schema.String),
-  currentlyParsing: Schema.optional(Schema.String),
-  graphVersion: Schema.optional(Schema.Number),
-  graphCoverage: Schema.optional(Schema.Number),
-  totalFiles: Schema.optional(Schema.Number),
-  graphBuiltAt: Schema.optional(Schema.Number),
-  result: Schema.optional(
-    Schema.Struct({
-      indexed: Schema.Number,
-      skipped: Schema.Number,
-      duration_ms: Schema.Number,
-      symbolsIndexed: Schema.Number,
-      skippedByReason: Schema.Struct({
-        gitignored: Schema.Number,
-        banyanignored: Schema.Number,
-        artifact: Schema.Number,
-        tooLarge: Schema.Number,
-        minified: Schema.Number,
-        tooLargeParse: Schema.Number,
-        cached: Schema.Number,
-        readError: Schema.Number,
-        parseFailure: Schema.Number,
-      }),
-    }),
-  ),
-  parseErrors: Schema.optional(
-    Schema.Array(Schema.Struct({ path: Schema.String, cause: Schema.String, indexedAt: Schema.Number })),
-  ),
-  error: Schema.optional(Schema.String),
-}).annotate({ identifier: "BanyanCodeTui/CodegraphBuildState" })
-export type BuildState = typeof BuildState.Type
-
-export const AutoUpdateState = Schema.Struct({
-  status: Schema.Literals(["idle", "watching", "draining", "paused"]),
-  pending: Schema.Number,
-  lastChangeAt: Schema.optional(Schema.Number),
-}).annotate({ identifier: "BanyanCodeTui/CodegraphAutoUpdateState" })
-export type AutoUpdateState = typeof AutoUpdateState.Type
-
-export const AutoUpdateProgressState = Schema.Struct({
-  status: Schema.Literals(["idle", "watching", "draining", "paused"]),
-  pending: Schema.Number,
-  lastChangeAt: Schema.optional(Schema.Number),
-  phase: Schema.optional(Schema.Literals(["preparing", "indexing", "removing", "done"])),
-  completed: Schema.optional(Schema.Number),
-  total: Schema.optional(Schema.Number),
-  currentFile: Schema.optional(Schema.String),
-})
-export type AutoUpdateProgressState = typeof AutoUpdateProgressState.Type
-
-export const GraphMeta = Schema.Struct({
-  graphBuiltAt: Schema.Number,
-  graphVersion: Schema.Number,
-  graphCoverage: Schema.Number,
-  totalFiles: Schema.Number,
-  totalNodes: Schema.Number,
-  totalEdges: Schema.Number,
-}).annotate({ identifier: "BanyanCodeTui/GraphMeta" })
-export type GraphMeta = typeof GraphMeta.Type
-
-export const ReadinessResult = Schema.Struct({
-  reason: Schema.Literals(["ready", "missing", "stale", "building", "failed"]),
-  autoBuilt: Schema.Boolean,
-  graphBuiltAt: Schema.optional(Schema.Number),
-  graphVersion: Schema.optional(Schema.Number),
-  graphCoverage: Schema.optional(Schema.Number),
-  totalFiles: Schema.optional(Schema.Number),
-  indexedFiles: Schema.optional(Schema.Number),
-  changedFiles: Schema.optional(Schema.Number),
-  durationMs: Schema.optional(Schema.Number),
-  warning: Schema.optional(Schema.String),
-  error: Schema.optional(Schema.String),
-}).annotate({ identifier: "BanyanCodeTui/CodegraphReadiness" })
-export type ReadinessResult = typeof ReadinessResult.Type
-
-export const CodegraphNode = Schema.Struct({
-  id: Schema.String,
-  fileID: Schema.String,
-  kind: Schema.String,
-  name: Schema.String,
-  signature: Schema.optional(Schema.String),
-  startLine: Schema.Number,
-  endLine: Schema.Number,
-  isEntrypoint: Schema.optional(Schema.Number),
-  inDegree: Schema.optional(Schema.Number),
-}).annotate({ identifier: "BanyanCodeTui/CodegraphNodeRow" })
-export type CodegraphNode = typeof CodegraphNode.Type
-
-export const CodegraphEdge = Schema.Struct({
-  id: Schema.String,
-  fromNodeID: Schema.String,
-  toNodeID: Schema.String,
-  kind: Schema.String,
-}).annotate({ identifier: "BanyanCodeTui/CodegraphEdgeRow" })
-export type CodegraphEdge = typeof CodegraphEdge.Type
-
-export const CodegraphFile = Schema.Struct({
-  id: Schema.String,
-  path: Schema.String,
-  contentHash: Schema.String,
-  language: Schema.String,
-  indexedAt: Schema.Number,
-  sizeBytes: Schema.optional(Schema.Number),
-  mtimeMs: Schema.optional(Schema.Number),
-}).annotate({ identifier: "BanyanCodeTui/CodegraphFile" })
-export type CodegraphFile = typeof CodegraphFile.Type
-
-export const CodegraphStatusOutput = Schema.Struct({
-  build: BuildState,
-  readiness: ReadinessResult,
-  autoUpdate: AutoUpdateState,
-  meta: Schema.optional(GraphMeta),
-  databasePath: Schema.String,
-  schemaVersion: Schema.Int,
-}).annotate({ identifier: "BanyanCodeTui/CodegraphStatus" })
-export type CodegraphStatusOutput = typeof CodegraphStatusOutput.Type
-
-export const CodegraphNodesOutput = Schema.Struct({
-  nodes: Schema.Array(CodegraphNode),
-  nextCursor: Schema.optional(Schema.String),
-})
-export type CodegraphNodesOutput = typeof CodegraphNodesOutput.Type
-
-export const CodegraphEdgesOutput = Schema.Struct({
-  edges: Schema.Array(CodegraphEdge),
-  nextCursor: Schema.optional(Schema.String),
-})
-export type CodegraphEdgesOutput = typeof CodegraphEdgesOutput.Type
-
-export const CodegraphFilesOutput = Schema.Struct({
-  files: Schema.Array(CodegraphFile),
-  nextCursor: Schema.optional(Schema.String),
-})
-export type CodegraphFilesOutput = typeof CodegraphFilesOutput.Type
-
-const RootInput = Schema.Struct({ root: Schema.optional(Schema.String) })
-const Page = {
-  cursor: Schema.optional(Schema.String),
-  limit: Schema.optional(Schema.Number),
+function std<S extends Schema.Top>(schema: S) {
+  return Schema.toStandardSchemaV1(schema as unknown as Schema.Codec<S["Encoded"], S["Type"]>)
 }
 
-export const CodegraphRpc = Rpc.define({
-  id: "banyancode.codegraph",
-  methods: {
-    build: {
-      input: std(
-        Schema.Struct({
-          root: Schema.optional(Schema.String),
-          force: Schema.optional(Schema.Boolean),
-          excludePatterns: Schema.optional(Schema.Array(Schema.String)),
-        }),
-      ),
-      output: std(BuildState),
-    },
-    cancel: { input: std(Schema.Struct({})), output: std(BuildState) },
-    forceKill: {
-      input: std(Schema.Struct({})),
-      output: std(Schema.Struct({ ok: Schema.Boolean, message: Schema.String })),
-    },
-    remove: {
-      input: std(Schema.Struct({ dropFile: Schema.optional(Schema.Boolean) })),
-      output: std(
-        Schema.Struct({
-          status: Schema.Literals(["removed", "empty"]),
-          sizeBefore: Schema.Number,
-          sizeAfter: Schema.Number,
-          freedBytes: Schema.Number,
-        }),
-      ),
-    },
-    status: { input: std(RootInput), output: std(CodegraphStatusOutput) },
-    nodes: { input: std(Schema.Struct(Page)), output: std(CodegraphNodesOutput) },
-    edges: { input: std(Schema.Struct(Page)), output: std(CodegraphEdgesOutput) },
-    files: { input: std(Schema.Struct(Page)), output: std(CodegraphFilesOutput) },
-  },
-  events: {
-    build: { schema: std(BuildState) },
-    autoUpdate: { schema: std(AutoUpdateState) },
-    autoUpdateProgress: { schema: std(AutoUpdateProgressState) },
-  },
-})
+type PortableOf<T> = T extends Schema.Top ? ReturnType<typeof std<T>> : T
 
-// ---------------------------------------------------------------------------
-// banyancode.mesh — mirror of packages/banyancode/src/mesh/rpc.ts
-// ---------------------------------------------------------------------------
-
-const MeshTokens = Schema.Struct({
-  input: Schema.Number,
-  output: Schema.Number,
-  reasoning: Schema.Number,
-  cache: Schema.Struct({ read: Schema.Number, write: Schema.Number }),
-})
-export type MeshTokens = typeof MeshTokens.Type
-
-const MeshModel = Schema.Struct({
-  providerID: Schema.String,
-  id: Schema.String,
-  variant: Schema.optional(Schema.String),
-})
-
-export interface MeshNode {
-  readonly sessionID: string
-  readonly parentID?: string
-  readonly title?: string
-  readonly agent?: string
-  readonly model?: { readonly providerID: string; readonly id: string; readonly variant?: string }
-  readonly state: "running" | "retry" | "idle" | "failed" | "interrupted" | "unknown"
-  readonly cost: number
-  readonly tokens: MeshTokens
-  readonly createdAt: number
-  readonly updatedAt: number
-  readonly lastActivityAt?: number
-  readonly children: ReadonlyArray<MeshNode>
+type PortableDefinitionOf<D extends Rpc.Definition> = {
+  readonly id: D["id"]
+  readonly methods: {
+    readonly [K in keyof D["methods"]]: {
+      readonly input: PortableOf<D["methods"][K]["input"]>
+      readonly output: PortableOf<D["methods"][K]["output"]>
+    }
+  }
+  readonly events: {
+    readonly [K in keyof D["events"]]: {
+      readonly schema: PortableOf<D["events"][K]["schema"]>
+    }
+  }
 }
 
-export const MeshNodeSchema: Schema.Codec<MeshNode> = Schema.Struct({
-  sessionID: Schema.String,
-  parentID: Schema.optional(Schema.String),
-  title: Schema.optional(Schema.String),
-  agent: Schema.optional(Schema.String),
-  model: Schema.optional(MeshModel),
-  state: Schema.Literals(["running", "retry", "idle", "failed", "interrupted", "unknown"]),
-  cost: Schema.Number,
-  tokens: MeshTokens,
-  createdAt: Schema.Number,
-  updatedAt: Schema.Number,
-  lastActivityAt: Schema.optional(Schema.Number),
-  children: Schema.Array(Schema.suspend((): Schema.Codec<MeshNode> => MeshNodeSchema)),
-})
+const isSchema = (value: unknown): value is Schema.Top => Schema.isSchema(value)
 
-export const MeshStatusOutput = Schema.Struct({
-  roots: Schema.Array(MeshNodeSchema),
-  generatedAt: Schema.Number,
-})
-export type MeshStatusOutput = typeof MeshStatusOutput.Type
+const portable = (value: unknown) =>
+  isSchema(value) ? std(value) : value
 
-export const MeshRpc = Rpc.define({
-  id: "banyancode.mesh",
-  methods: {
-    status: {
-      input: std(Schema.Struct({ sessionID: Schema.optional(Schema.String) })),
-      output: std(MeshStatusOutput),
-    },
-    sessionStatus: {
-      input: std(Schema.Struct({ sessionID: Schema.String })),
-      output: std(MeshStatusOutput),
-    },
-    "limits.get": {
-      input: std(Schema.Struct({})),
-      output: std(
-        Schema.Struct({
-          maxSubagents: Schema.Number,
-          backgroundSubagents: Schema.Boolean,
-          swarmMode: Schema.Boolean,
-          maxSubagentsLimit: Schema.Number,
-          maxSubagentsDefault: Schema.Number,
-        }),
-      ),
-    },
-  },
-  events: {
-    "status.updated": {
-      schema: std(Schema.Struct({ rootSessionID: Schema.String, tree: MeshNodeSchema })),
-    },
-  },
-})
+/**
+ * Re-wrap every server definition in one pass. Errors are dropped on purpose:
+ * the TUI treats every failure as `Attempt`, so the declared error channels
+ * only add noise to the client type.
+ */
+export function portableDefinition<const D extends Rpc.Definition>(definition: D): PortableDefinitionOf<D> {
+  return {
+    id: definition.id,
+    methods: Object.fromEntries(
+      Object.entries(definition.methods).map(([name, method]) => [
+        name,
+        { input: portable(method.input), output: portable(method.output) },
+      ]),
+    ),
+    events: Object.fromEntries(
+      Object.entries(definition.events).map(([name, event]) => [name, { schema: portable(event.schema) }]),
+    ),
+  } as PortableDefinitionOf<D>
+}
 
 // ---------------------------------------------------------------------------
-// banyancode.usage — v1 /global/tool-usage + /global/provider-usage
+// banyancode — status + config.get
+// ---------------------------------------------------------------------------
+
+export const BanyanRpc: PortableDefinitionOf<typeof BanyanDefinition> = portableDefinition(BanyanDefinition)
+
+type TypeOf<T> = T extends Schema.Top ? T["Type"] : unknown
+type InputOf<T> = T extends Schema.Top ? T["Encoded"] : unknown
+
+export type CoreStatus = TypeOf<(typeof BanyanDefinition.methods)["status"]["output"]>
+export type CoreConfigOutput = TypeOf<(typeof BanyanDefinition.methods)["config.get"]["output"]>
+export type BanyanConfig = CoreConfigOutput["config"]
+
+// ---------------------------------------------------------------------------
+// banyancode.codegraph
+// ---------------------------------------------------------------------------
+
+export const CodegraphRpc: PortableDefinitionOf<typeof CodegraphDefinition> = portableDefinition(CodegraphDefinition)
+
+export type CodegraphStatusOutput = TypeOf<(typeof CodegraphDefinition.methods)["status"]["output"]>
+export type BuildState = CodegraphStatusOutput["build"]
+export type ReadinessResult = CodegraphStatusOutput["readiness"]
+export type AutoUpdateState = CodegraphStatusOutput["autoUpdate"]
+export type GraphMeta = NonNullable<CodegraphStatusOutput["meta"]>
+export type CodegraphNode = TypeOf<(typeof CodegraphDefinition.methods)["nodes"]["output"]>["nodes"][number]
+export type CodegraphEdge = TypeOf<(typeof CodegraphDefinition.methods)["edges"]["output"]>["edges"][number]
+export type CodegraphFile = TypeOf<(typeof CodegraphDefinition.methods)["files"]["output"]>["files"][number]
+
+// ---------------------------------------------------------------------------
+// banyancode.intel — the v1 repository-intelligence surface
+// ---------------------------------------------------------------------------
+
+export const IntelRpc: PortableDefinitionOf<typeof IntelDefinition> = portableDefinition(IntelDefinition)
+
+export type IntelQueryOutput = TypeOf<(typeof IntelDefinition.methods)["query"]["output"]>
+export type IntelSlice = TypeOf<(typeof IntelDefinition.methods)["explain"]["output"]>
+
+// ---------------------------------------------------------------------------
+// banyancode.mesh
+// ---------------------------------------------------------------------------
+
+export const MeshRpc: PortableDefinitionOf<typeof MeshDefinition> = portableDefinition(MeshDefinition)
+
+export type MeshStatusOutput = TypeOf<(typeof MeshDefinition.methods)["status"]["output"]>
+export type MeshNode = MeshStatusOutput["roots"][number]
+export type MeshTokens = MeshNode["tokens"]
+export type MeshLimits = TypeOf<(typeof MeshDefinition.methods)["limits.get"]["output"]>
+
+// ---------------------------------------------------------------------------
+// banyancode.usage — real toolUsage/tokenUsage + v1 provider-usage placeholder
 // ---------------------------------------------------------------------------
 
 export const ToolUsageRow = Schema.Struct({
@@ -324,11 +141,6 @@ export const ToolUsageRow = Schema.Struct({
   lastUsedAt: Schema.Number,
 }).annotate({ identifier: "BanyanCodeTui/ToolUsageRow" })
 export type ToolUsageRow = typeof ToolUsageRow.Type
-
-export const ToolUsageOutput = Schema.Struct({ tools: Schema.Array(ToolUsageRow) }).annotate({
-  identifier: "BanyanCodeTui/ToolUsage",
-})
-export type ToolUsageOutput = typeof ToolUsageOutput.Type
 
 export const ProviderUsageWindow = Schema.Struct({
   id: Schema.String,
@@ -355,18 +167,15 @@ export const ProviderUsageSnapshot = Schema.Struct({
 }).annotate({ identifier: "BanyanCodeTui/ProviderUsageSnapshot" })
 export type ProviderUsageSnapshot = typeof ProviderUsageSnapshot.Type
 
-export const ProviderUsageOutput = Schema.Struct({ snapshots: Schema.Array(ProviderUsageSnapshot) }).annotate({
-  identifier: "BanyanCodeTui/ProviderUsage",
-})
+export const ProviderUsageOutput = Schema.Struct({
+  snapshots: Schema.Array(ProviderUsageSnapshot),
+}).annotate({ identifier: "BanyanCodeTui/ProviderUsage" })
 export type ProviderUsageOutput = typeof ProviderUsageOutput.Type
 
 export const UsageRpc = Rpc.define({
-  id: "banyancode.usage",
+  id: UsageDefinition.id,
   methods: {
-    tools: {
-      input: std(Schema.Struct({ session: Schema.optional(Schema.String) })),
-      output: std(ToolUsageOutput),
-    },
+    ...portableDefinition(UsageDefinition).methods,
     providers: { input: std(Schema.Struct({})), output: std(ProviderUsageOutput) },
     providersRefresh: {
       input: std(
@@ -379,59 +188,27 @@ export const UsageRpc = Rpc.define({
       output: std(ProviderUsageOutput),
     },
   },
-  events: {},
+  events: portableDefinition(UsageDefinition).events,
 })
 
 // ---------------------------------------------------------------------------
-// banyancode.system — v1 `banyancode.system.updated` EventV2 payload
+// banyancode.verify
 // ---------------------------------------------------------------------------
 
-export const SystemStatus = Schema.Struct({
-  cpuPercent: Schema.optional(Schema.Number),
-  memoryUsedBytes: Schema.Number,
-  memoryTotalBytes: Schema.Number,
-  gpuPercent: Schema.optional(Schema.Number),
-  vramUsedBytes: Schema.optional(Schema.Number),
-  gpuTotalBytes: Schema.optional(Schema.Number),
-  diskUsedBytes: Schema.optional(Schema.Number),
-  diskTotalBytes: Schema.optional(Schema.Number),
-  platform: Schema.Literals(["windows", "linux", "darwin"]),
-}).annotate({ identifier: "BanyanCodeTui/SystemStatus" })
-export type SystemStatus = typeof SystemStatus.Type
-
-export const SystemRpc = Rpc.define({
-  id: "banyancode.system",
-  methods: {
-    status: { input: std(Schema.Struct({})), output: std(SystemStatus) },
-  },
-  events: {
-    updated: { schema: std(SystemStatus) },
-  },
-})
+export const VerifyRpc: PortableDefinitionOf<typeof VerifyDefinition> = portableDefinition(VerifyDefinition)
 
 // ---------------------------------------------------------------------------
-// banyancode.intel.trace — v1 GET /global/trace (declared, never shipped)
+// banyancode.system — status, LSP state, YOLO switch, agent config writes
 // ---------------------------------------------------------------------------
 
-export const TraceRow = Schema.Struct({
-  ts: Schema.Number,
-  tool: Schema.String,
-  inputSummary: Schema.String,
-  resultSummary: Schema.String,
-  ms: Schema.optional(Schema.Number),
-}).annotate({ identifier: "BanyanCodeTui/TraceRow" })
-export type TraceRow = typeof TraceRow.Type
+export const SystemRpc: PortableDefinitionOf<typeof SystemDefinition> = portableDefinition(SystemDefinition)
 
-export const IntelTraceOutput = Schema.Struct({ events: Schema.Array(TraceRow) })
-export type IntelTraceOutput = typeof IntelTraceOutput.Type
+export const SystemStatus = SystemDefinition.methods.status.output
+export type SystemStatus = TypeOf<typeof SystemStatus>
 
-export const IntelRpc = Rpc.define({
-  id: "banyancode.intel",
-  methods: {
-    trace: {
-      input: std(Schema.Struct({ session: Schema.String, limit: Schema.optional(Schema.Number) })),
-      output: std(IntelTraceOutput),
-    },
-  },
-  events: {},
-})
+export type LspStatusOutput = TypeOf<(typeof SystemDefinition.methods)["lsp.status"]["output"]>
+export type YoloStatus = TypeOf<(typeof SystemDefinition.methods)["yolo.get"]["output"]>
+
+export type AgentOverrideInput = InputOf<(typeof SystemDefinition.methods)["config.agentOverride"]["input"]>
+export type AgentPromptInput = InputOf<(typeof SystemDefinition.methods)["config.agentPrompt"]["input"]>
+export type AgentSaveInput = InputOf<(typeof SystemDefinition.methods)["config.agentSave"]["input"]>

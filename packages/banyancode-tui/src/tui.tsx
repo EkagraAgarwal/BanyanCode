@@ -1,7 +1,6 @@
 import { Plugin } from "@opencode/plugin/tui"
-import type { Context } from "@opencode/plugin/tui/context"
 import { Show } from "solid-js"
-import { PANEL, PANEL_NAMES, PLUGIN_ID, RAIL, type PanelName } from "./constants"
+import { PANEL, PANEL_NAMES, PLUGIN_ID, RAIL } from "./constants"
 import { createLive, type Live } from "./data/live"
 import { CodegraphProgress } from "./components/status/codegraph-progress"
 import { StatusPills } from "./components/status/pills"
@@ -17,20 +16,7 @@ import { ProviderUsagePanel } from "./components/sidebar/provider-usage"
 import { SystemPanel } from "./components/sidebar/system-status"
 import { ToolUsagePanel } from "./components/sidebar/tool-usage"
 import { InspectorPage, InspectorPanel } from "./components/panels/inspector"
-
-/** Panel presentation requested by a view command. */
-type Presentation = "panel" | "fullscreen"
-
-function openView(context: Context, name: PanelName, options?: { readonly presentation?: Presentation }) {
-  const route = context.ui.router.current()
-  const sessionID = route.type === "session" ? route.sessionID : undefined
-  if (sessionID !== undefined && context.ui.panel.open(name, options)) return
-  context.ui.router.navigate({
-    type: "plugin",
-    name,
-    data: { view: name, sessionID },
-  })
-}
+import { cycleView, openView } from "./components/panels/nav"
 
 /**
  * BanyanCode TUI plugin.
@@ -93,7 +79,13 @@ export default Plugin.define({
     context.ui.slot({
       append: "prompt.footer.status",
       render: (input) => (
-        <StatusPills context={context} sessionID={input.sessionID} codegraph={live.codegraph} mesh={live.mesh} />
+        <StatusPills
+          context={context}
+          sessionID={input.sessionID}
+          codegraph={live.codegraph}
+          mesh={live.mesh}
+          system={live.system}
+        />
       ),
     })
     context.ui.slot({
@@ -106,7 +98,9 @@ export default Plugin.define({
     })
     context.ui.slot({
       append: "home.footer.status",
-      render: () => <StatusPills context={context} codegraph={live.codegraph} mesh={live.mesh} />,
+      render: () => (
+        <StatusPills context={context} codegraph={live.codegraph} mesh={live.mesh} system={live.system} />
+      ),
     })
 
     // v1 floating codegraph overlay → v2 composer rail.
@@ -144,6 +138,29 @@ export default Plugin.define({
     context.keymap.layer(() => ({
       mode: "global",
       commands: [
+        // v1 tab bar keys: ctrl+] / ctrl+[ cycle CHAT → SESSIONS → AGENTS → CONFIG.
+        {
+          id: "tabs.next",
+          title: "Next tab",
+          description: "Switch to the next BanyanCode view",
+          group: "Tabs",
+          bind: "ctrl+]",
+          palette: true,
+          async run() {
+            cycleView(context, 1)
+          },
+        },
+        {
+          id: "tabs.previous",
+          title: "Previous tab",
+          description: "Switch to the previous BanyanCode view",
+          group: "Tabs",
+          bind: "ctrl+[",
+          palette: true,
+          async run() {
+            cycleView(context, -1)
+          },
+        },
         {
           id: "codegraph.build",
           title: "Codegraph: build index",
@@ -195,6 +212,26 @@ export default Plugin.define({
           palette: true,
           run() {
             openView(context, PANEL.graph)
+          },
+        },
+        {
+          id: "codegraph.canvas",
+          title: "Codegraph: open canvas",
+          description: "Open the layered codegraph canvas",
+          group: "Codegraph",
+          palette: true,
+          run() {
+            openView(context, PANEL.canvas)
+          },
+        },
+        {
+          id: "banyancode.config",
+          title: "BanyanCode: agent config",
+          description: "Edit agent models, thinking levels and prompts",
+          group: "BanyanCode",
+          palette: true,
+          run() {
+            openView(context, PANEL.config)
           },
         },
         {

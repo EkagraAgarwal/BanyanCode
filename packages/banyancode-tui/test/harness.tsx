@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import type { SessionInfo, SessionMessageInfo } from "@opencode/client"
+import type { AgentInfo, ModelInfo, SessionInfo, SessionMessageInfo } from "@opencode/client"
 import type { Context } from "@opencode/plugin/tui/context"
 import type { ResolvedTheme } from "@opencode/theme/tui"
 import { RGBA } from "@opentui/core"
@@ -8,6 +8,7 @@ import type { JSX } from "solid-js"
 import type {
   CodegraphLive,
   CodegraphGraph,
+  IntelEntry,
   IntelLive,
   Live,
   MeshLive,
@@ -15,14 +16,17 @@ import type {
   UsageLive,
 } from "../src/data/live"
 import type {
+  BanyanConfig,
   BuildState,
   CodegraphFile,
+  CoreConfigOutput,
   GraphMeta,
   MeshNode,
   ProviderUsageSnapshot,
   ReadinessResult,
   SystemStatus,
   ToolUsageRow,
+  YoloStatus,
 } from "../src/data/pending-rpc"
 
 const COLOR = RGBA.fromInts(200, 200, 200)
@@ -87,6 +91,8 @@ export function context(input: {
   readonly messages?: Readonly<Record<string, readonly SessionMessageInfo[]>>
   readonly running?: ReadonlySet<string>
   readonly directory?: string
+  readonly agents?: readonly AgentInfo[]
+  readonly models?: readonly ModelInfo[]
 } = {}): Context {
   const sessions = input.sessions ?? []
   const running = input.running ?? new Set<string>()
@@ -148,11 +154,11 @@ export function context(input: {
         sync: async () => {},
         invalidate: () => {},
         vcs: { info: () => ({ branch: { current: "v2-base" } }), sync: async () => {}, invalidate: () => {} },
-        agent: { list: () => [], sync: async () => {}, invalidate: () => {} },
+        agent: { list: () => [...(input.agents ?? [])], sync: async () => {}, invalidate: () => {} },
         command: { list: () => [], sync: async () => {}, invalidate: () => {} },
         integration: { list: () => [], sync: async () => {}, invalidate: () => {} },
         mcp: { server: { list: () => [], sync: async () => {}, invalidate: () => {} }, resource: { list: () => [], sync: async () => {}, invalidate: () => {} } },
-        model: { list: () => [], sync: async () => {}, invalidate: () => {} },
+        model: { list: () => [...(input.models ?? [])], sync: async () => {}, invalidate: () => {} },
         provider: { list: () => [], sync: async () => {}, invalidate: () => {} },
         reference: { list: () => [], sync: async () => {}, invalidate: () => {} },
         skill: { list: () => [], sync: async () => {}, invalidate: () => {} },
@@ -169,8 +175,8 @@ export function context(input: {
       mode: { current: () => "base", push: () => () => {} },
     },
     storage: {
-      store: () => [{}, async () => {}],
-      memory: () => [{}, () => {}],
+      store: (_key: string, options: { readonly initial: object }) => [options.initial, async () => {}],
+      memory: (_key: string, options: { readonly initial: object }) => [options.initial, () => {}],
     },
     ui: {
       slot: () => () => {},
@@ -240,22 +246,51 @@ export function meshLive(input: {
   readonly availability?: "unknown" | "available" | "unavailable"
   readonly root?: MeshNode
   readonly maxSubagents?: number
+  readonly swarmMode?: boolean
 } = {}): MeshLive {
+  const limits =
+    input.maxSubagents === undefined && input.swarmMode === undefined
+      ? undefined
+      : {
+          maxSubagents: input.maxSubagents ?? 5,
+          backgroundSubagents: true,
+          swarmMode: input.swarmMode ?? false,
+          maxSubagentsLimit: 20,
+          maxSubagentsDefault: 5,
+        }
   return {
     availability: accessor(input.availability ?? "available"),
     error: accessor(undefined),
     root: () => input.root,
     ensure: noop,
-    limits: accessor(input.maxSubagents === undefined ? undefined : { maxSubagents: input.maxSubagents }),
+    limits: accessor(limits),
+    swarmMode: accessor(input.swarmMode),
     refreshLimits: noop,
   }
 }
 
-export function systemLive(input: { readonly status?: SystemStatus; readonly availability?: "unknown" | "available" | "unavailable" } = {}): SystemLive {
+export function systemLive(
+  input: {
+    readonly status?: SystemStatus
+    readonly availability?: "unknown" | "available" | "unavailable"
+    readonly lsp?: { readonly enabled: boolean; readonly servers: ReadonlyArray<{ readonly id: string; readonly status: "configured" | "connected" | "error"; readonly languages: readonly string[]; readonly inert: boolean; readonly disabled: boolean }> }
+    readonly yolo?: boolean
+  } = {},
+): SystemLive {
   return {
     availability: accessor(input.availability ?? "available"),
     status: accessor(input.status),
+    lsp: accessor(input.lsp),
+    lspAvailability: accessor(input.lsp === undefined ? "unavailable" : "available"),
+    yolo: accessor(input.yolo),
+    yoloAvailability: accessor(input.yolo === undefined ? "unavailable" : "available"),
     refresh: noop,
+    refreshLsp: noop,
+    refreshYolo: noop,
+    setYolo: async () => ({ ok: true, value: { enabled: false, env: false, config: false } as YoloStatus }),
+    agentOverride: async () => ({ ok: true, value: {} as BanyanConfig }),
+    agentPrompt: async () => ({ ok: true, value: {} as BanyanConfig }),
+    agentSave: async () => ({ ok: true, value: { ok: true, filePath: "" } }),
   }
 }
 
@@ -275,12 +310,10 @@ export function usageLive(input: {
   }
 }
 
-export function intelLive(input: { readonly traceAvailability?: "unknown" | "available" | "unavailable" } = {}): IntelLive {
+export function intelLive(input: { readonly entries?: readonly IntelEntry[] } = {}): IntelLive {
   return {
-    entries: accessor([]),
-    traceAvailability: accessor(input.traceAvailability ?? "unavailable"),
+    entries: accessor(input.entries ?? []),
     push: () => {},
-    trace: async () => undefined,
   }
 }
 
@@ -290,9 +323,20 @@ export function live(input: {
   readonly system?: SystemLive
   readonly usage?: UsageLive
   readonly intel?: IntelLive
+  readonly core?: {
+    readonly status?: CoreConfigOutput
+    readonly config?: BanyanConfig
+    readonly availability?: "unknown" | "available" | "unavailable"
+  }
 } = {}): Live {
+  const config = input.core?.config
   return {
-    core: { availability: accessor("available"), status: accessor(undefined), refresh: noop },
+    core: {
+      availability: accessor(input.core?.availability ?? "available"),
+      status: accessor(input.core?.status),
+      config: accessor(config),
+      refresh: noop,
+    },
     codegraph: input.codegraph ?? codegraphLive(),
     mesh: input.mesh ?? meshLive(),
     system: input.system ?? systemLive(),

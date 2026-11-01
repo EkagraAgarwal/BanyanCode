@@ -1,6 +1,6 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import { createMemo, Show } from "solid-js"
-import type { CodegraphLive, MeshLive } from "../../data/live"
+import type { CodegraphLive, MeshLive, SystemLive } from "../../data/live"
 import type { AutoUpdateState, BuildState, GraphMeta, ReadinessResult } from "../../data/pending-rpc"
 import type { Availability } from "../../data/rpc"
 import { palette } from "../../theme"
@@ -82,6 +82,7 @@ export function StatusPills(props: {
   readonly sessionID?: string
   readonly codegraph: CodegraphLive
   readonly mesh: MeshLive
+  readonly system: SystemLive
 }) {
   const theme = () => palette(props.context.theme)
 
@@ -105,6 +106,29 @@ export function StatusPills(props: {
     }),
   )
 
+  // v1 header status pills: green = connected, yellow = enabled/no server
+  // attached yet, red = disabled, muted = not hydrated yet.
+  const lspConnected = createMemo(
+    () => (props.system.lsp()?.servers ?? []).filter((server) => server.status === "connected" && !server.disabled),
+  )
+  const lspEnabled = createMemo(() => props.system.lsp()?.enabled === true)
+  const lspColor = () => {
+    if (props.system.lsp() === undefined) return theme().muted
+    if (!lspEnabled()) return theme().error
+    return lspConnected().length > 0 ? theme().success : theme().warning
+  }
+
+  const toggleYolo = async () => {
+    const next = !(props.system.yolo() === true)
+    const result = await props.system.setYolo(next)
+    if (!result.ok) {
+      props.context.ui.toast.show({
+        message: result.message ?? "YOLO toggle is not available on this server",
+        variant: "warning",
+      })
+    }
+  }
+
   const agentsColor = () => (activeAgents() > 0 ? theme().success : theme().muted)
 
   return (
@@ -114,9 +138,27 @@ export function StatusPills(props: {
         <text fg={theme().muted}>{activeAgents()} active</text>
       </box>
       <box flexDirection="row" flexShrink={0} gap={1}>
+        <text fg={lspColor()}>●</text>
+        <text fg={theme().muted}>LSP</text>
+      </box>
+      <box flexDirection="row" flexShrink={0} gap={1}>
         <text fg={severityColor(theme(), graph().severity)}>●</text>
         <text fg={theme().muted}>{graph().label}</text>
       </box>
+      <text
+        flexShrink={0}
+        fg={props.system.yolo() === true ? theme().error : theme().muted}
+        onMouseUp={() => void toggleYolo()}
+      >
+        [yolo]
+      </text>
+      <text
+        flexShrink={0}
+        fg={props.mesh.swarmMode() === true ? theme().error : theme().muted}
+        onMouseUp={() => void props.mesh.refreshLimits()}
+      >
+        [swarm]
+      </text>
       <Show when={props.codegraph.autoUpdate()?.status === "draining" && props.codegraph.autoUpdate()!.pending > 0}>
         <text fg={theme().muted}>·</text>
       </Show>

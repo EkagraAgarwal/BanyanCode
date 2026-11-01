@@ -8,18 +8,24 @@ import {
   type Attempt,
 } from "./rpc"
 import type {
+  AgentOverrideInput,
+  AgentPromptInput,
+  AgentSaveInput,
   AutoUpdateState,
+  BanyanConfig,
   BuildState,
   CodegraphEdge,
   CodegraphFile,
   CodegraphNode,
+  CoreConfigOutput,
   GraphMeta,
+  MeshLimits,
   MeshNode,
   ProviderUsageSnapshot,
   ReadinessResult,
   SystemStatus,
   ToolUsageRow,
-  TraceRow,
+  YoloStatus,
 } from "./pending-rpc"
 
 export interface CodegraphGraph {
@@ -53,14 +59,41 @@ export interface MeshLive {
   readonly error: Accessor<string | undefined>
   root(rootSessionID: string): MeshNode | undefined
   ensure(rootSessionID: string): Promise<void>
-  readonly limits: Accessor<{ maxSubagents: number } | undefined>
+  readonly limits: Accessor<MeshLimits | undefined>
+  readonly swarmMode: Accessor<boolean | undefined>
   refreshLimits(): Promise<void>
+}
+
+export interface LspServerStatus {
+  readonly id: string
+  readonly name?: string
+  readonly root?: string
+  readonly status: "configured" | "connected" | "error"
+  readonly languages: readonly string[]
+  readonly inert: boolean
+  readonly disabled: boolean
+  readonly disabledReason?: string
+}
+
+export interface LspStatus {
+  readonly enabled: boolean
+  readonly servers: readonly LspServerStatus[]
 }
 
 export interface SystemLive {
   readonly availability: Accessor<Availability>
   readonly status: Accessor<SystemStatus | undefined>
+  readonly lsp: Accessor<LspStatus | undefined>
+  readonly lspAvailability: Accessor<Availability>
+  readonly yolo: Accessor<boolean | undefined>
+  readonly yoloAvailability: Accessor<Availability>
   refresh(): Promise<void>
+  refreshLsp(): Promise<void>
+  refreshYolo(): Promise<void>
+  setYolo(enabled: boolean): Promise<Attempt<YoloStatus>>
+  agentOverride(input: AgentOverrideInput): Promise<Attempt<BanyanConfig>>
+  agentPrompt(input: AgentPromptInput): Promise<Attempt<BanyanConfig>>
+  agentSave(input: AgentSaveInput): Promise<Attempt<{ readonly ok: true; readonly filePath: string }>>
 }
 
 export interface UsageLive {
@@ -82,21 +115,13 @@ export interface IntelEntry {
 
 export interface IntelLive {
   readonly entries: Accessor<readonly IntelEntry[]>
-  readonly traceAvailability: Accessor<Availability>
   push(entry: Omit<IntelEntry, "id">): void
-  trace(sessionID: string): Promise<readonly TraceRow[] | undefined>
 }
 
 export interface CoreLive {
   readonly availability: Accessor<Availability>
-  readonly status: Accessor<
-    | {
-        readonly version: string
-        readonly host: { readonly name: string; readonly version: string; readonly channel: string }
-        readonly config: { readonly summary: Record<string, unknown> }
-      }
-    | undefined
-  >
+  readonly status: Accessor<CoreConfigOutput | undefined>
+  readonly config: Accessor<BanyanConfig | undefined>
   refresh(): Promise<void>
 }
 
@@ -113,6 +138,72 @@ export interface Live {
 const GRAPH_NODE_LIMIT = 2000
 const GRAPH_EDGE_LIMIT = 8000
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+/** v1 sent `banyancode_yolo_mode`; the v2 RPC may wrap it. Accept every shape. */
+export function normalizeYolo(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value
+  if (!isRecord(value)) return undefined
+  for (const key of ["enabled", "yoloMode", "yolo_mode", "banyancode_yolo_mode", "value"]) {
+    const candidate = value[key]
+    if (typeof candidate === "boolean") return candidate
+  }
+  return undefined
+}
+
+/** Normalize the v1 LSP entry list plus the v2 status envelope. */
+export function normalizeLsp(value: unknown): LspStatus | undefined {
+  const servers = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.servers)
+      ? value.servers
+      : undefined
+  if (servers === undefined) return undefined
+  const enabled = isRecord(value) && typeof value.enabled === "boolean" ? value.enabled : true
+  return { enabled, servers: servers.flatMap((entry) => normalizeLspEntry(entry)) }
+}
+
+function normalizeLspEntry(value: unknown): LspServerStatus[] {
+  if (!isRecord(value) || typeof value.id !== "string") return []
+  const status = value.status
+  return [
+    {
+      id: value.id,
+      ...(typeof value.name === "string" ? { name: value.name } : {}),
+      ...(typeof value.root === "string" ? { root: value.root } : {}),
+      status: status === "connected" || status === "error" ? status : "configured",
+      languages: Array.isArray(value.languages)
+        ? value.languages.filter((language): language is string => typeof language === "string")
+        : [],
+      inert: value.inert === true,
+      disabled: value.disabled === true,
+      ...(typeof value.disabledReason === "string" ? { disabledReason: value.disabledReason } : {}),
+    },
+  ]
+}
+
+/** Fall back to `banyancode_lsp` in the Banyan config when `lsp.status` is absent. */
+export function lspFromConfig(config: BanyanConfig | undefined): LspStatus | undefined {
+  const raw = config?.banyancode_lsp
+  if (raw === true) return { enabled: true, servers: [] }
+  if (raw === false) return { enabled: false, servers: [] }
+  if (raw === undefined) return undefined
+  if (!isRecord(raw)) return undefined
+  const servers = Object.entries(raw).map(([id, entry]): LspServerStatus => {
+    const detail = entry as Record<string, unknown>
+    const extensions = isRecord(entry) && Array.isArray(detail.extensions) ? detail.extensions : []
+    return {
+      id,
+      status: "configured",
+      languages: extensions.filter((extension): extension is string => typeof extension === "string"),
+      inert: false,
+      disabled: isRecord(entry) && entry.disabled === true,
+    }
+  })
+  return { enabled: true, servers }
+}
+
 /**
  * Shared reactive state for every BanyanCode surface. Created once per plugin
  * instance in `setup`, which owns the event subscriptions and disposes them on
@@ -127,13 +218,13 @@ export function createLive(context: Context): Live {
 
   // --- core ---------------------------------------------------------------
   const [coreAvailability, setCoreAvailability] = createSignal<Availability>("unknown")
-  const [coreStatus, setCoreStatus] = createSignal<CoreLive["status"] extends Accessor<infer T> ? T : never>(undefined)
+  const [coreStatus, setCoreStatus] = createSignal<CoreConfigOutput | undefined>(undefined)
 
   const refreshCore = async () => {
-    const result = await attempt(() => rpc.core.status({}))
+    const result = await attempt(() => rpc.core["config.get"]({}))
     if (disposed) return
     setCoreAvailability(availabilityOf(result))
-    if (result.ok) setCoreStatus(result.value as NonNullable<ReturnType<CoreLive["status"]>>)
+    if (result.ok) setCoreStatus(result.value)
   }
 
   // --- codegraph ----------------------------------------------------------
@@ -230,7 +321,7 @@ export function createLive(context: Context): Live {
   const [meshAvailability, setMeshAvailability] = createSignal<Availability>("unknown")
   const [meshError, setMeshError] = createSignal<string | undefined>(undefined)
   const [meshRoots, setMeshRoots] = createSignal<ReadonlyMap<string, MeshNode>>(new Map())
-  const [limits, setLimits] = createSignal<{ maxSubagents: number } | undefined>(undefined)
+  const [limits, setLimits] = createSignal<MeshLimits | undefined>(undefined)
 
   const storeRoots = (roots: readonly MeshNode[]) => {
     const next = new Map(meshRoots())
@@ -254,7 +345,7 @@ export function createLive(context: Context): Live {
     const result = await attempt(() => rpc.mesh["limits.get"]({}))
     if (disposed) return
     setMeshAvailability(availabilityOf(result))
-    if (result.ok) setLimits({ maxSubagents: result.value.maxSubagents })
+    if (result.ok) setLimits(result.value)
   }
 
   const onMesh = rpc.mesh.events.on("status.updated", (event) => {
@@ -268,6 +359,10 @@ export function createLive(context: Context): Live {
   // --- system -------------------------------------------------------------
   const [sysAvailability, setSysAvailability] = createSignal<Availability>("unknown")
   const [sysStatus, setSysStatus] = createSignal<SystemStatus | undefined>(undefined)
+  const [lspStatus, setLspStatus] = createSignal<LspStatus | undefined>(undefined)
+  const [lspAvailability, setLspAvailability] = createSignal<Availability>("unknown")
+  const [yoloValue, setYoloValue] = createSignal<boolean | undefined>(undefined)
+  const [yoloAvailability, setYoloAvailability] = createSignal<Availability>("unknown")
 
   const refreshSystem = async () => {
     const result = await attempt(() => rpc.system.status({}))
@@ -276,11 +371,63 @@ export function createLive(context: Context): Live {
     if (result.ok) setSysStatus(result.value)
   }
 
+  const refreshLsp = async () => {
+    const result = await attempt(() => rpc.system["lsp.status"]({}))
+    if (disposed) return
+    setLspAvailability(availabilityOf(result))
+    if (!result.ok) return
+    const normalized = normalizeLsp(result.value)
+    if (normalized) setLspStatus(normalized)
+  }
+
+  const refreshYolo = async () => {
+    const result = await attempt(() => rpc.system["yolo.get"]({}))
+    if (disposed) return
+    setYoloAvailability(availabilityOf(result))
+    if (!result.ok) return
+    const normalized = normalizeYolo(result.value)
+    if (normalized !== undefined) setYoloValue(normalized)
+  }
+
   const onSystem = rpc.system.events.on("updated", (event) => {
     setSysStatus(event.data)
     setSysAvailability("available")
   })
   disposers.push(onSystem)
+
+  const afterConfigWrite = async () => {
+    await refreshCore()
+    await context.data.location.agent.sync(context.location)
+    await refreshLsp()
+    await refreshYolo()
+  }
+
+  const setYolo = (enabled: boolean) =>
+    attempt(() => rpc.system["yolo.set"]({ enabled })).then(async (result) => {
+      if (result.ok) {
+        setYoloValue(enabled)
+        await afterConfigWrite()
+      }
+      return result
+    })
+
+  const agentOverride = (input: AgentOverrideInput) =>
+    attempt(() => rpc.system["config.agentOverride"](input)).then(async (result) => {
+      if (result.ok) await afterConfigWrite()
+      return result
+    })
+
+  const agentPrompt = (input: AgentPromptInput) =>
+    attempt(() => rpc.system["config.agentPrompt"](input)).then(async (result) => {
+      if (result.ok) await afterConfigWrite()
+      return result
+    })
+
+  const agentSave = (input: AgentSaveInput) =>
+    attempt(() => rpc.system["config.agentSave"](input)).then(async (result) => {
+      if (result.ok) await afterConfigWrite()
+      return result
+    })
 
   // --- usage --------------------------------------------------------------
   const [toolsAvailability, setToolsAvailability] = createSignal<Availability>("unknown")
@@ -290,7 +437,7 @@ export function createLive(context: Context): Live {
   const [providerRows, setProviderRows] = createSignal<readonly ProviderUsageSnapshot[] | undefined>(undefined)
 
   const refreshTools = async (sessionID?: string) => {
-    const result = await attempt(() => rpc.usage.tools(sessionID === undefined ? {} : { session: sessionID }))
+    const result = await attempt(() => rpc.usage.toolUsage(sessionID === undefined ? {} : { session: sessionID }))
     if (disposed) return
     setToolsAvailability(availabilityOf(result))
     if (!result.ok) {
@@ -316,7 +463,6 @@ export function createLive(context: Context): Live {
 
   // --- intel --------------------------------------------------------------
   const [intelEntries, setIntelEntries] = createSignal<readonly IntelEntry[]>([])
-  const [traceAvailability, setTraceAvailability] = createSignal<Availability>("unknown")
   let intelSequence = 0
 
   const pushIntel = (entry: Omit<IntelEntry, "id">) => {
@@ -324,17 +470,10 @@ export function createLive(context: Context): Live {
     setIntelEntries((previous) => [{ id: `intel_${intelSequence}`, ...entry }, ...previous].slice(0, 8))
   }
 
-  const trace = async (sessionID: string): Promise<readonly TraceRow[] | undefined> => {
-    const result = await attempt(() => rpc.intel.trace({ session: sessionID, limit: 8 }))
-    if (disposed) return undefined
-    setTraceAvailability(availabilityOf(result))
-    return result.ok ? result.value.events : undefined
-  }
-
-  // Hydrate the surfaces that are visible before any panel mounts. Failures
-  // are already folded into the availability signals.
-  void refreshCore()
-  void refreshCodegraph()
+  // Hydration is lazy: each surface refreshes when it mounts (and the RPC
+  // event subscriptions keep it live afterwards). Firing every namespace from
+  // `setup` made the plugin issue eight RPC calls before the first frame, which
+  // stalls startup and floods hosts that do not implement BanyanCode yet.
 
   const dispose = () => {
     disposed = true
@@ -342,10 +481,13 @@ export function createLive(context: Context): Live {
     disposers.length = 0
   }
 
+  const config = () => coreStatus()?.config
+
   return {
     core: {
       availability: coreAvailability,
       status: coreStatus,
+      config,
       refresh: refreshCore,
     },
     codegraph: {
@@ -374,12 +516,23 @@ export function createLive(context: Context): Live {
       root: (rootSessionID) => meshRoots().get(rootSessionID),
       ensure: ensureMesh,
       limits,
+      swarmMode: () => limits()?.swarmMode,
       refreshLimits,
     },
     system: {
       availability: sysAvailability,
       status: sysStatus,
+      lsp: () => lspStatus() ?? lspFromConfig(config()),
+      lspAvailability,
+      yolo: () => yoloValue() ?? (config()?.banyancode_yolo_mode === true ? true : undefined),
+      yoloAvailability,
       refresh: refreshSystem,
+      refreshLsp,
+      refreshYolo,
+      setYolo,
+      agentOverride,
+      agentPrompt,
+      agentSave,
     },
     usage: {
       toolsAvailability,
@@ -392,9 +545,7 @@ export function createLive(context: Context): Live {
     },
     intel: {
       entries: intelEntries,
-      traceAvailability,
       push: pushIntel,
-      trace,
     },
     dispose,
   }

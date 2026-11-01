@@ -26,6 +26,8 @@ export function SystemPanel(props: { readonly context: Context; readonly system:
 
   onMount(() => {
     void props.system.refresh()
+    void props.system.refreshLsp()
+    void props.system.refreshYolo()
   })
 
   const memoryPercent = createMemo(() => {

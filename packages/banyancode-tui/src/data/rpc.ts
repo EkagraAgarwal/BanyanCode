@@ -1,32 +1,14 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { Definition as CoreDefinition } from "@banyancode/plugin/rpc"
-import { Rpc } from "@opencode/schema/rpc"
-import { Schema } from "effect"
-import { CodegraphRpc, IntelRpc, MeshRpc, SystemRpc, UsageRpc } from "./pending-rpc"
-
-/**
- * `@banyancode/plugin/rpc` is the server-side definition, so its method
- * schemas are Effect codecs. Promise clients only accept portable schemas
- * (Standard Schema or JSON Schema), so re-wrap the same schemas instead of
- * copying them — the server stays the single source of truth for `banyancode`
- * status/config shapes.
- */
-const portable = (schema: unknown) => Schema.toStandardSchemaV1(schema as Schema.Codec<unknown, unknown>)
-
-const CoreRpc = Rpc.define({
-  id: CoreDefinition.id,
-  methods: {
-    status: {
-      input: portable(CoreDefinition.methods.status.input),
-      output: portable(CoreDefinition.methods.status.output),
-    },
-    "config.get": {
-      input: portable(CoreDefinition.methods["config.get"].input),
-      output: portable(CoreDefinition.methods["config.get"].output),
-    },
-  },
-  events: {},
-})
+import type { RpcClient } from "@opencode/client/promise/api"
+import {
+  BanyanRpc,
+  CodegraphRpc,
+  IntelRpc,
+  MeshRpc,
+  SystemRpc,
+  UsageRpc,
+  VerifyRpc,
+} from "./pending-rpc"
 
 /**
  * Typed client layer for every BanyanCode RPC the TUI touches.
@@ -36,21 +18,30 @@ const CoreRpc = Rpc.define({
  * `rpc.unavailable`). Nothing here assumes the server side exists: callers get
  * a discriminated `Result` and render a "not available" state instead.
  *
- * Swapping a placeholder for the real definition is a one-line import change
- * in `./pending-rpc.ts` once `packages/banyancode` exports it.
+ * Definitions come from `@banyancode/plugin/rpc*` (see `./pending-rpc.ts`) and
+ * are re-wrapped into portable schemas in one place.
  */
-export function createRpcLayer(client: Context["client"]) {
+export type RpcLayer = {
+  readonly core: RpcClient<typeof BanyanRpc>
+  readonly codegraph: RpcClient<typeof CodegraphRpc>
+  readonly intel: RpcClient<typeof IntelRpc>
+  readonly mesh: RpcClient<typeof MeshRpc>
+  readonly usage: RpcClient<typeof UsageRpc>
+  readonly system: RpcClient<typeof SystemRpc>
+  readonly verify: RpcClient<typeof VerifyRpc>
+}
+
+export function createRpcLayer(client: Context["client"]): RpcLayer {
   return {
-    core: client.rpc(CoreRpc),
+    core: client.rpc(BanyanRpc),
     codegraph: client.rpc(CodegraphRpc),
+    intel: client.rpc(IntelRpc),
     mesh: client.rpc(MeshRpc),
     usage: client.rpc(UsageRpc),
     system: client.rpc(SystemRpc),
-    intel: client.rpc(IntelRpc),
+    verify: client.rpc(VerifyRpc),
   }
 }
-
-export type RpcLayer = ReturnType<typeof createRpcLayer>
 
 export type Attempt<T> =
   | { readonly ok: true; readonly value: T }

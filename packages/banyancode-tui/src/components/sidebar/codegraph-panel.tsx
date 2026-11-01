@@ -25,6 +25,7 @@ export function CodegraphPanel(props: { readonly context: Context; readonly code
   onCleanup(() => clearInterval(tick))
 
   onMount(() => {
+    void props.codegraph.refresh()
     void props.codegraph.ensureGraph()
   })
 
