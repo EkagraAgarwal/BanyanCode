@@ -26,6 +26,7 @@ import { Npm } from "@opencode/util/npm"
 import { Plugin } from "@opencode/core/plugin"
 import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { Provider } from "@opencode/core/provider"
+import { ProviderUsage } from "@opencode/core/provider-usage/index"
 import { Session } from "@opencode/core/session"
 import { InstructionEntry } from "@opencode/core/session/instruction-entry"
 import { PersistentPty } from "@opencode/core/persistent-pty"
@@ -107,6 +108,7 @@ export const makePluginTestLayer = (permission = permissionLayer, generate = gen
       Artifact.node,
       AISDK.node,
       Provider.node,
+      ProviderUsage.node,
       Model.node,
       Command.node,
       Integration.node,

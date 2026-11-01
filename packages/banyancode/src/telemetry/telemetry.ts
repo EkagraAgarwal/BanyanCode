@@ -48,6 +48,13 @@ export const register = (ctx: Context, deps: TelemetryDeps): Effect.Effect<void,
           Effect.map((result) => result.data.map((provider) => ({ id: provider.id, name: provider.name }))),
           Effect.orElseSucceed(() => []),
         ),
+      // Result-only seam: core resolves the credential and performs the
+      // provider's fixed usage request. The plugin never sees a key or token
+      // and cannot choose a URL, header, or fetch implementation.
+      usage: (input) =>
+        typeof ctx.provider.usage === "function"
+          ? ctx.provider.usage(input)
+          : Effect.succeed({ snapshots: [] }),
     })
 
     const agentTelemetry = makeAgentTelemetryStore(ctx.storage)

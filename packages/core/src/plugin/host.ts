@@ -23,6 +23,7 @@ import { Session } from "../session.js"
 import { InstructionEntry } from "../session/instruction-entry.js"
 import { PersistentPty } from "../persistent-pty.js"
 import { Provider } from "../provider.js"
+import { ProviderUsage } from "../provider-usage/index.js"
 import { Reference } from "../reference.js"
 import { Rpc } from "../rpc.js"
 import { AbsolutePath, type DeepMutable } from "../schema.js"
@@ -58,6 +59,7 @@ export const make = Effect.fn("PluginHost.make")(function* (
   const artifacts = yield* Artifact.Service
   const aisdk = yield* AISDK.Service
   const providers = yield* Provider.Service
+  const providerUsage = yield* ProviderUsage.Service
   const models = yield* Model.Service
   const commands = yield* Command.Service
   const bus = yield* Bus.Service
@@ -207,6 +209,9 @@ export const make = Effect.fn("PluginHost.make")(function* (
             ),
           ),
       reload: providers.reload,
+      // The quota seam: core fetches with the stored credential and returns
+      // only sanitized numbers. No credential, URL, or header crosses here.
+      usage: (input) => providerUsage.snapshots(input),
       transform: (callback) =>
         providers.transform((editor) => {
           callback({
@@ -662,6 +667,7 @@ export const requirements = LayerNode.group([
   Artifact.node,
   AISDK.node,
   Provider.node,
+  ProviderUsage.node,
   Model.node,
   Command.node,
   Bus.node,

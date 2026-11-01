@@ -120,3 +120,99 @@ describe("provider usage collector", () => {
     })
   })
 })
+
+describe("provider usage core seam", () => {
+  const providers = [
+    { id: "anthropic", name: "Anthropic" },
+    { id: "openai", name: "OpenAI" },
+    { id: "google", name: "Google" },
+  ]
+
+  const coreSnapshot = (input: {
+    providerID: string
+    displayName: string
+    status: "available" | "unsupported" | "error"
+  }) => ({
+    providerID: input.providerID,
+    displayName: input.displayName,
+    status: input.status,
+    confidence: "exact" as const,
+    windows:
+      input.status === "available"
+        ? [{ id: "five_hour", label: "5h", kind: "quota" as const, usedPercent: 40, remainingPercent: 60 }]
+        : [],
+    ...(input.status === "unsupported" ? { message: "Usage unavailable" } : {}),
+    fetchedAt: 1_000,
+  })
+
+  test("core quota rows win; observed headers only fill unsupported rows", async () => {
+    observeRateLimitResponse("anthropic", headers)
+    observeRateLimitResponse("openai", headers)
+    const calls: Array<{ force?: boolean; providerID?: string }> = []
+    const usage = makeProviderUsage({
+      providers: () => Effect.succeed(providers),
+      usage: (input) => {
+        calls.push(input ?? {})
+        return Effect.succeed({
+          snapshots: [
+            coreSnapshot({ providerID: "anthropic", displayName: "Anthropic", status: "available" }),
+            coreSnapshot({ providerID: "openai", displayName: "OpenAI", status: "unsupported" }),
+          ],
+        })
+      },
+    })
+    const result = await Effect.runPromise(usage.snapshots())
+    const anthropic = result.snapshots.find((snapshot) => snapshot.providerID === "anthropic")!
+    const openai = result.snapshots.find((snapshot) => snapshot.providerID === "openai")!
+    const google = result.snapshots.find((snapshot) => snapshot.providerID === "google")!
+
+    // Core's exact quota beats the observed rate-limit headers.
+    expect(anthropic.confidence).toBe("exact")
+    expect(anthropic.windows.map((window) => window.id)).toEqual(["five_hour"])
+    // An unsupported core row still serves whatever headers were observed.
+    expect(openai.status).toBe("available")
+    expect(openai.confidence).toBe("reported")
+    expect(openai.windows.map((window) => window.id)).toEqual(["rate-limit-requests", "rate-limit-tokens"])
+    // A provider core never reported keeps its placeholder row.
+    expect(google.status).toBe("unsupported")
+    expect(calls).toEqual([{}])
+  })
+
+  test("refresh forces the core seam and filters by provider", async () => {
+    const calls: Array<{ force?: boolean; providerID?: string }> = []
+    const usage = makeProviderUsage({
+      providers: () => Effect.succeed(providers),
+      usage: (input) => {
+        calls.push(input ?? {})
+        return Effect.succeed({
+          snapshots: [coreSnapshot({ providerID: "openai", displayName: "OpenAI", status: "available" })],
+        })
+      },
+    })
+    await Effect.runPromise(usage.snapshots({ force: true, providerID: "openai" }))
+    expect(calls).toEqual([{ force: true, providerID: "openai" }])
+  })
+
+  test("a failing core seam degrades to observed rows, never a throw", async () => {
+    observeRateLimitResponse("openai", headers)
+    const usage = makeProviderUsage({
+      providers: () => Effect.succeed(providers),
+      usage: () => Effect.fail(new Error("core unavailable")),
+    })
+    const result = await Effect.runPromise(usage.snapshots())
+    expect(result.snapshots.find((snapshot) => snapshot.providerID === "openai")!.status).toBe("available")
+    expect(result.snapshots.find((snapshot) => snapshot.providerID === "anthropic")!.status).toBe("unsupported")
+  })
+
+  test("the panel payload carries no credential material", async () => {
+    const usage = makeProviderUsage({
+      providers: () => Effect.succeed(providers),
+      usage: () =>
+        Effect.succeed({
+          snapshots: [coreSnapshot({ providerID: "openai", displayName: "OpenAI", status: "available" })],
+        }),
+    })
+    const result = await Effect.runPromise(usage.snapshots())
+    expect(JSON.stringify(result)).not.toMatch(/token|secret|bearer|authorization|api[_-]?key/i)
+  })
+})

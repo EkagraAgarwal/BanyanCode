@@ -294,6 +294,16 @@ export interface ProviderLike {
 
 export interface ProviderUsageDeps {
   readonly providers: () => Effect.Effect<ReadonlyArray<ProviderLike>, unknown>
+  /**
+   * Result-only quota lookup served by the core credential boundary
+   * (`ctx.provider.usage`). The plugin passes a filter and a cache flag and
+   * receives sanitized windows; it never supplies or receives a credential,
+   * URL, header, or request callback.
+   */
+  readonly usage?: (input?: {
+    readonly force?: boolean
+    readonly providerID?: string
+  }) => Effect.Effect<{ readonly snapshots: ReadonlyArray<ProviderUsageSnapshot> }, unknown>
   readonly now?: () => number
   readonly ttlMs?: number
 }
@@ -302,39 +312,93 @@ export interface ProviderUsage {
   readonly snapshots: (input?: { readonly force?: boolean; readonly providerID?: string }) => Effect.Effect<ProviderUsageList>
 }
 
+// `opencode` and `opencode-go` are one panel row (v1 alias rule).
+const OPENCODE_ALIASES = ["opencode", "opencode-go"] as const
+const isOpenCodeAlias = (providerID: string) => (OPENCODE_ALIASES as readonly string[]).includes(providerID)
+const sameProvider = (a: string, b: string) =>
+  a === b || (isOpenCodeAlias(a) && isOpenCodeAlias(b))
+
+/** Decode the core seam result; a malformed row is dropped rather than shown. */
+const coreSnapshots = (
+  usage: ProviderUsageDeps["usage"],
+  input: { readonly force?: boolean; readonly providerID?: string },
+): Effect.Effect<ReadonlyArray<ProviderUsageSnapshot>, never, never> => {
+  if (usage === undefined) return Effect.succeed([])
+  return usage(input).pipe(
+    Effect.flatMap((result) =>
+      Schema.decodeUnknownEffect(Schema.Array(ProviderUsageSnapshot))(result.snapshots),
+    ),
+    Effect.orElseSucceed(() => [] as ReadonlyArray<ProviderUsageSnapshot>),
+  )
+}
+
+/** Overlay observed rate-limit headers on a provider with no exact quota source. */
+const observedSnapshot = (providerID: string, displayName: string, at: number, ttlMs: number) => {
+  const observed = readObservedRateLimit(providerID, at, ttlMs)
+  if (observed === undefined || observed.windows.length === 0) return undefined
+  return {
+    providerID,
+    displayName,
+    status: "available",
+    confidence: "reported",
+    windows: observed.windows.map((window) =>
+      normalizeWindow({
+        id: window.id,
+        label: window.label,
+        kind: "rate_limit",
+        ...(window.usedPercent === undefined ? {} : { usedPercent: window.usedPercent }),
+        ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
+        ...(window.limit === undefined ? {} : { limit: window.limit }),
+        ...(window.remaining === undefined ? {} : { remaining: window.remaining }),
+      }),
+    ),
+    fetchedAt: observed.observedAt,
+  } satisfies ProviderUsageSnapshot
+}
+
 export const makeProviderUsage = (deps: ProviderUsageDeps): ProviderUsage => {
   const now = deps.now ?? Date.now
   const ttlMs = deps.ttlMs ?? PROVIDER_USAGE_DEFAULT_TTL_MS
   let cache: { readonly at: number; readonly snapshots: ReadonlyArray<ProviderUsageSnapshot> } | undefined
 
-  const collect = (providerID?: string) =>
+  const collect = (input?: { readonly force?: boolean; readonly providerID?: string }) =>
     Effect.gen(function* () {
-      const providers = yield* deps.providers().pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<ProviderLike>))
       const at = now()
-      return providers
-        .filter((provider) => providerID === undefined || provider.id === providerID)
-        .map((provider): ProviderUsageSnapshot => {
-          const observed = readObservedRateLimit(provider.id, at, ttlMs)
-          if (observed === undefined || observed.windows.length === 0) {
-            return unsupportedSnapshot(provider.id, provider.name, at)
-          }
-          return {
-            providerID: provider.id,
-            displayName: provider.name,
-            status: "available",
-            confidence: "reported",
-            windows: observed.windows.map((window) => normalizeWindow({
-              id: window.id,
-              label: window.label,
-              kind: "rate_limit",
-              ...(window.usedPercent === undefined ? {} : { usedPercent: window.usedPercent }),
-              ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
-              ...(window.limit === undefined ? {} : { limit: window.limit }),
-              ...(window.remaining === undefined ? {} : { remaining: window.remaining }),
-            })),
-            fetchedAt: observed.observedAt,
-          }
-        })
+      const providerID = input?.providerID
+      const [core, providers] = yield* Effect.all(
+        [
+          coreSnapshots(deps.usage, {
+            ...(input?.force === true ? { force: true } : {}),
+            ...(providerID === undefined ? {} : { providerID }),
+          }),
+          deps.providers().pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<ProviderLike>)),
+        ],
+        { concurrency: 2 },
+      )
+      const filtered = (provider: ProviderLike) =>
+        providerID === undefined || sameProvider(provider.id, providerID)
+      const merged = new Map<string, ProviderUsageSnapshot>()
+      for (const snapshot of core) {
+        // Exact core quotas win. Only a provider core knows nothing about is
+        // eligible for the header-derived fallback — never a fabricated quota.
+        if (snapshot.status !== "unsupported") {
+          merged.set(snapshot.providerID, snapshot)
+          continue
+        }
+        const observed = observedSnapshot(snapshot.providerID, snapshot.displayName, at, ttlMs)
+        merged.set(snapshot.providerID, observed ?? snapshot)
+      }
+      // Providers the core seam did not report (unconfigured catalog entries)
+      // keep the pre-existing panel row instead of disappearing.
+      for (const provider of providers.filter(filtered)) {
+        if ([...merged.keys()].some((key) => sameProvider(key, provider.id))) continue
+        merged.set(
+          provider.id,
+          observedSnapshot(provider.id, provider.name, at, ttlMs) ??
+            unsupportedSnapshot(provider.id, provider.name, at),
+        )
+      }
+      return [...merged.values()]
     })
 
   const snapshots = (input?: { readonly force?: boolean; readonly providerID?: string }) =>
@@ -343,8 +407,8 @@ export const makeProviderUsage = (deps: ProviderUsageDeps): ProviderUsage => {
       const providerID = input?.providerID
       const cached = cache && providerID === undefined && !input?.force && isFresh(cache.at, at, ttlMs) ? cache : undefined
       if (cached !== undefined) return { snapshots: [...cached.snapshots] }
-      const collected = yield* collect(providerID)
-      if (providerID === undefined) cache = { at, snapshots: collected }
+      const collected = yield* collect(input)
+      if (providerID === undefined && input?.force !== true) cache = { at, snapshots: collected }
       return { snapshots: [...collected] }
     })
 

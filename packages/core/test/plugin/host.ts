@@ -52,6 +52,7 @@ export function host(overrides: Overrides = {}): Plugin.Context {
       get: () => Effect.die("unused provider.get"),
       transform: () => Effect.die("unused provider.transform"),
       reload: () => Effect.die("unused provider.reload"),
+      usage: () => Effect.die("unused provider.usage"),
     },
     model: overrides.model ?? {
       list: () => Effect.die("unused model.list"),
@@ -252,6 +253,7 @@ export function agentHost(agent: Agent.Interface): Plugin.Context["agent"] {
 export function providerHost(providers: Provider.Interface): Plugin.Context["provider"] {
   return {
     list: () => providers.available().pipe(Effect.map(located)),
+    usage: () => Effect.succeed({ snapshots: [] }),
     get: (input) =>
       providers
         .get(Provider.ID.make(input.providerID))
@@ -285,6 +287,7 @@ export function providerHost(providers: Provider.Interface): Plugin.Context["pro
 /** Empty catalog for hosts that only need provider lookups to fall back. */
 export const noProviders: Plugin.Context["provider"] = {
   list: () => Effect.succeed(located([])),
+  usage: () => Effect.succeed({ snapshots: [] }),
   get: () => Effect.die("unused provider.get"),
   transform: () => Effect.die("unused provider.transform"),
   reload: () => Effect.die("unused provider.reload"),

@@ -75,3 +75,36 @@ describe("telemetry register", () => {
     })
   })
 })
+
+describe("provider usage RPC", () => {
+  const snapshot = {
+    providerID: "openrouter",
+    displayName: "OpenRouter",
+    status: "available" as const,
+    confidence: "exact" as const,
+    windows: [{ id: "credits", label: "Credits", kind: "quota" as const, usedPercent: 10 }],
+    fetchedAt: 1_000,
+  }
+
+  test("providerList and providerRefresh serve the core seam result", async () => {
+    await withTemp(async (directory) => {
+      const harness = makeContext(directory)
+      const calls: Array<{ force?: boolean; providerID?: string }> = []
+      harness.setProviderUsage((input) => {
+        calls.push(input ?? {})
+        return Effect.succeed({ snapshots: [snapshot] })
+      })
+      const config = await configFor(directory, {})
+      await withStorage(directory, (storage) =>
+        Telemetry.register(harness.ctx, { storage, config }),
+      ).pipe(Effect.runPromise)
+      const registered = harness.rpcs.find((entry) => entry.definition.id === "banyancode.usage")!
+      const result = (await Effect.runPromise(registered.handlers.providerList!({}, {}))) as {
+        snapshots: Array<{ providerID: string }>
+      }
+      expect(result.snapshots.map((row) => row.providerID)).toEqual(["openrouter"])
+      await Effect.runPromise(registered.handlers.providerRefresh!({ providerID: "openrouter" }, {}))
+      expect(calls.at(-1)).toEqual({ force: true, providerID: "openrouter" })
+    })
+  })
+})
