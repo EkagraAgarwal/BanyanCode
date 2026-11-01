@@ -288,7 +288,20 @@ const layer = Layer.effect(
                 codeModeInventory,
                 (name, tool, input, context) =>
                   beforeExecute(name, input, context).pipe(
-                    Effect.flatMap((event) => executeTool(tool, name, event.input, context)),
+                    // A hook may reroute the call (e.g. the repository gateway sends grep to a
+                    // codegraph tool). The Code Mode runtime still holds the original registration,
+                    // so resolve the rewritten name before executing it, exactly as the direct path
+                    // below does.
+                    Effect.flatMap((event) => {
+                      const resolved = event.tool === name ? tool : active.get(event.tool)
+                      if (!resolved)
+                        return Effect.fail(
+                          new Tool.Error({
+                            message: `No tool named "${event.tool}" is currently available. Please use a tool from the available tool list.`,
+                          }),
+                        )
+                      return executeTool(resolved, event.tool, event.input, context)
+                    }),
                   ),
                 permission,
               )

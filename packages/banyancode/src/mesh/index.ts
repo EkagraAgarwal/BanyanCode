@@ -195,7 +195,19 @@ export const register = (ctx: Context, deps: MeshDeps): Effect.Effect<void, neve
     )
 
     // ── RPC + status events ────────────────────────────────────────────────
-    const rpc = yield* ctx.rpc.register(Definition, handlers({ mesh })).pipe(Effect.orDie)
+    const rpc = yield* ctx.rpc
+      .register(
+        Definition,
+        handlers({
+          mesh,
+          // v1 `banyancode.mesh.background` is the host's session.background route in v2.
+          background: (sessionID) =>
+            ctx.session
+              .background({ sessionID: sessionID as never })
+              .pipe(Effect.orDie, Effect.asVoid),
+        }),
+      )
+      .pipe(Effect.orDie)
     const cache = yield* Ref.make<ReadonlyMap<string, MeshSessionSnapshot>>(new Map())
 
     yield* ctx.event

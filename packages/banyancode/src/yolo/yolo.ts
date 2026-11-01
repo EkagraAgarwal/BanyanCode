@@ -9,6 +9,12 @@ import type { Info } from "../config/schema.js"
 // (`packages/opencode/src/permission/index.ts:83-87`): when yolo is enabled,
 // every permission request is allowed before any rule evaluation. v1 offered no
 // exceptions, including configured deny rules and "dangerous" asks.
+//
+// v2's permission service now delivers configured denies to this hook instead
+// of returning before it (packages/core/src/permission.ts), so overriding
+// `effect` here restores the v1 short-circuit. Organization policy is not
+// weakened: ConfigPolicyPlugin registers after the built-ins and re-applies its
+// deny, so a matching policy statement still wins.
 
 export interface YoloDeps {
   readonly config: BanyanConfig.Interface

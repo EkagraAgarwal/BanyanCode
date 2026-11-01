@@ -97,6 +97,12 @@ export const Definition = Rpc.define({
       input: LimitsSetInput,
       output: LimitsSetOutput,
     },
+    // v1 `banyancode.mesh.background`: moved to the host's
+    // `session.background` route, exposed on the plugin SessionDomain.
+    background: {
+      input: Schema.Struct({ sessionID: Schema.String }),
+      output: Schema.Void,
+    },
   },
   events: {
     "status.updated": {
@@ -107,6 +113,8 @@ export const Definition = Rpc.define({
 
 export interface HandlerDeps {
   readonly mesh: MeshService
+  /** Stops the session's running work via the host `session.background` route. */
+  readonly background: (sessionID: string) => Effect.Effect<void>
 }
 
 export const handlers = (deps: HandlerDeps): RpcHandlers<typeof Definition> => ({
@@ -116,6 +124,7 @@ export const handlers = (deps: HandlerDeps): RpcHandlers<typeof Definition> => (
       .pipe(Effect.orDie),
   sessionStatus: (input) => deps.mesh.status({ sessionID: input.sessionID, scope: "session" }).pipe(Effect.orDie),
   "limits.get": () => deps.mesh.limits().pipe(Effect.map(limitsOutput), Effect.orDie),
+  background: (input) => deps.background(input.sessionID).pipe(Effect.orDie),
   "limits.set": (input) =>
     Effect.gen(function* () {
       if (input.maxSubagents !== undefined) {

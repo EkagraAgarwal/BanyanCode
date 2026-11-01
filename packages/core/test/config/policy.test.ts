@@ -97,6 +97,21 @@ describe("ConfigPolicyPlugin.Plugin", () => {
     }),
   )
 
+  it.effect("organization tool.use policy still denies after an earlier allow hook", () =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      // Stands in for a plugin such as BanyanCode yolo: it sees the deny and flips it to allow.
+      yield* hooks.register("permission", "evaluate", (event) =>
+        Effect.sync(() => {
+          event.effect = "allow"
+          delete event.message
+        }),
+      )
+      yield* addPlugin([organizationPolicy([tool("deny", "shell:*")], "Acme")])
+      expect(yield* evaluate("shell", ["ls"], "deny")).toEqual({ effect: "deny", message: "Blocked by Acme's policy" })
+    }),
+  )
+
   it.effect("filters plugin-provided providers with ordered wildcard policies", () =>
     Effect.gen(function* () {
       const catalog = yield* Provider.Service

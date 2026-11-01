@@ -630,6 +630,7 @@ export const make = Effect.fn("PluginHost.make")(function* (
         sessions
           .interrupt(input.sessionID, { resume: input.resume })
           .pipe(Effect.map((interrupted) => ({ interrupted }))),
+      background: (input) => sessions.background(input.sessionID),
       wait: (input) => sessions.wait(input.sessionID),
       context: (input) => sessions.context(input.sessionID),
       instructions: {

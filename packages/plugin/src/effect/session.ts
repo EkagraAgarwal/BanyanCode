@@ -215,6 +215,8 @@ export type SessionDomain = Pick<
   | "update"
   | "move"
   | "context"
+  // v1 `banyancode.mesh.background`: stop the session's running work and let it idle.
+  | "background"
 > &
   Pick<ExperimentalSessionApi<unknown>, "wait" | "instructions"> & {
     readonly hook: ModelHooks<SessionHooks>

@@ -175,10 +175,14 @@ const layer = Layer.effect(
 
     const evaluateInput = Effect.fnUntraced(function* (input: AssertInput) {
       const rules = yield* configured(input.sessionID, input.agent)
-      if (denied(input, rules)) return { effect: "deny" as const, rules }
+      // Saved approvals must not override an explicit configured deny, but the deny still reaches the
+      // evaluate hook: v1 yolo short-circuited before rule evaluation, and a plugin can only reproduce
+      // that by observing and overriding this outcome. Organization policy stays authoritative because
+      // ConfigPolicyPlugin registers last among built-ins and re-applies its deny.
+      const configuredDeny = denied(input, rules)
       const all = [...rules, ...(yield* savedRules())]
       const effects = input.resources.map((resource) => evaluate(input.action, resource, all).effect)
-      const effect: Permission.Effect = effects.includes("ask") ? "ask" : "allow"
+      const effect: Permission.Effect = configuredDeny ? "deny" : effects.includes("ask") ? "ask" : "allow"
       const event = yield* hooks.trigger("permission", "evaluate", {
         sessionID: input.sessionID,
         agent: input.agent,

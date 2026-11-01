@@ -124,6 +124,58 @@ it.effect("runs a call to another harness's tool name as the matching tool and s
   }),
 )
 
+it.effect("resolves a hook-rewritten tool in the Code Mode inner-call path", () =>
+  Effect.gen(function* () {
+    const plugins = yield* Plugin.Service
+    const registry = yield* Tool.Service
+    const executed: Array<[string, unknown]> = []
+    yield* registry.transform((draft) => {
+      draft.add({
+        name: "grep",
+        description: "Grep",
+        input: Schema.Struct({ pattern: Schema.String }),
+        execute: (input) =>
+          Effect.sync(() => void executed.push(["grep", input])).pipe(Effect.as({ content: "grep result" })),
+      })
+      draft.add({
+        name: "code_find",
+        description: "Find a symbol",
+        input: Schema.Struct({ target: Schema.String }),
+        execute: (input) =>
+          Effect.sync(() => void executed.push(["code_find", input])).pipe(Effect.as({ content: "codegraph result" })),
+      })
+    })
+    yield* plugins.activate([
+      {
+        id: "reroute",
+        revision: "1",
+        effect: (ctx) =>
+          ctx.tool.hook("execute.before", (event) =>
+            Effect.sync(() => {
+              if (event.tool !== "grep") return
+              // Mirrors the repository gateway: change both the tool and its input.
+              event.tool = "code_find"
+              event.input = { target: "AuthManager" }
+            }),
+          ),
+      },
+    ])
+
+    const snapshot = yield* registry.snapshot()
+    const result = yield* snapshot.execute({
+      ...identity,
+      call: {
+        type: "tool-call",
+        id: "call-codemode-reroute",
+        name: "execute",
+        input: { code: 'return await tools.grep({ pattern: "AuthManager" })' },
+      },
+    })
+    expect(executed).toEqual([["code_find", { target: "AuthManager" }]])
+    expect(result.content).toEqual([{ type: "text", text: "codegraph result" }])
+  }),
+)
+
 it.effect("repairs namespaced inner tool input called from Code Mode", () =>
   Effect.gen(function* () {
     const plugins = yield* Plugin.Service

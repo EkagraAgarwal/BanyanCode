@@ -10,6 +10,12 @@ import type { Info } from "../config/schema.js"
 // provider-options payload is applied by rewriting the outbound JSON body in
 // `session.http.request`. That covers native protocols and AI SDK providers
 // uniformly.
+//
+// A body overlay added to `session.model.request` would not replace this: the
+// transport merges `http.body` into the protocol body (`route/transport/http.ts`),
+// so it can add or replace fields but cannot delete one the protocol already
+// emitted (the `off` policy). v2's typed provider options only carry known
+// fields too — `prompt_cache_options` is `{ ttl }` in both OpenAI protocols.
 
 export const PROMPT_CACHE_KEY_PROVIDERS: ReadonlySet<string> = new Set(["openai", "openrouter", "mistral"])
 
@@ -58,6 +64,68 @@ export interface BodyPlan {
   readonly changed: boolean
   readonly keyApplied: boolean
   readonly optionsApplied: boolean
+  readonly toolSearchDeferred: ReadonlyArray<string>
+}
+
+// ── tool_search / defer_loading ────────────────────────────────────────────
+// Port of v1 `packages/opencode/src/session/tools.ts` +
+// `session/llm/request.ts` gate. Eager tools stay inline; every other
+// function tool gets `defer_loading: true` and a hosted `{ type:
+// "tool_search" }` entry, so its schema loads at end-of-context instead of
+// being billed as input on every turn. OpenAI Responses + gpt-5.4+/gpt-6 only,
+// default OFF — unset/false leaves the body byte-for-byte untouched.
+export const TOOL_SEARCH_EAGER_NAMES: ReadonlySet<string> = new Set([
+  "shell",
+  "read",
+  "edit",
+  "write",
+  "patch",
+  "multiedit",
+  "apply_patch",
+  "ls",
+  "grep",
+  "glob",
+  "subagent",
+  "task",
+  "todowrite",
+  "question",
+  "webfetch",
+  "websearch",
+  "skill",
+])
+
+const GPT5_TOOL_SEARCH_RE = /(?:^|\/)gpt-5[.-](\d+)(?:[.-]|$)/
+const GPT6_TOOL_SEARCH_RE = /(?:^|\/)gpt-6(?:[.-]|$)/
+
+export const supportsToolSearchDefer = (modelID: string): boolean => {
+  const id = modelID.toLowerCase()
+  if (GPT6_TOOL_SEARCH_RE.test(id)) return true
+  const match = GPT5_TOOL_SEARCH_RE.exec(id)
+  return match !== null && Number(match[1]) >= 4
+}
+
+export const toolSearchDeferApplies = (input: {
+  readonly config: Info
+  readonly providerID: string
+  readonly modelID: string
+}): boolean =>
+  input.config.banyancode_tool_search_defer === true &&
+  input.providerID === "openai" &&
+  supportsToolSearchDefer(input.modelID)
+
+/** Returns the wire tool record plus the deferred names; untouched when nothing applies. */
+export const applyToolSearchDefer = (
+  tools: ReadonlyArray<unknown>,
+): { readonly tools: ReadonlyArray<unknown>; readonly deferred: ReadonlyArray<string> } => {
+  const deferred: string[] = []
+  const next = tools.map((tool) => {
+    if (!isRecord(tool) || tool.type !== "function" || typeof tool.name !== "string") return tool
+    if (TOOL_SEARCH_EAGER_NAMES.has(tool.name)) return tool
+    deferred.push(tool.name)
+    return { ...tool, defer_loading: true }
+  })
+  const hasSearch = tools.some((tool) => isRecord(tool) && tool.type === "tool_search")
+  return { tools: hasSearch ? next : [...next, { type: "tool_search" }], deferred }
 }
 
 /**
@@ -118,5 +186,15 @@ export const planBody = (input: PlanInput): BodyPlan => {
     }
   }
 
-  return { body, changed, keyApplied, optionsApplied }
+  let toolSearchDeferred: ReadonlyArray<string> = []
+  if (toolSearchDeferApplies(input)) {
+    const tools = Array.isArray(body.tools) ? body.tools : undefined
+    if (tools !== undefined && tools.length > 0) {
+      const plan = applyToolSearchDefer(tools)
+      set("tools", plan.tools)
+      toolSearchDeferred = plan.deferred
+    }
+  }
+
+  return { body, changed, keyApplied, optionsApplied, toolSearchDeferred }
 }

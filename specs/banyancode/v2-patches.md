@@ -160,6 +160,9 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/core/src/plugin/host.ts` | hook | wire `session.background` into the plugin Context (v1 `banyancode.mesh.background`) | — |
 | `packages/plugin/src/effect/session.ts` | hook | expose `background` on the plugin SessionDomain | — |
 | `packages/plugin/src/promise/session.ts` | hook | mirror the `background` SessionDomain addition for promise plugins | — |
+| `packages/plugin/src/promise/adapter.ts` | hook | wire `background` from the promise host into the SessionDomain | — |
+| `packages/core/test/plugin/host.ts` | fix | test host session mock follows the `background` SessionDomain addition | — |
+| `packages/core/test/config/policy.test.ts` | fix | prove an organization deny still wins after an earlier allow hook | — |
 | `packages/core/test/permission.test.ts` | fix | cover hook override of a configured deny and a later policy deny winning | — |
 | `packages/core/test/plugin/tool-input-repair-integration.test.ts` | fix | cover Code Mode resolving a hook-rewritten tool | — |
 | `packages/tui/src/plugin/builtins.ts` | hook | registers the BanyanCode TUI plugin as a built-in | — |

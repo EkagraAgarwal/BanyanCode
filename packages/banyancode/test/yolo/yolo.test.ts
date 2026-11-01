@@ -37,6 +37,10 @@ describe("yolo permission hook", () => {
       const ask = evaluate("ask")
       await Effect.runPromise(callHook(harness.permission.get("evaluate"), ask))
       expect(ask.effect).toBe("ask")
+      // A configured deny reaches the hook; only yolo mode may override it.
+      const deny = evaluate("deny")
+      await Effect.runPromise(callHook(harness.permission.get("evaluate"), deny))
+      expect(deny.effect).toBe("deny")
     })
   })
 

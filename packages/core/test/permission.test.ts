@@ -9,6 +9,7 @@ import { Location } from "@opencode/core/location"
 import { Permission } from "@opencode/core/permission"
 import { PermissionTable } from "@opencode/core/permission/sql"
 import { PermissionSaved } from "@opencode/core/permission/saved"
+import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { Project } from "@opencode/core/project"
 import { ProjectTable } from "@opencode/core/project/sql"
 import { AbsolutePath } from "@opencode/core/schema"
@@ -26,7 +27,15 @@ const current = Layer.succeed(
 )
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, Bus.node, SessionStore.node, PermissionSaved.node, Agent.node, Permission.node]),
+    LayerNode.group([
+      Database.node,
+      Bus.node,
+      SessionStore.node,
+      PermissionSaved.node,
+      Agent.node,
+      PluginHooks.node,
+      Permission.node,
+    ]),
     [Location.node.replace(current)],
   ),
 )
@@ -281,6 +290,36 @@ describe("Permission", () => {
       expect(yield* service.ask(assertion({ action: "bash", resources: ["pwd"] }))).toMatchObject({ effect: "deny" })
       yield* setSession([{ action: "bash", resource: "*", effect: "ask" }])
       expect(yield* service.ask(assertion({ action: "bash", resources: ["pwd"] }))).toMatchObject({ effect: "allow" })
+    }),
+  )
+
+  it.effect("lets an evaluate hook override a configured deny, while a later policy deny still wins", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "read", resource: "*", effect: "deny" }])
+      const hooks = yield* PluginHooks.Service
+      const seen: string[] = []
+      // Stands in for BanyanCode yolo: v1 allowed these before rule evaluation.
+      yield* hooks.register("permission", "evaluate", (event) =>
+        Effect.sync(() => {
+          seen.push(event.effect)
+          if (event.effect === "deny") event.effect = "allow"
+        }),
+      )
+      const service = yield* Permission.Service
+      expect(yield* service.ask(assertion())).toMatchObject({ effect: "allow" })
+      expect(seen).toEqual(["deny"])
+
+      // ConfigPolicyPlugin registers after the built-ins, so organization policy still wins.
+      yield* hooks.register("permission", "evaluate", (event) =>
+        Effect.sync(() => {
+          event.effect = "deny"
+          event.message = "Blocked by Acme's policy"
+        }),
+      )
+      expect(yield* service.ask(assertion({ id: Permission.ID.create("per_test_policy") }))).toEqual({
+        id: Permission.ID.create("per_test_policy"),
+        effect: "deny",
+      })
     }),
   )
 
