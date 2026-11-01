@@ -1,0 +1,172 @@
+import type { Context, PanelInput } from "@opencode/plugin/tui/context"
+import { createMemo, createSignal, For, Show } from "solid-js"
+import { PANEL, RAIL, type PanelName } from "../../constants"
+import type { Live } from "../../data/live"
+import { palette } from "../../theme"
+import { AgentsPanel } from "../sidebar/agents"
+import { CodegraphIntelPanel } from "../sidebar/codegraph-intel-panel"
+import { IntelTracePanel } from "../sidebar/intel-trace-panel"
+import { ProviderUsagePanel } from "../sidebar/provider-usage"
+import { SystemPanel } from "../sidebar/system-status"
+import { AgentDetails } from "../inspector/agent-details"
+import { GraphExplorer } from "../inspector/graph-explorer"
+import { PendingActions } from "../inspector/pending-actions"
+import { TodoPanel } from "../inspector/todo"
+import { AgentTreeView } from "./agents"
+import { SessionsView } from "./sessions"
+
+const RAIL_WIDTH = 13
+const STACK_THRESHOLD = 72
+
+function panelName(name: string): PanelName {
+  return (Object.values(PANEL) as string[]).includes(name) ? (name as PanelName) : PANEL.details
+}
+
+function content(props: {
+  readonly context: Context
+  readonly live: Live
+  readonly sessionID: string
+  readonly active: PanelName
+}) {
+  const view = () => {
+    const name = props.active
+    if (name === PANEL.details) return <AgentDetails context={props.context} sessionID={props.sessionID} />
+    if (name === PANEL.todos) return <TodoPanel context={props.context} sessionID={props.sessionID} />
+    if (name === PANEL.graph) return <GraphExplorer context={props.context} codegraph={props.live.codegraph} />
+    if (name === PANEL.pending) return <PendingActions context={props.context} sessionID={props.sessionID} />
+    if (name === PANEL.sessions) return <SessionsView context={props.context} />
+    if (name === PANEL.agents) {
+      return <AgentTreeView context={props.context} sessionID={props.sessionID} mesh={props.live.mesh} />
+    }
+    if (name === PANEL.trace) {
+      return <IntelTracePanel context={props.context} sessionID={props.sessionID} intel={props.live.intel} />
+    }
+    if (name === PANEL.usage) {
+      return <ProviderUsagePanel context={props.context} sessionID={props.sessionID} usage={props.live.usage} />
+    }
+    if (name === PANEL.system) return <SystemPanel context={props.context} system={props.live.system} />
+    return <AgentsPanel context={props.context} sessionID={props.sessionID} mesh={props.live.mesh} />
+  }
+  return view()
+}
+
+/**
+ * Session-panel shell for every v1 left-rail view (inspector, tabs, graph
+ * explorer). v2 owns the panel chrome, focus, and fullscreen toggle; this only
+ * renders the rail and the selected view.
+ */
+export function InspectorPanel(props: {
+  readonly context: Context
+  readonly live: Live
+  readonly panel: PanelInput
+}) {
+  const theme = () => palette(props.context.theme)
+  const active = createMemo(() => panelName(props.panel.name))
+  const stacked = createMemo(() => props.panel.width < STACK_THRESHOLD)
+
+  const select = (name: PanelName) => props.context.ui.panel.open(name, { presentation: props.panel.presentation })
+
+  const rail = (
+    <box
+      flexDirection={stacked() ? "row" : "column"}
+      flexShrink={0}
+      width={stacked() ? "100%" : RAIL_WIDTH}
+      gap={stacked() ? 1 : 0}
+      paddingLeft={1}
+      paddingRight={1}
+      paddingTop={stacked() ? 0 : 1}
+      border={stacked() ? ["bottom"] : ["right"]}
+      borderColor={theme().border}
+    >
+      <For each={RAIL}>
+        {(item) => (
+          <text
+            fg={active() === item.name ? theme().primary : theme().muted}
+            onMouseUp={() => select(item.name)}
+            wrapMode="none"
+          >
+            {active() === item.name ? "› " : "  "}
+            {item.label}
+          </text>
+        )}
+      </For>
+    </box>
+  )
+
+  return (
+    <box flexDirection={stacked() ? "column" : "row"} flexGrow={1} minWidth={0} minHeight={0}>
+      {rail}
+      <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
+        <box flexDirection="row" justifyContent="space-between" alignItems="center">
+          <text fg={theme().muted}>{RAIL.find((item) => item.name === active())?.title ?? ""}</text>
+          <box flexDirection="row" gap={2}>
+            <text fg={theme().muted} onMouseUp={props.panel.toggleFullscreen}>
+              {props.panel.presentation === "fullscreen" ? "restore" : "fullscreen"}
+            </text>
+            <text fg={theme().muted} onMouseUp={props.panel.close}>
+              close
+            </text>
+          </box>
+        </box>
+        <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
+          <box flexDirection="column" paddingTop={1}>
+            {content({ context: props.context, live: props.live, sessionID: props.panel.sessionID, active: active() })}
+          </box>
+        </scrollbox>
+      </box>
+    </box>
+  )
+}
+
+/** Router page: same views when no session panel is available (home route). */
+export function InspectorPage(props: {
+  readonly context: Context
+  readonly live: Live
+  readonly data?: Record<string, any>
+}) {
+  const theme = () => palette(props.context.theme)
+  const sessionID = () => (typeof props.data?.sessionID === "string" ? props.data.sessionID : undefined)
+  const [active, setActive] = createSignal<PanelName>(
+    typeof props.data?.view === "string" ? panelName(props.data.view) : PANEL.details,
+  )
+
+  return (
+    <box flexDirection="column" flexGrow={1} minHeight={0}>
+      <box
+        flexDirection="row"
+        gap={1}
+        paddingLeft={2}
+        paddingRight={2}
+        paddingTop={1}
+        border={["bottom"]}
+        borderColor={theme().border}
+      >
+        <text fg={theme().text}>
+          <b>BanyanCode</b>
+        </text>
+        <For each={RAIL}>
+          {(item) => (
+            <text fg={active() === item.name ? theme().primary : theme().muted} onMouseUp={() => setActive(item.name)}>
+              {item.label}
+            </text>
+          )}
+        </For>
+      </box>
+      <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
+        <box paddingLeft={2} paddingRight={2} paddingTop={1}>
+          <Show
+            when={sessionID()}
+            fallback={
+              <box flexDirection="column" gap={0}>
+                <text fg={theme().muted}>Open a session to use this view.</text>
+                <CodegraphIntelPanel context={props.context} intel={props.live.intel} />
+              </box>
+            }
+          >
+            {(id) => content({ context: props.context, live: props.live, sessionID: id(), active: active() })}
+          </Show>
+        </box>
+      </scrollbox>
+    </box>
+  )
+}

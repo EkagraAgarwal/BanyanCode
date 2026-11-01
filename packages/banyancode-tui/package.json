@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@banyancode/tui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "BanyanCode TUI plugin for OpenCode v2: sidebar panels, status pills, codegraph progress, inspector, and palette commands.",
+  "exports": {
+    "./tui": "./src/tui.tsx"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bun check --no-script -p tsconfig.test.json",
+    "typecheck:tsc": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@banyancode/plugin": "workspace:*",
+    "@opencode/client": "workspace:*",
+    "@opencode/plugin": "workspace:*",
+    "@opencode/schema": "workspace:*",
+    "@opencode/theme": "workspace:*",
+    "effect": "catalog:"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.8.0",
+    "@opentui/solid": ">=0.8.0",
+    "solid-js": ">=1.9.0"
+  },
+  "devDependencies": {
+    "@opentui/core": "catalog:",
+    "@opentui/solid": "catalog:",
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native": "catalog:",
+    "solid-js": "catalog:",
+    "typescript": "catalog:"
+  }
+}
