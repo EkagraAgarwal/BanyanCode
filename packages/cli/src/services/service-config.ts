@@ -39,8 +39,11 @@ const decodeLegacy = Schema.decodeUnknownOption(
 )
 const decodeRegistration = Schema.decodeUnknownEffect(Schema.fromJsonString(Service.Info))
 
+// Only stable channels share a service: a dev or next build must never attach to, or replace, the stable server.
+const sharesStableService = (channel: string) => channel === "latest" || channel === "beta"
+
 export function filename(channel = OPENCODE_CHANNEL) {
-  if (channel === "latest" || channel === "dev" || channel === "beta" || channel === "next") return "service.json"
+  if (sharesStableService(channel)) return "service.json"
   return `service-${channel.replace(/[^a-zA-Z0-9._-]/g, "-")}.json`
 }
 
@@ -55,8 +58,9 @@ export function defaultPort(channel = OPENCODE_CHANNEL, platform = process.platf
 }
 
 function channelPort(channel: string) {
-  if (channel === "latest" || channel === "dev" || channel === "beta" || channel === "next") return 0xc0de
-  if (channel === "local") return 0xc0df
+  // Not upstream's 0xc0de/0xc0df: BanyanCode and stock OpenCode install side by side.
+  if (sharesStableService(channel)) return 0xb4c0
+  if (channel === "local") return 0xb4c1
   return 10_000 + (Number.parseInt(Hash.fast(channel).slice(0, 8), 16) % 50_000)
 }
 

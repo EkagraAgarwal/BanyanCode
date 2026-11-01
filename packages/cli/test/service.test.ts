@@ -21,20 +21,23 @@ import { testEffect } from "../../core/test/lib/effect"
 const it = testEffect(NodeFileSystem.layer)
 
 test("managed service ports are stable per installation channel", () => {
-  expect(ServiceConfig.defaultPort("latest", "linux")).toBe(0xc0de)
-  expect(ServiceConfig.defaultPort("dev", "linux")).toBe(0xc0de)
-  expect(ServiceConfig.defaultPort("beta", "linux")).toBe(0xc0de)
-  expect(ServiceConfig.defaultPort("next", "linux")).toBe(0xc0de)
-  expect(ServiceConfig.defaultPort("local", "linux")).toBe(0xc0df)
-  expect(ServiceConfig.defaultPort("latest", "darwin")).toBe(0xc0de)
+  expect(ServiceConfig.defaultPort("latest", "linux")).toBe(0xb4c0)
+  expect(ServiceConfig.defaultPort("beta", "linux")).toBe(0xb4c0)
+  expect(ServiceConfig.defaultPort("local", "linux")).toBe(0xb4c1)
+  expect(ServiceConfig.defaultPort("latest", "darwin")).toBe(0xb4c0)
+  // Canaries never share a port with stable, and stable never shares stock OpenCode's 0xc0de.
+  expect(ServiceConfig.defaultPort("dev", "linux")).not.toBe(0xb4c0)
+  expect(ServiceConfig.defaultPort("next", "linux")).not.toBe(0xb4c0)
+  expect(ServiceConfig.defaultPort("next", "linux")).not.toBe(ServiceConfig.defaultPort("dev", "linux"))
+  expect(ServiceConfig.defaultPort("latest", "linux")).not.toBe(0xc0de)
   expect(ServiceConfig.defaultPort("preview-a", "linux")).toBe(ServiceConfig.defaultPort("preview-a", "linux"))
   expect(ServiceConfig.defaultPort("preview-a", "linux")).not.toBe(ServiceConfig.defaultPort("preview-b", "linux"))
 })
 
 test("managed service ports on Windows stay below the ranges Windows and WSL reserve", () => {
-  expect(ServiceConfig.defaultPort("latest", "win32")).toBe(0x70de)
-  expect(ServiceConfig.defaultPort("dev", "win32")).toBe(0x70de)
-  expect(ServiceConfig.defaultPort("local", "win32")).toBe(0x70df)
+  expect(ServiceConfig.defaultPort("latest", "win32")).toBe(0x74c0)
+  expect(ServiceConfig.defaultPort("dev", "win32")).not.toBe(0x74c0)
+  expect(ServiceConfig.defaultPort("local", "win32")).toBe(0x74c1)
   const ports = Array.from({ length: 200 }, (_, index) => ({
     windows: ServiceConfig.defaultPort(`preview-${index}`, "win32"),
     linux: ServiceConfig.defaultPort(`preview-${index}`, "linux"),
@@ -261,11 +264,11 @@ test.skipIf(process.platform === "win32")("port owner is unknown for a free port
   ).toBeUndefined()
 })
 
-test("service filenames share release channels and identify preview channels", () => {
+test("service filenames share stable channels and isolate dev, next and preview channels", () => {
   expect(ServiceConfig.filename("latest")).toBe("service.json")
-  expect(ServiceConfig.filename("dev")).toBe("service.json")
   expect(ServiceConfig.filename("beta")).toBe("service.json")
-  expect(ServiceConfig.filename("next")).toBe("service.json")
+  expect(ServiceConfig.filename("dev")).toBe("service-dev.json")
+  expect(ServiceConfig.filename("next")).toBe("service-next.json")
   expect(ServiceConfig.filename("local")).toBe("service-local.json")
   expect(ServiceConfig.filename("preview-a")).toBe("service-preview-a.json")
   expect(ServiceConfig.filename("preview/a")).toBe("service-preview-a.json")

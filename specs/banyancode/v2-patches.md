@@ -47,7 +47,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/cli/src/brand-env.ts` | branding | maps BANYANCODE_* onto the internal OPENCODE_* namespace at CLI entry | — |
 | `packages/cli/src/commands/commands.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
 | `packages/cli/src/commands/handlers/mcp/add.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
-| `packages/cli/src/database-path.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
+| `packages/cli/src/database-path.ts` | branding | banyancode.db naming; only stable channels share the plain file | — |
 | `packages/cli/src/env-map.ts` | branding | maps BANYANCODE_* onto the internal OPENCODE_* namespace at CLI entry | — |
 | `packages/cli/src/index.ts` | branding | imports brand-env first so the env rewrite precedes every module | — |
 | `packages/cli/test/acp/subprocess.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
@@ -113,7 +113,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/cli/src/server-process.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/cli/src/services/remote-tunnel.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/cli/src/services/retained-image.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
-| `packages/cli/src/services/service-config.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/cli/src/services/service-config.ts` | branding | BanyanCode text; own default port (stock OpenCode uses 0xc0de) and dev/next isolated from the stable service | — |
 | `packages/cli/src/services/update-preflight.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/cli/src/services/updater.ts` | branding | upgrades resolve and install npm banyancode; upstream-only WinGet path removed | — |
 | `packages/cli/test/acp/error.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
@@ -168,3 +168,4 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/plugin/builtins.ts` | hook | registers the BanyanCode TUI plugin as a built-in | — |
 | `packages/tui/package.json` | hook | workspace dependency on `@banyancode/tui` for the built-in import | — |
 | `packages/tui/test/builtins-banyancode.test.ts` | hook | pins the built-in registration | — |
+| `packages/cli/test/database-path.test.ts` | fix | pins dev and next database isolation | — |
