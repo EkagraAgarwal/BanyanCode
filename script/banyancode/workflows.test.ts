@@ -20,12 +20,21 @@ const load = async (file: string): Promise<{ text: string; doc: Workflow }> => {
 }
 
 describe("release workflows", () => {
-  test("are dispatch-only until cutover", async () => {
-    for (const file of [publishFile, preflightFile]) {
-      const { doc } = await load(file)
-      expect(Object.keys(doc.on ?? {})).toEqual(["workflow_dispatch"])
-      expect(doc.on?.push).toBeUndefined()
-    }
+  test("preflight is dispatch-only until cutover", async () => {
+    const { doc } = await load(preflightFile)
+    expect(Object.keys(doc.on ?? {})).toEqual(["workflow_dispatch"])
+  })
+
+  test("publish pushes only from version tags and the dry-run branch", async () => {
+    const { doc } = await load(publishFile)
+    expect(doc.on?.push).toEqual({ tags: ["v[0-9]*"], branches: ["release-check"] })
+  })
+
+  test("a push publishes only from a tag, and anything unexpected stays a dry run", async () => {
+    const { text } = await load(publishFile)
+    expect(text).toContain('refs/tags/v*)  INPUT_VERSION="${GITHUB_REF_NAME#v}"; DRY_RUN=false ;;')
+    expect(text).toContain('*)             INPUT_VERSION="${BASE}-dev.${GITHUB_SHA:0:7}"; DRY_RUN=true ;;')
+    expect(text).toContain('if [ "${DRY_RUN}" != "false" ]; then DRY_RUN=true; fi')
   })
 
   test("publish declares version, channel and dry_run inputs", async () => {

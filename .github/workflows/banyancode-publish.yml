@@ -137,9 +137,9 @@ jobs:
           - { runs-on: ubuntu-latest,  target: linux-x64-baseline-musl }
           - { runs-on: ubuntu-latest,  target: linux-arm64 }
           - { runs-on: ubuntu-latest,  target: linux-arm64-musl }
-          - { runs-on: macos-14,       target: darwin-x64 }
-          - { runs-on: macos-14,       target: darwin-x64-baseline }
-          - { runs-on: macos-14,       target: darwin-arm64 }
+          - { runs-on: macos-15,       target: darwin-x64 }
+          - { runs-on: macos-15,       target: darwin-x64-baseline }
+          - { runs-on: macos-15,       target: darwin-arm64 }
           - { runs-on: windows-latest, target: windows-x64 }
           - { runs-on: windows-latest, target: windows-x64-baseline }
           # Bun cross-compiles the ARM64 PE on an x64 runner. If that ever fails,
