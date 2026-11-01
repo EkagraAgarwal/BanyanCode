@@ -473,6 +473,8 @@ describe("DatabaseMigration", () => {
         `)
 
         yield* db.run(sql`DELETE FROM migration WHERE id = ${legacyCredentialsMigration.id}`)
+        // Bootstrap has already imported auth.json; this test covers the migration path on its own.
+        yield* db.run(sql`DELETE FROM credential WHERE id <> 'existing'`)
         yield* DatabaseMigration.applyOnly(db, [legacyCredentialsMigration])
         yield* DatabaseMigration.applyOnly(db, [legacyCredentialsMigration])
 

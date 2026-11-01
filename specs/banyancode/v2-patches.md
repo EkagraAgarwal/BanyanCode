@@ -169,3 +169,6 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/package.json` | hook | workspace dependency on `@banyancode/tui` for the built-in import | — |
 | `packages/tui/test/builtins-banyancode.test.ts` | hook | pins the built-in registration | — |
 | `packages/cli/test/database-path.test.ts` | fix | pins dev and next database isolation | — |
+| `packages/core/src/database/migration.ts` | fix | a new database imports `auth.json`, which schema bootstrap would otherwise skip; every v1 user's database is new | — |
+| `packages/core/test/database-migration.test.ts` | fix | test setup accounts for the bootstrap import | — |
+| `packages/core/test/database-bootstrap-credentials.test.ts` | fix | pins the bootstrap import, including a corrupt `auth.json` | — |

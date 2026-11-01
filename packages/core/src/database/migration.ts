@@ -5,8 +5,10 @@ import { Effect } from "effect"
 import { supportsForeignKeyToggle } from "#sqlite"
 import type { EffectDrizzleSqlite } from "./drizzle.js"
 import { migrations } from "./migration.gen.js"
+import { importLegacyCredentials } from "./migration/20260805200742_import_legacy_credentials.js"
 import schema from "./schema.gen.js"
 import { Global } from "@opencode/util/global"
+import path from "path"
 
 type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0]
@@ -48,6 +50,13 @@ export function apply(db: Database) {
       migrations: migrations.length,
       durationMs: Date.now() - started,
     })
+    // Bootstrap records migrations without running them, so a new database never imports auth.json.
+    // BanyanCode's database is always new to a v1 user, who would otherwise be logged out of every
+    // provider. A corrupt file must not stop the app starting: log it and continue.
+    const global = yield* Global.Service
+    yield* db
+      .transaction((tx) => importLegacyCredentials(tx, path.join(global.data, "auth.json")))
+      .pipe(Effect.catchCause((cause) => Effect.logWarning("legacy credential import skipped", { cause })))
   })
 }
 
