@@ -17,4 +17,8 @@ if (process.versions.bun !== expectedBunVersion) {
   console.warn(`Warning: Bun version ${process.versions.bun} differs from expected ${expectedBunVersion}`);
 }
 '
+# Git sets GIT_DIR for hooks in a linked worktree. Turbo's per-package git status then
+# takes each package as the worktree root, misses the root .gitignore and walks
+# node_modules, which looks like a hang.
+unset GIT_DIR
 bun run check
