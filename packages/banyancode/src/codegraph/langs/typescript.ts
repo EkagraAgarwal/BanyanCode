@@ -1,0 +1,582 @@
+import type { ParseResult, ParsedNode, ParsedEdge } from "./types"
+
+const IMPORTS_REGEX = /import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["']([^"']+)["']/g
+const EXPORT_CLASS_REGEX = /export\s+class\s+(\w+)(?:\s+extends\s+(\w+))?/g
+const CLASS_REGEX = /(?:^|\n)(?!export\s+)class\s+(\w+)(?:\s+extends\s+(\w+))?/g
+const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(/g
+// Allow leading whitespace so layer-internal `const start = ...` (4-space indented
+// inside `Layer.effect(...)`) is indexed. Previously anchored on `(?:^|\n)const`
+// which silently dropped every indented layer const. The optional `: Type`
+// after a parenthesized parameter list admits return-type annotations on
+// multi-line signatures (`(input: {...}): {...} =>`), which were never indexed.
+const ARROW_CONST_REGEX =
+  /(?:^|\n)\s*(?:export\s+)?const\s+(\w+)\s*=\s*(async\s+)?(?:\([^)]*\)(?:\s*:[^=;]{1,500}?)?|[^=>\n]+)\s*=>/g
+const FACTORY_EXPORT_REGEX =
+  /(?:^|\n)export\s+const\s+(\w+)\s*=\s*((?:Tool\.define|Layer\.effect|Layer\.succeed|Layer\.scoped|Context\.Service|Context\.Tag|Layer\.mergeAll)(?:<[^>]+>)?)\s*\(/g
+// Allow optional `export ` and indentation between the newline and the
+// `interface` keyword. Real BanyanCode services use
+// `export interface Interface { ... }` as the sibling type of
+// `Context.Service<Service, Interface>()`. Previously the anchored
+// `(?:^|\n)interface` regex silently skipped these declarations.
+const INTERFACE_REGEX = /(?:^|\n)\s*(?:export\s+)?interface\s+(\w+)/g
+// Optional `export`, indentation and generic parameters: exported aliases
+// (`export type Foo<T> = ...`) were never indexed.
+const TYPE_REGEX = /(?:^|\n)\s*(?:export\s+)?type\s+(\w+)(?:<[^=]*?>)?\s*=/g
+const EFFECT_FN_REGEX = /Effect\.fn\s*\(\s*["']([^"']+)["']\s*\)/
+const EFFECT_FN_CONST_REGEX = /const\s+(\w+)\s*=\s*Effect\.fn\s*\(\s*["']([^"']+)["']\s*\)/g
+// Match a single `readonly name(args): ReturnType` member line inside an
+// `interface { ... }` block. The Context.Service<Service, Interface>() pattern
+// puts all callable members in a sibling interface, so a regex pass on each
+// interface body produces the method nodes the analyzer needs. Allow `:`
+// before the `(` so signatures like `put: (key: string) => Effect.Effect<void>`
+// match (the `:` is required by the TS interface body syntax, not optional).
+const INTERFACE_MEMBER_REGEX = /(?:^|\n)\s*(?:readonly\s+)?(\w+)\s*[:\s]\s*\(([^)]*)\)\s*[:=]\s*([^\n;]+)/g
+
+function computeLineStartOffsets(content: string): number[] {
+  const offsets = [0]
+  for (let i = 0; i < content.length; i++) {
+    if (content[i] === "\n") offsets.push(i + 1)
+  }
+  return offsets
+}
+
+// Equivalent to `content.substring(0, offset).split("\n").length`: the count
+// of line starts at or before `offset`. A "\n" exactly AT `offset` is NOT
+// counted because `substring(0, offset)` excludes the char at `offset`.
+function lineAtOffset(offsets: readonly number[], offset: number): number {
+  let lo = 0
+  let hi = offsets.length - 1
+  let count = 0
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (offsets[mid] <= offset) {
+      count = mid + 1
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  return count
+}
+
+// Index of the declaration proper. The `(?:^|\n)` anchor (and any `\s*`
+// between it and the keyword) can sit one or more lines before the
+// declaration, so the first non-whitespace char after the match start
+// carries the true declaration line. This is 1-based and points at the
+// FIRST LINE OF THE DECLARATION (the `function`/`class`/`const` keyword),
+// matching tree-sitter's `startPosition.row + 1` — the parser-mode remap
+// in codegraph-indexer keys tree-sitter `:function:<line>` endpoints off
+// this line, so a skew here silently drops every parser-owned edge.
+function declStartLine(content: string, offsets: readonly number[], matchIndex: number): number {
+  let i = matchIndex
+  while (i < content.length && /\s/.test(content[i]!)) i++
+  return lineAtOffset(offsets, i)
+}
+
+// End line of a captured body: the 1-based line of its last character
+// (`endOffset` is exclusive). Previously computed as
+// `startLine + lineAtOffset(endOffset) - lineAtOffset(matchIndex)`, which
+// assumed startLine was the ANCHOR line (`(?:^|\n)` position). startLine
+// is now the declaration line, so the end line is a pure function of the
+// offset.
+function endLineFor(offsets: readonly number[], endOffset: number): number {
+  return lineAtOffset(offsets, endOffset - 1)
+}
+
+// Forward-scan budgets for body extraction. The opening-brace discovery scan
+// stops after 8KB so brace-less generated files (many matches, no `{`/`;`)
+// don't degrade to O(n²); the brace-count pass gets 64KB so the largest real
+// bodies in this repo (a 64KB `layer` function) still capture their close.
+const OPEN_SCAN_BOUND = 8192
+const BRACE_SCAN_BOUND = 65536
+
+// FUNCTION_REGEX stops at the opening `(`. A `{` inside the parameter list
+// (`opts: Opts = {}`, destructuring) or a type-literal return type
+// (`Promise<{ a: 1 }>`) must not be mistaken for the body brace, so skip the
+// balanced parameter list and any return-type annotation first.
+function skipFunctionSignature(content: string, afterOpenParen: number): number {
+  // Bound the paren scan like every other forward scan in this file: an
+  // unbalanced `(` (e.g. inside a comment/string) must not walk to EOF per
+  // function match (O(n²) on large files — observed as a startup-index
+  // freeze on Windows). Fall back to the regex path when unbalanced inside
+  // the budget.
+  const parenLimit = Math.min(afterOpenParen + OPEN_SCAN_BOUND, content.length)
+  let i = afterOpenParen
+  let depth = 1
+  while (i < parenLimit && depth > 0) {
+    const ch = content[i]!
+    if (ch === "(") depth++
+    else if (ch === ")") depth--
+    i++
+  }
+  if (depth > 0) return afterOpenParen
+  let j = i
+  while (j < content.length && /\s/.test(content[j]!)) j++
+  if (content[j] !== ":") return i
+  let nest = 0
+  for (let k = j + 1; k < Math.min(j + OPEN_SCAN_BOUND, content.length); k++) {
+    const ch = content[k]!
+    if (ch === "<" || ch === "(" || ch === "[") nest++
+    else if (ch === ">" && content[k - 1] !== "=") nest--
+    else if (ch === ")" || ch === "]") nest--
+    else if (ch === "{") {
+      if (nest > 0) {
+        nest++
+        continue
+      }
+      let p = k - 1
+      while (p > j && /\s/.test(content[p]!)) p--
+      if (!"|&:,<".includes(content[p]!)) return k
+      nest++
+    } else if (ch === "}") nest--
+    else if (ch === ";" && nest <= 0) return k
+  }
+  return i
+}
+
+function getTSNodeBody(
+  content: string,
+  offsets: readonly number[],
+  matchIndex: number,
+  matchText: string,
+  bodyScanStart?: number,
+): { code: string; endLine: number } {
+  const afterMatchIndex = bodyScanStart ?? matchIndex + matchText.length
+  const openLimit = Math.min(afterMatchIndex + OPEN_SCAN_BOUND, content.length)
+  let firstBrace = -1
+  let firstSemicolon = -1
+  for (let i = afterMatchIndex; i < openLimit; i++) {
+    const ch = content[i]!
+    if (ch === "{") {
+      firstBrace = i
+      break
+    }
+    if (ch === ";") {
+      firstSemicolon = i
+      break
+    }
+    if ((ch === "f" && content.startsWith("function ", i)) || (ch === "c" && content.startsWith("class ", i))) {
+      break
+    }
+  }
+  if (firstBrace !== -1) {
+    const braceLimit = Math.min(firstBrace + BRACE_SCAN_BOUND, content.length)
+    let braceCount = 1
+    let i = firstBrace + 1
+    while (i < braceLimit) {
+      const ch = content[i]!
+      if (ch === "{") braceCount++
+      else if (ch === "}") {
+        braceCount--
+        if (braceCount === 0) {
+          return {
+            code: content.substring(matchIndex, i + 1),
+            endLine: endLineFor(offsets, i + 1),
+          }
+        }
+      }
+      i++
+    }
+    return {
+      code: content.substring(matchIndex, braceLimit),
+      endLine: endLineFor(offsets, braceLimit),
+    }
+  }
+  const endOffset = firstSemicolon !== -1 ? firstSemicolon + 1 : afterMatchIndex
+  return {
+    code: content.substring(matchIndex, endOffset),
+    endLine: endLineFor(offsets, endOffset),
+  }
+}
+
+const CLASS_METHOD_REGEX = /(?:^|\n)\s+(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::\s*[^{;]+)?\s*\{/g
+
+// End offset of an expression starting at `start`: the first `;`, `,` or
+// newline at bracket depth 0, or a closer that belongs to an enclosing call
+// (`f(x => y)`). A newline whose next line starts with a continuation token
+// (`|` / `&` union members, `.` chains, `?` / `:` ternaries) does not end it.
+function scanExpressionEnd(content: string, start: number): number {
+  const limit = Math.min(start + BRACE_SCAN_BOUND, content.length)
+  let depth = 0
+  for (let i = start; i < limit; i++) {
+    const ch = content[i]!
+    if (ch === "(" || ch === "[" || ch === "{") depth++
+    else if (ch === ")" || ch === "]" || ch === "}") {
+      if (depth === 0) return i
+      depth--
+    } else if ((ch === ";" || ch === ",") && depth === 0) return i
+    else if (ch === "\n" && depth === 0) {
+      let j = i + 1
+      while (j < limit && /[ \t\r]/.test(content[j]!)) j++
+      if (!"|&.?:".includes(content[j] ?? "")) return i
+    }
+  }
+  return limit
+}
+
+function getArrowBody(
+  content: string,
+  offsets: readonly number[],
+  matchIndex: number,
+  matchText: string,
+): { code: string; endLine: number } {
+  const arrowIndex = content.indexOf("=>", matchIndex + matchText.length - 2)
+  if (arrowIndex === -1) return getTSNodeBody(content, offsets, matchIndex, matchText)
+
+  const afterArrow = arrowIndex + 2
+  const sliceEnd = Math.min(afterArrow + OPEN_SCAN_BOUND, content.length)
+  const slice = content.substring(afterArrow, sliceEnd)
+  const rest = slice.trimStart()
+  if (rest.startsWith("{")) {
+    const braceStart = sliceEnd - rest.length
+    // Stop BEFORE the body brace: getTSNodeBody scans for the first `{` after
+    // the match, so including it made the scan start at the NEXT brace — an
+    // inner `if {` (range cut short) or the following function (range overrun),
+    // which misattributed call edges to the wrong enclosing node.
+    return getTSNodeBody(content, offsets, matchIndex, content.substring(matchIndex, braceStart))
+  }
+
+  // Expression body: it may start on the next line and span lines through
+  // balanced brackets (`Effect.gen(function* () {...})`, `.pipe(...)` chains).
+  const endOffset = scanExpressionEnd(content, sliceEnd - rest.length)
+  return {
+    code: content.substring(matchIndex, endOffset),
+    endLine: endLineFor(offsets, endOffset),
+  }
+}
+
+function getFactoryBody(
+  content: string,
+  offsets: readonly number[],
+  matchIndex: number,
+  matchText: string,
+): { code: string; endLine: number } {
+  const afterMatchIndex = matchIndex + matchText.length
+  const openParen = content.indexOf("(", afterMatchIndex)
+  if (openParen === -1) return getTSNodeBody(content, offsets, matchIndex, matchText)
+  const parenLimit = Math.min(openParen + BRACE_SCAN_BOUND, content.length)
+  let parenCount = 1
+  let i = openParen + 1
+  while (i < parenLimit && parenCount > 0) {
+    if (content[i] === "(") parenCount++
+    else if (content[i] === ")") parenCount--
+    i++
+  }
+  const closeParen = i - 1
+  return {
+    code: content.substring(matchIndex, closeParen + 1),
+    endLine: endLineFor(offsets, closeParen + 1),
+  }
+}
+
+function extractClassMethods(
+  classCode: string,
+  classStartLine: number,
+  fileID: string,
+  className: string,
+): ParsedNode[] {
+  const methods: ParsedNode[] = []
+  const localOffsets = computeLineStartOffsets(classCode)
+  for (const match of classCode.matchAll(CLASS_METHOD_REGEX)) {
+    const name = match[1]
+    if (name === "constructor") continue
+    const localStart = declStartLine(classCode, localOffsets, match.index)
+    const startLine = classStartLine + localStart - 1
+    const { code, endLine: localEnd } = getTSNodeBody(classCode, localOffsets, match.index!, match[0])
+    const endLine = classStartLine + localEnd - 1
+    const effectMatch = code.match(EFFECT_FN_REGEX)
+    const signature = effectMatch ? effectMatch[1] : match[0].trim()
+    methods.push({
+      id: `${fileID}:method:${className}:${name}:${startLine}`,
+      kind: "method",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
+  }
+  return methods
+}
+
+// Extract members of an `interface Interface { ... }` block. These become
+// callable nodes qualified by the enclosing Context.Service<Service, Interface>
+// class so blast_radius / preflight / code_find callers on
+// `CodegraphBuildService.start` resolve to a real method graph node instead
+// of returning 0 callers against the empty class body.
+function extractInterfaceMembers(
+  interfaceCode: string,
+  interfaceStartLine: number,
+  fileID: string,
+  interfaceName: string,
+): ParsedNode[] {
+  const members: ParsedNode[] = []
+  const seen = new Set<string>()
+  const localOffsets = computeLineStartOffsets(interfaceCode)
+  for (const match of interfaceCode.matchAll(INTERFACE_MEMBER_REGEX)) {
+    const name = match[1]
+    if (!name || name === interfaceName) continue
+    const params = match[2] ?? ""
+    const returnType = (match[3] ?? "").trim().replace(/\s*\{$/, "")
+    const localStart = declStartLine(interfaceCode, localOffsets, match.index)
+    const startLine = interfaceStartLine + localStart - 1
+    const signature = `${name}(${params.trim()}): ${returnType}`.replace(/\s+/g, " ").trim()
+    // Members live on one line in real BanyanCode code; treat the line range
+    // as the same line. Multi-line signatures fall back to a 1-line window
+    // until tree-sitter migration lands.
+    const endLine = startLine
+    const id = `${fileID}:method:${interfaceName}:${name}:${startLine}`
+    if (seen.has(id)) continue
+    seen.add(id)
+    members.push({
+      id,
+      kind: "method",
+      name,
+      startLine,
+      endLine,
+      signature,
+    })
+  }
+  return members
+}
+
+// Strip comment and string-literal regions from source text so downstream
+// classification (identifier word-scans and `includes("extends ")` /
+// `includes(name + "(")` kind heuristics) never fires inside comments or
+// strings. Replaced regions become spaces/newlines (never removed entirely)
+// so line structure and token boundaries are preserved. Regex-v1 pragmatic
+// subset: `//` line comments, `/* */` block comments, `"..."` / `'...'`
+// strings, and `` `...` `` template literals (interpolations stripped whole).
+export function stripCommentsAndStrings(code: string): string {
+  const out: string[] = []
+  let i = 0
+  let lineComment = false
+  let blockComment = false
+  let inString: '"' | "'" | "`" | undefined = undefined
+  const len = code.length
+  while (i < len) {
+    const ch = code[i]!
+    const next = i + 1 < len ? code[i + 1]! : ""
+    if (lineComment) {
+      out.push(ch === "\n" ? "\n" : " ")
+      if (ch === "\n") lineComment = false
+      i++
+      continue
+    }
+    if (blockComment) {
+      if (ch === "*" && next === "/") {
+        out.push("  ")
+        i += 2
+        blockComment = false
+        continue
+      }
+      out.push(ch === "\n" ? "\n" : " ")
+      i++
+      continue
+    }
+    if (inString) {
+      if (ch === "\\") {
+        // Escape sequence: swallow the escaped char too.
+        out.push("  ")
+        i += 2
+        continue
+      }
+      if (ch === inString) {
+        out.push(" ")
+        inString = undefined
+        i++
+        continue
+      }
+      if (ch === "\n") {
+        // Unterminated string — treat the newline as the terminator.
+        out.push("\n")
+        inString = undefined
+        i++
+        continue
+      }
+      out.push(" ")
+      i++
+      continue
+    }
+    if (ch === "/" && next === "/") {
+      out.push("  ")
+      i += 2
+      lineComment = true
+      continue
+    }
+    if (ch === "/" && next === "*") {
+      out.push("  ")
+      i += 2
+      blockComment = true
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      out.push(" ")
+      inString = ch
+      i++
+      continue
+    }
+    out.push(ch)
+    i++
+  }
+  return out.join("")
+}
+
+export function parseTypeScript(content: string, fileID: string): ParseResult {
+  const nodes: ParsedNode[] = []
+  const edges: ParsedEdge[] = []
+  const offsets = computeLineStartOffsets(content)
+
+  for (const match of content.matchAll(IMPORTS_REGEX)) {
+    const symbol = match[1]
+    if (!symbol) continue
+    edges.push({
+      id: `${fileID}:import:${symbol}`,
+      fromNodeID: `${fileID}:file`,
+      toNodeID: `module:${symbol}`,
+      kind: "imports",
+    })
+  }
+
+  for (const match of content.matchAll(EXPORT_CLASS_REGEX)) {
+    const name = match[1]
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0])
+    nodes.push({ id: `${fileID}:class:${name}:${startLine}`, kind: "class", name, startLine, endLine, code })
+    nodes.push(...extractClassMethods(code, startLine, fileID, name))
+  }
+
+  for (const match of content.matchAll(CLASS_REGEX)) {
+    const name = match[1]
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0])
+    nodes.push({ id: `${fileID}:class:${name}:${startLine}`, kind: "class", name, startLine, endLine, code })
+    nodes.push(...extractClassMethods(code, startLine, fileID, name))
+  }
+
+  for (const match of content.matchAll(FUNCTION_REGEX)) {
+    const name = match[1]
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getTSNodeBody(
+      content,
+      offsets,
+      match.index,
+      match[0],
+      skipFunctionSignature(content, match.index + match[0].length),
+    )
+    const effectMatch = code.match(EFFECT_FN_REGEX)
+    const signature = effectMatch ? effectMatch[1] : match[0].trim()
+    nodes.push({
+      id: `${fileID}:function:${name}:${startLine}`,
+      kind: "function",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
+  }
+
+  for (const match of content.matchAll(FACTORY_EXPORT_REGEX)) {
+    const name = match[1]
+    const factoryCall = match[2]
+    const signature = factoryCall.replace(/\s*\($/, "")
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getFactoryBody(content, offsets, match.index!, match[0])
+    nodes.push({
+      id: `${fileID}:factory:${name}:${startLine}`,
+      kind: "function",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
+  }
+
+  for (const match of content.matchAll(ARROW_CONST_REGEX)) {
+    const name = match[1]
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getArrowBody(content, offsets, match.index!, match[0])
+    const effectMatch = code.match(EFFECT_FN_REGEX)
+    const signature = effectMatch ? effectMatch[1] : match[0].trim()
+    nodes.push({
+      id: `${fileID}:function:${name}:${startLine}`,
+      kind: "function",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
+  }
+
+  for (const match of content.matchAll(EFFECT_FN_CONST_REGEX)) {
+    const name = match[1]
+    const signature = match[2]
+    const startLine = declStartLine(content, offsets, match.index)
+    const afterMatchIndex = match.index + match[0].length
+    const openLimit = Math.min(afterMatchIndex + OPEN_SCAN_BOUND, content.length)
+    let firstBrace = -1
+    for (let i = afterMatchIndex; i < openLimit; i++) {
+      if (content[i] === "{") {
+        firstBrace = i
+        break
+      }
+    }
+    let code = match[0]
+    let endLine = endLineFor(offsets, match.index + match[0].length)
+    if (firstBrace !== -1) {
+      const braceLimit = Math.min(firstBrace + BRACE_SCAN_BOUND, content.length)
+      let braceCount = 1
+      let i = firstBrace + 1
+      while (i < braceLimit) {
+        if (content[i] === "{") braceCount++
+        else if (content[i] === "}") {
+          braceCount--
+          if (braceCount === 0) {
+            code = content.substring(match.index, i + 1)
+            endLine = endLineFor(offsets, i + 1)
+            break
+          }
+        }
+        i++
+      }
+      if (code === match[0]) {
+        code = content.substring(match.index, braceLimit)
+        endLine = endLineFor(offsets, braceLimit)
+      }
+    }
+    nodes.push({
+      id: `${fileID}:function:${name}:${startLine}`,
+      kind: "function",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
+  }
+
+  for (const match of content.matchAll(INTERFACE_REGEX)) {
+    const name = match[1]
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getTSNodeBody(content, offsets, match.index, match[0])
+    nodes.push({ id: `${fileID}:type:${name}:${startLine}`, kind: "type", name, startLine, endLine, code })
+    nodes.push(...extractInterfaceMembers(code, startLine, fileID, name))
+  }
+
+  for (const match of content.matchAll(TYPE_REGEX)) {
+    const name = match[1]
+    const startLine = declStartLine(content, offsets, match.index)
+    // A type alias body is an expression, never a brace block: getTSNodeBody
+    // would scan ahead to the NEXT `{` (often the following function) and
+    // swallow it, attributing that function's calls to the type.
+    const endOffset = scanExpressionEnd(content, match.index! + match[0].length)
+    const code = content.substring(match.index!, endOffset)
+    const endLine = endLineFor(offsets, endOffset)
+    nodes.push({ id: `${fileID}:type:${name}:${startLine}`, kind: "type", name, startLine, endLine, code })
+  }
+
+  return { nodes, edges }
+}

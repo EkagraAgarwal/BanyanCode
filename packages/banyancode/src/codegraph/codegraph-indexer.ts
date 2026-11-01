@@ -1,0 +1,2176 @@
+export * as CodegraphIndexer from "./codegraph-indexer"
+
+import { Cause, Effect, Queue, Ref, Schema } from "effect"
+import { createHash, randomUUID } from "node:crypto"
+import path from "path"
+import type { Storage } from "../storage/index.js"
+import type { Interface as CodegraphRepoInterface } from "./codegraph-repo.js"
+import { fs } from "./fs.js"
+import type { DirEntry } from "./fs.js"
+import type { CodegraphEdge, CodegraphFile, CodegraphNode, CodegraphNodeKind } from "./types.js"
+import { getParserForPath, TREE_SITTER_WALK_EXTENSIONS } from "./langs/registry.js"
+import type { ParseResult } from "./langs/types.js"
+import { parseTypeScript, stripCommentsAndStrings } from "./langs/typescript.js"
+import { parsePython } from "./langs/python.js"
+import {
+  ensureQuerySourcesLoaded,
+  parseLanguageWithTreeSitter,
+  parsePythonWithTreeSitter,
+  parseTypeScriptWithTreeSitter,
+} from "./langs/query-executor.js"
+import { ensureWebTreeSitterReady } from "./langs/tree-sitter.js"
+import { extractTestFileImports } from "./codegraph-helpers.js"
+
+const TS_LIKE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"])
+const PY_LIKE_EXTS = new Set([".py", ".pyw"])
+
+// Phase 3 entrypoint heuristic — kept here (not in repository-intelligence)
+// because it must run during the parse pass so the column lands in the DB
+// the same build that writes the node. The function/class/method kinds are
+// the entrypoint candidates: routes (app.get(...)), CLI handlers
+// (cli-handler / cmd-* names), paths under commands/cli/routes/handlers,
+// and the bin/main export of any package.json.
+const ENTRYPOINT_PATH_PATTERNS = [
+  /\/commands?\//i,
+  /\/cli\//i,
+  /\/routes?\//i,
+  /\/handlers?\//i,
+  /\/bin\//i,
+  /\/scripts?\//i,
+]
+const ENTRYPOINT_NAME_HINTS = /(handler|^main$|mainFn|mainHandler|^route$|^cmd$|^command$|^setup$|^bootstrap$)/i
+const ROUTE_REGEX_HINT = /\b(app|router|fastify|instance)\s*\.\s*(get|post|put|delete|patch|head|options|trace)\s*\(/i
+const ENTRYPOINT_KINDS: ReadonlyArray<CodegraphNodeKind> = ["function", "class", "method"]
+
+const isEntrypointNode = (node: Pick<CodegraphNode, "name" | "kind" | "code" | "signature">, filePath: string): boolean => {
+  if (!ENTRYPOINT_KINDS.includes(node.kind)) return false
+  if (ENTRYPOINT_NAME_HINTS.test(node.name)) return true
+  if (ENTRYPOINT_PATH_PATTERNS.some((p) => p.test(filePath))) return true
+  const sig = node.signature
+  if (sig && ENTRYPOINT_PATH_PATTERNS.some((p) => p.test(sig))) return true
+  if (node.code && ROUTE_REGEX_HINT.test(node.code)) return true
+  return false
+}
+
+export class CodegraphError extends Schema.TaggedError<CodegraphError>()("Banyan/CodegraphError", {
+  message: Schema.String,
+}) {}
+
+export interface Interface {
+  readonly index: (input: {
+    root: string
+    force?: boolean
+    maxFileSizeBytes?: number
+    excludePatterns?: readonly string[]
+    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+  }) => Effect.Effect<
+    {
+      indexed: number
+      skipped: number
+      scannedFiles: number
+      /**
+       * Phase 0+2: files the indexer considered eligible for indexing.
+       * This is the union of (a) code/artifact candidates the walker
+       * reached and passed extension/artifact filters, plus (b) code
+       * candidates excluded only for size budget. Gitignored /
+       * banyanignored files are NOT eligible (the indexer never sees
+       * them). Cached files remain eligible.
+       *
+       * Important: previously this counted `allFiles.length` (every
+       * walked file including non-code extensions like `.json`, `.lock`,
+       * images). For a monorepo whose non-code files dominate, that
+       * cap pushed coverage to ~0.62 and made the `STALENESS_COVERAGE_HIGH
+       * = 0.5` cliff reachable. Denominator now counts only files the
+       * indexer would actually attempt so a fully-cached rebuild scores
+       * near 1.0.
+       */
+      eligibleFiles: number
+      symbolsIndexed: number
+      skippedByReason: {
+        gitignored: number
+        banyanignored: number
+        artifact: number
+        tooLarge: number
+        minified: number
+        tooLargeParse: number
+        cached: number
+        readError: number
+        parseFailure: number
+      }
+      parseErrors: Array<{ path: string; cause: string; indexedAt: number }>
+    },
+    CodegraphError,
+    never
+  >
+  readonly applyChanges: (input: {
+    root: string
+    addedOrChanged: string[]
+    removed: string[]
+    force?: boolean
+    maxFileSizeBytes?: number
+    excludePatterns?: readonly string[]
+    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+  }) => Effect.Effect<{
+    indexed: number
+    removed: number
+    skipped: number
+    parseErrors: Array<{ path: string; cause: string; indexedAt: number }>
+  }>
+  readonly indexFiles: (input: {
+    root: string
+    paths: string[]
+    force?: boolean
+    maxFileSizeBytes?: number
+    excludePatterns?: readonly string[]
+    onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+  }) => Effect.Effect<{
+    indexed: number
+    skipped: number
+    parseErrors: Array<{ path: string; cause: string; indexedAt: number }>
+  }>
+  readonly removeFiles: (input: {
+    root: string
+    paths: string[]
+  }) => Effect.Effect<void, never, never>
+  readonly cancel: () => Effect.Effect<void, never, never>
+}
+
+// Peak-RAM budget for the parse→persist pipeline. parsedQueue (below) is the
+// bounded producer-consumer between parse fibers (producers) and the single
+// drain fiber (consumer); the persist batch bounds how many parsed files the
+// drain holds before flushing to SQLite. Both keep the build's live set
+// O(queue + batch) instead of O(total files).
+export const PARSED_QUEUE_CAPACITY = 128
+export const PERSIST_BATCH_DEFAULT = 25
+export const PARSE_CONCURRENCY_DEFAULT = 8
+export const PARSE_CONCURRENCY_MAX = 32
+
+const clampInt = (value: number, min: number, max: number, fallback: number): number => {
+  if (!Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, Math.floor(value)))
+}
+
+// Parse-fanout budget. BANYANCODE_INDEX_CONCURRENCY overrides; default 8
+// preserves current throughput. Adaptive (on unless
+// BANYANCODE_INDEX_ADAPTIVE=0) steps the fanout down under heap pressure so
+// a large monorepo build degrades gracefully instead of OOMing.
+export const resolveParseConcurrency = (): number => {
+  const base = clampInt(
+    Number(process.env.BANYANCODE_INDEX_CONCURRENCY ?? PARSE_CONCURRENCY_DEFAULT),
+    1,
+    PARSE_CONCURRENCY_MAX,
+    PARSE_CONCURRENCY_DEFAULT,
+  )
+  if (process.env.BANYANCODE_INDEX_ADAPTIVE === "0") return base
+  const heapUsed = process.memoryUsage().heapUsed
+  if (heapUsed > 1_500_000_000) return Math.max(1, Math.floor(base / 2))
+  if (heapUsed > 800_000_000) return Math.max(2, Math.floor((base * 3) / 4))
+  return base
+}
+
+export const resolvePersistBatchSize = (): number =>
+  clampInt(
+    Number(process.env.BANYANCODE_INDEX_PERSIST_BATCH ?? PERSIST_BATCH_DEFAULT),
+    1,
+    200,
+    PERSIST_BATCH_DEFAULT,
+  )
+
+// Bounded iterator over an already-walked candidate list. Yields fixed-size
+// slices so the parse phase can be fed chunk-by-chunk, keeping only the
+// current chunk's closures live instead of one closure per file.
+export function* streamCandidateBatches<T>(candidates: readonly T[], batchSize: number): Generator<readonly T[]> {
+  const size = Math.max(1, Math.floor(batchSize))
+  for (let i = 0; i < candidates.length; i += size) {
+    yield candidates.slice(i, i + size)
+  }
+}
+
+const DEFAULT_IGNORED = [
+  "node_modules",
+  "dist",
+  "build",
+  "coverage",
+  ".next",
+  ".cache",
+  "target",
+  "vendor",
+  "out",
+  "temp",
+  ".sst",
+  ".turbo",
+  ".drizzle",
+  ".git",
+  ".opencode",
+  ".banyancode",
+  ".bun",
+  ".bun-cache",
+  // BanyanCode runtime artifacts left at a workspace root. A *.db is the
+  // indexer's own DB (codegraph.sql.ts, memory.sql.ts, subagent-*.sql.ts);
+  // *.db-wal / *.db-shm are SQLite sidecars. Always exclude — they are
+  // never legitimate source code, and walking them just logs noisy
+  // "exceeding size limit" warnings on every build.
+  "*.db",
+  "*.db-wal",
+  "*.db-shm",
+  "*.lock",
+]
+
+// Out-of-product UI packages that the codegraph never needs to index.
+// These are out of scope per AGENTS.md ("desktop, web, app, storybook
+// packages are explicitly out of scope"). They are still respected
+// when the user explicitly lists them in `banyancode_codegraph_exclude_patterns`
+// or `.banyancode/ignore`, but they are also excluded by default so
+// that a fresh build does not waste time walking packages/desktop etc.
+const DEFAULT_PRODUCT_EXCLUDES = [
+  "packages/web",
+  "packages/app",
+  "packages/desktop",
+  "packages/storybook",
+]
+
+// Auto-generated SDK output (regenerated by `bun ./packages/sdk/js/script/build.ts`
+// via @hey-api/openapi-ts). These directories contain files like
+// `types.gen.ts` (~250KB) with single-line `export type Foo = { ... }` declarations
+// that exceed 5000 chars on one line. The minified/compiled heuristic at
+// codegraph-indexer.ts:488 false-positives on them, and regenerating the SDK
+// churns the entire graph on every build. Path-based exclusion is unambiguous
+// and cheaper than sniffing each file's header for a `@hey-api/openapi-ts` marker.
+const DEFAULT_GENERATED_EXCLUDES = [
+  "packages/sdk/js/src/gen",
+  "packages/sdk/js/src/v2/gen",
+]
+
+export const make = (
+  repo: CodegraphRepoInterface,
+  storage: Storage.Interface,
+): Effect.Effect<Interface> =>
+  Effect.gen(function* () {
+    const cancelled = yield* Ref.make(false)
+
+    // Bundle anchor: query-executor's `.scm` text imports — and transitively
+    // tree-sitter.ts's wasm imports — must stay statically reachable from
+    // the production graph, because `packages/opencode/script/build.ts`
+    // validates that all 20 tree-sitter assets (17 wasm + 3 scm) exist in
+    // compiled binaries and fails the build otherwise. This call also primes
+    // the module-level query-source cache used by the per-file tree-sitter
+    // parse path below (Phase 0: TS/JS/Python via .scm query edges, plus the
+    // 13 AST-walk adapter languages). It builds a 3-entry Map from bundled
+    // strings — microseconds, memoized per process, no wasm instantiation
+    // (that happens once per build in `ensureWebTreeSitterReady`, called at
+    // the top of `index` and `applyChanges`).
+    yield* Effect.promise(() => ensureQuerySourcesLoaded())
+
+    // Nested .gitignore support: per-build cache of compiled patterns keyed by
+    // directory (null = no .gitignore or nothing to add). Populated lazily by
+    // loadDirGitignore during the walk and by applyChanges' ancestor scan.
+    const nestedGitignoreCache = new Map<string, IgnorePattern[] | null>()
+
+    const loadIgnoreContext = (root: string, excludePatterns?: readonly string[]): Effect.Effect<IgnoreContext> => {
+      return Effect.gen(function* () {
+        nestedGitignoreCache.clear()
+        const defaults = [...DEFAULT_IGNORED, ...DEFAULT_PRODUCT_EXCLUDES, ...DEFAULT_GENERATED_EXCLUDES]
+          .map((raw) => compileIgnorePattern(raw, root))
+          .filter((p): p is IgnorePattern => p !== undefined)
+        const rootGit: IgnorePattern[] = []
+        const gitignorePath = path.join(root, ".gitignore")
+        if (yield* fs.existsSafe(gitignorePath)) {
+          const content = yield* fs.readFileStringSafe(gitignorePath).pipe(Effect.orDie)
+          if (content) {
+            for (const line of content.split("\n")) {
+              const pattern = compileIgnorePattern(line, root)
+              if (pattern) rootGit.push(pattern)
+            }
+          }
+        }
+        const banyan: IgnorePattern[] = []
+        const banyancodeIgnorePath = path.join(root, ".banyancode", "ignore")
+        if (yield* fs.existsSafe(banyancodeIgnorePath)) {
+          const content = yield* fs.readFileStringSafe(banyancodeIgnorePath).pipe(Effect.orDie)
+          if (content) {
+            for (const line of content.split("\n")) {
+              const pattern = compileIgnorePattern(line, root)
+              if (pattern) banyan.push(pattern)
+            }
+          }
+        }
+        if (excludePatterns) {
+          for (const raw of excludePatterns) {
+            const pattern = compileIgnorePattern(raw, root)
+            if (pattern) banyan.push(pattern)
+          }
+        }
+        return { root, defaults, rootGit, banyan, nested: nestedGitignoreCache }
+      })
+    }
+
+    const loadDirGitignore = (dir: string): Effect.Effect<void> => {
+      if (nestedGitignoreCache.has(dir)) return Effect.void
+      return Effect.gen(function* () {
+        const gitignorePath = path.join(dir, ".gitignore")
+        if (yield* fs.existsSafe(gitignorePath)) {
+          const content = yield* fs.readFileStringSafe(gitignorePath).pipe(Effect.orDie)
+          const patterns: IgnorePattern[] = []
+          if (content) {
+            for (const line of content.split("\n")) {
+              const pattern = compileIgnorePattern(line, dir)
+              if (pattern) patterns.push(pattern)
+            }
+          }
+          nestedGitignoreCache.set(dir, patterns)
+        } else {
+          nestedGitignoreCache.set(dir, null)
+        }
+      })
+    }
+
+    const decideIgnored = (ctx: IgnoreContext, fullPath: string, isDir: boolean): "git" | "banyan" | "none" => {
+      let dir = path.dirname(fullPath)
+      while (dir !== ctx.root && dir.length > ctx.root.length) {
+        const nested = ctx.nested.get(dir)
+        if (nested && nested.length > 0) {
+          const decided = evaluatePatterns(nested, fullPath, isDir)
+          if (decided !== undefined) return decided ? "git" : "none"
+        }
+        const parent = path.dirname(dir)
+        if (parent === dir) break
+        dir = parent
+      }
+      const rootDecision = evaluatePatterns(ctx.rootGit, fullPath, isDir)
+      if (rootDecision !== undefined) return rootDecision ? "git" : "none"
+      if (evaluatePatterns(ctx.defaults, fullPath, isDir) === true) return "git"
+      return evaluatePatterns(ctx.banyan, fullPath, isDir) === true ? "banyan" : "none"
+    }
+
+    const walkDirectory = (
+      dir: string,
+      maxFileSizeBytes: number,
+      root: string,
+      ctx: IgnoreContext,
+    ): Effect.Effect<WalkResult> => {
+      const walkSubdir = (subdir: string): Effect.Effect<WalkResult> => {
+        if (decideIgnored(ctx, subdir, true) !== "none") {
+          return Effect.succeed({ files: [], skippedBySize: 0, skippedByGitignore: 1, skippedByBanyanignore: 0 })
+        }
+        return walkDirectory(subdir, maxFileSizeBytes, root, ctx)
+      }
+      return Effect.gen(function* () {
+        if (dir !== root) yield* loadDirGitignore(dir)
+        const entries = yield* fs.readDirectoryEntries(dir).pipe(Effect.catch(() => Effect.succeed<readonly DirEntry[]>([])))
+        const dirNames: string[] = []
+        const fileNames: string[] = []
+        for (const entry of entries) {
+          if (entry.type === "directory") dirNames.push(path.basename(entry.name))
+          else if (entry.type === "file") fileNames.push(entry.name)
+        }
+        const subResults = yield* Effect.all(dirNames.map((name) => walkSubdir(path.join(dir, name))), {
+          concurrency: resolveParseConcurrency(),
+          discard: false,
+        })
+        let skippedBySize = 0
+        let skippedByGitignore = 0
+        let skippedByBanyanignore = 0
+        const files: CandidateFile[] = []
+        for (const sub of subResults) {
+          // Element-wise append: `files.push(...sub.files)` spreads the
+          // child array as call arguments (arg-list blowup on large dirs)
+          // and holds both arrays fully live; the loop keeps peak at one
+          // element.
+          for (const f of sub.files) files.push(f)
+          skippedBySize += sub.skippedBySize
+          skippedByGitignore += sub.skippedByGitignore
+          skippedByBanyanignore += sub.skippedByBanyanignore
+        }
+        for (const name of fileNames) {
+          const fullPath = path.join(dir, name)
+          const ignored = decideIgnored(ctx, fullPath, false)
+          if (ignored === "git") {
+            skippedByGitignore++
+            continue
+          }
+          if (ignored === "banyan") {
+            skippedByBanyanignore++
+            continue
+          }
+          // Non-indexable paths (notes.txt, *.sqlite-wal sidecars, other
+          // runtime binaries) are dropped uncounted HERE, before the size
+          // check. The post-walk filter (codeFiles = allFiles.filter(
+          // isIndexablePath)) would drop them anyway; classifying them for
+          // size first lets an oversized sidecar — e.g. a test/user SQLite
+          // WAL just over the 1MB default — pollute the tooLarge bucket and
+          // inflate eligibleFiles (which adds skippedBySize to the
+          // graphCoverage denominator). Ignore checks stay first so
+          // gitignored/banyanignored files keep their bucket counts
+          // regardless of indexability.
+          if (!isIndexablePath(fullPath)) continue
+          const stats = yield* fs.stat(fullPath)
+          if (stats === undefined) continue
+          if (stats.size > maxFileSizeBytes) {
+            yield* Effect.logDebug(`Skipping file exceeding size limit: ${path.relative(root, fullPath).replace(/\\/g, "/")} (${stats.size} bytes)`)
+            skippedBySize++
+            continue
+          }
+          files.push({
+            path: fullPath,
+            sizeBytes: Number(stats.size),
+            mtimeMs: Math.floor(stats.mtimeMs),
+          })
+        }
+        return { files, skippedBySize, skippedByGitignore, skippedByBanyanignore }
+      })
+    }
+
+    const hashContent = (content: string | undefined): string => {
+      if (!content) return ""
+      return createHash("sha256").update(content).digest("hex")
+    }
+
+    const classifyFileKind = (filePath: string, content: string): CodegraphNodeKind | undefined => {
+      const base = path.basename(filePath)
+      const lower = base.toLowerCase()
+      const normPath = filePath.replace(/\\/g, "/")
+      if (/\.(test|spec)\.(tsx?|jsx?|mts|cts|mjs|cjs)$/i.test(base)) return "test"
+
+      if (lower.endsWith(".md")) return "doc"
+      if (lower.startsWith("readme")) return "doc"
+      if (lower.startsWith("changelog")) return "doc"
+      if (lower.startsWith("contributing")) return "doc"
+      if (lower.startsWith("design") && lower.endsWith(".md")) return "doc"
+      if (/\/(?:docs|rfcs)\/.*\.md$/i.test(normPath)) return "doc"
+
+      if (lower === "dockerfile" || lower.startsWith("dockerfile.") || lower.endsWith(".dockerfile")) return "docker"
+      if (lower === "compose.yml" || lower === "compose.yaml") return "docker"
+      if (lower === "docker-compose.yml" || lower === "docker-compose.yaml") return "docker"
+
+      if (/\/\.github\/workflows\/.+\.(yml|yaml)$/i.test(normPath)) return "ci"
+      if (lower === ".gitlab-ci.yml") return "ci"
+      if (lower === "jenkinsfile") return "ci"
+      if (/\/\.circleci\/.+\.(yml|yaml)$/i.test(normPath)) return "ci"
+      if (lower.startsWith("azure-pipelines") && lower.endsWith(".yml")) return "ci"
+
+      if (lower.startsWith(".env")) return "env"
+      if (lower === ".envrc") return "env"
+      if (lower.startsWith("dotenv")) return "env"
+
+      if (lower === "package.json") return "config"
+      if (lower.startsWith("tsconfig") && lower.endsWith(".json")) return "config"
+      if (lower === "pnpm-workspace.yaml" || lower === "pnpm-workspace.yml") return "config"
+      if (lower === "pyproject.toml") return "config"
+      if (lower === "cargo.toml") return "config"
+      if (lower === "go.mod") return "config"
+      if (/\.config\.(json|js|ts)$/i.test(base) || lower === "config.json") return "config"
+
+      if (/\.generated\.(ts|js)$/i.test(base)) return "generated"
+      if (/code generated by/i.test(content)) return "generated"
+      if (/app\.(get|post|put|delete|patch|all|use)\s*\(/m.test(content)) return "route"
+      return undefined
+    }
+
+    const artifactFileName = (filePath: string, kind: CodegraphNodeKind): string => {
+      const base = path.basename(filePath)
+      if (kind === "package") return "package"
+      if (kind === "build") return base
+      if (kind === "docker" || kind === "ci" || kind === "env") return base
+      const ext = path.extname(base)
+      return ext ? base.slice(0, -ext.length) : base
+    }
+
+    // Shared type and constants at layer factory level
+type ParsedFile = {
+  readonly file: CodegraphFile
+  readonly nodes: CodegraphNode[]
+  readonly edges: CodegraphEdge[]
+  readonly relativePath: string
+  readonly skipped: boolean
+  readonly previousFileID?: string
+}
+
+// Phase 0 tree-sitter: per-file parse outcome. `backend` is the parser that
+// produced the nodes; `error` is non-null when the tree-sitter path failed
+// (wasm unavailable / exception → regex fallback) or reported a syntax error
+// (ERROR / MISSING node). The file ALWAYS continues with the (regex) result.
+type ParseOutcome = {
+  readonly result: ParseResult
+  readonly backend: "regex" | "tree-sitter"
+  readonly error: { message: string } | null
+}
+
+const treeSitterParseWithFallback = (
+  parse: Effect.Effect<ParseResult, unknown, never>,
+  regexFallback: () => ParseResult,
+): Effect.Effect<ParseOutcome, never, never> =>
+  parse.pipe(
+    Effect.map((result) => ({
+      result,
+      backend: result.backend === "tree-sitter" ? ("tree-sitter" as const) : ("regex" as const),
+      error: result.syntaxError
+        ? { message: `tree-sitter syntax error at line ${result.syntaxError.line}: ${result.syntaxError.message}` }
+        : null,
+    })),
+    // The tree-sitter path must NEVER fail an index build: wasm unavailable
+    // or an exception inside the parse falls back to the regex parser.
+    Effect.catchCause((cause) =>
+      Effect.succeed({
+        result: regexFallback(),
+        backend: "regex" as const,
+        error: { message: `tree-sitter unavailable: ${Cause.pretty(cause)}` },
+      }),
+    ),
+  )
+const CHECKPOINT_EVERY = 250
+type CandidateFile = {
+  readonly path: string
+  readonly sizeBytes: number
+  readonly mtimeMs: number
+}
+type WalkResult = {
+  files: CandidateFile[]
+  skippedBySize: number
+  skippedByGitignore: number
+  skippedByBanyanignore: number
+}
+
+const indexCandidateFileCore = (
+  candidate: CandidateFile,
+  relativePath: string,
+  cfg: {
+    input: {
+      root: string
+      force?: boolean
+      maxFileSizeBytes?: number
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+    }
+    maxFileSizeBytes: number
+    total: number
+    parsedQueue: Queue.Queue<ParsedFile>
+    skippedParsed: (rp: string) => ParsedFile
+    skippedRef: Ref.Ref<number>
+    skippedTooLargeParseRef: Ref.Ref<number>
+    skippedMinifiedRef: Ref.Ref<number>
+    skippedArtifactRef: Ref.Ref<number>
+    skippedReadErrorRef: Ref.Ref<number>
+    skippedParseFailureRef: Ref.Ref<number>
+    skippedCachedRef: Ref.Ref<number>
+    cancelled: Ref.Ref<boolean>
+    currentlyParsingRef: Ref.Ref<string | undefined>
+    progressCounter: Ref.Ref<number>
+    // Phase 2: fileIDs that hit the content-hash cache in this build.
+    // After the drain loop we batch-update `indexed_at` on these so any
+    // downstream consumer that compares mtime to indexed_at doesn't get
+    // stuck on a cached file forever.
+    cachedFileIDsRef: Ref.Ref<Set<string>>
+    // Phase 0 tree-sitter: BANYANCODE_TS_EDGES mode ("derived" default).
+    // Read once per build; parser mode lets tree-sitter query edges
+    // (calls / yield / service_access) survive for tree-sitter-parsed files.
+    edgeMode: "derived" | "parser"
+    // Phase 0 tree-sitter (parser mode only): fileIDs whose tree-sitter
+    // query edges were actually stored this build (parser owns their call
+    // edges), plus the stored parser-edge ids. rebuildDerivedGraph uses
+    // them to skip the delete+regenerate pass for parser-owned call edges.
+    parserFileIDsRef: Ref.Ref<Set<string>>
+    parserEdgeIDsRef: Ref.Ref<Set<string>>
+    existingFilesByPath: ReadonlyMap<string, CodegraphFile>
+  },
+): Effect.Effect<void, never, never> => {
+  return Effect.gen(function* () {
+    yield* Ref.set(cfg.currentlyParsingRef, relativePath)
+    if (yield* Ref.get(cfg.cancelled)) {
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
+      return
+    }
+
+    const filePath = candidate.path
+    const ext = path.extname(filePath).toLowerCase()
+    const existing = cfg.existingFilesByPath.get(filePath)
+    if (
+      existing &&
+      !cfg.input.force &&
+      existing.sizeBytes === candidate.sizeBytes &&
+      existing.mtimeMs === candidate.mtimeMs
+    ) {
+      yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+      yield* Ref.update(cfg.skippedCachedRef, (n) => n + 1)
+      yield* Ref.update(cfg.cachedFileIDsRef, (s) => {
+        s.add(existing.id)
+        return s
+      })
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
+      return
+    }
+
+    const content = yield* fs.readFileStringSafe(filePath)
+    if (content === undefined) {
+      yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+      yield* Ref.update(cfg.skippedReadErrorRef, (n) => n + 1)
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
+      return
+    }
+
+    if (content.length > cfg.maxFileSizeBytes) {
+      yield* Effect.logDebug(`Skipping large file (potential bundle): ${relativePath} (${content.length} chars, limit: ${cfg.maxFileSizeBytes})`)
+      yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+      yield* Ref.update(cfg.skippedTooLargeParseRef, (n) => n + 1)
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
+      return
+    }
+
+    const contentHash = hashContent(content)
+    if (existing && existing.contentHash === contentHash && !cfg.input.force) {
+      yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+      yield* Ref.update(cfg.skippedCachedRef, (n) => n + 1)
+      // Phase 2: track cached fileIDs so the drain loop can refresh
+      // `indexed_at` in one batched UPDATE after the parse pass.
+      yield* Ref.update(cfg.cachedFileIDsRef, (s) => {
+        s.add(existing.id)
+        return s
+      })
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
+      return
+    }
+
+    const lines = content.split("\n")
+    const lineCount = lines.length
+
+    if (lines.some((line) => line.length > 5000)) {
+      yield* Effect.logDebug(`Skipping minified/compiled file: ${relativePath}`)
+      yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+      yield* Ref.update(cfg.skippedMinifiedRef, (n) => n + 1)
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
+      return
+    }
+
+    const baseForArtifact = path.basename(filePath).toLowerCase()
+    const normPathForArtifact = filePath.replace(/\\/g, "/")
+    const isArtifact =
+      (normPathForArtifact.endsWith("package.json") ||
+        normPathForArtifact.endsWith("dockerfile") ||
+        normPathForArtifact.includes("dockerfile.") ||
+        normPathForArtifact.endsWith(".dockerfile") ||
+        normPathForArtifact.endsWith("compose.yml") ||
+        normPathForArtifact.endsWith("compose.yaml") ||
+        normPathForArtifact.endsWith("docker-compose.yml") ||
+        normPathForArtifact.endsWith("docker-compose.yaml") ||
+        normPathForArtifact.endsWith("jenkinsfile") ||
+        normPathForArtifact.endsWith(".gitlab-ci.yml") ||
+        (normPathForArtifact.includes("azure-pipelines") && normPathForArtifact.endsWith(".yml")) ||
+        (baseForArtifact.startsWith("tsconfig") && baseForArtifact.endsWith(".json")) ||
+        normPathForArtifact.endsWith("pnpm-workspace.yaml") ||
+        normPathForArtifact.endsWith("pnpm-workspace.yml") ||
+        normPathForArtifact.endsWith("pyproject.toml") ||
+        normPathForArtifact.endsWith("cargo.toml") ||
+        normPathForArtifact.endsWith("go.mod") ||
+        normPathForArtifact.endsWith(".envrc") ||
+        normPathForArtifact.endsWith(".env.example") ||
+        baseForArtifact.startsWith(".env") ||
+        baseForArtifact.startsWith("dotenv") ||
+        /\/\.github\/workflows\/.+\.(yml|yaml)$/i.test(normPathForArtifact) ||
+        /\/\.circleci\/.+\.(yml|yaml)$/i.test(normPathForArtifact) ||
+        /\.config\.(json|js|ts)$/i.test(baseForArtifact) ||
+        baseForArtifact === "config.json") &&
+      baseForArtifact !== "dockerfile" &&
+      !baseForArtifact.startsWith("dockerfile.") &&
+      !baseForArtifact.endsWith(".dockerfile")
+    const fileKind = classifyFileKind(filePath, content)
+    if (isArtifact && !fileKind) {
+      yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+      yield* Ref.update(cfg.skippedArtifactRef, (n) => n + 1)
+      yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
+      return
+    }
+
+    const parser = getParserForPath(filePath)
+    const fileID = existing?.id ?? randomUUID()
+    // Phase 0 tree-sitter: TS/JS/Python route through the tree-sitter parse
+    // (node extraction stays regex inside query-executor; the tree-sitter
+    // pass adds query edges + syntax-error detection). Every failure path
+    // falls back to the regex parser — the build never fails on a parse.
+    let outcome: ParseOutcome
+    if (isArtifact) {
+      outcome = { result: { nodes: [], edges: [] }, backend: "regex", error: null }
+    } else if (TS_LIKE_EXTS.has(ext)) {
+      outcome = yield* treeSitterParseWithFallback(
+        parseTypeScriptWithTreeSitter(content, fileID),
+        () => parseTypeScript(content, fileID),
+      )
+    } else if (PY_LIKE_EXTS.has(ext)) {
+      outcome = yield* treeSitterParseWithFallback(
+        parsePythonWithTreeSitter(content, fileID),
+        () => parsePython(content, fileID),
+      )
+    } else if (TREE_SITTER_WALK_EXTENSIONS.includes(ext)) {
+      // Phase 5 (Batch 3): the 13 AST-walk languages (rust/go/java/c/cpp/
+      // csharp/ruby/php/bash/json/zig/toml/yaml) route through
+      // parseLanguageWithTreeSitter with the registry parser as regex
+      // fallback. Same lifecycle as the TS/PY path: derivation stamped
+      // tree-sitter-v1, syntax errors recorded + continue, wasm-unavailable
+      // degrades to the regex result.
+      outcome = yield* treeSitterParseWithFallback(
+        parseLanguageWithTreeSitter(ext, content, fileID, () => parser.parse(content, fileID)),
+        () => parser.parse(content, fileID),
+      )
+    } else {
+      outcome = { result: parser.parse(content, fileID), backend: "regex", error: null }
+    }
+    const result = outcome.result
+    if (outcome.error) {
+      // Record + continue: the file still indexes with the regex fallback
+      // result; the parse error is visible in codegraph_parse_errors and the
+      // parseFailure skip bucket.
+      yield* repo.recordParseError({ path: relativePath, cause: outcome.error.message, indexedAt: Date.now() }).pipe(
+        Effect.catchCause((innerCause) =>
+          Effect.logWarning(`recordParseError insert failed for ${relativePath}`, { cause: Cause.pretty(innerCause) }),
+        ),
+      )
+      yield* Ref.update(cfg.skippedParseFailureRef, (n) => n + 1)
+    }
+    let language = "generic"
+    if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx" || ext === ".mts" || ext === ".cts" || ext === ".mjs" || ext === ".cjs") language = "typescript"
+    else if (ext === ".py" || ext === ".pyw") language = "python"
+    else if (ext === ".zig") language = "zig"
+    else if (ext === ".rs") language = "rust"
+    else if (ext === ".go") language = "go"
+    else if (ext === ".c" || ext === ".cpp" || ext === ".cc" || ext === ".cxx" || ext === ".h" || ext === ".hpp" || ext === ".hh" || ext === ".hxx") language = "c_cpp"
+    else if (ext === ".java" || ext === ".kt") language = "java"
+    else if (ext === ".cs") language = "csharp"
+    else if (ext === ".swift") language = "swift"
+    else if (ext === ".rb") language = "ruby"
+    else if (ext === ".php") language = "php"
+    else if (ext === ".sh" || ext === ".bash" || ext === ".bat" || ext === ".ps1") language = "shell"
+    else if (ext === ".sql") language = "sql"
+    else if (ext === ".html" || ext === ".css") language = "web"
+    else if (ext === ".md") language = "markdown"
+    else if (ext === ".json") language = "json"
+    else if (ext === ".toml") language = "toml"
+    else if (ext === ".yml" || ext === ".yaml") language = "yaml"
+
+    const indexedAt = Date.now()
+    const file: CodegraphFile = {
+      id: fileID,
+      path: filePath,
+      contentHash,
+      language,
+      indexedAt,
+      sizeBytes: candidate.sizeBytes,
+      mtimeMs: candidate.mtimeMs,
+    }
+    const fileLevelNode: CodegraphNode = {
+      id: `${fileID}:file`,
+      fileID,
+      kind: "file",
+      name: path.basename(filePath),
+      signature: relativePath,
+      startLine: 1,
+      endLine: lineCount,
+      code: content.slice(0, 4000),
+      // Phase 0 tree-sitter: the file-level node is indexer-owned, so it
+      // keeps the regex-v1 derivation even when symbol nodes below come
+      // from the tree-sitter path.
+      derivation: "regex-v1",
+    }
+    // Phase 0 tree-sitter: symbol nodes produced by the tree-sitter path get
+    // "tree-sitter-v1" (nodes themselves are still regex-extracted today);
+    // regex fallback (wasm unavailable / exception) stays "regex-v1".
+    const nodeDerivation: CodegraphNode["derivation"] =
+      outcome.backend === "tree-sitter" ? "tree-sitter-v1" : "regex-v1"
+    const nodes: CodegraphNode[] = [fileLevelNode, ...result.nodes.map((n) => {
+      const node: CodegraphNode = {
+        id: n.id,
+        fileID,
+        kind: n.kind,
+        name: n.name,
+        signature: n.signature,
+        startLine: n.startLine,
+        endLine: n.endLine,
+        code: n.code,
+        derivation: nodeDerivation,
+      }
+      return Object.assign(node, {
+        isEntrypoint: isEntrypointNode(node, filePath) ? 1 : 0,
+      }) as CodegraphNode
+    })]
+
+    const knownNodeIDs = new Set(nodes.map((n) => n.id))
+    const parserMode = cfg.edgeMode === "parser"
+    // Phase 0 tree-sitter (parser mode): resolve a parser-edge endpoint to a
+    // real node id. codegraph_edges FK-enforces both endpoints onto
+    // codegraph_nodes, so symbolic parser targets (`symbol:X`, `service:X`)
+    // and line-only sources (`<fileID>:function:<line>`) must be remapped to
+    // nodes in THIS file or the edge cannot be stored.
+    const nodeIdsByKindLine = new Map<string, Map<number, string>>()
+    const nodeIdsByName = new Map<string, string[]>()
+    for (const n of result.nodes) {
+      let byLine = nodeIdsByKindLine.get(n.kind)
+      if (!byLine) {
+        byLine = new Map()
+        nodeIdsByKindLine.set(n.kind, byLine)
+      }
+      byLine.set(n.startLine, n.id)
+      const byName = nodeIdsByName.get(n.name) ?? []
+      byName.push(n.id)
+      nodeIdsByName.set(n.name, byName)
+    }
+    const resolveParserEndpoint = (endpoint: string): string | null => {
+      if (knownNodeIDs.has(endpoint)) return endpoint
+      const kindLine = /^[^:]+:(function|method|class|variable|type):(\d+)$/.exec(endpoint)
+      if (kindLine) {
+        const byLine = nodeIdsByKindLine.get(kindLine[1]!)
+        if (byLine) {
+          const line = Number(kindLine[2])
+          const resolved = byLine.get(line)
+          if (resolved) return resolved
+          // Defense-in-depth: tolerate a ±1 line skew between the
+          // tree-sitter endpoint (`startPosition.row + 1` of the enclosing
+          // callable) and the regex parser's startLine. The parsers now
+          // agree exactly for single-line declarations; skew survives only
+          // for unusual layouts (e.g. `export` on its own line above
+          // `function`, where tree-sitter rows the `function` keyword but
+          // the regex anchors on `export`). Prefer line-1: the historical
+          // off-by-one direction was the regex line one BELOW the
+          // tree-sitter line.
+          const adjacent = byLine.get(line - 1) ?? byLine.get(line + 1)
+          if (adjacent) return adjacent
+        }
+        return null
+      }
+      const symbol = /^symbol:(.+)$/.exec(endpoint)
+      if (symbol) {
+        const candidates = nodeIdsByName.get(symbol[1]!) ?? []
+        // Prefer callable kinds; any same-file node is acceptable.
+        const preferred = candidates.filter((id) => /:(function|method|class):/.test(id))
+        return (preferred[0] ?? candidates[0]) ?? null
+      }
+      return null
+    }
+    const edges: CodegraphEdge[] = []
+    for (const e of result.edges) {
+      if (parserMode && outcome.backend === "tree-sitter" && e.source === "tree-sitter") {
+        // Phase 0 tree-sitter: parser-owned edges survive with remapped
+        // endpoints (intra-file calls). Edges whose target cannot be
+        // resolved (service tags, out-of-file symbols) stay index-time-only.
+        const fromNodeID = resolveParserEndpoint(e.fromNodeID)
+        const toNodeID = resolveParserEndpoint(e.toNodeID)
+        if (fromNodeID && toNodeID) {
+          edges.push({ id: e.id, fromNodeID, toNodeID, kind: e.kind })
+        }
+        continue
+      }
+      // Everything else keeps the strict endpoint check (regex `imports`
+      // edges stay discarded — module resolution is derived).
+      if (knownNodeIDs.has(e.fromNodeID) && knownNodeIDs.has(e.toNodeID)) {
+        edges.push({ id: e.id, fromNodeID: e.fromNodeID, toNodeID: e.toNodeID, kind: e.kind })
+      }
+    }
+
+    // Phase 0 tree-sitter (parser mode): track tree-sitter-parsed fileIDs
+    // that OWN their call edges (at least one parser edge was actually
+    // written this build) plus those edge ids, so rebuildDerivedGraph can
+    // preserve them (skip delete + skip derived calls regeneration). Files
+    // whose parser edges could not be stored (cross-file `symbol:` targets,
+    // `new` expressions, service tags — nothing same-file resolvable, and
+    // the edges table FK-enforces both endpoints onto codegraph_nodes) keep
+    // the full derived calls lifecycle.
+    //
+    // Phase 5 (Batch 3): the ownership guard additionally requires at least
+    // one `source: "tree-sitter"` edge in the parse result. The AST-walk
+    // languages (rust/go/c/...) never emit parser edges — their regex edges
+    // (parseC's same-file `calls`) use derived-style `->` ids and must NOT
+    // claim parser ownership, or rebuildDerivedGraph would skip their calls
+    // regeneration and the cross-file peer-scope edges would vanish in
+    // parser mode. TS/PY are unaffected: their parser edges always carry
+    // source:"tree-sitter".
+    if (
+      parserMode &&
+      outcome.backend === "tree-sitter" &&
+      result.edges.some((e) => e.source === "tree-sitter")
+    ) {
+      if (edges.length > 0) {
+        yield* Ref.update(cfg.parserFileIDsRef, (s) => {
+          s.add(fileID)
+          return s
+        })
+        yield* Ref.update(cfg.parserEdgeIDsRef, (s) => {
+          for (const e of edges) s.add(e.id)
+          return s
+        })
+      }
+    }
+
+    if (fileKind) {
+      nodes.push({
+        id: `${fileID}:artifact:${fileKind}`,
+        fileID,
+        kind: fileKind,
+        name: artifactFileName(filePath, fileKind),
+        signature: relativePath,
+        startLine: 1,
+        endLine: lineCount,
+        code: content.slice(0, 4000),
+        derivation: "regex-v1",
+      })
+    }
+
+    yield* Queue.offer(cfg.parsedQueue, {
+      file,
+      nodes,
+      edges,
+      relativePath,
+      skipped: false,
+      previousFileID: existing?.id,
+    })
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.gen(function* () {
+        const prettyCause = Cause.pretty(cause)
+        yield* Effect.logWarning(`Failed to index file: ${relativePath}`, { cause: prettyCause })
+        yield* repo
+          .recordParseError({ path: relativePath, cause: prettyCause, indexedAt: Date.now() })
+          .pipe(
+            Effect.catchCause((innerCause) =>
+              Effect.logWarning(`recordParseError insert failed for ${relativePath}`, { cause: Cause.pretty(innerCause) }),
+            ),
+          )
+        yield* Ref.update(cfg.skippedRef, (n) => n + 1)
+        yield* Ref.update(cfg.skippedParseFailureRef, (n) => n + 1)
+        yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
+      }),
+    ),
+    Effect.ensuring(
+      Effect.gen(function* () {
+        const doneCount = yield* Ref.updateAndGet(cfg.progressCounter, (n) => n + 1)
+        const currentFile = yield* Ref.get(cfg.currentlyParsingRef)
+        if (cfg.input.onProgress) {
+          yield* cfg.input.onProgress({ file: relativePath, done: doneCount, total: cfg.total, currentFile })
+        }
+      }),
+    ),
+  )
+}
+
+// BANYANCODE_TS_EDGES (Phase 0 tree-sitter edge-mode switch; read once per
+// build, default "derived"):
+//   derived — EXACTLY today's behavior: this function deletes + regenerates
+//     all 8 derived kinds (calls, extends, references, tested_by,
+//     configured_by, built_by, mounts, generated_from) plus imports.
+//     Parser-emitted edges are discarded at index time and never reach the
+//     DB. Byte-identical with the switch unset.
+//   parser — for files where the tree-sitter query edges (calls) were
+//     actually stored this build (parserState.fileIDs — same-file-resolvable
+//     targets only; the edges table FK-enforces both endpoints onto
+//     codegraph_nodes), those edges survive: the delete pass preserves
+//     their ids (parserState.preserveEdgeIDs) and the calls regeneration
+//     below is skipped for those files. Files whose parser edges could not
+//     be stored (cross-file `symbol:` targets, `new` expressions, service
+//     tags) keep the full derived calls lifecycle. imports stays derived
+//     (module resolution is indexer-owned) and the cross-edges (tested_by /
+//     configured_by / built_by / mounts / generated_from) stay derived.
+//     `yield` and `service_access` are not derived kinds, so they are
+//     untouched here.
+const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(function* (
+  changedFileIDs: string[] | undefined,
+  additionalSourceFileIDs?: readonly string[],
+  parserState?: { fileIDs: ReadonlySet<string>; preserveEdgeIDs: ReadonlySet<string> },
+) {
+  const isCancelled = yield* Ref.get(cancelled)
+  if (isCancelled) return
+
+  const changedSet = changedFileIDs && changedFileIDs.length > 0 ? new Set(changedFileIDs) : null
+  const sourceFileIDs = new Set<string>([
+    ...(changedFileIDs ?? []),
+    ...(additionalSourceFileIDs ?? []),
+  ])
+  const sourceSet = sourceFileIDs.size > 0 ? sourceFileIDs : null
+
+  // For incremental mode, fetch source nodes WITH code and all other nodes
+  // WITHOUT code. The source set includes dependents so their persisted code
+  // can regenerate edges after a changed endpoint is replaced.
+  // For full rebuild, fetch everything with code (existing path).
+  let allNodesForIndex: CodegraphNode[]
+
+  if (sourceSet && sourceSet.size > 0) {
+    const [sourceNodes, lightNodes] = yield* Effect.all([
+      repo.nodesByFileIDs({ fileIDs: [...sourceSet] }),
+      repo.searchNodesLight({ limit: 100_000 }),
+    ])
+    const sourceIDs = new Set(sourceNodes.map((n) => n.id))
+    // lightNodes already have no `code` field; spread to lose the Omit type
+    allNodesForIndex = [
+      ...sourceNodes,
+      ...lightNodes.filter((n) => !sourceIDs.has(n.id)),
+    ]
+  } else {
+    // Full rebuild
+    allNodesForIndex = yield* repo.searchNodes({ limit: 100_000 })
+  }
+
+  const allFiles = yield* repo.listAllFiles()
+  const fileByID = new Map(allFiles.map((f) => [f.id, f]))
+  const fileDir = (filePath: string) => path.dirname(filePath).replace(/\\/g, "/")
+  // Files grouped by normalized directory so the same-dir peer scan and the
+  // configured_by scan avoid re-iterating every file in the graph per owner.
+  const filesByDir = new Map<string, CodegraphFile[]>()
+  for (const file of allFiles) {
+    const dir = fileDir(file.path)
+    const list = filesByDir.get(dir) ?? []
+    list.push(file)
+    filesByDir.set(dir, list)
+  }
+
+  const nodeMap = new Map<string, CodegraphNode[]>()
+  const nodeByID = new Map<string, CodegraphNode>()
+  const nodesByFileID = new Map<string, CodegraphNode[]>()
+  const BATCH_SIZE = 500
+
+  for (let batchStart = 0; batchStart < allNodesForIndex.length; batchStart += BATCH_SIZE) {
+    if (yield* Ref.get(cancelled)) break
+    const batchEnd = Math.min(batchStart + BATCH_SIZE, allNodesForIndex.length)
+    const batch = allNodesForIndex.slice(batchStart, batchEnd)
+
+    for (const node of batch) {
+      const list = nodeMap.get(node.name) ?? []
+      list.push(node)
+      nodeMap.set(node.name, list)
+      nodeByID.set(node.id, node)
+      const fileList = nodesByFileID.get(node.fileID) ?? []
+      fileList.push(node)
+      nodesByFileID.set(node.fileID, fileList)
+    }
+  }
+
+  const fileByPath = new Map(allFiles.map((f) => [f.path.replace(/\\/g, "/"), f]))
+  const deriveModuleCandidates = (sourcePath: string, specifier: string): ReadonlyArray<CodegraphFile> => {
+    if (!specifier) return []
+    if (!specifier.startsWith(".") && !specifier.startsWith("/")) return []
+    const sourceDir = path.dirname(sourcePath)
+    const resolvedBase = path.resolve(sourceDir, specifier).replace(/\\/g, "/")
+    const direct = fileByPath.get(resolvedBase)
+    if (direct) return [direct]
+    const candidates = [
+      `${resolvedBase}.ts`,
+      `${resolvedBase}.tsx`,
+      `${resolvedBase}.js`,
+      `${resolvedBase}.jsx`,
+      `${resolvedBase}.mts`,
+      `${resolvedBase}.cts`,
+      `${resolvedBase}.mjs`,
+      `${resolvedBase}.cjs`,
+      `${resolvedBase}.py`,
+      `${resolvedBase}.pyw`,
+      `${resolvedBase}/index.ts`,
+      `${resolvedBase}/index.tsx`,
+      `${resolvedBase}/index.js`,
+      `${resolvedBase}/index.jsx`,
+      `${resolvedBase}/index.mts`,
+      `${resolvedBase}/index.cts`,
+      `${resolvedBase}/index.py`,
+    ]
+    return candidates
+      .map((candidate) => fileByPath.get(candidate))
+      .filter((file): file is CodegraphFile => file !== undefined)
+  }
+
+  const referenceEdges: { fromNodeID: string; toNodeID: string; kind: "imports" | "calls" | "extends" | "references" }[] = []
+  const crossEdges: { fromNodeID: string; toNodeID: string; kind: CodegraphEdge["kind"] }[] = []
+  const referenceEdgeKeys = new Set<string>()
+
+  // For referenceEdges: iterate only nodes that have code and are NOT skipped kinds.
+  // In incremental mode, iterate changed files plus dependent files as edge sources
+  // (untouched files never need an import scope recomputed).
+  const importScopesByFileID = new Map<string, Set<string>>()
+  for (const [fileID, nodes] of nodesByFileID) {
+    if (sourceSet && !sourceSet.has(fileID)) continue
+    const fileNode = nodes.find((node) => node.kind === "file")
+    const owner = fileByID.get(fileID)
+    if (!fileNode?.code || !owner) continue
+    const scope = new Set<string>()
+    for (const match of fileNode.code.matchAll(/import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["']([^"']+)["']/g)) {
+      const specifier = match[1]
+      if (!specifier) continue
+      const importedFiles = deriveModuleCandidates(owner.path, specifier)
+      for (const imported of importedFiles) {
+        // Phase 5 (P8a): emit one `imports` edge per imported FILE — from
+        // the importing file's file-kind node to the imported file's
+        // file-kind node. Previously the declared `imports` edge kind was
+        // only used to build the in-scope node set and no edge was ever
+        // emitted, so `imports` never appeared in the graph. Dedup via the
+        // shared referenceEdgeKeys set (distinct `${from}->${to}:imports`
+        // key format) so a file imported by several statements yields one
+        // edge. The endpoint guard (nodeByID.has) keeps the edge from ever
+        // pointing at a node outside the current index window.
+        const importedFileNodeID = `${imported.id}:file`
+        if (nodeByID.has(importedFileNodeID)) {
+          const importKey = `${fileNode.id}->${importedFileNodeID}:imports`
+          if (!referenceEdgeKeys.has(importKey)) {
+            referenceEdgeKeys.add(importKey)
+            referenceEdges.push({
+              fromNodeID: fileNode.id,
+              toNodeID: importedFileNodeID,
+              kind: "imports",
+            })
+          }
+        }
+        const importedNodes = nodesByFileID.get(imported.id) ?? []
+        for (const node of importedNodes) {
+          if (node.kind === "file") continue
+          scope.add(node.id)
+        }
+      }
+    }
+    importScopesByFileID.set(fileID, scope)
+  }
+
+  for (const nodeA of allNodesForIndex) {
+    if (
+      !nodeA.code ||
+      nodeA.kind === "test" ||
+      nodeA.kind === "route" ||
+      nodeA.kind === "config" ||
+      nodeA.kind === "build" ||
+      nodeA.kind === "package" ||
+      nodeA.kind === "generated" ||
+      nodeA.kind === "ci" ||
+      nodeA.kind === "docker" ||
+      nodeA.kind === "env" ||
+      nodeA.kind === "doc" ||
+      nodeA.kind === "file"
+    ) {
+      continue
+    }
+
+    // Incremental: skip nodeA if its file is neither changed nor a dependent source
+    if (sourceSet && !sourceSet.has(nodeA.fileID)) continue
+
+    const inScopeNodeIDs = new Set<string>()
+    const sameFileNodes = nodesByFileID.get(nodeA.fileID) ?? []
+    for (const n of sameFileNodes) {
+      if (n.id !== nodeA.id && n.kind !== "file") inScopeNodeIDs.add(n.id)
+    }
+    const importedScope = importScopesByFileID.get(nodeA.fileID)
+    if (importedScope) {
+      for (const importedID of importedScope) inScopeNodeIDs.add(importedID)
+    }
+    if (!importedScope || importedScope.size === 0) {
+      const owner = fileByID.get(nodeA.fileID)
+      if (owner) {
+        const ownerDir = fileDir(owner.path)
+        const peers = filesByDir.get(ownerDir) ?? []
+        for (const file of peers) {
+          if (file.id === owner.id) continue
+          const peerNodes = nodesByFileID.get(file.id) ?? []
+          for (const node of peerNodes) {
+            if (node.kind !== "file") inScopeNodeIDs.add(node.id)
+          }
+        }
+      }
+    }
+    const inScopeByName = new Map<string, CodegraphNode[]>()
+    for (const nodeID of inScopeNodeIDs) {
+      const scopedNode = nodeByID.get(nodeID)
+      if (!scopedNode) continue
+      const scoped = inScopeByName.get(scopedNode.name) ?? []
+      scoped.push(scopedNode)
+      inScopeByName.set(scopedNode.name, scoped)
+    }
+    // Phase 5 (P8b): strip comment and string-literal regions BEFORE the
+    // identifier scan and kind classification so a comment mentioning a
+    // symbol or a string like `"callBash("` cannot fabricate a
+    // `references`/`calls` edge. The original `nodeA.code` stays on the
+    // node unchanged — the strip is only for edge classification.
+    const strippedCode = stripCommentsAndStrings(nodeA.code)
+    const identifiers = new Set<string>()
+    for (const m of strippedCode.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
+      if (m[0].length >= 3 && inScopeByName.has(m[0])) identifiers.add(m[0])
+    }
+
+    for (const name of identifiers) {
+      const targets = inScopeByName.get(name)
+      if (!targets || targets.length === 0) continue
+
+      for (const nodeB of targets) {
+        if (nodeB.id === nodeA.id) continue
+
+        const kind =
+          nodeA.kind === "class" && strippedCode.includes(`extends ${name}`)
+            ? ("extends" as const)
+            : strippedCode.includes(`${name}(`)
+              ? ("calls" as const)
+              : ("references" as const)
+
+        // Phase 0 tree-sitter (parser mode): the tree-sitter query pass owns
+        // `calls` edges for tree-sitter-parsed files — skip regenerating
+        // them so the parser-emitted edges survive unchanged. references /
+        // extends stay derived for those files.
+        if (kind === "calls" && parserState?.fileIDs.has(nodeA.fileID)) continue
+
+        const key = `${nodeA.id}->${nodeB.id}:${kind}`
+        if (referenceEdgeKeys.has(key)) continue
+        referenceEdgeKeys.add(key)
+        referenceEdges.push({
+          fromNodeID: nodeA.id,
+          toNodeID: nodeB.id,
+          kind,
+        })
+      }
+    }
+  }
+
+  // Filter node lists by file set for crossEdges that are scope-limited to changed/dependent files.
+  // In incremental mode, changed and dependent source files are processed.
+  // In full mode, all nodes are processed (sourceSet is null).
+  const configNodes = allNodesForIndex.filter((n) => n.kind === "config" && (!sourceSet || sourceSet.has(n.fileID)))
+  const dockerNodes = allNodesForIndex.filter((n) => n.kind === "docker")
+  const testNodes = allNodesForIndex.filter((n) => n.kind === "test" && (!sourceSet || sourceSet.has(n.fileID)))
+  const routeNodes = allNodesForIndex.filter((n) => n.kind === "route" && (!sourceSet || sourceSet.has(n.fileID)))
+  const generatedNodes = allNodesForIndex.filter((n) => n.kind === "generated" && (!sourceSet || sourceSet.has(n.fileID)))
+
+  for (const testNode of testNodes) {
+    if (yield* Ref.get(cancelled)) {
+      yield* Effect.logWarning("codegraph: cancelled during tested_by")
+      break
+    }
+    const testFile = fileByID.get(testNode.fileID)
+    if (!testFile || !testNode.code) continue
+    const testFileImports = extractTestFileImports(testNode.code)
+    const referenced = new Set<string>()
+    for (const m of testNode.code.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
+      referenced.add(m[0])
+    }
+    for (const name of referenced) {
+      const candidates = nodeMap.get(name)
+      if (!candidates || candidates.length > 10) continue
+      for (const node of candidates) {
+        if (node.fileID === testNode.fileID) continue
+        if (node.kind === "test") continue
+        const nodeFile = fileByID.get(node.fileID)
+        if (!nodeFile) continue
+        if (/\.(test|spec)\./i.test(nodeFile.path.toLowerCase())) continue
+
+        const targetImport = nodeFile.path.replace(/\.(ts|tsx|js|jsx)$/, "").replace(/^.*\//, "")
+        const importsFile = testFileImports.has(targetImport)
+
+        const callOnlyMatch = !importsFile &&
+          candidates.length === 1 &&
+          (testNode.code ?? "").includes(`${name}(`)
+
+        if (importsFile || callOnlyMatch) {
+          crossEdges.push({ fromNodeID: node.id, toNodeID: testNode.id, kind: "tested_by" })
+        }
+      }
+    }
+  }
+
+  for (const cfg of configNodes) {
+    if (yield* Ref.get(cancelled)) {
+      yield* Effect.logWarning("codegraph: cancelled during configured_by")
+      break
+    }
+    const cfgFile = fileByID.get(cfg.fileID)
+    if (!cfgFile) continue
+    const cfgDir = fileDir(cfgFile.path)
+    const cfgBasename = cfgFile.path.replace(/\\/g, "/").split("/").pop() ?? cfgFile.path
+    for (const file of filesByDir.get(cfgDir) ?? []) {
+      if (file.id === cfg.fileID) continue
+      const fromNodes = nodesByFileID.get(file.id) ?? []
+      const fromNode = fromNodes.find(
+        (n) =>
+          n.kind !== "config" &&
+          n.kind !== "docker" &&
+          n.kind !== "package" &&
+          n.kind !== "build" &&
+          n.kind !== "ci" &&
+          n.kind !== "env" &&
+          n.kind !== "doc" &&
+          n.kind !== "test" &&
+          n.kind !== "route" &&
+          n.kind !== "generated",
+      ) ?? fromNodes[0]
+      if (!fromNode) continue
+      const code = fromNode.code ?? ""
+      if (!code.includes(cfgBasename)) continue
+      crossEdges.push({ fromNodeID: fromNode.id, toNodeID: cfg.id, kind: "configured_by" })
+    }
+  }
+
+  for (const cfg of configNodes) {
+    const cfgFile = fileByID.get(cfg.fileID)
+    if (!cfgFile) continue
+    const cfgDir = fileDir(cfgFile.path)
+    const docker = dockerNodes.find((n) => {
+      const f = fileByID.get(n.fileID)
+      return f ? fileDir(f.path) === cfgDir : false
+    })
+    if (docker) crossEdges.push({ fromNodeID: cfg.id, toNodeID: docker.id, kind: "built_by" })
+  }
+
+  if (yield* Ref.get(cancelled)) {
+    yield* Effect.logWarning("codegraph: cancelled before mounts")
+  } else {
+    const routeHandlerRegex = /app\.(?:get|post|put|delete|patch|all|use)\s*\([^,]+,\s*(\w+)\s*\)/g
+    for (const routeNode of routeNodes) {
+      if (!routeNode.code) continue
+      for (const match of routeNode.code.matchAll(routeHandlerRegex)) {
+        const handlerName = match[1]
+        const handlers = nodeMap.get(handlerName)
+        const handler = handlers?.find((n) => n.fileID === routeNode.fileID)
+        if (handler) crossEdges.push({ fromNodeID: routeNode.id, toNodeID: handler.id, kind: "mounts" })
+      }
+    }
+
+    for (const gen of generatedNodes) {
+      if (yield* Ref.get(cancelled)) {
+        yield* Effect.logWarning("codegraph: cancelled during generated_from")
+        break
+      }
+      const genFile = fileByID.get(gen.fileID)
+      if (!genFile) continue
+      const genDir = fileDir(genFile.path)
+      const genBase = path.basename(genFile.path).replace(/\.generated(\.[^.]+)$/i, "$1")
+      const sourceFile = allFiles.find(
+        (f) => fileDir(f.path) === genDir && path.basename(f.path) === genBase,
+      )
+      if (!sourceFile) continue
+      const sourceNodes = nodesByFileID.get(sourceFile.id)
+      const sourceNode = sourceNodes?.find((n) => n.kind !== "generated") ?? sourceNodes?.[0]
+      if (sourceNode) crossEdges.push({ fromNodeID: gen.id, toNodeID: sourceNode.id, kind: "generated_from" })
+    }
+  }
+
+  const edgesToWrite = [
+    ...referenceEdges.map((e) => ({
+      id: `${e.fromNodeID}->${e.toNodeID}:${e.kind}`,
+      fromNodeID: e.fromNodeID,
+      toNodeID: e.toNodeID,
+      kind: e.kind,
+    })),
+    ...crossEdges.map((e) => ({
+      id: `${e.fromNodeID}->${e.toNodeID}:${e.kind}`,
+      fromNodeID: e.fromNodeID,
+      toNodeID: e.toNodeID,
+      kind: e.kind,
+    })),
+  ]
+  const touchedNodeIDs = new Set<string>()
+  for (const edge of edgesToWrite) {
+    touchedNodeIDs.add(edge.fromNodeID)
+    touchedNodeIDs.add(edge.toNodeID)
+  }
+  if (changedSet) {
+    const deletedTouched = yield* repo.deleteDerivedEdgesForFiles({
+      fileIDs: changedFileIDs!,
+      // Phase 0 tree-sitter (parser mode): keep the parser-emitted edge ids
+      // written this build — remapped parser edges have real node endpoints,
+      // so without the exclusion the node-endpoint delete would wipe them.
+      preserveEdgeIDs: parserState?.preserveEdgeIDs,
+    })
+    for (const nodeID of deletedTouched) touchedNodeIDs.add(nodeID)
+  } else {
+    // Full-rebuild derived-edge purge. Pre-Phase-3a rebuilds inserted with
+    // onConflictDoNothing without ever deleting, which let stale derived edges
+    // accumulate across builds (~166K stale edges on this repo before the fix).
+    // Deleting them here and re-inserting via putEdges gives a reproducible
+    // import-scoped count. Phase 0 tree-sitter (parser mode): preserve the
+    // parser-emitted edge ids written this build so parser-owned call edges
+    // survive; everything else is purged and regenerated as today.
+    const deletedTouchedFull = yield* repo.deleteAllDerivedEdges(parserState?.preserveEdgeIDs)
+    for (const nodeID of deletedTouchedFull) touchedNodeIDs.add(nodeID)
+  }
+  if (edgesToWrite.length > 0) {
+    yield* repo.putEdges(edgesToWrite)
+  }
+  if (touchedNodeIDs.size > 0) {
+    yield* repo.recomputeInDegree({ nodeIDs: [...touchedNodeIDs] }).pipe(Effect.orDie)
+  } else if (!changedSet) {
+    // Full-rebuild purge may have driven in-degree to zero on many nodes that
+    // were never re-touched by the new derived pass. Recompute over the whole
+    // graph so downstream readers see accurate ranker scores.
+    yield* repo.recomputeInDegree().pipe(Effect.orDie)
+  }
+})
+
+    const index = Effect.fn("CodegraphIndexer.index")(function* (input: {
+      root: string
+      force?: boolean
+      maxFileSizeBytes?: number
+      excludePatterns?: readonly string[]
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+    }) {
+      yield* Ref.set(cancelled, false)
+      const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
+      // Phase 0 tree-sitter: prime the parser bundle ONCE per build (before
+      // the walk loop). ensureWebTreeSitterReady is idempotent and never
+      // throws; the per-file parse path then runs with the bundle loaded.
+      yield* ensureWebTreeSitterReady()
+      // Phase 0 tree-sitter edge-mode switch: read once per build, default
+      // "derived" (byte-identical with today's behavior when unset).
+      const edgeMode = yield* Effect.sync(() => (process.env.BANYANCODE_TS_EDGES === "parser" ? "parser" : "derived"))
+      const parserFileIDsRef = yield* Ref.make<Set<string>>(new Set())
+      const parserEdgeIDsRef = yield* Ref.make<Set<string>>(new Set())
+      const ignoreCtx = yield* loadIgnoreContext(input.root, input.excludePatterns)
+      const walkStart = Date.now()
+      const walkResult = yield* walkDirectory(input.root, maxFileSizeBytes, input.root, ignoreCtx)
+      const allFiles = walkResult.files
+      yield* Effect.logDebug(`codegraph: walk took ${Date.now() - walkStart}ms (${allFiles.length} files)`)
+      const codeFiles = allFiles.filter((f) => isIndexablePath(f.path))
+      const listStart = Date.now()
+      const existingFilesByPath = new Map((yield* repo.listAllFiles()).map((f) => [f.path, f]))
+      yield* Effect.logDebug(`codegraph: listAllFiles took ${Date.now() - listStart}ms`)
+
+      const indexedRef = yield* Ref.make(0)
+      const skippedRef = yield* Ref.make(0)
+      const symbolsIndexedRef = yield* Ref.make(0)
+      const skippedGitignoredRef = yield* Ref.make(walkResult.skippedByGitignore)
+      const skippedBanyanignoredRef = yield* Ref.make(walkResult.skippedByBanyanignore)
+      const skippedArtifactRef = yield* Ref.make(0)
+      const skippedTooLargeRef = yield* Ref.make(walkResult.skippedBySize)
+      const skippedTooLargeParseRef = yield* Ref.make(0)
+      const skippedMinifiedRef = yield* Ref.make(0)
+      const skippedCachedRef = yield* Ref.make(0)
+      const skippedReadErrorRef = yield* Ref.make(0)
+      const skippedParseFailureRef = yield* Ref.make(0)
+      const total = codeFiles.length
+      const progressCounter = yield* Ref.make(0)
+      const currentlyParsingRef = yield* Ref.make<string | undefined>(undefined)
+      // Phase 2: fileIDs that hit the cache this build. After the drain
+      // loop completes we batch-write `indexed_at = now` so the next
+      // run's ready-check sees a fresh timestamp and doesn't keep
+      // tripping on files whose content is unchanged.
+      const cachedFileIDsRef = yield* Ref.make<Set<string>>(new Set())
+
+      if (input.onProgress) {
+        yield* input.onProgress({ file: "", done: 0, total })
+      }
+
+      const parsedQueue = yield* Queue.bounded<ParsedFile>(PARSED_QUEUE_CAPACITY)
+      const skippedParsed = (relativePath: string): ParsedFile => ({
+        file: { id: "", path: "", contentHash: "", language: "", indexedAt: 0 },
+        nodes: [],
+        edges: [],
+        relativePath,
+        skipped: true,
+      })
+
+      const parseFiber = (candidate: CandidateFile): Effect.Effect<void, never, never> => {
+        const relativePath = path.relative(input.root, candidate.path).replace(/\\/g, "/")
+        return indexCandidateFileCore(candidate, relativePath, {
+          input,
+          maxFileSizeBytes,
+          total,
+          parsedQueue,
+          skippedParsed,
+          skippedRef,
+          skippedTooLargeParseRef,
+          skippedMinifiedRef,
+          skippedArtifactRef,
+          skippedReadErrorRef,
+          skippedParseFailureRef,
+          skippedCachedRef,
+          cancelled,
+          currentlyParsingRef,
+          progressCounter,
+          cachedFileIDsRef,
+          edgeMode,
+          parserFileIDsRef,
+          parserEdgeIDsRef,
+          existingFilesByPath,
+        })
+      }
+
+      // Bounded-batch persist: the drain holds at most persistBatch parsed
+      // files before flushing to SQLite, so the live set stays O(batch)
+      // instead of growing with the build. Each flush drops its batch so
+      // parsed node/edge arrays become GC-eligible promptly.
+      const persistBatch = resolvePersistBatchSize()
+      const drainParsedQueue = Effect.gen(function* () {
+        let processed = 0
+        let batch: ParsedFile[] = []
+        const flushBatch = Effect.gen(function* () {
+          const pending = batch
+          batch = []
+          // v2: each `repo.writeFileGraph` runs in its own transaction. The
+          // v1 outer batch transaction was a commit-count optimisation only;
+          // per-file atomicity and catch-cause logging are preserved.
+          yield* Effect.gen(function* () {
+                for (const parsed of pending) {
+                  yield* repo.writeFileGraph({
+                    file: parsed.file,
+                    nodes: parsed.nodes,
+                    edges: parsed.edges,
+                    ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
+                  }).pipe(
+                    Effect.catchCause((cause) =>
+                      Effect.gen(function* () {
+                        yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
+                          cause: Cause.pretty(cause),
+                        })
+                        yield* repo
+                          .recordParseError({ path: parsed.relativePath, cause: Cause.pretty(cause), indexedAt: Date.now() })
+                          .pipe(
+                            Effect.catchCause((innerCause) =>
+                              Effect.logWarning(`recordParseError insert failed for ${parsed.relativePath}`, {
+                                cause: Cause.pretty(innerCause),
+                              }),
+                            ),
+                          )
+                        yield* Ref.update(skippedRef, (n) => n + 1)
+                        yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
+                      }),
+                    ),
+                  )
+                }
+          })
+        })
+        while (processed < total) {
+          const parsed = yield* Queue.take(parsedQueue)
+          processed++
+          if (parsed.skipped) continue
+          batch.push(parsed)
+          if (parsed.nodes.length > 0) {
+            yield* Ref.update(indexedRef, (n) => n + 1)
+            yield* Ref.update(symbolsIndexedRef, (n) => n + parsed.nodes.length)
+          }
+          if (batch.length >= persistBatch) yield* flushBatch
+          if (processed % CHECKPOINT_EVERY === 0) {
+            yield* storage.exec("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
+          }
+        }
+        if (batch.length > 0) yield* flushBatch
+      })
+
+      const parseStart = Date.now()
+      // Chunked producer: feed the bounded queue in slices so only the
+      // current chunk's parse closures are live; concurrency is
+      // configurable/adaptive (default 8 preserves current throughput).
+      const feedParseQueue = Effect.gen(function* () {
+        for (const chunk of streamCandidateBatches(codeFiles, 1000)) {
+          yield* Effect.forEach(chunk, parseFiber, { concurrency: resolveParseConcurrency(), discard: true })
+          if (yield* Ref.get(cancelled)) break
+        }
+      })
+      yield* Effect.all([feedParseQueue, drainParsedQueue], { concurrency: 2, discard: true }).pipe(
+        Effect.ensuring(Queue.shutdown(parsedQueue)),
+      )
+      yield* Effect.logDebug(`codegraph: parse+drain took ${Date.now() - parseStart}ms`)
+      const checkpointStart = Date.now()
+      yield* storage.exec("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
+      yield* Effect.logDebug(`codegraph: wal_checkpoint(TRUNCATE) took ${Date.now() - checkpointStart}ms`)
+
+      // Phase 3: prune files that disappeared between walks. Before this,
+      // a `full rebuild` left orphan rows in `codegraph_files` and their
+      // edges + nodes behind, inflating `totalFiles` and the `totalEdges`
+      // baseline in `meta`. The diff is `existingFilesByPath - walked`.
+      const walkedPaths = new Set(allFiles.map((f) => f.path))
+      const orphanFileRows: Array<{ id: string; path: string }> = []
+      for (const [path, row] of existingFilesByPath) {
+        if (!walkedPaths.has(path)) orphanFileRows.push({ id: row.id, path })
+      }
+      // Batch the prunes: chunk the orphan ids and delete each chunk inside
+      // one transaction (repo.deleteFile nests its own transaction as a
+      // savepoint, so per-file catch-cause logging is preserved while the
+      // per-chunk commit overhead drops from 1 tx/file to 1 tx/900 files).
+      const ORPHAN_DELETE_CHUNK = 900
+      for (let i = 0; i < orphanFileRows.length; i += ORPHAN_DELETE_CHUNK) {
+        const chunk = orphanFileRows.slice(i, i + ORPHAN_DELETE_CHUNK)
+        yield* Effect.gen(function* () {
+            for (const orphan of chunk) {
+              yield* repo.deleteFile(orphan.id).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning(`Pruning orphaned file row failed for ${orphan.path}`, {
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              )
+            }
+        })
+      }
+
+      // Phase 2: refresh `indexed_at` on every file that hit the content
+      // cache in this build. One batched update per 900-id chunk —
+      // cheaper than touching each row in the drain loop and, more
+      // importantly, fixes the readiness trap where a cached file's
+      // never-refreshed timestamp made it look "changed" forever.
+      const bumpStart = Date.now()
+      const cachedFileIDs = yield* Ref.get(cachedFileIDsRef)
+      if (cachedFileIDs.size > 0) {
+        yield* repo.bumpIndexedAt({ fileIDs: [...cachedFileIDs], indexedAt: Date.now() }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("bumpIndexedAt failed; cached files may look stale until next build", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        )
+      }
+      yield* Effect.logDebug(`codegraph: bumpIndexedAt took ${Date.now() - bumpStart}ms (${cachedFileIDs.size} files)`)
+
+      const indexed = yield* Ref.get(indexedRef)
+      if (indexed > 0) {
+        // Phase 0 tree-sitter (parser mode): hand rebuildDerivedGraph the
+        // tree-sitter-parsed fileIDs + parser edge ids written this build so
+        // parser-owned call edges survive the delete+regenerate pass. In
+        // derived mode nothing is passed — byte-identical with today.
+        const parserState = edgeMode === "parser"
+          ? {
+              fileIDs: yield* Ref.get(parserFileIDsRef),
+              preserveEdgeIDs: yield* Ref.get(parserEdgeIDsRef),
+            }
+          : undefined
+        yield* rebuildDerivedGraph(undefined, undefined, parserState)
+      }
+      yield* Ref.get(skippedRef)
+      const symbolsIndexed = yield* Ref.get(symbolsIndexedRef)
+      const skippedGitignored = yield* Ref.get(skippedGitignoredRef)
+      const skippedBanyanignored = yield* Ref.get(skippedBanyanignoredRef)
+      const skippedArtifact = yield* Ref.get(skippedArtifactRef)
+      const skippedTooLarge = yield* Ref.get(skippedTooLargeRef)
+      const skippedTooLargeParse = yield* Ref.get(skippedTooLargeParseRef)
+      const skippedMinified = yield* Ref.get(skippedMinifiedRef)
+      const skippedCached = yield* Ref.get(skippedCachedRef)
+      const skippedReadError = yield* Ref.get(skippedReadErrorRef)
+      const skippedParseFailure = yield* Ref.get(skippedParseFailureRef)
+
+      const totalSkipped =
+        skippedGitignored +
+        skippedBanyanignored +
+        skippedArtifact +
+        skippedTooLarge +
+        skippedTooLargeParse +
+        skippedMinified +
+        skippedCached +
+        skippedReadError +
+        skippedParseFailure
+
+      const parseErrors = yield* repo.listParseErrors()
+
+      // Phase 2: eligibleFiles is the graphCoverage denominator. It counts
+      // only files the indexer would actually attempt: code/artifact
+      // candidates the walker reached, plus code candidates excluded
+      // only by the size budget (which is ours, not the repo's).
+      // Non-code files (`.json`, `.lock`, images, fonts, etc.) are
+      // excluded because the indexer will never emit a graph row for
+      // them — counting them capped coverage on monorepos and brought it
+      // close to the 0.5 staleness cliff.
+      const eligibleFiles = codeFiles.length + walkResult.skippedBySize
+
+      return {
+        indexed,
+        skipped: totalSkipped,
+        scannedFiles: indexed + totalSkipped,
+        eligibleFiles,
+        symbolsIndexed,
+        skippedByReason: {
+          gitignored: skippedGitignored,
+          banyanignored: skippedBanyanignored,
+          artifact: skippedArtifact,
+          tooLarge: skippedTooLarge,
+          minified: skippedMinified,
+          tooLargeParse: skippedTooLargeParse,
+          cached: skippedCached,
+          readError: skippedReadError,
+          parseFailure: skippedParseFailure,
+        },
+        parseErrors: parseErrors.slice(0, 50),
+      }
+    })
+
+    const cancel = Effect.fn("CodegraphIndexer.cancel")(function* () {
+      yield* Ref.set(cancelled, true)
+    })
+
+    const applyChanges = Effect.fn("CodegraphIndexer.applyChanges")(function* (input: {
+      root: string
+      addedOrChanged: string[]
+      removed: string[]
+      force?: boolean
+      maxFileSizeBytes?: number
+      excludePatterns?: readonly string[]
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+    }) {
+      yield* Ref.set(cancelled, false)
+      const maxFileSizeBytes = input.maxFileSizeBytes ?? 1_048_576
+      // Phase 0 tree-sitter: prime the parser bundle once per (incremental)
+      // build — same rationale as the full-build path in `index`.
+      yield* ensureWebTreeSitterReady()
+      // Phase 0 tree-sitter edge-mode switch: read once per build.
+      const edgeMode = yield* Effect.sync(() => (process.env.BANYANCODE_TS_EDGES === "parser" ? "parser" : "derived"))
+      const parserFileIDsRef = yield* Ref.make<Set<string>>(new Set())
+      const parserEdgeIDsRef = yield* Ref.make<Set<string>>(new Set())
+      const ignoreCtx = yield* loadIgnoreContext(input.root, input.excludePatterns)
+      const removedFileIDs = new Set<string>()
+      const filteredRemoved: string[] = []
+      const filteredAddedOrChanged: CandidateFile[] = []
+      let skippedInputs = 0
+      const listStart = Date.now()
+      const existingFilesByPath = new Map((yield* repo.listAllFiles()).map((f) => [f.path, f]))
+      yield* Effect.logDebug(`codegraph: incremental listAllFiles took ${Date.now() - listStart}ms`)
+
+      // Pre-load every ancestor .gitignore for the change set so the sync
+      // decideIgnored checks below see the same nested rules the walker uses.
+      for (const filePath of new Set([...input.removed, ...input.addedOrChanged])) {
+        let dir = path.dirname(filePath)
+        while (dir !== input.root && dir.length > input.root.length) {
+          yield* loadDirGitignore(dir)
+          const parent = path.dirname(dir)
+          if (parent === dir) break
+          dir = parent
+        }
+      }
+
+      // Capture the pre-mutation file IDs before delete/write cascades remove
+      // their endpoint nodes and edges. This lets removed and replaced files
+      // contribute their existing dependents to the later source rebuild.
+      const dependencySeedFileIDs = new Set<string>()
+      for (const filePath of new Set([...input.removed, ...input.addedOrChanged])) {
+        const existing = existingFilesByPath.get(filePath)
+        if (existing) dependencySeedFileIDs.add(existing.id)
+      }
+      const dependentFileIDs = dependencySeedFileIDs.size > 0
+        ? yield* repo.dependentsOfFiles({ fileIDs: [...dependencySeedFileIDs] })
+        : []
+
+      for (const filePath of input.removed) {
+        if (decideIgnored(ignoreCtx, filePath, false) !== "none") {
+          const existing = existingFilesByPath.get(filePath)
+          if (existing) {
+            removedFileIDs.add(existing.id)
+            yield* repo.deleteFile(existing.id)
+            existingFilesByPath.delete(filePath)
+          }
+          skippedInputs++
+          continue
+        }
+        filteredRemoved.push(filePath)
+      }
+
+      let removed = 0
+      for (const filePath of filteredRemoved) {
+        const existing = existingFilesByPath.get(filePath)
+        if (existing) {
+          removedFileIDs.add(existing.id)
+          yield* repo.deleteFile(existing.id)
+          existingFilesByPath.delete(filePath)
+          removed++
+        } else {
+          skippedInputs++
+        }
+      }
+
+      for (const filePath of input.addedOrChanged) {
+        const relativePath = path.relative(input.root, filePath).replace(/\\/g, "/")
+        if (decideIgnored(ignoreCtx, filePath, false) !== "none") {
+          const existing = existingFilesByPath.get(filePath)
+          if (existing) {
+            removedFileIDs.add(existing.id)
+            yield* repo.deleteFile(existing.id)
+            existingFilesByPath.delete(filePath)
+          }
+          skippedInputs++
+          continue
+        }
+        const stats = yield* fs.stat(filePath)
+        if (stats === undefined) {
+          const existing = existingFilesByPath.get(filePath)
+          if (existing) {
+            removedFileIDs.add(existing.id)
+            yield* repo.deleteFile(existing.id)
+            existingFilesByPath.delete(filePath)
+          }
+          skippedInputs++
+          continue
+        }
+        if (stats.isDirectory) {
+          // The watcher (Windows/Parcel) can deliver directory paths — sometimes
+          // with a trailing separator — as a side effect of atomic-save rename
+          // sequences or parent-directory updates. Stat-and-skip them here so
+          // parseFile never reaches fs.readFileStringSafe with a directory
+          // (which would raise PlatformError: BadResource, EISDIR).
+          yield* Effect.logDebug(`Skipping directory path delivered by watcher: ${relativePath}`)
+          skippedInputs++
+          continue
+        }
+        if (stats.size > maxFileSizeBytes) {
+          yield* Effect.logDebug(`Skipping large file (potential bundle): ${relativePath} (${stats.size} bytes, limit: ${maxFileSizeBytes})`)
+          const existing = existingFilesByPath.get(filePath)
+          if (existing) {
+            removedFileIDs.add(existing.id)
+            yield* repo.deleteFile(existing.id)
+            existingFilesByPath.delete(filePath)
+          }
+          skippedInputs++
+          continue
+        }
+        // Same eligibility predicate as the full walk (index): incremental
+        // builds must not index files the full build would skip, or the two
+        // graphs diverge. Stale rows for previously-indexed non-code files
+        // are pruned like the ignore branch does.
+        if (!isIndexablePath(filePath)) {
+          const existing = existingFilesByPath.get(filePath)
+          if (existing) {
+            removedFileIDs.add(existing.id)
+            yield* repo.deleteFile(existing.id)
+            existingFilesByPath.delete(filePath)
+          }
+          skippedInputs++
+          continue
+        }
+        filteredAddedOrChanged.push({
+          path: filePath,
+          sizeBytes: Number(stats.size),
+          mtimeMs: Math.floor(stats.mtimeMs),
+        })
+      }
+
+      if (filteredRemoved.length === 0 && filteredAddedOrChanged.length === 0 && removedFileIDs.size === 0) {
+        return {
+          indexed: 0,
+          removed: 0,
+          skipped: input.addedOrChanged.length + input.removed.length,
+          parseErrors: [],
+        }
+      }
+
+      const skippedRef = yield* Ref.make(0)
+      const skippedTooLargeParseRef = yield* Ref.make(0)
+      const skippedMinifiedRef = yield* Ref.make(0)
+      const skippedArtifactRef = yield* Ref.make(0)
+      const skippedReadErrorRef = yield* Ref.make(0)
+      const skippedParseFailureRef = yield* Ref.make(0)
+      const skippedCachedRef = yield* Ref.make(0)
+      const indexedRef = yield* Ref.make(0)
+      const progressCounter = yield* Ref.make(0)
+      const currentlyParsingRef = yield* Ref.make<string | undefined>(undefined)
+      const changedFileIDsRef = yield* Ref.make<Set<string>>(new Set(removedFileIDs))
+      // Phase 2: track fileIDs that hit the content-hash cache in this
+      // incremental build so we can refresh `indexed_at` in one batched
+      // UPDATE after the drain (see `bumpIndexedAt`).
+      const cachedFileIDsRef = yield* Ref.make<Set<string>>(new Set())
+      const total = filteredAddedOrChanged.length
+
+      if (input.onProgress) {
+        yield* input.onProgress({ file: "", done: 0, total })
+      }
+
+      const parsedQueue = yield* Queue.bounded<ParsedFile>(PARSED_QUEUE_CAPACITY)
+      const skippedParsedFn = (relativePath: string): ParsedFile => ({
+        file: { id: "", path: "", contentHash: "", language: "", indexedAt: 0 },
+        nodes: [],
+        edges: [],
+        relativePath,
+        skipped: true,
+      })
+
+      // Plan Phase 5 fix: run the producer pool and the drain concurrently
+// instead of sequentially. The previous code drained only after every
+// parse had finished, which deadlocked the bounded queue at 128 entries
+// once the input exceeded that cap (the 129-file case).
+const drainParsedQueue = Effect.gen(function* () {
+        let processed = 0
+        while (processed < total) {
+          const parsed = yield* Queue.take(parsedQueue)
+          processed++
+          if (parsed.skipped) continue
+          if (parsed.previousFileID) {
+            yield* Ref.update(changedFileIDsRef, (s) => {
+              s.add(parsed.previousFileID!)
+              return s
+            })
+          }
+          if (parsed.file.id) {
+            yield* Ref.update(changedFileIDsRef, (s) => {
+              s.add(parsed.file.id)
+              return s
+            })
+          }
+          yield* repo.writeFileGraph({
+            file: parsed.file,
+            nodes: parsed.nodes,
+            edges: parsed.edges,
+            ...(parsed.previousFileID !== undefined ? { previousFileID: parsed.previousFileID } : {}),
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                yield* Effect.logWarning(`Failed to write file: ${parsed.relativePath}`, {
+                  cause: Cause.pretty(cause),
+                })
+                yield* repo
+                  .recordParseError({ path: parsed.relativePath, cause: Cause.pretty(cause), indexedAt: Date.now() })
+                  .pipe(
+                    Effect.catchCause((innerCause) =>
+                      Effect.logWarning(`recordParseError insert failed for ${parsed.relativePath}`, {
+                        cause: Cause.pretty(innerCause),
+                      }),
+                    ),
+                  )
+                yield* Ref.update(skippedRef, (n) => n + 1)
+                yield* Ref.update(skippedParseFailureRef, (n) => n + 1)
+              }),
+            ),
+          )
+          if (parsed.nodes.length > 0) {
+            yield* Ref.update(indexedRef, (n) => n + 1)
+          }
+          if (processed % CHECKPOINT_EVERY === 0) {
+            yield* storage.exec("PRAGMA wal_checkpoint(PASSIVE)").pipe(Effect.ignore)
+          }
+        }
+      })
+
+      const parseStart = Date.now()
+      yield* Effect.all(
+        [
+          Effect.forEach(filteredAddedOrChanged, (candidate) => {
+            const relativePath = path.relative(input.root, candidate.path).replace(/\\/g, "/")
+            return indexCandidateFileCore(candidate, relativePath, {
+              input,
+              maxFileSizeBytes,
+              total,
+              parsedQueue,
+              skippedParsed: skippedParsedFn,
+              skippedRef,
+              skippedTooLargeParseRef,
+              skippedMinifiedRef,
+              skippedArtifactRef,
+              skippedReadErrorRef,
+              skippedParseFailureRef,
+              skippedCachedRef,
+              cancelled,
+              currentlyParsingRef,
+              progressCounter,
+              cachedFileIDsRef,
+              edgeMode,
+              parserFileIDsRef,
+              parserEdgeIDsRef,
+              existingFilesByPath,
+            })
+          }, { concurrency: 8, discard: true }),
+          drainParsedQueue,
+        ],
+        { concurrency: 2, discard: true },
+      ).pipe(Effect.ensuring(Queue.shutdown(parsedQueue)))
+      yield* Effect.logDebug(`codegraph: incremental parse+drain took ${Date.now() - parseStart}ms`)
+
+      const checkpointStart = Date.now()
+      yield* storage.exec("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
+      yield* Effect.logDebug(`codegraph: incremental wal_checkpoint(TRUNCATE) took ${Date.now() - checkpointStart}ms`)
+
+      // Phase 2: refresh `indexed_at` on every file that hit the cache
+      // in this incremental build. Same logic as the full-build path —
+      // keeps downstream time-based heuristics from getting stuck on
+      // cached files.
+      const bumpStart = Date.now()
+      const cachedFileIDs = yield* Ref.get(cachedFileIDsRef)
+      if (cachedFileIDs.size > 0) {
+        yield* repo.bumpIndexedAt({ fileIDs: [...cachedFileIDs], indexedAt: Date.now() }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("bumpIndexedAt failed on incremental; cached files may look stale", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        )
+      }
+      yield* Effect.logDebug(`codegraph: incremental bumpIndexedAt took ${Date.now() - bumpStart}ms (${cachedFileIDs.size} files)`)
+
+      const changedFileIDs = Array.from(yield* Ref.get(changedFileIDsRef))
+      if (changedFileIDs.length > 0) {
+        const changedSet = new Set(changedFileIDs)
+        const dependentSourceFileIDs = dependentFileIDs.filter((fileID) => !changedSet.has(fileID))
+        // Phase 0 tree-sitter (parser mode): same preserve/regeneration-skip
+        // handoff as the full-build path (see `index`).
+        const parserState = edgeMode === "parser"
+          ? {
+              fileIDs: yield* Ref.get(parserFileIDsRef),
+              preserveEdgeIDs: yield* Ref.get(parserEdgeIDsRef),
+            }
+          : undefined
+        yield* rebuildDerivedGraph(changedFileIDs, dependentSourceFileIDs, parserState)
+      }
+
+      const fileCount = yield* repo.countFiles()
+      // Phase 0: the incremental path doesn't run a full directory walk,
+      // so the eligible denominator is just the file count from the
+      // caller-supplied change set (plus any previously-known files not
+      // yet seen by the walker). This keeps coverage comparable to a full
+      // build when the change set IS the entire repo.
+      const listingCount = filteredAddedOrChanged.length + filteredRemoved.length
+      // Floor the denominator at the current file count: a tiny change set
+      // (1-5 files from the watcher) must never tank graph coverage past the
+      // staleness cliff, or readiness forces an endless rebuild loop.
+      const eligibleForCoverage = Math.max(listingCount, fileCount)
+      if (changedFileIDs.length > 0) {
+        yield* repo.bumpVersion({
+          eligibleFiles: eligibleForCoverage,
+          indexedRoot: input.root,
+        })
+      }
+
+      const indexed = yield* Ref.get(indexedRef)
+      const parsedSkipped = yield* Ref.get(skippedRef)
+      const parseErrors = yield* repo.listParseErrors()
+      return {
+        indexed,
+        removed,
+        skipped: skippedInputs + parsedSkipped,
+        parseErrors: parseErrors.slice(0, 50),
+      }
+    })
+
+    const indexFiles = Effect.fn("CodegraphIndexer.indexFiles")(function* (input: {
+      root: string
+      paths: string[]
+      force?: boolean
+      maxFileSizeBytes?: number
+      excludePatterns?: readonly string[]
+      onProgress?: (info: { file: string; done: number; total: number; currentFile?: string }) => Effect.Effect<void>
+    }) {
+      const result = yield* applyChanges({
+        root: input.root,
+        addedOrChanged: input.paths,
+        removed: [],
+        ...(input.force !== undefined ? { force: input.force } : {}),
+        ...(input.maxFileSizeBytes !== undefined ? { maxFileSizeBytes: input.maxFileSizeBytes } : {}),
+        ...(input.excludePatterns !== undefined ? { excludePatterns: input.excludePatterns } : {}),
+        ...(input.onProgress !== undefined ? { onProgress: input.onProgress } : {}),
+      })
+      return {
+        indexed: result.indexed,
+        skipped: result.skipped,
+        parseErrors: result.parseErrors,
+      }
+    })
+
+    const removeFiles = Effect.fn("CodegraphIndexer.removeFiles")(function* (input: {
+      root: string
+      paths: string[]
+    }) {
+      yield* applyChanges({
+        root: input.root,
+        addedOrChanged: [],
+        removed: input.paths,
+      })
+    })
+
+    return { index, applyChanges, indexFiles, removeFiles, cancel }
+  })
+
+const globToRegex = (pattern: string): string =>
+  pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    // `**`/`**/` are consumed into placeholders first: the `*`/`?` passes
+    // below would otherwise clobber the `(?:.*/)?` tokens they insert.
+    .replace(/\*\*\//g, "\u0000GS\u0000")
+    .replace(/\*\*/g, "\u0000G\u0000")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]")
+    .replace(/\u0000GS\u0000/g, "(?:.*/)?")
+    .replace(/\u0000G\u0000/g, ".*")
+
+type IgnorePattern = {
+  readonly regex: RegExp
+  readonly dirRegex: RegExp | undefined
+  readonly negated: boolean
+  readonly base: string
+}
+
+// Gitignore compiler with real git semantics: basename patterns match at any
+// depth, slash patterns are relative to the ignore file's directory, a leading
+// "/" anchors to it, a trailing "/" is directory-only, "!" negates, and
+// `**`/`**/` span path segments. Last-match-wins is applied by evaluatePatterns.
+const compileIgnorePattern = (raw: string, base: string): IgnorePattern | undefined => {
+  let pattern = raw.trim()
+  if (pattern === "" || pattern.startsWith("#")) return undefined
+  let negated = false
+  if (pattern.startsWith("!")) {
+    negated = true
+    pattern = pattern.slice(1).trim()
+    if (pattern === "") return undefined
+  }
+  let dirOnly = false
+  if (pattern.endsWith("/")) {
+    dirOnly = true
+    pattern = pattern.slice(0, -1)
+  }
+  if (pattern === "") return undefined
+  const anchored = pattern.startsWith("/")
+  const pathPart = anchored ? pattern.slice(1) : pattern
+  if (pathPart === "") return undefined
+  const glob = globToRegex(pathPart)
+  const prefix = anchored || pathPart.includes("/") ? "^" : "(?:^|.*/)?"
+  const regex = new RegExp(prefix + glob + (dirOnly ? "$" : "(?:/.*)?$"))
+  const dirRegex = dirOnly ? new RegExp(prefix + glob + "/.*$") : undefined
+  return { regex, dirRegex, negated, base }
+}
+
+// Evaluate one ignore file's patterns against a path (last match wins). Returns
+// true (ignored), false (re-included by a later negation), or undefined when no
+// pattern matched. Paths are matched relative to each pattern's own base dir.
+const evaluatePatterns = (patterns: readonly IgnorePattern[], fullPath: string, isDir: boolean): boolean | undefined => {
+  let decided: boolean | undefined
+  const relCache = new Map<string, string>()
+  for (const pattern of patterns) {
+    let rel = relCache.get(pattern.base)
+    if (rel === undefined) {
+      rel = path.relative(pattern.base, fullPath).replace(/\\/g, "/")
+      relCache.set(pattern.base, rel)
+    }
+    const matched = pattern.dirRegex
+      ? (isDir && pattern.regex.test(rel)) || pattern.dirRegex.test(rel)
+      : pattern.regex.test(rel)
+    if (matched) decided = !pattern.negated
+  }
+  return decided
+}
+
+const CODE_EXTENSIONS = new Set([
+  ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs",
+  ".py", ".pyw",
+  ".zig",
+  ".rs",
+  ".go",
+  ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh",
+  ".java", ".kt",
+  ".cs",
+  ".swift",
+  ".rb",
+  ".php",
+  ".sh", ".bat", ".ps1",
+  ".sql",
+  ".html", ".css",
+  ".md",
+])
+
+const isArtifactPath = (filePath: string): boolean => {
+  const base = path.basename(filePath)
+  const lower = base.toLowerCase()
+  const normPath = filePath.replace(/\\/g, "/")
+  if (lower === "package.json") return true
+  if (lower === "dockerfile" || lower.startsWith("dockerfile.") || lower.endsWith(".dockerfile")) return true
+  if (lower === "compose.yml" || lower === "compose.yaml") return true
+  if (lower === "docker-compose.yml" || lower === "docker-compose.yaml") return true
+  if (lower === "jenkinsfile") return true
+  if (lower === ".gitlab-ci.yml") return true
+  if (lower.startsWith("azure-pipelines") && lower.endsWith(".yml")) return true
+  if (lower.startsWith("tsconfig") && lower.endsWith(".json")) return true
+  if (lower === "pnpm-workspace.yaml" || lower === "pnpm-workspace.yml") return true
+  if (lower === "pyproject.toml") return true
+  if (lower === "cargo.toml") return true
+  if (lower === "go.mod") return true
+  if (lower === ".envrc" || lower === ".env.example") return true
+  if (lower.startsWith(".env")) return true
+  if (lower.startsWith("dotenv")) return true
+  if (/\/\.github\/workflows\/.+\.(yml|yaml)$/i.test(normPath)) return true
+  if (/\/\.circleci\/.+\.(yml|yaml)$/i.test(normPath)) return true
+  if (/\.config\.(json|js|ts)$/i.test(base)) return true
+  if (lower === "config.json") return true
+  return false
+}
+
+// Shared eligibility predicate: both the full walk (index) and the incremental
+// path (applyChanges) must index exactly the same file set, or the two graphs
+// diverge (non-code files appearing only in incremental builds).
+const isIndexablePath = (filePath: string): boolean =>
+  CODE_EXTENSIONS.has(path.extname(filePath).toLowerCase()) || isArtifactPath(filePath)
+
+type IgnoreContext = {
+  readonly root: string
+  readonly defaults: readonly IgnorePattern[]
+  readonly rootGit: readonly IgnorePattern[]
+  readonly banyan: readonly IgnorePattern[]
+  readonly nested: Map<string, IgnorePattern[] | null>
+}
