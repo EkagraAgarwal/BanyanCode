@@ -174,3 +174,9 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/core/test/database-bootstrap-credentials.test.ts` | fix | pins the bootstrap import, including a corrupt `auth.json` | — |
 | `packages/client/src/service-probe.ts` | branding | the default service registration is BanyanCode's; a stock OpenCode registration holds that server's password | — |
 | `packages/client/test/service.test.ts` | branding | pins the default registration path | — |
+| `packages/cli/src/commands/commands.ts` | hook | BanyanCode subcommand specs: codegraph, goal, repository, websearch-free, tools, telemetry, db, mcp serve/doctor/profiles/install, stats --heatmap | — |
+| `packages/cli/src/index.ts` | hook | maps the BanyanCode subcommand handlers and runs first-run init | — |
+| `packages/cli/src/commands/handlers/stats.ts` | hook | v1 `--heatmap` flag | — |
+| `packages/cli/src/commands/handlers/banyancode/**` | hook | BanyanCode CLI subcommands | — |
+| `packages/cli/src/commands/handlers/mcp/*` | hook | `banyancode mcp serve`, doctor, profiles, install | — |
+| `packages/cli/test/banyancode/**` | hook | tests for the BanyanCode CLI subcommands | — |

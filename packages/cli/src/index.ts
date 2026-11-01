@@ -9,6 +9,7 @@ import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { Cause, Effect } from "effect"
 import { getErrorReported } from "effect/Runtime"
 import { Commands } from "./commands/commands"
+import { ensureBanyanDirs } from "./commands/handlers/banyancode/init"
 import { Runtime } from "./framework/runtime"
 import { Observability } from "@opencode/util/observability"
 import { Updater } from "./services/updater"
@@ -38,6 +39,11 @@ process.env.no_proxy = noProxy
 
 ensurePluginRuntime()
 
+// v1 first-run bootstrap (`init-banyan`): product dirs + a default global
+// banyancode.json when absent. Runs before dispatch so every command and the
+// TUI start from the same state.
+await ensureBanyanDirs()
+
 if (process.env.OPENCODE_SSH_ASKPASS_PORT) {
   const { askpass } = await import("./ssh-askpass")
   process.exit(await Effect.runPromise(askpass.pipe(Effect.provide(NodeServices.layer))))
@@ -64,6 +70,10 @@ const Handlers = Runtime.handlers(Commands, {
     paths: () => import("./commands/handlers/debug/paths"),
   },
   mcp: {
+    serve: () => import("./commands/handlers/mcp/serve"),
+    doctor: () => import("./commands/handlers/mcp/doctor"),
+    profiles: () => import("./commands/handlers/mcp/profiles"),
+    install: () => import("./commands/handlers/mcp/install"),
     list: () => import("./commands/handlers/mcp/list"),
     add: () => import("./commands/handlers/mcp/add"),
     auth: () => import("./commands/handlers/mcp/auth"),
@@ -98,6 +108,42 @@ const Handlers = Runtime.handlers(Commands, {
     unset: () => import("./commands/handlers/service/unset"),
   },
   serve: () => import("./commands/handlers/serve"),
+  codegraph: {
+    build: () => import("./commands/handlers/banyancode/codegraph/build"),
+    status: () => import("./commands/handlers/banyancode/codegraph/status"),
+    cancel: () => import("./commands/handlers/banyancode/codegraph/cancel"),
+    remove: () => import("./commands/handlers/banyancode/codegraph/remove"),
+    "force-kill": () => import("./commands/handlers/banyancode/codegraph/force-kill"),
+    path: () => import("./commands/handlers/banyancode/codegraph/path"),
+    trace: () => import("./commands/handlers/banyancode/codegraph/trace"),
+  },
+  goal: {
+    set: () => import("./commands/handlers/banyancode/goal/set"),
+    status: () => import("./commands/handlers/banyancode/goal/status"),
+    list: () => import("./commands/handlers/banyancode/goal/list"),
+    cancel: () => import("./commands/handlers/banyancode/goal/cancel"),
+  },
+  repository: {
+    query: () => import("./commands/handlers/banyancode/repository/query"),
+    explain: () => import("./commands/handlers/banyancode/repository/explain"),
+    trace: () => import("./commands/handlers/banyancode/repository/trace"),
+    impact: () => import("./commands/handlers/banyancode/repository/impact"),
+    tests: () => import("./commands/handlers/banyancode/repository/tests"),
+    relationships: () => import("./commands/handlers/banyancode/repository/relationships"),
+    ownership: () => import("./commands/handlers/banyancode/repository/ownership"),
+  },
+  "websearch-free": () => import("./commands/handlers/banyancode/websearch-free"),
+  tools: () => import("./commands/handlers/banyancode/tools"),
+  telemetry: {
+    status: () => import("./commands/handlers/banyancode/telemetry/status"),
+    on: () => import("./commands/handlers/banyancode/telemetry/on"),
+    off: () => import("./commands/handlers/banyancode/telemetry/off"),
+    "agent-report": () => import("./commands/handlers/banyancode/telemetry/agent-report"),
+    "agent-export": () => import("./commands/handlers/banyancode/telemetry/agent-export"),
+  },
+  db: {
+    gc: () => import("./commands/handlers/banyancode/db-gc"),
+  },
 })
 
 Effect.gen(function* () {

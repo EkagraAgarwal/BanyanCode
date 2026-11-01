@@ -9,6 +9,7 @@ import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
 import { errorMessage } from "../../util/error"
+import { computeHeatmapBuckets, HEATMAP_DEFAULT_DAYS, renderHeatmap } from "./banyancode/heatmap"
 
 const handler = Effect.fn("cli.stats")(function* (input: Runtime.Input<typeof Commands.commands.stats>) {
   const days = Option.getOrUndefined(input.days)
@@ -54,6 +55,12 @@ const handler = Effect.fn("cli.stats")(function* (input: Runtime.Input<typeof Co
         width: process.stdout.columns ?? 80,
       })
   process.stdout.write(output + EOL)
+  // v1 parity: `--heatmap` appends the activity grid after the stats body.
+  if (input.heatmap) {
+    const heatmapDays = days === undefined ? HEATMAP_DEFAULT_DAYS : days === 0 ? 1 : days
+    const buckets = computeHeatmapBuckets(stats.activity)
+    process.stdout.write(EOL + renderHeatmap(buckets, heatmapDays) + EOL)
+  }
 })
 
 export default Runtime.handler(Commands.commands.stats, (input) =>

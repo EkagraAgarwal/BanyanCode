@@ -237,8 +237,100 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       ],
     }),
     Spec.make("mcp", {
-      description: "Manage MCP (Model Context Protocol) servers",
+      description: "Manage MCP (Model Context Protocol) servers, or serve BanyanCode over MCP",
       commands: [
+        Spec.make("serve", {
+          description: "Serve BanyanCode over MCP (stdio by default; --http for stateless Streamable HTTP)",
+          params: {
+            cwd: Flag.String("cwd").pipe(
+              Flag.withDescription("Project directory to operate on (default: $CLAUDE_PROJECT_DIR or the cwd)"),
+              Flag.optional,
+            ),
+            config: Flag.String("config").pipe(
+              Flag.withDescription("banyancode.json path (default: discovery from --cwd)"),
+              Flag.optional,
+            ),
+            attach: Flag.String("attach").pipe(
+              Flag.withDescription("Reuse a running server instead of starting one (e.g. http://127.0.0.1:4096)"),
+              Flag.optional,
+            ),
+            password: Flag.String("password").pipe(
+              Flag.withDescription("Password for --attach (default: $BANYANCODE_SERVER_PASSWORD)"),
+              Flag.optional,
+            ),
+            allowYolo: Flag.Boolean("allow-yolo").pipe(
+              Flag.withDescription("Permit the yolo permission policy for delegated tasks"),
+              Flag.withDefault(false),
+            ),
+            permission: Flag.Literals("permission", ["reject", "edits", "yolo"]).pipe(
+              Flag.withDescription("Server permission policy for delegated tasks"),
+              Flag.optional,
+            ),
+            maxTasks: Flag.Int("max-tasks").pipe(
+              Flag.withDescription("Max concurrent delegated tasks (1-32)"),
+              Flag.optional,
+            ),
+            tools: Flag.String("tools").pipe(
+              Flag.withDescription('Comma-separated tool groups (default: all; "task", "code")'),
+              Flag.optional,
+            ),
+            http: Flag.Boolean("http").pipe(
+              Flag.withDescription("Serve over stateless Streamable HTTP instead of stdio"),
+              Flag.withDefault(false),
+            ),
+            port: Flag.Int("port").pipe(Flag.withDescription("HTTP port (default: ephemeral)"), Flag.optional),
+            hostname: Flag.String("hostname").pipe(
+              Flag.withDescription("HTTP bind address (default 127.0.0.1; non-loopback needs --token)"),
+              Flag.optional,
+            ),
+            token: Flag.String("token").pipe(
+              Flag.withDescription("HTTP bearer token (default: $BANYANCODE_MCP_TOKEN, else generated)"),
+              Flag.optional,
+            ),
+            noStart: Flag.Boolean("no-start").pipe(
+              Flag.withDescription("Never spawn the background service"),
+              Flag.withDefault(false),
+            ),
+            noRehydrate: Flag.Boolean("no-rehydrate").pipe(
+              Flag.withDescription("Skip rebuilding task handles from sessions at startup"),
+              Flag.withDefault(false),
+            ),
+          },
+        }),
+        Spec.make("doctor", {
+          description: "Check the MCP configuration, background service and delegated task state",
+          params: {
+            cwd: Flag.String("cwd").pipe(Flag.withDescription("Project directory to inspect"), Flag.optional),
+            config: Flag.String("config").pipe(
+              Flag.withDescription("banyancode.json path (default: discovery from --cwd)"),
+              Flag.optional,
+            ),
+          },
+        }),
+        Spec.make("profiles", {
+          description: "List the autonomy profiles available to delegated tasks",
+          params: {
+            cwd: Flag.String("cwd").pipe(Flag.withDescription("Project directory to inspect"), Flag.optional),
+            config: Flag.String("config").pipe(Flag.withDescription("banyancode.json path"), Flag.optional),
+            permission: Flag.Literals("permission", ["reject", "edits", "yolo"]).pipe(
+              Flag.withDescription("Server permission policy override"),
+              Flag.optional,
+            ),
+          },
+        }),
+        Spec.make("install", {
+          description: "Write the MCP client config (claude-code, codex, or cursor) after showing the change",
+          params: {
+            client: Argument.String("client").pipe(
+              Argument.withDescription("Client to configure: claude-code, codex, or cursor"),
+            ),
+            cwd: Flag.String("cwd").pipe(Flag.withDescription("Project directory to configure"), Flag.optional),
+            yes: Flag.Boolean("yes").pipe(
+              Flag.withDescription("Write without asking for confirmation (the change is still printed)"),
+              Flag.withDefault(false),
+            ),
+          },
+        }),
         Spec.make("list", {
           description: "List configured MCP servers and their status",
           globalFlags: ServerFlags,
@@ -360,6 +452,12 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
           Flag.withDefault(5),
         ),
         json: Flag.Boolean("json").pipe(Flag.withDescription("Output statistics as JSON"), Flag.withDefault(false)),
+        heatmap: Flag.Boolean("heatmap").pipe(
+          Flag.withDescription(
+            "Render per-day activity as an ASCII heatmap (last 365 days, or the --days window)",
+          ),
+          Flag.withDefault(false),
+        ),
       },
     }),
     Spec.make("mini", {
@@ -580,6 +678,253 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
         service: Flag.Boolean("service").pipe(Flag.withDefault(false)),
         stdio: Flag.Boolean("stdio").pipe(Flag.withDefault(false)),
       },
+    }),
+    // BanyanCode subcommands (v1 parity section 8a). Every command reaches the
+    // plugin over its RPC namespaces; the handlers live in
+    // `handlers/banyancode/**`.
+    Spec.make("codegraph", {
+      description: "Build and inspect the BanyanCode codegraph",
+      globalFlags: ServerFlags,
+      commands: [
+        Spec.make("build", {
+          description: "Build the codegraph for the current workspace",
+          params: {
+            root: Flag.String("root").pipe(
+              Flag.withDescription("Directory to index (defaults to the current working directory)"),
+              Flag.optional,
+            ),
+            force: Flag.Boolean("force").pipe(
+              Flag.withDescription("Rebuild even if the codegraph is already up to date"),
+              Flag.withDefault(false),
+            ),
+            watch: Flag.Boolean("watch").pipe(
+              Flag.withDescription("Stream progress events until the build finishes (default: true in a TTY)"),
+              Flag.withDefault(false),
+            ),
+            timeout: Flag.Int("timeout").pipe(
+              Flag.withDescription("Fail after N seconds; 0 = no timeout"),
+              Flag.withDefault(0),
+            ),
+          },
+        }),
+        Spec.make("status", {
+          description: "Print the current codegraph build status",
+          params: {
+            root: Flag.String("root").pipe(
+              Flag.withDescription("Directory whose graph should be inspected (defaults to the current directory)"),
+              Flag.optional,
+            ),
+          },
+        }),
+        Spec.make("cancel", { description: "Cancel an in-flight codegraph build" }),
+        Spec.make("remove", {
+          description:
+            "Remove the codegraph index (preserves banyancode.db by default; pass --drop-file to also delete the file)",
+          params: {
+            dropFile: Flag.Boolean("drop-file").pipe(
+              Flag.withDescription("Also delete the database file (DANGEROUS: shared with sessions)"),
+              Flag.withDefault(false),
+            ),
+          },
+        }),
+        Spec.make("force-kill", { description: "Force-kill a stuck codegraph build" }),
+        Spec.make("path", { description: "Print the BanyanCode database path" }),
+        Spec.make("trace", {
+          description: "Print recent tool-call traces for a session",
+          params: {
+            session: Flag.String("session").pipe(
+              Flag.withDescription("Session id whose trace file should be read"),
+            ),
+            limit: Flag.Int("limit").pipe(
+              Flag.withDescription("Number of most-recent events to print (default: 50)"),
+              Flag.withDefault(50),
+            ),
+            worktree: Flag.String("worktree").pipe(
+              Flag.withDescription("Project worktree to locate the trace file (defaults to the current directory)"),
+              Flag.optional,
+            ),
+          },
+        }),
+      ],
+    }),
+    Spec.make("goal", {
+      description: "Manage /goal loop goals (set/status/list/cancel)",
+      globalFlags: ServerFlags,
+      commands: [
+        Spec.make("set", {
+          description: "Create a new active goal for the current session",
+          params: {
+            condition: Argument.String("condition").pipe(
+              Argument.withDescription("Goal condition (free-text)"),
+            ),
+            plan: Flag.String("plan").pipe(
+              Flag.withDescription("Path to plan.md (v2 native goal mode stores no plan)"),
+              Flag.optional,
+            ),
+            priority: Flag.Literals("priority", ["low", "normal", "high"]).pipe(
+              Flag.withDescription("Goal priority (v2 native goal mode stores no priority)"),
+              Flag.withDefault("normal"),
+            ),
+            session: Flag.String("session").pipe(Flag.withDescription("Session id")),
+          },
+        }),
+        Spec.make("status", {
+          description: "Print the active goal for a session",
+          params: { session: Flag.String("session").pipe(Flag.withDescription("Session id")) },
+        }),
+        Spec.make("list", {
+          description: "List all goals (active + terminal) for a session",
+          params: { session: Flag.String("session").pipe(Flag.withDescription("Session id")) },
+        }),
+        Spec.make("cancel", {
+          description: "Cancel the active goal for a session",
+          params: { session: Flag.String("session").pipe(Flag.withDescription("Session id")) },
+        }),
+      ],
+    }),
+    Spec.make("repository", {
+      description: "BanyanCode repository intelligence subcommands",
+      globalFlags: ServerFlags,
+      commands: [
+        Spec.make("query", {
+          description: "Run a unified repository query (symbols, tests, docs, configs)",
+          params: {
+            query: Argument.String("query").pipe(
+              Argument.withDescription("Function name, file path, or feature phrase"),
+            ),
+            limit: Flag.Int("limit").pipe(
+              Flag.withDescription("Max recent commits to include"),
+              Flag.withDefault(10),
+            ),
+          },
+        }),
+        Spec.make("explain", {
+          description: "Explain a symbol by name",
+          params: { symbol: Argument.String("symbol").pipe(Argument.withDescription("Symbol name")) },
+        }),
+        Spec.make("trace", {
+          description: "Trace a symbol to its downstream dependents",
+          params: {
+            symbol: Argument.String("symbol").pipe(Argument.withDescription("Symbol name")),
+            depth: Flag.Int("depth").pipe(Flag.withDescription("Graph walk depth"), Flag.withDefault(2)),
+          },
+        }),
+        Spec.make("impact", {
+          description: "Analyze the impact of changing a file by path",
+          params: {
+            path: Argument.String("path").pipe(
+              Argument.withDescription("Repository-relative file path"),
+            ),
+          },
+        }),
+        Spec.make("tests", {
+          description: "Find tests that reference a symbol",
+          params: { symbol: Argument.String("symbol").pipe(Argument.withDescription("Symbol name")) },
+        }),
+        Spec.make("relationships", {
+          description: "Walk the graph from a nodeID",
+          params: {
+            nodeID: Argument.String("nodeID").pipe(Argument.withDescription("Codegraph node id")),
+            depth: Flag.Int("depth").pipe(Flag.withDescription("Graph walk depth"), Flag.withDefault(2)),
+          },
+        }),
+        Spec.make("ownership", {
+          description: "Find the most active author for a file by path",
+          params: {
+            path: Argument.String("path").pipe(
+              Argument.withDescription("Repository-relative file path"),
+            ),
+          },
+        }),
+      ],
+    }),
+    Spec.make("websearch-free", {
+      description: "Search the web via DuckDuckGo HTML (free, no API key)",
+      globalFlags: ServerFlags,
+      params: {
+        query: Argument.String("query").pipe(Argument.withDescription("Search query")),
+        num: Flag.Int("num").pipe(
+          Flag.withDescription("Max results (default 8, max 20; the provider returns at most 8)"),
+          Flag.withDefault(8),
+        ),
+      },
+    }),
+    Spec.make("tools", {
+      description: "Print the canonical tool catalog: registered / materialized / visible to the LLM",
+      globalFlags: ServerFlags,
+      params: {
+        category: Flag.String("category").pipe(
+          Flag.withDescription("Filter to a single category (e.g. Repository, Mesh, Primitive)"),
+          Flag.optional,
+        ),
+      },
+    }),
+    Spec.make("telemetry", {
+      description: "Telemetry subcommands (status/on/off/agent-report/agent-export)",
+      globalFlags: ServerFlags,
+      commands: [
+        Spec.make("status", { description: "Show install telemetry status" }),
+        Spec.make("on", { description: "Enable install telemetry (default)" }),
+        Spec.make("off", { description: "Disable install telemetry" }),
+        Spec.make("agent-report", {
+          description: "Show local agent-efficiency telemetry",
+          params: {
+            runId: Flag.String("run-id").pipe(Flag.withDescription("Filter by run id"), Flag.optional),
+            sessionId: Flag.String("session-id").pipe(
+              Flag.withDescription("Filter by session id"),
+              Flag.optional,
+            ),
+            since: Flag.Int("since").pipe(
+              Flag.withDescription("Only include events after this epoch millisecond"),
+              Flag.optional,
+            ),
+            json: Flag.Boolean("json").pipe(
+              Flag.withDescription("Print the report as JSON"),
+              Flag.withDefault(false),
+            ),
+          },
+        }),
+        Spec.make("agent-export", {
+          description: "Export sanitized local agent telemetry as JSONL",
+          params: {
+            runId: Flag.String("run-id").pipe(Flag.withDescription("Filter by run id"), Flag.optional),
+            sessionId: Flag.String("session-id").pipe(
+              Flag.withDescription("Filter by session id"),
+              Flag.optional,
+            ),
+            since: Flag.Int("since").pipe(
+              Flag.withDescription("Only include events after this epoch millisecond"),
+              Flag.optional,
+            ),
+          },
+        }),
+      ],
+    }),
+    Spec.make("db", {
+      description: "Database tools",
+      globalFlags: ServerFlags,
+      commands: [
+        Spec.make("gc", {
+          description:
+            "List orphaned BanyanCode project databases and delete them only with --yes (dry-run by default)",
+          params: {
+            yes: Flag.Boolean("yes").pipe(
+              Flag.withDescription("Actually delete orphaned databases (without this flag nothing is deleted)"),
+              Flag.withDefault(false),
+            ),
+            dryRun: Flag.Boolean("dry-run").pipe(
+              Flag.withDescription("List what would be deleted without deleting, even with --yes"),
+              Flag.optional,
+            ),
+            root: Flag.String("root").pipe(
+              Flag.withDescription(
+                "Project root whose worktree hash identifies current databases (defaults to cwd)",
+              ),
+              Flag.optional,
+            ),
+          },
+        }),
+      ],
     }),
   ],
 })
