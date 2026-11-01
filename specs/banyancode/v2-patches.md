@@ -180,3 +180,11 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/cli/src/commands/handlers/banyancode/**` | hook | BanyanCode CLI subcommands | — |
 | `packages/cli/src/commands/handlers/mcp/*` | hook | `banyancode mcp serve`, doctor, profiles, install | — |
 | `packages/cli/test/banyancode/**` | hook | tests for the BanyanCode CLI subcommands | — |
+| `packages/core/src/provider-usage/**` | hook | provider quota collection in core: fixed provider endpoints, returns numbers only | — |
+| `packages/core/test/provider-usage/**` | hook | quota adapters, redaction, and the result-only plugin surface | — |
+| `packages/core/test/fixture/policy.ts` | hook | test host follows `provider.usage` | — |
+| `packages/core/test/plugin/fixture.ts` | hook | test layer provides `ProviderUsage` | — |
+| `packages/plugin/src/effect/provider.ts` | hook | result-only `provider.usage` on the plugin API | — |
+| `packages/core/src/session/model-request.ts` | hook | orders volatile system parts after stable ones so a change can't cut the cached prefix | — |
+| `packages/core/test/session-model-request-hooks.test.ts` | hook | pins stable-before-volatile ordering | — |
+| `packages/core/test/session-runner.test.ts` | hook | proves v2 keeps the cached prefix across a thinking change (`banyancode_reasoning_configuration_update`) | — |

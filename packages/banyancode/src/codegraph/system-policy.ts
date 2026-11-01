@@ -12,6 +12,11 @@
  *   2. A per-session tool guide rendered from the tools that are actually
  *      registered (v1 read the tool registry; v2 passes the plugin's own
  *      tool list).
+ *
+ * `renderPolicy` renders both plus the live graph readout as one block (the
+ * v1 legacy order). `policySystemParts` splits the static pair from that
+ * readout so `banyancode_prompt_cache_stable_prefix` can emit the volatile
+ * line as its own trailing part.
  */
 export const POLICY_TEXT = [
   "## Repository intelligence is the canonical interface (ALWAYS)",
@@ -166,14 +171,65 @@ export const graphLineFor = (graph: GraphState): string => {
   return "Graph state: missing — the first graph call will build it."
 }
 
-export const renderPolicy = (input?: {
+export interface PolicyInput {
   readonly tools?: ReadonlyArray<ToolGuideInput>
   readonly graph?: GraphState
-}): string => {
-  const tools = input?.tools ?? []
-  const graph = input?.graph
-  if (tools.length === 0 && graph === undefined) return POLICY_TEXT
-  return [POLICY_TEXT, renderToolGuide(tools), graph === undefined ? "" : graphLineFor(graph)]
-    .filter((part) => part.length > 0)
-    .join("\n\n")
+}
+
+/** The block split at its volatility boundary (v1 `CodegraphParts`). */
+export interface PolicyParts {
+  /** Static policy + per-session tool guide: identical bytes on every turn. */
+  readonly stable: string
+  /** Live graph readout, which flips as the graph builds. */
+  readonly dynamic?: string
+}
+
+export const renderPolicyParts = (input?: PolicyInput): PolicyParts => {
+  const guide = renderToolGuide(input?.tools ?? [])
+  const stable = guide.length === 0 ? POLICY_TEXT : `${POLICY_TEXT}\n\n${guide}`
+  return input?.graph === undefined ? { stable } : { stable, dynamic: graphLineFor(input.graph) }
+}
+
+/** The whole block, exactly as v1 rendered it (policy + guide + graph line). */
+export const renderPolicy = (input?: PolicyInput): string => {
+  const parts = renderPolicyParts(input)
+  return parts.dynamic === undefined ? parts.stable : `${parts.stable}\n\n${parts.dynamic}`
+}
+
+/**
+ * Metadata marker the host request assembly reads: a part carrying it changes
+ * between turns, so the assembly moves it behind every stable part and the
+ * provider's cacheable prefix survives.
+ */
+export const VOLATILE_SYSTEM_METADATA = { system: { volatility: "dynamic" } } as const
+
+export interface PolicySystemPart {
+  readonly type: "text"
+  readonly text: string
+  readonly metadata?: Record<string, unknown>
+}
+
+/**
+ * `banyancode_prompt_cache_stable_prefix` (default true), v1 WS3 parity:
+ * emit the static policy + tool guide first and the live graph readout as its
+ * own trailing part. A graph-state flip then changes bytes only after the
+ * cacheable prefix. With the setting off the block stays one part in the
+ * legacy interleaved position.
+ */
+export const policySystemParts = (
+  input: PolicyInput & { readonly stablePrefix: boolean },
+): ReadonlyArray<PolicySystemPart> => {
+  const parts = renderPolicyParts(input)
+  if (!input.stablePrefix || parts.dynamic === undefined)
+    return [
+      { type: "text", text: parts.dynamic === undefined ? parts.stable : `${parts.stable}\n\n${parts.dynamic}` },
+    ]
+  return [
+    { type: "text", text: parts.stable, metadata: { banyancode: { stable: true, source: "codegraph" } } },
+    {
+      type: "text",
+      text: parts.dynamic,
+      metadata: { ...VOLATILE_SYSTEM_METADATA, banyancode: { source: "codegraph" } },
+    },
+  ]
 }

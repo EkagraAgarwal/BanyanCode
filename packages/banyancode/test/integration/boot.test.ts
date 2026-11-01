@@ -19,8 +19,12 @@ const core = (path: string) => import(["..", "..", "..", "core", path].join("/")
 const { testEffect } = await core("test/lib/effect.js")
 const { PluginTestLayer } = await core("test/plugin/fixture.js")
 const { Agent } = await core("src/agent.js")
+const { Model } = await core("src/model.js")
+const { PluginHooks } = await core("src/plugin/hooks.js")
 const { PluginHost } = await core("src/plugin/host.js")
+const { Provider } = await core("src/provider.js")
 const { Rpc } = await core("src/rpc.js")
+const { Session } = await core("src/session.js")
 const { Tool } = await core("src/tool.js")
 const { WebSearch } = await core("src/websearch.js")
 
@@ -119,6 +123,30 @@ it.live(
       const websearch = yield* WebSearch.Service
       const providers = yield* websearch.providers()
       expect(providers.map((provider: { id: string }) => provider.id as string)).toContain("duckduckgo")
+
+      // ── system policy: stable prefix split ───────────────────────────────
+      const hooks = yield* PluginHooks.Service
+      const policy = yield* hooks.trigger("session", "context", {
+        sessionID: Session.ID.make("ses_boot_policy"),
+        agent: Agent.ID.make("build"),
+        model: Model.Ref.make({ id: Model.ID.make("boot"), providerID: Provider.ID.make("boot") }),
+        system: [],
+        messages: [],
+        options: {},
+        tools: {},
+      })
+      const texts = policy.system.map((part: { text: string }) => part.text)
+      expect(texts.some((text: string) => text.includes("Repository intelligence is the canonical interface"))).toBe(
+        true,
+      )
+      expect(texts.some((text: string) => text.includes("BanyanCode orchestration"))).toBe(true)
+      // The live graph line is its own part, marked so request assembly moves it behind stable text.
+      const graph = policy.system.find((part: { text: string }) => part.text.startsWith("Graph state:"))
+      expect(graph?.metadata).toEqual({ system: { volatility: "dynamic" }, banyancode: { source: "codegraph" } })
+      const stable = policy.system.find((part: { text: string }) =>
+        part.text.includes("Repository intelligence is the canonical interface"),
+      )
+      expect(stable?.text).not.toContain("Graph state:")
 
       // ── storage ──────────────────────────────────────────────────────────
       const status = yield* rpc.call("banyancode", "status", {})

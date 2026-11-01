@@ -251,9 +251,9 @@ Schema: `packages/core/src/v1/config/banyan-config.ts:109-318`. Consumers read v
 | banyancode_prompt_cache_key (`auto`/`off`/string) | packages/core/src/v1/config/banyan-config.ts:192 | 3e | todo | |
 | banyancode_prompt_cache_mode (`implicit`/`explicit`/`off`) | packages/core/src/v1/config/banyan-config.ts:201 | 3e | todo | |
 | banyancode_prompt_cache_diagnostics | packages/core/src/v1/config/banyan-config.ts:208 | 3e | todo | |
-| banyancode_prompt_cache_stable_prefix | packages/core/src/v1/config/banyan-config.ts:213 | 3e | todo | |
+| banyancode_prompt_cache_stable_prefix | packages/core/src/v1/config/banyan-config.ts:213 | 3e | done | packages/banyancode/test/codegraph/codegraph.test.ts::stable prefix on emits the graph line as its own trailing volatile part; packages/core/test/session-model-request-hooks.test.ts::moves volatile parts behind stable ones so a change cannot cut the prefix |
 | banyancode_prompt_cache_prewarm | packages/core/src/v1/config/banyan-config.ts:215 | 3e | todo | |
-| banyancode_reasoning_configuration_update | packages/core/src/v1/config/banyan-config.ts:222 | 3e | todo | |
+| banyancode_reasoning_configuration_update | packages/core/src/v1/config/banyan-config.ts:222 | 3e | done — satisfied natively by model-switched effort markers; the key is accepted but not consulted | packages/core/test/session-runner.test.ts::keeps the cacheable prefix and history stable across a thinking change |
 | banyancode_tool_search_defer | packages/core/src/v1/config/banyan-config.ts:232 | 3e | todo | |
 | banyancode_lsp (boolean or per-server record) | packages/core/src/v1/config/banyan-config.ts:237 | 3e | todo | |
 | banyancode_lsp_idle_timeout_ms | packages/core/src/v1/config/banyan-config.ts:241 | 3e | todo | |
@@ -340,8 +340,8 @@ and `rpc.banyancode.*` events. Memory routes have no v2 replacement.
 | GET /global/codegraph-nodes → RPC banyancode.codegraph.nodes | packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:541 | 3a | todo | |
 | GET /global/codegraph-edges → RPC banyancode.codegraph.edges | packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:557 | 3a | todo | |
 | GET /global/tool-usage → RPC banyancode.usage.toolUsage | packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:530 | 3e | todo | |
-| GET /global/provider-usage → RPC banyancode.usage.providerList | packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:716 | 3g | todo | |
-| POST /global/provider-usage/refresh → RPC banyancode.usage.providerRefresh | packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:726 | 3g | todo | |
+| GET /global/provider-usage → RPC banyancode.usage.providerList | packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:716 | 3g | done | packages/banyancode/test/telemetry/telemetry.test.ts::providerList and providerRefresh serve the core seam result; packages/core/test/provider-usage/service.test.ts::the layer resolves the credential inside core and returns only numbers |
+| POST /global/provider-usage/refresh → RPC banyancode.usage.providerRefresh | packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:726 | 3g | done | packages/banyancode/test/telemetry/telemetry.test.ts::providerList and providerRefresh serve the core seam result; packages/core/test/provider-usage/service.test.ts::TTL caching serves the cached row; force refreshes |
 | POST /global/startup (bridge bootstrap) → no v2 equivalent; plugin activation replaces it | packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:590 | 1 | todo | |
 | POST /global/websearch-free → RPC banyancode.websearch.free (name to confirm) | packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:610 | 3d | todo | |
 | POST /global/code-find → RPC banyancode.intel.codeFind | packages/opencode/src/server/routes/instance/httpapi/groups/global.ts:622 | 3c | todo | |
@@ -432,7 +432,7 @@ Registration list: `packages/tui/src/feature-plugins/builtins.ts:36-73`. Slots:
 | Sidebar: performance panel (tokens/s, TTFT, output tokens) | packages/tui/src/feature-plugins/sidebar/performance.tsx:9 | 3g | todo | |
 | Sidebar: context panel (token breakdown, cache read/write, cost) | packages/tui/src/feature-plugins/sidebar/context.tsx:8 | 3g | todo | |
 | Sidebar: system panel (CPU, memory, disk, GPU/VRAM when available) | packages/tui/src/feature-plugins/sidebar/system-status.tsx:8 | 3g | todo | |
-| Sidebar: provider usage panel (quota/rate-limit windows per provider) | packages/tui/src/feature-plugins/sidebar/provider-usage.tsx:10 | 3g | todo | |
+| Sidebar: provider usage panel (quota/rate-limit windows per provider) | packages/tui/src/feature-plugins/sidebar/provider-usage.tsx:10 | 3g | done | packages/banyancode/test/telemetry/provider-usage.test.ts::core quota rows win; observed headers only fill unsupported rows; packages/core/test/provider-usage/service.test.ts::anthropic OAuth windows normalize from the pinned endpoint |
 | Sidebar: tool usage panel (codegraph_tool_usage counts) | packages/tui/src/feature-plugins/sidebar/tool-usage.tsx:8 | 3g | todo | |
 | Sidebar: MCP panel | packages/tui/src/feature-plugins/sidebar/mcp.tsx:6 | 3g | todo | |
 | Sidebar: modified files panel | packages/tui/src/feature-plugins/sidebar/files.tsx:7 | 3g | todo | |

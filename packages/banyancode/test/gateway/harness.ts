@@ -13,6 +13,14 @@ export interface RpcCapture {
   readonly handlers: Readonly<Record<string, (input: unknown, context: unknown) => Effect.Effect<unknown, unknown>>>
 }
 
+export interface HarnessOptions {
+  readonly providers?: ReadonlyArray<{ readonly id: string; readonly name: string }>
+  readonly usage?: (input?: {
+    readonly force?: boolean
+    readonly providerID?: string
+  }) => Effect.Effect<{ readonly snapshots: ReadonlyArray<unknown> }, unknown>
+}
+
 export interface Harness {
   readonly ctx: Context
   readonly tool: Map<string, Hook>
@@ -20,14 +28,16 @@ export interface Harness {
   readonly session: Map<string, Hook>
   readonly rpcs: RpcCapture[]
   setMessages(messages: readonly unknown[]): void
+  setProviderUsage(usage: HarnessOptions["usage"]): void
 }
 
-export const makeContext = (directory: string): Harness => {
+export const makeContext = (directory: string, options: HarnessOptions = {}): Harness => {
   const tool = new Map<string, Hook>()
   const permission = new Map<string, Hook>()
   const session = new Map<string, Hook>()
   const rpcs: RpcCapture[] = []
   let messages: readonly unknown[] = []
+  let usage = options.usage
 
   const hook =
     (registry: Map<string, Hook>) =>
@@ -51,6 +61,11 @@ export const makeContext = (directory: string): Harness => {
     event: {
       subscribe: () => Stream.empty,
     },
+    provider: {
+      list: () => Effect.succeed({ data: options.providers ?? [] }),
+      usage: (input?: { readonly force?: boolean; readonly providerID?: string }) =>
+        usage === undefined ? Effect.succeed({ snapshots: [] }) : usage(input),
+    },
     rpc: {
       register: (
         definition: { readonly id: string },
@@ -71,6 +86,9 @@ export const makeContext = (directory: string): Harness => {
     rpcs,
     setMessages: (next) => {
       messages = next
+    },
+    setProviderUsage: (next) => {
+      usage = next
     },
   }
 }

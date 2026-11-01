@@ -109,9 +109,12 @@ export const clampMaxSubagents = (value: number | undefined): number => {
 
 /**
  * Appended for every agent, exactly like v1's single shared system part.
- * `banyancode_prompt_cache_stable_prefix` (default true) marks the part with an
- * ephemeral cache hint so providers that honor explicit hints keep it in the
- * cacheable prefix; unset/false leaves the part untagged (v1 legacy order).
+ * No manual cache hint: the auto cache policy already breakpoints the last
+ * system part, and spending the breakpoint budget here would displace the
+ * conversation-tail breakpoint. `banyancode_prompt_cache_stable_prefix`
+ * (default true) is enforced where the volatile text lives — the codegraph
+ * hook splits its live graph line into a trailing part, and the host moves
+ * that part behind everything stable.
  */
 export const register = (
   ctx: Context,
@@ -121,13 +124,10 @@ export const register = (
     .hook("context", (event) =>
       Effect.gen(function* () {
         const loaded = yield* deps.config.get()
-        const text = orchestrationText(clampMaxSubagents(loaded.config.banyancode_max_subagents))
-        const stable = loaded.config.banyancode_prompt_cache_stable_prefix ?? true
         event.system.push({
           type: "text",
-          text,
+          text: orchestrationText(clampMaxSubagents(loaded.config.banyancode_max_subagents)),
           metadata: { banyancode: { stable: true, source: "orchestration" } },
-          ...(stable ? { cache: { type: "ephemeral" as const } } : {}),
         })
       }).pipe(Effect.catchCause(() => Effect.void)),
     )

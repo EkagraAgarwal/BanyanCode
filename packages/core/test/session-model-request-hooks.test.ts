@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { ToolDefinition } from "@opencode/ai/effect"
+import { SystemPart, ToolDefinition } from "@opencode/ai/effect"
 import { OpenAIChat } from "@opencode/ai/protocols"
 import { Agent } from "@opencode/schema/agent"
 import { Money } from "@opencode/schema/money"
@@ -236,5 +236,72 @@ describe("SessionModelRequest HTTP hooks", () => {
         "receive:primary:created",
       ])
     }),
+  )
+})
+
+describe("SessionModelRequest stable system prefix", () => {
+  const volatile = { system: { volatility: "dynamic" } }
+  const text = (value: string, metadata?: Record<string, unknown>) => ({
+    type: "text" as const,
+    text: value,
+    ...(metadata === undefined ? {} : { metadata }),
+  })
+  const prepare = (requests: SessionModelRequest.Interface, system: Array<SystemPart>) =>
+    requests.primary({ session, agent: Agent.ID.make("build"), model, system, messages: [] })
+
+  it.effect("moves volatile parts behind stable ones so a change cannot cut the prefix", () =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      let graph = "Graph state: missing"
+      yield* hooks.register("session", "context", (event) =>
+        Effect.sync(() => {
+          event.system.push(text("stable codegraph policy"))
+          event.system.push(text(graph, volatile))
+          event.system.push(text("stable orchestration policy"))
+        }),
+      )
+      const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+      const first = yield* prepare(requests, [SystemPart.make("agent prompt")])
+      graph = "Graph state: ready (42 symbols)"
+      const second = yield* prepare(requests, [SystemPart.make("agent prompt")])
+
+      expect(first.event.system.map((part) => part.text)).toEqual([
+        "agent prompt",
+        "stable codegraph policy",
+        "stable orchestration policy",
+        "Graph state: missing",
+      ])
+      expect(second.event.system.map((part) => part.text)).toEqual([
+        "agent prompt",
+        "stable codegraph policy",
+        "stable orchestration policy",
+        "Graph state: ready (42 symbols)",
+      ])
+      // Everything before the volatile tail is byte-for-byte identical across turns.
+      expect(second.event.system.slice(0, -1)).toEqual(first.event.system.slice(0, -1))
+      // The wire request keeps the assembled order.
+      expect(second.request.system.map((part) => part.text)).toEqual(second.event.system.map((part) => part.text))
+    }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
+  )
+
+  it.effect("leaves unmarked parts in hook order", () =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      yield* hooks.register("session", "context", (event) =>
+        Effect.sync(() => {
+          event.system.push(text("stable codegraph policy"))
+          event.system.push(text("Graph state: missing"))
+          event.system.push(text("stable orchestration policy"))
+        }),
+      )
+      const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+      const prepared = yield* prepare(requests, [SystemPart.make("agent prompt")])
+      expect(prepared.event.system.map((part) => part.text)).toEqual([
+        "agent prompt",
+        "stable codegraph policy",
+        "Graph state: missing",
+        "stable orchestration policy",
+      ])
+    }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
   )
 })

@@ -123,6 +123,24 @@ export const baseTranscript = (input: {
   }
 }
 
+/** A plugin marks a part it knows changes between turns with `metadata.system.volatility: "dynamic"`. */
+const isVolatileSystemPart = (part: SystemPart) => {
+  const system = part.metadata?.system
+  return (
+    typeof system === "object" && system !== null && (system as { readonly volatility?: unknown }).volatility === "dynamic"
+  )
+}
+
+/**
+ * Moves volatile system parts behind every stable part. Providers cache a request prefix, so a part
+ * that changes (live graph state, for example) invalidates every byte after it unless it is last.
+ * Relative order is otherwise preserved, and an unmarked system array is returned unchanged.
+ */
+const orderSystem = (system: Array<SystemPart>): Array<SystemPart> => {
+  if (!system.some(isVolatileSystemPart)) return system
+  return [...system.filter((part) => !isVolatileSystemPart(part)), ...system.filter(isVolatileSystemPart)]
+}
+
 const mimeToModality = (mime: string) => {
   if (mime.startsWith("image/")) return "image"
   if (mime.startsWith("audio/")) return "audio"
@@ -275,6 +293,9 @@ export const layer = Layer.effect(
         },
         Object.fromEntries(Array.from(given, ([d, t]) => [t.name, d])),
       )
+      // Hooks run inside `shape`; reordering after them is the last word on the system array. A
+      // volatile part behind stable text would cut the provider's cacheable prefix on every change.
+      shaped.system = orderSystem(shaped.system)
       // Match by identity first, then by key. Entries matching neither were invented by a
       // hook and are dropped. `t.name` stays the real name so execution can map renames back.
       const byName = new Map(tools.definitions.map((t) => [t.name, t]))

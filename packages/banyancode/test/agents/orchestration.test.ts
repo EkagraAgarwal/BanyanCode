@@ -54,11 +54,11 @@ describe("orchestration system block (v1 parity)", () => {
     expect(result).toHaveLength(2)
     expect(result[1]!.text).toContain("Cap: 4 parallel subagents")
     expect(result[1]!.metadata).toEqual({ banyancode: { stable: true, source: "orchestration" } })
-    // Default `banyancode_prompt_cache_stable_prefix` = true.
-    expect(result[1]!.cache).toEqual({ type: "ephemeral" })
+    // No manual cache hint: it would spend the auto policy's tail breakpoint.
+    expect(result[1]!.cache).toBeUndefined()
   })
 
-  test("stable prefix off drops the cache hint; value is clamped", async () => {
+  test("clamps the subagent cap and ignores the stable-prefix key here", async () => {
     const [part] = await harness({
       banyancode_prompt_cache_stable_prefix: false,
       banyancode_max_subagents: 99,

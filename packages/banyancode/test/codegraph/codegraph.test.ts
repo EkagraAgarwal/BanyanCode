@@ -19,7 +19,13 @@ import { make as makeAnalyzer } from "../../src/codegraph/codegraph-analyzer.js"
 import { makeService as makeSearch } from "../../src/codegraph/search/search.js"
 import { make as makeStructural } from "../../src/codegraph/structural-queries/structural-queries.js"
 import { resolveGraphTargetPure } from "../../src/codegraph/symbol-resolver.js"
-import { renderPolicy, POLICY_TEXT } from "../../src/codegraph/system-policy.js"
+import {
+  graphLineFor,
+  policySystemParts,
+  renderPolicy,
+  renderPolicyParts,
+  POLICY_TEXT,
+} from "../../src/codegraph/system-policy.js"
 import { tool as codeFindTool } from "../../src/codegraph/tools/code-find.js"
 import { tool as searchTool } from "../../src/codegraph/tools/codegraph-search-tool.js"
 import { tool as stalenessTool } from "../../src/codegraph/tools/codegraph-staleness.js"
@@ -396,6 +402,42 @@ describe("codegraph system policy", () => {
     expect(text).toContain("Graph state: ready (42 symbols)")
     // Tools outside the registered list never appear.
     expect(text).not.toContain("codegraph_impact")
+  })
+
+  test("splits the static policy from the live graph line byte-identically", () => {
+    const tools = [{ id: "codegraph_build", description: "Build (or rebuild) the code graph. Extra detail." }]
+    const graph = { state: "ready", symbols: 42 } as const
+    const parts = renderPolicyParts({ tools, graph })
+    expect(parts.dynamic).toBe(graphLineFor(graph))
+    expect(parts.stable).not.toContain("Graph state:")
+    expect(`${parts.stable}\n\n${parts.dynamic}`).toBe(renderPolicy({ tools, graph }))
+    // No graph readout: stable only, and still byte-identical to the legacy renderer.
+    expect(renderPolicyParts({ tools })).toEqual({ stable: renderPolicy({ tools }) })
+    // No tool guide: the policy alone stays the stable part.
+    expect(renderPolicyParts({ graph })).toEqual({ stable: POLICY_TEXT, dynamic: graphLineFor(graph) })
+  })
+
+  test("stable prefix on emits the graph line as its own trailing volatile part", () => {
+    const tools = [{ id: "codegraph_build", description: "Build (or rebuild) the code graph. Extra detail." }]
+    const graph = { state: "missing" } as const
+    const on = policySystemParts({ tools, graph, stablePrefix: true })
+    expect(on).toHaveLength(2)
+    expect(on[0]!.text).not.toContain("Graph state:")
+    expect(on[0]!.metadata).toEqual({ banyancode: { stable: true, source: "codegraph" } })
+    expect(on[1]!.text).toBe(graphLineFor(graph))
+    expect(on[1]!.metadata).toEqual({ system: { volatility: "dynamic" }, banyancode: { source: "codegraph" } })
+    // Setting off keeps the legacy single part, byte-for-byte.
+    expect(policySystemParts({ tools, graph, stablePrefix: false })).toEqual([
+      { type: "text", text: renderPolicy({ tools, graph }) },
+    ])
+  })
+
+  test("consecutive turns keep every stable byte when only the graph state flips", () => {
+    const tools = [{ id: "codegraph_build", description: "Build (or rebuild) the code graph. Extra detail." }]
+    const first = policySystemParts({ tools, graph: { state: "building" }, stablePrefix: true })
+    const second = policySystemParts({ tools, graph: { state: "ready", symbols: 1234 }, stablePrefix: true })
+    expect(second[0]).toEqual(first[0])
+    expect(second[1]!.text).not.toBe(first[1]!.text)
   })
 
   test("keeps the exact v1 tool ids", () => {

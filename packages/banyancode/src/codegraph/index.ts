@@ -37,7 +37,7 @@ import { make as makeRepo } from "./codegraph-repo.js"
 import { Definition } from "./rpc.js"
 import { makeService } from "./search/search.js"
 import { make as makeStructural } from "./structural-queries/structural-queries.js"
-import { renderPolicy, type ToolGuideInput } from "./system-policy.js"
+import { policySystemParts, type ToolGuideInput } from "./system-policy.js"
 import { name as codeFindName, tool as codeFindTool } from "./tools/code-find.js"
 import {
   name_build,
@@ -334,8 +334,16 @@ export const register = (
               : ready.reason === "building"
                 ? ({ state: "building" } as const)
                 : ({ state: "missing" } as const)
-          const text = renderPolicy({ tools: toolGuide, graph })
-          event.system.push({ type: "text", text })
+          // v1 WS3: stable policy + tool guide first, live graph readout as its
+          // own trailing part (moved behind every stable part by the host).
+          const loaded = yield* deps.config.get()
+          event.system.push(
+            ...policySystemParts({
+              tools: toolGuide,
+              graph,
+              stablePrefix: loaded.config.banyancode_prompt_cache_stable_prefix ?? true,
+            }),
+          )
         }).pipe(Effect.catchCause(() => Effect.void)),
       )
       .pipe(Effect.orDie)

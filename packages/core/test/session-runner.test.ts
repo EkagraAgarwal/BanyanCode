@@ -2332,6 +2332,51 @@ describe("SessionRunnerLLM", () => {
     })
   })
 
+  scenario("keeps the cacheable prefix and history stable across a thinking change", function* (s) {
+    s.currentModel = LanguageModel.make({
+      id: "gpt-6.1-sol",
+      provider: "openai",
+      route: OpenAIResponses.route,
+      defaults: { providerOptions: { reasoningEffort: "high" } },
+    })
+    const model = { id: ID.make("gpt-6.1-sol"), providerID: Provider.ID.make("openai") }
+    yield* s.bus.publish(SessionEvent.ModelSelected, {
+      sessionID,
+      model: { ...model, variant: Model.VariantID.make("high") },
+    })
+    yield* s.llm.push(TestLLM.text("Earlier answer", "text-thinking-high"))
+    yield* s.runPrompt("First")
+    yield* s.bus.publish(SessionEvent.ModelSelected, {
+      sessionID,
+      model: { ...model, variant: Model.VariantID.make("low") },
+    })
+    s.currentModel = LanguageModel.update(s.currentModel, {
+      defaults: { providerOptions: { reasoningEffort: "low" } },
+    })
+    yield* s.llm.push(TestLLM.text("Later answer", "text-thinking-low"))
+    yield* s.runPrompt("Second")
+
+    const [first, second] = s.requests
+    // Nothing before the change moves: the system text is byte-identical and every
+    // message from the first turn replays unchanged.
+    expect(second!.system).toEqual(first!.system)
+    expect(second!.messages.slice(0, first!.messages.length)).toEqual([...first!.messages])
+    expect(second!.messages.at(-2)).toEqual(Message.effort({ effort: "low", previous: "high" }))
+
+    // The change rides the native configuration_update item; the top-level effort
+    // stays frozen at the value the conversation started with.
+    const compiled = yield* compileRequest(second!)
+    expect(compiled.body).toMatchObject({
+      reasoning: { effort: "high" },
+      input: [
+        { role: "user" },
+        { role: "assistant" },
+        { type: "configuration_update", reasoning: { effort: "low" } },
+        { role: "user" },
+      ],
+    })
+  })
+
   scenario("preserves instruction values while a source is temporarily unavailable", function* (s) {
     yield* s.runPrompt("First")
     yield* s.bus.publish(SessionEvent.ModelSelected, {
