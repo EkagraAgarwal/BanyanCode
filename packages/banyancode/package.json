@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@banyancode/plugin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "BanyanCode server plugin for OpenCode v2: project storage, configuration, and RPC surface.",
+  "exports": {
+    ".": "./src/server.ts",
+    "./server": "./src/server.ts",
+    "./rpc": "./src/rpc.ts",
+    "./config": "./src/config/index.ts",
+    "./storage": "./src/storage/index.ts",
+    "./grammar": "./src/grammar.ts"
+  },
+  "imports": {
+    "#sqlite": {
+      "bun": "./src/storage/sqlite.bun.ts",
+      "node": "./src/storage/sqlite.node.ts",
+      "default": "./src/storage/sqlite.node.ts"
+    },
+    "#grammar-assets": {
+      "bun": "./src/grammar-assets.bun.ts",
+      "node": "./src/grammar-assets.node.ts",
+      "default": "./src/grammar-assets.node.ts"
+    }
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bun check --no-script -p tsconfig.test.json",
+    "typecheck:tsc": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@opencode/plugin": "workspace:*",
+    "@opencode/schema": "workspace:*",
+    "effect": "catalog:",
+    "web-tree-sitter": "0.25.10"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "@typescript/native": "catalog:",
+    "typescript": "catalog:"
+  }
+}

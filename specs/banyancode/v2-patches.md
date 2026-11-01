@@ -39,3 +39,5 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | Path | Category | Why | Upstream PR |
 | --- | --- | --- | --- |
 | `.github/workflows/*` | ci | upstream workflows removed; BanyanCode CI replaces them | — |
+| `packages/core/src/plugin/internal.ts` | hook | register `@banyancode/plugin` as a guarded built-in (`post` list + `guarded` set) | — |
+| `packages/core/package.json` | hook | workspace dependency on `@banyancode/plugin` for the built-in import | — |

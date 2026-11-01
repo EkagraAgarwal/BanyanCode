@@ -96,6 +96,7 @@
     "fast-check": "catalog:"
   },
   "dependencies": {
+    "@banyancode/plugin": "workspace:*",
     "@ai-sdk/provider": "3.0.19",
     "@ai-sdk/provider-utils": "4.0.62",
     "@ff-labs/fff-bun": "0.10.5",
