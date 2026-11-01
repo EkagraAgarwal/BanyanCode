@@ -1,0 +1,118 @@
+# BanyanCode preflight: validate release readiness without publishing.
+#
+# TRIGGERS: workflow_dispatch only until the v2 cutover (migration plan Phase 6).
+# Add this at cutover:
+#
+#   on:
+#     push:
+#       branches: ["main"]
+#     workflow_dispatch: ...
+#
+# Checks, in order: patch ledger, npm auth, dev build, binary smoke (a real
+# isolated run), packaging dry run, Azure signing secrets. The smoke step is
+# deliberately strict: an unwired feature (server RPC, `mcp serve`) fails the
+# preflight instead of being skipped.
+name: banyancode-preflight
+run-name: "banyancode preflight (${{ github.ref_name }})"
+
+on:
+  workflow_dispatch:
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
+
+env:
+  GH_REPO: EkagraAgarwal/BanyanCode
+
+jobs:
+  preflight:
+    name: Validate release readiness
+    runs-on: ubuntu-latest
+    if: github.repository == 'EkagraAgarwal/BanyanCode'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so the patch ledger can diff against the upstream base.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          bun-version: "1.4.4"
+
+      - name: Patch ledger
+        run: bun script/banyancode/patch-ledger.ts
+
+      - name: Setup Node + npm auth probe
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      - name: npm auth probe
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # Warn only: a fork without the secret must not block preflight. The
+          # publish workflow fails instead.
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::warning::NPM_TOKEN is missing; a real publish would fail. Add the secret before cutting a release."
+          elif npm whoami >/dev/null 2>&1; then
+            echo "npm auth OK ($(npm whoami))"
+          else
+            echo "::warning::NPM_TOKEN is set but npm whoami failed; the token may be invalid."
+          fi
+
+      - name: Build the dev binary (current platform)
+        env:
+          # dev-build derives `-dev.<sha7>` from GITHUB_SHA.
+          GITHUB_SHA: ${{ github.sha }}
+        run: bun script/banyancode/dev-build.ts
+
+      - name: Read the built version
+        id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./packages/cli/dist/dev/build.json').version")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Built ${VERSION}"
+
+      - name: Smoke-test the binary (isolated root)
+        run: bun script/banyancode/smoke.ts --bin packages/cli/dist/dev/banyancode
+
+      - name: Stage npm packages
+        run: bun script/banyancode/pack.ts --version="${{ steps.v.outputs.version }}"
+
+      - name: Inspect the npm tarballs (no publish)
+        run: |
+          # Single-platform runner: the dry run inspects only the platform it built.
+          bun script/banyancode/publish.ts --dry-run --version="${{ steps.v.outputs.version }}"
+
+      - name: Validate Azure signing secrets
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+        run: |
+          if [ -z "$AZURE_CLIENT_ID" ] || [ -z "$AZURE_TENANT_ID" ] || [ -z "$AZURE_SUBSCRIPTION_ID" ] || [ -z "$AZURE_TRUSTED_SIGNING_ACCOUNT_NAME" ] || [ -z "$AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE" ] || [ -z "$AZURE_TRUSTED_SIGNING_ENDPOINT" ]; then
+            echo "::warning::Azure signing secrets missing; Windows binaries will be unsigned."
+          else
+            echo "Azure signing secrets present."
+          fi
+
+      - name: Summarize
+        run: |
+          echo "PREFLIGHT SUMMARY"
+          echo "-----------------"
+          echo "version: ${{ steps.v.outputs.version }}"
+          ls -la packages/cli/dist/dev 2>/dev/null || true
+          ls -la dist/npm 2>/dev/null || true
+          ls -la dist/archives 2>/dev/null || true
+          echo "npm-only release: AUR and Homebrew tap pushes are out of scope."

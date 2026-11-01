@@ -20,7 +20,9 @@
   "scripts": {
     "build": "bun run script/build.ts",
     "build:node": "bun run script/build-node.ts",
-    "pack": "bun run script/pack.ts",
+    "pack": "bun run ../../script/banyancode/pack.ts",
+    "publish": "bun run ../../script/banyancode/publish.ts",
+    "publish:dry-run": "bun run ../../script/banyancode/publish.ts --dry-run",
     "pack:docker": "chmod +x dist/cli-linux-*-musl/bin/opencode && mkdir -p ../../dist/docker && docker buildx build --platform linux/amd64,linux/arm64 --output type=oci,dest=../../dist/docker/opencode-image.tar .",
     "dev": "bun run src/index.ts",
     "test": "bun test --timeout 30000 --only-failures",
@@ -29,6 +31,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.6.0",
+    "@banyancode/mcp": "workspace:*",
     "@clack/core": "1.0.0-alpha.1",
     "@clack/prompts": "1.0.0-alpha.1",
     "@effect/platform-node": "catalog:",

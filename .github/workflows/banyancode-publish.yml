@@ -1,0 +1,419 @@
+# BanyanCode release pipeline (v2 base).
+#
+# TRIGGERS: workflow_dispatch only until the v2 cutover (migration plan Phase 6).
+# Add these at cutover, in this exact shape:
+#
+#   on:
+#     push:
+#       tags: ["v[0-9]*"]      # NOT "v*" — `v*` matched `v1-final` and started a bogus publish
+#       branches: ["dev"]      # dev canary (channel=dev, `-dev.<sha7>`, npm dist-tag `dev`)
+#     workflow_dispatch: ...
+#
+# Never widen the tag glob to `v*`. `tag-release.yml` is the only normal tag
+# creator; it dispatches this workflow explicitly with the resolved version.
+#
+# Behavior:
+#   dry_run=true (default)  build + pack + `npm pack` inspection, publishes nothing
+#   channel=dev             publishes ONLY to npm's `dev` dist-tag (no GitHub release)
+#   channel=next            rc/beta prerelease, npm `next` dist-tag
+#   channel=latest          GA: draft release + assets -> npm publish -> finalize
+#
+# Idempotency: publish.ts skips any package already present on npm
+# (`npm view <name>@<version>`), so a re-run only fills the gaps.
+name: banyancode-publish
+run-name: "banyancode publish ${{ inputs.version || github.sha }} (${{ inputs.channel }}, dry_run=${{ inputs.dry_run }})"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (YY.MM.PATCH or YY.MM.PATCH-dev.<sha7>). Empty derives it from script/banyancode/version.json + the channel."
+        required: false
+        default: ""
+      channel:
+        description: "Release channel. `auto` derives it from the version suffix."
+        type: choice
+        options:
+          - auto
+          - latest
+          - dev
+          - next
+        default: auto
+      dry_run:
+        description: "Inspect only: build, pack and run `npm pack`; never publish or create a release."
+        type: boolean
+        default: true
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  BUN_VERSION: "1.4.4"
+  WRAPPER: banyancode
+  GH_REPO: EkagraAgarwal/BanyanCode
+
+jobs:
+  version:
+    name: Resolve version and channel
+    runs-on: ubuntu-latest
+    if: github.repository == 'EkagraAgarwal/BanyanCode'
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      channel: ${{ steps.resolve.outputs.channel }}
+      dry_run: ${{ steps.resolve.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve version and channel
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Single source of truth for the CalVer base. packages/cli/package.json
+          # tracks the upstream OpenCode release and is rewritten by every merge.
+          BASE="$(node -p "require('./script/banyancode/version.json').version")"
+          INPUT_VERSION="${{ inputs.version }}"
+          INPUT_CHANNEL="${{ inputs.channel }}"
+
+          VERSION="${INPUT_VERSION}"
+          if [ -z "${VERSION}" ]; then
+            case "${INPUT_CHANNEL}" in
+              dev)            VERSION="${BASE}-dev.${GITHUB_SHA:0:7}" ;;
+              latest|auto)    VERSION="${BASE}" ;;
+              next)           echo "::error::channel=next needs an explicit version with an -rc.*/-beta.* suffix"; exit 1 ;;
+              *)              echo "::error::unknown channel ${INPUT_CHANNEL}"; exit 1 ;;
+            esac
+          fi
+
+          case "${VERSION}" in
+            *-dev.*)          CHANNEL="dev" ;;
+            *-rc.*|*-beta.*)  CHANNEL="next" ;;
+            *)                CHANNEL="latest" ;;
+          esac
+
+          if [ "${INPUT_CHANNEL}" != "auto" ] && [ "${INPUT_CHANNEL}" != "${CHANNEL}" ]; then
+            echo "::error::channel=${INPUT_CHANNEL} does not match version ${VERSION} (suffix channel ${CHANNEL})"
+            exit 1
+          fi
+
+          # CalVer continuity: the v2 line continues after v1's last release
+          # (26.10.9), and every build derives from the same base file.
+          BASE_PART="${VERSION%%-*}"
+          if [ "${BASE_PART}" != "${BASE}" ]; then
+            echo "::error::version ${VERSION} does not match script/banyancode/version.json (${BASE})"
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
+          echo "Resolved ${VERSION} (channel ${CHANNEL}, dry_run ${{ inputs.dry_run }})"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: version
+    if: github.repository == 'EkagraAgarwal/BanyanCode'
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runs-on: ubuntu-latest,  target: linux-x64 }
+          - { runs-on: ubuntu-latest,  target: linux-x64-baseline }
+          - { runs-on: ubuntu-latest,  target: linux-x64-musl }
+          - { runs-on: ubuntu-latest,  target: linux-x64-baseline-musl }
+          - { runs-on: ubuntu-latest,  target: linux-arm64 }
+          - { runs-on: ubuntu-latest,  target: linux-arm64-musl }
+          - { runs-on: macos-14,       target: darwin-x64 }
+          - { runs-on: macos-14,       target: darwin-x64-baseline }
+          - { runs-on: macos-14,       target: darwin-arm64 }
+          - { runs-on: windows-latest, target: windows-x64 }
+          - { runs-on: windows-latest, target: windows-x64-baseline }
+          # Bun cross-compiles the ARM64 PE on an x64 runner. If that ever fails,
+          # switch this row to `runs-on: windows-11-arm` (public repo runners).
+          - { runs-on: windows-latest, target: windows-arm64 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-tags: true
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          bun-version: "1.4.4"
+          # The build plugin resolves per-platform native packages for the
+          # cross-compiled targets (musl, arm64), so install every variant.
+          install-flags: '--os="*" --cpu="*"'
+
+      - name: Build ${{ matrix.target }}
+        shell: bash
+        env:
+          OPENCODE_VERSION: ${{ needs.version.outputs.version }}
+          OPENCODE_CHANNEL: ${{ needs.version.outputs.channel }}
+          # build.ts reads the target from OPENCODE_TARGET (there is no --target flag in v2).
+          OPENCODE_TARGET: ${{ matrix.target }}
+          OPENCODE_RELEASE: "true"
+        run: bun ./packages/cli/script/build.ts --skip-install
+
+      - name: Upload CLI artifact (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: banyancode-${{ matrix.target }}
+          compression-level: 1
+          retention-days: 1
+          path: packages/cli/dist/cli-${{ matrix.target }}
+
+      - name: Upload unsigned CLI artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          # `unsigned-` keeps raw Windows builds out of the central
+          # `banyancode-*` match, so publish only sees the final artifact.
+          name: unsigned-banyancode-${{ matrix.target }}
+          compression-level: 1
+          retention-days: 1
+          path: packages/cli/dist/cli-${{ matrix.target }}
+
+  sign-windows:
+    name: Optional Windows signing
+    needs: [version, build]
+    if: github.repository == 'EkagraAgarwal/BanyanCode'
+    runs-on: windows-latest
+    outputs:
+      artifact-name: ${{ steps.artifact.outputs.name }}
+      signed: ${{ steps.signing.outputs.enabled }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download Windows CLI artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: unsigned-banyancode-windows-x64
+          path: packages/cli/dist
+
+      - name: Decide signing path
+        id: signing
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+        run: |
+          $hasSigning = $env:AZURE_CLIENT_ID -and $env:AZURE_TENANT_ID -and $env:AZURE_SUBSCRIPTION_ID -and $env:AZURE_TRUSTED_SIGNING_ACCOUNT_NAME -and $env:AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE -and $env:AZURE_TRUSTED_SIGNING_ENDPOINT
+          if ($hasSigning) { echo "enabled=true" >> $env:GITHUB_OUTPUT } else { echo "enabled=false" >> $env:GITHUB_OUTPUT }
+          Write-Host "Azure signing configured: $hasSigning"
+
+      - name: Azure login
+        if: steps.signing.outputs.enabled == 'true'
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign BanyanCode Windows binary
+        if: steps.signing.outputs.enabled == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+        with:
+          endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+          # Sign the build output in place: pack.ts copies this exact file to
+          # bin/banyancode.exe, so the signature survives packaging.
+          files: |
+            ${{ github.workspace }}\packages\cli\dist\cli-windows-x64\bin\opencode.exe
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+
+      - name: Upload signed Windows artifact
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: final-banyancode-windows-x64
+          compression-level: 1
+          retention-days: 1
+          path: packages/cli/dist/cli-windows-x64
+
+      - name: Resolve final Windows artifact name
+        id: artifact
+        shell: pwsh
+        run: |
+          # Fast path: without Azure credentials nothing is signed, so publish
+          # downloads the raw build artifact directly. A failed signing attempt
+          # (enabled=true) fails this job instead of silently falling back.
+          if ("${{ steps.signing.outputs.enabled }}" -eq "true") {
+            echo "name=final-banyancode-windows-x64" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "::warning::Windows binaries are NOT signed (Azure credentials missing)."
+            echo "name=unsigned-banyancode-windows-x64" >> $env:GITHUB_OUTPUT
+          }
+
+  publish:
+    name: Package and publish
+    needs: [version, build, sign-windows]
+    # No always(): a failed build/sign must never reach npm or finalize a release.
+    if: github.repository == 'EkagraAgarwal/BanyanCode' && needs.version.outputs.version != ''
+    runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ needs.version.outputs.version }}
+      CHANNEL: ${{ needs.version.outputs.channel }}
+      DRY_RUN: ${{ needs.version.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-tags: true
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          bun-version: "1.4.4"
+          # Publish only packs (`bun pm pack`) and publishes; no compile.
+          install-flags: ''
+
+      - name: Setup Node + npm registry auth
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      - name: Download Unix CLI artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          # Windows raw/signed artifacts use `unsigned-`/`final-` prefixes, so
+          # this pattern only matches the Unix builds.
+          pattern: banyancode-*
+          merge-multiple: true
+          path: packages/cli/dist
+
+      - name: Download Windows baseline npm stub
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          # npm-only fallback for pre-AVX2 CPUs; never a GitHub release asset.
+          name: unsigned-banyancode-windows-x64-baseline
+          merge-multiple: true
+          path: packages/cli/dist
+
+      - name: Download Windows ARM64 build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: unsigned-banyancode-windows-arm64
+          merge-multiple: true
+          path: packages/cli/dist
+
+      - name: Download Windows x64 build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.sign-windows.outputs.artifact-name }}
+          merge-multiple: true
+          path: packages/cli/dist
+
+      - name: Stage npm packages and release archives
+        run: bun script/banyancode/pack.ts --all --version="$VERSION"
+
+      - name: Inspect the npm tarballs (no publish)
+        run: bun script/banyancode/publish.ts --dry-run --require-all --version="$VERSION"
+
+      - name: Create draft GitHub release
+        # dev canaries publish to npm only (`dev` dist-tag); they get no release.
+        if: env.DRY_RUN != 'true' && env.CHANNEL != 'dev'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          PRERELEASE="--prerelease"
+          if [ "${CHANNEL}" = "latest" ]; then PRERELEASE=""; fi
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "Release $TAG exists; uploading new assets."
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --draft $PRERELEASE \
+              --generate-notes --title "BanyanCode ${VERSION}" --repo "$GH_REPO"
+          fi
+
+      - name: Upload release assets
+        if: env.DRY_RUN != 'true' && env.CHANNEL != 'dev'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Explicit 11-target allowlist: windows-x64-baseline is npm-only.
+          files=(
+            dist/archives/banyancode-linux-x64.tar.gz
+            dist/archives/banyancode-linux-x64-baseline.tar.gz
+            dist/archives/banyancode-linux-x64-musl.tar.gz
+            dist/archives/banyancode-linux-x64-baseline-musl.tar.gz
+            dist/archives/banyancode-linux-arm64.tar.gz
+            dist/archives/banyancode-linux-arm64-musl.tar.gz
+            dist/archives/banyancode-darwin-x64.zip
+            dist/archives/banyancode-darwin-x64-baseline.zip
+            dist/archives/banyancode-darwin-arm64.zip
+            dist/archives/banyancode-windows-x64.zip
+            dist/archives/banyancode-windows-arm64.zip
+          )
+          missing=0
+          for f in "${files[@]}"; do
+            if [ ! -f "$f" ]; then echo "::error::missing release asset $f"; missing=1; fi
+          done
+          if [ "$missing" -ne 0 ]; then echo "::error::refusing to upload a partial release"; exit 1; fi
+          gh release upload "v${VERSION}" "${files[@]}" --clobber --repo "$GH_REPO"
+
+      - name: Publish to npm
+        if: env.DRY_RUN != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+        run: bun script/banyancode/publish.ts --version="$VERSION" --channel="$CHANNEL"
+
+      - name: Finalize GitHub release
+        if: env.DRY_RUN != 'true' && env.CHANNEL != 'dev'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Only after npm succeeded: a failed publish leaves the release as a draft.
+          if [ "${CHANNEL}" = "latest" ]; then
+            gh release edit "v${VERSION}" --draft=false --prerelease=false --repo "$GH_REPO"
+          else
+            gh release edit "v${VERSION}" --draft=false --prerelease=true --repo "$GH_REPO"
+          fi
+
+      - name: Summary
+        run: |
+          echo "banyancode release ${VERSION} (channel ${CHANNEL}, dry_run ${DRY_RUN})"
+          echo "npm tarballs:"
+          ls -la dist/npm 2>/dev/null || true
+          echo "release archives:"
+          ls -la dist/archives 2>/dev/null || true
+          if [ "${CHANNEL}" = "dev" ]; then
+            echo "dev canary: published to the npm \`dev\` dist-tag only (no GitHub release)."
+          fi
