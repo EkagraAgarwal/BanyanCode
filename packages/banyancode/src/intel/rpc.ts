@@ -59,6 +59,13 @@ const QueryOutput = Schema.Struct({
   context: RepositoryContextSchema,
 })
 
+// The RPC surface defaults `includeKeywordFallback` like the `code_find` tool
+// does: a plain `{intent, target}` lookup must not fail input validation.
+const CodeFindRpcInput = Schema.Struct({
+  ...CodeFindInput.fields,
+  includeKeywordFallback: Schema.optional(Schema.Boolean),
+})
+
 export const Definition = Rpc.define({
   id: "banyancode.intel",
   methods: {
@@ -71,7 +78,7 @@ export const Definition = Rpc.define({
     relationships: { input: RelationshipsInput, output: Schema.Array(GraphNodeSchema) },
     ownership: { input: OwnershipInput, output: OwnershipOutputSchema },
     slice: { input: ArchitecturalSliceQuery, output: ArchitecturalSliceSchema },
-    codeFind: { input: CodeFindInput, output: CodeFindOutput },
+    codeFind: { input: CodeFindRpcInput, output: CodeFindOutput },
     preflight: { input: PreflightInput, output: PreflightOutput },
     blastRadius: { input: BlastRadiusInput, output: BlastRadiusOutput },
     safeRename: {
@@ -109,7 +116,8 @@ export const handlers = (deps: HandlerDeps): RpcHandlers<typeof Definition> => (
       ...(input.workspace?.worktree ? { cwd: input.workspace.worktree } : {}),
     }),
   slice: (input: typeof ArchitecturalSliceQuery.Type) => deps.intel.explain({ symbol: input.focus }),
-  codeFind: (input: typeof CodeFindInput.Type) => computeCodeFind(deps.port, input),
+  codeFind: (input: typeof CodeFindRpcInput.Type) =>
+    computeCodeFind(deps.port, { ...input, includeKeywordFallback: input.includeKeywordFallback ?? true }),
   preflight: (input: typeof PreflightInput.Type) =>
     computePreflight({ port: deps.port, intel: deps.intel }, input),
   blastRadius: (input: typeof BlastRadiusInput.Type) =>

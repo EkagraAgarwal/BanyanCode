@@ -231,13 +231,16 @@ export const register = (
               repo.countEdges(),
             ])
             const empty = filesBefore === 0 && nodesBefore === 0 && edgesBefore === 0
-            const { sizeBefore, sizeAfter } = yield* repo.clearAll({ dropFile: input.dropFile ?? false })
+            const { sizeBefore, sizeAfter, droppedFile } = yield* repo.clearAll({
+              dropFile: input.dropFile ?? false,
+            })
             yield* buildService.reset()
             return {
               status: (empty ? "empty" : "removed") as "empty" | "removed",
               sizeBefore,
               sizeAfter,
               freedBytes: Math.max(0, sizeBefore - sizeAfter),
+              droppedFile,
             }
           }),
         status: () =>

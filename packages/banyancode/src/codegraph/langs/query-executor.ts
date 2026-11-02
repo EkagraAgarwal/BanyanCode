@@ -298,10 +298,142 @@ const buildQueryOnTree = (
   return extractEdgesFromMatches(query.matches(tree.rootNode), fileID)
 }
 
+/**
+ * Blanks a source range with spaces, preserving newlines and offsets. Used to
+ * build a syntax-check copy where grammar gaps are neutralised; the real
+ * extraction still runs on the untouched source.
+ */
+const blankOut = (text: string, start: number, end: number): string =>
+  text.slice(0, start) + text.slice(start, end).replace(/[^\n]/g, " ") + text.slice(end)
+
+const findMatching = (text: string, open: number, openChar: string, closeChar: string): number => {
+  let depth = 0
+  const limit = Math.min(open + 8000, text.length)
+  for (let i = open; i < limit; i++) {
+    if (text[i] === openChar) depth++
+    else if (text[i] === closeChar) {
+      depth--
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
+/**
+ * The vendored TypeScript grammar predates a handful of valid language
+ * features (`in`/`out` variance, `export type *`, generic tagged templates,
+ * generic call signatures after a plain one). They parse as ERROR or MISSING
+ * nodes even though the file is valid, so the syntax-error reporter must not
+ * trust the first parse. Neutralising only those constructs and re-parsing
+ * keeps genuine errors visible: the error is suppressed only when the
+ * repaired copy parses cleanly.
+ */
+const normalizeTypeScriptForSyntax = (input: string): string => {
+  let text = input
+
+  // `export type * from "..."` (TS 5.0): the grammar reads `type` as a stray
+  // keyword because it only knows `export *` / `export type { ... }`.
+  text = text.replace(/(\bexport\s+)type(\s+\*\s+from\b)/g, (_match: string, head: string, tail: string) =>
+    head + " ".repeat(4) + tail,
+  )
+
+  // Variance annotations: `interface I<in K, out V>` / `<in out T>`. Blank
+  // only the modifier words inside a generic parameter list.
+  let cursor = 0
+  while (cursor < text.length) {
+    const open = text.indexOf("<", cursor)
+    if (open === -1) break
+    const before = text.slice(Math.max(0, open - 160), open)
+    if (!/(?:[A-Za-z_$][\w$]*|\n\s*)$/.test(before)) {
+      cursor = open + 1
+      continue
+    }
+    const close = findMatching(text, open, "<", ">")
+    if (close === -1) {
+      cursor = open + 1
+      continue
+    }
+    const interior = text.slice(open + 1, close)
+    const stripped = interior.replace(
+      /\b(in\s+out|out\s+in|in|out)\b(\s+)(?=[A-Za-z_$][\w$]*\s*(?:[,>=]|\bextends\b))/g,
+      (modifier: string) => " ".repeat(modifier.length),
+    )
+    if (stripped !== interior) text = text.slice(0, open + 1) + stripped + text.slice(close)
+    cursor = close + 1
+  }
+
+  // `sql<T>\`...\``: the grammar parses `sql<T>` as an instantiation
+  // expression and inserts a missing `!` before the template literal. Blank
+  // the type arguments when the next token is a template string.
+  cursor = 0
+  while (cursor < text.length) {
+    const open = text.indexOf("<", cursor)
+    if (open === -1) break
+    const before = text.slice(Math.max(0, open - 160), open)
+    if (!/[A-Za-z_$][\w$.]*\s*$/.test(before)) {
+      cursor = open + 1
+      continue
+    }
+    const close = findMatching(text, open, "<", ">")
+    if (close === -1) {
+      cursor = open + 1
+      continue
+    }
+    let next = close + 1
+    while (next < text.length && /\s/.test(text[next]!)) next++
+    if (text[next] !== "`") {
+      cursor = open + 1
+      continue
+    }
+    text = blankOut(text, open, close + 1)
+    cursor = close + 1
+  }
+
+  // Generic call signatures: `<T>(value: T): R` on its own line. The grammar
+  // only recovers cleanly from one call signature per interface, so a second
+  // generic overload corrupts the parse tree.
+  const lines = text.split("\n")
+  let offset = 0
+  for (const line of lines) {
+    const match = /^(\s*)</.exec(line)
+    if (match) {
+      const open = offset + match[1]!.length
+      const close = findMatching(text, open, "<", ">")
+      if (close !== -1) {
+        let next = close + 1
+        while (next < text.length && /\s/.test(text[next]!)) next++
+        if (text[next] === "(") text = blankOut(text, open, close + 1)
+      }
+    }
+    offset += line.length + 1
+  }
+
+  return text
+}
+
+const syntaxErrorWithRetry = (
+  refs: BundleRefs,
+  content: string,
+  error: { line: number; message: string } | null,
+  normalize: ((text: string) => string) | undefined,
+): { line: number; message: string } | null => {
+  if (error === null || normalize === undefined) return error
+  const repaired = normalize(content)
+  if (repaired === content) return error
+  const tree = refs.parser.parse(repaired)
+  if (!tree) return error
+  try {
+    return tree.rootNode && findSyntaxError(tree.rootNode) ? error : null
+  } finally {
+    tree.delete()
+  }
+}
+
 const runQueryAndExtract = (
   refs: BundleRefs,
   content: string,
   fileID: string,
+  normalize?: (text: string) => string,
 ): { edges: ParsedEdge[]; syntaxError: { line: number; message: string } | null } => {
   const tree = refs.parser.parse(content)
   if (!tree) return { edges: [], syntaxError: null }
@@ -309,11 +441,12 @@ const runQueryAndExtract = (
   // the per-parse Tree is deleted here — otherwise every parsed file leaks
   // one tree's wasm heap for the process lifetime.
   try {
+    const syntaxError = tree.rootNode ? findSyntaxError(tree.rootNode) : null
     return {
       edges: buildQueryOnTree(tree, refs.query, fileID),
       // Phase 0 tree-sitter: report ERROR / MISSING nodes so the indexer can
       // record a real parse error (Wave-5 goal) while still indexing this file.
-      syntaxError: tree.rootNode ? findSyntaxError(tree.rootNode) : null,
+      syntaxError: syntaxErrorWithRetry(refs, content, syntaxError, normalize),
     }
   } finally {
     tree.delete()
@@ -355,7 +488,12 @@ export const parseTypeScriptWithTreeSitter = (
       if (!parser || !language) return parseTypeScript(content, fileID)
       const query = getCachedQuery(".ts", language, Query, querySource)
       if (!query) return parseTypeScript(content, fileID)
-      const { edges: tsEdges, syntaxError } = runQueryAndExtract({ parser, query }, content, fileID)
+      const { edges: tsEdges, syntaxError } = runQueryAndExtract(
+        { parser, query },
+        content,
+        fileID,
+        normalizeTypeScriptForSyntax,
+      )
       const regex = parseTypeScript(content, fileID)
       return {
         ...regex,

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Effect } from "effect"
@@ -197,6 +198,53 @@ describe("banyancode storage", () => {
       await first.release()
       const second = await acquireFileLock(lockPath)
       await second.release()
+    })
+  })
+
+  test("a corrupt project database is moved aside and replaced with a working one", async () => {
+    await withTemp(async (directory) => {
+      const resolved = resolveProjectDbPath({ projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } })
+      const garbage = "this is definitely not a sqlite database file 0123456789".repeat(8)
+      await writeFile(resolved.dbPath, garbage)
+      await writeFile(`${resolved.dbPath}-wal`, garbage)
+
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const storage = yield* Storage.open({ projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } })
+            const rows = yield* storage.query<{ count: number }>("SELECT COUNT(*) AS count FROM banyancode_migrations")
+            return { path: storage.path, version: storage.schemaVersion, count: rows[0]?.count }
+          }),
+        ),
+      )
+      expect(result.version).toBe(migrations.length)
+      expect(result.count).toBe(migrations.length)
+      expect(existsSync(resolved.dbPath)).toBe(true)
+
+      const names = await readdir(directory)
+      const corrupt = names.filter((name) => name.includes("-corrupt-"))
+      expect(corrupt.length).toBeGreaterThan(0)
+      const kept = corrupt.find((name) => name.includes(".db-corrupt-"))
+      expect(kept).toBeDefined()
+      expect((await readFile(join(directory, kept!))).toString()).toBe(garbage)
+    })
+  })
+
+  test("a non-corruption open failure still fails without moving the file", async () => {
+    await withTemp(async (directory) => {
+      const resolved = resolveProjectDbPath({ projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } })
+      // A directory at the database path is an open failure SQLite reports
+      // differently from corruption; recovery must not rename it.
+      await mkdir(resolved.dbPath, { recursive: true })
+
+      const exit = await Effect.runPromiseExit(
+        Effect.scoped(
+          Storage.open({ projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } }),
+        ),
+      )
+      expect(exit._tag).toBe("Failure")
+      expect(existsSync(resolved.dbPath)).toBe(true)
+      expect((await readdir(directory)).some((name) => name.includes("-corrupt-"))).toBe(false)
     })
   })
 

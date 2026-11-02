@@ -2,7 +2,8 @@ import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { isAbsolute, join, relative, resolve } from "node:path"
-import { Option, Schema } from "effect"
+import { Result, Schema } from "effect"
+import { Config } from "@opencode/schema/config"
 import { parseJsonc } from "./jsonc.js"
 import {
   AgentKeys,
@@ -89,8 +90,19 @@ export const projectConfigDirs = (directory: string, projectRoot: string): reado
   return [root, ...parts.map((_, index) => join(root, ...parts.slice(0, index + 1)))]
 }
 
+// `banyancode.json` is shared with the host: the product reads the same file
+// the host config schema describes. Derive the host-owned top-level keys from
+// that schema instead of hand-maintaining a list, so `model`, `permissions`,
+// `agents`, `mcp`, … are never reported as unknown Banyan keys.
+let hostKeysCache: ReadonlySet<string> | undefined
+const hostKeys = (): ReadonlySet<string> => {
+  hostKeysCache ??= new Set(Object.keys(Config.Info.fields))
+  return hostKeysCache
+}
+
 const unknownKeysFor = (file: string, raw: Record<string, unknown>): UnknownKeys | undefined => {
-  const keys = Object.keys(raw).filter((key) => !InfoKeys.has(key))
+  const knownHostKeys = hostKeys()
+  const keys = Object.keys(raw).filter((key) => !InfoKeys.has(key) && !knownHostKeys.has(key))
   if (isRecord(raw.agent)) {
     for (const [name, value] of Object.entries(raw.agent)) {
       if (!isRecord(value)) continue
@@ -100,6 +112,57 @@ const unknownKeysFor = (file: string, raw: Record<string, unknown>): UnknownKeys
     }
   }
   return keys.length > 0 ? { file, keys } : undefined
+}
+
+const decodeField = (schema: typeof Info, value: unknown): Result.Result<unknown, string> =>
+  Result.match(Schema.decodeUnknownResult(schema, { errors: "all", onExcessProperty: "ignore" })(value), {
+    onSuccess: (decoded) => Result.succeed(decoded),
+    onFailure: (error) => Result.fail(error.message),
+  })
+
+const decodeKey = (key: string, value: unknown): Result.Result<unknown, string> => {
+  const result = decodeField(Info, { [key]: value })
+  if (Result.isFailure(result)) return result
+  return Result.succeed((result.success as Record<string, unknown>)[key])
+}
+
+/**
+ * Validates one top-level key at a time so a single bad value (a typo in
+ * `banyancode_router`, say) drops only that key. The host owns the rest of the
+ * file, so host-only keys are left untouched and never validated here.
+ */
+const sanitizeEntry = (
+  file: string,
+  raw: Record<string, unknown>,
+  errors: ConfigError[],
+): Record<string, unknown> => {
+  const clean: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (!InfoKeys.has(key)) continue
+    if (key === "agent" && isRecord(value)) {
+      const agents: Record<string, unknown> = {}
+      for (const [name, fields] of Object.entries(value)) {
+        if (!isRecord(fields)) {
+          errors.push({ file, message: `agent.${name}: expected an object` })
+          continue
+        }
+        const valid: Record<string, unknown> = {}
+        for (const [field, fieldValue] of Object.entries(fields)) {
+          if (!AgentKeys.has(field)) continue
+          const result = decodeField(Info, { agent: { [name]: { [field]: fieldValue } } })
+          if (Result.isSuccess(result)) valid[field] = fieldValue
+          else errors.push({ file, message: `agent.${name}.${field}: ${result.failure}` })
+        }
+        if (Object.keys(valid).length > 0) agents[name] = valid
+      }
+      if (Object.keys(agents).length > 0) clean.agent = agents
+      continue
+    }
+    const result = decodeKey(key, value)
+    if (Result.isSuccess(result)) clean[key] = result.success
+    else errors.push({ file, message: `${key}: ${result.failure}` })
+  }
+  return clean
 }
 
 /**
@@ -135,7 +198,7 @@ export const load = async (input: LoadInput): Promise<Loaded> => {
     }
     const unknown = unknownKeysFor(file, parsed)
     if (unknown) unknownKeys.push(unknown)
-    entries.push({ file, scope, raw: parsed })
+    entries.push({ file, scope, raw: sanitizeEntry(file, parsed, errors) })
     sources.push({ file, scope })
   }
 
@@ -149,16 +212,18 @@ export const load = async (input: LoadInput): Promise<Loaded> => {
   }
 
   const merged = entries.reduce<Record<string, unknown>>((result, entry) => ({ ...result, ...entry.raw }), {})
-  const decoded = Schema.decodeUnknownOption(Info, { errors: "all", onExcessProperty: "ignore" })(merged)
-  if (Option.isNone(decoded)) {
+  // Every field was validated individually above, so this decode only fails
+  // when a value is valid alone but conflicts after the global/project merge.
+  const decoded = Schema.decodeUnknownResult(Info, { errors: "all", onExcessProperty: "ignore" })(merged)
+  if (Result.isFailure(decoded)) {
     errors.push({
       file: sources.at(-1)?.file ?? "banyancode.json",
-      message: "configuration did not match the BanyanConfig schema",
+      message: decoded.failure.message,
     })
   }
 
   return {
-    config: Option.isSome(decoded) ? decoded.value : ({} as BanyanConfigInfo),
+    config: Result.isSuccess(decoded) ? decoded.success : ({} as BanyanConfigInfo),
     sources,
     unknownKeys,
     errors,

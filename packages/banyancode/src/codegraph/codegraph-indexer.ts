@@ -24,6 +24,13 @@ import { extractTestFileImports } from "./codegraph-helpers.js"
 const TS_LIKE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"])
 const PY_LIKE_EXTS = new Set([".py", ".pyw"])
 
+// Import clause with its local bindings: `import { a, b as c }`,
+// `import * as Ns`, `import Default` and `import type { T }`.
+const IMPORT_BINDING_REGEX =
+  /import\s+(?:type\s+)?(?:(\{[^}]*\})|(\*\s+as\s+([A-Za-z_$][\w$]*))|([A-Za-z_$][\w$]*))?\s*from\s*["'][^"']+["']/g
+const IMPORT_PART_REGEX = /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
 // Phase 3 entrypoint heuristic — kept here (not in repository-intelligence)
 // because it must run during the parse pass so the column lands in the DB
 // the same build that writes the node. The function/class/method kinds are
@@ -1122,6 +1129,13 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   const crossEdges: { fromNodeID: string; toNodeID: string; kind: CodegraphEdge["kind"] }[] = []
   const referenceEdgeKeys = new Set<string>()
 
+  // Local binding -> imported name per file. `import { Config } from "./config"`
+  // puts `config.ts` nodes in scope, but only `Config` is actually imported:
+  // matching every identifier in scope turned local variables named
+  // `configured`/`merge` into fake references to unrelated modules. Only a
+  // call site or an explicitly imported binding may create an edge.
+  const importBindingsByFileID = new Map<string, Map<string, string | undefined>>()
+
   // For referenceEdges: iterate only nodes that have code and are NOT skipped kinds.
   // In incremental mode, iterate changed files plus dependent files as edge sources
   // (untouched files never need an import scope recomputed).
@@ -1133,6 +1147,24 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     const owner = fileByID.get(fileID)
     if (!fileNode?.code || !owner) continue
     const scope = new Set<string>()
+    const bindings = new Map<string, string | undefined>()
+    for (const match of fileNode.code.matchAll(IMPORT_BINDING_REGEX)) {
+      const braces = match[1]
+      const namespaceBinding = match[3]
+      const defaultBinding = match[4]
+      if (braces !== undefined) {
+        for (const raw of braces.slice(1, -1).split(",")) {
+          const part = IMPORT_PART_REGEX.exec(raw.trim())
+          if (!part) continue
+          const imported = part[1]!
+          const local = part[2] ?? imported
+          bindings.set(local, local === imported ? undefined : imported)
+        }
+      }
+      if (namespaceBinding !== undefined) bindings.set(namespaceBinding, undefined)
+      if (defaultBinding !== undefined) bindings.set(defaultBinding, undefined)
+    }
+    importBindingsByFileID.set(fileID, bindings)
     for (const match of fileNode.code.matchAll(/import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["']([^"']+)["']/g)) {
       const specifier = match[1]
       if (!specifier) continue
@@ -1194,7 +1226,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     const inScopeNodeIDs = new Set<string>()
     const sameFileNodes = nodesByFileID.get(nodeA.fileID) ?? []
     for (const n of sameFileNodes) {
-      if (n.id !== nodeA.id && n.kind !== "file") inScopeNodeIDs.add(n.id)
+      if (n.kind !== "file") inScopeNodeIDs.add(n.id)
     }
     const importedScope = importScopesByFileID.get(nodeA.fileID)
     if (importedScope) {
@@ -1214,13 +1246,22 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
         }
       }
     }
-    const inScopeByName = new Map<string, CodegraphNode[]>()
+    // Split the scope map into declarations in THIS file and declarations in
+    // imported/peer files. A file-local declaration shadows an imported one
+    // (that is JavaScript scoping), and without the split every file that
+    // defines its own `configured`/`match`/`merge` while importing a module
+    // with the same name produced a bogus cross-file edge to the imported
+    // symbol (`Config.configured` had 12 callers, 1 real).
+    const sameFileIDs = new Set(sameFileNodes.map((node) => node.id))
+    const localByName = new Map<string, CodegraphNode[]>()
+    const importedByName = new Map<string, CodegraphNode[]>()
     for (const nodeID of inScopeNodeIDs) {
       const scopedNode = nodeByID.get(nodeID)
       if (!scopedNode) continue
-      const scoped = inScopeByName.get(scopedNode.name) ?? []
+      const target = sameFileIDs.has(nodeID) ? localByName : importedByName
+      const scoped = target.get(scopedNode.name) ?? []
       scoped.push(scopedNode)
-      inScopeByName.set(scopedNode.name, scoped)
+      target.set(scopedNode.name, scoped)
     }
     // Phase 5 (P8b): strip comment and string-literal regions BEFORE the
     // identifier scan and kind classification so a comment mentioning a
@@ -1228,22 +1269,43 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     // `references`/`calls` edge. The original `nodeA.code` stays on the
     // node unchanged — the strip is only for edge classification.
     const strippedCode = stripCommentsAndStrings(nodeA.code)
+    const bindings = importBindingsByFileID.get(nodeA.fileID)
+    const callNames = new Set<string>()
+    for (const m of strippedCode.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) callNames.add(m[1]!)
     const identifiers = new Set<string>()
     for (const m of strippedCode.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
-      if (m[0].length >= 3 && inScopeByName.has(m[0])) identifiers.add(m[0])
+      const name = m[0]
+      if (name.length < 3) continue
+      // Cross-file edges only for names this file imports or calls, plus
+      // declarations in this file. A local variable that happens to share a
+      // name with an imported module's symbol (every `const configured = …`
+      // in a file that imports config.ts) is not a reference to it.
+      if (callNames.has(name) || bindings?.has(name) || localByName.has(name)) identifiers.add(name)
     }
 
     for (const name of identifiers) {
-      const targets = inScopeByName.get(name)
+      const importedName = bindings?.get(name) ?? name
+      // `Ns.member` is a namespaced call only when `Ns` is an imported
+      // binding; `input.match(...)` on a string is not a call to an imported
+      // `match`. A receiver that is not imported falls back to the same-file
+      // declaration (JavaScript shadowing) instead of the module's symbol.
+      const receiver = new RegExp(`([A-Za-z_$][\\w$]*)\\s*\\.\\s*${escapeRegExp(name)}\\b`).exec(strippedCode)
+      const namespaced = receiver !== null && bindings?.has(receiver[1]!) === true
+      const targets = namespaced
+        ? importedByName.get(importedName) ?? importedByName.get(name) ?? localByName.get(name)
+        : localByName.get(name) ?? importedByName.get(importedName) ?? importedByName.get(name)
       if (!targets || targets.length === 0) continue
 
       for (const nodeB of targets) {
         if (nodeB.id === nodeA.id) continue
+        // A function's own name (including overload signatures extracted as
+        // separate nodes) appears in its declaration, not in a call site.
+        if (nodeA.name === name && nodeA.fileID === nodeB.fileID) continue
 
         const kind =
           nodeA.kind === "class" && strippedCode.includes(`extends ${name}`)
             ? ("extends" as const)
-            : strippedCode.includes(`${name}(`)
+            : callNames.has(name)
               ? ("calls" as const)
               : ("references" as const)
 

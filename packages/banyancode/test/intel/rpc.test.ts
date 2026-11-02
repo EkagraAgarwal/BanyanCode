@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Schema } from "effect"
 import { Definition as IntelDefinition } from "../../src/intel/rpc.js"
 import { Definition as VerifyDefinition } from "../../src/verify/rpc.js"
 import { INTEL_TOOL_NAMES } from "../../src/intel/index.js"
@@ -30,6 +31,21 @@ describe("workstream 3c public surface", () => {
       ].sort(),
     )
     expect(Object.keys(IntelDefinition.events)).toEqual([])
+  })
+
+  test("codeFind accepts a call without includeKeywordFallback and defaults it on", () => {
+    const decoded = Schema.decodeUnknownSync(IntelDefinition.methods.codeFind.input)({
+      intent: "definition",
+      target: "add",
+    })
+    expect(decoded.includeKeywordFallback).toBeUndefined()
+    expect(
+      Schema.decodeUnknownSync(IntelDefinition.methods.codeFind.input)({
+        intent: "definition",
+        target: "add",
+        includeKeywordFallback: false,
+      }).includeKeywordFallback,
+    ).toBe(false)
   })
 
   test("verify RPC mirrors every v1 verify route", () => {

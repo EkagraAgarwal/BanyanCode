@@ -47,6 +47,66 @@ describe("banyancode config", () => {
     })
   })
 
+  test("host-owned keys from the host config schema are not reported as unknown", async () => {
+    await withTemp(async (directory) => {
+      const project = join(directory, "project")
+      await mkdir(project, { recursive: true })
+      const projectFile = join(project, "banyancode.json")
+      await writeFile(
+        projectFile,
+        JSON.stringify({
+          $schema: "https://banyan.dev/schema/banyancode.json",
+          model: "opencode-go/deepseek-v4.1-flash",
+          default_agent: "build",
+          permissions: { edit: "allow" },
+          agents: { plan: { model: "x/y" } },
+          mcp: { server: { type: "local" } },
+          providers: {},
+          instructions: ["AGENTS.md"],
+          banyancode_yolo_mode: true,
+          banyancode_only_typo: 1,
+        }),
+      )
+
+      const loaded = await load({ directory: project, projectRoot: project, globalDir: join(directory, "missing") })
+      expect(loaded.unknownKeys).toEqual([{ file: projectFile, keys: ["banyancode_only_typo"] }])
+      expect(loaded.errors).toEqual([])
+      expect(loaded.config.banyancode_yolo_mode).toBe(true)
+    })
+  })
+
+  test("one invalid value drops only that key and names it in errors", async () => {
+    await withTemp(async (directory) => {
+      const project = join(directory, "project")
+      await mkdir(project, { recursive: true })
+      const projectFile = join(project, "banyancode.json")
+      await writeFile(
+        projectFile,
+        JSON.stringify({
+          banyancode_disable_websearch: true,
+          banyancode_router: "bogus",
+          banyancode_max_subagents: "lots",
+          agent: { coder: { thinking: "high", enabled: "yes" } },
+        }),
+      )
+
+      const loaded = await load({ directory: project, projectRoot: project, globalDir: join(directory, "missing") })
+      expect(loaded.config.banyancode_disable_websearch).toBe(true)
+      expect(loaded.config.banyancode_router).toBeUndefined()
+      expect(loaded.config.banyancode_max_subagents).toBeUndefined()
+      expect(loaded.config.agent?.coder?.thinking).toBe("high")
+      expect(loaded.config.agent?.coder?.enabled).toBeUndefined()
+      expect(loaded.errors.map((error) => error.file)).toEqual([projectFile, projectFile, projectFile])
+      expect(loaded.errors.map((error) => error.message.split(":")[0])).toEqual([
+        "banyancode_router",
+        "banyancode_max_subagents",
+        "agent.coder.enabled",
+      ])
+      expect(loaded.errors[0]?.message).toContain("off")
+      expect(loaded.errors[0]?.message).toContain("banyancode_router")
+    })
+  })
+
   test("nearest project config wins over an ancestor config", async () => {
     await withTemp(async (directory) => {
       const project = join(directory, "project")

@@ -5,11 +5,11 @@
  * against a temp repo and a real SQLite database — no mocks.
  */
 import { describe, expect, test } from "bun:test"
-import { existsSync } from "node:fs"
+import { existsSync, statSync } from "node:fs"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Effect, Queue, Stream } from "effect"
+import { Effect, Queue, Ref, Stream } from "effect"
 import { Storage } from "../../src/storage/index.js"
 import { make as makeRepo } from "../../src/codegraph/codegraph-repo.js"
 import { make as makeIndexer } from "../../src/codegraph/codegraph-indexer.js"
@@ -20,6 +20,7 @@ import { watch as fsWatch } from "node:fs"
 import { make as makeWatcher, type Update } from "../../src/codegraph/codegraph-watcher.js"
 import { make as makeAnalyzer } from "../../src/codegraph/codegraph-analyzer.js"
 import { buildTool } from "../../src/codegraph/tools/codegraph.js"
+import { resolveGraphTargetPure } from "../../src/codegraph/symbol-resolver.js"
 import { resolveProjectRoot } from "../../src/codegraph/workspace-identity.js"
 
 const withTemp = async (fn: (directory: string) => Promise<void>) => {
@@ -251,6 +252,42 @@ describe("codegraph parse errors", () => {
           "}",
         ].join("\n"),
       )
+      // The vendor grammar predates these valid constructs; every one of
+      // them used to be recorded as a parse failure.
+      await write(
+        directory,
+        "core/variance-tables.ts",
+        [
+          "export interface SQLiteInsertBase<in out TTable extends SQLiteTable, out TRunResult, out TReturning = undefined> {",
+          "  run(): TReturning",
+          "}",
+        ].join("\n"),
+      )
+      await write(directory, "core/type-star.ts", 'export type * from "@anthropic-ai/claude-agent-sdk"\n')
+      await write(
+        directory,
+        "core/bus.ts",
+        [
+          "export interface Subscribe {",
+          "  (): Stream.Stream<Event.Payload>",
+          "  <D extends Event.Definition>(definition: D): Stream.Stream<Event.Payload<D>>",
+          "  <const D extends readonly [Event.Definition, ...Event.Definition[]]>(",
+          "    definitions: D,",
+          "  ): Stream.Stream<SubscribePayload<D>>",
+          "}",
+        ].join("\n"),
+      )
+      await write(
+        directory,
+        "core/history.ts",
+        [
+          "export const text = (db: Db) =>",
+          "  db.select({",
+          "    text: sql<unknown>`json_extract(${SessionMessageTable.data}, '$.text')`,",
+          "  })",
+          "export const count = sql<{ count: number }>`select count(*) as count`",
+        ].join("\n"),
+      )
       await withServices(directory, ({ repo, indexer }) =>
         Effect.gen(function* () {
           const result = yield* indexer.index({ root: directory, force: true })
@@ -322,6 +359,52 @@ describe("codegraph build lifecycle", () => {
 
           yield* buildService.cancel()
         }),
+      )
+    })
+  })
+
+  test("two starts that overlap during preparation run one build", async () => {
+    await withTemp(async (directory) => {
+      await seedMany(directory, 200)
+      await withServices(directory, ({ indexer, repo }) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+          const indexCalls = yield* Ref.make(0)
+          const countingIndexer = {
+            ...indexer,
+            index: (input: Parameters<typeof indexer.index>[0]) =>
+              Ref.update(indexCalls, (count) => count + 1).pipe(Effect.andThen(indexer.index(input))),
+          }
+          // A real metadata read can yield long enough for a second HTTP
+          // request to enter start(); the delay makes that overlap
+          // deterministic without mocking the database.
+          const slowRepo = {
+            ...repo,
+            getMeta: () => Effect.sleep("60 millis").pipe(Effect.andThen(repo.getMeta())),
+          }
+          const buildService = yield* makeBuildService({
+            indexer: countingIndexer,
+            repo: slowRepo,
+            dbPath: () => "/tmp/unused.db",
+          })
+
+          yield* Effect.all(
+            [
+              buildService.start({ root: directory, force: true }),
+              Effect.sleep("10 millis").pipe(
+                Effect.andThen(buildService.start({ root: join(directory, "src"), force: true })),
+              ),
+            ],
+            { concurrency: 2 },
+          )
+          yield* Effect.sleep("200 millis")
+
+          expect(yield* Ref.get(indexCalls)).toBe(1)
+          const state = yield* buildService.status()
+          expect(state.root).toBe(directory)
+          yield* buildService.cancel()
+          }),
+        ),
       )
     })
   })
@@ -407,19 +490,34 @@ describe("codegraph removal", () => {
     })
   })
 
-  test("--drop-file removes the WAL and SHM sidecars with the database", async () => {
+  test("--drop-file clears the open database and the next build persists real data", async () => {
     await withTemp(async (directory) => {
       await write(directory, "src/a.ts", "export function a() { return 1 }\n")
       await withServices(directory, ({ storage, repo, indexer }) =>
         Effect.gen(function* () {
           yield* indexer.index({ root: directory, force: true })
           expect(existsSync(`${storage.path}-wal`)).toBe(true)
+
           const cleared = yield* repo.clearAll({ dropFile: true })
-          if (cleared.droppedFile) {
-            expect(existsSync(storage.path)).toBe(false)
-            expect(existsSync(`${storage.path}-wal`)).toBe(false)
-            expect(existsSync(`${storage.path}-shm`)).toBe(false)
-          }
+          // The database is open, so it is emptied rather than unlinked (an
+          // unlinked file would swallow every later build on POSIX and the
+          // unlink silently fails on Windows).
+          expect(cleared.droppedFile).toBe(false)
+          expect(existsSync(storage.path)).toBe(true)
+          expect(yield* repo.countNodes()).toBe(0)
+          expect(yield* repo.countFiles()).toBe(0)
+          expect(statSync(`${storage.path}-wal`).size).toBe(0)
+
+          // A build right after --drop-file writes real rows into the file.
+          yield* Effect.promise(() => write(directory, "src/b.ts", "export function afterDrop() { return 2 }\n"))
+          const rebuild = yield* indexer.index({ root: directory, force: true })
+          expect(rebuild.indexed).toBeGreaterThan(0)
+          expect(yield* repo.countNodes()).toBeGreaterThan(0)
+          expect((yield* repo.listAllFiles()).map((file) => file.path).some((p) => p.endsWith("b.ts"))).toBe(true)
+          // The node is queryable through the shared resolver, i.e. the build
+          // wrote into the same (still open) database the tools read.
+          const found = yield* resolveGraphTargetPure(repo, { target: "afterDrop" })
+          expect(found._tag).toBe("Ok")
         }),
       )
     })

@@ -19,7 +19,6 @@
  */
 import { Cause, Effect, Exit, Semaphore } from "effect"
 import { statSync } from "node:fs"
-import { unlink } from "node:fs/promises"
 import type { Storage } from "../storage/index.js"
 import { isTestFilePath } from "./codegraph-paths.js"
 import type { CodegraphEdge, CodegraphFile, CodegraphMeta, CodegraphNode } from "./types.js"
@@ -180,6 +179,12 @@ export interface Interface {
     edges: CodegraphEdge[]
     previousFileID?: string
   }) => Effect.Effect<void>
+  /**
+   * Deletes every graph row, rebuilds the FTS index, VACUUMs the file and
+   * truncates the WAL. `dropFile` requests the strongest reset; because the
+   * plugin holds the database open, that means an empty schema rather than an
+   * unlinked file (`droppedFile` is always false).
+   */
   readonly clearAll: (input?: { dropFile?: boolean }) => Effect.Effect<{
     sizeBefore: number
     sizeAfter: number
@@ -829,31 +834,21 @@ export const make = (storage: Storage.Interface): Interface => {
         yield* storage.exec("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
       }
       const sizeAfter = filePath !== ":memory:" ? safeSize(filePath) : 0
-      let droppedFile = false
       if (input?.dropFile ?? false) {
-        if (filePath !== ":memory:") {
-          const unlinked = yield* Effect.tryPromise({
-            try: () => unlink(filePath).then(() => true as const),
-            catch: () => false as const,
-          }).pipe(Effect.orElseSucceed(() => false))
-          droppedFile = unlinked
-          // The main file is gone; the WAL/SHM sidecars keep the deleted
-          // database's bytes on disk (and confuse a later `codegraph path`).
-          // Best effort: a live connection may hold them (Windows EBUSY).
-          for (const sidecar of [`${filePath}-wal`, `${filePath}-shm`, `${filePath}-journal`]) {
-            yield* Effect.tryPromise({
-              try: () => unlink(sidecar),
-              catch: () => undefined,
-            }).pipe(Effect.ignore)
-          }
-          if (!unlinked) {
-            yield* Effect.logWarning(
-              `codegraph-remove: failed to unlink ${filePath} (Windows EBUSY or other unlink error; the DB file remains on disk until the running app exits)`,
-            )
-          }
+        // Never unlink a database that still has a live connection: POSIX
+        // keeps writing into the unlinked inode (the next build reports
+        // success but persists nothing) and Windows refuses the unlink
+        // (EBUSY) while the command printed a green check. The VACUUM +
+        // checkpoint above already drained every row and truncated the WAL,
+        // so the file on disk is an empty schema — a build right after writes
+        // real data into it.
+        yield* storage.exec("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
+        const remaining = yield* get<{ count: number }>("SELECT COUNT(*) AS count FROM codegraph_nodes")
+        if ((remaining?.count ?? 0) > 0) {
+          yield* Effect.logWarning("codegraph-remove: the graph still has nodes after --drop-file; the file was kept")
         }
       }
-      return { sizeBefore, sizeAfter, droppedFile }
+      return { sizeBefore, sizeAfter, droppedFile: false }
     })
 
   const recomputeInDegree: Interface["recomputeInDegree"] = (input) => {

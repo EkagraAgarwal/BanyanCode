@@ -1,6 +1,6 @@
 export * as CodegraphBuildService from "./codegraph-build-service"
 
-import { Cause, Context, Effect, Fiber, Queue, Ref, Schema, Scope } from "effect"
+import { Cause, Context, Effect, Exit, Fiber, Queue, Ref, Schema, Scope } from "effect"
 import type { Interface as CodegraphIndexerInterface } from "./codegraph-indexer.js"
 import type { Interface as CodegraphRepoInterface } from "./codegraph-repo.js"
 import { CODEGRAPH_SCHEMA_VERSION } from "./codegraph-repo.js"
@@ -119,6 +119,13 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
     const dbPath = deps.dbPath
     const state = yield* Ref.make<State>({ status: "idle", done: 0, total: 0 })
     const inFlight = yield* Ref.make<Fiber.Fiber<unknown, unknown> | undefined>(undefined)
+    // Atomic start gate. `inFlight` is only published after the worker is
+    // forked, so two starts that overlap during the preparation steps (a slow
+    // metadata read, the cancel signal, the progress offer) both used to pass
+    // the "is a build running?" check and silently replace each other. Claim
+    // the slot with one Ref.modify before the first yield; the sequencing
+    // fiber releases it when the build reaches a terminal state.
+    const gate = yield* Ref.make<"idle" | "running">("idle")
     // Set before interrupting the worker so the sequencing fiber can tell a
     // user cancel/force-kill apart from a genuine build failure. Without it
     // the join sees an interrupt, writes "failed" first, and the later
@@ -145,19 +152,16 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
 
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
-        const currentFiber = yield* Ref.get(inFlight)
-        const currentState = yield* Ref.get(state)
         // One build at a time: a second call while one is running reports the
         // running build instead of silently taking over (the caller reads
-        // status() right after start()).
-        if (currentFiber !== undefined && currentState.status === "running") {
+        // status() right after start()). The claim is a single atomic
+        // Ref.modify, so no yield can interleave two starts.
+        const claimed = yield* Ref.modify(gate, (current) =>
+          current === "idle" ? ([true, "running"] as const) : ([false, current] as const),
+        )
+        if (!claimed) {
           yield* Effect.logDebug("codegraph build already running; keeping the current build")
           return
-        }
-        // A finished fiber may still be registered if the terminal writer has
-        // not cleared it yet; never interrupt it (it is done).
-        if (currentFiber !== undefined) {
-          yield* Ref.set(inFlight, undefined)
         }
         yield* Ref.set(cancelRequested, false)
 
@@ -278,6 +282,7 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
             const current = yield* Ref.get(state)
             if (current.status !== "running") {
               yield* Ref.set(inFlight, undefined)
+              yield* Ref.set(gate, "idle")
               return
             }
 
@@ -330,9 +335,18 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
             yield* Ref.set(state, terminal)
             yield* emit(terminal)
             yield* Ref.set(inFlight, undefined)
+            yield* Ref.set(gate, "idle")
           }),
         )
-      }) as unknown as Effect.Effect<void, never, never>
+      }).pipe(
+        // The claim must not be released by a request interruption between
+        // "claimed" and the worker being installed: the prep is short and
+        // synchronous apart from a metadata read, so run it uninterruptibly.
+        Effect.uninterruptible,
+        Effect.onExit((exit) =>
+          Exit.isFailure(exit) ? Ref.set(gate, "idle") : Effect.void,
+        ),
+      ) as unknown as Effect.Effect<void, never, never>
 
     const cancel: Interface["cancel"] = () =>
       Effect.gen(function* () {
@@ -341,6 +355,7 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
           yield* Ref.set(cancelRequested, true)
           yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"), Effect.ignore)
           yield* Ref.set(inFlight, undefined)
+          yield* Ref.set(gate, "idle")
           const current = yield* Ref.get(state)
           if (current.status === "running") {
             const next: State = { ...current, status: "cancelled", phase: undefined }
@@ -348,6 +363,7 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
             yield* emit(next)
           }
         }
+        yield* Ref.set(gate, "idle")
         yield* indexer.cancel()
       })
 
@@ -360,6 +376,7 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
           yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"), Effect.ignore)
           yield* Ref.set(inFlight, undefined)
         }
+        yield* Ref.set(gate, "idle")
         yield* indexer.cancel()
         const current = yield* Ref.get(state)
         if (current.status === "running") {
@@ -418,6 +435,7 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
           yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"), Effect.ignore)
         }
         yield* Ref.set(inFlight, undefined)
+        yield* Ref.set(gate, "idle")
         yield* indexer.cancel()
         const idle: State = { status: "idle", done: 0, total: 0 }
         yield* Ref.set(state, idle)

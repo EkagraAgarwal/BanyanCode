@@ -56,6 +56,9 @@ export const RemoveOutput = Schema.Struct({
   sizeBefore: Schema.Number,
   sizeAfter: Schema.Number,
   freedBytes: Schema.Number,
+  // Always false: the database is open, so `--drop-file` clears it instead of
+  // unlinking it. Exposed so callers can describe what actually happened.
+  droppedFile: Schema.Boolean,
 }).annotate({ identifier: "Banyan.CodegraphRemoveOutput" })
 
 export const ForceKillOutput = Schema.Struct({

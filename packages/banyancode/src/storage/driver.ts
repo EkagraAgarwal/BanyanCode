@@ -13,14 +13,26 @@ export type { Driver, NativeDatabase, NativeStatement } from "./native.js"
 export const openDatabase = async (path: string): Promise<NativeDatabase> => {
   await mkdir(dirname(path), { recursive: true })
   const db = openNative(path)
-  db.exec(
-    [
-      "PRAGMA journal_mode = WAL",
-      "PRAGMA synchronous = NORMAL",
-      "PRAGMA busy_timeout = 5000",
-      "PRAGMA foreign_keys = ON",
-    ].join(";"),
-  )
+  try {
+    db.exec(
+      [
+        "PRAGMA journal_mode = WAL",
+        "PRAGMA synchronous = NORMAL",
+        "PRAGMA busy_timeout = 5000",
+        "PRAGMA foreign_keys = ON",
+      ].join(";"),
+    )
+  } catch (cause) {
+    // The pragmas are the first statement that reads the file header, so a
+    // corrupt file fails here. Close the half-open handle before the caller
+    // moves the file aside.
+    try {
+      db.close()
+    } catch {
+      // ignore a close error from an already-broken connection
+    }
+    throw cause
+  }
   return db
 }
 

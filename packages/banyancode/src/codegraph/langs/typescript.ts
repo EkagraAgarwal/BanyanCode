@@ -3,7 +3,11 @@ import type { ParseResult, ParsedNode, ParsedEdge } from "./types"
 const IMPORTS_REGEX = /import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?["']([^"']+)["']/g
 const EXPORT_CLASS_REGEX = /export\s+class\s+(\w+)(?:\s+extends\s+(\w+))?/g
 const CLASS_REGEX = /(?:^|\n)(?!export\s+)class\s+(\w+)(?:\s+extends\s+(\w+))?/g
-const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(/g
+// The declaration name is captured without requiring the `(` right after it:
+// a type-parameter list (`function latest<K extends keyof Info>(...)`) used to
+// make the regex miss the whole function. The loop confirms the parameter
+// list with `skipTypeParameters` below.
+const FUNCTION_REGEX = /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)/g
 // Allow leading whitespace so layer-internal `const start = ...` (4-space indented
 // inside `Layer.effect(...)`) is indexed. Previously anchored on `(?:^|\n)const`
 // which silently dropped every indented layer const. The optional `: Type`
@@ -11,8 +15,13 @@ const FUNCTION_REGEX = /(?:^|\n)(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(
 // multi-line signatures (`(input: {...}): {...} =>`), which were never indexed.
 const ARROW_CONST_REGEX =
   /(?:^|\n)\s*(?:export\s+)?const\s+(\w+)\s*=\s*(async\s+)?(?:\([^)]*\)(?:\s*:[^=;]{1,500}?)?|[^=>\n]+)\s*=>/g
+// Generic arrow function: `export const f = <T>(value: T) => ...`. One level
+// of nested angle brackets in a constraint is tolerated; deeper constraints
+// fall back to not being indexed.
+const GENERIC_ARROW_CONST_REGEX =
+  /(?:^|\n)\s*(?:export\s+)?const\s+(\w+)\s*=\s*(async\s+)?<[^<>\n]{0,300}(?:<[^<>\n]{0,300}>[^<>\n]{0,300})?>\s*\([^)]*\)(?:\s*:[^=;\n]{1,500}?)?\s*=>/g
 const FACTORY_EXPORT_REGEX =
-  /(?:^|\n)export\s+const\s+(\w+)\s*=\s*((?:Tool\.define|Layer\.effect|Layer\.succeed|Layer\.scoped|Context\.Service|Context\.Tag|Layer\.mergeAll)(?:<[^>]+>)?)\s*\(/g
+  /(?:^|\n)\s*(?:export\s+)?const\s+(\w+)\s*(?::[^=\n]{1,300})?\s*=\s*((?:Tool\.define|Layer\.effect|Layer\.succeed|Layer\.scoped|Context\.Service|Context\.Tag|Layer\.mergeAll|Effect\.fnUntraced)(?:<[^>]+>)?)\s*\(/g
 // Allow optional `export ` and indentation between the newline and the
 // `interface` keyword. Real BanyanCode services use
 // `export interface Interface { ... }` as the sibling type of
@@ -23,6 +32,10 @@ const INTERFACE_REGEX = /(?:^|\n)\s*(?:export\s+)?interface\s+(\w+)/g
 // (`export type Foo<T> = ...`) were never indexed.
 const TYPE_REGEX = /(?:^|\n)\s*(?:export\s+)?type\s+(\w+)(?:<[^=]*?>)?\s*=/g
 const EFFECT_FN_REGEX = /Effect\.fn\s*\(\s*["']([^"']+)["']\s*\)/
+// `export * as Wildcard from "./wildcard"`: the namespace re-export is the
+// module's public name. Without a node for it, `Wildcard.match` cannot be
+// resolved against the imported file even though the call edges exist.
+const NAMESPACE_EXPORT_REGEX = /(?:^|\n)\s*export\s+\*\s+as\s+(\w+)\s+from\s+["'][^"']+["']/g
 const EFFECT_FN_CONST_REGEX = /const\s+(\w+)\s*=\s*Effect\.fn\s*\(\s*["']([^"']+)["']\s*\)/g
 // Match a single `readonly name(args): ReturnType` member line inside an
 // `interface { ... }` block. The Context.Service<Service, Interface>() pattern
@@ -116,6 +129,17 @@ function skipFunctionSignature(content: string, afterOpenParen: number): number 
   let nest = 0
   for (let k = j + 1; k < Math.min(j + OPEN_SCAN_BOUND, content.length); k++) {
     const ch = content[k]!
+    // A declaration that ends with a type annotation but has no body
+    // (TypeScript overload signatures) must stop at the next line. Without
+    // this the return-type scan ran into the following overload/implementation
+    // and attributed that body's calls to the signature node.
+    if (ch === "\n" && nest <= 0) {
+      let next = k + 1
+      while (next < content.length && (content[next] === " " || content[next] === "\t")) next++
+      if (/^(export|function|const|let|var|class|interface|type|declare|async|@|\/\/|\/\*)/.test(content.slice(next, next + 12))) {
+        return k
+      }
+    }
     if (ch === "<" || ch === "(" || ch === "[") nest++
     else if (ch === ">" && content[k - 1] !== "=") nest--
     else if (ch === ")" || ch === "]") nest--
@@ -422,6 +446,30 @@ export function stripCommentsAndStrings(code: string): string {
   return out.join("")
 }
 
+// Skips whitespace and, when present, a balanced `<...>` type-parameter list.
+// Returns the index of the first character after it (the `(` of a declaration
+// or the start of an arrow's parameter list).
+function skipTypeParameters(content: string, start: number): number {
+  let i = start
+  while (i < content.length && /\s/.test(content[i]!)) i++
+  if (content[i] !== "<") return i
+  let depth = 0
+  const limit = Math.min(i + 4000, content.length)
+  for (; i < limit; i++) {
+    const ch = content[i]
+    if (ch === "<") depth++
+    else if (ch === ">") {
+      depth--
+      if (depth === 0) {
+        i++
+        break
+      }
+    }
+  }
+  while (i < content.length && /\s/.test(content[i]!)) i++
+  return i
+}
+
 export function parseTypeScript(content: string, fileID: string): ParseResult {
   const nodes: ParsedNode[] = []
   const edges: ParsedEdge[] = []
@@ -456,16 +504,21 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
 
   for (const match of content.matchAll(FUNCTION_REGEX)) {
     const name = match[1]
+    const afterName = skipTypeParameters(content, match.index + match[0].length)
+    // `function` is a keyword but this match may be a call/mention; the real
+    // declaration always has a parameter list after the optional generics.
+    if (content[afterName] !== "(") continue
+    const declaration = content.substring(match.index, afterName + 1)
     const startLine = declStartLine(content, offsets, match.index)
     const { code, endLine } = getTSNodeBody(
       content,
       offsets,
       match.index,
-      match[0],
-      skipFunctionSignature(content, match.index + match[0].length),
+      declaration,
+      skipFunctionSignature(content, afterName + 1),
     )
     const effectMatch = code.match(EFFECT_FN_REGEX)
-    const signature = effectMatch ? effectMatch[1] : match[0].trim()
+    const signature = effectMatch ? effectMatch[1] : declaration.trim()
     nodes.push({
       id: `${fileID}:function:${name}:${startLine}`,
       kind: "function",
@@ -495,6 +548,23 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
   }
 
   for (const match of content.matchAll(ARROW_CONST_REGEX)) {
+    const name = match[1]
+    const startLine = declStartLine(content, offsets, match.index)
+    const { code, endLine } = getArrowBody(content, offsets, match.index!, match[0])
+    const effectMatch = code.match(EFFECT_FN_REGEX)
+    const signature = effectMatch ? effectMatch[1] : match[0].trim()
+    nodes.push({
+      id: `${fileID}:function:${name}:${startLine}`,
+      kind: "function",
+      name,
+      startLine,
+      endLine,
+      signature,
+      code,
+    })
+  }
+
+  for (const match of content.matchAll(GENERIC_ARROW_CONST_REGEX)) {
     const name = match[1]
     const startLine = declStartLine(content, offsets, match.index)
     const { code, endLine } = getArrowBody(content, offsets, match.index!, match[0])
@@ -576,6 +646,20 @@ export function parseTypeScript(content: string, fileID: string): ParseResult {
     const code = content.substring(match.index!, endOffset)
     const endLine = endLineFor(offsets, endOffset)
     nodes.push({ id: `${fileID}:type:${name}:${startLine}`, kind: "type", name, startLine, endLine, code })
+  }
+
+  for (const match of content.matchAll(NAMESPACE_EXPORT_REGEX)) {
+    const name = match[1]
+    const startLine = declStartLine(content, offsets, match.index)
+    nodes.push({
+      id: `${fileID}:variable:${name}:${startLine}`,
+      kind: "variable",
+      name,
+      startLine,
+      endLine: startLine,
+      signature: `export * as ${name}`,
+      code: match[0].trim(),
+    })
   }
 
   return { nodes, edges }

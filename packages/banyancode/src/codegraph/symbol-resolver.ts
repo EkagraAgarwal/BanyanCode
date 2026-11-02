@@ -74,6 +74,13 @@ export type ResolveRepo = Pick<
    * step simply does not run when the member is absent.
    */
   readonly ftsSearchNodes?: CodegraphRepoInterface["ftsSearchNodes"]
+  /**
+   * Optional file listing used by the module-name fallback: a namespace
+   * import (`import * as Flock from "./flock"`) has no declaration node, so
+   * `Flock.withLock` can only be scoped by matching the file whose basename
+   * spells the namespace.
+   */
+  readonly listAllFiles?: CodegraphRepoInterface["listAllFiles"]
 }
 
 export const resolveGraphTargetPure = (
@@ -236,6 +243,18 @@ export const resolveGraphTargetStrict = (
         const validFileIDs = new Set(parentScan.filter((n) => n.name === parentName).map((n) => n.fileID))
         for (const fileID of yield* repo.fileIDsByServiceName(parentName)) {
           validFileIDs.add(fileID)
+        }
+        // Namespace imports (`import * as Flock from "./flock"`) leave no
+        // declaration node behind, so `Flock.withLock` has no parent to scope
+        // by. Fall back to the module file whose basename spells the
+        // namespace (case/separator-insensitive: PhotonNormalize →
+        // photon-normalize.ts).
+        if (validFileIDs.size === 0 && repo.listAllFiles) {
+          const moduleName = (parentName.split(".").pop() ?? parentName).toLowerCase().replace(/[-_]/g, "")
+          for (const file of yield* repo.listAllFiles()) {
+            const base = (file.path.split(/[\\/]/).pop() ?? "").replace(/\.[^.]+$/, "")
+            if (base.toLowerCase().replace(/[-_]/g, "") === moduleName) validFileIDs.add(file.id)
+          }
         }
         // Rank non-test files first so test doubles of the same parent don't
         // widen the scope to bogus paths. Capture for step 4 reuse.

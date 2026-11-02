@@ -185,16 +185,15 @@ export const OutputCallers = Schema.Struct({
 export const InputRemove = Schema.Struct({
   dropFile: optionalBoolean.annotate({
     description:
-      "When true, drops the entire banyancode.db file (use only when the " +
-      "DB is corrupt and incremental delete fails). Defaults to false " +
-      "(delete rows only — the file remains, sessions and memory are " +
-      "preserved).",
+      "When true, clears every table, VACUUMs and truncates the WAL — the " +
+      "strongest reset available while the plugin holds the database open. " +
+      "The banyancode.db file itself is kept (SQLite must not unlink an open " +
+      "database); a build right after writes into the emptied file.",
   }),
 }).annotate({
   description:
     "Remove the current codegraph index. Frees disk space but does not " +
-    "delete the banyancode.db file by default (the file is shared with " +
-    "sessions and memory).",
+    "delete the banyancode.db file (the file is shared with sessions and memory).",
 })
 
 export const OutputRemove = Schema.Struct({
@@ -202,6 +201,8 @@ export const OutputRemove = Schema.Struct({
   sizeBefore: Schema.Number,
   sizeAfter: Schema.Number,
   freedBytes: Schema.Number,
+  // Always false: the open database is cleared, never unlinked.
+  droppedFile: Schema.Boolean,
 })
 
 const metaOrUndefined = (meta: {
@@ -497,18 +498,25 @@ export const removeTool = (deps: Deps): Tool.Info<typeof InputRemove, typeof Out
         deps.repo.countEdges(),
       ])
       const graphWasEmpty = filesBefore === 0 && nodesBefore === 0 && edgesBefore === 0
-      const { sizeBefore, sizeAfter } = yield* deps.repo.clearAll({ dropFile: input.dropFile ?? false })
+      const { sizeBefore, sizeAfter, droppedFile } = yield* deps.repo.clearAll({
+        dropFile: input.dropFile ?? false,
+      })
       const freedBytes = Math.max(0, sizeBefore - sizeAfter)
       const output = {
         status: (graphWasEmpty ? "empty" : "removed") as "empty" | "removed",
         sizeBefore,
         sizeAfter,
         freedBytes,
+        droppedFile,
       }
+      const cleared =
+        input.dropFile && !droppedFile
+          ? " The database file is kept (the plugin holds it open) and now contains an empty schema; a build writes into it again."
+          : ""
       const content =
         output.status === "empty"
           ? "Codegraph index was already empty."
-          : `Codegraph index removed. Freed ${output.freedBytes} bytes (${output.sizeBefore} -> ${output.sizeAfter}).`
+          : `Codegraph index removed. Freed ${output.freedBytes} bytes (${output.sizeBefore} -> ${output.sizeAfter}).${cleared}`
       return { output, content }
     }).pipe(Effect.mapError(() => new Tool.Error({ message: "codegraph_remove failed" }))),
 })

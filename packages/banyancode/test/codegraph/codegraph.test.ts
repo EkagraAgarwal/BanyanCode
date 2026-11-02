@@ -190,6 +190,150 @@ describe("codegraph indexer", () => {
     })
   })
 
+  test("namespaced calls resolve through the module and generic declarations are indexed", async () => {
+    await withTemp(async (directory) => {
+      await write(
+        directory,
+        "src/util/wildcard.ts",
+        [
+          'export * as Wildcard from "./wildcard"',
+          "export function match(input: string, pattern: string) {",
+          "  return input === pattern",
+          "}",
+        ].join("\n"),
+      )
+      await write(
+        directory,
+        "src/consumer.ts",
+        [
+          'import { Wildcard } from "./util/wildcard"',
+          "export function check() {",
+          '  return Wildcard.match("a", "*")',
+          "}",
+        ].join("\n"),
+      )
+      await write(
+        directory,
+        "src/config.ts",
+        [
+          'export * as Config from "./config"',
+          "export function latest<K extends string>(key: K) {",
+          "  return key",
+          "}",
+        ].join("\n"),
+      )
+      await write(
+        directory,
+        "src/use-config.ts",
+        ['import { Config } from "./config"', "export function pick() {", '  return Config.latest("x")', "}"].join("\n"),
+      )
+      await write(directory, "src/generic.ts", "export const wrap = <T>(value: T) => value\n")
+
+      await withServices(directory, ({ repo, indexer }) =>
+        Effect.gen(function* () {
+          yield* indexer.index({ root: directory, force: true })
+          const analyzer = makeAnalyzer(repo)
+
+          const wildcard = yield* resolveGraphTargetPure(repo, { target: "Wildcard.match" })
+          expect(wildcard._tag).toBe("Ok")
+          if (wildcard._tag === "Ok") {
+            expect(wildcard.value.node.name).toBe("match")
+            expect(wildcard.value.derivation).toBe("qualified-split")
+          }
+          const checkers = yield* analyzer
+            .callers({ function: "Wildcard.match" })
+            .pipe(Effect.orElseSucceed(() => []))
+          expect(checkers.map((node) => node.name)).toContain("check")
+
+          const latest = yield* resolveGraphTargetPure(repo, { target: "Config.latest" })
+          expect(latest._tag).toBe("Ok")
+          if (latest._tag === "Ok") expect(latest.value.node.name).toBe("latest")
+          const pickers = yield* analyzer
+            .callers({ function: "Config.latest" })
+            .pipe(Effect.orElseSucceed(() => []))
+          expect(pickers.map((node) => node.name)).toContain("pick")
+
+          expect(yield* repo.queryNodes({ function: "wrap" })).toHaveLength(1)
+        }),
+      )
+    })
+  })
+
+  test("a namespace import without a declaration node resolves through the module filename", async () => {
+    await withTemp(async (directory) => {
+      await write(
+        directory,
+        "src/util/flock.ts",
+        [
+          "export function withLock(key: string, run: () => number) {",
+          "  return run()",
+          "}",
+        ].join("\n"),
+      )
+      await write(
+        directory,
+        "src/use-flock.ts",
+        [
+          'import * as Flock from "./util/flock"',
+          "export function locked() {",
+          '  return Flock.withLock("k", () => 1)',
+          "}",
+        ].join("\n"),
+      )
+
+      await withServices(directory, ({ repo, indexer }) =>
+        Effect.gen(function* () {
+          yield* indexer.index({ root: directory, force: true })
+          const analyzer = makeAnalyzer(repo)
+          const resolved = yield* resolveGraphTargetPure(repo, { target: "Flock.withLock" })
+          expect(resolved._tag).toBe("Ok")
+          if (resolved._tag === "Ok") expect(resolved.value.node.name).toBe("withLock")
+          const callers = yield* analyzer
+            .callers({ function: "Flock.withLock" })
+            .pipe(Effect.orElseSucceed(() => []))
+          expect(callers.map((node) => node.name)).toContain("locked")
+        }),
+      )
+    })
+  })
+
+  test("a local variable sharing an imported symbol's name is not a caller", async () => {
+    await withTemp(async (directory) => {
+      await write(
+        directory,
+        "src/config.ts",
+        ['export * as Config from "./config"', "export function configured() {", "  return 1", "}"].join("\n"),
+      )
+      await write(
+        directory,
+        "src/other.ts",
+        [
+          'import { Config } from "./config"',
+          "const configured = 2",
+          "export function localUse() {",
+          "  return configured + 1",
+          "}",
+        ].join("\n"),
+      )
+      await write(
+        directory,
+        "src/instance.ts",
+        ['import { Config } from "./config"', "export function boot() {", "  return Config.configured()", "}"].join("\n"),
+      )
+
+      await withServices(directory, ({ repo, indexer }) =>
+        Effect.gen(function* () {
+          yield* indexer.index({ root: directory, force: true })
+          const analyzer = makeAnalyzer(repo)
+          const callers = yield* analyzer
+            .callers({ function: "Config.configured" })
+            .pipe(Effect.orElseSucceed(() => []))
+          expect(callers.map((node) => node.name)).toEqual(["boot"])
+        }),
+      )
+    })
+  })
+
   test("incremental update replaces a changed file's nodes and edges", async () => {
     await withTemp(async (directory) => {
       await seedRepo(directory)
