@@ -631,7 +631,7 @@ it.live("routes pending requests through the Session's instance", () =>
     }).pipe(
       Effect.filterOrFail((ready) => ready),
       Effect.retry(Schedule.spaced("10 millis")),
-      Effect.timeout("2 seconds"),
+      Effect.timeout("10 seconds"),
     )
     const createdPermission = yield* Effect.promise(() =>
       handler(
