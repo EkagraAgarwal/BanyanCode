@@ -36,7 +36,7 @@ const project = Effect.gen(function* () {
   const tmp = yield* tmpdirScoped()
   yield* Effect.promise(() =>
     Bun.write(
-      path.join(tmp.path, ".opencode/plugins/prompt.ts"),
+      path.join(tmp.path, ".banyancode/plugins/prompt.ts"),
       `export default {
         id: "prompt-readiness",
         async setup(ctx) {

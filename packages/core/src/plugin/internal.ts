@@ -270,11 +270,13 @@ const pre = [
 const post = [
   ConfigInstructionPlugin.Plugin,
   ConfigReferencePlugin.Plugin,
+  // BanyanCode is a product built-in, not a user-installed plugin: it owns the
+  // project database, banyancode.json, and the `banyan_*` tool surface. It runs
+  // before ConfigAgentPlugin so the last matching rule is the user's: configured
+  // permissions and disabled agents win over its agent defaults.
+  BanyanPlugin,
   ConfigAgentPlugin.Plugin,
   BrowserPlugin,
-  // BanyanCode is a product built-in, not a user-installed plugin: it owns the
-  // project database, banyancode.json, and the `banyan_*` tool surface.
-  BanyanPlugin,
   ConfigCommandPlugin.Plugin,
   ConfigCompactionPlugin.Plugin,
   ConfigFormatterPlugin.Plugin,

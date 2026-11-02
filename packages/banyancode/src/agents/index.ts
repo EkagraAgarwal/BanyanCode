@@ -37,9 +37,9 @@ const fingerprint = (loaded: Loaded, state: AgentState) =>
  * Register the BanyanCode agent set and its `banyancode.json` overrides.
  *
  * Ordering: this runs from the `banyancode` built-in plugin, which the host
- * activates after the config/markdown agent plugin and after core's built-in
- * agents, so our transform is appended (and therefore wins) where they
- * conflict. `banyancode.json` per-agent overrides are applied last.
+ * activates after core's built-in agents and before the config/markdown agent
+ * plugin. So these defaults win over core's, and the user's configured
+ * permissions, `agents` entries and markdown agents win over these.
  *
  * Transform callbacks are synchronous, so every read happens here: the snapshot
  * is refreshed whenever the config or model catalog changes, then

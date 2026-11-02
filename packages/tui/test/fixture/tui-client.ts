@@ -174,6 +174,10 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/api/experimental/migration/v1") return json({ status: "completed" })
     // The prompt footer reads the routed session's goal from the goal plugin's RPC; no fixture sets one.
     if (url.pathname === "/api/rpc/opencode.goal/get") return json({ output: null })
+    // The BanyanCode TUI plugin treats an unknown RPC as a feature that isn't available.
+    if (url.pathname.startsWith("/api/rpc/banyancode.")) {
+      return json({ _tag: "RpcNotFoundError", type: "rpc.method_not_found", message: "not available" }, { status: 404 })
+    }
     throw new Error(`unexpected request: ${url.pathname}`)
   }
   fetch.preconnect = () => {}

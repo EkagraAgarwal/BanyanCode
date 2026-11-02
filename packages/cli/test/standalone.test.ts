@@ -8,7 +8,7 @@ test("standalone server exits when its owner is killed", async () => {
   await using root = await tmpdir("opencode-cli-standalone-")
   const owner = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixture/standalone-owner.ts")], {
     cwd: path.join(import.meta.dir, ".."),
-    env: isolatedEnv(root.path, { OPENCODE_SERVER_USERNAME: "custom" }),
+    env: isolatedEnv(root.path, { BANYANCODE_SERVER_USERNAME: "custom" }),
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
