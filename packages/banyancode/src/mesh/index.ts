@@ -385,15 +385,16 @@ const emitStatus = (
   Effect.gen(function* () {
     const tree = treeFor(withoutKilled(cache, killed), rootSessionID, live)
     if (tree === undefined) return
-    yield* rpc.events.emit("status.updated", { rootSessionID, tree })
+    yield* rpc.events.emit("status.updated", { rootSessionID, tree, killed: [...killed] })
   }).pipe(Effect.catchCause(() => Effect.void))
 
 const emitStatusFor =
   (mesh: MeshService, rpc: RpcRegistration<typeof Definition>) => (sessionID: string) =>
     Effect.gen(function* () {
-      const map = withoutKilled(yield* mesh.snapshotMap(), yield* Ref.get(mesh.killed))
+      const killed = yield* Ref.get(mesh.killed)
+      const map = withoutKilled(yield* mesh.snapshotMap(), killed)
       const root = rootOf(map, sessionID) ?? sessionID
       const tree = treeFor(map, root, yield* Ref.get(mesh.live))
       if (tree === undefined) return
-      yield* rpc.events.emit("status.updated", { rootSessionID: root, tree })
+      yield* rpc.events.emit("status.updated", { rootSessionID: root, tree, killed: [...killed] })
     }).pipe(Effect.catchCause(() => Effect.void))

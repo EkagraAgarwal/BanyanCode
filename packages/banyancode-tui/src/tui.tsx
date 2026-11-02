@@ -1,8 +1,11 @@
+import type { ExperimentalSessionImportInput } from "@opencode/client"
 import { Plugin } from "@opencode/plugin/tui"
 import { Goal } from "@opencode/schema/goal"
 import { Show } from "solid-js"
 import { PANEL, PANEL_NAMES, PLUGIN_ID, RAIL } from "./constants"
+import { normalizeImportPath } from "./data/import-path"
 import { createLive, type Live } from "./data/live"
+import { encodeSessionImport, parseTranscript, transcriptToImport } from "./data/transcript"
 import { CodegraphProgress } from "./components/status/codegraph-progress"
 import { StatusPills } from "./components/status/pills"
 import { SessionStatus } from "./components/status/session-status"
@@ -312,6 +315,54 @@ export default Plugin.define({
           palette: true,
           run() {
             openView(context, PANEL.agents)
+          },
+        },
+        {
+          id: "session.import",
+          title: "Import session",
+          description: "Import a session from a Markdown transcript file",
+          group: "BanyanCode",
+          slash: { name: "import", arguments: true },
+          async run(input) {
+            const raw = (input ?? "").trim()
+            const path =
+              raw === ""
+                ? await context.ui.dialog.prompt({
+                    title: "Path to transcript",
+                    placeholder: "/path/to/session-xxxx.md",
+                  })
+                : raw
+            if (path === undefined || path.trim() === "") {
+              if (raw === "") notify("Usage: /import <path-to-transcript.md>", "warning")
+              return
+            }
+            const directory = context.location?.directory
+            if (directory === undefined) {
+              notify("Import failed: no project is open", "error")
+              return
+            }
+            try {
+              const content = await Bun.file(normalizeImportPath(path, process.platform)).text()
+              const parsed = parseTranscript(content)
+              if (parsed.messages.length === 0) {
+                notify("Import failed: transcript contained no user/assistant messages", "error")
+                return
+              }
+              const data = transcriptToImport(parsed, { directory })
+              const payload = encodeSessionImport(data)
+              const imported = await context.client.experimental.session.import({
+                ...payload,
+                location: { directory },
+              } as unknown as ExperimentalSessionImportInput)
+              const count = data.messages.length
+              notify(
+                `Imported ${count} message${count === 1 ? "" : "s"} into "${imported.title ?? data.info.title}"`,
+                "success",
+              )
+              context.ui.router.navigate({ type: "session", sessionID: imported.id })
+            } catch (error) {
+              notify(`Import failed: ${error instanceof Error ? error.message : String(error)}`, "error")
+            }
           },
         },
         {

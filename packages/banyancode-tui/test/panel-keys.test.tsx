@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import type { Context, KeymapCommand, PanelInput } from "@opencode/plugin/tui/context"
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { InspectorPanel } from "../src/components/panels/inspector"
+import { InspectorPanel, panelScrollsInternally } from "../src/components/panels/inspector"
 import { createPanelFocus, PanelFocusContext } from "../src/components/panels/keys"
 import { SessionsView } from "../src/components/panels/sessions"
 import { PANEL } from "../src/constants"
@@ -67,7 +67,15 @@ function recordingContext(input: Parameters<typeof context>[0] = {}) {
   return { value, layers, pushes, opened, navigated, press }
 }
 
-function panel(name: string, input: { readonly focused?: boolean; readonly width?: number } = {}): PanelInput {
+function panel(
+  name: string,
+  input: {
+    readonly focused?: boolean
+    readonly width?: number
+    readonly close?: () => void
+    readonly toggleFullscreen?: () => void
+  } = {},
+): PanelInput {
   return {
     name,
     sessionID: "ses_root",
@@ -75,8 +83,8 @@ function panel(name: string, input: { readonly focused?: boolean; readonly width
     presentation: "panel",
     focused: input.focused ?? true,
     focus: () => {},
-    close: () => {},
-    toggleFullscreen: () => {},
+    close: input.close ?? (() => {}),
+    toggleFullscreen: input.toggleFullscreen ?? (() => {}),
   }
 }
 
@@ -105,6 +113,38 @@ test("arrow keys move the rail, enter opens the selected view", async () => {
   } finally {
     app.renderer.destroy()
   }
+})
+
+test("f toggles fullscreen and the header names both keys", async () => {
+  const recorded = recordingContext({ sessions })
+  let toggles = 0
+  const app = await mount(
+    () => (
+      <InspectorPanel
+        context={recorded.value}
+        live={live({})}
+        panel={panel(PANEL.details, { toggleFullscreen: () => (toggles += 1) })}
+      />
+    ),
+    { width: 100, height: 24 },
+  )
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("f fullscreen")
+    expect(frame).toContain("esc close")
+    expect(await recorded.press("Toggle fullscreen")).toBe(true)
+    expect(toggles).toBe(1)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("views with their own list scrollbar do not draw a second panel bar", async () => {
+  expect(panelScrollsInternally(PANEL.agents)).toBe(true)
+  expect(panelScrollsInternally(PANEL.config)).toBe(true)
+  expect(panelScrollsInternally(PANEL.sessions)).toBe(true)
+  expect(panelScrollsInternally(PANEL.details)).toBe(false)
+  expect(panelScrollsInternally(PANEL.trace)).toBe(false)
 })
 
 test("panel keys stay inactive while the pane is not focused", async () => {

@@ -200,6 +200,7 @@ test("plugin registers additive slots, router pages, and commands", () => {
   expect(ids).toContain("swarm.toggle")
   expect(ids).toContain("subagents.max_subagents")
   expect(ids).toContain("thinking.set")
+  expect(ids).toContain("session.import")
 
   expect(recorded.pages).toContain("banyancode.graph")
   expect(recorded.pages).toContain("banyancode.agents")

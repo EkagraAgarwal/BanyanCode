@@ -1,6 +1,6 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import type { SessionInfo } from "@opencode/client"
-import { createMemo, createSignal, For, Show } from "solid-js"
+import { createMemo, createSignal, For, onMount, Show } from "solid-js"
 import { toolNames } from "../../data/messages"
 import type { MeshLive } from "../../data/live"
 import { meshStateFor } from "../../data/mesh"
@@ -10,7 +10,9 @@ function statusType(
   context: Context,
   mesh: MeshLive,
   session: SessionInfo,
+  killed: boolean,
 ): "idle" | "running" | "error" | "queued" {
+  if (killed) return "idle"
   const meshState = meshStateFor(mesh.root(context.data.session.root(session.id)), session.id)
   if (meshState === "running" || meshState === "retry") return "running"
   if (meshState === "failed" || meshState === "interrupted") return "error"
@@ -30,12 +32,21 @@ export function AgentTreePanel(props: { readonly context: Context; readonly sess
   const theme = () => palette(props.context.theme)
   const [open, setOpen] = createSignal(true)
 
+  onMount(() => {
+    void props.mesh.ensure(props.context.data.session.root(props.sessionID))
+  })
+
   const children = createMemo(() =>
     props.context.data.session.list().filter((session) => session.parentID === props.sessionID),
   )
+  const isKilled = (session: SessionInfo) => props.mesh.killed().has(session.id)
+  // "N active" is the number of children actually running, not the tree size.
+  const running = createMemo(
+    () => children().filter((child) => statusType(props.context, props.mesh, child, isKilled(child)) === "running").length,
+  )
 
   const glyph = (session: SessionInfo) => {
-    const status = statusType(props.context, props.mesh, session)
+    const status = statusType(props.context, props.mesh, session, isKilled(session))
     if (status === "idle") return { color: theme().muted, char: "○" }
     if (status === "running") return { color: theme().success, char: "●" }
     if (status === "error") return { color: theme().error, char: "×" }
@@ -50,7 +61,9 @@ export function AgentTreePanel(props: { readonly context: Context; readonly sess
           <text fg={theme().text}>
             <b>AGENT TREE</b>
           </text>
-          <text fg={theme().muted}>{` ${children().length} active`}</text>
+          <text fg={running() > 0 ? theme().success : theme().muted}>
+            {` ${running() > 0 ? "● " : ""}${running()} active`}
+          </text>
         </box>
         <Show when={open()}>
           <box paddingLeft={1}>
@@ -82,8 +95,15 @@ export function AgentTreePanel(props: { readonly context: Context; readonly sess
                       <text fg={theme().text} wrapMode="word">
                         {child.title ?? child.id}
                       </text>
-                      <Show when={child.outcome !== undefined}>
-                        <text fg={theme().muted}> {child.outcome}</text>
+                      <Show
+                        when={isKilled(child)}
+                        fallback={
+                          <Show when={child.outcome !== undefined}>
+                            <text fg={theme().muted}> {child.outcome}</text>
+                          </Show>
+                        }
+                      >
+                        <text fg={theme().muted}> killed</text>
                       </Show>
                     </box>
                     <Show when={tools().length > 0}>

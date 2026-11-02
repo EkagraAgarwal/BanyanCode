@@ -1,7 +1,7 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import type { SessionInfo } from "@opencode/client"
 import type { RGBA } from "@opentui/core"
-import { createMemo, createSignal, For, Show } from "solid-js"
+import { createMemo, createSignal, For, onMount, Show } from "solid-js"
 import { formatTokens } from "../../data/format"
 import type { MeshLive } from "../../data/live"
 import { totalTokens } from "../../data/messages"
@@ -21,6 +21,7 @@ export interface AgentNode {
   readonly totalCost: number
   readonly totalTokens: number
   readonly status: AgentStatus
+  readonly killed: boolean
   readonly isPathToRunning: boolean
 }
 
@@ -122,6 +123,7 @@ export function buildAgentTree(input: {
   readonly sessions: readonly SessionInfo[]
   readonly rootID: string
   readonly stateOf: (sessionID: string) => AgentStatus
+  readonly killed?: ReadonlySet<string>
 }): AgentNode | undefined {
   const byParent = new Map<string, SessionInfo[]>()
   for (const session of input.sessions) {
@@ -139,7 +141,8 @@ export function buildAgentTree(input: {
       .filter((child) => !nextPath.has(child.id))
       .sort((a, b) => a.time.created - b.time.created)
       .map((child) => visit(child, nextPath))
-    const status = input.stateOf(session.id)
+    const killed = input.killed?.has(session.id) ?? false
+    const status = killed ? "done" : input.stateOf(session.id)
     const selfTokens = totalTokens(session.tokens)
     return {
       session,
@@ -147,6 +150,7 @@ export function buildAgentTree(input: {
       totalCost: (session.cost ?? 0) + children.reduce((sum, child) => sum + child.totalCost, 0),
       totalTokens: selfTokens + children.reduce((sum, child) => sum + child.totalTokens, 0),
       status,
+      killed,
       isPathToRunning: status === "running" || children.some((child) => child.isPathToRunning),
     }
   }
@@ -191,6 +195,10 @@ export function AgentTreeView(props: {
   const theme = () => palette(props.context.theme)
   const [expanded, setExpanded] = createSignal<ReadonlySet<string>>(new Set())
 
+  onMount(() => {
+    void props.mesh.ensure(props.context.data.session.root(props.sessionID))
+  })
+
   const stateOf = (sessionID: string): AgentStatus => {
     const session = props.context.data.session.get(sessionID)
     const root = session === undefined ? undefined : props.context.data.session.root(sessionID)
@@ -207,6 +215,7 @@ export function AgentTreeView(props: {
       sessions: props.context.data.session.list(),
       rootID: props.context.data.session.root(props.sessionID),
       stateOf,
+      killed: props.mesh.killed(),
     }),
   )
 
@@ -319,6 +328,12 @@ export function AgentTreeView(props: {
                     <Show when={status.glyph}>
                       <text fg={status.color} paddingLeft={1} flexShrink={0}>
                         {status.glyph}
+                      </text>
+                    </Show>
+                    <Show when={node.killed}>
+                      <text fg={theme().muted} flexShrink={0}>
+                        {" "}
+                        killed
                       </text>
                     </Show>
                     <Show when={childSummary}>

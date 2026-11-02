@@ -54,10 +54,10 @@ export function ToolUsagePanel(props: {
         }
       >
         <box flexDirection="column" gap={0}>
-          <Show when={summary()}>{(value) => <text fg={theme().muted}>{value()}</text>}</Show>
           <text fg={theme().primary}>
             <b>TOOL USAGE</b>
           </text>
+          <Show when={summary()}>{(value) => <text fg={theme().muted}>{value()}</text>}</Show>
           <For each={visible()}>
             {(row) => (
               <box flexDirection="row" gap={1} justifyContent="space-between" width="100%">

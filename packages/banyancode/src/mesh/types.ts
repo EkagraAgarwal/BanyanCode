@@ -131,6 +131,8 @@ export interface MeshNode {
 export interface MeshStatus {
   readonly roots: readonly MeshNode[]
   readonly generatedAt: number
+  /** Sessions killed through `mesh.kill`; durable so a restart keeps them finished. */
+  readonly killed?: readonly string[]
 }
 
 export interface CheckinPeer {

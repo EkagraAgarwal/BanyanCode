@@ -61,6 +61,8 @@ export interface MeshLive {
   ensure(rootSessionID: string): Promise<void>
   readonly limits: Accessor<MeshLimits | undefined>
   readonly swarmMode: Accessor<boolean | undefined>
+  /** Sessions killed through mesh.kill, so every tree can mark them finished. */
+  readonly killed: Accessor<ReadonlySet<string>>
   refreshLimits(): Promise<void>
   setLimits(input: { readonly maxSubagents?: number; readonly swarmMode?: boolean }): Promise<Attempt<MeshLimits>>
   steer(input: {
@@ -71,7 +73,8 @@ export interface MeshLive {
   }): Promise<Attempt<{ readonly delivered: number }>>
   kill(input: {
     readonly parentSessionID: string
-    readonly targetAgent: string
+    readonly targetAgent?: string
+    readonly targetSessionID?: string
     readonly reason: string
   }): Promise<Attempt<{ readonly killed: number }>>
 }
@@ -348,12 +351,18 @@ export function createLive(context: Context): Live {
   const [meshAvailability, setMeshAvailability] = createSignal<Availability>("unknown")
   const [meshError, setMeshError] = createSignal<string | undefined>(undefined)
   const [meshRoots, setMeshRoots] = createSignal<ReadonlyMap<string, MeshNode>>(new Map())
+  const [meshKilled, setMeshKilled] = createSignal<ReadonlyMap<string, readonly string[]>>(new Map())
   const [limits, setLimitsValue] = createSignal<MeshLimits | undefined>(undefined)
 
-  const storeRoots = (roots: readonly MeshNode[]) => {
+  const storeRoots = (roots: readonly MeshNode[], killed: readonly string[] | undefined) => {
     const next = new Map(meshRoots())
-    for (const node of roots) next.set(node.sessionID, node)
+    const nextKilled = new Map(meshKilled())
+    for (const node of roots) {
+      next.set(node.sessionID, node)
+      nextKilled.set(node.sessionID, killed ?? [])
+    }
     setMeshRoots(next)
+    setMeshKilled(nextKilled)
   }
 
   const ensureMesh = async (rootSessionID: string) => {
@@ -365,7 +374,7 @@ export function createLive(context: Context): Live {
       return
     }
     setMeshError(undefined)
-    storeRoots(result.value.roots)
+    storeRoots(result.value.roots, result.value.killed)
   }
 
   const refreshLimits = async () => {
@@ -409,18 +418,30 @@ export function createLive(context: Context): Live {
 
   const kill = async (input: {
     readonly parentSessionID: string
-    readonly targetAgent: string
+    readonly targetAgent?: string
+    readonly targetSessionID?: string
     readonly reason: string
   }) => {
     const result = await attempt(() => rpc.mesh.kill(input))
-    if (!disposed && result.ok) setMeshAvailability("available")
+    if (disposed) return result
+    if (result.ok) {
+      setMeshAvailability("available")
+      await ensureMesh(input.parentSessionID)
+    }
     return result
   }
+
+  const killedSessions = () => new Set([...meshKilled().values()].flat())
 
   const onMesh = rpc.mesh.events.on("status.updated", (event) => {
     const next = new Map(meshRoots())
     next.set(event.data.rootSessionID, event.data.tree)
     setMeshRoots(next)
+    if (event.data.killed !== undefined) {
+      const nextKilled = new Map(meshKilled())
+      nextKilled.set(event.data.rootSessionID, event.data.killed)
+      setMeshKilled(nextKilled)
+    }
     setMeshAvailability("available")
   })
   disposers.push(onMesh)
@@ -611,6 +632,7 @@ export function createLive(context: Context): Live {
       ensure: ensureMesh,
       limits,
       swarmMode: () => limits()?.swarmMode,
+      killed: killedSessions,
       refreshLimits,
       setLimits,
       steer,

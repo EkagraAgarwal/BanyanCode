@@ -53,6 +53,8 @@ export interface MessagesRepo {
   readonly countPending: (parentSessionID: string) => Effect.Effect<number, StorageError>
   readonly markDelivered: (id: string, deliveredAt: number) => Effect.Effect<void, StorageError>
   readonly peers: (parentSessionID: string, windowMs?: number) => Effect.Effect<readonly PeerInfo[], StorageError>
+  /** Every session that has a durable `kill` message, so kills survive a restart. */
+  readonly killedSessions: () => Effect.Effect<readonly string[], StorageError>
 }
 
 const PEER_WINDOW_MS = 5 * 60 * 1000
@@ -178,5 +180,12 @@ export const makeMessagesRepo = (storage: Storage): MessagesRepo => {
         }),
       )
 
-  return { put, publishOrFetch, get, listByParent, listPending, countPending, markDelivered, peers }
+  const killedSessions: MessagesRepo["killedSessions"] = () =>
+    storage
+      .query<{ to_session: string }>(
+        "SELECT DISTINCT to_session FROM subagent_messages WHERE kind = 'kill' AND to_session IS NOT NULL",
+      )
+      .pipe(Effect.map((rows) => rows.map((row) => row.to_session)))
+
+  return { put, publishOrFetch, get, listByParent, listPending, countPending, markDelivered, peers, killedSessions }
 }

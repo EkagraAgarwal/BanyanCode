@@ -162,6 +162,64 @@ test("agent tree dialog steers the chosen subagent", async () => {
   expect(fake.toasts.at(-1)?.message).toContain("Steer sent")
 })
 
+test("agent tree kill targets the selected session, not every child of the agent", async () => {
+  const base = context({
+    sessions: [
+      { id: "ses_root", title: "root" } as never,
+      { id: "ses_a", parentID: "ses_root", title: "first explore", agent: "explore" } as never,
+      { id: "ses_b", parentID: "ses_root", title: "second explore", agent: "explore" } as never,
+    ],
+  })
+  const target = { sessionID: "ses_a", agent: "explore", title: "first explore", state: "running" as const, killed: false }
+  const fake = fakeContext({ base, selects: [target, "kill"], confirms: [true] })
+  const killed: Array<{ parentSessionID: string; targetAgent?: string; targetSessionID?: string }> = []
+  const live = {
+    mesh: {
+      ...meshLive(),
+      root: () => undefined,
+      ensure: async () => {},
+      refreshLimits: async () => {},
+      limits: () => limits(5),
+      kill: async (input: { parentSessionID: string; targetAgent?: string; targetSessionID?: string }) => {
+        killed.push(input)
+        return { ok: true as const, value: { killed: 1 } }
+      },
+    },
+  }
+  await openAgentControl(fake.context, live as unknown as Parameters<typeof openAgentControl>[1])
+  expect(killed).toHaveLength(1)
+  expect(killed[0]).toMatchObject({ parentSessionID: "ses_root", targetSessionID: "ses_a" })
+  expect(killed[0]?.targetAgent).toBeUndefined()
+})
+
+test("agent tree refuses to kill a child that is already finished", async () => {
+  const base = context({
+    sessions: [
+      { id: "ses_root", title: "root" } as never,
+      { id: "ses_a", parentID: "ses_root", title: "first explore", agent: "explore" } as never,
+    ],
+  })
+  const target = { sessionID: "ses_a", agent: "explore", title: "first explore", state: "interrupted" as const, killed: true }
+  const fake = fakeContext({ base, selects: [target] })
+  let calls = 0
+  const live = {
+    mesh: {
+      ...meshLive({ killed: ["ses_a"] }),
+      root: () => undefined,
+      ensure: async () => {},
+      refreshLimits: async () => {},
+      limits: () => limits(5),
+      kill: async () => {
+        calls += 1
+        return { ok: true as const, value: { killed: 1 } }
+      },
+    },
+  }
+  await openAgentControl(fake.context, live as unknown as Parameters<typeof openAgentControl>[1])
+  expect(calls).toBe(0)
+  expect(fake.toasts.at(-1)?.message).toContain("already finished")
+})
+
 test("steer and kill report a missing mesh RPC instead of pretending success", async () => {
   const node = meshNode({ sessionID: "ses_child", agent: "coder", state: "running" })
   const fake = fakeContext({ prompts: ["instruction"], confirms: [true] })
@@ -172,9 +230,10 @@ test("steer and kill report a missing mesh RPC instead of pretending success", a
       kill: async () => ({ ok: false as const, unavailable: true, message: "rpc.method_not_found" }),
     },
   }
-  await steerSubagent(fake.context, live as unknown as Parameters<typeof steerSubagent>[1], "ses_root", node)
+  const target = { ...node, killed: false }
+  await steerSubagent(fake.context, live as unknown as Parameters<typeof steerSubagent>[1], "ses_root", target)
   expect(fake.toasts.at(-1)?.variant).toBe("warning")
-  await killSubagent(fake.context, live as unknown as Parameters<typeof killSubagent>[1], "ses_root", node)
+  await killSubagent(fake.context, live as unknown as Parameters<typeof killSubagent>[1], "ses_root", target)
   expect(fake.toasts.at(-1)?.variant).toBe("warning")
 })
 

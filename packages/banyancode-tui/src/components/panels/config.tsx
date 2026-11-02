@@ -368,24 +368,37 @@ function AgentCard(props: {
         {summarize(props.agent.description)}
       </text>
       <box flexDirection="row" gap={1} alignItems="center">
-        <text fg={props.theme.muted}>Model</text>
+        <text fg={props.theme.muted} flexShrink={0} wrapMode="none">
+          Model
+        </text>
         <text
           fg={props.cursor && props.action === props.actionOffset ? props.theme.primary : props.theme.info}
           onMouseUp={props.onModel}
+          flexShrink={1}
+          wrapMode="none"
+          truncate
         >
           {props.modelLabel} ▾
         </text>
-        <text fg={props.theme.muted}>· Thinking</text>
+        <text fg={props.theme.muted} flexShrink={0} wrapMode="none">
+          · Thinking
+        </text>
         <text
           fg={props.cursor && props.action === props.actionOffset + 1 ? props.theme.primary : props.theme.info}
           onMouseUp={props.onThinking}
+          flexShrink={0}
+          wrapMode="none"
         >
           {props.thinkingLabel} ▾
         </text>
-        <text fg={props.theme.muted}>· Prompt</text>
+        <text fg={props.theme.muted} flexShrink={0} wrapMode="none">
+          · Prompt
+        </text>
         <text
           fg={props.cursor && props.action === props.actionOffset + 2 ? props.theme.primary : props.theme.info}
           onMouseUp={props.onPrompt}
+          flexShrink={0}
+          wrapMode="none"
         >
           edit system prompt
         </text>

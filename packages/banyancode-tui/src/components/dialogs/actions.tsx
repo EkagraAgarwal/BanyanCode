@@ -52,9 +52,18 @@ function flatten(nodes: readonly MeshNode[], out: MeshNode[] = []): MeshNode[] {
   return out
 }
 
-function subagentLabel(node: MeshNode): string {
+/** A dialog row built from the session list, so killed children stay visible as finished. */
+export interface AgentTarget {
+  readonly sessionID: string
+  readonly agent?: string
+  readonly title?: string
+  readonly state: MeshNode["state"]
+  readonly killed: boolean
+}
+
+function subagentLabel(node: AgentTarget): string {
   const name = node.agent ?? node.title ?? node.sessionID
-  return `${name} · ${node.state}`
+  return `${name} · ${node.killed ? "killed" : node.state}`
 }
 
 /**
@@ -150,15 +159,36 @@ export async function openAgentControl(context: Context, live: Live): Promise<vo
     return
   }
   await Promise.all([live.mesh.ensure(root), live.mesh.refreshLimits()])
+  const killed = live.mesh.killed()
   const tree = live.mesh.root(root)
-  const nodes = tree ? flatten(tree.children) : []
+  const meshByID = new Map((tree ? flatten(tree.children) : []).map((node) => [node.sessionID, node]))
+  const nodes: AgentTarget[] = context.data.session
+    .family(root)
+    .filter((sessionID) => sessionID !== root)
+    .flatMap((sessionID) => {
+      const session = context.data.session.get(sessionID)
+      if (session === undefined) return []
+      const mesh = meshByID.get(sessionID)
+      const state: MeshNode["state"] = killed.has(sessionID)
+        ? "interrupted"
+        : (mesh?.state ?? (context.data.session.status(sessionID) === "running" ? "running" : "idle"))
+      return [
+        {
+          sessionID,
+          ...(session.agent === undefined ? {} : { agent: session.agent }),
+          ...(session.title === undefined ? {} : { title: session.title }),
+          state,
+          killed: killed.has(sessionID),
+        },
+      ]
+    })
   if (nodes.length === 0) {
     notify("No subagents are running for this session", "info")
     return
   }
 
   const current = live.mesh.limits()
-  const selected = await context.ui.dialog.select<MeshNode>({
+  const selected = await context.ui.dialog.select<AgentTarget>({
     title: `Agent tree (${nodes.length} subagent${nodes.length === 1 ? "" : "s"} · max ${current?.maxSubagents ?? DEFAULT_MAX_SUBAGENTS})`,
     placeholder: "Select a subagent",
     options: nodes.map((node) => ({
@@ -184,6 +214,10 @@ export async function openAgentControl(context: Context, live: Live): Promise<vo
     ],
   })
   if (selected === undefined) return
+  if (selected.killed) {
+    notify(`${subagentLabel(selected)} is already finished`, "info")
+    return
+  }
   const action = await context.ui.dialog.select<"steer" | "kill">({
     title: subagentLabel(selected),
     options: [
@@ -199,9 +233,13 @@ export async function steerSubagent(
   context: Context,
   live: Live,
   parentSessionID: string,
-  node: MeshNode,
+  node: AgentTarget,
 ): Promise<void> {
   const notify = notifier(context)
+  if (node.killed) {
+    notify(`${subagentLabel(node)} is already finished`, "info")
+    return
+  }
   const instruction = await context.ui.dialog.prompt({
     title: `Steer: ${node.agent ?? node.title ?? node.sessionID}`,
     description: node.sessionID,
@@ -220,9 +258,13 @@ export async function killSubagent(
   context: Context,
   live: Live,
   parentSessionID: string,
-  node: MeshNode,
+  node: AgentTarget,
 ): Promise<void> {
   const notify = notifier(context)
+  if (node.killed) {
+    notify(`${subagentLabel(node)} is already finished`, "info")
+    return
+  }
   const confirmed = await context.ui.dialog.confirm({
     title: "Kill subagent",
     message: `Kill ${node.agent ?? node.title ?? node.sessionID}? This cannot be undone.`,
@@ -231,7 +273,7 @@ export async function killSubagent(
   if (confirmed !== true) return
   const result = await live.mesh.kill({
     parentSessionID,
-    targetAgent: node.agent ?? node.sessionID,
+    targetSessionID: node.sessionID,
     reason: "User requested kill",
   })
   report(notify, result, `Kill sent to ${node.sessionID}`)

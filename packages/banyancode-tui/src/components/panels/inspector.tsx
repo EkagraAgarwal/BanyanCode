@@ -27,6 +27,11 @@ function panelName(name: string): PanelName {
   return (Object.values(PANEL) as string[]).includes(name) ? (name as PanelName) : PANEL.details
 }
 
+/** Views with their own list scrollbox: the panel must not draw a second bar. */
+export function panelScrollsInternally(name: PanelName): boolean {
+  return name === PANEL.agents || name === PANEL.config || name === PANEL.sessions
+}
+
 function content(props: {
   readonly context: Context
   readonly live: Live
@@ -69,6 +74,7 @@ export function InspectorPanel(props: {
 }) {
   const theme = () => palette(props.context.theme)
   const active = createMemo(() => panelName(props.panel.name))
+  const innerScroll = createMemo(() => panelScrollsInternally(active()))
   const stacked = createMemo(() => props.panel.width < STACK_THRESHOLD)
   const focus = createPanelFocus(Math.max(0, RAIL.findIndex((item) => item.name === active())))
   let scroll: ScrollBoxRenderable | undefined
@@ -133,6 +139,12 @@ export function InspectorPanel(props: {
         group: "Panel",
         run: () => focus.setZone(focus.zone() === "rail" ? "content" : "rail"),
       },
+      {
+        bind: "f",
+        title: "Toggle fullscreen",
+        group: "Panel",
+        run: () => props.panel.toggleFullscreen(),
+      },
     ],
   }))
 
@@ -185,10 +197,10 @@ export function InspectorPanel(props: {
                   <text fg={theme().faint}>{"↑↓ select · → action · enter · ← rail"}</text>
                 </Show>
                 <text fg={theme().muted} onMouseUp={props.panel.toggleFullscreen}>
-                  {props.panel.presentation === "fullscreen" ? "restore" : "fullscreen"}
+                  {props.panel.presentation === "fullscreen" ? "f restore" : "f fullscreen"}
                 </text>
                 <text fg={theme().muted} onMouseUp={props.panel.close}>
-                  close
+                  esc close
                 </text>
               </box>
             </box>
@@ -196,7 +208,7 @@ export function InspectorPanel(props: {
               id="banyancode.panel.content"
               ref={(element: ScrollBoxRenderable) => (scroll = element)}
               flexGrow={1}
-              verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}
+              verticalScrollbarOptions={{ visible: !innerScroll(), paddingLeft: 1 }}
             >
               <box flexDirection="column" paddingTop={1}>
                 {content({
@@ -226,6 +238,7 @@ export function InspectorPage(props: {
     typeof props.data?.view === "string" ? panelName(props.data.view) : PANEL.details,
   )
   const focus = createPanelFocus(Math.max(0, RAIL.findIndex((item) => item.name === active())))
+  const innerScroll = createMemo(() => panelScrollsInternally(active()))
   let scroll: ScrollBoxRenderable | undefined
 
   usePanelKeyMode(props.context, () => true)
@@ -264,7 +277,7 @@ export function InspectorPage(props: {
           id="banyancode.panel.page"
           ref={(element: ScrollBoxRenderable) => (scroll = element)}
           flexGrow={1}
-          verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}
+          verticalScrollbarOptions={{ visible: !innerScroll(), paddingLeft: 1 }}
         >
           <box paddingLeft={2} paddingRight={2} paddingTop={1}>
             <Show

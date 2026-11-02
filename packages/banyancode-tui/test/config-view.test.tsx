@@ -70,6 +70,41 @@ test("config view lists the orchestrator and subagents with overrides", async ()
   }
 })
 
+test("a long model id keeps the model row on one line", async () => {
+  const longModel = "provider/this-model-id-is-deliberately-long-enough-to-overflow-the-row"
+  const longConfig = {
+    banyancode_thinking_default: "medium",
+    agent: {
+      coder: { model: longModel, thinking: "high" },
+    },
+  } as unknown as BanyanConfig
+  const app = await mount(
+    () => (
+      <ConfigView
+        context={context({
+          agents: [
+            agent({ name: "build", mode: "primary" }),
+            agent({ name: "coder", mode: "subagent" }),
+          ],
+          models,
+        })}
+        live={live({ core: { config: longConfig } })}
+      />
+    ),
+    { width: 90, height: 20 },
+  )
+
+  try {
+    const lines = app.captureCharFrame().split("\n")
+    const modelRow = lines.find((line) => line.includes("Model") && line.includes("Thinking"))
+    expect(modelRow).toBeDefined()
+    expect(modelRow).toContain("Prompt")
+    expect(modelRow).not.toContain(longModel)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("config view shows the unavailable hint when config RPC is missing", async () => {
   const app = await mount(
     () => (

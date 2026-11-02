@@ -91,7 +91,10 @@ export interface MeshService {
   }) => Effect.Effect<{ readonly delivered: number }, StorageError>
   readonly kill: (input: {
     readonly parentSessionID: string
-    readonly targetAgent: string
+    /** Kills every descendant of this agent (v1 mailbox behavior). */
+    readonly targetAgent?: string
+    /** Kills exactly this session; the dialog uses this so one child does not take its siblings. */
+    readonly targetSessionID?: string
     readonly reason: string
   }) => Effect.Effect<{ readonly killed: number }, StorageError>
   readonly queueReview: (input: {
@@ -112,7 +115,12 @@ export const makeMesh = (deps: MeshDeps): Effect.Effect<MeshService> =>
     const reviews = makeReviewsRepo(deps.storage)
     const limitsState = yield* Ref.make<LimitsState>({})
     const live = yield* Ref.make<ReadonlyMap<string, LiveState>>(new Map())
-    const killed = yield* Ref.make<ReadonlySet<string>>(new Set())
+    // Kills are durable `kill` messages, so a restarted plugin still reports the
+    // child as finished instead of resurrecting it from the session list.
+    const persistedKilled = yield* messages
+      .killedSessions()
+      .pipe(Effect.catchCause(() => Effect.succeed([] as readonly string[])))
+    const killed = yield* Ref.make<ReadonlySet<string>>(new Set(persistedKilled))
     const modelForAgent = deps.modelForAgent ?? (() => Effect.succeed(undefined))
 
     const limits = () =>
@@ -178,7 +186,7 @@ export const makeMesh = (deps: MeshDeps): Effect.Effect<MeshService> =>
             : input.scope === "session"
               ? input.sessionID
               : (rootOf(map, input.sessionID) ?? input.sessionID)
-        return buildStatus(map, states, target)
+        return { ...buildStatus(map, states, target), killed: [...(yield* Ref.get(killed))] }
       })
 
     const checkin: MeshService["checkin"] = (sessionID) =>
@@ -239,9 +247,19 @@ export const makeMesh = (deps: MeshDeps): Effect.Effect<MeshService> =>
         return { planID }
       })
 
-    const targetSessions = (root: string, agent: string) =>
+    const targetSessions = (
+      root: string,
+      parentSessionID: string,
+      target: { readonly agent?: string; readonly sessionID?: string },
+    ) =>
       snapshotMap().pipe(
-        Effect.map((map) => descendantsOf(map, root).filter((session) => session.agent === agent)),
+        Effect.map((map) =>
+          descendantsOf(map, root).filter(
+            (session) =>
+              session.sessionID !== parentSessionID &&
+              (target.sessionID === undefined ? session.agent === target.agent : session.sessionID === target.sessionID),
+          ),
+        ),
       )
 
     const steer: MeshService["steer"] = (input) =>
@@ -259,9 +277,7 @@ export const makeMesh = (deps: MeshDeps): Effect.Effect<MeshService> =>
           createdAt,
           deliveredAt: createdAt,
         })
-        const targets = (yield* targetSessions(root, input.targetAgent)).filter(
-          (session) => session.sessionID !== input.parentSessionID,
-        )
+        const targets = yield* targetSessions(root, input.parentSessionID, { agent: input.targetAgent })
         yield* Effect.forEach(
           targets,
           (target) =>
@@ -281,19 +297,30 @@ export const makeMesh = (deps: MeshDeps): Effect.Effect<MeshService> =>
       Effect.gen(function* () {
         const root = yield* resolveRoot(input.parentSessionID)
         const createdAt = now()
-        yield* messages.put({
-          id: uuid(),
-          parentSessionID: root,
-          fromSession: input.parentSessionID,
-          fromAgent: "orchestrator",
-          toAgent: input.targetAgent,
-          kind: "kill",
-          payload: { reason: input.reason },
-          createdAt,
-          deliveredAt: createdAt,
+        const targets = yield* targetSessions(root, input.parentSessionID, {
+          ...(input.targetAgent === undefined ? {} : { agent: input.targetAgent }),
+          ...(input.targetSessionID === undefined ? {} : { sessionID: input.targetSessionID }),
         })
-        const targets = (yield* targetSessions(root, input.targetAgent)).filter(
-          (session) => session.sessionID !== input.parentSessionID,
+        // One durable kill row per target keeps the killed set after a restart.
+        // The agent-name path also records the mailbox signal when nothing matched.
+        const messageTargets: ReadonlyArray<MeshSessionSnapshot | undefined> =
+          targets.length > 0 ? targets : input.targetSessionID === undefined ? [undefined] : []
+        yield* Effect.forEach(
+          messageTargets,
+          (target) =>
+            messages.put({
+              id: uuid(),
+              parentSessionID: root,
+              fromSession: input.parentSessionID,
+              fromAgent: "orchestrator",
+              ...(target === undefined ? {} : { toSession: target.sessionID }),
+              toAgent: target?.agent ?? input.targetAgent ?? input.targetSessionID ?? "subagent",
+              kind: "kill",
+              payload: { reason: input.reason },
+              createdAt,
+              deliveredAt: createdAt,
+            }),
+          { discard: true },
         )
         yield* Ref.update(killed, (current) => {
           const next = new Set(current)

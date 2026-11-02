@@ -253,6 +253,7 @@ export function meshLive(input: {
   readonly root?: MeshNode
   readonly maxSubagents?: number
   readonly swarmMode?: boolean
+  readonly killed?: readonly string[]
 } = {}): MeshLive {
   const limits =
     input.maxSubagents === undefined && input.swarmMode === undefined
@@ -271,6 +272,7 @@ export function meshLive(input: {
     ensure: noop,
     limits: accessor(limits),
     swarmMode: accessor(input.swarmMode),
+    killed: accessor(new Set(input.killed ?? [])),
     refreshLimits: noop,
     setLimits: async (next) => ({
       ok: true,

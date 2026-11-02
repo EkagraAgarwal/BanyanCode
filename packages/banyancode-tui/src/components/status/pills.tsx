@@ -22,7 +22,7 @@ export interface StatusPill {
 const DAY_MS = 24 * 60 * 60 * 1000
 
 /** Columns the host needs for its own footer hints and the location label. */
-export const HOST_FOOTER_RESERVE = 72
+export const HOST_FOOTER_RESERVE = 56
 /** Below this width the plugin yields the footer completely. */
 export const PLUGIN_FOOTER_MIN_WIDTH = HOST_FOOTER_RESERVE
 

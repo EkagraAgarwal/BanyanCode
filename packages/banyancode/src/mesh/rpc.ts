@@ -47,6 +47,7 @@ export const MeshNodeSchema: Schema.Codec<MeshNode> = Schema.Struct({
 export const MeshStatusOutput = Schema.Struct({
   roots: Schema.Array(MeshNodeSchema),
   generatedAt: Schema.Number,
+  killed: Schema.optional(Schema.Array(Schema.String)),
 })
 
 export const LimitsOutput = Schema.Struct({
@@ -87,7 +88,10 @@ export const SteerInput = Schema.Struct({
 
 export const KillInput = Schema.Struct({
   parentSessionID: Schema.String,
-  targetAgent: Schema.String,
+  /** Kills every descendant of this agent. */
+  targetAgent: Schema.optional(Schema.String),
+  /** Kills exactly this session; wins over `targetAgent` when both are present. */
+  targetSessionID: Schema.optional(Schema.String),
   reason: Schema.String.check(Schema.isMaxLength(2_000)),
 })
 
@@ -127,7 +131,11 @@ export const Definition = Rpc.define({
   },
   events: {
     "status.updated": {
-      schema: Schema.Struct({ rootSessionID: Schema.String, tree: MeshNodeSchema }),
+      schema: Schema.Struct({
+        rootSessionID: Schema.String,
+        tree: MeshNodeSchema,
+        killed: Schema.optional(Schema.Array(Schema.String)),
+      }),
     },
   },
 })

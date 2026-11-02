@@ -141,9 +141,10 @@ test("status pills never render a zero count or crowd a narrow footer", async ()
 
 test("pill width budget reserves the host footer and packs in priority order", () => {
   expect(pillBudget(44)).toBe(0)
-  expect(pillBudget(72)).toBe(0)
-  expect(pillBudget(100)).toBe(28)
-  expect(pillBudget(160)).toBe(88)
+  expect(pillBudget(72)).toBe(16)
+  expect(pillBudget(80)).toBe(24)
+  expect(pillBudget(100)).toBe(44)
+  expect(pillBudget(160)).toBe(104)
   const pills = statusPills({
     activeAgents: 2,
     graph: { label: "Graph: built", severity: "success" },
