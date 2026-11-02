@@ -1,5 +1,5 @@
 import { RGBA } from "@opentui/core"
-import { fadeIn, GROWTH_END } from "./growth"
+import { fadeIn } from "./growth"
 
 /** The mockup's 5x7 bitmap font, packed into four rows of half blocks. */
 const FONT: Record<string, readonly string[]> = {
@@ -22,10 +22,11 @@ const ADVANCE = 6
 const REVEAL_START = 3.6
 const REVEAL_STEP = 0.07
 const REVEAL_FADE = 0.35
-const HIGHLIGHT_START = 4.6
-const HIGHLIGHT_FROM = -12
-const HIGHLIGHT_SPEED = 40
+const HIGHLIGHT_FROM = -20
+const HIGHLIGHT_SPEED = 22
 const HIGHLIGHT_SIGMA = 5
+/** The highlight wraps once it clears the word plus `HIGHLIGHT_FROM` of run-in on both sides. */
+const HIGHLIGHT_SPAN = WORDMARK.length * 6 + 80
 
 const FULL = 0x2588
 const UPPER = 0x2580
@@ -91,23 +92,24 @@ const mix = (out: RGBA, from: RGBA, to: RGBA, amount: number) => {
 }
 
 /**
- * The wordmark at `t`: letters fade in left to right from the background, over a
- * left-to-right `bright`→`leaf` gradient, with one gaussian highlight that crosses
- * the word between 4.6s and `GROWTH_END` and leaves no residue.
+ * The wordmark at a growth `elapsed` and loop `ambient` time: letters fade in left
+ * to right from the background, over a left-to-right `bright`→`leaf` gradient,
+ * with one gaussian highlight that loops across the word for as long as the
+ * ambient clock runs.
  */
 export function wordmarkFrame(
-  t: number,
+  elapsed: number,
+  ambient: number,
   palette: WordmarkPalette,
   frame: WordmarkFrame = createWordmarkFrame(),
 ): WordmarkFrame {
-  const head = HIGHLIGHT_FROM + (t - HIGHLIGHT_START) * HIGHLIGHT_SPEED
-  const lit = t >= HIGHLIGHT_START && t < GROWTH_END
+  const head = ((ambient * HIGHLIGHT_SPEED) % HIGHLIGHT_SPAN) + HIGHLIGHT_FROM
   WORDMARK_CELLS.forEach((cell, index) => {
-    const opacity = fadeIn(t, cell.reveal, REVEAL_FADE)
+    const opacity = fadeIn(elapsed, cell.reveal, REVEAL_FADE)
     frame.visible[index] = opacity > 0 ? 1 : 0
     if (opacity <= 0) return
     const base = mix(baseScratch, palette.bright, palette.leaf, cell.shade / (WORDMARK.length * ADVANCE))
-    const glow = lit ? Math.exp(-((cell.shade - head) ** 2) / (2 * HIGHLIGHT_SIGMA ** 2)) : 0
+    const glow = Math.exp(-((cell.shade - head) ** 2) / (2 * HIGHLIGHT_SIGMA ** 2))
     mix(frame.colors[index]!, palette.background, mix(toneScratch, base, palette.highlight, glow), opacity)
   })
   return frame

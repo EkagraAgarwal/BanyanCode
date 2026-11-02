@@ -18,6 +18,13 @@ export function homeFooterVisibility(width: number) {
   }
 }
 
+/**
+ * The prompt hints are the first thing the footer row drops: with a typical
+ * directory, the pills and the version they need this much width to coexist.
+ * Below it the directory gets the room instead of being squeezed to nothing.
+ */
+const HINTS_MIN_WIDTH = 120
+
 function Mcp(props: { context: Plugin.Context }) {
   const dimensions = useTerminalDimensions()
   const visibility = createMemo(() => homeFooterVisibility(dimensions().width))
@@ -159,7 +166,7 @@ function View(props: { context: Plugin.Context }) {
         </Slot>
         {/* Home's prompt carries no footer row of its own, so its hints live
             here when the row has room for them. */}
-        <Show when={dimensions().width >= 100}>
+        <Show when={dimensions().width >= HINTS_MIN_WIDTH}>
           <InteractivityProvider enabled={true}>
             <PromptFooter context={props.context} mode="normal" showDetails />
           </InteractivityProvider>

@@ -1,10 +1,29 @@
 import { expect, test } from "bun:test"
+import { mkdir, mkdtemp } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import type { SessionInfo } from "@opencode/client"
+import type { Config } from "../../src/config"
 import { createAppFixture } from "../fixture/app"
-import { directory, json } from "../fixture/tui-client"
+import { directory, json, type FetchHandler } from "../fixture/tui-client"
 
 // captureCharFrame ends with a newline; rows() drops the empty tail so at(-1) is the last rendered row.
 const rows = (frame: string) => frame.replace(/\n$/, "").split("\n")
+
+/** Seeds persisted session tabs so Home renders under a real tab strip. */
+async function tabsState() {
+  const state = await mkdtemp(path.join(tmpdir(), "banyan-home-tabs-"))
+  const tui = path.join(state, "test", "tui")
+  await mkdir(tui, { recursive: true })
+  await Bun.write(
+    path.join(tui, "tabs.json"),
+    JSON.stringify({
+      global: { tabs: sessions.map((item) => ({ sessionID: item.id, title: item.title })), unread: {} },
+      cwd: {},
+    }),
+  )
+  return state
+}
 
 const resumeSession = (id: string, title: string, updated: number): SessionInfo => ({
   id,
@@ -30,6 +49,15 @@ const resumeFetch = (url: URL) => {
   return undefined
 }
 
+/** Resume plus what the tab strip asks each open tab for. */
+const tabFetch = (url: URL) => {
+  const base = resumeFetch(url)
+  if (base) return base
+  if (/^\/api\/session\/[^/]+\/message$/.test(url.pathname)) return json({ data: [], cursor: {} })
+  if (/^\/api\/session\/[^/]+\/inbox$/.test(url.pathname)) return json({ data: [] })
+  return undefined
+}
+
 const sessionFetch = (url: URL) => {
   if (url.pathname === "/api/session/ses_test") return json({ data: resumeSession("ses_test", "Session", 3_000) })
   if (url.pathname === "/api/session/ses_test/message") return json({ data: [], cursor: {} })
@@ -52,7 +80,14 @@ const promptBlock = (frame: string) => {
 }
 const indexOf = (lines: readonly string[], needle: string) => lines.findIndex((line) => line.includes(needle))
 
-const home = async (input: { width: number; height: number; fetch?: typeof resumeFetch; args?: { sessionID: string } }) => {
+const home = async (input: {
+  width: number
+  height: number
+  fetch?: FetchHandler
+  args?: { sessionID: string }
+  config?: Config.Info
+  state?: string
+}) => {
   const setup = await createAppFixture(input)
   await setup.ready
   await setup.waitFor(() => setup.captureCharFrame().trim().length > 0, { maxPasses: 400 })
@@ -277,3 +312,230 @@ test("a session's prompt keeps its location row", async () => {
     await setup[Symbol.asyncDispose]()
   }
 }, 60000)
+
+/**
+ * The host owns rows Home does not: a tab strip at the top, the devtools bar at
+ * the bottom. Neither may push the resume block over the footer.
+ */
+const assertNoOverlap = (frame: string, height: number, shown: boolean) => {
+  const lines = rows(frame)
+  expect(lines).toHaveLength(height)
+  const footer = lines.findIndex((line) => line.includes("packages/tui"))
+  expect(footer).toBeGreaterThan(0)
+  const resume = lines.findIndex((line) => line.trim() === "RESUME")
+  expect(resume >= 0).toBe(shown)
+  if (resume < 0) {
+    // Dropped as a whole, never half drawn.
+    expect(frame).not.toContain("1 Newest task")
+    return
+  }
+  // The whole block: header plus three rows, all above the footer.
+  expect(resume + 4).toBeLessThanOrEqual(footer)
+  expect(lines[resume + 1]).toContain("1 Newest task")
+  expect(lines[resume + 2]).toContain("2 Middle task")
+  expect(lines[resume + 3]).toContain("3 Oldest task")
+}
+
+const CHROME_SIZES: ReadonlyArray<readonly [number, number, boolean]> = [
+  // Chrome costs the list, never the tree: 120x40 keeps the 29-row hero and
+  // drops RESUME, 120x42 still fits both, and 60x12 has no room left for either.
+  [120, 40, false],
+  [120, 42, true],
+  [60, 12, false],
+  [200, 55, true],
+]
+
+/** The hero's tree rows: every row from the first braille row down to the rule. */
+const treeRows = (lines: readonly string[]) => {
+  const rule = lines.findIndex((line) => line.includes("─"))
+  const first = lines.findIndex((line) => /[\u2800-\u28ff]/.test(line))
+  return rule < 0 || first < 0 || first > rule ? 0 : rule - first
+}
+
+/** Holds the session list back so the pre- and post-fetch layouts are both checkable. */
+const gated = (fetch: FetchHandler) => {
+  const gate = Promise.withResolvers<void>()
+  const handler: FetchHandler = async (url, request) => {
+    if (url.pathname === "/api/session") await gate.promise
+    return fetch(url, request)
+  }
+  return { gate, fetch: handler }
+}
+
+const settle = async (setup: Awaited<ReturnType<typeof home>>) => {
+  await setup.waitFor(() => setup.captureCharFrame().includes("packages/tui"), { maxPasses: 400 })
+  await Bun.sleep(100)
+  await setup.renderOnce()
+}
+
+test.each(CHROME_SIZES)("a tab strip never overlaps the footer or clips the resume block at %sx%s", async (width, height, shown) => {
+  const { gate, fetch } = gated(tabFetch)
+  const setup = await home({
+    width,
+    height,
+    fetch,
+    state: await tabsState(),
+    config: { animations: false, tabs: { scope: "global" } },
+  })
+  try {
+    await settle(setup)
+    gate.resolve()
+    await Bun.sleep(100)
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    // The strip really is on screen, above everything else.
+    expect(rows(frame)[0]).toContain("Newest")
+    assertNoOverlap(frame, height, shown)
+  } finally {
+    await setup[Symbol.asyncDispose]()
+  }
+}, 60000)
+
+test.each(CHROME_SIZES)("the devtools bar never overlaps the footer or clips the resume block at %sx%s", async (width, height, shown) => {
+  const { gate, fetch } = gated(resumeFetch)
+  const setup = await home({
+    width,
+    height,
+    fetch,
+    config: { animations: false, debug: { devtools: true } },
+  })
+  try {
+    await settle(setup)
+    gate.resolve()
+    await Bun.sleep(100)
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    // The bar really is on screen, below the footer.
+    expect(rows(frame).at(-1)).toContain("Server")
+    assertNoOverlap(frame, height, shown)
+  } finally {
+    await setup[Symbol.asyncDispose]()
+  }
+}, 60000)
+
+/** Home under real host chrome: a tab strip, the devtools bar, or both. */
+const chromeHome = async (input: { height: number; tabs: boolean; devtools: boolean; fetch: FetchHandler }) => {
+  const { gate, fetch } = gated(input.fetch)
+  const setup = await home({
+    width: 120,
+    height: input.height,
+    fetch,
+    state: input.tabs ? await tabsState() : undefined,
+    config: {
+      animations: false,
+      debug: { devtools: input.devtools },
+      ...(input.tabs ? { tabs: { scope: "global" as const } } : {}),
+    },
+  })
+  await settle(setup)
+  gate.resolve()
+  await Bun.sleep(100)
+  await setup.renderOnce()
+  return setup
+}
+
+test("a tab strip at 46 rows drops the hero to the short tier so the list still fits", async () => {
+  const setup = await chromeHome({ height: 46, tabs: true, devtools: false, fetch: tabFetch })
+  try {
+    const frame = setup.captureCharFrame()
+    expect(rows(frame)[0]).toContain("Newest")
+    // Home has 45 rows: the tall tier also wants room for the list, the short one fits.
+    expect(treeRows(rows(frame))).toBe(23)
+    assertNoOverlap(frame, 46, true)
+    // The measured height does not depend on the hero, so the frame is stable.
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).toBe(frame)
+  } finally {
+    await setup[Symbol.asyncDispose]()
+  }
+}, 60000)
+
+test("at 47 rows the tall tree still fits under the strip", async () => {
+  const setup = await chromeHome({ height: 47, tabs: true, devtools: false, fetch: tabFetch })
+  try {
+    const frame = setup.captureCharFrame()
+    expect(rows(frame)[0]).toContain("Newest")
+    expect(treeRows(rows(frame))).toBe(27)
+    assertNoOverlap(frame, 47, true)
+  } finally {
+    await setup[Symbol.asyncDispose]()
+  }
+}, 60000)
+
+test("a strip and the devtools bar keep the short tier and the list at 46 and 47", async () => {
+  for (const height of [46, 47]) {
+    const setup = await chromeHome({ height, tabs: true, devtools: true, fetch: tabFetch })
+    try {
+      const frame = setup.captureCharFrame()
+      // Two chrome rows leave Home 44/45: the tall tier is out of reach, the short one is not.
+      expect(treeRows(rows(frame))).toBe(23)
+      assertNoOverlap(frame, height, true)
+    } finally {
+      await setup[Symbol.asyncDispose]()
+    }
+  }
+}, 120000)
+
+test("at 120x40 the tree keeps its tier and the list is the thing that goes", async () => {
+  // One chrome row: Home has 39, so 29 + 6 + 4 + 1 no longer fits and RESUME drops.
+  for (const [tabs, devtools, resume] of [
+    [true, false, false],
+    [true, true, false],
+  ] as const) {
+    const setup = await chromeHome({ height: 40, tabs, devtools, fetch: tabFetch })
+    try {
+      const frame = setup.captureCharFrame()
+      expect(rows(frame)[0]).toContain("Newest")
+      expect(treeRows(rows(frame))).toBe(23)
+      expect(frame.includes("RESUME")).toBe(resume)
+      // Nothing overlaps the footer and the prompt is whole.
+      assertNoOverlap(frame, 40, resume)
+      expect(promptTop(rows(frame))).toBeGreaterThan(0)
+      expect(promptBottom(rows(frame))).toBeGreaterThan(promptTop(rows(frame)))
+    } finally {
+      await setup[Symbol.asyncDispose]()
+    }
+  }
+}, 120000)
+
+/**
+ * A directory long enough that it only survives the footer row if the hints
+ * give way first.
+ */
+const DEEP_DIRECTORY = "/home/somebody/workspace/deep/path/for/a/project-calls-project"
+
+const deepFetch: FetchHandler = (url) => {
+  if (url.pathname === "/api/location")
+    return json({
+      directory: DEEP_DIRECTORY,
+      project: { id: "proj_test", directory: DEEP_DIRECTORY, canonical: DEEP_DIRECTORY },
+    })
+  if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
+  return undefined
+}
+
+test("the footer drops the prompt hints before it squeezes the directory", async () => {
+  for (const [width, hints] of [
+    [100, false],
+    [80, false],
+    [120, true],
+  ] as const) {
+    const setup = await home({
+      width,
+      height: 30,
+      fetch: deepFetch,
+      config: { animations: false, debug: { devtools: true } },
+    })
+    try {
+      await setup.ready
+      await setup.waitFor(() => setup.captureCharFrame().includes("project-calls-project"), { maxPasses: 400 })
+      const footer = rows(setup.captureCharFrame()).find((line) => line.includes("project-calls-project")) ?? ""
+      // The whole directory survives, not just the basename, and the version stays.
+      expect(footer).toContain(DEEP_DIRECTORY)
+      expect(footer).toContain("test")
+      expect(footer.includes("shift+tab agents")).toBe(hints)
+    } finally {
+      await setup[Symbol.asyncDispose]()
+    }
+  }
+}, 120000)

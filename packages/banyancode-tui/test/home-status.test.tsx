@@ -59,3 +59,37 @@ test("keeps the branch visible when the directory has to truncate", async () => 
     app.renderer.destroy()
   }
 })
+
+/** Mounts the status block beside a fixed-width neighbour, as the real footer row does. */
+const renderBeside = async (ctx: Context, width: number, neighbour: number) => {
+  const app = await mount(
+    () => (
+      <box flexDirection="row" width={width} height={1}>
+        <HomeStatus context={ctx} />
+        <box width={neighbour} flexShrink={0} />
+      </box>
+    ),
+    { width, height: 1 },
+  )
+  await app.renderOnce()
+  return app
+}
+
+test("never loses the directory's basename when the row is tight", async () => {
+  const base = context({ directory: "/home/someone/very/long/project/path/project" })
+  for (const [width, neighbour] of [
+    [100, 78],
+    [80, 58],
+  ] as const) {
+    const app = await renderBeside(base, width, neighbour)
+    try {
+      const line = app.captureCharFrame().split("\n")[0] ?? ""
+      // The prefix gives way; the basename and the branch stay.
+      expect(line).toContain("/project")
+      expect(line).toContain("v2-base")
+      expect(line.trimEnd().length).toBeLessThanOrEqual(width)
+    } finally {
+      app.renderer.destroy()
+    }
+  }
+})

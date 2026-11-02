@@ -1,13 +1,13 @@
-/** @jsxImportSource @opentui/solid */
+﻿/** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
 import { RGBA, type KeyEvent } from "@opentui/core"
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing"
 import { render } from "@opentui/solid"
 import type { Context } from "@opencode/plugin/tui/context"
 import { Show, createSignal } from "solid-js"
-import { BanyanHero } from "../src/components/home/hero"
-import { GROWTH_END, createGrowth, type Growth } from "../src/components/home/growth"
-import { TREE_ROWS_AT_6, WORDMARK_ROWS_AT_6 } from "./fixture/home-keyframes"
+import { BanyanHero, heroRows } from "../src/components/home/hero"
+import { GROWTH_END, GROWTH_TICK_MS, createGrowth, type Growth } from "../src/components/home/growth"
+import { FINAL_TREE_23, FINAL_TREE_27, WORDMARK_ROWS_AT_6 } from "./fixture/home-keyframes"
 import { context, theme } from "./harness"
 
 const growthTheme = () =>
@@ -29,13 +29,17 @@ type Handle = ReturnType<typeof setInterval>
 function manualGrowth() {
   let time = 0
   let tick: (() => void) | undefined
+  let scheduled = 0
+  const delays: number[] = []
   return {
     growth: createGrowth({
       animations: () => true,
       now: () => time,
-      setInterval: ((fn: () => void) => {
+      setInterval: ((fn: () => void, delay: number) => {
+        scheduled += 1
+        delays.push(delay)
         tick = fn
-        return 1 as unknown as Handle
+        return scheduled as unknown as Handle
       }) as typeof setInterval,
       clearInterval: (() => {
         tick = undefined
@@ -48,6 +52,12 @@ function manualGrowth() {
     get pending() {
       return tick !== undefined
     },
+    get scheduled() {
+      return scheduled
+    },
+    get delays() {
+      return delays
+    },
   }
 }
 
@@ -58,6 +68,7 @@ async function mountHero(options: {
   headerRows?: number
   centered?: boolean
   marker?: boolean
+  homeHeight?: () => number
 }) {
   const setup = await createTestRenderer({ width: options.width, height: options.height, kittyKeyboard: true })
   const host = { ...context(), renderer: setup.renderer, theme: growthTheme() } as Context
@@ -67,7 +78,7 @@ async function mountHero(options: {
         <Show when={options.headerRows}>
           <box height={options.headerRows} flexShrink={0} />
         </Show>
-        <BanyanHero context={host} growth={options.growth} />
+        <BanyanHero context={host} growth={options.growth} height={options.homeHeight} />
         <Show when={options.marker}>
           <text fg={theme.text.base}>marker</text>
         </Show>
@@ -102,6 +113,36 @@ const TIERS: ReadonlyArray<readonly [number, number, "full" | "compact" | "plain
   [60, 12, "plain"],
   [60, 11, "none"],
 ]
+
+describe("heroRows", () => {
+  test("is the one source of truth for the hero's size", () => {
+    // The terminal decides the tier, as the mockup's thresholds say.
+    expect(heroRows(120, 40, 40)).toBe(29)
+    expect(heroRows(120, 45, 45)).toBe(29)
+    expect(heroRows(119, 40, 40)).toBe(4)
+    expect(heroRows(120, 39, 39)).toBe(4)
+    expect(heroRows(72, 18, 18)).toBe(4)
+    expect(heroRows(71, 18, 18)).toBe(1)
+    expect(heroRows(60, 11, 11)).toBe(0)
+
+    // Chrome never demotes the tree while the tree, prompt and footer still fit.
+    expect(heroRows(120, 40, 39)).toBe(29)
+    expect(heroRows(120, 40, 38)).toBe(29)
+    expect(heroRows(120, 40, 36)).toBe(29)
+    expect(heroRows(120, 40, 35)).toBe(4)
+
+    // The tall tier also has to leave room for the list under it.
+    expect(heroRows(120, 46, 46)).toBe(33)
+    expect(heroRows(120, 46, 45)).toBe(29)
+    expect(heroRows(120, 47, 46)).toBe(33)
+    expect(heroRows(200, 60, 60)).toBe(33)
+
+    // 120x40 stays exactly in budget: hero 29 + prompt 6 + resume 4 + footer 1.
+    expect(heroRows(120, 40, 40) + 6 + 4 + 1).toBe(40)
+    // 46 rows fit the tall hero, two gaps, the prompt, the list and the footer.
+    expect(heroRows(120, 46, 46) + 2 + 6 + 4 + 1).toBe(46)
+  })
+})
 
 describe("BanyanHero layout", () => {
   for (const [width, height, tier] of TIERS) {
@@ -158,19 +199,32 @@ describe("BanyanHero layout", () => {
     }
   })
 
-  test("draws the mockup's tree, rule and wordmark at their exact position", async () => {
-    const clock = manualGrowth()
-    const { setup } = await mountHero({ width: 168, height: 48, growth: clock.growth, headerRows: 1, centered: true })
+  test("draws the checked-in final frame, rule and wordmark at 23 tree rows", async () => {
+    const { setup } = await mountHero({ width: 120, height: 40, growth: finished(), headerRows: 1, centered: true })
     try {
-      clock.advance(6000)
-      await setup.renderOnce()
       const rows = rowsOf(setup)
-      TREE_ROWS_AT_6.forEach((expected, index) => {
-        expect(rows[14 + index]!.slice(34, 134).trimEnd()).toBe(expected)
+      FINAL_TREE_23.forEach((expected, index) => {
+        expect(rows[1 + index]!.slice(10, 110)).toBe(expected)
       })
-      expect(rows[24]!.slice(34, 134)).toBe("          " + "─".repeat(80) + "          ")
+      expect(rows[24]!.slice(10, 110)).toBe("          " + "─".repeat(80) + "          ")
       WORDMARK_ROWS_AT_6.forEach((expected, index) => {
-        expect(rows[26 + index]!.slice(55, 114).trimEnd()).toBe(expected)
+        expect(rows[26 + index]!.slice(31, 90).trimEnd()).toBe(expected)
+      })
+    } finally {
+      await setup.dispose()
+    }
+  })
+
+  test("grows a four-row-taller tree when the terminal is tall", async () => {
+    const { setup } = await mountHero({ width: 168, height: 48, growth: finished(), headerRows: 1, centered: true })
+    try {
+      const rows = rowsOf(setup)
+      FINAL_TREE_27.forEach((expected, index) => {
+        expect(rows[1 + index]!.slice(34, 134)).toBe(expected)
+      })
+      expect(rows[28]!.slice(34, 134)).toBe("          " + "─".repeat(80) + "          ")
+      WORDMARK_ROWS_AT_6.forEach((expected, index) => {
+        expect(rows[30 + index]!.slice(55, 114).trimEnd()).toBe(expected)
       })
     } finally {
       await setup.dispose()
@@ -179,9 +233,9 @@ describe("BanyanHero layout", () => {
 
   test("grows the ground rule out to its full width", async () => {
     const clock = manualGrowth()
-    const { setup } = await mountHero({ width: 168, height: 48, growth: clock.growth, headerRows: 1, centered: true })
+    const { setup } = await mountHero({ width: 168, height: 48, growth: clock.growth, headerRows: 1 })
     try {
-      const width = () => rowsOf(setup)[24]!.split("").filter((char) => char === "─").length
+      const width = () => rowsOf(setup)[28]!.split("").filter((char) => char === "─").length
       expect(width()).toBe(0)
       clock.advance(600)
       await setup.renderOnce()
@@ -193,18 +247,48 @@ describe("BanyanHero layout", () => {
       await setup.dispose()
     }
   })
+
+  test("picks its tier from the terminal, and only denies the full hero when it cannot fit", async () => {
+    // Rule row minus the first braille row is the tree height; 0 means the compact tier.
+    const artRows = (rows: readonly string[]) => {
+      const rule = rows.findIndex((row) => row.includes("─"))
+      if (rule < 0) return 0
+      const first = rows.findIndex((row) => /[\u2800-\u28ff]/.test(row))
+      return first < 0 ? 0 : rule - first
+    }
+    for (const [terminal, home, tree] of [
+      [40, 40, 23],
+      // Chrome costs rows, but the tree is not the thing that gives way.
+      [40, 39, 23],
+      [40, 38, 23],
+      [40, 36, 23],
+      // Below 36 Home cannot hold tree, prompt and footer: the wordmark steps in.
+      [40, 35, 0],
+      // The tall tier needs room for the list too.
+      [46, 45, 23],
+      [46, 46, 27],
+    ] as const) {
+      const { setup } = await mountHero({ width: 120, height: terminal, growth: finished(), homeHeight: () => home })
+      try {
+        const rows = rowsOf(setup)
+        expect({ terminal, home, tree: artRows(rows) }).toEqual({ terminal, home, tree })
+        if (tree === 0) expect(rows.join("\n")).toContain("█")
+      } finally {
+        await setup.dispose()
+      }
+    }
+  })
 })
 
-describe("BanyanHero growth", () => {
-  test("a keypress jumps to the finished tree without eating the input", async () => {
+describe("BanyanHero loop", () => {
+  test("a keypress skips growth but the loop keeps going, and the input is not eaten", async () => {
     const clock = manualGrowth()
     const { setup } = await mountHero({ width: 168, height: 48, growth: clock.growth, headerRows: 1, centered: true })
     try {
       clock.advance(1000)
       await setup.renderOnce()
       expect(clock.growth.done()).toBe(false)
-      const partial = setup.captureCharFrame()
-      expect(partial.includes("█")).toBe(false)
+      expect(setup.captureCharFrame().includes("█")).toBe(false)
 
       const seen: KeyEvent[] = []
       setup.renderer.keyInput.on("keypress", (key: KeyEvent) => seen.push(key))
@@ -215,13 +299,17 @@ describe("BanyanHero growth", () => {
       expect(clock.growth.elapsed()).toBe(GROWTH_END)
       expect(seen).toHaveLength(1)
       expect(seen[0]!.defaultPrevented).toBe(false)
-      expect(setup.captureCharFrame()).toContain("█")
+      expect(clock.pending).toBe(true)
+      const before = cellsOf(setup)
+      clock.advance(500)
+      await setup.renderOnce()
+      expect(cellsOf(setup)).not.toBe(before)
     } finally {
       await setup.dispose()
     }
   })
 
-  test("a paste jumps to the finished tree", async () => {
+  test("a paste skips growth", async () => {
     const clock = manualGrowth()
     const { setup } = await mountHero({ width: 168, height: 48, growth: clock.growth, headerRows: 1, centered: true })
     try {
@@ -232,28 +320,112 @@ describe("BanyanHero growth", () => {
       await setup.renderOnce()
       expect(clock.growth.done()).toBe(true)
       expect(clock.growth.elapsed()).toBe(GROWTH_END)
+      expect(clock.pending).toBe(true)
     } finally {
       await setup.dispose()
     }
   })
 
-  test("never asks for live frames and stops once finished", async () => {
+  test("leaves move between two ambient times while the trunk stays put", async () => {
+    const clock = manualGrowth()
+    const { setup } = await mountHero({ width: 120, height: 40, growth: clock.growth, headerRows: 1 })
+    try {
+      clock.advance(7000)
+      await setup.renderOnce()
+      const before = rowsOf(setup)
+      clock.advance(500)
+      await setup.renderOnce()
+      const after = rowsOf(setup)
+      // Rows 1..12 are canopy only; rows 18..23 hold the trunk and nothing else.
+      expect(before.slice(1, 13).join("\n")).not.toBe(after.slice(1, 13).join("\n"))
+      expect(before.slice(18, 24).join("\n")).toBe(after.slice(18, 24).join("\n"))
+    } finally {
+      await setup.dispose()
+    }
+  })
+
+  test("keeps shimmering the wordmark in the compact tier", async () => {
+    const clock = manualGrowth()
+    const { setup } = await mountHero({ width: 80, height: 20, growth: clock.growth })
+    try {
+      clock.advance(7000)
+      await setup.renderOnce()
+      const before = cellsOf(setup)
+      clock.advance(500)
+      await setup.renderOnce()
+      expect(cellsOf(setup)).not.toBe(before)
+    } finally {
+      await setup.dispose()
+    }
+  })
+
+  test("pauses on cleanup and never asks for live frames", async () => {
     const clock = manualGrowth()
     const { setup } = await mountHero({ width: 168, height: 48, growth: clock.growth, headerRows: 1, centered: true })
+    clock.advance(7000)
+    await setup.renderOnce()
+    expect(clock.growth.done()).toBe(true)
+    expect(clock.growth.ambient()).toBeGreaterThan(GROWTH_END)
+    expect(setup.renderer.root.liveCount).toBe(0)
+    expect(clock.pending).toBe(true)
+    await setup.dispose()
+    expect(clock.pending).toBe(false)
+    expect(clock.growth.done()).toBe(true)
+  })
+
+  test("the plain tier schedules nothing at all", async () => {
+    const clock = manualGrowth()
+    const { setup } = await mountHero({ width: 60, height: 12, growth: clock.growth })
     try {
-      clock.advance(1000)
-      await setup.renderOnce()
-      expect(setup.renderer.root.liveCount).toBe(0)
-      clock.growth.finish()
-      await setup.renderOnce()
-      expect(clock.growth.done()).toBe(true)
+      expect(setup.captureCharFrame()).toContain("BanyanCode")
+      expect(clock.scheduled).toBe(0)
       expect(clock.pending).toBe(false)
-      expect(setup.renderer.getSchedulerState().hasScheduledRender).toBe(false)
+      expect(clock.growth.ambient()).toBe(0)
     } finally {
       await setup.dispose()
     }
   })
 
+  test("ticks at no more than 12 fps", async () => {
+    const clock = manualGrowth()
+    const { setup } = await mountHero({ width: 120, height: 40, growth: clock.growth })
+    try {
+      expect(clock.delays).toEqual([GROWTH_TICK_MS])
+      expect(GROWTH_TICK_MS).toBeCloseTo(1000 / 12)
+      expect(clock.scheduled).toBe(1)
+    } finally {
+      await setup.dispose()
+    }
+  })
+
+  test("schedules no timer at all when animations are off", async () => {
+    let scheduled = 0
+    const growth = createGrowth({
+      animations: () => false,
+      setInterval: ((fn: () => void, delay: number) => {
+        void fn
+        void delay
+        scheduled += 1
+        return 1 as unknown as Handle
+      }) as typeof setInterval,
+      clearInterval: (() => {}) as typeof clearInterval,
+    })
+    const { setup } = await mountHero({ width: 120, height: 40, growth })
+    try {
+      expect(scheduled).toBe(0)
+      expect(growth.done()).toBe(true)
+      expect(growth.elapsed()).toBe(GROWTH_END)
+      expect(growth.ambient()).toBe(GROWTH_END)
+      const frame = setup.captureCharFrame()
+      await setup.renderOnce()
+      expect(setup.captureCharFrame()).toBe(frame)
+    } finally {
+      await setup.dispose()
+    }
+  })
+})
+
+describe("BanyanHero growth", () => {
   test("the final frame is identical cell for cell on every render", async () => {
     const { setup } = await mountHero({ width: 168, height: 48, growth: finished(), headerRows: 1, centered: true })
     try {
@@ -306,9 +478,15 @@ describe("BanyanHero growth", () => {
       clock.advance(1000)
       await setup.renderOnce()
       expect(/[\u2800-\u28ff]/.test(setup.captureCharFrame())).toBe(true)
+      // The plain tier draws no animated art, so it stops the clock instead of burning ticks.
       setup.resize(60, 12)
       await setup.renderOnce()
       expect(setup.captureCharFrame()).toContain("BanyanCode")
+      expect(clock.pending).toBe(false)
+      // Back to a tier with art: the loop resumes where it left off.
+      setup.resize(200, 55)
+      await setup.renderOnce()
+      expect(clock.pending).toBe(true)
       clock.advance(500)
       await setup.renderOnce()
       expect(clock.growth.done()).toBe(false)

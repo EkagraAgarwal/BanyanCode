@@ -9,7 +9,14 @@ import {
 } from "@opentui/core"
 import { extend, useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, Match, onCleanup, onMount, Switch } from "solid-js"
-import { TREE_ROLES, TREE_WIDTH, createTreeFrame, treeFrame, type TreeFrame, type TreeRole } from "./banyan-tree"
+import {
+  TREE_ROLES,
+  TREE_WIDTH,
+  createTreeFrame,
+  treeFrame,
+  type TreeFrame,
+  type TreeRole,
+} from "./banyan-tree"
 import { GROWTH_END, fadeIn, type Growth } from "./growth"
 import {
   WORDMARK_CELLS,
@@ -20,19 +27,41 @@ import {
   type WordmarkFrame,
 } from "./wordmark"
 
-/** Rows: 0-22 tree, 23 ground rule, 24 gap, 25-28 wordmark. Matches the handoff mockup rows 1-29. */
+/** Width of the art canvas; the crown is narrower and stays under it. */
 const FULL_WIDTH = 100
-const FULL_HEIGHT = 29
-const RULE_ROW = 23
-const RULE_CENTER = 50
+/** Rows below the tree: ground rule, gap, then the four wordmark rows. */
+const BELOW_TREE = 6
 const RULE_REACH = 40
 const RULE_GROW_SECONDS = 2.2
 const WORDMARK_LEFT = 21
-const WORDMARK_TOP = 25
 
 export const HERO_FULL_MIN = { width: 120, height: 40 }
 export const HERO_COMPACT_MIN = { width: 72, height: 18 }
 export const HERO_PLAIN_MIN_HEIGHT = 12
+/** At this terminal height the hero grows a four-row-taller tree. */
+export const HERO_TALL_MIN_HEIGHT = 46
+/** Hero rows at the full tier: 23 tree + rule + gap + wordmark, and 27 tree + the same. */
+export const HERO_FULL_ROWS = 29
+export const HERO_TALL_ROWS = 33
+/** The plain tier is the one-row wordmark. */
+export const HERO_PLAIN_ROWS = 1
+
+/** Home's prompt block: border, padding, input, padding, metadata, border. */
+export const HOME_PROMPT_ROWS = 6
+/** The resume block: a header plus three sessions. */
+export const HOME_RESUME_ROWS = 4
+/** The home footer row. */
+export const HOME_FOOTER_ROWS = 1
+/** Home spends a breathing row above and below the prompt once it is tall enough. */
+export const HOME_GAP_ROWS = 2
+/** Home rows from which the breathing rows are spent. */
+export const HOME_ROOMY_MIN_HEIGHT = 43
+
+/** The full hero and everything around it, minus the list: 29 + 6 + 1. */
+const FULL_MIN_HOME_ROWS = HERO_FULL_ROWS + HOME_PROMPT_ROWS + HOME_FOOTER_ROWS
+/** The tall hero is only worth it when the list still fits under it: 33 + 2 + 6 + 4 + 1. */
+const TALL_MIN_HOME_ROWS =
+  HERO_TALL_ROWS + HOME_GAP_ROWS + HOME_PROMPT_ROWS + HOME_RESUME_ROWS + HOME_FOOTER_ROWS
 
 const SPACE = 32
 const RULE = 0x2500
@@ -51,6 +80,29 @@ type HomeArtPalette = {
   readonly highlight: RGBA
   readonly background: RGBA
   readonly border: RGBA
+}
+
+/**
+ * The one source of truth for the hero's size: the layout here and the resume
+ * list's eligibility both read it, so they can never disagree.
+ *
+ * The tier itself is the terminal's call - the mockup's thresholds do not move
+ * because the host drew a tab strip - but a full hero is denied when the tree,
+ * the prompt and the footer cannot fit in the rows Home really owns, and the
+ * tall hero is denied unless the list still fits under it. The tree therefore
+ * beats the list: chrome costs the list, never the branches.
+ */
+export function heroRows(width: number, terminalHeight: number, homeRows: number) {
+  if (
+    width >= HERO_FULL_MIN.width &&
+    terminalHeight >= HERO_FULL_MIN.height &&
+    homeRows >= FULL_MIN_HOME_ROWS
+  ) {
+    return terminalHeight >= HERO_TALL_MIN_HEIGHT && homeRows >= TALL_MIN_HOME_ROWS ? HERO_TALL_ROWS : HERO_FULL_ROWS
+  }
+  if (width >= HERO_COMPACT_MIN.width && terminalHeight >= HERO_COMPACT_MIN.height) return WORDMARK_HEIGHT
+  if (terminalHeight >= HERO_PLAIN_MIN_HEIGHT) return HERO_PLAIN_ROWS
+  return 0
 }
 
 const copy = (plane: Uint16Array, offset: number, color: RGBA) => {
@@ -114,13 +166,14 @@ type Options = RenderableOptions<BanyanHomeArtRenderable> & {
  * Draws the Home tree and wordmark into its own frame buffer (`buffered`) through
  * `withBuffers`, so a frame is plain typed-array writes plus one blit. It is never
  * `live`: the growth clock requests a render per tick, and an unchanged frame is
- * reused, so a finished tree costs nothing.
+ * reused, so a paused tree costs nothing.
  */
 export class BanyanHomeArtRenderable extends Renderable {
   private _mode: HomeArtMode = "full"
   private _elapsed = 0
+  private _ambient = 0
   private _palette: HomeArtPalette | undefined
-  private readonly tree: TreeFrame = createTreeFrame()
+  private _tree: TreeFrame | undefined
   private readonly wordmark: WordmarkFrame = createWordmarkFrame()
   private drawnKey = ""
 
@@ -149,6 +202,16 @@ export class BanyanHomeArtRenderable extends Renderable {
     this.invalidate()
   }
 
+  get ambient() {
+    return this._ambient
+  }
+
+  set ambient(value: number) {
+    if (value === this._ambient) return
+    this._ambient = value
+    this.invalidate()
+  }
+
   get palette(): HomeArtPalette | undefined {
     return this._palette
   }
@@ -171,12 +234,15 @@ export class BanyanHomeArtRenderable extends Renderable {
 
   protected override destroySelf() {
     this._palette = undefined
+    this._tree = undefined
     this.drawnKey = ""
     super.destroySelf()
   }
 
-  private time() {
-    return this._mode === "wordmark" ? GROWTH_END : this._elapsed
+  private frame(): TreeFrame {
+    const height = Math.max(1, this.height - BELOW_TREE)
+    if (!this._tree || this._tree.height !== height) this._tree = createTreeFrame(height)
+    return this._tree
   }
 
   protected override renderSelf(buffer: OptimizedBuffer) {
@@ -188,11 +254,12 @@ export class BanyanHomeArtRenderable extends Renderable {
     const width = this.width
     const height = this.height
     if (width <= 0 || height <= 0) return
-    const t = this.time()
-    const key = `${this._mode}|${t}|${width}x${height}|${palette.signature}`
+    const t = this._elapsed
+    const key = `${this._mode}|${t}|${this._ambient}|${width}x${height}|${palette.signature}`
     if (key === this.drawnKey) return
-    if (this._mode === "full") treeFrame(t, this.tree)
-    wordmarkFrame(t, palette, this.wordmark)
+    const tree = this._mode === "full" ? treeFrame(t, this._ambient, this.frame()) : undefined
+    wordmarkFrame(this._mode === "wordmark" ? GROWTH_END : t, this._ambient, palette, this.wordmark)
+    const ruleRow = height - BELOW_TREE
     buffer.withBuffers((cells) => {
       const stride = cells.width
       const rows = Math.min(height, cells.height)
@@ -213,18 +280,19 @@ export class BanyanHomeArtRenderable extends Renderable {
         char[cell] = code
         copy(fg, cell * 4, color)
       }
-      if (this._mode === "full") {
-        const mask = this.tree.mask
+      if (tree) {
+        const mask = tree.mask
         for (let i = 0; i < mask.length; i++) {
           const bits = mask[i]!
           if (!bits) continue
-          put(i % TREE_WIDTH, Math.floor(i / TREE_WIDTH), 0x2800 + bits, palette.tree[this.tree.roles[i]!]!)
+          put(i % TREE_WIDTH, Math.floor(i / TREE_WIDTH), 0x2800 + bits, palette.tree[tree.roles[i]!]!)
         }
+        const center = Math.floor(TREE_WIDTH / 2)
         const reach = Math.round(fadeIn(t, 0, RULE_GROW_SECONDS) * RULE_REACH)
-        for (let x = RULE_CENTER - reach; x < RULE_CENTER + reach; x++) put(x, RULE_ROW, RULE, palette.border)
+        for (let x = center - reach; x < center + reach; x++) put(x, ruleRow, RULE, palette.border)
       }
-      const left = this._mode === "full" ? WORDMARK_LEFT : 0
-      const top = this._mode === "full" ? WORDMARK_TOP : 0
+      const left = tree ? WORDMARK_LEFT : 0
+      const top = tree ? ruleRow + 2 : 0
       WORDMARK_CELLS.forEach((cell, index) => {
         if (!this.wordmark.visible[index]) return
         put(left + cell.x, top + cell.row, cell.char, this.wordmark.colors[index]!)
@@ -242,17 +310,29 @@ declare module "@opentui/solid" {
 
 extend({ banyan_home_art: BanyanHomeArtRenderable })
 
+type Tier = "full" | "compact" | "plain" | "none"
+
 /**
- * The Home hero: grows a banyan once per launch, then stays still. The layout size
- * never changes while growing, so the prompt mounted below it stays put.
+ * The Home hero: grows a banyan once, then loops its ambient effects until unmounted.
+ * The layout size never changes while growing, so the prompt mounted below it stays put.
+ *
+ * `height` is Home's real height in rows when the host passes it: chrome like the
+ * session tab strip and the devtools bar is not the hero's to spend.
  */
-export function BanyanHero(props: { readonly context: Context; readonly growth: Growth }) {
+export function BanyanHero(props: {
+  readonly context: Context
+  readonly growth: Growth
+  readonly height?: () => number
+}) {
   const dimensions = useTerminalDimensions()
-  const tier = createMemo(() => {
-    const { width, height } = dimensions()
-    if (width >= HERO_FULL_MIN.width && height >= HERO_FULL_MIN.height) return "full"
-    if (width >= HERO_COMPACT_MIN.width && height >= HERO_COMPACT_MIN.height) return "compact"
-    if (height >= HERO_PLAIN_MIN_HEIGHT) return "plain"
+  const rows = () => props.height?.() ?? dimensions().height
+  const heroSize = createMemo(() => heroRows(dimensions().width, dimensions().height, rows()))
+  // One tier decision, so the art and the clock can never disagree about it.
+  const tier = createMemo<Tier>(() => {
+    const size = heroSize()
+    if (size >= HERO_FULL_ROWS) return "full"
+    if (size === WORDMARK_HEIGHT) return "compact"
+    if (size === HERO_PLAIN_ROWS) return "plain"
     return "none"
   })
   const [art, setArt] = createSignal<BanyanHomeArtRenderable>()
@@ -261,19 +341,10 @@ export function BanyanHero(props: { readonly context: Context; readonly growth: 
     onCleanup(() => setArt((current) => (current === node ? undefined : current)))
   }
 
-  createEffect(() => {
-    const palette = paletteFor(props.context.theme)
-    const elapsed = props.growth.elapsed()
-    const node = art()
-    if (!node) return
-    node.palette = palette
-    node.elapsed = elapsed
-  })
-
   onMount(() => {
     const keyInput = props.context.renderer.keyInput
     if (keyInput) {
-      // Never consumes the input: the prompt still receives every character.
+      // Skips growth only; the ambient loop keeps going and the input is never consumed.
       const finish = () => props.growth.finish()
       keyInput.on("keypress", finish)
       keyInput.on("paste", finish)
@@ -282,15 +353,33 @@ export function BanyanHero(props: { readonly context: Context; readonly growth: 
         keyInput.off("paste", finish)
       })
     }
-    // Leaving Home mid-growth means returning shows the finished tree.
-    onCleanup(() => props.growth.finish())
-    props.growth.start()
+    // Leaving Home pauses the loop: returning shows the finished tree and resumes it.
+    onCleanup(() => {
+      props.growth.finish()
+      props.growth.pause()
+    })
+    // Nothing below the compact tier animates, so it never starts a clock at all.
+    if (tier() === "full" || tier() === "compact") props.growth.resume()
+  })
+
+  // The plain tier draws no animated art, so it does not keep the clock running.
+  createEffect(() => {
+    if (tier() === "full" || tier() === "compact") props.growth.resume()
+    else props.growth.pause()
+  })
+
+  createEffect(() => {
+    const node = art()
+    if (!node) return
+    node.palette = paletteFor(props.context.theme)
+    node.elapsed = props.growth.elapsed()
+    node.ambient = props.growth.ambient()
   })
 
   return (
     <Switch>
       <Match when={tier() === "full"}>
-        <banyan_home_art width={FULL_WIDTH} height={FULL_HEIGHT} mode="full" ref={bindArt} />
+        <banyan_home_art width={FULL_WIDTH} height={heroSize()} mode="full" ref={bindArt} />
       </Match>
       <Match when={tier() === "compact"}>
         <banyan_home_art width={WORDMARK_WIDTH} height={WORDMARK_HEIGHT} mode="wordmark" ref={bindArt} />

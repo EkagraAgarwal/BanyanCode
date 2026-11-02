@@ -4,7 +4,7 @@ import type { Context } from "@opencode/plugin/tui/context"
 import type { SessionInfo } from "@opencode/client"
 import { RGBA } from "@opentui/core"
 import { createSignal } from "solid-js"
-import { Resume, fitTitle, relativeAge, RESUME_ROWS } from "../src/components/home/resume"
+import { Resume, fitTitle, relativeAge, RESUME_ROWS, sessionTitle } from "../src/components/home/resume"
 import type { Growth } from "../src/components/home/growth"
 import { context, mount, session } from "./harness"
 
@@ -15,9 +15,12 @@ const TAIL = "TAIL"
 
 const growthAt = (elapsed: () => number): Growth => ({
   elapsed,
+  ambient: elapsed,
   done: () => elapsed() >= 6.1,
   start: () => {},
   finish: () => {},
+  pause: () => {},
+  resume: () => {},
 })
 
 // The harness theme is one flat colour; the fade needs knowable endpoints.
@@ -59,11 +62,11 @@ const collect = (base: Context, overrides: { navigate?: (destination: unknown) =
     },
   }) as unknown as Context
 
-const render = async (ctx: Context, size = { width: 80, height: 30 }) => {
+const render = async (ctx: Context, size = { width: 80, height: 30 }, height = size.height) => {
   const app = await mount(
     () => (
       <box flexDirection="column">
-        <Resume context={ctx} growth={growthAt(() => 6.1)} />
+        <Resume context={ctx} growth={growthAt(() => 6.1)} height={() => height} />
         <text>{TAIL}</text>
       </box>
     ),
@@ -91,6 +94,31 @@ test("relative ages stay compact", () => {
 test("titles truncate with an ellipsis instead of wrapping", () => {
   expect(fitTitle("short", 10)).toBe("short")
   expect(fitTitle("a very long session title", 10)).toBe("a very lo…")
+})
+
+test("untitled sessions use the host's timestamped fallback, not a blank row", () => {
+  const time = { created: Date.UTC(2026, 0, 2, 3, 4, 5), updated: Date.UTC(2026, 0, 2, 3, 4, 5) }
+  expect(sessionTitle({ parentID: undefined, time })).toBe("New session - 2026-01-02T03:04:05.000Z")
+  expect(sessionTitle({ parentID: "ses_parent", time })).toBe("Child session - 2026-01-02T03:04:05.000Z")
+  expect(sessionTitle({ title: "Named", parentID: undefined, time })).toBe("Named")
+})
+
+test("renders the fallback label for an untitled session", async () => {
+  const created = Date.UTC(2026, 0, 2, 3, 4, 5)
+  const app = await render(
+    styled([
+      {
+        ...session({ id: "ses_untitled", time: { created, updated: 9_000 } }),
+        title: undefined as unknown as string,
+      },
+    ]),
+  )
+  try {
+    const text = app.captureCharFrame().replace(/\s+/g, " ")
+    expect(text).toContain("1 New session - 2026-01-02T03:04:05.000Z")
+  } finally {
+    app.renderer.destroy()
+  }
 })
 
 test("lists the three most recently updated root sessions for this directory", async () => {
@@ -187,6 +215,31 @@ test("the size guard drops the block instead of overflowing", async () => {
   } finally {
     tight.renderer.destroy()
   }
+
+  // 120x40 fits exactly with the full hero: 29 + 6 + 4 + 1.
+  const exact = await render(ctx, { width: 120, height: 40 }, 40)
+  try {
+    expect(exact.captureCharFrame()).toContain("RESUME")
+  } finally {
+    exact.renderer.destroy()
+  }
+
+  // One row of host chrome leaves 39: the tree keeps its tier and the list goes,
+  // because the tree is never the thing that gives way.
+  const chrome = await render(ctx, { width: 120, height: 40 }, 39)
+  try {
+    expect(chrome.captureCharFrame().trim()).toBe(TAIL)
+  } finally {
+    chrome.renderer.destroy()
+  }
+
+  // With no room left, the block is dropped rather than clipped.
+  const behind = await render(ctx, { width: 120, height: 10 }, 10)
+  try {
+    expect(behind.captureCharFrame().trim()).toBe(TAIL)
+  } finally {
+    behind.renderer.destroy()
+  }
 })
 
 test("the rows hold their space from the first frame and fade in", async () => {
@@ -195,7 +248,7 @@ test("the rows hold their space from the first frame and fade in", async () => {
   const app = await mount(
     () => (
       <box flexDirection="column">
-        <Resume context={ctx} growth={growthAt(elapsed)} />
+        <Resume context={ctx} growth={growthAt(elapsed)} height={() => 30} />
         <text>{TAIL}</text>
       </box>
     ),

@@ -6,16 +6,18 @@ import { StoryFooter } from "./footer"
 import type { Story } from "./index"
 
 /**
- * The real home hero on the real growth clock, with the two things a story
- * needs: start over, and jump to the finished frame.
+ * The real home hero on the real growth clock, with the things a story needs:
+ * start over, jump to the finished frame, and stop or restart the ambient loop.
  */
 function HomeStory(props: { context: Plugin.Context }) {
   const theme = props.context.theme
   const dimensions = useTerminalDimensions()
   const [player, setPlayer] = createSignal<{ growth: Growth; dispose: () => void }>()
+  const [paused, setPaused] = createSignal(false)
 
   const play = () => {
     player()?.dispose()
+    setPaused(false)
     setPlayer(
       createRoot((dispose) => {
         const growth = createGrowth({ animations: () => props.context.ui.animations() })
@@ -23,6 +25,14 @@ function HomeStory(props: { context: Plugin.Context }) {
         return { growth, dispose }
       }),
     )
+  }
+
+  const toggle = () => {
+    const growth = player()?.growth
+    if (!growth) return
+    if (paused()) growth.resume()
+    else growth.pause()
+    setPaused(!paused())
   }
 
   props.context.keymap.layer(() => ({
@@ -35,6 +45,7 @@ function HomeStory(props: { context: Plugin.Context }) {
       },
       { bind: "r", title: "Replay growth", group: "Storybook", run: play },
       { bind: "s", title: "Skip to final frame", group: "Storybook", run: () => player()?.growth.finish() },
+      { bind: "p", title: "Pause or resume the loop", group: "Storybook", run: toggle },
     ],
   }))
 
@@ -56,10 +67,11 @@ function HomeStory(props: { context: Plugin.Context }) {
       <StoryFooter
         context={props.context}
         title="home"
-        details={["banyan hero", "real growth clock"]}
+        details={["banyan hero", "growth + ambient loop"]}
         controls={[
           { shortcut: "r", label: "replay" },
           { shortcut: "s", label: "final frame" },
+          { shortcut: "p", label: "pause loop" },
           { shortcut: "esc", label: "storybook" },
         ]}
       />

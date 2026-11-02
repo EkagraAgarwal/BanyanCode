@@ -17,8 +17,9 @@ const placeholder = {
   normal: ["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"],
   shell: ["ls -la", "git status", "pwd"],
 }
-// 29 hero rows, the 6-row prompt (its own footer row is off on Home) and the
-// footer only fit inside 40 rows once the two breathing rows are dropped.
+/** Home's footer is one row, and it is not part of the measured content box. */
+const HOME_FOOTER_ROWS = 1
+/** The hero, prompt, resume block and footer fit inside 40 rows once the two breathing rows are dropped. */
 const ROOMY_MIN_HEIGHT = 43
 
 export function Home() {
@@ -31,7 +32,12 @@ export function Home() {
   const data = useData()
   const location = useLocation()
   const dimensions = useTerminalDimensions()
-  const roomy = () => dimensions().height >= ROOMY_MIN_HEIGHT
+  // What Home really has: the host's tab strip and devtools bar take rows off the
+  // viewport. The content box is measured, never derived from its own children, so
+  // nothing feeds back into the layout.
+  const [contentRows, setContentRows] = createSignal(Math.max(0, dimensions().height - HOME_FOOTER_ROWS))
+  const homeRows = () => contentRows() + HOME_FOOTER_ROWS
+  const roomy = () => homeRows() >= ROOMY_MIN_HEIGHT
   // Global MCP elicitations can arrive without a session route, so keep them reachable from Home.
   const currentLocation = () => route.location ?? data.location.default()
   const forms = createMemo(() => data.session.form.list("global", currentLocation()) ?? [])
@@ -85,12 +91,15 @@ export function Home() {
         alignItems="center"
         paddingLeft={dimensions().width < 44 ? 1 : 2}
         paddingRight={dimensions().width < 44 ? 1 : 2}
+        onSizeChange={function () {
+          setContentRows(this.height)
+        }}
       >
         {/* Equal spacers: the block is centred when the terminal is taller than
             it, and starts at the top when it is exactly as tall. */}
         <box flexGrow={1} minHeight={0} />
         <box width="100%" flexDirection="column" alignItems="center" flexShrink={0}>
-          <Slot path="home.logo">
+          <Slot path="home.logo" input={{ height: homeRows }}>
             <Logo />
           </Slot>
           <Show when={roomy()}>
@@ -105,7 +114,7 @@ export function Home() {
         <Show when={roomy()}>
           <box height={1} flexShrink={0} />
         </Show>
-        <Slot path="home.bottom" />
+        <Slot path="home.bottom" input={{ height: homeRows }} />
         <box flexGrow={1} minHeight={0} />
       </box>
       <box width="100%" flexShrink={0}>

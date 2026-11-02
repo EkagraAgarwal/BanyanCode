@@ -3,22 +3,13 @@ import type { SessionInfo } from "@opencode/client"
 import { RGBA, TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js"
-import { HERO_COMPACT_MIN, HERO_FULL_MIN, HERO_PLAIN_MIN_HEIGHT } from "./hero"
+import { heroRows, HOME_FOOTER_ROWS, HOME_GAP_ROWS, HOME_PROMPT_ROWS, HOME_RESUME_ROWS, HOME_ROOMY_MIN_HEIGHT } from "./hero"
 import { fadeIn, type Growth } from "./growth"
-import { WORDMARK_HEIGHT } from "./wordmark"
 import { palette } from "../../theme"
 
 /** Header plus the three most recent sessions. */
-export const RESUME_ROWS = 4
+export const RESUME_ROWS = HOME_RESUME_ROWS
 export const RESUME_LIMIT = 3
-/** hero.tsx draws 29 rows at the full tier. */
-const HERO_FULL_ROWS = 29
-/** Home renders the prompt without its own footer row: border, padding, input, padding, metadata, border. */
-const HOME_PROMPT_ROWS = 6
-/** Home adds a row above the prompt and above this block, but only when the terminal is tall enough. */
-const HOME_GAP_ROWS = 2
-const HOME_ROOMY_MIN_HEIGHT = 43
-const HOME_FOOTER_ROWS = 1
 /** The fade-in window, in seconds since the home growth started. */
 const RESUME_FADE_START = 5.5
 const RESUME_FADE_DURATION = 0.6
@@ -37,6 +28,15 @@ export function relativeAge(updated: number, now: number): string {
   return `${Math.floor(days / 7)}w`
 }
 
+/**
+ * Untitled sessions get the host's timestamped fallback, the same label the
+ * session dialogs use, so a row is never blank.
+ */
+export function sessionTitle(item: Pick<SessionInfo, "title" | "parentID" | "time">): string {
+  if (item.title) return item.title
+  return `${item.parentID ? "Child" : "New"} session - ${new Date(item.time.created).toISOString()}`
+}
+
 /** One row of the list: no wrapping, and the title carries its own ellipsis. */
 export function fitTitle(title: string, budget: number): string {
   if (title.length <= budget) return title
@@ -52,13 +52,19 @@ function tint(base: RGBA, overlay: RGBA, alpha: number) {
  * The three most recently updated root sessions for the working directory,
  * faded in once the home growth finishes.
  *
- * Its rows are reserved from the first frame whenever the terminal has room, so
- * the prompt never moves when the list resolves or a session appears. The whole
- * block is skipped when the hero, prompt and footer would not fit around it.
+ * Its rows are reserved from the first frame whenever Home has room, so the
+ * prompt never moves when the list resolves or a session appears. The whole
+ * block is skipped when the hero, prompt, gaps and footer would not fit in the
+ * rows Home actually owns: the host's tab strip and devtools bar are not ours.
  *
  * The ordinals are labels, not hotkeys: digits belong to the prompt.
  */
-export function Resume(props: { readonly context: Context; readonly growth: Growth }) {
+export function Resume(props: {
+  readonly context: Context
+  readonly growth: Growth
+  /** Rows Home really has, footer included. Never the raw viewport. */
+  readonly height: () => number
+}) {
   const theme = () => palette(props.context.theme)
   const dimensions = useTerminalDimensions()
   const [fetched, setFetched] = createSignal<readonly SessionInfo[]>([])
@@ -90,20 +96,15 @@ export function Resume(props: { readonly context: Context; readonly growth: Grow
       .map((item) => props.context.data.session.get(item.id) ?? item),
   )
 
-  // Departure rows the hero takes at this size, mirroring hero.tsx.
-  const heroRows = () => {
-    const { width, height } = dimensions()
-    if (width >= HERO_FULL_MIN.width && height >= HERO_FULL_MIN.height) return HERO_FULL_ROWS
-    if (width >= HERO_COMPACT_MIN.width && height >= HERO_COMPACT_MIN.height) return WORDMARK_HEIGHT
-    if (height >= HERO_PLAIN_MIN_HEIGHT) return 1
-    return 0
-  }
   // Size-only so the block never appears or moves during growth or after a fetch.
   const eligible = createMemo(() => {
-    const { width, height } = dimensions()
+    const width = dimensions().width
     if (width < 60) return false
+    // The hero's tier is the terminal's call, but the tree is never spent on this
+    // list: chrome costs the list, and the hero is denied only when it cannot fit.
+    const height = props.height()
     const gaps = height >= HOME_ROOMY_MIN_HEIGHT ? HOME_GAP_ROWS : 0
-    return height >= heroRows() + HOME_PROMPT_ROWS + RESUME_ROWS + gaps + HOME_FOOTER_ROWS
+    return height >= heroRows(width, dimensions().height, height) + HOME_PROMPT_ROWS + HOME_RESUME_ROWS + gaps + HOME_FOOTER_ROWS
   })
 
   // Same width as the prompt, so the two blocks line up.
@@ -152,7 +153,7 @@ export function Resume(props: { readonly context: Context; readonly growth: Grow
                       {slot + 1}
                     </text>
                     <text fg={fade(theme().muted)} wrapMode="none" flexShrink={1} minWidth={0}>
-                      {fitTitle(item().title ?? "", titleBudget())}
+                      {fitTitle(sessionTitle(item()), titleBudget())}
                     </text>
                     <box flexGrow={1} />
                     <text width={ROW_AGE} fg={fade(theme().faint)} textAlign="right" wrapMode="none">
