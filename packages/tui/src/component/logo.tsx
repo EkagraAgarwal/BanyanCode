@@ -53,20 +53,28 @@ export function Logo() {
     })
   }
 
-  // The tree is fixed green and the wordmark follows the theme, so it stays readable on a light background.
+  // The tree is fixed green. The wordmark follows the theme, so it stays readable on a light background, and is drawn
+  // as v1 drew it: a half block over a dim shade of the same color, which gives the letters a bevel.
   const renderSplashLine = (line: string): JSX.Element[] =>
     line
       .split(/(█+)/)
       .filter((run) => run !== "")
-      .map((run) => (
-        <text
-          fg={run.startsWith("█") ? theme.text.base : TREE}
-          attributes={run.startsWith("█") ? TextAttributes.BOLD : undefined}
-          selectable={false}
-        >
-          {run}
-        </text>
-      ))
+      .map((run) =>
+        run.startsWith("█") ? (
+          <text
+            fg={theme.text.base}
+            bg={tint(theme.background.base, theme.text.base, 0.25)}
+            attributes={TextAttributes.BOLD}
+            selectable={false}
+          >
+            {"▀".repeat(run.length)}
+          </text>
+        ) : (
+          <text fg={TREE} selectable={false}>
+            {run}
+          </text>
+        ),
+      )
 
   return (
     <box>
