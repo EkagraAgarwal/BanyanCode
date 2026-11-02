@@ -1,5 +1,5 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createMemo, Show } from "solid-js"
+import { createMemo, Show, onMount } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { CodegraphLive, MeshLive, SystemLive } from "../../data/live"
 import type { AutoUpdateState, BuildState, GraphMeta, ReadinessResult } from "../../data/pending-rpc"
@@ -160,6 +160,12 @@ export function StatusPills(props: {
 }) {
   const theme = () => palette(props.context.theme)
   const dimensions = useTerminalDimensions()
+
+  // YOLO and swarm can be on from config or the environment before anything toggles them.
+  onMount(() => {
+    void props.system.refreshYolo()
+    void props.mesh.refreshLimits()
+  })
 
   const activeAgents = createMemo(() => {
     const sessionID = props.sessionID

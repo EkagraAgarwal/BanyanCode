@@ -272,10 +272,13 @@ export function createLive(context: Context): Live {
     setMeta(result.value.meta)
   }
 
+  // A panel asks once on mount, so a rebuild has to fetch again for it.
+  let filesWanted = false
   const invalidateGraph = () => {
     graphEpoch += 1
     setGraph(undefined)
     setFiles(undefined)
+    if (filesWanted) void ensureFiles()
   }
 
   const ensureGraph = async (force = false) => {
@@ -301,6 +304,7 @@ export function createLive(context: Context): Live {
   }
 
   const ensureFiles = async () => {
+    filesWanted = true
     if (filesRequest) return filesRequest
     if (files() !== undefined) return
     filesRequest = (async () => {

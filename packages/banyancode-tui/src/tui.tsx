@@ -19,7 +19,7 @@ import { ProviderUsagePanel } from "./components/sidebar/provider-usage"
 import { SystemPanel } from "./components/sidebar/system-status"
 import { ToolUsagePanel } from "./components/sidebar/tool-usage"
 import { InspectorPage, InspectorPanel } from "./components/panels/inspector"
-import { cycleView, openView } from "./components/panels/nav"
+import { closeView, cycleView, openView } from "./components/panels/nav"
 import { HomeStrip } from "./components/home/home-strip"
 import {
   applyVariantCommand,
@@ -190,9 +190,9 @@ export default Plugin.define({
           id: "banyancode.panel.close",
           title: "Close BanyanCode panel",
           bind: "escape",
-          enabled: () => context.ui.panel.current() !== undefined,
+          enabled: () => context.ui.panel.current() !== undefined || context.ui.router.current().type === "plugin",
           run() {
-            context.ui.panel.close()
+            closeView(context)
           },
         },
         // v1 tab bar keys: ctrl+] / ctrl+[ cycle CHAT → SESSIONS → AGENTS → CONFIG.
@@ -203,6 +203,8 @@ export default Plugin.define({
           group: "Tabs",
           bind: "ctrl+]",
           palette: true,
+          // The views belong to a session. On the home screen there's nothing to show them for.
+          enabled: () => context.ui.router.current().type !== "home",
           async run() {
             cycleView(context, 1)
           },
@@ -214,6 +216,7 @@ export default Plugin.define({
           group: "Tabs",
           bind: "ctrl+[",
           palette: true,
+          enabled: () => context.ui.router.current().type !== "home",
           async run() {
             cycleView(context, -1)
           },
@@ -223,7 +226,7 @@ export default Plugin.define({
           title: "Codegraph: build index",
           group: "Codegraph",
           palette: true,
-          slash: { name: "codegraph-build", arguments: true },
+          slash: { name: "codegraph-build", arguments: true, optionalArguments: true },
           async run(input) {
             const force = /(^|\s)--force(\s|$)/.test(input ?? "")
             report(await live.codegraph.start({ force }), "Codegraph build started")
@@ -244,7 +247,7 @@ export default Plugin.define({
           title: "Codegraph: remove index",
           group: "Codegraph",
           palette: true,
-          slash: { name: "codegraph-remove", arguments: true },
+          slash: { name: "codegraph-remove", arguments: true, optionalArguments: true },
           async run(input) {
             const dropFile = /(^|\s)--drop-file(\s|$)/.test(input ?? "")
             report(await live.codegraph.remove(dropFile), "Codegraph index removed")
@@ -345,7 +348,7 @@ export default Plugin.define({
           title: "Toggle YOLO mode",
           group: "BanyanCode",
           palette: true,
-          slash: { name: "yolo", arguments: true },
+          slash: { name: "yolo", arguments: true, optionalArguments: true },
           async run(input) {
             if (live.system.yoloAvailability() === "unknown") await live.system.refreshYolo()
             const next = switchTo(input, live.system.yolo() === true, "/yolo <on|off|toggle>")
@@ -359,7 +362,7 @@ export default Plugin.define({
           title: "Toggle swarm mode",
           group: "BanyanCode",
           palette: true,
-          slash: { name: "swarm", arguments: true },
+          slash: { name: "swarm", arguments: true, optionalArguments: true },
           async run(input) {
             if (live.mesh.limits() === undefined) await live.mesh.refreshLimits()
             const next = switchTo(input, live.mesh.swarmMode() === true, "/swarm <on|off|toggle>")
@@ -373,7 +376,7 @@ export default Plugin.define({
           title: "Set max concurrent subagents",
           group: "BanyanCode",
           palette: true,
-          slash: { name: "max-subagents", arguments: true },
+          slash: { name: "max-subagents", arguments: true, optionalArguments: true },
           async run(input) {
             const text = (input ?? "").trim()
             if (text === "") {
@@ -393,7 +396,7 @@ export default Plugin.define({
           title: "Toggle LSP",
           group: "BanyanCode",
           palette: true,
-          slash: { name: "lsp", arguments: true },
+          slash: { name: "lsp", arguments: true, optionalArguments: true },
           async run(input) {
             if (live.system.lsp() === undefined) await live.system.refresh()
             const next = switchTo(input, live.system.lsp()?.enabled === true, "/lsp <on|off|toggle>")

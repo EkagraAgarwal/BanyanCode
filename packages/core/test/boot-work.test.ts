@@ -2,7 +2,7 @@
 // catalog lookups per step (#58601), Azure model edits per model rebuild (#58600) and git spawns (#58602).
 // These are exact counts, not timings. Changing one is fine when the change is intended; update the expected
 // number here and say why in the PR.
-import { describe, expect } from "bun:test"
+import { afterAll, beforeAll, describe, expect } from "bun:test"
 import path from "path"
 import whichPkg from "which"
 import { Effect, Layer } from "effect"
@@ -156,6 +156,14 @@ const expected = {
 }
 
 describe("boot work", () => {
+  // These count the host, and the BanyanCode plugin refreshes on its own schedule.
+  beforeAll(() => {
+    process.env.BANYANCODE_ENABLE = "0"
+  })
+  afterAll(() => {
+    delete process.env.BANYANCODE_ENABLE
+  })
+
   it.live("counts catalog lookups, Azure model edits and git spawns over a cold boot and one turn", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
