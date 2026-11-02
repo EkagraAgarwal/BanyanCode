@@ -108,7 +108,7 @@ export const computeSafeRename = (
     })
 
     const risks: Risk[] = plannerPlan.risks.map((risk) => ({
-      kind: risk.kind as Risk["kind"],
+      kind: risk.kind,
       severity: risk.severity === "med" ? "medium" : risk.severity,
       message: risk.message,
     }))

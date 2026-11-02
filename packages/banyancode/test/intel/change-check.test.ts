@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { rm } from "node:fs/promises"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { computeBlastRadius } from "../../src/intel/blast-radius.js"
-import { makeEditPlanner } from "../../src/intel/edit-planner.js"
+import { makeEditPlanner, type EditPlannerInterface } from "../../src/intel/edit-planner.js"
 import { resolveGraphTarget } from "../../src/intel/resolve.js"
+import { handlers } from "../../src/intel/rpc.js"
 import { computeSafeRename, RenamePlanError } from "../../src/intel/safe-rename.js"
 import { make } from "../../src/intel/service.js"
-import type { PreflightOutput } from "../../src/intel/types.js"
+import { SafeRenameOutput, type PreflightOutput } from "../../src/intel/types.js"
 import { buildProject } from "./graph-fixture.js"
 
 const roots: string[] = []
@@ -87,6 +88,41 @@ describe("safe rename", () => {
     )
     expect(result.edits).toEqual([])
     expect((result.preflight as PreflightOutput).target.resolved).toBe(true)
+  })
+
+  test("RPC output schema accepts a real rename and planner risk kinds", async () => {
+    const { fixture, intel, planner, root } = await setup()
+    const rpcContext = { error: () => { throw new Error("unexpected rpc error") } } as never
+
+    const real = await Effect.runPromise(
+      handlers({ port: fixture.port, intel, planner }).safeRename(
+        { symbol: "MemoryRepo.update", newName: "MemoryRepo.set", dryRun: false, root },
+        rpcContext,
+      ),
+    )
+    const decoded = Schema.decodeUnknownSync(SafeRenameOutput)(real)
+    expect(decoded.edits.length).toBe(6)
+
+    // The edit planner's own vocabulary (`missing-tests`) must pass the same
+    // output schema: this was the reported 500.
+    const riskPlanner: EditPlannerInterface = {
+      ...planner,
+      planBeforeEdit: () =>
+        Effect.succeed({
+          steps: [],
+          expectedImpact: { directDependents: 6, transitiveDependents: 1, testsToRun: [] },
+          risks: [{ kind: "missing-tests", severity: "med", message: "no test files found in dependents" }],
+        }),
+    }
+    const withRisk = await Effect.runPromise(
+      handlers({ port: fixture.port, intel, planner: riskPlanner }).safeRename(
+        { symbol: "MemoryRepo.update", newName: "MemoryRepo.set", dryRun: true, root },
+        rpcContext,
+      ),
+    )
+    const riskDecoded = Schema.decodeUnknownSync(SafeRenameOutput)(withRisk)
+    expect(riskDecoded.risks).toHaveLength(1)
+    expect(riskDecoded.risks[0]?.kind).toBe("missing-tests")
   })
 
   test("rejects bare symbol and newName with a typed failure", async () => {

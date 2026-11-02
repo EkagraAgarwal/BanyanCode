@@ -1,7 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { dirname, join } from "node:path"
-import { VERSION } from "../version.js"
 
 /**
  * Install telemetry, ported from v1
@@ -139,7 +138,7 @@ export const buildPayload = (
   return {
     install_id: identity.install_id,
     event_type: options.eventType ?? "first_run",
-    version: options.version ?? VERSION,
+    version: options.version ?? "unknown",
     channel: options.channel ?? "latest",
     os: process.platform,
     arch: process.arch,

@@ -207,7 +207,7 @@ export const makeEditPlanner = (port: CodegraphPort): EditPlannerInterface => {
           { tool: "code_find", args: { intent: "callers", target: input.targetSymbol }, rationale: "re-verify callers after the edit" },
           { tool: "code_find", args: { intent: "impact", target: input.targetSymbol }, rationale: "re-check blast radius" },
           ...(testsToRun.length > 0
-            ? [{ tool: "bash", args: { command: "bun test " + testsToRun.join(" ") }, rationale: "run affected tests" }]
+            ? [{ tool: "shell", args: { command: "bun test " + testsToRun.join(" ") }, rationale: "run affected tests" }]
             : []),
         ],
         expectedImpact: { directDependents: callers.length, transitiveDependents: callers.length, testsToRun },

@@ -26,7 +26,7 @@ const FILE_PATH_PATTERN = /^[a-zA-Z0-9._/-]+$/
 const TEST_PATH_PATTERN = /^[a-zA-Z0-9._*?-][a-zA-Z0-9._/*?-]*$/
 
 const ProjectRoot = Schema.optional(Schema.String.check(Schema.isMaxLength(512))).annotate({
-  description: "Project root. Defaults to the current working directory when omitted.",
+  description: "Project root. Defaults to the session project root when omitted.",
 })
 
 const TimeoutMs = Schema.optional(Schema.Number).annotate({

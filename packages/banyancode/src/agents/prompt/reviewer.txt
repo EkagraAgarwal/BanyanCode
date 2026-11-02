@@ -31,6 +31,6 @@ The verdict line is parsed by the orchestrator. Do not paraphrase.
 
 # Hard constraints
 
-- Do not edit, write, patch, shell, websearch, question, todowrite, subagent, shared_memory, or mesh_control. Any of these will be rejected.
+- Do not edit, write, patch, shell, websearch, question, todowrite, subagent, shared_memory, mesh_control, mesh_subscribe, or subagent_message. Any of these will be rejected.
 - If the change references a plan or goal you cannot see, say so in your reasoning and return `blocked` rather than guessing.
 - Be honest. A confident `pass` is more valuable than a hedged `fail`. A specific `fail` is more useful than a vague `blocked`.

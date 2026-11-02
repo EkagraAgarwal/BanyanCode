@@ -272,6 +272,9 @@ export const StalenessSchema = Schema.Struct({
   reason: Schema.optional(Schema.String),
 })
 
+// Preflight and the edit planner both feed this schema, so the union covers
+// both vocabularies. The planner-only kinds are the ones v1 passed through as
+// free-form strings.
 export const RiskKind = Schema.Literals([
   "no-target",
   "many-callers",
@@ -279,6 +282,9 @@ export const RiskKind = Schema.Literals([
   "touches-event-bus",
   "touches-http-routes",
   "stale-graph",
+  "missing-tests",
+  "external-caller",
+  "broad-impact",
 ])
 
 export const RiskSchema = Schema.Struct({

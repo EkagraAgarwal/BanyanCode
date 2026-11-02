@@ -17,7 +17,7 @@ import { Storage } from "./storage/index.js"
 import { register as registerSystem } from "./system/index.js"
 import { register as registerTelemetry } from "./telemetry/index.js"
 import { register as registerVerify } from "./verify/index.js"
-import { PLUGIN_ID, VERSION } from "./version.js"
+import { PLUGIN_ID } from "./version.js"
 import { register as registerWebsearch } from "./websearch/index.js"
 import { register as registerYolo } from "./yolo/index.js"
 
@@ -81,7 +81,7 @@ export default Plugin.define({
       const loaded = yield* config.get()
       return {
         plugin: PLUGIN_ID,
-        version: VERSION,
+        version: ctx.app.version,
         host: { name: ctx.app.name, version: ctx.app.version, channel: ctx.app.channel },
         database: {
           path: storage.path,

@@ -38,11 +38,16 @@ const resultFields = (result: VerifierResult, limit?: number) => {
   }
 }
 
-export const handlers = (verifier: VerifierInterface): RpcHandlers<typeof Definition> => ({
+/** The location's project root, captured when the plugin registers. */
+export interface HandlerDefaults {
+  readonly projectRoot: string
+}
+
+export const handlers = (verifier: VerifierInterface, defaults: HandlerDefaults): RpcHandlers<typeof Definition> => ({
   typecheck: (input: typeof TypecheckInput.Type) =>
     Effect.gen(function* () {
       const result = yield* verifier.typecheck({
-        projectRoot: input.projectRoot ?? process.cwd(),
+        projectRoot: input.projectRoot ?? defaults.projectRoot,
         ...(input.path !== undefined ? { path: input.path } : {}),
         ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
       })
@@ -52,7 +57,7 @@ export const handlers = (verifier: VerifierInterface): RpcHandlers<typeof Defini
     Effect.gen(function* () {
       const result = yield* verifier.test({
         path: input.path,
-        projectRoot: input.projectRoot ?? process.cwd(),
+        projectRoot: input.projectRoot ?? defaults.projectRoot,
         ...(input.framework !== undefined ? { framework: input.framework } : {}),
         ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
       })
@@ -61,7 +66,7 @@ export const handlers = (verifier: VerifierInterface): RpcHandlers<typeof Defini
   lint: (input: typeof LintInput.Type) =>
     Effect.gen(function* () {
       const result = yield* verifier.lint({
-        projectRoot: input.projectRoot ?? process.cwd(),
+        projectRoot: input.projectRoot ?? defaults.projectRoot,
         ...(input.path !== undefined ? { path: input.path } : {}),
         ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
       })

@@ -26,7 +26,10 @@ export interface IntelDeps {
 
 export const register = (ctx: Context, deps: IntelDeps): Effect.Effect<void, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const intel = make(deps.codegraph)
+    const projectRoot = ctx.location.project.canonical || ctx.location.project.directory
+    // Git reads (ownership, recent commits) must resolve against the project,
+    // not the host process cwd (which is the user's home for the server).
+    const intel = make(deps.codegraph, { cwd: projectRoot })
     const planner = makeEditPlanner(deps.codegraph)
     const tools = buildTools({ ctx, port: deps.codegraph, intel })
 

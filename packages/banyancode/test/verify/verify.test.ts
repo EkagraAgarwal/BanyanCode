@@ -6,6 +6,7 @@ import { dirname, join } from "node:path"
 import { Effect } from "effect"
 import { BanyanConfig } from "../../src/config/index.js"
 import { Storage } from "../../src/storage/index.js"
+import { handlers } from "../../src/verify/rpc.js"
 import { make, withinProject } from "../../src/verify/service.js"
 
 /**
@@ -231,5 +232,34 @@ describe("verify service", () => {
     expect(withinProject("C:/repo", "src/a.ts")).toBe(true)
     expect(withinProject("C:/repo", "../outside.ts")).toBe(false)
     expect(withinProject("C:/repo", "../repo-other/x.ts")).toBe(false)
+  })
+
+  test("RPC handlers default projectRoot to the registered location", async () => {
+    const roots: string[] = []
+    const verifier = {
+      detect: () => Effect.die("unused"),
+      typecheck: (input: { projectRoot?: string }) =>
+        Effect.sync(() => {
+          roots.push(input.projectRoot ?? "")
+          return {
+            kind: "typecheck" as const,
+            target: input.projectRoot ?? "",
+            status: "passed" as const,
+            summary: {},
+            durationMs: 1,
+            cacheHit: false,
+            rawOutput: undefined,
+            command: "bun run typecheck",
+          }
+        }),
+      test: () => Effect.die("unused"),
+      lint: () => Effect.die("unused"),
+      compile: () => Effect.die("unused"),
+    }
+    const rpc = handlers(verifier as never, { projectRoot: "/ctx/project" })
+    const rpcContext = { error: () => { throw new Error("unexpected rpc error") } } as never
+    const result = await Effect.runPromise(rpc.typecheck({}, rpcContext))
+    expect(result.status).toBe("passed")
+    expect(roots).toEqual(["/ctx/project"])
   })
 })

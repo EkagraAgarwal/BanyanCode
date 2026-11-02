@@ -173,10 +173,12 @@ type QueryContext = {
 
 export interface Options {
   readonly git?: GitPort
+  /** Default git working directory (the plugin's project root). */
+  readonly cwd?: string
 }
 
 export const make = (port: CodegraphPort, options: Options = {}): Interface => {
-  const git = options.git ?? makeGit()
+  const git = options.git ?? makeGit(options.cwd)
 
   const findSymbol = (
     input: { name: string; kind?: GraphNode["kind"]; file?: string; exact?: boolean; workspace?: WorkspaceContext },

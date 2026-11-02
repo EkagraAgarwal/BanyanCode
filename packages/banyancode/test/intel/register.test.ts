@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import type { Tool } from "@opencode/schema/tool"
+import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { Effect } from "effect"
 import { register as registerIntel } from "../../src/intel/index.js"
 import { register as registerVerify } from "../../src/verify/index.js"
@@ -22,12 +24,17 @@ interface RegisteredRpc {
   readonly handlers: Readonly<Record<string, unknown>>
 }
 
-const makeContext = () => {
+const makeContext = (directory: string = process.cwd()) => {
   const tools: Tool.Info[] = []
   const rpc: RegisteredRpc[] = []
   const namespaces: string[] = []
   const commands: string[] = []
   const ctx = {
+    app: { name: "banyancode", version: "26.10.9", channel: "dev" },
+    location: {
+      directory,
+      project: { id: "project-1", directory, canonical: directory },
+    },
     permission: { assert: () => Effect.void },
     tool: {
       transform: (fn: (editor: unknown) => void) =>
@@ -170,5 +177,48 @@ describe("workstream 3c registration", () => {
       expect(tool.input).toBeDefined()
       expect(tool.options?.permission).toBe(tool.name)
     }
+  })
+
+  test("verify tools default to the location project root, not the process cwd", async () => {
+    const directory = join(tmpdir(), "banyancode-verify-location")
+    const harness = makeContext(directory)
+    const roots: string[] = []
+    const result = {
+      kind: "test" as const,
+      target: "src/sum.test.ts",
+      status: "passed" as const,
+      summary: { passed: 1, failed: 0, skipped: 0 },
+      durationMs: 1,
+      cacheHit: false,
+      rawOutput: "pass",
+      command: "bun test src/sum.test.ts",
+    }
+    const verifier = {
+      detect: () => Effect.die("unused"),
+      typecheck: () => Effect.die("unused"),
+      test: (input: { projectRoot?: string }) =>
+        Effect.sync(() => {
+          roots.push(input.projectRoot ?? "")
+          return result
+        }),
+      lint: () => Effect.die("unused"),
+      compile: () => Effect.die("unused"),
+    }
+    const tool = buildVerifyTools(harness.ctx, verifier as never).find(
+      (candidate) => candidate.name === "banyan_test",
+    )!
+    await Effect.runPromise(
+      tool.execute(
+        { path: "src/sum.test.ts" },
+        {
+          sessionID: "session-1",
+          agent: "coder",
+          messageID: "message-1",
+          id: "call-1",
+          progress: () => Effect.void,
+        } as never,
+      ),
+    )
+    expect(roots).toEqual([directory])
   })
 })

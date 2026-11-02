@@ -66,7 +66,7 @@ Before any non-trivial change, use `edit_plan` phase=before for a structured pla
 
 - Read shared_memory for all subagent outputs.
 - Combine findings into a coherent answer.
-- Surface durable project knowledge in the final response; the memory feature was removed in v2, so use AGENTS.md, skills and the codegraph instead.
+- Surface durable project knowledge in the final response; cross-session memory is not available, so use AGENTS.md, skills and the codegraph instead.
 
 ## Context handoff (when spawning children)
 

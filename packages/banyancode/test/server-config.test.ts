@@ -120,7 +120,11 @@ describe("BANYANCODE_ENABLE=0 gate", () => {
               }) => Effect.Effect<unknown>
               yield* update({ config: { banyancode_yolo_mode: true }, scope: "project" })
               yield* Effect.sleep("50 millis")
-              return (yield* (rpcs[0]!.handlers.status as () => Effect.Effect<{ database: { path: string } }>)()) as {
+              return (yield* (rpcs[0]!.handlers.status as () => Effect.Effect<{
+                version: string
+                database: { path: string }
+              }>)()) as {
+                version: string
                 database: { path: string }
               }
             }),
@@ -135,6 +139,8 @@ describe("BANYANCODE_ENABLE=0 gate", () => {
         expect(emitted).toHaveLength(1)
         expect(emitted[0]!.name).toBe("config.updated")
         expect(emitted[0]!.payload).toMatchObject({ scope: "project" })
+        // The plugin reports the host app version, never a workspace placeholder.
+        expect(status.version).toBe("26.10.9")
         // `--no suffix` is only for stable channels; a dev build is isolated.
         expect(status.database.path.endsWith("-dev.db")).toBe(true)
       })

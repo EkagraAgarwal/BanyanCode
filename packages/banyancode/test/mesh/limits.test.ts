@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { Effect } from "effect"
 import {
   applySubagentPermissionDecision,
   checkNestedSpawn,
+  makeSubagentSlotLedger,
   MAX_NESTED_EXPLORE_LIFETIME_PER_CODER,
   MAX_SUBAGENTS_LIMIT,
   NESTED_LIFETIME_WINDOW_MS,
@@ -94,6 +96,47 @@ describe("max subagents limit", () => {
     }
     applySubagentPermissionDecision(denied, { sessions: tree(9), maxSubagents: 1 })
     expect(denied.message).toBe("rule")
+  })
+
+  test("concurrent spawns reserve atomically and release when the child ends", async () => {
+    const ledger = await Effect.runPromise(makeSubagentSlotLedger())
+    const [first, second] = await Effect.runPromise(
+      Effect.all(
+        [
+          ledger.reserve({ toolCallID: "call-1", rootSessionID: "root", runningSessionIDs: new Set(), maxSubagents: 1 }),
+          ledger.reserve({ toolCallID: "call-2", rootSessionID: "root", runningSessionIDs: new Set(), maxSubagents: 1 }),
+        ],
+        { concurrency: 2 },
+      ),
+    )
+    // Both spawns saw running=0, but only one may pass the check.
+    expect([first.deny, second.deny].filter(Boolean)).toHaveLength(1)
+    expect(await Effect.runPromise(ledger.reservedFor("root"))).toBe(1)
+
+    const winner = first.deny ? "call-2" : "call-1"
+    await Effect.runPromise(ledger.bind(winner, "child-1"))
+    await Effect.runPromise(ledger.releaseChild("child-1"))
+    expect(await Effect.runPromise(ledger.reservedFor("root"))).toBe(0)
+
+    const next = await Effect.runPromise(
+      ledger.reserve({ toolCallID: "call-3", rootSessionID: "root", runningSessionIDs: new Set(), maxSubagents: 1 }),
+    )
+    expect(next.deny).toBe(false)
+  })
+
+  test("a running child with a bound reservation takes one slot, not two", async () => {
+    const ledger = await Effect.runPromise(makeSubagentSlotLedger())
+    const reserve = (id: string, runningSessionIDs: ReadonlySet<string>) =>
+      Effect.runPromise(ledger.reserve({ toolCallID: id, rootSessionID: "root", runningSessionIDs, maxSubagents: 2 }))
+    expect((await reserve("call-1", new Set())).deny).toBe(false)
+    await Effect.runPromise(ledger.bind("call-1", "child-1"))
+    // Not in the session list yet: still counted through its reservation.
+    expect((await reserve("call-2", new Set())).running).toBe(1)
+    await Effect.runPromise(ledger.bind("call-2", "child-2"))
+    // In the list now: counted once each, and the limit of two is reached.
+    const third = await reserve("call-3", new Set(["child-1", "child-2"]))
+    expect(third.running).toBe(2)
+    expect(third.deny).toBe(true)
   })
 
   test("validates 1..20 and clamps config values", () => {

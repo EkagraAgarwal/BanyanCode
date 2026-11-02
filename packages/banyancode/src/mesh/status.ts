@@ -146,6 +146,22 @@ export const buildForest = (
     .map((snapshot) => toNode(snapshot, byParent, live))
 }
 
+/** Drop killed sessions and their subtrees from a status snapshot. */
+export const withoutKilled = (
+  sessions: ReadonlyMap<string, MeshSessionSnapshot>,
+  killed: ReadonlySet<string>,
+): ReadonlyMap<string, MeshSessionSnapshot> => {
+  if (killed.size === 0) return sessions
+  const excluded = new Set<string>()
+  for (const sessionID of killed) {
+    if (!sessions.has(sessionID)) continue
+    excluded.add(sessionID)
+    for (const child of descendantsOf(sessions, sessionID)) excluded.add(child.sessionID)
+  }
+  if (excluded.size === 0) return sessions
+  return new Map([...sessions].filter(([sessionID]) => !excluded.has(sessionID)))
+}
+
 /** Subtree for one session (including itself). */
 export const treeFor = (
   sessions: ReadonlyMap<string, MeshSessionSnapshot>,
@@ -162,11 +178,11 @@ export const buildStatus = (
   live: ReadonlyMap<string, LiveState> = new Map(),
   rootSessionID?: string,
 ): MeshStatus => {
-  const scoped = rootSessionID === undefined ? undefined : treeFor(sessions, rootSessionID, live)
-  return {
-    roots: scoped === undefined ? buildForest(sessions, live) : [scoped],
-    generatedAt: Date.now(),
+  if (rootSessionID === undefined) {
+    return { roots: buildForest(sessions, live), generatedAt: Date.now() }
   }
+  const scoped = treeFor(sessions, rootSessionID, live)
+  return { roots: scoped === undefined ? [] : [scoped], generatedAt: Date.now() }
 }
 
 export const descendantsOf = (
@@ -191,6 +207,17 @@ export const flattenTree = (node: MeshNode): readonly MeshNode[] => [
 ]
 
 /** Number of descendants of `rootSessionID` that are currently running. */
+export const runningDescendantIDs = (
+  sessions: ReadonlyMap<string, MeshSessionSnapshot>,
+  rootSessionID: string,
+  live: ReadonlyMap<string, LiveState> = new Map(),
+): ReadonlySet<string> =>
+  new Set(
+    descendantsOf(sessions, rootSessionID)
+      .filter((snapshot) => stateOf(snapshot, live.get(snapshot.sessionID)) === "running")
+      .map((snapshot) => snapshot.sessionID),
+  )
+
 export const countRunningDescendants = (
   sessions: ReadonlyMap<string, MeshSessionSnapshot>,
   rootSessionID: string,

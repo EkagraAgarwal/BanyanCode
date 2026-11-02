@@ -13,7 +13,7 @@ import {
   type LimitsState,
   type MaxValidation,
 } from "./limits.js"
-import { buildStatus, descendantsOf, rootOf, type LiveState } from "./status.js"
+import { buildStatus, descendantsOf, rootOf, withoutKilled, type LiveState } from "./status.js"
 import type { SessionPort } from "./session-port.js"
 import { dispatchReview as runDispatchReview, formatReviewPrompt } from "./review.js"
 
@@ -61,6 +61,8 @@ export interface MeshService {
   readonly reviews: ReturnType<typeof makeReviewsRepo>
   readonly limitsState: Ref.Ref<LimitsState>
   readonly live: Ref.Ref<ReadonlyMap<string, LiveState>>
+  /** Sessions killed through `mesh.kill`; hidden from status immediately. */
+  readonly killed: Ref.Ref<ReadonlySet<string>>
   readonly limits: () => Effect.Effect<LimitsConfigSnapshot>
   readonly setMaxSubagents: (value: number) => Effect.Effect<MaxValidation & { readonly limits?: LimitsConfigSnapshot }>
   readonly setSwarmMode: (on: boolean) => Effect.Effect<LimitsConfigSnapshot>
@@ -110,6 +112,7 @@ export const makeMesh = (deps: MeshDeps): Effect.Effect<MeshService> =>
     const reviews = makeReviewsRepo(deps.storage)
     const limitsState = yield* Ref.make<LimitsState>({})
     const live = yield* Ref.make<ReadonlyMap<string, LiveState>>(new Map())
+    const killed = yield* Ref.make<ReadonlySet<string>>(new Set())
     const modelForAgent = deps.modelForAgent ?? (() => Effect.succeed(undefined))
 
     const limits = () =>
@@ -167,7 +170,7 @@ export const makeMesh = (deps: MeshDeps): Effect.Effect<MeshService> =>
 
     const status: MeshService["status"] = (input) =>
       Effect.gen(function* () {
-        const map = yield* snapshotMap()
+        const map = withoutKilled(yield* snapshotMap(), yield* Ref.get(killed))
         const states = yield* Ref.get(live)
         const target =
           input?.sessionID === undefined
@@ -292,6 +295,11 @@ export const makeMesh = (deps: MeshDeps): Effect.Effect<MeshService> =>
         const targets = (yield* targetSessions(root, input.targetAgent)).filter(
           (session) => session.sessionID !== input.parentSessionID,
         )
+        yield* Ref.update(killed, (current) => {
+          const next = new Set(current)
+          for (const target of targets) next.add(target.sessionID)
+          return next
+        })
         yield* Effect.forEach(
           targets,
           (target) => deps.sessions.interrupt(target.sessionID).pipe(Effect.catchCause(() => Effect.void)),
@@ -400,6 +408,7 @@ export const makeMesh = (deps: MeshDeps): Effect.Effect<MeshService> =>
       reviews,
       limitsState,
       live,
+      killed,
       limits,
       setMaxSubagents,
       setSwarmMode,

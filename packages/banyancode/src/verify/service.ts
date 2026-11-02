@@ -295,12 +295,20 @@ interface CachedRow {
 export interface Options {
   readonly storage: StorageInterface
   readonly config: ConfigInterface
+  /** Project root used when a tool/RPC call omits `projectRoot`. */
+  readonly projectRoot?: string
   /** @internal test seam for the concurrency bound. */
   readonly concurrency?: number
 }
 
 export const make = (options: Options): Interface => {
   const semaphore = Semaphore.makeUnsafe(options.concurrency ?? CONCURRENCY)
+
+  const resolveProjectRoot = (input: { readonly projectRoot?: string }): string => {
+    const root = input.projectRoot ?? options.projectRoot
+    if (root === undefined) throw new Error("verification requires a projectRoot")
+    return path.resolve(root)
+  }
 
   const recordStart = (kind: VerificationKind, target: string, cacheKey: string): Effect.Effect<number> =>
     Effect.gen(function* () {
@@ -425,7 +433,7 @@ export const make = (options: Options): Interface => {
 
   const typecheck = (input: TypecheckInput): Effect.Effect<VerifierResult> =>
     Effect.gen(function* () {
-      const projectRoot = path.resolve(input.projectRoot ?? process.cwd())
+      const projectRoot = resolveProjectRoot(input)
       if (!withinProject(projectRoot, input.path)) {
         return erroredResult("typecheck", input.path ?? projectRoot, "", `typecheck: path escapes projectRoot`)
       }
@@ -444,7 +452,7 @@ export const make = (options: Options): Interface => {
 
   const test = (input: TestInput): Effect.Effect<VerifierResult> =>
     Effect.gen(function* () {
-      const projectRoot = path.resolve(input.projectRoot ?? process.cwd())
+      const projectRoot = resolveProjectRoot(input)
       if (!withinProject(projectRoot, input.path)) {
         return erroredResult("test", input.path, "", `test: path escapes projectRoot`)
       }
@@ -463,7 +471,7 @@ export const make = (options: Options): Interface => {
 
   const lint = (input: LintInput): Effect.Effect<VerifierResult> =>
     Effect.gen(function* () {
-      const projectRoot = path.resolve(input.projectRoot ?? process.cwd())
+      const projectRoot = resolveProjectRoot(input)
       if (!withinProject(projectRoot, input.path)) {
         return erroredResult("lint", input.path ?? projectRoot, "", `lint: path escapes projectRoot`)
       }
@@ -482,7 +490,7 @@ export const make = (options: Options): Interface => {
 
   const compile = (input: CompileInput): Effect.Effect<VerifierResult> =>
     Effect.gen(function* () {
-      const projectRoot = path.resolve(input.projectRoot ?? process.cwd())
+      const projectRoot = resolveProjectRoot(input)
       if (!withinProject(projectRoot, input.path)) {
         return erroredResult("compile", input.path, "", `compile: path escapes projectRoot`)
       }

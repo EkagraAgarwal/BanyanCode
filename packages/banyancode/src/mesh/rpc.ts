@@ -1,7 +1,7 @@
 import type { RpcHandlers } from "@opencode/plugin/effect/rpc"
 import { Rpc } from "@opencode/schema/rpc"
-import { Effect, Schema } from "effect"
-import { MAX_SUBAGENTS_LIMIT, DEFAULT_MAX_SUBAGENTS } from "./limits.js"
+import { Effect, Result, Schema } from "effect"
+import { MAX_SUBAGENTS_LIMIT, DEFAULT_MAX_SUBAGENTS, validateMaxSubagents } from "./limits.js"
 import type { MeshService } from "./service.js"
 import type { MeshNode } from "./types.js"
 
@@ -136,6 +136,13 @@ export interface HandlerDeps {
   readonly mesh: MeshService
   /** Stops the session's running work via the host `session.background` route. */
   readonly background: (sessionID: string) => Effect.Effect<void>
+  /** Persists a limits change to `banyancode.json` (v1 behavior). */
+  readonly persist?: (patch: {
+    readonly banyancode_max_subagents?: number
+    readonly banyancode_swarm_mode?: boolean
+  }) => Effect.Effect<void, unknown>
+  /** Re-publishes the status tree after a mutation that emits no session event. */
+  readonly changed?: (sessionID: string) => Effect.Effect<void>
 }
 
 export const handlers = (deps: HandlerDeps): RpcHandlers<typeof Definition> => ({
@@ -147,15 +154,37 @@ export const handlers = (deps: HandlerDeps): RpcHandlers<typeof Definition> => (
   "limits.get": () => deps.mesh.limits().pipe(Effect.map(limitsOutput), Effect.orDie),
   background: (input) => deps.background(input.sessionID).pipe(Effect.orDie),
   steer: (input) => deps.mesh.steer(input).pipe(Effect.orDie),
-  kill: (input) => deps.mesh.kill(input).pipe(Effect.orDie),
+  kill: (input) =>
+    Effect.gen(function* () {
+      const result = yield* deps.mesh.kill(input)
+      if (deps.changed !== undefined) yield* deps.changed(input.parentSessionID)
+      return result
+    }).pipe(Effect.orDie),
   "limits.set": (input) =>
     Effect.gen(function* () {
       if (input.maxSubagents !== undefined) {
-        const result = yield* deps.mesh.setMaxSubagents(input.maxSubagents)
-        if (!result.ok) {
-          return { ok: false, error: result.error, limits: limitsOutput(yield* deps.mesh.limits()) }
+        const validation = validateMaxSubagents(input.maxSubagents)
+        if (!validation.ok) {
+          return { ok: false, error: validation.error, limits: limitsOutput(yield* deps.mesh.limits()) }
         }
       }
+      const patch = {
+        ...(input.maxSubagents === undefined
+          ? {}
+          : { banyancode_max_subagents: input.maxSubagents }),
+        ...(input.swarmMode === undefined ? {} : { banyancode_swarm_mode: input.swarmMode }),
+      }
+      if (deps.persist !== undefined && Object.keys(patch).length > 0) {
+        const written = yield* deps.persist(patch).pipe(Effect.result)
+        if (Result.isFailure(written)) {
+          return {
+            ok: false,
+            error: `could not write banyancode.json: ${String(written.failure)}`,
+            limits: limitsOutput(yield* deps.mesh.limits()),
+          }
+        }
+      }
+      if (input.maxSubagents !== undefined) yield* deps.mesh.setMaxSubagents(input.maxSubagents)
       if (input.swarmMode !== undefined) yield* deps.mesh.setSwarmMode(input.swarmMode)
       return { ok: true, limits: limitsOutput(yield* deps.mesh.limits()) }
     }).pipe(Effect.orDie),

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { execFileSync } from "node:child_process"
 import { rm } from "node:fs/promises"
 import { Effect } from "effect"
 import { make } from "../../src/intel/service.js"
@@ -20,6 +21,24 @@ const setup = async () => {
 }
 
 describe("repository intelligence service", () => {
+  test("git reads default to the project root, not the server process cwd", async () => {
+    const project = await buildProject()
+    roots.push(project.root)
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: project.root, stdio: "ignore" })
+    git("init", "-q")
+    git("config", "user.email", "fixture@example.com")
+    git("config", "user.name", "Fixture Owner")
+    git("add", "-A")
+    git("commit", "-q", "-m", "fixture")
+
+    const intel = make(project.fixture.port, { cwd: project.root })
+    const owner = await Effect.runPromise(intel.findOwner({ path: "packages/core/src/memory-repo.ts" }))
+    expect(owner).toEqual({ owner: "Fixture Owner", count: 1 })
+
+    const ctx = await Effect.runPromise(intel.query({ query: "MemoryRepo", limit: 10 }))
+    expect(ctx.git.recentCommits.map((commit) => commit.subject)).toEqual(["fixture"])
+  })
+
   test("query returns symbols, graph slice, tests and ranking signals", async () => {
     const { fixture, intel } = await setup()
     const ctx = await Effect.runPromise(intel.query({ query: "MemoryRepo", limit: 10 }))

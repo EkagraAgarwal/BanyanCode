@@ -28,6 +28,9 @@ export const NAME_COMPILE = "banyan_compile"
 
 const DEFAULT_OUTPUT_LIMIT = 65_536
 
+/** The location's project root, never the server process cwd. */
+const projectRootOf = (ctx: Context): string => ctx.location.project.canonical || ctx.location.project.directory
+
 const clampOutput = (raw: string | undefined, limit: number | undefined): string | undefined => {
   const cap = limit ?? DEFAULT_OUTPUT_LIMIT
   if (cap === 0) return undefined
@@ -57,14 +60,14 @@ export const makeTestTool = (ctx: Context, verifier: VerifierInterface): Tool.In
     "Returns\n" +
     '  { status, summary: {passed, failed, skipped}, durationMs, cacheHit, rawOutput? }\n' +
     "Avoid when\n" +
-    "  you only need a single test name — `bun test` already supports `-t <name>` via the bash tool.\n" +
+    "  you only need a single test name — `bun test` already supports `-t <name>` via the shell tool.\n" +
     "After this, often: typecheck (to confirm types), blast_radius (to see what else is affected).",
   input: TestInput,
   output: TestOutput,
   options: { permission: NAME_TEST },
   execute: (input, context) =>
     Effect.gen(function* () {
-      const projectRoot = path.resolve(input.projectRoot ?? process.cwd())
+      const projectRoot = path.resolve(input.projectRoot ?? projectRootOf(ctx))
       if (!withinProject(projectRoot, input.path)) {
         return yield* Effect.fail(
           new Tool.Error({ message: `test: path "${input.path}" resolves outside projectRoot "${projectRoot}"` }),
@@ -111,7 +114,7 @@ export const makeTypecheckTool = (
   options: { permission: NAME_TYPECHECK },
   execute: (input, context) =>
     Effect.gen(function* () {
-      const projectRoot = path.resolve(input.projectRoot ?? process.cwd())
+      const projectRoot = path.resolve(input.projectRoot ?? projectRootOf(ctx))
       if (!withinProject(projectRoot, input.path)) {
         return yield* Effect.fail(
           new Tool.Error({ message: `typecheck: path "${input.path}" resolves outside projectRoot "${projectRoot}"` }),
@@ -153,7 +156,7 @@ export const makeLintTool = (ctx: Context, verifier: VerifierInterface): Tool.In
   options: { permission: NAME_LINT },
   execute: (input, context) =>
     Effect.gen(function* () {
-      const projectRoot = path.resolve(input.projectRoot ?? process.cwd())
+      const projectRoot = path.resolve(input.projectRoot ?? projectRootOf(ctx))
       if (!withinProject(projectRoot, input.path)) {
         return yield* Effect.fail(
           new Tool.Error({ message: `lint: path "${input.path}" resolves outside projectRoot "${projectRoot}"` }),
@@ -194,7 +197,7 @@ export const makeCompileTool = (
   options: { permission: NAME_COMPILE },
   execute: (input, context) =>
     Effect.gen(function* () {
-      const projectRoot = path.resolve(input.projectRoot ?? process.cwd())
+      const projectRoot = path.resolve(input.projectRoot ?? projectRootOf(ctx))
       if (!withinProject(projectRoot, input.path)) {
         return yield* Effect.fail(
           new Tool.Error({ message: `compile: path "${input.path}" resolves outside projectRoot "${projectRoot}"` }),

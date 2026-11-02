@@ -136,6 +136,12 @@ describe("banyancode agents", () => {
     // v1 parity: build/plan keep the provider prompt.
     expect(agents.get("build")?.system).toBeUndefined()
     expect(agents.get("plan")?.system).toBeUndefined()
+    // Prompts are model-visible: no internal version names or missing tool ids.
+    for (const agent of agents.values()) {
+      expect(agent.system ?? "").not.toContain("v2")
+      expect(agent.system ?? "").not.toContain("v1")
+      expect(agent.system ?? "").not.toContain("bash")
+    }
   })
 
   test("build allows the four worker subagents and denies the reviewer", () => {
@@ -170,6 +176,10 @@ describe("banyancode agents", () => {
     expect(lastEffect(agents.get("scout")!.permissions, "websearch")).toBe("allow")
     expect(lastEffect(agents.get("reviewer")!.permissions, "question")).toBe("deny")
     expect(lastEffect(agents.get("reviewer")!.permissions, "websearch")).toBe("deny")
+    // The reviewer prompt forbids mesh writes; the permission layer must agree.
+    for (const action of ["shared_memory", "mesh_control", "mesh_subscribe", "subagent_message"]) {
+      expect(lastEffect(agents.get("reviewer")!.permissions, action)).toBe("deny")
+    }
   })
 
   test("researcher searches but cannot edit or run shell", () => {

@@ -1,17 +1,32 @@
 import type { Context } from "@opencode/plugin/effect/plugin"
+import type { RpcRegistration } from "@opencode/plugin/effect/rpc"
 import { Tool } from "@opencode/schema/tool"
 import { Cause, Effect, Option, Ref, Stream, type Scope } from "effect"
 import type { Interface as ConfigInterface } from "../config/service.js"
+import { update as updateConfig } from "../config/writer.js"
 import type { Interface as StorageInterface } from "../storage/service.js"
 import { checkGoalCommand, registerCommands } from "./commands.js"
-import { applySubagentPermissionDecision, subagentToolGuard, type NestedBudgetEntry } from "./limits.js"
-import { makeMesh } from "./service.js"
+import {
+  applySubagentPermissionDecision,
+  makeSubagentSlotLedger,
+  subagentToolGuard,
+  type NestedBudgetEntry,
+} from "./limits.js"
+import { makeMesh, type MeshService } from "./service.js"
 import type { SessionPort } from "./session-port.js"
 import { pluginSessionPort } from "./session-port.js"
 import { makeSharedMemoryTool } from "./shared-memory.js"
 import { buildMeshTools } from "./tools.js"
 import { Definition, handlers } from "./rpc.js"
-import { removeSnapshot, rootOf, treeFor, upsertSnapshot, type LiveState } from "./status.js"
+import {
+  runningDescendantIDs,
+  removeSnapshot,
+  rootOf,
+  treeFor,
+  upsertSnapshot,
+  withoutKilled,
+  type LiveState,
+} from "./status.js"
 import type { MeshSessionSnapshot } from "./types.js"
 
 export { Definition as MeshRpcDefinition, handlers as meshRpcHandlers } from "./rpc.js"
@@ -90,6 +105,7 @@ export const register = (ctx: Context, deps: MeshDeps): Effect.Effect<void, neve
         ),
       )
     const mesh = yield* makeMesh({ storage: deps.storage, config: deps.config, sessions, modelForAgent })
+    const slots = yield* makeSubagentSlotLedger()
 
     // ── tools ──────────────────────────────────────────────────────────────
     const tools = [
@@ -137,6 +153,29 @@ export const register = (ctx: Context, deps: MeshDeps): Effect.Effect<void, neve
 
     // ── limit enforcement: tool gate (background + nested budget + max) ────
     const nestedBudget = yield* Ref.make<ReadonlyMap<string, NestedBudgetEntry>>(new Map())
+    yield* ctx.tool.hook("execute.after", (event) =>
+      Effect.gen(function* () {
+        if (event.tool !== SUBAGENT_TOOL) return
+        if (event.status === "error") {
+          yield* slots.release(event.id)
+          return
+        }
+        const output = inputRecord(event.result.output)
+        const childSessionID = typeof output?.sessionID === "string" ? output.sessionID : undefined
+        if (childSessionID === undefined) {
+          yield* slots.release(event.id)
+          return
+        }
+        if (output?.status === "completed") {
+          yield* slots.release(event.id)
+          return
+        }
+        yield* slots.bind(event.id, childSessionID)
+        if ((yield* Ref.get(mesh.live)).get(childSessionID) === "idle") {
+          yield* slots.releaseChild(childSessionID)
+        }
+      }).pipe(Effect.catchCause(() => Effect.void)),
+    )
     yield* ctx.tool.hook("execute.before", (event) =>
       Effect.gen(function* () {
         if (event.tool !== SUBAGENT_TOOL) return
@@ -176,6 +215,22 @@ export const register = (ctx: Context, deps: MeshDeps): Effect.Effect<void, neve
         if (decision.deny) {
           return yield* Effect.fail(new Tool.Error({ message: decision.message ?? "Subagent spawn denied" }))
         }
+        if (followUp === undefined) {
+          // Reserve under one Ref.modify so a second spawn in the same turn
+          // sees this slot even before the child session exists.
+          const root = rootOf(map, event.sessionID) ?? event.sessionID
+          const reservation = yield* slots.reserve({
+            toolCallID: event.id,
+            rootSessionID: root,
+            runningSessionIDs: runningDescendantIDs(map, root, live),
+            maxSubagents: limits.maxSubagents,
+          })
+          if (reservation.deny) {
+            return yield* Effect.fail(
+              new Tool.Error({ message: reservation.message ?? "Subagent spawn denied" }),
+            )
+          }
+        }
         if (decision.nested !== undefined) {
           yield* Ref.update(nestedBudget, (current) => {
             const next = new Map(current)
@@ -195,6 +250,7 @@ export const register = (ctx: Context, deps: MeshDeps): Effect.Effect<void, neve
     )
 
     // ── RPC + status events ────────────────────────────────────────────────
+    const emitter = yield* Ref.make<((sessionID: string) => Effect.Effect<void>) | undefined>(undefined)
     const rpc = yield* ctx.rpc
       .register(
         Definition,
@@ -205,9 +261,28 @@ export const register = (ctx: Context, deps: MeshDeps): Effect.Effect<void, neve
             ctx.session
               .background({ sessionID: sessionID as never })
               .pipe(Effect.orDie, Effect.asVoid),
+          // v1 persisted both limits in `banyancode.json`; the TUI palette and
+          // `/swarm` both go through this RPC.
+          persist: (patch) =>
+            Effect.promise(() =>
+              updateConfig(
+                {
+                  directory: ctx.location.directory,
+                  projectRoot: ctx.location.project.canonical || ctx.location.project.directory,
+                },
+                patch,
+              ),
+            ).pipe(Effect.asVoid),
+          changed: (sessionID) =>
+            Effect.gen(function* () {
+              yield* Effect.forEach(yield* Ref.get(mesh.killed), slots.releaseChild, { discard: true })
+              const emit = yield* Ref.get(emitter)
+              if (emit !== undefined) yield* emit(sessionID)
+            }),
         }),
       )
       .pipe(Effect.orDie)
+    yield* Ref.set(emitter, emitStatusFor(mesh, rpc))
     const cache = yield* Ref.make<ReadonlyMap<string, MeshSessionSnapshot>>(new Map())
 
     yield* ctx.event
@@ -224,7 +299,8 @@ export const register = (ctx: Context, deps: MeshDeps): Effect.Effect<void, neve
               const root = rootOf(current, sessionID) ?? sessionID
               const next = removeSnapshot(current, sessionID)
               yield* Ref.set(cache, next)
-              yield* emitStatus(rpc, next, root, yield* Ref.get(mesh.live))
+              yield* slots.releaseChild(sessionID)
+              yield* emitStatus(rpc, next, root, yield* Ref.get(mesh.live), yield* Ref.get(mesh.killed))
               return
             }
             if (type === "session.status") {
@@ -252,12 +328,19 @@ export const register = (ctx: Context, deps: MeshDeps): Effect.Effect<void, neve
                 next.set(sessionID, "idle")
                 return next
               })
+              yield* slots.releaseChild(sessionID)
             }
             const snapshot = yield* sessions.get(sessionID)
             if (snapshot === undefined) return
             const next = upsertSnapshot(yield* Ref.get(cache), snapshot)
             yield* Ref.set(cache, next)
-            yield* emitStatus(rpc, next, rootOf(next, sessionID) ?? sessionID, yield* Ref.get(mesh.live))
+            yield* emitStatus(
+              rpc,
+              next,
+              rootOf(next, sessionID) ?? sessionID,
+              yield* Ref.get(mesh.live),
+              yield* Ref.get(mesh.killed),
+            )
           })
           return handler.pipe(
             Effect.catchCause((cause) =>
@@ -293,13 +376,24 @@ export const register = (ctx: Context, deps: MeshDeps): Effect.Effect<void, neve
   })
 
 const emitStatus = (
-  rpc: import("@opencode/plugin/effect/rpc").RpcRegistration<typeof Definition>,
+  rpc: RpcRegistration<typeof Definition>,
   cache: ReadonlyMap<string, MeshSessionSnapshot>,
   rootSessionID: string,
   live: ReadonlyMap<string, LiveState>,
+  killed: ReadonlySet<string>,
 ) =>
   Effect.gen(function* () {
-    const tree = treeFor(cache, rootSessionID, live)
+    const tree = treeFor(withoutKilled(cache, killed), rootSessionID, live)
     if (tree === undefined) return
     yield* rpc.events.emit("status.updated", { rootSessionID, tree })
   }).pipe(Effect.catchCause(() => Effect.void))
+
+const emitStatusFor =
+  (mesh: MeshService, rpc: RpcRegistration<typeof Definition>) => (sessionID: string) =>
+    Effect.gen(function* () {
+      const map = withoutKilled(yield* mesh.snapshotMap(), yield* Ref.get(mesh.killed))
+      const root = rootOf(map, sessionID) ?? sessionID
+      const tree = treeFor(map, root, yield* Ref.get(mesh.live))
+      if (tree === undefined) return
+      yield* rpc.events.emit("status.updated", { rootSessionID: root, tree })
+    }).pipe(Effect.catchCause(() => Effect.void))

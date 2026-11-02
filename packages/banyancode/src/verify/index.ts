@@ -21,7 +21,8 @@ export interface VerifyDeps {
 
 export const register = (ctx: Context, deps: VerifyDeps): Effect.Effect<void, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const verifier = make({ storage: deps.storage, config: deps.config })
+    const projectRoot = ctx.location.project.canonical || ctx.location.project.directory
+    const verifier = make({ storage: deps.storage, config: deps.config, projectRoot })
     const tools = buildTools(ctx, verifier)
 
     yield* ctx.tool
@@ -35,7 +36,7 @@ export const register = (ctx: Context, deps: VerifyDeps): Effect.Effect<void, ne
       .pipe(Effect.orDie)
 
     yield* ctx.rpc
-      .register(Definition, handlers(verifier))
+      .register(Definition, handlers(verifier, { projectRoot }))
       .pipe(Effect.orDie)
   })
 

@@ -302,12 +302,41 @@ describe("mesh tools on a real plugin database", () => {
       const scoped = await Effect.runPromise(rpc.sessionStatus({ sessionID: "child" }, rpcContext))
       expect(scoped.roots[0]?.sessionID).toBe("child")
 
+      const unknown = await Effect.runPromise(rpc.sessionStatus({ sessionID: "ses_nope" }, rpcContext))
+      expect(unknown.roots).toEqual([])
+
       const limits = await Effect.runPromise(rpc["limits.get"]({}, rpcContext))
       expect(limits.maxSubagents).toBe(5)
       expect(limits.maxSubagentsLimit).toBe(20)
 
       await Effect.runPromise(rpc.background({ sessionID: "child" }, rpcContext))
       expect(stopped).toEqual(["child"])
+    })
+  })
+
+  test("a killed subagent disappears from mesh status and the update is emitted", async () => {
+    await withHarness(async (harness) => {
+      const changed: string[] = []
+      const rpc = handlers({
+        mesh: harness.mesh,
+        background: () => Effect.void,
+        changed: (sessionID) =>
+          Effect.sync(() => {
+            changed.push(sessionID)
+          }),
+      })
+      const rpcContext = { error: () => { throw new Error("unexpected rpc error") } } as never
+      const killed = await Effect.runPromise(
+        rpc.kill({ parentSessionID: "root", targetAgent: "coder", reason: "done" }, rpcContext),
+      )
+      expect(killed.killed).toBe(1)
+      expect(changed).toEqual(["root"])
+      expect(harness.interrupted).toEqual(["child"])
+
+      const status = await Effect.runPromise(harness.mesh.status({ sessionID: "root" }))
+      expect(status.roots[0]?.children).toEqual([])
+      const scoped = await Effect.runPromise(rpc.sessionStatus({ sessionID: "child" }, rpcContext))
+      expect(scoped.roots).toEqual([])
     })
   })
 

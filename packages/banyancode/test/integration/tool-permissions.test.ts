@@ -68,11 +68,17 @@ describe("registered Banyan tools are reachable", () => {
     })
   }
 
-  for (const id of ["explore", "scout", "reviewer", "researcher"] as const) {
+  for (const id of ["explore", "scout", "researcher"] as const) {
     test(`${id} explicitly allows every registered Banyan tool`, () => {
       const spec = agent(id)
       const unreachable = registeredToolIds.filter((tool) => !reachable(spec.permissions, tool))
       expect(unreachable).toEqual([])
     })
   }
+
+  test("reviewer allows the read-only tools and denies mesh writes", () => {
+    const spec = agent("reviewer")
+    const unreachable = registeredToolIds.filter((tool) => !reachable(spec.permissions, tool))
+    expect(unreachable).toEqual([...MESH_TOOL_NAMES, SHARED_MEMORY_TOOL].sort())
+  })
 })

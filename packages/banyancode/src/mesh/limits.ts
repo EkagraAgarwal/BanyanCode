@@ -1,4 +1,5 @@
 import type { Permission } from "@opencode/schema/permission"
+import { Effect, Ref } from "effect"
 import type { Info as BanyanConfigInfo } from "../config/schema.js"
 import { AGENT, type MeshSessionSnapshot } from "./types.js"
 import { countRunningDescendants, descendantsOf, rootOf, stateOf, type LiveState } from "./status.js"
@@ -72,6 +73,114 @@ export const subagentLimitDecision = (input: {
     max: input.maxSubagents,
   }
 }
+
+export interface SubagentSlotReservation {
+  readonly rootSessionID: string
+  readonly childSessionID?: string
+}
+
+/**
+ * Atomic spawn reservations. The session list is eventually consistent, so
+ * two spawns issued in the same turn both see the same (unchanged) running
+ * count. Reserving under one `Ref.modify` makes the second check observe the
+ * first slot before either child session exists. The reservation is released
+ * when the child session ends.
+ */
+export interface SubagentSlotLedger {
+  readonly reserve: (input: {
+    readonly toolCallID: string
+    readonly rootSessionID: string
+    readonly runningSessionIDs: ReadonlySet<string>
+    readonly maxSubagents: number
+  }) => Effect.Effect<SubagentLimitDecision>
+  readonly bind: (toolCallID: string, childSessionID: string) => Effect.Effect<void>
+  readonly release: (toolCallID: string) => Effect.Effect<void>
+  readonly releaseChild: (childSessionID: string) => Effect.Effect<void>
+  readonly reservedFor: (rootSessionID: string) => Effect.Effect<number>
+  readonly entries: Effect.Effect<ReadonlyMap<string, SubagentSlotReservation>>
+}
+
+export const makeSubagentSlotLedger = (): Effect.Effect<SubagentSlotLedger> =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make<ReadonlyMap<string, SubagentSlotReservation>>(new Map())
+
+    const reservedFor = (rootSessionID: string) =>
+      Ref.get(state).pipe(
+        Effect.map(
+          (current) =>
+            [...current.values()].filter((entry) => entry.rootSessionID === rootSessionID).length,
+        ),
+      )
+
+    // A bound reservation's child is usually already in the running set: count it once. It stays counted when the
+    // session list hasn't caught up with it yet.
+    const occupied = (
+      current: ReadonlyMap<string, SubagentSlotReservation>,
+      rootSessionID: string,
+      runningSessionIDs: ReadonlySet<string>,
+    ) =>
+      runningSessionIDs.size +
+      [...current.values()].filter(
+        (entry) =>
+          entry.rootSessionID === rootSessionID &&
+          (entry.childSessionID === undefined || !runningSessionIDs.has(entry.childSessionID)),
+      ).length
+
+    const reserve: SubagentSlotLedger["reserve"] = (input) =>
+      Ref.modify(
+        state,
+        (
+          current,
+        ): readonly [SubagentLimitDecision, ReadonlyMap<string, SubagentSlotReservation>] => {
+          if (current.has(input.toolCallID)) {
+            const running = occupied(current, input.rootSessionID, input.runningSessionIDs)
+            return [{ deny: false, running, max: input.maxSubagents }, current]
+          }
+          const running = occupied(current, input.rootSessionID, input.runningSessionIDs)
+          if (running >= input.maxSubagents) {
+            return [
+              {
+                deny: true,
+                message: `Max ${input.maxSubagents} subagents reached for this orchestration tree (${running} running). Wait for a subagent to finish, increase banyancode_max_subagents, or use /max-subagents to change the limit.`,
+                running,
+                max: input.maxSubagents,
+              },
+              current,
+            ]
+          }
+          const next = new Map(current)
+          next.set(input.toolCallID, { rootSessionID: input.rootSessionID })
+          return [{ deny: false, running, max: input.maxSubagents }, next]
+        },
+      )
+
+    const bind: SubagentSlotLedger["bind"] = (toolCallID, childSessionID) =>
+      Ref.update(state, (current) => {
+        const entry = current.get(toolCallID)
+        if (entry === undefined) return current
+        const next = new Map(current)
+        next.set(toolCallID, { ...entry, childSessionID })
+        return next
+      })
+
+    const release: SubagentSlotLedger["release"] = (toolCallID) =>
+      Ref.update(state, (current) => {
+        if (!current.has(toolCallID)) return current
+        const next = new Map(current)
+        next.delete(toolCallID)
+        return next
+      })
+
+    const releaseChild: SubagentSlotLedger["releaseChild"] = (childSessionID) =>
+      Ref.update(state, (current) => {
+        const next = new Map(
+          [...current].filter(([, entry]) => entry.childSessionID !== childSessionID),
+        )
+        return next.size === current.size ? current : next
+      })
+
+    return { reserve, bind, release, releaseChild, reservedFor, entries: Ref.get(state) }
+  })
 
 /** Mutates a `permission.evaluate` event; returns the same object for easy testing. */
 export const applySubagentPermissionDecision = (

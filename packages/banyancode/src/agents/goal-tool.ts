@@ -108,7 +108,7 @@ export const makeGoalTool = (ctx: Context): Tool.Info<typeof Input, typeof Outpu
   return {
     name: GOAL_TOOL,
     description:
-      "Manage the goal loop for the current session. `set` starts a goal with a condition; `status` reads it; `list` lists this session's goal; `pause` / `resume` / `cancel` control it; `record_review` records a reviewer verdict (pass | fail | blocked), and once the configured round budget runs out the goal pauses with `max iterations reached`; `complete` ends the loop as achieved; `block` stops the loop with a reason (the goal pauses and can be resumed). One goal per session. v1's `reviewID` and `goalID` are accepted for compatibility.",
+      "Manage the goal loop for the current session. `set` starts a goal with a condition; `status` reads it; `list` lists this session's goal; `pause` / `resume` / `cancel` control it; `record_review` records a reviewer verdict (pass | fail | blocked), and once the configured round budget runs out the goal pauses with `max iterations reached`; `complete` ends the loop as achieved; `block` stops the loop with a reason (the goal pauses and can be resumed). One goal per session. `reviewID` and `goalID` are accepted for compatibility.",
     input: Input,
     output: Output,
     options: { permission: GOAL_TOOL },
