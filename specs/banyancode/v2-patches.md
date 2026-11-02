@@ -269,6 +269,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/component/tool-settle.test.tsx` | hook | covers the tool settle | — |
 | `packages/tui/test/session-panels-overlay.test.ts` | hook | covers the Trunk panels overlay state and curves | — |
 | `packages/tui/test/subagent-rows.test.ts` | hook | covers the live subagent rows | — |
+| `packages/tui/test/feature-plugins/home-footer.test.ts` | hook | pins which footer items show at each width | — |
 | `packages/tui/test/clear-session.test.tsx` | fix | Home's resume list can show a cleared session's title, so the test checks the tab store | — |
 | `packages/tui/test/plugin-keymap.test.tsx` | fix | Home readiness marker follows the redesign | — |
 | `packages/tui/test/prompt-cursor.test.tsx` | fix | Home readiness marker follows the redesign | — |
