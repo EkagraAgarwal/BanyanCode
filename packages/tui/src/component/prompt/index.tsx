@@ -77,6 +77,11 @@ export type PromptProps = {
   visible?: boolean
   disabled?: boolean
   muted?: boolean
+  /**
+   * Render the row under the box (location, hints, usage). Home turns it off
+   * because its own footer already carries the directory and branch.
+   */
+  footer?: boolean
   onSubmit?: () => void
   onEmptySubmit?: () => boolean | Promise<boolean>
   ref?: (ref: PromptRef | undefined) => void
@@ -1859,92 +1864,97 @@ export function Prompt(props: PromptProps) {
             </box>
           </box>
         </box>
-        <box width="100%" flexDirection="row" justifyContent="space-between" gap={2}>
-          <Slot path="prompt.footer" input={footerInput()}>
-            <Slot path="prompt.footer.status" input={footerInput()}>
-              <box
-                flexGrow={1}
-                flexShrink={1}
-                minWidth={0}
-                onSizeChange={function (this: BoxRenderable) {
-                  const width = this.width
-                  queueMicrotask(() => setLocationWidth(width))
-                }}
-              >
-                <Switch>
-                  <Match when={status() === "running"}>
-                    <box flexDirection="row" gap={1} flexGrow={1} justifyContent="flex-start">
-                      <box marginLeft={1}>
-                        <Show when={config.animations ?? true} fallback={<text fg={theme.text.muted}>[⋯]</text>}>
-                          <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
-                        </Show>
+        <Show when={props.footer !== false}>
+          <box width="100%" flexDirection="row" justifyContent="space-between" gap={2}>
+            <Slot path="prompt.footer" input={footerInput()}>
+              <Slot path="prompt.footer.status" input={footerInput()}>
+                <box
+                  flexGrow={1}
+                  flexShrink={1}
+                  minWidth={0}
+                  onSizeChange={function (this: BoxRenderable) {
+                    const width = this.width
+                    queueMicrotask(() => setLocationWidth(width))
+                  }}
+                >
+                  <Switch>
+                    <Match when={status() === "running"}>
+                      <box flexDirection="row" gap={1} flexGrow={1} justifyContent="flex-start">
+                        <box marginLeft={1}>
+                          <Show when={config.animations ?? true} fallback={<text fg={theme.text.muted}>[⋯]</text>}>
+                            <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+                          </Show>
+                        </box>
+                        <PromptInterruptStatus
+                          armed={store.interrupt > 0}
+                          animations={animationsEnabled()}
+                          text={theme.text.base}
+                          subdued={theme.text.muted}
+                          warning={theme.text.feedback.warning.base}
+                          flash={theme.decrease(theme.text.feedback.warning.base, 2)}
+                        />
                       </box>
-                      <PromptInterruptStatus
-                        armed={store.interrupt > 0}
-                        animations={animationsEnabled()}
-                        text={theme.text.base}
-                        subdued={theme.text.muted}
-                        warning={theme.text.feedback.warning.base}
-                        flash={theme.decrease(theme.text.feedback.warning.base, 2)}
-                      />
-                    </box>
-                  </Match>
-                  <Match when={move.progress()}>
-                    {(progress) => (
-                      <box paddingLeft={3} height={1} minHeight={0} flexShrink={1}>
-                        <Spinner color={theme.hue.accent[500]}>
-                          {progress()}
-                          <span style={{ fg: theme.text.muted }}>{".".repeat(move.creatingDots())}</span>
-                        </Spinner>
-                      </box>
-                    )}
-                  </Match>
-                  <Match when={move.pendingNew()}>
-                    <box paddingLeft={3} height={1} minHeight={0} flexShrink={1}>
-                      <text fg={theme.hue.accent[500]} wrapMode="none" truncate>
-                        (new worktree)
-                      </text>
-                    </box>
-                  </Match>
-                  <Match when={true}>
-                    {/* A docked sidebar already shows this at the same width. */}
-                    <Show when={!props.sessionID || dimensions().width <= 120 ? locationLabelDisplay() : undefined} fallback={<text />}>
-                      {(location) => (
-                        <text
-                          id="prompt.footer.location"
-                          fg={locationActions.hovered() ? theme.text.base : theme.text.muted}
-                          wrapMode="none"
-                          truncate
-                          flexGrow={1}
-                          flexShrink={1}
-                          onMouseOver={locationActions.onMouseOver}
-                          onMouseOut={locationActions.onMouseOut}
-                          onMouseUp={locationActions.onMouseUp}
-                        >
-                          {location()}
-                        </text>
+                    </Match>
+                    <Match when={move.progress()}>
+                      {(progress) => (
+                        <box paddingLeft={3} height={1} minHeight={0} flexShrink={1}>
+                          <Spinner color={theme.hue.accent[500]}>
+                            {progress()}
+                            <span style={{ fg: theme.text.muted }}>{".".repeat(move.creatingDots())}</span>
+                          </Spinner>
+                        </box>
                       )}
-                    </Show>
-                  </Match>
-                </Switch>
-              </box>
+                    </Match>
+                    <Match when={move.pendingNew()}>
+                      <box paddingLeft={3} height={1} minHeight={0} flexShrink={1}>
+                        <text fg={theme.hue.accent[500]} wrapMode="none" truncate>
+                          (new worktree)
+                        </text>
+                      </box>
+                    </Match>
+                    <Match when={true}>
+                      {/* A docked sidebar already shows this at the same width. */}
+                      <Show
+                        when={!props.sessionID || dimensions().width <= 120 ? locationLabelDisplay() : undefined}
+                        fallback={<text />}
+                      >
+                        {(location) => (
+                          <text
+                            id="prompt.footer.location"
+                            fg={locationActions.hovered() ? theme.text.base : theme.text.muted}
+                            wrapMode="none"
+                            truncate
+                            flexGrow={1}
+                            flexShrink={1}
+                            onMouseOver={locationActions.onMouseOver}
+                            onMouseOut={locationActions.onMouseOut}
+                            onMouseUp={locationActions.onMouseUp}
+                          >
+                            {location()}
+                          </text>
+                        )}
+                      </Show>
+                    </Match>
+                  </Switch>
+                </box>
+              </Slot>
+              <Slot path="prompt.footer.file" input={footerInput()}>
+                <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
+                  {(file) => (
+                    <text
+                      wrapMode="none"
+                      truncate
+                      flexShrink={1}
+                      fg={editorContextLabelState() === "pending" ? theme.hue.accent[500] : theme.text.muted}
+                    >
+                      {file()}
+                    </text>
+                  )}
+                </Show>
+              </Slot>
             </Slot>
-            <Slot path="prompt.footer.file" input={footerInput()}>
-              <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
-                {(file) => (
-                  <text
-                    wrapMode="none"
-                    truncate
-                    flexShrink={1}
-                    fg={editorContextLabelState() === "pending" ? theme.hue.accent[500] : theme.text.muted}
-                  >
-                    {file()}
-                  </text>
-                )}
-              </Show>
-            </Slot>
-          </Slot>
-        </box>
+          </box>
+        </Show>
       </box>
       <Autocomplete
         sessionID={props.sessionID}

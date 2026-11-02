@@ -4,6 +4,7 @@ import path from "node:path"
 import { Global } from "@opencode/util/global"
 import type { TuiInput } from "../../src/app"
 import type { Config } from "../../src/config"
+import type { UpdateSource } from "../../src/context/update-notification"
 import { tmpdir } from "./fixture"
 import { createEventStream, createFetch, type FetchHandler } from "./tui-client"
 
@@ -15,6 +16,7 @@ export async function createAppFixture(
     config?: Config.Info
     args?: TuiInput["args"]
     fetch?: FetchHandler
+    updater?: UpdateSource
     // A renderer whose owner already set up its terminal, such as the simulation renderer.
     setup?: TestRendererSetup
   } = {},
@@ -52,6 +54,7 @@ export async function createAppFixture(
       packages: { prepare: async () => ({ directory: "" }) },
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: "dark", complete: ready.resolve }),
       args: input.args ?? {},
+      updater: input.updater,
       log: () => {},
     }).pipe(
       Effect.provide(

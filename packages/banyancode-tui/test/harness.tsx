@@ -56,6 +56,14 @@ export const theme = {
     lineNumber: { text: COLOR, background: { added: COLOR, removed: COLOR } },
   },
   background: { base: COLOR, raised: { base: COLOR, high: COLOR, max: COLOR } },
+  growth: {
+    leaf: COLOR,
+    highlight: COLOR,
+    done: COLOR,
+    faded: COLOR,
+    wood: COLOR,
+    bright: COLOR,
+  },
 } as unknown as ResolvedTheme
 
 let ids = 0
@@ -99,6 +107,7 @@ export function context(input: {
   readonly directory?: string
   readonly agents?: readonly AgentInfo[]
   readonly models?: readonly ModelInfo[]
+  readonly animations?: boolean
   readonly on?: (
     type: string,
     handler: (event: { readonly data: { readonly sessionID: string } }) => void,
@@ -125,7 +134,12 @@ export function context(input: {
     location: { directory: input.directory ?? "D:/workspace" },
     options: {},
     renderer: {},
-    client: { session: { diff: async () => [] } },
+    client: {
+      session: {
+        diff: async () => [],
+        list: async () => ({ data: [...(input.sessions ?? [])].filter((item) => !item.parentID), cursor: {} }),
+      },
+    },
     data: {
       on: input.on ?? (() => () => {}),
       listen: () => () => {},
@@ -196,6 +210,7 @@ export function context(input: {
       dialog: { show: () => {}, set: () => {}, clear: () => {}, alert: async () => {}, confirm: async () => false, prompt: async () => undefined, select: async () => undefined },
       toast: { show: () => {} },
       format: { path: (value: string) => value },
+      animations: () => input.animations ?? false,
       model: { current: () => undefined, variant: { list: () => [], set: () => false } },
     },
     markdown: { registerCodeBlockRenderer: () => () => {} },

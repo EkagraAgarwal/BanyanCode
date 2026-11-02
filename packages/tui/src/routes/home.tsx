@@ -11,16 +11,15 @@ import { useLocation } from "../context/location"
 import { FormPrompt } from "./session/form"
 import { Slot } from "../plugin/render"
 import { useTerminalDimensions } from "@opentui/solid"
-import { useTheme } from "../context/theme"
-import { useUpdateNotification } from "../context/update-notification"
-import { useExit } from "../context/exit"
-import { FadeInText } from "../component/fade-in-text"
 
 let once = false
 const placeholder = {
   normal: ["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"],
   shell: ["ls -la", "git status", "pwd"],
 }
+// 29 hero rows, the 6-row prompt (its own footer row is off on Home) and the
+// footer only fit inside 40 rows once the two breathing rows are dropped.
+const ROOMY_MIN_HEIGHT = 43
 
 export function Home() {
   const route = useRouteData("home")
@@ -32,7 +31,7 @@ export function Home() {
   const data = useData()
   const location = useLocation()
   const dimensions = useTerminalDimensions()
-  const [logoWidth, setLogoWidth] = createSignal(0)
+  const roomy = () => dimensions().height >= ROOMY_MIN_HEIGHT
   // Global MCP elicitations can arrive without a session route, so keep them reachable from Home.
   const currentLocation = () => route.location ?? data.location.default()
   const forms = createMemo(() => data.session.form.list("global", currentLocation()) ?? [])
@@ -82,25 +81,30 @@ export function Home() {
     <>
       <box
         flexGrow={1}
+        minHeight={0}
         alignItems="center"
         paddingLeft={dimensions().width < 44 ? 1 : 2}
         paddingRight={dimensions().width < 44 ? 1 : 2}
       >
+        {/* Equal spacers: the block is centred when the terminal is taller than
+            it, and starts at the top when it is exactly as tall. */}
         <box flexGrow={1} minHeight={0} />
-        <box height={3} minHeight={0} flexShrink={1} />
-        <box
-          flexShrink={0}
-          onSizeChange={function () {
-            setLogoWidth(this.width)
-          }}
-        >
-          <Logo />
+        <box width="100%" flexDirection="column" alignItems="center" flexShrink={0}>
+          <Slot path="home.logo">
+            <Logo />
+          </Slot>
+          <Show when={roomy()}>
+            <box height={1} flexShrink={0} />
+          </Show>
+          <box width="100%" maxWidth={75} zIndex={1000} position="relative" flexShrink={0}>
+            {/* Home's own footer already carries the directory and branch, so the
+                prompt drops its location/hint row here. It stays in sessions. */}
+            <Prompt ref={bind} placeholders={placeholder} disabled={forms().length > 0} footer={false} />
+          </box>
         </box>
-        <box height={1} flexShrink={0} />
-        <UpdateNotification width={logoWidth()} />
-        <box width="100%" maxWidth={75} zIndex={1000} paddingTop={1} flexShrink={0} position="relative">
-          <Prompt ref={bind} placeholders={placeholder} disabled={forms().length > 0} />
-        </box>
+        <Show when={roomy()}>
+          <box height={1} flexShrink={0} />
+        </Show>
         <Slot path="home.bottom" />
         <box flexGrow={1} minHeight={0} />
       </box>
@@ -120,58 +124,5 @@ export function Home() {
         }}
       </Show>
     </>
-  )
-}
-
-function UpdateNotification(props: { width: number }) {
-  const update = useUpdateNotification()
-  const exit = useExit()
-  const theme = useTheme()
-  const [hovered, setHovered] = createSignal(false)
-  const backdrop = () => (hovered() ? theme.background.action.primary.hovered : theme.background.base)
-  createEffect(() => {
-    update.notification()
-    setHovered(false)
-  })
-
-  return (
-    <Show when={update.notification()} keyed>
-      {(state) => {
-        const remote = state.source === "server" && state.remote
-        return (
-          <Show when={!remote || state.type === "available"}>
-            <box
-              flexShrink={0}
-              flexDirection="row"
-              justifyContent="center"
-              width={props.width}
-              maxWidth="100%"
-              gap={1}
-              backgroundColor={hovered() ? theme.background.action.primary.hovered : undefined}
-              onMouseOver={() => setHovered(true)}
-              onMouseOut={() => setHovered(false)}
-              onMouseUp={() => {
-                if (remote) return update.dismiss()
-                if (state.type === "installed") return exit()
-                update.open?.("notification")
-              }}
-            >
-              <FadeInText fg={theme.text.muted} backdrop={backdrop()}>
-                <Show when={!remote}>
-                  <span style={{ fg: theme.text.action.primary.selected }}>
-                    {state.type === "installed" ? "/exit" : "/update"}
-                  </span>
-                </Show>
-                {remote
-                  ? "remote server update available"
-                  : state.type === "installed"
-                    ? ` restart to use v${state.version}`
-                    : ` to install v${state.version}`}
-              </FadeInText>
-            </box>
-          </Show>
-        )
-      }}
-    </Show>
   )
 }

@@ -22,6 +22,10 @@ import { ToolUsagePanel } from "./components/sidebar/tool-usage"
 import { InspectorPage, InspectorPanel } from "./components/panels/inspector"
 import { closeView, cycleView, openView } from "./components/panels/nav"
 import { HomeStrip } from "./components/home/home-strip"
+import { HomeStatus } from "./components/home/home-status"
+import { Resume } from "./components/home/resume"
+import { createGrowth } from "./components/home/growth"
+import { BanyanHero } from "./components/home/hero"
 import {
   applyVariantCommand,
   openAgentControl,
@@ -41,6 +45,8 @@ export default Plugin.define({
   id: PLUGIN_ID,
   setup(context) {
     const live = createLive(context)
+    // One growth for the process: returning to home shows the finished tree.
+    const growth = createGrowth({ animations: () => context.ui.animations() })
 
     // --- sidebar (v1 order) --------------------------------------------------
     context.ui.slot({
@@ -108,6 +114,18 @@ export default Plugin.define({
         <StatusPills context={context} codegraph={live.codegraph} mesh={live.mesh} system={live.system} />
       ),
     })
+    // The home footer leads with the working directory and its branch.
+    context.ui.slot({
+      prepend: "home.footer.status",
+      render: () => <HomeStatus context={context} />,
+    })
+
+    // --- home ----------------------------------------------------------------
+    // The v2 home replaces the host splash: the banyan grows once per process.
+    context.ui.slot({
+      replace: "home.logo",
+      render: () => <BanyanHero context={context} growth={growth} />,
+    })
 
     // v1 attention strip. The host replaces the prompt (and with it the
     // prompt footer) while a permission or question is pending, so this slot
@@ -117,10 +135,15 @@ export default Plugin.define({
       render: (input) => <AttentionStrip context={context} sessionID={input.sessionID} />,
     })
 
-    // v1 home tip + progress overlay.
+    // v1 home progress overlay, now without the tip row.
     context.ui.slot({
       append: "home.bottom",
       render: () => <HomeStrip context={context} codegraph={live.codegraph} />,
+    })
+    // The resume list, under the prompt.
+    context.ui.slot({
+      append: "home.bottom",
+      render: () => <Resume context={context} growth={growth} />,
     })
 
     // v1 floating codegraph overlay → v2 composer rail.
@@ -558,7 +581,10 @@ export default Plugin.define({
       ],
     }))
 
-    return () => live.dispose()
+    return () => {
+      growth.finish()
+      live.dispose()
+    }
   },
 })
 

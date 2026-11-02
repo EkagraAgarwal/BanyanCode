@@ -191,6 +191,7 @@ export interface PanelInput {
  */
 export interface SlotMap {
   readonly app: Readonly<Record<string, never>>
+  readonly "home.logo": Readonly<Record<string, never>>
   readonly "home.bottom": Readonly<Record<string, never>>
   readonly "home.footer": Readonly<Record<string, never>>
   readonly "home.footer.status": Readonly<Record<string, never>>
@@ -502,6 +503,8 @@ export interface UI {
   readonly format: {
     path(value: string): string
   }
+  /** Whether the TUI should animate. Reactive when read in a Solid computation. */
+  animations(): boolean
   readonly router: {
     register(page: Page): () => void
     navigate(destination: Destination): void

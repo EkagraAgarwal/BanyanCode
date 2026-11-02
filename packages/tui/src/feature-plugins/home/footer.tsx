@@ -1,8 +1,14 @@
 import { Plugin } from "@opencode/plugin/tui"
-import { createMemo, Match, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createSignal, Match, Show, Switch } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { usePlugin } from "../../plugin/context"
 import { Slot } from "../../plugin/render"
+import { useUpdateNotification } from "../../context/update-notification"
+import { useExit } from "../../context/exit"
+import { useTheme } from "../../context/theme"
+import { InteractivityProvider } from "../../context/interactivity"
+import { FadeInText } from "../../component/fade-in-text"
+import { PromptFooter } from "../prompt/footer"
 
 export function homeFooterVisibility(width: number) {
   return {
@@ -74,6 +80,59 @@ function Plugins(props: { context: Plugin.Context }) {
   )
 }
 
+// The update notice rides in the footer row, right of the spacer: the mockup's
+// "/update ... <installed version>" cluster. It keeps its own click behavior.
+function UpdateNotice() {
+  const update = useUpdateNotification()
+  const exit = useExit()
+  const theme = useTheme()
+  const [hovered, setHovered] = createSignal(false)
+  const backdrop = () => (hovered() ? theme.background.action.primary.hovered : theme.background.base)
+  createEffect(() => {
+    update.notification()
+    setHovered(false)
+  })
+
+  return (
+    <Show when={update.notification()} keyed>
+      {(state) => {
+        const remote = state.source === "server" && state.remote
+        return (
+          <Show when={!remote || state.type === "available"}>
+            <box
+              flexShrink={1}
+              minWidth={0}
+              flexDirection="row"
+              gap={1}
+              backgroundColor={hovered() ? theme.background.action.primary.hovered : undefined}
+              onMouseOver={() => setHovered(true)}
+              onMouseOut={() => setHovered(false)}
+              onMouseUp={() => {
+                if (remote) return update.dismiss()
+                if (state.type === "installed") return exit()
+                update.open?.("notification")
+              }}
+            >
+              <FadeInText fg={theme.text.muted} backdrop={backdrop()} wrapMode="none" truncate>
+                <Show when={!remote}>
+                  <span style={{ fg: theme.text.action.primary.selected }}>
+                    {state.type === "installed" ? "/exit" : "/update"}
+                  </span>
+                </Show>
+                {remote
+                  ? "remote server update available"
+                  : state.type === "installed"
+                    ? ` restart to use v${state.version}`
+                    : ` to install v${state.version}`}
+              </FadeInText>
+            </box>
+          </Show>
+        )
+      }}
+    </Show>
+  )
+}
+
 function View(props: { context: Plugin.Context }) {
   const dimensions = useTerminalDimensions()
   const visibility = createMemo(() => homeFooterVisibility(dimensions().width))
@@ -82,22 +141,35 @@ function View(props: { context: Plugin.Context }) {
     <Show when={dimensions().height >= 14 && dimensions().width >= 44}>
       <box
         width="100%"
-        paddingTop={dimensions().height < 16 ? 0 : 1}
-        paddingBottom={dimensions().height < 16 ? 0 : 1}
+        height={1}
         paddingLeft={2}
         paddingRight={2}
         flexDirection="row"
+        alignItems="center"
         flexShrink={0}
         gap={2}
+        overflow="hidden"
       >
-        <Mcp context={props.context} />
-        <Plugins context={props.context} />
-        <Slot path="home.footer.status" />
-        <box flexGrow={1} />
+        {/* Host status content lives inside the slot: a plugin prepend (the
+            directory and branch) then lands left of the MCP and plugin counts,
+            and an append (status pills) stays right of them. */}
+        <Slot path="home.footer.status">
+          <Mcp context={props.context} />
+          <Plugins context={props.context} />
+        </Slot>
+        {/* Home's prompt carries no footer row of its own, so its hints live
+            here when the row has room for them. */}
+        <Show when={dimensions().width >= 100}>
+          <InteractivityProvider enabled={true}>
+            <PromptFooter context={props.context} mode="normal" showDetails />
+          </InteractivityProvider>
+        </Show>
+        <box flexGrow={1} minWidth={0} />
+        <UpdateNotice />
         <Show when={visibility().version}>
-          <box flexShrink={0}>
-            <text fg={props.context.theme.text.muted}>{props.context.app.version}</text>
-          </box>
+          <text fg={props.context.theme.text.muted} flexShrink={0}>
+            {props.context.app.version}
+          </text>
         </Show>
       </box>
     </Show>

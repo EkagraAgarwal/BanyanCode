@@ -1358,7 +1358,9 @@ test("keeps the prompt display stable while a new location catalog loads", async
       }),
     ])
     await setup.renderOnce()
-    expect(setup.captureCharFrame()).toContain(target)
+    // Home shows the working directory in its footer rather than the prompt, so
+    // this frame proves only that the prompt holds the previous catalog.
+    expect(setup.captureCharFrame()).toContain("Build · Source Model Provider")
 
     locationCatalog.resolve()
     await Promise.race([
@@ -1378,6 +1380,8 @@ test("keeps the prompt display stable while a new location catalog loads", async
 
     providerCatalog.resolve()
     await setup.waitForFrame((frame) => frame.includes("Build · Target Model Provider"))
+    // The home footer is where the working directory lives now; it follows the move.
+    await setup.waitForFrame((frame) => frame.includes(target))
   } finally {
     locationCatalog.resolve()
     catalog.resolve()
@@ -1658,7 +1662,7 @@ test.each([
     },
   })
   await setup.ready
-  await setup.waitForFrame((frame) => frame.includes("commands"))
+  await setup.waitForFrame((frame) => frame.includes("Ask anything"))
   if (!initial) {
     expect(setup.captureCharFrame()).not.toContain("Plugin failed")
     inventory = inventory.map((plugin) => (plugin.id === "broken" ? { ...plugin, state: failure } : plugin))

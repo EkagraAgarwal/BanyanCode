@@ -182,12 +182,18 @@ test("plugin registers additive slots, router pages, and commands", () => {
   expect(sidebar.every((claim) => claim.placement === "append")).toBe(true)
 
   expect(recorded.claims.filter((claim) => claim.target === "prompt.footer.status")).toHaveLength(0)
-  expect(recorded.claims.filter((claim) => claim.target === "home.footer.status")).toHaveLength(1)
+  expect(recorded.claims.filter((claim) => claim.target === "home.footer.status")).toHaveLength(2)
+  expect(
+    recorded.claims.filter((claim) => claim.target === "home.footer.status" && claim.placement === "prepend"),
+  ).toHaveLength(1)
+  expect(recorded.claims.filter((claim) => claim.target === "home.logo")).toEqual([
+    { target: "home.logo", placement: "replace" },
+  ])
   expect(recorded.claims.filter((claim) => claim.target === "session.header")).toHaveLength(1)
   expect(recorded.claims.filter((claim) => claim.target === "session.footer")).toHaveLength(1)
   expect(recorded.claims.filter((claim) => claim.target === "session.inspector")).toHaveLength(2)
   expect(recorded.claims.filter((claim) => claim.target === "session.composer.top")).toHaveLength(2)
-  expect(recorded.claims.filter((claim) => claim.target === "home.bottom")).toHaveLength(1)
+  expect(recorded.claims.filter((claim) => claim.target === "home.bottom")).toHaveLength(2)
   expect(recorded.claims.filter((claim) => claim.target === "session.panel")).toHaveLength(1)
 
   const ids = recorded.commands.map((command) => command.id)

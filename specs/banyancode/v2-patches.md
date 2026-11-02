@@ -170,9 +170,15 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/routes/session/sidebar.tsx` | hook | a docked sidebar has its own width and the v1 border | — |
 | `packages/tui/src/ui/session-rails.tsx` | hook | v1 resize handle and collapsed rail for the side columns | — |
 | `packages/tui/src/component/prompt/autocomplete.tsx` | fix | a command offered by both client and server is listed once | — |
-| `packages/tui/src/routes/home.tsx` | hook | `home.bottom` slot under the prompt, for the v1 tip | — |
-| `packages/plugin/src/tui/context.ts` | hook | declares the `home.bottom` slot and `slash.forwardToServer` | — |
-| `packages/tui/src/component/prompt/index.tsx` | hook | a slash command can hand some inputs to the server command of the same name | — |
+| `packages/tui/src/routes/home.tsx` | hook | `home.logo` and `home.bottom` slots, size-only gap and centring rules, and a prompt without its own footer row so the full layout fits 120x40 | — |
+| `packages/plugin/src/tui/context.ts` | hook | declares the `home.logo` slot, `ui.animations` and `slash.forwardToServer` | — |
+| `packages/tui/src/plugin/api.tsx` | hook | wires `ui.animations` from the host's `config.animations` | — |
+| `packages/tui/src/feature-plugins/home/footer.tsx` | hook | one-row footer: directory and branch status content, the prompt hints the home prompt no longer carries, update notice and version on one line | — |
+| `packages/tui/src/feature-plugins/system/storybook/home.tsx` | hook | fixture-driven home hero story with replay and final-frame controls | — |
+| `packages/tui/src/feature-plugins/system/storybook/index.tsx` | hook | registers the home story | — |
+| `packages/tui/test/feature-plugins/home-redesign.test.tsx` | hook | covers the `home.logo` slot with and without a claim, and the one-row footer | — |
+| `packages/tui/test/fixture/app.ts` | hook | accepts an updater so the footer update notice is reachable in tests | — |
+| `packages/tui/src/component/prompt/index.tsx` | hook | a slash command can hand some inputs to the server command of the same name; a `footer` prop lets Home drop the location/hint row | — |
 | `packages/tui/src/mini/footer.permission.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/mini/footer.prompt.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/mini/runtime.lifecycle.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
@@ -181,7 +187,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/util/error-details.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/util/error.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/util/presentation.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
-| `packages/tui/test/app-lifecycle.test.tsx` | fix | test expectation follows the BanyanCode text and names | — |
+| `packages/tui/test/app-lifecycle.test.tsx` | fix | test expectation follows the BanyanCode text and names; Home's directory is read from the footer, and its readiness marker is the prompt placeholder because the hints move | — |
 | `packages/tui/test/cli/tui/dialog-mcp.test.tsx` | fix | test expectation follows the BanyanCode text and names | — |
 | `packages/tui/test/component/dialog-update.test.tsx` | fix | test expectation follows the BanyanCode text and names | — |
 | `packages/tui/test/context/program-status.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
@@ -235,3 +241,16 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/core/src/session/generate.ts` | hook | resolves the explicit generate model | — |
 | `packages/core/test/plugin/goal-settings.test.ts` | hook | proves each goal setting changes behaviour | — |
 | `packages/core/test/session-generate.test.ts` | fix | proves the generate model override reaches the provider | — |
+| `packages/theme/src/tui/schema.ts` | hook | optional `growth` token group for the redesign's roles | — |
+| `packages/theme/src/tui/types.ts` | hook | `growth` on the resolved theme | — |
+| `packages/theme/src/tui/resolve.ts` | hook | passes `growth` through and derives readable fallbacks for themes that omit it | — |
+| `packages/theme/src/tui/index.ts` | hook | exports the `growth` types | — |
+| `packages/theme/test/growth.test.ts` | hook | covers `growth` fallbacks and overrides | — |
+| `packages/tui/src/theme/component.ts` | hook | exposes `growth` on the component theme | — |
+| `packages/tui/src/theme/index.ts` | hook | registers the built-in `banyan` theme | — |
+| `packages/tui/src/theme/assets/v2/banyan.json` | hook | the `banyan` theme, dark and light | — |
+| `packages/tui/src/context/theme.tsx` | hook | `banyan` is the default when no theme is chosen; `opencode` stays the parse-failure fallback | — |
+| `packages/tui/test/context/theme.test.tsx` | fix | covers the default and a configured theme winning | — |
+| `packages/tui/test/theme/v2/banyan.test.ts` | hook | covers the `banyan` roles and contrast | — |
+| `packages/tui/test/theme/v2/growth.test.ts` | hook | every built-in theme resolves the `growth` roles | — |
+| `packages/tui/test/cli/tui/dialog-select.test.tsx` | fix | pins the theme a cursor-color test compares against | — |
