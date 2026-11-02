@@ -1,6 +1,7 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import { createMemo, For, Show } from "solid-js"
 import { allocateBarWidths, categorizeTokens, formatTokensCompact, type TokenBreakdown } from "../../data/tokens"
+import { formatMoney } from "../../data/format"
 import { palette, type Palette } from "../../theme"
 
 const BAR_WIDTH = 24
@@ -38,14 +39,14 @@ function segmentColor(theme: Palette, color: SegmentColor) {
 }
 
 /**
- * Ported from v1 `feature-plugins/sidebar/context.tsx`. The host owns the
- * compact "tokens / percent used / spent" panel in v2, so this adds the v1
- * breakdown beside it: a stacked bar plus one row per token category.
+ * Ported from v1 `feature-plugins/sidebar/context.tsx`: a stacked bar, one row per
+ * token category, and the session's cost. It replaces the host's compact panel.
  */
 export function ContextBreakdownPanel(props: { readonly context: Context; readonly sessionID: string }) {
   const theme = () => palette(props.context.theme)
   const messages = createMemo(() => props.context.data.session.message.list(props.sessionID))
   const breakdown = createMemo(() => categorizeTokens(messages()))
+  const cost = createMemo(() => props.context.data.session.cost(props.sessionID))
   const limit = createMemo(() => {
     const model = breakdown()?.model
     if (!model) return undefined
@@ -121,6 +122,9 @@ export function ContextBreakdownPanel(props: { readonly context: Context; readon
               </box>
             )}
           </For>
+          <Show when={cost() > 0}>
+            <text fg={theme().muted}>{formatMoney(cost())} spent</text>
+          </Show>
         </box>
       )}
     </Show>
