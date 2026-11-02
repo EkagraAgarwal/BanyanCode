@@ -1,3 +1,4 @@
+import type { Context } from "@opencode/plugin/tui/context"
 import type { MeshNode } from "./pending-rpc"
 
 export interface PeerRow {
@@ -52,4 +53,74 @@ export function meshCounts(root: MeshNode | undefined) {
   const nodes = flattenMesh(root)
   const active = nodes.filter((node) => node.state === "running" || node.state === "retry").length
   return { total: Math.max(0, nodes.length - 1), active }
+}
+
+/** What a branch or pane shows for one subagent. */
+export type ChildState = "running" | "waiting" | "done" | "failed"
+
+export interface MeshChild {
+  readonly sessionID: string
+  readonly agent: string
+  readonly title?: string | undefined
+  readonly state: ChildState
+  readonly cost: number
+  readonly tokens: number
+  readonly createdAt: number
+  readonly lastActivityAt?: number | undefined
+  /** Pending permissions plus questions for this child. */
+  readonly pending: number
+}
+
+/**
+ * `MeshNode.state` carries `running`/`retry` and `failed`/`interrupted`, but no
+ * "waiting" and no "done". Waiting is a permission or question the child is
+ * blocked on (the mesh status has no `blockedReason`), and everything else that
+ * is neither running nor failed has finished. A session killed through
+ * `mesh.kill` is durable in `MeshStatus.killed`, so it is failed here even when
+ * its node state has already settled.
+ */
+export function childState(
+  node: MeshNode,
+  input: { readonly pending?: number | undefined; readonly killed?: boolean | undefined } = {},
+): ChildState {
+  if (input.killed || node.state === "failed" || node.state === "interrupted") return "failed"
+  if ((input.pending ?? 0) > 0) return "waiting"
+  if (node.state === "running" || node.state === "retry") return "running"
+  return "done"
+}
+
+/** Pending permissions and questions for exactly this session. */
+export function pendingCount(context: Context, sessionID: string): number {
+  return (
+    (context.data.session.permission.list(sessionID)?.length ?? 0) +
+    (context.data.session.form.list(sessionID)?.length ?? 0)
+  )
+}
+
+/**
+ * Direct mesh children of a session, in spawn order, with the state a branch,
+ * pane or status row shows. Call inside a `createMemo` to stay reactive.
+ */
+export function directChildren(input: {
+  readonly context: Context
+  readonly sessionID: string
+  readonly root: MeshNode | undefined
+  readonly killed?: ReadonlySet<string> | undefined
+}): MeshChild[] {
+  const node = flattenMesh(input.root).find((item) => item.sessionID === input.sessionID)
+  if (!node) return []
+  return node.children.map((child) => {
+    const pending = pendingCount(input.context, child.sessionID)
+    return {
+      sessionID: child.sessionID,
+      agent: child.agent ?? "agent",
+      title: child.title,
+      state: childState(child, { pending, killed: input.killed?.has(child.sessionID) }),
+      cost: child.cost,
+      tokens: peerTokens(child),
+      createdAt: child.createdAt,
+      lastActivityAt: child.lastActivityAt ?? child.updatedAt,
+      pending,
+    }
+  })
 }

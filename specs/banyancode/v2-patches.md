@@ -254,3 +254,5 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/theme/v2/banyan.test.ts` | hook | covers the `banyan` roles and contrast | — |
 | `packages/tui/test/theme/v2/growth.test.ts` | hook | every built-in theme resolves the `growth` roles | — |
 | `packages/tui/test/cli/tui/dialog-select.test.tsx` | fix | pins the theme a cursor-color test compares against | — |
+| `packages/tui/test/sidebar-scroll.test.tsx` | hook | covers the gap between sidebar content and its scrollbar | — |
+| `packages/tui/src/component/spinner-frames.ts` | hook | the redesign's `SPROUT` spinner frames | — |

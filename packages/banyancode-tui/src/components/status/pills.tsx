@@ -110,6 +110,26 @@ export function activePeers(mesh: MeshLive, rootSessionID: string | undefined): 
   return root.children.filter((node) => node.state === "running" || node.state === "retry").length
 }
 
+/**
+ * Running subagents under the session. The session store and the mesh update at
+ * different moments, so the larger of the two is the visible truth: a session
+ * that has started but has no mesh node yet must still count.
+ */
+export function activeAgentCount(input: {
+  readonly context: Context
+  readonly sessionID?: string | undefined
+  readonly mesh: MeshLive
+}): number {
+  const sessionID = input.sessionID
+  if (!sessionID) return 0
+  const family = input.context.data.session.family(sessionID)
+  const running = family.filter(
+    (id) => id !== sessionID && input.context.data.session.status(id) === "running",
+  ).length
+  return Math.max(running, activePeers(input.mesh, input.context.data.session.root(sessionID)))
+}
+
+
 /** True when the graph state is worth a footer pill. Neutral/unknown is silent. */
 export function graphPillVisible(state: GraphPillState): boolean {
   return state.severity !== "neutral"
@@ -169,15 +189,9 @@ export function StatusPills(props: {
     void props.codegraph.refresh()
   })
 
-  const activeAgents = createMemo(() => {
-    const sessionID = props.sessionID
-    if (!sessionID) return 0
-    const family = props.context.data.session.family(sessionID)
-    const running = family.filter(
-      (id) => id !== sessionID && props.context.data.session.status(id) === "running",
-    ).length
-    return Math.max(running, activePeers(props.mesh, props.context.data.session.root(sessionID)))
-  })
+  const activeAgents = createMemo(() =>
+    activeAgentCount({ context: props.context, sessionID: props.sessionID, mesh: props.mesh }),
+  )
 
   const graph = createMemo(() =>
     graphPill({

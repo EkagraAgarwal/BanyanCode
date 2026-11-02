@@ -23,45 +23,49 @@ interface AttentionItem {
 }
 
 /**
+ * Pending permissions and questions for a session, counted the way the host
+ * presents them: a root session owns its family's permissions and questions
+ * (plus global questions); a subagent only ever sees global questions.
+ */
+export function attentionBreakdown(context: Context, sessionID: string) {
+  const session = context.data.session.get(sessionID)
+  const family = context.data.session.family(sessionID)
+  const permissions =
+    session?.parentID === undefined
+      ? family.flatMap((id) => context.data.session.permission.list(id) ?? []).length
+      : 0
+  const global = context.data.session.form.list("global", context.location) ?? []
+  const forms =
+    session?.parentID === undefined
+      ? family.flatMap((id) => context.data.session.form.list(id) ?? []).length + global.length
+      : global.length
+  return { permissions, forms, count: permissions + forms }
+}
+
+/**
  * Ported from v1 `component/attention-strip.tsx`, narrowed to the data v2
  * exposes: pending permission requests and question forms. v1 also listed
  * blocked mesh peers, but the v2 mesh status carries no `blockedReason`.
  */
 export function AttentionStrip(props: { readonly context: Context; readonly sessionID: string }) {
   const theme = () => palette(props.context.theme)
-  const session = createMemo(() => props.context.data.session.get(props.sessionID))
-  // Matches the host's own pending list: a root session owns its family's
-  // permissions and questions; a subagent only ever sees global questions.
-  const permissions = createMemo(() => {
-    if (session()?.parentID) return []
-    return props.context.data.session
-      .family(props.sessionID)
-      .flatMap((id) => props.context.data.session.permission.list(id) ?? [])
-  })
-  const forms = createMemo(() => {
-    const global = props.context.data.session.form.list("global", props.context.location) ?? []
-    if (session()?.parentID) return global
-    return props.context.data.session
-      .family(props.sessionID)
-      .flatMap((id) => props.context.data.session.form.list(id) ?? [])
-      .concat(global)
-  })
-  const count = createMemo(() => permissions().length + forms().length)
+  const summary = createMemo(() => attentionBreakdown(props.context, props.sessionID))
+  const count = createMemo(() => summary().count)
   const items = createMemo<AttentionItem[]>(() => {
     const result: AttentionItem[] = []
-    if (permissions().length > 0) {
-      const size = permissions().length
+    const permissions = summary().permissions
+    if (permissions > 0) {
       result.push({
         key: "permission",
-        label: `${size} permission${size === 1 ? "" : "s"} awaiting`,
+        label: `${permissions} permission${permissions === 1 ? "" : "s"} awaiting`,
         color: "warning",
       })
     }
-    if (forms().length > 0) {
-      const size = forms().length
+    const forms = summary().forms
+    if (forms > 0) {
       result.push({
         key: "question",
-        label: `${size} question${size === 1 ? "" : "s"} awaiting`,
+        label: `${forms} question${forms === 1 ? "" : "s"} awaiting`,
         color: "info",
       })
     }

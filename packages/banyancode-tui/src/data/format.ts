@@ -26,6 +26,17 @@ export function formatMoney(value: number): string {
   return money.format(value)
 }
 
+/** Compact elapsed time for a running row: `9s`, `1m 04s`, `1h 02m`. */
+export function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  if (total < 60) return `${total}s`
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  if (minutes < 60) return `${minutes}m ${String(seconds).padStart(2, "0")}s`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`
+}
+
 export function bar(done: number, total: number, width = 20): string {
   if (total <= 0) return "░".repeat(width)
   const filled = Math.max(0, Math.min(width, Math.round((done / total) * width)))

@@ -1,0 +1,280 @@
+/** @jsxImportSource @opentui/solid */
+import { expect, test } from "bun:test"
+import type { ModelInfo, SessionMessageInfo } from "@opencode/client"
+import type { Context } from "@opencode/plugin/tui/context"
+import { RGBA } from "@opentui/core"
+import { SessionFooter, SessionHeader } from "../src/components/status/session-chrome"
+import { PANEL } from "../src/constants"
+import { createTicker, type Ticker } from "../src/motion"
+import { codegraphLive, context, meshLive, mount, session, systemLive, theme } from "./harness"
+
+function fakeClock() {
+  const timers = new Map<number, () => void>()
+  let next = 1
+  let scheduled = 0
+  let cleared = 0
+  let now = 0
+  return {
+    options: {
+      now: () => now,
+      setInterval: ((fn: () => void) => {
+        const id = next++
+        timers.set(id, fn)
+        scheduled++
+        return id as unknown as ReturnType<typeof setInterval>
+      }) as unknown as typeof setInterval,
+      clearInterval: ((id: unknown) => {
+        if (timers.delete(id as number)) cleared++
+      }) as unknown as typeof clearInterval,
+    },
+    advance(ms: number) {
+      now += ms
+      for (const fn of [...timers.values()]) fn()
+    },
+    scheduled: () => scheduled,
+    cleared: () => cleared,
+    live: () => timers.size,
+  }
+}
+
+const root = session({ id: "ses_root", title: "root" })
+const child = session({ id: "ses_child", parentID: "ses_root", title: "worker", agent: "coder" })
+
+const message = {
+  id: "msg_a",
+  type: "assistant",
+  agent: "build",
+  model: { providerID: "test", id: "model" },
+  time: { created: 1_000, completed: 2_000 },
+  tokens: { input: 40_000, output: 1_000, reasoning: 0, cache: { read: 0, write: 0 } },
+  content: [{ type: "text", text: "answer" }],
+} as unknown as SessionMessageInfo
+
+const models = [
+  { providerID: "test", id: "model", limit: { context: 100_000, output: 8_000 } },
+] as unknown as ModelInfo[]
+
+const idle = context({ sessions: [root] })
+const busy = context({
+  sessions: [root, child],
+  running: new Set(["ses_child"]),
+  messages: { ses_root: [message] },
+  models,
+})
+
+const codegraph = codegraphLive({ readiness: { reason: "ready", autoBuilt: false } })
+
+/**
+ * The harness theme gives every token the same colour, which hides a
+ * colour-only animation. This variant separates the rule from the highlight.
+ */
+function distinctColors(value: Context): Context {
+  return {
+    ...value,
+    theme: {
+      ...theme,
+      border: { ...theme.border, base: RGBA.fromInts(20, 20, 20) },
+      growth: { ...theme.growth, highlight: RGBA.fromInts(200, 240, 120), leaf: RGBA.fromInts(120, 200, 140) },
+    },
+  } as unknown as Context
+}
+
+const lines = (app: { captureCharFrame(): string }) => app.captureCharFrame().split("\n")
+const canopyColors = (app: { captureSpans(): { lines: Array<{ spans: Array<{ fg: RGBA }> }> } }) =>
+  (app.captureSpans().lines[1]?.spans ?? []).map((span) => span.fg.toInts().join(","))
+
+async function renderHeader(options: {
+  readonly width: number
+  readonly ctx?: Context
+  readonly ticker?: Ticker
+}) {
+  return mount(
+    () => (
+      <SessionHeader
+        context={options.ctx ?? idle}
+        sessionID="ses_root"
+        codegraph={codegraph}
+        mesh={meshLive()}
+        system={systemLive()}
+        ticker={options.ticker}
+      />
+    ),
+    { width: options.width, height: 4 },
+  )
+}
+
+function pendingContext(permissions: number): Context {
+  const base = context({ sessions: [root] })
+  return {
+    ...base,
+    data: {
+      ...base.data,
+      session: {
+        ...base.data.session,
+        permission: {
+          ...base.data.session.permission,
+          list: () => Array.from({ length: permissions }, (_, index) => ({ id: `perm_${index}` })),
+        },
+      },
+    },
+  } as unknown as Context
+}
+
+test("row 0 carries every status exactly once on the right", async () => {
+  const app = await renderHeader({ width: 160, ctx: busy })
+  try {
+    const [row0, canopy] = lines(app)
+    expect(row0).toContain("banyancode")
+    expect(row0).toContain("workspace")
+    for (const label of ["CHAT", "SESSIONS", "AGENTS", "CONFIG"]) expect(row0).toContain(label)
+    expect(row0).toContain("◉ 1 agent")
+    expect(row0).toContain("ctx 41%")
+    expect(row0).toContain("Graph: built")
+    expect(row0).toContain("● LSP")
+    expect(row0).not.toContain("ctrl+p")
+    // The canopy is row 1 and is a rule, not a second line of labels.
+    expect(canopy!.replace(/[─━\s]/g, "")).toBe("")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("row 0 keeps every tab and never wraps, down to a narrow terminal", async () => {
+  for (const width of [160, 120, 80, 44]) {
+    const app = await renderHeader({ width })
+    try {
+      const [row0, row1] = lines(app)
+      for (const label of ["CHAT", "SESSIONS", "AGENTS", "CONFIG"]) expect(row0).toContain(label)
+      expect(row1!.replace(/[─━\s]/g, "")).toBe("")
+      expect(row0!.length).toBeLessThanOrEqual(width)
+    } finally {
+      app.renderer.destroy()
+    }
+  }
+  const narrow = await renderHeader({ width: 44 })
+  try {
+    const [row0] = lines(narrow)
+    // The brand name is the first thing to go, so the tabs keep their room.
+    expect(row0).not.toContain("banyancode")
+    expect(row0).not.toContain("Graph")
+  } finally {
+    narrow.renderer.destroy()
+  }
+})
+
+test("very narrow chrome keeps only the active tab", async () => {
+  const base = context({ sessions: [root] })
+  const onAgents = {
+    ...base,
+    ui: { ...base.ui, panel: { ...base.ui.panel, current: () => ({ name: PANEL.agents }) } },
+  } as unknown as Context
+  const app = await renderHeader({ width: 30, ctx: onAgents })
+  try {
+    const [row0] = lines(app)
+    expect(row0).toContain("AGENTS")
+    expect(row0).not.toContain("CHAT")
+    expect(row0).not.toContain("SESSIONS")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("an idle header subscribes no timer", async () => {
+  const clock = fakeClock()
+  const ticker = createTicker({ animations: () => true, ...clock.options })
+  const app = await renderHeader({ width: 120, ticker })
+  try {
+    expect(ticker.subscribers()).toBe(0)
+    expect(ticker.running()).toBe(false)
+    expect(clock.scheduled()).toBe(0)
+  } finally {
+    app.renderer.destroy()
+    ticker.dispose()
+  }
+})
+
+test("a busy header shares one timer and the canopy moves", async () => {
+  const clock = fakeClock()
+  const ticker = createTicker({ animations: () => true, ...clock.options })
+  const app = await renderHeader({ width: 120, ctx: distinctColors(busy), ticker })
+  try {
+    expect(clock.scheduled()).toBe(1)
+    expect(ticker.subscribers()).toBe(1)
+    const before = canopyColors(app)
+    const frameBefore = lines(app)[1]!
+    clock.advance(500)
+    await app.renderOnce()
+    const after = canopyColors(app)
+    expect(after).not.toEqual(before)
+    // Characters stay a rule; the movement is the highlight colour.
+    expect(lines(app)[1]).toBe(frameBefore)
+    expect(lines(app)[1]!.replace(/[─━\s]/g, "")).toBe("")
+    expect(lines(app)[1]).toContain("━")
+  } finally {
+    app.renderer.destroy()
+    ticker.dispose()
+  }
+})
+
+test("animations off means no timer even while busy", async () => {
+  const clock = fakeClock()
+  const ticker = createTicker({ animations: () => false, ...clock.options })
+  const app = await renderHeader({ width: 120, ctx: busy, ticker })
+  try {
+    expect(clock.scheduled()).toBe(0)
+    const before = lines(app)[1]!
+    clock.advance(500)
+    await app.renderOnce()
+    expect(lines(app)[1]).toBe(before)
+  } finally {
+    app.renderer.destroy()
+    ticker.dispose()
+  }
+})
+
+async function renderFooter(options: { readonly width: number; readonly ctx?: Context }) {
+  return mount(
+    () => (
+      <SessionFooter context={options.ctx ?? idle} sessionID="ses_root" mesh={meshLive()} system={systemLive()} />
+    ),
+    { width: options.width, height: 2 },
+  )
+}
+
+test("the bottom row shows the location, branch and one key hint", async () => {
+  const app = await renderFooter({ width: 120 })
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("workspace · Git: v2-base")
+    expect(frame).toContain("^p commands")
+    expect(frame).toContain("^] tabs")
+    expect(frame).not.toContain("ctrl+p")
+    expect(frame).not.toContain("need attention")
+    expect(frame).not.toContain("0 need attention")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("attention appears only while something is waiting", async () => {
+  const waiting = await renderFooter({ width: 120, ctx: pendingContext(2) })
+  const clear = await renderFooter({ width: 120 })
+  try {
+    expect(waiting.captureCharFrame()).toContain("▲ 2 need attention")
+    expect(clear.captureCharFrame()).not.toContain("need attention")
+  } finally {
+    waiting.renderer.destroy()
+    clear.renderer.destroy()
+  }
+})
+
+test("narrow chrome drops the key hint but keeps the attention message", async () => {
+  const app = await renderFooter({ width: 44, ctx: pendingContext(1) })
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("▲ 1 need attention")
+    expect(frame).not.toContain("^p")
+  } finally {
+    app.renderer.destroy()
+  }
+})

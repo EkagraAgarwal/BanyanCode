@@ -16,6 +16,51 @@ export const VIEW_TABS: ReadonlyArray<{
   { key: "config", label: "CONFIG", panel: PANEL.config },
 ]
 
+/**
+ * Columns from one label start to the next: the label, the two padding columns
+ * an active segment would use, and one column of actual gap.
+ */
+const TAB_STEP = 3
+
+export interface TabColumn {
+  readonly key: ViewKey
+  readonly label: string
+  /** Column of the first label character. */
+  readonly labelStart: number
+  /** Column of the first heavy segment character: one left of the label. */
+  readonly segmentStart: number
+  /** Segment width in cells, including one padding column each side. */
+  readonly width: number
+}
+
+/**
+ * Stable tab geometry so the canopy rule can draw the active segment on the
+ * exact columns its label occupies. Row 0 renders labels from these columns and
+ * row 1 draws from the same numbers; neither measures the other.
+ */
+export function tabColumns(start: number): TabColumn[] {
+  const columns: TabColumn[] = []
+  let x = start
+  for (const tab of VIEW_TABS) {
+    columns.push({
+      key: tab.key,
+      label: tab.label,
+      labelStart: x,
+      segmentStart: x - 1,
+      width: tab.label.length + 2,
+    })
+    x += tab.label.length + TAB_STEP
+  }
+  return columns
+}
+
+/** First column after the last label. */
+export function tabsEnd(columns: readonly TabColumn[]): number {
+  const last = columns.at(-1)
+  if (!last) return 0
+  return last.labelStart + last.label.length
+}
+
 /** Which v1 tab is active for a panel name. */
 export function viewKeyForPanel(name: string | undefined): ViewKey {
   if (name === PANEL.sessions) return "sessions"
