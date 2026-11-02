@@ -206,7 +206,9 @@ export const nativeLayer = Layer.succeed(
         const directory = input.type === "file" ? path.dirname(input.target) : input.target
         const names = new Set(input.type === "file" ? [path.basename(input.target)] : input.names)
         return Effect.try(() =>
-          watch(directory, { recursive: false }, (_event, file) => {
+          // On Windows a non-recursive watch stops the directory being renamed or deleted. A recursive one costs a
+          // single handle and does not, and the name check below still drops anything nested.
+          watch(directory, { recursive: process.platform === "win32" }, (_event, file) => {
             if (file && !names.has(file)) return
             for (const name of file ? [file] : names) {
               input.publish({ path: path.join(directory, name), type: "update" })

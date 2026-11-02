@@ -184,6 +184,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/core/src/permission.ts` | hook | deliver a configured deny to the `permission.evaluate` hook so a plugin (yolo) can override it; policy hooks still run later | — |
 | `packages/core/src/tool.ts` | fix | resolve a hook-rewritten tool name on the Code Mode inner-call path, not just direct calls | — |
 | `packages/plugin/src/effect/watcher.ts` | hook | exposes the native directory watcher to plugins | — |
+| `packages/core/src/filesystem/watcher.ts` | fix | a watch no longer locks the directory on Windows | — |
 | `packages/plugin/src/effect/plugin.ts` | hook | adds the watcher domain to the plugin context | — |
 | `packages/server/package.json` | hook | longer test timeout while source transpiles | — |
 | `packages/core/src/plugin/host.ts` | hook | wire `session.background` into the plugin Context (v1 `banyancode.mesh.background`) | — |
