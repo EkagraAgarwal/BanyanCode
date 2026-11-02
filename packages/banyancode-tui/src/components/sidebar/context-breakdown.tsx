@@ -1,9 +1,11 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createMemo, For, Show } from "solid-js"
+import type { BoxRenderable } from "@opentui/core"
+import { createMemo, createSignal, For, Show } from "solid-js"
 import { allocateBarWidths, categorizeTokens, formatTokensCompact, type TokenBreakdown } from "../../data/tokens"
 import { formatMoney } from "../../data/format"
 import { palette, type Palette } from "../../theme"
 
+// Rendered only until the row reports its real width through onSizeChange.
 const BAR_WIDTH = 24
 
 type SegmentColor = "muted" | "accent" | "info" | "success" | "warning" | "primary"
@@ -61,15 +63,19 @@ export function ContextBreakdownPanel(props: { readonly context: Context; readon
     if (!total || !denominator) return undefined
     return Math.round((total / denominator) * 100)
   })
+  // The bar stretches to the panel's content width, like the System meters, and
+  // reallocates its integer columns whenever the sidebar resizes.
+  const [barWidth, setBarWidth] = createSignal(BAR_WIDTH)
   const bar = createMemo(() => {
     const value = breakdown()
-    if (!value) return { segments: [] as Array<Segment & { width: number }>, empty: BAR_WIDTH }
+    const width = barWidth()
+    if (!value) return { segments: [] as Array<Segment & { width: number }>, empty: width }
     const active = tokenSegments(value).filter((segment) => segment.tokens > 0)
-    const widths = allocateBarWidths(active, value.total, limit() ?? value.total, BAR_WIDTH)
-    const used = widths.reduce((sum, width) => sum + width, 0)
+    const widths = allocateBarWidths(active, value.total, limit() ?? value.total, width)
+    const used = widths.reduce((sum, item) => sum + item, 0)
     return {
       segments: active.map((segment, index) => ({ ...segment, width: widths[index] ?? 0 })),
-      empty: Math.max(0, BAR_WIDTH - used),
+      empty: Math.max(0, width - used),
     }
   })
 
@@ -93,7 +99,14 @@ export function ContextBreakdownPanel(props: { readonly context: Context; readon
               </Show>
             </text>
           </box>
-          <box flexDirection="row" width={BAR_WIDTH} height={1}>
+          <box
+            flexDirection="row"
+            width="100%"
+            height={1}
+            onSizeChange={function (this: BoxRenderable) {
+              setBarWidth(this.width)
+            }}
+          >
             <For each={bar().segments}>
               {(segment) => (
                 <box

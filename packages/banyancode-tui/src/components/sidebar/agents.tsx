@@ -1,6 +1,5 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import { createMemo, createSignal, For, onMount, Show } from "solid-js"
-import { formatMoney, formatTokens } from "../../data/format"
 import type { MeshLive } from "../../data/live"
 import { meshPeers, type PeerRow } from "../../data/mesh"
 import { palette, type Palette } from "../../theme"
@@ -38,12 +37,6 @@ function PeerLine(props: { readonly context: Context; readonly peer: PeerRow }) 
         <b>{props.peer.agent}</b>
       </text>
       <text fg={statusColor(props.peer, theme())}>[{stateLabel(props.peer.status)}]</text>
-      <Show when={props.peer.cost !== undefined}>
-        <text fg={theme().muted}>{formatMoney(props.peer.cost ?? 0)}</text>
-      </Show>
-      <Show when={props.peer.tokens !== undefined}>
-        <text fg={theme().muted}>{formatTokens(props.peer.tokens ?? 0)} tok</text>
-      </Show>
     </box>
   )
 }

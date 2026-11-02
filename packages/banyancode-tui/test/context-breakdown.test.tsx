@@ -1,9 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import type { ModelInfo, SessionMessageAssistant, SessionMessageInfo } from "@opencode/client"
+import type { Context } from "@opencode/plugin/tui/context"
+import { RGBA } from "@opentui/core"
 import { ContextBreakdownPanel, tokenSegments } from "../src/components/sidebar/context-breakdown"
+import { SystemPanel } from "../src/components/sidebar/system-status"
 import { allocateBarWidths, categorizeTokens, estimateTokens, formatTokensCompact } from "../src/data/tokens"
-import { context, mount, session } from "./harness"
+import { context, mount, session, systemLive, theme } from "./harness"
 
 function assistant(input: {
   readonly id: string
@@ -145,4 +148,127 @@ test("token segments keep the v1 order and colors", () => {
   ])
   expect(segments.find((segment) => segment.key === "thinking")?.color).toBe("accent")
   expect(segments.find((segment) => segment.key === "files")?.color).toBe("success")
+})
+
+const surfaceHigh = RGBA.fromInts(9, 9, 9)
+
+// Distinct colors per bar bucket so the captured spans show where the bar ends.
+const barTheme = {
+  ...theme,
+  text: {
+    ...theme.text,
+    muted: RGBA.fromInts(11, 11, 11),
+    feedback: {
+      error: { ...theme.text.feedback.error, base: RGBA.fromInts(12, 12, 12) },
+      warning: { ...theme.text.feedback.warning, base: RGBA.fromInts(13, 13, 13) },
+      success: { ...theme.text.feedback.success, base: RGBA.fromInts(14, 14, 14) },
+      info: { ...theme.text.feedback.info, base: RGBA.fromInts(15, 15, 15) },
+    },
+  },
+  hue: {
+    ...theme.hue,
+    interactive: { ...theme.hue.interactive, 300: RGBA.fromInts(16, 16, 16) },
+    accent: { ...theme.hue.accent, 300: RGBA.fromInts(17, 17, 17) },
+  },
+  background: { ...theme.background, raised: { ...theme.background.raised, high: surfaceHigh } },
+} as unknown as Context["theme"]
+
+function backgroundCells(app: Awaited<ReturnType<typeof mount>>, row: number) {
+  const line = app.captureSpans().lines[row]!
+  const cells: string[] = []
+  for (const span of line.spans) {
+    const color = span.bg.toInts()
+    for (let index = 0; index < span.width; index++) cells.push(`${color[0]},${color[1]},${color[2]}`)
+  }
+  return cells
+}
+
+const surfaceKey = "9,9,9"
+
+function contextPanel(width: number) {
+  return mount(
+    () => (
+      <box width={width}>
+        <ContextBreakdownPanel
+          context={{
+            ...context({
+              sessions: [session({ id: "ses_tokens", title: "tokens" })],
+              messages: { ses_tokens: messages },
+              models: [model],
+            }),
+            theme: barTheme,
+          }}
+          sessionID="ses_tokens"
+        />
+      </box>
+    ),
+    { width, height: 20 },
+  )
+}
+
+const systemStatus = {
+  cpuPercent: 12,
+  memoryUsedBytes: 4 * 1024 ** 3,
+  memoryTotalBytes: 16 * 1024 ** 3,
+  diskUsedBytes: 100 * 1024 ** 3,
+  diskTotalBytes: 500 * 1024 ** 3,
+  platform: "windows" as const,
+}
+
+function systemPanel(width: number) {
+  return mount(
+    () => (
+      <box width={width}>
+        <SystemPanel
+          context={{ ...context(), theme: barTheme }}
+          system={systemLive({ status: systemStatus })}
+        />
+      </box>
+    ),
+    { width, height: 20 },
+  )
+}
+
+test("context bar stretches to the panel width at every sidebar width", async () => {
+  for (const width of [30, 48]) {
+    const app = await contextPanel(width)
+    try {
+      await app.renderOnce()
+      const bar = backgroundCells(app, 1)
+      expect(bar).toHaveLength(width)
+      expect(bar[width - 1]).toBe(surfaceKey)
+      expect(bar[0]).not.toBe(surfaceKey)
+      // No gaps or overflow: every column belongs to a segment or the empty tail.
+      const blank = backgroundCells(app, 19)![0]!
+      expect(bar.every((cell) => cell !== blank)).toBe(true)
+      expect(new Set(bar).size).toBeGreaterThan(2)
+    } finally {
+      app.renderer.destroy()
+    }
+  }
+})
+
+test("context bar and system meters share the same right edge", async () => {
+  for (const width of [30, 48]) {
+    const contextApp = await contextPanel(width)
+    const systemApp = await systemPanel(width)
+    try {
+      await contextApp.renderOnce()
+      await systemApp.renderOnce()
+      const contextBar = backgroundCells(contextApp, 1)
+      expect(contextBar[width - 1]).toBe(surfaceKey)
+
+      const meterRows = Array.from({ length: 20 }, (_, row) => backgroundCells(systemApp, row)).filter(
+        (cells) => cells[width - 1] === surfaceKey,
+      )
+      expect(meterRows.length).toBeGreaterThanOrEqual(3)
+      // Every meter ends in the same column as the context bar.
+      expect(meterRows.every((cells) => cells[width - 1] === contextBar[width - 1])).toBe(true)
+      const blank = backgroundCells(systemApp, 19)![0]!
+      expect(meterRows.every((cells) => cells.every((cell) => cell !== blank))).toBe(true)
+    } finally {
+      contextApp.renderer.destroy()
+      systemApp.renderer.destroy()
+    }
+  }
 })
