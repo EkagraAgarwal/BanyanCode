@@ -22,6 +22,8 @@ export interface IntelDeps {
   readonly storage: StorageInterface
   readonly config: ConfigInterface
   readonly codegraph: CodegraphPort
+  /** Builds the graph first when it is missing or empty, as the repository tools promise. */
+  readonly ensureGraph?: () => Effect.Effect<unknown>
 }
 
 export const register = (ctx: Context, deps: IntelDeps): Effect.Effect<void, never, Scope.Scope> =>
@@ -31,7 +33,18 @@ export const register = (ctx: Context, deps: IntelDeps): Effect.Effect<void, nev
     // not the host process cwd (which is the user's home for the server).
     const intel = make(deps.codegraph, { cwd: projectRoot })
     const planner = makeEditPlanner(deps.codegraph)
-    const tools = buildTools({ ctx, port: deps.codegraph, intel })
+    const ensureGraph = deps.ensureGraph
+    const tools = buildTools({ ctx, port: deps.codegraph, intel }).map((tool) =>
+      ensureGraph === undefined
+        ? tool
+        : {
+            ...tool,
+            execute: ((...args: never[]) =>
+              ensureGraph().pipe(
+                Effect.andThen((tool.execute as (...args: never[]) => Effect.Effect<never, never>)(...args)),
+              )) as typeof tool.execute,
+          },
+    )
 
     yield* ctx.tool
       .transform((editor) => {

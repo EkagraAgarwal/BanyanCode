@@ -140,6 +140,20 @@ export interface Interface {
 // drain fiber (consumer); the persist batch bounds how many parsed files the
 // drain holds before flushing to SQLite. Both keep the build's live set
 // O(queue + batch) instead of O(total files).
+// Indexing is CPU work on the thread that also serves the host's HTTP API. Effect's own yields are microtasks, which
+// don't let I/O run, so a long build froze every client and could not even receive its cancel. Each long loop gives
+// the event loop a macrotask turn once it has held the thread for this long; the sleep is also where a cancel lands.
+const THREAD_BUDGET_MS = 25
+let threadHeldSince = performance.now()
+const threadOverBudget = () => performance.now() - threadHeldSince > THREAD_BUDGET_MS
+const yieldThread = Effect.callback<void>((resume) => {
+  const timer = setTimeout(() => {
+    threadHeldSince = performance.now()
+    resume(Effect.void)
+  }, 0)
+  return Effect.sync(() => clearTimeout(timer))
+})
+
 export const PARSED_QUEUE_CAPACITY = 128
 export const PERSIST_BATCH_DEFAULT = 25
 export const PARSE_CONCURRENCY_DEFAULT = 8
@@ -598,6 +612,7 @@ const indexCandidateFileCore = (
   },
 ): Effect.Effect<void, never, never> => {
   return Effect.gen(function* () {
+    if (threadOverBudget()) yield* yieldThread
     yield* Ref.set(cfg.currentlyParsingRef, relativePath)
     if (yield* Ref.get(cfg.cancelled)) {
       yield* Queue.offer(cfg.parsedQueue, cfg.skippedParsed(relativePath))
@@ -1040,6 +1055,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   // configured_by scan avoid re-iterating every file in the graph per owner.
   const filesByDir = new Map<string, CodegraphFile[]>()
   for (const file of allFiles) {
+    if (threadOverBudget()) yield* yieldThread
     const dir = fileDir(file.path)
     const list = filesByDir.get(dir) ?? []
     list.push(file)
@@ -1052,6 +1068,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   const BATCH_SIZE = 500
 
   for (let batchStart = 0; batchStart < allNodesForIndex.length; batchStart += BATCH_SIZE) {
+    if (threadOverBudget()) yield* yieldThread
     if (yield* Ref.get(cancelled)) break
     const batchEnd = Math.min(batchStart + BATCH_SIZE, allNodesForIndex.length)
     const batch = allNodesForIndex.slice(batchStart, batchEnd)
@@ -1110,6 +1127,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   // (untouched files never need an import scope recomputed).
   const importScopesByFileID = new Map<string, Set<string>>()
   for (const [fileID, nodes] of nodesByFileID) {
+    if (threadOverBudget()) yield* yieldThread
     if (sourceSet && !sourceSet.has(fileID)) continue
     const fileNode = nodes.find((node) => node.kind === "file")
     const owner = fileByID.get(fileID)
@@ -1152,6 +1170,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   }
 
   for (const nodeA of allNodesForIndex) {
+    if (threadOverBudget()) yield* yieldThread
     if (
       !nodeA.code ||
       nodeA.kind === "test" ||
@@ -1256,6 +1275,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   const generatedNodes = allNodesForIndex.filter((n) => n.kind === "generated" && (!sourceSet || sourceSet.has(n.fileID)))
 
   for (const testNode of testNodes) {
+    if (threadOverBudget()) yield* yieldThread
     if (yield* Ref.get(cancelled)) {
       yield* Effect.logWarning("codegraph: cancelled during tested_by")
       break
@@ -1292,6 +1312,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   }
 
   for (const cfg of configNodes) {
+    if (threadOverBudget()) yield* yieldThread
     if (yield* Ref.get(cancelled)) {
       yield* Effect.logWarning("codegraph: cancelled during configured_by")
       break
@@ -1324,6 +1345,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   }
 
   for (const cfg of configNodes) {
+    if (threadOverBudget()) yield* yieldThread
     const cfgFile = fileByID.get(cfg.fileID)
     if (!cfgFile) continue
     const cfgDir = fileDir(cfgFile.path)
@@ -1383,6 +1405,7 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
   ]
   const touchedNodeIDs = new Set<string>()
   for (const edge of edgesToWrite) {
+    if (threadOverBudget()) yield* yieldThread
     touchedNodeIDs.add(edge.fromNodeID)
     touchedNodeIDs.add(edge.toNodeID)
   }

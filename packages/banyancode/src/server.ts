@@ -9,6 +9,8 @@ import { register as registerGateway } from "./gateway/index.js"
 import { empty as emptyCodegraphPort, make as makeCodegraphPort } from "./integration/codegraph-port.js"
 import { make as makeCodegraphQuery } from "./integration/codegraph-query.js"
 import { withJsonSafeRpc } from "./integration/json-rpc.js"
+import { ensureReadyForRepositoryTools } from "./codegraph/codegraph-readiness.js"
+import { isHomeOrAbove } from "./codegraph/workspace-identity.js"
 import { register as registerIntel } from "./intel/index.js"
 import { register as registerLsp } from "./lsp/index.js"
 import { register as registerMesh } from "./mesh/index.js"
@@ -174,7 +176,16 @@ export default Plugin.define({
       "codegraph",
       registerCodegraph(ctx, { ...deps, ...(codegraph === undefined ? {} : { services: codegraph }) }),
     )
-    yield* isolated("intel", registerIntel(ctx, { ...deps, codegraph: port }))
+    yield* isolated(
+      "intel",
+      registerIntel(ctx, {
+        ...deps,
+        codegraph: port,
+        ...(codegraph === undefined || isHomeOrAbove(projectRoot)
+          ? {}
+          : { ensureGraph: () => ensureReadyForRepositoryTools(codegraph.readiness, projectRoot) }),
+      }),
+    )
     yield* isolated("verify", registerVerify(ctx, { ...deps, codegraph: port }))
     yield* isolated("agents", registerAgents(ctx, { config }))
     yield* isolated("websearch", registerWebsearch(ctx, { config }))
