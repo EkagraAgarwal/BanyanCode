@@ -5,10 +5,6 @@ import { formatMoney, formatTokens } from "../../data/format"
 import { totalTokens } from "../../data/messages"
 import { palette } from "../../theme"
 
-function basename(path: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean)
-  return parts.at(-1) ?? path
-}
 
 /**
  * Ported from v1 `footer/session-footer.tsx`, narrowed to what the v2 host
