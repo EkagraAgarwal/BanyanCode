@@ -1,6 +1,6 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import type { RGBA } from "@opentui/core"
-import { createMemo, createSignal, onCleanup, Show } from "solid-js"
+import type { BoxRenderable, RGBA } from "@opentui/core"
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { formatTokens } from "../../data/format"
 import { lastAssistant } from "../../data/messages"
 import { palette, type Palette } from "../../theme"
@@ -13,31 +13,26 @@ interface StepMetrics {
 
 type Freshness = "live" | "last" | "pending"
 
-function metricBar(value: number, max: number, width: number): string {
-  const filled = Math.max(1, Math.min(width, Math.round((value / max) * width)))
-  return "█".repeat(filled) + "░".repeat(width - filled)
-}
-
-function BarMetric(props: {
+interface BarRow {
   readonly label: string
   readonly value: string
+  /** Filled units out of `BAR_UNITS`, like the fixed 8-column bar v1 drew. */
   readonly filled: number
-  readonly width: number
   readonly color: (theme: Palette) => RGBA
-  readonly theme: () => Palette
-}) {
-  const color = () => props.color(props.theme())
-  return (
-    <box flexDirection="row" justifyContent="space-between" width="100%" alignItems="center">
-      <text fg={props.theme().muted} width={10}>
-        {props.label}
-      </text>
-      <text fg={color()}>{metricBar(props.filled, props.width, props.width)}</text>
-      <text fg={color()} width={6}>
-        {props.value.padStart(6)}
-      </text>
-    </box>
-  )
+}
+
+// Rendered only until the panel reports its real width through onSizeChange.
+const DEFAULT_BAR_WIDTH = 8
+// Below this the bar is dropped rather than squeezing the value text.
+const MIN_BAR_WIDTH = 3
+// One unit per 10 tokens/s, so 80 tokens/s is a full bar.
+const BAR_UNITS = 8
+
+function metricBar(filled: number, width: number): string {
+  if (width <= 0) return ""
+  const ratio = Math.max(1 / BAR_UNITS, Math.min(1, filled / BAR_UNITS))
+  const columns = Math.max(1, Math.min(width, Math.round(ratio * width)))
+  return "█".repeat(columns) + "░".repeat(Math.max(0, width - columns))
 }
 
 /**
@@ -50,6 +45,9 @@ export function PerformancePanel(props: { readonly context: Context; readonly se
   const [step, setStep] = createSignal<StepMetrics | undefined>(undefined)
   const [liveSource, setLiveSource] = createSignal<string | undefined>(undefined)
   const [liveFresh, setLiveFresh] = createSignal(false)
+  // The bar stretches to the panel's content width, like the System meters, and
+  // reallocates its columns whenever the sidebar resizes.
+  const [panelWidth, setPanelWidth] = createSignal(0)
   const startedAt = new Map<string, number>()
 
   const offStart = props.context.data.on("session.step.started", (event) => {
@@ -108,8 +106,48 @@ export function PerformancePanel(props: { readonly context: Context; readonly se
 
   const cue = () => (freshness() === "live" ? "now" : freshness() === "last" ? "last" : "—")
 
+  const rows = createMemo<BarRow[]>(() => {
+    const metrics = active()
+    if (!metrics) return []
+    const list: BarRow[] = []
+    if (metrics.tokensPerSecond !== undefined) {
+      list.push({
+        label: "Tokens/s",
+        value: metrics.tokensPerSecond.toFixed(1),
+        filled: Math.min(BAR_UNITS, Math.max(1, Math.round(metrics.tokensPerSecond / 10))),
+        color: (value) => value.success,
+      })
+    }
+    if (metrics.tokensOut !== undefined && metrics.tokensPerSecond !== undefined) {
+      list.push({
+        label: "Output",
+        value: formatTokens(metrics.tokensOut),
+        filled: Math.min(BAR_UNITS, Math.max(1, Math.round(metrics.tokensOut / 100))),
+        color: (value) => value.info,
+      })
+    }
+    return list
+  })
+
+  // One label column and one value column for the whole panel, so the bars start
+  // and end on the same columns even when the values differ in length.
+  const layout = createMemo(() => {
+    const list = rows()
+    const label = Math.max(0, ...list.map((row) => row.label.length)) + 1
+    const value = Math.max(0, ...list.map((row) => row.value.length)) + 1
+    const width = panelWidth()
+    const bar = width === 0 ? DEFAULT_BAR_WIDTH : Math.max(0, width - label - value)
+    return { label, value, bar, show: bar >= MIN_BAR_WIDTH }
+  })
+
   return (
-    <box>
+    <box
+      flexDirection="column"
+      width="100%"
+      onSizeChange={function (this: BoxRenderable) {
+        setPanelWidth(this.width)
+      }}
+    >
       <box flexDirection="row" gap={1} alignItems="center">
         <text fg={theme().primary}>
           <b>PERFORMANCE</b>
@@ -123,32 +161,29 @@ export function PerformancePanel(props: { readonly context: Context; readonly se
         fallback={<text fg={theme().muted}>step metrics after first turn</text>}
       >
         {(metrics) => (
-          <box gap={0}>
-            <Show when={metrics().tokensPerSecond !== undefined}>
-              <BarMetric
-                label="Tokens/s"
-                value={metrics().tokensPerSecond!.toFixed(1)}
-                filled={Math.min(8, Math.max(1, Math.round(metrics().tokensPerSecond! / 10)))}
-                width={8}
-                color={(value) => value.success}
-                theme={theme}
-              />
-            </Show>
+          <box flexDirection="column" gap={0} width="100%">
             <Show when={metrics().tokensPerSecond === undefined}>
               <text fg={theme().muted}>
                 tool-only step · {formatTokens(metrics().tokensOut ?? 0)} tokens
               </text>
             </Show>
-            <Show when={metrics().tokensOut !== undefined && metrics().tokensPerSecond !== undefined}>
-              <BarMetric
-                label="Output"
-                value={formatTokens(metrics().tokensOut!)}
-                filled={Math.min(8, Math.max(1, Math.round((metrics().tokensOut ?? 0) / 100)))}
-                width={8}
-                color={(value) => value.info}
-                theme={theme}
-              />
-            </Show>
+            <For each={rows()}>
+              {(row) => (
+                <box flexDirection="row" width="100%" height={1} alignItems="center">
+                  <text fg={theme().muted} width={layout().label} flexShrink={0}>
+                    {row.label}
+                  </text>
+                  <box flexGrow={1} flexShrink={1} height={1} minWidth={0}>
+                    <Show when={layout().show}>
+                      <text fg={row.color(theme())}>{metricBar(row.filled, layout().bar)}</text>
+                    </Show>
+                  </box>
+                  <text fg={row.color(theme())} width={layout().value} flexShrink={0}>
+                    {row.value.padStart(layout().value)}
+                  </text>
+                </box>
+              )}
+            </For>
           </box>
         )}
       </Show>

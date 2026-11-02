@@ -11,8 +11,10 @@ function clampPercent(value: number): number {
 }
 
 export function asciiBar(percent: number, width = BAR_WIDTH): string {
-  const filled = Math.round((clampPercent(percent) / 100) * width)
-  return "█".repeat(filled) + "░".repeat(width - filled)
+  const columns = Math.max(0, Math.round(width))
+  if (columns === 0) return ""
+  const filled = Math.min(columns, Math.max(0, Math.round((clampPercent(percent) / 100) * columns)))
+  return "█".repeat(filled) + "░".repeat(columns - filled)
 }
 
 /** Remaining percent for a window, or undefined when the provider gave no usable limit. */
@@ -54,13 +56,13 @@ export interface WindowParts {
   readonly countdown?: string
 }
 
-export function windowParts(window: ProviderUsageWindow, nowMs: number): WindowParts {
+export function windowParts(window: ProviderUsageWindow, nowMs: number, width = BAR_WIDTH): WindowParts {
   const percent = windowPercent(window)
   const remainder = remainderText(window)
   const countdown = window.resetsAt === undefined ? undefined : formatCountdown(window.resetsAt - nowMs)
   return {
     label: window.label,
-    bar: percent === undefined ? "░".repeat(BAR_WIDTH) : asciiBar(percent),
+    bar: percent === undefined ? "░".repeat(Math.max(0, Math.round(width))) : asciiBar(percent, width),
     ...(remainder === undefined ? {} : { remainder }),
     ...(countdown === undefined ? {} : { countdown }),
   }
