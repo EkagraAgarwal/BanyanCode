@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
+import type { SessionMessageInfo } from "@opencode/client"
 import type { Context, SlotClaim } from "@opencode/plugin/tui/context"
 import type { JSX } from "solid-js"
 import BanyanTui from "../src/tui"
@@ -8,6 +9,8 @@ import { AgentTreePanel } from "../src/components/sidebar/agent-tree"
 import { CodebaseTreePanel } from "../src/components/sidebar/codebase-tree"
 import { CodegraphIntelPanel } from "../src/components/sidebar/codegraph-intel-panel"
 import { CodegraphPanel } from "../src/components/sidebar/codegraph-panel"
+import { ContextBreakdownPanel } from "../src/components/sidebar/context-breakdown"
+import { ModifiedFilesPanel } from "../src/components/sidebar/files"
 import { IntelTracePanel } from "../src/components/sidebar/intel-trace-panel"
 import { PerformancePanel } from "../src/components/sidebar/performance"
 import { ProviderUsagePanel } from "../src/components/sidebar/provider-usage"
@@ -29,7 +32,15 @@ import {
 const root = session({ id: "ses_root", title: "root", cost: 0.42 })
 const child = session({ id: "ses_child", parentID: "ses_root", title: "worker", agent: "coder" })
 const sessions = [root, child]
-const messages = { ses_root: [assistant([{ name: "read" }, { name: "grep" }])] }
+const messages = {
+  ses_root: [
+    { id: "msg_user", type: "user", time: { created: 1_000 }, text: "u".repeat(400) },
+    {
+      ...assistant([{ name: "read" }, { name: "grep" }]),
+      tokens: { input: 4_000, output: 200, reasoning: 50, cache: { read: 0, write: 0 } },
+    },
+  ],
+} as unknown as Record<string, readonly SessionMessageInfo[]>
 
 const fixture = {
   sessions,
@@ -74,15 +85,28 @@ const views: ReadonlyArray<{ readonly name: string; readonly render: (ctx: Conte
   { name: "codebase-tree", render: (ctx) => <CodebaseTreePanel context={ctx} codegraph={fixture.codegraph} /> },
   { name: "codegraph-intel", render: (ctx) => <CodegraphIntelPanel context={ctx} intel={fixture.intel} /> },
   { name: "intel-trace", render: (ctx) => <IntelTracePanel context={ctx} sessionID="ses_root" intel={fixture.intel} /> },
+  { name: "context-breakdown", render: (ctx) => <ContextBreakdownPanel context={ctx} sessionID="ses_root" /> },
+  { name: "modified-files", render: (ctx) => <ModifiedFilesPanel context={ctx} sessionID="ses_root" /> },
 ]
+
+const fixtureContext = {
+  ...context(fixture),
+  client: {
+    session: {
+      diff: async () => [{ file: "src/math.ts", patch: "", additions: 3, deletions: 1, status: "modified" as const }],
+    },
+  },
+} as unknown as Context
 
 // The sidebar wrapper owns the inter-plugin gap. Every panel therefore starts
 // its own content on the first terminal row (marginTop 0) and never emits a
 // leading blank line of its own.
 for (const view of views) {
   test(`sidebar panel ${view.name} starts on the first row`, async () => {
-    const app = await mount(() => view.render(context(fixture)), { width: 80, height: 25 })
+    const app = await mount(() => view.render(fixtureContext), { width: 80, height: 25 })
     try {
+      await Bun.sleep(1)
+      await app.renderOnce()
       const lines = app.captureCharFrame().split("\n")
       expect(lines[0]!.trim().length).toBeGreaterThan(0)
     } finally {
@@ -154,12 +178,12 @@ test("plugin registers additive slots, router pages, and commands", () => {
   if (typeof cleanup === "function") void cleanup()
 
   const sidebar = recorded.claims.filter((claim) => claim.target === "sidebar.content")
-  expect(sidebar).toHaveLength(10)
+  expect(sidebar).toHaveLength(12)
   expect(sidebar.every((claim) => claim.placement === "append")).toBe(true)
 
   expect(recorded.claims.filter((claim) => claim.target === "prompt.footer.status")).toHaveLength(2)
   expect(recorded.claims.filter((claim) => claim.target === "home.footer.status")).toHaveLength(1)
-  expect(recorded.claims.filter((claim) => claim.target === "session.composer.top")).toHaveLength(1)
+  expect(recorded.claims.filter((claim) => claim.target === "session.composer.top")).toHaveLength(2)
   expect(recorded.claims.filter((claim) => claim.target === "home.bottom")).toHaveLength(1)
   expect(recorded.claims.filter((claim) => claim.target === "session.panel")).toHaveLength(1)
 

@@ -49,6 +49,12 @@ export const theme = {
     neutral: { 100: COLOR, 200: COLOR, 300: COLOR, 400: COLOR, 500: COLOR, 600: COLOR, 700: COLOR, 800: COLOR, 900: COLOR },
   },
   border: { base: COLOR },
+  diff: {
+    text: { added: COLOR, removed: COLOR, context: COLOR, hunkHeader: COLOR },
+    background: { added: COLOR, removed: COLOR, context: COLOR },
+    highlight: { added: COLOR, removed: COLOR },
+    lineNumber: { text: COLOR, background: { added: COLOR, removed: COLOR } },
+  },
   background: { base: COLOR, raised: { base: COLOR, high: COLOR, max: COLOR } },
 } as unknown as ResolvedTheme
 
@@ -115,7 +121,7 @@ export function context(input: {
     location: { directory: input.directory ?? "D:/workspace" },
     options: {},
     renderer: {},
-    client: {},
+    client: { session: { diff: async () => [] } },
     data: {
       on: () => () => {},
       listen: () => () => {},

@@ -1,9 +1,11 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import type { SessionInfo } from "@opencode/client"
+import type { RGBA } from "@opentui/core"
 import { createMemo, For, Show } from "solid-js"
 import { formatMoney } from "../../data/format"
 import { sessionAge } from "../../data/messages"
 import { palette, type Palette } from "../../theme"
+import { usePanelFocus, useRowKeys, type PanelRow } from "./keys"
 
 export function orderSessions(sessions: readonly SessionInfo[], pinned: readonly string[] = []): SessionInfo[] {
   const starred = new Set(pinned)
@@ -76,6 +78,25 @@ export function SessionsView(props: { readonly context: Context }) {
     props.context.ui.toast.show({ message: "Session deleted", variant: "success" })
   }
 
+  const focus = usePanelFocus()
+
+  const rows = createMemo<PanelRow[]>(() => [
+    { id: "new", actions: [{ title: "New session", run: () => void create() }] },
+    ...sessions().map((session) => ({
+      id: session.id,
+      actions: [
+        { title: "Continue", run: () => props.context.ui.router.navigate({ type: "session", sessionID: session.id }) },
+        { title: "Rename", run: () => void rename(session) },
+        { title: "Delete", run: () => void remove(session) },
+        { title: "Pin", run: () => void togglePin(session.id) },
+      ],
+    })),
+  ])
+  const keys = useRowKeys({ context: props.context, rows })
+  const cursor = (index: number) => focus?.zone() === "content" && keys.row() === index
+  const actionColor = (row: number, action: number, color: RGBA) =>
+    action === keys.action() && cursor(row) ? theme().primary : color
+
   return (
     <box flexDirection="column" flexGrow={1} minHeight={0}>
       <box
@@ -90,10 +111,15 @@ export function SessionsView(props: { readonly context: Context }) {
           <b>Sessions</b>
         </text>
         <text fg={theme().primary} onMouseUp={create}>
+          {cursor(0) ? "▸ " : ""}
           [+ New session]
         </text>
       </box>
-      <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
+      <scrollbox
+        id="banyancode.sessions.list"
+        flexGrow={1}
+        verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}
+      >
         <box flexDirection="column" paddingTop={1} gap={0}>
           <Show
             when={sessions().length > 0}
@@ -108,51 +134,59 @@ export function SessionsView(props: { readonly context: Context }) {
             }
           >
             <For each={sessions()}>
-              {(session) => (
-                <box flexDirection="column" paddingLeft={2} paddingRight={2}>
-                  <box flexDirection="row" gap={1} alignItems="center">
-                    <text fg={dotColor(props.context, session, theme())}>●</text>
-                    <text
-                      fg={isPinned(session.id) ? theme().accent : theme().muted}
-                      onMouseUp={() => void togglePin(session.id)}
-                    >
-                      {isPinned(session.id) ? "★" : "☆"}
-                    </text>
-                    <text
-                      fg={theme().text}
-                      flexGrow={1}
-                      onMouseUp={() =>
-                        props.context.ui.router.navigate({ type: "session", sessionID: session.id })
-                      }
-                    >
-                      {session.title ?? "(untitled)"}
-                    </text>
-                    <text fg={theme().muted}>{sessionAge(session.time.updated)}</text>
+              {(session, index) => {
+                const row = () => index() + 1
+                return (
+                  <box flexDirection="column" paddingLeft={2} paddingRight={2}>
+                    <box flexDirection="row" gap={1} alignItems="center">
+                      <text fg={cursor(row()) ? theme().primary : dotColor(props.context, session, theme())}>
+                        {cursor(row()) ? "▸" : "●"}
+                      </text>
+                      <text
+                        fg={isPinned(session.id) ? theme().accent : theme().muted}
+                        onMouseUp={() => void togglePin(session.id)}
+                      >
+                        {isPinned(session.id) ? "★" : "☆"}
+                      </text>
+                      <text
+                        fg={cursor(row()) ? theme().primary : theme().text}
+                        flexGrow={1}
+                        onMouseUp={() =>
+                          props.context.ui.router.navigate({ type: "session", sessionID: session.id })
+                        }
+                      >
+                        {session.title ?? "(untitled)"}
+                      </text>
+                      <text fg={theme().muted}>{sessionAge(session.time.updated)}</text>
+                    </box>
+                    <box flexDirection="row" gap={2} paddingLeft={1}>
+                      <Show when={session.agent}>
+                        <text fg={theme().muted}>{session.agent}</text>
+                      </Show>
+                      <Show when={session.cost > 0}>
+                        <text fg={theme().muted}>{formatMoney(session.cost)}</text>
+                      </Show>
+                      <text
+                        fg={actionColor(row(), 0, theme().success)}
+                        onMouseUp={() =>
+                          props.context.ui.router.navigate({ type: "session", sessionID: session.id })
+                        }
+                      >
+                        continue
+                      </text>
+                      <text fg={actionColor(row(), 1, theme().info)} onMouseUp={() => void rename(session)}>
+                        rename
+                      </text>
+                      <text fg={actionColor(row(), 2, theme().error)} onMouseUp={() => void remove(session)}>
+                        delete
+                      </text>
+                      <text fg={actionColor(row(), 3, theme().muted)} onMouseUp={() => void togglePin(session.id)}>
+                        {isPinned(session.id) ? "unpin" : "pin"}
+                      </text>
+                    </box>
                   </box>
-                  <box flexDirection="row" gap={2} paddingLeft={1}>
-                    <Show when={session.agent}>
-                      <text fg={theme().muted}>{session.agent}</text>
-                    </Show>
-                    <Show when={session.cost > 0}>
-                      <text fg={theme().muted}>{formatMoney(session.cost)}</text>
-                    </Show>
-                    <text
-                      fg={theme().success}
-                      onMouseUp={() =>
-                        props.context.ui.router.navigate({ type: "session", sessionID: session.id })
-                      }
-                    >
-                      continue
-                    </text>
-                    <text fg={theme().info} onMouseUp={() => void rename(session)}>
-                      rename
-                    </text>
-                    <text fg={theme().error} onMouseUp={() => void remove(session)}>
-                      delete
-                    </text>
-                  </box>
-                </box>
-              )}
+                )
+              }}
             </For>
           </Show>
         </box>

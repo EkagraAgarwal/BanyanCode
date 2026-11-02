@@ -7,6 +7,7 @@ import type { MeshLive } from "../../data/live"
 import { totalTokens } from "../../data/messages"
 import { meshStateFor } from "../../data/mesh"
 import { palette, type Palette } from "../../theme"
+import { usePanelFocus, useRowKeys, type PanelRow } from "./keys"
 
 export const AGENT_TREE_COLLAPSE_THRESHOLD = 5
 const BAR_WIDTH = 10
@@ -210,6 +211,17 @@ export function AgentTreeView(props: {
   )
 
   const rows = createMemo(() => (root() ? flattenAgentTree(root()!, expanded()) : []))
+  const focus = usePanelFocus()
+
+  const treeRows = createMemo<PanelRow[]>(() =>
+    rows().map((row) =>
+      row.kind === "group"
+        ? { id: row.key, actions: [{ title: "Toggle group", run: () => toggle(row.key) }] }
+        : { id: row.node.session.id, actions: [] },
+    ),
+  )
+  const keys = useRowKeys({ context: props.context, rows: treeRows })
+  const cursor = (index: number) => focus?.zone() === "content" && keys.row() === index
   const sessionCount = createMemo(() => {
     const count = (node: AgentNode): number => 1 + node.children.reduce((sum, child) => sum + count(child), 0)
     return root() ? count(root()!) : 0
@@ -240,7 +252,7 @@ export function AgentTreeView(props: {
         </text>
         <text fg={theme().muted}>{sessionCount()} sessions</text>
       </box>
-      <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
+      <scrollbox id="banyancode.agents.list" flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
         <box flexDirection="column" paddingTop={1} gap={0}>
           <Show
             when={rows().length > 0}
@@ -251,7 +263,7 @@ export function AgentTreeView(props: {
             }
           >
             <For each={rows()}>
-              {(row) => {
+              {(row, index) => {
                 const connector = () =>
                   row.depth === 0
                     ? ""
@@ -270,14 +282,17 @@ export function AgentTreeView(props: {
                       <text fg={theme().muted} flexShrink={0}>
                         {connector()}
                       </text>
-                      <text fg={theme().muted} flexShrink={0}>
+                      <text fg={cursor(index()) ? theme().primary : theme().muted} flexShrink={0}>
                         {`${row.nodes.length} ${row.agentName} collapsed`}
                       </text>
                       <text fg={style.color} flexShrink={0} paddingLeft={2}>
                         {agentTreeSparkline(row.nodes.map((node) => node.totalTokens))}
                       </text>
                       <box flexGrow={1} />
-                      <text fg={theme().muted} flexShrink={0}>
+                      <text
+                        fg={cursor(index()) && keys.action() === 0 ? theme().primary : theme().muted}
+                        flexShrink={0}
+                      >
                         expand ▶
                       </text>
                     </box>
@@ -298,7 +313,7 @@ export function AgentTreeView(props: {
                     <text fg={style.color} flexShrink={0} width={2}>
                       {style.icon}
                     </text>
-                    <text fg={theme().text} flexShrink={0}>
+                    <text fg={cursor(index()) ? theme().primary : theme().text} flexShrink={0}>
                       <b>{agentName(node.session)}</b>
                     </text>
                     <Show when={status.glyph}>

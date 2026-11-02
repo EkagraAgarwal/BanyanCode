@@ -4,6 +4,7 @@ import { createMemo, For, onMount, Show } from "solid-js"
 import type { BanyanConfig } from "../../data/pending-rpc"
 import type { Live } from "../../data/live"
 import { palette, type Palette } from "../../theme"
+import { usePanelFocus, useRowKeys, type PanelRow } from "./keys"
 
 const THINKING_LEVELS = ["off", "low", "medium", "high", "max", "xhigh", "ultra"] as const
 const HIDDEN_FROM_TAB = new Set(["plan"])
@@ -193,6 +194,38 @@ export function ConfigView(props: { readonly context: Context; readonly live: Li
     )
   }
 
+  const focus = usePanelFocus()
+
+  const rows = createMemo<PanelRow[]>(() => {
+    const primary = orchestrator()
+    const list: PanelRow[] = primary
+      ? [
+          {
+            id: primary.name,
+            actions: [
+              { title: "Model", run: () => void pickModel(primary) },
+              { title: "Thinking", run: () => void pickThinking(primary) },
+              { title: "Prompt", run: () => void editPrompt(primary) },
+            ],
+          },
+        ]
+      : []
+    for (const agent of subagents()) {
+      list.push({
+        id: agent.name,
+        actions: [
+          { title: "Toggle", run: () => void toggle(agent.name) },
+          { title: "Model", run: () => void pickModel(agent) },
+          { title: "Thinking", run: () => void pickThinking(agent) },
+          { title: "Prompt", run: () => void editPrompt(agent) },
+        ],
+      })
+    }
+    return list
+  })
+  const keys = useRowKeys({ context: props.context, rows })
+  const cursor = (index: number) => focus?.zone() === "content" && keys.row() === index
+
   return (
     <box flexDirection="column" flexGrow={1} minHeight={0}>
       <box
@@ -220,7 +253,7 @@ export function ConfigView(props: { readonly context: Context; readonly live: Li
         </text>
       </Show>
 
-      <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
+      <scrollbox id="banyancode.config.list" flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
         <box flexDirection="column" paddingTop={0} gap={0}>
           <Show when={orchestrator()}>
             {(agent) => (
@@ -235,6 +268,9 @@ export function ConfigView(props: { readonly context: Context; readonly live: Li
                     theme={theme()}
                     showToggle={false}
                     enabled
+                    cursor={cursor(0)}
+                    action={keys.action()}
+                    actionOffset={0}
                     modelLabel={modelLabel(agent())}
                     thinkingLabel={thinkingFor(agent().name)}
                     onToggle={() => {}}
@@ -252,13 +288,16 @@ export function ConfigView(props: { readonly context: Context; readonly live: Li
           </text>
           <box flexDirection="column" paddingLeft={2} paddingRight={2} gap={0}>
             <For each={subagents()}>
-              {(agent) => (
+              {(agent, index) => (
                 <AgentCard
                   agent={agent}
                   displayName={agent.name}
                   theme={theme()}
                   showToggle
                   enabled={enabledFor(agent.name)}
+                  cursor={cursor(index() + (orchestrator() ? 1 : 0))}
+                  action={keys.action()}
+                  actionOffset={1}
                   modelLabel={modelLabel(agent)}
                   thinkingLabel={thinkingFor(agent.name)}
                   onToggle={() => void toggle(agent.name)}
@@ -286,6 +325,9 @@ function AgentCard(props: {
   readonly theme: Palette
   readonly showToggle: boolean
   readonly enabled: boolean
+  readonly cursor: boolean
+  readonly action: number
+  readonly actionOffset: number
   readonly modelLabel: string
   readonly thinkingLabel: string
   readonly onToggle: () => void
@@ -304,7 +346,9 @@ function AgentCard(props: {
       paddingBottom={0}
     >
       <box flexDirection="row" gap={1} alignItems="center">
-        <text fg={modeColor(props.agent.mode, props.theme)}>●</text>
+        <text fg={props.cursor ? props.theme.primary : modeColor(props.agent.mode, props.theme)}>
+          {props.cursor ? "▸" : "●"}
+        </text>
         <text fg={props.enabled ? props.theme.text : props.theme.muted}>
           <b>{props.displayName}</b>
         </text>
@@ -325,15 +369,24 @@ function AgentCard(props: {
       </text>
       <box flexDirection="row" gap={1} alignItems="center">
         <text fg={props.theme.muted}>Model</text>
-        <text fg={props.theme.info} onMouseUp={props.onModel}>
+        <text
+          fg={props.cursor && props.action === props.actionOffset ? props.theme.primary : props.theme.info}
+          onMouseUp={props.onModel}
+        >
           {props.modelLabel} ▾
         </text>
         <text fg={props.theme.muted}>· Thinking</text>
-        <text fg={props.theme.info} onMouseUp={props.onThinking}>
+        <text
+          fg={props.cursor && props.action === props.actionOffset + 1 ? props.theme.primary : props.theme.info}
+          onMouseUp={props.onThinking}
+        >
           {props.thinkingLabel} ▾
         </text>
         <text fg={props.theme.muted}>· Prompt</text>
-        <text fg={props.theme.info} onMouseUp={props.onPrompt}>
+        <text
+          fg={props.cursor && props.action === props.actionOffset + 2 ? props.theme.primary : props.theme.info}
+          onMouseUp={props.onPrompt}
+        >
           edit system prompt
         </text>
       </box>

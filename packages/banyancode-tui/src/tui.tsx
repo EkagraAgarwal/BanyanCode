@@ -5,9 +5,12 @@ import { createLive, type Live } from "./data/live"
 import { CodegraphProgress } from "./components/status/codegraph-progress"
 import { StatusPills } from "./components/status/pills"
 import { SessionStatus } from "./components/status/session-status"
+import { AttentionStrip } from "./components/status/attention"
 import { AgentsPanel } from "./components/sidebar/agents"
 import { AgentTreePanel } from "./components/sidebar/agent-tree"
 import { CodebaseTreePanel } from "./components/sidebar/codebase-tree"
+import { ContextBreakdownPanel } from "./components/sidebar/context-breakdown"
+import { ModifiedFilesPanel } from "./components/sidebar/files"
 import { CodegraphIntelPanel } from "./components/sidebar/codegraph-intel-panel"
 import { CodegraphPanel } from "./components/sidebar/codegraph-panel"
 import { IntelTracePanel } from "./components/sidebar/intel-trace-panel"
@@ -39,6 +42,17 @@ export default Plugin.define({
     const live = createLive(context)
 
     // --- sidebar (v1 registration order) ----------------------------------
+    // v1 showed the token breakdown and the session's changed files in the
+    // sidebar; the host's Context panel only carries the total, so both are
+    // ported here as additive panels (they render nothing without data).
+    context.ui.slot({
+      append: "sidebar.content",
+      render: (input) => <ContextBreakdownPanel context={context} sessionID={input.sessionID} />,
+    })
+    context.ui.slot({
+      append: "sidebar.content",
+      render: (input) => <ModifiedFilesPanel context={context} sessionID={input.sessionID} />,
+    })
     context.ui.slot({
       append: "sidebar.content",
       render: (input) => <AgentsPanel context={context} sessionID={input.sessionID} mesh={live.mesh} />,
@@ -113,6 +127,14 @@ export default Plugin.define({
       ),
     })
 
+    // v1 attention strip. The host replaces the prompt (and with it the
+    // prompt footer) while a permission or question is pending, so this slot
+    // is the only surface that can carry the attention count at that moment.
+    context.ui.slot({
+      append: "session.composer.top",
+      render: (input) => <AttentionStrip context={context} sessionID={input.sessionID} />,
+    })
+
     // v1 home tip + progress overlay.
     context.ui.slot({
       append: "home.bottom",
@@ -177,7 +199,7 @@ export default Plugin.define({
         {
           id: "tabs.next",
           title: "Next tab",
-          description: "Switch to the next BanyanCode view",
+          description: "Next view",
           group: "Tabs",
           bind: "ctrl+]",
           palette: true,
@@ -188,7 +210,7 @@ export default Plugin.define({
         {
           id: "tabs.previous",
           title: "Previous tab",
-          description: "Switch to the previous BanyanCode view",
+          description: "Previous view",
           group: "Tabs",
           bind: "ctrl+[",
           palette: true,
@@ -199,7 +221,6 @@ export default Plugin.define({
         {
           id: "codegraph.build",
           title: "Codegraph: build index",
-          description: "Index the workspace code graph",
           group: "Codegraph",
           palette: true,
           slash: { name: "codegraph-build", arguments: true },
@@ -211,7 +232,6 @@ export default Plugin.define({
         {
           id: "codegraph.cancel",
           title: "Codegraph: cancel build",
-          description: "Cancel the in-flight codegraph build",
           group: "Codegraph",
           palette: true,
           slash: { name: "codegraph-cancel" },
@@ -222,7 +242,6 @@ export default Plugin.define({
         {
           id: "codegraph.remove",
           title: "Codegraph: remove index",
-          description: "Clear the codegraph index for this workspace",
           group: "Codegraph",
           palette: true,
           slash: { name: "codegraph-remove", arguments: true },
@@ -234,7 +253,6 @@ export default Plugin.define({
         {
           id: "codegraph.force-kill",
           title: "Codegraph: force-kill a wedged build",
-          description: "Force-kill the server hosting a hung codegraph build",
           group: "Codegraph",
           slash: { name: "codegraph-force-kill" },
           async run() {
@@ -255,7 +273,6 @@ export default Plugin.define({
         {
           id: "codegraph.canvas",
           title: "Codegraph: open canvas",
-          description: "Open the layered codegraph canvas",
           group: "Codegraph",
           palette: true,
           run() {
@@ -265,7 +282,6 @@ export default Plugin.define({
         {
           id: "banyancode.config",
           title: "BanyanCode: agent config",
-          description: "Edit agent models, thinking levels and prompts",
           group: "BanyanCode",
           palette: true,
           run() {
@@ -276,7 +292,7 @@ export default Plugin.define({
           // v1 id + slash: the control dialog with steer/kill, not the tab.
           id: "agent.tree",
           title: "Agent tree",
-          description: "Steer or kill a subagent in this session's tree",
+          description: "Steer or kill subagents",
           group: "BanyanCode",
           palette: true,
           slash: { name: "agent-tree" },
@@ -287,7 +303,7 @@ export default Plugin.define({
         {
           id: "agent.tree.panel",
           title: "Agent tree: full view",
-          description: "Open the session's subagent tree panel",
+          description: "Subagent tree panel",
           group: "BanyanCode",
           palette: true,
           run() {
@@ -298,7 +314,6 @@ export default Plugin.define({
           // v1 `agent.model` / `/agent-model`.
           id: "agent.model",
           title: "Pick model for orchestrator or subagent",
-          description: "Choose the model that an agent uses",
           group: "BanyanCode",
           palette: true,
           slash: { name: "agent-model" },
@@ -311,7 +326,6 @@ export default Plugin.define({
           // the current location's host catalog is the available equivalent.
           id: "models.refresh",
           title: "Refresh models catalog",
-          description: "Re-sync the model catalog for this location",
           group: "BanyanCode",
           palette: true,
           slash: { name: "refresh-models" },
@@ -329,7 +343,6 @@ export default Plugin.define({
           // v1 `yolo.toggle`.
           id: "yolo.toggle",
           title: "Toggle YOLO mode",
-          description: "Turn BanyanCode YOLO mode on or off",
           group: "BanyanCode",
           palette: true,
           slash: { name: "yolo", arguments: true },
@@ -344,7 +357,6 @@ export default Plugin.define({
           // v1 `swarm.toggle`.
           id: "swarm.toggle",
           title: "Toggle swarm mode",
-          description: "Turn BanyanCode swarm fan-out on or off",
           group: "BanyanCode",
           palette: true,
           slash: { name: "swarm", arguments: true },
@@ -359,7 +371,6 @@ export default Plugin.define({
           // v1 `subagents.max_subagents`.
           id: "subagents.max_subagents",
           title: "Set max concurrent subagents",
-          description: "Open the 1-20 max-subagents dialog",
           group: "BanyanCode",
           palette: true,
           slash: { name: "max-subagents", arguments: true },
@@ -380,7 +391,6 @@ export default Plugin.define({
         {
           id: "lsp.toggle",
           title: "Toggle LSP",
-          description: "Turn BanyanCode LSP on or off",
           group: "BanyanCode",
           palette: true,
           slash: { name: "lsp", arguments: true },
@@ -396,7 +406,6 @@ export default Plugin.define({
           // v1 `/thinking` (`/variant` and `/reasoning` are aliases).
           id: "thinking.set",
           title: "Set reasoning variant",
-          description: "Read or set the current model's thinking variant",
           group: "BanyanCode",
           slash: { name: "thinking", aliases: ["variant", "reasoning"], arguments: true },
           run(input) {

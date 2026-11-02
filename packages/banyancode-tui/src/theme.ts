@@ -22,6 +22,8 @@ export function palette(theme: ResolvedTheme) {
     surface: theme.background.raised.base,
     surfaceHigh: theme.background.raised.high,
     background: theme.background.base,
+    diffAdded: theme.diff.text.added,
+    diffRemoved: theme.diff.text.removed,
   }
 }
 

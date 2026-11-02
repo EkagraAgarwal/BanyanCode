@@ -8,6 +8,13 @@ export function DialogStatus() {
   const theme = useTheme().surface("dialog")
 
   const mcp = createMemo(() => data.location.mcp.server.list() ?? [])
+  const providers = createMemo(() => data.location.provider.list() ?? [])
+  const models = createMemo(() => data.location.model.list() ?? [])
+  const sessions = createMemo(() => data.session.list().filter((session) => !session.parentID))
+  const running = createMemo(
+    () => data.session.list().filter((session) => data.session.status(session.id) === "running").length,
+  )
+  const modelCount = (providerID: string) => models().filter((model) => model.providerID === providerID).length
   const color = (status: string) => {
     if (status === "connected") return theme.text.feedback.success.base
     if (status === "failed") return theme.text.feedback.error.base
@@ -16,6 +23,34 @@ export function DialogStatus() {
   }
   return (
     <DialogLayout header={<DialogHeader title="Status" />}>
+      <Show when={providers().length > 0} fallback={<text fg={theme.text.base}>No providers connected</text>}>
+        <box>
+          <text fg={theme.text.base}>
+            {providers().length} provider{providers().length === 1 ? "" : "s"}
+          </text>
+          <For each={providers()}>
+            {(item) => (
+              <box flexDirection="row" gap={1}>
+                <text flexShrink={0} style={{ fg: theme.text.feedback.success.base }}>
+                  •
+                </text>
+                <text fg={theme.text.base} wrapMode="word">
+                  <b>{item.name}</b>{" "}
+                  <span style={{ fg: theme.text.muted }}>
+                    {modelCount(item.id)} model{modelCount(item.id) === 1 ? "" : "s"}
+                  </span>
+                </text>
+              </box>
+            )}
+          </For>
+        </box>
+      </Show>
+      <box>
+        <text fg={theme.text.base}>
+          {sessions().length} session{sessions().length === 1 ? "" : "s"}
+          {running() > 0 ? ` · ${running()} running` : ""}
+        </text>
+      </box>
       <Show when={mcp().length > 0} fallback={<text fg={theme.text.base}>No MCP servers</text>}>
         <box>
           <text fg={theme.text.base}>

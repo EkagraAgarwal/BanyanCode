@@ -1,5 +1,6 @@
 import type { Context, PanelInput } from "@opencode/plugin/tui/context"
-import { createMemo, createSignal, For, Show } from "solid-js"
+import type { ScrollBoxRenderable } from "@opentui/core"
+import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js"
 import { PANEL, RAIL, type PanelName } from "../../constants"
 import type { Live } from "../../data/live"
 import { palette } from "../../theme"
@@ -15,6 +16,7 @@ import { TodoPanel } from "../inspector/todo"
 import { AgentTreeView } from "./agents"
 import { ConfigView } from "./config"
 import { CodegraphCanvas } from "./graph"
+import { createPanelFocus, PanelFocusContext, usePanelKeyMode, usePanelScroll } from "./keys"
 import { SessionTabs, viewKeyForPanel } from "./nav"
 import { SessionsView } from "./sessions"
 
@@ -68,8 +70,71 @@ export function InspectorPanel(props: {
   const theme = () => palette(props.context.theme)
   const active = createMemo(() => panelName(props.panel.name))
   const stacked = createMemo(() => props.panel.width < STACK_THRESHOLD)
+  const focus = createPanelFocus(Math.max(0, RAIL.findIndex((item) => item.name === active())))
+  let scroll: ScrollBoxRenderable | undefined
 
   const select = (name: PanelName) => props.context.ui.panel.open(name, { presentation: props.panel.presentation })
+
+  usePanelKeyMode(props.context, () => props.panel.focused)
+  usePanelScroll(props.context, () => scroll)
+
+  // Mouse selections move the rail cursor too, so the next arrow key starts
+  // from the view the user is looking at.
+  const syncRail = (name: PanelName) => focus.setRail(Math.max(0, RAIL.findIndex((item) => item.name === name)))
+  createEffect(on(active, syncRail, { defer: true }))
+
+  props.context.keymap.layer(() => ({
+    mode: "banyancode.panel",
+    priority: 30,
+    commands: [
+      {
+        bind: "up",
+        title: "Previous panel",
+        group: "Panel",
+        enabled: () => focus.zone() === "rail",
+        run: () => focus.setRail((focus.rail() - 1 + RAIL.length) % RAIL.length),
+      },
+      {
+        bind: "down",
+        title: "Next panel",
+        group: "Panel",
+        enabled: () => focus.zone() === "rail",
+        run: () => focus.setRail((focus.rail() + 1) % RAIL.length),
+      },
+      {
+        bind: "enter",
+        title: "Open panel",
+        group: "Panel",
+        enabled: () => focus.zone() === "rail",
+        run: () => {
+          const item = RAIL[focus.rail()]
+          if (!item) return
+          select(item.name)
+          focus.setZone("content")
+        },
+      },
+      {
+        bind: "right",
+        title: "Focus panel content",
+        group: "Panel",
+        enabled: () => focus.zone() === "rail",
+        run: () => focus.setZone("content"),
+      },
+      {
+        bind: "left",
+        title: "Focus panel rail",
+        group: "Panel",
+        enabled: () => focus.zone() === "content",
+        run: () => focus.setZone("rail"),
+      },
+      {
+        bind: "tab",
+        title: "Switch panel region",
+        group: "Panel",
+        run: () => focus.setZone(focus.zone() === "rail" ? "content" : "rail"),
+      },
+    ],
+  }))
 
   const rail = (
     <box
@@ -84,13 +149,13 @@ export function InspectorPanel(props: {
       borderColor={theme().border}
     >
       <For each={RAIL}>
-        {(item) => (
+        {(item, index) => (
           <text
-            fg={active() === item.name ? theme().primary : theme().muted}
+            fg={active() === item.name ? theme().primary : index() === focus.rail() ? theme().text : theme().muted}
             onMouseUp={() => select(item.name)}
             wrapMode="none"
           >
-            {active() === item.name ? "› " : "  "}
+            {index() === focus.rail() ? "› " : "  "}
             {item.label}
           </text>
         )}
@@ -99,30 +164,53 @@ export function InspectorPanel(props: {
   )
 
   return (
-    <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0}>
-      <SessionTabs context={props.context} active={viewKeyForPanel(active())} />
-      <box flexDirection={stacked() ? "column" : "row"} flexGrow={1} minWidth={0} minHeight={0}>
-        {rail}
-        <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1}>
-          <box flexDirection="row" justifyContent="space-between" alignItems="center">
-            <text fg={theme().muted}>{RAIL.find((item) => item.name === active())?.title ?? ""}</text>
-            <box flexDirection="row" gap={2}>
-              <text fg={theme().muted} onMouseUp={props.panel.toggleFullscreen}>
-                {props.panel.presentation === "fullscreen" ? "restore" : "fullscreen"}
-              </text>
-              <text fg={theme().muted} onMouseUp={props.panel.close}>
-                close
-              </text>
+    <PanelFocusContext.Provider value={focus}>
+      <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0}>
+        <SessionTabs context={props.context} active={viewKeyForPanel(active())} />
+        <box flexDirection={stacked() ? "column" : "row"} flexGrow={1} minWidth={0} minHeight={0}>
+          {rail}
+          <box
+            flexDirection="column"
+            flexGrow={1}
+            minWidth={0}
+            minHeight={0}
+            paddingLeft={2}
+            paddingRight={2}
+            paddingTop={1}
+          >
+            <box flexDirection="row" justifyContent="space-between" alignItems="center">
+              <text fg={theme().muted}>{RAIL.find((item) => item.name === active())?.title ?? ""}</text>
+              <box flexDirection="row" gap={2}>
+                <Show when={props.panel.width >= STACK_THRESHOLD}>
+                  <text fg={theme().faint}>{"↑↓ select · → action · enter · ← rail"}</text>
+                </Show>
+                <text fg={theme().muted} onMouseUp={props.panel.toggleFullscreen}>
+                  {props.panel.presentation === "fullscreen" ? "restore" : "fullscreen"}
+                </text>
+                <text fg={theme().muted} onMouseUp={props.panel.close}>
+                  close
+                </text>
+              </box>
             </box>
+            <scrollbox
+              id="banyancode.panel.content"
+              ref={(element: ScrollBoxRenderable) => (scroll = element)}
+              flexGrow={1}
+              verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}
+            >
+              <box flexDirection="column" paddingTop={1}>
+                {content({
+                  context: props.context,
+                  live: props.live,
+                  sessionID: props.panel.sessionID,
+                  active: active(),
+                })}
+              </box>
+            </scrollbox>
           </box>
-          <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
-            <box flexDirection="column" paddingTop={1}>
-              {content({ context: props.context, live: props.live, sessionID: props.panel.sessionID, active: active() })}
-            </box>
-          </scrollbox>
         </box>
       </box>
-    </box>
+    </PanelFocusContext.Provider>
   )
 }
 
@@ -137,45 +225,62 @@ export function InspectorPage(props: {
   const [active, setActive] = createSignal<PanelName>(
     typeof props.data?.view === "string" ? panelName(props.data.view) : PANEL.details,
   )
+  const focus = createPanelFocus(Math.max(0, RAIL.findIndex((item) => item.name === active())))
+  let scroll: ScrollBoxRenderable | undefined
+
+  usePanelKeyMode(props.context, () => true)
+  usePanelScroll(props.context, () => scroll)
+  const syncRail = (name: PanelName) => focus.setRail(Math.max(0, RAIL.findIndex((item) => item.name === name)))
+  createEffect(on(active, syncRail, { defer: true }))
 
   return (
-    <box flexDirection="column" flexGrow={1} minHeight={0}>
-      <SessionTabs context={props.context} active={viewKeyForPanel(active())} />
-      <box
-        flexDirection="row"
-        gap={1}
-        paddingLeft={2}
-        paddingRight={2}
-        paddingTop={1}
-        border={["bottom"]}
-        borderColor={theme().border}
-      >
-        <text fg={theme().text}>
-          <b>BanyanCode</b>
-        </text>
-        <For each={RAIL}>
-          {(item) => (
-            <text fg={active() === item.name ? theme().primary : theme().muted} onMouseUp={() => setActive(item.name)}>
-              {item.label}
-            </text>
-          )}
-        </For>
-      </box>
-      <scrollbox flexGrow={1} verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}>
-        <box paddingLeft={2} paddingRight={2} paddingTop={1}>
-          <Show
-            when={sessionID()}
-            fallback={
-              <box flexDirection="column" gap={0}>
-                <text fg={theme().muted}>Open a session to use this view.</text>
-                <CodegraphIntelPanel context={props.context} intel={props.live.intel} />
-              </box>
-            }
-          >
-            {(id) => content({ context: props.context, live: props.live, sessionID: id(), active: active() })}
-          </Show>
+    <PanelFocusContext.Provider value={focus}>
+      <box flexDirection="column" flexGrow={1} minHeight={0}>
+        <SessionTabs context={props.context} active={viewKeyForPanel(active())} />
+        <box
+          flexDirection="row"
+          gap={1}
+          paddingLeft={2}
+          paddingRight={2}
+          paddingTop={1}
+          border={["bottom"]}
+          borderColor={theme().border}
+        >
+          <text fg={theme().text}>
+            <b>BanyanCode</b>
+          </text>
+          <For each={RAIL}>
+            {(item) => (
+              <text
+                fg={active() === item.name ? theme().primary : theme().muted}
+                onMouseUp={() => setActive(item.name)}
+              >
+                {item.label}
+              </text>
+            )}
+          </For>
         </box>
-      </scrollbox>
-    </box>
+        <scrollbox
+          id="banyancode.panel.page"
+          ref={(element: ScrollBoxRenderable) => (scroll = element)}
+          flexGrow={1}
+          verticalScrollbarOptions={{ visible: true, paddingLeft: 1 }}
+        >
+          <box paddingLeft={2} paddingRight={2} paddingTop={1}>
+            <Show
+              when={sessionID()}
+              fallback={
+                <box flexDirection="column" gap={0}>
+                  <text fg={theme().muted}>Open a session to use this view.</text>
+                  <CodegraphIntelPanel context={props.context} intel={props.live.intel} />
+                </box>
+              }
+            >
+              {(id) => content({ context: props.context, live: props.live, sessionID: id(), active: active() })}
+            </Show>
+          </box>
+        </scrollbox>
+      </box>
+    </PanelFocusContext.Provider>
   )
 }

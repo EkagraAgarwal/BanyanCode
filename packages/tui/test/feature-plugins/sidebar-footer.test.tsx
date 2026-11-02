@@ -4,7 +4,7 @@ import { RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { Context } from "@opencode/plugin/tui/context"
 import { createStore, produce } from "solid-js/store"
-import { SidebarOnboarding } from "../../src/feature-plugins/sidebar/footer"
+import { SidebarFooter, SidebarOnboarding, SidebarVersion } from "../../src/feature-plugins/sidebar/footer"
 
 function context(options?: {
   dismissed?: boolean
@@ -16,9 +16,14 @@ function context(options?: {
   const location = { directory: "/workspace" }
   return {
     location,
+    app: { version: "26.11.0", channel: "test" },
     theme: {
       background: { raised: { high: color } },
-      text: { base: color, muted: color },
+      text: {
+        base: color,
+        muted: color,
+        feedback: { success: { base: color }, error: { base: color }, warning: { base: color }, info: { base: color } },
+      },
     },
     storage: {
       store: () => [
@@ -120,6 +125,45 @@ test("sidebar onboarding opens integrations and can be dismissed", async () => {
     await app.mockMouse.click(dismiss.x, dismiss.y)
     await app.renderOnce()
     expect(app.captureCharFrame()).not.toContain("Getting started")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("sidebar footer shows the version instead of a second workspace path", async () => {
+  const input = context({ integrations: [], dismissed: true })
+  const app = await testRender(
+    () => (
+      <box width={38}>
+        <SidebarFooter context={input} sessionID="session" />
+      </box>
+    ),
+    { width: 38, height: 8 },
+  )
+  await app.renderOnce()
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("BanyanCode")
+    expect(frame).toContain("26.11.0")
+    expect(frame).not.toContain("/workspace")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("sidebar version line names the running build", async () => {
+  const input = context({ integrations: [] })
+  const app = await testRender(
+    () => (
+      <box width={38}>
+        <SidebarVersion context={input} />
+      </box>
+    ),
+    { width: 38, height: 2 },
+  )
+  await app.renderOnce()
+  try {
+    expect(app.captureCharFrame()).toContain("• BanyanCode 26.11.0")
   } finally {
     app.renderer.destroy()
   }

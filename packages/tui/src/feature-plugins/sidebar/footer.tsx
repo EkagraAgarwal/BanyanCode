@@ -1,9 +1,6 @@
 import { Plugin } from "@opencode/plugin/tui"
 import { createMemo, Show } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
-import { FilePath } from "../../ui/file-path"
-import { useWorkingDirectoryActions } from "../../ui/working-directory-actions"
-import { usePromptMove } from "../../component/prompt/move"
 import { hasConnectedProvider } from "../../util/connected-provider"
 import { displayName } from "../../brand"
 
@@ -75,41 +72,25 @@ export function SidebarOnboarding(props: { context: Plugin.Context; sessionID: s
   )
 }
 
-function SidebarFooter(props: { context: Plugin.Context; sessionID: string }) {
-  const session = createMemo(() => props.context.data.session.get(props.sessionID))
-  const move = usePromptMove({
-    projectID: () => session()?.projectID,
-    sessionID: () => props.sessionID,
-  })
-  const actions = useWorkingDirectoryActions({
-    directory: () => props.context.location?.directory,
-    onMove: () => void move.open(),
-  })
-  const directory = createMemo(() => {
-    if (!props.context.location) return undefined
-    const value = props.context.ui.format.path(props.context.location.directory)
-    const branch = props.context.data.location.vcs.info(props.context.location)?.branch.current
-    return branch ? `${value}:${branch}` : value
-  })
+/** v1 `feature-plugins/sidebar/footer.tsx`: brand line with the app version. */
+export function SidebarVersion(props: { context: Plugin.Context }) {
+  const theme = props.context.theme
+  return (
+    <text id="sidebar.footer.version" fg={theme.text.muted}>
+      <span style={{ fg: theme.text.feedback.success.base }}>•</span>{" "}
+      <span style={{ fg: theme.text.base }}>
+        <b>BanyanCode</b>
+      </span>{" "}
+      {props.context.app.version}
+    </text>
+  )
+}
+
+export function SidebarFooter(props: { context: Plugin.Context; sessionID: string }) {
   return (
     <box gap={1}>
       <SidebarOnboarding context={props.context} sessionID={props.sessionID} />
-      <Show when={directory()}>
-        {(value) => (
-          <box
-            id="sidebar.footer.location"
-            onMouseOver={actions.onMouseOver}
-            onMouseOut={actions.onMouseOut}
-            onMouseUp={actions.onMouseUp}
-          >
-            <FilePath
-              value={value()}
-              maxWidth={38}
-              fg={actions.hovered() ? props.context.theme.text.base : props.context.theme.text.muted}
-            />
-          </box>
-        )}
-      </Show>
+      <SidebarVersion context={props.context} />
     </box>
   )
 }
@@ -117,7 +98,7 @@ function SidebarFooter(props: { context: Plugin.Context; sessionID: string }) {
 export default Plugin.define({
   id: "opencode.sidebar.footer",
   setup(context) {
-    // Append keeps the path open to additive plugin claims; an external
+    // Append keeps the footer open to additive plugin claims; an external
     // replace still takes the boundary over.
     context.ui.slot({
       append: "sidebar.footer",
