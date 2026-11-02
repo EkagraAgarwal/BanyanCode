@@ -68,7 +68,7 @@ const StartInput = z
       .enum(["shared", "worktree"])
       .optional()
       .describe(
-        'v1 name for worktree: "worktree" allocates a fresh git worktree via the v2 worktree API, ' +
+        'Older name for worktree: "worktree" allocates a fresh git worktree, ' +
           '"shared" runs in the project root. Prefer `worktree` for new callers.',
       ),
     permission: z
@@ -749,5 +749,5 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
 }
 
 export const TOOL_LAYER_NOTE =
-  "Task tools are the Phase 5 core; code tools (banyan_code_find, banyan_repo, banyan_change_check, " +
-  "banyan_codegraph, banyan_verify) land once codegraph/intel RPCs are exposed on v2."
+  "Task tools delegate work. Code tools (banyan_code_find, banyan_repo, banyan_change_check, " +
+  "banyan_codegraph, banyan_verify) answer questions about the repository directly."

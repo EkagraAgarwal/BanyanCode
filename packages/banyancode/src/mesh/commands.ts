@@ -323,7 +323,7 @@ export const checkGoalCommand = (ctx: Context) =>
       result.data.some((command) => command.name === "goal")
         ? Effect.void
         : Effect.logWarning(
-            "mesh: v2 goal command is missing; /goal is owned by the built-in GoalPlugin and was not re-registered",
+            "mesh: the built-in /goal command is missing",
           ),
     ),
     Effect.catchCause(() => Effect.void),

@@ -188,9 +188,7 @@ export const makeCompileTool = (
     "Returns\n" +
     "  { status, summary: {}, durationMs, cacheHit, rawOutput?, command }\n" +
     "Avoid when\n" +
-    "  typecheck or test already covers the change.\n" +
-    "Note: not part of the v1 public tool set; registered here because v1's verifier\n" +
-    "  supported `compile` and `commands.compile` existed as config with no consumer.",
+    "  typecheck or test already covers the change.",
   input: CompileInput,
   output: CompileOutput,
   options: { permission: NAME_COMPILE },

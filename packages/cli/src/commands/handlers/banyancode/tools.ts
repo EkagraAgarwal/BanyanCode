@@ -26,7 +26,6 @@ const handler = Effect.fn("cli.tools")(function* (
   println(dim(`  registered:  ${registered}`))
   println(dim(`  materialized: ${registered}`))
   println(dim(`  visible:     ${registered}`))
-  println(dim("  source:      static (v2 has no tool-catalog RPC)"))
   println("")
 
   const categories: ReadonlyArray<Category> = filter ? [filter as Category] : ORDER

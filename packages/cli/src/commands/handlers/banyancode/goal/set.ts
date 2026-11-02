@@ -23,7 +23,7 @@ const handler = Effect.fn("cli.goal.set")(function* (
   if (plan !== undefined || priority !== undefined) {
     println(
       dim(
-        "  note: v2 native goal mode stores no plan path or priority; --plan/--priority are accepted for script compatibility.",
+        "  note: goals store no plan path or priority; --plan and --priority are accepted but ignored.",
       ),
     )
   }
