@@ -107,6 +107,8 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
     if (current?.sessionID === props.sessionID) return current
   })
   const fullscreen = () => activePanel() !== undefined && panels.presentation() === "fullscreen"
+  // A small terminal needs every row for the transcript and composer.
+  const chrome = () => !fullscreen() && dimensions().height >= 20 && dimensions().width >= 60
   const mainPanel = createMemo(() => (panels.presentation() === "main" ? activePanel() : undefined))
   createEffect(
     on([activePanel, () => selectedTerminal()?.id], ([panel, terminal], previous) => {
@@ -314,7 +316,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
 
   return (
     <box flexGrow={1} minWidth={0} minHeight={0} flexDirection="column">
-    <Show when={!fullscreen()}>
+    <Show when={chrome()}>
       <Slot path="session.header" input={{ sessionID: props.sessionID }} />
     </Show>
     <box
@@ -510,7 +512,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
         </box>
       </Show>
     </box>
-    <Show when={!fullscreen()}>
+    <Show when={chrome()}>
       <Slot path="session.footer" input={{ sessionID: props.sessionID }} />
     </Show>
     </box>

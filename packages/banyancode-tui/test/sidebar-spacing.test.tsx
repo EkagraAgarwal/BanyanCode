@@ -178,11 +178,14 @@ test("plugin registers additive slots, router pages, and commands", () => {
   if (typeof cleanup === "function") void cleanup()
 
   const sidebar = recorded.claims.filter((claim) => claim.target === "sidebar.content")
-  expect(sidebar).toHaveLength(12)
+  expect(sidebar).toHaveLength(7)
   expect(sidebar.every((claim) => claim.placement === "append")).toBe(true)
 
-  expect(recorded.claims.filter((claim) => claim.target === "prompt.footer.status")).toHaveLength(2)
+  expect(recorded.claims.filter((claim) => claim.target === "prompt.footer.status")).toHaveLength(0)
   expect(recorded.claims.filter((claim) => claim.target === "home.footer.status")).toHaveLength(1)
+  expect(recorded.claims.filter((claim) => claim.target === "session.header")).toHaveLength(1)
+  expect(recorded.claims.filter((claim) => claim.target === "session.footer")).toHaveLength(1)
+  expect(recorded.claims.filter((claim) => claim.target === "session.inspector")).toHaveLength(2)
   expect(recorded.claims.filter((claim) => claim.target === "session.composer.top")).toHaveLength(2)
   expect(recorded.claims.filter((claim) => claim.target === "home.bottom")).toHaveLength(1)
   expect(recorded.claims.filter((claim) => claim.target === "session.panel")).toHaveLength(1)

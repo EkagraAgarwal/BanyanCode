@@ -130,7 +130,7 @@ test("sidebar onboarding opens integrations and can be dismissed", async () => {
   }
 })
 
-test("sidebar footer shows the version instead of a second workspace path", async () => {
+test("sidebar footer shows the workspace path above the version", async () => {
   const input = context({ integrations: [], dismissed: true })
   const app = await testRender(
     () => (
@@ -145,7 +145,7 @@ test("sidebar footer shows the version instead of a second workspace path", asyn
     const frame = app.captureCharFrame()
     expect(frame).toContain("BanyanCode")
     expect(frame).toContain("26.11.0")
-    expect(frame).not.toContain("/workspace")
+    expect(frame).toContain("/workspace")
   } finally {
     app.renderer.destroy()
   }
