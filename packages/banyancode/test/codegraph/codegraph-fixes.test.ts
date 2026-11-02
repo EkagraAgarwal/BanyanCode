@@ -496,6 +496,8 @@ describe("codegraph auto-update", () => {
 
             const watcher = yield* makeWatcher({ root: directory, onChange: auto.onChange })
             expect(yield* watcher.watching()).toBe(true)
+            // The Linux watch walks the tree in the background.
+            yield* Effect.sleep("300 millis")
 
             yield* Effect.promise(() =>
               write(

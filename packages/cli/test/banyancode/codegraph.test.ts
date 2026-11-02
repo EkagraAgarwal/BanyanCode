@@ -65,11 +65,11 @@ describe("codegraph commands against a real server", () => {
     expect(build.stderr).toContain("✓ codegraph built (indexed 2")
     expect(build.stderr).toMatch(/indexed 2, skipped \d+, \d+\.\d+s/)
 
-    const remove = await cli(root, ["codegraph", "remove", "--server", server.url], { cwd: project })
+    const remove = await cli(root, ["codegraph", "remove", "--root", project, "--server", server.url])
     expect(remove.exitCode).toBe(0)
     expect(remove.stderr).toMatch(/✓ Codegraph index removed\. Freed \d+ bytes/)
 
-    const again = await cli(root, ["codegraph", "remove", "--server", server.url], { cwd: project })
+    const again = await cli(root, ["codegraph", "remove", "--root", project, "--server", server.url])
     expect(again.exitCode).toBe(0)
     expect(again.stderr).toContain("Codegraph index was already empty.")
   }, 180_000)

@@ -45,10 +45,10 @@ export async function tmpRoot(prefix = "banyancode-cli-") {
 export async function cli(
   root: string,
   args: ReadonlyArray<string>,
-  options: { env?: Record<string, string | undefined>; timeout?: number; cwd?: string } = {},
+  options: { env?: Record<string, string | undefined>; timeout?: number } = {},
 ): Promise<CliResult> {
   const child = Bun.spawn([process.execPath, "run", CLI_ENTRY, ...args], {
-    cwd: options.cwd ?? CLI_ROOT,
+    cwd: CLI_ROOT,
     env: envFor(root, options.env),
     stdin: "ignore",
     stdout: "pipe",

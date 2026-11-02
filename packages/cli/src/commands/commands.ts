@@ -744,11 +744,15 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
         Spec.make("cancel", { description: "Cancel an in-flight codegraph build" }),
         Spec.make("remove", {
           description:
-            "Remove the codegraph index (preserves banyancode.db by default; pass --drop-file to also delete the file)",
+            "Remove the codegraph index (pass --drop-file to also delete its database file)",
           params: {
             dropFile: Flag.Boolean("drop-file").pipe(
-              Flag.withDescription("Also delete the database file (DANGEROUS: shared with sessions)"),
+              Flag.withDescription("Also delete the code graph's database file"),
               Flag.withDefault(false),
+            ),
+            root: Flag.String("root").pipe(
+              Flag.withDescription("Project whose index to remove (default: the current directory)"),
+              Flag.optional,
             ),
           },
         }),

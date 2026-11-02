@@ -1,4 +1,5 @@
-import { Effect } from "effect"
+import path from "node:path"
+import { Effect, Option } from "effect"
 import { Commands } from "../../../commands"
 import { Runtime } from "../../../../framework/runtime"
 import { connect, here, onError } from "../client"
@@ -10,7 +11,14 @@ const handler = Effect.fn("cli.codegraph.remove")(function* (
 ) {
   const { client } = yield* connect()
   const result = yield* Effect.tryPromise({
-    try: () => client.rpc(CodegraphRpc).remove({ dropFile: input.dropFile }, here()),
+    try: () =>
+      client.rpc(CodegraphRpc).remove(
+        { dropFile: input.dropFile },
+        Option.match(input.root, {
+          onNone: here,
+          onSome: (root) => ({ location: { directory: path.resolve(root) } }),
+        }),
+      ),
     catch: (cause) => cause,
   })
   if (result.status === "empty") {
