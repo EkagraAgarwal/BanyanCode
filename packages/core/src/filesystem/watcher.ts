@@ -7,7 +7,7 @@ import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { FSUtil } from "@opencode/util/fs-util"
 import { Cause, Context, Effect, Layer, PubSub, RcMap, Stream } from "effect"
 import { lazy } from "../util/lazy.js"
-import { statSync, watch } from "node:fs"
+import { existsSync, statSync, watch } from "node:fs"
 import path from "path"
 import loadBinding from "./watcher-binding.js"
 
@@ -201,7 +201,7 @@ export const testLayer = Layer.effectContext(
 // On Windows a watch holds its directory open, and these targets include the project folder and each folder above it:
 // the user couldn't rename or delete them while the service had the project open. They are only a few named files, so
 // polling costs little and holds nothing.
-const POLL_INTERVAL_MS = 1000
+const POLL_INTERVAL_MS = 500
 function pollNames(directory: string, names: ReadonlySet<string>, publish: (update: Update) => void): Subscription {
   const stamp = (name: string) => {
     try {
@@ -231,7 +231,9 @@ export const nativeLayer = Layer.succeed(
       if (input.type === "file" || input.type === "entries") {
         const directory = input.type === "file" ? path.dirname(input.target) : input.target
         const names = new Set(input.type === "file" ? [path.basename(input.target)] : input.names)
-        if (process.platform === "win32") return Effect.succeed(pollNames(directory, names, input.publish))
+        // A missing directory ends subscriber streams, as the watch below does.
+        if (process.platform === "win32")
+          return Effect.sync(() => (existsSync(directory) ? pollNames(directory, names, input.publish) : undefined))
         return Effect.try(() =>
           watch(directory, { recursive: false }, (_event, file) => {
             if (file && !names.has(file)) return
