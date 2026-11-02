@@ -428,11 +428,13 @@ export interface KeymapCommand {
     readonly arguments?: true
     /** With arguments: choosing it from the menu runs it straight away, without arguments. */
     readonly optionalArguments?: true
+    /** True when this input belongs to the server command of the same name instead of `run`. */
+    readonly forwardToServer?: (input: string) => boolean
   }
   /** Promotes the command in discovery UI. */
   readonly suggested?: boolean | (() => boolean)
   /** Executes the command. Keyboard dispatch includes its event; programmatic dispatch does not. Return false to continue. */
-  readonly run: (input?: string, event?: KeyEvent) => void | false | Promise<void | false>
+  readonly run: (input?: string, event?: KeyEvent) => void | false | Promise<void>
 }
 
 export interface KeymapLayer {

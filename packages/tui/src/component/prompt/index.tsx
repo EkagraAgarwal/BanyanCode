@@ -179,7 +179,7 @@ function argumentSlash(input: string, commands: readonly KeymapCommand[]) {
       command.slash?.arguments &&
       (command.slash.name === head.name || command.slash.aliases?.includes(head.name) === true),
   )
-  if (!command) return
+  if (!command || command.slash?.forwardToServer?.(head.arguments)) return
   return { command, input: head.arguments }
 }
 
@@ -1148,11 +1148,9 @@ export function Prompt(props: PromptProps) {
       return true
     }
     if (slash) {
-      // Returning false declines, leaving it to the server command of the same name.
-      if ((await slash.command.run(slash.input)) !== false) {
-        clearPrompt()
-        return true
-      }
+      clearPrompt()
+      await slash.command.run(slash.input)
+      return true
     }
     const slashHead = parseSlashHead(inputText, /\s/)
     const isCommand =

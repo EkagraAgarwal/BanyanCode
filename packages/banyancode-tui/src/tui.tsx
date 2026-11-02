@@ -462,26 +462,36 @@ export default Plugin.define({
           id: "goal.status",
           title: "Goal status",
           group: "BanyanCode",
-          slash: { name: "goal", arguments: true },
+          slash: {
+            name: "goal",
+            arguments: true,
+            forwardToServer: (input) => !["", "status", "pause", "resume", "clear"].includes(input.trim().toLowerCase()),
+          },
           run(input) {
-            const text = (input ?? "").trim()
+            const text = (input ?? "").trim().toLowerCase()
             if (text === "") {
               notify("Usage: /goal <objective> | status | pause | resume | clear")
               return
             }
-            if (text !== "status") return false
             const route = context.ui.router.current()
             if (route.type !== "session") {
               notify("No active goal")
               return
             }
-            return context.client
-              .rpc(Goal.Definition)
-              .get({ sessionID: route.sessionID })
-              .then(
-                (goal) => notify(goal ? `Goal (${goal.status}): ${goal.objective}` : "No active goal"),
-                () => notify("No active goal"),
-              )
+            const sessionID = route.sessionID
+            if (text === "status")
+              return context.client
+                .rpc(Goal.Definition)
+                .get({ sessionID })
+                .then(
+                  (goal) => notify(goal ? `Goal (${goal.status}): ${goal.objective}` : "No active goal"),
+                  () => notify("No active goal"),
+                )
+            const done = text === "pause" ? "Goal paused" : text === "resume" ? "Goal resumed" : "Goal cleared"
+            return context.client.session.command({ sessionID, name: "goal", text }).then(
+              () => notify(done, "success"),
+              (error: unknown) => notify(error instanceof Error ? error.message : "Goal command failed", "warning"),
+            )
           },
         },
         {
