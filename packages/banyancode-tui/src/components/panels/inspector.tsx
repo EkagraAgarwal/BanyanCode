@@ -17,7 +17,7 @@ import { AgentTreeView } from "./agents"
 import { ConfigView } from "./config"
 import { CodegraphCanvas } from "./graph"
 import { createPanelFocus, PanelFocusContext, usePanelKeyMode, usePanelScroll } from "./keys"
-import { SessionTabs, viewKeyForPanel } from "./nav"
+import { SessionTabs, VIEW_TABS, viewKeyForPanel } from "./nav"
 import { SessionsView } from "./sessions"
 
 const RAIL_WIDTH = 13
@@ -83,7 +83,10 @@ export function InspectorPanel(props: {
   })
   let scroll: ScrollBoxRenderable | undefined
 
-  const select = (name: PanelName) => props.context.ui.panel.open(name, { presentation: props.panel.presentation })
+  const select = (name: PanelName) =>
+    props.context.ui.panel.open(name, {
+      presentation: VIEW_TABS.some((tab) => tab.panel === name) ? "main" : props.panel.presentation,
+    })
 
   usePanelKeyMode(props.context, () => props.panel.focused)
   usePanelScroll(props.context, () => scroll)

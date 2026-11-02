@@ -356,6 +356,16 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
         onSizeChange={function () {
           setSessionWidth(this.width)
         }}
+        // A tab keeps the composer usable: a click outside the tab's own area gives it the keyboard.
+        onMouseUp={(event) => {
+          if (!mainPanel() || activePane() !== "right" || !panelNode) return
+          const inside =
+            event.x >= panelNode.x &&
+            event.x < panelNode.x + panelNode.width &&
+            event.y >= panelNode.y &&
+            event.y < panelNode.y + panelNode.height
+          if (!inside) focusSession()
+        }}
       >
         <InteractivityProvider enabled={(activePane() === "session" || mainPanel() !== undefined) && !fullscreen()}>
           <Session
