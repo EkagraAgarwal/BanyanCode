@@ -135,3 +135,13 @@ test("yolo.toggle and swarm.toggle call the live RPCs", async () => {
     if (typeof cleanup === "function") await cleanup()
   }
 })
+
+test("settings commands run locally, so they never reach the model", () => {
+  const recorded = recordingContext()
+  const cleanup = BanyanTui.setup(recorded.context)
+  if (typeof cleanup === "function") void cleanup()
+  const names = recorded.commands.flatMap((command) => (command.slash ? [command.slash.name] : []))
+  for (const name of ["yolo", "swarm", "max-subagents", "lsp", "codegraph-build", "codegraph-cancel", "codegraph-remove"]) {
+    expect(names).toContain(name)
+  }
+})

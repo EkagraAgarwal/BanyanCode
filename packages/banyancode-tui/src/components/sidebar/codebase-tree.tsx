@@ -28,6 +28,7 @@ const COLLAPSED_BY_DEFAULT = new Set([
 export function buildFileTree(
   files: ReadonlyArray<{ readonly path: string }>,
   maxDepth = 3,
+  root?: string,
 ): readonly TreeNode[] {
   interface Mutable {
     readonly name: string
@@ -37,7 +38,10 @@ export function buildFileTree(
   }
   const top = new Map<string, Mutable>()
   for (const file of files) {
-    const segments = file.path.split(/[/\\]/).filter(Boolean)
+    const normalized = file.path.replaceAll("\\", "/")
+    const rootPrefix = root?.replaceAll("\\", "/").replace(/\/$/, "")
+    const relative = rootPrefix !== undefined && normalized.startsWith(`${rootPrefix}/`) ? normalized.slice(rootPrefix.length + 1) : normalized
+    const segments = relative.split("/").filter(Boolean)
     if (segments.length === 0) continue
     let level = top
     let prefix = ""
@@ -101,7 +105,7 @@ export function CodebaseTreePanel(props: { readonly context: Context; readonly c
     void props.codegraph.ensureFiles()
   })
 
-  const tree = createMemo(() => buildFileTree(props.codegraph.files() ?? []))
+  const tree = createMemo(() => buildFileTree(props.codegraph.files() ?? [], 3, props.context.location?.directory))
   const root = createMemo(() => {
     const directory = props.context.location?.directory
     if (!directory) return "workspace"

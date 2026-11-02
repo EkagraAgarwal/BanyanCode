@@ -183,7 +183,8 @@ const connectOpenAI = (handler: Handler) =>
     }).pipe(
       Effect.filterOrFail((ready) => ready),
       Effect.retry(Schedule.spaced("10 millis")),
-      Effect.timeout("2 seconds"),
+      // Source runs transpile the built-in plugins while this polls.
+      Effect.timeout("10 seconds"),
     )
     return yield* Effect.promise(() =>
       handler(

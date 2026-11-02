@@ -151,9 +151,28 @@ export default Plugin.define({
       else notify(result.message ?? "BanyanCode RPC is not available on this server", "warning")
     }
 
+    // Parses the on/off/toggle argument these commands share. Undefined means it was not understood, and has been said so.
+    const switchTo = (input: string | undefined, current: boolean, usage: string) => {
+      const arg = (input ?? "").trim().toLowerCase()
+      if (arg === "" || arg === "toggle") return !current
+      if (arg === "on" || arg === "true") return true
+      if (arg === "off" || arg === "false") return false
+      notify(`Unknown argument "${arg}". Usage: ${usage}`, "warning")
+      return undefined
+    }
+
     context.keymap.layer(() => ({
       mode: "global",
       commands: [
+        {
+          id: "banyancode.panel.close",
+          title: "Close BanyanCode panel",
+          bind: "escape",
+          enabled: () => context.ui.panel.current() !== undefined,
+          run() {
+            context.ui.panel.close()
+          },
+        },
         // v1 tab bar keys: ctrl+] / ctrl+[ cycle CHAT → SESSIONS → AGENTS → CONFIG.
         {
           id: "tabs.next",
@@ -183,9 +202,10 @@ export default Plugin.define({
           description: "Index the workspace code graph",
           group: "Codegraph",
           palette: true,
-          slash: { name: "codegraph-build" },
-          async run() {
-            report(await live.codegraph.start(), "Codegraph build started")
+          slash: { name: "codegraph-build", arguments: true },
+          async run(input) {
+            const force = /(^|\s)--force(\s|$)/.test(input ?? "")
+            report(await live.codegraph.start({ force }), "Codegraph build started")
           },
         },
         {
@@ -205,9 +225,10 @@ export default Plugin.define({
           description: "Clear the codegraph index for this workspace",
           group: "Codegraph",
           palette: true,
-          slash: { name: "codegraph-remove" },
-          async run() {
-            report(await live.codegraph.remove(false), "Codegraph index removed")
+          slash: { name: "codegraph-remove", arguments: true },
+          async run(input) {
+            const dropFile = /(^|\s)--drop-file(\s|$)/.test(input ?? "")
+            report(await live.codegraph.remove(dropFile), "Codegraph index removed")
           },
         },
         {
@@ -311,9 +332,11 @@ export default Plugin.define({
           description: "Turn BanyanCode YOLO mode on or off",
           group: "BanyanCode",
           palette: true,
-          async run() {
+          slash: { name: "yolo", arguments: true },
+          async run(input) {
             if (live.system.yoloAvailability() === "unknown") await live.system.refreshYolo()
-            const next = live.system.yolo() !== true
+            const next = switchTo(input, live.system.yolo() === true, "/yolo <on|off|toggle>")
+            if (next === undefined) return
             report(await live.system.setYolo(next), `YOLO mode ${next ? "enabled" : "disabled"}`)
           },
         },
@@ -324,9 +347,11 @@ export default Plugin.define({
           description: "Turn BanyanCode swarm fan-out on or off",
           group: "BanyanCode",
           palette: true,
-          async run() {
+          slash: { name: "swarm", arguments: true },
+          async run(input) {
             if (live.mesh.limits() === undefined) await live.mesh.refreshLimits()
-            const next = live.mesh.swarmMode() !== true
+            const next = switchTo(input, live.mesh.swarmMode() === true, "/swarm <on|off|toggle>")
+            if (next === undefined) return
             report(await live.mesh.setLimits({ swarmMode: next }), `Swarm mode ${next ? "enabled" : "disabled"}`)
           },
         },
@@ -337,8 +362,34 @@ export default Plugin.define({
           description: "Open the 1-20 max-subagents dialog",
           group: "BanyanCode",
           palette: true,
-          async run() {
-            await openMaxSubagents(context, live)
+          slash: { name: "max-subagents", arguments: true },
+          async run(input) {
+            const text = (input ?? "").trim()
+            if (text === "") {
+              await openMaxSubagents(context, live)
+              return
+            }
+            const value = Number(text)
+            if (!Number.isInteger(value) || value < 1 || value > 20) {
+              notify(`Max subagents must be a whole number from 1 to 20, got "${text}"`, "warning")
+              return
+            }
+            report(await live.mesh.setLimits({ maxSubagents: value }), `Max subagents set to ${value}`)
+          },
+        },
+        {
+          id: "lsp.toggle",
+          title: "Toggle LSP",
+          description: "Turn BanyanCode LSP on or off",
+          group: "BanyanCode",
+          palette: true,
+          slash: { name: "lsp", arguments: true },
+          async run(input) {
+            if (live.system.lsp() === undefined) await live.system.refresh()
+            const next = switchTo(input, live.system.lsp()?.enabled === true, "/lsp <on|off|toggle>")
+            if (next === undefined) return
+            report(await live.core.update({ banyancode_lsp: next }), `LSP ${next ? "on" : "off"}`)
+            await live.system.refresh()
           },
         },
         {

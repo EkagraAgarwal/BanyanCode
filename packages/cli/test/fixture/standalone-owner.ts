@@ -1,7 +1,11 @@
 import { Effect } from "effect"
 import { Service } from "@opencode/client/effect/service"
 import path from "node:path"
+import { EnvMap } from "../../src/env-map"
 import { Standalone } from "../../src/services/standalone"
+
+// The real CLI entry maps the environment first; without this the server drops the lease password the owner sets.
+EnvMap.apply()
 
 process.chdir(path.join(import.meta.dir, "../../../.."))
 

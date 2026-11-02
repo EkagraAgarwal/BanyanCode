@@ -135,6 +135,7 @@ export interface CoreLive {
   readonly status: Accessor<CoreConfigOutput | undefined>
   readonly config: Accessor<BanyanConfig | undefined>
   refresh(): Promise<void>
+  update(config: Readonly<Record<string, unknown>>): Promise<Attempt<unknown>>
 }
 
 export interface Live {
@@ -562,6 +563,11 @@ export function createLive(context: Context): Live {
       status: coreStatus,
       config,
       refresh: refreshCore,
+      update: (config: Readonly<Record<string, unknown>>) =>
+        attempt(() => rpc.core["config.update"]({ config })).then(async (result) => {
+          await refreshCore()
+          return result
+        }),
     },
     codegraph: {
       availability: cgAvailability,

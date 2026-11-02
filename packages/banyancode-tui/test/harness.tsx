@@ -346,6 +346,7 @@ export function live(input: {
     core: {
       availability: accessor(input.core?.availability ?? "available"),
       status: accessor(input.core?.status),
+      update: async () => ({ ok: true as const, value: undefined }),
       config: accessor(config),
       refresh: noop,
     },

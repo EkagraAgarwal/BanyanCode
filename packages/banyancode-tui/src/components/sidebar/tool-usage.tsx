@@ -1,5 +1,5 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createMemo, For, onMount, Show } from "solid-js"
+import { createMemo, For, onCleanup, onMount, Show } from "solid-js"
 import type { CodegraphLive, UsageLive } from "../../data/live"
 import { GRAPH_FAMILY } from "../../data/usage"
 import { palette } from "../../theme"
@@ -21,6 +21,7 @@ export function ToolUsagePanel(props: {
   onMount(() => {
     void props.usage.refreshTools()
   })
+  onCleanup(props.context.data.on("session.step.ended", () => void props.usage.refreshTools()))
 
   const rows = createMemo(() => props.usage.tools() ?? [])
   const visible = createMemo(() => rows().slice(0, MAX_ROWS))

@@ -78,12 +78,16 @@ export function Logo() {
 
   return (
     <box>
-      {dimensions().height < 12 ? null : dimensions().width < 40 ? (
+      {dimensions().height < 12 ? null : dimensions().width < 40 || dimensions().height < 20 ? (
         <text fg={theme.text.base} attributes={TextAttributes.BOLD} selectable={false}>
           BanyanCode
         </text>
       ) : dimensions().width >= SPLASH_WIDTH + 4 && dimensions().height >= SPLASH_HEIGHT ? (
         <For each={splash}>{(line) => <box flexDirection="row">{renderSplashLine(line)}</box>}</For>
+      ) : dimensions().width < 64 && dimensions().height < 28 ? (
+        <text fg={theme.text.base} attributes={TextAttributes.BOLD} selectable={false}>
+          BanyanCode
+        </text>
       ) : dimensions().width < 64 ? (
         <>
           <For each={logo.left.slice(1)}>

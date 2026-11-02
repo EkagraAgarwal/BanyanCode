@@ -80,6 +80,11 @@ export function CodegraphProgress(props: {
         return
       }
       if (value === "completed" || value === "cancelled") {
+        const finished = build()?.lastProgressAt
+        if (finished !== undefined && Date.now() - finished > COMPLETED_HIDE_MS) {
+          setHidden(true)
+          return
+        }
         setHidden(false)
         const handle = setTimeout(() => setHidden(true), COMPLETED_HIDE_MS)
         onCleanup(() => clearTimeout(handle))
