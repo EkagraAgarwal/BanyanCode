@@ -4,7 +4,7 @@ BanyanCode now runs on the OpenCode v2 architecture.
 
 **Removed:** cross-session memory, including its tools and commands.
 
-**New:** `banyancode mcp install` connects Claude Code, Codex and other harnesses, which can delegate work to BanyanCode and check on it with `banyan_checkup`.
+**New:** `banyancode mcp install` connects Claude Code, Codex and other harnesses, which can delegate work to BanyanCode and check on it with `banyan_checkup`. Add `--permission edits` to let delegated tasks edit files; by default they can't.
 
 **Differences from the previous version:**
 

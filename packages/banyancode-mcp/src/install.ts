@@ -44,15 +44,17 @@ export type InstallInput = {
   cwd: string
   /** The command prefix that re-invokes this binary (`selfCommand()`). */
   selfCommand: string[]
+  /** Written into the server entry. yolo is left out: it should never come from a config file alone. */
+  permission?: "edits"
   env?: NodeJS.ProcessEnv
   /** Overrides the home directory (tests); defaults to $HOME / os.homedir(). */
   home?: string
 }
 
-const stdioEntry = (selfCommand: string[], cwd: string) => ({
+const stdioEntry = (selfCommand: string[], cwd: string, permission?: "edits") => ({
   type: "stdio" as const,
   command: selfCommand[0] ?? "banyancode",
-  args: [...selfCommand.slice(1), "mcp", "serve", "--cwd", cwd],
+  args: [...selfCommand.slice(1), "mcp", "serve", "--cwd", cwd, ...(permission ? ["--permission", permission] : [])],
 })
 
 const readIfExists = (target: string): string | undefined => {
@@ -125,8 +127,8 @@ export const planInstall = (input: InstallInput): InstallPlan => {
     process.env["HOME"] ??
     process.env["USERPROFILE"] ??
     ""
-  const command = [...input.selfCommand, "mcp", "serve", "--cwd", input.cwd]
-  const entry = stdioEntry(input.selfCommand, input.cwd)
+  const entry = stdioEntry(input.selfCommand, input.cwd, input.permission)
+  const command = [entry.command, ...entry.args]
   const files: InstallFile[] = []
 
   if (input.client === "claude-code" || input.client === "cursor") {

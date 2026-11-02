@@ -329,6 +329,10 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
               Flag.withDescription("Write without asking for confirmation (the change is still printed)"),
               Flag.withDefault(false),
             ),
+            permission: Flag.String("permission").pipe(
+              Flag.withDescription("Write this permission policy into the client config: edits"),
+              Flag.optional,
+            ),
           },
         }),
         Spec.make("list", {

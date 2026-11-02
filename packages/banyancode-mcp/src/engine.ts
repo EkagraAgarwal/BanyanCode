@@ -737,9 +737,11 @@ export class TaskEngine {
     }
     this.clearNeedsInputTimer(handle)
     const askSession = ask.sessionID ?? current.sessionID
+    // The policy is the operator's and an approval can't widen it, so the ask is still rejected. The caller has to
+    // hear that, or it believes the agent was allowed and can't tell why the task then fails.
+    const refused = ask.kind === "permission" && input.decision === "approve" && this.config.permission === "reject"
     if (ask.kind === "permission") {
-      const granted =
-        input.decision === "approve" && this.config.permission !== "reject" ? "once" : "reject"
+      const granted = input.decision === "approve" && !refused ? "once" : "reject"
       await this.port.replyPermission({
         sessionID: askSession,
         requestID: ask.id,
@@ -764,6 +766,11 @@ export class TaskEngine {
       phase: "executing",
       pending: current.pending.filter((item) => item.id !== ask.id),
     })
+    if (refused)
+      throw new Error(
+        "approve refused: this server runs with the reject permission policy, so the request was rejected. " +
+          "Restart it with --permission edits (banyancode mcp install <client> --permission edits) to allow edits.",
+      )
     return this.get(handle)
   }
 

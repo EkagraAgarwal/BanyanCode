@@ -175,8 +175,9 @@ describe("TaskEngine status and replies", () => {
     const h = harness({ config: { permission: "reject" } })
     const record = await h.engine.start({ prompt: "edit" })
     h.port.addPermission(record.sessionID, permission("per_1", "edit", ["src/a.ts"]))
-    await h.engine.reply(record.handle, { decision: "approve" })
+    await expect(h.engine.reply(record.handle, { decision: "approve" })).rejects.toThrow(/--permission edits/)
     expect(h.port.calls.replyPermission.at(-1)?.decision).toBe("reject")
+    expect(h.engine.get(record.handle).pending).toHaveLength(0)
     h.close()
   })
 
@@ -439,7 +440,7 @@ describe("TaskEngine result", () => {
 
 describe("TaskEngine subagent asks", () => {
   test("an ask from a v2 subagent session resolves to the parent task and replies on that session", async () => {
-    const h = harness()
+    const h = harness({ config: { permission: "edits" } })
     const parent = await h.engine.start({ prompt: "parent" })
     const child = await h.port.createSession({ parentID: parent.sessionID, metadata: {}, directory: cwd })
     h.port.addPermission(child.id, permission("per_2", "edit", ["src/child.ts"]))

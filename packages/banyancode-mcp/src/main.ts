@@ -110,7 +110,8 @@ Usage:
   banyancode mcp serve --http             serve over stateless Streamable HTTP
   banyancode mcp doctor                   check config, service and task state
   banyancode mcp profiles                 list autonomy profiles
-  banyancode mcp install <client> [--yes] write the client config (claude-code|codex|cursor)
+  banyancode mcp install <client> [--yes] [--permission edits]
+                                          write the client config (claude-code|codex|cursor)
 
 Options:
   --cwd <dir>          project directory the tasks run in (default: $CLAUDE_PROJECT_DIR or cwd)
@@ -128,6 +129,7 @@ Options:
   --token <token>      HTTP bearer token (default: $BANYANCODE_MCP_TOKEN, else generated)
   --no-rehydrate       skip rebuilding task handles from sessions at startup
   --yes                install: write without asking (prints the change first)
+                       install also takes --permission edits, written into the client config
 
 Environment:
   BANYANCODE_CONFIG, BANYANCODE_CONFIG_DIR   config discovery
@@ -292,7 +294,7 @@ async function doctor(parsed: Parsed, io: MainIO): Promise<number> {
 async function install(parsed: Parsed, io: MainIO): Promise<number> {
   const requested = parsed.positional[0]
   if (requested === undefined) {
-    io.stderr(`usage: banyancode mcp install <${installClients}> [--yes]`)
+    io.stderr(`usage: banyancode mcp install <${installClients}> [--yes] [--permission edits]`)
     return 2
   }
   if (!isInstallClient(requested)) {
@@ -301,7 +303,18 @@ async function install(parsed: Parsed, io: MainIO): Promise<number> {
   }
   const cwd = path.resolve(flagString(parsed, "cwd") ?? io.env["CLAUDE_PROJECT_DIR"] ?? io.cwd())
   const client: InstallClient = requested
-  const plan = planInstall({ client, cwd, selfCommand: selfCommand(), env: io.env })
+  const permission = flagString(parsed, "permission")
+  if (permission !== undefined && permission !== "edits") {
+    io.stderr(`install only accepts --permission edits, got "${permission}"`)
+    return 2
+  }
+  const plan = planInstall({
+    client,
+    cwd,
+    selfCommand: selfCommand(),
+    env: io.env,
+    ...(permission !== undefined ? { permission } : {}),
+  })
   io.stdout(`BanyanCode MCP install for ${client} (project: ${cwd})`)
   io.stdout(describePlan(plan))
   const pending = plan.files.filter((file) => file.changes)
@@ -326,6 +339,8 @@ async function install(parsed: Parsed, io: MainIO): Promise<number> {
     files: pending,
   })
   io.stdout(written.map((file) => `wrote ${file}`).join("\n"))
+  if (permission === undefined)
+    io.stdout("Delegated tasks can't edit files under the default reject policy. Add --permission edits to allow it.")
   if (client === "claude-code") {
     io.stdout("Restart Claude Code (or run /mcp) to pick up the server and the delegate skill.")
   } else {

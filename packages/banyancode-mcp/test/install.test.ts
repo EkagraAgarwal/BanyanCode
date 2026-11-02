@@ -36,6 +36,14 @@ describe("install plans", () => {
     expect(plan.files.every((file) => file.changes)).toBe(true)
   })
 
+  test("a permission choice is written into the server entry", () => {
+    const cwd = temp("banyancode-install-permission-")
+    const plan = planInstall({ client: "cursor", cwd, home: temp("h-"), selfCommand: ["/bin/banyancode"], permission: "edits" })
+    expect(plan.command).toEqual(["/bin/banyancode", "mcp", "serve", "--cwd", cwd, "--permission", "edits"])
+    const config = JSON.parse(plan.files[0]!.content) as { mcpServers: Record<string, { args: string[] }> }
+    expect(config.mcpServers[SERVER_KEY]?.args).toEqual(["mcp", "serve", "--cwd", cwd, "--permission", "edits"])
+  })
+
   test("cursor writes .cursor/mcp.json with the same stdio entry", () => {
     const cwd = temp("banyancode-install-cursor-")
     const plan = planInstall({ client: "cursor", cwd, home: temp("h-"), selfCommand: ["banyancode.exe"] })
