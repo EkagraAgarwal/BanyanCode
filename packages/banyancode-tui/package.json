@@ -7,7 +7,9 @@
   "description": "BanyanCode TUI plugin for OpenCode v2: sidebar panels, status pills, codegraph progress, inspector, and palette commands.",
   "exports": {
     "./tui": "./src/tui.tsx",
-    "./home": "./src/home.ts"
+    "./home": "./src/home.ts",
+    "./grove": "./src/grove.ts",
+    "./trunk": "./src/trunk.ts"
   },
   "scripts": {
     "test": "bun test",

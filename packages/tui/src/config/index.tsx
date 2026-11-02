@@ -183,6 +183,10 @@ export const Info = Schema.Struct({
       }),
     }),
   ).annotate({ description: "Session transcript presentation settings" }),
+  session_layout: Schema.optional(Schema.Literals(["trunk", "classic"])).annotate({
+    description:
+      "Chat layout: 'trunk' grows subagents as branches off a rail beside the chat; 'classic' keeps the side columns",
+  }),
   tabs: Schema.optional(
     Schema.Struct({
       mode: Schema.optional(Schema.Literals(["auto", "on", "off"])).annotate({
@@ -258,6 +262,7 @@ export const Info = Schema.Struct({
 export type Info = Schema.Schema.Type<typeof Info>
 
 export type Resolved = Omit<Info, "attention" | "cursor" | "keybinds" | "leader" | "mouse" | "session" | "tabs"> & {
+  session_layout: "trunk" | "classic"
   attention: {
     notifications: boolean
     sound: boolean
@@ -304,6 +309,7 @@ export function resolve(
 
   return {
     ...input,
+    session_layout: input.session_layout ?? "trunk",
     attention: {
       notifications: input.attention?.notifications ?? false,
       sound: input.attention?.sound ?? false,

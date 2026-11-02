@@ -3,6 +3,8 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, type JSX } from "solid-js"
 import { StoryFooter } from "./footer"
 import { homeStory } from "./home"
+import { groveStory } from "./grove"
+import { trunkStory } from "./trunk"
 import { mermanLayoutsStory } from "./merman-layouts"
 import { sessionTabsStory } from "./session-tabs"
 import { sessionLocationMissingStory } from "./session-location-missing"
@@ -23,6 +25,8 @@ export type Story = {
 
 const stories: Story[] = [
   homeStory,
+  groveStory,
+  trunkStory,
   mermanLayoutsStory,
   sessionTabsStory,
   sessionLocationMissingStory,

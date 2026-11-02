@@ -191,14 +191,30 @@ export interface PanelInput {
  */
 export interface SlotMap {
   readonly app: Readonly<Record<string, never>>
-  readonly "home.logo": Readonly<Record<string, never>>
-  readonly "home.bottom": Readonly<Record<string, never>>
+  /**
+   * Home's own height in rows, footer included. The host owns part of the
+   * terminal (session tabs, the devtools bar), so anything that sizes itself to
+   * the viewport has to ask Home instead of the terminal.
+   */
+  readonly "home.logo": { readonly height: () => number }
+  readonly "home.bottom": { readonly height: () => number }
   readonly "home.footer": Readonly<Record<string, never>>
   readonly "home.footer.status": Readonly<Record<string, never>>
   readonly "prompt.footer": PromptFooterInput
   readonly "prompt.footer.status": PromptFooterInput
   readonly "prompt.footer.file": PromptFooterInput
   readonly "session.composer.top": { readonly sessionID: string }
+  /**
+   * Agent status as a row above the composer. Mounted only by the Trunk chat
+   * layout on terminals too narrow to dock the rail.
+   */
+  readonly "session.composer.pills": { readonly sessionID: string }
+  /**
+   * The session's left side column. Its host content is the classic sidebar;
+   * the Trunk chat layout replaces it with the trunk rail. `width` is the
+   * column's width in cells, so a claim never has to measure the host itself.
+   */
+  readonly "session.rail": { readonly sessionID: string; readonly width: number }
   readonly "session.panel": PanelInput
   readonly "session.header": { readonly sessionID: string }
   readonly "session.footer": { readonly sessionID: string }

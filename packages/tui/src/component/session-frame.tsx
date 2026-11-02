@@ -8,6 +8,7 @@ import {
 } from "@opentui/core"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { batch, createEffect, createMemo, createResource, createSignal, on, onCleanup, Show } from "solid-js"
+import { TRUNK_RAIL_MIN_WIDTH } from "@banyancode/tui/trunk"
 import { Slot } from "../plugin/render"
 import { CollapsedRail, SeparatorHandle } from "../ui/session-rails"
 import { useConfig } from "../config"
@@ -17,7 +18,7 @@ import { Keymap } from "../context/keymap"
 import { InteractivityProvider } from "../context/interactivity"
 import { useSessionTerminals } from "../context/session-terminals"
 import { usePromptRef } from "../context/prompt"
-import { usePanel } from "../context/panel"
+import { usePanel, panelEaseOut, panelSpring } from "../context/panel"
 import { useStorage } from "../context/storage"
 import { useDialog } from "../ui/dialog"
 import { Session } from "../routes/session"
@@ -35,6 +36,15 @@ const SIDEBAR_MAX_PERCENT = 38
 const INSPECTOR_MAX_PERCENT = 34
 const SIDE_COLLAPSE_PERCENT = 15
 const SESSION_MIN_WIDTH_BESIDE_PANE = 44
+/** The Trunk layout caps the transcript at this many columns, and docks its rail beside it. */
+const TRUNK_TRANSCRIPT_WIDTH = 96
+const TRUNK_PANE_PADDING = 4
+/** The panels overlay's width, and its spring / ease-out durations. */
+const PANEL_OVERLAY_WIDTH = 44
+const PANEL_OPEN_MS = 700
+const PANEL_CLOSE_MS = 500
+/** The overlay's clock frame, matching the trunk's 12 fps ceiling. */
+const PANEL_FRAME_MS = 1000 / 12
 
 export function SessionFrame(props: { sessionID: string; verticalTabsWidth: number }) {
   const sessions = useSessionTerminals()
@@ -50,6 +60,8 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
   const theme = useTheme()
   const availableWidth = () => Math.max(0, dimensions().width - props.verticalTabsWidth)
   const defaultPaneWidth = () => Math.max(1, Math.floor(panels.width() / 2))
+  // Trunk is the default chat layout; `session_layout: "classic"` keeps the side columns.
+  const trunk = () => config.data.session_layout === "trunk"
   const [layout, updateLayout] = useStorage().store<{
     paneWidth?: number
     terminalWidth?: number
@@ -124,17 +136,28 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
     }),
   )
   const wide = createMemo(() => dimensions().width - props.verticalTabsWidth > 120)
+  const railWidth = () => dimensions().width - props.verticalTabsWidth
   const sidebarVisible = createMemo(() => {
     if (data.session.get(props.sessionID)?.parentID) return false
     if (sidebarOpen()) return true
     return (config.data.session?.sidebar ?? "auto") === "auto" && wide()
   })
+  // The Trunk rail replaces the sidebar: it docks from the same threshold, but
+  // it survives narrower terminals because a branch label needs fewer columns
+  // than the eight side panels did.
+  const trunkRailVisible = createMemo(() => {
+    if (!trunk()) return false
+    if (data.session.get(props.sessionID)?.parentID) return false
+    if (railWidth() < TRUNK_RAIL_MIN_WIDTH) return false
+    if (sidebarOpen()) return true
+    return (config.data.session?.sidebar ?? "auto") === "auto"
+  })
   // Wide terminals dock the sidebar on the left, so only a narrow one still opens it over the session.
   const rightPane = createMemo(() => {
     if (activePanel() && !mainPanel()) return "panel"
-    if (!wide() && sidebarVisible()) return "sidebar"
+    if (!trunk() && !wide() && sidebarVisible()) return "sidebar"
     if (selectedTerminal()) return "terminal"
-    if (wide() && !layout.inspectorHidden && !data.session.get(props.sessionID)?.parentID) return "inspector"
+    if (!trunk() && wide() && !layout.inspectorHidden && !data.session.get(props.sessionID)?.parentID) return "inspector"
   })
   const sidebarPercent = () => layout.sidebarPercent ?? DEFAULT_SIDE_PERCENT
   const inspectorPercent = () => layout.inspectorPercent ?? DEFAULT_SIDE_PERCENT
@@ -149,17 +172,46 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
       !fullscreen() &&
       availableWidth() - sideWidth(sidebarPercent()) - rightWidth() >= SESSION_MIN_WIDTH_BESIDE_PANE,
   )
+  /** What occupies the left column: the trunk rail, or the classic docked sidebar. */
+  const leftDocked = createMemo(() => (trunk() ? trunkRailVisible() : sidebarDocked()))
+  // The Trunk overlay keeps the transcript at its own width: it slides over the
+  // right edge instead of taking a column, so nothing reflows underneath it.
+  const overlayWidth = createOverlayWidth({
+    open: () => trunk() && panels.overlay(),
+    animations: () => config.data.animations ?? true,
+    width: PANEL_OVERLAY_WIDTH,
+  })
   const persistLayout = (change: (draft: typeof layout) => void) =>
     void updateLayout(change).catch((error) => console.error("Failed to persist TUI layout", error))
+  const hideSidebar = () => {
+    batch(() => {
+      void config
+        .update((draft) => {
+          draft.session = { ...draft.session, sidebar: "hide" }
+        })
+        .catch(toast.error)
+      setSidebarOpen(false)
+    })
+  }
   const resizeSide = (key: "sidebarPercent" | "inspectorPercent", max: number) => (percent: number) => {
     if (percent < SIDE_COLLAPSE_PERCENT) {
-      if (key === "sidebarPercent") toggleSidebar()
-      else persistLayout((draft) => void (draft.inspectorHidden = true))
+      // Dragging the rail shut hides the column rather than opening the panel
+      // overlay, which is what the same gesture used to do to the sidebar.
+      if (key === "sidebarPercent") {
+        if (trunk()) hideSidebar()
+        else toggleSidebar()
+      } else persistLayout((draft) => void (draft.inspectorHidden = true))
       return
     }
     persistLayout((draft) => void (draft[key] = Math.max(SIDE_MIN_PERCENT, Math.min(max, percent))))
   }
   const toggleSidebar = () => {
+    // In the Trunk layout the side panels only exist as an overlay, so the same
+    // key slides them in and out without reflowing the transcript.
+    if (trunk()) {
+      panels.toggleOverlay()
+      return
+    }
     batch(() => {
       const visible = sidebarVisible()
       void config
@@ -231,7 +283,13 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
     commands: [
       {
         id: "session.sidebar.toggle",
-        title: sidebarVisible() ? "Hide sidebar" : "Show sidebar",
+        title: trunk()
+          ? panels.overlay()
+            ? "Hide panels"
+            : "Show panels"
+          : sidebarVisible()
+            ? "Hide sidebar"
+            : "Show sidebar",
         group: "Session",
         palette: true,
         run: () => {
@@ -240,10 +298,23 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
         },
       },
       {
+        // The panels overlay closes the way it opens, and with escape.
+        id: "session.panels.close",
+        title: "Close panels",
+        group: "Session",
+        bind: "escape",
+        enabled: () => trunk() && panels.overlay() && dialog.stack.length === 0,
+        run: () => {
+          panels.closeOverlay()
+        },
+      },
+      {
         id: "session.inspector.toggle",
         title: layout.inspectorHidden ? "Show inspector" : "Hide inspector",
         group: "Session",
         palette: true,
+        // Trunk has no right inspector: its panels live in the overlay instead.
+        enabled: () => !trunk(),
         run: () => {
           persistLayout((draft) => void (draft.inspectorHidden = !draft.inspectorHidden))
           dialog.clear()
@@ -329,9 +400,19 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
       onMouseDragEnd={finishPaneResize}
       onMouseUp={finishPaneResize}
     >
-      <Show when={sidebarDocked()}>
+      <Show when={leftDocked()}>
         <box flexShrink={0} width={sideWidth(sidebarPercent())} minHeight={0}>
-          <Sidebar sessionID={props.sessionID} width={sideWidth(sidebarPercent())} />
+          <Show
+            when={trunk()}
+            fallback={<Sidebar sessionID={props.sessionID} width={sideWidth(sidebarPercent())} />}
+          >
+            <Slot
+              path="session.rail"
+              input={{ sessionID: props.sessionID, width: sideWidth(sidebarPercent()) }}
+            >
+              <Sidebar sessionID={props.sessionID} width={sideWidth(sidebarPercent())} />
+            </Slot>
+          </Show>
         </box>
         <SeparatorHandle
           side="left"
@@ -339,7 +420,11 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
           onResize={resizeSide("sidebarPercent", SIDEBAR_MAX_PERCENT)}
         />
       </Show>
-      <Show when={wide() && !sidebarVisible() && !fullscreen() && !data.session.get(props.sessionID)?.parentID}>
+      <Show
+        when={
+          !trunk() && wide() && !sidebarVisible() && !fullscreen() && !data.session.get(props.sessionID)?.parentID
+        }
+      >
         <CollapsedRail side="left" onExpand={toggleSidebar} />
       </Show>
       <box
@@ -349,6 +434,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
         flexBasis={0}
         minWidth={0}
         minHeight={0}
+        maxWidth={trunk() && !mainPanel() ? TRUNK_TRANSCRIPT_WIDTH + TRUNK_PANE_PADDING : undefined}
         position={fullscreen() ? "absolute" : "relative"}
         visible={!fullscreen()}
         width={fullscreen() ? Math.max(0, panels.width() - paneResize.size()) : undefined}
@@ -451,7 +537,11 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
           </scrollbox>
         </box>
       </Show>
-      <Show when={wide() && layout.inspectorHidden && !rightPane() && !data.session.get(props.sessionID)?.parentID}>
+      <Show
+        when={
+          !trunk() && wide() && layout.inspectorHidden && !rightPane() && !data.session.get(props.sessionID)?.parentID
+        }
+      >
         <CollapsedRail
           side="right"
           onExpand={() => persistLayout((draft) => void (draft.inspectorHidden = false))}
@@ -521,12 +611,78 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
           <Sidebar sessionID={props.sessionID} />
         </box>
       </Show>
+      <Show when={trunk() && overlayWidth() > 0.5 && !fullscreen()}>
+        <box
+          id="session-panels-overlay"
+          position="absolute"
+          top={0}
+          right={0}
+          bottom={0}
+          width={Math.max(1, Math.round(overlayWidth()))}
+          zIndex={5}
+          backgroundColor={theme.background.raised.base}
+        >
+          <Sidebar sessionID={props.sessionID} width={Math.max(1, Math.round(overlayWidth()))} />
+        </box>
+      </Show>
     </box>
     <Show when={chrome()}>
       <Slot path="session.footer" input={{ sessionID: props.sessionID }} />
     </Show>
     </box>
   )
+}
+
+/**
+ * The panels overlay's width over time: a 700 ms spring opening, a 500 ms
+ * ease-out closing. The interval exists only while the width is changing and is
+ * cleared on unmount, so a settled overlay holds no timer. With animations off
+ * the width jumps to its target.
+ */
+function createOverlayWidth(options: {
+  readonly open: () => boolean
+  readonly animations: () => boolean
+  readonly width: number
+}): () => number {
+  const [value, setValue] = createSignal(0)
+  let handle: ReturnType<typeof setInterval> | undefined
+  let from = 0
+  let to = 0
+  const stop = () => {
+    if (handle === undefined) return
+    clearInterval(handle)
+    handle = undefined
+  }
+  onCleanup(stop)
+  createEffect(
+    on(
+      options.open,
+      (open) => {
+        stop()
+        const target = open ? options.width : 0
+        if (!options.animations() || value() === target) {
+          from = target
+          setValue(target)
+          return
+        }
+        from = value()
+        to = target
+        const duration = open ? PANEL_OPEN_MS : PANEL_CLOSE_MS
+        const curve = open ? panelSpring : panelEaseOut
+        const startedAt = performance.now()
+        handle = setInterval(() => {
+          const progress = Math.min(1, (performance.now() - startedAt) / duration)
+          setValue(from + (to - from) * curve(progress))
+          if (progress >= 1) {
+            from = to
+            stop()
+          }
+        }, PANEL_FRAME_MS)
+      },
+      { defer: true },
+    ),
+  )
+  return value
 }
 
 function within(node: Renderable | null | undefined, root: Renderable | undefined) {

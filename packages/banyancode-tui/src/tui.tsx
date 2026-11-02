@@ -5,6 +5,8 @@ import { Show } from "solid-js"
 import { PANEL, PANEL_NAMES, PLUGIN_ID, RAIL } from "./constants"
 import { normalizeImportPath } from "./data/import-path"
 import { createLive, type Live } from "./data/live"
+import { createTicker } from "./motion"
+import { TrunkPills, TrunkRail } from "./components/trunk/trunk"
 import { encodeSessionImport, parseTranscript, transcriptToImport } from "./data/transcript"
 import { CodegraphProgress } from "./components/status/codegraph-progress"
 import { StatusPills } from "./components/status/pills"
@@ -47,6 +49,9 @@ export default Plugin.define({
     const live = createLive(context)
     // One growth for the process: returning to home shows the finished tree.
     const growth = createGrowth({ animations: () => context.ui.animations() })
+    // One 12 fps clock for every animated session surface, shared by the chrome
+    // today and by Trunk and Grove next. It holds no timer while nothing moves.
+    const ticker = createTicker({ animations: () => context.ui.animations() })
 
     // --- sidebar (v1 order) --------------------------------------------------
     context.ui.slot({
@@ -88,6 +93,7 @@ export default Plugin.define({
           codegraph={live.codegraph}
           mesh={live.mesh}
           system={live.system}
+          ticker={ticker}
         />
       ),
     })
@@ -95,6 +101,28 @@ export default Plugin.define({
       append: "session.footer",
       render: (input) => (
         <SessionFooter context={context} sessionID={input.sessionID} mesh={live.mesh} system={live.system} />
+      ),
+    })
+    // --- B · Trunk -----------------------------------------------------------
+    // The trunk rail is the left side column's content in the Trunk chat
+    // layout, so the host's resize, collapse and persisted width still apply.
+    context.ui.slot({
+      replace: "session.rail",
+      render: (input) => (
+        <TrunkRail
+          context={context}
+          sessionID={input.sessionID}
+          mesh={live.mesh}
+          ticker={ticker}
+          width={input.width}
+        />
+      ),
+    })
+    // Below the rail's threshold the host folds the same status onto the composer.
+    context.ui.slot({
+      replace: "session.composer.pills",
+      render: (input) => (
+        <TrunkPills context={context} sessionID={input.sessionID} mesh={live.mesh} ticker={ticker} />
       ),
     })
     context.ui.slot({
@@ -122,9 +150,10 @@ export default Plugin.define({
 
     // --- home ----------------------------------------------------------------
     // The v2 home replaces the host splash: the banyan grows once per process.
+    // Home's own rows pick the tier, so chrome the host draws above it is not spent on the tree.
     context.ui.slot({
       replace: "home.logo",
-      render: () => <BanyanHero context={context} growth={growth} />,
+      render: (input) => <BanyanHero context={context} growth={growth} height={input.height} />,
     })
 
     // v1 attention strip. The host replaces the prompt (and with it the
@@ -140,10 +169,10 @@ export default Plugin.define({
       append: "home.bottom",
       render: () => <HomeStrip context={context} codegraph={live.codegraph} />,
     })
-    // The resume list, under the prompt.
+    // The resume list, under the prompt. It measures against Home's own rows so it can never overlap the footer.
     context.ui.slot({
       append: "home.bottom",
-      render: () => <Resume context={context} growth={growth} />,
+      render: (input) => <Resume context={context} growth={growth} height={input.height} />,
     })
 
     // v1 floating codegraph overlay → v2 composer rail.
@@ -157,7 +186,7 @@ export default Plugin.define({
       append: "session.panel",
       render: (panel) => (
         <Show when={PANEL_NAMES.has(panel.name)}>
-          <InspectorPanel context={context} live={live} panel={panel} />
+          <InspectorPanel context={context} live={live} panel={panel} ticker={ticker} />
         </Show>
       ),
     })
@@ -583,6 +612,7 @@ export default Plugin.define({
 
     return () => {
       growth.finish()
+      ticker.dispose()
       live.dispose()
     }
   },

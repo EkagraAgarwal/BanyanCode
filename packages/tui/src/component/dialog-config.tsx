@@ -57,6 +57,16 @@ export const settings: Setting[] = [
     keywords: ["motion", "effects"],
   },
   {
+    title: "Chat layout",
+    category: "Session",
+    path: ["session_layout"],
+    description: "Whether subagents branch off a rail beside the chat or keep the side columns",
+    default: "trunk",
+    values: ["trunk", "classic"],
+    labels: ["trunk", "classic"],
+    keywords: ["trunk", "grove", "rail", "subagents", "branches", "sidebar layout"],
+  },
+  {
     title: "Sidebar",
     category: "Session",
     path: ["session", "sidebar"],
