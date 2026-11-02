@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test"
+import { readFileSync, readdirSync } from "node:fs"
+import path from "node:path"
 import { createAppFixture } from "./fixture/app"
 import { directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
@@ -47,9 +49,36 @@ test("/clear replaces the active session tab", async () => {
   await setup.waitForFrame((frame) => frame.includes("Session to clear"))
   await setup.mockInput.typeText("/clear")
   setup.mockInput.pressEnter()
-  const frame = await setup.waitForFrame((frame) => !frame.includes("Session to clear"))
-
-  expect(frame).not.toContain("Session to clear")
+  // Home lists the session it no longer has open in its resume block, so the frame
+  // cannot show that the tab closed. The tab store records what is open.
+  const tabs = path.join(state.path, "test", "tui", "tabs.json")
+  const locks = path.join(state.path, "test", "locks")
+  const open = () => {
+    try {
+      const stored = JSON.parse(readFileSync(tabs, "utf8")) as { global?: { tabs?: Array<{ sessionID: string }> } }
+      return stored.global?.tabs
+    } catch {
+      return undefined
+    }
+  }
+  const writing = () => {
+    try {
+      return readdirSync(locks).length > 0
+    } catch {
+      return false
+    }
+  }
+  await setup.waitForFrame((frame) => frame.includes("RESUME") && frame.includes("Session to clear"))
+  // The close and the resume block's title sync both update the tab store. Stop once
+  // several consecutive frames see the session gone and no flock held.
+  let quiet = 0
+  await setup.waitFor(() => {
+    const list = open()
+    const settled = list !== undefined && list.every((tab) => tab.sessionID !== session.id) && !writing()
+    quiet = settled ? quiet + 1 : 0
+    return quiet >= 3
+  })
+  expect(open()?.map((tab) => tab.sessionID)).not.toContain(session.id)
 })
 
 test("/new keeps the active session tab", async () => {

@@ -1,3 +1,4 @@
+import { TextareaRenderable } from "@opentui/core"
 import { beforeEach, expect, test } from "bun:test"
 import path from "node:path"
 import { takeDraft } from "../src/component/prompt/draft-stash"
@@ -24,7 +25,8 @@ test("an agent mention after a tab replaces only the mention", async () => {
     },
   })
   await setup.ready
-  await setup.waitForFrame((frame) => frame.includes("commands"))
+  // Home moved its prompt hints to the footer row above 120 columns; focus is the durable readiness signal.
+  await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof TextareaRenderable)
   await setup.mockInput.pasteBracketedText("\f👨‍👩‍👧நி\t@助")
   await setup.waitForFrame((frame) => frame.includes("@助手"))
   setup.mockInput.pressEnter()
@@ -43,7 +45,8 @@ test("history navigation moves the cursor to the end of wide text", async () => 
   await Bun.write(file, entry("中\t👨‍👩‍👧நி") + entry("末") + "corrupt\n")
   await using setup = await createAppFixture({ state: state.path })
   await setup.ready
-  await setup.waitForFrame((frame) => frame.includes("commands"))
+  // Home moved its prompt hints to the footer row above 120 columns; focus is the durable readiness signal.
+  await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof TextareaRenderable)
   // The history provider rewrites the file without the corrupt line after it loads the entries.
   await setup.waitFor(async () => !(await Bun.file(file).text()).includes("corrupt"), { maxPasses: 200 })
   const text = () => setup.renderer.currentFocusedEditor?.plainText

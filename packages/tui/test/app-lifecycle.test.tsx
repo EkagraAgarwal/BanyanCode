@@ -36,6 +36,9 @@ test.each([100, 44])("Ctrl-O is immediate, dismissible, and prunes cached deleti
     state: state.path,
     fetch: (url) => {
       if (url.pathname === "/api/session") {
+        // Home's resume block lists the newest three sessions; this test drives the
+        // Ctrl-O dialog's own listing, so keep the resume block empty and uncounted.
+        if (url.searchParams.get("limit") === "3") return json({ data: [], cursor: {} })
         requests++
         requested.resolve()
         if (requests === 1) return response.promise
@@ -49,7 +52,9 @@ test.each([100, 44])("Ctrl-O is immediate, dismissible, and prunes cached deleti
   })
   try {
     await setup.ready
-    await setup.waitForFrame((frame) => frame.includes("commands"))
+    // Home's prompt carries no footer row of its own, and its key hints only
+    // reach the footer from 120 columns, so 100 and 44 wait on the placeholder.
+    await setup.waitForFrame((frame) => frame.includes("Ask anything"))
     setup.mockInput.pressKey("o", { ctrl: true })
     await requested.promise
     await setup.renderOnce()
@@ -131,6 +136,9 @@ test.each(["dismissed", "refreshing"])(
       config: { animations: false, tabs: { mode: "off" } },
       fetch: (url) => {
         if (url.pathname === "/api/session") {
+          // Home's resume block lists the newest three sessions; this test drives the
+          // Ctrl-O dialog's listing, so keep the resume block empty and uncounted.
+          if (url.searchParams.get("limit") === "3") return json({ data: [], cursor: {} })
           if (url.searchParams.has("parentID")) {
             const parent = url.searchParams.get("parentID")
             if (parent && parent !== "null") return json({ data: [], cursor: {} })
@@ -172,7 +180,7 @@ test.each(["dismissed", "refreshing"])(
     })
     try {
       await setup.ready
-      await setup.waitForFrame((frame) => frame.includes("commands"))
+      await setup.waitForFrame((frame) => frame.includes("Ask anything"))
       setup.mockInput.pressKey("o", { ctrl: true })
       await setup.waitForFrame((frame) => frame.includes(cached.title) && !frame.includes("Refreshing"))
       setup.mockInput.pressEscape()
@@ -228,7 +236,7 @@ test("boots on the simulation renderer with the terminal title enabled", async (
         yield* Effect.promise(async () => {
           await using app = await createAppFixture({ setup })
           await app.ready
-          await app.waitForFrame((frame) => frame.includes("commands"))
+          await app.waitForFrame((frame) => frame.includes("Ask anything"))
         })
       }),
     ),
@@ -533,13 +541,15 @@ test("narrow vertical session tabs collapse to a compact rail with the terminal"
     },
   })
   await setup.ready
-  await setup.waitForFrame((frame) => frame.split("\n")[1].slice(0, 10).trim() === "⌕")
+  // The rail is its own 5-column column; the header's canopy rule now shares row 1
+  // to its right, so read only the rail's columns.
+  await setup.waitForFrame((frame) => frame.split("\n")[1].slice(0, 5).trim() === "⌕")
 
   setup.resize(68, 30)
   await setup.waitForFrame((frame) => frame.split("\n")[0].includes(session.title))
   expect(setup.captureCharFrame()).not.toContain("⌕")
   setup.resize(80, 30)
-  await setup.waitForFrame((frame) => frame.split("\n")[1].slice(0, 10).trim() === "⌕")
+  await setup.waitForFrame((frame) => frame.split("\n")[1].slice(0, 5).trim() === "⌕")
 })
 
 test("horizontal session tabs stay visible with a single open session", async () => {
@@ -1101,7 +1111,7 @@ test("error investigations repeatedly seed editable home drafts without creating
       return undefined
     },
   })
-  await setup.waitForFrame((frame) => frame.includes("commands"))
+  await setup.waitForFrame((frame) => frame.includes("Ask anything"))
 
   setup.mockInput.pressKey("F6")
   await setup.waitForFrame((frame) => frame.includes("MCP servers") && frame.includes("alpha"))
@@ -1394,7 +1404,7 @@ test("configured app binding opens settings", async () => {
     config: { animations: false, keybinds: { "opencode.settings": "f6" } },
   })
   await setup.ready
-  await setup.waitForFrame((frame) => frame.includes("commands"))
+  await setup.waitForFrame((frame) => frame.includes("Ask anything"))
 
   setup.mockInput.pressKey("F6")
   const settings = await setup.waitForFrame((frame) => frame.includes("Settings"))
@@ -1405,7 +1415,7 @@ test("configured app binding opens settings", async () => {
 test("ctrl+c dismisses autocomplete and shell mode before exiting", async () => {
   await using setup = await createAppFixture()
   await setup.ready
-  await setup.waitForFrame((frame) => frame.includes("commands"))
+  await setup.waitForFrame((frame) => frame.includes("Ask anything"))
   await setup.mockInput.typeText("/theme")
   await setup.waitForFrame((frame) => frame.includes("Switch theme"))
 
@@ -2292,7 +2302,11 @@ test("free usage limit Subscribe handles mid-auth/mid-sync Escape, sync failure,
   )
   expect(switchedModels).toHaveLength(0)
   expect(resentPrompts).toHaveLength(0)
-  expect(setup.captureCharFrame().split("Refactor the parser").length).toBe(2)
+  // The recalled prompt is still in the composer after the failed sync. Read the editor
+  // rather than counting copies in the frame: the transcript's copy of the user message
+  // stays in view whenever the viewport is tall enough to hold it.
+  await setup.waitFor(() => setup.renderer.currentFocusedEditor?.plainText === "Refactor the parser")
+  expect(setup.renderer.currentFocusedEditor?.plainText).toBe("Refactor the parser")
 
   // 3a. Expired/needs_auth active credential (even with a status-free inactive backup): refresh detects needs_auth and routes to device sign-in without submitting.
   failModelSync = false

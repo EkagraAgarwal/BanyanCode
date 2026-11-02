@@ -108,7 +108,9 @@ test("failed setup reports batched layer errors and disposes earlier and later s
     config: { animations: false, plugins: [{ package: plugin.directory, options: { fail: true } }] },
   })
   await setup.ready
-  await setup.waitForFrame((frame) => frame.includes("ctrl+p commands"))
+  // Home's key hints live in its footer only from 120 columns; at the fixture's
+  // default 100 the placeholder is the stable marker that Home has rendered.
+  await setup.waitForFrame((frame) => frame.includes("Ask anything"))
 
   await openPlugin(setup)
   await setup.waitForFrame((frame) => frame.includes("view error"))

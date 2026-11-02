@@ -167,7 +167,9 @@ test.each([
         .captureCharFrame()
         .split("\n")
         .findIndex((line) => line.includes("Thought:"))
-      await setup.mockMouse.click(8, header)
+      // Trunk docks its rail in the left column, so click the header where it
+      // actually starts rather than the classic layout's fixed column.
+      await setup.mockMouse.click(setup.captureCharFrame().split("\n")[header].indexOf("Thought:"), header)
       await waitForHighlightedFrame(setup, (frame) => frame.includes("First thought body"))
       setup.mockInput.pressKey("u", { ctrl: true, shift: true })
       await setup.waitForVisualIdle({ quietFrames: 3 })

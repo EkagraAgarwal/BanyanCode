@@ -75,7 +75,9 @@ test("clicking a backfilled thought group toggles it", async () => {
     const lines = setup.captureCharFrame().split("\n")
     const row = lines.findIndex((line) => line.includes("+ Thought: Turn 0"))
     expect(row).toBeGreaterThan(0)
-    await setup.mockMouse.click(6, row)
+    // Click the disclosure where it actually starts: Trunk docks its rail in the
+    // left column, so a fixed column from the classic layout misses the row.
+    await setup.mockMouse.click(lines[row].indexOf("+ Thought: Turn 0") + 2, row)
     await setup.waitForVisualIdle({ quietFrames: 3 })
     expect(setup.captureCharFrame()).toContain("A fixed thought.")
   } finally {

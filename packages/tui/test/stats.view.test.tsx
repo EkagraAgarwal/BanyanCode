@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { TextareaRenderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Global } from "@opencode/util/global"
 import { Effect, FileSystem } from "effect"
@@ -52,13 +53,18 @@ test("stats shows only this year and returns after errors or success", async () 
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
   try {
-    await setup.waitForFrame((frame) => frame.includes("commands"))
+    // Home moved its prompt hints to the footer row above 120 columns; focus is the durable readiness signal.
+    await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof TextareaRenderable)
     await setup.mockInput.typeText("/stats")
     await setup.waitForFrame((frame) => frame.includes("Usage statistics"))
     setup.mockInput.pressKey("RETURN")
     await setup.waitForFrame((frame) => frame.includes("Could not load stats"))
     setup.mockInput.pressKey("ESCAPE")
-    await setup.waitForFrame((frame) => frame.includes("commands") && !frame.includes("Could not load stats"))
+    await setup.waitFor(
+      () =>
+        !setup.captureCharFrame().includes("Could not load stats") &&
+        setup.renderer.currentFocusedEditor instanceof TextareaRenderable,
+    )
     await setup.mockInput.typeText("/stats")
     await setup.waitForFrame((frame) => frame.includes("Usage statistics"))
     setup.mockInput.pressKey("RETURN")
@@ -86,7 +92,11 @@ test("stats shows only this year and returns after errors or success", async () 
     expect(setup.captureCharFrame()).toContain("TOKENS")
     expect(setup.captureCharFrame()).not.toContain("headline")
     setup.mockInput.pressKey("ESCAPE")
-    await setup.waitForFrame((frame) => frame.includes("commands") && !frame.includes("banyancode / stats"))
+    await setup.waitFor(
+      () =>
+        !setup.captureCharFrame().includes("banyancode / stats") &&
+        setup.renderer.currentFocusedEditor instanceof TextareaRenderable,
+    )
   } finally {
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
     await task.finally(() => server.stop(true))

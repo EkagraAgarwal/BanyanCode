@@ -10,7 +10,8 @@ test("the prompt keeps a cursor style set on its textarea when the theme changes
     config: { animations: false, keybinds: { "theme.switch_mode": "f6" } },
   })
   await setup.ready
-  await setup.waitForFrame((frame) => frame.includes("commands"))
+  // Home moved its prompt hints to the footer row above 120 columns; focus is the durable readiness signal.
+  await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof TextareaRenderable)
   const prompt = setup.renderer.currentFocusedEditor
   if (!(prompt instanceof TextareaRenderable)) throw new Error("expected the focused prompt textarea")
   const color = prompt.cursorColor
