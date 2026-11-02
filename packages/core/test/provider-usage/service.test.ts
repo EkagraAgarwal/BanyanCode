@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { Credential } from "@opencode/core/credential"
 import { Integration } from "@opencode/core/integration"
 import { ProviderUsage } from "@opencode/core/provider-usage/index"
@@ -7,11 +8,17 @@ import { Effect, Layer } from "effect"
 import type { Endpoints } from "@opencode/core/provider-usage/index"
 import { Provider } from "@opencode/core/provider"
 import { IntegrationConnection } from "@opencode/core/integration/connection"
+import { ClaudeRateLimits } from "@opencode/core/plugin/provider/claude-agent/claude/rate-limits"
+import { ConvertClaudeStream } from "@opencode/core/plugin/provider/claude-agent/language-model/convert-claude-stream"
 
 const servers: Array<{ stop: (force?: boolean) => void }> = []
 
 afterEach(() => {
   for (const server of servers.splice(0)) server.stop(true)
+})
+
+beforeEach(() => {
+  ClaudeRateLimits.reset()
 })
 
 const serve = (handler: (request: Request) => Response | Promise<Response>) => {
@@ -34,16 +41,20 @@ const endpointsFor = (base: string): Endpoints => ({
   opencodeGo: `${base}/zen/go/v1/usage`,
 })
 
-const oauth = (token: string) =>
+const oauth = (token: string, metadata?: Record<string, unknown>) =>
   Credential.OAuth.make({
     type: "oauth",
     methodID: Integration.MethodID.make("fixture"),
     access: token,
     refresh: `refresh-${token}`,
     expires: Date.now() + 60_000,
+    ...(metadata === undefined ? {} : { metadata }),
   })
 
 const key = (secret: string) => Credential.Key.make({ type: "key", key: secret })
+
+const external = () =>
+  Credential.External.make({ type: "external", methodID: Integration.MethodID.make("claude-login") })
 
 const target = (input: {
   readonly providerID: string
@@ -101,6 +112,165 @@ describe("provider usage adapters", () => {
     expect(requests).toEqual([`Bearer ${token}`])
     // The token is used for the request only; it is never part of the result.
     expect(JSON.stringify(result)).not.toContain(token)
+  })
+
+  test("OpenCode Go OAuth credentials fetch real usage with the workspace id", async () => {
+    const requests: Array<{ authorization: string | null; org: string | null }> = []
+    const base = serve((request) => {
+      requests.push({
+        authorization: request.headers.get("authorization"),
+        org: request.headers.get("x-opencode-org-id"),
+      })
+      return Response.json({
+        usage: {
+          rolling: { percent: 25, resetsAt: "2026-11-02T12:00:00Z" },
+          weekly: { percent: 40, resetsAt: "2026-11-08T12:00:00Z" },
+          monthly: { percent: 10, resetsAt: "2026-12-01T12:00:00Z" },
+        },
+      })
+    })
+    const token = "oauth-access-TOPSECRET"
+    const result = await snapshots(
+      [
+        target({
+          providerID: "opencode-go",
+          displayName: "OpenCode",
+          authType: "oauth",
+          credential: oauth(token, { orgID: "org_fixture" }),
+        }),
+      ],
+      { endpoints: endpointsFor(base) },
+    )
+    const snapshot = result.snapshots[0]!
+    expect(snapshot.status).toBe("available")
+    expect(snapshot.windows.map((window) => window.label)).toEqual(["5h", "1w", "1mo"])
+    expect(snapshot.windows.map((window) => window.usedPercent)).toEqual([25, 40, 10])
+    expect(requests).toEqual([{ authorization: `Bearer ${token}`, org: "org_fixture" }])
+    expect(JSON.stringify(result)).not.toContain(token)
+  })
+
+  test("an OpenCode OAuth quota refusal is not reported as Not connected", async () => {
+    const base = serve(() => new Response("forbidden", { status: 403 }))
+    const result = await snapshots(
+      [
+        target({
+          providerID: "opencode-go",
+          displayName: "OpenCode",
+          authType: "oauth",
+          credential: oauth("oauth-access-TOPSECRET"),
+        }),
+      ],
+      { endpoints: endpointsFor(base) },
+    )
+    const snapshot = result.snapshots[0]!
+    expect(snapshot.status).toBe("unsupported")
+    expect(snapshot.message).toBe("OpenCode Go usage is unavailable for this account")
+    expect(snapshot.windows).toEqual([])
+  })
+
+  test("Claude Agent rate-limit events become reported quota windows", async () => {
+    const convert = ConvertClaudeStream.make([])
+    convert({
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "allowed_warning",
+        rateLimitType: "five_hour",
+        resetsAt: Math.floor(Date.now() / 1000) + 3_600,
+        unifiedWindows: {
+          five_hour: { utilization: 0.62, resetsAt: Math.floor(Date.now() / 1000) + 3_600 },
+          seven_day: { utilization: 31, resetsAt: Math.floor(Date.now() / 1000) + 86_400 },
+        },
+      },
+      uuid: "rate-limit",
+      session_id: "session",
+    } as unknown as SDKMessage)
+    const result = await snapshots(
+      [
+        target({
+          providerID: "claude-agent",
+          displayName: "Claude Agent",
+          authType: "external",
+          credential: external(),
+        }),
+      ],
+      { fetchImpl: () => Promise.reject(new Error("must not be called")) },
+    )
+    const snapshot = result.snapshots[0]!
+    expect(snapshot.status).toBe("available")
+    expect(snapshot.confidence).toBe("reported")
+    expect(snapshot.windows.map((window) => window.label)).toEqual(["5h", "1w"])
+    expect(snapshot.windows[0]!.usedPercent).toBe(62)
+    expect(snapshot.windows[0]!.remainingPercent).toBe(38)
+    expect(snapshot.windows[0]!.resetsAt).toBeGreaterThan(Date.now())
+    expect(snapshot.windows[1]!.usedPercent).toBe(31)
+  })
+
+  test("a connected Claude Agent without an observed response says limits are pending", async () => {
+    const result = await snapshots(
+      [
+        target({
+          providerID: "claude-agent",
+          displayName: "Claude Agent",
+          authType: "external",
+          credential: external(),
+        }),
+      ],
+      { fetchImpl: () => Promise.reject(new Error("must not be called")) },
+    )
+    const snapshot = result.snapshots[0]!
+    expect(snapshot.status).toBe("unsupported")
+    expect(snapshot.message).toBe("Limits appear after the first response")
+    expect(snapshot.windows).toEqual([])
+  })
+
+  test("an expired Claude Agent window is not shown as current usage", async () => {
+    const convert = ConvertClaudeStream.make([])
+    convert({
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "allowed",
+        rateLimitType: "five_hour",
+        unifiedWindows: {
+          five_hour: { utilization: 0.9, resetsAt: Math.floor(Date.now() / 1000) - 60 },
+        },
+      },
+      uuid: "rate-limit",
+      session_id: "session",
+    } as unknown as SDKMessage)
+    const result = await snapshots(
+      [
+        target({
+          providerID: "claude-agent",
+          displayName: "Claude Agent",
+          authType: "external",
+          credential: external(),
+        }),
+      ],
+      { fetchImpl: () => Promise.reject(new Error("must not be called")) },
+    )
+    const snapshot = result.snapshots[0]!
+    expect(snapshot.status).toBe("unsupported")
+    expect(snapshot.message).toBe("Limits update after the next response")
+    expect(snapshot.windows).toEqual([])
+  })
+
+  test("a disconnected Claude Agent stays unauthenticated", async () => {
+    const result = await snapshots(
+      [
+        target({
+          providerID: "claude-agent",
+          displayName: "Claude Agent",
+          hasAuth: false,
+          credential: undefined,
+        }),
+      ],
+      { fetchImpl: () => Promise.reject(new Error("must not be called")) },
+    )
+    expect(result.snapshots[0]).toMatchObject({
+      status: "unauthenticated",
+      message: "Not connected",
+      windows: [],
+    })
   })
 
   test("an adapter failure message never contains the credential", async () => {
@@ -247,6 +417,65 @@ describe("provider usage credential boundary", () => {
     )
     expect(authorization).toBe(`Bearer ${token}`)
     expect(result.snapshots[0]!.status).toBe("available")
+    expect(JSON.stringify(result)).not.toContain(token)
+  })
+
+  test("an OpenCode Go alias reuses the Console OAuth connection", async () => {
+    const token = "oauth-console-TOPSECRET"
+    const requests: Array<{ authorization: string | null; org: string | null }> = []
+    const base = serve((request) => {
+      requests.push({
+        authorization: request.headers.get("authorization"),
+        org: request.headers.get("x-opencode-org-id"),
+      })
+      return Response.json({
+        usage: {
+          rolling: { percent: 12, resetsAt: "2027-01-01T00:00:00Z" },
+          weekly: { percent: 34, resetsAt: "2027-01-08T00:00:00Z" },
+        },
+      })
+    })
+    const provider = { id: "opencode-go", name: "OpenCode Go", activation: "auto", package: "" } as const
+    const connection: IntegrationConnection.Info = {
+      type: "credential",
+      id: Credential.ID.make("cred_console"),
+      label: "OpenCode Console",
+      method: "oauth",
+    }
+    const providerService = Layer.succeed(Provider.Service, {
+      available: () => Effect.succeed([provider]),
+      all: () => Effect.succeed([provider]),
+      get: () => Effect.succeed(provider),
+      reload: Effect.void,
+      transform: () => Effect.never,
+      snapshot: () => Effect.never,
+    } as unknown as Provider.Interface)
+    const integrationService = Layer.succeed(Integration.Service, {
+      connection: {
+        active: (integrationID: Integration.ID) =>
+          Effect.succeed(String(integrationID) === "opencode" ? connection : undefined),
+        resolve: () => Effect.succeed(oauth(token, { orgID: "org_fixture" })),
+        status: () => Effect.void,
+      },
+    } as unknown as Integration.Interface)
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const usage = yield* ProviderUsage.Service
+        return yield* usage.snapshots()
+      }).pipe(
+        Effect.provide(
+          ProviderUsage.layerWithOptions({ endpoints: endpointsFor(base) }).pipe(
+            Layer.provideMerge(providerService),
+            Layer.provide(integrationService),
+          ),
+        ),
+      ),
+    )
+    const snapshot = result.snapshots[0]!
+    expect(snapshot.providerID).toBe("opencode-go")
+    expect(snapshot.status).toBe("available")
+    expect(snapshot.windows.map((window) => window.label)).toEqual(["5h", "1w"])
+    expect(requests).toEqual([{ authorization: `Bearer ${token}`, org: "org_fixture" }])
     expect(JSON.stringify(result)).not.toContain(token)
   })
 })

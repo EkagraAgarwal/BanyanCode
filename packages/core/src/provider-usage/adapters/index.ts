@@ -1,6 +1,7 @@
 export * as ProviderUsageAdapters from "./index.js"
 
 import { AnthropicAdapter } from "./anthropic.js"
+import { ClaudeAgentAdapter } from "./claude-agent.js"
 import { CodexAdapter } from "./openai-codex.js"
 import { CopilotAdapter } from "./github-copilot.js"
 import { KimiAdapter } from "./kimi.js"
@@ -21,13 +22,14 @@ export const BUILT_IN_ADAPTERS: ReadonlyArray<Adapter> = [
   CodexAdapter,
   OpenRouterAdapter,
   AnthropicAdapter,
+  ClaudeAgentAdapter,
   CopilotAdapter,
   KimiAdapter,
   ZhipuAdapter,
   MiniMaxAdapter,
 ]
 
-export { AnthropicAdapter, CodexAdapter, CopilotAdapter, KimiAdapter, MiniMaxAdapter }
+export { AnthropicAdapter, ClaudeAgentAdapter, CodexAdapter, CopilotAdapter, KimiAdapter, MiniMaxAdapter }
 export { OpenCodeGoAdapter, OpenRouterAdapter, ZhipuAdapter }
 export type { Adapter, AdapterContext, AdapterSupport, Endpoints, FetchImpl } from "./types.js"
 export { DEFAULT_ENDPOINTS } from "./types.js"

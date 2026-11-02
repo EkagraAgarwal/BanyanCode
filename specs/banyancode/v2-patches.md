@@ -221,6 +221,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/cli/test/banyancode/**` | hook | tests for the BanyanCode CLI subcommands | — |
 | `packages/core/src/provider-usage/**` | hook | provider quota collection in core: fixed provider endpoints, returns numbers only | — |
 | `packages/core/test/provider-usage/**` | hook | quota adapters, redaction, and the result-only plugin surface | — |
+| `packages/core/src/plugin/provider/claude-agent/**` | hook | record Claude Code rate-limit events for the sidebar usage panel | — |
 | `packages/core/test/fixture/policy.ts` | hook | test host follows `provider.usage` | — |
 | `packages/core/test/plugin/fixture.ts` | hook | test layer provides `ProviderUsage` | — |
 | `packages/plugin/src/effect/provider.ts` | hook | result-only `provider.usage` on the plugin API | — |

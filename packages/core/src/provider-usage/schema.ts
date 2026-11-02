@@ -197,8 +197,12 @@ const baseSnapshot = (
 })
 
 /** Snapshot for a provider with no usable usage source. Never fabricates limits. */
-export const unsupportedSnapshot = (providerID: string, displayName: string, fetchedAt: number): Snapshot =>
-  baseSnapshot(providerID, displayName, "unsupported", fetchedAt, "Usage unavailable")
+export const unsupportedSnapshot = (
+  providerID: string,
+  displayName: string,
+  fetchedAt: number,
+  message = "Usage unavailable",
+): Snapshot => baseSnapshot(providerID, displayName, "unsupported", fetchedAt, message)
 
 /** Snapshot for a configured provider whose credentials are absent or expired. */
 export const unauthenticatedSnapshot = (providerID: string, displayName: string, fetchedAt: number): Snapshot =>

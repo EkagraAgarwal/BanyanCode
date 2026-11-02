@@ -14,6 +14,7 @@ import {
   DEFAULT_TTL_MS,
   errorSnapshot,
   isFresh,
+  isOpenCodeAlias,
   markStale,
   matchesProviderID,
   MAX_CONCURRENCY,
@@ -138,7 +139,12 @@ export const make = (options: Options = {}): Effect.Effect<Interface> =>
           case "unauthenticated":
             return unauthenticatedSnapshot(target.providerID, target.displayName, now)
           case "unsupported":
-            return unsupportedSnapshot(target.providerID, target.displayName, now)
+            return unsupportedSnapshot(
+              target.providerID,
+              target.displayName,
+              now,
+              error.message.length > 0 ? error.message : "Usage unavailable",
+            )
           case "rate_limited": {
             const retryAfter = error.retryAfterMs ?? 60_000
             yield* Ref.update(backoffUntil, (prev) => new Map(prev).set(cacheKeyFor(target), now + retryAfter))
@@ -274,7 +280,13 @@ const discover = (
     (provider) =>
       Effect.gen(function* () {
         const integrationID = provider.integrationID ?? Integration.ID.make(provider.id)
-        return { provider, connection: yield* active(integrationID) }
+        const connection =
+          (yield* active(integrationID)) ??
+          // `opencode` and `opencode-go` are one provider on one Console
+          // account; a catalog-only alias may have no integrationID of its
+          // own, so reuse the Console connection (v1's alias fallback).
+          (isOpenCodeAlias(provider.id) ? yield* active(Integration.ID.make("opencode")) : undefined)
+        return { provider, connection }
       }),
     { concurrency: MAX_CONCURRENCY },
   ).pipe(

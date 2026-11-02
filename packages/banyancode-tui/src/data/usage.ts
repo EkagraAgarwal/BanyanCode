@@ -172,7 +172,7 @@ export function orderSnapshots(
 
 export function statusLine(snapshot: ProviderUsageSnapshot): string {
   if (snapshot.status === "unauthenticated") return "Not connected"
-  if (snapshot.status === "unsupported") return "Usage unavailable"
+  if (snapshot.status === "unsupported") return snapshot.message?.slice(0, 80) || "Usage unavailable"
   if (snapshot.status === "error") return snapshot.message?.slice(0, 80) || "Couldn't load usage"
   return ""
 }

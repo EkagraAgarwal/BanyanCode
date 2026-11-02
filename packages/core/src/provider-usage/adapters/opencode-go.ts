@@ -9,11 +9,13 @@ import type { Adapter, AdapterContext } from "./types.js"
 /**
  * OpenCode Go usage adapter (provider-usage sidebar parity).
  *
- * Calls the fixed `GET https://opencode.ai/zen/go/v1/usage` endpoint with the
- * workspace API key. In v2 the key arrives as the integration credential, so
- * credential precedence collapses to the active connection (v1 also probed
- * `OPENCODE_API_KEY` and configured `apiKey` options, both of which surface as
- * env/key connections here).
+ * Calls `GET <Console origin>/zen/go/v1/usage` with the workspace credential.
+ * In v2 the credential is the active integration
+ * connection: a workspace API key, or the OpenCode Console device-login OAuth
+ * token. Console's own usage service reads the same endpoint with the OAuth
+ * access token plus the workspace id (`packages/core/src/usage-limits.ts`),
+ * so both credential kinds are accepted here. Env and configured `apiKey`
+ * options surface as env/key connections.
  *
  * Live contract: `{ usage: { rolling, weekly, monthly } }` where each window
  * carries `percent` (used percent, 0-100) and a reset. The endpoint returns no
@@ -131,6 +133,18 @@ export const normalizeOpenCodeGoUsage = (
   }
 }
 
+/** Console serves the Go allowance from the origin the member signed in to. */
+const usageURL = (fallback: string, server: unknown): string => {
+  if (typeof server !== "string" || server.length === 0) return fallback
+  try {
+    const url = new URL(server)
+    if (url.protocol !== "http:" && url.protocol !== "https:") return fallback
+    return `${url.origin}/zen/go/v1/usage`
+  } catch {
+    return fallback
+  }
+}
+
 export const OpenCodeGoAdapter: Adapter = {
   id: "banyan-usage-opencode-go",
   providerID: "opencode",
@@ -139,23 +153,53 @@ export const OpenCodeGoAdapter: Adapter = {
   fetch: (ctx: AdapterContext) =>
     Effect.gen(function* () {
       const credential = yield* ctx.credential()
-      const apiKey = credential?.type === "key" && credential.key.length > 0 ? credential.key : undefined
-      if (!apiKey)
+      const isOAuth = credential?.type === "oauth"
+      const token =
+        credential?.type === "key" && credential.key.length > 0
+          ? credential.key
+          : isOAuth && credential.access.length > 0
+            ? credential.access
+            : undefined
+      if (!token)
         return yield* new ProviderUsageError({
           providerID: ctx.providerID,
           reason: "unauthenticated",
           message: "OpenCode Go is not connected",
         })
+      const workspaceID =
+        isOAuth && typeof credential.metadata?.orgID === "string" && credential.metadata.orgID.length > 0
+          ? credential.metadata.orgID
+          : undefined
       const payload = yield* requestJson({
         providerID: ctx.providerID,
         fetch: ctx.fetch,
-        url: ctx.endpoints.opencodeGo,
-        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+        url: isOAuth ? usageURL(ctx.endpoints.opencodeGo, credential.metadata?.server) : ctx.endpoints.opencodeGo,
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          ...(workspaceID === undefined ? {} : { "x-opencode-org-id": workspaceID }),
+        },
         label: "OpenCode Go usage",
         unauthorized: "OpenCode Go rejected the API key",
         rateLimited: "OpenCode Go usage rate limited",
         unreadable: "OpenCode Go returned an unreadable usage payload",
-      })
+      }).pipe(
+        // An OAuth connection exists even when the quota endpoint refuses it
+        // (for example an account without Go). Reporting that as "Not
+        // connected" would be false; surface the refusal instead.
+        Effect.catchIf(
+          (error): error is ProviderUsageError =>
+            isOAuth && error instanceof ProviderUsageError && error.reason === "unauthenticated",
+          () =>
+            Effect.fail(
+              new ProviderUsageError({
+                providerID: ctx.providerID,
+                reason: "unsupported",
+                message: "OpenCode Go usage is unavailable for this account",
+              }),
+            ),
+        ),
+      )
       return yield* fromThrow(ctx.providerID, () =>
         normalizeOpenCodeGoUsage(payload, { providerID: ctx.providerID, displayName: ctx.displayName }),
       )

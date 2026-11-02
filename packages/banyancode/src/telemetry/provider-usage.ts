@@ -7,10 +7,11 @@ import { Effect, Schema } from "effect"
  * observer/rate-limit normalizer from
  * `packages/opencode/src/provider/usage/{rate-limit-headers,observer}.ts`.
  *
- * Scope note: the v1 adapters that call provider APIs need credentials, and
- * the v2 plugin API exposes no auth surface, so this port serves the part the
- * plugin can honestly observe: rate-limit headers from live model responses
- * (`ctx.session.hook("http.response")`). A provider with a fresh observation
+ * Scope note: exact quotas come from the core credential boundary
+ * (`ctx.provider.usage`), which resolves the credential and returns normalized
+ * windows. This collector also keeps rate-limit headers observed from live
+ * model responses (`ctx.session.hook("http.response")`) as a fallback for a
+ * provider core has no exact source for. A provider with a fresh observation
  * reports `available` + `reported` windows; every other provider is
  * `unsupported` ("Usage unavailable"), never an invented quota. `message`
  * fields are secret-sanitized before they leave the plugin.

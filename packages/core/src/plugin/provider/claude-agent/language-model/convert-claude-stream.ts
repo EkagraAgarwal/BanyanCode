@@ -3,6 +3,7 @@ export * as ConvertClaudeStream from "./convert-claude-stream.js"
 import type { LanguageModelV3FunctionTool, LanguageModelV3StreamPart } from "@ai-sdk/provider"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { Provider } from "@opencode/schema/provider"
+import { ClaudeRateLimits } from "../claude/rate-limits.js"
 import { ClaudeUsage } from "./usage.js"
 import { ToolNames } from "../tools/names.js"
 import { ClaudeAgentError } from "./claude-agent-error.js"
@@ -18,6 +19,7 @@ export function make(tools: readonly LanguageModelV3FunctionTool[]) {
 
   return (message: SDKMessage): LanguageModelV3StreamPart[] => {
     const parts: LanguageModelV3StreamPart[] = []
+    if (message.type === "rate_limit_event") ClaudeRateLimits.record(message.rate_limit_info)
     const error = failure(message)
     if (error) return [{ type: "error", error }]
     if (message.type === "stream_event" && message.parent_tool_use_id === null) {

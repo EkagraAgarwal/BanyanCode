@@ -45,9 +45,13 @@ export function ProviderUsagePanel(props: {
     void refresh(false)
   })
 
+  // A response can reveal new Claude Agent limits. Forcing a refresh when the
+  // session goes idle shows them without waiting for the poll interval.
+  const unsubscribeIdle = props.context.data.on("session.idle", () => void refresh(true))
   const poll = setInterval(() => void refresh(false), PROVIDER_USAGE_POLL_MS)
   const tick = setInterval(() => setNow(Date.now()), COUNTDOWN_TICK_MS)
   onCleanup(() => {
+    unsubscribeIdle()
     clearInterval(poll)
     clearInterval(tick)
   })
@@ -92,7 +96,7 @@ export function ProviderUsagePanel(props: {
                 >
                   <Show
                     when={snapshot.windows.length > 0}
-                    fallback={<text fg={theme().muted}>Usage unavailable</text>}
+                    fallback={<text fg={theme().muted}>{snapshot.message ?? "Usage unavailable"}</text>}
                   >
                     <For each={snapshot.windows}>
                       {(window) => {
