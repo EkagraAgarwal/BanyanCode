@@ -116,6 +116,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/theme.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
 | `packages/util/src/global.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
 | `packages/util/src/product.ts` | branding | single product identity constant (app, config names, project dir, db, CLI name, env prefix) | — |
+| `packages/core/src/tool/plugin/opencode.ts` | branding | the tool namespace description says BanyanCode | — |
 | `packages/util/src/observability/logging.ts` | branding | the log file is banyancode.log | — |
 | `packages/core/src/app.ts` | branding | the user agent says banyancode | — |
 | `packages/core/test/logging.test.ts` | fix | test expectation follows the log file name | — |

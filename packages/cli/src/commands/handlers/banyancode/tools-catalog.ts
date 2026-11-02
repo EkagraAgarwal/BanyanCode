@@ -17,7 +17,7 @@
  * `--category` keeps working for scripts.
  */
 
-export type Category = "Primitive" | "Repository" | "Codegraph" | "Search" | "Memory" | "Mesh" | "Edit" | "MCP"
+export type Category = "Primitive" | "Repository" | "Codegraph" | "Search" | "Mesh" | "Edit" | "MCP"
 
 const PRIMITIVES = new Set([
   // v2 host tool ids
@@ -34,7 +34,6 @@ const PRIMITIVES = new Set([
   "todowrite",
   "skill",
   "question",
-  "opencode",
   "models",
   "artifact_create",
   "artifact_read",
@@ -65,7 +64,6 @@ export const classify = (name: string): Category => {
   if (name.startsWith("repository_")) return "Repository"
   if (name.startsWith("codegraph_")) return "Codegraph"
   if (name.startsWith("code_find") || name === "search" || name === "websearch_free") return "Search"
-  if (name.startsWith("memory_") || name === "shared_memory") return "Memory"
   if (name.startsWith("mesh_")) return "Mesh"
   if (name === "edit_plan") return "Edit"
   return "MCP"
@@ -76,7 +74,6 @@ export const ORDER: ReadonlyArray<Category> = [
   "Repository",
   "Codegraph",
   "Search",
-  "Memory",
   "Mesh",
   "Edit",
   "MCP",
@@ -97,7 +94,6 @@ export const CATALOG: ReadonlyArray<string> = [
   "todowrite",
   "skill",
   "question",
-  "opencode",
   "models",
   "artifact_create",
   "artifact_read",

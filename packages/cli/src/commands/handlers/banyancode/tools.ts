@@ -38,9 +38,7 @@ const handler = Effect.fn("cli.tools")(function* (
   const registered = [...grouped.values()].reduce((total, names) => total + names.length, 0)
 
   println(Style.TEXT_HIGHLIGHT + "Tool Catalog" + Style.TEXT_NORMAL)
-  println(dim(`  registered:  ${registered}`))
-  println(dim(`  materialized: ${registered}`))
-  println(dim(`  visible:     ${registered}`))
+  println(dim(`  tools: ${registered}`))
   println("")
 
   const categories: ReadonlyArray<Category> = filter ? [filter as Category] : ORDER

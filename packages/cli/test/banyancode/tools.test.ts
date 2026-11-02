@@ -30,9 +30,7 @@ describe("tools catalog", () => {
       const all = await cli(root, ["tools", "--server", server.url])
       expect(all.exitCode).toBe(0)
       expect(all.stderr).toContain("Tool Catalog")
-      expect(all.stderr).toContain("registered:  65")
-      expect(all.stderr).toContain("materialized: 65")
-      expect(all.stderr).toContain("visible:     65")
+      expect(all.stderr).toContain("tools: 64")
       expect(all.stderr).toContain("Repository")
       expect(plain(all.stderr)).toContain("repository_query (7 uses)")
 
