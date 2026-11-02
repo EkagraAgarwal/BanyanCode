@@ -8,7 +8,10 @@ import { createLive, type Live } from "./data/live"
 import { encodeSessionImport, parseTranscript, transcriptToImport } from "./data/transcript"
 import { CodegraphProgress } from "./components/status/codegraph-progress"
 import { StatusPills } from "./components/status/pills"
-import { SessionStatus } from "./components/status/session-status"
+import { SessionFooter, SessionHeader } from "./components/status/session-chrome"
+import { AgentDetails } from "./components/inspector/agent-details"
+import { PendingActions } from "./components/inspector/pending-actions"
+import { TodoPanel } from "./components/inspector/todo"
 import { AttentionStrip } from "./components/status/attention"
 import { AgentsPanel } from "./components/sidebar/agents"
 import { AgentTreePanel } from "./components/sidebar/agent-tree"
@@ -45,18 +48,7 @@ export default Plugin.define({
   setup(context) {
     const live = createLive(context)
 
-    // --- sidebar (v1 registration order) ----------------------------------
-    // v1 showed the token breakdown and the session's changed files in the
-    // sidebar; the host's Context panel only carries the total, so both are
-    // ported here as additive panels (they render nothing without data).
-    context.ui.slot({
-      append: "sidebar.content",
-      render: (input) => <ContextBreakdownPanel context={context} sessionID={input.sessionID} />,
-    })
-    context.ui.slot({
-      append: "sidebar.content",
-      render: (input) => <ModifiedFilesPanel context={context} sessionID={input.sessionID} />,
-    })
+    // --- sidebar (v1 order) --------------------------------------------------
     context.ui.slot({
       append: "sidebar.content",
       render: (input) => <AgentsPanel context={context} sessionID={input.sessionID} mesh={live.mesh} />,
@@ -64,6 +56,10 @@ export default Plugin.define({
     context.ui.slot({
       append: "sidebar.content",
       render: () => <CodebaseTreePanel context={context} codegraph={live.codegraph} />,
+    })
+    context.ui.slot({
+      append: "sidebar.content",
+      render: (input) => <ContextBreakdownPanel context={context} sessionID={input.sessionID} />,
     })
     context.ui.slot({
       append: "sidebar.content",
@@ -97,33 +93,45 @@ export default Plugin.define({
       append: "sidebar.content",
       render: () => <ToolUsagePanel context={context} usage={live.usage} codegraph={live.codegraph} />,
     })
+    context.ui.slot({
+      append: "sidebar.content",
+      render: (input) => <ModifiedFilesPanel context={context} sessionID={input.sessionID} />,
+    })
+
+    // --- v1 session chrome ---------------------------------------------------
+    context.ui.slot({
+      append: "session.header",
+      render: (input) => (
+        <SessionHeader
+          context={context}
+          sessionID={input.sessionID}
+          codegraph={live.codegraph}
+          mesh={live.mesh}
+          system={live.system}
+        />
+      ),
+    })
+    context.ui.slot({
+      append: "session.footer",
+      render: (input) => (
+        <SessionFooter context={context} sessionID={input.sessionID} mesh={live.mesh} system={live.system} />
+      ),
+    })
+    context.ui.slot({
+      append: "session.inspector",
+      render: (input) => <AgentDetails context={context} sessionID={input.sessionID} />,
+    })
+    context.ui.slot({
+      append: "session.inspector",
+      render: (input) => <TodoPanel context={context} sessionID={input.sessionID} />,
+    })
+    context.ui.slot({
+      append: "session.inspector",
+      render: (input) => <PendingActions context={context} sessionID={input.sessionID} />,
+    })
 
     // --- status surfaces ---------------------------------------------------
-    // v1 app_top status pills → prompt.footer.status in a session,
-    // home.footer.status on the home screen.
-    context.ui.slot({
-      append: "prompt.footer.status",
-      // The home screen has its own row at home.footer.status; without this check it shows twice.
-      render: (input) => (
-        <Show when={input.sessionID}>
-          <StatusPills
-            context={context}
-            sessionID={input.sessionID}
-            codegraph={live.codegraph}
-            mesh={live.mesh}
-            system={live.system}
-          />
-        </Show>
-      ),
-    })
-    context.ui.slot({
-      append: "prompt.footer.status",
-      render: (input) => (
-        <Show when={input.sessionID}>
-          {(sessionID) => <SessionStatus context={context} sessionID={sessionID()} />}
-        </Show>
-      ),
-    })
+    // In a session the pills live in the header and footer above; the home screen has its own row.
     context.ui.slot({
       append: "home.footer.status",
       render: () => (

@@ -157,6 +157,8 @@ export function Session(props: {
   visibleTerminalID?: string
   onTerminalPicker?: (show: (() => void) | undefined) => void
   width?: number
+  /** Drawn over the transcript, which stays mounted underneath. */
+  main?: JSX.Element
 }) {
   const epilogue = useEpilogue()
   const clipboard = useClipboard()
@@ -1556,6 +1558,7 @@ export function Session(props: {
                   {(height) => <box id={NAVIGATION_SLACK_ID} height={height()} flexShrink={0} />}
                 </Show>
               </scrollbox>
+              {props.main}
             </box>
             <box height={1} flexShrink={0} flexDirection="row" justifyContent="flex-end">
               <Show when={firstJump()}>

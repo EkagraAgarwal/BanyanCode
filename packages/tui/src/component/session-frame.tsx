@@ -8,7 +8,10 @@ import {
 } from "@opentui/core"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { batch, createEffect, createMemo, createResource, createSignal, on, onCleanup, Show } from "solid-js"
+import { Slot } from "../plugin/render"
+import { CollapsedRail, SeparatorHandle } from "../ui/session-rails"
 import { useConfig } from "../config"
+import { useTheme } from "../context/theme"
 import { useData } from "../context/data"
 import { Keymap } from "../context/keymap"
 import { InteractivityProvider } from "../context/interactivity"
@@ -19,12 +22,19 @@ import { useStorage } from "../context/storage"
 import { useDialog } from "../ui/dialog"
 import { Session } from "../routes/session"
 import { Sidebar } from "../routes/session/sidebar"
-import { clampSessionPaneWidth, SESSION_SIDEBAR_WIDTH } from "../ui/layout"
+import { clampSessionPaneWidth } from "../ui/layout"
 import { createPaneResize } from "../ui/pane-resize"
 import { PaneResizeHandle } from "../ui/pane-resize-handle"
 import { useToast } from "../ui/toast"
 import { TerminalPane } from "./terminal-pane"
 import { PanelHost } from "./panel-host"
+
+const DEFAULT_SIDE_PERCENT = 22
+const SIDE_MIN_PERCENT = 18
+const SIDEBAR_MAX_PERCENT = 38
+const INSPECTOR_MAX_PERCENT = 34
+const SIDE_COLLAPSE_PERCENT = 15
+const SESSION_MIN_WIDTH_BESIDE_PANE = 44
 
 export function SessionFrame(props: { sessionID: string; verticalTabsWidth: number }) {
   const sessions = useSessionTerminals()
@@ -37,9 +47,16 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
   const dimensions = useTerminalDimensions()
   const panels = usePanel()
   const dialog = useDialog()
+  const theme = useTheme()
   const availableWidth = () => Math.max(0, dimensions().width - props.verticalTabsWidth)
   const defaultPaneWidth = () => Math.max(1, Math.floor(panels.width() / 2))
-  const [layout, updateLayout] = useStorage().store<{ paneWidth?: number; terminalWidth?: number }>("layout", {
+  const [layout, updateLayout] = useStorage().store<{
+    paneWidth?: number
+    terminalWidth?: number
+    sidebarPercent?: number
+    inspectorPercent?: number
+    inspectorHidden?: boolean
+  }>("layout", {
     initial: {},
   })
   const paneResize = createPaneResize({
@@ -90,15 +107,16 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
     if (current?.sessionID === props.sessionID) return current
   })
   const fullscreen = () => activePanel() !== undefined && panels.presentation() === "fullscreen"
+  const mainPanel = createMemo(() => (panels.presentation() === "main" ? activePanel() : undefined))
   createEffect(
     on([activePanel, () => selectedTerminal()?.id], ([panel, terminal], previous) => {
       if (panel && panel !== previous?.[0]) {
-        setSidebarOpen(false)
+        if (!wide()) setSidebarOpen(false)
         if (terminal) void sessions.selectTerminal(props.sessionID, null).catch(toast.error)
         return
       }
       if (terminal && terminal !== previous?.[1]) {
-        setSidebarOpen(false)
+        if (!wide()) setSidebarOpen(false)
         if (panel) panels.close()
       }
     }),
@@ -109,23 +127,48 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
     if (sidebarOpen()) return true
     return (config.data.session?.sidebar ?? "auto") === "auto" && wide()
   })
+  // Wide terminals dock the sidebar on the left, so only a narrow one still opens it over the session.
   const rightPane = createMemo(() => {
-    if (activePanel()) return "panel"
-    if (sidebarOpen() && sidebarVisible()) return "sidebar"
+    if (activePanel() && !mainPanel()) return "panel"
+    if (!wide() && sidebarVisible()) return "sidebar"
     if (selectedTerminal()) return "terminal"
-    if (sidebarVisible()) return "sidebar"
+    if (wide() && !layout.inspectorHidden && !data.session.get(props.sessionID)?.parentID) return "inspector"
   })
+  const sidebarPercent = () => layout.sidebarPercent ?? DEFAULT_SIDE_PERCENT
+  const inspectorPercent = () => layout.inspectorPercent ?? DEFAULT_SIDE_PERCENT
+  const sideWidth = (percent: number) => Math.round((percent / 100) * availableWidth())
+  const rightWidth = () =>
+    rightPane() === "inspector" ? sideWidth(inspectorPercent()) : rightPane() ? paneResize.size() : 0
+  // A terminal or panel on the right can leave too little room for the session beside the sidebar too.
+  const sidebarDocked = createMemo(
+    () =>
+      wide() &&
+      sidebarVisible() &&
+      !fullscreen() &&
+      availableWidth() - sideWidth(sidebarPercent()) - rightWidth() >= SESSION_MIN_WIDTH_BESIDE_PANE,
+  )
+  const persistLayout = (change: (draft: typeof layout) => void) =>
+    void updateLayout(change).catch((error) => console.error("Failed to persist TUI layout", error))
+  const resizeSide = (key: "sidebarPercent" | "inspectorPercent", max: number) => (percent: number) => {
+    if (percent < SIDE_COLLAPSE_PERCENT) {
+      if (key === "sidebarPercent") toggleSidebar()
+      else persistLayout((draft) => void (draft.inspectorHidden = true))
+      return
+    }
+    persistLayout((draft) => void (draft[key] = Math.max(SIDE_MIN_PERCENT, Math.min(max, percent))))
+  }
   const toggleSidebar = () => {
     batch(() => {
-      const visible = rightPane() === "sidebar"
+      const visible = sidebarVisible()
       void config
         .update((draft) => {
           draft.session = { ...draft.session, sidebar: visible ? "hide" : "auto" }
         })
         .catch(toast.error)
       setSidebarOpen(!visible)
-      if (!visible && activePanel()) panels.close()
-      if (!visible && selectedTerminal()) void sessions.selectTerminal(props.sessionID, null).catch(toast.error)
+      if (!visible && !wide() && activePanel()) panels.close()
+      if (!visible && !wide() && selectedTerminal())
+        void sessions.selectTerminal(props.sessionID, null).catch(toast.error)
     })
   }
   const focusSession = () => {
@@ -145,8 +188,9 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
   }
   const onFocused = () => {
     const current = renderer.currentFocusedRenderable
-    if (rightPane() !== "sidebar" && within(current, rightNode)) setActivePane("right")
-    if (!fullscreen() && within(current, sessionNode)) setActivePane("session")
+    if ((rightPane() === "terminal" || rightPane() === "panel") && within(current, rightNode)) setActivePane("right")
+    if (!fullscreen() && within(current, sessionNode) && !within(current, panelNode)) setActivePane("session")
+    if (mainPanel() && within(current, panelNode)) setActivePane("right")
   }
   renderer.on(CliRenderEvents.FOCUSED_RENDERABLE, onFocused)
   onCleanup(() => renderer.off(CliRenderEvents.FOCUSED_RENDERABLE, onFocused))
@@ -154,7 +198,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
     if (fullscreen()) focusRightPane()
   })
   createEffect(() => {
-    if (rightPane() !== "terminal" && rightPane() !== "panel") setActivePane("session")
+    if (rightPane() !== "terminal" && rightPane() !== "panel" && !mainPanel()) setActivePane("session")
   })
   createEffect(() => {
     if (!restoreTerminalFocus() || selectedTerminal()) return
@@ -185,11 +229,21 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
     commands: [
       {
         id: "session.sidebar.toggle",
-        title: rightPane() === "sidebar" ? "Hide sidebar" : "Show sidebar",
+        title: sidebarVisible() ? "Hide sidebar" : "Show sidebar",
         group: "Session",
         palette: true,
         run: () => {
           toggleSidebar()
+          dialog.clear()
+        },
+      },
+      {
+        id: "session.inspector.toggle",
+        title: layout.inspectorHidden ? "Show inspector" : "Hide inspector",
+        group: "Session",
+        palette: true,
+        run: () => {
+          persistLayout((draft) => void (draft.inspectorHidden = !draft.inspectorHidden))
           dialog.clear()
         },
       },
@@ -259,6 +313,10 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
   }))
 
   return (
+    <box flexGrow={1} minWidth={0} minHeight={0} flexDirection="column">
+    <Show when={!fullscreen()}>
+      <Slot path="session.header" input={{ sessionID: props.sessionID }} />
+    </Show>
     <box
       flexGrow={1}
       minWidth={0}
@@ -269,6 +327,19 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
       onMouseDragEnd={finishPaneResize}
       onMouseUp={finishPaneResize}
     >
+      <Show when={sidebarDocked()}>
+        <box flexShrink={0} width={sideWidth(sidebarPercent())} minHeight={0}>
+          <Sidebar sessionID={props.sessionID} width={sideWidth(sidebarPercent())} />
+        </box>
+        <SeparatorHandle
+          side="left"
+          percent={sidebarPercent}
+          onResize={resizeSide("sidebarPercent", SIDEBAR_MAX_PERCENT)}
+        />
+      </Show>
+      <Show when={wide() && !sidebarVisible() && !fullscreen() && !data.session.get(props.sessionID)?.parentID}>
+        <CollapsedRail side="left" onExpand={toggleSidebar} />
+      </Show>
       <box
         id="session-pane"
         ref={(value: BoxRenderable) => (sessionNode = value)}
@@ -284,7 +355,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
           setSessionWidth(this.width)
         }}
       >
-        <InteractivityProvider enabled={activePane() === "session" && !fullscreen()}>
+        <InteractivityProvider enabled={(activePane() === "session" || mainPanel() !== undefined) && !fullscreen()}>
           <Session
             scrollRef={(value) => (sessionScroll = value)}
             verticalTabsWidth={props.verticalTabsWidth}
@@ -295,9 +366,31 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
             visibleTerminalID={rightPane() === "terminal" ? selectedTerminal()?.id : undefined}
             onTerminalPicker={(show) => (showTerminals = show)}
             width={sessionWidth()}
+            main={
+              <Show keyed when={mainPanel()}>
+                {(item) => (
+                  <box position="absolute" left={0} top={0} width="100%" height="100%" zIndex={2}>
+                    <PanelHost
+                      panel={item}
+                      width={Math.max(0, (sessionWidth() ?? availableWidth()) - 4)}
+                      focused={activePane() === "right"}
+                      onFocus={focusRightPane}
+                      onTarget={(node) => {
+                        panelNode = node
+                        if (node) {
+                          focusRightPane()
+                          return
+                        }
+                        focusSession()
+                      }}
+                    />
+                  </box>
+                )}
+              </Show>
+            }
           />
         </InteractivityProvider>
-        <Show when={activePane() === "right"}>
+        <Show when={activePane() === "right" && !mainPanel()}>
           <box
             position="absolute"
             left={0}
@@ -322,19 +415,44 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
           />
         </Show>
       </box>
-      <Show when={rightPane() === "terminal" || rightPane() === "panel" || (rightPane() === "sidebar" && wide())}>
+      <Show when={rightPane() === "inspector" && !fullscreen()}>
+        <SeparatorHandle
+          side="right"
+          percent={inspectorPercent}
+          onResize={resizeSide("inspectorPercent", INSPECTOR_MAX_PERCENT)}
+        />
+        <box
+          flexShrink={0}
+          width={sideWidth(inspectorPercent())}
+          minHeight={0}
+          border
+          borderStyle="rounded"
+          borderColor={theme.border.base}
+          backgroundColor={theme.background.raised.base}
+          paddingLeft={1}
+          paddingRight={1}
+        >
+          <scrollbox flexGrow={1} minHeight={0} horizontalScrollbarOptions={{ visible: false }}>
+            <box flexDirection="column" flexShrink={0} gap={1} paddingRight={1}>
+              <Slot path="session.inspector" input={{ sessionID: props.sessionID }} />
+            </box>
+          </scrollbox>
+        </box>
+      </Show>
+      <Show when={wide() && layout.inspectorHidden && !rightPane() && !data.session.get(props.sessionID)?.parentID}>
+        <CollapsedRail
+          side="right"
+          onExpand={() => persistLayout((draft) => void (draft.inspectorHidden = false))}
+        />
+      </Show>
+      <Show when={rightPane() === "terminal" || rightPane() === "panel"}>
         <box
           ref={(value: BoxRenderable) => (rightNode = value)}
           flexShrink={0}
-          width={
-            fullscreen() ? availableWidth() : rightPane() === "sidebar" ? SESSION_SIDEBAR_WIDTH : paneResize.size()
-          }
+          width={fullscreen() ? availableWidth() : paneResize.size()}
           minWidth={0}
           minHeight={0}
         >
-          <Show
-            when={rightPane() === "sidebar"}
-            fallback={
               <Show
                 keyed
                 when={activePanel()}
@@ -373,10 +491,6 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
                   />
                 )}
               </Show>
-            }
-          >
-            <Sidebar sessionID={props.sessionID} />
-          </Show>
         </box>
       </Show>
       <Show when={!fullscreen() && (rightPane() === "terminal" || rightPane() === "panel") && availableWidth() >= 3}>
@@ -395,6 +509,10 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
           <Sidebar sessionID={props.sessionID} />
         </box>
       </Show>
+    </box>
+    <Show when={!fullscreen()}>
+      <Slot path="session.footer" input={{ sessionID: props.sessionID }} />
+    </Show>
     </box>
   )
 }

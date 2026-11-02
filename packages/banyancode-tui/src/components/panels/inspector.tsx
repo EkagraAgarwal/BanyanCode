@@ -77,6 +77,10 @@ export function InspectorPanel(props: {
   const innerScroll = createMemo(() => panelScrollsInternally(active()))
   const stacked = createMemo(() => props.panel.width < STACK_THRESHOLD)
   const focus = createPanelFocus(Math.max(0, RAIL.findIndex((item) => item.name === active())))
+  const main = () => props.panel.presentation === "main"
+  createEffect(() => {
+    if (main()) focus.setZone("content")
+  })
   let scroll: ScrollBoxRenderable | undefined
 
   const select = (name: PanelName) => props.context.ui.panel.open(name, { presentation: props.panel.presentation })
@@ -130,19 +134,21 @@ export function InspectorPanel(props: {
         bind: "left",
         title: "Focus panel rail",
         group: "Panel",
-        enabled: () => focus.zone() === "content",
+        enabled: () => focus.zone() === "content" && !main(),
         run: () => focus.setZone("rail"),
       },
       {
         bind: "tab",
         title: "Switch panel region",
         group: "Panel",
+        enabled: () => !main(),
         run: () => focus.setZone(focus.zone() === "rail" ? "content" : "rail"),
       },
       {
         bind: "f",
         title: "Toggle fullscreen",
         group: "Panel",
+        enabled: () => !main(),
         run: () => props.panel.toggleFullscreen(),
       },
     ],
@@ -175,10 +181,39 @@ export function InspectorPanel(props: {
     </box>
   )
 
+  const body = () => (
+    <scrollbox
+      id="banyancode.panel.content"
+      ref={(element: ScrollBoxRenderable) => (scroll = element)}
+      flexGrow={1}
+      verticalScrollbarOptions={{ visible: !innerScroll(), paddingLeft: 1 }}
+    >
+      <box flexDirection="column" paddingTop={1}>
+        {content({
+          context: props.context,
+          live: props.live,
+          sessionID: props.panel.sessionID,
+          active: active(),
+        })}
+      </box>
+    </scrollbox>
+  )
+
+  if (main())
+    return (
+      <PanelFocusContext.Provider value={focus}>
+        <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0}>
+          {body()}
+        </box>
+      </PanelFocusContext.Provider>
+    )
+
   return (
     <PanelFocusContext.Provider value={focus}>
       <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0}>
-        <SessionTabs context={props.context} active={viewKeyForPanel(active())} />
+        <Show when={props.panel.presentation === "fullscreen"}>
+          <SessionTabs context={props.context} active={viewKeyForPanel(active())} />
+        </Show>
         <box flexDirection={stacked() ? "column" : "row"} flexGrow={1} minWidth={0} minHeight={0}>
           {rail}
           <box
@@ -204,21 +239,7 @@ export function InspectorPanel(props: {
                 </text>
               </box>
             </box>
-            <scrollbox
-              id="banyancode.panel.content"
-              ref={(element: ScrollBoxRenderable) => (scroll = element)}
-              flexGrow={1}
-              verticalScrollbarOptions={{ visible: !innerScroll(), paddingLeft: 1 }}
-            >
-              <box flexDirection="column" paddingTop={1}>
-                {content({
-                  context: props.context,
-                  live: props.live,
-                  sessionID: props.panel.sessionID,
-                  active: active(),
-                })}
-              </box>
-            </scrollbox>
+            {body()}
           </box>
         </box>
       </box>

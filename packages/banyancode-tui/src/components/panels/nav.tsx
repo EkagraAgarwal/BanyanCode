@@ -24,7 +24,12 @@ export function viewKeyForPanel(name: string | undefined): ViewKey {
   return "chat"
 }
 
-export function openView(context: Context, name: PanelName, presentation: "panel" | "fullscreen" = "panel") {
+export function openView(
+  context: Context,
+  name: PanelName,
+  // The v1 tabs replaced the transcript. Everything else opens beside the session.
+  presentation: "panel" | "fullscreen" | "main" = VIEW_TABS.some((tab) => tab.panel === name) ? "main" : "panel",
+) {
   const route = context.ui.router.current()
   const sessionID = route.type === "session" ? route.sessionID : undefined
   if (sessionID !== undefined && context.ui.panel.open(name, { presentation })) return

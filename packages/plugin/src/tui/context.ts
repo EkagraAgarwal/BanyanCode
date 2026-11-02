@@ -162,7 +162,8 @@ type PromptFooterInput = {
   readonly showDetails: boolean
 }
 
-export type PanelPresentation = "panel" | "fullscreen"
+/** `main` shows the panel in place of the transcript, keeping the composer and side columns. */
+export type PanelPresentation = "panel" | "fullscreen" | "main"
 
 /** Client-local state of the selected session panel. The host owns its layout and input scope. */
 export interface PanelInput {
@@ -198,6 +199,9 @@ export interface SlotMap {
   readonly "prompt.footer.file": PromptFooterInput
   readonly "session.composer.top": { readonly sessionID: string }
   readonly "session.panel": PanelInput
+  readonly "session.header": { readonly sessionID: string }
+  readonly "session.footer": { readonly sessionID: string }
+  readonly "session.inspector": { readonly sessionID: string }
   readonly "sidebar.content": { readonly sessionID: string }
   readonly "sidebar.footer": { readonly sessionID: string }
 }

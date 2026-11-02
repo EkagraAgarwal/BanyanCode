@@ -13,7 +13,7 @@ export function createPanelState() {
   const [requested, setRequested] = createSignal<PanelPresentation>("panel")
   const [width, setWidth] = createSignal(0)
   const canSplit = () => width() >= SESSION_PANEL_SPLIT_MIN_WIDTH
-  const presentation = createMemo(() => (canSplit() ? requested() : "fullscreen"))
+  const presentation = createMemo(() => (canSplit() || requested() === "main" ? requested() : "fullscreen"))
   return {
     current,
     width,
@@ -36,7 +36,7 @@ export function createPanelState() {
       setCurrent()
     },
     toggleFullscreen() {
-      if (!canSplit()) return
+      if (!canSplit() || requested() === "main") return
       setRequested((current) => (current === "panel" ? "fullscreen" : "panel"))
     },
   }
