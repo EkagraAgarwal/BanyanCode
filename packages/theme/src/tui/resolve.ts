@@ -94,6 +94,7 @@ function tokens(definition: ThemeTokensDefinition): ThemeTokensDefinition {
     diff: definition.diff,
     syntax: definition.syntax,
     markdown: definition.markdown,
+    ...(definition.growth ? { growth: definition.growth } : {}),
   }
 }
 
@@ -137,7 +138,7 @@ function contextualActions(
 
 function resolveView(
   definition: ThemeTokensDefinition,
-  hue: ResolvedThemeTokens["hue"],
+  hue: ResolvedHue,
   categorical: ResolvedThemeTokens["categorical"],
   hueSteps: Pick<ResolvedThemeTokens, "source" | "increase" | "decrease">,
 ): ResolvedThemeTokens {
@@ -157,8 +158,41 @@ function resolveView(
       action: statefulActions(resolved.background.action),
       formfield: statefulColor(resolved.background.formfield),
     },
+    growth: resolveGrowth(resolved.growth, hue, resolved),
     ...hueSteps,
   }
+}
+
+// Growth roles are optional in theme files. `green` is missing from v1-migrated themes that never
+// used it, so fall back to the always-present accent hue and rank the scale by contrast.
+function resolveGrowth(
+  growth: Partial<ResolvedThemeTokens["growth"]> | undefined,
+  hue: ResolvedHue,
+  resolved: ResolvedThemeTokens,
+): ResolvedThemeTokens["growth"] {
+  const contrast = (color: RGBA) => contrastRatio(color, resolved.background.base)
+  const ranked = HueStep.literals
+    .map((step) => (hue.green ?? hue.accent)[step])
+    .toSorted((first, second) => contrast(second) - contrast(first))
+  return {
+    leaf: growth?.leaf ?? ranked[1] ?? resolved.text.base,
+    highlight: growth?.highlight ?? ranked[0] ?? resolved.text.base,
+    done: growth?.done ?? ranked[2] ?? resolved.text.muted,
+    faded: growth?.faded ?? (ranked.findLast((color) => contrast(color) >= 1.8) ?? resolved.text.faint),
+    wood: growth?.wood ?? resolved.text.muted,
+    bright: growth?.bright ?? resolved.text.base,
+  }
+}
+
+function contrastRatio(color: RGBA, background: RGBA) {
+  const first = relativeLuminance(color)
+  const second = relativeLuminance(background)
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
+}
+
+function relativeLuminance(color: RGBA) {
+  const channel = (value: number) => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)
+  return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
 }
 
 function statefulActions(actions: Readonly<Record<ActionVariant, StatefulColor>>) {

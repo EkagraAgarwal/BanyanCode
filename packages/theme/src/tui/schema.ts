@@ -190,6 +190,19 @@ const DiffDefinition = Schema.Struct({
 })
 export type DiffDefinition = Schema.Schema.Type<typeof DiffDefinition>
 
+export const GrowthRole = Schema.Literals(["leaf", "highlight", "done", "faded", "wood", "bright"])
+export type GrowthRole = Schema.Schema.Type<typeof GrowthRole>
+
+const GrowthDefinition = Schema.Struct({
+  leaf: Schema.optional(ColorValue),
+  highlight: Schema.optional(ColorValue),
+  done: Schema.optional(ColorValue),
+  faded: Schema.optional(ColorValue),
+  wood: Schema.optional(ColorValue),
+  bright: Schema.optional(ColorValue),
+})
+export type GrowthDefinition = Schema.Schema.Type<typeof GrowthDefinition>
+
 const ThemeTokensDefinition = Schema.Struct({
   text: Schema.optional(TextDefinition),
   background: Schema.optional(BackgroundDefinition),
@@ -198,6 +211,7 @@ const ThemeTokensDefinition = Schema.Struct({
   diff: Schema.optional(DiffDefinition),
   syntax: Schema.optional(SyntaxDefinition),
   markdown: Schema.optional(MarkdownDefinition),
+  growth: Schema.optional(GrowthDefinition),
 })
 export type ThemeTokensDefinition = Schema.Schema.Type<typeof ThemeTokensDefinition>
 
@@ -264,6 +278,7 @@ const CompleteThemeTokensDefinition = Schema.Struct({
   }),
   syntax: Schema.Record(SyntaxToken, HueColorValue),
   markdown: Schema.Record(MarkdownToken, HueColorValue),
+  growth: Schema.optional(GrowthDefinition),
 })
 
 const ThemeDefinitionFields = Schema.Struct({

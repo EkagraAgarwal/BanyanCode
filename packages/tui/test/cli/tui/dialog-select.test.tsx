@@ -387,7 +387,7 @@ test("matches the search cursor to the highlighted row until text is typed under
     () => {},
     () => {},
     undefined,
-    { experimental: { "new-designs": true } },
+    { experimental: { "new-designs": true }, theme: { name: "opencode" } },
   )
 
   try {

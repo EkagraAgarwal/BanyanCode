@@ -76,6 +76,8 @@ export const createThemeSource = (config: string): ThemeSource => ({
 })
 
 const THEME_REFRESH_DELAYS = [250, 1000] as const
+// The built-in BanyanCode theme; users who configure a theme name keep it.
+const DEFAULT_THEME = "banyan"
 
 type State = {
   mode: "dark" | "light"
@@ -113,7 +115,7 @@ type ThemeContextValue = {
 const [store, setStore] = createStore<State>({
   mode: "dark",
   lock: undefined,
-  active: "opencode",
+  active: DEFAULT_THEME,
   ready: false,
 })
 const [themeSources, setThemeSources] = createSignal(allThemes())
@@ -136,7 +138,7 @@ const themeContext = createSimpleContext({
         const mode = lock ?? renderer.themeMode ?? props.mode
         draft.mode = mode
         draft.lock = lock
-        draft.active = config.theme?.name ?? "opencode"
+        draft.active = config.theme?.name ?? DEFAULT_THEME
         draft.ready = false
       }),
     )
@@ -163,6 +165,7 @@ const themeContext = createSimpleContext({
         .then((themes) => {
           setCustomThemes(themes)
         })
+        // Discovery failures leave the built-in OpenCode theme selected: it is the guaranteed-parseable fallback.
         .catch(() => setStore("active", "opencode"))
     }
 
@@ -297,6 +300,7 @@ const themeContext = createSimpleContext({
     const initStarted = performance.now()
     const selected = createMemo(() => {
       const sources = available()
+      // Missing or invalid selections land on `opencode`, the built-in that must always parse.
       const name = sources[store.active] ? store.active : "opencode"
       try {
         return loadTheme(sources[name], name, store.mode, newDesigns())

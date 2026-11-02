@@ -35,6 +35,9 @@ export function createComponentTheme(
     get markdown() {
       return view().markdown
     },
+    get growth() {
+      return view().growth
+    },
     source: (color: RGBA) => view().source(color),
     increase: (color: RGBA, amount = 1) => view().increase(color, amount),
     decrease: (color: RGBA, amount = 1) => view().decrease(color, amount),

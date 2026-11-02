@@ -65,6 +65,14 @@ export type ResolvedThemeTokens = {
   }
   readonly syntax: Readonly<Record<SyntaxToken, RGBA>>
   readonly markdown: Readonly<Record<MarkdownToken, RGBA>>
+  readonly growth: {
+    readonly leaf: RGBA
+    readonly highlight: RGBA
+    readonly done: RGBA
+    readonly faded: RGBA
+    readonly wood: RGBA
+    readonly bright: RGBA
+  }
 }
 
 export type ResolvedTheme = ResolvedThemeTokens & {

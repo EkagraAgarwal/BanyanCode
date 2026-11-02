@@ -22,6 +22,12 @@ export function palette(theme: ResolvedTheme) {
     surface: theme.background.raised.base,
     surfaceHigh: theme.background.raised.high,
     background: theme.background.base,
+    leaf: theme.growth.leaf,
+    highlight: theme.growth.highlight,
+    done: theme.growth.done,
+    faded: theme.growth.faded,
+    wood: theme.growth.wood,
+    bright: theme.growth.bright,
     diffAdded: theme.diff.text.added,
     diffRemoved: theme.diff.text.removed,
   }
