@@ -205,6 +205,20 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
         // JOINS the worker. If the terminal state were written inside the
         // worker, the worker's final `publish` call could block on a full
         // events queue and the build would never reach a terminal state.
+        // No progress can be a slow file, a busy machine or a held database, and the log is the only trace left after.
+        const stallWatch = Effect.gen(function* () {
+          while (true) {
+            yield* Effect.sleep("30 seconds")
+            const current = yield* Ref.get(state)
+            if (current.status !== "running") return
+            const quiet = Date.now() - (current.lastProgressAt ?? Date.now())
+            if (quiet < 30_000) continue
+            yield* Effect.logWarning(
+              `codegraph build: no progress for ${Math.round(quiet / 1000)}s at ${current.done}/${current.total}, working on ${current.currentlyParsing ?? current.currentFile ?? "unknown"}`,
+            )
+          }
+        })
+        yield* Effect.forkDetach(stallWatch)
         const worker = Effect.gen(function* () {
           const result = yield* indexer.index({
             root: identity.root,

@@ -77,6 +77,8 @@ const ARROW_ASYNC_REGEX = /(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s*)?\([^)]
 const ARROW_ASYNC_REGEX2 = /(?:export\s+)?(?:async\s+)?(\w+)\s*:\s*(?:Promise<[^>]+>|[A-Z]\w*)\s*=\s*(?:async\s*)?\(/g
 const HTTP_ROUTE_REGEX = /(?:app|router)\s*\.\s*(get|post|put|delete|patch|head|options|trace)\s*\(\s*["']([^"']+)["']/gi
 const FASTIFY_ROUTE_REGEX = /(?:fastify|instance)\s*\.\s*(get|post|put|delete|patch|head|options|trace)\s*\(\s*["']([^"']+)["']/gi
+const EFFECT_ROUTE_REGEX =
+  /HttpApiEndpoint\s*\.\s*(get|post|put|delete|patch|head|options)\s*\(\s*["'][^"']+["']\s*,\s*["'`]([^"'`]+)["'`]/gi
 const RECURSIVE_CALL_REGEX = /(?:return|^\s*)(?:\w+\s*\.\s*)*(\w+)\s*\([^)]*\)/gm
 
 // Python patterns
@@ -426,6 +428,22 @@ export const make = (repo: CodegraphRepoInterface): Interface => {
                 id: node.id || `${path}:${method}`,
                 name: `${method} ${path}`,
                 signature: `fastify.${match[1]}('${path}')`,
+              })
+            }
+          }
+
+          EFFECT_ROUTE_REGEX.lastIndex = 0
+          while ((match = EFFECT_ROUTE_REGEX.exec(node.code)) !== null) {
+            const method = match[1]!.toUpperCase()
+            const path = match[2]!
+            const key = `${node.id || node.name}:${path}:${method}`
+            if (!seen.has(key)) {
+              seen.add(key)
+              results.push({
+                ...node,
+                id: node.id || `${path}:${method}`,
+                name: `${method} ${path}`,
+                signature: `HttpApiEndpoint.${match[1]}('${path}')`,
               })
             }
           }

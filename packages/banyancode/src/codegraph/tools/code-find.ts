@@ -48,9 +48,9 @@ export const Input = Schema.Struct({
       "Never pass an empty string or omit this field — if no target is clear from " +
       "the user's prompt, ask the user for one or call code_find with a different tool.",
   }),
-  includeKeywordFallback: Schema.Boolean.annotate({
+  includeKeywordFallback: Schema.optional(Schema.Boolean).annotate({
     description:
-      "When true (recommended), if the exact symbol name isn't found the resolver " +
+      "Defaults to true. When true (recommended), if the exact symbol name isn't found the resolver " +
       "falls back to Context.Service tag, code-substring, and name-like matching. " +
       "Pass false only when the user explicitly asks for strict exact-name matching. " +
       "When false and no exact match exists, the tool returns _diagnostic='target-not-resolved'.",

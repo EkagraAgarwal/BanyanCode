@@ -172,12 +172,18 @@ const isVarianceModifierError = (node: Node): boolean => {
   return previous?.type === "type_parameter" && (previous.text.trim() === "in" || previous.text.trim() === "out")
 }
 
+// The grammar inserts no semicolon before a line starting with `in` or `instanceof`, so a member with that name after a
+// member without a semicolon comes back as an error, in valid code.
+const isKeywordMemberError = (node: Node): boolean =>
+  /(?:^|\s)(?:in|instanceof)\??\s*:/.test(node.text) &&
+  (node.parent?.type === "object_type" || node.parent?.type === "interface_body" || node.parent?.type === "ERROR")
+
 const findSyntaxError = (rootNode: Node): { line: number; message: string } | null => {
   const stack: Node[] = [rootNode]
   while (stack.length > 0) {
     const node = stack.pop()!
     if (node.type === "ERROR") {
-      if (!isVarianceModifierError(node)) {
+      if (!isVarianceModifierError(node) && !isKeywordMemberError(node)) {
         const snippet = node.text.trim().replace(/\s+/g, " ").slice(0, 60)
         return { line: lineNumber(node), message: `syntax error near '${snippet || "unexpected token"}'` }
       }

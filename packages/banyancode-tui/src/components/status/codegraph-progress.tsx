@@ -103,7 +103,6 @@ export function CodegraphProgress(props: {
   const visible = createMemo(() => status() !== "idle" && !hidden())
   // The box covers the prompt on a small terminal, so there it stays in the flow.
   const floating = createMemo(() => props.overlay === true && dimensions().width >= 100 && dimensions().height >= 30)
-  const stacked = createMemo(() => floating() || dimensions().width < 120)
   const lastUpdateSeconds = createMemo(() => {
     const state = build()
     if (!state?.lastProgressAt) return 0
@@ -133,29 +132,37 @@ export function CodegraphProgress(props: {
         flexDirection="column"
       >
         <>
-          <box flexDirection={stacked() ? "column" : "row"} gap={stacked() ? 0 : 1}>
-            <text fg={status() === "failed" ? theme().error : status() === "stuck" ? theme().warning : theme().text}>
+          <box flexDirection="column">
+            <text
+              fg={status() === "failed" ? theme().error : status() === "stuck" ? theme().warning : theme().text}
+              wrapMode="none"
+            >
               <b>Codegraph Indexing — {labelFor(status())}</b>
             </text>
             <Show when={!props.codegraph.availability || props.codegraph.availability() === "available"}>
-              <text fg={theme().muted}>
+              <text fg={theme().muted} wrapMode="none">
                 {(build()?.total ?? 0) > 0
                   ? `${bar(build()?.done ?? 0, build()?.total ?? 0)} ${build()?.done ?? 0}/${build()?.total ?? 0}`
                   : "Scanning files…"}
               </text>
             </Show>
             <Show when={status() === "running"}>
-              <text fg={theme().muted}>· /codegraph-cancel to stop</text>
+              <text fg={theme().muted} wrapMode="none">/codegraph-cancel to stop</text>
             </Show>
             <Show when={status() === "stuck"}>
-              <text fg={theme().warning}>· build appears stuck ({lastUpdateSeconds()}s since progress)</text>
+              <text fg={theme().warning} wrapMode="none">
+                No progress for {lastUpdateSeconds()}s. It may still finish; /codegraph-cancel to stop
+              </text>
             </Show>
           </box>
           <Show when={status() === "running" && build()?.currentFile}>
             {(file) => <text fg={theme().muted} wrapMode="none">Indexing: {file()}</text>}
           </Show>
           <Show when={status() === "stuck" && build()?.lastCompletedFile}>
-            {(file) => <text fg={theme().muted}>Last completed: {file()}</text>}
+            {(file) => <text fg={theme().muted} wrapMode="none">Last completed: {file()}</text>}
+          </Show>
+          <Show when={status() === "stuck" && build()?.currentlyParsing}>
+            {(file) => <text fg={theme().muted} wrapMode="none">Working on: {file()}</text>}
           </Show>
           <Show when={status() === "completed" && build()?.result}>
             {(result) => (

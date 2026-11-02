@@ -372,7 +372,8 @@ export const queryTool = (deps: Deps): Tool.Info<typeof InputQuery, typeof Outpu
       if (input.function) {
         nodes = (yield* deps.repo.searchNodesLight({ name: input.function, limit })) as CodegraphNode[]
       } else if (input.kind) {
-        nodes = (yield* deps.repo.listNodesByKind(input.kind)).slice(0, limit)
+        // TypeScript interfaces are stored with the other named types.
+        nodes = (yield* deps.repo.listNodesByKind(input.kind === "interface" ? "type" : input.kind)).slice(0, limit)
       } else if (input.file) {
         const file = yield* deps.repo.getFileByPath(input.file)
         if (file) nodes = yield* deps.repo.listNodesByFile(file.id)
