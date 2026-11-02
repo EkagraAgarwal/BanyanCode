@@ -230,6 +230,42 @@ describe("banyancode storage", () => {
     })
   })
 
+  test("damage that only shows on a later query still gets the file moved aside", async () => {
+    await withTemp(async (directory) => {
+      const input = { projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } }
+      const resolved = resolveProjectDbPath(input)
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const storage = yield* Storage.open(input)
+            yield* storage.exec("CREATE TABLE big (a TEXT)")
+            yield* storage.exec(
+              "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000) INSERT INTO big SELECT hex(randomblob(100)) FROM n",
+            )
+            yield* storage.exec("PRAGMA wal_checkpoint(TRUNCATE)")
+          }),
+        ),
+      )
+      const bytes = await readFile(resolved.dbPath)
+      bytes.fill(0xff, Math.floor(bytes.length / 2))
+      await writeFile(resolved.dbPath, bytes)
+
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const storage = yield* Storage.open(input)
+            const damaged = yield* Effect.exit(storage.query("SELECT COUNT(*), MAX(a) FROM big"))
+            const rows = yield* storage.query<{ count: number }>("SELECT COUNT(*) AS count FROM banyancode_migrations")
+            return { damaged: damaged._tag, count: rows[0]?.count }
+          }),
+        ),
+      )
+      expect(result.damaged).toBe("Failure")
+      expect(result.count).toBe(migrations.length)
+      expect((await readdir(directory)).some((name) => name.includes(".db-corrupt-"))).toBe(true)
+    })
+  })
+
   test("a non-corruption open failure still fails without moving the file", async () => {
     await withTemp(async (directory) => {
       const resolved = resolveProjectDbPath({ projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } })

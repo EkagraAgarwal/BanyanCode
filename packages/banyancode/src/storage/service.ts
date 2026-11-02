@@ -115,30 +115,53 @@ const openWithRecovery = (dbPath: string): Effect.Effect<NativeDatabase, Storage
  */
 export const open = Effect.fn("BanyanStorage.open")(function* (input: OpenInput) {
   const resolved = resolveProjectDbPath(input)
-  const db = yield* Effect.acquireRelease(openWithRecovery(resolved.dbPath), (db) => Effect.sync(() => db.close()))
+  const live = { db: yield* openWithRecovery(resolved.dbPath) }
+  yield* Effect.addFinalizer(() => Effect.sync(() => live.db.close()))
 
   const migration = yield* Effect.tryPromise({
-    try: () => withFileLock(`${resolved.dbPath}.migrate.lock`, () => Promise.resolve(applyMigrations(db))),
+    try: () => withFileLock(`${resolved.dbPath}.migrate.lock`, () => Promise.resolve(applyMigrations(live.db))),
     catch: (cause) =>
       new StorageError({ message: `Failed to migrate the BanyanCode database at ${resolved.dbPath}`, cause }),
   })
 
+  // A header can read fine with the damage further in (a stale WAL even rebuilds page one over a garbage file), so
+  // opening doesn't prove the file is healthy. The same move-aside then applies to the first statement that fails.
+  const replacing = { current: undefined as Promise<void> | undefined }
+  const replaceCorrupt = () =>
+    (replacing.current ??= (async () => {
+      live.db.close()
+      const moved = await moveCorruptDatabase(resolved.dbPath)
+      live.db = await openDatabase(resolved.dbPath)
+      if (moved === undefined) throw new Error(`could not move the corrupt database at ${resolved.dbPath} aside`)
+      await withFileLock(`${resolved.dbPath}.migrate.lock`, () => Promise.resolve(applyMigrations(live.db)))
+    })().finally(() => {
+      replacing.current = undefined
+    }))
+  const recovering = <A>(message: string, statement: () => A) =>
+    Effect.try({ try: statement, catch: (cause) => cause }).pipe(
+      Effect.catch((cause) =>
+        !isCorruptDatabaseError(cause)
+          ? Effect.fail(new StorageError({ message, cause }))
+          : Effect.logWarning(
+              `BanyanCode database at ${resolved.dbPath} is corrupt (${corruptionMessage(cause)}); replacing it`,
+            ).pipe(
+              Effect.andThen(
+                Effect.tryPromise({ try: replaceCorrupt, catch: (cause) => new StorageError({ message, cause }) }),
+              ),
+              Effect.andThen(Effect.try({ try: statement, catch: (cause) => new StorageError({ message, cause }) })),
+            ),
+      ),
+    )
+
   const handle: Interface = {
     path: resolved.dbPath,
-    driver: db.driver,
+    driver: live.db.driver,
     schemaVersion: migration.version,
     appliedMigrations: migration.ids,
-    ftsTokenizer: detectFtsTokenizer(db),
-    exec: (sql) =>
-      Effect.try({
-        try: () => db.exec(sql),
-        catch: (cause) => new StorageError({ message: "Failed to execute SQL", cause }),
-      }),
+    ftsTokenizer: detectFtsTokenizer(live.db),
+    exec: (sql) => recovering("Failed to execute SQL", () => live.db.exec(sql)),
     query: <A>(sql: string, params: readonly unknown[] = []) =>
-      Effect.try({
-        try: () => db.prepare(sql).all(...params) as readonly A[],
-        catch: (cause) => new StorageError({ message: "Failed to query the BanyanCode database", cause }),
-      }),
+      recovering("Failed to query the BanyanCode database", () => live.db.prepare(sql).all(...params) as readonly A[]),
     withWriteLock: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Effect.acquireUseRelease(
         Effect.tryPromise({
