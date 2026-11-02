@@ -820,8 +820,14 @@ export const make = (storage: Storage.Interface): Interface => {
           yield* run("INSERT INTO codegraph_nodes_fts (codegraph_nodes_fts) VALUES ('rebuild')")
         }),
       )
-      yield* run("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
-      if (filePath !== ":memory:") yield* run("VACUUM").pipe(Effect.ignore)
+      // VACUUM rebuilds the file, but in WAL mode the rewritten pages land in
+      // the WAL first: the main file only shrinks after a checkpoint that
+      // FOLLOWS the vacuum. Checkpointing before it (the old order) left
+      // sizeAfter === sizeBefore and reported freedBytes 0.
+      if (filePath !== ":memory:") {
+        yield* storage.exec("VACUUM").pipe(Effect.ignore)
+        yield* storage.exec("PRAGMA wal_checkpoint(TRUNCATE)").pipe(Effect.ignore)
+      }
       const sizeAfter = filePath !== ":memory:" ? safeSize(filePath) : 0
       let droppedFile = false
       if (input?.dropFile ?? false) {
@@ -831,6 +837,15 @@ export const make = (storage: Storage.Interface): Interface => {
             catch: () => false as const,
           }).pipe(Effect.orElseSucceed(() => false))
           droppedFile = unlinked
+          // The main file is gone; the WAL/SHM sidecars keep the deleted
+          // database's bytes on disk (and confuse a later `codegraph path`).
+          // Best effort: a live connection may hold them (Windows EBUSY).
+          for (const sidecar of [`${filePath}-wal`, `${filePath}-shm`, `${filePath}-journal`]) {
+            yield* Effect.tryPromise({
+              try: () => unlink(sidecar),
+              catch: () => undefined,
+            }).pipe(Effect.ignore)
+          }
           if (!unlinked) {
             yield* Effect.logWarning(
               `codegraph-remove: failed to unlink ${filePath} (Windows EBUSY or other unlink error; the DB file remains on disk until the running app exits)`,

@@ -12,7 +12,7 @@
  */
 import { existsSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
-import { isAbsolute, join, parse, relative, resolve } from "node:path"
+import { isAbsolute, join, relative, resolve } from "node:path"
 
 export const sanitizeRoot = (input: string): string => {
   try {
@@ -51,17 +51,6 @@ export const isWithinRoot = (child: string, parent: string): boolean => {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))
 }
 
-export type EffectiveRootSource = "explicit" | "worktree" | "repo-walk" | "cwd"
-
-export type EffectiveRoot =
-  | { readonly _tag: "Ok"; readonly root: string; readonly source: EffectiveRootSource }
-  | { readonly _tag: "InvalidWorkspace"; readonly diagnostic: { readonly kind: string; readonly message: string } }
-
-const invalid = (message: string): EffectiveRoot => ({
-  _tag: "InvalidWorkspace",
-  diagnostic: { kind: "invalid-workspace", message },
-})
-
 const samePath = (a: string, b: string): boolean =>
   process.platform === "win32" ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b)
 
@@ -74,68 +63,46 @@ const isAncestor = (candidate: string, descendant: string): boolean => {
 export const isHomeOrAbove = (root: string, home: string = homedir()): boolean =>
   samePath(resolve(root), home) || isAncestor(resolve(root), home)
 
-/** The home directory (or any ancestor) is never a project root. */
-export const findRepoRoot = (startDir: string, home: string = homedir()): string | undefined => {
-  const dir = resolve(startDir)
-  const { root: fsRoot } = parse(dir)
-  const walk = (marker: string, isMarker: (p: string) => boolean): string | undefined => {
-    let current = dir
-    while (current !== fsRoot && !samePath(current, home) && !isAncestor(current, home)) {
-      if (isMarker(join(current, marker))) return current
-      current = resolve(current, "..")
-    }
-    return undefined
-  }
-  return (
-    walk(".git", (p) => {
-      try {
-        return statSync(p).isDirectory()
-      } catch {
-        return false
-      }
-    }) ??
-    walk("package.json", (p) => {
-      try {
-        return statSync(p).isFile()
-      } catch {
-        return false
-      }
-    })
-  )
-}
+export type ProjectRootResolution =
+  | { readonly _tag: "Ok"; readonly root: string }
+  | { readonly _tag: "Refused"; readonly message: string }
 
-export const resolveEffectiveRoot = (input: {
-  readonly explicitRoot?: string | undefined
-  readonly worktree?: string | undefined
-  readonly cwd?: string | undefined
-  readonly home?: string | undefined
-}): EffectiveRoot => {
-  const cwd = input.cwd ?? process.cwd()
-  const home = input.home ?? homedir()
-  const repoRoot = findRepoRoot(cwd, home)
-  const candidate = input.explicitRoot ?? input.worktree ?? repoRoot ?? cwd
-  const source: EffectiveRootSource = input.explicitRoot
-    ? "explicit"
-    : input.worktree
-      ? "worktree"
-      : repoRoot !== undefined && candidate !== cwd
-        ? "repo-walk"
-        : "cwd"
-  if (!candidate || candidate.trim() === "") return invalid("workspace root must be a non-empty path")
+/**
+ * Resolve a codegraph root against the open project.
+ *
+ * The plugin stores every project's graph in that project's own database, so a
+ * build must never index a folder outside it: doing so replaces the project's
+ * graph with another folder's files. An omitted root means the project root;
+ * a relative or absolute path is accepted only when it stays inside it.
+ */
+export const resolveProjectRoot = (projectRoot: string, requested?: string): ProjectRootResolution => {
+  const base = sanitizeRoot(projectRoot)
+  if (requested === undefined || requested.trim() === "") return { _tag: "Ok", root: base }
+  const candidate = isAbsolute(requested) ? requested : resolve(base, requested)
   const root = sanitizeRoot(candidate)
-  const { root: fsRoot } = parse(root)
-  if (root === fsRoot)
-    return invalid(`workspace root '${candidate}' resolves to a filesystem root; pass a workspace directory instead`)
-  if (samePath(root, home)) {
-    return invalid(`workspace root '${candidate}' is the user home directory; open a project directory instead`)
+  if (!existsSync(root)) {
+    return { _tag: "Refused", message: `root '${requested}' does not exist` }
   }
   try {
-    if (!existsSync(root)) return invalid(`workspace root '${candidate}' does not exist`)
-    if (!statSync(root).isDirectory()) return invalid(`workspace root '${candidate}' is not a directory`)
+    if (!statSync(root).isDirectory()) {
+      return { _tag: "Refused", message: `root '${requested}' is not a directory` }
+    }
   } catch {
-    return invalid(`workspace root '${candidate}' is not accessible`)
+    return { _tag: "Refused", message: `root '${requested}' is not accessible` }
   }
-  return { _tag: "Ok", root, source }
+  if (!isWithinRoot(root, base)) {
+    return {
+      _tag: "Refused",
+      message: `root '${requested}' is outside the open project ('${base}'); the code graph only indexes the open project`,
+    }
+  }
+  if (isHomeOrAbove(root)) {
+    return {
+      _tag: "Refused",
+      message: `root '${requested}' is the user home directory or above; open a project directory instead`,
+    }
+  }
+  return { _tag: "Ok", root }
 }
 
 export const isInsideWorkspace = (root: string, candidate: string): boolean => {

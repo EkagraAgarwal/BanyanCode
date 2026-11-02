@@ -160,9 +160,28 @@ export const ensureReadyBounded = (
     ),
   )
 
+/**
+ * Lazy auto-build entry point for graph-backed repository tools.
+ *
+ * The intel tools are read-only by contract, so they never build directly: the
+ * caller wires the codegraph workstream's readiness service into the tool deps
+ * and awaits this helper before the first graph read. A missing or empty graph
+ * then classifies as `needsBuild` and one bounded build runs (the same policy
+ * `code_find` already follows). Returns "failed" with the build's error when
+ * the build cannot finish inside the wait budget; callers should surface an
+ * empty result plus that message instead of failing the whole tool.
+ */
+export const ensureReadyForRepositoryTools = (
+  readiness: Interface,
+  root: string,
+): Effect.Effect<ReadinessResult> => ensureReadyBounded(readiness, { root })
+
+
 export interface Deps {
   readonly buildService: CodegraphBuildServiceInterface
   readonly repo: CodegraphRepoInterface
+  /** Extra ignore globs (`banyancode_codegraph_exclude_patterns`) applied to every build readiness starts. */
+  readonly excludePatterns?: () => Effect.Effect<readonly string[], never, never>
 }
 
 export const make = (deps: Deps): Effect.Effect<Interface> =>
@@ -210,7 +229,12 @@ export const make = (deps: Deps): Effect.Effect<Interface> =>
           return result
         }
 
-        yield* buildService.start({ root, force: classification.forceReindex })
+        const excludes = deps.excludePatterns ? yield* deps.excludePatterns() : []
+        yield* buildService.start({
+          root,
+          force: classification.forceReindex,
+          ...(excludes.length > 0 ? { excludePatterns: excludes } : {}),
+        })
 
         let currentStatus = yield* buildService.status()
         let polls = 0

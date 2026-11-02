@@ -14,13 +14,16 @@
  *               `-force-kill`, `-remove`)
  *   - policy  → `ctx.session.hook("context")`, appending the v1 policy text +
  *               per-session tool guide to `event.system`
- *   - watcher → `ctx.event.subscribe({ types: ["filesystem.changed"] })`
+ *   - watcher → `ctx.event.subscribe({ types: ["filesystem.changed"] })` plus a
+ *               recursive project-tree watch (`codegraph-watcher.ts`), because
+ *               the host only publishes change events for files it watches
+ *               explicitly and an ordinary edit never reached auto-update
  *   - backgrounds → `Effect.forkScoped` (plugin scope)
  *
  * Per AGENTS.md every service event queue has exactly ONE consumer, and it is
  * the RPC bridge here — no service drains its own queue.
  */
-import { isHomeOrAbove } from "./workspace-identity"
+import { isHomeOrAbove, resolveProjectRoot } from "./workspace-identity"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import type { Tool as ToolSchema } from "@opencode/schema/tool"
 import { Effect, Queue, Scope, Stream } from "effect"
@@ -34,6 +37,7 @@ import { make as makeBootstrap } from "./codegraph-bootstrap.js"
 import { make as makeBuildService } from "./codegraph-build-service.js"
 import { make as makeIndexer } from "./codegraph-indexer.js"
 import { make as makeReadiness } from "./codegraph-readiness.js"
+import { make as makeWatcher } from "./codegraph-watcher.js"
 import { make as makeRepo } from "./codegraph-repo.js"
 import { Definition } from "./rpc.js"
 import { makeService } from "./search/search.js"
@@ -113,6 +117,11 @@ export interface Services {
 export const makeServices = (ctx: Context, deps: RegisterDeps): Effect.Effect<Services, never, Scope.Scope> =>
   Effect.gen(function* () {
     const projectRoot = ctx.location.project.canonical || ctx.location.project.directory
+    const configuredExcludes = () =>
+      deps.config.get().pipe(
+        Effect.map((loaded) => loaded.config.banyancode_codegraph_exclude_patterns ?? []),
+        Effect.orElseSucceed(() => [] as readonly string[]),
+      )
     const repo = makeRepo(deps.storage)
     const indexer = yield* makeIndexer(repo, deps.storage)
     const buildService = yield* makeBuildService({ indexer, repo, dbPath: () => deps.storage.path })
@@ -138,7 +147,9 @@ export const makeServices = (ctx: Context, deps: RegisterDeps): Effect.Effect<Se
           ),
       },
     })
-    const readiness = yield* makeReadiness({ buildService, repo })
+    // Bootstrap/lazy builds inherit the user's exclude patterns too: the
+    // config value is not limited to watcher-driven updates.
+    const readiness = yield* makeReadiness({ buildService, repo, excludePatterns: configuredExcludes })
     const bootstrap = yield* makeBootstrap({
       readiness,
       watchEnabled: () =>
@@ -179,16 +190,31 @@ export const register = (
         Effect.orElseSucceed(() => [] as readonly string[]),
       )
 
+    // Every root-taking entry point resolves against the location's project
+    // root. The host service runs with its own cwd (often the user's home), so
+    // falling back to process.cwd() would index a folder that is not this
+    // project and replace its graph.
+    const resolvedRoot = (requested?: string): string => {
+      const resolution = resolveProjectRoot(projectRoot, requested)
+      return resolution._tag === "Ok" ? resolution.root : projectRoot
+    }
+
     // ── RPC ─────────────────────────────────────────────────────────────────
     const rpc = yield* ctx.rpc
       .register(Definition, {
         build: (input) =>
           Effect.gen(function* () {
-            const root = input.root ?? projectRoot
+            const resolution = resolveProjectRoot(projectRoot, input.root)
+            if (resolution._tag === "Refused") {
+              yield* buildService.reportRefused(`codegraph build refused: ${resolution.message}`)
+              return yield* buildService.status()
+            }
+            const configured = yield* excludePatterns()
+            const excludes = [...new Set([...configured, ...(input.excludePatterns ?? [])])]
             yield* buildService.start({
-              root,
+              root: resolution.root,
               force: input.force ?? false,
-              ...(input.excludePatterns ? { excludePatterns: input.excludePatterns } : {}),
+              ...(excludes.length > 0 ? { excludePatterns: excludes } : {}),
             })
             return yield* buildService.status()
           }),
@@ -196,6 +222,10 @@ export const register = (
         forceKill: () => buildService.forceKill(),
         remove: (input) =>
           Effect.gen(function* () {
+            // A running build would keep writing rows while the tables are
+            // dropped; stop it first, then wipe, then clear the last-run state
+            // so status does not keep reporting the removed build as complete.
+            yield* buildService.cancel()
             const [filesBefore, nodesBefore, edgesBefore] = yield* Effect.all([
               repo.countFiles(),
               repo.countNodes(),
@@ -203,6 +233,7 @@ export const register = (
             ])
             const empty = filesBefore === 0 && nodesBefore === 0 && edgesBefore === 0
             const { sizeBefore, sizeAfter } = yield* repo.clearAll({ dropFile: input.dropFile ?? false })
+            yield* buildService.reset()
             return {
               status: (empty ? "empty" : "removed") as "empty" | "removed",
               sizeBefore,
@@ -232,7 +263,7 @@ export const register = (
         files: (input) => repo.listFilesPage({ ...input }),
         staleness: (input) =>
           Effect.gen(function* () {
-            const root = input.root ?? projectRoot
+            const root = resolvedRoot(input.root)
             const totalFiles = yield* repo.countFiles()
             if (totalFiles === 0) {
               return { staleFiles: 0, missingFiles: 0, totalFiles: 0, topStale: [], topMissing: [] }
@@ -255,8 +286,10 @@ export const register = (
             }
           }),
         "autoUpdate.status": () => autoUpdate.state(),
-        "autoUpdate.flush": (input) => autoUpdate.flush({ ...input }),
-        "autoUpdate.reconcile": (input) => autoUpdate.reconcile({ ...input }),
+        "autoUpdate.flush": (input) =>
+          autoUpdate.flush({ ...input, ...(input.root ? { root: resolvedRoot(input.root) } : {}) }),
+        "autoUpdate.reconcile": (input) =>
+          autoUpdate.reconcile({ ...input, ...(input.root ? { root: resolvedRoot(input.root) } : {}) }),
       })
       // ctx.rpc.register has an `unknown` error channel (spike finding).
       .pipe(Effect.orDie)
@@ -304,8 +337,29 @@ export const register = (
         Effect.forkScoped,
       )
 
+    // The host only publishes `filesystem.changed` for files it watches
+    // explicitly, so an ordinary edit never reached auto-update and the graph
+    // silently went stale. Watch the project tree here; the service's
+    // onChange applies the enable flag, the own-data-dir filter and the
+    // debounce. Never watch the home folder or a whole drive.
+    if (!isHomeOrAbove(projectRoot)) {
+      const treeWatcher = yield* makeWatcher({ root: projectRoot, onChange: autoUpdate.onChange })
+      const active = yield* treeWatcher.watching()
+      yield* Effect.logInfo(
+        active
+          ? `codegraph auto-update: watching ${projectRoot}`
+          : `codegraph auto-update: no recursive watch for ${projectRoot}`,
+      )
+    }
+
     // ── tools ──────────────────────────────────────────────────────────────
-    const toolDeps = { repo, analyzer, buildService }
+    const toolDeps = {
+      repo,
+      analyzer,
+      buildService,
+      projectRoot: () => projectRoot,
+      excludePatterns,
+    }
     const registered = [
       ...codegraphTools(toolDeps),
       codeFindTool({ repo, analyzer, readiness, projectRoot: () => projectRoot }),
@@ -381,7 +435,9 @@ export const register = (
           description: "remove the code graph index [--drop-file]",
           execute: (input) =>
             Effect.gen(function* () {
+              yield* buildService.cancel()
               yield* repo.clearAll({ dropFile: parseDropFile(input.prompt.text) })
+              yield* buildService.reset()
             }).pipe(Effect.orDie),
         })
       })

@@ -7,6 +7,7 @@ import { Effect, Schema } from "effect"
 import { existsSync } from "node:fs"
 import path from "path"
 import type { Interface as CodegraphRepoInterface } from "../codegraph-repo.js"
+import { resolveProjectRoot } from "../workspace-identity.js"
 
 export const name = "codegraph_staleness"
 
@@ -15,7 +16,7 @@ const PathField = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9 _./-]+$/))
 export const Input = Schema.Struct({
   root: Schema.optional(
     PathField.annotate({
-      description: "Optional absolute or `./`-relative workspace root. Defaults to the caller's cwd.",
+      description: "Optional absolute or project-relative workspace root. Defaults to the open project's root.",
     }),
   ),
 }).annotate({
@@ -87,7 +88,8 @@ export const tool = (deps: Deps): Tool.Info<typeof Input, typeof Output> => ({
   options: { permission: name, codemode: true },
   execute: (input) =>
     Effect.gen(function* () {
-      const root = input.root ? path.resolve(input.root) : deps.projectRoot()
+      const resolution = resolveProjectRoot(deps.projectRoot(), input.root)
+      const root = resolution._tag === "Ok" ? resolution.root : deps.projectRoot()
       const totalFiles = yield* deps.repo.countFiles()
       if (totalFiles === 0) {
         const output = { staleFiles: 0, missingFiles: 0, totalFiles: 0, topStale: [], topMissing: [] }

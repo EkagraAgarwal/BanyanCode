@@ -156,13 +156,32 @@ const isMissingNode = (node: Node): boolean => {
   return typeof flag === "function" ? flag() : flag === true
 }
 
+// The vendored tree-sitter TypeScript grammar predates variance annotations,
+// so a valid `interface KeyedMutex<in Key>` produces an ERROR node whose text
+// is exactly the `in`/`out` modifier inside `type_parameters`. Reporting that
+// as a syntax error flags valid source; skip only that shape and keep every
+// other ERROR/MISSING report intact.
+const isVarianceModifierError = (node: Node): boolean => {
+  if (node.type !== "ERROR") return false
+  if (node.parent?.type !== "type_parameters") return false
+  const text = node.text.trim()
+  if (text === "in" || text === "out") return true
+  // `class C<in T>` and `function f<out T>` parse the modifier as a
+  // type_parameter node and turn the following identifier into the ERROR.
+  const previous = node.previousSibling
+  return previous?.type === "type_parameter" && (previous.text.trim() === "in" || previous.text.trim() === "out")
+}
+
 const findSyntaxError = (rootNode: Node): { line: number; message: string } | null => {
   const stack: Node[] = [rootNode]
   while (stack.length > 0) {
     const node = stack.pop()!
     if (node.type === "ERROR") {
-      const snippet = node.text.trim().replace(/\s+/g, " ").slice(0, 60)
-      return { line: lineNumber(node), message: `syntax error near '${snippet || "unexpected token"}'` }
+      if (!isVarianceModifierError(node)) {
+        const snippet = node.text.trim().replace(/\s+/g, " ").slice(0, 60)
+        return { line: lineNumber(node), message: `syntax error near '${snippet || "unexpected token"}'` }
+      }
+      continue
     }
     if (isMissingNode(node)) {
       return { line: lineNumber(node), message: `missing '${node.type}'` }

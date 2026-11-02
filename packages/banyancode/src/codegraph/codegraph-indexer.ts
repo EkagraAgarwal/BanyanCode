@@ -349,8 +349,15 @@ export const make = (
       ctx: IgnoreContext,
     ): Effect.Effect<WalkResult> => {
       const walkSubdir = (subdir: string): Effect.Effect<WalkResult> => {
-        if (decideIgnored(ctx, subdir, true) !== "none") {
+        const decision = decideIgnored(ctx, subdir, true)
+        // Bucket the ignored directory by the rule that matched: a
+        // `.banyancode/ignore` (or config exclude) directory is banyanignored,
+        // never gitignored.
+        if (decision === "git") {
           return Effect.succeed({ files: [], skippedBySize: 0, skippedByGitignore: 1, skippedByBanyanignore: 0 })
+        }
+        if (decision === "banyan") {
+          return Effect.succeed({ files: [], skippedBySize: 0, skippedByGitignore: 0, skippedByBanyanignore: 1 })
         }
         return walkDirectory(subdir, maxFileSizeBytes, root, ctx)
       }
@@ -493,6 +500,24 @@ type ParseOutcome = {
   readonly result: ParseResult
   readonly backend: "regex" | "tree-sitter"
   readonly error: { message: string } | null
+}
+
+// TypeScript ESM sources import with a `.js` specifier that maps back to the
+// `.ts` file on disk (`import { Wildcard } from "./util/wildcard.js"`). Without
+// the swap no import resolves, the imported file's nodes never enter the
+// caller's scope, and every cross-file call from such a file is missing from
+// the graph (namespaced calls like `Wildcard.match(...)` showed zero callers).
+const TS_ESM_EXT_SWAP: Readonly<Record<string, string>> = {
+  ".js": ".ts",
+  ".jsx": ".tsx",
+  ".mjs": ".mts",
+  ".cjs": ".cts",
+}
+const stripEsmExtension = (base: string): string => {
+  for (const [from, to] of Object.entries(TS_ESM_EXT_SWAP)) {
+    if (base.endsWith(from)) return `${base.slice(0, -from.length)}${to}`
+  }
+  return base
 }
 
 const treeSitterParseWithFallback = (
@@ -692,6 +717,12 @@ const indexCandidateFileCore = (
         parseTypeScriptWithTreeSitter(content, fileID),
         () => parseTypeScript(content, fileID),
       )
+      // The vendored TypeScript grammar is the TS grammar, not TSX: JSX makes
+      // it emit ERROR nodes on files that are perfectly valid. Still use the
+      // pass for its edges, but never report a JSX false positive as a syntax
+      // error (a real TS error in a .tsx file is not reported either — the
+      // grammar cannot tell them apart).
+      if (ext === ".tsx" && outcome.error) outcome = { ...outcome, error: null }
     } else if (PY_LIKE_EXTS.has(ext)) {
       outcome = yield* treeSitterParseWithFallback(
         parsePythonWithTreeSitter(content, fileID),
@@ -1042,9 +1073,11 @@ const rebuildDerivedGraph = Effect.fn("CodegraphIndexer.rebuildDerivedGraph")(fu
     if (!specifier.startsWith(".") && !specifier.startsWith("/")) return []
     const sourceDir = path.dirname(sourcePath)
     const resolvedBase = path.resolve(sourceDir, specifier).replace(/\\/g, "/")
-    const direct = fileByPath.get(resolvedBase)
+    const swappedBase = stripEsmExtension(resolvedBase)
+    const direct = fileByPath.get(resolvedBase) ?? fileByPath.get(swappedBase)
     if (direct) return [direct]
     const candidates = [
+      ...(swappedBase === resolvedBase ? [] : [swappedBase]),
       `${resolvedBase}.ts`,
       `${resolvedBase}.tsx`,
       `${resolvedBase}.js`,

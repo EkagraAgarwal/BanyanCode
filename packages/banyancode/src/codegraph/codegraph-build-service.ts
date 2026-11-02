@@ -8,6 +8,10 @@ import { identityForRoot } from "./workspace-identity.js"
 
 export const State = Schema.Struct({
   status: Schema.Literals(["idle", "running", "completed", "failed", "cancelled"]),
+  // The walk has to enumerate the tree before the first progress callback, so
+  // `done`/`total` stay 0/0 for a while on a large project. The phase lets a
+  // status reader say "enumerating" instead of showing a stuck 0/0.
+  phase: Schema.optional(Schema.Literals(["enumerating", "indexing"])),
   root: Schema.optional(Schema.String),
   // Phase 7 follow-up: the canonical banyan dir + DB path are always
   // derived from the root, never from `dbPath` in the request. `dbPath`
@@ -81,6 +85,10 @@ export interface Interface {
   }) => Effect.Effect<void, never, never>
   readonly cancel: () => Effect.Effect<void, never, never>
   readonly forceKill: () => Effect.Effect<{ ok: boolean; message: string }, never, never>
+  /** Drop the last run's state after the index was removed; a removed graph must not report a completed build. */
+  readonly reset: () => Effect.Effect<void, never, never>
+  /** Record a refused start (e.g. a root outside the project) so status readers see why nothing ran. */
+  readonly reportRefused: (message: string) => Effect.Effect<void, never, never>
   /**
    * Build progress stream. The single consumer is `register()` in
    * `src/codegraph/index.ts`, which republishes each state through the
@@ -111,6 +119,11 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
     const dbPath = deps.dbPath
     const state = yield* Ref.make<State>({ status: "idle", done: 0, total: 0 })
     const inFlight = yield* Ref.make<Fiber.Fiber<unknown, unknown> | undefined>(undefined)
+    // Set before interrupting the worker so the sequencing fiber can tell a
+    // user cancel/force-kill apart from a genuine build failure. Without it
+    // the join sees an interrupt, writes "failed" first, and the later
+    // "cancelled" write is dropped by the running-state guard.
+    const cancelRequested = yield* Ref.make(false)
     // Phase 2: dropping strategy so Queue.offer never suspends the producer.
     // The events queue is drained by the bridge; if it falls behind, new
     // events are dropped rather than blocking the worker. Per AGENTS.md,
@@ -133,9 +146,20 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
     const start: Interface["start"] = (input) =>
       Effect.gen(function* () {
         const currentFiber = yield* Ref.get(inFlight)
-        // Mirror cancel/forceKill (:283/:303): bound the interrupt so a
-        // wedged CPU-bound indexer fiber cannot hang start() forever.
-        if (currentFiber) yield* Fiber.interrupt(currentFiber).pipe(Effect.timeout("2 seconds"), Effect.ignore)
+        const currentState = yield* Ref.get(state)
+        // One build at a time: a second call while one is running reports the
+        // running build instead of silently taking over (the caller reads
+        // status() right after start()).
+        if (currentFiber !== undefined && currentState.status === "running") {
+          yield* Effect.logDebug("codegraph build already running; keeping the current build")
+          return
+        }
+        // A finished fiber may still be registered if the terminal writer has
+        // not cleared it yet; never interrupt it (it is done).
+        if (currentFiber !== undefined) {
+          yield* Ref.set(inFlight, undefined)
+        }
+        yield* Ref.set(cancelRequested, false)
 
         yield* indexer.cancel()
         // Phase 7 follow-up: canonical storage is derived from the caller-
@@ -159,6 +183,7 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
           (input.force ?? false) || (priorMeta !== undefined && priorMeta.schemaVersion !== CODEGRAPH_SCHEMA_VERSION)
         const initial: State = {
           status: "running",
+          phase: "enumerating",
           root: input.root,
           banyanDir: identity.banyanDir,
           dbPath: dbPath(),
@@ -185,6 +210,7 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
               const basename = file.split("/").pop() ?? file.split("\\").pop() ?? file
               const next: State = {
                 ...initial,
+                phase: "indexing",
                 done,
                 total,
                 currentFile: file,
@@ -230,11 +256,18 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
           Effect.gen(function* () {
             const outcome = yield* Fiber.join(workerFiber).pipe(
               Effect.map((r) => ({ kind: "completed" as const, ...r })),
-              Effect.catchCause((cause) => {
-                const err = Cause.squash(cause)
-                const errorMsg = err instanceof Error ? err.message : String(err)
-                return Effect.succeed({ kind: "failed" as const, error: errorMsg } as const)
-              }),
+              Effect.catchCause((cause) =>
+                Effect.gen(function* () {
+                  // A cancel/force-kill interrupts the worker; the join then
+                  // fails with an interrupt cause. Report that as cancelled,
+                  // not failed, so the status does not stick at "failed".
+                  if (yield* Ref.get(cancelRequested)) return { kind: "cancelled" as const }
+                  if (Cause.hasInterruptsOnly(cause)) return { kind: "cancelled" as const }
+                  const err = Cause.squash(cause)
+                  const errorMsg = err instanceof Error ? err.message : String(err)
+                  return { kind: "failed" as const, error: errorMsg } as const
+                }),
+              ),
             )
 
             // Don't overwrite a state set by cancel/forceKill, and don't
@@ -243,7 +276,10 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
             const liveFiber = yield* Ref.get(inFlight)
             if (liveFiber !== workerFiber) return
             const current = yield* Ref.get(state)
-            if (current.status !== "running") return
+            if (current.status !== "running") {
+              yield* Ref.set(inFlight, undefined)
+              return
+            }
 
             // Read state from Ref to preserve lastCompletedFile / currentlyParsing /
             // lastProgressAt set by the last onProgress callback. Spreading
@@ -260,6 +296,7 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
                 ? {
                     ...current,
                     status: "completed",
+                    phase: undefined,
                     done: outcome.result.indexed + outcome.result.skipped,
                     total: outcome.result.indexed + outcome.result.skipped,
                     graphVersion: outcome.graphVersion,
@@ -275,15 +312,24 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
                     },
                     parseErrors: outcome.result.parseErrors,
                   }
-                : {
-                    ...current,
-                    status: "failed",
-                    lastProgressAt: Date.now(),
-                    error: outcome.error,
-                  }
+                : outcome.kind === "cancelled"
+                  ? {
+                      ...current,
+                      status: "cancelled",
+                      phase: undefined,
+                      lastProgressAt: Date.now(),
+                    }
+                  : {
+                      ...current,
+                      status: "failed",
+                      phase: undefined,
+                      lastProgressAt: Date.now(),
+                      error: outcome.error,
+                    }
 
             yield* Ref.set(state, terminal)
             yield* emit(terminal)
+            yield* Ref.set(inFlight, undefined)
           }),
         )
       }) as unknown as Effect.Effect<void, never, never>
@@ -292,11 +338,12 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
       Effect.gen(function* () {
         const fiber = yield* Ref.get(inFlight)
         if (fiber) {
+          yield* Ref.set(cancelRequested, true)
           yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"), Effect.ignore)
           yield* Ref.set(inFlight, undefined)
           const current = yield* Ref.get(state)
           if (current.status === "running") {
-            const next: State = { ...current, status: "cancelled" }
+            const next: State = { ...current, status: "cancelled", phase: undefined }
             yield* Ref.set(state, next)
             yield* emit(next)
           }
@@ -309,13 +356,14 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
         const fiber = yield* Ref.get(inFlight)
         // First try a normal cancel via Fiber.interrupt — works most of the time.
         if (fiber) {
+          yield* Ref.set(cancelRequested, true)
           yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"), Effect.ignore)
           yield* Ref.set(inFlight, undefined)
         }
         yield* indexer.cancel()
         const current = yield* Ref.get(state)
         if (current.status === "running") {
-          const next: State = { ...current, status: "cancelled", error: "force-killed" }
+          const next: State = { ...current, status: "cancelled", phase: undefined, error: "force-killed" }
           yield* Ref.set(state, next)
           yield* emit(next)
         }
@@ -362,8 +410,31 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
         )
       })
 
+    const reset: Interface["reset"] = () =>
+      Effect.gen(function* () {
+        const fiber = yield* Ref.get(inFlight)
+        if (fiber) {
+          yield* Ref.set(cancelRequested, true)
+          yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"), Effect.ignore)
+        }
+        yield* Ref.set(inFlight, undefined)
+        yield* indexer.cancel()
+        const idle: State = { status: "idle", done: 0, total: 0 }
+        yield* Ref.set(state, idle)
+        yield* emit(idle)
+      })
+
+    const reportRefused: Interface["reportRefused"] = (message) =>
+      Effect.gen(function* () {
+        // A running build is not the refused one; leave it untouched.
+        if ((yield* Ref.get(state)).status === "running") return
+        const refused: State = { status: "failed", done: 0, total: 0, error: message }
+        yield* Ref.set(state, refused)
+        yield* emit(refused)
+      })
+
     const status: Interface["status"] = () => Ref.get(state)
     const eventsDequeue: Interface["events"] = () => events
 
-    return { status, start, cancel, forceKill, events: eventsDequeue }
+    return { status, start, cancel, forceKill, reset, reportRefused, events: eventsDequeue }
   })

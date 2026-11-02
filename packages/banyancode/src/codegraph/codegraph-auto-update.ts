@@ -48,6 +48,8 @@ export interface Interface {
   readonly state: () => Effect.Effect<State, never, never>
   readonly events: () => Queue.Dequeue<State>
   readonly progressEvents: () => Queue.Dequeue<ProgressState>
+  /** Whether `banyancode_codegraph_watch_enabled` allows background updates. */
+  readonly enabled: () => Effect.Effect<boolean, never, never>
   /**
    * Feed one host `filesystem.changed` event. `register()` is the single
    * subscriber of that stream; the service never subscribes on its own.
@@ -427,7 +429,11 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
     )
     yield* Ref.set(drainFiberRef, drainFiber)
 
-    yield* publish({ status: "idle", pending: 0 })
+    yield* publish(
+      (yield* Ref.get(enabledRef))
+        ? { status: "watching", pending: 0 }
+        : { status: "idle", pending: 0 },
+    )
 
     const onChange: Interface["onChange"] = (change) =>
       Effect.gen(function* () {
@@ -438,7 +444,14 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
         if (isOwnPath(change.file)) return
         const meta = yield* repo.getMeta()
         if (meta?.indexedRoot) {
-          if (!change.directory || normPath(change.directory) !== normPath(meta.indexedRoot)) return
+          // The host may stamp the event with any location directory (a
+          // subdirectory of the project, or the canonical spelling of the
+          // same folder). What matters is whether the changed file is inside
+          // the indexed root, not whether the strings match.
+          const root = normPath(meta.indexedRoot)
+          const target = normPath(change.file)
+          const rel = path.relative(root, target)
+          if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return
         }
         yield* Ref.update(pendingRef, (pending) => {
           const next = new Map(pending)
@@ -465,6 +478,7 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
       state: () => Ref.get(stateRef),
       events: () => eventsQueue,
       progressEvents: () => progressEventsQueue,
+      enabled: () => Ref.get(enabledRef),
       onChange,
       flush: (input = {}) =>
         Effect.gen(function* () {

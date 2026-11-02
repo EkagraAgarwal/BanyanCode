@@ -13,6 +13,7 @@ import type { Interface as CodegraphAnalyzerInterface } from "../codegraph-analy
 import type { Interface as CodegraphBuildServiceInterface } from "../codegraph-build-service.js"
 import type { Interface as CodegraphRepoInterface } from "../codegraph-repo.js"
 import { GraphMeta, type CodegraphNode } from "../types.js"
+import { resolveProjectRoot } from "../workspace-identity.js"
 import { formatNodes } from "./format.js"
 import { optionalBoolean, optionalNumber, optionalString } from "./schema.js"
 
@@ -27,13 +28,17 @@ export interface Deps {
   readonly repo: CodegraphRepoInterface
   readonly analyzer: CodegraphAnalyzerInterface
   readonly buildService: CodegraphBuildServiceInterface
+  /** The open project's root; every tool default resolves here, never the host cwd. */
+  readonly projectRoot: () => string
+  /** `banyancode_codegraph_exclude_patterns`, applied to an explicit build. */
+  readonly excludePatterns?: () => Effect.Effect<readonly string[], never, never>
 }
 
 export const InputBuild = Schema.Struct({
   root: optionalString.annotate({
     description:
-      "Workspace root to scan. Defaults to the current working directory " +
-      "when omitted. Pass an absolute path to index a different workspace.",
+      "Workspace root to scan. Defaults to the open project's root " +
+      "when omitted. A path outside the open project is refused.",
   }),
   force: optionalBoolean.annotate({
     description:
@@ -242,8 +247,17 @@ export const buildTool = (deps: Deps): Tool.Info<typeof InputBuild, typeof Outpu
   options: { permission: name_build, codemode: true },
   execute: (input) =>
     Effect.gen(function* () {
-      const root = input.root ?? process.cwd()
-      yield* deps.buildService.start({ root, force: input.force ?? false })
+      const resolution = resolveProjectRoot(deps.projectRoot(), input.root)
+      if (resolution._tag === "Refused") {
+        return yield* Effect.fail(new Tool.Error({ message: `codegraph_build: ${resolution.message}` }))
+      }
+      const root = resolution.root
+      const configured = deps.excludePatterns ? yield* deps.excludePatterns() : []
+      yield* deps.buildService.start({
+        root,
+        force: input.force ?? false,
+        ...(configured.length > 0 ? { excludePatterns: configured } : {}),
+      })
 
       let currentStatus = yield* deps.buildService.status()
       while (currentStatus.status === "running") {
