@@ -542,6 +542,35 @@ test("narrow vertical session tabs collapse to a compact rail with the terminal"
   await setup.waitForFrame((frame) => frame.split("\n")[1].slice(0, 10).trim() === "⌕")
 })
 
+test("horizontal session tabs stay visible with a single open session", async () => {
+  await using state = await tmpdir()
+  const session = {
+    id: "ses_single_tab",
+    title: "Solo tab fixture",
+    projectID: "project",
+    location: { directory },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 2 },
+  }
+  await using setup = await createAppFixture({
+    width: 120,
+    state: state.path,
+    args: { sessionID: session.id },
+    fetch: (url) => {
+      if (url.pathname === `/api/session/${session.id}`) return json({ data: session })
+      if (/^\/api\/session\/ses_single_tab\/(message|inbox|permission)$/.test(url.pathname))
+        return json({ data: [], cursor: {} })
+      return undefined
+    },
+  })
+  await setup.ready
+  await setup.waitForFrame((frame) => frame.split("\n")[0].includes(session.title))
+  const strip = setup.captureCharFrame().split("\n")[0]
+  expect(strip).toContain(session.title)
+  expect(strip).toMatch(/Solo tab fixture.*\+/)
+})
+
 test("automatic rename refreshes the displayed title before settling, even without a renamed event", async () => {
   await using state = await tmpdir()
   const response = Promise.withResolvers<Response>()
@@ -1933,7 +1962,7 @@ test("free usage limit offers OpenCode Go once per 24h, transitions Subscribe to
     },
   })
   await setup.waitForFrame((frame) => !frame.includes("They reset at"))
-  expect(setup.captureCharFrame().split("Refactor the parser").length).toBeLessThanOrEqual(3)
+  expect(setup.captureCharFrame().split("Refactor the parser").length).toBe(2)
 
   // Just before 24h (86_400_000 - 1 ms) with an empty composer: recalls the next turn's prompt without reopening Free limit reached.
   currentNow = baseNow + 86_400_000 - 1
@@ -2192,7 +2221,7 @@ test("free usage limit Subscribe handles mid-auth/mid-sync Escape, sync failure,
   await waitForGoUpsellConnect()
   expect(switchedModels).toHaveLength(0)
   expect(resentPrompts).toHaveLength(0)
-  expect(setup.captureCharFrame().split("Refactor the parser").length).toBeLessThanOrEqual(3)
+  expect(setup.captureCharFrame().split("Refactor the parser").length).toBe(3)
 
   // 1b. Escape mid-sync: cancelling while model sync is awaited must not select a model or resubmit the prompt.
   currentNow = baseNow + 86_400_000
@@ -2230,7 +2259,7 @@ test("free usage limit Subscribe handles mid-auth/mid-sync Escape, sync failure,
   onModelSyncRequest = undefined
   expect(switchedModels).toHaveLength(0)
   expect(resentPrompts).toHaveLength(0)
-  expect(setup.captureCharFrame().split("Refactor the parser").length).toBeLessThanOrEqual(3)
+  expect(setup.captureCharFrame().split("Refactor the parser").length).toBe(3)
 
   // 2. Model-sync rejection: catches the failure, closes "Waiting for authorization…", shows the error, and keeps the recalled prompt.
   currentNow = baseNow + 2 * 86_400_000
@@ -2259,7 +2288,7 @@ test("free usage limit Subscribe handles mid-auth/mid-sync Escape, sync failure,
   )
   expect(switchedModels).toHaveLength(0)
   expect(resentPrompts).toHaveLength(0)
-  expect(setup.captureCharFrame().split("Refactor the parser").length).toBeLessThanOrEqual(3)
+  expect(setup.captureCharFrame().split("Refactor the parser").length).toBe(2)
 
   // 3a. Expired/needs_auth active credential (even with a status-free inactive backup): refresh detects needs_auth and routes to device sign-in without submitting.
   failModelSync = false

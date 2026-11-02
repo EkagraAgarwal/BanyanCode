@@ -1437,7 +1437,7 @@ function App() {
         <box flexGrow={1} minWidth={0} flexDirection="column">
           <Show when={plugins.ready()}>
             <box flexGrow={1} minHeight={0} flexDirection="column">
-              <Show when={tabsVisible() && !tabsVertical() && (sessionTabs.tabs().length > 1 || config.data.tabs.mode === "on")}>
+              <Show when={tabsVisible() && !tabsVertical()}>
                 <SessionTabs />
               </Show>
               <Switch>
