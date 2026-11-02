@@ -4,23 +4,23 @@ Status at 2026-11-02. Plan: [v2-migration-plan.md](v2-migration-plan.md). Featur
 
 ## Where things are
 
-- `banyancode@next` is `26.11.0-rc.3`, with a GitHub prerelease. `banyancode@latest` is still v1 (`26.10.9`), so existing users are unaffected.
-- `v2-base` is on GitHub at the tagged commit and `banyancode-ci` passes. `main` is still v1.
+- `banyancode@latest` is `26.11.0`, with a stable GitHub release. Everyone who installs or upgrades now gets v2. The last v1 release is `26.10.9`.
+- `v2-base` is on GitHub at the tagged commit and `banyancode-ci` passes. `main` is still v1, so the branch cutover has not happened.
 - The publish workflow runs from a `v[0-9]*` tag. A push to `release-check` builds and packs all 12 platforms and publishes nothing; use it when the workflow changes. Dispatch needs the file on the default branch.
 
-## How rc.3 was tested
+## How 26.11.0 was tested
 
 - Real use in tmux on a native Linux build, using the harness in `D:\bct-h` (see its `TESTING.md`), compared against real v1 side by side. Three rounds of test agents reported into `D:\bct-h\reports`, and findings were reproduced before fixing.
 - All packages' suites on Linux and Windows in `banyancode-ci`, and locally compared with the upstream base: the failures left there also fail on upstream (see below).
-- Smoke test 18 of 18 on Linux. Service responsiveness while indexing large trees: median 40 ms, cancel 24 ms. Windows idle CPU about 2% of one core.
+- Smoke test 18 of 18 on Linux, on a dev build and on a `latest`-channel build. On Windows, a real Claude Agent reply showed limits on the next plain read, and they survived a service restart.
+- Service responsiveness while indexing large trees: median 40 ms, cancel 24 ms. Windows idle CPU about 2% of one core.
 
 Not tested: macOS and Linux arm builds have never been run. Typing into the TUI on Windows has not been driven, because there is no tmux there: Windows was covered through the CLI, service, MCP and a real run.
 
 ## Next steps, in order
 
-1. The user tries it: `npm install -g banyancode@next`. This replaces the installed v1, which also hosts the current MCP connection; use `--prefix` to keep both.
-2. Ask the user before each of these: tag `v26.11.0` (moves `latest`, so every v1 user moves to v2 with a fresh start), and the cutover (rename `main` to `v1`, `v2-base` to `main`).
-3. At cutover, add the `branches: ["dev"]` canary trigger and the preflight triggers.
+1. Ask the user before the cutover (rename `main` to `v1`, `v2-base` to `main`).
+2. At cutover, add the `branches: ["dev"]` canary trigger and the preflight triggers.
 
 ## Open questions and known differences from v1
 
