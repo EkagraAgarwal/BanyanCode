@@ -164,6 +164,7 @@ export function StatusPills(props: {
   // YOLO and swarm can be on from config or the environment before anything toggles them.
   onMount(() => {
     void props.system.refreshYolo()
+    void props.system.refreshLsp()
     void props.mesh.refreshLimits()
     void props.codegraph.refresh()
   })

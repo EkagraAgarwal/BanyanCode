@@ -136,6 +136,7 @@ test("mounting home surfaces does not fetch another location's catalog", async (
     expect(recorded.calls.filter((call) => call.kind === "method").map((call) => call.target).sort()).toEqual([
       "banyancode.codegraph.status",
       "banyancode.mesh.limits.get",
+      "banyancode.system.lsp.status",
       "banyancode.system.yolo.get",
     ])
     expect(recorded.synced).toEqual([])

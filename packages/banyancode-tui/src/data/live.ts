@@ -578,6 +578,8 @@ export function createLive(context: Context): Live {
         () => {
           if (cgAvailability() !== "unknown") void refreshCodegraph()
           if (coreAvailability() !== "unknown") void refreshCore()
+          if (yoloAvailability() !== "unknown") void refreshYolo()
+          if (lspAvailability() !== "unknown") void refreshLsp()
         },
         { defer: true },
       ),
