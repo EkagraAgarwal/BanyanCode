@@ -7,7 +7,7 @@ import { makeGlobalNode } from "@opencode/util/effect/app-node"
 import { FSUtil } from "@opencode/util/fs-util"
 import { Cause, Context, Effect, Layer, PubSub, RcMap, Stream } from "effect"
 import { lazy } from "../util/lazy.js"
-import { watch } from "node:fs"
+import { statSync, watch } from "node:fs"
 import path from "path"
 import loadBinding from "./watcher-binding.js"
 
@@ -198,6 +198,32 @@ export const testLayer = Layer.effectContext(
   }),
 )
 
+// On Windows a watch holds its directory open, and these targets include the project folder and each folder above it:
+// the user couldn't rename or delete them while the service had the project open. They are only a few named files, so
+// polling costs little and holds nothing.
+const POLL_INTERVAL_MS = 1000
+function pollNames(directory: string, names: ReadonlySet<string>, publish: (update: Update) => void): Subscription {
+  const stamp = (name: string) => {
+    try {
+      const info = statSync(path.join(directory, name))
+      return `${info.mtimeMs}:${info.size}`
+    } catch {
+      return undefined
+    }
+  }
+  const seen = new Map(Array.from(names, (name) => [name, stamp(name)]))
+  const timer = setInterval(() => {
+    for (const [name, before] of seen) {
+      const now = stamp(name)
+      if (now === before) continue
+      seen.set(name, now)
+      publish({ path: path.join(directory, name), type: now === undefined ? "delete" : before === undefined ? "create" : "update" })
+    }
+  }, POLL_INTERVAL_MS)
+  timer.unref()
+  return { unsubscribe: () => Promise.resolve(clearInterval(timer)), backend: "poll" }
+}
+
 export const nativeLayer = Layer.succeed(
   Native,
   Native.of({
@@ -205,10 +231,9 @@ export const nativeLayer = Layer.succeed(
       if (input.type === "file" || input.type === "entries") {
         const directory = input.type === "file" ? path.dirname(input.target) : input.target
         const names = new Set(input.type === "file" ? [path.basename(input.target)] : input.names)
+        if (process.platform === "win32") return Effect.succeed(pollNames(directory, names, input.publish))
         return Effect.try(() =>
-          // On Windows a non-recursive watch stops the directory being renamed or deleted. A recursive one costs a
-          // single handle and does not, and the name check below still drops anything nested.
-          watch(directory, { recursive: process.platform === "win32" }, (_event, file) => {
+          watch(directory, { recursive: false }, (_event, file) => {
             if (file && !names.has(file)) return
             for (const name of file ? [file] : names) {
               input.publish({ path: path.join(directory, name), type: "update" })
