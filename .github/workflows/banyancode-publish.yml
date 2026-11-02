@@ -173,7 +173,7 @@ jobs:
         if: runner.os != 'Windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: banyancode-${{ matrix.target }}
+          name: cli-${{ matrix.target }}
           compression-level: 1
           retention-days: 1
           path: packages/cli/dist/cli-${{ matrix.target }}
@@ -183,7 +183,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           # `unsigned-` keeps raw Windows builds out of the central
-          # `banyancode-*` match, so publish only sees the final artifact.
+          # `cli-*` match, so publish only sees the final artifact.
           name: unsigned-banyancode-${{ matrix.target }}
           compression-level: 1
           retention-days: 1
@@ -204,7 +204,7 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: unsigned-banyancode-windows-x64
-          path: packages/cli/dist
+          path: packages/cli/dist/cli-windows-x64
 
       - name: Decide signing path
         id: signing
@@ -319,9 +319,9 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           # Windows raw/signed artifacts use `unsigned-`/`final-` prefixes, so
-          # this pattern only matches the Unix builds.
-          pattern: banyancode-*
-          merge-multiple: true
+          # this pattern only matches the Unix builds. Without merge-multiple each
+          # lands in dist/<artifact name>, the cli-<target> folder pack.ts reads.
+          pattern: cli-*
           path: packages/cli/dist
 
       - name: Download Windows baseline npm stub
@@ -329,22 +329,19 @@ jobs:
         with:
           # npm-only fallback for pre-AVX2 CPUs; never a GitHub release asset.
           name: unsigned-banyancode-windows-x64-baseline
-          merge-multiple: true
-          path: packages/cli/dist
+          path: packages/cli/dist/cli-windows-x64-baseline
 
       - name: Download Windows ARM64 build
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: unsigned-banyancode-windows-arm64
-          merge-multiple: true
-          path: packages/cli/dist
+          path: packages/cli/dist/cli-windows-arm64
 
       - name: Download Windows x64 build
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ needs.sign-windows.outputs.artifact-name }}
-          merge-multiple: true
-          path: packages/cli/dist
+          path: packages/cli/dist/cli-windows-x64
 
       - name: Stage npm packages and release archives
         run: bun script/banyancode/pack.ts --all --version="$VERSION"
