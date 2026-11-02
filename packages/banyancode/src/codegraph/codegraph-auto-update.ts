@@ -360,6 +360,12 @@ export const make = (deps: Deps): Effect.Effect<Interface, never, Scope.Scope> =
           currentFile: removals[removals.length - 1],
         })
         yield* publishProgress({ phase: "done", completed: removals.length, total: removals.length })
+        // A folder's removal is reported only for the folder, which isn't a row: the rows under it are found this way.
+        if (removals.some((filePath) => path.extname(filePath) === "")) {
+          const probe = yield* probeFileDrift(repo).pipe(Effect.orElseSucceed(() => undefined))
+          const gone = (probe?.removedPaths ?? []).filter((filePath) => filePath.startsWith(root + path.sep))
+          if (gone.length > 0) yield* requeue(gone.map((filePath) => [filePath, "unlink"] as const))
+        }
       }
 
       if (additions.length > 0) {

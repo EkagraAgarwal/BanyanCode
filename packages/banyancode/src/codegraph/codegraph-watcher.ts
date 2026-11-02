@@ -1,5 +1,6 @@
 export * as CodegraphWatcher from "./codegraph-watcher"
 
+import { readdir, stat } from "node:fs/promises"
 import { Effect, Scope, Stream } from "effect"
 import path from "node:path"
 import type { FileChange } from "./codegraph-auto-update.js"
@@ -40,11 +41,35 @@ const skipped = (absolute: string, root: string): boolean => {
 
 const EVENT = { create: "add", update: "change", delete: "unlink" } as const
 
+// A folder moved into place reports only the folder itself, so the files in it have to be found here.
+const NEVER_WALKED = new Set([...SKIPPED_SEGMENTS, ".git", "node_modules"])
+const walk = async (directory: string): Promise<readonly string[]> => {
+  const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
+  const nested = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && !NEVER_WALKED.has(entry.name))
+      .map((entry) => walk(path.join(directory, entry.name))),
+  )
+  return [...entries.filter((entry) => entry.isFile()).map((entry) => path.join(directory, entry.name)), ...nested.flat()]
+}
+const filesUnder = (update: Update) =>
+  Effect.promise(async () => {
+    if (update.type === "delete") return [update.path]
+    const info = await stat(update.path).catch(() => undefined)
+    return info?.isDirectory() ? walk(update.path) : [update.path]
+  })
+
 export const make = (deps: Deps): Effect.Effect<void, never, Scope.Scope> => {
   const root = path.resolve(deps.root)
   return deps.updates.pipe(
     Stream.filter((update) => !skipped(update.path, root)),
-    Stream.runForEach((update) => deps.onChange({ file: update.path, event: EVENT[update.type] })),
+    Stream.runForEach((update) =>
+      filesUnder(update).pipe(
+        Effect.flatMap((files) =>
+          Effect.forEach(files, (file) => deps.onChange({ file, event: EVENT[update.type] }), { discard: true }),
+        ),
+      ),
+    ),
     Effect.catchCause((cause) => Effect.logWarning("codegraph auto-update: file watch stopped", { cause })),
     Effect.forkScoped,
     Effect.asVoid,

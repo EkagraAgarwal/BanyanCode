@@ -2,6 +2,8 @@ import { expect, test } from "bun:test"
 import { Effect, Stream } from "effect"
 import type { FileChange } from "../src/codegraph/codegraph-auto-update.js"
 import { make, type Update } from "../src/codegraph/codegraph-watcher.js"
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 test("turns host updates into changes, skipping build output and anything outside the project", async () => {
@@ -43,4 +45,29 @@ test("a watch that fails doesn't take anything else down", async () => {
       }),
     ),
   )
+})
+
+test("a folder moved into place reports the files inside it", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "banyan-watcher-")))
+  await mkdir(join(root, "lib", "deep"), { recursive: true })
+  await mkdir(join(root, "lib", "node_modules"), { recursive: true })
+  await writeFile(join(root, "lib", "a.ts"), "1")
+  await writeFile(join(root, "lib", "deep", "b.ts"), "1")
+  await writeFile(join(root, "lib", "node_modules", "c.ts"), "1")
+  const seen: FileChange[] = []
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* make({
+          root,
+          updates: Stream.make({ path: join(root, "lib"), type: "create" } as Update),
+          onChange: (change) => Effect.sync(() => void seen.push(change)),
+        })
+        yield* Effect.sleep("100 millis")
+      }),
+    ),
+  )
+  await rm(root, { recursive: true, force: true })
+  expect(seen.map((change) => change.file).toSorted()).toEqual([join(root, "lib", "a.ts"), join(root, "lib", "deep", "b.ts")])
+  expect(seen.every((change) => change.event === "add")).toBe(true)
 })
