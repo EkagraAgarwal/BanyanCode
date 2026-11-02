@@ -269,3 +269,10 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/component/tool-settle.test.tsx` | hook | covers the tool settle | — |
 | `packages/tui/test/session-panels-overlay.test.ts` | hook | covers the Trunk panels overlay state and curves | — |
 | `packages/tui/test/subagent-rows.test.ts` | hook | covers the live subagent rows | — |
+| `packages/tui/test/clear-session.test.tsx` | fix | Home's resume list can show a cleared session's title, so the test checks the tab store | — |
+| `packages/tui/test/plugin-keymap.test.tsx` | fix | Home readiness marker follows the redesign | — |
+| `packages/tui/test/prompt-cursor.test.tsx` | fix | Home readiness marker follows the redesign | — |
+| `packages/tui/test/prompt-offset.test.tsx` | fix | Home readiness marker follows the redesign | — |
+| `packages/tui/test/prompt-paste.test.tsx` | fix | Home readiness marker follows the redesign | — |
+| `packages/tui/test/session-backfill-disclosure.test.tsx` | fix | clicks the disclosure's real column, since the Trunk rail moves it | — |
+| `packages/tui/test/session-group-navigation.test.tsx` | fix | clicks the group header's real column, since the Trunk rail moves it | — |

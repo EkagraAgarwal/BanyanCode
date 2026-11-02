@@ -163,7 +163,9 @@ test("home.logo renders the claim, and the host logo without one", async () => {
   // The host Logo draws the wordmark in blocks; the claimed slot shows the hero instead.
   expect(withoutClaim).toContain("████   ███")
   expect(withClaim).not.toContain("████   ███")
-  expect(withClaim).toContain("test")
+  // The compact palette hint at 100 columns is the footer's proof the plugin is in;
+  // the version now yields to it below 120.
+  expect(withClaim).toContain("^p cmds")
 }, 60000)
 
 test("120x40 holds the whole layout: hero, prompt, three sessions, one footer row", async () => {
@@ -514,11 +516,13 @@ const deepFetch: FetchHandler = (url) => {
   return undefined
 }
 
-test("the footer drops the prompt hints before it squeezes the directory", async () => {
-  for (const [width, hints] of [
-    [100, false],
-    [80, false],
-    [120, true],
+test("the footer keeps a palette hint at every width and gives up the version first", async () => {
+  for (const [width, hint, version] of [
+    [120, "shift+tab agents", true],
+    [100, "^p cmds", false],
+    [80, "^p cmds", false],
+    [64, "^p cmds", false],
+    [63, undefined, false],
   ] as const) {
     const setup = await home({
       width,
@@ -529,11 +533,23 @@ test("the footer drops the prompt hints before it squeezes the directory", async
     try {
       await setup.ready
       await setup.waitFor(() => setup.captureCharFrame().includes("project-calls-project"), { maxPasses: 400 })
-      const footer = rows(setup.captureCharFrame()).find((line) => line.includes("project-calls-project")) ?? ""
-      // The whole directory survives, not just the basename, and the version stays.
-      expect(footer).toContain(DEEP_DIRECTORY)
-      expect(footer).toContain("test")
-      expect(footer.includes("shift+tab agents")).toBe(hints)
+      const lines = rows(setup.captureCharFrame())
+      const footer = lines.find((line) => line.includes("project-calls-project")) ?? ""
+      // The footer stays one row: the directory appears on it and nowhere else.
+      expect(lines).toHaveLength(30)
+      expect(lines.filter((line) => line.includes("project-calls-project"))).toHaveLength(1)
+      // The basename always survives, and the whole path when the row has room.
+      expect(footer).toContain("project-calls-project")
+      if (width >= 100) expect(footer).toContain(DEEP_DIRECTORY)
+      // Hints: full at 120, compact down to 64, gone at 63.
+      expect(footer.includes("shift+tab agents")).toBe(hint === "shift+tab agents")
+      expect(footer.includes("^p cmds")).toBe(hint === "^p cmds")
+      // The version yields to the compact hint, and is gone below 64 anyway.
+      expect(footer.trimEnd().endsWith("test")).toBe(version)
+      // Nothing wrapped onto the row above.
+      const index = lines.indexOf(footer)
+      expect(lines[index - 1] ?? "").not.toContain("project-calls-project")
+      expect(lines[index - 1] ?? "").not.toContain("cmds")
     } finally {
       await setup[Symbol.asyncDispose]()
     }

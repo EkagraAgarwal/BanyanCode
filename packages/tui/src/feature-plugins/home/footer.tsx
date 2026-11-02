@@ -10,20 +10,46 @@ import { InteractivityProvider } from "../../context/interactivity"
 import { FadeInText } from "../../component/fade-in-text"
 import { PromptFooter } from "../prompt/footer"
 
+/**
+ * The prompt hints are the first thing the footer row drops: with a typical
+ * directory, the pills and the version they need this much width to coexist.
+ * Below it the compact palette hint and the directory get the room.
+ */
+const HINTS_MIN_WIDTH = 120
+
 export function homeFooterVisibility(width: number) {
   return {
     mcpCommand: width >= 64,
     pluginCommand: width >= 80,
-    version: width >= 64,
+    // The palette hint never disappears: below the full hints it compacts to `^p cmds`.
+    compactHint: width >= 64 && width < HINTS_MIN_WIDTH,
+    // The version is the first thing the row gives up, so the hint keeps its columns.
+    version: width >= HINTS_MIN_WIDTH,
   }
 }
 
 /**
- * The prompt hints are the first thing the footer row drops: with a typical
- * directory, the pills and the version they need this much width to coexist.
- * Below it the directory gets the room instead of being squeezed to nothing.
+ * The palette hint below the full hints' width: the session footer's compact
+ * shape, but read from the keymap so a rebind cannot leave it stale.
  */
-const HINTS_MIN_WIDTH = 120
+function CompactHint(props: { context: Plugin.Context }) {
+  const label = createMemo(() => {
+    const binding = props.context.keymap.shortcuts("command.palette.show")[0]
+    if (!binding) return undefined
+    // The default binding reads as `^p`, the way the session footer writes it.
+    const ctrl = /^ctrl\+([a-z0-9])$/i.exec(binding)
+    return `${ctrl ? `^${ctrl[1]!.toLowerCase()}` : binding} cmds`
+  })
+  return (
+    <Show when={label()}>
+      {(text) => (
+        <text fg={props.context.theme.text.muted} flexShrink={0}>
+          {text()}
+        </text>
+      )}
+    </Show>
+  )
+}
 
 function Mcp(props: { context: Plugin.Context }) {
   const dimensions = useTerminalDimensions()
@@ -165,11 +191,15 @@ function View(props: { context: Plugin.Context }) {
           <Plugins context={props.context} />
         </Slot>
         {/* Home's prompt carries no footer row of its own, so its hints live
-            here when the row has room for them. */}
+            here: the full set when the row has room, the compact palette hint
+            when it does not. */}
         <Show when={dimensions().width >= HINTS_MIN_WIDTH}>
           <InteractivityProvider enabled={true}>
             <PromptFooter context={props.context} mode="normal" showDetails />
           </InteractivityProvider>
+        </Show>
+        <Show when={visibility().compactHint}>
+          <CompactHint context={props.context} />
         </Show>
         <box flexGrow={1} minWidth={0} />
         <UpdateNotice />

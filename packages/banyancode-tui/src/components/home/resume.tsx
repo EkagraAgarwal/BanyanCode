@@ -85,7 +85,20 @@ export function Resume(props: {
         },
       )
   }
-  createEffect(on(() => location().directory, () => void load()))
+  // The location ref churns identity while the route and the default location
+  // settle, which fired three identical requests per launch. Only a real
+  // directory change is worth a fetch.
+  let loaded: string | undefined
+  createEffect(
+    on(
+      () => location().directory,
+      (directory) => {
+        if (directory === loaded) return
+        loaded = directory
+        void load()
+      },
+    ),
+  )
 
   // Live session info wins over the fetched snapshot so a rename lands without a refetch.
   const rows = createMemo(() =>

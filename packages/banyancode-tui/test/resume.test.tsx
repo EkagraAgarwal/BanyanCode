@@ -190,6 +190,55 @@ test("the rows are reserved once the list resolves", async () => {
   }
 })
 
+test("fetches once per directory, not once per location tick", async () => {
+  const calls: string[] = []
+  const [place, setPlace] = createSignal({ directory: "D:/workspace" })
+  const base = context({ sessions: sessions() })
+  const ctx = {
+    ...base,
+    get location() {
+      return place()
+    },
+    client: {
+      ...base.client,
+      session: {
+        ...base.client.session,
+        list: async (input: { directory: string }) => {
+          calls.push(input.directory)
+          return { data: sessions(), cursor: {} }
+        },
+      },
+    },
+  } as unknown as Context
+  const app = await mount(
+    () => (
+      <box flexDirection="column">
+        <Resume context={ctx} growth={growthAt(() => 6.1)} height={() => 30} />
+        <text>{TAIL}</text>
+      </box>
+    ),
+    { width: 80, height: 30 },
+  )
+  try {
+    await Bun.sleep(10)
+    await app.renderOnce()
+    expect(calls).toEqual(["D:/workspace"])
+
+    // The route and the default location settle with a fresh object each time.
+    setPlace({ directory: "D:/workspace" })
+    setPlace({ directory: "D:/workspace" })
+    await Bun.sleep(10)
+    expect(calls).toEqual(["D:/workspace"])
+
+    // A real move is worth a fetch.
+    setPlace({ directory: "D:/other" })
+    await Bun.sleep(10)
+    expect(calls).toEqual(["D:/workspace", "D:/other"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("the size guard drops the block instead of overflowing", async () => {
   const ctx = styled(sessions())
 
