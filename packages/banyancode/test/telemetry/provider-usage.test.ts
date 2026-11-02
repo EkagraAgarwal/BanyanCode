@@ -193,6 +193,49 @@ describe("provider usage core seam", () => {
     expect(calls).toEqual([{ force: true, providerID: "openai" }])
   })
 
+  test("a waiting Claude Agent row is not served from the collector cache", async () => {
+    let calls = 0
+    let available = false
+    const usage = makeProviderUsage({
+      providers: () => Effect.succeed([{ id: "claude-agent", name: "Claude Agent" }]),
+      usage: () => {
+        calls++
+        return Effect.succeed({
+          snapshots: [
+            {
+              providerID: "claude-agent",
+              displayName: "Claude Agent",
+              status: available ? ("available" as const) : ("unsupported" as const),
+              confidence: "reported" as const,
+              windows: available
+                ? [{ id: "five_hour", label: "5h", kind: "quota" as const, usedPercent: 51, remainingPercent: 49 }]
+                : [],
+              ...(available ? {} : { message: "Limits appear after the first response" }),
+              fetchedAt: 1_000,
+            },
+          ],
+        })
+      },
+    })
+
+    const first = await Effect.runPromise(usage.snapshots())
+    expect(first.snapshots[0]!.status).toBe("unsupported")
+    expect(calls).toBe(1)
+
+    // Still waiting: the collector must re-read instead of caching the placeholder.
+    await Effect.runPromise(usage.snapshots())
+    expect(calls).toBe(2)
+
+    available = true
+    const after = await Effect.runPromise(usage.snapshots())
+    expect(after.snapshots[0]!.status).toBe("available")
+    expect(calls).toBe(3)
+
+    // Claude Agent rows are local state, so every read observes the latest value.
+    await Effect.runPromise(usage.snapshots())
+    expect(calls).toBe(4)
+  })
+
   test("a failing core seam degrades to observed rows, never a throw", async () => {
     observeRateLimitResponse("openai", headers)
     const usage = makeProviderUsage({

@@ -319,6 +319,13 @@ const isOpenCodeAlias = (providerID: string) => (OPENCODE_ALIASES as readonly st
 const sameProvider = (a: string, b: string) =>
   a === b || (isOpenCodeAlias(a) && isOpenCodeAlias(b))
 
+// The Claude Agent adapter reads process state that the next response replaces.
+const CLAUDE_AGENT_ID = "claude-agent"
+
+/** Claude Agent values change without a request and lapse on wall-clock time, so never cache them. */
+const cacheable = (snapshots: ReadonlyArray<ProviderUsageSnapshot>): boolean =>
+  snapshots.every((snapshot) => snapshot.providerID !== CLAUDE_AGENT_ID)
+
 /** Decode the core seam result; a malformed row is dropped rather than shown. */
 const coreSnapshots = (
   usage: ProviderUsageDeps["usage"],
@@ -406,10 +413,18 @@ export const makeProviderUsage = (deps: ProviderUsageDeps): ProviderUsage => {
     Effect.gen(function* () {
       const at = now()
       const providerID = input?.providerID
-      const cached = cache && providerID === undefined && !input?.force && isFresh(cache.at, at, ttlMs) ? cache : undefined
+      const cached =
+        cache &&
+        providerID === undefined &&
+        !input?.force &&
+        isFresh(cache.at, at, ttlMs) &&
+        cacheable(cache.snapshots)
+          ? cache
+          : undefined
       if (cached !== undefined) return { snapshots: [...cached.snapshots] }
       const collected = yield* collect(input)
-      if (providerID === undefined && input?.force !== true) cache = { at, snapshots: collected }
+      if (providerID === undefined && input?.force !== true && cacheable(collected))
+        cache = { at, snapshots: collected }
       return { snapshots: [...collected] }
     })
 

@@ -29,6 +29,9 @@ export const ClaudeAgentAdapter: Adapter = {
   providerID: PROVIDER_ID,
   refreshIntervalSeconds: 60,
   supports: (input) => input.providerID === PROVIDER_ID,
+  // Values come from process-local stream state and lapse on wall-clock time,
+  // so no row is cached: reading the current observation costs no request.
+  cacheable: () => false,
   fetch: (ctx: AdapterContext) =>
     Effect.gen(function* () {
       const credential = yield* ctx.credential()

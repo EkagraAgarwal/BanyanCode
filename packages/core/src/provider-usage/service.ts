@@ -179,9 +179,10 @@ export const make = (options: Options = {}): Effect.Effect<Interface> =>
             Effect.timeout("15 seconds"),
             Effect.catchCause((cause) => errorToSnapshot(target, cause, now)),
           )
+        const cacheable = adapter.cacheable?.(fetched) ?? true
         if (fetched.status === "available") {
           const snapshot = { ...fetched, fetchedAt: now }
-          yield* Ref.update(cache, (prev) => new Map(prev).set(key, { snapshot, ttlMs }))
+          if (cacheable) yield* Ref.update(cache, (prev) => new Map(prev).set(key, { snapshot, ttlMs }))
           yield* Ref.update(backoffUntil, (prev) => {
             if (!prev.has(key)) return prev
             const next = new Map(prev)
@@ -189,6 +190,17 @@ export const make = (options: Options = {}): Effect.Effect<Interface> =>
             return next
           })
           return snapshot
+        }
+        if (!cacheable) {
+          // The adapter owns state a later event replaces. Drop the previous
+          // row too, or the panel keeps showing a value that just expired.
+          yield* Ref.update(cache, (prev) => {
+            if (!prev.has(key)) return prev
+            const next = new Map(prev)
+            next.delete(key)
+            return next
+          })
+          return fetched
         }
         const existing = (yield* Ref.get(cache)).get(key)
         if (!existing) yield* Ref.update(cache, (prev) => new Map(prev).set(key, { snapshot: fetched, ttlMs }))

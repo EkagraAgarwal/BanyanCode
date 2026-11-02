@@ -99,6 +99,10 @@ export function context(input: {
   readonly directory?: string
   readonly agents?: readonly AgentInfo[]
   readonly models?: readonly ModelInfo[]
+  readonly on?: (
+    type: string,
+    handler: (event: { readonly data: { readonly sessionID: string } }) => void,
+  ) => () => void
 } = {}): Context {
   const sessions = input.sessions ?? []
   const running = input.running ?? new Set<string>()
@@ -123,7 +127,7 @@ export function context(input: {
     renderer: {},
     client: { session: { diff: async () => [] } },
     data: {
-      on: () => () => {},
+      on: input.on ?? (() => () => {}),
       listen: () => () => {},
       session: {
         list: () => [...sessions],

@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
+import { randomUUID } from "node:crypto"
+import { writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { Credential } from "@opencode/core/credential"
 import { Integration } from "@opencode/core/integration"
 import { ProviderUsage } from "@opencode/core/provider-usage/index"
@@ -12,12 +16,17 @@ import { ClaudeRateLimits } from "@opencode/core/plugin/provider/claude-agent/cl
 import { ConvertClaudeStream } from "@opencode/core/plugin/provider/claude-agent/language-model/convert-claude-stream"
 
 const servers: Array<{ stop: (force?: boolean) => void }> = []
+let store = ""
 
 afterEach(() => {
   for (const server of servers.splice(0)) server.stop(true)
+  ClaudeRateLimits.reset()
+  ClaudeRateLimits.setStorePath(undefined)
 })
 
 beforeEach(() => {
+  store = join(tmpdir(), `banyancode-claude-rate-limits-${randomUUID()}.json`)
+  ClaudeRateLimits.setStorePath(store)
   ClaudeRateLimits.reset()
 })
 
@@ -79,6 +88,24 @@ const snapshots = (targets: ReadonlyArray<Target>, options: ProviderUsage.Option
       return yield* usage.snapshots()
     }),
   )
+
+const claudeTarget = () =>
+  target({
+    providerID: "claude-agent",
+    displayName: "Claude Agent",
+    authType: "external",
+    credential: external(),
+  })
+
+const recordRateLimits = (rateLimitInfo: Record<string, unknown>) => {
+  const convert = ConvertClaudeStream.make([])
+  convert({
+    type: "rate_limit_event",
+    rate_limit_info: rateLimitInfo,
+    uuid: "rate-limit",
+    session_id: "session",
+  } as unknown as SDKMessage)
+}
 
 describe("provider usage adapters", () => {
   test("anthropic OAuth windows normalize from the pinned endpoint", async () => {
@@ -220,6 +247,102 @@ describe("provider usage adapters", () => {
     const snapshot = result.snapshots[0]!
     expect(snapshot.status).toBe("unsupported")
     expect(snapshot.message).toBe("Limits appear after the first response")
+    expect(snapshot.windows).toEqual([])
+  })
+
+  test("a plain read returns Claude Agent bars right after an event is recorded", async () => {
+    let requests = 0
+    const base = serve(() => {
+      requests++
+      return Response.json({ data: { limit: 10, usage: 2 } })
+    })
+    const usage = await Effect.runPromise(
+      ProviderUsage.make({
+        targets: () =>
+          Effect.succeed([
+            claudeTarget(),
+            target({ providerID: "openrouter", displayName: "OpenRouter", credential: key("sk-openrouter-secret") }),
+          ]),
+        endpoints: endpointsFor(base),
+      }),
+    )
+
+    const waiting = await Effect.runPromise(usage.snapshots())
+    const pending = waiting.snapshots.find((snapshot) => snapshot.providerID === "claude-agent")!
+    expect(pending.status).toBe("unsupported")
+    expect(pending.message).toBe("Limits appear after the first response")
+    expect(requests).toBe(1)
+
+    recordRateLimits({
+      status: "allowed",
+      unifiedWindows: {
+        five_hour: { utilization: 0.51, resetsAt: Math.floor(Date.now() / 1000) + 3_600 },
+        seven_day: { utilization: 91, resetsAt: Math.floor(Date.now() / 1000) + 86_400 },
+      },
+    })
+
+    const after = await Effect.runPromise(usage.snapshots())
+    const claude = after.snapshots.find((snapshot) => snapshot.providerID === "claude-agent")!
+    expect(claude.status).toBe("available")
+    expect(claude.windows.map((window) => window.label)).toEqual(["5h", "1w"])
+    expect(claude.windows.map((window) => window.usedPercent)).toEqual([51, 91])
+    // Only the changed provider is re-read; the cached OpenCode-style row is untouched.
+    expect(requests).toBe(1)
+  })
+
+  test("the last Claude Agent observation survives a restart", async () => {
+    recordRateLimits({
+      status: "allowed",
+      unifiedWindows: {
+        five_hour: { utilization: 0.51, resetsAt: Math.floor(Date.now() / 1000) + 3_600 },
+        seven_day: { utilization: 91, resetsAt: Math.floor(Date.now() / 1000) + 86_400 },
+      },
+    })
+    ClaudeRateLimits.restart()
+
+    const result = await snapshots([claudeTarget()], {
+      fetchImpl: () => Promise.reject(new Error("must not be called")),
+    })
+    const snapshot = result.snapshots[0]!
+    expect(snapshot.status).toBe("available")
+    expect(snapshot.windows.map((window) => window.usedPercent)).toEqual([51, 91])
+    expect(snapshot.windows[0]!.resetsAt).toBeGreaterThan(Date.now())
+  })
+
+  test("a corrupt Claude Agent state file is ignored", async () => {
+    recordRateLimits({
+      status: "allowed",
+      unifiedWindows: { five_hour: { utilization: 0.2, resetsAt: Math.floor(Date.now() / 1000) + 60 } },
+    })
+    ClaudeRateLimits.restart()
+    const restored = await snapshots([claudeTarget()], {
+      fetchImpl: () => Promise.reject(new Error("must not be called")),
+    })
+    expect(restored.snapshots[0]!.status).toBe("available")
+    expect(restored.snapshots[0]!.windows[0]!.usedPercent).toBe(20)
+
+    writeFileSync(store, "{not json", "utf8")
+    ClaudeRateLimits.restart()
+    const result = await snapshots([claudeTarget()], {
+      fetchImpl: () => Promise.reject(new Error("must not be called")),
+    })
+    expect(result.snapshots[0]!.status).toBe("unsupported")
+    expect(result.snapshots[0]!.message).toBe("Limits appear after the first response")
+  })
+
+  test("a persisted window past its reset shows the update message after a restart", async () => {
+    recordRateLimits({
+      status: "allowed",
+      unifiedWindows: { five_hour: { utilization: 0.9, resetsAt: Math.floor(Date.now() / 1000) - 60 } },
+    })
+    ClaudeRateLimits.restart()
+
+    const result = await snapshots([claudeTarget()], {
+      fetchImpl: () => Promise.reject(new Error("must not be called")),
+    })
+    const snapshot = result.snapshots[0]!
+    expect(snapshot.status).toBe("unsupported")
+    expect(snapshot.message).toBe("Limits update after the next response")
     expect(snapshot.windows).toEqual([])
   })
 

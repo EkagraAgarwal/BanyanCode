@@ -45,13 +45,16 @@ export function ProviderUsagePanel(props: {
     void refresh(false)
   })
 
-  // A response can reveal new Claude Agent limits. Forcing a refresh when the
-  // session goes idle shows them without waiting for the poll interval.
-  const unsubscribeIdle = props.context.data.on("session.idle", () => void refresh(true))
+  // A response can reveal new Claude Agent limits. A plain read after the step
+  // ends shows them without forcing requests for the other providers.
+  const offStep = props.context.data.on("session.step.ended", (event) => {
+    if (event.data.sessionID !== props.sessionID) return
+    void refresh(false)
+  })
   const poll = setInterval(() => void refresh(false), PROVIDER_USAGE_POLL_MS)
   const tick = setInterval(() => setNow(Date.now()), COUNTDOWN_TICK_MS)
   onCleanup(() => {
-    unsubscribeIdle()
+    offStep()
     clearInterval(poll)
     clearInterval(tick)
   })

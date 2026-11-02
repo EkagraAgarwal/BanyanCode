@@ -67,4 +67,10 @@ export interface Adapter {
   readonly refreshIntervalSeconds: number
   readonly supports: (input: AdapterSupport) => boolean
   readonly fetch: (ctx: AdapterContext) => Effect.Effect<Snapshot, ProviderUsageError>
+  /**
+   * Whether a snapshot may be served from (and left in) the service cache.
+   * An adapter whose source changes without a request, like the Claude Agent
+   * stream, returns false so the next read observes the current state.
+   */
+  readonly cacheable?: (snapshot: Snapshot) => boolean
 }
