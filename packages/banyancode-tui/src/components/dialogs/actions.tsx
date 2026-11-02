@@ -1,6 +1,6 @@
 import type { AgentInfo, ModelInfo } from "@opencode/client"
 import type { Context } from "@opencode/plugin/tui/context"
-import type { Live } from "../../data/live"
+import type { Live, MeshLive } from "../../data/live"
 import type { BanyanConfig, MeshNode } from "../../data/pending-rpc"
 
 const MAX_SUBAGENTS = 20
@@ -202,14 +202,14 @@ export async function openAgentControl(context: Context, live: Live): Promise<vo
         title: "Steer",
         side: "right",
         selection: "required",
-        onTrigger: (node) => void steerSubagent(context, live, root, node),
+        onTrigger: (node) => void steerSubagent(context, live.mesh, root, node),
       },
       {
         bind: "ctrl+k",
         title: "Kill",
         side: "right",
         selection: "required",
-        onTrigger: (node) => void killSubagent(context, live, root, node),
+        onTrigger: (node) => void killSubagent(context, live.mesh, root, node),
       },
     ],
   })
@@ -225,13 +225,13 @@ export async function openAgentControl(context: Context, live: Live): Promise<vo
       { title: "Kill", description: "Terminate this subagent", value: "kill" },
     ],
   })
-  if (action === "steer") await steerSubagent(context, live, root, selected)
-  if (action === "kill") await killSubagent(context, live, root, selected)
+  if (action === "steer") await steerSubagent(context, live.mesh, root, selected)
+  if (action === "kill") await killSubagent(context, live.mesh, root, selected)
 }
 
 export async function steerSubagent(
   context: Context,
-  live: Live,
+  mesh: MeshLive,
   parentSessionID: string,
   node: AgentTarget,
 ): Promise<void> {
@@ -246,7 +246,7 @@ export async function steerSubagent(
     placeholder: "Instruction for this subagent",
   })
   if (instruction === undefined || instruction.trim() === "") return
-  const result = await live.mesh.steer({
+  const result = await mesh.steer({
     parentSessionID,
     targetAgent: node.agent ?? node.sessionID,
     instruction,
@@ -256,7 +256,7 @@ export async function steerSubagent(
 
 export async function killSubagent(
   context: Context,
-  live: Live,
+  mesh: MeshLive,
   parentSessionID: string,
   node: AgentTarget,
 ): Promise<void> {
@@ -271,7 +271,7 @@ export async function killSubagent(
     label: { confirm: "Kill", cancel: "Cancel" },
   })
   if (confirmed !== true) return
-  const result = await live.mesh.kill({
+  const result = await mesh.kill({
     parentSessionID,
     targetSessionID: node.sessionID,
     reason: "User requested kill",

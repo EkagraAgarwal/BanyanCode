@@ -46,7 +46,7 @@ export function useRowKeys(input: {
   readonly context: Context
   readonly rows: () => readonly PanelRow[]
   readonly priority?: number
-}): { readonly row: () => number; readonly action: () => number } {
+}): { readonly row: () => number; readonly action: () => number; readonly setRow: (index: number) => void } {
   const focus = usePanelFocus()
   const [rowIndex, setRowIndex] = createSignal(0)
   const [actionIndex, setActionIndex] = createSignal(0)
@@ -59,6 +59,12 @@ export function useRowKeys(input: {
     const size = input.rows().length
     if (size === 0) return
     setRowIndex((row() + delta + size) % size)
+    setActionIndex(0)
+  }
+  const setRow = (index: number) => {
+    const size = input.rows().length
+    if (size === 0) return
+    setRowIndex(Math.max(0, Math.min(size - 1, Math.round(index))))
     setActionIndex(0)
   }
   const moveAction = (delta: number) => {
@@ -109,7 +115,7 @@ export function useRowKeys(input: {
     ],
   }))
 
-  return { row, action }
+  return { row, action, setRow }
 }
 
 /** Page/keyboard scrolling for a scrollable panel region. */

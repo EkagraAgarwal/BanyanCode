@@ -3,7 +3,9 @@ import type { ScrollBoxRenderable } from "@opentui/core"
 import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js"
 import { PANEL, RAIL, type PanelName } from "../../constants"
 import type { Live } from "../../data/live"
+import type { Ticker } from "../../motion"
 import { palette } from "../../theme"
+import { Grove } from "../grove"
 import { AgentsPanel } from "../sidebar/agents"
 import { CodegraphIntelPanel } from "../sidebar/codegraph-intel-panel"
 import { IntelTracePanel } from "../sidebar/intel-trace-panel"
@@ -13,7 +15,6 @@ import { AgentDetails } from "../inspector/agent-details"
 import { GraphExplorer } from "../inspector/graph-explorer"
 import { PendingActions } from "../inspector/pending-actions"
 import { TodoPanel } from "../inspector/todo"
-import { AgentTreeView } from "./agents"
 import { ConfigView } from "./config"
 import { CodegraphCanvas } from "./graph"
 import { createPanelFocus, PanelFocusContext, usePanelKeyMode, usePanelScroll } from "./keys"
@@ -46,9 +47,6 @@ function content(props: {
     if (name === PANEL.canvas) return <CodegraphCanvas context={props.context} codegraph={props.live.codegraph} />
     if (name === PANEL.pending) return <PendingActions context={props.context} sessionID={props.sessionID} />
     if (name === PANEL.sessions) return <SessionsView context={props.context} />
-    if (name === PANEL.agents) {
-      return <AgentTreeView context={props.context} sessionID={props.sessionID} mesh={props.live.mesh} />
-    }
     if (name === PANEL.config) return <ConfigView context={props.context} live={props.live} />
     if (name === PANEL.trace) {
       return <IntelTracePanel context={props.context} sessionID={props.sessionID} intel={props.live.intel} />
@@ -71,11 +69,13 @@ export function InspectorPanel(props: {
   readonly context: Context
   readonly live: Live
   readonly panel: PanelInput
+  readonly ticker?: Ticker | undefined
 }) {
   const theme = () => palette(props.context.theme)
   const active = createMemo(() => panelName(props.panel.name))
   const innerScroll = createMemo(() => panelScrollsInternally(active()))
   const stacked = createMemo(() => props.panel.width < STACK_THRESHOLD)
+  const grove = createMemo(() => active() === PANEL.agents)
   const focus = createPanelFocus(Math.max(0, RAIL.findIndex((item) => item.name === active())))
   const main = () => props.panel.presentation === "main"
   createEffect(() => {
@@ -184,6 +184,16 @@ export function InspectorPanel(props: {
     </box>
   )
 
+  const groveView = () => (
+    <Grove
+      context={props.context}
+      sessionID={props.panel.sessionID}
+      mesh={props.live.mesh}
+      ticker={props.ticker}
+      width={props.panel.width}
+    />
+  )
+
   const body = () => (
     <scrollbox
       id="banyancode.panel.content"
@@ -206,7 +216,7 @@ export function InspectorPanel(props: {
     return (
       <PanelFocusContext.Provider value={focus}>
         <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0}>
-          {body()}
+          {grove() ? groveView() : body()}
         </box>
       </PanelFocusContext.Provider>
     )
@@ -242,7 +252,7 @@ export function InspectorPanel(props: {
                 </text>
               </box>
             </box>
-            {body()}
+            {grove() ? groveView() : body()}
           </box>
         </box>
       </box>
@@ -297,26 +307,33 @@ export function InspectorPage(props: {
             )}
           </For>
         </box>
-        <scrollbox
-          id="banyancode.panel.page"
-          ref={(element: ScrollBoxRenderable) => (scroll = element)}
-          flexGrow={1}
-          verticalScrollbarOptions={{ visible: !innerScroll(), paddingLeft: 1 }}
-        >
-          <box paddingLeft={2} paddingRight={2} paddingTop={1}>
-            <Show
-              when={sessionID()}
-              fallback={
-                <box flexDirection="column" gap={0}>
-                  <text fg={theme().muted}>Open a session to use this view.</text>
-                  <CodegraphIntelPanel context={props.context} intel={props.live.intel} />
-                </box>
-              }
+        <Show
+          when={active() === PANEL.agents ? sessionID() : undefined}
+          fallback={
+            <scrollbox
+              id="banyancode.panel.page"
+              ref={(element: ScrollBoxRenderable) => (scroll = element)}
+              flexGrow={1}
+              verticalScrollbarOptions={{ visible: !innerScroll(), paddingLeft: 1 }}
             >
-              {(id) => content({ context: props.context, live: props.live, sessionID: id(), active: active() })}
-            </Show>
-          </box>
-        </scrollbox>
+              <box paddingLeft={2} paddingRight={2} paddingTop={1}>
+                <Show
+                  when={sessionID()}
+                  fallback={
+                    <box flexDirection="column" gap={0}>
+                      <text fg={theme().muted}>Open a session to use this view.</text>
+                      <CodegraphIntelPanel context={props.context} intel={props.live.intel} />
+                    </box>
+                  }
+                >
+                  {(id) => content({ context: props.context, live: props.live, sessionID: id(), active: active() })}
+                </Show>
+              </box>
+            </scrollbox>
+          }
+        >
+          {(id) => <Grove context={props.context} sessionID={id()} mesh={props.live.mesh} />}
+        </Show>
       </box>
     </PanelFocusContext.Provider>
   )

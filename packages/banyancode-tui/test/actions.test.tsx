@@ -231,9 +231,9 @@ test("steer and kill report a missing mesh RPC instead of pretending success", a
     },
   }
   const target = { ...node, killed: false }
-  await steerSubagent(fake.context, live as unknown as Parameters<typeof steerSubagent>[1], "ses_root", target)
+  await steerSubagent(fake.context, live.mesh as unknown as Parameters<typeof steerSubagent>[1], "ses_root", target)
   expect(fake.toasts.at(-1)?.variant).toBe("warning")
-  await killSubagent(fake.context, live as unknown as Parameters<typeof killSubagent>[1], "ses_root", target)
+  await killSubagent(fake.context, live.mesh as unknown as Parameters<typeof killSubagent>[1], "ses_root", target)
   expect(fake.toasts.at(-1)?.variant).toBe("warning")
 })
 
