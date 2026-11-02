@@ -4,6 +4,7 @@
 
 import { ResourceTemplate } from "@modelcontextprotocol/server"
 import type { McpServer } from "@modelcontextprotocol/server"
+import { taskFilesChanged } from "./engine"
 import type { TaskEngine, TaskRecord } from "./engine"
 import { suggestCheckupSeconds } from "./stuck"
 
@@ -52,7 +53,7 @@ export function registerResources(
       })),
       cost: Math.round(record.cost * 10_000) / 10_000,
       tokens: record.tokens,
-      files_changed: record.digest.files.length,
+      files_changed: taskFilesChanged(record),
       last_text: record.digest.lastText !== undefined ? clip(record.digest.lastText.trim(), 400) : undefined,
       error: record.error,
       error_code: record.errorCode,

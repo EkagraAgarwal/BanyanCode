@@ -13,13 +13,20 @@ import type { DurableEvent } from "./digest"
 /** Marks digest events synthesized from the transcript (no durable log). */
 export const SYNTHETIC_AGGREGATE = "transcript" as const
 
+export type TranscriptTool = {
+  name: string
+  input: Record<string, unknown>
+  status?: string
+  error?: string
+}
+
 export type TranscriptMessage = {
   type: string
   created: number
   text?: string
   cost?: number
   tokens?: { input: number; output: number; reasoning: number; cacheRead?: number; cacheWrite?: number }
-  tools?: Array<{ name: string; input: Record<string, unknown> }>
+  tools?: TranscriptTool[]
 }
 
 export function transcriptEvents(messages: readonly TranscriptMessage[], afterOrdinal: number): DurableEvent[] {
@@ -31,6 +38,24 @@ export function transcriptEvents(messages: readonly TranscriptMessage[], afterOr
     const durable = { aggregateID: SYNTHETIC_AGGREGATE, seq: ordinal, version: 0 }
     out.push({ type: "session.step.started", created: message.created, durable, data: {} })
     for (const tool of message.tools ?? []) {
+      if (tool.status === "error") {
+        // A failed call still counts as a call, but never as a file edit: a
+        // refused `edit` carries the intended path in its input and used to
+        // inflate `files_changed` for work that never happened.
+        out.push({
+          type: "session.tool.called",
+          created: message.created,
+          durable,
+          data: { name: tool.name, input: {} },
+        })
+        out.push({
+          type: "session.tool.failed",
+          created: message.created,
+          durable,
+          data: { name: tool.name, error: tool.error ?? "tool call failed" },
+        })
+        continue
+      }
       out.push({
         type: "session.tool.called",
         created: message.created,

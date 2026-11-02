@@ -315,3 +315,28 @@ describe("MCP code tools", () => {
     expect(text(response)).toContain("BanyanCode plugin")
   })
 })
+
+describe("RPC failure detail", () => {
+  const rigs: Rig[] = []
+  afterEach(async () => {
+    await Promise.all(rigs.splice(0).map((item) => item.close()))
+  })
+
+  test("a generic RPC call failure includes the underlying message", async () => {
+    const r = await rig()
+    rigs.push(r)
+    r.rpc.on("banyancode.intel.codeFind", () => {
+      throw {
+        type: "rpc.internal",
+        message: "RPC call failed",
+        data: { message: "unknown session ses_nope" },
+      }
+    })
+    const response = await r.client.callTool({
+      name: "banyan_code_find",
+      arguments: { intent: "definition", target: "Foo" },
+    })
+    expect(response.isError).toBe(true)
+    expect(text(response)).toContain("unknown session ses_nope")
+  })
+})

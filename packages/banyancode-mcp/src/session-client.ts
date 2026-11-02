@@ -39,6 +39,14 @@ export type SessionSummary = {
   updated: number
 }
 
+export type MessageToolSummary = {
+  name: string
+  input: Record<string, unknown>
+  /** Tool state: streaming | running | completed | error. */
+  status?: string
+  error?: string
+}
+
 export type MessageSummary = {
   id: string
   type: string
@@ -47,7 +55,7 @@ export type MessageSummary = {
   created: number
   cost?: number
   tokens?: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
-  tools?: Array<{ name: string; input: Record<string, unknown> }>
+  tools?: MessageToolSummary[]
 }
 
 export type MessagePage = { items: MessageSummary[]; next?: string }
@@ -156,17 +164,27 @@ const toMessage = (info: SessionMessageInfo): MessageSummary => {
   }
   if (info.type !== "assistant") return message
   message.role = "assistant"
-  const tools: Array<{ name: string; input: Record<string, unknown> }> = []
+  const tools: MessageToolSummary[] = []
   const texts: string[] = []
   for (const part of info.content) {
     if (part.type === "text") texts.push(part.text)
     if (part.type !== "tool") continue
-    const state = part.state as { input?: unknown }
+    const state = part.state as {
+      input?: unknown
+      status?: unknown
+      error?: { message?: unknown }
+    }
     const input =
       state.input !== null && typeof state.input === "object" && !Array.isArray(state.input)
         ? (state.input as Record<string, unknown>)
         : {}
-    tools.push({ name: part.name, input })
+    const error = typeof state.error?.message === "string" ? state.error.message : undefined
+    tools.push({
+      name: part.name,
+      input,
+      ...(typeof state.status === "string" ? { status: state.status } : {}),
+      ...(error !== undefined ? { error } : {}),
+    })
   }
   if (texts.length > 0) message.text = texts.join("\n")
   if (tools.length > 0) message.tools = tools

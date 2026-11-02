@@ -43,12 +43,43 @@ export const isRpcUnavailable = (error: unknown): boolean => {
   return type === "rpc.unavailable" || type === "rpc.method_not_found"
 }
 
+// Pull the most specific human message out of an RPC failure payload. The host
+// sometimes wraps a handler defect as the generic "RPC call failed"; the cause
+// (when it survives the wire) is in `data` or `cause` and must not be dropped.
+const detailOf = (value: unknown): string | undefined => {
+  if (value === undefined || value === null) return undefined
+  if (typeof value === "string") return value !== "" ? value : undefined
+  if (value instanceof Error) return value.message !== "" ? value.message : undefined
+  if (typeof value !== "object") return String(value)
+  const record = value as Record<string, unknown>
+  if (typeof record["message"] === "string" && record["message"] !== "") return record["message"]
+  if (record["cause"] !== undefined) {
+    const cause = detailOf(record["cause"])
+    if (cause !== undefined) return cause
+  }
+  try {
+    return JSON.stringify(value) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
 export const messageOf = (error: unknown): string => {
-  if (error instanceof Error) return error.message
   if (typeof error === "string") return error
-  if (error !== null && typeof error === "object" && "message" in error) {
-    const message = (error as { message?: unknown }).message
-    if (typeof message === "string") return message
+  if (error instanceof Error) {
+    const cause = detailOf(error.cause)
+    return cause !== undefined && cause !== error.message ? `${error.message}: ${cause}` : error.message
+  }
+  if (error !== null && typeof error === "object") {
+    const record = error as Record<string, unknown>
+    const message = typeof record["message"] === "string" ? record["message"] : undefined
+    const type = typeof record["type"] === "string" ? record["type"] : undefined
+    const detail = detailOf(record["data"]) ?? detailOf(record["cause"])
+    const base = message ?? type ?? "RPC call failed"
+    if (detail !== undefined && detail !== base) return `${base}: ${detail}`
+    if (message === undefined && type !== undefined) return `${type}: request failed`
+    if (message === "RPC call failed" && type !== undefined) return `${message} (${type})`
+    return base
   }
   try {
     return JSON.stringify(error) ?? String(error)

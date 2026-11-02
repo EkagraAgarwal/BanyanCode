@@ -85,6 +85,27 @@ export const DEFAULT_OUTPUT_MAX_CHARS = 8_000
 export const DEFAULT_TASK_BUDGET_USD = 5
 export const DEFAULT_AUTO_ANSWER_AFTER_SECONDS = 120
 
+export const TOOL_GROUPS = ["task", "code"] as const
+export type ToolGroup = (typeof TOOL_GROUPS)[number]
+
+export class InvalidConfigError extends Error {
+  readonly code = "INVALID_CONFIG" as const
+  constructor(message: string) {
+    super(message)
+    this.name = "InvalidConfigError"
+  }
+}
+
+const assertToolGroups = (groups: readonly string[] | undefined): void => {
+  if (groups === undefined) return
+  const unknown = groups.filter((group) => !(TOOL_GROUPS as readonly string[]).includes(group))
+  if (unknown.length === 0) return
+  throw new InvalidConfigError(
+    `unknown tool group${unknown.length === 1 ? "" : "s"} ${unknown.map((group) => `"${group}"`).join(", ")}; ` +
+      `expected one of: ${TOOL_GROUPS.join(", ")}`,
+  )
+}
+
 // Strip `//` and `/* */` comments plus trailing commas without touching
 // string contents. banyancode.json is JSONC by convention.
 export function stripJsonc(text: string): string {
@@ -268,6 +289,7 @@ export function resolveConfig(overrides: ConfigOverrides): ResolvedConfig {
   if (stored.allowed_agents !== undefined) resolved.allowedAgents = [...stored.allowed_agents]
   if (stored.allowed_models !== undefined) resolved.allowedModels = [...stored.allowed_models]
   const toolGroups = overrides.toolGroups ?? stored.tools
+  assertToolGroups(toolGroups)
   if (toolGroups !== undefined) resolved.toolGroups = [...toolGroups]
   return resolved
 }

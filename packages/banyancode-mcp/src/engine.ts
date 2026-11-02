@@ -70,6 +70,12 @@ export type TaskRecord = {
   pending: PendingAsk[]
   error?: string
   errorCode?: string
+  /** Approval refusals the server had to turn into rejects (reject policy). */
+  refusedApprovals: number
+  /** File count from the session diff once known; the digest is only a hint. */
+  diffFiles?: number
+  /** True once a diff read was attempted, so a missing project is not re-probed. */
+  diffChecked?: boolean
   cost: number
   tokens: { input: number; output: number }
   budget: Budget
@@ -111,9 +117,15 @@ export type CheckupTaskReport = {
   phase: TaskPhase
   agent?: string
   model?: string
-  progress: DigestSummary
+  progress: DigestSummary & {
+    /** Cumulative counters, the same digest `banyan_task_result` summarizes. */
+    total_steps: number
+    total_tool_calls: number
+    total_tool_failures: number
+  }
   pending: Array<{ id: string; kind: "permission" | "question"; title: string; age_s: number }>
   files_changed: number
+  done_with_failures?: boolean
   cost: number
   tokens: { input: number; output: number }
   stuck?: { kind: "no_progress" | "loop"; detail: string }
@@ -146,13 +158,23 @@ export type TaskResult = {
     steps: number
     tool_calls: number
     tool_failures: number
+    /** Status is done, but a tool failed or an approval was refused: work did not all land. */
+    done_with_failures?: boolean
     last_text?: string
     error?: string
     error_code?: string
     worktree?: string
   }
   diff?: Array<{ file: string; status: string; additions: number; deletions: number; patch?: string }>
-  transcript?: { messages: Array<{ role: string; text: string }>; cursor?: string; truncated: boolean }
+  transcript?: {
+    messages: Array<{
+      role: string
+      text: string
+      tool_calls?: Array<{ name: string; status?: string; error?: string }>
+    }>
+    cursor?: string
+    truncated: boolean
+  }
 }
 
 export type TaskTreeNode = {
@@ -195,6 +217,16 @@ const TRANSCRIPT_PAGE_DEFAULT = 40
 const LIVE_BUFFER_BOUND = 256
 const TRANSCRIPT_PAGE_SIZE = 100
 const TRANSCRIPT_PAGE_CAP = 10
+// The prompt call can stall on a cold provider/plugin path. The task is already
+// queued at the server, so the start tool must answer within a few seconds and
+// let the launch finish in the background (its failure still lands on the record).
+const LAUNCH_READY_TIMEOUT_MS = 2_500
+// A rehydrated session that is not active and has produced no assistant turn is
+// dead unless the host updated it very recently (restart recovery in progress).
+const REHYDRATE_LOST_GRACE_MS = 15_000
+// A task launched by this process that stops being active without a reply is
+// presumed lost after this much silence.
+const ACTIVE_LOST_GRACE_MS = 60_000
 
 export class UnknownTaskError extends Error {
   readonly code = "UNKNOWN_TASK" as const
@@ -396,6 +428,7 @@ export class TaskEngine {
       updatedAt: now,
       prompt: input.prompt,
       pending: [],
+      refusedApprovals: 0,
       cost: 0,
       tokens: { input: 0, output: 0 },
       budget,
@@ -464,8 +497,32 @@ export class TaskEngine {
     const record = this.get(handle)
     const before = await this.port.messagePage({ sessionID: record.sessionID, order: "desc", limit: 1 })
     const latest = before.items[0]
+    const launchedAt = this.now()
+    // The task owns its slot and handle before the prompt call returns: a cold
+    // provider/plugin path must not make `banyan_task_start` look hung.
+    this.patch(handle, {
+      status: "running",
+      phase: "executing",
+      launchedAt: latest?.created !== undefined ? Math.min(launchedAt, latest.created) : launchedAt,
+    })
+    await this.port
+      .updateMetadata({ sessionID: record.sessionID, metadata: { [STATE_KEY]: "running" } })
+      .catch(() => undefined)
+    const sending = this.deliverPrompt(handle, record).then(
+      () => "delivered" as const,
+      (error: unknown) => ({ error }),
+    )
+    const timeout = new Promise<undefined>((resolve) => {
+      setTimeout(resolve, LAUNCH_READY_TIMEOUT_MS)
+    })
+    const outcome = await Promise.race([sending, timeout])
+    if (outcome !== undefined && outcome !== "delivered") throw outcome.error
+  }
+
+  private async deliverPrompt(handle: string, record: TaskRecord): Promise<void> {
     try {
       await this.port.prompt({ sessionID: record.sessionID, text: record.prompt })
+      await this.refresh(handle).catch(() => undefined)
     } catch (error) {
       this.patch(handle, {
         status: "failed",
@@ -475,16 +532,6 @@ export class TaskEngine {
       })
       throw error
     }
-    const launchedAt = this.now()
-    this.patch(handle, {
-      status: "running",
-      phase: "executing",
-      launchedAt: latest?.created !== undefined ? Math.min(launchedAt, latest.created) : launchedAt,
-    })
-    await this.port
-      .updateMetadata({ sessionID: record.sessionID, metadata: { [STATE_KEY]: "running" } })
-      .catch(() => undefined)
-    await this.refresh(handle).catch(() => undefined)
   }
 
   // --- status / wait --------------------------------------------------------
@@ -492,6 +539,7 @@ export class TaskEngine {
   async status(handle: string): Promise<TaskRecord> {
     const record = this.require(handle)
     if (record.status === "running" || record.status === "queued") await this.refresh(handle).catch(() => undefined)
+    if (isTerminal(this.require(handle).status)) await this.reconcileDiff(handle).catch(() => undefined)
     return this.get(handle)
   }
 
@@ -542,7 +590,7 @@ export class TaskEngine {
 
     for (const record of selected) {
       const current = this.has(record.handle) ? this.require(record.handle) : record
-      if (current.status === "running" || current.status === "queued") {
+      if (current.status === "running" || current.status === "queued" || current.status === "needs_input") {
         await this.refresh(current.handle).catch(() => undefined)
       }
       const after = input.cursorState[current.handle] ?? 0
@@ -550,10 +598,14 @@ export class TaskEngine {
       const events = await this.selectEvents(current.sessionID, after, drained)
       const delta = foldDigest(emptyDigest(), events)
       const nextCursor = nextCursorFrom(after, events)
+      // A transcript replay describes the whole history, not an increment: it
+      // replaces the digest so a source switch cannot double-count steps.
+      const replay =
+        after >= 0 && events.length > 0 && events.every((event) => event.durable?.aggregateID === SYNTHETIC_AGGREGATE)
       // Keep the cumulative digest for budget enforcement; failures here only
       // affect the step counter, never correctness of the status.
       this.patch(current.handle, {
-        digest: foldDigest(this.records.get(current.handle)?.digest ?? emptyDigest(), events),
+        digest: foldDigest(replay ? emptyDigest() : (this.records.get(current.handle)?.digest ?? emptyDigest()), events),
         lastCheckupSeq: nextCursor,
         lastCheckupAt: now,
       })
@@ -576,6 +628,7 @@ export class TaskEngine {
       })
       const budgetTrip = this.budgetTrip(settled)
       if (budgetTrip !== undefined) await this.cancelInternal(settled.handle, budgetTrip).catch(() => undefined)
+      if (isTerminal(this.require(settled.handle).status)) await this.reconcileDiff(settled.handle).catch(() => undefined)
       const final = this.get(settled.handle)
       if (final.status === "running" || final.status === "queued") active += 1
       if (final.status === "needs_input") needsInput += 1
@@ -598,14 +651,20 @@ export class TaskEngine {
         phase: final.phase,
         ...(final.agent !== undefined ? { agent: final.agent } : {}),
         ...(final.model !== undefined ? { model: final.model } : {}),
-        progress: summarizeDigest(delta, { maxTextChars: input.maxTextChars ?? 200 }),
+        progress: {
+          ...summarizeDigest(delta, { maxTextChars: input.maxTextChars ?? 200 }),
+          total_steps: final.digest.steps,
+          total_tool_calls: final.digest.toolCalls,
+          total_tool_failures: final.digest.toolFailures,
+        },
         pending: final.pending.map((ask) => ({
           id: ask.id,
           kind: ask.kind,
           title: ask.title,
           age_s: Math.max(0, Math.round((now - ask.askedAt) / 1000)),
         })),
-        files_changed: final.digest.files.length,
+        files_changed: taskFilesChanged(final),
+        ...(taskDoneWithFailures(final) ? { done_with_failures: true } : {}),
         cost: Math.round(final.cost * 10_000) / 10_000,
         tokens: { ...final.tokens },
         ...(stuck !== undefined ? { stuck: { kind: stuck.kind, detail: stuck.detail } } : {}),
@@ -651,7 +710,9 @@ export class TaskEngine {
     const logged = await this.fetchEvents(sessionID, after > 0 ? after : 0).catch(() => [] as DurableEvent[])
     if (logged.length > 0) return logged
     if (live.length > 0) return [...live]
-    if (after > 0) return []
+    // A durable cursor does not survive a restart: when the host kept no log
+    // (the default), replay the transcript once instead of freezing the
+    // counters at zero forever.
     const messages = await this.pageAll(sessionID).catch(() => [] as TranscriptMessage[])
     return transcriptEvents(messages, after < 0 ? -after : 0)
   }
@@ -765,6 +826,7 @@ export class TaskEngine {
       status: "running",
       phase: "executing",
       pending: current.pending.filter((item) => item.id !== ask.id),
+      ...(refused ? { refusedApprovals: current.refusedApprovals + 1 } : {}),
     })
     if (refused)
       throw new Error(
@@ -848,11 +910,21 @@ export class TaskEngine {
     await this.refresh(handle).catch(() => undefined)
     let current = this.get(handle)
     // `result` must stand alone: if no checkup ran, rebuild the counters from
-    // the transcript so steps/files/last-text are not reported as zero.
-    if (current.digest.steps === 0 && current.digest.lastText === undefined) {
+    // the transcript so steps/files/last-text are not reported as zero. A run
+    // that only saw tool-call events also needs the transcript to discover a
+    // failed call the event stream never reported.
+    const rebuild = current.digest.steps === 0 && current.digest.lastText === undefined
+    if (rebuild || current.digest.toolFailures === 0) {
       const messages = await this.pageAll(current.sessionID).catch(() => [] as TranscriptMessage[])
       if (messages.length > 0) {
-        this.patch(handle, { digest: foldDigest(current.digest, transcriptEvents(messages, 0)) })
+        const transcriptDigest = foldDigest(emptyDigest(), transcriptEvents(messages, 0))
+        if (rebuild) {
+          this.patch(handle, { digest: transcriptDigest })
+        } else if (transcriptDigest.toolFailures > current.digest.toolFailures) {
+          this.patch(handle, {
+            digest: { ...current.digest, toolFailures: transcriptDigest.toolFailures },
+          })
+        }
         current = this.get(handle)
       }
     }
@@ -872,6 +944,7 @@ export class TaskEngine {
     if (current.digest.lastText !== undefined) {
       summary.last_text = clip(current.digest.lastText.trim(), Math.min(1_200, budgetChars / 2))
     }
+    if (taskDoneWithFailures(current)) summary.done_with_failures = true
     if (current.error !== undefined) summary.error = current.error
     if (current.errorCode !== undefined) summary.error_code = current.errorCode
     if (current.worktree !== undefined) summary.worktree = current.worktree.directory
@@ -879,12 +952,14 @@ export class TaskEngine {
     let diffResult: TaskResult["diff"]
     try {
       const diff = await this.port.diff({ sessionID: current.sessionID })
-      // Diff is authoritative when non-empty; otherwise report the files the
-      // digest saw the task touch (a run that reverted everything, or a
-      // non-git project).
-      summary.files_changed = diff.length > 0 ? diff.length : current.digest.files.length
+      // The diff is authoritative once it is readable, including an empty one:
+      // a refused edit leaves a digest hint but no real change.
+      summary.files_changed = diff.length
       summary.additions = diff.reduce((total, file) => total + file.additions, 0)
       summary.deletions = diff.reduce((total, file) => total + file.deletions, 0)
+      // Only a terminal task's diff is final; caching a running diff would keep
+      // reporting stale counts after later edits.
+      if (isTerminal(current.status)) this.patch(handle, { diffFiles: diff.length, diffChecked: true })
       if (detail === "diff") {
         diffResult = []
         let used = 0
@@ -915,18 +990,47 @@ export class TaskEngine {
         ...(cursor === undefined || cursor === "" ? { order: "asc" as const } : {}),
         ...(cursor !== undefined && cursor !== "" ? { cursor } : {}),
       })
-      const messages: Array<{ role: string; text: string }> = []
+      const messages: Array<{
+        role: string
+        text: string
+        tool_calls?: Array<{ name: string; status?: string; error?: string }>
+      }> = []
       let used = 0
       let truncated = false
       for (const message of page.items) {
         const text = clip(message.text ?? "", 600)
-        if (text === "") continue
-        if (used + text.length > budgetChars) {
+        const toolCalls = message.tools?.map((tool) => ({
+          name: tool.name,
+          ...(tool.status !== undefined ? { status: tool.status } : {}),
+          ...(tool.error !== undefined ? { error: clip(tool.error, 300) } : {}),
+        }))
+        // A tool-only assistant turn has no text but is still the turn that
+        // failed; dropping it hides the refused call from the transcript.
+        if (text === "" && (toolCalls === undefined || toolCalls.length === 0)) continue
+        const toolText =
+          toolCalls === undefined
+            ? ""
+            : clip(
+                toolCalls
+                  .map(
+                    (tool) =>
+                      `${tool.name}${tool.status === "error" ? " failed" : ""}` +
+                      `${tool.error !== undefined ? `: ${tool.error}` : ""}`,
+                  )
+                  .join("; "),
+                600,
+              )
+        const display = text !== "" ? text : toolText
+        if (used + display.length > budgetChars) {
           truncated = true
           break
         }
-        messages.push({ role: message.role ?? message.type, text })
-        used += text.length
+        messages.push({
+          role: message.role ?? message.type,
+          text: display,
+          ...(toolCalls !== undefined && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        })
+        used += display.length
       }
       result.transcript = {
         messages,
@@ -1002,12 +1106,17 @@ export class TaskEngine {
 
   private async rebuild(session: SessionSummary, handle: string): Promise<TaskRecord> {
     const now = this.now()
-    const queuedState = session.metadata[STATE_KEY] === "queued"
+    const state = session.metadata[STATE_KEY]
+    const stateStatus =
+      state === "failed" ? "failed" : state === "cancelled" ? "cancelled" : state === "done" ? "done" : undefined
+    const queuedState = state === "queued"
+    const status = queuedState ? "queued" : (stateStatus ?? statusFromSession(session))
     const record: TaskRecord = {
       handle,
       sessionID: session.id,
-      status: queuedState ? "queued" : statusFromSession(session),
-      phase: queuedState ? "queued" : "executing",
+      status,
+      // A terminal status must not come back as a task that still executes.
+      phase: status === "queued" ? "queued" : isTerminal(status) ? "finished" : "executing",
       autonomy: session.metadata[AUTONOMY_KEY] ?? "supervised",
       isolation: session.metadata.banyan_worktree !== undefined ? "worktree" : "shared",
       mcpClient: session.metadata[CLIENT_KEY] ?? "unknown",
@@ -1015,6 +1124,7 @@ export class TaskEngine {
       updatedAt: session.updated > 0 ? session.updated : now,
       prompt: session.title ?? "",
       pending: [],
+      refusedApprovals: 0,
       cost: session.cost,
       tokens: { input: session.tokens.input, output: session.tokens.output },
       budget: budgetFromMetadata(session.metadata[BUDGET_KEY], this.config.taskBudgetUsd),
@@ -1037,9 +1147,9 @@ export class TaskEngine {
         .catch(() => undefined)
       if (project !== undefined) record.worktree = { directory: worktree, projectID: project.id, created: false }
     }
-    if (session.outcome === "failed") record.status = "failed"
     this.records.set(handle, record)
     this.sessionToHandle.set(session.id, handle)
+    if (isTerminal(record.status)) await this.reconcileDiff(handle).catch(() => undefined)
     await this.refresh(handle).catch(() => undefined)
     this.ensureSweepTimer()
     this.ensureBudgetTimer()
@@ -1051,7 +1161,10 @@ export class TaskEngine {
   private async refresh(handle: string): Promise<void> {
     const record = this.records.get(handle)
     if (!record) return
-    if (record.status === "cancelled" || record.status === "failed") return
+    if (isTerminal(record.status)) {
+      await this.reconcileDiff(handle).catch(() => undefined)
+      return
+    }
     const session = await this.port.getSession({ sessionID: record.sessionID })
     if (session === undefined) {
       this.patch(handle, {
@@ -1117,6 +1230,15 @@ export class TaskEngine {
       } else if (await this.hasAssistantReply(record)) {
         patch.status = "done"
         patch.phase = "finished"
+      } else if (record.status !== "queued" && this.taskLost(record, session.updated)) {
+        // The host lost the execution (service crash/restart) and recovery did
+        // not resume it: report a terminal failure instead of "running" forever.
+        patch.status = "failed"
+        patch.phase = "finished"
+        patch.error =
+          "the background service stopped while this task was running and did not resume it. " +
+          "The work did not finish; start a new task to retry."
+        patch.errorCode = "SERVICE_LOST"
       } else if (record.status !== "queued") {
         patch.status = "running"
         patch.phase = "executing"
@@ -1133,6 +1255,31 @@ export class TaskEngine {
     this.patch(handle, patch)
     if (patch.status === "needs_input") this.ensureNeedsInputTimer(handle)
     else this.clearNeedsInputTimer(handle)
+    if (patch.status !== undefined && isTerminal(patch.status)) await this.reconcileDiff(handle).catch(() => undefined)
+  }
+
+  // The session diff is the only honest `files_changed` once a task is over:
+  // the digest counts an edit tool call even when its permission was refused.
+  private async reconcileDiff(handle: string): Promise<void> {
+    const record = this.records.get(handle)
+    if (!record || record.diffChecked === true) return
+    try {
+      const diff = await this.port.diff({ sessionID: record.sessionID })
+      this.patch(handle, { diffFiles: diff.length, diffChecked: true })
+    } catch {
+      this.patch(handle, { diffChecked: true })
+    }
+  }
+
+  private taskLost(record: TaskRecord, sessionUpdated: number): boolean {
+    const last = Math.max(
+      record.lastActivityAt ?? 0,
+      record.digest.lastEventAt ?? 0,
+      record.launchedAt ?? 0,
+      sessionUpdated > 0 ? sessionUpdated : record.createdAt,
+    )
+    const grace = record.launchedAt === undefined ? REHYDRATE_LOST_GRACE_MS : ACTIVE_LOST_GRACE_MS
+    return this.now() - last > grace
   }
 
   private async hasAssistantReply(record: TaskRecord): Promise<boolean> {
@@ -1620,6 +1767,17 @@ const budgetFromMetadata = (raw: string | undefined, fallbackCost: number): Budg
     return { maxSteps: 200, maxCost: fallbackCost, timeoutMs: 0 }
   }
 }
+
+const isTerminal = (status: TaskStatus): boolean =>
+  status === "done" || status === "failed" || status === "cancelled"
+
+// `done` alone is not honest when the only action failed or was refused.
+export const taskFilesChanged = (record: TaskRecord): number =>
+  isTerminal(record.status) && record.diffFiles !== undefined ? record.diffFiles : record.digest.files.length
+
+export const taskDoneWithFailures = (record: TaskRecord): boolean =>
+  record.status === "done" &&
+  (record.digest.toolFailures > 0 || record.digest.executionsFailed > 0 || record.refusedApprovals > 0)
 
 const statusFromSession = (session: SessionSummary): TaskStatus => {
   if (session.outcome === "failed") return "failed"

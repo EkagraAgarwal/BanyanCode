@@ -12,11 +12,14 @@ import {
   SharedWriteConflictError,
   TaskEngine,
   UnknownTaskError,
+  taskDoneWithFailures,
+  taskFilesChanged,
   type PendingAsk,
   type ResultDetail,
   type TaskRecord,
 } from "./engine"
 import { suggestCheckupSeconds } from "./stuck"
+import { messageOf } from "./rpc"
 import { log } from "./logging"
 
 export const TaskToolNames = [
@@ -210,6 +213,7 @@ const StatusOutput = z.object({
   tokens: z.object({ input: z.number(), output: z.number() }),
   files_changed: z.number().int().min(0),
   steps: z.number().int().min(0),
+  done_with_failures: z.boolean().optional(),
   last_text: z.string().optional(),
   error: z.string().optional(),
   error_code: z.string().optional(),
@@ -246,9 +250,13 @@ const CheckupOutput = z.object({
         cost: z.number(),
         tokens: z.object({ input: z.number(), output: z.number() }),
         last_event_at: z.number().optional(),
+        total_steps: z.number().int().min(0),
+        total_tool_calls: z.number().int().min(0),
+        total_tool_failures: z.number().int().min(0),
       }),
       pending: z.array(PendingSchema),
       files_changed: z.number().int().min(0),
+      done_with_failures: z.boolean().optional(),
       cost: z.number(),
       tokens: z.object({ input: z.number(), output: z.number() }),
       stuck: z.object({ kind: z.enum(["no_progress", "loop"]), detail: z.string() }).optional(),
@@ -286,6 +294,7 @@ const ResultOutput = z.object({
     steps: z.number().int().min(0),
     tool_calls: z.number().int().min(0),
     tool_failures: z.number().int().min(0),
+    done_with_failures: z.boolean().optional(),
     last_text: z.string().optional(),
     error: z.string().optional(),
     error_code: z.string().optional(),
@@ -304,7 +313,21 @@ const ResultOutput = z.object({
     .optional(),
   transcript: z
     .object({
-      messages: z.array(z.object({ role: z.string(), text: z.string() })),
+      messages: z.array(
+        z.object({
+          role: z.string(),
+          text: z.string(),
+          tool_calls: z
+            .array(
+              z.object({
+                name: z.string(),
+                status: z.string().optional(),
+                error: z.string().optional(),
+              }),
+            )
+            .optional(),
+        }),
+      ),
       cursor: z.string().optional(),
       truncated: z.boolean(),
     })
@@ -352,7 +375,7 @@ const mapError = (error: unknown): ToolResult => {
   if (error instanceof UnknownTaskError) return errorResult("UNKNOWN_TASK", error.message)
   if (error instanceof SharedWriteConflictError) return errorResult("SHARED_WRITE_CONFLICT", error.message)
   if (error instanceof McpKilledError) return errorResult("MCP_KILLED", error.message)
-  const message = error instanceof Error ? error.message : String(error)
+  const message = messageOf(error)
   if (/unknown autonomy profile/.test(message)) return errorResult("INVALID_ARGUMENTS", message)
   if (/not in banyancode_mcp_server/.test(message)) return errorResult("POLICY_REJECTED", message)
   return errorResult("UPSTREAM_ERROR", message)
@@ -407,8 +430,9 @@ const statusOut = (record: TaskRecord) => ({
   pending: pendingOut(record),
   cost: Math.round(record.cost * 10_000) / 10_000,
   tokens: { ...record.tokens },
-  files_changed: record.digest.files.length,
+  files_changed: taskFilesChanged(record),
   steps: record.digest.steps,
+  ...(taskDoneWithFailures(record) ? { done_with_failures: true } : {}),
   ...(record.digest.lastText !== undefined ? { last_text: clip(record.digest.lastText.trim(), 240) } : {}),
   ...(record.error !== undefined ? { error: record.error } : {}),
   ...(record.errorCode !== undefined ? { error_code: record.errorCode } : {}),
@@ -615,8 +639,9 @@ export function registerTaskTools(mcp: McpServer, deps: TaskToolsDeps): void {
       title: "Task result",
       description:
         "Bounded result for a finished (or running) task: counts, verification outcome, cost and the tail of " +
-        "the last assistant message. detail=diff adds patches, detail=transcript pages the conversation with " +
-        "a cursor. " +
+        "the last assistant message. summary carries done_with_failures when the task finished but a tool " +
+        "failed or an approval was refused. detail=diff adds patches, detail=transcript pages the " +
+        "conversation with a cursor. " +
         HANDLE_LIFETIME,
       inputSchema: ResultInput,
       outputSchema: ResultOutput,

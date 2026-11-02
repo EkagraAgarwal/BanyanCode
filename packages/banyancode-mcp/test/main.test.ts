@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { main, parseArgv } from "../src/main"
-import { basicAuthHeaders, resolveServeCommand } from "../src/attach"
+import { basicAuthHeaders, defaultServiceFile, resolveServeCommand } from "../src/attach"
+import { resolveServerVersion } from "../src/server"
 
 describe("parseArgv", () => {
   test("defaults to serve and reads value/boolean flags", () => {
@@ -97,5 +98,96 @@ describe("main", () => {
     expect(out.join("\n")).toContain("banyancode mcp")
     expect(await main(["nope"], io)).toBe(2)
     expect(err.join("\n")).toContain('unknown command "nope"')
+  })
+})
+
+describe("argument validation", () => {
+  const io = (out: string[], err: string[], env: NodeJS.ProcessEnv = {}) => ({
+    stdout: (text: string) => out.push(text),
+    stderr: (text: string) => err.push(text),
+    cwd: () => process.cwd(),
+    env,
+  })
+
+  test("an unknown tool group is rejected instead of silently disabling every tool", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "banyancode-mcp-tools-"))
+    const err: string[] = []
+    const code = await main(["profiles", "--cwd", directory, "--tools", "bogus"], io([], err))
+    expect(code).toBe(2)
+    expect(err.join("\n")).toContain('unknown tool group "bogus"')
+    expect(err.join("\n")).toContain("task, code")
+  })
+
+  test("--max-tasks outside 1-32 is rejected", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "banyancode-mcp-max-"))
+    for (const value of ["99", "0", "abc"]) {
+      const err: string[] = []
+      const code = await main(["profiles", "--cwd", directory, "--max-tasks", value], io([], err))
+      expect(code).toBe(2)
+      expect(err.join("\n")).toContain("between 1 and 32")
+    }
+  })
+})
+
+describe("service file and version", () => {
+  test("the default service file follows this build's channel", () => {
+    const state = mkdtempSync(path.join(tmpdir(), "banyancode-mcp-state-"))
+    expect(defaultServiceFile({ XDG_STATE_HOME: state, BANYANCODE_CHANNEL: "dev" })).toBe(
+      path.join(state, "banyancode", "service-dev.json"),
+    )
+    expect(defaultServiceFile({ XDG_STATE_HOME: state, BANYANCODE_CHANNEL: "local" })).toBe(
+      path.join(state, "banyancode", "service-local.json"),
+    )
+    expect(defaultServiceFile({ XDG_STATE_HOME: state, BANYANCODE_CHANNEL: "latest" })).toBe(
+      path.join(state, "banyancode", "service.json"),
+    )
+    expect(defaultServiceFile({ XDG_STATE_HOME: state, BANYANCODE_CHANNEL: "beta" })).toBe(
+      path.join(state, "banyancode", "service.json"),
+    )
+  })
+
+  test("doctor finds the channel service file, not only service.json", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "banyancode-mcp-doctor-file-"))
+    const state = mkdtempSync(path.join(tmpdir(), "banyancode-mcp-doctor-state-"))
+    mkdirSync(path.join(state, "banyancode"), { recursive: true })
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const pathname = new URL(request.url).pathname
+        if (pathname === "/api/info") return Response.json({ version: "test", pid: process.pid })
+        if (pathname === "/api/session") return Response.json({ data: [], cursor: {} })
+        return new Response("not found", { status: 404 })
+      },
+    })
+    const registration = path.join(state, "banyancode", "service-local.json")
+    writeFileSync(
+      registration,
+      JSON.stringify({ url: `http://127.0.0.1:${server.port}`, pid: process.pid, version: "test" }),
+    )
+    try {
+      const out: string[] = []
+      const err: string[] = []
+      const code = await main(["doctor", "--cwd", directory], {
+        stdout: (value: string) => out.push(value),
+        stderr: (value: string) => err.push(value),
+        cwd: () => directory,
+        env: { XDG_STATE_HOME: state },
+      })
+      expect(code).toBe(0)
+      const report = JSON.parse(out.join("\n")) as Record<string, unknown>
+      expect(report["service_file"]).toBe(registration)
+      expect((report["service"] as Record<string, unknown>)["url"]).toBe(`http://127.0.0.1:${server.port}`)
+      expect(report["tasks"]).toEqual([])
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test("the MCP server version is the real app version, never a literal 0.0.0", () => {
+    expect(resolveServerVersion({ BANYANCODE_VERSION: "26.11.0-dev.8f77dc8" }, undefined)).toBe(
+      "26.11.0-dev.8f77dc8",
+    )
+    expect(resolveServerVersion({}, "26.11.0")).toBe("26.11.0")
+    expect(resolveServerVersion({}, undefined)).toBe("0.0.0")
   })
 })

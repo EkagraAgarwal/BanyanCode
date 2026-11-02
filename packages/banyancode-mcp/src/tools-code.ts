@@ -100,7 +100,7 @@ const invoke = async (deps: CodeToolsDeps, namespace: string, run: () => Promise
         `${namespace} is not registered on this server (${messageOf(error)}); load the BanyanCode plugin in banyancode.json`,
       )
     }
-    return errorResult("UPSTREAM_ERROR", `request failed: ${messageOf(error)}`)
+    return errorResult("UPSTREAM_ERROR", `${namespace} request failed: ${messageOf(error)}`)
   }
 }
 

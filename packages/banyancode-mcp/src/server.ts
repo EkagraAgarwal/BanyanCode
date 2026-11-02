@@ -12,7 +12,22 @@ import type { RpcCaller } from "./rpc"
 import { registerResources } from "./resources"
 
 export const SERVER_NAME = "banyancode"
-export const SERVER_VERSION = process.env["BANYANCODE_VERSION"] ?? "0.0.0"
+
+// The CLI build replaces OPENCODE_VERSION with the real release version. The
+// env var keeps source runs and tests able to report one too.
+declare const OPENCODE_VERSION: string
+const buildVersion = typeof OPENCODE_VERSION === "string" ? OPENCODE_VERSION : undefined
+
+export const resolveServerVersion = (
+  env: NodeJS.ProcessEnv = process.env,
+  embedded: string | undefined = buildVersion,
+): string => {
+  const fromEnv = env["BANYANCODE_VERSION"]
+  if (fromEnv !== undefined && fromEnv !== "") return fromEnv
+  return embedded ?? "0.0.0"
+}
+
+export const SERVER_VERSION = resolveServerVersion()
 
 // Taught at initialize. Keep it about WHEN to reach for each tool; the tool
 // descriptions carry the details.
@@ -22,7 +37,7 @@ export const SERVER_INSTRUCTIONS = [
   "banyan_checkup is the cheap supervision primitive: one call returns, per active task, a digest of what happened since your cursor (steps, tool calls, files changed, tail of the last assistant message), pending questions and permission asks, cost/tokens, stuck or loop detection, a suggested next checkup interval, and a fresh cursor. Pass the cursor back.",
   "Do not poll banyan_task_status in a loop; use banyan_checkup and honor next_checkup_in_s.",
   "Answer pending asks with banyan_task_reply (typed approve/reject for permissions, free text for questions). When your client supports elicitation and the server offers it, approve or deny permission asks inline.",
-  "Read banyan_task_result when a task finishes (summary), with detail=diff for patches or detail=transcript to page the conversation.",
+  "Read banyan_task_result when a task finishes (summary), with detail=diff for patches or detail=transcript to page the conversation. A done task with done_with_failures true did not complete all its work: compare the diff and transcript before reporting success.",
   "banyan_task_list shows the task and subagent tree. banyan_task_cancel aborts one task; banyan_kill aborts all of them.",
   "Resources banyan://tasks and banyan://task/{id} mirror the same state; subscribe when your client supports push updates.",
   "Tasks are normal sessions tagged with BanyanCode metadata, so handles survive client disconnects and server restarts.",

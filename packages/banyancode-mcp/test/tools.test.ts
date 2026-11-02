@@ -100,6 +100,8 @@ describe("MCP task tools", () => {
     expect(instructions).toContain("cursor")
     expect(instructions).toContain("banyan_verify")
     expect(instructions).not.toContain("banyan_memory")
+    expect(instructions).not.toMatch(/\bv[12]\b/)
+    expect(instructions).toContain("done_with_failures")
   }, 15_000)
 
   test("start → checkup → status → result → list → cancel", async () => {

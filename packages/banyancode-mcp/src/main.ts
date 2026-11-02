@@ -5,7 +5,7 @@
 import path from "node:path"
 import { McpConfig, type ResolvedConfig } from "./config"
 import { assertYoloAllowed, listProfiles } from "./autonomy"
-import { attachOrStart, resolveServeCommand, selfCommand } from "./attach"
+import { attachOrStart, defaultServiceFile, resolveServeCommand, selfCommand } from "./attach"
 import { createSessionPort, makeRpcCaller } from "./session-client"
 import { TaskEngine } from "./engine"
 import { createMcpServer } from "./server"
@@ -117,6 +117,7 @@ Options:
   --cwd <dir>          project directory the tasks run in (default: $CLAUDE_PROJECT_DIR or cwd)
   --config <file>      banyancode.json path (default: discovery from --cwd)
   --attach <url>       reuse a running server instead of discovering/starting one
+  --service-file <f>   service registration file (default: this channel's file)
   --password <pw>      password for --attach (default: $BANYANCODE_SERVER_PASSWORD)
   --no-start           never spawn the background service
   --allow-yolo         permit the yolo autonomy profile (stored config cannot)
@@ -152,8 +153,21 @@ const toolGroups = (parsed: Parsed): string[] | undefined => {
     .filter((item) => item !== "")
 }
 
+const maxTasksFlag = (parsed: Parsed): number | undefined => {
+  const raw = flagString(parsed, "max-tasks")
+  if (raw === undefined) return undefined
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 1 || value > 32) {
+    throw new McpConfig.InvalidConfigError(
+      `--max-tasks must be an integer between 1 and 32, got "${raw}"`,
+    )
+  }
+  return value
+}
+
 const resolve = (parsed: Parsed, io: MainIO): ResolvedConfig => {
   const cwd = path.resolve(flagString(parsed, "cwd") ?? io.env["CLAUDE_PROJECT_DIR"] ?? io.cwd())
+  const maxConcurrentTasks = maxTasksFlag(parsed)
   const config = McpConfig.resolveConfig({
     cwd,
     ...(flagString(parsed, "config") !== undefined ? { configPath: flagString(parsed, "config")! } : {}),
@@ -161,9 +175,7 @@ const resolve = (parsed: Parsed, io: MainIO): ResolvedConfig => {
     ...(flagString(parsed, "permission") !== undefined
       ? { permission: flagString(parsed, "permission") as "reject" | "edits" | "yolo" }
       : {}),
-    ...(flagString(parsed, "max-tasks") !== undefined
-      ? { maxConcurrentTasks: Number(flagString(parsed, "max-tasks")) }
-      : {}),
+    ...(maxConcurrentTasks !== undefined ? { maxConcurrentTasks } : {}),
     ...(toolGroups(parsed) !== undefined ? { toolGroups: toolGroups(parsed)! } : {}),
     env: io.env,
   })
@@ -246,7 +258,9 @@ async function doctor(parsed: Parsed, io: MainIO): Promise<number> {
   } catch (error) {
     configError = error instanceof Error ? error.message : String(error)
   }
-  const discovered = await Service.discover().catch(() => undefined)
+  // Same registration file `mcp serve` uses: channel-specific on dev/canary.
+  const serviceFile = flagString(parsed, "service-file") ?? defaultServiceFile(io.env)
+  const discovered = await Service.discover({ file: serviceFile }).catch(() => undefined)
   const report: Record<string, unknown> = {
     cwd,
     config_path: config?.configPath ?? null,
@@ -254,6 +268,7 @@ async function doctor(parsed: Parsed, io: MainIO): Promise<number> {
     max_concurrent_tasks: config?.maxConcurrentTasks ?? null,
     tool_groups: config?.toolGroups ?? null,
     autonomy: config === undefined ? null : listProfiles(config.autonomy).map((profile) => profile.name),
+    service_file: serviceFile,
     service: discovered === undefined ? null : { url: discovered.url, auth: discovered.auth !== undefined },
     serve_command: (() => {
       try {
@@ -387,7 +402,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2), over
     }
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error))
-    return 1
+    return error instanceof McpConfig.InvalidConfigError ? 2 : 1
   }
 }
 

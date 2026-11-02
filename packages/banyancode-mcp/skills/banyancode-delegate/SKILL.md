@@ -20,6 +20,14 @@ Call `banyan_task_start` with `prompt` (or `goal`) and return the `task_id`. Use
 - `wait_seconds` long-polls for the first state change; keep it small.
 - `banyan_task_spawn` fans out independent subtasks under an existing task.
 
+## Permissions
+
+The server's default `reject` policy refuses file edits. If the user wants delegated tasks to change
+files, install the server with `--permission edits`
+(`banyancode mcp install <client> --permission edits`). Without it a task can still ask for
+approval, but the request is refused, the diff stays empty, and the result reports
+`done_with_failures: true` — do not report that task as successful.
+
 ## Check up (do not poll status)
 
 Call `banyan_checkup` with the previous `cursor`. One call returns, for every active task: status

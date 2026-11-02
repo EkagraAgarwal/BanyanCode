@@ -8,6 +8,7 @@
 
 import { Service } from "@opencode/client/service"
 import type { Endpoint } from "@opencode/client/service"
+import { homedir } from "node:os"
 import path from "node:path"
 
 export type AttachTarget = {
@@ -37,6 +38,25 @@ export type AttachOptions = {
 export const SERVE_COMMAND_ENV = "BANYANCODE_MCP_SERVE_COMMAND" as const
 export const BIN_ENV = "BANYANCODE_BIN" as const
 export const PASSWORD_ENV = "BANYANCODE_SERVER_PASSWORD" as const
+
+// Build-time channel, same define the CLI reads. Stable channels share
+// `service.json`; dev/next/local builds use a channel-suffixed registration.
+declare const OPENCODE_CHANNEL: string
+
+// The registration file for this build's channel: `mcp serve` and `mcp doctor`
+// must look at the same file or doctor reports a healthy service as missing.
+export function defaultServiceFile(env: NodeJS.ProcessEnv = process.env): string {
+  const envChannel = env["BANYANCODE_CHANNEL"]
+  const embedded = typeof OPENCODE_CHANNEL === "string" ? OPENCODE_CHANNEL : "local"
+  const channel = envChannel !== undefined && envChannel !== "" ? envChannel : embedded
+  const stable = channel === "latest" || channel === "beta"
+  const name = stable ? "service.json" : `service-${channel.replace(/[^a-zA-Z0-9._-]/g, "-")}.json`
+  const stateHome =
+    env["XDG_STATE_HOME"] !== undefined && env["XDG_STATE_HOME"] !== ""
+      ? env["XDG_STATE_HOME"]
+      : path.join(homedir(), ".local", "state")
+  return path.join(stateHome, "banyancode", name)
+}
 
 // The command that re-invokes THIS binary. Mirrors
 // `packages/cli/src/util/process.ts: selfCommand`: a compiled binary executes
@@ -138,7 +158,8 @@ export async function attachOrStart(options: AttachOptions = {}): Promise<Attach
       url: normalizeUrl(options.attach),
     }
   }
-  const discoverOptions = options.serviceFile !== undefined ? { file: options.serviceFile } : {}
+  // Default to this channel's registration, not the stable `service.json`.
+  const discoverOptions = { file: options.serviceFile ?? defaultServiceFile(env) }
   const found = await Service.discover(discoverOptions)
   if (found !== undefined) return endpointTarget(found, "service")
   if (options.noStart === true) {

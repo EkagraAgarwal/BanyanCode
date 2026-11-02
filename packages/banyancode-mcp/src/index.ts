@@ -16,7 +16,7 @@ export type {
 } from "./engine"
 export { createSessionPort, makeClient, makeRpcCaller, parseModel } from "./session-client"
 export type { SessionPort } from "./session-client"
-export { attachOrStart, resolveServeCommand, selfCommand, basicAuthHeaders } from "./attach"
+export { attachOrStart, defaultServiceFile, resolveServeCommand, selfCommand, basicAuthHeaders } from "./attach"
 export { registerTaskTools, TaskToolNames, MAX_WAIT_SECONDS } from "./tools-task"
 export { registerCodeTools, CodeToolNames } from "./tools-code"
 export { registerVerifyTool, VerifyToolName } from "./tools-verify"

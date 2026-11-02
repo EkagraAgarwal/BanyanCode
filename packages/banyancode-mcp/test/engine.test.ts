@@ -396,6 +396,9 @@ describe("TaskEngine result", () => {
         tools: [{ name: "edit", input: { filePath: "src/result.ts" } }],
       },
     ]
+    h.port.diff = async () => [
+      { file: "src/result.ts", status: "modified", additions: 1, deletions: 0, patch: "+x" },
+    ]
     const result = await h.engine.result(record.handle, "summary")
     expect(result.summary.steps).toBe(1)
     expect(result.summary.tool_calls).toBe(1)
@@ -633,5 +636,226 @@ describe("TaskEngine rehydrate", () => {
     const restored = await second.rehydrateAll()
     expect(restored.find((item) => item.handle === record.handle)?.status).toBe("cancelled")
     second.close()
+  })
+})
+
+describe("TaskEngine honesty after a refused task", () => {
+  test("a refused approval keeps done honest: no files, counted failure, refused signal", async () => {
+    const h = harness({ config: { permission: "reject" } })
+    const record = await h.engine.start({ prompt: "create reply-probe.txt" })
+    h.port.addPermission(record.sessionID, permission("per_1", "edit", ["reply-probe.txt"]))
+    await expect(h.engine.reply(record.handle, { decision: "approve" })).rejects.toThrow(/--permission edits/)
+
+    const session = h.port.sessions.get(record.sessionID)!
+    session.active = false
+    session.outcome = "succeeded"
+    session.messages = [
+      { id: "m1", type: "user", role: "user", text: "create reply-probe.txt", created: 1 },
+      {
+        id: "m2",
+        type: "assistant",
+        role: "assistant",
+        created: 2,
+        tools: [
+          {
+            name: "edit",
+            input: { filePath: "reply-probe.txt" },
+            status: "error",
+            error: "permission denied by the server policy",
+          },
+        ],
+      },
+    ]
+
+    const result = await h.engine.result(record.handle, "summary")
+    expect(result.status).toBe("done")
+    expect(result.summary.files_changed).toBe(0)
+    expect(result.summary.tool_calls).toBe(1)
+    expect(result.summary.tool_failures).toBe(1)
+    expect(result.summary.done_with_failures).toBe(true)
+
+    const diff = await h.engine.result(record.handle, "diff")
+    expect(diff.diff).toEqual([])
+
+    const transcript = await h.engine.result(record.handle, "transcript")
+    const assistant = transcript.transcript?.messages.find((message) => message.role === "assistant")
+    expect(assistant?.text).toContain("permission denied")
+    expect(assistant?.tool_calls?.[0]).toEqual({
+      name: "edit",
+      status: "error",
+      error: "permission denied by the server policy",
+    })
+    h.close()
+  })
+
+  test("an empty diff wins over a digest edit hint", async () => {
+    const h = harness()
+    const record = await h.engine.start({ prompt: "stale hint" })
+    h.port.emit({
+      type: "durable",
+      sessionID: record.sessionID,
+      event: event(1, "session.tool.called", { name: "edit", input: { filePath: "a.ts" } }),
+    })
+    await waitUntil(() => h.engine.get(record.handle).live.length === 1)
+    await h.engine.checkup({ cursorState: {} })
+    expect(h.engine.get(record.handle).digest.files).toEqual(["a.ts"])
+
+    h.port.sessions.get(record.sessionID)!.outcome = "succeeded"
+    const result = await h.engine.result(record.handle, "summary")
+    expect(result.summary.files_changed).toBe(0)
+    h.close()
+  })
+})
+
+describe("TaskEngine lost-service recovery", () => {
+  test("a rehydrated task whose service died fails with SERVICE_LOST", async () => {
+    const h = harness()
+    const created = await h.port.createSession({
+      title: "[banyan] crashed",
+      metadata: { origin: "banyan-mcp", banyan_task: "btask_crashed", banyan_state: "running" },
+      directory: cwd,
+    })
+    const session = h.port.sessions.get(created.id)!
+    session.created = h.clock() - 120_000
+    session.updated = h.clock() - 60_000
+    session.active = false
+
+    const second = new TaskEngine({
+      port: h.port,
+      config: config(),
+      root: cwd,
+      now: h.clock,
+      sweepIntervalMs: 60_000,
+    })
+    const restored = await second.rehydrateAll()
+    const record = restored.find((item) => item.sessionID === created.id)!
+    expect(record.status).toBe("failed")
+    expect(record.phase).toBe("finished")
+    expect(record.errorCode).toBe("SERVICE_LOST")
+    expect(record.error).toContain("service stopped")
+    second.close()
+  })
+
+  test("restart recovery in progress keeps a recent task running", async () => {
+    const h = harness()
+    const created = await h.port.createSession({
+      title: "[banyan] starting",
+      metadata: { origin: "banyan-mcp", banyan_task: "btask_starting", banyan_state: "running" },
+      directory: cwd,
+    })
+    const session = h.port.sessions.get(created.id)!
+    session.created = h.clock() - 2_000
+    session.updated = h.clock() - 1_000
+    session.active = false
+
+    const second = new TaskEngine({
+      port: h.port,
+      config: config(),
+      root: cwd,
+      now: h.clock,
+      sweepIntervalMs: 60_000,
+    })
+    const restored = await second.rehydrateAll()
+    expect(restored.find((item) => item.sessionID === created.id)?.status).toBe("running")
+    second.close()
+  })
+
+  test("terminal task state is not rehydrated as executing", async () => {
+    const h = harness()
+    const states = ["failed", "cancelled", "done"] as const
+    const ids: string[] = []
+    for (const state of states) {
+      const created = await h.port.createSession({
+        title: `[banyan] ${state}`,
+        metadata: { origin: "banyan-mcp", banyan_task: `btask_${state}`, banyan_state: state },
+        directory: cwd,
+      })
+      const session = h.port.sessions.get(created.id)!
+      session.created = h.clock() - 5_000
+      session.updated = h.clock() - 1_000
+      session.active = false
+      ids.push(created.id)
+    }
+
+    const second = new TaskEngine({
+      port: h.port,
+      config: config(),
+      root: cwd,
+      now: h.clock,
+      sweepIntervalMs: 60_000,
+    })
+    const restored = await second.rehydrateAll()
+    for (const id of ids) {
+      const record = restored.find((item) => item.sessionID === id)!
+      expect(record.phase).toBe("finished")
+    }
+    expect(restored.find((item) => item.sessionID === ids[0])?.status).toBe("failed")
+    expect(restored.find((item) => item.sessionID === ids[1])?.status).toBe("cancelled")
+    expect(restored.find((item) => item.sessionID === ids[2])?.status).toBe("done")
+    second.close()
+  })
+})
+
+describe("TaskEngine consistency and startup latency", () => {
+  test("checkup totals match the result summary after a rehydrate", async () => {
+    const h = harness()
+    const created = await h.port.createSession({
+      title: "[banyan] history",
+      metadata: { origin: "banyan-mcp", banyan_task: "btask_history" },
+      directory: cwd,
+    })
+    const session = h.port.sessions.get(created.id)!
+    session.created = h.clock() - 5_000
+    session.updated = h.clock() - 1_000
+    session.outcome = "succeeded"
+    session.messages = [
+      { id: "m1", type: "user", role: "user", text: "do it", created: 1 },
+      {
+        id: "m2",
+        type: "assistant",
+        role: "assistant",
+        text: "attempted the edit",
+        created: 2,
+        tools: [{ name: "edit", input: { filePath: "a.ts" }, status: "error", error: "denied" }],
+      },
+    ]
+
+    const second = new TaskEngine({
+      port: h.port,
+      config: config(),
+      root: cwd,
+      now: h.clock,
+      sweepIntervalMs: 60_000,
+    })
+    const restored = await second.rehydrateAll()
+    const handle = restored.find((item) => item.sessionID === created.id)!.handle
+    const first = await second.checkup({ cursorState: {} })
+    const task = first.report.tasks.find((item) => item.task_id === handle)!
+    expect(task.progress.total_steps).toBe(1)
+    expect(task.progress.total_tool_calls).toBe(1)
+    expect(task.progress.total_tool_failures).toBe(1)
+
+    const result = await second.result(handle, "summary")
+    expect(result.summary.steps).toBe(task.progress.total_steps)
+    expect(result.summary.tool_calls).toBe(task.progress.total_tool_calls)
+    expect(result.summary.tool_failures).toBe(task.progress.total_tool_failures)
+
+    const secondCheckup = await second.checkup({ cursorState: decodeCursor(first.report.cursor) })
+    const next = secondCheckup.report.tasks.find((item) => item.task_id === handle)!
+    expect(next.progress.steps).toBe(0)
+    expect(next.progress.total_steps).toBe(1)
+    expect(next.progress.total_tool_failures).toBe(1)
+    second.close()
+  })
+
+  test("a stalled prompt launch returns running promptly", async () => {
+    const h = harness()
+    h.port.prompt = () => new Promise<void>(() => {})
+    const startedAt = Date.now()
+    const record = await h.engine.start({ prompt: "cold provider" })
+    expect(Date.now() - startedAt).toBeLessThan(10_000)
+    expect(record.status).toBe("running")
+    expect(record.phase).toBe("executing")
+    h.close()
   })
 })
