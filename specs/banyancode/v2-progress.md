@@ -1,45 +1,51 @@
 # BanyanCode v2 migration: progress
 
-Status at the last stop, 2026-11-01. Plan: [v2-migration-plan.md](v2-migration-plan.md). Feature list: [v2-parity.md](v2-parity.md), gaps audit: [v2-parity-gaps.md](v2-parity-gaps.md), upstream edits: [v2-patches.md](v2-patches.md).
+Status at 2026-11-02. Plan: [v2-migration-plan.md](v2-migration-plan.md). Feature list: [v2-parity.md](v2-parity.md), gaps audit: [v2-parity-gaps.md](v2-parity-gaps.md), upstream edits: [v2-patches.md](v2-patches.md).
 
 ## Where things are
 
-- Branch `v2-base`, local only. **Not on GitHub yet, and nothing is published to npm.**
-- The fork is frozen: `v1-final` tagged and pushed, `publish` and `Tag release` workflows disabled on GitHub.
-- All work is committed; no coders were running at the stop.
+- `banyancode@next` is `26.11.0-rc.2`, with a GitHub prerelease. `banyancode@latest` is still v1 (`26.10.9`), so existing users are unaffected.
+- `v2-base` is on GitHub at the tagged commit and `banyancode-ci` passes. `main` is still v1.
+- The publish workflow runs from a `v[0-9]*` tag. A push to `release-check` builds and packs all 12 platforms and publishes nothing; use it before tagging. Dispatch only works once the workflow is on the default branch.
 
-## Verified on the dev build (26.11.0-dev.008a7d0, before the line-ending commit)
+## Verified on rc.2, installed from npm on Windows x64
 
-- Smoke test: 18 of 18. Includes `mcp serve` starting its own service and ignoring a stock OpenCode registration.
-- A real AI session: built the code graph, found the caller, wrote the file.
-- Real MCP delegation: delegate, disconnect mid-task, reconnect, supervise with `banyan_checkup` (each under about 1 KB), answer permission prompts, collect the result. This run predates the goal, quota and prompt-cache commits; the smoke test covers those builds, this flow has not been repeated.
-- CLI subcommands, run on a real binary, including project isolation. Also predates those commits.
-- Tests: plugin 296, TUI 49, MCP 131, core tests touched by these changes pass, typecheck clean in those packages.
+- Smoke test: 18 of 18.
+- A real AI session, with logins imported from `auth.json`.
+- MCP delegation with `--permission edits`: disconnect mid-task, reconnect, checkups, permission replies, file written, `files_changed` 1.
+- Approving under the default reject policy returns a clear error and writes nothing.
+- `mcp install --permission edits` writes the policy into the client config, and refuses `yolo`.
+- The TUI starts and draws in a real terminal (rc.1 code on a dev build). It has not been used by hand: no typing, dialogs or a full session.
+- Linux and macOS builds were packed and published but never run.
 
 ## Next steps, in order
 
-1. Push `v2-base`. Upstream's pre-push hook runs `bun run check` (lint, then typecheck of every package), which ran over 25 minutes without finishing on Windows, and was stopped. Run it from a clean checkout with its output visible to find out whether it's slow or stuck. Don't skip the hook without the user's say-so.
-2. Confirm `banyancode-ci` passes on GitHub.
-3. Rebuild, then repeat the smoke test and the MCP delegation flow on the final commit.
-4. Ask the user before the first npm canary (`dev` dist-tag). Needs `NPM_TOKEN`. Workflows are manual-dispatch only and default to dry run.
-5. Cutover (confirm with the user first): rename `main` to `v1`, `v2-base` to `main`. Enable publish triggers then; a tag trigger must be `v[0-9]*`, because `v*` matched `v1-final` and started a bogus publish.
+1. Try the TUI by hand: `npm install -g banyancode@next`. Note this replaces the installed v1, which also hosts the current MCP connection; use `--prefix` to keep them apart.
+2. Ask the user before each of these: tag `v26.11.0` (moves `latest`, so every v1 user moves to v2 with a fresh start), and the cutover (rename `main` to `v1`, `v2-base` to `main`).
+3. At cutover, add the `branches: ["dev"]` canary trigger and the preflight triggers.
 
 ## Open questions and known differences from v1
 
-- The MCP restart-recovery integration test failed once under heavy machine load, then passed in the full suite. Likely timing, not proven. Re-run on a quiet machine.
-- `Ctrl-O` in `app-lifecycle` and `standalone server exits when its owner is killed` fail on this machine, with and without BanyanCode's plugins.
 - Logins from `auth.json` are imported on first run even though the data decision was a fresh start: losing them seemed worse. Confirm with the user. Sessions and memory don't carry over.
-- A dev build run outside the smoke test shares `banyancode` config and data folders with an installed v1. Its database and service are separate, but this hasn't been tested alongside a real v1 install.
+- By default `mcp install` leaves delegated tasks unable to edit files, as v1 did. Keeping that default was a choice; `--permission edits` opts in.
+- After an upgrade, a running older service keeps serving `banyancode run`: an rc.2 client used the rc.1 service. Upstream has a version-replace path (`checkVersion`) that `run` didn't take. Not tested through the TUI or `banyancode upgrade`.
+- Each channel uses one fixed service port, so two homes on one machine can't both run the same channel: the second fails with a clear "port in use" error. Shared machines would hit this. Upstream design.
+- npm warns that tokens bypassing 2FA are being restricted for direct publishing. Check `NPM_TOKEN` before the stable release.
+- Windows binaries are unsigned: no Azure secrets are set.
+- The MCP `serve-stdio` test timed out once in the full suite with about 1.5 GB of memory free, and passed 3 of 3 alone. Its first frame arrived past the 60 second limit. Likely load, not proven. CI doesn't run the MCP or TUI suites.
+- `Snapshot > captures concurrently` and `treats capture outside Git`, `Ctrl-O` in `app-lifecycle` and `standalone server exits when its owner is killed` fail on this machine. The two snapshot tests also fail on the baseline.
 - `goal`: `block` shows as paused (v2 has no blocked status); `--plan` and `--priority` are accepted but not stored.
 - Codex usage: no in-adapter token refresh. Anthropic OAuth quota is ported, but v2 has no Anthropic OAuth integration, so it reports unsupported.
 - `banyancode_reasoning_configuration_update` is accepted but not consulted, because v2 already does this; turning it off isn't reproduced.
-- `session.background` was exposed to plugins, but the TUI hasn't been run by hand in a real terminal. Do that before the canary.
+- The snapshot budget covers the whole capture, so it defaults to 60 seconds where v1's 15 covered only the listing. Once exceeded, snapshots stop for that process.
 - Upstream plugins can read credentials through `integration.connection.resolve`. That is upstream's design, left as is.
 
 ## Working notes
 
 - Bun 1.4.4 is required: `D:\BanyanCode-v2\spike-build\bun-1.4.4\bun-windows-x64`. The global install is 1.4.3.
-- Checkouts: `D:\BanyanCode-v2` (work), `D:\BanyanCode-lead` (clean builds and hook runs), `D:\BanyanCode-baseline` (comparison, before the TUI plugin). Test a "pre-existing failure" claim against the baseline.
+- Checkouts: `D:\BanyanCode-v2` (work), `D:\BanyanCode-lead` (clean builds and pushes), `D:\BanyanCode-baseline` (comparison, before the TUI plugin). Test a "pre-existing failure" claim against the baseline.
+- These checkouts have symlinks off, so `packages/app/src/custom-elements.d.ts` fails typecheck as a text file. `D:\BanyanCode-lead` has a real copy marked skip-worktree; push from there.
 - Never kill `banyancode.exe` by image name: the installed v1 hosts the coders and the MCP connection. Stop by PID.
+- Stop test services between runs: same-channel services share a port across test homes, and a leftover one looks like a broken build.
 - `banyancode run` waits on stdin when it isn't a terminal: use `< /dev/null` in scripts.
 - Keep test roots short on Windows (e.g. `D:\bct4`): deep paths fail snapshots with "Filename too long".
