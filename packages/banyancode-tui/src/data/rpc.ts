@@ -32,55 +32,61 @@ export type RpcLayer = {
 }
 
 type Location = NonNullable<Context["location"]>
+type Definition = Parameters<Context["client"]["rpc"]>[0]
+type Call = (input: unknown, options?: object) => Promise<unknown>
+type Published = { readonly location?: { readonly directory?: string } }
+type Events = {
+  readonly subscribe: unknown
+  readonly on: (name: string, handler: (event: Published) => unknown, options?: object) => () => void
+}
 
 /**
  * Plugin RPC is per location, and a call without one is answered by a plugin instance in the service's default
  * location, usually the home folder. That instance reads an empty database and starts indexing that folder, so every
  * call names the current location, and events from other locations are dropped.
  */
-function scoped<D extends Parameters<Context["client"]["rpc"]>[0]>(
-  client: RpcClient<D>,
+function scoped<const D extends Definition>(
+  client: Context["client"],
+  definition: D,
   location: () => Location | undefined,
 ): RpcClient<D> {
-  const events = (client as { readonly events: { readonly on: (...args: never[]) => () => void } }).events
-  const scopedEvents = new Proxy(events, {
-    get: (target, property) =>
-      property !== "on"
-        ? Reflect.get(target, property)
-        : (name: never, handler: (event: { readonly location?: { readonly directory?: string } }) => unknown, options: never) =>
-            target.on(
-              name,
-              ((event: { readonly location?: { readonly directory?: string } }) => {
-                const from = event.location?.directory
-                if (from !== undefined && location() !== undefined && from !== location()?.directory) return
-                return handler(event)
-              }) as never,
-              options,
-            ),
-  })
-  return new Proxy(client, {
-    get(target, property) {
-      if (property === "events") return scopedEvents
-      const method = Reflect.get(target, property) as unknown
-      if (typeof method !== "function") return method
-      return (input: unknown, options?: object) => {
-        const current = location()
-        if (current === undefined) return Promise.reject({ type: "rpc.unavailable", message: "No location is ready yet" })
-        return Reflect.apply(method, target, [input, { ...options, location: current }])
-      }
+  const raw = client.rpc(definition)
+  // SAFETY: client.rpc builds exactly these keys from the same definition; the input and output types are restored below.
+  const untyped = raw as unknown as Record<string, Call> & { readonly events: Events }
+  const methods = Object.keys(definition.methods).map((name) => [
+    name,
+    (input: unknown, options?: object) => {
+      const current = location()
+      if (current === undefined) return Promise.reject({ type: "rpc.unavailable", message: "No location is ready yet" })
+      return untyped[name]!(input, { ...options, location: current })
     },
-  })
+  ])
+  const events: Events = {
+    subscribe: untyped.events.subscribe,
+    on: (name, handler, options) =>
+      untyped.events.on(
+        name,
+        (event) => {
+          const from = event.location?.directory
+          if (from !== undefined && location() !== undefined && from !== location()?.directory) return
+          return handler(event)
+        },
+        options,
+      ),
+  }
+  // SAFETY: same keys and call shapes as raw; only the options argument gains a location.
+  return { ...Object.fromEntries(methods), events } as unknown as RpcClient<D>
 }
 
 export function createRpcLayer(client: Context["client"], location: () => Location | undefined): RpcLayer {
   return {
-    core: scoped(client.rpc(BanyanRpc), location),
-    codegraph: scoped(client.rpc(CodegraphRpc), location),
-    intel: scoped(client.rpc(IntelRpc), location),
-    mesh: scoped(client.rpc(MeshRpc), location),
-    usage: scoped(client.rpc(UsageRpc), location),
-    system: scoped(client.rpc(SystemRpc), location),
-    verify: scoped(client.rpc(VerifyRpc), location),
+    core: scoped(client, BanyanRpc, location),
+    codegraph: scoped(client, CodegraphRpc, location),
+    intel: scoped(client, IntelRpc, location),
+    mesh: scoped(client, MeshRpc, location),
+    usage: scoped(client, UsageRpc, location),
+    system: scoped(client, SystemRpc, location),
+    verify: scoped(client, VerifyRpc, location),
   }
 }
 
