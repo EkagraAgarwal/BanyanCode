@@ -41,8 +41,8 @@ export const register = (ctx: Context, deps: IntelDeps): Effect.Effect<void, nev
             ...tool,
             execute: ((...args: never[]) =>
               ensureGraph().pipe(
-                Effect.andThen((tool.execute as (...args: never[]) => Effect.Effect<never, never>)(...args)),
-              )) as typeof tool.execute,
+                Effect.andThen((tool.execute as unknown as (...args: never[]) => Effect.Effect<unknown, unknown>)(...args)),
+              )) as unknown as typeof tool.execute,
           },
     )
 
