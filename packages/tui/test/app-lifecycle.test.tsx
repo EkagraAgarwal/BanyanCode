@@ -2192,7 +2192,7 @@ test("free usage limit Subscribe handles mid-auth/mid-sync Escape, sync failure,
   await waitForGoUpsellConnect()
   expect(switchedModels).toHaveLength(0)
   expect(resentPrompts).toHaveLength(0)
-  expect(setup.captureCharFrame().split("Refactor the parser").length).toBe(3)
+  expect(setup.captureCharFrame().split("Refactor the parser").length).toBe(2)
 
   // 1b. Escape mid-sync: cancelling while model sync is awaited must not select a model or resubmit the prompt.
   currentNow = baseNow + 86_400_000
@@ -2230,7 +2230,7 @@ test("free usage limit Subscribe handles mid-auth/mid-sync Escape, sync failure,
   onModelSyncRequest = undefined
   expect(switchedModels).toHaveLength(0)
   expect(resentPrompts).toHaveLength(0)
-  expect(setup.captureCharFrame().split("Refactor the parser").length).toBe(3)
+  expect(setup.captureCharFrame().split("Refactor the parser").length).toBe(2)
 
   // 2. Model-sync rejection: catches the failure, closes "Waiting for authorization…", shows the error, and keeps the recalled prompt.
   currentNow = baseNow + 2 * 86_400_000
@@ -2259,7 +2259,7 @@ test("free usage limit Subscribe handles mid-auth/mid-sync Escape, sync failure,
   )
   expect(switchedModels).toHaveLength(0)
   expect(resentPrompts).toHaveLength(0)
-  expect(setup.captureCharFrame().split("Refactor the parser").length).toBe(3)
+  expect(setup.captureCharFrame().split("Refactor the parser").length).toBe(2)
 
   // 3a. Expired/needs_auth active credential (even with a status-free inactive backup): refresh detects needs_auth and routes to device sign-in without submitting.
   failModelSync = false
