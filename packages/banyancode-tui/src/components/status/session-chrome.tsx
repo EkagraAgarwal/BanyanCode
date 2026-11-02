@@ -70,7 +70,9 @@ export function SessionHeader(props: {
           <text fg={theme().primary}>
             <b>BANYANCODE</b>
           </text>
-          <text fg={theme().muted}>{folderName(props.context.location?.directory)}</text>
+          <Show when={dimensions().width >= 90}>
+            <text fg={theme().muted}>{folderName(props.context.location?.directory)}</text>
+          </Show>
         </box>
         <Show when={dimensions().width >= HEADER_PILLS_MIN_WIDTH}>
           <box flexDirection="row" gap={2} flexShrink={0}>
@@ -142,7 +144,7 @@ export function SessionFooter(props: {
       </text>
       <Show when={dimensions().width >= 100}>
         <text fg={theme().muted} flexShrink={0}>
-          ^p cmd
+          ^p cmd · / search
         </text>
       </Show>
     </box>

@@ -1682,22 +1682,11 @@ export function Prompt(props: PromptProps) {
       <box ref={(r: BoxRenderable) => (anchor = r)} visible={props.visible !== false} width="100%">
         <box
           width="100%"
-          border={["left"]}
-          borderColor={borderHighlight()}
-          customBorderChars={{
-            ...SplitBorder.customBorderChars,
-            bottomLeft: "╹",
-          }}
+          border
+          borderStyle="rounded"
+          borderColor={store.mode === "shell" ? borderHighlight() : theme.border.base}
         >
-          <box
-            paddingLeft={dimensions().width < 44 ? 1 : 2}
-            paddingRight={dimensions().width < 44 ? 1 : 2}
-            paddingTop={1}
-            flexShrink={0}
-            backgroundColor={promptBg()}
-            flexGrow={1}
-            width="100%"
-          >
+          <box paddingLeft={1} paddingRight={1} paddingTop={1} flexShrink={0} flexGrow={1} width="100%">
             <Show when={config.prompt?.image_preview && visibleImageAttachments().length > 0}>
               <box
                 width="100%"
@@ -1871,32 +1860,6 @@ export function Prompt(props: PromptProps) {
             </box>
           </box>
         </box>
-        <box
-          height={1}
-          border={["left"]}
-          borderColor={borderHighlight()}
-          customBorderChars={{
-            ...EmptyBorder,
-            vertical: promptBg().a !== 0 ? "╹" : " ",
-          }}
-        >
-          <box
-            height={1}
-            border={["bottom"]}
-            borderColor={promptBg()}
-            customBorderChars={
-              promptBg().a !== 0
-                ? {
-                    ...EmptyBorder,
-                    horizontal: "▀",
-                  }
-                : {
-                    ...EmptyBorder,
-                    horizontal: " ",
-                  }
-            }
-          />
-        </box>
         <box width="100%" flexDirection="row" justifyContent="space-between" gap={2}>
           <Slot path="prompt.footer" input={footerInput()}>
             <Slot path="prompt.footer.status" input={footerInput()}>
@@ -1945,7 +1908,8 @@ export function Prompt(props: PromptProps) {
                     </box>
                   </Match>
                   <Match when={true}>
-                    <Show when={locationLabelDisplay()} fallback={<text />}>
+                    {/* A docked sidebar already shows this at the same width. */}
+                    <Show when={!props.sessionID || dimensions().width <= 120 ? locationLabelDisplay() : undefined} fallback={<text />}>
                       {(location) => (
                         <text
                           id="prompt.footer.location"

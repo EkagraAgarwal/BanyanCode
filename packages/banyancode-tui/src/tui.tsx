@@ -10,17 +10,11 @@ import { CodegraphProgress } from "./components/status/codegraph-progress"
 import { StatusPills } from "./components/status/pills"
 import { SessionFooter, SessionHeader } from "./components/status/session-chrome"
 import { AgentDetails } from "./components/inspector/agent-details"
-import { PendingActions } from "./components/inspector/pending-actions"
 import { TodoPanel } from "./components/inspector/todo"
 import { AttentionStrip } from "./components/status/attention"
 import { AgentsPanel } from "./components/sidebar/agents"
-import { AgentTreePanel } from "./components/sidebar/agent-tree"
-import { CodebaseTreePanel } from "./components/sidebar/codebase-tree"
 import { ContextBreakdownPanel } from "./components/sidebar/context-breakdown"
 import { ModifiedFilesPanel } from "./components/sidebar/files"
-import { CodegraphIntelPanel } from "./components/sidebar/codegraph-intel-panel"
-import { CodegraphPanel } from "./components/sidebar/codegraph-panel"
-import { IntelTracePanel } from "./components/sidebar/intel-trace-panel"
 import { PerformancePanel } from "./components/sidebar/performance"
 import { ProviderUsagePanel } from "./components/sidebar/provider-usage"
 import { SystemPanel } from "./components/sidebar/system-status"
@@ -55,10 +49,6 @@ export default Plugin.define({
     })
     context.ui.slot({
       append: "sidebar.content",
-      render: () => <CodebaseTreePanel context={context} codegraph={live.codegraph} />,
-    })
-    context.ui.slot({
-      append: "sidebar.content",
       render: (input) => <ContextBreakdownPanel context={context} sessionID={input.sessionID} />,
     })
     context.ui.slot({
@@ -72,22 +62,6 @@ export default Plugin.define({
     context.ui.slot({
       append: "sidebar.content",
       render: (input) => <ProviderUsagePanel context={context} sessionID={input.sessionID} usage={live.usage} />,
-    })
-    context.ui.slot({
-      append: "sidebar.content",
-      render: (input) => <AgentTreePanel context={context} sessionID={input.sessionID} mesh={live.mesh} />,
-    })
-    context.ui.slot({
-      append: "sidebar.content",
-      render: () => <CodegraphPanel context={context} codegraph={live.codegraph} />,
-    })
-    context.ui.slot({
-      append: "sidebar.content",
-      render: () => <CodegraphIntelPanel context={context} intel={live.intel} />,
-    })
-    context.ui.slot({
-      append: "sidebar.content",
-      render: (input) => <IntelTracePanel context={context} sessionID={input.sessionID} intel={live.intel} />,
     })
     context.ui.slot({
       append: "sidebar.content",
@@ -119,15 +93,11 @@ export default Plugin.define({
     })
     context.ui.slot({
       append: "session.inspector",
-      render: (input) => <AgentDetails context={context} sessionID={input.sessionID} />,
+      render: (input) => <AgentDetails context={context} sessionID={input.sessionID} live={live} />,
     })
     context.ui.slot({
       append: "session.inspector",
       render: (input) => <TodoPanel context={context} sessionID={input.sessionID} />,
-    })
-    context.ui.slot({
-      append: "session.inspector",
-      render: (input) => <PendingActions context={context} sessionID={input.sessionID} />,
     })
 
     // --- status surfaces ---------------------------------------------------

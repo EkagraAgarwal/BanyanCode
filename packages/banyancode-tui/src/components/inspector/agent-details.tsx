@@ -1,8 +1,10 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js"
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { formatMoney, formatTokens } from "../../data/format"
 import { lastAssistant, toolNames, totalTokens } from "../../data/messages"
+import type { Live } from "../../data/live"
 import { palette } from "../../theme"
+import { openAgentModel } from "../dialogs/actions"
 
 function ago(ms: number | undefined, now: number): string {
   if (ms === undefined) return "—"
@@ -14,7 +16,7 @@ function ago(ms: number | undefined, now: number): string {
 }
 
 /** Ported from v1 `inspector/agent-details.tsx`. */
-export function AgentDetails(props: { readonly context: Context; readonly sessionID: string }) {
+export function AgentDetails(props: { readonly context: Context; readonly sessionID: string; readonly live: Live }) {
   const theme = () => palette(props.context.theme)
   const [now, setNow] = createSignal(Date.now())
 
@@ -29,7 +31,13 @@ export function AgentDetails(props: { readonly context: Context; readonly sessio
 
   onMount(() => {
     void props.context.data.session.message.sync(props.sessionID)
+    void props.live.system.refreshLsp()
   })
+
+  const lsp = createMemo(() => props.live.system.lsp())
+  const connected = createMemo(() =>
+    (lsp()?.servers ?? []).filter((server) => server.status === "connected" && !server.disabled),
+  )
 
   const modelName = createMemo(() => {
     const model = session()?.model
@@ -67,7 +75,9 @@ export function AgentDetails(props: { readonly context: Context; readonly sessio
           ? new Date(session()!.time.created).toLocaleTimeString("en-US", { hour12: false })
           : "—"}
       </text>
-      <text fg={theme().info}>Model: {modelName()}</text>
+      <text fg={theme().info} onMouseDown={() => void openAgentModel(props.context, props.live)}>
+        Model: {modelName()} ▾
+      </text>
       <text fg={theme().text}>Tools: {toolsLabel()}</text>
       <text fg={theme().text}>Cost: {formatMoney(cost())}</text>
       <text fg={theme().text}>Tokens: {formatTokens(tokens())}</text>
@@ -76,6 +86,28 @@ export function AgentDetails(props: { readonly context: Context; readonly sessio
       </Show>
       <Show when={session()?.outcome !== undefined}>
         <text fg={theme().muted}>Outcome: {session()!.outcome}</text>
+      </Show>
+      <text fg={theme().primary} marginTop={1}>
+        <b>LSP</b>
+      </text>
+      <Show
+        when={lsp()?.enabled}
+        fallback={<text fg={theme().muted}>Disabled. Run /lsp or set banyancode_lsp: true in banyancode.json.</text>}
+      >
+        <Show
+          when={connected().length > 0}
+          fallback={<text fg={theme().muted}>No active LSPs yet; they activate as files are read.</text>}
+        >
+          <For each={connected()}>
+            {(server) => (
+              <box flexDirection="row" gap={1}>
+                <text fg={theme().success}>●</text>
+                <text fg={theme().text}>{server.name}</text>
+                <text fg={theme().success}>[on]</text>
+              </box>
+            )}
+          </For>
+        </Show>
       </Show>
     </box>
   )

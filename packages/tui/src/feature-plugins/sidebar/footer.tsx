@@ -86,11 +86,25 @@ export function SidebarVersion(props: { context: Plugin.Context }) {
   )
 }
 
+function SidebarLocation(props: { context: Plugin.Context; sessionID: string }) {
+  const location = () => props.context.data.session.get(props.sessionID)?.location ?? props.context.location
+  const label = () => {
+    const current = location()
+    if (!current) return ""
+    const branch = props.context.data.location.vcs.info(current)?.branch.current
+    return branch ? `${current.directory}:${branch}` : current.directory
+  }
+  return <text fg={props.context.theme.text.muted}>{label()}</text>
+}
+
 export function SidebarFooter(props: { context: Plugin.Context; sessionID: string }) {
   return (
     <box gap={1}>
       <SidebarOnboarding context={props.context} sessionID={props.sessionID} />
-      <SidebarVersion context={props.context} />
+      <box>
+        <SidebarLocation context={props.context} sessionID={props.sessionID} />
+        <SidebarVersion context={props.context} />
+      </box>
     </box>
   )
 }

@@ -40,7 +40,7 @@ function content(props: {
 }) {
   const view = () => {
     const name = props.active
-    if (name === PANEL.details) return <AgentDetails context={props.context} sessionID={props.sessionID} />
+    if (name === PANEL.details) return <AgentDetails context={props.context} sessionID={props.sessionID} live={props.live} />
     if (name === PANEL.todos) return <TodoPanel context={props.context} sessionID={props.sessionID} />
     if (name === PANEL.graph) return <GraphExplorer context={props.context} codegraph={props.live.codegraph} />
     if (name === PANEL.canvas) return <CodegraphCanvas context={props.context} codegraph={props.live.codegraph} />
