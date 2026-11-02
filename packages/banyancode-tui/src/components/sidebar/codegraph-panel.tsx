@@ -122,7 +122,7 @@ export function CodegraphPanel(props: { readonly context: Context; readonly code
             }
           >
             <text fg={theme().muted} marginTop={0}>
-              {layers() ? `Around ${layers()!.symbol}` : "No symbols indexed"}
+              {layers() ? `Around ${layers()!.symbol}` : props.codegraph.graphLoading() ? "Loading…" : "No symbols indexed"}
             </text>
             <box marginTop={0} gap={0}>
               <For each={rows}>

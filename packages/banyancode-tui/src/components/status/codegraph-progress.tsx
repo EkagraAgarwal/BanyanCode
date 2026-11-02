@@ -103,6 +103,7 @@ export function CodegraphProgress(props: {
   const visible = createMemo(() => status() !== "idle" && !hidden())
   // The box covers the prompt on a small terminal, so there it stays in the flow.
   const floating = createMemo(() => props.overlay === true && dimensions().width >= 100 && dimensions().height >= 30)
+  const stacked = createMemo(() => floating() || dimensions().width < 120)
   const lastUpdateSeconds = createMemo(() => {
     const state = build()
     if (!state?.lastProgressAt) return 0
@@ -115,7 +116,7 @@ export function CodegraphProgress(props: {
         {...(floating()
           ? {
               position: "absolute" as const,
-              bottom: 1,
+              bottom: 2,
               right: 2,
               zIndex: 2000,
               width: 60,
@@ -132,7 +133,7 @@ export function CodegraphProgress(props: {
         flexDirection="column"
       >
         <>
-          <box flexDirection={floating() ? "column" : "row"} gap={floating() ? 0 : 1}>
+          <box flexDirection={stacked() ? "column" : "row"} gap={stacked() ? 0 : 1}>
             <text fg={status() === "failed" ? theme().error : status() === "stuck" ? theme().warning : theme().text}>
               <b>Codegraph Indexing — {labelFor(status())}</b>
             </text>
@@ -151,7 +152,7 @@ export function CodegraphProgress(props: {
             </Show>
           </box>
           <Show when={status() === "running" && build()?.currentFile}>
-            {(file) => <text fg={theme().muted}>Indexing: {file()}</text>}
+            {(file) => <text fg={theme().muted} wrapMode="none">Indexing: {file()}</text>}
           </Show>
           <Show when={status() === "stuck" && build()?.lastCompletedFile}>
             {(file) => <text fg={theme().muted}>Last completed: {file()}</text>}
@@ -167,7 +168,7 @@ export function CodegraphProgress(props: {
             {(error) => <text fg={theme().error}>{error()}</text>}
           </Show>
           <Show when={build()?.dbPath}>
-            {(path) => <text fg={theme().muted}>Index → {path()}</text>}
+            {(path) => <text fg={theme().muted} wrapMode="none">Index → {path()}</text>}
           </Show>
         </>
       </box>

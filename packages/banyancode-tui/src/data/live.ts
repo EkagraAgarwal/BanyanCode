@@ -305,6 +305,8 @@ export function createLive(context: Context): Live {
     })().finally(() => {
       graphRequest = undefined
       setGraphLoading(false)
+      // A build finished while this ran: its answer was dropped, and the reload asked for then was given this request.
+      if (!disposed && epoch !== graphEpoch && graphWanted) void ensureGraph()
     })
     return graphRequest
   }
