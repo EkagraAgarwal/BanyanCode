@@ -57,8 +57,8 @@ function format(input: unknown) {
 }
 
 export function file(local = true, channel = "local") {
-  if (!local) return path.join(Global.Path.log, "opencode.log")
-  return path.join(Global.Path.log, `opencode-${channel.replace(/[^a-zA-Z0-9._-]/g, "-")}.log`)
+  if (!local) return path.join(Global.Path.log, "banyancode.log")
+  return path.join(Global.Path.log, `banyancode-${channel.replace(/[^a-zA-Z0-9._-]/g, "-")}.log`)
 }
 
 export function fileLogger(target = file(), id: string = runID()) {

@@ -116,6 +116,10 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/theme.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
 | `packages/util/src/global.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
 | `packages/util/src/product.ts` | branding | single product identity constant (app, config names, project dir, db, CLI name, env prefix) | — |
+| `packages/util/src/observability/logging.ts` | branding | the log file is banyancode.log | — |
+| `packages/core/src/app.ts` | branding | the user agent says banyancode | — |
+| `packages/core/test/logging.test.ts` | fix | test expectation follows the log file name | — |
+| `packages/cli/script/service-smoke.ts` | fix | reads the log under its new name | — |
 | `packages/util/test/global.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |
 | `packages/cli/src/acp/agent.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/cli/src/acp/error.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
@@ -162,8 +166,8 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/logo.ts` | branding | the v1 BanyanCode tree splash and wordmark | — |
 | `packages/tui/src/component/prompt/autocomplete.tsx` | fix | a command offered by both client and server is listed once | — |
 | `packages/tui/src/routes/home.tsx` | hook | `home.bottom` slot under the prompt, for the v1 tip | — |
-| `packages/plugin/src/tui/context.ts` | hook | declares the `home.bottom` slot | — |
-| `packages/tui/src/component/prompt/index.tsx` | hook | a slash command can decline, leaving it to the server command | — |
+| `packages/plugin/src/tui/context.ts` | hook | declares the `home.bottom` slot and `slash.forwardToServer` | — |
+| `packages/tui/src/component/prompt/index.tsx` | hook | a slash command can hand some inputs to the server command of the same name | — |
 | `packages/tui/src/mini/footer.permission.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/mini/footer.prompt.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/mini/runtime.lifecycle.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |

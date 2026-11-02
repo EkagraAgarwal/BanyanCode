@@ -90,7 +90,7 @@ try {
   processes.forEach((process) => process.kill())
   await Promise.all(processes.map((process) => process.exited))
   if (failure)
-    errors.push(fs.readFile(path.join(root, "data", "opencode", "log", "opencode.log"), "utf8").catch(() => ""))
+    errors.push(fs.readFile(path.join(root, "data", "opencode", "log", "banyancode.log"), "utf8").catch(() => ""))
 }
 
 const output = await Promise.all(errors)
