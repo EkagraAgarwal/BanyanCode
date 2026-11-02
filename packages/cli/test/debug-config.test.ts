@@ -87,7 +87,8 @@ describe("debug config command", () => {
       expect(result.stdout).not.toContain("Bearer example")
       expect(requested?.pathname).toBe("/api/config")
       expect(requested?.searchParams.get("location[directory]")).toBe(project)
-      expect(authorization).toEqual([`Basic ${btoa("opencode:secret")}`])
+      // One request for the config diagnostics, one for the config itself.
+      expect(authorization).toEqual([`Basic ${btoa("opencode:secret")}`, `Basic ${btoa("opencode:secret")}`])
       expect(healthProbes).toBe(1)
     } finally {
       server.stop(true)

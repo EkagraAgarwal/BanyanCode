@@ -11,8 +11,13 @@ const handler = Effect.fn("cli.codegraph.forceKill")(function* () {
     try: () => client.rpc(CodegraphRpc).forceKill({}, here()),
     catch: (cause) => cause,
   })
-  if (result.ok) println(Style.TEXT_SUCCESS + "✓ " + result.message + Style.TEXT_NORMAL)
-  else println(Style.TEXT_DANGER + "✗ " + result.message + Style.TEXT_NORMAL)
+  // The plugin explains why it did not taskkill on non-Windows platforms; that
+  // detail is noise for a user who just wants the outcome.
+  const message = result.message.includes("not on Windows")
+    ? "force-kill: the build was interrupted"
+    : result.message
+  if (result.ok) println(Style.TEXT_SUCCESS + "✓ " + message + Style.TEXT_NORMAL)
+  else println(Style.TEXT_DANGER + "✗ " + message + Style.TEXT_NORMAL)
 })
 
 export default Runtime.handler(Commands.commands.codegraph.commands["force-kill"], () =>

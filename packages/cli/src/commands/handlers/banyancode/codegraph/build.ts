@@ -1,3 +1,4 @@
+import { statSync } from "node:fs"
 import path from "node:path"
 import { Effect, Option } from "effect"
 import { Commands } from "../../../commands"
@@ -13,6 +14,7 @@ const handler = Effect.fn("cli.codegraph.build")(function* (
   input: Runtime.Input<(typeof Commands.commands.codegraph.commands)["build"]>,
 ) {
   const root = path.resolve(Option.getOrUndefined(input.root) ?? process.cwd())
+  if (!isDirectory(root)) return yield* Effect.fail(new Error(`Directory not found: ${root}`))
   const { client } = yield* connect()
   const codegraph = client.rpc(CodegraphRpc)
 
@@ -77,3 +79,11 @@ const handler = Effect.fn("cli.codegraph.build")(function* (
 export default Runtime.handler(Commands.commands.codegraph.commands.build, (input) =>
   handler(input).pipe(Effect.catch(onError({ id: "banyancode.codegraph", method: "build" }))),
 )
+
+function isDirectory(target: string) {
+  try {
+    return statSync(target).isDirectory()
+  } catch {
+    return false
+  }
+}

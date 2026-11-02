@@ -10,6 +10,7 @@ import { Cause, Effect } from "effect"
 import { getErrorReported } from "effect/Runtime"
 import { Commands } from "./commands/commands"
 import { ensureBanyanDirs } from "./commands/handlers/banyancode/init"
+import { debugStacks, errorLine } from "./framework/error"
 import { Runtime } from "./framework/runtime"
 import { Observability } from "@opencode/util/observability"
 import { Updater } from "./services/updater"
@@ -98,6 +99,8 @@ const Handlers = Runtime.handlers(Commands, {
     export: () => import("./commands/handlers/session/export"),
     import: () => import("./commands/handlers/session/import"),
   },
+  export: () => import("./commands/handlers/session/export"),
+  import: () => import("./commands/handlers/session/import"),
   service: {
     start: () => import("./commands/handlers/service/start"),
     restart: () => import("./commands/handlers/service/restart"),
@@ -205,12 +208,14 @@ Effect.gen(function* () {
   Effect.tap(() => Effect.sync(() => process.exit(process.exitCode ?? 0))),
   // runMain's default reporter logs the fatal cause to stdout. Write it to stderr instead: the
   // desktop and `Service.ensure` only capture stderr from `serve --service`, so this is the only
-  // channel through which a startup failure's reason reaches the user.
+  // channel through which a startup failure's reason reaches the user. Ordinary failures are one
+  // line; a stack needs `--print-logs` or BANYANCODE_DEBUG=1, and the full cause is always logged.
   Effect.tapCause((cause) =>
     Effect.sync(() => {
       if (Cause.hasInterruptsOnly(cause)) return
-      if (!getErrorReported(Cause.squash(cause))) return
-      process.stderr.write(Cause.pretty(cause) + "\n")
+      const error = Cause.squash(cause)
+      if (!getErrorReported(error)) return
+      process.stderr.write((debugStacks() ? Cause.pretty(cause) : errorLine(error)) + "\n")
     }),
   ),
   NodeRuntime.runMain({ disableErrorReporting: true }),

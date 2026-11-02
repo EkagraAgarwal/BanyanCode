@@ -47,7 +47,7 @@ describe("goal commands (v2 native goal mode)", () => {
       expect(result.stderr).toContain("condition: ship the release")
       expect(result.stderr).toContain("plan:      (none)")
       expect(result.stderr).toContain("priority:  (default)")
-      expect(result.stderr).toContain("--plan/--priority are accepted for script compatibility")
+      expect(result.stderr).toContain("--plan and --priority are accepted but ignored")
       expect(commands).toEqual([{ sessionID: "ses_1", name: "goal", text: "ship the release" }])
     } finally {
       server.stop()

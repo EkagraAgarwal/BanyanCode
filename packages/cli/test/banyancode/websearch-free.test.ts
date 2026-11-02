@@ -42,18 +42,18 @@ describe("websearch-free", () => {
     }
   }, 180_000)
 
-  test("prints nothing when the search is disabled by env", async () => {
+  test("says why the search is disabled by env instead of succeeding silently", async () => {
     const root = await tmpRoot("banyancode-cli-websearch-off-")
     // No --server: a disabled search must not even try to connect.
     const result = await cli(root, ["websearch-free", "anything"], {
       env: { BANYANCODE_DISABLE_WEBSEARCH: "1" },
     })
-    expect(result.exitCode).toBe(0)
+    expect(result.exitCode).toBe(1)
     expect(result.stdout).toBe("")
-    expect(result.stderr).toBe("")
+    expect(result.stderr).toContain("websearch disabled by BANYANCODE_DISABLE_WEBSEARCH=1")
   }, 120_000)
 
-  test("prints nothing when the provider is not registered", async () => {
+  test("says so when the provider is not registered", async () => {
     const root = await tmpRoot("banyancode-cli-websearch-missing-")
     const server = fakeServer((_request, url) =>
       url.pathname === "/api/websearch/provider"
@@ -62,9 +62,9 @@ describe("websearch-free", () => {
     )
     try {
       const result = await cli(root, ["websearch-free", "anything", "--server", server.url])
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode).toBe(1)
       expect(result.stdout).toBe("")
-      expect(result.stderr).toBe("")
+      expect(result.stderr).toContain("websearch is disabled")
     } finally {
       server.stop()
     }

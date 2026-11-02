@@ -51,7 +51,7 @@ describe("codegraph commands against a real server", () => {
     try {
       const result = await cli(root, ["codegraph", "force-kill", "--server", fake.url])
       expect(result.exitCode).toBe(0)
-      expect(plain(result.stderr)).toContain("✓ force-kill: not on Windows")
+      expect(plain(result.stderr)).toContain("✓ force-kill: the build was interrupted")
     } finally {
       fake.stop()
     }

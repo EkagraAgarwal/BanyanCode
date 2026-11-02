@@ -13,6 +13,23 @@ import { handlePromptErrors, prompt, requireInteractive } from "../../ui/prompt"
 import { errorMessage } from "../../util/error"
 import { displayName } from "../../brand"
 
+export type RemovalTarget = {
+  readonly path: string
+  readonly label: string
+  readonly keep: boolean
+}
+
+/** v1 parity: data and config are removable; cache and state always go. */
+export const removalTargets = (
+  paths: { readonly data: string; readonly cache: string; readonly config: string; readonly state: string },
+  input: { readonly keepConfig: boolean; readonly keepData: boolean },
+): RemovalTarget[] => [
+  { path: paths.data, label: "Data", keep: input.keepData },
+  { path: paths.cache, label: "Cache", keep: false },
+  { path: paths.config, label: "Config", keep: input.keepConfig },
+  { path: paths.state, label: "State", keep: false },
+]
+
 export default Runtime.handler(
   Commands.commands.uninstall,
   Effect.fn("cli.uninstall")(function* (input) {
@@ -30,12 +47,16 @@ export default Runtime.handler(
       : []
     const shell = method === "curl" ? yield* shellConfigs(global.home) : []
 
+    const targets = removalTargets(global, input)
     log.info(`Installation method: ${method ?? "unknown"}`)
     log.message(`The following global files will be removed (shared by ${displayName} versions and channels):`)
-    if (yield* fs.exists(global.cache)) log.info(`  Cache: ${global.cache}`)
     services.forEach((name) =>
       log.info(`  Stop background service and persistent terminals: ${path.join(global.state, name)}`),
     )
+    for (const target of targets) {
+      if (!(yield* fs.exists(target.path))) continue
+      log.info(`  ${target.keep ? "Keep" : "Remove"} ${target.label}: ${target.path}`)
+    }
     shell.forEach((file) => log.info(`  Shell PATH: ${file}`))
     if (removal) log.info(`  Package: ${removal.command.join(" ")}`)
     if (method === "curl") log.info(`  Binary (manual removal): ${process.execPath}`)
@@ -75,22 +96,29 @@ export default Runtime.handler(
     // Links that keep an older OpenCode replaceable may still run; move them so the cache can go.
     if (process.platform === "win32") yield* RetainedImage.relocate(global.cache, global.tmp)
     const errors: string[] = []
-    progress.start("Removing Cache...")
-    yield* fs.remove(global.cache, { recursive: true, force: true }).pipe(
-      // Windows reports a terminated service as gone before it releases its file handles,
-      // so the first removal can race that teardown.
-      Effect.retry({
-        while: (error) => process.platform === "win32" && error.reason._tag === "Busy",
-        schedule: Schedule.max([Schedule.spaced("250 millis"), Schedule.recurs(40)]),
-      }),
-      Effect.tap(() => Effect.sync(() => progress.stop("Removed Cache"))),
-      Effect.catch((error) =>
-        Effect.sync(() => {
-          progress.stop("Failed to remove Cache", 1)
-          errors.push(`Cache: ${errorMessage(error)}`)
+    for (const target of targets) {
+      if (target.keep) {
+        log.info(`Keeping ${target.label}: ${target.path}`)
+        continue
+      }
+      if (!(yield* fs.exists(target.path))) continue
+      progress.start(`Removing ${target.label}...`)
+      yield* fs.remove(target.path, { recursive: true, force: true }).pipe(
+        // Windows reports a terminated service as gone before it releases its file handles,
+        // so the first removal can race that teardown.
+        Effect.retry({
+          while: (error) => process.platform === "win32" && error.reason._tag === "Busy",
+          schedule: Schedule.max([Schedule.spaced("250 millis"), Schedule.recurs(40)]),
         }),
-      ),
-    )
+        Effect.tap(() => Effect.sync(() => progress.stop(`Removed ${target.label}`))),
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            progress.stop(`Failed to remove ${target.label}`, 1)
+            errors.push(`${target.label}: ${errorMessage(error)}`)
+          }),
+        ),
+      )
+    }
     yield* Effect.forEach(shell, (file) =>
       fs.readFileString(file).pipe(
         Effect.flatMap((content) => fs.writeFileString(file, cleanShellConfig(content))),

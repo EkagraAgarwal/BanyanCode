@@ -6,10 +6,11 @@
  *
  * Differences forced by the provider contract: the provider always returns at
  * most 8 results (`MAX_RESULTS`), so `--num` can only narrow that window, and
- * `region` / `time` knobs no longer exist. A disabled search returns silently,
- * exactly like v1.
+ * `region` / `time` knobs no longer exist. A disabled search reports why and
+ * exits non-zero instead of returning an empty success.
  */
 import { Effect } from "effect"
+import { EOL } from "node:os"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { connect, onError } from "./client"
@@ -22,7 +23,16 @@ const handler = Effect.fn("cli.websearchFree")(function* (
   input: Runtime.Input<typeof Commands.commands["websearch-free"]>,
 ) {
   const query = input.query
-  if (process.env.BANYANCODE_DISABLE_WEBSEARCH === "1" || process.env.BANYANCODE_ENABLE === "0") return
+  if (process.env.BANYANCODE_ENABLE === "0") {
+    process.stderr.write("websearch disabled by BANYANCODE_ENABLE=0" + EOL)
+    process.exitCode = 1
+    return
+  }
+  if (process.env.BANYANCODE_DISABLE_WEBSEARCH === "1") {
+    process.stderr.write("websearch disabled by BANYANCODE_DISABLE_WEBSEARCH=1" + EOL)
+    process.exitCode = 1
+    return
+  }
 
   const { client } = yield* connect()
   const location = { directory: process.cwd() }
@@ -30,8 +40,13 @@ const handler = Effect.fn("cli.websearchFree")(function* (
     try: () => client.websearch.providers({ location }),
     catch: (cause) => cause,
   })
-  // `banyancode_disable_websearch` unregisters the provider; v1 printed nothing then.
-  if (!providers.data.some((provider) => provider.id === PROVIDER_ID)) return
+  // `banyancode_disable_websearch` unregisters the provider; say so instead of
+  // returning an empty success.
+  if (!providers.data.some((provider) => provider.id === PROVIDER_ID)) {
+    process.stderr.write("websearch is disabled (the DuckDuckGo provider is not registered)" + EOL)
+    process.exitCode = 1
+    return
+  }
 
   const response = yield* Effect.tryPromise({
     try: () => client.websearch.query({ location, query, providerID: PROVIDER_ID }),

@@ -20,6 +20,6 @@ export default Runtime.handler(
         }),
       ]),
     )
-    if (code !== 0) yield* Effect.fail(new Error(`mcp profiles failed (exit ${code})`))
+    if (code !== 0) process.exitCode = code
   }),
 )

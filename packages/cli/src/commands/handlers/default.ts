@@ -5,11 +5,12 @@ import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Config } from "../../config"
 import { Context, Effect, FileSystem, Option, Queue, Schedule, Semaphore } from "effect"
+import { existsSync } from "node:fs"
 import { ServerConnection } from "../../services/server-connection"
 import { Updater } from "../../services/updater"
 import { UpdatePreflight } from "../../services/update-preflight"
 import { Npm } from "@opencode/util/npm"
-import { displayName } from "../../brand"
+import { cliName, displayName } from "../../brand"
 import { OPENCODE_ARTIFACT, OPENCODE_CHANNEL, OPENCODE_HIGHLIGHTS, OPENCODE_VERSION } from "../../version"
 import { Env } from "../../env"
 import { Service } from "@opencode/client/effect/service"
@@ -17,11 +18,34 @@ import { OpenCode } from "@opencode/client/promise"
 import { findSession } from "../../session-target"
 import { errorMessage } from "../../util/error"
 
+/**
+ * The root positional is a project directory, so a typo looks like a command.
+ * A path-shaped value keeps the directory wording; anything else is an unknown
+ * command (v1 reported these through yargs instead of a chdir stack trace).
+ */
+function directoryError(directory: string, cause: unknown) {
+  if (existsSync(directory)) {
+    const detail = cause instanceof Error ? cause.message : String(cause)
+    return new Error(`Cannot open directory "${directory}": ${detail}`)
+  }
+  if (/[\\/]/.test(directory) || directory.startsWith("."))
+    return new Error(`Directory not found: ${directory}`)
+  return new Error(
+    `Unknown command "${directory}". Run \`${cliName} --help\` to see available commands.`,
+  )
+}
+
 export default Runtime.handler(Commands, (input) =>
   Effect.gen(function* () {
     const requestedDirectory = Option.getOrUndefined(input.directory)
     const requestedServer = Option.getOrUndefined(input.server)
-    if (requestedDirectory !== undefined) process.chdir(requestedDirectory)
+    if (requestedDirectory !== undefined) {
+      try {
+        process.chdir(requestedDirectory)
+      } catch (cause) {
+        return yield* Effect.fail(directoryError(requestedDirectory, cause))
+      }
+    }
     const preflight = UpdatePreflight.make()
     yield* Effect.addFinalizer(() => Effect.promise(() => preflight.close()))
     const serviceStarts = yield* Queue.unbounded<{

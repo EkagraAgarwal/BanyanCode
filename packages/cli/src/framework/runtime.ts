@@ -82,11 +82,20 @@ export function handlers<const Root extends Spec.Any>(root: Root, handlers: Hand
 }
 
 export function run(commands: Spec.Any, handlers: ReadonlyArray<LazyHandler>, options: { readonly version: string }) {
-  return Command.run(provide(commands, handlers).pipe(Command.withGlobalFlags([PrintLogs])), options) as Effect.Effect<
-    void,
-    unknown,
-    Command.Environment
-  >
+  const command = provide(commands, handlers).pipe(Command.withGlobalFlags([PrintLogs]))
+  // v1 exposed `banyancode completion [shell]`; map it onto the built-in
+  // `--completions` action so both spellings generate the same script.
+  const completion = completionArgs(process.argv.slice(2))
+  if (completion !== undefined)
+    return Command.runWith(command, options)(completion) as Effect.Effect<void, unknown, Command.Environment>
+  return Command.run(command, options) as Effect.Effect<void, unknown, Command.Environment>
+}
+
+function completionArgs(args: ReadonlyArray<string>) {
+  if (args[0] !== "completion") return undefined
+  if (args.slice(1).some((arg) => arg === "-h" || arg === "--help")) return undefined
+  const shell = args[1] !== undefined && !args[1].startsWith("-") ? args[1] : "bash"
+  return ["--completions", shell]
 }
 
 function provide(node: Spec.Any, handlers: ReadonlyArray<LazyHandler>): ProvidedCommand {

@@ -113,7 +113,8 @@ describe("telemetry agent-report / agent-export", () => {
       expect(exported.exitCode).toBe(0)
       expect(exported.stdout.trim().split("\n")).toEqual(['{"eventID":"e1"}', '{"eventID":"e2"}'])
 
-      expect(seen[0]).toEqual({
+      // The config diagnostic probe runs first; assert on the command's own call.
+      expect(seen.find((entry) => entry.method === "telemetry.agentReport")).toEqual({
         rpcID: "banyancode.usage",
         method: "telemetry.agentReport",
         input: { runID: "run_1", sessionID: "ses_1", since: 5 },

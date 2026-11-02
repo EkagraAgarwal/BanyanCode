@@ -42,6 +42,6 @@ export default Runtime.handler(
     if (input.noRehydrate) argv.push("--no-rehydrate")
 
     const code = yield* Effect.promise(() => main(argv))
-    if (code !== 0) return yield* Effect.fail(new Error(`banyancode mcp serve exited with code ${code}`))
+    if (code !== 0) process.exitCode = code
   }),
 )

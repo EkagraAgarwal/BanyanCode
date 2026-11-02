@@ -18,6 +18,6 @@ export default Runtime.handler(
         }),
       ]),
     )
-    if (code !== 0) yield* Effect.fail(new Error(`mcp doctor reported a problem (exit ${code})`))
+    if (code !== 0) process.exitCode = code
   }),
 )

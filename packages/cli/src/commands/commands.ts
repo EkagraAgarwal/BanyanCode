@@ -47,6 +47,36 @@ const PermissionParams = {
   ),
 }
 
+// v1 exposed `export [sessionID]` and `import <file>` at the top level. Both
+// spellings share one spec object so the same handler module serves
+// `session export` / `session import` and the aliases.
+const ExportSession = Spec.make("export", {
+  description: "Export session data as JSON",
+  globalFlags: ServerFlags,
+  params: {
+    session: Argument.String("session").pipe(
+      Argument.withDescription("Session ID to export"),
+      Argument.optional,
+    ),
+    sanitize: Flag.Boolean("sanitize").pipe(
+      Flag.withDescription("Redact sensitive transcript and file data"),
+      Flag.withDefault(false),
+    ),
+  },
+})
+
+const ImportSession = Spec.make("import", {
+  description: "Import session data from a JSON file or URL",
+  globalFlags: ServerFlags,
+  params: {
+    file: Argument.String("file").pipe(Argument.withDescription("JSON file or URL to import")),
+    directory: Flag.String("directory").pipe(
+      Flag.withDescription("Directory in which to import the session"),
+      Flag.optional,
+    ),
+  },
+})
+
 const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME : Product.cliName, {
   description: `${displayName} command line interface`,
   params: {
@@ -85,8 +115,18 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       },
     }),
     Spec.make("uninstall", {
-      description: `Uninstall ${displayName}, keeping session data, configuration, and state`,
+      description: `Uninstall ${displayName} and remove all related files`,
       params: {
+        keepConfig: Flag.Boolean("keep-config").pipe(
+          Flag.withAlias("c"),
+          Flag.withDescription("Keep configuration files"),
+          Flag.withDefault(false),
+        ),
+        keepData: Flag.Boolean("keep-data").pipe(
+          Flag.withAlias("d"),
+          Flag.withDescription("Keep session data and snapshots"),
+          Flag.withDefault(false),
+        ),
         dryRun: Flag.Boolean("dry-run").pipe(
           Flag.withDescription("Show what would be removed without removing"),
           Flag.withDefault(false),
@@ -567,31 +607,12 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
             sessionID: Argument.String("sessionID").pipe(Argument.withDescription("Session ID to delete")),
           },
         }),
-        Spec.make("export", {
-          description: "Export session data as JSON",
-          params: {
-            session: Argument.String("session").pipe(
-              Argument.withDescription("Session ID to export"),
-              Argument.optional,
-            ),
-            sanitize: Flag.Boolean("sanitize").pipe(
-              Flag.withDescription("Redact sensitive transcript and file data"),
-              Flag.withDefault(false),
-            ),
-          },
-        }),
-        Spec.make("import", {
-          description: "Import session data from a JSON file or URL",
-          params: {
-            file: Argument.String("file").pipe(Argument.withDescription("JSON file or URL to import")),
-            directory: Flag.String("directory").pipe(
-              Flag.withDescription("Directory in which to import the session"),
-              Flag.optional,
-            ),
-          },
-        }),
+        ExportSession,
+        ImportSession,
       ],
     }),
+    ExportSession,
+    ImportSession,
     Spec.make("service", {
       description: "Manage the background server",
       commands: [
@@ -670,7 +691,7 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       },
     }),
     Spec.make("serve", {
-      description: "Start the v2 API and web server",
+      description: "Start the API and web server",
       params: {
         hostname: Flag.String("hostname").pipe(Flag.optional),
         port: Flag.Int("port").pipe(Flag.optional),
@@ -762,11 +783,11 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
               Argument.withDescription("Goal condition (free-text)"),
             ),
             plan: Flag.String("plan").pipe(
-              Flag.withDescription("Path to plan.md (v2 native goal mode stores no plan)"),
+              Flag.withDescription("Path to plan.md"),
               Flag.optional,
             ),
             priority: Flag.Literals("priority", ["low", "normal", "high"]).pipe(
-              Flag.withDescription("Goal priority (v2 native goal mode stores no priority)"),
+              Flag.withDescription("Goal priority"),
               Flag.withDefault("normal"),
             ),
             session: Flag.String("session").pipe(Flag.withDescription("Session id")),

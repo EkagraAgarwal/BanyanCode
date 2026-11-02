@@ -240,6 +240,37 @@ export const IntelRpc = Rpc.define({
 })
 
 // ---------------------------------------------------------------------------
+// banyancode — config diagnostics (status/config.get live on the plugin root)
+// ---------------------------------------------------------------------------
+
+export const ConfigGetOutput = Schema.Struct({
+  config: Schema.Record(Schema.String, Schema.Unknown),
+  sources: Schema.Array(Schema.String),
+  unknownKeys: Schema.Array(
+    Schema.Struct({
+      file: Schema.String,
+      keys: Schema.Array(Schema.String),
+    }),
+  ),
+  errors: Schema.Array(
+    Schema.Struct({
+      file: Schema.String,
+      message: Schema.String,
+    }),
+  ),
+})
+
+export type ConfigGetOutput = typeof ConfigGetOutput.Type
+
+export const ConfigRpc = Rpc.define({
+  id: "banyancode",
+  methods: {
+    "config.get": { input: std(Schema.Struct({})), output: std(ConfigGetOutput) },
+  },
+  events: {},
+})
+
+// ---------------------------------------------------------------------------
 // banyancode.usage — agent telemetry report/export
 // ---------------------------------------------------------------------------
 

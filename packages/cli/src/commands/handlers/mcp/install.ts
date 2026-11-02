@@ -17,6 +17,6 @@ export default Runtime.handler(
         ...Option.match(input.permission, { onNone: () => [], onSome: (value) => ["--permission", value] }),
       ]),
     )
-    if (code !== 0) yield* Effect.fail(new Error(`mcp install exited with code ${code}`))
+    if (code !== 0) process.exitCode = code
   }),
 )

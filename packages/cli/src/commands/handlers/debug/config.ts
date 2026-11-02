@@ -5,6 +5,7 @@ import { Service } from "@opencode/client/effect/service"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { ServerConnection } from "../../../services/server-connection"
+import { warnConfig } from "../banyancode/client"
 import { redactConfig } from "./redact"
 
 export default Runtime.handler(
@@ -12,6 +13,7 @@ export default Runtime.handler(
   Effect.fn("cli.debug.config")(function* () {
     const { endpoint } = yield* ServerConnection.resolve()
     const client = OpenCode.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
+    yield* warnConfig(client)
     const entries = yield* Effect.promise(() => client.config.get({ location: { directory: process.cwd() } }))
     process.stdout.write(JSON.stringify(redactConfig(entries), null, 2) + EOL)
   }),
