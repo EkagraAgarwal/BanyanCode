@@ -1148,9 +1148,11 @@ export function Prompt(props: PromptProps) {
       return true
     }
     if (slash) {
-      clearPrompt()
-      await slash.command.run(slash.input)
-      return true
+      // Returning false declines, leaving it to the server command of the same name.
+      if ((await slash.command.run(slash.input)) !== false) {
+        clearPrompt()
+        return true
+      }
     }
     const slashHead = parseSlashHead(inputText, /\s/)
     const isCommand =

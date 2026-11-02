@@ -1,4 +1,5 @@
 import { Plugin } from "@opencode/plugin/tui"
+import { Goal } from "@opencode/schema/goal"
 import { Show } from "solid-js"
 import { PANEL, PANEL_NAMES, PLUGIN_ID, RAIL } from "./constants"
 import { createLive, type Live } from "./data/live"
@@ -398,11 +399,38 @@ export default Plugin.define({
           palette: true,
           slash: { name: "lsp", arguments: true, optionalArguments: true },
           async run(input) {
-            if (live.system.lsp() === undefined) await live.system.refresh()
+            await live.system.refreshLsp()
             const next = switchTo(input, live.system.lsp()?.enabled === true, "/lsp <on|off|toggle>")
             if (next === undefined) return
             report(await live.core.update({ banyancode_lsp: next }), `LSP ${next ? "on" : "off"}`)
-            await live.system.refresh()
+            await live.system.refreshLsp()
+          },
+        },
+        {
+          // Setting a goal is the server's /goal. Asking about one must not start a model turn.
+          id: "goal.status",
+          title: "Goal status",
+          group: "BanyanCode",
+          slash: { name: "goal", arguments: true },
+          run(input) {
+            const text = (input ?? "").trim()
+            if (text === "") {
+              notify("Usage: /goal <objective> | status | pause | resume | clear")
+              return
+            }
+            if (text !== "status") return false
+            const route = context.ui.router.current()
+            if (route.type !== "session") {
+              notify("No active goal")
+              return
+            }
+            return context.client
+              .rpc(Goal.Definition)
+              .get({ sessionID: route.sessionID })
+              .then(
+                (goal) => notify(goal ? `Goal (${goal.status}): ${goal.objective}` : "No active goal"),
+                () => notify("No active goal"),
+              )
           },
         },
         {

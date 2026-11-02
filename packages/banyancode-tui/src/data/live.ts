@@ -274,14 +274,17 @@ export function createLive(context: Context): Live {
 
   // A panel asks once on mount, so a rebuild has to fetch again for it.
   let filesWanted = false
+  let graphWanted = false
   const invalidateGraph = () => {
     graphEpoch += 1
     setGraph(undefined)
     setFiles(undefined)
     if (filesWanted) void ensureFiles()
+    if (graphWanted) void ensureGraph()
   }
 
   const ensureGraph = async (force = false) => {
+    graphWanted = true
     if (graphRequest) return graphRequest
     if (!force && graph() !== undefined) return
     const epoch = graphEpoch
@@ -316,6 +319,13 @@ export function createLive(context: Context): Live {
       filesRequest = undefined
     })
     return filesRequest
+  }
+
+  // These publish no build event when nothing was running, and the panels mustn't keep the old numbers.
+  const afterGraphChange = async <T,>(result: T) => {
+    await refreshCodegraph()
+    invalidateGraph()
+    return result
   }
 
   const onBuild = rpc.codegraph.events.on("build", (event) => {
@@ -589,9 +599,10 @@ export function createLive(context: Context): Live {
       ensureGraph,
       ensureFiles,
       start: (options) => attempt(() => rpc.codegraph.build({ root: root(), ...options })),
-      cancel: () => attempt(() => rpc.codegraph.cancel({})),
-      remove: (dropFile) => attempt(() => rpc.codegraph.remove(dropFile === undefined ? {} : { dropFile })),
-      forceKill: () => attempt(() => rpc.codegraph.forceKill({})),
+      cancel: () => attempt(() => rpc.codegraph.cancel({})).then(afterGraphChange),
+      remove: (dropFile) =>
+        attempt(() => rpc.codegraph.remove(dropFile === undefined ? {} : { dropFile })).then(afterGraphChange),
+      forceKill: () => attempt(() => rpc.codegraph.forceKill({})).then(afterGraphChange),
     },
     mesh: {
       availability: meshAvailability,

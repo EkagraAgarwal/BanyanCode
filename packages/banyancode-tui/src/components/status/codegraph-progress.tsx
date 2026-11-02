@@ -101,6 +101,8 @@ export function CodegraphProgress(props: {
   )
 
   const visible = createMemo(() => status() !== "idle" && !hidden())
+  // The box covers the prompt on a small terminal, so there it stays in the flow.
+  const floating = createMemo(() => props.overlay === true && dimensions().width >= 100 && dimensions().height >= 30)
   const lastUpdateSeconds = createMemo(() => {
     const state = build()
     if (!state?.lastProgressAt) return 0
@@ -110,13 +112,13 @@ export function CodegraphProgress(props: {
   return (
     <Show when={visible()}>
       <box
-        {...(props.overlay
+        {...(floating()
           ? {
               position: "absolute" as const,
               bottom: 1,
               right: 2,
               zIndex: 2000,
-              width: Math.min(60, dimensions().width - 6),
+              width: 60,
               border: true,
               borderStyle: "rounded" as const,
               borderColor: status() === "failed" ? theme().error : status() === "stuck" ? theme().warning : theme().border,
@@ -130,7 +132,7 @@ export function CodegraphProgress(props: {
         flexDirection="column"
       >
         <>
-          <box flexDirection={props.overlay ? "column" : "row"} gap={props.overlay ? 0 : 1}>
+          <box flexDirection={floating() ? "column" : "row"} gap={floating() ? 0 : 1}>
             <text fg={status() === "failed" ? theme().error : status() === "stuck" ? theme().warning : theme().text}>
               <b>Codegraph Indexing — {labelFor(status())}</b>
             </text>
@@ -163,6 +165,9 @@ export function CodegraphProgress(props: {
           </Show>
           <Show when={build()?.error}>
             {(error) => <text fg={theme().error}>{error()}</text>}
+          </Show>
+          <Show when={build()?.dbPath}>
+            {(path) => <text fg={theme().muted}>Index → {path()}</text>}
           </Show>
         </>
       </box>

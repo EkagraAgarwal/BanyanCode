@@ -134,6 +134,7 @@ test("mounting home surfaces does not fetch another location's catalog", async (
     await Bun.sleep(30)
     // Only the status row's own two reads, for this location.
     expect(recorded.calls.filter((call) => call.kind === "method").map((call) => call.target).sort()).toEqual([
+      "banyancode.codegraph.status",
       "banyancode.mesh.limits.get",
       "banyancode.system.yolo.get",
     ])

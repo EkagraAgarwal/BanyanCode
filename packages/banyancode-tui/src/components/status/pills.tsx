@@ -165,6 +165,7 @@ export function StatusPills(props: {
   onMount(() => {
     void props.system.refreshYolo()
     void props.mesh.refreshLimits()
+    void props.codegraph.refresh()
   })
 
   const activeAgents = createMemo(() => {

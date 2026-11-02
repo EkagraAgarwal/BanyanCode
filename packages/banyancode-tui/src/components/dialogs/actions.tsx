@@ -127,8 +127,7 @@ export async function openMaxSubagents(context: Context, live: Live): Promise<vo
   const limit = Math.min(limits?.maxSubagentsLimit ?? MAX_SUBAGENTS, MAX_SUBAGENTS)
   const raw = await context.ui.dialog.prompt({
     title: `Set max concurrent subagents (1-${limit})`,
-    description: "Enter an integer between 1 and 20.",
-    value: String(current),
+    description: `Enter a whole number from 1 to ${limit}. Now ${current}.`,
   })
   if (raw === undefined) return
   const value = Number(raw)

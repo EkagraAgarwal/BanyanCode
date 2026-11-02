@@ -432,7 +432,7 @@ export interface KeymapCommand {
   /** Promotes the command in discovery UI. */
   readonly suggested?: boolean | (() => boolean)
   /** Executes the command. Keyboard dispatch includes its event; programmatic dispatch does not. Return false to continue. */
-  readonly run: (input?: string, event?: KeyEvent) => void | false | Promise<void>
+  readonly run: (input?: string, event?: KeyEvent) => void | false | Promise<void | false>
 }
 
 export interface KeymapLayer {

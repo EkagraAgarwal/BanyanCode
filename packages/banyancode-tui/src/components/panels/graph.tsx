@@ -172,7 +172,7 @@ export function CodegraphCanvas(props: { readonly context: Context; readonly cod
   const header = createMemo(() => {
     const meta = props.codegraph.meta()
     if (!meta) return undefined
-    return `v${meta.graphVersion} · ${meta.totalNodes} nodes · ${meta.totalEdges} edges`
+    return `${meta.totalNodes} nodes · ${meta.totalEdges} edges`
   })
 
   const syncContainer = (node: BoxRenderable) => {
