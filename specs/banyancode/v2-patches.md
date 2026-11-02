@@ -118,7 +118,6 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/util/src/product.ts` | branding | single product identity constant (app, config names, project dir, db, CLI name, env prefix) | — |
 | `packages/core/src/tool/plugin/opencode.ts` | branding | the tool namespace description says BanyanCode | — |
 | `packages/util/src/observability/logging.ts` | branding | the log file is banyancode.log | — |
-| `packages/core/src/app.ts` | branding | the user agent says banyancode | — |
 | `packages/core/test/logging.test.ts` | fix | test expectation follows the log file name | — |
 | `packages/cli/script/service-smoke.ts` | fix | reads the log under its new name | — |
 | `packages/util/test/global.test.ts` | fix | test expectation follows the BanyanCode app dir, config names or BANYANCODE_* env | — |

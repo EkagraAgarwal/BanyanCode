@@ -52,7 +52,7 @@ const resultFields = (result: VerifierResult, limit: number | undefined) => {
 export const makeTestTool = (ctx: Context, verifier: VerifierInterface): Tool.Info<typeof TestInput, typeof TestOutput> => ({
   name: NAME_TEST,
   description:
-    "Use when:\n" +
+    "Verify the project. Use when:\n" +
     "  the agent has finished editing and needs to confirm the project's tests still pass.\n" +
     "Examples\n" +
     '  - "Run my failing test"\n' +
@@ -98,7 +98,7 @@ export const makeTypecheckTool = (
 ): Tool.Info<typeof TypecheckInput, typeof TypecheckOutput> => ({
   name: NAME_TYPECHECK,
   description:
-    "Use when:\n" +
+    "Verify the project. Use when:\n" +
     "  the agent has finished editing and needs to confirm the project's types still compile.\n" +
     "Examples\n" +
     '  - "Typecheck my edits"\n' +
@@ -141,7 +141,7 @@ export const makeTypecheckTool = (
 export const makeLintTool = (ctx: Context, verifier: VerifierInterface): Tool.Info<typeof LintInput, typeof LintOutput> => ({
   name: NAME_LINT,
   description:
-    "Use when:\n" +
+    "Verify the project. Use when:\n" +
     "  the agent has finished editing and wants to confirm lint passes before claiming done.\n" +
     "Examples\n" +
     '  - "Lint my edits"\n' +
@@ -186,7 +186,7 @@ export const makeCompileTool = (
 ): Tool.Info<typeof CompileInput, typeof CompileOutput> => ({
   name: NAME_COMPILE,
   description:
-    "Use when:\n" +
+    "Verify the project. Use when:\n" +
     "  the agent needs to confirm a file still bundles before shipping it.\n" +
     "Returns\n" +
     "  { status, summary: {}, durationMs, cacheHit, rawOutput?, command }\n" +
