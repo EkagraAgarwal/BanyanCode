@@ -70,6 +70,22 @@ function recordingContext() {
   return { context: value, calls, synced }
 }
 
+test("every plugin call names the current location, so the home folder is never activated", async () => {
+  const seen: unknown[] = []
+  const events = { on: () => () => {}, subscribe: () => [] }
+  const rpc = () => new Proxy({}, {
+    get: (_target, property) => property === "events" ? events : async (_input: unknown, options: unknown) => {
+      seen.push(options)
+      return {}
+    },
+  })
+  const value = { ...context(), location: { directory: "D:/workspace" }, client: { rpc } } as unknown as Context
+  const live = createLive(value)
+  await live.codegraph.refresh()
+  expect(seen).toEqual([{ location: { directory: "D:/workspace" } }])
+  live.dispose()
+})
+
 test("createLive issues no RPC or location fetch at construction", () => {
   const recorded = recordingContext()
   const live = createLive(recorded.context)

@@ -31,15 +31,56 @@ export type RpcLayer = {
   readonly verify: RpcClient<typeof VerifyRpc>
 }
 
-export function createRpcLayer(client: Context["client"]): RpcLayer {
+type Location = NonNullable<Context["location"]>
+
+/**
+ * Plugin RPC is per location, and a call without one is answered by a plugin instance in the service's default
+ * location, usually the home folder. That instance reads an empty database and starts indexing that folder, so every
+ * call names the current location, and events from other locations are dropped.
+ */
+function scoped<D extends Parameters<Context["client"]["rpc"]>[0]>(
+  client: RpcClient<D>,
+  location: () => Location | undefined,
+): RpcClient<D> {
+  const events = (client as { readonly events: { readonly on: (...args: never[]) => () => void } }).events
+  const scopedEvents = new Proxy(events, {
+    get: (target, property) =>
+      property !== "on"
+        ? Reflect.get(target, property)
+        : (name: never, handler: (event: { readonly location?: { readonly directory?: string } }) => unknown, options: never) =>
+            target.on(
+              name,
+              ((event: { readonly location?: { readonly directory?: string } }) => {
+                const from = event.location?.directory
+                if (from !== undefined && location() !== undefined && from !== location()?.directory) return
+                return handler(event)
+              }) as never,
+              options,
+            ),
+  })
+  return new Proxy(client, {
+    get(target, property) {
+      if (property === "events") return scopedEvents
+      const method = Reflect.get(target, property) as unknown
+      if (typeof method !== "function") return method
+      return (input: unknown, options?: object) => {
+        const current = location()
+        if (current === undefined) return Promise.reject({ type: "rpc.unavailable", message: "No location is ready yet" })
+        return Reflect.apply(method, target, [input, { ...options, location: current }])
+      }
+    },
+  })
+}
+
+export function createRpcLayer(client: Context["client"], location: () => Location | undefined): RpcLayer {
   return {
-    core: client.rpc(BanyanRpc),
-    codegraph: client.rpc(CodegraphRpc),
-    intel: client.rpc(IntelRpc),
-    mesh: client.rpc(MeshRpc),
-    usage: client.rpc(UsageRpc),
-    system: client.rpc(SystemRpc),
-    verify: client.rpc(VerifyRpc),
+    core: scoped(client.rpc(BanyanRpc), location),
+    codegraph: scoped(client.rpc(CodegraphRpc), location),
+    intel: scoped(client.rpc(IntelRpc), location),
+    mesh: scoped(client.rpc(MeshRpc), location),
+    usage: scoped(client.rpc(UsageRpc), location),
+    system: scoped(client.rpc(SystemRpc), location),
+    verify: scoped(client.rpc(VerifyRpc), location),
   }
 }
 

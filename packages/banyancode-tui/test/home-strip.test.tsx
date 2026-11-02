@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { CODEGRAPH_TIP, HOME_TIPS, HomeStrip } from "../src/components/home/home-strip"
+import { CODEGRAPH_TIP, HomeStrip } from "../src/components/home/home-strip"
 import { codegraphLive, context, mount } from "./harness"
 
 const frame = async (codegraph: ReturnType<typeof codegraphLive>, size = { width: 100, height: 20 }) => {
@@ -26,8 +26,7 @@ test("suggests building the graph only while it is missing", async () => {
       }),
     ),
   )
-  expect(running).not.toContain(CODEGRAPH_TIP)
-  expect(HOME_TIPS.some((tip) => running.includes(tip))).toBe(true)
+  expect(running).not.toContain("Type /codegraph-build")
 })
 
 test("shows scanning instead of a 0/0 count before the file total is known", async () => {

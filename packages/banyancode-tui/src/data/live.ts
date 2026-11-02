@@ -1,5 +1,5 @@
 import type { Context } from "@opencode/plugin/tui/context"
-import { createSignal, type Accessor } from "solid-js"
+import { createEffect, createRoot, createSignal, on, type Accessor } from "solid-js"
 import {
   availabilityOf,
   attempt,
@@ -223,7 +223,7 @@ export function lspFromConfig(config: BanyanConfig | undefined): LspStatus | und
  * surface in its "not available" state instead of throwing.
  */
 export function createLive(context: Context): Live {
-  const rpc = createRpcLayer(context.client)
+  const rpc = createRpcLayer(context.client, () => context.location)
   const root = () => context.location?.directory
   const disposers: Array<() => void> = []
   let disposed = false
@@ -532,8 +532,24 @@ export function createLive(context: Context): Live {
   // `setup` made the plugin issue eight RPC calls before the first frame, which
   // stalls startup and floods hosts that do not implement BanyanCode yet.
 
+  // A surface can mount before the location is known, and /cd changes it. Refresh what has already been asked for.
+  const stopLocationWatch = createRoot((stop) => {
+    createEffect(
+      on(
+        () => context.location?.directory,
+        () => {
+          if (cgAvailability() !== "unknown") void refreshCodegraph()
+          if (coreAvailability() !== "unknown") void refreshCore()
+        },
+        { defer: true },
+      ),
+    )
+    return stop
+  })
+
   const dispose = () => {
     disposed = true
+    stopLocationWatch()
     for (const off of disposers) off()
     disposers.length = 0
   }

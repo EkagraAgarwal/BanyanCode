@@ -183,6 +183,7 @@ export default Plugin.define({
           description: "Index the workspace code graph",
           group: "Codegraph",
           palette: true,
+          slash: { name: "codegraph-build" },
           async run() {
             report(await live.codegraph.start(), "Codegraph build started")
           },

@@ -499,9 +499,12 @@ export function Autocomplete(props: {
       }))
     })
     const commandNames = new Set<string>()
+    const clientNames = new Set(results.map((result) => result.display))
 
     for (const serverCommand of data.location.command.list(location.current) ?? []) {
       commandNames.add(serverCommand.name)
+      // A plugin can offer the same command on both sides: the client one needs no session, so it wins.
+      if (clientNames.has("/" + serverCommand.name)) continue
       results.push({
         display: "/" + serverCommand.name,
         description: serverCommand.description,

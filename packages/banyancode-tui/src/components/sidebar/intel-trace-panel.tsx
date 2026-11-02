@@ -29,8 +29,7 @@ export function IntelTracePanel(props: {
         when={entries().length > 0}
         fallback={
           <text fg={theme().muted}>
-            No trace recorded yet. v1's trace endpoint never shipped; repository-intel results appear in the
-            CODEGRAPH INTEL panel.
+            No trace recorded yet. Repository results appear in the CODEGRAPH INTEL panel.
           </text>
         }
       >

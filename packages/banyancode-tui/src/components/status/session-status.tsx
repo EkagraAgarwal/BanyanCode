@@ -21,15 +21,6 @@ export function SessionStatus(props: { readonly context: Context; readonly sessi
   const dimensions = useTerminalDimensions()
 
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
-  const location = createMemo(() => session()?.location ?? props.context.location)
-
-  const label = createMemo(() => {
-    const directory = location()?.directory
-    if (!directory) return undefined
-    const branch = props.context.data.location.vcs.info(location())?.branch.current
-    return branch ? `${basename(directory)}:${branch}` : basename(directory)
-  })
-
   const attention = createMemo(() => {
     const sessionID = props.sessionID
     const permissions = props.context.data.session.permission.list(sessionID)?.length ?? 0
@@ -44,12 +35,10 @@ export function SessionStatus(props: { readonly context: Context; readonly sessi
   // cost and tokens are already shown by the host footer.
   const showDetails = createMemo(() => dimensions().width >= 88)
   const showAttention = createMemo(() => dimensions().width >= 60 && attention() > 0)
-  const showLabel = createMemo(() => showDetails() && label() !== undefined)
 
   return (
     <Show when={showAttention() || (showDetails() && (cost() > 0 || tokens() > 0))}>
       <box flexDirection="row" gap={2} alignItems="center" flexShrink={0}>
-        <Show when={showLabel()}>{(value) => <text fg={theme().muted}>{value()}</text>}</Show>
         <Show when={showDetails() && cost() > 0}>
           <text fg={theme().muted}>{formatMoney(cost())}</text>
         </Show>

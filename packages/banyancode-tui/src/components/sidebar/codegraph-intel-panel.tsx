@@ -18,7 +18,7 @@ export function CodegraphIntelPanel(props: { readonly context: Context; readonly
       <Show
         when={props.intel.entries().length > 0}
         fallback={
-          <text fg={theme().muted}>Use /codegraph-search, /repo-find-subsystem, or /codegraph-find-routes.</text>
+          <text fg={theme().muted}>Use /repository-query, /repository-explain or /repository-trace.</text>
         }
       >
         <For each={props.intel.entries()}>
