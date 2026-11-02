@@ -21,6 +21,7 @@ import type { SkillDomain } from "./skill.js"
 import type { StorageDomain } from "./storage.js"
 import type { ToolDomain } from "./tool.js"
 import type { VcsDomain } from "./vcs.js"
+import type { WatcherDomain } from "./watcher.js"
 import type { WebSearchDomain } from "./websearch.js"
 import type { WorktreeDomain } from "./worktree.js"
 
@@ -55,6 +56,7 @@ export interface Context {
   readonly storage: StorageDomain
   readonly tool: ToolDomain
   readonly vcs: VcsDomain
+  readonly watcher: WatcherDomain
   readonly websearch: WebSearchDomain
   readonly worktree: WorktreeDomain
 }

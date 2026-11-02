@@ -14,10 +14,9 @@
  *               `-force-kill`, `-remove`)
  *   - policy  → `ctx.session.hook("context")`, appending the v1 policy text +
  *               per-session tool guide to `event.system`
- *   - watcher → `ctx.event.subscribe({ types: ["filesystem.changed"] })` plus a
- *               recursive project-tree watch (`codegraph-watcher.ts`), because
- *               the host only publishes change events for files it watches
- *               explicitly and an ordinary edit never reached auto-update
+ *   - watcher → `ctx.event.subscribe({ types: ["filesystem.changed"] })` plus the
+ *               host's directory watcher (`codegraph-watcher.ts`), because that
+ *               event only covers files the host watches explicitly
  *   - backgrounds → `Effect.forkScoped` (plugin scope)
  *
  * Per AGENTS.md every service event queue has exactly ONE consumer, and it is
@@ -343,13 +342,11 @@ export const register = (
     // onChange applies the enable flag, the own-data-dir filter and the
     // debounce. Never watch the home folder or a whole drive.
     if (!isHomeOrAbove(projectRoot)) {
-      const treeWatcher = yield* makeWatcher({ root: projectRoot, onChange: autoUpdate.onChange })
-      const active = yield* treeWatcher.watching()
-      yield* Effect.logInfo(
-        active
-          ? `codegraph auto-update: watching ${projectRoot}`
-          : `codegraph auto-update: no recursive watch for ${projectRoot}`,
-      )
+      yield* makeWatcher({
+        root: projectRoot,
+        updates: ctx.watcher.directory(projectRoot),
+        onChange: autoUpdate.onChange,
+      })
     }
 
     // ── tools ──────────────────────────────────────────────────────────────

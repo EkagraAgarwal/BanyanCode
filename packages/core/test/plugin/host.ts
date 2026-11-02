@@ -152,6 +152,7 @@ export function host(overrides: Overrides = {}): Plugin.Context {
       list: () => Effect.die("unused tool.list"),
       hook: () => Effect.die("unused tool.hook"),
     },
+    watcher: overrides.watcher ?? { directory: () => Stream.empty },
     vcs: overrides.vcs ?? {
       base: () => Effect.die("unused vcs.base"),
       get: () => Effect.die("unused vcs.get"),

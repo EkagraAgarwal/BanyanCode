@@ -31,6 +31,8 @@ import { Skill } from "../skill.js"
 import { Tool } from "../tool.js"
 import { Workspace } from "../workspace.js"
 import { Vcs } from "../vcs.js"
+import { Watcher } from "../filesystem/watcher.js"
+import { FSUtil } from "@opencode/util/fs-util"
 import { WebSearch } from "../websearch.js"
 import { Worktree } from "../worktree.js"
 import { WorktreeStrategies } from "../worktree/strategies.js"
@@ -72,6 +74,7 @@ export const make = Effect.fn("PluginHost.make")(function* (
   const skill = yield* Skill.Service
   const tools = yield* Tool.Service
   const vcs = yield* Vcs.Service
+  const watcher = yield* Watcher.Service
   const websearch = yield* WebSearch.Service
   const generate = yield* Generate.Service
   const generateText = (input: Generate.TextInput) => generate.text(input).pipe(Effect.map((text) => ({ text })))
@@ -267,6 +270,10 @@ export const make = Effect.fn("PluginHost.make")(function* (
     },
     credential: {
       activate: (input) => integration.connection.activate(input.credentialID),
+    },
+    watcher: {
+      directory: (directory) =>
+        Stream.unwrap(watcher.subscribe({ path: directory, type: "directory", ignore: FSUtil.ignoreGlobs })),
     },
     event: {
       // The bus only delivers the requested types, which TypeScript cannot follow through the generic signature.
@@ -680,6 +687,7 @@ export const requirements = LayerNode.group([
   Skill.node,
   Tool.node,
   Vcs.node,
+  Watcher.node,
   WebSearch.node,
   Worktree.node,
   WorktreeStrategies.node,

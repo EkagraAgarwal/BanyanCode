@@ -9,14 +9,15 @@ import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Effect } from "effect"
+import { Effect, Queue, Stream } from "effect"
 import { Storage } from "../../src/storage/index.js"
 import { make as makeRepo } from "../../src/codegraph/codegraph-repo.js"
 import { make as makeIndexer } from "../../src/codegraph/codegraph-indexer.js"
 import { make as makeBuildService } from "../../src/codegraph/codegraph-build-service.js"
 import { make as makeReadiness } from "../../src/codegraph/codegraph-readiness.js"
 import { make as makeAutoUpdate } from "../../src/codegraph/codegraph-auto-update.js"
-import { make as makeWatcher } from "../../src/codegraph/codegraph-watcher.js"
+import { watch as fsWatch } from "node:fs"
+import { make as makeWatcher, type Update } from "../../src/codegraph/codegraph-watcher.js"
 import { make as makeAnalyzer } from "../../src/codegraph/codegraph-analyzer.js"
 import { buildTool } from "../../src/codegraph/tools/codegraph.js"
 import { resolveProjectRoot } from "../../src/codegraph/workspace-identity.js"
@@ -494,10 +495,21 @@ describe("codegraph auto-update", () => {
             const first = yield* indexer.index({ root: directory, force: true })
             yield* repo.bumpVersion({ eligibleFiles: first.eligibleFiles, indexedRoot: directory })
 
-            const watcher = yield* makeWatcher({ root: directory, onChange: auto.onChange })
-            expect(yield* watcher.watching()).toBe(true)
-            // The Linux watch walks the tree in the background.
-            yield* Effect.sleep("300 millis")
+            yield* makeWatcher({
+              root: directory,
+              onChange: auto.onChange,
+              updates: Stream.callback<Update>((queue) =>
+                Effect.acquireRelease(
+                  Effect.sync(() =>
+                    fsWatch(directory, { recursive: true }, (_event, filename) => {
+                      if (filename) Queue.offerUnsafe(queue, { path: join(directory, filename.toString()), type: "update" })
+                    }),
+                  ),
+                  (handle) => Effect.sync(() => handle.close()),
+                ),
+              ),
+            })
+            yield* Effect.sleep("200 millis")
 
             yield* Effect.promise(() =>
               write(
