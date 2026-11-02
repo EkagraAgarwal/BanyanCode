@@ -622,7 +622,11 @@ describe("codegraph auto-update", () => {
               (nodes) => nodes.length > 0,
             )
             expect(beta).toHaveLength(1)
-            const state = yield* auto.state()
+            // One save can raise more than one event, so a second pass may still be queued.
+            const state = yield* waitFor(
+              () => auto.state(),
+              (current) => current.pending === 0,
+            )
             expect(["watching", "draining"]).toContain(state.status)
             expect(state.pending).toBe(0)
           }),
