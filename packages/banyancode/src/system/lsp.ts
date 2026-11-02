@@ -80,6 +80,8 @@ export const lspStatus = (config: BanyanConfigInfo): LspStatus => {
   const live = snapshot()
   if (!live) return fromConfig(config)
   if (config.banyancode_lsp === false) return disabledByConfig(live)
+  // Turned on since the runtime last read its config: it picks that up the next time a file needs a server.
+  if (config.banyancode_lsp === true && !live.enabled) return { ...live, enabled: true }
   return live
 }
 
