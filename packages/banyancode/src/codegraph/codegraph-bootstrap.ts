@@ -2,6 +2,7 @@ export * as CodegraphBootstrap from "./codegraph-bootstrap"
 
 import { Cause, Context, Duration, Effect, Ref, Schema } from "effect"
 import path from "path"
+import { isHomeOrAbove } from "./workspace-identity"
 import type { Interface as CodegraphReadinessInterface, ReadinessResult } from "./codegraph-readiness.js"
 
 /**
@@ -74,6 +75,8 @@ export const make = (deps: Deps): Effect.Effect<Interface> =>
       if (path.parse(path.resolve(input.root)).root === path.resolve(input.root)) {
         return { state: "missing" }
       }
+      // v2 opens a location on launch, not on the first session as v1 did, so starting in ~ reaches here.
+      if (isHomeOrAbove(input.root)) return yield* status()
 
       // Honor the codegraph_auto_update disable semantics: watch_enabled
       // false means the user does not want background builds, so we only

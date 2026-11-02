@@ -85,14 +85,17 @@ export default Plugin.define({
     // home.footer.status on the home screen.
     context.ui.slot({
       append: "prompt.footer.status",
+      // The home screen has its own row at home.footer.status; without this check it shows twice.
       render: (input) => (
-        <StatusPills
-          context={context}
-          sessionID={input.sessionID}
-          codegraph={live.codegraph}
-          mesh={live.mesh}
-          system={live.system}
-        />
+        <Show when={input.sessionID}>
+          <StatusPills
+            context={context}
+            sessionID={input.sessionID}
+            codegraph={live.codegraph}
+            mesh={live.mesh}
+            system={live.system}
+          />
+        </Show>
       ),
     })
     context.ui.slot({
@@ -110,10 +113,9 @@ export default Plugin.define({
       ),
     })
 
-    // v1 home tip + progress overlay → appended below the host home footer so
-    // the host row keeps its width at every terminal size.
+    // v1 home tip + progress overlay.
     context.ui.slot({
-      append: "home.footer",
+      append: "home.bottom",
       render: () => <HomeStrip context={context} codegraph={live.codegraph} />,
     })
 

@@ -20,6 +20,7 @@
  * Per AGENTS.md every service event queue has exactly ONE consumer, and it is
  * the RPC bridge here — no service drains its own queue.
  */
+import { isHomeOrAbove } from "./workspace-identity"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import type { Tool as ToolSchema } from "@opencode/schema/tool"
 import { Effect, Queue, Scope, Stream } from "effect"
@@ -393,7 +394,7 @@ export const register = (
     yield* Effect.forkScoped(
       Effect.forever(
         Effect.sleep("10 minutes").pipe(
-          Effect.andThen(autoUpdate.reconcile({ root: projectRoot })),
+          Effect.andThen(isHomeOrAbove(projectRoot) ? Effect.void : autoUpdate.reconcile({ root: projectRoot })),
           Effect.ignore,
         ),
       ),

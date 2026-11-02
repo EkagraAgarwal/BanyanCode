@@ -1,5 +1,6 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import { createEffect, createMemo, createSignal, on, onCleanup, Show } from "solid-js"
+import { useTerminalDimensions } from "@opentui/solid"
 import { bar } from "../../data/format"
 import type { CodegraphLive } from "../../data/live"
 import { palette } from "../../theme"
@@ -31,16 +32,16 @@ function labelFor(status: BuildStatus): string {
 }
 
 /**
- * Codegraph build progress. v1 mounted this as a floating overlay
- * (`component/codegraph-progress.tsx`); v2 mounts it at `session.composer.top`
- * so it never covers the prompt.
+ * Codegraph build progress. In a session it sits at `session.composer.top` so it
+ * never covers the prompt. On the home screen, `overlay` floats it bottom right, as v1 did.
  */
 export function CodegraphProgress(props: {
   readonly context: Context
   readonly codegraph: CodegraphLive
-  readonly idleHint?: boolean
+  readonly overlay?: boolean
 }) {
   const theme = () => palette(props.context.theme)
+  const dimensions = useTerminalDimensions()
   const [now, setNow] = createSignal(Date.now())
   const [hidden, setHidden] = createSignal(false)
 
@@ -94,13 +95,7 @@ export function CodegraphProgress(props: {
     }),
   )
 
-  const visible = createMemo(() => {
-    if (status() !== "idle") return !hidden()
-    if (props.idleHint !== true) return false
-    return props.codegraph.readiness()?.reason === "missing" || props.codegraph.readiness() === undefined
-  })
-
-  const idle = createMemo(() => status() === "idle")
+  const visible = createMemo(() => status() !== "idle" && !hidden())
   const lastUpdateSeconds = createMemo(() => {
     const state = build()
     if (!state?.lastProgressAt) return 0
@@ -110,30 +105,36 @@ export function CodegraphProgress(props: {
   return (
     <Show when={visible()}>
       <box
-        width="100%"
+        {...(props.overlay
+          ? {
+              position: "absolute" as const,
+              bottom: 1,
+              right: 2,
+              zIndex: 2000,
+              width: Math.min(60, dimensions().width - 6),
+              border: true,
+              borderStyle: "rounded" as const,
+              borderColor: status() === "failed" ? theme().error : status() === "stuck" ? theme().warning : theme().border,
+              backgroundColor: theme().surface,
+              paddingTop: 1,
+              paddingBottom: 1,
+            }
+          : { width: "100%" as const, flexShrink: 0 })}
         paddingLeft={2}
         paddingRight={2}
-        paddingTop={0}
-        paddingBottom={0}
         flexDirection="column"
-        flexShrink={0}
       >
-        <Show
-          when={!idle()}
-          fallback={
-            <box flexDirection="row" gap={1} alignItems="center">
-              <text fg={theme().muted}>∅</text>
-              <text fg={theme().text}>Codegraph not built</text>
-              <text fg={theme().muted}>· run /codegraph-build</text>
-            </box>
-          }
-        >
-          <box flexDirection="row" gap={1} alignItems="center">
+        <>
+          <box flexDirection={props.overlay ? "column" : "row"} gap={props.overlay ? 0 : 1}>
             <text fg={status() === "failed" ? theme().error : status() === "stuck" ? theme().warning : theme().text}>
               <b>Codegraph Indexing — {labelFor(status())}</b>
             </text>
             <Show when={!props.codegraph.availability || props.codegraph.availability() === "available"}>
-              <text fg={theme().muted}>{`${bar(build()?.done ?? 0, build()?.total ?? 0)} ${build()?.done ?? 0}/${build()?.total ?? 0}`}</text>
+              <text fg={theme().muted}>
+                {(build()?.total ?? 0) > 0
+                  ? `${bar(build()?.done ?? 0, build()?.total ?? 0)} ${build()?.done ?? 0}/${build()?.total ?? 0}`
+                  : "Scanning files…"}
+              </text>
             </Show>
             <Show when={status() === "running"}>
               <text fg={theme().muted}>· /codegraph-cancel to stop</text>
@@ -158,10 +159,7 @@ export function CodegraphProgress(props: {
           <Show when={build()?.error}>
             {(error) => <text fg={theme().error}>{error()}</text>}
           </Show>
-          <Show when={build()?.dbPath}>
-            {(path) => <text fg={theme().muted}>Index → {path()}</text>}
-          </Show>
-        </Show>
+        </>
       </box>
     </Show>
   )

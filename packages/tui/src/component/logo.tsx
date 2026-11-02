@@ -3,7 +3,11 @@ import { For, type JSX } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../context/theme"
 import { tint } from "../theme/color"
-import { go, logo } from "../logo"
+import { logo, splash } from "../logo"
+
+const TREE = RGBA.fromInts(34, 139, 34)
+const SPLASH_WIDTH = splash[0]!.length
+const SPLASH_HEIGHT = 36
 
 export function Logo() {
   const theme = useTheme()
@@ -49,12 +53,29 @@ export function Logo() {
     })
   }
 
+  // The tree is fixed green and the wordmark follows the theme, so it stays readable on a light background.
+  const renderSplashLine = (line: string): JSX.Element[] =>
+    line
+      .split(/(█+)/)
+      .filter((run) => run !== "")
+      .map((run) => (
+        <text
+          fg={run.startsWith("█") ? theme.text.base : TREE}
+          attributes={run.startsWith("█") ? TextAttributes.BOLD : undefined}
+          selectable={false}
+        >
+          {run}
+        </text>
+      ))
+
   return (
     <box>
-      {dimensions().height < 12 ? null : dimensions().width < 33 ? (
-        <For each={go.right.slice(1)}>
-          {(line) => <box flexDirection="row">{renderLine(line, theme.text.base, true)}</box>}
-        </For>
+      {dimensions().height < 12 ? null : dimensions().width < 40 ? (
+        <text fg={theme.text.base} attributes={TextAttributes.BOLD} selectable={false}>
+          BanyanCode
+        </text>
+      ) : dimensions().width >= SPLASH_WIDTH + 4 && dimensions().height >= SPLASH_HEIGHT ? (
+        <For each={splash}>{(line) => <box flexDirection="row">{renderSplashLine(line)}</box>}</For>
       ) : dimensions().width < 64 ? (
         <>
           <For each={logo.left.slice(1)}>

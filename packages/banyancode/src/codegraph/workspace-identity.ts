@@ -70,6 +70,10 @@ const isAncestor = (candidate: string, descendant: string): boolean => {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)
 }
 
+/** The home folder and those above it hold far more than one project, so they are never indexed unasked. */
+export const isHomeOrAbove = (root: string, home: string = homedir()): boolean =>
+  samePath(resolve(root), home) || isAncestor(resolve(root), home)
+
 /** The home directory (or any ancestor) is never a project root. */
 export const findRepoRoot = (startDir: string, home: string = homedir()): string | undefined => {
   const dir = resolve(startDir)

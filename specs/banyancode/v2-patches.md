@@ -141,7 +141,9 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/context/program-status.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/feature-plugins/sidebar/footer.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/feature-plugins/system/stats.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
-| `packages/tui/src/logo.ts` | branding | BanyanCode 5x5 block wordmark | — |
+| `packages/tui/src/logo.ts` | branding | the v1 BanyanCode tree splash and wordmark | — |
+| `packages/tui/src/routes/home.tsx` | hook | `home.bottom` slot under the prompt, for the v1 tip | — |
+| `packages/plugin/src/tui/context.ts` | hook | declares the `home.bottom` slot | — |
 | `packages/tui/src/mini/footer.permission.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/mini/footer.prompt.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/mini/runtime.lifecycle.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |

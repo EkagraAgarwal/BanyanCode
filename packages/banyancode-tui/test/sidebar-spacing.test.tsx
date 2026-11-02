@@ -160,7 +160,7 @@ test("plugin registers additive slots, router pages, and commands", () => {
   expect(recorded.claims.filter((claim) => claim.target === "prompt.footer.status")).toHaveLength(2)
   expect(recorded.claims.filter((claim) => claim.target === "home.footer.status")).toHaveLength(1)
   expect(recorded.claims.filter((claim) => claim.target === "session.composer.top")).toHaveLength(1)
-  expect(recorded.claims.filter((claim) => claim.target === "home.footer")).toHaveLength(1)
+  expect(recorded.claims.filter((claim) => claim.target === "home.bottom")).toHaveLength(1)
   expect(recorded.claims.filter((claim) => claim.target === "session.panel")).toHaveLength(1)
 
   const ids = recorded.commands.map((command) => command.id)
