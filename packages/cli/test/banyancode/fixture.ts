@@ -98,7 +98,7 @@ export type RunningServer = { readonly url: string; readonly stop: () => Promise
 /** Boot a real isolated server; the caller must `stop()` it in `afterAll`. */
 export async function startServer(root: string, extraEnv: Record<string, string | undefined> = {}) {
   const child = Bun.spawn([process.execPath, "run", CLI_ENTRY, "serve", "--port", "0"], {
-    cwd: options.cwd ?? CLI_ROOT,
+    cwd: CLI_ROOT,
     env: envFor(root, extraEnv),
     stdin: "ignore",
     stdout: "pipe",
