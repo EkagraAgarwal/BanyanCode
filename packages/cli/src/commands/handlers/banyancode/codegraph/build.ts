@@ -3,7 +3,7 @@ import path from "node:path"
 import { Effect, Option } from "effect"
 import { Commands } from "../../../commands"
 import { Runtime } from "../../../../framework/runtime"
-import { connect, here, onError } from "../client"
+import { connect, onError } from "../client"
 import { CodegraphRpc } from "../rpc"
 import { dim, println, Style } from "../ui"
 import { formatState } from "./shared"
@@ -15,10 +15,12 @@ const handler = Effect.fn("cli.codegraph.build")(function* (
 ) {
   const root = path.resolve(Option.getOrUndefined(input.root) ?? process.cwd())
   if (!isDirectory(root)) return yield* Effect.fail(new Error(`Directory not found: ${root}`))
+  // --root picks the project: a graph belongs to its own project, so the call goes to that location.
+  const location = { location: { directory: root } }
   const { client } = yield* connect()
   const codegraph = client.rpc(CodegraphRpc)
 
-  const before = yield* Effect.tryPromise({ try: () => codegraph.status({ root }, here()), catch: (cause) => cause })
+  const before = yield* Effect.tryPromise({ try: () => codegraph.status({ root }, location), catch: (cause) => cause })
   println(Style.TEXT_HIGHLIGHT + "Building codegraph" + Style.TEXT_NORMAL)
   println(dim(`  root:   ${root}`))
   println(dim(`  db:     ${before.databasePath}`))
@@ -32,7 +34,7 @@ const handler = Effect.fn("cli.codegraph.build")(function* (
   }
 
   yield* Effect.tryPromise({
-    try: () => codegraph.build({ root, force: input.force }, here()),
+    try: () => codegraph.build({ root, force: input.force }, location),
     catch: (cause) => cause,
   })
 
@@ -40,7 +42,7 @@ const handler = Effect.fn("cli.codegraph.build")(function* (
   // v1 streamed every state in a TTY and only the terminal one when piped.
   const watch = input.watch || Boolean(process.stdout.isTTY || process.stderr.isTTY)
   let last = ""
-  let state = yield* Effect.tryPromise({ try: () => codegraph.status({ root }, here()), catch: (cause) => cause })
+  let state = yield* Effect.tryPromise({ try: () => codegraph.status({ root }, location), catch: (cause) => cause })
   while (state.build.status === "running") {
     const line = formatState(state.build)
     if (watch && line !== last) {
@@ -52,7 +54,7 @@ const handler = Effect.fn("cli.codegraph.build")(function* (
       break
     }
     yield* Effect.sleep(POLL)
-    state = yield* Effect.tryPromise({ try: () => codegraph.status({ root }, here()), catch: (cause) => cause })
+    state = yield* Effect.tryPromise({ try: () => codegraph.status({ root }, location), catch: (cause) => cause })
   }
 
   if (!watch || last !== formatState(state.build)) println(formatState(state.build))

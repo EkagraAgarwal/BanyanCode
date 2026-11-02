@@ -63,6 +63,17 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # The search tests run real ripgrep and tests may not download it.
+      - name: Install ripgrep
+        run: sudo apt-get install -y ripgrep
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@banyancode.invalid"
+          git config --global user.name "banyancode-ci"
+
       - name: Test
         working-directory: packages/${{ matrix.package }}
+        env:
+          GITHUB_ACTIONS: "false"
         run: bun run test

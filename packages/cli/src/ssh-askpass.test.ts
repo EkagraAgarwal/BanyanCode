@@ -17,6 +17,7 @@ test("the executable askpass branch returns only the response, without CLI outpu
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "index.ts"), "Enter passphrase:"], {
       env: {
         ...process.env,
+        BANYANCODE_INTERNAL_ENV_MAPPED: "1",
         OPENCODE_SSH_ASKPASS_PORT: String(address.port),
         OPENCODE_SSH_ASKPASS_TOKEN: "fixture",
         SSH_ASKPASS_PROMPT: "confirm",
@@ -51,7 +52,7 @@ test("a response split inside a multi-byte character is written intact", async (
   if (!address || typeof address === "string") throw new Error("missing listener")
   try {
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "index.ts"), "Enter passphrase:"], {
-      env: { ...process.env, OPENCODE_SSH_ASKPASS_PORT: String(address.port), OPENCODE_SSH_ASKPASS_TOKEN: "fixture" },
+      env: { ...process.env, BANYANCODE_INTERNAL_ENV_MAPPED: "1", OPENCODE_SSH_ASKPASS_PORT: String(address.port), OPENCODE_SSH_ASKPASS_TOKEN: "fixture" },
       stdout: "pipe",
       stderr: "pipe",
     })

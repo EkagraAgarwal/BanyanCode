@@ -21,4 +21,5 @@ if (process.versions.bun !== expectedBunVersion) {
 # takes each package as the worktree root, misses the root .gitignore and walks
 # node_modules, which looks like a hang.
 unset GIT_DIR
+bun script/banyancode/patch-ledger.ts
 bun run check

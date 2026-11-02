@@ -46,7 +46,24 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/cli/src/config/config.ts` | hook | BANYANCODE_TUI_CONFIG overlays cli.json | — |
 | `packages/core/src/snapshot.ts` | fix | capture time budget, so a huge worktree can't stall a session | — |
 | `packages/core/test/snapshot.test.ts` | fix | covers the capture time budget | — |
-| `.husky/pre-push` | fix | unset GIT_DIR so turbo doesn't stall in a linked worktree | — |
+| `.husky/pre-push` | fix | unset GIT_DIR so turbo doesn't stall in a linked worktree; check the ledger | — |
+| `packages/cli/src/commands/handlers/debug/config.ts` | hook | shows BanyanCode config warnings | — |
+| `packages/cli/src/commands/handlers/session/import.ts` | fix | one-line message for a bad import file | — |
+| `packages/cli/src/framework/error.ts` | fix | one-line errors; stacks behind a debug flag | — |
+| `packages/cli/src/framework/runtime.ts` | hook | v1's `completion` command | — |
+| `packages/cli/test/fixture/standalone-owner.ts` | branding | maps the environment as the CLI entry does | — |
+| `packages/cli/test/standalone.test.ts` | branding | BANYANCODE_ variable name | — |
+| `packages/cli/test/uninstall.test.ts` | hook | covers restored uninstall flags | — |
+| `packages/cli/src/ssh-askpass.test.ts` | branding | marks the environment as already mapped | — |
+| `packages/core/script/test.ts` | branding | test config dir is banyancode | — |
+| `packages/core/test/boot-work.test.ts` | hook | counts the prompt-cache hook's lookup | — |
+| `packages/core/test/session-activation.test.ts` | branding | `.banyancode` fixture path | — |
+| `packages/core/test/plugin/supervisor-reload.test.ts` | branding | `.banyancode` fixture path | — |
+| `packages/server/test/fetch.test.ts` | branding | product path; longer wait while source transpiles | — |
+| `packages/tui/src/component/dialog-status.tsx` | hook | provider and session summary, as in v1 | — |
+| `packages/tui/test/component/dialog-status.test.tsx` | hook | covers the status summary | — |
+| `packages/tui/test/fixture/tui-client.ts` | hook | answers BanyanCode plugin requests | — |
+| `packages/tui/test/stats.view.test.tsx` | branding | CLI name in the stats header | — |
 | `packages/cli/script/postinstall.mjs` | branding | user-visible install errors say BanyanCode; temp dir is banyancode-install-* | — |
 | `packages/cli/src/brand-env.ts` | branding | maps BANYANCODE_* onto the internal OPENCODE_* namespace at CLI entry | — |
 | `packages/cli/src/commands/commands.ts` | branding | derives the name/path from Product instead of the opencode literal | — |
