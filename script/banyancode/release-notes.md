@@ -12,3 +12,4 @@ BanyanCode now runs on the OpenCode v2 architecture.
 - Anthropic OAuth quota reports as unsupported.
 - `banyancode_reasoning_configuration_update` is accepted but has no effect.
 - Long snapshots now stop after 60 seconds by default. Set `BANYANCODE_SNAPSHOT_LIST_TIMEOUT_MS` to change this.
+- A configured `model` that doesn't exist falls back to the first available model instead of failing.

@@ -4,23 +4,21 @@ Status at 2026-11-02. Plan: [v2-migration-plan.md](v2-migration-plan.md). Featur
 
 ## Where things are
 
-- `banyancode@next` is `26.11.0-rc.2`, with a GitHub prerelease. `banyancode@latest` is still v1 (`26.10.9`), so existing users are unaffected.
+- `banyancode@next` is `26.11.0-rc.3`, with a GitHub prerelease. `banyancode@latest` is still v1 (`26.10.9`), so existing users are unaffected.
 - `v2-base` is on GitHub at the tagged commit and `banyancode-ci` passes. `main` is still v1.
-- The publish workflow runs from a `v[0-9]*` tag. A push to `release-check` builds and packs all 12 platforms and publishes nothing; use it before tagging. Dispatch only works once the workflow is on the default branch.
+- The publish workflow runs from a `v[0-9]*` tag. A push to `release-check` builds and packs all 12 platforms and publishes nothing; use it when the workflow changes. Dispatch needs the file on the default branch.
 
-## Verified on rc.2, installed from npm on Windows x64
+## How rc.3 was tested
 
-- Smoke test: 18 of 18.
-- A real AI session, with logins imported from `auth.json`.
-- MCP delegation with `--permission edits`: disconnect mid-task, reconnect, checkups, permission replies, file written, `files_changed` 1.
-- Approving under the default reject policy returns a clear error and writes nothing.
-- `mcp install --permission edits` writes the policy into the client config, and refuses `yolo`.
-- The TUI starts and draws in a real terminal (rc.1 code on a dev build). It has not been used by hand: no typing, dialogs or a full session.
-- Linux and macOS builds were packed and published but never run.
+- Real use in tmux on a native Linux build, using the harness in `D:\bct-h` (see its `TESTING.md`), compared against real v1 side by side. Three rounds of test agents reported into `D:\bct-h\reports`, and findings were reproduced before fixing.
+- All packages' suites on Linux and Windows in `banyancode-ci`, and locally compared with the upstream base: the failures left there also fail on upstream (see below).
+- Smoke test 18 of 18 on Linux. Service responsiveness while indexing large trees: median 40 ms, cancel 24 ms. Windows idle CPU about 2% of one core.
+
+Not tested: macOS and Linux arm builds have never been run. Typing into the TUI on Windows has not been driven, because there is no tmux there: Windows was covered through the CLI, service, MCP and a real run.
 
 ## Next steps, in order
 
-1. Try the TUI by hand: `npm install -g banyancode@next`. Note this replaces the installed v1, which also hosts the current MCP connection; use `--prefix` to keep them apart.
+1. The user tries it: `npm install -g banyancode@next`. This replaces the installed v1, which also hosts the current MCP connection; use `--prefix` to keep both.
 2. Ask the user before each of these: tag `v26.11.0` (moves `latest`, so every v1 user moves to v2 with a fresh start), and the cutover (rename `main` to `v1`, `v2-base` to `main`).
 3. At cutover, add the `branches: ["dev"]` canary trigger and the preflight triggers.
 
@@ -39,6 +37,13 @@ Status at 2026-11-02. Plan: [v2-migration-plan.md](v2-migration-plan.md). Featur
 - `banyancode_reasoning_configuration_update` is accepted but not consulted, because v2 already does this; turning it off isn't reproduced.
 - The snapshot budget covers the whole capture, so it defaults to 60 seconds where v1's 15 covered only the listing. Once exceeded, snapshots stop for that process.
 - Upstream plugins can read credentials through `integration.connection.resolve`. That is upstream's design, left as is.
+
+- The wire user agent stays `opencode/...`: the Copilot and OpenCode gateway integrations depend on it. The service's basic-auth user and cookie name are also still `opencode`.
+- A configured `model` that doesn't exist falls back to the first available model without a warning, as upstream does. v1 failed with an error.
+- A project-level `banyancode_telemetry` is ignored: telemetry is read from the global config only.
+- Internal plugin RPC failures reach HTTP clients as a bare 500, `RPC call failed`. A read-only data folder only reports `Background service failed to start`. A busy service port takes about 20 seconds to report.
+- The first run sends both `first_run` and `heartbeat` telemetry events.
+- The update notice on the `dev` channel can offer an older build when the `dev` tag lags a local build.
 
 ## Working notes
 
