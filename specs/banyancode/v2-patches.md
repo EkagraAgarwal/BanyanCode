@@ -58,6 +58,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/core/script/test.ts` | branding | test config dir is banyancode | — |
 | `packages/core/test/boot-work.test.ts` | hook | counts the prompt-cache hook's lookup | — |
 | `packages/core/test/session-activation.test.ts` | branding | `.banyancode` fixture path | — |
+| `packages/core/test/preload.test.ts` | branding | product directory names | — |
 | `packages/core/test/plugin/supervisor-reload.test.ts` | branding | `.banyancode` fixture path | — |
 | `packages/server/test/fetch.test.ts` | branding | product path; longer wait while source transpiles | — |
 | `packages/tui/src/component/dialog-status.tsx` | hook | provider and session summary, as in v1 | — |
