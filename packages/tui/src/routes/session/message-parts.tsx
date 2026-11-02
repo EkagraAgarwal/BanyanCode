@@ -1,4 +1,4 @@
-import { createMemo, createSignal, Match, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createSignal, Match, on, onCleanup, Show, Switch } from "solid-js"
 import { RGBA, TextAttributes, type MouseEvent } from "@opentui/core"
 import { useRenderer, type JSX } from "@opentui/solid"
 import type {
@@ -7,6 +7,8 @@ import type {
   SessionMessageAssistantText,
 } from "@opencode/client"
 import { Spinner } from "../../component/spinner"
+import { createTokenBloom } from "../../component/token-bloom"
+import { useConfig } from "../../config"
 import { createSyntaxStyleMemo, useTheme, useThemes } from "../../context/theme"
 import { reasoningSummary } from "../../context/thinking"
 import { usePlugin } from "../../plugin/context"
@@ -143,7 +145,9 @@ function ReasoningHeader(props: {
     <Switch>
       <Match when={!props.done}>
         <box flexDirection="row">
-          <Spinner color={fg()}>{props.title ? "Thinking: " + props.title : "Thinking"}</Spinner>
+          <Spinner color={fg()} shimmer={theme.growth.highlight}>
+            {props.title ? "Thinking: " + props.title : "Thinking"}
+          </Spinner>
         </box>
       </Match>
       <Match when={true}>
@@ -177,15 +181,28 @@ export function TextPart(props: {
 }) {
   const ctx = use()
   const theme = useTheme()
+  const config = useConfig()
   const { currentSyntax: syntax } = useThemes()
   const plugins = usePlugin()
+  // Captured at mount: completed history never needs the bloom, so its markdown keeps the plain renderer.
+  const bloomEligible = props.message.time.completed === undefined && (config.data.animations ?? true)
+  // The bloom is positional, not timed: it follows the newest characters as real chunks arrive.
+  const bloom = createTokenBloom({
+    active: () => (config.data.animations ?? true) && props.message.time.completed === undefined,
+    text: () => props.part.text,
+    highlight: () => theme.growth.highlight,
+    textColor: () => theme.markdown.text,
+  })
+  const renderNode = createMemo(() => (bloomEligible ? bloom.renderNode(plugins.markdown()) : plugins.markdown()))
+  createEffect(on(() => [props.part.text, props.message.time.completed], () => bloom.syncSoon(), { defer: true }))
+  onCleanup(() => bloom.dispose())
   return (
     <Show when={props.part.text.trim()}>
       <box paddingLeft={3} flexShrink={0}>
         {/* Configure custom nodes before parsing; apply content before streaming so completion keeps the final tokens. */}
         <markdown
           syntaxStyle={syntax()}
-          renderNode={plugins.markdown()}
+          renderNode={renderNode()}
           content={props.part.text.trim()}
           streaming={props.message.time.completed === undefined}
           internalBlockMode="top-level"

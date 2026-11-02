@@ -256,3 +256,16 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/cli/tui/dialog-select.test.tsx` | fix | pins the theme a cursor-color test compares against | — |
 | `packages/tui/test/sidebar-scroll.test.tsx` | hook | covers the gap between sidebar content and its scrollbar | — |
 | `packages/tui/src/component/spinner-frames.ts` | hook | the redesign's `SPROUT` spinner frames | — |
+| `packages/tui/src/component/dialog-config.tsx` | hook | "Chat layout" setting for `session_layout` | — |
+| `packages/tui/src/component/diff-reveal.tsx` | hook | diffs open and collapse with a short reveal | — |
+| `packages/tui/src/component/token-bloom.ts` | hook | the newest streamed characters blend from the highlight color | — |
+| `packages/tui/src/component/tool-settle.tsx` | hook | a live tool row's background flash fades | — |
+| `packages/tui/src/feature-plugins/system/storybook/grove.tsx` | hook | fixture story for the Grove Agents tab | — |
+| `packages/tui/src/feature-plugins/system/storybook/trunk.tsx` | hook | fixture story for the Trunk rail | — |
+| `packages/tui/src/routes/session/message-parts.tsx` | hook | token bloom on live text; reasoning uses the growth highlight shimmer | — |
+| `packages/tui/src/routes/session/subagent-rows.ts` | hook | one live row per running child under a `subagents` tool row | — |
+| `packages/tui/test/component/diff-reveal.test.tsx` | hook | covers the diff reveal | — |
+| `packages/tui/test/component/token-bloom.test.tsx` | hook | covers token bloom | — |
+| `packages/tui/test/component/tool-settle.test.tsx` | hook | covers the tool settle | — |
+| `packages/tui/test/session-panels-overlay.test.ts` | hook | covers the Trunk panels overlay state and curves | — |
+| `packages/tui/test/subagent-rows.test.ts` | hook | covers the live subagent rows | — |

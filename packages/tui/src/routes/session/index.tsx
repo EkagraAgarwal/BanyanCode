@@ -22,6 +22,8 @@ import { SplitBorder } from "../../ui/border"
 import { useTuiTerminalEnvironment } from "../../context/runtime"
 import { Spinner, SPINNER_FRAMES } from "../../component/spinner"
 import { PatchDiff } from "../../component/patch-diff"
+import { DiffReveal, diffRowCount } from "../../component/diff-reveal"
+import { ToolSettle } from "../../component/tool-settle"
 import { useTheme, useThemes } from "../../context/theme"
 import {
   BoxRenderable,
@@ -102,6 +104,7 @@ import { usePathFormatter } from "../../context/path-format"
 import { useLocation } from "../../context/location"
 import { Slot } from "../../plugin/render"
 import { usePlugin } from "../../plugin/context"
+import { TRUNK_RAIL_MIN_WIDTH } from "@banyancode/tui/trunk"
 import {
   cacheReuseDrop,
   completeGroupBoundary,
@@ -128,6 +131,7 @@ import { parseTodos } from "../../util/todo"
 import { createHistoryPrepend } from "./history"
 import { context, use, type PendingAction } from "./render-context"
 import { INLINE_TOOL_ICON_WIDTH, InlineToolRow, ReasoningPart, TextPart, toolDisplay } from "./message-parts"
+import { subagentChildRows, subagentChildSessionIDs } from "./subagent-rows"
 import { defaultVerbosity, type GroupKind, type SessionEntry } from "./grouping/session"
 import { SessionGroupView } from "./group-view"
 import { useEntryAnchor } from "./anchor-view"
@@ -1584,6 +1588,14 @@ export function Session(props: {
               <Show when={!composer.open && !disabled() && queuedPrompts().length > 0}>
                 <QueuedPromptDock prompts={queuedPrompts()} onOpen={openQueuedPrompts} />
               </Show>
+              <Show
+                when={
+                  config.session_layout === "trunk" &&
+                  dimensions().width - props.verticalTabsWidth < TRUNK_RAIL_MIN_WIDTH
+                }
+              >
+                <Slot path="session.composer.pills" input={{ sessionID: route.sessionID }} />
+              </Show>
               <Slot path="session.composer.top" input={{ sessionID: route.sessionID }} />
               <Composer
                 sessionID={route.sessionID}
@@ -2804,9 +2816,13 @@ function InlineTool(props: {
 }) {
   const theme = useTheme()
   const renderer = useRenderer()
+  const config = useConfig().data
   const [hover, setHover] = createSignal(false)
   const [errorExpanded, setErrorExpanded] = createSignal(false)
   const permission = useToolPermission(() => props.part)
+  // Captured at mount: a row that first appears while running flashes once; history rows never do.
+  const settle =
+    (props.part.state.status === "running" || props.part.state.status === "streaming") && (config.animations ?? true)
 
   const error = createMemo(() =>
     !props.running && props.part.state.status === "error" ? stripAnsi(props.part.state.error.message) : undefined,
@@ -2831,32 +2847,34 @@ function InlineTool(props: {
   })
 
   return (
-    <InlineToolRow
-      icon={props.icon}
-      color={fg()}
-      errorColor={theme.text.feedback.error.base}
-      failed={failed()}
-      denied={Boolean(denied())}
-      error={error()}
-      errorExpanded={errorExpanded()}
-      complete={props.complete}
-      pending={props.pending}
-      spinner={props.spinner}
-      status={props.status}
-      onMouseOver={() => clickable() && setHover(true)}
-      onMouseOut={() => setHover(false)}
-      onMouseUp={() => {
-        if (renderer.getSelection()?.getSelectedText()) return
-        if (failed()) {
-          if (props.onErrorClick) return props.onErrorClick()
-          setErrorExpanded((value) => !value)
-          return
-        }
-        props.onClick?.()
-      }}
-    >
-      {props.children}
-    </InlineToolRow>
+    <ToolSettle flash={theme.growth.faded} base={theme.background.base} active={settle}>
+      <InlineToolRow
+        icon={props.icon}
+        color={fg()}
+        errorColor={theme.text.feedback.error.base}
+        failed={failed()}
+        denied={Boolean(denied())}
+        error={error()}
+        errorExpanded={errorExpanded()}
+        complete={props.complete}
+        pending={props.pending}
+        spinner={props.spinner}
+        status={props.status}
+        onMouseOver={() => clickable() && setHover(true)}
+        onMouseOut={() => setHover(false)}
+        onMouseUp={() => {
+          if (renderer.getSelection()?.getSelectedText()) return
+          if (failed()) {
+            if (props.onErrorClick) return props.onErrorClick()
+            setErrorExpanded((value) => !value)
+            return
+          }
+          props.onClick?.()
+        }}
+      >
+        {props.children}
+      </InlineToolRow>
+    </ToolSettle>
   )
 }
 
@@ -2893,8 +2911,16 @@ function BlockTool(props: BlockToolProps) {
     stripAnsi(props.error ?? (props.part?.state.status === "error" ? props.part.state.error.message : "")),
   )
   const permission = useToolPermission(() => props.part)
+  const settle = Boolean(
+    props.part &&
+      (props.part.state.status === "running" || props.part.state.status === "streaming") &&
+      (ctx.config.animations ?? true),
+  )
   return (
-    <box
+    <ToolSettle
+      flash={theme.growth.faded}
+      base={background()}
+      active={settle}
       border={["left"]}
       flexShrink={0}
       paddingTop={1}
@@ -2963,7 +2989,7 @@ function BlockTool(props: BlockToolProps) {
       <Show when={error()}>
         <text fg={props.errorColor ?? theme.text.feedback.error.base}>{error()}</text>
       </Show>
-    </box>
+    </ToolSettle>
   )
 }
 
@@ -3279,6 +3305,7 @@ function WebSearch(props: ToolProps) {
 function Subagent(props: ToolProps) {
   const { navigate } = useRoute()
   const data = useData()
+  const theme = useTheme()
   const sessionID = createMemo(
     () =>
       stringValue(props.metadata.sessionID) ??
@@ -3293,27 +3320,56 @@ function Subagent(props: ToolProps) {
     const id = sessionID()
     return props.part.state.status === "running" || Boolean(id && data.session.status(id) === "running")
   })
+  // Real child sessions only: each running child gets one indented row under the tool row.
+  const children = createMemo(() =>
+    subagentChildRows(
+      subagentChildSessionIDs(props.part).map((id) => ({
+        sessionID: id,
+        agent: data.session.get(id)?.agent ?? stringValue(props.input.agent),
+        status: data.session.status(id),
+        messages: data.session.message.list(id),
+      })),
+    ),
+  )
 
   return (
-    <InlineTool
-      icon={isRunning() ? "│" : continuation() ? "↳" : props.part.state.status === "completed" ? "✓" : "│"}
-      spinner={isRunning()}
-      running={isRunning()}
-      complete={description()}
-      pending="Delegating…"
-      part={props.part}
-      onClick={() => {
-        const id = sessionID()
-        if (id) navigate({ type: "session", sessionID: id })
-      }}
-      status={
-        isBackgroundSubagent(props.metadata, props.part.state.status) ? (
-          <StatusBadge>Background</StatusBadge>
-        ) : undefined
-      }
-    >
-      {`${continuation() ? "Continue subagent" : `${Locale.titlecase(stringValue(props.input.agent) ?? stringValue(props.input.subagent_type) ?? "General")} Subagent`} — ${description() ?? "Subagent"}${model() ? ` · ${model()}` : ""}`}
-    </InlineTool>
+    <>
+      <InlineTool
+        icon={isRunning() ? "│" : continuation() ? "↳" : props.part.state.status === "completed" ? "✓" : "│"}
+        spinner={isRunning()}
+        running={isRunning()}
+        complete={description()}
+        pending="Delegating…"
+        part={props.part}
+        onClick={() => {
+          const id = sessionID()
+          if (id) navigate({ type: "session", sessionID: id })
+        }}
+        status={
+          isBackgroundSubagent(props.metadata, props.part.state.status) ? (
+            <StatusBadge>Background</StatusBadge>
+          ) : undefined
+        }
+      >
+        {`${continuation() ? "Continue subagent" : `${Locale.titlecase(stringValue(props.input.agent) ?? stringValue(props.input.subagent_type) ?? "General")} Subagent`} — ${description() ?? "Subagent"}${model() ? ` · ${model()}` : ""}`}
+      </InlineTool>
+      <For each={children()}>
+        {(child) => (
+          <box paddingLeft={6} flexDirection="row" gap={1} flexShrink={0}>
+            <Spinner color={theme.growth.leaf} />
+            <text fg={theme.text.base}>{child.agent}</text>
+            <Show when={child.tool}>
+              {(tool) => (
+                <text fg={theme.text.muted} flexGrow={1} minWidth={0} wrapMode="none" truncate>
+                  {tool().name}
+                  {tool().args ? ` ${tool().args}` : ""}
+                </text>
+              )}
+            </Show>
+          </box>
+        )}
+      </For>
+    </>
   )
 }
 
@@ -3455,34 +3511,41 @@ function Edit(props: ToolProps) {
 
   const file = createMemo(() => parseApplyPatchFiles(props.metadata.files)[0])
   const path = createMemo(() => file()?.relativePath ?? stringValue(props.input.path))
+  // Captured at mount: a live edit opens its diff; a history edit shows it at once.
+  const animateDiff =
+    (ctx.config.animations ?? true) &&
+    props.part.state.status !== "completed" &&
+    props.part.state.status !== "error"
 
   return (
     <Switch>
       <Match when={file()}>
         {(item) => (
           <BlockTool path={{ label: "← Edit", value: pathFormatter.format(path()) }} part={props.part}>
-            <box paddingLeft={1} paddingRight={3}>
-              <PatchDiff
-                diff={item().patch}
-                hunkFg={theme.diff.text.hunkHeader}
-                view={view()}
-                filetype={filetype(path())}
-                syntaxStyle={syntax()}
-                showLineNumbers={true}
-                width="100%"
-                wrapMode={ctx.diffWrapMode()}
-                fg={theme.text.base}
-                addedBg={theme.diff.background.added}
-                removedBg={theme.diff.background.removed}
-                contextBg={theme.diff.background.context}
-                addedSignColor={theme.diff.highlight.added}
-                removedSignColor={theme.diff.highlight.removed}
-                lineNumberFg={theme.diff.lineNumber.text}
-                lineNumberBg={theme.diff.background.context}
-                addedLineNumberBg={theme.diff.lineNumber.background.added}
-                removedLineNumberBg={theme.diff.lineNumber.background.removed}
-              />
-            </box>
+            <DiffReveal rows={diffRowCount(item().patch)} active={animateDiff}>
+              <box paddingLeft={1} paddingRight={3}>
+                <PatchDiff
+                  diff={item().patch}
+                  hunkFg={theme.diff.text.hunkHeader}
+                  view={view()}
+                  filetype={filetype(path())}
+                  syntaxStyle={syntax()}
+                  showLineNumbers={true}
+                  width="100%"
+                  wrapMode={ctx.diffWrapMode()}
+                  fg={theme.text.base}
+                  addedBg={theme.diff.background.added}
+                  removedBg={theme.diff.background.removed}
+                  contextBg={theme.diff.background.context}
+                  addedSignColor={theme.diff.highlight.added}
+                  removedSignColor={theme.diff.highlight.removed}
+                  lineNumberFg={theme.diff.lineNumber.text}
+                  lineNumberBg={theme.diff.background.context}
+                  addedLineNumberBg={theme.diff.lineNumber.background.added}
+                  removedLineNumberBg={theme.diff.lineNumber.background.removed}
+                />
+              </box>
+            </DiffReveal>
             <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.path) ?? ""} />
           </BlockTool>
         )}
@@ -3529,6 +3592,10 @@ function ApplyPatch(props: ToolProps) {
     if (ctx.config.diffs?.view === "split") return "split"
     return ctx.width > 120 ? "split" : "unified"
   })
+  const animateDiff =
+    (ctx.config.animations ?? true) &&
+    props.part.state.status !== "completed" &&
+    props.part.state.status !== "error"
 
   return (
     <Switch>
@@ -3551,28 +3618,30 @@ function ApplyPatch(props: ToolProps) {
                     </text>
                   }
                 >
-                  <box paddingLeft={1} paddingRight={3}>
-                    <PatchDiff
-                      diff={file.patch}
-                      hunkFg={theme.diff.text.hunkHeader}
-                      view={view()}
-                      filetype={filetype(file.relativePath)}
-                      syntaxStyle={syntax()}
-                      showLineNumbers={true}
-                      width="100%"
-                      wrapMode={ctx.diffWrapMode()}
-                      fg={theme.text.base}
-                      addedBg={theme.diff.background.added}
-                      removedBg={theme.diff.background.removed}
-                      contextBg={theme.diff.background.context}
-                      addedSignColor={theme.diff.highlight.added}
-                      removedSignColor={theme.diff.highlight.removed}
-                      lineNumberFg={theme.diff.lineNumber.text}
-                      lineNumberBg={theme.diff.background.context}
-                      addedLineNumberBg={theme.diff.lineNumber.background.added}
-                      removedLineNumberBg={theme.diff.lineNumber.background.removed}
-                    />
-                  </box>
+                  <DiffReveal rows={diffRowCount(file.patch)} active={animateDiff}>
+                    <box paddingLeft={1} paddingRight={3}>
+                      <PatchDiff
+                        diff={file.patch}
+                        hunkFg={theme.diff.text.hunkHeader}
+                        view={view()}
+                        filetype={filetype(file.relativePath)}
+                        syntaxStyle={syntax()}
+                        showLineNumbers={true}
+                        width="100%"
+                        wrapMode={ctx.diffWrapMode()}
+                        fg={theme.text.base}
+                        addedBg={theme.diff.background.added}
+                        removedBg={theme.diff.background.removed}
+                        contextBg={theme.diff.background.context}
+                        addedSignColor={theme.diff.highlight.added}
+                        removedSignColor={theme.diff.highlight.removed}
+                        lineNumberFg={theme.diff.lineNumber.text}
+                        lineNumberBg={theme.diff.background.context}
+                        addedLineNumberBg={theme.diff.lineNumber.background.added}
+                        removedLineNumberBg={theme.diff.lineNumber.background.removed}
+                      />
+                    </box>
+                  </DiffReveal>
                 </Show>
               </BlockTool>
             )}
