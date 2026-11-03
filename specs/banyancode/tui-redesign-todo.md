@@ -27,9 +27,9 @@ Brief: `D:\opencode\specs\tui-redesign-handoff\agents-tab.html`. Owner chose: sm
 - [x] Steer one session by id; finished and failed agents can be steered again
 - [x] Pure data: roster tree with killed agents kept, display suffixes, states, merged stream log
 - [x] Roster, Stream and inspector replace Grove on the Agents tab (committed, owner to verify)
-- [x] Share one project DB across install channels, and adopt an existing channel DB
-- [ ] Fix the sidebar System monitor not refreshing
-- [~] Verify the read/grep/glob → codegraph tool router end to end and fix what it exposes
+- [x] Share one project DB across install channels, and adopt an existing channel DB (committed, owner to verify)
+- [x] Fix the sidebar System monitor not refreshing (committed, owner to verify)
+- [x] Verify the read/grep/glob → codegraph tool router end to end and fix what it exposes (committed; the rewrite was failing in the default config)
 - [ ] Full suites, typecheck, ledger, new Windows binary, new dev tag
 - Deferred: Trace, replay, overview, Roots, stale-edit warnings, composer `@` routing
 
