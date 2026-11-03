@@ -138,6 +138,8 @@ export interface RosterRow {
   readonly tokens: number
   readonly cost: number
   readonly model?: string
+  /** The thinking variant the model was started with, when one was chosen. */
+  readonly variant?: string
   readonly startedAt: number
   readonly endedAt?: number
   /** The host keeps only the newest messages of a synced child (see `HOST_MESSAGE_CAP`). */
@@ -361,6 +363,7 @@ export function rosterRows(input: RosterInput): RosterRow[] {
     const state = stateOf.get(session.id)!
     const root = entry.depth === 0
     const model = modelLabel(session)
+    const variant = session.model?.variant
     // The root has no `done` state; its last turn is over when `time.idle`
     // arrives after the turn's `busy` mark. That final duration is what RUN
     // shows once the run stops.
@@ -380,6 +383,7 @@ export function rosterRows(input: RosterInput): RosterRow[] {
       tokens: totalTokens(session.tokens),
       cost: session.cost ?? 0,
       ...(model === undefined ? {} : { model }),
+      ...(variant === undefined ? {} : { variant }),
       startedAt: session.time.busy ?? session.time.created,
       ...(endedAt === undefined ? {} : { endedAt }),
       historyMayBeTruncated: mayBeTruncated(messagesOf(session.id), { root }),
@@ -561,7 +565,7 @@ function metadataString(state: SessionMessageAssistantTool["state"], key: string
 }
 
 /** `+add -del` from `state.metadata.files`, which edit and patch both write. */
-function diffCounts(state: SessionMessageAssistantTool["state"]): { added: number; removed: number } | undefined {
+export function diffCounts(state: SessionMessageAssistantTool["state"]): { added: number; removed: number } | undefined {
   if (state.status === "streaming") return undefined
   const metadata = state.metadata
   if (typeof metadata !== "object" || metadata === null) return undefined
@@ -861,7 +865,8 @@ export interface AgentSheet {
 
 const EDIT_TOOLS = new Set(["edit", "write", "patch", "safe_rename"])
 
-function toolPath(input: unknown): string | undefined {
+/** The file a tool call names, from the keys read, search and edit calls use. */
+export function toolPath(input: unknown): string | undefined {
   if (typeof input === "string") return input.trim() === "" ? undefined : input.trim()
   if (typeof input !== "object" || input === null) return undefined
   const record = input as Record<string, unknown>
