@@ -499,7 +499,7 @@ test("the overflow row scrolls horizontally", async () => {
   }
 })
 
-test("the agents panel renders the grove as its main view", async () => {
+test("the agents panel renders the understory as its main view", async () => {
   const fixture = groveFixture({ specs: STATES })
   const app = await mount(
     () => (
@@ -523,9 +523,9 @@ test("the agents panel renders the grove as its main view", async () => {
   try {
     await app.renderOnce()
     const frame = app.captureCharFrame()
-    expect(frame).toContain("branches growing")
+    expect(frame).toContain("RUN")
     expect(frame).toContain("explore")
-    expect(frame).toContain("ACTIVE")
+    expect(frame).not.toContain("branches growing")
   } finally {
     app.renderer.destroy()
   }

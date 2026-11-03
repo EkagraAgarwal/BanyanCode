@@ -9,6 +9,7 @@
     "./tui": "./src/tui.tsx",
     "./home": "./src/home.ts",
     "./grove": "./src/grove.ts",
+    "./understory": "./src/understory.ts",
     "./trunk": "./src/trunk.ts"
   },
   "scripts": {

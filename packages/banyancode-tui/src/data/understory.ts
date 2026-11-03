@@ -90,7 +90,7 @@ const TOOL_LETTERS: Readonly<Record<string, ToolLetter>> = {
   blast_radius: "S",
   preflight: "S",
   edit_plan: "S",
-  safe_rename: "S",
+  safe_rename: "E",
   edit: "E",
   write: "E",
   patch: "E",
@@ -361,7 +361,12 @@ export function rosterRows(input: RosterInput): RosterRow[] {
     const state = stateOf.get(session.id)!
     const root = entry.depth === 0
     const model = modelLabel(session)
-    const stopped = state === "failed" || state === "killed" || state === "done"
+    // The root has no `done` state; its last turn is over when `time.idle`
+    // arrives after the turn's `busy` mark. That final duration is what RUN
+    // shows once the run stops.
+    const rootEnded =
+      root && session.time.idle !== undefined && session.time.idle >= (session.time.busy ?? session.time.created)
+    const stopped = state === "failed" || state === "killed" || state === "done" || rootEnded
     const endedAt = stopped ? (session.time.idle ?? session.time.updated) : undefined
     return {
       sessionID: session.id,
@@ -792,7 +797,10 @@ export function runSheet(input: InspectorInput): RunSheet | undefined {
   const branches = input.rows
     .filter((row) => row.depth > 0)
     .map((row): RunBranch => {
-      const returned = returnedSummary(input.messages(row.sessionID), 120)
+      // Only a finished branch has a return. A running branch has not returned
+      // yet, and a failed one's last words are not a successful return, so its
+      // summary is omitted rather than mislabelled.
+      const returned = row.state === "done" ? returnedSummary(input.messages(row.sessionID), 120) : undefined
       return {
         sessionID: row.sessionID,
         label: row.label,
@@ -851,7 +859,7 @@ export interface AgentSheet {
   readonly historyMayBeTruncated: boolean
 }
 
-const EDIT_TOOLS = new Set(["edit", "write", "patch"])
+const EDIT_TOOLS = new Set(["edit", "write", "patch", "safe_rename"])
 
 function toolPath(input: unknown): string | undefined {
   if (typeof input === "string") return input.trim() === "" ? undefined : input.trim()

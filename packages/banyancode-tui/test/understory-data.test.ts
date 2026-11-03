@@ -269,7 +269,9 @@ test("an idle root is idle, not done", () => {
   expect(rows).toHaveLength(1)
   expect(rows[0]!.state).toBe("idle")
   expect(stateGlyph(rows[0]!.state, "*")).toBe("○")
-  expect(rows[0]!.endedAt).toBeUndefined()
+  // The last turn ended at 1800, so the run's final duration is known even
+  // though the root itself is idle and ready for the next prompt.
+  expect(rows[0]!.endedAt).toBe(1_800)
 })
 
 test("a done child has an end time; glyphs stay distinct", () => {
@@ -352,6 +354,7 @@ test("unknown tools get ?, and every known tool gets its letter", () => {
   expect(toolKind("write")).toBe("E")
   expect(toolKind("patch")).toBe("E")
   expect(toolKind("apply_patch")).toBe("E")
+  expect(toolKind("safe_rename")).toBe("E")
   expect(toolKind("bash")).toBe("$")
   expect(toolKind("shell")).toBe("$")
   expect(toolKind("banyan_test")).toBe("V")
@@ -723,4 +726,55 @@ test("runSheet shows branch tokens and returned summaries; agentSheet hides zero
   const free = agentSheet({ rows, root: "ses_root", selected: "ses_b", messages: () => [] })!
   expect(free.cost).toBeUndefined()
   expect(agentSheet({ rows, root: "ses_root", messages: () => [] })).toBeUndefined()
+})
+
+test("runSheet only reports returns from finished branches", () => {
+  const sessions = [
+    root(),
+    child({ id: "ses_done", agent: "coder", created: 100, idle: 1_500 }),
+    child({ id: "ses_running", agent: "explore", created: 200 }),
+    child({ id: "ses_failed", agent: "scout", created: 300, idle: 1_600, outcome: "failed" }),
+  ]
+  const messages: Record<string, SessionMessageInfo[]> = {
+    ses_done: [assistantMessage({ id: "done_text", created: 1_000, completed: 1_100, content: [textPart("done words")] })],
+    ses_running: [assistantMessage({ id: "run_text", created: 1_000, content: [textPart("still working")] })],
+    ses_failed: [assistantMessage({ id: "fail_text", created: 1_000, completed: 1_100, content: [textPart("half done")] })],
+  }
+  const rows = rosterRows({
+    root: "ses_root",
+    sessions,
+    mesh: meshNode({
+      sessionID: "ses_root",
+      state: "running",
+      children: [
+        meshNode({ sessionID: "ses_done", agent: "coder", state: "idle" }),
+        meshNode({ sessionID: "ses_running", agent: "explore", state: "running" }),
+        meshNode({ sessionID: "ses_failed", agent: "scout", state: "failed" }),
+      ],
+    }),
+    messages: (id) => messages[id] ?? [],
+  })
+  const run = runSheet({ rows, root: "ses_root", selected: "ses_root", messages: (id) => messages[id] ?? [] })!
+  const byLabel = new Map(run.branches.map((branch) => [branch.label, branch]))
+  expect(byLabel.get("coder")?.returned).toBe("done words")
+  expect(byLabel.get("explore")?.returned).toBeUndefined()
+  expect(byLabel.get("scout")?.returned).toBeUndefined()
+})
+
+test("the root's run ends at its idle mark, and a newer busy turn reopens it", () => {
+  const idleRoot = session({
+    id: "ses_root",
+    agent: "build",
+    time: { created: 1_000, updated: 6_000, busy: 1_000, idle: 5_000 },
+  })
+  const ended = rosterRows({ root: "ses_root", sessions: [idleRoot] })
+  expect(ended[0]!.endedAt).toBe(5_000)
+
+  const busyRoot = session({
+    id: "ses_root",
+    agent: "build",
+    time: { created: 1_000, updated: 7_000, busy: 6_000, idle: 5_000 },
+  })
+  const running = rosterRows({ root: "ses_root", sessions: [busyRoot] })
+  expect(running[0]!.endedAt).toBeUndefined()
 })

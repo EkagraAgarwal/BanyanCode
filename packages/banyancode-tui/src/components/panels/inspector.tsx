@@ -5,7 +5,7 @@ import { PANEL, RAIL, type PanelName } from "../../constants"
 import type { Live } from "../../data/live"
 import type { Ticker } from "../../motion"
 import { palette } from "../../theme"
-import { Grove } from "../grove"
+import { Understory } from "../understory"
 import { AgentsPanel } from "../sidebar/agents"
 import { CodegraphIntelPanel } from "../sidebar/codegraph-intel-panel"
 import { IntelTracePanel } from "../sidebar/intel-trace-panel"
@@ -184,8 +184,8 @@ export function InspectorPanel(props: {
     </box>
   )
 
-  const groveView = () => (
-    <Grove
+  const understoryView = () => (
+    <Understory
       context={props.context}
       sessionID={props.panel.sessionID}
       mesh={props.live.mesh}
@@ -216,7 +216,7 @@ export function InspectorPanel(props: {
     return (
       <PanelFocusContext.Provider value={focus}>
         <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0}>
-          {grove() ? groveView() : body()}
+          {grove() ? understoryView() : body()}
         </box>
       </PanelFocusContext.Provider>
     )
@@ -252,7 +252,7 @@ export function InspectorPanel(props: {
                 </text>
               </box>
             </box>
-            {grove() ? groveView() : body()}
+            {grove() ? understoryView() : body()}
           </box>
         </box>
       </box>
@@ -332,7 +332,7 @@ export function InspectorPage(props: {
             </scrollbox>
           }
         >
-          {(id) => <Grove context={props.context} sessionID={id()} mesh={props.live.mesh} />}
+          {(id) => <Understory context={props.context} sessionID={id()} mesh={props.live.mesh} />}
         </Show>
       </box>
     </PanelFocusContext.Provider>
