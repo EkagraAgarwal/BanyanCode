@@ -30,7 +30,7 @@ Brief: `D:\opencode\specs\tui-redesign-handoff\agents-tab.html`. Owner chose: sm
 - [x] Share one project DB across install channels, and adopt an existing channel DB (committed, owner to verify)
 - [x] Fix the sidebar System monitor not refreshing (committed, owner to verify)
 - [x] Verify the read/grep/glob → codegraph tool router end to end and fix what it exposes (committed; the rewrite was failing in the default config)
-- [ ] Full suites, typecheck, ledger, new Windows binary, new dev tag
+- [x] Full suites, typecheck, ledger, new Windows binary, new dev tag (`v26.11.0-dev.44b8edd`)
 - Deferred: Trace, replay, overview, Roots, stale-edit warnings, composer `@` routing
 
 ## Round 4 (owner feedback)
