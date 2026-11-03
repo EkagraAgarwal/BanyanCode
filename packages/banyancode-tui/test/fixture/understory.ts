@@ -141,6 +141,8 @@ export function understoryFixture(input: {
   readonly specs?: readonly UnderstorySpec[]
   readonly root?: Partial<UnderstorySpec>
   readonly animations?: boolean
+  /** The mesh branch limit, so the roster header can show `n/limit`. */
+  readonly limit?: number
   /** False keeps the root session free of messages, for the empty stream state. */
   readonly rootMessages?: boolean
 } = {}): UnderstoryFixture {
@@ -281,7 +283,11 @@ export function understoryFixture(input: {
   } as unknown as Context
 
   const mesh: MeshLive = {
-    ...meshLive({ root: nodes.get("ses_root"), killed: specs.filter((spec) => spec.killed || spec.state === "killed").map((spec) => spec.id) }),
+    ...meshLive({
+      root: nodes.get("ses_root"),
+      killed: specs.filter((spec) => spec.killed || spec.state === "killed").map((spec) => spec.id),
+      ...(input.limit === undefined ? {} : { maxSubagents: input.limit }),
+    }),
     steer: async (steerInput) => {
       steers.push(steerInput)
       return { ok: true as const, value: { delivered: 1 } }

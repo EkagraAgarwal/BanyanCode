@@ -1,69 +1,63 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import type { SessionMessageInfo } from "@opencode/client"
-import { TextAttributes, type RGBA, type ScrollBoxRenderable } from "@opentui/core"
+import type { RGBA, ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
-import type { MeshLive } from "../../data/live"
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js"
+import type { CodegraphLive, MeshLive } from "../../data/live"
+import { truncate } from "../../data/format"
 import { canSteer, pendingCount } from "../../data/mesh"
-import { formatMoney, formatTokens, truncate } from "../../data/format"
-import { returnedSummary } from "../../data/messages"
 import {
   agentSheet,
   isLiveState,
   nextAttention,
   rosterRows,
   runSheet,
-  shortLabel,
-  stateGlyph,
-  streamEntries,
   visibleRows,
   type AgentSheet,
   type RosterRow,
   type RunSheet,
-  type StreamEntry,
-  type StreamSession,
 } from "../../data/understory"
-import { createTicker, mix, useTickerWhen, type Ticker } from "../../motion"
-import { palette, type Palette } from "../../theme"
+import {
+  agentSpans,
+  sparkValues,
+  staleEdits,
+  tokenRate,
+  type AgentSpan,
+  type StaleEdit,
+} from "../../data/understory-spans"
+import { createTicker, ease, spring, useTickerWhen, type Ticker } from "../../motion"
+import { palette } from "../../theme"
 import { steerSubagent, type AgentTarget } from "../dialogs/actions"
 import { PANEL_KEY_MODE, usePanelFocus, usePanelScroll } from "../panels/keys"
-import { sproutFrame } from "../status/sprout"
+import { buildGraphData, fileName, type GraphData } from "./graph-data"
 import { branchHue } from "./hue"
+import { Inspector, type FileTouch, type InspectorAsk } from "./inspector"
+import { LensTabs } from "./lens-tabs"
 import {
-  clock,
-  costText,
   fitHints,
   INSPECTOR_WIDTH,
-  rightAlign,
   rosterAreaRows,
   rosterRowHeight,
   rosterWindow,
+  runClock,
+  runStateColor,
+  runStateLabel,
+  rowGeometry,
   spans,
-  stateColor,
-  stateCountSpans,
-  stateLabel,
-  streamClock,
-  treePrefix,
   understoryColumns,
-  type Span,
 } from "./layout"
-
-type Line = readonly Span[]
-
-function LineView(props: { readonly width: number; readonly spans: Line }) {
-  return (
-    <text width={Math.max(0, props.width)} wrapMode="none">
-      <For each={props.spans}>
-        {(span) => (
-          <span style={{ fg: span.color, attributes: span.bold ? TextAttributes.BOLD : 0 }}>{span.text}</span>
-        )}
-      </For>
-    </text>
-  )
-}
+import { LineView, type Line } from "./line"
+import { Roster, rowColor, rowGlyph } from "./roster"
+import { StreamLens } from "./stream"
+import { TraceLens } from "./trace"
+import { RootsLens } from "./roots"
+import { createUnderstoryView, type LensProps } from "./view"
 
 const KEY_ROWS: ReadonlyArray<readonly [string, string]> = [
+  ["1 2 3", "Trace, Roots, Stream"],
   ["j k  ↑ ↓", "move selection"],
+  ["← →", "scrub 2 seconds"],
+  ["+ - 0", "zoom the time axis"],
   ["w", "next agent needing attention"],
   ["z", "fold finished agents"],
   ["f", "stream: selected agent only"],
@@ -78,13 +72,16 @@ const KEY_ROWS: ReadonlyArray<readonly [string, string]> = [
 ]
 
 /**
- * D · Understory, first slice: the roster, the merged stream and the inspector.
- * Trace, Roots, replay and the other lenses are deliberately absent.
+ * D · Understory: the shell. It owns the roster, the keys, the layout and the
+ * shared view state; the active lens is one seam below the lens tabs. The
+ * lenses read real span data and draw themselves.
  */
 export function Understory(props: {
   readonly context: Context
   readonly sessionID: string
   readonly mesh: MeshLive
+  /** The code graph Roots draws; omitted means the gap-(d) flat map. */
+  readonly codegraph?: CodegraphLive | undefined
   readonly ticker?: Ticker | undefined
   readonly width?: number | undefined
   readonly now?: (() => number) | undefined
@@ -107,6 +104,12 @@ export function Understory(props: {
   onMount(() => {
     void props.mesh.ensure(root())
     void props.mesh.refreshLimits()
+    // The File sheet reads the graph's files and edges; ask once, and leave the
+    // lens offline when the host has no codegraph namespace.
+    if (props.codegraph !== undefined) {
+      void props.codegraph.ensureFiles()
+      void props.codegraph.ensureGraph()
+    }
   })
 
   const messagesOf = (sessionID: string): readonly SessionMessageInfo[] =>
@@ -136,10 +139,10 @@ export function Understory(props: {
     }
   })
 
+  const view = createUnderstoryView({ now })
+
   const [selection, setSelection] = createSignal<string>()
   const [folded, setFolded] = createSignal(false)
-  const [filtered, setFiltered] = createSignal(false)
-  const [overlay, setOverlay] = createSignal(false)
   const [keyList, setKeyList] = createSignal(false)
   const [keyOffset, setKeyOffset] = createSignal(0)
   const [message, setMessage] = createSignal<string>()
@@ -147,10 +150,12 @@ export function Understory(props: {
   const [rosterOffset, setRosterOffset] = createSignal(0)
   const [following, setFollowing] = createSignal(true)
   const [streamTop, setStreamTop] = createSignal(0)
+  /** Roots zoom: the package the map is showing, if any. */
+  const [rootsRoot, setRootsRoot] = createSignal<string | undefined>(undefined)
 
-  const foldedView = createMemo(() => visibleRows(rows(), { folded: folded(), selected: selection() }))
-  const visible = createMemo(() => foldedView().rows)
-  const selectedID = createMemo(() => foldedView().selected ?? visible()[0]?.sessionID)
+  const foldState = createMemo(() => visibleRows(rows(), { folded: folded(), selected: selection() }))
+  const visible = createMemo(() => foldState().rows)
+  const selectedID = createMemo(() => foldState().selected ?? visible()[0]?.sessionID)
   const selected = createMemo(() => rows().find((row) => row.sessionID === selectedID()))
 
   const focus = usePanelFocus()
@@ -158,12 +163,100 @@ export function Understory(props: {
 
   const cols = createMemo(() => understoryColumns(width()))
   const overlayMode = () => !cols().docked
+  const geometry = createMemo(() => rowGeometry(height(), visible().length))
+  const lensHeight = () => Math.max(0, height() - 1 - geometry().tabs)
 
   const hues = createMemo(() => {
     const mode = props.context.themeMode
     return new Map(rows().map((row, index) => [row.sessionID, branchHue(index, mode)]))
   })
-  const hueOf = (sessionID: string): RGBA => hues().get(sessionID) ?? theme().leaf
+  const hueOf = (sessionID: string | undefined): ReturnType<typeof branchHue> =>
+    (sessionID === undefined ? undefined : hues().get(sessionID)) ?? theme().leaf
+
+  /** What a row is waiting for, as the lane and now column show it: `shell: npm pack --dry-run`. */
+  const askOf = (sessionID: string): string | undefined => {
+    const request = props.context.data.session.permission.list(sessionID)?.[0]
+    if (request !== undefined) {
+      const resource = request.resources[0]
+      return resource === undefined || resource === "" ? request.action : `${request.action}: ${resource}`
+    }
+    return props.context.data.session.form.list(sessionID)?.[0]?.title
+  }
+
+  /** The permission's own target, which is what the status row names. */
+  const pendingTarget = (sessionID: string): string | undefined => {
+    const request = props.context.data.session.permission.list(sessionID)?.[0]
+    if (request === undefined) return props.context.data.session.form.list(sessionID)?.[0]?.title
+    const resource = request.resources[0]
+    return resource === undefined || resource === "" ? request.action : resource
+  }
+
+  const spansBySession = createMemo((): ReadonlyMap<string, readonly AgentSpan[]> => {
+    const map = new Map<string, readonly AgentSpan[]>()
+    for (const row of rows()) {
+      const ask = row.state === "waiting" ? askOf(row.sessionID) : undefined
+      map.set(
+        row.sessionID,
+        agentSpans(messagesOf(row.sessionID), {
+          state: row.state,
+          start: row.startedAt,
+          ...(ask === undefined ? {} : { ask }),
+        }),
+      )
+    }
+    return map
+  })
+
+  /** Live tokens per second one session streamed; zero when it has no signal. */
+  const rateOf = (sessionID: string): number => {
+    tick()
+    return tokenRate(messagesOf(sessionID), { to: view.viewT() })
+  }
+
+  /** Sparkline steps for one roster row, oldest first. */
+  const sparkFor = (row: RosterRow): readonly number[] => {
+    tick()
+    return sparkValues(messagesOf(row.sessionID), { to: view.viewT(), columns: 14 })
+  }
+
+  /** The advisory stale-read check across every branch. */
+  const stale = createMemo((): readonly StaleEdit[] =>
+    staleEdits(
+      rows().map((row) => ({ sessionID: row.sessionID, label: row.label, messages: messagesOf(row.sessionID) })),
+    ),
+  )
+
+  /** The code graph, when the host has loaded one; absent means "not built". */
+  const graph = createMemo((): GraphData | undefined => {
+    const codegraph = props.codegraph
+    if (codegraph === undefined) return undefined
+    const files = codegraph.files()
+    const data = codegraph.graph()
+    if (files === undefined || data === undefined) return undefined
+    return buildGraphData({ files, nodes: data.nodes, edges: data.edges })
+  })
+
+  /** Every real touch of one file, from the tool calls that named it. */
+  const touches = (path: string): readonly FileTouch[] => {
+    const wanted = fileName(path)
+    const found: FileTouch[] = []
+    for (const row of rows()) {
+      for (const span of spansBySession().get(row.sessionID) ?? []) {
+        if (span.kind !== "tool" || span.file === undefined) continue
+        if (span.file !== path && fileName(span.file) !== wanted) continue
+        found.push({
+          at: span.t0,
+          label: row.label,
+          sessionID: row.sessionID,
+          verb: span.letter === "E" ? "w" : "r",
+          summary: span.target === "" ? span.name : `${span.name} ${span.target}`,
+          ...(span.added === undefined ? {} : { added: span.added }),
+          ...(span.removed === undefined ? {} : { removed: span.removed }),
+        })
+      }
+    }
+    return found.sort((left, right) => left.at - right.at)
+  }
 
   let messageTimer: ReturnType<typeof setTimeout> | undefined
   let killTimer: ReturnType<typeof setTimeout> | undefined
@@ -189,20 +282,19 @@ export function Understory(props: {
     if (killTimer !== undefined) timers.clearTimeout(killTimer)
   })
 
-  const currentView = () => visibleRows(rows(), { folded: folded(), selected: selection() })
-
   const select = (sessionID: string | undefined) => {
     if (sessionID === undefined) return
     disarm()
     clearMessage()
     setSelection(sessionID)
-    const list = currentView().rows
+    const list = foldState().rows
     const index = list.findIndex((row) => row.sessionID === sessionID)
     if (index >= 0) {
-      const per = rosterRowHeight(list.length, rosterAreaRows(height()))
+      const areaRows = rosterAreaRows(height())
+      const per = rosterRowHeight(list.length, areaRows, geometry().laneHeight)
       const offset = rosterWindow({
         total: list.length,
-        areaRows: rosterAreaRows(height()) - (folded() && currentView().hidden > 0 ? 1 : 0),
+        areaRows: areaRows - (folded() && foldState().hidden > 0 ? 1 : 0),
         rowHeight: per,
         offset: rosterOffset(),
         selected: index,
@@ -212,13 +304,22 @@ export function Understory(props: {
   }
 
   const move = (delta: number) => {
-    const view = currentView()
-    const list = view.rows
+    const current = foldState()
+    const list = current.rows
     if (list.length === 0) return
-    const current = view.selected ?? selection()
-    const index = list.findIndex((row) => row.sessionID === current)
+    const active = current.selected ?? selection()
+    const index = list.findIndex((row) => row.sessionID === active)
     const next = Math.max(0, Math.min(list.length - 1, (index < 0 ? 0 : index) + delta))
     select(list[next]?.sessionID)
+  }
+
+  /** ← → move the playhead two seconds inside the loaded run, from wherever it is. */
+  const scrub = (delta: number) => {
+    const rootRow = rows().find((row) => row.depth === 0)
+    if (rootRow === undefined) return
+    const clock = now()
+    const next = Math.max(rootRow.startedAt, Math.min(clock, view.viewT() + delta))
+    view.setT(next >= clock - 150 ? undefined : next)
   }
 
   const jumpAttention = () => {
@@ -235,8 +336,8 @@ export function Understory(props: {
     setFolded(next)
     setKeyOffset(0)
     setRosterOffset(0)
-    const view = visibleRows(rows(), { folded: next, selected: selection() })
-    if (view.selected !== undefined) setSelection(view.selected)
+    const result = visibleRows(rows(), { folded: next, selected: selection() })
+    if (result.selected !== undefined) setSelection(result.selected)
   }
 
   const targetOf = (row: RosterRow): AgentTarget => ({
@@ -281,14 +382,14 @@ export function Understory(props: {
     return row === undefined ? [] : (props.context.data.session.form.list(row.sessionID) ?? [])
   })
   const waiting = () => selected()?.state === "waiting"
-  const ask = createMemo(() => {
+  const ask = createMemo((): InspectorAsk | undefined => {
     if (!waiting()) return undefined
     const request = permissions()[0]
     if (request !== undefined) {
-      return { kind: "permission" as const, title: request.action, target: request.resources[0] ?? "" }
+      return { kind: "permission", title: request.action, target: request.resources[0] ?? "" }
     }
     const form = forms()[0]
-    return form === undefined ? undefined : { kind: "form" as const, title: form.title, target: "" }
+    return form === undefined ? undefined : { kind: "form", title: form.title, target: "" }
   })
 
   const answer = (decision: "once" | "always" | "reject") => {
@@ -346,33 +447,6 @@ export function Understory(props: {
 
   const focusComposer = () => props.context.keymap.dispatch("pane.focus.left")
 
-  const streamSessions = createMemo((): readonly StreamSession[] =>
-    rows().map((row) => {
-      const messages = messagesOf(row.sessionID)
-      const returned = returnedSummary(messages, 120)
-      return {
-        sessionID: row.sessionID,
-        label: row.label,
-        state: row.state,
-        messages,
-        ...(row.endedAt === undefined ? {} : { endedAt: row.endedAt }),
-        ...(returned === undefined ? {} : { returned }),
-      }
-    }),
-  )
-  const allStream = createMemo(() =>
-    streamEntries(streamSessions(), {
-      ...(rows().some((row) => isLiveState(row.state)) ? { now: now() } : {}),
-    }),
-  )
-  const stream = createMemo(() =>
-    filtered() ? allStream().filter((entry) => entry.sessionID === selectedID()) : allStream(),
-  )
-  const newestEntryAt = () => allStream().at(-1)?.at ?? 0
-  const streamOrigin = () => rows().find((row) => row.depth === 0)?.startedAt ?? 0
-  const streamTruncated = createMemo(() =>
-    rows().some((row) => (filtered() ? row.sessionID === selectedID() : true) && row.historyMayBeTruncated),
-  )
   usePanelScroll(props.context, () => streamScroll, 6)
 
   const run = createMemo((): RunSheet | undefined =>
@@ -398,12 +472,17 @@ export function Understory(props: {
       setKeyOffset(0)
       return
     }
-    if (overlayMode() && overlay()) {
-      setOverlay(false)
+    // Roots: Esc backs out of a package zoom before it closes anything else.
+    if (view.lens() === "roots" && rootsRoot() !== undefined) {
+      setRootsRoot(undefined)
       return
     }
-    if (filtered()) {
-      setFiltered(false)
+    if (overlayMode() && view.overlay()) {
+      view.setOverlay(false)
+      return
+    }
+    if (view.filter()) {
+      view.setFilter(false)
       return
     }
     if (armed() !== undefined) {
@@ -416,6 +495,52 @@ export function Understory(props: {
     mode: PANEL_KEY_MODE,
     priority: 35,
     commands: [
+      { bind: "1", title: "Trace lens", group: "Understory", enabled: editing, run: () => view.setLens("trace") },
+      { bind: "2", title: "Roots lens", group: "Understory", enabled: editing, run: () => view.setLens("roots") },
+      { bind: "3", title: "Stream lens", group: "Understory", enabled: editing, run: () => view.setLens("stream") },
+      {
+        bind: "=",
+        title: "Zoom in",
+        group: "Understory",
+        enabled: () => editing() && view.lens() === "trace",
+        run: () => view.zoom(1),
+      },
+      {
+        bind: "shift+=",
+        title: "Zoom in",
+        group: "Understory",
+        enabled: () => editing() && view.lens() === "trace",
+        run: () => view.zoom(1),
+      },
+      {
+        bind: "-",
+        title: "Zoom out",
+        group: "Understory",
+        enabled: () => editing() && view.lens() === "trace",
+        run: () => view.zoom(-1),
+      },
+      {
+        bind: "0",
+        title: "Reset zoom",
+        group: "Understory",
+        enabled: () => editing() && view.lens() === "trace",
+        run: view.resetZoom,
+      },
+      {
+        bind: "left",
+        title: "Scrub back",
+        group: "Understory",
+        enabled: () => editing() && view.lens() === "trace",
+        run: () => scrub(-2_000),
+      },
+      {
+        bind: "right",
+        title: "Scrub forward",
+        group: "Understory",
+        enabled: () => editing() && view.lens() === "trace",
+        run: () => scrub(2_000),
+      },
+      { bind: "l", title: "Return to live", group: "Understory", enabled: editing, run: () => view.setT(undefined) },
       { bind: "j", title: "Next agent", group: "Understory", enabled: editing, run: () => move(1) },
       { bind: "k", title: "Previous agent", group: "Understory", enabled: editing, run: () => move(-1) },
       {
@@ -449,18 +574,26 @@ export function Understory(props: {
       { bind: "w", title: "Next waiting agent", group: "Understory", enabled: editing, run: jumpAttention },
       { bind: "z", title: "Fold finished agents", group: "Understory", enabled: editing, run: toggleFold },
       {
+        // Roots: blast radius for the selected tile (brief section 11, `b`).
+        bind: "b",
+        title: "Roots blast radius",
+        group: "Understory",
+        enabled: () => editing() && view.lens() === "roots" && view.file() !== undefined,
+        run: () => view.setBlast(!view.blast()),
+      },
+      {
         bind: "f",
         title: "Filter the stream",
         group: "Understory",
         enabled: editing,
-        run: () => setFiltered((value) => !value),
+        run: () => view.setFilter(!view.filter()),
       },
       {
         bind: "i",
         title: "Toggle inspector overlay",
         group: "Understory",
         enabled: () => editing() && overlayMode(),
-        run: () => setOverlay((value) => !value),
+        run: () => view.setOverlay(!view.overlay()),
       },
       {
         bind: "?",
@@ -493,20 +626,8 @@ export function Understory(props: {
         enabled: () => editing() && selected() !== undefined,
         run: () => open(selected()),
       },
-      {
-        bind: "a",
-        title: "Allow once",
-        group: "Understory",
-        enabled: editing,
-        run: () => answer("once"),
-      },
-      {
-        bind: "shift+a",
-        title: "Always allow",
-        group: "Understory",
-        enabled: editing,
-        run: () => answer("always"),
-      },
+      { bind: "a", title: "Allow once", group: "Understory", enabled: editing, run: () => answer("once") },
+      { bind: "shift+a", title: "Always allow", group: "Understory", enabled: editing, run: () => answer("always") },
       { bind: "d", title: "Deny", group: "Understory", enabled: editing, run: () => answer("reject") },
       { bind: "tab", title: "Focus composer", group: "Understory", enabled: editing, run: focusComposer },
       {
@@ -514,321 +635,142 @@ export function Understory(props: {
         title: "Back out one level",
         group: "Understory",
         enabled: () =>
-          editing() && (keyList() || (overlayMode() && overlay()) || filtered() || armed() !== undefined),
+          editing() &&
+          (keyList() ||
+            (view.lens() === "roots" && rootsRoot() !== undefined) ||
+            (overlayMode() && view.overlay()) ||
+            view.filter() ||
+            armed() !== undefined),
         run: closeOneLevel,
       },
     ],
   }))
 
-  const tick = useTickerWhen(ticker, () => rows().some((row) => isLiveState(row.state)))
-
-  const glyphOf = (row: RosterRow, index: number): string => {
-    if (row.state !== "running") return stateGlyph(row.state, "⋯")
-    return animations() ? sproutFrame(tick(), index) : "⋯"
-  }
-
-  const colorOf = (row: RosterRow): RGBA => {
-    if (row.state === "waiting" && animations()) {
-      const breath = 0.5 + 0.5 * Math.sin(tick() * Math.PI * 2)
-      return mix(theme().warning, theme().border, breath * 0.6)
+  /**
+   * The inspector overlay's spring. Opening takes 700 ms with a slight
+   * overshoot, closing 500 ms ease-out; with animations off it just appears and
+   * disappears, and no timer runs.
+   */
+  const [overlayMotion, setOverlayMotion] = createSignal<{ readonly at: number; readonly open: boolean } | undefined>(
+    undefined,
+  )
+  let overlayWasOpen = view.overlay()
+  createEffect(() => {
+    const open = view.overlay()
+    if (open === overlayWasOpen) return
+    overlayWasOpen = open
+    if (!animations()) {
+      setOverlayMotion(undefined)
+      return
     }
-    return stateColor(row.state, theme())
+    setOverlayMotion({ at: untrack(tick), open })
+  })
+  const overlayDuration = (open: boolean): number => (open ? 0.7 : 0.5)
+  const overlayAnimating = (): boolean => {
+    const motion = overlayMotion()
+    if (motion === undefined || !animations()) return false
+    return tick() - motion.at < overlayDuration(motion.open)
   }
+  const overlayValue = (): number => {
+    const motion = overlayMotion()
+    if (motion === undefined) return view.overlay() ? 1 : 0
+    const progress = Math.max(0, Math.min(1, (tick() - motion.at) / overlayDuration(motion.open)))
+    return motion.open ? Math.min(1, spring(progress)) : 1 - ease(progress)
+  }
+  const overlayVisible = (): boolean =>
+    view.overlay() || (overlayMotion()?.open === false && overlayValue() < 1)
+
+  const tick = useTickerWhen(ticker, () => rows().some((row) => isLiveState(row.state)) || overlayAnimating())
 
   const runElapsed = createMemo(() => {
     tick()
     const rootRow = rows().find((row) => row.depth === 0)
-    if (rootRow === undefined) return "0s"
+    if (rootRow === undefined) return "0:00"
     // The stream can outlive the root's own turn (a child message lands after
     // the root went idle). RUN must never be shorter than the newest event it
-    // contains; an ended run then shows that final duration.
-    const end = Math.max(rootRow.endedAt ?? now(), newestEntryAt())
-    return clock(end - rootRow.startedAt)
+    // contains; an ended run then shows that final duration. Replaying shows
+    // the playhead instead.
+    const end = view.t() === undefined ? Math.max(rootRow.endedAt ?? now(), newestEventAt()) : view.viewT()
+    return runClock(Math.max(0, end - rootRow.startedAt))
   })
 
-  const rosterLines = createMemo((): Line[] => {
-    const list = visible()
-    const paneWidth = Math.max(1, cols().roster)
-    const reserveFold = folded() && foldedView().hidden > 0 ? 1 : 0
-    const areaRows = Math.max(0, rosterAreaRows(height()) - reserveFold)
-    const per = rosterRowHeight(list.length, areaRows)
-    const selectedIndex = list.findIndex((row) => row.sessionID === selectedID())
-    const window = rosterWindow({
-      total: list.length,
-      areaRows,
-      rowHeight: per,
-      offset: rosterOffset(),
-      selected: selectedIndex < 0 ? undefined : selectedIndex,
-    })
+  function newestEventAt(): number {
+    return rows().reduce((newest, row) => Math.max(newest, newestMessageAt(messagesOf(row.sessionID))), 0)
+  }
 
-    const header: Line[] = [
-      spans(paneWidth, [
-        { text: " ", color: theme().faint },
-        { text: "RUN ", color: theme().faint },
-        { text: runElapsed(), color: theme().text, bold: true },
-      ]),
-      spans(paneWidth, [
-        { text: " ", color: theme().faint },
-        ...stateCountSpans(paneWidth - 1, rows(), theme()),
-      ]),
-    ]
-
-    const drawn = list.slice(window.offset, window.offset + window.count)
-    const entries = drawn.flatMap((row, index): Line[] => {
-      const absolute = window.offset + index
-      const isSelected = row.sessionID === selectedID()
-      const prefix = treePrefix(list, row)
-      const prefixWidth = Math.min(prefix.text.length, Math.max(0, paneWidth - 6))
-      const prefixText = prefix.text.slice(0, prefixWidth)
-      const glyph = glyphOf(row, absolute)
-      const nameWidth = Math.max(1, paneWidth - prefixWidth - 1)
-      const prefixSpan: Span[] =
-        prefixText === "" ? [] : [{ text: prefixText, color: prefix.depthOnly ? theme().faint : theme().wood }]
-      const nameColor = row.depth === 0 ? theme().text : hueOf(row.sessionID)
-      const bar: Span = { text: isSelected ? "▌" : " ", color: theme().leaf }
-
-      if (per === 1) {
-        const tokens = paneWidth >= 29 && row.tokens > 0 ? formatTokens(row.tokens) : ""
-        const labelWidth = Math.min(nameWidth, 14)
-        const taskWidth = Math.max(0, paneWidth - prefixWidth - 5 - tokens.length - (tokens === "" ? 0 : 1))
-        return [
-          spans(paneWidth, [
-            bar,
-            ...prefixSpan,
-            { text: glyph, color: colorOf(row), bold: true },
-            { text: ` ${shortLabel(row.label, labelWidth - 2)}`, color: nameColor, bold: isSelected },
-            ...(taskWidth > 2 && row.title !== undefined
-              ? [{ text: `  ${truncate(row.title, taskWidth)}`, color: theme().muted }]
-              : []),
-            ...(tokens === "" ? [] : [{ text: ` ${tokens}`, color: theme().faint }]),
-          ]),
-        ]
-      }
-
-      const elapsed = clock((row.endedAt ?? now()) - row.startedAt)
-      // The label keeps its number; when the elapsed column would eat into it,
-      // drop elapsed instead and give the name the width it needs.
-      const label = shortLabel(row.label, nameWidth - 2)
-      const nameLine =
-        label.length + elapsed.length + 3 <= nameWidth
-          ? rightAlign(nameWidth, `${glyph} ${label}`, elapsed)
-          : `${glyph} ${label}`
-      const shownTokens = row.tokens > 0 ? formatTokens(row.tokens) : ""
-      const shownCost = costText(row.cost)
-      // The cost is the first thing dropped when it cannot sit next to the
-      // token total; never clip a currency value into "$0…".
-      const third =
-        shownTokens === ""
-          ? shownCost
-          : shownCost !== "" && shownTokens.length + shownCost.length + 1 <= nameWidth
-            ? rightAlign(Math.max(1, nameWidth), shownTokens, shownCost)
-            : shownTokens
-      return [
-        spans(paneWidth, [bar, ...prefixSpan, { text: nameLine, color: nameColor, bold: isSelected }]),
-        spans(paneWidth, [
-          bar,
-          { text: " ".repeat(Math.min(prefixWidth + 2, Math.max(0, paneWidth - 2))), color: theme().faint },
-          {
-            text:
-              row.title === undefined
-                ? ""
-                : truncate(row.title, Math.max(0, paneWidth - prefixWidth - 3)),
-            color: row.state === "done" ? theme().faint : theme().muted,
-          },
-        ]),
-        spans(paneWidth, [
-          bar,
-          { text: " ".repeat(Math.min(prefixWidth, Math.max(0, paneWidth - 2))), color: theme().faint },
-          { text: third, color: theme().faint },
-        ]),
-      ]
-    })
-
-    const foldedLine: Line[] =
-      folded() && foldedView().hidden > 0
-        ? [
-            spans(paneWidth, [
-              { text: " ", color: theme().faint },
-              { text: `✓ ${foldedView().hidden} finished  ·  z show`, color: theme().done },
-            ]),
-          ]
-        : []
-    const marker: Line[] = window.overflow
-      ? [
-          spans(paneWidth, [
-            { text: " ", color: theme().faint },
-            { text: `↓ ${window.more} more`, color: theme().faint },
-          ]),
-        ]
-      : []
-    return [...header, ...entries, ...foldedLine, ...marker]
+  const runClockText = createMemo(() => {
+    tick()
+    const rootRow = rows().find((row) => row.depth === 0)
+    if (rootRow === undefined) return "0:00"
+    const end = view.viewT()
+    return runClock(Math.max(0, end - rootRow.startedAt))
   })
 
-  const hintSegments = createMemo((): string[] => {
-    if (message() !== undefined) return [message()!]
-    const row = selected()
-    const segments: string[] = []
-    if (armed() !== undefined) segments.push(`press x again to kill ${armed()!.label}`)
-    segments.push("j k move", "w next", "z fold", "f filter")
-    if (overlayMode()) segments.push("i inspector")
-    segments.push("? keys", "Tab composer")
-    if (row !== undefined) {
-      if (row.depth > 0 && steerable(row))
-        segments.push("s steer")
-      if (row.depth > 0 && row.state !== "killed") segments.push("x kill")
-      segments.push("Enter open")
+  /** Everything the roster header reports about the run. */
+  const summary = createMemo(() => {
+    tick()
+    const list = rows()
+    const tokens = list.reduce((total, row) => total + row.tokens, 0)
+    const cost = list.reduce((total, row) => total + row.cost, 0)
+    const limit = props.mesh.limits()?.maxSubagents
+    return {
+      clock: runElapsed(),
+      state: runStateLabel(list),
+      stateColor: runStateColor(list, theme()),
+      tokens,
+      ...(tokens > 0 ? { rate: list.reduce((total, row) => total + rateOf(row.sessionID), 0) } : {}),
+      cost,
+      ...(limit === undefined ? {} : { limit }),
     }
-    if (waiting() && ask()?.kind === "permission") segments.push("a allow · A always · d deny")
+  })
+
+  /** What the status row says on the left: this turn's message, else attention. */
+  const statusLeft = createMemo((): { readonly text: string; readonly color: RGBA } | undefined => {
+    if (message() !== undefined) return { text: message()!, color: theme().warning }
+    const waitingRows = rows().filter((row) => row.state === "waiting")
+    if (waitingRows.length > 0) {
+      const first = waitingRows[0]!
+      const target = pendingTarget(first.sessionID)
+      const more = waitingRows.length > 1 ? ` (+${waitingRows.length - 1})` : ""
+      return {
+        text: `▲ ${first.label} needs you${target === undefined ? "" : `: ${target}`}${more} · a allow`,
+        color: theme().warning,
+      }
+    }
+    const alert = stale()[0]
+    if (alert !== undefined) {
+      return {
+        text: `▲ ${alert.readerLabel} is editing ${fileName(alert.path)} from a stale read`,
+        color: theme().error,
+      }
+    }
+    return undefined
+  })
+
+  /** The mockup's right-aligned key hints on the status row. */
+  const statusHints = createMemo((): string[] => {
+    const segments: string[] = []
+    if (width() >= 120) {
+      segments.push("1-3 lens")
+      if (view.lens() === "trace") segments.push(view.live() ? "drag ruler to rewind" : "l back to live")
+    }
+    segments.push("w next")
+    if (overlayMode()) segments.push("i inspector")
+    segments.push("? keys")
     return segments
   })
 
-  const inspectorWidth = () => Math.min(INSPECTOR_WIDTH, width())
-  const inspectorLines = createMemo((): Line[] => {
-    const inner = Math.max(4, inspectorWidth() - 2)
-    const row = selected()
-    if (row === undefined) return []
-    const lines: Line[] = [
-      spans(inner, [
-        { text: `${glyphOf(row, 0)} `, color: colorOf(row), bold: true },
-        { text: row.label, color: row.depth === 0 ? theme().text : hueOf(row.sessionID), bold: true },
-        { text: `  ${stateLabel(row.state)}`, color: stateColor(row.state, theme()) },
-      ]),
-    ]
-    const current = ask()
-    if (current !== undefined) {
-      const border = animations()
-        ? mix(theme().warning, theme().border, (0.5 + 0.5 * Math.sin(tick() * Math.PI * 2)) * 0.6)
-        : theme().warning
-      const top = `╭─ ${current.kind === "form" ? "QUESTION" : "NEEDS YOU"} `
-      const middle = (text: string, color: RGBA = theme().text) =>
-        spans(inner, [
-          { text: "│ ", color: border },
-          { text: truncate(text, Math.max(0, inner - 4)), color },
-          { text: " │", color: border },
-        ])
-      lines.push(
-        spans(inner, [
-          { text: top, color: border },
-          { text: "─".repeat(Math.max(0, inner - top.length - 1)), color: border },
-          { text: "╮", color: border },
-        ]),
-      )
-      if (current.kind === "form") {
-        lines.push(middle(current.title), middle("Enter opens the session", theme().muted))
-      } else {
-        lines.push(middle(`${current.title}${current.target === "" ? "" : ` ${current.target}`}`))
-        lines.push(
-          spans(inner, [
-            { text: "│ ", color: border },
-            { text: "a", color: theme().warning, bold: true },
-            { text: " allow once  ", color: theme().muted },
-            { text: "A", color: theme().warning, bold: true },
-            { text: " always  ", color: theme().muted },
-            { text: "d", color: theme().warning, bold: true },
-            { text: " deny", color: theme().muted },
-            { text: " │", color: border },
-          ]),
-        )
-      }
-      lines.push(spans(inner, [{ text: `╰${"─".repeat(Math.max(0, inner - 2))}╯`, color: border }]))
-      lines.push(spans(inner, []))
-    }
-
-    const section = (title: string) => lines.push(spans(inner, [{ text: title, color: theme().wood, bold: true }]))
-    const para = (text: string, color: RGBA = theme().muted) =>
-      lines.push(spans(inner, [{ text: truncate(text.replace(/\s+/g, " ").trim(), inner), color }]))
-    const blank = () => lines.push(spans(inner, []))
-
-    const runSheetValue = run()
-    if (runSheetValue !== undefined && row.depth === 0) {
-      para(row.title ?? "orchestrating the run", theme().text)
-      blank()
-      section("TOKENS BY BRANCH")
-      if (runSheetValue.branches.length === 0) para("No branches yet.")
-      for (const branch of runSheetValue.branches) {
-        lines.push(
-          spans(inner, [
-            { text: `${branch.label}  `, color: hueOf(branch.sessionID) },
-            { text: formatTokens(branch.tokens), color: theme().muted },
-            ...(branch.cost === undefined ? [] : [{ text: `  ${formatMoney(branch.cost)}`, color: theme().faint }]),
-          ]),
-        )
-      }
-      blank()
-      section("RETURNED")
-      const returned = runSheetValue.branches.filter((branch) => branch.returned !== undefined)
-      if (returned.length === 0) para("Nothing has returned yet.")
-      for (const branch of returned.slice(-8).reverse()) {
-        lines.push(
-          spans(inner, [
-            { text: `${stateGlyph(branch.state, "⋯")} `, color: stateColor(branch.state, theme()) },
-            { text: branch.label, color: hueOf(branch.sessionID), bold: true },
-          ]),
-        )
-        para(`  ${branch.returned ?? ""}`, theme().text)
-      }
-      if (runSheetValue.truncated.length > 0) {
-        blank()
-        para("earlier activity not loaded for some branches", theme().warning)
-      }
-      return lines
-    }
-
-    const agent = sheet()
-    if (agent === undefined) return lines
-    if (agent.title !== undefined) para(agent.title, theme().text)
-    lines.push(
-      spans(inner, [
-        { text: agent.model ?? "no model", color: theme().primary },
-        { text: `  ${clock((row.endedAt ?? now()) - row.startedAt)}`, color: theme().faint },
-        ...(agent.cost === undefined ? [] : [{ text: `  ${formatMoney(agent.cost)}`, color: theme().faint }]),
-      ]),
-    )
-    if (agent.output.length > 0) {
-      blank()
-      section("OUTPUT")
-      for (const line of agent.output) para(line, theme().text)
-    }
-    if (agent.tools.length > 0) {
-      blank()
-      section("TOOLS")
-      for (const tool of agent.tools) {
-        const glyph = tool.status === "error" ? "✕" : tool.status === "running" ? "▸" : "✓"
-        lines.push(
-          spans(inner, [
-            {
-              text: `${glyph} `,
-              color: tool.error ? theme().error : tool.status === "running" ? theme().leaf : theme().done,
-            },
-            { text: `${tool.letter} `, color: theme().primary },
-            { text: tool.name, color: theme().text },
-            ...(tool.target === "" ? [] : [{ text: ` ${tool.target}`, color: theme().muted }]),
-            ...(tool.durationMs === undefined ? [] : [{ text: `  ${clock(tool.durationMs)}`, color: theme().faint }]),
-          ]),
-        )
-      }
-    }
-    if (agent.files.length > 0) {
-      blank()
-      section("CHANGED")
-      for (const file of agent.files.slice(0, 8)) {
-        lines.push(
-          spans(inner, [
-            { text: truncate(file.path, Math.max(4, inner - 12)), color: theme().muted },
-            ...(file.added === undefined ? [] : [{ text: ` +${file.added}`, color: theme().diffAdded }]),
-            ...(file.removed === undefined ? [] : [{ text: ` −${file.removed}`, color: theme().diffRemoved }]),
-          ]),
-        )
-      }
-    }
-    blank()
-    section("TOKENS")
-    lines.push(spans(inner, [{ text: formatTokens(agent.tokens), color: theme().text, bold: true }]))
-    if (agent.historyMayBeTruncated) {
-      blank()
-      para("earlier activity not loaded", theme().warning)
-    }
-    return lines
+  const statusLine = createMemo((): Line => {
+    const inner = Math.max(0, width() - 1)
+    const left = statusLeft()
+    const hints = fitHints(left === undefined ? inner : Math.max(0, inner - [...left.text].length - 2), statusHints())
+    if (left === undefined) return spans(inner, [{ text: " ".repeat(Math.max(0, inner - hints.length)), color: theme().faint }, { text: hints, color: theme().faint }])
+    const room = Math.max(0, inner - hints.length - 1)
+    return spans(inner, [
+      { text: truncate(left.text, room), color: left.color, bold: true },
+      { text: " ".repeat(Math.max(0, inner - Math.min(room, [...left.text].length) - hints.length)), color: theme().faint },
+      { text: hints, color: theme().faint },
+    ])
   })
 
   const actionSegments = createMemo((): string[] => {
@@ -836,20 +778,68 @@ export function Understory(props: {
     if (row === undefined) return []
     if (armed() !== undefined && armed()!.sessionID === row.sessionID) return [`x kill ${row.label}`]
     const segments: string[] = []
-    if (row.depth > 0 && steerable(row))
-      segments.push("s steer")
+    if (row.depth > 0 && steerable(row)) segments.push("s steer")
     if (row.depth > 0 && row.state !== "killed") segments.push("x kill")
-    segments.push("Enter open")
+    segments.push("↵ open session")
     return segments
   })
 
+  const inspectorWidth = () => Math.min(INSPECTOR_WIDTH, width())
+  const inspector = (width: number) => (
+    <Inspector
+      width={width}
+      height={Math.max(0, height() - 1)}
+      row={selected()}
+      hue={hueOf(selectedID())}
+      glyph={selected() === undefined ? "⋯" : rowGlyph(selected()!, 0, tick(), animations())}
+      glyphColor={
+        selected() === undefined ? theme().faint : rowColor(selected()!, theme(), tick(), animations())
+      }
+      ask={ask()}
+      sheet={sheet()}
+      run={run()}
+      hues={hues()}
+      theme={theme()}
+      animations={animations()}
+      tick={tick()}
+      now={now}
+      actions={actionSegments()}
+      file={view.lens() === "roots" ? view.file() : undefined}
+      graph={graph()}
+      pinned={view.pinned()}
+      spans={spansBySession()}
+      stale={stale()}
+      touches={touches}
+      rate={rateOf}
+    />
+  )
+
+  const lensProps = (): LensProps => ({
+    rows: rows(),
+    visible: visible(),
+    offset: rosterOffset(),
+    ask: askOf,
+    spans: spansBySession(),
+    messages: messagesOf,
+    hues: hues(),
+    theme: theme(),
+    view,
+    selected: selectedID(),
+    width: cols().stream,
+    height: lensHeight(),
+    geometry: geometry(),
+    animations: animations(),
+    tick: tick(),
+    on: { selectAgent: select, pinCall: view.pinCall, selectFile: view.selectFile },
+  })
+
   const keyWidth = () => Math.min(52, Math.max(6, width() - 2))
-  const keyLines = createMemo((): Line[] => {
+  const keyLines = createMemo(() => {
     const inner = Math.max(6, keyWidth() - 4)
     const total = KEY_ROWS.length
     const visibleCount = Math.max(1, Math.min(total, height() - 7))
     const offset = Math.max(0, Math.min(keyOffset(), Math.max(0, total - visibleCount)))
-    const lines: Line[] = [spans(inner, [{ text: "Keys", color: theme().text, bold: true }])]
+    const lines = [spans(inner, [{ text: "Keys", color: theme().text, bold: true }])]
     for (const [key, description] of KEY_ROWS.slice(offset, offset + visibleCount)) {
       lines.push(
         spans(inner, [
@@ -876,80 +866,89 @@ export function Understory(props: {
       }}
     >
       <box flexDirection="row" flexGrow={1} minHeight={0} position="relative">
-        <box
-          flexDirection="column"
-          width={cols().roster}
-          flexShrink={0}
-          minHeight={0}
-          overflow="hidden"
-        >
-          <For each={rosterLines()}>{(line) => <LineView width={cols().roster} spans={line} />}</For>
-        </box>
-
-        <StreamView
-          width={cols().stream}
-          height={Math.max(0, height() - 1)}
-          entries={stream()}
+        <Roster
+          rows={rows()}
+          visible={visible()}
+          hidden={foldState().hidden}
+          folded={folded()}
+          selected={selectedID()}
           hues={hues()}
           theme={theme()}
+          width={cols().roster}
+          height={height()}
           animations={animations()}
-          time={tick()}
-          truncated={streamTruncated()}
-          origin={streamOrigin()}
-          filterLabel={filtered() ? `${selected()?.label ?? ""} only` : "All branches"}
-          filterHue={filtered() ? hueOf(selectedID() ?? "") : undefined}
-          following={following()}
-          top={streamTop()}
-          onScroll={(scroll, top, follow) => {
-            streamScroll = scroll
-            setStreamTop(top)
-            setFollowing(follow)
+          live={view.live() && rows().some((row) => isLiveState(row.state))}
+          tick={tick()}
+          now={now}
+          summary={summary()}
+          spark={sparkFor}
+          offset={rosterOffset()}
+          header={geometry().header}
+          laneHeight={geometry().laneHeight}
+          onSelect={select}
+          onScroll={(delta) => {
+            const list = foldState().rows
+            const areaRows = rosterAreaRows(height()) - (folded() && foldState().hidden > 0 ? 1 : 0)
+            const lane = geometry().laneHeight
+            const max = Math.max(0, list.length * lane - areaRows)
+            setRosterOffset((value) => Math.max(0, Math.min(max, value + delta)))
           }}
         />
 
-        <Show when={cols().docked}>
-          <InspectorView
-            width={inspectorWidth()}
-            height={Math.max(0, height() - 1)}
-            title={selected()?.depth === 0 ? "RUN" : "BRANCH"}
-            lines={inspectorLines()}
-            actions={actionSegments()}
+        <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0}>
+          <LensTabs
+            width={cols().stream}
+            lens={view.lens()}
+            onSelect={view.setLens}
             theme={theme()}
+            clock={runClockText()}
+            live={view.live()}
           />
-        </Show>
+          <box flexDirection="column" flexGrow={1} minHeight={0} minWidth={0}>
+            {view.lens() === "trace" ? (
+              <TraceLens {...lensProps()} />
+            ) : view.lens() === "roots" ? (
+              <RootsLens
+                {...lensProps()}
+                codegraph={props.codegraph}
+                mapRoot={rootsRoot()}
+                onMapRoot={setRootsRoot}
+                root={props.context.location?.directory}
+              />
+            ) : (
+              <StreamLens
+                {...lensProps()}
+                following={following()}
+                top={streamTop()}
+                onScroll={(scroll, top, follow) => {
+                  streamScroll = scroll
+                  setStreamTop(top)
+                  setFollowing(follow)
+                }}
+              />
+            )}
+          </box>
+        </box>
 
-        <Show when={overlayMode() && overlay()}>
+        <Show when={cols().docked}>{inspector(inspectorWidth())}</Show>
+
+        <Show when={overlayMode() && overlayVisible()}>
           <box
             position="absolute"
             top={0}
-            right={0}
+            right={-Math.round(inspectorWidth() * (1 - overlayValue()))}
             bottom={0}
             width={inspectorWidth()}
             zIndex={20}
             backgroundColor={theme().surface}
           >
-            <InspectorView
-              width={inspectorWidth()}
-              height={Math.max(0, height() - 1)}
-              title={selected()?.depth === 0 ? "RUN" : "BRANCH"}
-              lines={inspectorLines()}
-              actions={actionSegments()}
-              theme={theme()}
-            />
+            {inspector(inspectorWidth())}
           </box>
         </Show>
       </box>
 
       <box height={1} flexShrink={0} paddingLeft={1}>
-        <LineView
-          width={Math.max(0, width() - 1)}
-          spans={spans(Math.max(0, width() - 1), [
-            {
-              text: fitHints(Math.max(0, width() - 1), hintSegments()),
-              color: message() !== undefined || armed() !== undefined ? theme().warning : theme().faint,
-            },
-          ])}
-        />
+        <LineView width={Math.max(0, width() - 1)} spans={statusLine()} />
       </box>
 
       <Show when={keyList()}>
@@ -975,176 +974,7 @@ export function Understory(props: {
   )
 }
 
-function StreamView(props: {
-  readonly width: number
-  readonly height: number
-  readonly entries: readonly StreamEntry[]
-  readonly hues: ReadonlyMap<string, RGBA>
-  readonly theme: Palette
-  readonly animations: boolean
-  readonly time: number
-  readonly truncated: boolean
-  readonly origin: number
-  readonly filterLabel: string
-  readonly filterHue?: RGBA | undefined
-  readonly following: boolean
-  readonly top: number
-  readonly onScroll: (scroll: ScrollBoxRenderable, top: number, following: boolean) => void
-}) {
-  let scroll: ScrollBoxRenderable | undefined
-  const inner = () => Math.max(0, props.width - 1)
-  const area = () => Math.max(0, props.height - 1)
-  const total = () => props.entries.length
-  const start = () => {
-    if (props.following) return Math.max(0, total() - area())
-    return Math.max(0, Math.min(props.top, Math.max(0, total() - area())))
-  }
-  const slice = () => props.entries.slice(start(), start() + area())
-  const spinner = () => (props.animations ? sproutFrame(props.time) : "⋯")
-  const timeWidth = () => (inner() >= 60 ? 7 : 0)
-  const tagWidth = () => Math.min(11, Math.max(6, Math.floor(inner() * 0.14)))
-  const bodyWidth = () => Math.max(1, inner() - timeWidth() - tagWidth() - 1)
-
-  const lineFor = (entry: StreamEntry): Line => {
-    const tag = shortLabel(entry.label, tagWidth())
-    const failed = entry.kind === "fail" || entry.detail?.error === true
-    const prefix = streamPrefix(entry, props.animations, spinner())
-    const summary = truncate(entry.summary, Math.max(1, bodyWidth() - prefix.length - (failed ? 2 : 0)))
-    const parts: Span[] = []
-    if (timeWidth() > 0)
-      parts.push({ text: `${streamClock(Math.max(0, entry.at - props.origin)).padStart(6)} `, color: props.theme.faint })
-    parts.push({ text: tag, color: props.hues.get(entry.sessionID) ?? props.theme.text, bold: true })
-    parts.push({ text: " ".repeat(Math.max(1, tagWidth() - tag.length + 1)), color: props.theme.faint })
-    parts.push({
-      text: prefix,
-      color: failed ? props.theme.error : entry.kind === "user" ? props.theme.primary : props.theme.done,
-    })
-    parts.push({ text: summary, color: failed ? props.theme.error : props.theme.text })
-    if (failed) parts.push({ text: " !", color: props.theme.error, bold: true })
-    return spans(inner(), parts)
-  }
-
-  const header = () =>
-    spans(inner(), [
-      {
-        text: props.filterLabel,
-        color: props.filterHue ?? (props.filterLabel === "All branches" ? props.theme.muted : props.theme.text),
-        bold: props.filterLabel !== "All branches",
-      },
-      ...(props.following
-        ? props.truncated
-          ? [{ text: "   earlier activity not loaded", color: props.theme.warning }]
-          : []
-        : [
-            { text: "   ↓ latest", color: props.theme.primary, bold: true },
-            ...(props.truncated
-              ? [{ text: "   earlier activity not loaded", color: props.theme.warning }]
-              : []),
-          ]),
-    ])
-
-  return (
-    <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0} height={props.height} paddingLeft={1} overflow="hidden">
-      <LineView width={inner()} spans={header()} />
-      <Show
-        when={total() > 0}
-        fallback={
-          <box flexDirection="column" flexGrow={1} minHeight={0}>
-            <LineView width={inner()} spans={spans(inner(), [{ text: "No branches yet", color: props.theme.text }])} />
-            <LineView
-              width={inner()}
-              spans={spans(inner(), [
-                { text: "Agents appear here when the agent fans out.", color: props.theme.faint },
-              ])}
-            />
-          </box>
-        }
-      >
-        <scrollbox
-          id="banyancode.understory.stream"
-          height={area()}
-          flexShrink={0}
-          width={inner()}
-          stickyScroll
-          stickyStart="bottom"
-          verticalScrollbarOptions={{
-            visible: false,
-            onChange: (position: number) => {
-              if (scroll === undefined) return
-              props.onScroll(scroll, position, position + area() >= total() - 0.5)
-            },
-          }}
-          ref={(element: ScrollBoxRenderable) => {
-            scroll = element
-            props.onScroll(element, start(), props.following)
-          }}
-        >
-          <box position="relative" height={total()} width={inner()} flexDirection="column">
-            <For each={slice()}>
-              {(entry, index) => (
-                <box position="absolute" top={start() + index()} left={0} width={inner()} height={1}>
-                  <LineView width={inner()} spans={lineFor(entry)} />
-                </box>
-              )}
-            </For>
-          </box>
-        </scrollbox>
-      </Show>
-    </box>
-  )
-}
-
-function InspectorView(props: {
-  readonly width: number
-  readonly height: number
-  readonly title: string
-  readonly lines: readonly Line[]
-  readonly actions: readonly string[]
-  readonly theme: Palette
-}) {
-  const inner = () => Math.max(0, props.width - 2)
-  return (
-    <box flexDirection="column" width={props.width} height={props.height} flexShrink={0} paddingLeft={1} overflow="hidden">
-      <LineView width={inner()} spans={spans(inner(), [{ text: props.title, color: props.theme.wood, bold: true }])} />
-      <scrollbox id="banyancode.understory.inspector" flexGrow={1} minHeight={0} width={inner()}>
-        <box flexDirection="column" width={inner()}>
-          <For each={props.lines}>{(line) => <LineView width={inner()} spans={line} />}</For>
-        </box>
-      </scrollbox>
-      <LineView
-        width={inner()}
-        spans={spans(
-          inner(),
-          props.actions.flatMap((action, index): Span[] => {
-            const kind = action.startsWith("s") ? "steer" : action.startsWith("x") ? "kill" : "open"
-            return [
-              ...(index === 0 ? [] : [{ text: "  ", color: props.theme.faint }]),
-              {
-                text: action,
-                color: kind === "kill" ? props.theme.error : kind === "steer" ? props.theme.leaf : props.theme.primary,
-                bold: true,
-              },
-            ]
-          }),
-        )}
-      />
-    </box>
-  )
-}
-
-function streamPrefix(entry: StreamEntry, animations: boolean, spinner: string): string {
-  const detail = entry.detail
-  if (entry.kind === "tool" && detail !== undefined) {
-    if (detail.error) return "✕ "
-    if (detail.open) return animations ? `${spinner} ` : "⋯ "
-    return "✓ "
-  }
-  if (entry.kind === "spawn") return "┬ "
-  if (entry.kind === "return") return "↩ "
-  if (entry.kind === "fail") return "✕ "
-  if (entry.kind === "kill") return "⊘ "
-  if (entry.kind === "user") return "› "
-  if (entry.kind === "think") return "∴ "
-  if (entry.kind === "text") return "│ "
-  return "· "
+/** The newest message any loaded session has, so RUN never shrinks below its own stream. */
+function newestMessageAt(messages: readonly SessionMessageInfo[]): number {
+  return messages.reduce((newest, message) => Math.max(newest, message.time.created), 0)
 }

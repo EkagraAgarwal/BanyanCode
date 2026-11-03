@@ -1,4 +1,6 @@
+import type { RGBA } from "@opentui/core"
 import type { ResolvedTheme } from "@opencode/theme/tui"
+import type { ToolLetter } from "./data/understory"
 
 /**
  * The v1 surfaces were written against a flat `{ text, textMuted, primary,
@@ -30,7 +32,32 @@ export function palette(theme: ResolvedTheme) {
     bright: theme.growth.bright,
     diffAdded: theme.diff.text.added,
     diffRemoved: theme.diff.text.removed,
+    /** User and info text, reads. */
+    sky: theme.tool.read,
+    /** Shell calls and section rules. */
+    bark: theme.tool.shell,
+    /** Verification and the running edge. */
+    lime: theme.tool.verify,
+    /** Web tools: the only kind with no existing role. */
+    violet: theme.tool.web,
+    tool: theme.tool,
   }
 }
 
 export type Palette = ReturnType<typeof palette>
+
+/**
+ * The colour a tool block carries. Kind is never conveyed by colour alone: the
+ * block always draws its letter too, so a theme that collapses two kinds still
+ * reads. Unclassified tools (`?`) stay muted.
+ */
+export function kindColor(letter: ToolLetter, theme: Palette): RGBA {
+  if (letter === "R") return theme.tool.read
+  if (letter === "S") return theme.tool.search
+  if (letter === "E") return theme.tool.edit
+  if (letter === "$") return theme.tool.shell
+  if (letter === "V") return theme.tool.verify
+  if (letter === "W") return theme.tool.web
+  if (letter === "T") return theme.muted
+  return theme.faint
+}

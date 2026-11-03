@@ -110,7 +110,10 @@ async function openAgents(setup: Awaited<ReturnType<typeof fixture>>) {
   setup.mockInput.pressKey("]", { ctrl: true })
   await setup.waitFor(() => setup.renderer.currentFocusedRenderable?.id === "session-panel")
   setup.mockInput.pressKey("]", { ctrl: true })
-  await setup.waitForFrame((frame) => frame.includes("RUN") && frame.includes("All branches"), { maxPasses: 200 })
+  await setup.waitForFrame(
+    (frame) => frame.includes("1 Trace") && (frame.includes("BRANCHES") || frame.includes("BRCH")),
+    { maxPasses: 200 },
+  )
   await setup.waitFor(() => setup.renderer.currentFocusedRenderable?.id === "session-panel")
 }
 
@@ -141,13 +144,15 @@ test("the Agents tab owns real keys: j/k, Esc, Tab and the composer", async () =
   await setup.waitForFrame((frame) => frame.includes("close this list"), { maxPasses: 100 })
   setup.mockInput.pressEscape()
   await setup.waitForFrame((frame) => !frame.includes("close this list"), { maxPasses: 100 })
-  expect(setup.captureCharFrame()).toContain("RUN")
+  expect(setup.captureCharFrame()).toContain("1 Trace")
 
+  setup.mockInput.pressKey("3")
+  await setup.waitForFrame((frame) => frame.includes("All branches"), { maxPasses: 100 })
   setup.mockInput.pressKey("f")
   await setup.waitForFrame((frame) => frame.includes("build only"), { maxPasses: 100 })
   setup.mockInput.pressEscape()
   await setup.waitForFrame((frame) => frame.includes("All branches"), { maxPasses: 100 })
-  expect(setup.captureCharFrame()).toContain("RUN")
+  expect(setup.captureCharFrame()).toContain("1 Trace")
 
   setup.mockInput.pressEscape()
   await setup.waitFor(() => setup.renderer.root.findDescendantById("session-panel") === undefined)
@@ -202,16 +207,18 @@ test("the app frames keep the panel hints above the composer", async () => {
     const prompt = setup.renderer.currentFocusedEditor
     if (!(prompt instanceof TextareaRenderable)) throw new Error("missing prompt")
     await openAgents(setup)
+    setup.mockInput.pressKey("3")
+    await setup.waitForFrame((frame) => frame.includes("All branches"), { maxPasses: 100 })
     const frame = setup.captureCharFrame()
     const lines = frame.split("\n")
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(width)
-    const hints = lines.findIndex((line) => line.includes("j k move"))
+    const hints = lines.findIndex((line) => line.includes("w next"))
     expect(hints).toBeGreaterThan(-1)
-    expect(lines[hints]).toContain("Tab composer")
+    expect(lines[hints]).toContain("? keys")
     expect(prompt.y).toBeGreaterThan(hints)
     expect(prompt.y + prompt.height).toBeLessThanOrEqual(height)
-    expect(frame).toContain("BANYANCODE")
-    expect(frame).toContain("root prompt")
+    expect(frame.toLowerCase()).toContain("banyancode")
+    expect(frame.includes("BRANCHES") || frame.includes("BRCH")).toBe(true)
     captured.push(`${width}x${height}\n${frame}`)
   }
   await Bun.write("D:/bc-tools/scratch/understory-app-frames.txt", captured.join("\n\n"))

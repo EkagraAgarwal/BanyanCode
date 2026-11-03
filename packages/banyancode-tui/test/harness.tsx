@@ -64,6 +64,14 @@ export const theme = {
     wood: COLOR,
     bright: COLOR,
   },
+  tool: {
+    read: COLOR,
+    search: COLOR,
+    edit: COLOR,
+    shell: COLOR,
+    verify: COLOR,
+    web: COLOR,
+  },
 } as unknown as ResolvedTheme
 
 let ids = 0

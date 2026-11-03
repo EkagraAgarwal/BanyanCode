@@ -1,7 +1,7 @@
 import type { RGBA } from "@opentui/core"
 import type { Palette } from "../../theme"
 import { truncate } from "../../data/format"
-import { stateGlyph, type RosterRow, type UnderstoryState } from "../../data/understory"
+import { isLiveState, type RosterRow, type UnderstoryState } from "../../data/understory"
 
 /** Column widths from the design brief. The inspector docks only at the widest tier. */
 export const ROSTER_WIDE = 34
@@ -35,11 +35,150 @@ export function understoryColumns(width: number): UnderstoryColumns {
   return { roster: Math.min(roster, total), stream: Math.max(0, total - roster - inspector), docked }
 }
 
-/** Rows per roster entry: three while they all fit, otherwise one. */
-export function rosterRowHeight(entryCount: number, areaRows: number): number {
-  if (entryCount <= 0 || areaRows <= 0) return 3
-  return entryCount * 3 <= areaRows ? 3 : 1
+/**
+ * Rows per roster entry: three while they all fit, otherwise one. The lens's
+ * lane height wins when it is known, so a roster row and its lane start on the
+ * same row; the roster pads the difference until it draws every lane row.
+ */
+export function rosterRowHeight(entryCount: number, areaRows: number, laneHeight?: number): number {
+  const base = entryCount <= 0 || areaRows <= 0 ? 3 : entryCount * 3 <= areaRows ? 3 : 1
+  if (laneHeight === undefined) return base
+  return Math.max(1, Math.min(4, laneHeight))
 }
+
+// ---------------------------------------------------------------------------
+// Row geometry: one header height and one lane height, so the roster rows and
+// the lens lanes land on the same terminal rows.
+// ---------------------------------------------------------------------------
+
+/** Height on the rows>=36 tier: three rows of token-rate layers. */
+export const OVERVIEW_ROWS_TALL = 3
+/** Height on the rows>=28 tier: two rows of token-rate layers. */
+export const OVERVIEW_ROWS_MEDIUM = 2
+/** 4 rows of token bars, 3 rows of tool blocks, 2 rows, then blocks only. */
+export const LANE_HEIGHTS = [4, 3, 2, 1] as const
+
+export function overviewRows(rows: number): number {
+  if (rows >= 36) return OVERVIEW_ROWS_TALL
+  if (rows >= 28) return OVERVIEW_ROWS_MEDIUM
+  return 0
+}
+
+/** Lens tabs, the overview strip, then the ruler. Lanes start below. */
+export function headerRows(rows: number): number {
+  return 1 + overviewRows(rows) + 1
+}
+
+export interface RowGeometry {
+  readonly rows: number
+  /** Lens tab row: always one. */
+  readonly tabs: number
+  /** Overview strip rows: 3, 2 or 0. */
+  readonly overview: number
+  /** Time ruler rows: always one. */
+  readonly ruler: number
+  /** Rows above the first lane, and the rows the roster header shares. */
+  readonly header: number
+  /** The largest lane height that fits, 4 down to 1. */
+  readonly laneHeight: number
+  /** Rows left for lanes after the header and the hint row. */
+  readonly lanesArea: number
+  /** Lanes that fit; smaller than `agents` means the panel scrolls. */
+  readonly visibleLanes: number
+  readonly overflow: boolean
+}
+
+/**
+ * The single row map for the Agents tab. `rows` is the panel height, so the
+ * hint row is reserved here, and both the roster and the active lens read the
+ * same header and lane height from this.
+ */
+export function rowGeometry(rows: number, agents: number): RowGeometry {
+  const total = Math.max(0, Math.floor(rows))
+  const count = Math.max(0, Math.floor(agents))
+  const overview = overviewRows(total)
+  const header = 1 + overview + 1
+  const lanesArea = Math.max(0, total - 1 - header)
+  const laneHeight = LANE_HEIGHTS.find((height) => count * height <= lanesArea) ?? 1
+  const visibleLanes = Math.min(count, Math.floor(lanesArea / laneHeight))
+  return {
+    rows: total,
+    tabs: 1,
+    overview,
+    ruler: 1,
+    header,
+    laneHeight,
+    lanesArea,
+    visibleLanes,
+    overflow: visibleLanes < count,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Trace time window
+// ---------------------------------------------------------------------------
+
+/** A fixed 0.7 s per column keeps a normal tool call at least two cells wide. */
+export const TRACE_SECONDS_PER_COLUMN = 0.7
+export const TRACE_SCALE_MIN = 0.1
+export const TRACE_SCALE_MAX = 4
+/** Live paging: forward 30% of the window when the now line reaches 90%. */
+export const PAGE_FRACTION = 0.3
+export const PAGE_TRIGGER = 0.9
+
+export interface TraceWindow {
+  readonly a: number
+  readonly b: number
+  /** Seconds per column for this window. */
+  readonly scale: number
+}
+
+export interface TraceWindowInput {
+  /** Run start; the window never shows earlier. */
+  readonly start: number
+  /** Set once the run stopped; omitted while it is live. */
+  readonly end?: number | undefined
+  /** The playhead the window must contain. */
+  readonly now: number
+  readonly columns: number
+  /** Seconds per column; `TRACE_SECONDS_PER_COLUMN` unless zoomed. */
+  readonly scale?: number | undefined
+  /** Start of the current page, from the previous call. */
+  readonly anchor?: number | undefined
+}
+
+/**
+ * The visible time window. While live the column scale is fixed and the window
+ * pages forward in 30% steps, so history stays still between pages. Once the
+ * run ends the whole run is fitted to the column count.
+ */
+export function traceWindow(input: TraceWindowInput): TraceWindow {
+  const columns = Math.max(1, Math.floor(input.columns))
+  if (input.end !== undefined) {
+    const span = Math.max(1, input.end - input.start)
+    return { a: input.start, b: input.start + span, scale: span / columns }
+  }
+  const scale = input.scale ?? TRACE_SECONDS_PER_COLUMN
+  const span = columns * scale
+  const from = Math.max(input.start, input.anchor ?? input.start)
+  const lead = span * PAGE_TRIGGER
+  const step = span * PAGE_FRACTION
+  const pages = input.now > from + lead ? Math.ceil((input.now - from - lead) / step) : 0
+  const a = from + pages * step
+  return { a, b: a + span, scale }
+}
+
+/** `+` halves the seconds per column (zoom in); `-` doubles it. */
+export function zoomScale(scale: number, direction: 1 | -1): number {
+  const next = direction === 1 ? scale / 2 : scale * 2
+  return Math.max(TRACE_SCALE_MIN, Math.min(TRACE_SCALE_MAX, next))
+}
+
+/** A time's column inside the window, unclipped. */
+export function columnAt(window: TraceWindow, columns: number, t: number): number {
+  return ((t - window.a) / (window.b - window.a)) * Math.max(1, columns)
+}
+
 
 export interface RosterWindow {
   /** Index of the first drawn row. */
@@ -91,8 +230,13 @@ export function clock(ms: number): string {
   return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`
 }
 
-/** `mm:ss` for the stream's time column. */
-export function streamClock(ms: number): string {
+/** `0:46`, the run clock the lens tabs carry. */
+export function runClock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`
+}
+
+/** `mm:ss` for the stream's time column. */export function streamClock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000))
   const minutes = Math.floor(total / 60)
   const seconds = total % 60
@@ -129,29 +273,54 @@ export function countStates(rows: readonly RosterRow[]): ReadonlyArray<{ state: 
 }
 
 /**
- * The roster header's per-state chips, tightest first: waiting and the
- * terminal failures outrank the running count, and done is dropped before
- * anything else. A chip is only drawn whole, so a narrow roster never shows a
+ * The roster header's per-state chips, in the mockup's order and glyphs:
+ * `⣿ running ▲ waiting ✕ failed ✓ done`. The root is not a branch, so it is
+ * not counted. A chip is only drawn whole, so a narrow roster never shows a
  * clipped number.
  */
 export function stateCountSpans(width: number, rows: readonly RosterRow[], theme: Palette): Span[] {
-  const order: readonly UnderstoryState[] = ["waiting", "failed", "killed", "running", "retry", "blocked", "idle", "done"]
-  const counts = new Map<UnderstoryState, number>()
-  for (const row of rows) counts.set(row.state, (counts.get(row.state) ?? 0) + 1)
+  const counts = { running: 0, waiting: 0, failed: 0, done: 0 }
+  for (const row of rows) {
+    if (row.depth === 0) continue
+    if (row.state === "running" || row.state === "retry" || row.state === "blocked") counts.running += 1
+    else if (row.state === "waiting") counts.waiting += 1
+    else if (row.state === "failed" || row.state === "killed") counts.failed += 1
+    else if (row.state === "done") counts.done += 1
+  }
+  const chips: ReadonlyArray<{ glyph: string; count: number; color: RGBA }> = [
+    { glyph: "⣿", count: counts.running, color: theme.leaf },
+    { glyph: "▲", count: counts.waiting, color: theme.warning },
+    { glyph: "✕", count: counts.failed, color: theme.error },
+    { glyph: "✓", count: counts.done, color: theme.done },
+  ]
   let used = 0
-  return order.flatMap((state): Span[] => {
-    const count = counts.get(state) ?? 0
-    if (count === 0) return []
-    const glyph = stateGlyph(state, "⋯")
+  return chips.flatMap((chip): Span[] => {
+    if (chip.count === 0) return []
     const separator = used === 0 ? 0 : 1
-    if (used + separator + glyph.length + String(count).length > width) return []
-    used += separator + glyph.length + String(count).length
+    const text = `${chip.glyph}${chip.count}`
+    if (used + separator + [...text].length > width) return []
+    used += separator + [...text].length
     return [
       ...(separator === 0 ? [] : [{ text: " ", color: theme.faint }]),
-      { text: glyph, color: stateColor(state, theme) },
-      { text: String(count), color: theme.muted },
+      { text: chip.glyph, color: chip.color },
+      { text: String(chip.count), color: theme.muted },
     ]
   })
+}
+
+/** What the run header says after the clock. */
+export function runStateLabel(rows: readonly RosterRow[]): string {
+  const root = rows.find((row) => row.depth === 0)
+  if (root === undefined) return "idle"
+  if (root.endedAt !== undefined) return "finished"
+  if (rows.some((row) => isLiveState(row.state))) return "running"
+  return "idle"
+}
+
+export function runStateColor(rows: readonly RosterRow[], theme: Palette): RGBA {
+  const label = runStateLabel(rows)
+  if (label === "running") return theme.leaf
+  return theme.muted
 }
 
 /** Two columns per level, up to three levels; deeper levels show the depth digit. */
@@ -234,9 +403,10 @@ export function fitHints(width: number, segments: readonly string[]): string {
   return line
 }
 
-/** Rows left for the roster list after the panel hint and the roster header. */
+/** Rows left for the roster list after the panel hint and the shared header rows. */
 export function rosterAreaRows(panelHeight: number): number {
-  return Math.max(0, Math.floor(panelHeight) - 1 - ROSTER_HEADER_ROWS)
+  const height = Math.max(0, Math.floor(panelHeight))
+  return Math.max(0, height - 1 - headerRows(height))
 }
 
 export function streamAreaRows(panelHeight: number): number {

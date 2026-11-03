@@ -106,6 +106,10 @@ async function render(fixture: ReturnType<typeof understoryFixture>, options: Re
     { width: options.width, height: options.height },
   )
   await app.renderOnce()
+  // Trace is the default lens; these tests cover the rest of the screen, so
+  // they start from the stream.
+  fixture.press("Stream lens")
+  await app.renderOnce()
   await app.renderOnce()
   return { app, clock }
 }
@@ -150,8 +154,10 @@ test("the screen fits every reviewed size without wrapping", async () => {
     try {
       expectFits(app, width)
       const text = frame(app)
-      expect(text).toContain("RUN")
-      expect(text).toContain("All branches")
+      // The mockup drops the RUN row below 28 terminal rows; everything else fits.
+      if (height >= 28) expect(text).toContain("RUN")
+      else expect(text).toContain("BRCH")
+      expect(text).toContain("1 Trace")
       captured.push(`${width}x${height}\n${text}`)
     } finally {
       app.renderer.destroy()
@@ -229,21 +235,36 @@ test("every roster size and both row modes keeps all twenty labels distinct", as
   }
 })
 
-test("the roster header keeps the waiting and failure counts before it clips", async () => {
+test("the roster header counts running, waiting, failed and done in that order, and merges killed into failed", async () => {
+  const fixture = understoryFixture({ specs: MIXED })
+  const { app } = await render(fixture, { width: 120, height: 40 })
+  try {
+    const lines = frame(app).split("\n")
+    const header = lines.slice(0, 4).map((line) => line.slice(0, understoryColumns(120).roster)).join("\n")
+    expect(header).toContain("⣿1")
+    expect(header).toContain("▲1")
+    expect(header).toContain("✕2")
+    expect(header).toContain("✓1")
+    expect(header).not.toContain("⊘")
+    expect(header).not.toContain("…")
+    expect(header.indexOf("⣿1")).toBeLessThan(header.indexOf("▲1"))
+    expect(header.indexOf("▲1")).toBeLessThan(header.indexOf("✕2"))
+    expect(header.indexOf("✕2")).toBeLessThan(header.indexOf("✓1"))
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("below 28 rows the roster header keeps only the branch count", async () => {
   const fixture = understoryFixture({ specs: MIXED })
   const { app } = await render(fixture, { width: 80, height: 24 })
   try {
     const lines = frame(app).split("\n")
-    const header = `${lines[0] ?? ""}\n${lines[1] ?? ""}`
-    expect(header).toContain("▲1")
-    expect(header).toContain("✕1")
-    expect(header).toContain("⊘1")
-    expect(header).toContain("⋯2")
-    expect(header).not.toContain("✓")
-    expect(header).not.toContain("…")
-    expect(header.indexOf("▲1")).toBeLessThan(header.indexOf("✕1"))
-    expect(header.indexOf("✕1")).toBeLessThan(header.indexOf("⊘1"))
-    expect(header.indexOf("⊘1")).toBeLessThan(header.indexOf("⋯2"))
+    const header = lines.slice(0, 2).map((line) => line.slice(0, understoryColumns(80).roster)).join("\n")
+    expect(header).toContain("BRCH")
+    expect(header).not.toContain("RUN")
+    expect(header).not.toContain("⣿")
+    expect(header).not.toContain("tok")
   } finally {
     app.renderer.destroy()
   }
@@ -294,8 +315,8 @@ test("RUN uses the stream's newest event and keeps an ended run's final duration
     const text = frame(liveRun.app)
     // Root started at 900. The newest stream entry is at 5000, so the run is 4s,
     // not 5s (now) and not 1s (the root's own idle mark).
-    expect(text).toContain("RUN 4s")
-    expect(text).toContain("00:04")
+    expect(text).toContain("RUN 0:04")
+    expect(text).toContain("0:04")
   } finally {
     liveRun.app.renderer.destroy()
   }
@@ -303,7 +324,7 @@ test("RUN uses the stream's newest event and keeps an ended run's final duration
   const ended = await render(late(), { width: 120, height: 40, clock: fakeTimers(60_000) })
   try {
     // The run ended, so a later wall clock must not inflate RUN.
-    expect(frame(ended.app)).toContain("RUN 4s")
+    expect(frame(ended.app)).toContain("RUN 0:04")
   } finally {
     ended.app.renderer.destroy()
   }
@@ -560,13 +581,13 @@ test("filter, fold, keys, Tab and Enter all move the screen", async () => {
   try {
     expect(fixture.press("Fold finished agents")).toBe(true)
     await app.renderOnce()
-    expect(frame(app)).toContain("2 finished")
+    expect(frame(app)).toContain("2 done")
     expect(frame(app)).toContain("z show")
 
     expect(fixture.press("Next agent")).toBe(true)
     expect(fixture.press("Fold finished agents")).toBe(true)
     await app.renderOnce()
-    expect(frame(app)).not.toContain("2 finished")
+    expect(frame(app)).not.toContain("2 done")
 
     expect(fixture.press("Filter the stream")).toBe(true)
     await app.renderOnce()
@@ -809,6 +830,41 @@ test("animations off draws final states and starts no timer", async () => {
     expect(clock.live()).toBe(0)
     expect(frame(app)).toContain("▲")
     expect(frame(app)).toContain("⋯")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("1 2 3 switch the lens, and the tab strip carries the live clock", async () => {
+  const fixture = understoryFixture({ specs: MIXED })
+  const { app } = await render(fixture, { width: 168, height: 48, clock: fakeTimers(12_000) })
+  try {
+    const stream = frame(app)
+    expect(stream).toContain("1 Trace")
+    expect(stream).toContain("2 Roots")
+    expect(stream).toContain("3 Stream")
+    expect(stream).toContain("LIVE")
+    expect(stream).toContain("All branches")
+
+    expect(fixture.press("Trace lens")).toBe(true)
+    await app.renderOnce()
+    const trace = frame(app)
+    expect(trace).toContain("R read")
+    expect(trace).toContain("NOW")
+    expect(trace).not.toContain("Trace is not built yet.")
+    expect(trace).not.toContain("All branches")
+
+    expect(fixture.press("Roots lens")).toBe(true)
+    await app.renderOnce()
+    // Without a code graph the lens is the gap-(d) fallback: a flat map of the
+    // touched files (none here) and the build hint.
+    expect(frame(app)).toContain("/codegraph-build")
+    expect(frame(app)).toContain("stale edit")
+
+    expect(fixture.press("Stream lens")).toBe(true)
+    await app.renderOnce()
+    expect(frame(app)).toContain("All branches")
+    expectFits(app, 168)
   } finally {
     app.renderer.destroy()
   }
