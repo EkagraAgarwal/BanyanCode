@@ -1,6 +1,7 @@
 import type { AgentInfo, ModelInfo } from "@opencode/client"
 import type { Context } from "@opencode/plugin/tui/context"
 import type { Live, MeshLive } from "../../data/live"
+import { canSteer } from "../../data/mesh"
 import type { BanyanConfig, MeshNode } from "../../data/pending-rpc"
 
 const MAX_SUBAGENTS = 20
@@ -236,7 +237,7 @@ export async function steerSubagent(
   node: AgentTarget,
 ): Promise<void> {
   const notify = notifier(context)
-  if (node.killed) {
+  if (!canSteer(node.state, { killed: node.killed })) {
     notify(`${subagentLabel(node)} is already finished`, "info")
     return
   }
@@ -246,9 +247,12 @@ export async function steerSubagent(
     placeholder: "Instruction for this subagent",
   })
   if (instruction === undefined || instruction.trim() === "") return
+  // Address the child by session ID: the agent name alone reaches every
+  // same-named sibling, and this dialog picked one row.
   const result = await mesh.steer({
     parentSessionID,
     targetAgent: node.agent ?? node.sessionID,
+    targetSessionID: node.sessionID,
     instruction,
   })
   report(notify, result, `Steer sent to ${node.sessionID}`)

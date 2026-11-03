@@ -89,6 +89,30 @@ export function childState(
   return "done"
 }
 
+/**
+ * Steering is not limited to running agents: `mesh.steer` prompts the child
+ * without `resume: false`, which wakes it and starts a new turn, so a finished
+ * or failed branch can recover. A killed session is the exception — its kill row
+ * is durable and status hides it, so it cannot be revived. `state` accepts both
+ * the pane's `ChildState` and the raw `MeshNode` state; `unknown` means the mesh
+ * has not reported the child yet.
+ */
+export function canSteer(
+  state: ChildState | MeshNode["state"] | undefined,
+  options: { readonly killed?: boolean | undefined } = {},
+): boolean {
+  if (options.killed === true || state === undefined) return false
+  return (
+    state === "running" ||
+    state === "waiting" ||
+    state === "done" ||
+    state === "failed" ||
+    state === "retry" ||
+    state === "idle" ||
+    state === "interrupted"
+  )
+}
+
 /** Pending permissions and questions for exactly this session. */
 export function pendingCount(context: Context, sessionID: string): number {
   return (

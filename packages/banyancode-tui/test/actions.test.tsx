@@ -142,7 +142,8 @@ test("agent tree dialog steers the chosen subagent", async () => {
     ],
   })
   const fake = fakeContext({ base, selects: [child, "steer"], prompts: ["go faster"] })
-  const steered: Array<{ parentSessionID: string; targetAgent: string; instruction: string }> = []
+  const steered: Array<{ parentSessionID: string; targetAgent: string; targetSessionID?: string; instruction: string }> =
+    []
   const live = {
     mesh: {
       ...meshLive({ root: tree, maxSubagents: 5 }),
@@ -150,7 +151,12 @@ test("agent tree dialog steers the chosen subagent", async () => {
       ensure: async () => {},
       refreshLimits: async () => {},
       limits: () => limits(5),
-      steer: async (input: { parentSessionID: string; targetAgent: string; instruction: string }) => {
+      steer: async (input: {
+        parentSessionID: string
+        targetAgent: string
+        targetSessionID?: string
+        instruction: string
+      }) => {
         steered.push(input)
         return { ok: true as const, value: { delivered: 1 } }
       },
@@ -158,7 +164,9 @@ test("agent tree dialog steers the chosen subagent", async () => {
     },
   }
   await openAgentControl(fake.context, live as unknown as Parameters<typeof openAgentControl>[1])
-  expect(steered).toEqual([{ parentSessionID: "ses_root", targetAgent: "coder", instruction: "go faster" }])
+  expect(steered).toEqual([
+    { parentSessionID: "ses_root", targetAgent: "coder", targetSessionID: "ses_child", instruction: "go faster" },
+  ])
   expect(fake.toasts.at(-1)?.message).toContain("Steer sent")
 })
 
@@ -216,6 +224,57 @@ test("agent tree refuses to kill a child that is already finished", async () => 
     },
   }
   await openAgentControl(fake.context, live as unknown as Parameters<typeof openAgentControl>[1])
+  expect(calls).toBe(0)
+  expect(fake.toasts.at(-1)?.message).toContain("already finished")
+})
+
+test("steering a done or failed child sends the instruction to its own session", async () => {
+  const recorded: Array<{ parentSessionID: string; targetAgent: string; targetSessionID?: string; instruction: string }> =
+    []
+  const mesh = {
+    ...meshLive(),
+    steer: async (input: {
+      parentSessionID: string
+      targetAgent: string
+      targetSessionID?: string
+      instruction: string
+    }) => {
+      recorded.push(input)
+      return { ok: true as const, value: { delivered: 1 } }
+    },
+  } as unknown as Parameters<typeof steerSubagent>[1]
+
+  for (const target of [
+    // `idle` is a finished child in mesh terms; `done` is the pane's word for it.
+    { sessionID: "ses_done", agent: "coder", state: "idle" as const, killed: false },
+    { sessionID: "ses_failed", agent: "coder", state: "failed" as const, killed: false },
+  ]) {
+    const fake = fakeContext({ prompts: ["try again"] })
+    await steerSubagent(fake.context, mesh, "ses_root", target)
+    expect(fake.toasts.at(-1)?.message).toContain(`Steer sent to ${target.sessionID}`)
+  }
+  expect(recorded).toEqual([
+    { parentSessionID: "ses_root", targetAgent: "coder", targetSessionID: "ses_done", instruction: "try again" },
+    { parentSessionID: "ses_root", targetAgent: "coder", targetSessionID: "ses_failed", instruction: "try again" },
+  ])
+})
+
+test("steering a killed child is refused without prompting or calling the RPC", async () => {
+  const fake = fakeContext({ prompts: ["wake up"] })
+  let calls = 0
+  const mesh = {
+    ...meshLive(),
+    steer: async () => {
+      calls += 1
+      return { ok: true as const, value: { delivered: 1 } }
+    },
+  } as unknown as Parameters<typeof steerSubagent>[1]
+  await steerSubagent(fake.context, mesh, "ses_root", {
+    sessionID: "ses_gone",
+    agent: "coder",
+    state: "failed",
+    killed: true,
+  })
   expect(calls).toBe(0)
   expect(fake.toasts.at(-1)?.message).toContain("already finished")
 })

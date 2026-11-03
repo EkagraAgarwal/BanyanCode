@@ -68,6 +68,8 @@ export interface MeshLive {
   steer(input: {
     readonly parentSessionID: string
     readonly targetAgent: string
+    /** Steers exactly this session; wins over `targetAgent` when both are present. */
+    readonly targetSessionID?: string
     readonly instruction: string
     readonly priority?: "low" | "normal" | "high"
   }): Promise<Attempt<{ readonly delivered: number }>>
@@ -410,6 +412,7 @@ export function createLive(context: Context): Live {
   const steer = async (input: {
     readonly parentSessionID: string
     readonly targetAgent: string
+    readonly targetSessionID?: string
     readonly instruction: string
     readonly priority?: "low" | "normal" | "high"
   }) => {

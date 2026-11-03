@@ -81,7 +81,10 @@ const limitsOutput = (limits: {
 
 export const SteerInput = Schema.Struct({
   parentSessionID: Schema.String,
+  /** Steers every descendant of this agent; `targetSessionID` narrows it to one session. */
   targetAgent: Schema.String,
+  /** Steers exactly this session; wins over `targetAgent` when both are present. */
+  targetSessionID: Schema.optional(Schema.String),
   instruction: Schema.String.check(Schema.isMaxLength(50_000)),
   priority: Schema.optional(Schema.Literals(["low", "normal", "high"])),
 })

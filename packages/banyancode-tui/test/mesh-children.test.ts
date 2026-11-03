@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { Context } from "@opencode/plugin/tui/context"
-import { childState, directChildren, pendingCount } from "../src/data/mesh"
+import { childState, canSteer, directChildren, pendingCount } from "../src/data/mesh"
 import { context, meshNode, session } from "./harness"
 
 const root = session({ id: "ses_root", title: "root" })
@@ -59,6 +59,23 @@ test("child state separates running, waiting, done and failed", () => {
 test("pending count reads permissions and questions for the session", () => {
   expect(pendingCount(withPending({ ses_child: 2 }, { ses_child: 1 }), "ses_child")).toBe(3)
   expect(pendingCount(withPending({}), "ses_child")).toBe(0)
+})
+
+test("canSteer allows running, waiting, done and failed, and refuses killed", () => {
+  expect(canSteer("running")).toBe(true)
+  expect(canSteer("waiting")).toBe(true)
+  expect(canSteer("done")).toBe(true)
+  expect(canSteer("failed")).toBe(true)
+  // Raw mesh states map onto the same four: retry runs, idle is done, interrupted failed.
+  expect(canSteer("retry")).toBe(true)
+  expect(canSteer("idle")).toBe(true)
+  expect(canSteer("interrupted")).toBe(true)
+  // A killed session is durable and hidden from status, so it cannot be revived.
+  expect(canSteer("failed", { killed: true })).toBe(false)
+  expect(canSteer("running", { killed: true })).toBe(false)
+  // No mesh report yet, or no node at all.
+  expect(canSteer("unknown")).toBe(false)
+  expect(canSteer(undefined)).toBe(false)
 })
 
 test("direct children carry real state, order, tokens and titles", () => {

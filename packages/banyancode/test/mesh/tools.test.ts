@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Effect } from "effect"
+import { Effect, Exit } from "effect"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import { BanyanConfig } from "../../src/config/index.js"
 import { makeMesh, type MeshService } from "../../src/mesh/service.js"
@@ -29,12 +29,15 @@ interface Harness {
   readonly mesh: MeshService
   readonly sessions: SessionPort
   readonly ctx: Context
-  readonly prompts: Array<{ sessionID: string; text: string; delivery?: string }>
+  readonly prompts: Array<{ sessionID: string; text: string; delivery?: string; resume?: boolean }>
   readonly synthetics: Array<{ sessionID: string; text: string }>
   readonly interrupted: string[]
 }
 
-const withHarness = async (fn: (harness: Harness) => Promise<void>) => {
+const withHarness = async (
+  fn: (harness: Harness) => Promise<void>,
+  extra: ReadonlyArray<MeshSessionSnapshot> = [],
+) => {
   const directory = await mkdtemp(join(tmpdir(), "banyancode-mesh-tools-"))
   try {
     await Effect.runPromise(
@@ -47,6 +50,7 @@ const withHarness = async (fn: (harness: Harness) => Promise<void>) => {
           const fixtures = new Map<string, MeshSessionSnapshot>()
           fixtures.set("root", snapshot("root", { agent: "orchestrator" }))
           fixtures.set("child", snapshot("child", { parentID: "root", agent: "coder" }))
+          for (const session of extra) fixtures.set(session.sessionID, session)
 
           const sessions: SessionPort = {
             list: () => Effect.succeed([...fixtures.values()]),
@@ -58,6 +62,7 @@ const withHarness = async (fn: (harness: Harness) => Promise<void>) => {
                   sessionID: input.sessionID,
                   text: input.text,
                   ...(input.delivery === undefined ? {} : { delivery: input.delivery }),
+                  ...(input.resume === undefined ? {} : { resume: input.resume }),
                 })
               }),
             wait: () => Effect.void,
@@ -145,6 +150,17 @@ const runTool = async (
     output: Record<string, unknown>
     content?: string
   }
+
+const runToolExit = (harness: Harness, name: string, input: Record<string, unknown>) =>
+  Effect.runPromise(Effect.exit(tool(harness, name).execute(input as never, context("root", "orchestrator"))))
+
+/** Mailbox rows a steer wrote, so addressing can be asserted without trusting the service return. */
+const steerRows = (harness: Harness) =>
+  Effect.runPromise(
+    harness.storage.query<{ to_session: string | null; to_agent: string | null }>(
+      "SELECT to_session, to_agent FROM subagent_messages WHERE kind = 'steer' ORDER BY created_at ASC",
+    ),
+  )
 
 describe("mesh RPC surface", () => {
   test("owns the banyancode.mesh namespace with status, sessionStatus, limits, background, and status.updated", () => {
@@ -361,6 +377,127 @@ describe("mesh tools on a real plugin database", () => {
       expect(steered.delivered).toBe(1)
       expect(killed.killed).toBe(1)
       expect(calls).toEqual(["steer:coder:focus", "kill:coder:done"])
+    })
+  })
+})
+
+describe("per-session steering", () => {
+  const sibling = snapshot("sibling", { parentID: "root", agent: "coder" })
+
+  test("steering by session ID reaches exactly one of two same-named children", async () => {
+    await withHarness(async (harness) => {
+      const steered = await runTool(harness, "mesh_control", {
+        action: "steer",
+        targetAgent: "coder",
+        targetSessionID: "child",
+        instruction: "only you",
+      })
+      expect(steered.output.result).toBe("steered child")
+      expect(harness.prompts).toEqual([
+        { sessionID: "child", text: "[mesh steer]\nonly you", delivery: "steer" },
+      ])
+      // The mailbox row is addressed like a kill row, so a subscriber cannot read
+      // the steer meant for one child as traffic for the whole agent.
+      expect(await steerRows(harness)).toEqual([{ to_session: "child", to_agent: "coder" }])
+    }, [sibling])
+  })
+
+  test("steering by agent name alone still reaches every same-named child", async () => {
+    await withHarness(async (harness) => {
+      const steered = await runTool(harness, "mesh_control", {
+        action: "steer",
+        targetAgent: "coder",
+        instruction: "all of you",
+      })
+      expect(steered.output.result).toBe("steered coder")
+      expect(harness.prompts.map((prompt) => prompt.sessionID).sort()).toEqual(["child", "sibling"])
+      expect(harness.prompts.every((prompt) => prompt.delivery === "steer" && prompt.text.includes("all of you"))).toBe(
+        true,
+      )
+      expect(await steerRows(harness)).toHaveLength(2)
+    }, [sibling])
+  })
+
+  test("a session ID outside the parent's subtree is refused", async () => {
+    await withHarness(
+      async (harness) => {
+        const direct = await Effect.runPromise(
+          harness.mesh.steer({ parentSessionID: "root", targetSessionID: "stranger", instruction: "nope" }),
+        )
+        expect(direct).toEqual({ delivered: 0 })
+        expect(harness.prompts).toEqual([])
+        expect(await steerRows(harness)).toEqual([])
+
+        // The RPC reports the refusal instead of throwing and instead of falling
+        // back to targetAgent, which would have steered the real children.
+        const rpc = handlers({ mesh: harness.mesh, background: () => Effect.void })
+        const rpcContext = { error: () => { throw new Error("unexpected rpc error") } } as never
+        const viaRpc = await Effect.runPromise(
+          rpc.steer(
+            { parentSessionID: "root", targetAgent: "coder", targetSessionID: "stranger", instruction: "nope" },
+            rpcContext,
+          ),
+        )
+        expect(viaRpc.delivered).toBe(0)
+        expect(harness.prompts).toEqual([])
+
+        // The tool refuses too, so the model learns the steer did not land.
+        const exit = await runToolExit(harness, "mesh_control", {
+          action: "steer",
+          targetAgent: "coder",
+          targetSessionID: "stranger",
+          instruction: "nope",
+        })
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(harness.prompts).toEqual([])
+      },
+      [snapshot("stranger", { agent: "coder" })],
+    )
+  })
+
+  test("a done or failed child wakes and runs a new turn", async () => {
+    const done = snapshot("done", { parentID: "root", agent: "coder", idleAt: 3_000 })
+    const failed = snapshot("failed", { parentID: "root", agent: "coder", outcome: "failed" })
+    await withHarness(async (harness) => {
+      const doneStatus = await Effect.runPromise(harness.mesh.status({ sessionID: "done", scope: "session" }))
+      expect(doneStatus.roots[0]?.state).toBe("idle")
+      const failedStatus = await Effect.runPromise(harness.mesh.status({ sessionID: "failed", scope: "session" }))
+      expect(failedStatus.roots[0]?.state).toBe("failed")
+
+      const doneSteer = await Effect.runPromise(
+        harness.mesh.steer({ parentSessionID: "root", targetSessionID: "done", instruction: "carry on" }),
+      )
+      expect(doneSteer).toEqual({ delivered: 1 })
+      const failedSteer = await Effect.runPromise(
+        harness.mesh.steer({ parentSessionID: "root", targetSessionID: "failed", instruction: "recover" }),
+      )
+      expect(failedSteer).toEqual({ delivered: 1 })
+
+      expect(harness.prompts).toEqual([
+        { sessionID: "done", text: "[mesh steer]\ncarry on", delivery: "steer" },
+        { sessionID: "failed", text: "[mesh steer]\nrecover", delivery: "steer" },
+      ])
+      // `session.prompt` wakes the session unless `resume: false` (`packages/core/src/session/session.ts`),
+      // so an idle or failed child starts a new turn instead of leaving the steer pending.
+      expect(harness.prompts.every((prompt) => prompt.resume === undefined)).toBe(true)
+      expect(await Effect.runPromise(harness.mesh.messages.countPending("root"))).toBe(0)
+      expect((await steerRows(harness)).map((row) => row.to_session)).toEqual(["done", "failed"])
+    }, [done, failed])
+  })
+
+  test("a killed child is refused", async () => {
+    await withHarness(async (harness) => {
+      const killed = await Effect.runPromise(
+        harness.mesh.kill({ parentSessionID: "root", targetSessionID: "child", reason: "done" }),
+      )
+      expect(killed.killed).toBe(1)
+
+      const steered = await Effect.runPromise(
+        harness.mesh.steer({ parentSessionID: "root", targetSessionID: "child", instruction: "wake up" }),
+      )
+      expect(steered).toEqual({ delivered: 0 })
+      expect(harness.prompts).toEqual([])
+      expect(await steerRows(harness)).toEqual([])
     })
   })
 })

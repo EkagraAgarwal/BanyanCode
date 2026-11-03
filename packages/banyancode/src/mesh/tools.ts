@@ -211,6 +211,8 @@ deduplicate even with a fresh tool call id. For any retry, you MUST echo back bo
 export const MeshControlInput = Schema.Struct({
   action: Schema.Literals(["checkin", "steer", "kill", "plan_for", "review"]),
   targetAgent: Schema.optional(Schema.String),
+  /** Steers or kills exactly this session; wins over `targetAgent` when both are present. */
+  targetSessionID: Schema.optional(Schema.String),
   instruction: Schema.optional(Schema.String),
   priority: Schema.optional(Schema.Literals(["low", "normal", "high"])),
   reason: Schema.optional(Schema.String),
@@ -248,7 +250,7 @@ const makeMeshControlTool = (deps: {
 }): Tool.Info<typeof MeshControlInput, typeof MeshControlOutput> => ({
   name: "mesh_control",
   description:
-    "Control subagents in the orchestrator's mesh. Actions: checkin (get status of all subagents), steer (inject an instruction into a subagent's current plan), kill (terminate a subagent gracefully), plan_for (hand a subagent its initial plan), review (dispatch the reviewer subagent with paths/description/reason — returns reviewID).",
+    "Control subagents in the orchestrator's mesh. Actions: checkin (get status of all subagents), steer (inject an instruction into a subagent's current plan), kill (terminate a subagent gracefully), plan_for (hand a subagent its initial plan), review (dispatch the reviewer subagent with paths/description/reason — returns reviewID). steer and kill take targetAgent, targetSessionID (exactly that child; wins over targetAgent), or both.",
   input: MeshControlInput,
   output: MeshControlOutput,
   options: { permission: "mesh_control" },
@@ -261,25 +263,35 @@ const makeMeshControlTool = (deps: {
           return { output: { result: yield* deps.mesh.checkin(context.sessionID) }, content: "mesh checkin" }
         }
         case "steer": {
-          if (input.targetAgent === undefined) return yield* Effect.fail(fail("targetAgent is required for steer"))
+          if (input.targetAgent === undefined && input.targetSessionID === undefined)
+            return yield* Effect.fail(fail("targetAgent or targetSessionID is required for steer"))
           if (input.instruction === undefined) return yield* Effect.fail(fail("instruction is required for steer"))
-          yield* deps.mesh.steer({
+          const target = input.targetSessionID ?? input.targetAgent
+          const steered = yield* deps.mesh.steer({
             parentSessionID: context.sessionID,
-            targetAgent: input.targetAgent,
+            ...(input.targetAgent === undefined ? {} : { targetAgent: input.targetAgent }),
+            ...(input.targetSessionID === undefined ? {} : { targetSessionID: input.targetSessionID }),
             instruction: input.instruction,
             ...(input.priority === undefined ? {} : { priority: input.priority }),
           })
-          return { output: { result: `steered ${input.targetAgent}` }, content: `steered ${input.targetAgent}` }
+          // A session-ID steer is precise: no descendant, or a killed child, means
+          // the instruction was refused rather than broadcast to a sibling.
+          if (input.targetSessionID !== undefined && steered.delivered === 0)
+            return yield* Effect.fail(fail(`session ${input.targetSessionID} is not a steerable descendant`))
+          return { output: { result: `steered ${target}` }, content: `steered ${target}` }
         }
         case "kill": {
-          if (input.targetAgent === undefined) return yield* Effect.fail(fail("targetAgent is required for kill"))
+          if (input.targetAgent === undefined && input.targetSessionID === undefined)
+            return yield* Effect.fail(fail("targetAgent or targetSessionID is required for kill"))
           if (input.reason === undefined) return yield* Effect.fail(fail("reason is required for kill"))
+          const target = input.targetSessionID ?? input.targetAgent
           yield* deps.mesh.kill({
             parentSessionID: context.sessionID,
-            targetAgent: input.targetAgent,
+            ...(input.targetAgent === undefined ? {} : { targetAgent: input.targetAgent }),
+            ...(input.targetSessionID === undefined ? {} : { targetSessionID: input.targetSessionID }),
             reason: input.reason,
           })
-          return { output: { result: `killed ${input.targetAgent}` }, content: `killed ${input.targetAgent}` }
+          return { output: { result: `killed ${target}` }, content: `killed ${target}` }
         }
         case "plan_for": {
           if (input.targetAgent === undefined) return yield* Effect.fail(fail("targetAgent is required for plan_for"))

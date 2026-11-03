@@ -85,7 +85,10 @@ export interface MeshService {
   }) => Effect.Effect<{ readonly planID: string }, StorageError>
   readonly steer: (input: {
     readonly parentSessionID: string
-    readonly targetAgent: string
+    /** Steers every descendant of this agent (v1 mailbox behavior). */
+    readonly targetAgent?: string
+    /** Steers exactly this session; the dialog uses this so one child does not steer its siblings. */
+    readonly targetSessionID?: string
     readonly instruction: string
     readonly priority?: "low" | "normal" | "high"
   }) => Effect.Effect<{ readonly delivered: number }, StorageError>
@@ -266,18 +269,39 @@ export const makeMesh = (deps: MeshDeps): Effect.Effect<MeshService> =>
       Effect.gen(function* () {
         const root = yield* resolveRoot(input.parentSessionID)
         const createdAt = now()
-        yield* messages.put({
-          id: uuid(),
-          parentSessionID: root,
-          fromSession: input.parentSessionID,
-          fromAgent: "orchestrator",
-          toAgent: input.targetAgent,
-          kind: "steer",
-          payload: { instruction: input.instruction, priority: input.priority },
-          createdAt,
-          deliveredAt: createdAt,
-        })
-        const targets = yield* targetSessions(root, input.parentSessionID, { agent: input.targetAgent })
+        // Killed sessions are finished for good (durable kill row, hidden from
+        // status), so a steer must not revive one.
+        const gone = yield* Ref.get(killed)
+        const targets = (
+          yield* targetSessions(root, input.parentSessionID, {
+            ...(input.targetAgent === undefined ? {} : { agent: input.targetAgent }),
+            ...(input.targetSessionID === undefined ? {} : { sessionID: input.targetSessionID }),
+          })
+        ).filter((target) => !gone.has(target.sessionID))
+        // Address each row with `toSession` (like kill) so a session-ID steer
+        // lands in exactly one mailbox; the agent-name path keeps a single
+        // unaddressed note when no descendant matched.
+        const messageTargets: ReadonlyArray<MeshSessionSnapshot | undefined> =
+          targets.length > 0 ? targets : input.targetSessionID === undefined ? [undefined] : []
+        yield* Effect.forEach(
+          messageTargets,
+          (target) =>
+            messages.put({
+              id: uuid(),
+              parentSessionID: root,
+              fromSession: input.parentSessionID,
+              fromAgent: "orchestrator",
+              ...(target === undefined ? {} : { toSession: target.sessionID }),
+              toAgent: target?.agent ?? input.targetAgent ?? input.targetSessionID ?? "subagent",
+              kind: "steer",
+              payload: { instruction: input.instruction, priority: input.priority },
+              createdAt,
+              deliveredAt: createdAt,
+            }),
+          { discard: true },
+        )
+        // `prompt` without `resume: false` wakes the session: an idle, done or
+        // failed child starts a new turn instead of leaving the steer in its inbox.
         yield* Effect.forEach(
           targets,
           (target) =>
