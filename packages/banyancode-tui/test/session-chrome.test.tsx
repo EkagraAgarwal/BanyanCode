@@ -4,6 +4,7 @@ import type { ModelInfo, SessionMessageInfo } from "@opencode/client"
 import type { Context } from "@opencode/plugin/tui/context"
 import { RGBA } from "@opentui/core"
 import { SessionFooter, SessionHeader } from "../src/components/status/session-chrome"
+import { setAgentsStatus } from "../src/data/agents-status"
 import { PANEL } from "../src/constants"
 import { createTicker, type Ticker } from "../src/motion"
 import { codegraphLive, context, meshLive, mount, session, systemLive, theme } from "./harness"
@@ -399,11 +400,21 @@ test("the Agents tab wears the canopy chrome even in the classic layout", async 
   }
   const footer = await renderFooter({ width: 120, ctx: agents })
   try {
+    // The tab hands its status row to the footer: what needs you, then hints.
+    setAgentsStatus({
+      text: "▲ coder-1 needs you: npm pack --dry-run · a allow",
+      tone: "warning",
+      hints: ["1-3 lens", "w next", "? keys"],
+    })
+    await footer.renderOnce()
     const frame = footer.captureCharFrame()
-    expect(frame).toContain("^p commands")
+    expect(frame).toContain("workspace · Git: v2-base")
+    expect(frame).toContain("▲ coder-1 needs you: npm pack --dry-run · a allow")
+    expect(frame).toContain("1-3 lens · w next · ? keys")
     // The classic "▲ 0 need attention" is not part of the canopy chrome.
     expect(frame).not.toContain("need attention")
   } finally {
+    setAgentsStatus(undefined)
     footer.renderer.destroy()
   }
 })

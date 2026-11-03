@@ -98,6 +98,24 @@ export function TraceLens(props: TraceLensProps) {
 
   const laneTop = () => props.geometry.overview + props.geometry.ruler
 
+  /** Live branches under one agent, at any depth: what a blocked row is waiting on. */
+  const waitingBelow = (sessionID: string): number => {
+    const byID = new Map(rows().map((row) => [row.sessionID, row]))
+    let count = 0
+    for (const row of rows()) {
+      if (!isLiveState(row.state)) continue
+      let parent = row.parentID
+      while (parent !== undefined) {
+        if (parent === sessionID) {
+          count += 1
+          break
+        }
+        parent = byID.get(parent)?.parentID
+      }
+    }
+    return count
+  }
+
   const windowed = () => {
     const per = Math.max(1, props.geometry.laneHeight)
     const selected = rows().findIndex((row) => row.sessionID === props.selected)
@@ -305,7 +323,7 @@ export function TraceLens(props: TraceLensProps) {
         live: live(),
         pinned: pinned?.sessionID === entry.row.sessionID ? pinned.spanID : undefined,
         askText: props.ask?.(entry.row.sessionID),
-        waitingOn: rows().filter((row) => row.parentID === entry.row.sessionID && isLiveState(row.state)).length,
+        waitingOn: waitingBelow(entry.row.sessionID),
       })
     })
 

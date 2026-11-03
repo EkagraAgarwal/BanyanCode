@@ -83,6 +83,12 @@ export type PromptProps = {
    * because its own footer already carries the directory and branch.
    */
   footer?: boolean
+  /**
+   * A panel that bleeds takes the whole width and its own status row; the
+   * prompt then drops the row under the box and its leading blank, so the box
+   * is five rows (three when the terminal is shorter than 28 rows).
+   */
+  bleed?: boolean
   onSubmit?: () => void
   onEmptySubmit?: () => boolean | Promise<boolean>
   ref?: (ref: PromptRef | undefined) => void
@@ -1726,7 +1732,7 @@ export function Prompt(props: PromptProps) {
           borderStyle="rounded"
           borderColor={store.mode === "shell" ? borderHighlight() : theme.border.base}
         >
-          <box paddingLeft={1} paddingRight={1} paddingTop={1} flexShrink={0} flexGrow={1} width="100%">
+          <box paddingLeft={1} paddingRight={1} paddingTop={props.bleed ? 0 : 1} flexShrink={0} flexGrow={1} width="100%">
             <Show when={config.prompt?.image_preview && visibleImageAttachments().length > 0}>
               <box
                 width="100%"
@@ -1882,32 +1888,34 @@ export function Prompt(props: PromptProps) {
               cursorColor={disabled() ? theme.background.raised.base : theme.text.base}
               syntaxStyle={syntax()}
             />
-            <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="space-between">
-              <PromptMetadataRow
-                mode={store.mode}
-                agent={agentLabel()}
-                auto={local.permission.mode === "autoaccept"}
-                model={promptDisplay().modelLabel}
-                provider={promptDisplay().providerLabel}
-                variant={promptDisplay().variant}
-                limit={limit()}
-                muted={!!muted()}
-                highlight={highlight()}
-                agentAlpha={agentMetaAlpha()}
-                modelAlpha={modelMetaAlpha()}
-                variantAlpha={variantMetaAlpha()}
-              />
-              <Show when={routeLabel()}>
-                {(label) => (
-                  <text flexShrink={0} wrapMode="none" fg={routeColor(label().tone)}>
-                    {label().text}
-                  </text>
-                )}
-              </Show>
-            </box>
+            <Show when={!props.bleed || dimensions().height >= 28}>
+              <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="space-between">
+                <PromptMetadataRow
+                  mode={store.mode}
+                  agent={agentLabel()}
+                  auto={local.permission.mode === "autoaccept"}
+                  model={promptDisplay().modelLabel}
+                  provider={promptDisplay().providerLabel}
+                  variant={promptDisplay().variant}
+                  limit={limit()}
+                  muted={!!muted()}
+                  highlight={highlight()}
+                  agentAlpha={agentMetaAlpha()}
+                  modelAlpha={modelMetaAlpha()}
+                  variantAlpha={variantMetaAlpha()}
+                />
+                <Show when={routeLabel()}>
+                  {(label) => (
+                    <text flexShrink={0} wrapMode="none" fg={routeColor(label().tone)}>
+                      {label().text}
+                    </text>
+                  )}
+                </Show>
+              </box>
+            </Show>
           </box>
         </box>
-        <Show when={props.footer !== false}>
+        <Show when={props.footer !== false && !props.bleed}>
           <box width="100%" flexDirection="row" justifyContent="space-between" gap={2}>
             <Slot path="prompt.footer" input={footerInput()}>
               <Slot path="prompt.footer.status" input={footerInput()}>

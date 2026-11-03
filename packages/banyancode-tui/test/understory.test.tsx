@@ -7,8 +7,10 @@ import { Understory } from "../src/components/understory"
 import { PANEL } from "../src/constants"
 import { createTicker } from "../src/motion"
 import { shortLabel } from "../src/data/understory"
+import { rowGeometry } from "../src/components/understory/layout"
 import { understoryColumns } from "../src/understory"
 import { live, mount } from "./harness"
+import { agentsStatus } from "../src/data/agents-status"
 import {
   fakeTimers,
   tickerClock,
@@ -120,6 +122,14 @@ function frame(app: Awaited<ReturnType<typeof mount>>): string {
   return app.captureCharFrame()
 }
 
+/**
+ * What the tab asks the host status row to say. The tab spends no row of its
+ * own on it, so `say()` messages are read here rather than out of the frame.
+ */
+function statusText(): string | undefined {
+  return agentsStatus()?.text
+}
+
 function expectFits(app: Awaited<ReturnType<typeof mount>>, width: number) {
   for (const line of frame(app).split("\n")) {
     expect(line.length).toBeLessThanOrEqual(width)
@@ -184,7 +194,8 @@ test("twenty agents fit, and the narrow roster says how many are below", async (
   const narrow = await render(understoryFixture({ specs: FANOUT }), { width: 80, height: 18 })
   try {
     expectFits(narrow.app, 80)
-    expect(frame(narrow.app)).toContain("↓ 7 more")
+    // The panel spends no row on a hint line, so one more branch shows.
+    expect(frame(narrow.app)).toContain("↓ 6 more")
   } finally {
     narrow.app.renderer.destroy()
   }
@@ -397,7 +408,7 @@ test("the allow keys never pick another agent, and several requests answer the o
     expect(fixture.press("Allow once")).toBe(true)
     await app.renderOnce()
     expect(fixture.replies).toHaveLength(0)
-    expect(frame(app)).toContain("press w to jump to the next waiting agent")
+    expect(statusText()).toBe("press w to jump to the next waiting agent")
 
     expect(fixture.press("Next waiting agent")).toBe(true)
     await app.renderOnce()
@@ -425,7 +436,7 @@ test("a question cannot be answered with a A d and says Enter opens the session"
     expect(fixture.press("Allow once")).toBe(true)
     await app.renderOnce()
     expect(fixture.replies).toHaveLength(0)
-    expect(frame(app)).toContain("questions need Enter")
+    expect(statusText()).toBe("questions need Enter; open the session to answer")
   } finally {
     app.renderer.destroy()
   }
@@ -439,7 +450,7 @@ test("x kills only on a second press within three seconds, and selection or the 
     expect(fixture.press("Next agent")).toBe(true)
     expect(fixture.press("Kill selected agent")).toBe(true)
     await app.renderOnce()
-    expect(frame(app)).toContain("press x again to kill coder-1")
+    expect(statusText()).toBe("press x again to kill coder-1")
     expect(fixture.kills).toHaveLength(0)
 
     expect(fixture.press("Kill selected agent")).toBe(true)
@@ -460,7 +471,7 @@ test("x kills only on a second press within three seconds, and selection or the 
     expect(timed.press("Kill selected agent")).toBe(true)
     await timedApp.app.renderOnce()
     expect(timed.kills).toHaveLength(0)
-    expect(frame(timedApp.app)).toContain("press x again to kill coder-1")
+    expect(statusText()).toBe("press x again to kill coder-1")
   } finally {
     timedApp.app.renderer.destroy()
   }
@@ -474,7 +485,7 @@ test("x kills only on a second press within three seconds, and selection or the 
     expect(moved.press("Kill selected agent")).toBe(true)
     await movedApp.app.renderOnce()
     expect(moved.kills).toHaveLength(0)
-    expect(frame(movedApp.app)).toContain("press x again to kill coder-2")
+    expect(statusText()).toBe("press x again to kill coder-2")
   } finally {
     movedApp.app.renderer.destroy()
   }
@@ -557,7 +568,7 @@ test("escape backs out one level and only then reaches the panel close", async (
     expect(fixture.press("Kill selected agent")).toBe(true)
     expect(pressBind(fixture, "escape")).toBe(true)
     await app.renderOnce()
-    expect(frame(app)).not.toContain("press x again")
+    expect(statusText() ?? "").not.toContain("press x again")
     expect(closed).toBe(1)
 
     expect(pressBind(fixture, "escape")).toBe(true)
@@ -604,6 +615,74 @@ test("filter, fold, keys, Tab and Enter all move the screen", async () => {
   } finally {
     app.renderer.destroy()
   }
+})
+
+/**
+ * The panel at the mockup's 168x48 terminal: 39 rows under the chrome, which
+ * is the composer's five rows and the status row. Nine branches at three rows
+ * each, and one row at the bottom shared by the lens legend, the roster's fold
+ * hint and the inspector's actions.
+ */
+const NINE: readonly UnderstorySpec[] = [
+  ...MIXED.slice(0, 4),
+  { id: "ses_c3", agent: "coder", title: "fourth branch", state: "running", tokens: 9_000, created: 1_350 },
+  { id: "ses_e2", agent: "explore", title: "fifth branch", state: "done", tokens: 7_000, created: 1_375 },
+  { id: "ses_s1", agent: "scout", title: "sixth branch", state: "done", tokens: 5_000, created: 1_400 },
+  { id: "ses_g2", agent: "general", title: "seventh branch", state: "running", tokens: 3_000, created: 1_425 },
+]
+
+test("at 168x48 the panel spends no row on hints: nine branches take three rows, and the last row is shared", async () => {
+  const fixture = understoryFixture({ specs: NINE })
+  const { app } = await render(fixture, { width: 168, height: 39, lens: null })
+  try {
+    // A live subagent is selected, so the inspector offers all three actions.
+    expect(fixture.press("Next agent")).toBe(true)
+    await app.renderOnce()
+    const lines = frame(app).split("\n")
+    const cols = understoryColumns(168)
+    const roster = (y: number) => lines[y]!.slice(0, cols.roster)
+    const inspector = (y: number) => lines[y]!.slice(cols.roster + cols.stream)
+    // Tabs, then three overview rows, then the ruler: the first lane row is 5.
+    const top = rowGeometry(39, 9).header
+    expect(top).toBe(5)
+    expect(rowGeometry(39, 9).laneHeight).toBe(3)
+    expect(roster(top)).toContain("build")
+    expect(roster(top + 3)).toContain("coder-1")
+    expect(roster(top + 6)).toContain("coder-2")
+
+    // The legend, the fold hint and the action row all land on the last row.
+    const last = lines[38]!
+    expect(last).toContain("R read  S search  E edit  $ shell  V verify  W web")
+    expect(last).toContain("drag overview to zoom")
+    expect(roster(38)).toContain("z fold finished")
+    expect(inspector(38)).toContain("s steer")
+    expect(inspector(38)).toContain("x kill")
+    expect(inspector(38)).toContain("open session")
+    // The rule above the actions sits on the row before it.
+    expect(inspector(37)).toContain("────")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("the noise-free status row is published for the host footer instead of drawn", async () => {
+  const fixture = understoryFixture({ specs: MIXED })
+  const { app } = await render(fixture, { width: 168, height: 39, lens: null })
+  try {
+    // coder-2 is waiting, so the row leads with the ask and ends with the keys.
+    expect(agentsStatus()?.text).toBe("▲ coder-2 needs you: npm pack --dry-run · a allow")
+    expect(agentsStatus()?.tone).toBe("warning")
+    expect(agentsStatus()?.hints).toEqual(["1-3 lens", "drag ruler to rewind", "w next", "? keys"])
+    // Nothing of it is spent on a panel row.
+    const text = frame(app)
+    expect(text).not.toContain("1-3 lens · drag ruler")
+    await app.renderOnce()
+    expect(agentsStatus()?.text).toBe("▲ coder-2 needs you: npm pack --dry-run · a allow")
+  } finally {
+    app.renderer.destroy()
+  }
+  // Leaving the tab clears it, so chat keeps its own status row.
+  expect(agentsStatus()).toBeUndefined()
 })
 
 test("the inspector overlay is toggled with i and does not resize the columns", async () => {

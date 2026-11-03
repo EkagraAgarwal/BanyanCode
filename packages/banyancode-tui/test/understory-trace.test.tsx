@@ -16,8 +16,8 @@ import { palette, type Palette } from "../src/theme"
 import { mount, theme as harnessTheme } from "./harness"
 import { understoryFixture, type UnderstorySpec } from "./fixture/understory"
 
-/** The mockup's chrome: a 48-row terminal leaves 38 rows for the panel. */
-const CHROME = 10
+/** The mockup's chrome: a 48-row terminal leaves 39 rows for the panel. */
+const CHROME = 9
 const T0 = 1_700_000_000_000
 const at = (seconds: number) => T0 + seconds * 1000
 
@@ -185,7 +185,7 @@ function lensProps(input: {
     view,
     selected: input.selected ?? rows[1]?.sessionID,
     width: cols.stream,
-    height: panel - 2,
+    height: panel - 1,
     geometry,
     animations: input.animations ?? false,
     tick: input.tick ?? 0,
@@ -248,7 +248,9 @@ test("the now column takes a third and every lane lands on its roster row at all
     }
   }
   // The adaptive rule the reference frames pin: 4, 3, 2, 1, 1.
-  expect(lanes).toEqual([4, 3, 2, 1, 1])
+  // A session has no home-footer row, so the panel owns one row more than the
+  // frames did: at 100x30 that is enough for two-row lanes (21 rows: 2 + 18).
+  expect(lanes).toEqual([4, 3, 2, 2, 1])
 })
 
 test("the layout keeps one blank column at each edge and never inverts", () => {

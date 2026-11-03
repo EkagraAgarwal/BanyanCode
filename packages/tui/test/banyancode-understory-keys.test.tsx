@@ -233,8 +233,7 @@ test("entering the Agents tab lands on Trace, and the lens keys are only digits"
   expect(typed).not.toContain("All branches")
 })
 
-test("the app frames keep the panel hints above the composer", async () => {
-  const captured: string[] = []
+test("the app frames keep the panel status row under the composer", async () => {
   for (const [width, height] of [
     [120, 40],
     [80, 24],
@@ -252,11 +251,12 @@ test("the app frames keep the panel hints above the composer", async () => {
     const hints = lines.findIndex((line) => line.includes("w next"))
     expect(hints).toBeGreaterThan(-1)
     expect(lines[hints]).toContain("? keys")
-    expect(prompt.y).toBeGreaterThan(hints)
+    // The tab publishes its hints to the host status row, so they sit under
+    // the composer instead of spending a panel row above it.
+    expect(hints).toBeGreaterThan(prompt.y + prompt.height)
     expect(prompt.y + prompt.height).toBeLessThanOrEqual(height)
+    expect(lines[hints]).toContain("Git:")
     expect(frame.toLowerCase()).toContain("banyancode")
     expect(frame.includes("BRANCHES") || frame.includes("BRCH")).toBe(true)
-    captured.push(`${width}x${height}\n${frame}`)
   }
-  await Bun.write("D:/bc-tools/scratch/understory-app-frames.txt", captured.join("\n\n"))
 })

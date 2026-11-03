@@ -166,7 +166,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/logo.ts` | branding | the v1 BanyanCode tree splash and wordmark | — |
 | `packages/tui/src/component/session-frame.tsx` | hook | the v1 layout: header, docked left sidebar, right inspector, footer, tabs over the transcript; the Trunk layout docks a rail in the left column, caps the transcript and slides a panels overlay over the right edge, selected by `session_layout`; a main panel that asks to bleed hides both side columns and their rails without touching the persisted layout | — |
 | `packages/tui/src/context/panel.tsx` | hook | a panel can present in place of the transcript and ask to bleed (take the whole main area); the Trunk panels overlay is separate presentation state | — |
-| `packages/tui/src/routes/session/index.tsx` | hook | takes the element drawn over the transcript; tool settle, diff reveal, token bloom and live subagent rows; drops its reading gutter for a bleeding main panel | — |
+| `packages/tui/src/routes/session/index.tsx` | hook | takes the element drawn over the transcript; tool settle, diff reveal, token bloom and live subagent rows; drops its reading gutter for a bleeding main panel, and hands that flag to the prompt | — |
 | `packages/tui/src/routes/session/sidebar.tsx` | hook | a docked sidebar has its own width and the v1 border, and its scrolling body reserves the scrollbar's column | — |
 | `packages/tui/src/ui/session-rails.tsx` | hook | v1 resize handle and collapsed rail for the side columns | — |
 | `packages/tui/src/component/prompt/autocomplete.tsx` | fix | a command offered by both client and server is listed once; a mounted surface's own `@` rows are listed before the host's file, agent and reference matches | — |
@@ -178,7 +178,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/feature-plugins/system/storybook/index.tsx` | hook | registers the home story | — |
 | `packages/tui/test/feature-plugins/home-redesign.test.tsx` | hook | covers the `home.logo` slot with and without a claim, and the one-row footer | — |
 | `packages/tui/test/fixture/app.ts` | hook | accepts an updater so the footer update notice is reachable in tests | — |
-| `packages/tui/src/component/prompt/index.tsx` | hook | a slash command can hand some inputs to the server command of the same name; a `footer` prop lets Home drop the location/hint row; a registered surface can replace the placeholder, claim a submit, and label the model row with where the text will go | — |
+| `packages/tui/src/component/prompt/index.tsx` | hook | a slash command can hand some inputs to the server command of the same name; a `footer` prop lets Home drop the location/hint row; a `bleed` prop drops that row and the box's leading blank as well, so a full-bleed panel's composer is five rows (three under 28 terminal rows); a registered surface can replace the placeholder, claim a submit, and label the model row with where the text will go | — |
 | `packages/tui/src/context/composer.tsx` | hook | hosts the composer seams a surface registers while it is mounted: submit interceptors, `@` suggestions, route resolvers and a placeholder override | — |
 | `packages/tui/src/app.tsx` | hook | mounts the composer provider above the plugin tree, so `ui.composer` reaches every plugin | — |
 | `packages/tui/test/understory-composer.test.tsx` | hook | drives the real prompt on the Agents tab: `@` opens the branch picker, accepting inserts plain text, sending steers one session and clears the prompt, and Chat keeps the plain composer | — |
@@ -252,7 +252,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/theme/test/tool.test.ts` | hook | every built-in theme keeps each tool kind readable, and `banyan` names one colour per kind | - |
 | `packages/tui/src/theme/component.ts` | hook | exposes `growth` and the tool-kind roles on the component theme | - |
 | `packages/tui/src/theme/index.ts` | hook | registers the built-in `banyan` theme | — |
-| `packages/tui/src/theme/assets/v2/banyan.json` | hook | the `banyan` theme, dark and light, including the violet hue and tool-kind roles | - |
+| `packages/tui/src/theme/assets/v2/banyan.json` | hook | the `banyan` theme, dark and light, including the violet hue and tool-kind roles; the light mode steps verify and highlight to a lime that clears AA on the page | - |
 | `packages/tui/src/context/theme.tsx` | hook | `banyan` is the default when no theme is chosen; `opencode` stays the parse-failure fallback | — |
 | `packages/tui/test/context/theme.test.tsx` | fix | covers the default and a configured theme winning | — |
 | `packages/tui/test/theme/v2/banyan.test.ts` | hook | covers the `banyan` roles and contrast | — |
@@ -275,8 +275,8 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/panel.test.ts` | hook | covers the panel `bleed` request being kept and released | — |
 | `packages/tui/test/session-layout-default.test.tsx` | hook | pins the classic chat page by default and the opt-in Trunk chrome and rail | — |
 | `packages/tui/test/subagent-rows.test.ts` | hook | covers the live subagent rows | — |
-| `packages/tui/test/banyancode-understory-keys.test.tsx` | hook | drives the Agents tab keys through the real dispatcher, composer focus and Esc order; the brand assertion follows either chrome | — |
-| `packages/tui/test/banyancode-agents-bleed.test.tsx` | hook | covers the full-bleed Agents tab in both chat layouts at a wide and a narrow size: the side columns vanish and return, and the canopy chrome replaces the classic one | — |
+| `packages/tui/test/banyancode-understory-keys.test.tsx` | hook | drives the Agents tab keys through the real dispatcher, composer focus and Esc order; the brand assertion follows either chrome; the panel's hints and attention line are read from the status row under the composer | — |
+| `packages/tui/test/banyancode-agents-bleed.test.tsx` | hook | covers the full-bleed Agents tab in both chat layouts at a wide and a narrow size: the side columns vanish and return, the canopy chrome replaces the classic one, the composer is five rows (three under 28 terminal rows) with one status row under it, and Chat's own bottom rows are unchanged | — |
 | `packages/tui/test/feature-plugins/home-footer.test.ts` | hook | pins which footer items show at each width | — |
 | `packages/tui/test/clear-session.test.tsx` | fix | Home's resume list can show a cleared session's title, so the test checks the tab store | — |
 | `packages/tui/test/plugin-keymap.test.tsx` | fix | Home readiness marker follows the redesign | — |

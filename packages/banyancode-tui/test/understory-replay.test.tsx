@@ -6,10 +6,11 @@ import { bloomSpans, BLOOM_CHARS } from "../src/components/understory/stream"
 import { TraceLens } from "../src/components/understory/trace"
 import { Understory } from "../src/components/understory"
 import { CellGridRenderable } from "../src/components/understory/cells"
-import { createUnderstoryView, type LensProps } from "../src/components/understory/view"
+import { createUnderstoryView, REPLAY_OFF, type LensProps } from "../src/components/understory/view"
 import { branchHue } from "../src/components/understory/hue"
 import { rowGeometry } from "../src/components/understory/layout"
 import { rosterRows } from "../src/data/understory"
+import { agentsStatus } from "../src/data/agents-status"
 import { agentSpans } from "../src/data/understory-spans"
 import { kindColor, palette } from "../src/theme"
 import { mount, theme as harnessTheme } from "./harness"
@@ -244,7 +245,8 @@ test("steer, kill and permission answers are off while replaying, and say so", a
     expect(value.steers).toHaveLength(0)
     expect(value.kills).toHaveLength(0)
     expect(value.replies).toHaveLength(0)
-    expect(scrubbed).toContain("return to live")
+    // A write during replay says so on the host status row, not in the panel.
+    expect(agentsStatus()?.text).toBe(REPLAY_OFF)
     // The action row offers the way back instead of the actions.
     expect(scrubbed).toContain("back to live")
   } finally {

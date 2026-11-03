@@ -291,7 +291,7 @@ test("a done child has an end time; glyphs stay distinct", () => {
   expect(stateGlyph("running", "⠋")).toBe("⠋")
 })
 
-test("blocked needs an open subagent call and live descendants", () => {
+test("blocked needs evidence: either an open subagent call or a live descendant of an ended turn", () => {
   const blocked = rosterRows({
     root: "ses_root",
     sessions: [root(), child({ id: "ses_mid", agent: "coder", created: 100 }), child({ id: "ses_leaf", agent: "scout", created: 110, parent: "ses_mid" })],
@@ -641,11 +641,38 @@ test("a done parent stays visible while one of its descendants is still live", (
     ],
   })
   const rows = rosterRows({ root: "ses_root", sessions, mesh })
-  expect(rows[1]!.state).toBe("done")
+  // Its own turn ended but a branch below it is still live: it is waiting on
+  // that branch, not finished, so it stays on screen even when folding.
+  expect(rows[1]!.state).toBe("blocked")
   expect(rows[2]!.state).toBe("running")
   const folded = visibleRows(rows, { folded: true })
   expect(idsOf(folded.rows)).toEqual(["ses_root", "ses_mid", "ses_leaf"])
   expect(folded.hidden).toBe(0)
+})
+
+test("a root whose branches are still live reads blocked, and a quiet one stays idle", () => {
+  // The usual background fan-out: the root spawned branches and ended its own
+  // turn, so it has no running turn of its own — but the run has not stopped.
+  const busy = rosterRows({
+    root: "ses_root",
+    sessions: [root({ idle: 5_000 }), child({ id: "ses_coder", agent: "coder", created: 2_000 })],
+    status: (sessionID) => (sessionID === "ses_coder" ? "running" : "idle"),
+  })
+  expect(busy[0]!.state).toBe("blocked")
+  expect(busy[0]!.endedAt).toBeUndefined()
+  expect(busy[1]!.state).toBe("running")
+  // The run is still running, so RUN keeps its running label.
+  expect(runStateLabel(busy)).toBe("running")
+
+  // Nothing live below it: a root with no turn running and nothing left to
+  // wait on is idle, and keeps its idle mark.
+  const quiet = rosterRows({
+    root: "ses_root",
+    sessions: [root({ idle: 5_000 }), child({ id: "ses_coder", agent: "coder", created: 2_000, idle: 4_000 })],
+  })
+  expect(quiet[0]!.state).toBe("idle")
+  expect(quiet[0]!.endedAt).toBe(5_000)
+  expect(runStateLabel(quiet)).toBe("finished")
 })
 
 test("history truncation is exposed per session, never for the root", () => {
@@ -791,23 +818,4 @@ test("a root that keeps taking turns still starts its run at the session's creat
   const rows = rosterRows({ root: "ses_root", sessions: [late, child({ id: "ses_coder", agent: "coder", created: 2_000, idle: 5_000 })] })
   expect(rows[0]!.startedAt).toBe(1_000)
   expect(rows[1]!.startedAt).toBe(2_000)
-})
-
-test("branches still running keep the run header on running after the root goes idle", () => {
-  const sessions = [root({ idle: 5_000 }), child({ id: "ses_coder", agent: "coder", created: 2_000 })]
-  // The root launched background branches and ended its own turn; one child is
-  // still working, so the run is not finished.
-  const rows = rosterRows({
-    root: "ses_root",
-    sessions,
-    status: (sessionID) => (sessionID === "ses_coder" ? "running" : "idle"),
-  })
-  expect(rows[0]!.endedAt).toBe(5_000)
-  expect(runStateLabel(rows)).toBe("running")
-
-  const quiet = rosterRows({
-    root: "ses_root",
-    sessions: [root({ idle: 5_000 }), child({ id: "ses_coder", agent: "coder", created: 2_000, idle: 4_000 })],
-  })
-  expect(runStateLabel(quiet)).toBe("finished")
 })

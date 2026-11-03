@@ -30,15 +30,15 @@ test("header rows follow the brief's three tiers", () => {
 })
 
 test("the lane picker takes the largest height that fits and says when it cannot", () => {
-  // 6 branches at 200x55: header 5 and the hint row leave 49 rows, so 4 fits.
+  // 6 branches at 200x55: header 5 leaves 50 rows, and 4 rows each (24) fits.
   const roomy = rowGeometry(55, 6)
   expect(roomy.header).toBe(5)
-  expect(roomy.lanesArea).toBe(49)
+  expect(roomy.lanesArea).toBe(50)
   expect(roomy.laneHeight).toBe(4)
   expect(roomy.visibleLanes).toBe(6)
   expect(roomy.overflow).toBe(false)
 
-  // 21 branches at 55 rows: 3 rows each (63) does not fit 49, 2 rows each fits.
+  // 21 branches at 55 rows: 3 rows each (63) does not fit 50, 2 rows each fits.
   const medium = rowGeometry(55, 21)
   expect(medium.laneHeight).toBe(2)
   expect(medium.visibleLanes).toBe(21)
@@ -51,8 +51,14 @@ test("the lane picker takes the largest height that fits and says when it cannot
 
   const crowded = rowGeometry(18, 21)
   expect(crowded.laneHeight).toBe(1)
-  expect(crowded.visibleLanes).toBe(15)
+  expect(crowded.visibleLanes).toBe(16)
   expect(crowded.overflow).toBe(true)
+
+  // A last row is always free for the legend, so a height that exactly fills
+  // the area is one size too tall (100x30: 9 agents, 18 rows).
+  const exact = rowGeometry(20, 9)
+  expect(exact.lanesArea).toBe(18)
+  expect(exact.laneHeight).toBe(1)
 })
 
 test("the roster and the lanes read the same header height", () => {

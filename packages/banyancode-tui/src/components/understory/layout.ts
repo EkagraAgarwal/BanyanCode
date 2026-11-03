@@ -89,17 +89,19 @@ export interface RowGeometry {
 }
 
 /**
- * The single row map for the Agents tab. `rows` is the panel height, so the
- * hint row is reserved here, and both the roster and the active lens read the
- * same header and lane height from this.
+ * The single row map for the Agents tab. `rows` is the panel height. The hint
+ * row this used to reserve now lives in the host status row under the
+ * composer, so the last panel row belongs to the lens legend (and the
+ * roster's fold hint on the same row): a lane height that exactly filled the
+ * area would leave that row nowhere, so the picker keeps one spare.
  */
 export function rowGeometry(rows: number, agents: number): RowGeometry {
   const total = Math.max(0, Math.floor(rows))
   const count = Math.max(0, Math.floor(agents))
   const overview = overviewRows(total)
   const header = 1 + overview + 1
-  const lanesArea = Math.max(0, total - 1 - header)
-  const laneHeight = LANE_HEIGHTS.find((height) => count * height <= lanesArea) ?? 1
+  const lanesArea = Math.max(0, total - header)
+  const laneHeight = LANE_HEIGHTS.find((height) => count * height < lanesArea) ?? 1
   const visibleLanes = Math.min(count, Math.floor(lanesArea / laneHeight))
   return {
     rows: total,
@@ -409,10 +411,10 @@ export function fitHints(width: number, segments: readonly string[]): string {
   return line
 }
 
-/** Rows left for the roster list after the panel hint and the shared header rows. */
+/** Rows left for the roster list and its fold hint after the shared header rows. */
 export function rosterAreaRows(panelHeight: number): number {
   const height = Math.max(0, Math.floor(panelHeight))
-  return Math.max(0, height - 1 - headerRows(height))
+  return Math.max(0, height - headerRows(height))
 }
 
 export function streamAreaRows(panelHeight: number): number {

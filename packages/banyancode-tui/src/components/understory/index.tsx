@@ -1,11 +1,11 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import type { SessionMessageInfo } from "@opencode/client"
-import type { RGBA, ScrollBoxRenderable } from "@opentui/core"
+import type { ScrollBoxRenderable } from "@opentui/core"
 import type { KeyEvent } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js"
 import type { CodegraphLive, MeshLive } from "../../data/live"
-import { truncate } from "../../data/format"
+import { setAgentsStatus, type AgentsStatus } from "../../data/agents-status"
 import { canSteer, pendingCount } from "../../data/mesh"
 import {
   agentSheet,
@@ -41,7 +41,6 @@ import { branchHue } from "./hue"
 import { Inspector, type FileTouch, type InspectorAsk } from "./inspector"
 import { LensTabs } from "./lens-tabs"
 import {
-  fitHints,
   INSPECTOR_WIDTH,
   rosterAreaRows,
   rosterRowHeight,
@@ -53,7 +52,7 @@ import {
   spans,
   understoryColumns,
 } from "./layout"
-import { LineView, type Line } from "./line"
+import { LineView } from "./line"
 import { Roster, rowColor, rowGlyph } from "./roster"
 import { StreamLens } from "./stream"
 import { TraceLens } from "./trace"
@@ -233,7 +232,9 @@ export function Understory(props: {
   const cols = createMemo(() => understoryColumns(width()))
   const overlayMode = () => !cols().docked
   const geometry = createMemo(() => rowGeometry(height(), visible().length))
-  const lensHeight = () => Math.max(0, height() - 1 - geometry().tabs)
+  // The panel's row count is the whole area: the status row moved to the host
+  // footer, so only the lens tabs sit above the lens.
+  const lensHeight = () => Math.max(0, height() - geometry().tabs)
 
   const hues = createMemo(() => {
     const mode = props.context.themeMode
@@ -895,8 +896,8 @@ export function Understory(props: {
   })
 
   /** What the status row says on the left: this turn's message, else attention. */
-  const statusLeft = createMemo((): { readonly text: string; readonly color: RGBA } | undefined => {
-    if (message() !== undefined) return { text: message()!, color: theme().warning }
+  const statusLeft = createMemo((): { readonly text: string; readonly tone: "warning" | "error" } | undefined => {
+    if (message() !== undefined) return { text: message()!, tone: "warning" }
     const waitingRows = displayRows().filter((row) => row.state === "waiting")
     if (waitingRows.length > 0) {
       const first = waitingRows[0]!
@@ -904,7 +905,7 @@ export function Understory(props: {
       const more = waitingRows.length > 1 ? ` (+${waitingRows.length - 1})` : ""
       return {
         text: `▲ ${first.label} needs you${target === undefined ? "" : `: ${target}`}${more} · a allow`,
-        color: theme().warning,
+        tone: "warning",
       }
     }
     const alert = stale()[0]
@@ -915,7 +916,7 @@ export function Understory(props: {
       const ended = reader !== undefined && !isLiveState(reader.state)
       return {
         text: `▲ ${alert.readerLabel} ${ended ? "edited" : "is editing"} ${fileName(alert.path)} from a stale read`,
-        color: theme().error,
+        tone: "error",
       }
     }
     return undefined
@@ -934,18 +935,20 @@ export function Understory(props: {
     return segments
   })
 
-  const statusLine = createMemo((): Line => {
-    const inner = Math.max(0, width() - 1)
+  /**
+   * The tab's status row, published to the host footer: the panel spends no
+   * row of its own on hints, so the row under the composer carries them. One
+   * signal, read by `session.footer`; cleared when the panel unmounts.
+   */
+  const statusRow = createMemo((): AgentsStatus => {
     const left = statusLeft()
-    const hints = fitHints(left === undefined ? inner : Math.max(0, inner - [...left.text].length - 2), statusHints())
-    if (left === undefined) return spans(inner, [{ text: " ".repeat(Math.max(0, inner - hints.length)), color: theme().faint }, { text: hints, color: theme().faint }])
-    const room = Math.max(0, inner - hints.length - 1)
-    return spans(inner, [
-      { text: truncate(left.text, room), color: left.color, bold: true },
-      { text: " ".repeat(Math.max(0, inner - Math.min(room, [...left.text].length) - hints.length)), color: theme().faint },
-      { text: hints, color: theme().faint },
-    ])
+    return {
+      ...(left === undefined ? {} : { text: left.text, tone: left.tone }),
+      hints: statusHints(),
+    }
   })
+  createEffect(() => setAgentsStatus(statusRow()))
+  onCleanup(() => setAgentsStatus(undefined))
 
   const actionSegments = createMemo((): string[] => {
     if (!view.live()) return ["l back to live"]
@@ -963,7 +966,7 @@ export function Understory(props: {
   const inspector = (width: number) => (
     <Inspector
       width={width}
-      height={Math.max(0, height() - 1)}
+      height={Math.max(0, height())}
       row={selected()}
       hue={hueOf(selectedID())}
       glyph={selected() === undefined ? "⋯" : rowGlyph(selected()!, 0, tick(), animations())}
@@ -1115,10 +1118,6 @@ export function Understory(props: {
             {inspector(inspectorWidth())}
           </box>
         </Show>
-      </box>
-
-      <box height={1} flexShrink={0} paddingLeft={1}>
-        <LineView width={Math.max(0, width() - 1)} spans={statusLine()} />
       </box>
 
       <Show when={keyList()}>

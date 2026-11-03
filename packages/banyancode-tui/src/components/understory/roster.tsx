@@ -59,7 +59,7 @@ export interface RosterProps {
   readonly hues: ReadonlyMap<string, RGBA>
   readonly theme: Palette
   readonly width: number
-  /** The whole panel height, including the status row under the roster. */
+  /** The whole panel height; the roster shares the lens's rows, top to bottom. */
   readonly height: number
   readonly animations: boolean
   /** True while the run is live; only then does the trunk pulse. */
@@ -98,8 +98,8 @@ export function Roster(props: RosterProps) {
     const theme = props.theme
     const list = props.visible
     const lane = Math.max(1, props.laneHeight)
-    const header = Math.min(Math.max(0, props.header), Math.max(0, props.height - 1))
-    const area = Math.max(0, props.height - 1 - header)
+    const header = Math.min(Math.max(0, props.header), Math.max(0, props.height))
+    const area = Math.max(0, props.height - header)
     const big = width >= 28
     const reserveFold = props.folded && props.hidden > 0 ? 1 : 0
     const rowArea = Math.max(0, area - reserveFold)
@@ -251,6 +251,7 @@ export function Roster(props: RosterProps) {
 
     // --- the reserved rows under the list -----------------------------------
     const below = header + window.count * lane
+    const last = Math.max(0, props.height - 1)
     if (props.folded && props.hidden > 0) {
       const foldY = Math.min(below, header + area - 1)
       if (foldY >= header) {
@@ -259,7 +260,11 @@ export function Roster(props: RosterProps) {
       }
     }
     if (window.overflow) {
-      grid.text(1, Math.min(below, header + area), `↓ ${window.more} more`, theme.faint)
+      grid.text(1, Math.min(below, last), `↓ ${window.more} more`, theme.faint)
+    } else if (!props.folded && below <= last && width >= 16 && props.rows.some((row) => row.state === "done")) {
+      // The mockup's fold hint owns the roster's last row, level with the
+      // lens legend; only a full list or a narrow roster displaces it.
+      grid.text(1, last, "z fold finished", theme.faint)
     }
   }
 
@@ -268,7 +273,7 @@ export function Roster(props: RosterProps) {
       <CellGrid
         id="banyancode.understory.roster"
         width={props.width}
-        height={Math.max(1, props.height - 1)}
+        height={Math.max(1, props.height)}
         background={props.theme.background}
         draw={draw}
         onHit={(region) => {

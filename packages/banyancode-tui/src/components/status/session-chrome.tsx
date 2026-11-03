@@ -1,8 +1,9 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import type { RGBA } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { createMemo, For, onCleanup, onMount, Show } from "solid-js"
+import { createMemo, For, onCleanup, onMount, Show, Switch, Match } from "solid-js"
 import type { CodegraphLive, MeshLive, SystemLive } from "../../data/live"
+import { agentsStatus, fitAgentsStatusRow } from "../../data/agents-status"
 import { PANEL } from "../../constants"
 import { categorizeTokens } from "../../data/tokens"
 import { createTicker, mix, useTickerWhen, type Ticker } from "../../motion"
@@ -505,9 +506,11 @@ function TrunkHeader(props: ChromeHeaderProps) {
 /**
  * The Trunk bottom row: directory and branch on the left, an attention message
  * only while something is waiting, and the key hints. Statuses that row 0
- * already carries are deliberately absent. The Agents tab prints its own
- * attention line on its status row, so the footer drops it there: one row for
- * the tab's hints and one footer row, never a third.
+ * already carries are deliberately absent. On the Agents tab this row also
+ * carries the tab's own status: its attention line (or the transient `say()`
+ * message) and its key hints, published through `agentsStatus`, so the full
+ * height belongs to the roster lanes and the composer keeps its five rows.
+ * Chat keeps the row it always had.
  */
 function TrunkFooter(props: ChromeFooterProps) {
   const theme = () => palette(props.context.theme)
@@ -520,40 +523,82 @@ function TrunkFooter(props: ChromeFooterProps) {
     return current ? data.location.vcs.info(current)?.branch.current : undefined
   })
   const attention = createMemo(() => attentionBreakdown(props.context, props.sessionID).count)
+  const panel = () => props.context.ui.panel.current()?.name
   // The Agents tab repeats the count on its own status row; the Chat tab keeps it here.
-  const showAttention = () => props.context.ui.panel.current()?.name !== PANEL.agents
+  const showAttention = () => panel() !== PANEL.agents
+  const agents = createMemo(() => {
+    const published = agentsStatus()
+    return fitAgentsStatusRow({
+      width: Math.max(0, dimensions().width - 4),
+      left: `${folderName(location()?.directory)}${branch() ? ` · Git: ${branch()}` : ""}`,
+      ...(published?.text === undefined ? {} : { text: published.text }),
+      marks: [props.system.yolo() === true ? "[yolo]" : "", props.mesh.swarmMode() === true ? "[swarm]" : ""],
+      hints: published?.hints ?? [],
+    })
+  })
   return (
-    <box flexDirection="row" flexShrink={0} width="100%" gap={2} paddingLeft={2} paddingRight={2}>
-      <text fg={theme().muted} flexShrink={1} wrapMode="none">
-        {folderName(location()?.directory)}
-        {branch() ? ` · Git: ${branch()}` : ""}
-      </text>
-      <box flexGrow={1} />
-      <Show when={props.system.yolo() === true}>
-        <text fg={theme().error} flexShrink={0}>
-          [yolo]
-        </text>
-      </Show>
-      <Show when={props.mesh.swarmMode() === true}>
-        <text fg={theme().error} flexShrink={0}>
-          [swarm]
-        </text>
-      </Show>
-      <Show when={attention() > 0 && showAttention()}>
-        <text fg={theme().warning} flexShrink={0}>
-          {`▲ ${attention()} need attention`}
-        </text>
-      </Show>
-      <Show when={dimensions().width >= 110}>
-        <text fg={theme().muted} flexShrink={0}>
-          ^p commands · ^] tabs
-        </text>
-      </Show>
-      <Show when={dimensions().width >= 80 && dimensions().width < 110}>
-        <text fg={theme().muted} flexShrink={0}>
-          ^p cmds
-        </text>
-      </Show>
-    </box>
+    <Switch>
+      <Match when={panel() === PANEL.agents}>
+        <box flexDirection="row" flexShrink={0} width="100%" gap={2} paddingLeft={2} paddingRight={2}>
+          <text fg={theme().muted} flexShrink={1} wrapMode="none">
+            {agents().left}
+          </text>
+          <Show when={agents().text !== ""}>
+            <text
+              fg={agentsStatus()?.tone === "error" ? theme().error : theme().warning}
+              flexShrink={1}
+              wrapMode="none"
+            >
+              {agents().text}
+            </text>
+          </Show>
+          <box flexGrow={1} />
+          <Show when={agents().marks !== ""}>
+            <text fg={theme().error} flexShrink={0} wrapMode="none">
+              {agents().marks}
+            </text>
+          </Show>
+          <Show when={agents().hints !== ""}>
+            <text fg={theme().muted} flexShrink={0} wrapMode="none">
+              {agents().hints}
+            </text>
+          </Show>
+        </box>
+      </Match>
+      <Match when={true}>
+        <box flexDirection="row" flexShrink={0} width="100%" gap={2} paddingLeft={2} paddingRight={2}>
+          <text fg={theme().muted} flexShrink={1} wrapMode="none">
+            {folderName(location()?.directory)}
+            {branch() ? ` · Git: ${branch()}` : ""}
+          </text>
+          <box flexGrow={1} />
+          <Show when={props.system.yolo() === true}>
+            <text fg={theme().error} flexShrink={0}>
+              [yolo]
+            </text>
+          </Show>
+          <Show when={props.mesh.swarmMode() === true}>
+            <text fg={theme().error} flexShrink={0}>
+              [swarm]
+            </text>
+          </Show>
+          <Show when={attention() > 0 && showAttention()}>
+            <text fg={theme().warning} flexShrink={0}>
+              {`▲ ${attention()} need attention`}
+            </text>
+          </Show>
+          <Show when={dimensions().width >= 110}>
+            <text fg={theme().muted} flexShrink={0}>
+              ^p commands · ^] tabs
+            </text>
+          </Show>
+          <Show when={dimensions().width >= 80 && dimensions().width < 110}>
+            <text fg={theme().muted} flexShrink={0}>
+              ^p cmds
+            </text>
+          </Show>
+        </box>
+      </Match>
+    </Switch>
   )
 }

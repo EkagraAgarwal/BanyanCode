@@ -1572,26 +1572,30 @@ export function Session(props: {
               </scrollbox>
               {props.main}
             </box>
-            <box height={1} flexShrink={0} flexDirection="row" justifyContent="flex-end">
-              <Show when={firstJump()}>
-                <text fg={theme.text.feedback.info.base}>Loading session history…</text>
-              </Show>
-              <Show when={!firstJump() && awayFromBottom()}>
-                <box
-                  id="session-jump-to-latest"
-                  paddingLeft={1}
-                  onMouseOver={() => setLatestHovered(true)}
-                  onMouseOut={() => setLatestHovered(false)}
-                  onMouseUp={toBottom}
-                >
-                  <text
-                    fg={latestHovered() ? theme.text.action.secondary.hovered : theme.text.action.secondary.base}
+            {/* A bleeding panel covers the transcript, so this row would be a
+                blank line between its last row and the composer. */}
+            <Show when={!props.bleed}>
+              <box height={1} flexShrink={0} flexDirection="row" justifyContent="flex-end">
+                <Show when={firstJump()}>
+                  <text fg={theme.text.feedback.info.base}>Loading session history…</text>
+                </Show>
+                <Show when={!firstJump() && awayFromBottom()}>
+                  <box
+                    id="session-jump-to-latest"
+                    paddingLeft={1}
+                    onMouseOver={() => setLatestHovered(true)}
+                    onMouseOut={() => setLatestHovered(false)}
+                    onMouseUp={toBottom}
                   >
-                    Jump to latest ↓
-                  </text>
-                </box>
-              </Show>
-            </box>
+                    <text
+                      fg={latestHovered() ? theme.text.action.secondary.hovered : theme.text.action.secondary.base}
+                    >
+                      Jump to latest ↓
+                    </text>
+                  </box>
+                </Show>
+              </box>
+            </Show>
             <box flexShrink={0}>
               <Show when={!composer.open && !disabled() && queuedPrompts().length > 0}>
                 <QueuedPromptDock prompts={queuedPrompts()} onOpen={openQueuedPrompts} />
@@ -1666,6 +1670,7 @@ export function Session(props: {
                       return mutatePending("steer", next.id)
                     }}
                     sessionID={route.sessionID}
+                    bleed={props.bleed}
                   />
                 </Match>
               </Switch>

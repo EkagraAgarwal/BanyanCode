@@ -112,6 +112,13 @@ function composerLeft(frame: string) {
   const row = frame.split("\n").filter((line) => line.includes("╭")).at(-1)
   return row ? row.indexOf("╭") : -1
 }
+/** The composer's own box: the last rounded corner pair in the frame. */
+function composerRows(frame: string) {
+  const lines = frame.split("\n")
+  const top = lines.findLastIndex((line) => line.includes("╭"))
+  const bottom = lines.findIndex((line, index) => index > top && line.includes("╰"))
+  return { lines, top, bottom, height: bottom - top + 1 }
+}
 
 const cases = [
   { layout: "classic", width: 160, height: 40 },
@@ -182,5 +189,59 @@ for (const item of cases) {
     expect(box(setup, "session-pane")?.width).toBe(chatWidth)
     expect(composerLeft(setup.captureCharFrame())).toBeGreaterThanOrEqual(2)
     expect(setup.captureCharFrame()).toContain(item.layout === "classic" ? "BANYANCODE" : "banyancode")
+  })
+}
+
+for (const size of [
+  { width: 168, height: 48, rows: 5 },
+  { width: 80, height: 24, rows: 3 },
+] as const) {
+  test(`the Agents tab composer is ${size.rows} rows at ${size.width}x${size.height}, and Chat keeps its own rows`, async () => {
+    await using setup = await fixture({ width: size.width, height: size.height, layout: "classic" })
+    await ready(setup)
+    await setup.waitForVisualIdle({ quietFrames: 2 })
+
+    // Chat's bottom first: the composer's box, the prompt hints under it and
+    // then the status row. Nothing here may change.
+    const chat = composerRows(setup.captureCharFrame())
+    const chatUnder = chat.lines.slice(chat.bottom + 1).join("\n")
+    expect(chat.height).toBeGreaterThanOrEqual(5)
+
+    // AGENTS: the composer drops its hint row and leading blank, so the box is
+    // five rows (three when the terminal is under 28 rows tall).
+    await nextView(setup)
+    await nextView(setup)
+    await setup.waitFor(() => box(setup, "session-pane")?.x === 0, { maxPasses: 100 })
+    await setup.waitForVisualIdle({ quietFrames: 2 })
+    const agents = composerRows(setup.captureCharFrame())
+    expect(agents.height).toBe(size.rows)
+    // The placeholder, the blank and the model row are the box's own rows.
+    expect(agents.lines[agents.top + 1]).toContain("Message")
+    if (size.rows === 5) {
+      expect(agents.lines[agents.top + 2]!.slice(1, -1).trim()).toBe("")
+      expect(agents.lines[agents.top + 3]).toMatch(/Build|Plan/)
+    }
+    // One row under the composer, and it is the status row: no second hint row.
+    expect(agents.lines[agents.bottom + 1]).toContain("· Git: dev")
+    if (size.width >= 120) expect(agents.lines[agents.bottom + 1]).toContain("1-3 lens")
+    expect(agents.lines[agents.bottom + 1]).toContain("w next")
+    expect(agents.lines[agents.bottom + 1]).not.toContain("commands")
+
+    // Every released row reaches the panel: 48 - 3 chrome - 5 composer - 1
+    // status = 39, and the lens keeps the rest under its tabs.
+    if (size.height === 48) {
+      expect(box(setup, "banyancode.understory.roster")?.height).toBe(39)
+      expect(box(setup, "banyancode.understory.trace")?.height).toBe(38)
+    }
+
+    // Back on CHAT the bottom rows are byte for byte what they were.
+    await previousView(setup)
+    await previousView(setup)
+    await setup.waitFor(() => box(setup, "session-panel") === undefined, { maxPasses: 100 })
+    await setup.waitForFrame((frame) => frame.includes("BANYANCODE"), { maxPasses: 100 })
+    await setup.waitForVisualIdle({ quietFrames: 2 })
+    const after = composerRows(setup.captureCharFrame())
+    expect(after.height).toBe(chat.height)
+    expect(after.lines.slice(after.bottom + 1).join("\n")).toBe(chatUnder)
   })
 }

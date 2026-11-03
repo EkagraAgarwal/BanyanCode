@@ -295,6 +295,12 @@
       "interactive": "$hue.sky",
       "neutral": "$hue.gray"
     },
+    "tool": {
+      "verify": "$hue.lime.100"
+    },
+    "growth": {
+      "highlight": "$hue.lime.100"
+    },
     "diff": {
       "background": {
         "added": "#e3f0e4",

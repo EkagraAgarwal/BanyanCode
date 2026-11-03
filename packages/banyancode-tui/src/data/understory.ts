@@ -323,14 +323,18 @@ export function rosterRows(input: RosterInput): RosterRow[] {
     return result
   }
 
-  // `blocked` needs real evidence: the parent is running inside a `subagent`
-  // call and something below it is still live. Without both, a running agent
-  // stays `running`; an idle one stays `idle`/`done` rather than guessed.
+  // `blocked` needs real evidence: something below the agent is still live.
+  // Two shapes qualify. A parent whose own turn is running inside an open
+  // `subagent` call is waiting on that call. A parent whose turn has ended —
+  // the usual root, which spawns background branches and summarises — is
+  // waiting on them too, and saying `idle` there would hide live work. A truly
+  // idle agent with nothing live below it stays `idle`.
   for (const entry of ordered) {
     const sessionID = entry.session.id
-    if (stateOf.get(sessionID) !== "running") continue
     if (!hasLiveDescendant(sessionID)) continue
-    if (!openSubagent(messagesOf(sessionID))) continue
+    const own = stateOf.get(sessionID)
+    if (own === "running" && !openSubagent(messagesOf(sessionID))) continue
+    if (own !== "running" && isLiveState(own!)) continue
     stateOf.set(sessionID, "blocked")
   }
 
@@ -366,9 +370,13 @@ export function rosterRows(input: RosterInput): RosterRow[] {
     const variant = session.model?.variant
     // The root has no `done` state; its last turn is over when `time.idle`
     // arrives after the turn's `busy` mark. That final duration is what RUN
-    // shows once the run stops.
+    // shows once the run stops. A root that is `blocked` — its own turn over
+    // but branches still live — has not ended the run, so it keeps running.
     const rootEnded =
-      root && session.time.idle !== undefined && session.time.idle >= (session.time.busy ?? session.time.created)
+      root &&
+      state === "idle" &&
+      session.time.idle !== undefined &&
+      session.time.idle >= (session.time.busy ?? session.time.created)
     const stopped = state === "failed" || state === "killed" || state === "done" || rootEnded
     const endedAt = stopped ? (session.time.idle ?? session.time.updated) : undefined
     return {
