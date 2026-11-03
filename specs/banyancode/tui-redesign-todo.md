@@ -22,6 +22,16 @@ Brief: `specs/banyancode/tui-redesign-handoff/HANDOFF.md`. Status: `[ ]` open, `
 - [x] Full `packages/tui` and `packages/banyancode-tui` suites, typecheck, ledger (5 `tui` failures, all also failing on clean `v2-base`)
 - [x] Local Windows binary for the owner to test
 
+## Round 5: Agents tab, "Understory" first slice (owner's scope)
+Brief: `D:\opencode\specs\tui-redesign-handoff\agents-tab.html`. Owner chose: smallest slice, classic header, `s` steers only the selected agent, replay marks in memory (when replay is built).
+- [x] Steer one session by id; finished and failed agents can be steered again
+- [x] Pure data: roster tree with killed agents kept, display suffixes, states, merged stream log
+- [x] Roster, Stream and inspector replace Grove on the Agents tab (committed, owner to verify)
+- [ ] Share one project DB across install channels, and adopt an existing channel DB
+- [ ] Fix the sidebar System monitor not refreshing
+- [ ] Full suites, typecheck, ledger, new Windows binary, new dev tag
+- Deferred: Trace, replay, overview, Roots, stale-edit warnings, composer `@` routing
+
 ## Round 4 (owner feedback)
 - [x] Chat page matches the owner's screenshot: classic layout by default, `v2-base` header and footer, sidebar fixes kept; Trunk becomes opt-in (committed, owner to verify)
 - [x] Failed Trunk branches can be dismissed (committed, owner to verify; killed agents already leave mesh status)

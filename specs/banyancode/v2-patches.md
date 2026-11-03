@@ -270,6 +270,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/session-panels-overlay.test.ts` | hook | covers the `session_layout` default and setting, and the Trunk panels overlay state and curves | — |
 | `packages/tui/test/session-layout-default.test.tsx` | hook | pins the classic chat page by default and the opt-in Trunk chrome and rail | — |
 | `packages/tui/test/subagent-rows.test.ts` | hook | covers the live subagent rows | — |
+| `packages/tui/test/banyancode-understory-keys.test.tsx` | hook | drives the Agents tab keys through the real dispatcher, composer focus and Esc order | — |
 | `packages/tui/test/feature-plugins/home-footer.test.ts` | hook | pins which footer items show at each width | — |
 | `packages/tui/test/clear-session.test.tsx` | fix | Home's resume list can show a cleared session's title, so the test checks the tab store | — |
 | `packages/tui/test/plugin-keymap.test.tsx` | fix | Home readiness marker follows the redesign | — |
