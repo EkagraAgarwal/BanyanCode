@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import type { SessionInfo, SessionMessageInfo } from "@opencode/client"
 import { meshNode, session } from "./harness"
+import { runStateLabel } from "../src/components/understory/layout"
 import {
   agentSheet,
   canonicalTool,
@@ -492,7 +493,7 @@ test("spawn and return come from the parent's subagent call", () => {
   ]
   const entries = streamEntries(sessions).filter((entry) => entry.sessionID === "ses_root")
   expect(entries.map((entry) => entry.kind)).toEqual(["spawn", "return"])
-  expect(entries[0]!.summary).toBe("coder-1 · fix the installer")
+  expect(entries[0]!.summary).toBe("spawned coder-1: fix the installer")
   expect(entries[0]!.detail?.letter).toBe("T")
   expect(entries[1]!.summary).toBe("installer fixed")
   expect(entries[1]!.at).toBe(1_200)
@@ -777,4 +778,36 @@ test("the root's run ends at its idle mark, and a newer busy turn reopens it", (
   })
   const running = rosterRows({ root: "ses_root", sessions: [busyRoot] })
   expect(running[0]!.endedAt).toBeUndefined()
+})
+
+test("a root that keeps taking turns still starts its run at the session's creation", () => {
+  // The projector rewrites `time.busy` on every execution, so a root that
+  // spawns and then summarises would push the whole run to its last turn.
+  const late = session({
+    id: "ses_root",
+    agent: "build",
+    time: { created: 1_000, updated: 9_000, busy: 8_000, idle: 9_000 },
+  })
+  const rows = rosterRows({ root: "ses_root", sessions: [late, child({ id: "ses_coder", agent: "coder", created: 2_000, idle: 5_000 })] })
+  expect(rows[0]!.startedAt).toBe(1_000)
+  expect(rows[1]!.startedAt).toBe(2_000)
+})
+
+test("branches still running keep the run header on running after the root goes idle", () => {
+  const sessions = [root({ idle: 5_000 }), child({ id: "ses_coder", agent: "coder", created: 2_000 })]
+  // The root launched background branches and ended its own turn; one child is
+  // still working, so the run is not finished.
+  const rows = rosterRows({
+    root: "ses_root",
+    sessions,
+    status: (sessionID) => (sessionID === "ses_coder" ? "running" : "idle"),
+  })
+  expect(rows[0]!.endedAt).toBe(5_000)
+  expect(runStateLabel(rows)).toBe("running")
+
+  const quiet = rosterRows({
+    root: "ses_root",
+    sessions: [root({ idle: 5_000 }), child({ id: "ses_coder", agent: "coder", created: 2_000, idle: 4_000 })],
+  })
+  expect(runStateLabel(quiet)).toBe("finished")
 })

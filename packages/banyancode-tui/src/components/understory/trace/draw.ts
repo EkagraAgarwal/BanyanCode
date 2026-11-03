@@ -198,9 +198,16 @@ export interface RulerInput {
 export function drawRuler(grid: Grid, input: RulerInput): void {
   const { layout, y, window, theme } = input
   for (let c = 0; c < layout.history; c += 1) grid.setCell(layout.x + c, y, "─", theme.border)
+  const mark =
+    (input.replay || input.live) && input.playhead >= window.a && input.playhead <= window.b
+      ? Math.max(0, Math.min(layout.history - 1, Math.round(column(window, layout.history, input.playhead))))
+      : undefined
   for (const t of tickMarks(window, layout.history)) {
     const c = Math.round(column(window, layout.history, t))
     if (c < 0 || c > layout.history - 3) continue
+    // The playhead owns its column: a label it would run through is dropped, so
+    // the ruler never reads `0:1▼`.
+    if (mark !== undefined && c <= mark + 1 && c + 5 >= mark - 1) continue
     grid.text(layout.x + c, y, traceClock(t - input.origin), theme.muted)
   }
   for (let c = 0; c < layout.history; c += 1) grid.hit(layout.x + c, y, 1, 1, `trace:ruler:${c}`)
@@ -208,12 +215,11 @@ export function drawRuler(grid: Grid, input: RulerInput): void {
   const head = input.replay ? `AT ${traceClock(input.playhead - input.origin)}` : "NOW"
   grid.text(layout.labelX, y, truncate(head, layout.label), input.replay ? theme.sky : theme.wood, undefined, true)
 
-  if ((input.replay || input.live) && input.playhead >= window.a && input.playhead <= window.b) {
-    const c = Math.max(0, Math.min(layout.history - 1, Math.round(column(window, layout.history, input.playhead))))
-    grid.setCell(layout.x + c, y, "▼", input.replay ? theme.sky : theme.lime, undefined, true)
+  if (mark !== undefined) {
+    grid.setCell(layout.x + mark, y, "▼", input.replay ? theme.sky : theme.lime, undefined, true)
     if (input.replay) {
       const label = traceClock(input.playhead - input.origin)
-      if (c + 2 + label.length < layout.history) grid.text(layout.x + c + 2, y, label, theme.sky)
+      if (mark + 2 + label.length < layout.history) grid.text(layout.x + mark + 2, y, label, theme.sky)
     }
   }
 }

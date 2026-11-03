@@ -3,6 +3,7 @@ import { createMemo, For, Show } from "solid-js"
 import { truncate } from "../../data/format"
 import { returnedSummary } from "../../data/messages"
 import { isLiveState, shortLabel, streamEntries, type StreamEntry, type StreamSession } from "../../data/understory"
+import { durationText } from "../../data/understory-spans"
 import type { Palette } from "../../theme"
 import { mix } from "../../motion"
 import { sproutFrame } from "../status/sprout"
@@ -108,10 +109,26 @@ function StreamView(props: {
     const tag = shortLabel(entry.label, tagWidth())
     const failed = entry.kind === "fail" || entry.detail?.error === true
     const prefix = streamPrefix(entry, props.animations, spinner())
-    const summary = truncate(entry.summary, Math.max(1, bodyWidth() - prefix.length - (failed ? 2 : 0)))
+    // A finished call carries its own timing, and an edit its diff, exactly as
+    // the mockup's rows read: `✓ edit updater.ts +8 −2  3.1s`.
+    const detail = entry.detail
+    const diff =
+      detail !== undefined && (detail.added !== undefined || detail.removed !== undefined)
+        ? ` +${detail.added ?? 0} −${detail.removed ?? 0}`
+        : ""
+    const timing =
+      detail !== undefined && detail.durationMs !== undefined && !detail.open
+        ? `  ${durationText(detail.durationMs)}`
+        : ""
+    const summary = truncate(
+      `${entry.summary}${diff}${timing}`,
+      Math.max(1, bodyWidth() - prefix.length - (failed ? 2 : 0)),
+    )
     const parts: Span[] = []
-    if (timeWidth() > 0)
-      parts.push({ text: `${streamClock(Math.max(0, entry.at - props.origin)).padStart(6)} `, color: props.theme.faint })
+    if (timeWidth() > 0) {
+      const stamp = streamClock(Math.max(0, entry.at - props.origin))
+      parts.push({ text: `${stamp.padStart(6)} `, color: props.theme.faint })
+    }
     parts.push({ text: tag, color: props.hues.get(entry.sessionID) ?? props.theme.text, bold: true })
     parts.push({ text: " ".repeat(Math.max(1, tagWidth() - tag.length + 1)), color: props.theme.faint })
     parts.push({
@@ -220,19 +237,20 @@ export function bloomSpans(text: string, theme: Palette): Span[] {
   ]
 }
 
+/** The mockup's event glyphs: ✓ tool, ↩ return, ┬ spawn, ∴ thought, │ text. */
 function streamPrefix(entry: StreamEntry, animations: boolean, spinner: string): string {
   const detail = entry.detail
   if (entry.kind === "tool" && detail !== undefined) {
-    if (detail.error) return "? "
-    if (detail.open) return animations ? `${spinner} ` : "? "
-    return "? "
+    if (detail.error) return "✕ "
+    if (detail.open) return animations ? `${spinner} ` : "⣷ "
+    return "✓ "
   }
-  if (entry.kind === "spawn") return "- "
-  if (entry.kind === "return") return "? "
-  if (entry.kind === "fail") return "? "
-  if (entry.kind === "kill") return "? "
-  if (entry.kind === "user") return "� "
-  if (entry.kind === "think") return "? "
-  if (entry.kind === "text") return "� "
-  return "� "
+  if (entry.kind === "spawn") return "┬ "
+  if (entry.kind === "return") return "↩ "
+  if (entry.kind === "fail") return "✕ "
+  if (entry.kind === "kill") return "⊘ "
+  if (entry.kind === "user") return "▸ "
+  if (entry.kind === "think") return "∴ "
+  if (entry.kind === "text") return "│ "
+  return "│ "
 }

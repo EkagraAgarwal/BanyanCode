@@ -88,6 +88,8 @@ interface RenderOptions {
   readonly height: number
   readonly clock?: ReturnType<typeof fakeTimers>
   readonly ticker?: ReturnType<typeof createTicker>
+  /** Command to run after mounting; the stream by default, `null` for Trace. */
+  readonly lens?: string | null
 }
 
 async function render(fixture: ReturnType<typeof understoryFixture>, options: RenderOptions) {
@@ -107,8 +109,8 @@ async function render(fixture: ReturnType<typeof understoryFixture>, options: Re
   )
   await app.renderOnce()
   // Trace is the default lens; these tests cover the rest of the screen, so
-  // they start from the stream.
-  fixture.press("Stream lens")
+  // they start from the stream unless a caller keeps the default.
+  if (options.lens !== null) fixture.press(options.lens ?? "Stream lens")
   await app.renderOnce()
   await app.renderOnce()
   return { app, clock }
@@ -147,7 +149,6 @@ test("the screen fits every reviewed size without wrapping", async () => {
     [100, 30],
     [80, 24],
   ] as const
-  const captured: string[] = []
   for (const [width, height] of sizes) {
     const fixture = understoryFixture({ specs: MIXED })
     const { app } = await render(fixture, { width, height })
@@ -158,7 +159,6 @@ test("the screen fits every reviewed size without wrapping", async () => {
       if (height >= 28) expect(text).toContain("RUN")
       else expect(text).toContain("BRCH")
       expect(text).toContain("1 Trace")
-      captured.push(`${width}x${height}\n${text}`)
     } finally {
       app.renderer.destroy()
     }
@@ -166,11 +166,9 @@ test("the screen fits every reviewed size without wrapping", async () => {
   const fanout = await render(understoryFixture({ specs: FANOUT }), { width: 80, height: 24 })
   try {
     expectFits(fanout.app, 80)
-    captured.push(`80x24 fanout\n${frame(fanout.app)}`)
   } finally {
     fanout.app.renderer.destroy()
   }
-  await Bun.write("D:/bc-tools/scratch/understory-frames.txt", captured.join("\n\n"))
 })
 
 test("twenty agents fit, and the narrow roster says how many are below", async () => {
@@ -689,6 +687,31 @@ test("the stream follows, pauses on scroll, anchors the oldest visible entry and
   }
 })
 
+test("stream rows carry real event glyphs and a finished call's timing, never a replacement character", async () => {
+  const fixture = understoryFixture({
+    specs: [
+      {
+        id: "ses_row",
+        agent: "explore",
+        title: "reads the file",
+        state: "done",
+        tools: [{ name: "read", args: "math.ts", status: "completed" }],
+        summary: "three exports",
+      },
+    ],
+  })
+  const { app } = await render(fixture, { width: 200, height: 40 })
+  try {
+    const text = frame(app)
+    expect(text).toContain("✓ read")
+    expect(text).toContain("0.0s")
+    expect(text).toContain("│ three exports")
+    expect(text).not.toContain("\uFFFD")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("selection stays visible in a scrolling roster", async () => {
   const fixture = understoryFixture({ specs: FANOUT })
   const { app } = await render(fixture, { width: 80, height: 18 })
@@ -867,6 +890,25 @@ test("1 2 3 switch the lens, and the tab strip carries the live clock", async ()
     expectFits(app, 168)
   } finally {
     app.renderer.destroy()
+  }
+})
+
+test("the lens survives leaving the tab and coming back", async () => {
+  const fixture = understoryFixture({ specs: MIXED })
+  const first = await render(fixture, { width: 168, height: 48, lens: null })
+  try {
+    expect(fixture.press("Roots lens")).toBe(true)
+    await first.app.renderOnce()
+    expect(frame(first.app)).toContain("/codegraph-build")
+  } finally {
+    first.app.renderer.destroy()
+  }
+  // ctrl+] unmounts the panel; coming back must not silently reset to Trace.
+  const second = await render(fixture, { width: 168, height: 48, lens: null })
+  try {
+    expect(frame(second.app)).toContain("/codegraph-build")
+  } finally {
+    second.app.renderer.destroy()
   }
 })
 

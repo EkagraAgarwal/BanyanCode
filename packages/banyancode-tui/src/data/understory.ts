@@ -384,7 +384,11 @@ export function rosterRows(input: RosterInput): RosterRow[] {
       cost: session.cost ?? 0,
       ...(model === undefined ? {} : { model }),
       ...(variant === undefined ? {} : { variant }),
-      startedAt: session.time.busy ?? session.time.created,
+      // `time.busy` is rewritten on every turn, so a root that spawns and then
+      // summarises would restart the whole run at its last turn (an empty
+      // Trace, a 3-second window, a 00:00 stream). The session's creation is
+      // the one clock that never moves.
+      startedAt: session.time.created,
       ...(endedAt === undefined ? {} : { endedAt }),
       historyMayBeTruncated: mayBeTruncated(messagesOf(session.id), { root }),
       hasChildren: (rowChildren.get(session.id) ?? []).length > 0,
@@ -702,7 +706,7 @@ export function streamEntries(sessions: readonly StreamSession[], options: Strea
           ...base,
           at: start,
           kind: "spawn",
-          summary: clip(`${spawnName}${description === "" ? "" : ` · ${description}`}`, 120),
+          summary: clip(description === "" ? `spawned ${spawnName}` : `spawned ${spawnName}: ${description}`, 120),
           detail,
         })
         if (part.state.status === "completed" && completed !== undefined) {

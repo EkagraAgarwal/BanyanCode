@@ -138,7 +138,7 @@ export function TraceLens(props: TraceLensProps) {
   /** The time under one column of the overview, which always spans the whole run. */
   const overviewTime = (column: number): number => {
     const from = origin()
-    return from + ((column + 0.5) / Math.max(1, layout().inner)) * (overviewEnd() - from)
+    return from + ((column + 0.5) / Math.max(1, layout().history)) * (overviewEnd() - from)
   }
 
   let drag: { readonly kind: "ruler" | "overview"; readonly x0: number; x1: number } | undefined
@@ -173,8 +173,8 @@ export function TraceLens(props: TraceLensProps) {
     }
     // A real drag selects a zoom window across the overview.
     if (Math.abs(pointer.x - drag.x0) < DRAG_CELLS) return
-    const first = Math.max(0, Math.min(layout().inner - 1, drag.x0 - layout().x))
-    const second = Math.max(0, Math.min(layout().inner - 1, pointer.x - layout().x))
+    const first = Math.max(0, Math.min(layout().history - 1, drag.x0 - layout().x))
+    const second = Math.max(0, Math.min(layout().history - 1, pointer.x - layout().x))
     const a = Math.min(overviewTime(first), overviewTime(second))
     const b = Math.max(overviewTime(first), overviewTime(second))
     if (b - a < 4) return
@@ -186,7 +186,7 @@ export function TraceLens(props: TraceLensProps) {
     drag = undefined
     if (active === undefined || active.kind !== "overview") return
     const clock = Date.now()
-    const column = Math.max(0, Math.min(layout().inner - 1, pointer.x - layout().x))
+    const column = Math.max(0, Math.min(layout().history - 1, pointer.x - layout().x))
     const double = lastClick !== undefined && clock - lastClick.at < DOUBLE_CLICK_MS && lastClick.column === column
     lastClick = { at: clock, column }
     if (double) {
@@ -240,14 +240,16 @@ export function TraceLens(props: TraceLensProps) {
           messagesAt(props.messages(row.sessionID), cut()),
           from,
           to,
-          out.inner,
+          out.history,
         ).map((bucket) => bucket.rate),
       )
-      const rates = Array.from({ length: out.inner }, (_, column) => series.map((list) => list[column] ?? 0))
+      const rates = Array.from({ length: out.history }, (_, column) => series.map((list) => list[column] ?? 0))
+      // The strip shares the timeline's columns: it stops where the now column
+      // starts, so it never paints over the per-lane text.
       drawOverview(grid, {
         x: out.x,
         y: 0,
-        width: out.inner,
+        width: out.history,
         rows: geometry.overview,
         rates,
         colors: props.rows.map((row) => props.hues.get(row.sessionID) ?? theme.leaf),

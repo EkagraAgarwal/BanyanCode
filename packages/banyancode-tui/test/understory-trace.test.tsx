@@ -7,7 +7,7 @@ import { CellGridRenderable, Grid } from "../src/components/understory/cells"
 import { branchHue } from "../src/components/understory/hue"
 import { rowGeometry, rosterAreaRows, TRACE_SCALE_MAX, understoryColumns } from "../src/components/understory/layout"
 import { TraceLens } from "../src/components/understory/trace"
-import { drawLane, drawOverview, drawSpawnLinks, laneRows, traceLayout } from "../src/components/understory/trace/draw"
+import { drawLane, drawOverview, drawRuler, drawSpawnLinks, laneRows, traceLayout } from "../src/components/understory/trace/draw"
 import { createUnderstoryView, type LensProps } from "../src/components/understory/view"
 import { rosterRows, type RosterRow, type ToolLetter } from "../src/data/understory"
 import type { AgentSpan } from "../src/data/understory-spans"
@@ -538,6 +538,43 @@ test("the overview stacks agents at eighth-cell precision and dims what is not i
   expect(outside.bg.equals(mix(GROUND, mix(GROUND, EDIT, 0.62), 0.38))).toBe(true)
 })
 
+test("the overview strip stops where the now column starts", async () => {
+  const scenario = buildScenario()
+  const out = traceLayout(understoryColumns(SIZE.width).stream)
+  // One streaming assistant turn is enough to give the strip real rates.
+  const turn = {
+    id: "msg_tokens",
+    type: "assistant",
+    time: { created: at(0), completed: at(30) },
+    agent: "coder",
+    model: { providerID: "provider", id: "deepseek-v4.1-flash" },
+    content: [],
+    tokens: { input: 0, output: 4_000, reasoning: 0, cache: { read: 0, write: 0 } },
+  } as unknown as SessionMessageInfo
+  const props = lensProps({
+    scenario,
+    size: SIZE,
+    now: at(46),
+    messages: (sessionID) => (sessionID === "ses_c1" ? [turn] : []),
+  })
+  // The suite renders below the chrome, so the panel's own width is the lens width.
+  const app = await mount(() => <TraceLens {...props} />, { width: props.width, height: props.height })
+  await app.renderOnce()
+  await app.renderOnce()
+  try {
+    const lines = app.captureCharFrame().split("\n")
+    const blocks = "▁▂▃▄▅▆▇█"
+    const strip = lines.slice(0, props.geometry.overview).join("")
+    expect([...strip.slice(out.x, out.x + out.history)].some((ch) => blocks.includes(ch))).toBe(true)
+    for (let row = 0; row < props.geometry.overview; row += 1) {
+      const line = lines[row] ?? ""
+      expect([...line.slice(out.labelX)].some((ch) => blocks.includes(ch))).toBe(false)
+    }
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("the overview leaves the future blank and marks the playhead when replaying", () => {
   const grid = new Grid(10, 2)
   grid.clear(GROUND)
@@ -771,6 +808,27 @@ test("the legend names every kind and swaps the hint when zoomed", async () => {
 // ---------------------------------------------------------------------------
 // Hits
 // ---------------------------------------------------------------------------
+
+test("the playhead marker never cuts a ruler label in half", () => {
+  const out = traceLayout(80)
+  const grid = new Grid(80, 4)
+  grid.clear(GROUND)
+  const window = { a: 0, b: 80_000, scale: 1_000 }
+  drawRuler(grid, {
+    layout: out,
+    y: 0,
+    window,
+    origin: 0,
+    // 52 s over an 80 s window lands the marker mid-ruler, on a tick label's column.
+    playhead: 52_000,
+    replay: false,
+    live: true,
+    theme: DISTINCT,
+  })
+  const line = grid.lines()[0] ?? ""
+  expect(line).toContain("▼")
+  expect(/\d▼|▼\d/u.test(line)).toBe(false)
+})
 
 test("clicking a lane selects it, a block pins it, and the ruler moves the playhead", async () => {
   const selected: string[] = []

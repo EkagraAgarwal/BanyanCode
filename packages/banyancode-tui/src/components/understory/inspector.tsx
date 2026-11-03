@@ -513,6 +513,7 @@ export function Inspector(props: InspectorProps) {
         flexShrink={0}
         minHeight={0}
         width={inner()}
+        verticalScrollbarOptions={{ visible: false }}
       >
         <box flexDirection="column" width={inner()}>
           <For each={lines()}>{(line) => <LineView width={inner()} spans={line} />}</For>

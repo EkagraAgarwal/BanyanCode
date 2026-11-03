@@ -236,12 +236,16 @@ export function runClock(ms: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`
 }
 
-/** `mm:ss` for the stream's time column. */export function streamClock(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const minutes = Math.floor(total / 60)
-  const seconds = total % 60
-  if (minutes >= 60) return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+/**
+ * `0:13.6` for the stream's time column, the mockup's tenths-of-a-second stamp.
+ * Minutes are not zero-padded; a run past an hour keeps counting minutes.
+ */
+export function streamClock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms))
+  const minutes = Math.floor(total / 60_000)
+  const seconds = Math.floor(total / 1_000) % 60
+  const tenths = Math.floor(total / 100) % 10
+  return `${minutes}:${String(seconds).padStart(2, "0")}.${tenths}`
 }
 
 export function stateLabel(state: UnderstoryState): string {
@@ -308,12 +312,14 @@ export function stateCountSpans(width: number, rows: readonly RosterRow[], theme
   })
 }
 
-/** What the run header says after the clock. */
+/** What the run header says after the clock. Live branches outrank an idle root. */
 export function runStateLabel(rows: readonly RosterRow[]): string {
   const root = rows.find((row) => row.depth === 0)
   if (root === undefined) return "idle"
-  if (root.endedAt !== undefined) return "finished"
+  // A root that launched background branches has ended its turn, but the run
+  // has not: the header follows the branches, not the root's idle mark.
   if (rows.some((row) => isLiveState(row.state))) return "running"
+  if (root.endedAt !== undefined) return "finished"
   return "idle"
 }
 

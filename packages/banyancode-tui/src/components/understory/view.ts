@@ -136,8 +136,32 @@ const DEFAULT_SPAN_MS = 42_000
 const ZOOM_STEP_IN = 0.7
 const ZOOM_STEP_OUT = 1.4
 
-export function createUnderstoryView(input: { readonly now: () => number }): UnderstoryView {
-  const [lens, setLens] = createSignal<Lens>("trace")
+/**
+ * The chosen lens outlives the panel: ctrl+] unmounts the Agents tab, and
+ * coming back must not silently change the lens the user was reading. The
+ * store is keyed by the host context, so one session keeps its lens and a
+ * fresh context (another session, or a test) starts on Trace.
+ */
+export interface LensStore {
+  readonly get: Accessor<Lens>
+  readonly set: (lens: Lens) => void
+}
+
+const lensStores = new WeakMap<object, LensStore>()
+
+export function lensStore(key: object): LensStore {
+  const found = lensStores.get(key)
+  if (found !== undefined) return found
+  const [get, set] = createSignal<Lens>("trace")
+  const store: LensStore = { get, set }
+  lensStores.set(key, store)
+  return store
+}
+
+export function createUnderstoryView(input: { readonly now: () => number; readonly lens?: LensStore | undefined }): UnderstoryView {
+  const local = createSignal<Lens>("trace")
+  const lens = input.lens?.get ?? local[0]
+  const setLens = input.lens?.set ?? local[1]
   const [t, setT] = createSignal<number | undefined>(undefined)
   const [scaleValue, setScaleValue] = createSignal(TRACE_SECONDS_PER_COLUMN)
   const [win, setWin] = createSignal<TraceWindow | undefined>(undefined)

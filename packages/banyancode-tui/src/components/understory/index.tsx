@@ -58,7 +58,7 @@ import { Roster, rowColor, rowGlyph } from "./roster"
 import { StreamLens } from "./stream"
 import { TraceLens } from "./trace"
 import { RootsLens } from "./roots"
-import { createUnderstoryView, lensForKey, REPLAY_OFF, type Lens, type LensProps } from "./view"
+import { createUnderstoryView, lensStore, lensForKey, REPLAY_OFF, type Lens, type LensProps } from "./view"
 
 const KEY_ROWS: ReadonlyArray<readonly [string, string]> = [
   ["1 2 3", "Trace, Roots, Stream"],
@@ -146,7 +146,7 @@ export function Understory(props: {
     }
   })
 
-  const view = createUnderstoryView({ now })
+  const view = createUnderstoryView({ now, lens: lensStore(props.context) })
 
   const [selection, setSelection] = createSignal<string>()
   const [folded, setFolded] = createSignal(false)
@@ -909,8 +909,12 @@ export function Understory(props: {
     }
     const alert = stale()[0]
     if (alert !== undefined) {
+      // A finished branch keeps its alert until something re-reads the file,
+      // so the tense follows the branch rather than the alert.
+      const reader = displayRows().find((row) => row.sessionID === alert.reader)
+      const ended = reader !== undefined && !isLiveState(reader.state)
       return {
-        text: `▲ ${alert.readerLabel} is editing ${fileName(alert.path)} from a stale read`,
+        text: `▲ ${alert.readerLabel} ${ended ? "edited" : "is editing"} ${fileName(alert.path)} from a stale read`,
         color: theme().error,
       }
     }
