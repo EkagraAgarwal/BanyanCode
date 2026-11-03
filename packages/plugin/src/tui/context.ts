@@ -517,6 +517,77 @@ export interface Keymap {
   }
 }
 
+/**
+ * What an interceptor answers for a composer submit. Returning it claims the
+ * text: the host sends nothing, and clears the prompt unless `retain` is set.
+ * Use `retain` when the send failed, so the user keeps what they typed.
+ */
+export interface ComposerInterceptResult {
+  readonly handled: true
+  readonly retain?: boolean
+}
+
+/**
+ * Answers a composer submit before the host sends it, newest registration
+ * first. Return undefined to let the text through unchanged: that is what a
+ * surface that only reroutes some sends does with everything else.
+ */
+export type ComposerInterceptor = (
+  text: string,
+) => ComposerInterceptResult | undefined | Promise<ComposerInterceptResult | undefined>
+
+/** One row in the composer's `@` picker, listed before the host's own matches. */
+export interface ComposerSuggestion {
+  /** The row's text, e.g. `▲ coder-1`. */
+  readonly display: string
+  /** What accepting it inserts, e.g. `@coder-1`. Defaults to `display`. */
+  readonly insert?: string
+  /** Right-aligned short kind, as the host's own mentions name it. */
+  readonly kind?: "agent" | "skill" | "reference"
+  readonly description?: string
+}
+
+/** Suggestions for one `@` query, filtered by the provider. */
+export type ComposerSuggestionProvider = (query: string) => readonly ComposerSuggestion[]
+
+/**
+ * Where the composer's current text will go, shown at the end of its model
+ * row. A resolver runs on every text change, newest registration first; the
+ * first answer wins.
+ */
+export interface ComposerRoute {
+  readonly text: string
+  readonly tone?: "info" | "warning" | "error"
+}
+
+export type ComposerRouteResolver = (text: string) => ComposerRoute | undefined
+
+/**
+ * The composer's plugin seams. A surface that owns input of its own (a panel
+ * replacing the transcript) registers these while it is mounted, so Chat is
+ * untouched when it is not.
+ */
+export interface ComposerHooks {
+  /**
+   * Focuses the prompt and inserts `text` as typing would, so a key on another
+   * surface can hand `@` to the composer typed. Returns false when no prompt is
+   * mounted, as on Home.
+   */
+  focus(text?: string): boolean
+  /** Registers a submit interceptor. Returns a cleanup. */
+  intercept(handler: ComposerInterceptor): () => void
+  /** Registers `@` picker suggestions. Returns a cleanup. */
+  suggest(provider: ComposerSuggestionProvider): () => void
+  /** Registers a route resolver. Returns a cleanup. */
+  route(resolver: ComposerRouteResolver): () => void
+  /**
+   * Replaces the composer's empty-state placeholder while set; undefined
+   * restores the host's own rotation. Reactive when read.
+   */
+  placeholder(): string | undefined
+  setPlaceholder(text: string | undefined): void
+}
+
 export interface UI {
   readonly dialog: Dialog
   readonly toast: Toast
@@ -580,6 +651,8 @@ export interface UI {
   }
   /** Claims a place in the slot tree; see SlotClaim. */
   readonly slot: (claim: SlotClaim) => () => void
+  /** The composer's plugin seams: submit, `@` suggestions and its route label. */
+  readonly composer: ComposerHooks
 }
 
 export interface Context {

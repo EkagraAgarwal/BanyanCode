@@ -30,6 +30,8 @@ import { useAttention } from "../context/attention"
 import { useStorage } from "../context/storage"
 import { useSessionTabs } from "../context/session-tabs"
 import { useOptionalPanel } from "../context/panel"
+import { usePromptRef } from "../context/prompt"
+import { useComposer } from "../context/composer"
 import { useLocal } from "../context/local"
 import { useConfig } from "../config"
 import { abbreviateHome } from "../util/path-format"
@@ -82,6 +84,8 @@ export function usePluginHost() {
     storage: useStorage(),
     sessionTabs: useSessionTabs(),
     panel: useOptionalPanel(),
+    prompt: usePromptRef(),
+    composer: useComposer(),
     local: useLocal(),
     config: useConfig(),
   }
@@ -101,6 +105,7 @@ export function createPluginContext(input: {
   input.owned.push(async () => host.panel?.release(input.id))
   let context: Context
   let claims = 0
+  let placeholderOwned = false
   // Every dialog and registered render is wrapped so plugin components can
   // reach their own context through usePlugin().
   const provide = (render: () => JSX.Element) => (
@@ -313,6 +318,39 @@ export function createPluginContext(input: {
           render: (slotInput) => provide(() => (value.render as SlotRender)(slotInput)),
         })
         return registration("slots", key)
+      },
+      composer: {
+        focus(text) {
+          const ref = host.prompt.current
+          // No ref means Home, which has no composer to hand the key to.
+          if (ref === undefined) return false
+          ref.focus()
+          if (text !== undefined && text !== "") ref.insert(text)
+          return true
+        },
+        intercept(handler) {
+          const release = host.composer.intercept(handler)
+          input.owned.push(async () => release())
+          return release
+        },
+        suggest(provider) {
+          const release = host.composer.suggest(provider)
+          input.owned.push(async () => release())
+          return release
+        },
+        route(resolver) {
+          const release = host.composer.route(resolver)
+          input.owned.push(async () => release())
+          return release
+        },
+        placeholder: host.composer.placeholder,
+        setPlaceholder(text) {
+          if (!placeholderOwned) {
+            placeholderOwned = true
+            input.owned.push(async () => host.composer.setPlaceholder(undefined))
+          }
+          host.composer.setPlaceholder(text)
+        },
       },
     },
   }

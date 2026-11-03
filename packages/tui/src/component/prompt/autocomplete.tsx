@@ -56,6 +56,8 @@ export type AutocompleteOption = {
   disabled?: boolean
   description?: string
   isDirectory?: boolean
+  /** Replaces the typed `@` token on accept; defaults to `display` plus a space. */
+  insert?: string
   onSelect?: () => void
   path?: string
   absolute?: string
@@ -77,6 +79,8 @@ export function Autocomplete(props: {
   sessionID?: string
   argumentAutocomplete?: (command: KeymapCommand) => "directory" | undefined
   directoryOptions?: (query: string) => AutocompleteOption[]
+  /** A surface's own `@` rows, listed before the host's file and agent matches. */
+  suggestions?: (query: string) => readonly AutocompleteOption[]
   setPrompt: (input: (prompt: PromptInfo) => void) => void
   setExtmark: (part: PromptPartRef, extmarkId: number) => void
   anchor: () => BoxRenderable
@@ -537,6 +541,34 @@ export function Autocomplete(props: {
     })
   })
 
+  /**
+   * Replace the typed `@` token with an accepted suggestion as plain text. A
+   * suggestion is a destination, not a host mention: it must not attach a
+   * prompt part, or accepting `@coder-1` would also switch the session's agent.
+   */
+  function insertSuggestion(text: string) {
+    const input = props.input()
+    const cursorOffset = input.cursorOffset
+    input.cursorOffset = store.index
+    const start = input.logicalCursor
+    input.cursorOffset = cursorOffset
+    const end = input.logicalCursor
+    input.deleteRange(start.row, start.col, end.row, end.col)
+    input.insertText(text.endsWith(" ") ? text : `${text} `)
+    // Sync immediately, as hide(true) does: onContentChange is deferred.
+    props.setPrompt((draft) => {
+      draft.text = input.plainText
+    })
+  }
+
+  const suggestionOptions = createMemo((): AutocompleteOption[] => {
+    if (store.visible !== "reference") return []
+    return (props.suggestions?.(search()) ?? []).map((item) => ({
+      ...item,
+      onSelect: item.onSelect ?? (() => insertSuggestion(item.insert ?? item.display)),
+    }))
+  })
+
   const options = createMemo(() => {
     const fileSearch = visibleFiles()
     const referenceMatchValue = referenceMatch()
@@ -544,6 +576,9 @@ export function Autocomplete(props: {
     const referenceAliasesValue = referenceAliases()
     const commandsValue = commands()
     const searchValue = search()
+    // A surface's routing rows come first: on the Agents tab a branch label
+    // wins over the file that happens to share the query.
+    const suggestions = suggestionOptions()
 
     if (store.visible === "directory") {
       const supplemental = supplementalDirectoryOptions()
@@ -566,7 +601,7 @@ export function Autocomplete(props: {
           : []
 
     if (!searchValue) {
-      return [...nonFileOptions, ...fileOptions]
+      return [...suggestions, ...nonFileOptions, ...fileOptions]
     }
 
     const fuzziedNonFiles = fuzzysort
@@ -592,7 +627,7 @@ export function Autocomplete(props: {
       })
       .map((arr) => arr.obj)
 
-    return [...fuzziedNonFiles, ...fileOptions].slice(0, 10)
+    return [...suggestions, ...fuzziedNonFiles, ...fileOptions].slice(0, 10)
   })
 
   createEffect(() => {

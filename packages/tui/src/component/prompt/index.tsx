@@ -22,6 +22,7 @@ import { Spinner } from "../spinner"
 import { useClient } from "../../context/client"
 import { useRoute } from "../../context/route"
 import { usePromptRef } from "../../context/prompt"
+import { useComposer } from "../../context/composer"
 import { useSessionTabs } from "../../context/session-tabs"
 import { useEvent } from "../../context/event"
 import { editorSelectionKey, useEditorContext, type EditorSelection } from "../../context/editor"
@@ -97,6 +98,8 @@ export type PromptRef = {
   mode: "normal" | "shell"
   setMode(mode: "normal" | "shell"): void
   set(prompt: PromptInfo): void
+  /** Inserts text at the end as typing would, and keeps the stored prompt in sync. */
+  insert(text: string): void
   reset(): void
   blur(): void
   focus(): void
@@ -205,6 +208,7 @@ export function Prompt(props: PromptProps) {
   const editor = useEditorContext()
   const route = useRoute()
   const promptRef = usePromptRef()
+  const composer = useComposer()
   const sessionTabs = useSessionTabs()
   const data = useData()
   const directoryRecents = useDirectoryRecents()
@@ -701,6 +705,13 @@ export function Prompt(props: PromptProps) {
       restoreExtmarksFromPrompt(prompt)
       input.gotoBufferEnd()
     },
+    insert(text) {
+      if (disabled() || text === "") return
+      input.gotoBufferEnd()
+      input.insertText(text)
+      input.gotoBufferEnd()
+      setStore("prompt", "text", input.plainText)
+    },
     reset() {
       resetComposer()
     },
@@ -1167,6 +1178,20 @@ export function Prompt(props: PromptProps) {
       toast.show({ message: "Editor context cannot be queued", variant: "warning" })
       return false
     }
+    // A surface that owns the composer's routing (a panel presented as the
+    // transcript) answers before the text reaches the root agent. It may claim
+    // it, e.g. to steer one branch, and keep it when the send failed. Unclaimed
+    // text follows the normal path below, unchanged.
+    const submitted = store.prompt.text
+    const claimed = submitted.trim() === "" ? undefined : await composer.interceptSubmit(inputText.trim())
+    if (claimed !== undefined) {
+      // Only clear what this submit owned: text typed during the await stays.
+      if (claimed.retain !== true && store.prompt.text === submitted) {
+        resetComposer()
+        props.onSubmit?.()
+      }
+      return true
+    }
     const agent = local.agent.current()
     if (!agent) return false
     const selection = local.model.selection()
@@ -1621,6 +1646,10 @@ export function Prompt(props: PromptProps) {
 
   const placeholderText = createMemo(() => {
     const value = (() => {
+      // A mounted surface that owns the composer's routing names its own
+      // destination; with none, the host's rotation is unchanged.
+      const override = composer.placeholder()
+      if (override !== undefined) return override
       if (store.mode === "shell") {
         if (!shell().length) return undefined
         return `Run a command… "${shell()[store.placeholder % shell().length]}"`
@@ -1632,6 +1661,13 @@ export function Prompt(props: PromptProps) {
     const width = dimensions().width < 44 ? dimensions().width - 5 : Math.min(75, dimensions().width - 4) - 5
     return Locale.takeWidth(value, Math.max(1, width)).trimEnd()
   })
+  /** Where this text will go, from the surface that owns composer routing. */
+  const routeLabel = createMemo(() => composer.routeOf(store.prompt.text))
+  const routeColor = (tone: "info" | "warning" | "error" | undefined) => {
+    if (tone === "warning") return theme.text.feedback.warning.base
+    if (tone === "error") return theme.text.feedback.error.base
+    return theme.hue.accent[500]
+  }
   const footerLocation = createMemo(() => {
     if (!props.sessionID) {
       // No session yet: show where the next session will be created.
@@ -1861,6 +1897,13 @@ export function Prompt(props: PromptProps) {
                 modelAlpha={modelMetaAlpha()}
                 variantAlpha={variantMetaAlpha()}
               />
+              <Show when={routeLabel()}>
+                {(label) => (
+                  <text flexShrink={0} wrapMode="none" fg={routeColor(label().tone)}>
+                    {label().text}
+                  </text>
+                )}
+              </Show>
             </box>
           </box>
         </box>
@@ -1958,6 +2001,7 @@ export function Prompt(props: PromptProps) {
       </box>
       <Autocomplete
         sessionID={props.sessionID}
+        suggestions={(query) => composer.suggestions(query)}
         argumentAutocomplete={(command) => (command.id === "session.cd" ? "directory" : undefined)}
         directoryOptions={(query): AutocompleteOption[] => {
           if (query !== "") return []

@@ -169,16 +169,19 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/routes/session/index.tsx` | hook | takes the element drawn over the transcript; tool settle, diff reveal, token bloom and live subagent rows; drops its reading gutter for a bleeding main panel | — |
 | `packages/tui/src/routes/session/sidebar.tsx` | hook | a docked sidebar has its own width and the v1 border, and its scrolling body reserves the scrollbar's column | — |
 | `packages/tui/src/ui/session-rails.tsx` | hook | v1 resize handle and collapsed rail for the side columns | — |
-| `packages/tui/src/component/prompt/autocomplete.tsx` | fix | a command offered by both client and server is listed once | — |
+| `packages/tui/src/component/prompt/autocomplete.tsx` | fix | a command offered by both client and server is listed once; a mounted surface's own `@` rows are listed before the host's file, agent and reference matches | — |
 | `packages/tui/src/routes/home.tsx` | hook | `home.logo` and `home.bottom` slots, size-only gap and centring rules, and a prompt without its own footer row so the full layout fits 120x40 | — |
-| `packages/plugin/src/tui/context.ts` | hook | declares the `home.logo` slot, `ui.animations`, `ui.sessionLayout`, `slash.forwardToServer` and the panel `bleed` option (a panel can take the whole main area) | — |
-| `packages/tui/src/plugin/api.tsx` | hook | wires `ui.animations` from the host's `config.animations`, `ui.sessionLayout` from `config.session_layout`, and passes the panel options through, including `bleed` | — |
+| `packages/plugin/src/tui/context.ts` | hook | declares the `home.logo` slot, `ui.animations`, `ui.sessionLayout`, `slash.forwardToServer`, the panel `bleed` option (a panel can take the whole main area) and the `ui.composer` seams (submit interceptor, `@` suggestions, route label, placeholder, focus-with-text) | — |
+| `packages/tui/src/plugin/api.tsx` | hook | wires `ui.animations` from the host's `config.animations`, `ui.sessionLayout` from `config.session_layout`, passes the panel options through, including `bleed`, and adapts `ui.composer` to the prompt ref and the composer context | — |
 | `packages/tui/src/feature-plugins/home/footer.tsx` | hook | one-row footer: directory and branch status content, the prompt hints the home prompt no longer carries, update notice and version on one line | — |
 | `packages/tui/src/feature-plugins/system/storybook/home.tsx` | hook | fixture-driven home hero story with replay and final-frame controls | — |
 | `packages/tui/src/feature-plugins/system/storybook/index.tsx` | hook | registers the home story | — |
 | `packages/tui/test/feature-plugins/home-redesign.test.tsx` | hook | covers the `home.logo` slot with and without a claim, and the one-row footer | — |
 | `packages/tui/test/fixture/app.ts` | hook | accepts an updater so the footer update notice is reachable in tests | — |
-| `packages/tui/src/component/prompt/index.tsx` | hook | a slash command can hand some inputs to the server command of the same name; a `footer` prop lets Home drop the location/hint row | — |
+| `packages/tui/src/component/prompt/index.tsx` | hook | a slash command can hand some inputs to the server command of the same name; a `footer` prop lets Home drop the location/hint row; a registered surface can replace the placeholder, claim a submit, and label the model row with where the text will go | — |
+| `packages/tui/src/context/composer.tsx` | hook | hosts the composer seams a surface registers while it is mounted: submit interceptors, `@` suggestions, route resolvers and a placeholder override | — |
+| `packages/tui/src/app.tsx` | hook | mounts the composer provider above the plugin tree, so `ui.composer` reaches every plugin | — |
+| `packages/tui/test/understory-composer.test.tsx` | hook | drives the real prompt on the Agents tab: `@` opens the branch picker, accepting inserts plain text, sending steers one session and clears the prompt, and Chat keeps the plain composer | — |
 | `packages/tui/src/mini/footer.permission.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/mini/footer.prompt.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/mini/runtime.lifecycle.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
