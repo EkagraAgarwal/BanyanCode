@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { createMemo } from "solid-js"
 import { isLiveState } from "../../../data/understory"
-import { tokenBuckets } from "../../../data/understory-spans"
-import { CellGrid, type Grid } from "../cells"
+import { messagesAt, tokenBuckets } from "../../../data/understory-spans"
+import { CellGrid, type Grid, type GridPointer } from "../cells"
 import { rosterWindow, TRACE_SECONDS_PER_COLUMN } from "../layout"
 import type { LensProps } from "../view"
 import {
@@ -18,14 +18,25 @@ import {
   traceLayout,
 } from "./draw"
 
+/** A double click inside the overview resets the zoom, like the mockup. */
+const DOUBLE_CLICK_MS = 400
+/** A drag shorter than this many cells is a click, not a zoom window. */
+const DRAG_CELLS = 2
+
+export interface TraceLensProps extends LensProps {
+  /** Wheel over the lens scrolls the roster and its lanes together. */
+  readonly onScroll?: ((delta: number) => void) | undefined
+}
+
 /**
  * Trace: the profiler view of a run. A stacked token-rate overview, a time
  * ruler, one lane per roster row and a now column that says what each agent is
  * doing at the playhead. Every span is real data, and every frame is a pure
  * function of (spans, playhead, window), so a replay scrubs it with everything
- * else.
+ * else. Dragging the ruler scrubs, dragging the overview selects a zoom window
+ * and a click on either moves the playhead.
  */
-export function TraceLens(props: LensProps) {
+export function TraceLens(props: TraceLensProps) {
   const layout = createMemo(() => traceLayout(props.width))
   const rows = () => props.visible ?? props.rows
 
@@ -38,8 +49,11 @@ export function TraceLens(props: LensProps) {
   const lastEvent = createMemo(() => {
     let last = origin()
     for (const row of props.rows) {
-      last = Math.max(last, row.endedAt ?? 0)
-      for (const span of props.spans.get(row.sessionID) ?? []) last = Math.max(last, span.t1 ?? span.t0)
+      last = Math.max(last, row.endedAt !== undefined && row.endedAt <= props.view.viewT() ? row.endedAt : 0)
+      for (const span of props.spans.get(row.sessionID) ?? []) {
+        if (span.t0 > props.view.viewT()) continue
+        last = Math.max(last, span.t1 ?? span.t0)
+      }
     }
     return last
   })
@@ -55,6 +69,9 @@ export function TraceLens(props: LensProps) {
     if (!props.rows.some((row) => row.endedAt !== undefined)) return undefined
     return Math.max(origin() + 1, lastEvent())
   })
+
+  /** Messages a lane may read: nothing after the playhead while replaying. */
+  const cut = () => (props.view.live() ? Number.POSITIVE_INFINITY : props.view.viewT())
 
   const playhead = () => {
     const end = ended()
@@ -98,7 +115,7 @@ export function TraceLens(props: LensProps) {
     () => props.rows.length <= 1 && (props.rows[0] === undefined || (props.spans.get(props.rows[0].sessionID)?.length ?? 0) === 0),
   )
 
-  /** Click a lane to select, a block to pin it, the ruler or overview to aim the playhead. */
+  /** Aim the playhead at `t`, clamped to the run; reaching the end goes live. */
   const seek = (t: number) => {
     const end = ended()
     const clock = props.view.live() ? props.view.viewT() : undefined
@@ -109,6 +126,75 @@ export function TraceLens(props: LensProps) {
       return
     }
     props.view.setT(target)
+  }
+
+  /** The time under one history column of the current window. */
+  const timeAt = (column: number): number => {
+    const win = timeWindow()
+    const history = layout().history
+    return win.a + ((column + 0.5) / Math.max(1, history)) * (win.b - win.a)
+  }
+
+  /** The time under one column of the overview, which always spans the whole run. */
+  const overviewTime = (column: number): number => {
+    const from = origin()
+    return from + ((column + 0.5) / Math.max(1, layout().inner)) * (overviewEnd() - from)
+  }
+
+  let drag: { readonly kind: "ruler" | "overview"; readonly x0: number; x1: number } | undefined
+  let lastClick: { readonly at: number; readonly column: number } | undefined
+
+  const regionColumn = (region: string | undefined, prefix: string): number | undefined => {
+    if (region === undefined || !region.startsWith(prefix)) return undefined
+    const index = Number(region.slice(prefix.length))
+    return Number.isFinite(index) ? index : undefined
+  }
+
+  const onDragStart = (pointer: GridPointer) => {
+    const ruler = regionColumn(pointer.region, "trace:ruler:")
+    if (ruler !== undefined) {
+      drag = { kind: "ruler", x0: pointer.x, x1: pointer.x }
+      seek(timeAt(ruler))
+      return
+    }
+    const overview = regionColumn(pointer.region, "trace:overview:")
+    if (overview !== undefined) {
+      drag = { kind: "overview", x0: pointer.x, x1: pointer.x }
+    }
+  }
+
+  const onDragMove = (pointer: GridPointer) => {
+    if (drag === undefined) return
+    drag = { ...drag, x1: pointer.x }
+    if (drag.kind === "ruler") {
+      const column = Math.max(0, Math.min(layout().history - 1, pointer.x - layout().x))
+      seek(timeAt(column))
+      return
+    }
+    // A real drag selects a zoom window across the overview.
+    if (Math.abs(pointer.x - drag.x0) < DRAG_CELLS) return
+    const first = Math.max(0, Math.min(layout().inner - 1, drag.x0 - layout().x))
+    const second = Math.max(0, Math.min(layout().inner - 1, pointer.x - layout().x))
+    const a = Math.min(overviewTime(first), overviewTime(second))
+    const b = Math.max(overviewTime(first), overviewTime(second))
+    if (b - a < 4) return
+    props.view.setWin({ a, b, scale: (b - a) / 1000 / Math.max(1, layout().history) })
+  }
+
+  const onDragEnd = (pointer: GridPointer) => {
+    const active = drag
+    drag = undefined
+    if (active === undefined || active.kind !== "overview") return
+    const clock = Date.now()
+    const column = Math.max(0, Math.min(layout().inner - 1, pointer.x - layout().x))
+    const double = lastClick !== undefined && clock - lastClick.at < DOUBLE_CLICK_MS && lastClick.column === column
+    lastClick = { at: clock, column }
+    if (double) {
+      props.view.resetZoom()
+      return
+    }
+    // A click on the overview is a seek, not a zoom window.
+    if (Math.abs(pointer.x - active.x0) < DRAG_CELLS) seek(overviewTime(column))
   }
 
   const hit = (region: string) => {
@@ -124,20 +210,13 @@ export function TraceLens(props: LensProps) {
       props.on.pinCall(undefined)
       return
     }
-    if (region.startsWith("trace:ruler:")) {
-      const index = Number(region.slice("trace:ruler:".length))
-      const history = layout().history
-      if (!Number.isFinite(index) || history <= 0) return
-      const win = timeWindow()
-      seek(win.a + ((index + 0.5) / history) * (win.b - win.a))
+    const ruler = regionColumn(region, "trace:ruler:")
+    if (ruler !== undefined) {
+      seek(timeAt(ruler))
       return
     }
-    if (region.startsWith("trace:overview:")) {
-      const index = Number(region.slice("trace:overview:".length))
-      const width = layout().inner
-      if (!Number.isFinite(index) || width <= 0) return
-      seek(origin() + ((index + 0.5) / width) * (overviewEnd() - origin()))
-    }
+    const overview = regionColumn(region, "trace:overview:")
+    if (overview !== undefined) seek(overviewTime(overview))
   }
 
   const drawGrid = (grid: Grid) => {
@@ -156,9 +235,13 @@ export function TraceLens(props: LensProps) {
     if (geometry.overview > 0) {
       const to = overviewEnd()
       const series = props.rows.map((row) =>
-        tokenBuckets(props.spans.get(row.sessionID) ?? [], props.messages(row.sessionID), from, to, out.inner).map(
-          (bucket) => bucket.rate,
-        ),
+        tokenBuckets(
+          props.spans.get(row.sessionID) ?? [],
+          messagesAt(props.messages(row.sessionID), cut()),
+          from,
+          to,
+          out.inner,
+        ).map((bucket) => bucket.rate),
       )
       const rates = Array.from({ length: out.inner }, (_, column) => series.map((list) => list[column] ?? 0))
       drawOverview(grid, {
@@ -205,7 +288,7 @@ export function TraceLens(props: LensProps) {
       drawLane(grid, {
         row: entry.row,
         spans: props.spans.get(entry.row.sessionID) ?? [],
-        messages: props.messages(entry.row.sessionID),
+        messages: messagesAt(props.messages(entry.row.sessionID), cut()),
         y: entry.top,
         height: per,
         layout: out,
@@ -237,7 +320,7 @@ export function TraceLens(props: LensProps) {
           layout: out,
           y: legendY,
           theme,
-          zoomed: props.view.scale() !== TRACE_SECONDS_PER_COLUMN,
+          zoomed: props.view.win() !== undefined || props.view.scale() !== TRACE_SECONDS_PER_COLUMN,
         })
       }
     }
@@ -251,6 +334,15 @@ export function TraceLens(props: LensProps) {
       background={props.theme.background}
       draw={drawGrid}
       onHit={hit}
+      onDragStart={onDragStart}
+      onDragMove={onDragMove}
+      onDragEnd={onDragEnd}
+      onScroll={(direction, delta) => {
+        if (props.onScroll === undefined) return
+        if (direction === "left" || direction === "right") return
+        const steps = Math.max(1, delta)
+        props.onScroll(direction === "down" ? steps : -steps)
+      }}
     />
   )
 }

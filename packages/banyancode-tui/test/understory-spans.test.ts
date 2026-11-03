@@ -10,10 +10,12 @@ import {
   agentSpans,
   durationText,
   nowText,
+  rowAt,
   spanAt,
   staleEdits,
   stateAt,
   tokenBuckets,
+  toolCountAt,
   SPAN_CAP_PER_SESSION,
   type AgentSpan,
 } from "../src/data/understory-spans"
@@ -305,6 +307,66 @@ test("tokenBuckets spread a message's real tokens with no wobble", () => {
   // A message with no token record contributes nothing rather than a guess.
   const quiet = [assistant({ id: "msg_q", created: 0, completed: 10_000, content: [] })]
   expect(tokenBuckets(agentSpans(quiet), quiet, 0, 10_000, 4).every((bucket) => bucket.tokens === 0)).toBe(true)
+})
+
+test("a row at T carries the tokens and the tools that had really happened", () => {
+  const messages = [
+    assistant({ id: "msg_a", created: 0, completed: 1_000, tokens: tokens(400, 100), content: [] }),
+    assistant({
+      id: "msg_b",
+      created: 2_000,
+      completed: 3_000,
+      tokens: tokens(900, 100),
+      content: [tool({ id: "tb", name: "read", created: 2_100, ran: 2_100, completed: 2_200 })],
+    }),
+    assistant({
+      id: "msg_c",
+      created: 4_000,
+      completed: 5_000,
+      tokens: tokens(20, 5),
+      content: [tool({ id: "tc", name: "bash", created: 4_100, ran: 4_100, completed: 4_300 })],
+    }),
+  ]
+  const spans = agentSpans(messages)
+  const row: RosterRow = {
+    sessionID: "ses_a",
+    depth: 1,
+    agent: "coder",
+    label: "coder-1",
+    state: "done",
+    pending: 0,
+    tokens: 4_525,
+    cost: 0,
+    startedAt: 0,
+    endedAt: 5_000,
+    historyMayBeTruncated: false,
+    hasChildren: false,
+  }
+
+  // Before anything finished: no tokens, no calls, still running.
+  const early = rowAt(row, spans, messages, 500)
+  expect(early.tokens).toBe(0)
+  expect(early.endedAt).toBeUndefined()
+  expect(toolCountAt(spans, 500)).toBe(0)
+
+  // The first message completed (1_000 + 400 + 100) and the second is mid-call.
+  const middle = rowAt(row, spans, messages, 2_500)
+  expect(middle.tokens).toBe(1_500)
+  expect(middle.state).toBe("running")
+  expect(middle.endedAt).toBeUndefined()
+  expect(toolCountAt(spans, 2_500)).toBe(1)
+
+  // Everything completed by the end: the row's own total, both calls, ended.
+  const end = rowAt(row, spans, messages, 5_000)
+  expect(end.tokens).toBe(4_525)
+  expect(end.state).toBe("done")
+  expect(end.endedAt).toBe(5_000)
+  expect(toolCountAt(spans, 5_000)).toBe(2)
+
+  // A row without any per-message usage keeps the session's own total: there
+  // is no signal to spread, and the roster must not read zero.
+  const quiet = [assistant({ id: "msg_q", created: 0, completed: 1_000, content: [] })]
+  expect(rowAt(row, agentSpans(quiet), quiet, 1_000).tokens).toBe(4_525)
 })
 
 test("stage spans are bounded per session", () => {

@@ -1,9 +1,10 @@
-﻿import type { RGBA, ScrollBoxRenderable } from "@opentui/core"
+import type { RGBA, ScrollBoxRenderable } from "@opentui/core"
 import { createMemo, For, Show } from "solid-js"
 import { truncate } from "../../data/format"
 import { returnedSummary } from "../../data/messages"
 import { isLiveState, shortLabel, streamEntries, type StreamEntry, type StreamSession } from "../../data/understory"
 import type { Palette } from "../../theme"
+import { mix } from "../../motion"
 import { sproutFrame } from "../status/sprout"
 import { spans, streamClock, type Span } from "./layout"
 import { LineView, type Line } from "./line"
@@ -32,11 +33,14 @@ export function StreamLens(props: StreamLensProps) {
       }
     }),
   )
-  const all = createMemo(() =>
-    streamEntries(sessions(), {
+  const all = createMemo(() => {
+    const at = props.view.live() ? Number.POSITIVE_INFINITY : props.view.viewT()
+    return streamEntries(sessions(), {
       ...(props.rows.some((row) => isLiveState(row.state)) ? { now: props.view.viewT() } : {}),
-    }),
-  )
+    })
+      // A replay is the same log cut at the playhead: nothing after it exists.
+      .filter((entry) => entry.at <= at)
+  })
   const entries = createMemo(() =>
     props.view.filter() ? all().filter((entry) => entry.sessionID === props.selected) : all(),
   )
@@ -95,12 +99,12 @@ function StreamView(props: {
     return Math.max(0, Math.min(props.top, Math.max(0, total() - area())))
   }
   const slice = () => props.entries.slice(start(), start() + area())
-  const spinner = () => (props.animations ? sproutFrame(props.time) : "⋯")
+  const spinner = () => (props.animations ? sproutFrame(props.time) : "?")
   const timeWidth = () => (inner() >= 60 ? 7 : 0)
   const tagWidth = () => Math.min(11, Math.max(6, Math.floor(inner() * 0.14)))
   const bodyWidth = () => Math.max(1, inner() - timeWidth() - tagWidth() - 1)
 
-  const lineFor = (entry: StreamEntry): Line => {
+  const lineFor = (entry: StreamEntry, newest: boolean): Line => {
     const tag = shortLabel(entry.label, tagWidth())
     const failed = entry.kind === "fail" || entry.detail?.error === true
     const prefix = streamPrefix(entry, props.animations, spinner())
@@ -114,29 +118,34 @@ function StreamView(props: {
       text: prefix,
       color: failed ? props.theme.error : entry.kind === "user" ? props.theme.primary : props.theme.done,
     })
-    parts.push({ text: summary, color: failed ? props.theme.error : props.theme.text })
+    // The newest text blooms from the highlight into the text colour, and only
+    // with animations on: with them off the line is drawn at its final colour.
+    const bloom = newest && props.animations && !failed
+    parts.push(...(bloom ? bloomSpans(summary, props.theme) : [{ text: summary, color: failed ? props.theme.error : props.theme.text }]))
     if (failed) parts.push({ text: " !", color: props.theme.error, bold: true })
     return spans(inner(), parts)
   }
 
-  const header = () =>
-    spans(inner(), [
-      {
-        text: props.filterLabel,
-        color: props.filterHue ?? (props.filterLabel === "All branches" ? props.theme.muted : props.theme.text),
-        bold: props.filterLabel !== "All branches",
-      },
-      ...(props.following
-        ? props.truncated
-          ? [{ text: "   earlier activity not loaded", color: props.theme.warning }]
-          : []
-        : [
-            { text: "   ↓ latest", color: props.theme.primary, bold: true },
-            ...(props.truncated
-              ? [{ text: "   earlier activity not loaded", color: props.theme.warning }]
-              : []),
-          ]),
+  const header = () => {
+    const width = inner()
+    const filtered = props.filterLabel !== "All branches"
+    const label = { text: props.filterLabel, color: props.filterHue ?? (filtered ? props.theme.text : props.theme.muted), bold: filtered }
+    // The mockup's first row: the filter label, the `f` hint, then `↓ latest`
+    // on the right while the log is paused.
+    const hint = { text: "  f filter", color: props.theme.faint }
+    const latest = props.following ? "" : "↓ latest "
+    const cursor = [...label.text].length + [...hint.text].length
+    const gap = Math.max(1, width - cursor - [...latest].length)
+    return spans(width, [
+      label,
+      hint,
+      ...(props.truncated
+        ? [{ text: "   earlier activity not loaded", color: props.theme.warning }]
+        : []),
+      { text: " ".repeat(gap), color: props.theme.faint },
+      ...(latest === "" ? [] : [{ text: latest, color: props.theme.primary, bold: true }]),
     ])
+  }
 
   return (
     <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0} height={props.height} paddingLeft={1} overflow="hidden">
@@ -178,7 +187,7 @@ function StreamView(props: {
             <For each={slice()}>
               {(entry, index) => (
                 <box position="absolute" top={start() + index()} left={0} width={inner()} height={1}>
-                  <LineView width={inner()} spans={lineFor(entry)} />
+                  <LineView width={inner()} spans={lineFor(entry, index() === slice().length - 1)} />
                 </box>
               )}
             </For>
@@ -189,19 +198,41 @@ function StreamView(props: {
   )
 }
 
+/** Characters of the newest text that carry the bloom. */
+export const BLOOM_CHARS = 12
+
+/**
+ * The token bloom: the newest characters of the newest line blend from the
+ * highlight colour into the text colour. Pure, so the stream can call it per
+ * frame and a test can check the ramp without a renderer.
+ */
+export function bloomSpans(text: string, theme: Palette): Span[] {
+  const glyphs = [...text]
+  const head = glyphs.slice(0, Math.max(0, glyphs.length - BLOOM_CHARS)).join("")
+  const tail = glyphs.slice(-BLOOM_CHARS)
+  if (tail.length === 0) return []
+  return [
+    ...(head === "" ? [] : [{ text: head, color: theme.text }]),
+    ...tail.map((glyph, index) => ({
+      text: glyph,
+      color: mix(theme.highlight, theme.text, (index + 1) / tail.length),
+    })),
+  ]
+}
+
 function streamPrefix(entry: StreamEntry, animations: boolean, spinner: string): string {
   const detail = entry.detail
   if (entry.kind === "tool" && detail !== undefined) {
-    if (detail.error) return "✕ "
-    if (detail.open) return animations ? `${spinner} ` : "⋯ "
-    return "✓ "
+    if (detail.error) return "? "
+    if (detail.open) return animations ? `${spinner} ` : "? "
+    return "? "
   }
-  if (entry.kind === "spawn") return "┬ "
-  if (entry.kind === "return") return "↩ "
-  if (entry.kind === "fail") return "✕ "
-  if (entry.kind === "kill") return "⊘ "
-  if (entry.kind === "user") return "› "
-  if (entry.kind === "think") return "∴ "
-  if (entry.kind === "text") return "│ "
-  return "· "
+  if (entry.kind === "spawn") return "- "
+  if (entry.kind === "return") return "? "
+  if (entry.kind === "fail") return "? "
+  if (entry.kind === "kill") return "? "
+  if (entry.kind === "user") return "� "
+  if (entry.kind === "think") return "? "
+  if (entry.kind === "text") return "� "
+  return "� "
 }

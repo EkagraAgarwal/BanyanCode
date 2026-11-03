@@ -505,7 +505,9 @@ function TrunkHeader(props: ChromeHeaderProps) {
 /**
  * The Trunk bottom row: directory and branch on the left, an attention message
  * only while something is waiting, and the key hints. Statuses that row 0
- * already carries are deliberately absent.
+ * already carries are deliberately absent. The Agents tab prints its own
+ * attention line on its status row, so the footer drops it there: one row for
+ * the tab's hints and one footer row, never a third.
  */
 function TrunkFooter(props: ChromeFooterProps) {
   const theme = () => palette(props.context.theme)
@@ -518,6 +520,8 @@ function TrunkFooter(props: ChromeFooterProps) {
     return current ? data.location.vcs.info(current)?.branch.current : undefined
   })
   const attention = createMemo(() => attentionBreakdown(props.context, props.sessionID).count)
+  // The Agents tab repeats the count on its own status row; the Chat tab keeps it here.
+  const showAttention = () => props.context.ui.panel.current()?.name !== PANEL.agents
   return (
     <box flexDirection="row" flexShrink={0} width="100%" gap={2} paddingLeft={2} paddingRight={2}>
       <text fg={theme().muted} flexShrink={1} wrapMode="none">
@@ -535,7 +539,7 @@ function TrunkFooter(props: ChromeFooterProps) {
           [swarm]
         </text>
       </Show>
-      <Show when={attention() > 0}>
+      <Show when={attention() > 0 && showAttention()}>
         <text fg={theme().warning} flexShrink={0}>
           {`▲ ${attention()} need attention`}
         </text>

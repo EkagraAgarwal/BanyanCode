@@ -35,6 +35,8 @@ export interface RootsLensProps extends LensProps {
   readonly onMapRoot?: ((root: string | undefined) => void) | undefined
   /** Repo root, so an absolute tool path lands on its graph key. */
   readonly root?: string | undefined
+  /** Wheel over the map scrolls the roster and its lanes together. */
+  readonly onScroll?: ((delta: number) => void) | undefined
 }
 
 const normalize = (path: string, root: string | undefined): string => normalizeRepoPath(path, root)
@@ -160,6 +162,12 @@ export function RootsLens(props: RootsLensProps) {
       onMouseMove={(region) => {
         const next = region?.startsWith("tile:") ? region.slice("tile:".length) : undefined
         if (next !== hover()) setHover(next)
+      }}
+      onScroll={(direction, delta) => {
+        if (props.onScroll === undefined) return
+        if (direction === "left" || direction === "right") return
+        const steps = Math.max(1, delta)
+        props.onScroll(direction === "down" ? steps : -steps)
       }}
     />
   )

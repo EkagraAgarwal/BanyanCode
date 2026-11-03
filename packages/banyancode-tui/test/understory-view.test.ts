@@ -13,7 +13,7 @@ import {
   traceWindow,
   zoomScale,
 } from "../src/components/understory/layout"
-import { createUnderstoryView, LENSES, lensLabel } from "../src/components/understory/view"
+import { createUnderstoryView, LENSES, lensForKey, lensLabel } from "../src/components/understory/view"
 
 test("header rows follow the brief's three tiers", () => {
   expect(overviewRows(55)).toBe(3)
@@ -134,12 +134,23 @@ test("the view holds the lens, the playhead and the lens-only controls", () => {
 
   view.setLens("trace")
   expect(view.lens()).toBe("trace")
+  // Zoom follows the mockup: the span shrinks or grows by 0.7 / 1.4, kept
+  // between five seconds and the run plus fifteen, around the playhead.
+  const before = view.window({ start: 0, columns: 100 })
+  expect(before.b - before.a).toBeCloseTo(70_000, 6)
   view.zoom(1)
-  expect(view.scale()).toBe(TRACE_SECONDS_PER_COLUMN / 2)
+  const zoomed = view.window({ start: 0, columns: 100 })
+  expect(zoomed.b - zoomed.a).toBeLessThan(before.b - before.a)
+  expect(zoomed.b - zoomed.a).toBe(49_000)
+  expect(view.scale()).toBeCloseTo((zoomed.b - zoomed.a) / 1000 / 100, 6)
+  // The playhead sits inside a scrubbed window, never before the run.
+  expect(zoomed.a).toBeLessThanOrEqual(view.viewT())
   view.resetZoom()
+  expect(view.win()).toBeUndefined()
   expect(view.scale()).toBe(TRACE_SECONDS_PER_COLUMN)
+  expect(view.window({ start: 0, columns: 100 }).b - view.window({ start: 0, columns: 100 }).a).toBeCloseTo(70_000, 6)
   view.zoom(-1)
-  expect(view.scale()).toBe(TRACE_SECONDS_PER_COLUMN * 2)
+  expect(view.window({ start: 0, columns: 100 }).b - view.window({ start: 0, columns: 100 }).a).toBeGreaterThan(70_000)
 
   view.setFilter(true)
   view.setOverlay(true)
@@ -156,4 +167,15 @@ test("the view holds the lens, the playhead and the lens-only controls", () => {
 
 test("every lens is labelled for the tab strip", () => {
   expect(LENSES.map(lensLabel)).toEqual(["Trace", "Roots", "Stream"])
+})
+
+test("only a real digit press names a lens", () => {
+  // `@opentui/keymap` can match a bare digit for a key that is not one (the
+  // base-layout fallback), so the lens commands check the event's own name.
+  expect(lensForKey("1")).toBe("trace")
+  expect(lensForKey("2")).toBe("roots")
+  expect(lensForKey("3")).toBe("stream")
+  expect(lensForKey("]")).toBeUndefined()
+  expect(lensForKey("escape")).toBeUndefined()
+  expect(lensForKey(undefined)).toBeUndefined()
 })

@@ -418,6 +418,30 @@ test("the File sheet reads its tile, and says when the graph is not built", asyn
   }
 })
 
+test("the ask box's right border lines up at every width, including the key row", async () => {
+  for (const width of [44, 34, 28]) {
+    const app = await renderInspector({
+      width,
+      ask: { kind: "permission", title: "bash", target: "npm pack --dry-run" },
+    })
+    try {
+      const lines = app.captureCharFrame().split("\n")
+      const start = lines.findIndex((line) => line.includes("NEEDS YOU") && line.includes("╭"))
+      expect(start).toBeGreaterThanOrEqual(0)
+      const box = lines.slice(start, start + 4).map((line) => Array.from(line.trimEnd()))
+      // Every row of the box, the key row included, is exactly as wide as the
+      // top border, so the right edge lands on one column for all of them.
+      expect(new Set(box.map((cells) => cells.length)).size).toBe(1)
+      expect(lines[start + 2]).toContain("a ")
+      expect(lines[start + 2]).toContain("d deny")
+      // The body rows really carry the right border in that column.
+      for (const cells of box.slice(1, 3)) expect(cells[cells.length - 1]).toBe("│")
+    } finally {
+      app.renderer.destroy()
+    }
+  }
+})
+
 test("the Call sheet shows the pinned call's timing, change and output", async () => {
   const span: AgentSpan = {
     id: "m1:0",

@@ -322,6 +322,46 @@ test("Trunk attention appears only while something is waiting", async () => {
   }
 })
 
+/** The same host context, with the Agents panel open and focused. */
+function agentsPanel(base: Context): Context {
+  return {
+    ...base,
+    ui: {
+      ...base.ui,
+      panel: {
+        ...base.ui.panel,
+        current: () => ({
+          name: PANEL.agents,
+          sessionID: "ses_root",
+          width: 120,
+          presentation: "main",
+          focused: true,
+          focus: () => {},
+          close: () => {},
+          toggleFullscreen: () => {},
+        }),
+      },
+    },
+  } as Context
+}
+
+test("the Trunk footer leaves the attention count to the Agents tab's status row", async () => {
+  const onChat = await renderFooter({ width: 120, ctx: pendingContext(2) })
+  const onAgents = await renderFooter({ width: 120, ctx: agentsPanel(pendingContext(2)) })
+  try {
+    // Chat keeps the count on the footer, exactly as before.
+    expect(onChat.captureCharFrame()).toContain("▲ 2 need attention")
+    // The Agents tab prints it on its own status row; the footer drops it so
+    // the tab's hint row plus the footer are the mockup's rows -2 and -1.
+    const frame = onAgents.captureCharFrame()
+    expect(frame).not.toContain("need attention")
+    expect(frame).toContain("workspace · Git: v2-base")
+  } finally {
+    onChat.renderer.destroy()
+    onAgents.renderer.destroy()
+  }
+})
+
 test("narrow Trunk chrome drops the key hint but keeps the attention message", async () => {
   const app = await renderFooter({ width: 44, ctx: pendingContext(1) })
   try {

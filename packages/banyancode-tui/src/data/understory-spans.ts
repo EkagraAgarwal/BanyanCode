@@ -1,5 +1,5 @@
 import type { SessionMessageAssistantTool, SessionMessageInfo } from "@opencode/client"
-import { toolArgs } from "./messages"
+import { toolArgs, totalTokens } from "./messages"
 import {
   canonicalTool,
   diffCounts,
@@ -221,6 +221,71 @@ export function stateAt(row: RosterRow, spans: readonly AgentSpan[], t: number):
   return "running"
 }
 
+/**
+ * A replay reads the same history with an earlier `T`: nothing after T exists.
+ * These helpers are the one place that rule lives, so the lenses, the roster
+ * and the inspector cannot disagree about what happened by a given time.
+ */
+
+/** Messages that had arrived by `t`. */
+export function messagesAt(messages: readonly SessionMessageInfo[], t: number): SessionMessageInfo[] {
+  return messages.filter((message) => message.time.created <= t)
+}
+
+/**
+ * The tokens an agent had produced by `t`: a message's usage counts once it
+ * completed, so a half-streamed reply never inflates the total.
+ */
+export function tokensAt(messages: readonly SessionMessageInfo[], t: number): number {
+  return messages.reduce((total, message) => {
+    if (message.type !== "assistant") return total
+    if (message.time.completed === undefined || message.time.completed > t) return total
+    return total + totalTokens(message.tokens)
+  }, 0)
+}
+
+/** Spans that had started by `t`, with any still open at `t` closed there. */
+export function spansAt(spans: readonly AgentSpan[], t: number): AgentSpan[] {
+  return spans
+    .filter((span) => span.t0 <= t)
+    .map((span) => (span.t1 !== undefined && span.t1 > t ? { ...span, t1: t } : span))
+}
+
+/**
+ * Whether the messages carry per-message usage at all. Without it a replay has
+ * no signal to sum, so the row keeps the session's own total instead of zero.
+ */
+function hasUsage(messages: readonly SessionMessageInfo[]): boolean {
+  return messages.some((message) => message.type === "assistant" && message.tokens !== undefined)
+}
+
+/**
+ * The row as it stood at `t`: its state, its tokens and whether it had ended.
+ * A row that ends after the playhead is still running, and a tool count never
+ * includes a call that had not started.
+ */
+export function rowAt(
+  row: RosterRow,
+  spans: readonly AgentSpan[],
+  messages: readonly SessionMessageInfo[],
+  t: number,
+): RosterRow {
+  const ended = row.endedAt !== undefined && row.endedAt <= t ? row.endedAt : undefined
+  const state = stateAt(row, spans, t)
+  return {
+    ...row,
+    state,
+    tokens: hasUsage(messages) ? tokensAt(messages, t) : row.tokens,
+    endedAt: ended,
+    pending: state === "waiting" ? row.pending : 0,
+  }
+}
+
+/** Tool calls an agent had started by `t`, which the now column reports. */
+export function toolCountAt(spans: readonly AgentSpan[], t: number): number {
+  return spans.filter((span) => span.kind === "tool" && span.t0 <= t).length
+}
+
 /** `1.2s`, for the duration of an open call and the now column. */
 export function durationText(ms: number): string {
   if (ms < 0) return "0.0s"
@@ -391,15 +456,23 @@ const touches = (session: SpanSession): Touch[] =>
  * edited after B last read it, so B is working from a stale read. Computed from
  * sibling sessions' tool parts alone, and cleared when B re-reads the file.
  * A branch that never read the file is not reported: a blind edit is a
- * different problem, not a stale read.
+ * different problem, not a stale read. `to` is the replay playhead: a touch
+ * after it has not happened yet.
  */
-export function staleEdits(sessions: readonly SpanSession[], limit = 20): StaleEdit[] {
+export function staleEdits(
+  sessions: readonly SpanSession[],
+  limit = 20,
+  to = Number.POSITIVE_INFINITY,
+): StaleEdit[] {
   const labels = new Map(sessions.map((session) => [session.sessionID, session.label]))
   const lastRead = new Map<string, number>()
   const lastWrite = new Map<string, { at: number; sessionID: string }>()
   const found = new Map<string, StaleEdit>()
   const key = (sessionID: string, path: string) => `${sessionID}\u0000${path}`
-  const all = sessions.flatMap(touches).sort((left, right) => left.at - right.at)
+  const all = sessions
+    .flatMap(touches)
+    .filter((touch) => touch.at <= to)
+    .sort((left, right) => left.at - right.at)
   for (const touch of all) {
     const slot = key(touch.sessionID, touch.path)
     if (touch.verb === "r") {

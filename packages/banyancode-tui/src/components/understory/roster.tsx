@@ -65,7 +65,8 @@ export interface RosterProps {
   /** True while the run is live; only then does the trunk pulse. */
   readonly live: boolean
   readonly tick: number
-  readonly now: () => number
+  /** The playhead the elapsed column is measured at. */
+  readonly at: () => number
   readonly summary: RosterSummary
   /** Sparkline steps for one row, oldest first; empty when no tokens streamed. */
   readonly spark: (row: RosterRow) => readonly number[]
@@ -206,7 +207,7 @@ export function Roster(props: RosterProps) {
         return
       }
 
-      const elapsed = big ? runClock((row.endedAt ?? props.now()) - row.startedAt) : ""
+      const elapsed = big ? runClock((row.endedAt ?? props.at()) - row.startedAt) : ""
       const nameWidth = Math.max(1, xEnd - nameX + 1 - (big ? elapsed.length + 2 : 0))
       const label = shortLabel(row.label, nameWidth)
       grid.text(nameX, y, label, nameColor, rowBg, true)

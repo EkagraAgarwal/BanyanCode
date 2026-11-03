@@ -1,6 +1,7 @@
 import type { Context } from "@opencode/plugin/tui/context"
 import type { SessionMessageInfo } from "@opencode/client"
 import type { RGBA, ScrollBoxRenderable } from "@opentui/core"
+import type { KeyEvent } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js"
 import type { CodegraphLive, MeshLive } from "../../data/live"
@@ -19,6 +20,8 @@ import {
 } from "../../data/understory"
 import {
   agentSpans,
+  messagesAt,
+  rowAt,
   sparkValues,
   staleEdits,
   tokenRate,
@@ -30,6 +33,10 @@ import { palette } from "../../theme"
 import { steerSubagent, type AgentTarget } from "../dialogs/actions"
 import { PANEL_KEY_MODE, usePanelFocus, usePanelScroll } from "../panels/keys"
 import { buildGraphData, fileName, type GraphData } from "./graph-data"
+import {
+  composerPlaceholder,
+  registerComposerRouting,
+} from "./composer-route"
 import { branchHue } from "./hue"
 import { Inspector, type FileTouch, type InspectorAsk } from "./inspector"
 import { LensTabs } from "./lens-tabs"
@@ -51,7 +58,7 @@ import { Roster, rowColor, rowGlyph } from "./roster"
 import { StreamLens } from "./stream"
 import { TraceLens } from "./trace"
 import { RootsLens } from "./roots"
-import { createUnderstoryView, type LensProps } from "./view"
+import { createUnderstoryView, lensForKey, REPLAY_OFF, type Lens, type LensProps } from "./view"
 
 const KEY_ROWS: ReadonlyArray<readonly [string, string]> = [
   ["1 2 3", "Trace, Roots, Stream"],
@@ -66,7 +73,7 @@ const KEY_ROWS: ReadonlyArray<readonly [string, string]> = [
   ["x", "kill (press twice)"],
   ["Enter", "open the agent session"],
   ["a A d", "allow once, always, deny"],
-  ["Tab", "focus the composer"],
+  ["Tab @", "focus the composer"],
   ["Esc", "back out one level"],
   ["?", "close this list"],
 ]
@@ -153,25 +160,12 @@ export function Understory(props: {
   /** Roots zoom: the package the map is showing, if any. */
   const [rootsRoot, setRootsRoot] = createSignal<string | undefined>(undefined)
 
-  const foldState = createMemo(() => visibleRows(rows(), { folded: folded(), selected: selection() }))
-  const visible = createMemo(() => foldState().rows)
-  const selectedID = createMemo(() => foldState().selected ?? visible()[0]?.sessionID)
-  const selected = createMemo(() => rows().find((row) => row.sessionID === selectedID()))
-
-  const focus = usePanelFocus()
-  const editing = () => focus === undefined || focus.zone() === "content"
-
-  const cols = createMemo(() => understoryColumns(width()))
-  const overlayMode = () => !cols().docked
-  const geometry = createMemo(() => rowGeometry(height(), visible().length))
-  const lensHeight = () => Math.max(0, height() - 1 - geometry().tabs)
-
-  const hues = createMemo(() => {
-    const mode = props.context.themeMode
-    return new Map(rows().map((row, index) => [row.sessionID, branchHue(index, mode)]))
-  })
-  const hueOf = (sessionID: string | undefined): ReturnType<typeof branchHue> =>
-    (sessionID === undefined ? undefined : hues().get(sessionID)) ?? theme().leaf
+  /**
+   * The time every pane draws at: the scrubbed playhead, else the live clock.
+   * Replay is the same history read at an earlier T, so each pane derives its
+   * own rows from this one value instead of testing the clock itself.
+   */
+  const at = () => view.viewT()
 
   /** What a row is waiting for, as the lane and now column show it: `shell: npm pack --dry-run`. */
   const askOf = (sessionID: string): string | undefined => {
@@ -207,22 +201,65 @@ export function Understory(props: {
     return map
   })
 
-  /** Live tokens per second one session streamed; zero when it has no signal. */
+  /**
+   * The roster with every time-dependent field re-derived at `at`: state,
+   * tokens and whether the row had ended. Everything downstream (roster,
+   * lanes, map, inspector, status row) reads this list, so a scrub moves them
+   * all together. Live rows are already "at now", so they pass through.
+   */
+  const displayRows = createMemo((): readonly RosterRow[] => {
+    if (view.live()) return rows()
+    const spans = spansBySession()
+    const time = at()
+    return rows().map((row) => rowAt(row, spans.get(row.sessionID) ?? [], messagesOf(row.sessionID), time))
+  })
+
+  /**
+   * The horizon an "as of" filter uses: everything while live (the host's clock
+   * is a display clock, not a filter), the playhead while replaying.
+   */
+  const horizon = () => (view.live() ? Number.POSITIVE_INFINITY : at())
+
+  const foldState = createMemo(() => visibleRows(displayRows(), { folded: folded(), selected: selection() }))
+  const visible = createMemo(() => foldState().rows)
+  const selectedID = createMemo(() => foldState().selected ?? visible()[0]?.sessionID)
+  const selected = createMemo(() => displayRows().find((row) => row.sessionID === selectedID()))
+  /** The live row behind the selection, for the actions that only exist live. */
+  const selectedLive = createMemo(() => rows().find((row) => row.sessionID === selectedID()))
+
+  const focus = usePanelFocus()
+  const editing = () => focus === undefined || focus.zone() === "content"
+
+  const cols = createMemo(() => understoryColumns(width()))
+  const overlayMode = () => !cols().docked
+  const geometry = createMemo(() => rowGeometry(height(), visible().length))
+  const lensHeight = () => Math.max(0, height() - 1 - geometry().tabs)
+
+  const hues = createMemo(() => {
+    const mode = props.context.themeMode
+    return new Map(rows().map((row, index) => [row.sessionID, branchHue(index, mode)]))
+  })
+  const hueOf = (sessionID: string | undefined): ReturnType<typeof branchHue> =>
+    (sessionID === undefined ? undefined : hues().get(sessionID)) ?? theme().leaf
+
+  /** Tokens per second one session streamed up to the playhead; zero with no signal. */
   const rateOf = (sessionID: string): number => {
     tick()
-    return tokenRate(messagesOf(sessionID), { to: view.viewT() })
+    return tokenRate(messagesAt(messagesOf(sessionID), at()), { to: at() })
   }
 
-  /** Sparkline steps for one roster row, oldest first. */
+  /** Sparkline steps for one roster row, oldest first, ending at the playhead. */
   const sparkFor = (row: RosterRow): readonly number[] => {
     tick()
-    return sparkValues(messagesOf(row.sessionID), { to: view.viewT(), columns: 14 })
+    return sparkValues(messagesAt(messagesOf(row.sessionID), at()), { to: at(), columns: 14 })
   }
 
-  /** The advisory stale-read check across every branch. */
+  /** The advisory stale-read check across every branch, as far as the playhead reached. */
   const stale = createMemo((): readonly StaleEdit[] =>
     staleEdits(
       rows().map((row) => ({ sessionID: row.sessionID, label: row.label, messages: messagesOf(row.sessionID) })),
+      20,
+      horizon(),
     ),
   )
 
@@ -236,13 +273,15 @@ export function Understory(props: {
     return buildGraphData({ files, nodes: data.nodes, edges: data.edges })
   })
 
-  /** Every real touch of one file, from the tool calls that named it. */
+  /** Every real touch of one file, from the tool calls that named it by the playhead. */
   const touches = (path: string): readonly FileTouch[] => {
     const wanted = fileName(path)
+    const time = horizon()
     const found: FileTouch[] = []
     for (const row of rows()) {
       for (const span of spansBySession().get(row.sessionID) ?? []) {
         if (span.kind !== "tool" || span.file === undefined) continue
+        if (span.t0 > time) continue
         if (span.file !== path && fileName(span.file) !== wanted) continue
         found.push({
           at: span.t0,
@@ -322,8 +361,35 @@ export function Understory(props: {
     view.setT(next >= clock - 150 ? undefined : next)
   }
 
+  /**
+   * `[` and `]` step the playhead event by event on the selected agent: the
+   * previous or next span start. `]` past the last event returns to live.
+   */
+  const stepEvent = (delta: 1 | -1) => {
+    const row = selected()
+    if (row === undefined) return
+    const times = (spansBySession().get(row.sessionID) ?? [])
+      .map((span) => span.t0)
+      .filter((time, index, list) => time <= now() && list.indexOf(time) === index)
+      .sort((left, right) => left - right)
+    const time = view.viewT()
+    const next =
+      delta < 0
+        ? [...times].reverse().find((candidate) => candidate < time - 10)
+        : times.find((candidate) => candidate > time + 10)
+    if (next !== undefined) view.setT(next)
+    else if (delta > 0) view.setT(undefined)
+  }
+
+  /** Nothing that writes to the run may fire while the playhead is scrubbed. */
+  const needLive = (): boolean => {
+    if (view.live()) return true
+    say(REPLAY_OFF)
+    return false
+  }
+
   const jumpAttention = () => {
-    const next = nextAttention(rows(), selectedID())
+    const next = nextAttention(displayRows(), selectedID())
     if (next === undefined) {
       say("nothing needs you right now")
       return
@@ -336,7 +402,7 @@ export function Understory(props: {
     setFolded(next)
     setKeyOffset(0)
     setRosterOffset(0)
-    const result = visibleRows(rows(), { folded: next, selected: selection() })
+    const result = visibleRows(displayRows(), { folded: next, selected: selection() })
     if (result.selected !== undefined) setSelection(result.selected)
   }
 
@@ -364,8 +430,9 @@ export function Understory(props: {
     })
 
   const steer = () => {
-    const row = selected()
+    const row = selectedLive()
     if (row === undefined || row.depth === 0) return
+    if (!needLive()) return
     if (!steerable(row)) {
       say(`${row.label} is already finished`)
       return
@@ -374,14 +441,15 @@ export function Understory(props: {
   }
 
   const permissions = createMemo(() => {
-    const row = selected()
+    const row = selectedLive()
     return row === undefined ? [] : (props.context.data.session.permission.list(row.sessionID) ?? [])
   })
   const forms = createMemo(() => {
-    const row = selected()
+    const row = selectedLive()
     return row === undefined ? [] : (props.context.data.session.form.list(row.sessionID) ?? [])
   })
-  const waiting = () => selected()?.state === "waiting"
+  /** A pending ask only exists live: a scrubbed run has nothing to answer. */
+  const waiting = () => view.live() && selectedLive()?.state === "waiting"
   const ask = createMemo((): InspectorAsk | undefined => {
     if (!waiting()) return undefined
     const request = permissions()[0]
@@ -393,7 +461,8 @@ export function Understory(props: {
   })
 
   const answer = (decision: "once" | "always" | "reject") => {
-    const row = selected()
+    const row = selectedLive()
+    if (!needLive()) return
     if (row === undefined) {
       say("press w to jump to the next waiting agent")
       return
@@ -415,7 +484,8 @@ export function Understory(props: {
   }
 
   const kill = () => {
-    const row = selected()
+    const row = selectedLive()
+    if (!needLive()) return
     if (row === undefined || row.depth === 0) {
       say("select a subagent first")
       return
@@ -445,26 +515,43 @@ export function Understory(props: {
     }, 3_000)
   }
 
-  const focusComposer = () => props.context.keymap.dispatch("pane.focus.left")
+  const focusComposer = (text?: string) => {
+    // The host hook focuses the real prompt and can type the first key, so `@`
+    // arrives already typed instead of being handled twice.
+    if (props.context.ui.composer.focus(text)) return
+    props.context.keymap.dispatch("pane.focus.left")
+  }
 
   usePanelScroll(props.context, () => streamScroll, 6)
 
+  /** Messages a sheet may read: only what had arrived by the playhead. */
+  const sheetMessages = (sessionID: string): readonly SessionMessageInfo[] => messagesAt(messagesOf(sessionID), at())
+
   const run = createMemo((): RunSheet | undefined =>
     runSheet({
-      rows: rows(),
+      rows: displayRows(),
       root: root(),
       selected: selectedID(),
-      messages: messagesOf,
+      messages: sheetMessages,
     }),
   )
   const sheet = createMemo((): AgentSheet | undefined =>
     agentSheet({
-      rows: rows(),
+      rows: displayRows(),
       root: root(),
       selected: selectedID(),
-      messages: messagesOf,
+      messages: sheetMessages,
     }),
   )
+
+  /** Wheel over the roster or a lens scrolls both together, one lane at a time. */
+  const scrollRoster = (delta: number) => {
+    const list = foldState().rows
+    const areaRows = rosterAreaRows(height()) - (folded() && foldState().hidden > 0 ? 1 : 0)
+    const lane = geometry().laneHeight
+    const max = Math.max(0, list.length * lane - areaRows)
+    setRosterOffset((value) => Math.max(0, Math.min(max, value + delta)))
+  }
 
   const closeOneLevel = () => {
     if (keyList()) {
@@ -491,56 +578,115 @@ export function Understory(props: {
     }
   }
 
+  /**
+   * Switch to `wanted` only when the key really is that digit. A programmatic
+   * dispatch carries no event and is allowed; a keyboard match must name the
+   * digit, so a base-layout fallback match never changes the lens.
+   */
+  const lensCommand = (wanted: Lens, event: KeyEvent | undefined): false | void => {
+    if (event !== undefined && lensForKey(event.name) !== wanted) return false
+    view.setLens(wanted)
+  }
+
   props.context.keymap.layer(() => ({
     mode: PANEL_KEY_MODE,
     priority: 35,
     commands: [
-      { bind: "1", title: "Trace lens", group: "Understory", enabled: editing, run: () => view.setLens("trace") },
-      { bind: "2", title: "Roots lens", group: "Understory", enabled: editing, run: () => view.setLens("roots") },
-      { bind: "3", title: "Stream lens", group: "Understory", enabled: editing, run: () => view.setLens("stream") },
+      {
+        // The lens keys are named so the handler sees the key it was dispatched
+        // for. `@opentui/keymap` adds the physical key's base-layout character
+        // as an extra match, so a bare `3` can appear for a key that is not a
+        // digit (the host's ctrl+] tab switch carries its own base key); only
+        // the event's name proves a real digit press.
+        id: "understory.lens.trace",
+        bind: "1",
+        title: "Trace lens",
+        group: "Understory",
+        enabled: editing,
+        run: (_input, event) => lensCommand("trace", event),
+      },
+      {
+        id: "understory.lens.roots",
+        bind: "2",
+        title: "Roots lens",
+        group: "Understory",
+        enabled: editing,
+        run: (_input, event) => lensCommand("roots", event),
+      },
+      {
+        id: "understory.lens.stream",
+        bind: "3",
+        title: "Stream lens",
+        group: "Understory",
+        enabled: editing,
+        run: (_input, event) => lensCommand("stream", event),
+      },
       {
         bind: "=",
         title: "Zoom in",
         group: "Understory",
-        enabled: () => editing() && view.lens() === "trace",
+        enabled: editing,
         run: () => view.zoom(1),
       },
       {
         bind: "shift+=",
         title: "Zoom in",
         group: "Understory",
-        enabled: () => editing() && view.lens() === "trace",
+        enabled: editing,
         run: () => view.zoom(1),
       },
       {
         bind: "-",
         title: "Zoom out",
         group: "Understory",
-        enabled: () => editing() && view.lens() === "trace",
+        enabled: editing,
         run: () => view.zoom(-1),
       },
       {
         bind: "0",
         title: "Reset zoom",
         group: "Understory",
-        enabled: () => editing() && view.lens() === "trace",
+        enabled: editing,
         run: view.resetZoom,
       },
       {
         bind: "left",
         title: "Scrub back",
         group: "Understory",
-        enabled: () => editing() && view.lens() === "trace",
+        enabled: editing,
         run: () => scrub(-2_000),
       },
       {
         bind: "right",
         title: "Scrub forward",
         group: "Understory",
-        enabled: () => editing() && view.lens() === "trace",
+        enabled: editing,
         run: () => scrub(2_000),
       },
+      {
+        bind: "[",
+        title: "Previous event",
+        group: "Understory",
+        enabled: editing,
+        run: () => stepEvent(-1),
+      },
+      {
+        bind: "]",
+        title: "Next event",
+        group: "Understory",
+        enabled: editing,
+        run: () => stepEvent(1),
+      },
       { bind: "l", title: "Return to live", group: "Understory", enabled: editing, run: () => view.setT(undefined) },
+      {
+        // `End` returns to live while scrubbed, and keeps its panel-scroll
+        // meaning otherwise (the shell's own lower-priority binding).
+        bind: "end",
+        title: "Return to live",
+        group: "Understory",
+        enabled: () => editing() && !view.live(),
+        run: () => view.setT(undefined),
+      },
       { bind: "j", title: "Next agent", group: "Understory", enabled: editing, run: () => move(1) },
       { bind: "k", title: "Previous agent", group: "Understory", enabled: editing, run: () => move(-1) },
       {
@@ -629,7 +775,14 @@ export function Understory(props: {
       { bind: "a", title: "Allow once", group: "Understory", enabled: editing, run: () => answer("once") },
       { bind: "shift+a", title: "Always allow", group: "Understory", enabled: editing, run: () => answer("always") },
       { bind: "d", title: "Deny", group: "Understory", enabled: editing, run: () => answer("reject") },
-      { bind: "tab", title: "Focus composer", group: "Understory", enabled: editing, run: focusComposer },
+      { bind: "tab", title: "Focus composer", group: "Understory", enabled: editing, run: () => focusComposer() },
+      {
+        bind: "@",
+        title: "Focus composer and pick a branch",
+        group: "Understory",
+        enabled: editing,
+        run: () => focusComposer("@"),
+      },
       {
         bind: "escape",
         title: "Back out one level",
@@ -682,6 +835,23 @@ export function Understory(props: {
 
   const tick = useTickerWhen(ticker, () => rows().some((row) => isLiveState(row.state)) || overlayAnimating())
 
+  // The Agents tab owns the composer's routing for as long as it is mounted:
+  // `@coder-1 fix this` steers that one branch, plain text stays root text, and
+  // replay refuses every send. Chat registers none of this.
+  onCleanup(
+    registerComposerRouting({
+      context: props.context,
+      rows,
+      root,
+      mesh: props.mesh,
+      live: view.live,
+      tell: (text) => say(text),
+      glyph: (row, index) => rowGlyph(row, index, tick(), animations()),
+    }),
+  )
+  createEffect(() => props.context.ui.composer.setPlaceholder(composerPlaceholder(rows())))
+  onCleanup(() => props.context.ui.composer.setPlaceholder(undefined))
+
   const runElapsed = createMemo(() => {
     tick()
     const rootRow = rows().find((row) => row.depth === 0)
@@ -689,8 +859,8 @@ export function Understory(props: {
     // The stream can outlive the root's own turn (a child message lands after
     // the root went idle). RUN must never be shorter than the newest event it
     // contains; an ended run then shows that final duration. Replaying shows
-    // the playhead instead.
-    const end = view.t() === undefined ? Math.max(rootRow.endedAt ?? now(), newestEventAt()) : view.viewT()
+    // the playhead instead, so the clock reads the scrubbed time.
+    const end = view.live() ? Math.max(rootRow.endedAt ?? now(), newestEventAt()) : view.viewT()
     return runClock(Math.max(0, end - rootRow.startedAt))
   })
 
@@ -706,10 +876,10 @@ export function Understory(props: {
     return runClock(Math.max(0, end - rootRow.startedAt))
   })
 
-  /** Everything the roster header reports about the run. */
+  /** Everything the roster header reports about the run, as of the playhead. */
   const summary = createMemo(() => {
     tick()
-    const list = rows()
+    const list = displayRows()
     const tokens = list.reduce((total, row) => total + row.tokens, 0)
     const cost = list.reduce((total, row) => total + row.cost, 0)
     const limit = props.mesh.limits()?.maxSubagents
@@ -727,7 +897,7 @@ export function Understory(props: {
   /** What the status row says on the left: this turn's message, else attention. */
   const statusLeft = createMemo((): { readonly text: string; readonly color: RGBA } | undefined => {
     if (message() !== undefined) return { text: message()!, color: theme().warning }
-    const waitingRows = rows().filter((row) => row.state === "waiting")
+    const waitingRows = displayRows().filter((row) => row.state === "waiting")
     if (waitingRows.length > 0) {
       const first = waitingRows[0]!
       const target = pendingTarget(first.sessionID)
@@ -774,6 +944,7 @@ export function Understory(props: {
   })
 
   const actionSegments = createMemo((): string[] => {
+    if (!view.live()) return ["l back to live"]
     const row = selected()
     if (row === undefined) return []
     if (armed() !== undefined && armed()!.sessionID === row.sessionID) return [`x kill ${row.label}`]
@@ -802,7 +973,7 @@ export function Understory(props: {
       theme={theme()}
       animations={animations()}
       tick={tick()}
-      now={now}
+      now={at}
       actions={actionSegments()}
       file={view.lens() === "roots" ? view.file() : undefined}
       graph={graph()}
@@ -815,7 +986,7 @@ export function Understory(props: {
   )
 
   const lensProps = (): LensProps => ({
-    rows: rows(),
+    rows: displayRows(),
     visible: visible(),
     offset: rosterOffset(),
     ask: askOf,
@@ -879,20 +1050,14 @@ export function Understory(props: {
           animations={animations()}
           live={view.live() && rows().some((row) => isLiveState(row.state))}
           tick={tick()}
-          now={now}
+          at={at}
           summary={summary()}
           spark={sparkFor}
           offset={rosterOffset()}
           header={geometry().header}
           laneHeight={geometry().laneHeight}
           onSelect={select}
-          onScroll={(delta) => {
-            const list = foldState().rows
-            const areaRows = rosterAreaRows(height()) - (folded() && foldState().hidden > 0 ? 1 : 0)
-            const lane = geometry().laneHeight
-            const max = Math.max(0, list.length * lane - areaRows)
-            setRosterOffset((value) => Math.max(0, Math.min(max, value + delta)))
-          }}
+          onScroll={scrollRoster}
         />
 
         <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0}>
@@ -906,7 +1071,7 @@ export function Understory(props: {
           />
           <box flexDirection="column" flexGrow={1} minHeight={0} minWidth={0}>
             {view.lens() === "trace" ? (
-              <TraceLens {...lensProps()} />
+              <TraceLens {...lensProps()} onScroll={scrollRoster} />
             ) : view.lens() === "roots" ? (
               <RootsLens
                 {...lensProps()}
@@ -914,6 +1079,7 @@ export function Understory(props: {
                 mapRoot={rootsRoot()}
                 onMapRoot={setRootsRoot}
                 root={props.context.location?.directory}
+                onScroll={scrollRoster}
               />
             ) : (
               <StreamLens

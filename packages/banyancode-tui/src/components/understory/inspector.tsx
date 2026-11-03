@@ -365,27 +365,46 @@ export function Inspector(props: InspectorProps) {
         { text: "─".repeat(Math.max(0, width - top.length - 1)), color: border },
         { text: "╮", color: border },
       ])
-      const middle = (text: string, color: RGBA = theme.text) =>
+      // Every row between the corners is exactly the box's inner width, so the
+      // right border lines up at any width, including the key row.
+      const room = Math.max(0, width - 4)
+      const middle = (parts: readonly Span[]) => {
+        const body = spans(room, parts)
+        const used = body.reduce((total, part) => total + [...part.text].length, 0)
         push([
           { text: "│ ", color: border },
-          { text: truncate(text, Math.max(0, width - 4)), color },
-          { text: " │", color: border },
+          ...body,
+          { text: `${" ".repeat(Math.max(0, room - used))} │`, color: border },
         ])
+      }
       if (currentAsk.kind === "form") {
-        middle(currentAsk.title)
-        middle("Enter opens the session", theme.muted)
+        middle([{ text: currentAsk.title, color: theme.text }])
+        middle([{ text: "Enter opens the session", color: theme.muted }])
       } else {
-        middle(`${currentAsk.title}${currentAsk.target === "" ? "" : `: ${currentAsk.target}`}`)
-        push([
-          { text: "│ ", color: border },
-          { text: "a", color: theme.warning, bold: true },
-          { text: " allow once  ", color: theme.muted },
-          { text: "A", color: theme.warning, bold: true },
-          { text: " always  ", color: theme.muted },
-          { text: "d", color: theme.warning, bold: true },
-          { text: " deny", color: theme.muted },
-          { text: " │", color: border },
+        middle([
+          {
+            text: `${currentAsk.title}${currentAsk.target === "" ? "" : `: ${currentAsk.target}`}`,
+            color: theme.text,
+          },
         ])
+        // The key row keeps all three answers at every width; the wording
+        // shortens rather than letting the right border fall short.
+        const keys = (once: string, always: string, deny: string): Span[] => [
+          { text: "a", color: theme.warning, bold: true },
+          { text: once, color: theme.muted },
+          { text: "A", color: theme.warning, bold: true },
+          { text: always, color: theme.muted },
+          { text: "d", color: theme.warning, bold: true },
+          { text: deny, color: theme.muted },
+        ]
+        const variants = [
+          keys(" allow once  ", " always  ", " deny"),
+          keys(" allow  ", " always  ", " deny"),
+          keys(" once  ", " all  ", " deny"),
+          keys("  ", "  ", " deny"),
+        ]
+        const plain = (parts: readonly Span[]) => parts.reduce((total, part) => total + [...part.text].length, 0)
+        middle(variants.find((parts) => plain(parts) <= room) ?? variants.at(-1)!)
       }
       push([{ text: `╰${"─".repeat(Math.max(0, width - 2))}╯`, color: border }])
       blank()

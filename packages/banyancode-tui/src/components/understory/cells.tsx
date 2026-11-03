@@ -1,6 +1,6 @@
 import { Renderable, RGBA, TextAttributes, type OptimizedBuffer, type RenderableOptions, type RenderContext } from "@opentui/core"
 import { extend } from "@opentui/solid"
-import { createEffect, createMemo } from "solid-js"
+import { createEffect, createMemo, onCleanup } from "solid-js"
 
 /**
  * A cell grid the lenses draw into. One renderable paints every glyph with its
@@ -294,10 +294,25 @@ export interface CellGridProps {
   readonly onMouseMove?: ((region: string | undefined, grid: Grid) => void) | undefined
   /** Wheel over the grid: `direction` is the wheel, `delta` the reported steps. */
   readonly onScroll?: ((direction: "up" | "down" | "left" | "right", delta: number) => void) | undefined
+  /**
+   * A drag: press on a cell, move across cells, release. `cell` is grid-local,
+   * and `region` is the hit region under the pointer (undefined off any).
+   */
+  readonly onDragStart?: ((pointer: GridPointer) => void) | undefined
+  readonly onDragMove?: ((pointer: GridPointer) => void) | undefined
+  readonly onDragEnd?: ((pointer: GridPointer) => void) | undefined
+}
+
+/** Where a pointer is, in grid cells, for a drag handler. */
+export interface GridPointer {
+  readonly region: string | undefined
+  readonly x: number
+  readonly y: number
 }
 
 export function CellGrid(props: CellGridProps) {
   let renderable: CellGridRenderable | undefined
+  let dragging = false
   const grid = createMemo(() => new Grid(Math.max(1, props.width), Math.max(1, props.height)))
 
   const publish = () => {
@@ -317,6 +332,17 @@ export function CellGrid(props: CellGridProps) {
     return node.grid.hitAt(x - node.screenX, y - node.screenY)
   }
 
+  /** A pointer position in grid cells, plus the region under it. */
+  const pointer = (x: number, y: number): GridPointer => {
+    const node = renderable
+    if (node === undefined) return { region: undefined, x: 0, y: 0 }
+    return { region: node.grid.hitAt(x - node.screenX, y - node.screenY), x: x - node.screenX, y: y - node.screenY }
+  }
+
+  onCleanup(() => {
+    dragging = false
+  })
+
   return (
     <cell_grid
       id={props.id}
@@ -329,9 +355,26 @@ export function CellGrid(props: CellGridProps) {
       }}
       onMouseDown={(event) => {
         const node = renderable
-        if (node === undefined || props.onHit === undefined) return
+        if (node === undefined) return
         const region = local(event.x, event.y)
+        dragging = true
+        props.onDragStart?.(pointer(event.x, event.y))
+        if (props.onHit === undefined) return
         if (region !== undefined) props.onHit(region, node.grid)
+      }}
+      onMouseDrag={(event) => {
+        if (!dragging) return
+        props.onDragMove?.(pointer(event.x, event.y))
+      }}
+      onMouseDragEnd={(event) => {
+        if (!dragging) return
+        dragging = false
+        props.onDragEnd?.(pointer(event.x, event.y))
+      }}
+      onMouseUp={(event) => {
+        if (!dragging) return
+        dragging = false
+        props.onDragEnd?.(pointer(event.x, event.y))
       }}
       onMouseMove={(event) => {
         if (props.onMouseMove === undefined) return

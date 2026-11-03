@@ -196,6 +196,43 @@ test("the Agents tab owns real keys: j/k, Esc, Tab and the composer", async () =
   expect(selectedRow(setup)).not.toContain("explore")
 })
 
+test("entering the Agents tab lands on Trace, and the lens keys are only digits", async () => {
+  await using setup = await fixture({ width: 220, height: 45 })
+  await ready(setup)
+  const prompt = setup.renderer.currentFocusedEditor
+  if (!(prompt instanceof TextareaRenderable)) throw new Error("missing prompt")
+  await openAgents(setup)
+
+  // The tab opens on the Trace lens: its ruler, not the stream's filter row.
+  const entered = setup.captureCharFrame()
+  expect(entered).toContain("NOW")
+  expect(entered).not.toContain("All branches")
+
+  // 3 and 1 switch lenses through the real dispatcher.
+  setup.mockInput.pressKey("3")
+  await setup.waitForFrame((frame) => frame.includes("All branches"), { maxPasses: 100 })
+  setup.mockInput.pressKey("1")
+  await setup.waitForFrame((frame) => frame.includes("NOW") && !frame.includes("All branches"), { maxPasses: 100 })
+
+  // A key event whose base-layout key is a digit is not a digit press: the
+  // kitty sequence below is `]` with no modifiers but base key "3", which is
+  // the shape a tab switch carries. It must not reach the lens keys.
+  setup.renderer.stdin.emit("data", Buffer.from("\x1b[93;1;51u"))
+  await setup.waitForVisualIdle({ quietFrames: 2 })
+  expect(setup.captureCharFrame()).toContain("NOW")
+  expect(setup.captureCharFrame()).not.toContain("All branches")
+
+  // Digits typed into the composer stay digits and never pick a lens.
+  setup.mockInput.pressTab()
+  await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof TextareaRenderable)
+  setup.mockInput.typeText("213")
+  await setup.waitForFrame((frame) => frame.includes("213"), { maxPasses: 100 })
+  expect(prompt.plainText).toBe("213")
+  const typed = setup.captureCharFrame()
+  expect(typed).toContain("NOW")
+  expect(typed).not.toContain("All branches")
+})
+
 test("the app frames keep the panel hints above the composer", async () => {
   const captured: string[] = []
   for (const [width, height] of [

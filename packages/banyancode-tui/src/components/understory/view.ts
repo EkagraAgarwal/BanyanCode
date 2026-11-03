@@ -4,7 +4,7 @@ import { createSignal, type Accessor } from "solid-js"
 import type { RosterRow } from "../../data/understory"
 import type { AgentSpan } from "../../data/understory-spans"
 import type { Palette } from "../../theme"
-import { TRACE_SECONDS_PER_COLUMN, traceWindow, zoomScale, type RowGeometry, type TraceWindow } from "./layout"
+import { TRACE_SECONDS_PER_COLUMN, traceWindow, type RowGeometry, type TraceWindow } from "./layout"
 
 /**
  * Shared state for the Agents tab. The lenses read it; the shell owns the keys
@@ -20,6 +20,20 @@ export function lensLabel(lens: Lens): string {
   if (lens === "trace") return "Trace"
   if (lens === "roots") return "Roots"
   return "Stream"
+}
+
+/**
+ * The lens a real digit press selects. A keymap match is not proof of a press:
+ * `@opentui/keymap` adds the physical key's base-layout character as an extra
+ * match (so a digit-row key can match a bare digit), and the host's ctrl+] tab
+ * switch carries that base key. Only the event's own name is proof, so the
+ * lens commands pass their `KeyEvent` here and a fallback match is ignored.
+ */
+export function lensForKey(name: string | undefined): Lens | undefined {
+  if (name === "1") return "trace"
+  if (name === "2") return "roots"
+  if (name === "3") return "stream"
+  return undefined
 }
 
 /** A tool span pinned in Trace; the inspector's Call sheet reads it. */
@@ -76,9 +90,14 @@ export interface UnderstoryView {
   readonly live: Accessor<boolean>
   /** The playhead a lens draws: the scrubbed time, else `now()`. */
   readonly viewT: Accessor<number>
-  /** The visible time window for a run; fixed scale while live, fitted once ended. */
+  /** The visible time window, in milliseconds, for the run and its columns. */
   readonly window: (input: WindowInput) => TraceWindow
+  /** An explicit window, dragged or zoomed; `undefined` uses the fitted one. */
+  readonly win: Accessor<TraceWindow | undefined>
+  readonly setWin: (window: TraceWindow | undefined) => void
+  /** Seconds per column for the window on screen. */
   readonly scale: Accessor<number>
+  /** Zoom 30% in or out around the playhead. */
   readonly zoom: (direction: 1 | -1) => void
   readonly resetZoom: () => void
   readonly pinned: Accessor<PinnedCall | undefined>
@@ -95,37 +114,130 @@ export interface UnderstoryView {
   readonly setOverlay: (on: boolean) => void
 }
 
+/** The playhead is a scrub, so every action that would write to the run is off. */
+export const REPLAY_OFF = "return to live (l) first"
+
+/**
+ * The lens' replay state, for a surface that has no view of its own: the
+ * composer's send guard reads it, so a send while scrubbed is refused with the
+ * same words the panel uses.
+ */
+const [replaying, setReplaying] = createSignal(false)
+export const understoryLive = (): boolean => !replaying()
+
+const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value))
+/** Where the playhead sits in a scrubbed window: the mockup's 60%. */
+const PLAYHEAD_LEAD = 0.6
+/** A zoom keeps at least five seconds and grows to the run plus fifteen. */
+const ZOOM_MIN_MS = 5_000
+const ZOOM_SLACK_MS = 15_000
+/** The window a zoom starts from before the lens has asked for one: 42 s. */
+const DEFAULT_SPAN_MS = 42_000
+const ZOOM_STEP_IN = 0.7
+const ZOOM_STEP_OUT = 1.4
+
 export function createUnderstoryView(input: { readonly now: () => number }): UnderstoryView {
   const [lens, setLens] = createSignal<Lens>("trace")
   const [t, setT] = createSignal<number | undefined>(undefined)
-  const [scale, setScale] = createSignal(TRACE_SECONDS_PER_COLUMN)
+  const [scaleValue, setScaleValue] = createSignal(TRACE_SECONDS_PER_COLUMN)
+  const [win, setWin] = createSignal<TraceWindow | undefined>(undefined)
   const [pinned, setPinned] = createSignal<PinnedCall | undefined>(undefined)
   const [file, setFile] = createSignal<string | undefined>(undefined)
   const [blast, setBlast] = createSignal(false)
   const [filter, setFilter] = createSignal(false)
   const [overlay, setOverlay] = createSignal(false)
+
+  // The last window and column count the lens asked for, so `+`/`-` can zoom
+  // around the playhead before the lens has been drawn again.
+  let latest: TraceWindow | undefined
+  let latestColumns = 1
+
+  const live = () => t() === undefined
+  const viewT = () => t() ?? input.now()
+  const windowSpan = () => latestColumns * scaleValue() * 1000
+
+  const fit = (start: number, end: number, columns: number): TraceWindow => {
+    const span = Math.max(1, end - start)
+    return { a: start, b: start + span, scale: span / 1000 / Math.max(1, columns) }
+  }
+
+  /** A window around the playhead at the current scale, kept inside the run. */
+  const around = (start: number, ceiling: number, columns: number): TraceWindow => {
+    const span = windowSpan()
+    const a = clamp(viewT() - span * PLAYHEAD_LEAD, start, Math.max(start, ceiling - span))
+    return { a, b: a + span, scale: scaleValue() }
+  }
+
+  const computed = (range: WindowInput): TraceWindow => {
+    const columns = Math.max(1, Math.floor(range.columns))
+    latestColumns = columns
+    const start = range.start
+    const nowMs = range.now ?? viewT()
+    if (range.end !== undefined) {
+      const whole = fit(start, range.end, columns)
+      // An ended run fits whole, until the user zooms: then it is a window
+      // around the playhead at the zoomed scale.
+      return scaleValue() === TRACE_SECONDS_PER_COLUMN ? whole : around(start, Math.max(range.end, start + 1), columns)
+    }
+    if (!live()) return around(start, Math.max(nowMs, start + windowSpan()), columns)
+    // Live: a fixed scale that pages forward in 30% steps, in seconds, which is
+    // the unit `traceWindow` and its tests speak.
+    const paged = traceWindow({
+      start: start / 1000,
+      now: nowMs / 1000,
+      columns,
+      scale: scaleValue(),
+    })
+    return { a: paged.a * 1000, b: paged.b * 1000, scale: paged.scale }
+  }
+
   return {
     lens,
     setLens,
     t,
-    setT,
-    live: () => t() === undefined,
-    viewT: () => t() ?? input.now(),
-    // `traceWindow` pages in seconds, the unit its tests pin; the whole UI
-    // speaks milliseconds, so the conversion lives at this one boundary.
-    window: (range) => {
-      const win = traceWindow({
-        start: range.start / 1000,
-        ...(range.end === undefined ? {} : { end: range.end / 1000 }),
-        now: (range.now ?? t() ?? input.now()) / 1000,
-        columns: range.columns,
-        scale: scale(),
-      })
-      return { a: win.a * 1000, b: win.b * 1000, scale: win.scale }
+    setT: (value) => {
+      setT(value)
+      setReplaying(value !== undefined)
     },
-    scale,
-    zoom: (direction) => setScale(zoomScale(scale(), direction)),
-    resetZoom: () => setScale(TRACE_SECONDS_PER_COLUMN),
+    live,
+    viewT,
+    window: (range) => {
+      const fixed = win()
+      if (fixed !== undefined) {
+        latest = fixed
+        latestColumns = Math.max(1, Math.floor(range.columns))
+        return fixed
+      }
+      const next = computed(range)
+      latest = next
+      return next
+    },
+    win,
+    setWin,
+    scale: () => win()?.scale ?? scaleValue(),
+    zoom: (direction) => {
+      const base =
+        win() ??
+        latest ?? {
+          a: 0,
+          b: DEFAULT_SPAN_MS,
+          scale: TRACE_SECONDS_PER_COLUMN,
+        }
+      const ceiling = Math.max(30_000, base.b + ZOOM_SLACK_MS)
+      const span = clamp(
+        (base.b - base.a) * (direction === 1 ? ZOOM_STEP_IN : ZOOM_STEP_OUT),
+        ZOOM_MIN_MS,
+        ceiling,
+      )
+      const columns = Math.max(1, Math.round((base.b - base.a) / 1000 / Math.max(0.001, base.scale)))
+      const a = clamp(viewT() - span * PLAYHEAD_LEAD, 0, Math.max(0, ceiling - span))
+      setScaleValue(span / 1000 / columns)
+      setWin({ a, b: a + span, scale: span / 1000 / columns })
+    },
+    resetZoom: () => {
+      setWin(undefined)
+      setScaleValue(TRACE_SECONDS_PER_COLUMN)
+    },
     pinned,
     pinCall: setPinned,
     file,
