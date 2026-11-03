@@ -61,9 +61,9 @@ export const settings: Setting[] = [
     category: "Session",
     path: ["session_layout"],
     description: "Whether subagents branch off a rail beside the chat or keep the side columns",
-    default: "trunk",
-    values: ["trunk", "classic"],
-    labels: ["trunk", "classic"],
+    default: "classic",
+    values: ["classic", "trunk"],
+    labels: ["classic", "trunk"],
     keywords: ["trunk", "grove", "rail", "subagents", "branches", "sidebar layout"],
   },
   {

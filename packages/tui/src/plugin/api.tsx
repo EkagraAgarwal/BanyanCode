@@ -210,6 +210,7 @@ export function createPluginContext(input: {
         path: (value) => abbreviateHome(value, host.paths.home),
       },
       animations: () => host.config.data.animations ?? true,
+      sessionLayout: () => host.config.data.session_layout,
       router: {
         register(page) {
           if (input.registry.has("routes", page.name)) throw new Error(`Route already registered: ${page.name}`)

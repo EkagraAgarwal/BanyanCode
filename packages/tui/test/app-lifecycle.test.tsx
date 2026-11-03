@@ -541,7 +541,7 @@ test("narrow vertical session tabs collapse to a compact rail with the terminal"
     },
   })
   await setup.ready
-  // The rail is its own 5-column column; the header's canopy rule now shares row 1
+  // The rail is its own 5-column column; the shared chrome's second row now starts
   // to its right, so read only the rail's columns.
   await setup.waitForFrame((frame) => frame.split("\n")[1].slice(0, 5).trim() === "⌕")
 

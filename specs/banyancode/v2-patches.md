@@ -159,20 +159,20 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/component/error-component.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/component/logo.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/component/terminal-pane.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
-| `packages/tui/src/config/index.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
+| `packages/tui/src/config/index.tsx` | hook | adds the `session_layout` chat-layout setting, classic by default; user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/context/program-status.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/feature-plugins/sidebar/footer.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/feature-plugins/system/stats.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/logo.ts` | branding | the v1 BanyanCode tree splash and wordmark | — |
-| `packages/tui/src/component/session-frame.tsx` | hook | the v1 layout: header, docked left sidebar, right inspector, footer, tabs over the transcript | — |
-| `packages/tui/src/context/panel.tsx` | hook | a panel can present in place of the transcript | — |
-| `packages/tui/src/routes/session/index.tsx` | hook | takes the element drawn over the transcript | — |
-| `packages/tui/src/routes/session/sidebar.tsx` | hook | a docked sidebar has its own width and the v1 border | — |
+| `packages/tui/src/component/session-frame.tsx` | hook | the v1 layout: header, docked left sidebar, right inspector, footer, tabs over the transcript; the Trunk layout docks a rail in the left column, caps the transcript and slides a panels overlay over the right edge, selected by `session_layout` | — |
+| `packages/tui/src/context/panel.tsx` | hook | a panel can present in place of the transcript; the Trunk panels overlay is separate presentation state | — |
+| `packages/tui/src/routes/session/index.tsx` | hook | takes the element drawn over the transcript; tool settle, diff reveal, token bloom and live subagent rows | — |
+| `packages/tui/src/routes/session/sidebar.tsx` | hook | a docked sidebar has its own width and the v1 border, and its scrolling body reserves the scrollbar's column | — |
 | `packages/tui/src/ui/session-rails.tsx` | hook | v1 resize handle and collapsed rail for the side columns | — |
 | `packages/tui/src/component/prompt/autocomplete.tsx` | fix | a command offered by both client and server is listed once | — |
 | `packages/tui/src/routes/home.tsx` | hook | `home.logo` and `home.bottom` slots, size-only gap and centring rules, and a prompt without its own footer row so the full layout fits 120x40 | — |
-| `packages/plugin/src/tui/context.ts` | hook | declares the `home.logo` slot, `ui.animations` and `slash.forwardToServer` | — |
-| `packages/tui/src/plugin/api.tsx` | hook | wires `ui.animations` from the host's `config.animations` | — |
+| `packages/plugin/src/tui/context.ts` | hook | declares the `home.logo` slot, `ui.animations`, `ui.sessionLayout` and `slash.forwardToServer` | — |
+| `packages/tui/src/plugin/api.tsx` | hook | wires `ui.animations` from the host's `config.animations` and `ui.sessionLayout` from `config.session_layout` | — |
 | `packages/tui/src/feature-plugins/home/footer.tsx` | hook | one-row footer: directory and branch status content, the prompt hints the home prompt no longer carries, update notice and version on one line | — |
 | `packages/tui/src/feature-plugins/system/storybook/home.tsx` | hook | fixture-driven home hero story with replay and final-frame controls | — |
 | `packages/tui/src/feature-plugins/system/storybook/index.tsx` | hook | registers the home story | — |
@@ -187,7 +187,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/util/error-details.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/util/error.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/util/presentation.ts` | branding | user-visible text, commands and URLs say BanyanCode | — |
-| `packages/tui/test/app-lifecycle.test.tsx` | fix | test expectation follows the BanyanCode text and names; Home's directory is read from the footer, and its readiness marker is the prompt placeholder because the hints move | — |
+| `packages/tui/test/app-lifecycle.test.tsx` | fix | test expectation follows the BanyanCode text and names; Home's directory is read from the footer, its readiness marker is the prompt placeholder, and the vertical rail is read from its own columns | — |
 | `packages/tui/test/cli/tui/dialog-mcp.test.tsx` | fix | test expectation follows the BanyanCode text and names | — |
 | `packages/tui/test/component/dialog-update.test.tsx` | fix | test expectation follows the BanyanCode text and names | — |
 | `packages/tui/test/context/program-status.test.ts` | fix | test expectation follows the BanyanCode text and names | — |
@@ -256,7 +256,7 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/cli/tui/dialog-select.test.tsx` | fix | pins the theme a cursor-color test compares against | — |
 | `packages/tui/test/sidebar-scroll.test.tsx` | hook | covers the gap between sidebar content and its scrollbar | — |
 | `packages/tui/src/component/spinner-frames.ts` | hook | the redesign's `SPROUT` spinner frames | — |
-| `packages/tui/src/component/dialog-config.tsx` | hook | "Chat layout" setting for `session_layout` | — |
+| `packages/tui/src/component/dialog-config.tsx` | hook | "Chat layout" setting for `session_layout`, showing the classic default | — |
 | `packages/tui/src/component/diff-reveal.tsx` | hook | diffs open and collapse with a short reveal | — |
 | `packages/tui/src/component/token-bloom.ts` | hook | the newest streamed characters blend from the highlight color | — |
 | `packages/tui/src/component/tool-settle.tsx` | hook | a live tool row's background flash fades | — |
@@ -267,7 +267,8 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/component/diff-reveal.test.tsx` | hook | covers the diff reveal | — |
 | `packages/tui/test/component/token-bloom.test.tsx` | hook | covers token bloom | — |
 | `packages/tui/test/component/tool-settle.test.tsx` | hook | covers the tool settle | — |
-| `packages/tui/test/session-panels-overlay.test.ts` | hook | covers the Trunk panels overlay state and curves | — |
+| `packages/tui/test/session-panels-overlay.test.ts` | hook | covers the `session_layout` default and setting, and the Trunk panels overlay state and curves | — |
+| `packages/tui/test/session-layout-default.test.tsx` | hook | pins the classic chat page by default and the opt-in Trunk chrome and rail | — |
 | `packages/tui/test/subagent-rows.test.ts` | hook | covers the live subagent rows | — |
 | `packages/tui/test/feature-plugins/home-footer.test.ts` | hook | pins which footer items show at each width | — |
 | `packages/tui/test/clear-session.test.tsx` | fix | Home's resume list can show a cleared session's title, so the test checks the tab store | — |
@@ -275,5 +276,5 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/prompt-cursor.test.tsx` | fix | Home readiness marker follows the redesign | — |
 | `packages/tui/test/prompt-offset.test.tsx` | fix | Home readiness marker follows the redesign | — |
 | `packages/tui/test/prompt-paste.test.tsx` | fix | Home readiness marker follows the redesign | — |
-| `packages/tui/test/session-backfill-disclosure.test.tsx` | fix | clicks the disclosure's real column, since the Trunk rail moves it | — |
-| `packages/tui/test/session-group-navigation.test.tsx` | fix | clicks the group header's real column, since the Trunk rail moves it | — |
+| `packages/tui/test/session-backfill-disclosure.test.tsx` | fix | clicks the disclosure at the column the row actually starts at, so it works in either chat layout | — |
+| `packages/tui/test/session-group-navigation.test.tsx` | fix | clicks the group header at the column the row actually starts at, so it works in either chat layout | — |

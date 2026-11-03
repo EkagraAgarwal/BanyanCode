@@ -6,10 +6,10 @@ import type { CodegraphLive, MeshLive, SystemLive } from "../../data/live"
 import { categorizeTokens } from "../../data/tokens"
 import { createTicker, mix, useTickerWhen, type Ticker } from "../../motion"
 import { palette } from "../../theme"
-import { selectView, tabColumns, tabsEnd, viewKeyForPanel, VIEW_TABS, type TabColumn, type ViewKey } from "../panels/nav"
+import { selectView, tabColumns, tabsEnd, viewKeyForPanel, SessionTabs, VIEW_TABS, type TabColumn, type ViewKey } from "../panels/nav"
 import { canopyRuns } from "./canopy"
 import { attentionBreakdown } from "./attention"
-import { activeAgentCount, graphPill, severityColor, type PillSeverity } from "./pills"
+import { activeAgentCount, activePeers, graphPill, severityColor, type PillSeverity } from "./pills"
 
 const BANYAN_GLYPH = "⣴⣿⣦"
 const BRAND_NAME = "banyancode"
@@ -148,19 +148,196 @@ function truncateProject(value: string): string {
   return value.length > PROJECT_MAX_CHARS ? `${value.slice(0, PROJECT_MAX_CHARS - 1)}…` : value
 }
 
-/**
- * The v1 top bar, rebuilt as two rows: brand, project and tabs on row 0, then
- * the canopy rule. The rule is the tab underline now: the active tab is a heavy
- * segment, and a highlight sweeps along it only while work is running.
- */
-export function SessionHeader(props: {
+/** Everything the classic and Trunk top bars both need from the host. */
+export interface ChromeHeaderProps {
   readonly context: Context
   readonly sessionID: string
   readonly codegraph: CodegraphLive
   readonly mesh: MeshLive
   readonly system: SystemLive
   readonly ticker?: Ticker | undefined
+}
+
+export interface ChromeFooterProps {
+  readonly context: Context
+  readonly sessionID: string
+  readonly mesh: MeshLive
+  readonly system: SystemLive
+}
+
+/**
+ * The shared top bar. The classic layout renders the v1 arrangement the owner
+ * kept (brand, project, statuses and key hints, then the tab row and its
+ * separator); the Trunk layout renders the redesign's two-row chrome with the
+ * canopy rule. The host owns the setting, so a layout switch remounts the right
+ * one.
+ */
+export function SessionHeader(props: ChromeHeaderProps) {
+  return (
+    <Show
+      when={props.context.ui.sessionLayout() === "trunk"}
+      fallback={<ClassicHeader {...props} />}
+    >
+      <TrunkHeader {...props} />
+    </Show>
+  )
+}
+
+/** The shared bottom row; see SessionHeader for how the layout picks one. */
+export function SessionFooter(props: ChromeFooterProps) {
+  return (
+    <Show
+      when={props.context.ui.sessionLayout() === "trunk"}
+      fallback={<ClassicFooter {...props} />}
+    >
+      <TrunkFooter {...props} />
+    </Show>
+  )
+}
+
+const CLASSIC_PILLS_MIN_WIDTH = 72
+const CLASSIC_HINTS_MIN_WIDTH = 110
+const CLASSIC_PROJECT_MIN_WIDTH = 90
+const CLASSIC_FOOTER_HINT_MIN_WIDTH = 100
+
+function ClassicDot(props: {
+  readonly color: RGBA
+  readonly muted: RGBA
+  readonly label: string
 }) {
+  return (
+    <box flexDirection="row" flexShrink={0} gap={1}>
+      <text fg={props.color}>●</text>
+      <text fg={props.muted}>{props.label}</text>
+    </box>
+  )
+}
+
+/**
+ * The classic top bar, as the v2-base release drew it: brand and project, live
+ * statuses and key hints on row 0, then the centred CHAT / SESSIONS / AGENTS /
+ * CONFIG row with a full-width rule under it.
+ */
+function ClassicHeader(props: ChromeHeaderProps) {
+  const theme = () => palette(props.context.theme)
+  const dimensions = useTerminalDimensions()
+
+  // YOLO and swarm can be on from config or the environment before anything toggles them.
+  onMount(() => {
+    void props.system.refreshYolo()
+    void props.system.refreshLsp()
+    void props.mesh.refreshLimits()
+    void props.codegraph.refresh()
+  })
+
+  const active = createMemo(() => {
+    const family = props.context.data.session.family(props.sessionID)
+    const running = family.filter(
+      (id) => id !== props.sessionID && props.context.data.session.status(id) === "running",
+    ).length
+    return Math.max(running, activePeers(props.mesh, props.context.data.session.root(props.sessionID)))
+  })
+  const lspColor = createMemo(() => {
+    const status = props.system.lsp()
+    if (!status?.enabled) return theme().error
+    return status.servers.some((server) => server.status === "connected" && !server.disabled)
+      ? theme().success
+      : theme().warning
+  })
+  const graph = createMemo(() =>
+    graphPill({
+      availability: props.codegraph.availability(),
+      readiness: props.codegraph.readiness(),
+      build: props.codegraph.build(),
+      autoUpdate: props.codegraph.autoUpdate(),
+      meta: props.codegraph.meta(),
+    }),
+  )
+
+  return (
+    <box flexDirection="column" flexShrink={0} width="100%">
+      <box flexDirection="row" flexShrink={0} justifyContent="space-between" gap={1} paddingLeft={1} paddingRight={1}>
+        <box flexDirection="row" gap={2} flexShrink={0}>
+          <text fg={theme().primary}>
+            <b>BANYANCODE</b>
+          </text>
+          <Show when={dimensions().width >= CLASSIC_PROJECT_MIN_WIDTH}>
+            <text fg={theme().muted}>{folderName(props.context.location?.directory)}</text>
+          </Show>
+        </box>
+        <Show when={dimensions().width >= CLASSIC_PILLS_MIN_WIDTH}>
+          <box flexDirection="row" gap={2} flexShrink={0}>
+            <ClassicDot
+              color={active() > 0 ? theme().success : theme().muted}
+              muted={theme().muted}
+              label={`${active()} active`}
+            />
+            <ClassicDot color={lspColor()} muted={theme().muted} label="LSP" />
+            <ClassicDot color={severityColor(theme(), graph().severity)} muted={theme().muted} label={graph().label} />
+          </box>
+        </Show>
+        <Show when={dimensions().width >= CLASSIC_HINTS_MIN_WIDTH}>
+          <text fg={theme().muted} flexShrink={0}>
+            ctrl+p commands ctrl+] tabs
+          </text>
+        </Show>
+      </box>
+      <SessionTabs context={props.context} active={viewKeyForPanel(props.context.ui.panel.current()?.name)} />
+    </box>
+  )
+}
+
+/**
+ * The classic bottom row, as the v2-base release drew it: project and branch on
+ * the left, modes and the always-visible attention count on the right, then the
+ * v1 key hint when there is room.
+ */
+function ClassicFooter(props: ChromeFooterProps) {
+  const theme = () => palette(props.context.theme)
+  const dimensions = useTerminalDimensions()
+  const data = props.context.data
+  const session = createMemo(() => data.session.get(props.sessionID))
+  const location = () => session()?.location ?? props.context.location
+  const branch = createMemo(() => {
+    const current = location()
+    return current ? data.location.vcs.info(current)?.branch.current : undefined
+  })
+  const attention = createMemo(() => attentionBreakdown(props.context, props.sessionID).count)
+  return (
+    <box flexDirection="row" flexShrink={0} width="100%" gap={2} paddingLeft={2} paddingRight={2}>
+      <text fg={theme().muted} flexShrink={1} wrapMode="none">
+        {folderName(location()?.directory)}
+        {branch() ? ` · Git: ${branch()}` : ""}
+      </text>
+      <box flexGrow={1} />
+      <Show when={props.system.yolo() === true}>
+        <text fg={theme().error} flexShrink={0}>
+          [yolo]
+        </text>
+      </Show>
+      <Show when={props.mesh.swarmMode() === true}>
+        <text fg={theme().error} flexShrink={0}>
+          [swarm]
+        </text>
+      </Show>
+      <text fg={attention() > 0 ? theme().error : theme().success} flexShrink={0}>
+        {`▲ ${attention()} need attention`}
+      </text>
+      <Show when={dimensions().width >= CLASSIC_FOOTER_HINT_MIN_WIDTH}>
+        <text fg={theme().muted} flexShrink={0}>
+          ^p cmd · / search
+        </text>
+      </Show>
+    </box>
+  )
+}
+
+/**
+ * The Trunk top bar: brand, project and tabs on row 0, then the canopy rule. The
+ * rule is the tab underline: the active tab is a heavy segment, and a highlight
+ * sweeps along it only while work is running.
+ */
+function TrunkHeader(props: ChromeHeaderProps) {
   const theme = () => palette(props.context.theme)
   const dimensions = useTerminalDimensions()
   const ownsTicker = props.ticker === undefined
@@ -174,6 +351,7 @@ export function SessionHeader(props: {
     void props.mesh.refreshLimits()
     void props.codegraph.refresh()
   })
+
 
   const activeKey = createMemo(() => viewKeyForPanel(props.context.ui.panel.current()?.name))
   const active = createMemo(() =>
@@ -324,16 +502,11 @@ export function SessionHeader(props: {
 }
 
 /**
- * The bottom row: directory and branch on the left, an attention message only
- * while something is waiting, and the key hints. Statuses that row 0 already
- * carries are deliberately absent.
+ * The Trunk bottom row: directory and branch on the left, an attention message
+ * only while something is waiting, and the key hints. Statuses that row 0
+ * already carries are deliberately absent.
  */
-export function SessionFooter(props: {
-  readonly context: Context
-  readonly sessionID: string
-  readonly mesh: MeshLive
-  readonly system: SystemLive
-}) {
+function TrunkFooter(props: ChromeFooterProps) {
   const theme = () => palette(props.context.theme)
   const dimensions = useTerminalDimensions()
   const data = props.context.data

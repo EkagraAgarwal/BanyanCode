@@ -3,14 +3,14 @@ import { resolve } from "../src/config"
 import { settings, settingID } from "../src/component/dialog-config"
 import { createPanelState, panelEaseOut, panelSpring } from "../src/context/panel"
 
-test("trunk is the default chat layout and classic stays selectable", () => {
-  expect(resolve({}, { terminalSuspend: true }).session_layout).toBe("trunk")
-  expect(resolve({ session_layout: "classic" }, { terminalSuspend: true }).session_layout).toBe("classic")
-  // The setting is surfaced in the settings dialog, next to the sidebar.
+test("classic is the default chat layout and trunk stays selectable", () => {
+  expect(resolve({}, { terminalSuspend: true }).session_layout).toBe("classic")
+  expect(resolve({ session_layout: "trunk" }, { terminalSuspend: true }).session_layout).toBe("trunk")
+  // The setting is surfaced in the settings dialog, next to the sidebar, and shows classic first.
   const setting = settings.find((item) => settingID(item) === "session_layout")
   expect(setting).toBeDefined()
-  expect(setting?.values).toEqual(["trunk", "classic"])
-  expect(setting?.default).toBe("trunk")
+  expect(setting?.values).toEqual(["classic", "trunk"])
+  expect(setting?.default).toBe("classic")
 })
 
 test("the trunk panels overlay opens and closes on its own state", () => {

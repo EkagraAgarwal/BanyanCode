@@ -108,6 +108,8 @@ export function context(input: {
   readonly agents?: readonly AgentInfo[]
   readonly models?: readonly ModelInfo[]
   readonly animations?: boolean
+  /** The host's chat layout setting. Defaults to the host default, classic. */
+  readonly layout?: "trunk" | "classic"
   readonly on?: (
     type: string,
     handler: (event: { readonly data: { readonly sessionID: string } }) => void,
@@ -211,6 +213,7 @@ export function context(input: {
       toast: { show: () => {} },
       format: { path: (value: string) => value },
       animations: () => input.animations ?? false,
+      sessionLayout: () => input.layout ?? "classic",
       model: { current: () => undefined, variant: { list: () => [], set: () => false } },
     },
     markdown: { registerCodeBlockRenderer: () => () => {} },

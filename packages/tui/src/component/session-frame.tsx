@@ -60,7 +60,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
   const theme = useTheme()
   const availableWidth = () => Math.max(0, dimensions().width - props.verticalTabsWidth)
   const defaultPaneWidth = () => Math.max(1, Math.floor(panels.width() / 2))
-  // Trunk is the default chat layout; `session_layout: "classic"` keeps the side columns.
+  // Classic is the default chat layout; `session_layout: "trunk"` grows subagents on a rail instead.
   const trunk = () => config.data.session_layout === "trunk"
   const [layout, updateLayout] = useStorage().store<{
     paneWidth?: number

@@ -55,12 +55,15 @@ const models = [
 ] as unknown as ModelInfo[]
 
 const idle = context({ sessions: [root] })
-const busy = context({
+const busyContext = {
   sessions: [root, child],
   running: new Set(["ses_child"]),
   messages: { ses_root: [message] },
   models,
-})
+}
+// The Trunk chrome is opt-in now: its tests ask for it the way a user would.
+const trunkIdle = context({ sessions: [root], layout: "trunk" })
+const trunkBusy = context({ ...busyContext, layout: "trunk" })
 
 const codegraph = codegraphLive({ readiness: { reason: "ready", autoBuilt: false } })
 
@@ -104,7 +107,7 @@ async function renderHeader(options: {
 }
 
 function pendingContext(permissions: number): Context {
-  const base = context({ sessions: [root] })
+  const base = context({ sessions: [root], layout: "trunk" })
   return {
     ...base,
     data: {
@@ -120,8 +123,32 @@ function pendingContext(permissions: number): Context {
   } as unknown as Context
 }
 
+test("the classic layout is the default and draws the v1 chrome", async () => {
+  const app = await renderHeader({ width: 160 })
+  try {
+    const [row0, tabs, rule] = lines(app)
+    expect(row0).toContain("BANYANCODE")
+    expect(row0).toContain("workspace")
+    expect(row0).toContain("● 0 active")
+    expect(row0).toContain("● LSP")
+    expect(row0).toContain("Graph: built")
+    expect(row0).toContain("ctrl+p commands ctrl+] tabs")
+    expect(row0).not.toContain("CHAT")
+    // The tab row and its full-width rule sit under the brand row, not a canopy.
+    expect(tabs).toContain("CHAT")
+    expect(tabs).toContain("SESSIONS")
+    expect(tabs).toContain("AGENTS")
+    expect(tabs).toContain("CONFIG")
+    expect(rule!.replace(/[─\s]/g, "")).toBe("")
+    expect(app.captureCharFrame()).not.toContain("━")
+    expect(app.captureCharFrame()).not.toContain("⣴⣿⣦")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("row 0 carries every status exactly once on the right", async () => {
-  const app = await renderHeader({ width: 160, ctx: busy })
+  const app = await renderHeader({ width: 160, ctx: trunkBusy })
   try {
     const [row0, canopy] = lines(app)
     expect(row0).toContain("banyancode")
@@ -141,7 +168,7 @@ test("row 0 carries every status exactly once on the right", async () => {
 
 test("row 0 keeps every tab and never wraps, down to a narrow terminal", async () => {
   for (const width of [160, 120, 80, 44]) {
-    const app = await renderHeader({ width })
+    const app = await renderHeader({ width, ctx: trunkIdle })
     try {
       const [row0, row1] = lines(app)
       for (const label of ["CHAT", "SESSIONS", "AGENTS", "CONFIG"]) expect(row0).toContain(label)
@@ -151,7 +178,7 @@ test("row 0 keeps every tab and never wraps, down to a narrow terminal", async (
       app.renderer.destroy()
     }
   }
-  const narrow = await renderHeader({ width: 44 })
+  const narrow = await renderHeader({ width: 44, ctx: trunkIdle })
   try {
     const [row0] = lines(narrow)
     // The brand name is the first thing to go, so the tabs keep their room.
@@ -163,7 +190,7 @@ test("row 0 keeps every tab and never wraps, down to a narrow terminal", async (
 })
 
 test("very narrow chrome keeps only the active tab", async () => {
-  const base = context({ sessions: [root] })
+  const base = context({ sessions: [root], layout: "trunk" })
   const onAgents = {
     ...base,
     ui: { ...base.ui, panel: { ...base.ui.panel, current: () => ({ name: PANEL.agents }) } },
@@ -182,7 +209,7 @@ test("very narrow chrome keeps only the active tab", async () => {
 test("an idle header subscribes no timer", async () => {
   const clock = fakeClock()
   const ticker = createTicker({ animations: () => true, ...clock.options })
-  const app = await renderHeader({ width: 120, ticker })
+  const app = await renderHeader({ width: 120, ctx: trunkIdle, ticker })
   try {
     expect(ticker.subscribers()).toBe(0)
     expect(ticker.running()).toBe(false)
@@ -196,7 +223,7 @@ test("an idle header subscribes no timer", async () => {
 test("a busy header shares one timer and the canopy moves", async () => {
   const clock = fakeClock()
   const ticker = createTicker({ animations: () => true, ...clock.options })
-  const app = await renderHeader({ width: 120, ctx: distinctColors(busy), ticker })
+  const app = await renderHeader({ width: 120, ctx: distinctColors(trunkBusy), ticker })
   try {
     expect(clock.scheduled()).toBe(1)
     expect(ticker.subscribers()).toBe(1)
@@ -219,7 +246,7 @@ test("a busy header shares one timer and the canopy moves", async () => {
 test("animations off means no timer even while busy", async () => {
   const clock = fakeClock()
   const ticker = createTicker({ animations: () => false, ...clock.options })
-  const app = await renderHeader({ width: 120, ctx: busy, ticker })
+  const app = await renderHeader({ width: 120, ctx: trunkBusy, ticker })
   try {
     expect(clock.scheduled()).toBe(0)
     const before = lines(app)[1]!
@@ -235,13 +262,40 @@ test("animations off means no timer even while busy", async () => {
 async function renderFooter(options: { readonly width: number; readonly ctx?: Context }) {
   return mount(
     () => (
-      <SessionFooter context={options.ctx ?? idle} sessionID="ses_root" mesh={meshLive()} system={systemLive()} />
+      <SessionFooter
+        context={options.ctx ?? trunkIdle}
+        sessionID="ses_root"
+        mesh={meshLive()}
+        system={systemLive()}
+      />
     ),
     { width: options.width, height: 2 },
   )
 }
 
-test("the bottom row shows the location, branch and one key hint", async () => {
+test("the classic footer always shows the attention count and the v1 hint", async () => {
+  const app = await renderFooter({ width: 120, ctx: idle })
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("workspace · Git: v2-base")
+    expect(frame).toContain("▲ 0 need attention")
+    expect(frame).toContain("^p cmd · / search")
+    expect(frame).not.toContain("^p commands")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("the classic footer names the waiting count in the error colour", async () => {
+  const waiting = await renderFooter({ width: 120, ctx: pendingContext(2) })
+  try {
+    expect(waiting.captureCharFrame()).toContain("▲ 2 need attention")
+  } finally {
+    waiting.renderer.destroy()
+  }
+})
+
+test("the Trunk bottom row shows the location, branch and one key hint", async () => {
   const app = await renderFooter({ width: 120 })
   try {
     const frame = app.captureCharFrame()
@@ -256,7 +310,7 @@ test("the bottom row shows the location, branch and one key hint", async () => {
   }
 })
 
-test("attention appears only while something is waiting", async () => {
+test("Trunk attention appears only while something is waiting", async () => {
   const waiting = await renderFooter({ width: 120, ctx: pendingContext(2) })
   const clear = await renderFooter({ width: 120 })
   try {
@@ -268,7 +322,7 @@ test("attention appears only while something is waiting", async () => {
   }
 })
 
-test("narrow chrome drops the key hint but keeps the attention message", async () => {
+test("narrow Trunk chrome drops the key hint but keeps the attention message", async () => {
   const app = await renderFooter({ width: 44, ctx: pendingContext(1) })
   try {
     const frame = app.captureCharFrame()

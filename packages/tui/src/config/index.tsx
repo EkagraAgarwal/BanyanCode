@@ -185,7 +185,7 @@ export const Info = Schema.Struct({
   ).annotate({ description: "Session transcript presentation settings" }),
   session_layout: Schema.optional(Schema.Literals(["trunk", "classic"])).annotate({
     description:
-      "Chat layout: 'trunk' grows subagents as branches off a rail beside the chat; 'classic' keeps the side columns",
+      "Chat layout: 'classic' keeps the side columns; 'trunk' grows subagents as branches off a rail beside the chat",
   }),
   tabs: Schema.optional(
     Schema.Struct({
@@ -309,7 +309,7 @@ export function resolve(
 
   return {
     ...input,
-    session_layout: input.session_layout ?? "trunk",
+    session_layout: input.session_layout ?? "classic",
     attention: {
       notifications: input.attention?.notifications ?? false,
       sound: input.attention?.sound ?? false,

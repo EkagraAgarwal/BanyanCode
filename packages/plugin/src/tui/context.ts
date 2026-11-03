@@ -521,6 +521,11 @@ export interface UI {
   }
   /** Whether the TUI should animate. Reactive when read in a Solid computation. */
   animations(): boolean
+  /**
+   * The chat layout the host renders. `classic` keeps the side columns; `trunk`
+   * grows subagents on a rail. Reactive when read in a Solid computation.
+   */
+  sessionLayout(): "trunk" | "classic"
   readonly router: {
     register(page: Page): () => void
     navigate(destination: Destination): void
