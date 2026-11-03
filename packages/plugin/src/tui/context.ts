@@ -162,7 +162,11 @@ type PromptFooterInput = {
   readonly showDetails: boolean
 }
 
-/** `main` shows the panel in place of the transcript, keeping the composer and side columns. */
+/**
+ * `main` shows the panel in place of the transcript, keeping the composer and
+ * side columns. A panel may also ask to `bleed`, which drops the side columns so
+ * it spans the whole main area; leaving the panel restores them.
+ */
 export type PanelPresentation = "panel" | "fullscreen" | "main"
 
 /** Client-local state of the selected session panel. The host owns its layout and input scope. */
@@ -532,8 +536,12 @@ export interface UI {
     current(): Route
   }
   readonly panel: {
-    /** Opens the session.panel slot in the current session. */
-    open(name: string, options?: { readonly presentation?: PanelPresentation }): boolean
+    /**
+     * Opens the session.panel slot in the current session. `bleed` asks the host
+     * for the whole main area: the side columns, and their collapsed rails, are
+     * hidden until the panel closes. The persisted layout is unchanged.
+     */
+    open(name: string, options?: { readonly presentation?: PanelPresentation; readonly bleed?: boolean }): boolean
     /** Closes this plugin's active panel. Other plugins' panels are unaffected. */
     close(): void
     /** This plugin's active panel, if any. Reactive when read in a Solid computation. */

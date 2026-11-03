@@ -69,6 +69,14 @@ export function viewKeyForPanel(name: string | undefined): ViewKey {
   return "chat"
 }
 
+/**
+ * Views that take the whole main area. The host hides its side columns while
+ * one is open, so the Agents tab is full-bleed in either chat layout.
+ */
+export function bleeds(name: PanelName): boolean {
+  return name === PANEL.agents
+}
+
 export function openView(
   context: Context,
   name: PanelName,
@@ -77,7 +85,7 @@ export function openView(
 ) {
   const route = context.ui.router.current()
   const sessionID = route.type === "session" ? route.sessionID : undefined
-  if (sessionID !== undefined && context.ui.panel.open(name, { presentation })) return
+  if (sessionID !== undefined && context.ui.panel.open(name, { presentation, bleed: bleeds(name) })) return
   context.ui.router.navigate({ type: "plugin", name, data: { view: name, sessionID } })
 }
 

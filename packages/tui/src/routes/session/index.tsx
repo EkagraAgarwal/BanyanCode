@@ -163,6 +163,8 @@ export function Session(props: {
   width?: number
   /** Drawn over the transcript, which stays mounted underneath. */
   main?: JSX.Element
+  /** A main panel that takes the whole main area: no gutter, so it starts at column 0. */
+  bleed?: boolean
 }) {
   const epilogue = useEpilogue()
   const clipboard = useClipboard()
@@ -1465,6 +1467,12 @@ export function Session(props: {
   // (dimensions() is one object signal with identity equality) and vice versa.
   const terminalWidth = createMemo(() => dimensions().width)
   const terminalHeight = createMemo(() => dimensions().height)
+  // A bleeding main panel starts at column 0 and its composer spans the width;
+  // the transcript keeps the reading gutter.
+  const gutter = createMemo(() => {
+    if (props.bleed) return 0
+    return dimensions().width < 44 ? 1 : 2
+  })
 
   return (
     <context.Provider
@@ -1508,9 +1516,9 @@ export function Session(props: {
         <box
           flexGrow={1}
           minHeight={0}
-          paddingBottom={1}
-          paddingLeft={dimensions().width < 44 ? 1 : 2}
-          paddingRight={dimensions().width < 44 ? 1 : 2}
+          paddingBottom={props.bleed ? 0 : 1}
+          paddingLeft={gutter()}
+          paddingRight={gutter()}
         >
           <Show when={session()}>
             <box flexGrow={1} minHeight={0} position="relative">

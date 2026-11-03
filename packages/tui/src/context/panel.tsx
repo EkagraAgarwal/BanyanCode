@@ -8,6 +8,16 @@ export type PanelTarget = {
   readonly sessionID: string
 }
 
+export type PanelOptions = {
+  readonly presentation?: PanelPresentation
+  /**
+   * A panel may take the whole main area, including the columns the host
+   * otherwise docks its sidebars in. It is presentation state: the persisted
+   * layout is untouched, so closing the panel restores both columns as they were.
+   */
+  readonly bleed?: boolean
+}
+
 /** Spring `1 - e^(-6p)·cos(9p)`, held inside `[0, 1]` so an overshoot never widens the overlay column. */
 export function panelSpring(p: number): number {
   const value = Math.max(0, Math.min(1, p))
@@ -24,6 +34,9 @@ export function createPanelState() {
   const [current, setCurrent] = createSignal<PanelTarget>()
   const [requested, setRequested] = createSignal<PanelPresentation>("panel")
   const [width, setWidth] = createSignal(0)
+  // Presentation state, like `overlay` below: which columns the host may draw
+  // beside the panel is not a property of any one panel selection.
+  const [bleed, setBleed] = createSignal(false)
   // The Trunk chat layout keeps the side panels off screen until asked for.
   // This is presentation state, not a panel selection, so it survives the
   // panel opening and closing underneath it.
@@ -36,13 +49,15 @@ export function createPanelState() {
     canSplit,
     presentation,
     setWidth,
+    bleed,
     overlay,
     openOverlay: () => setOverlay(true),
     closeOverlay: () => setOverlay(false),
     toggleOverlay: () => setOverlay((value) => !value),
-    open(target: PanelTarget, presentation: PanelPresentation = "panel") {
+    open(target: PanelTarget, options: PanelOptions = {}) {
       batch(() => {
-        setRequested(presentation)
+        setRequested(options.presentation ?? "panel")
+        setBleed(options.bleed ?? false)
         setCurrent((current) =>
           current?.plugin === target.plugin && current.name === target.name && current.sessionID === target.sessionID
             ? current
@@ -50,9 +65,13 @@ export function createPanelState() {
         )
       })
     },
-    close: () => setCurrent(),
+    close: () => {
+      setBleed(false)
+      setCurrent()
+    },
     release(plugin: string) {
       if (current()?.plugin !== plugin) return
+      setBleed(false)
       setCurrent()
     },
     toggleFullscreen() {

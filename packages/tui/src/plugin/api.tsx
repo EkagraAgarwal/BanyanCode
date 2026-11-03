@@ -236,7 +236,7 @@ export function createPluginContext(input: {
           if (!host.panel || !input.registry.active()) return false
           const route = host.route.data
           if (route.type !== "session") return false
-          host.panel.open({ plugin: input.id, name, sessionID: route.sessionID }, options?.presentation)
+          host.panel.open({ plugin: input.id, name, sessionID: route.sessionID }, options)
           return true
         },
         close: () => host.panel?.release(input.id),

@@ -3,6 +3,7 @@ import type { RGBA } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo, For, onCleanup, onMount, Show } from "solid-js"
 import type { CodegraphLive, MeshLive, SystemLive } from "../../data/live"
+import { PANEL } from "../../constants"
 import { categorizeTokens } from "../../data/tokens"
 import { createTicker, mix, useTickerWhen, type Ticker } from "../../motion"
 import { palette } from "../../theme"
@@ -170,14 +171,12 @@ export interface ChromeFooterProps {
  * kept (brand, project, statuses and key hints, then the tab row and its
  * separator); the Trunk layout renders the redesign's two-row chrome with the
  * canopy rule. The host owns the setting, so a layout switch remounts the right
- * one.
+ * one. The Agents tab always wears the canopy chrome: it is full-bleed, and the
+ * classic footer's "need attention" count is not part of that surface.
  */
 export function SessionHeader(props: ChromeHeaderProps) {
   return (
-    <Show
-      when={props.context.ui.sessionLayout() === "trunk"}
-      fallback={<ClassicHeader {...props} />}
-    >
+    <Show when={canopyChrome(props.context)} fallback={<ClassicHeader {...props} />}>
       <TrunkHeader {...props} />
     </Show>
   )
@@ -186,13 +185,15 @@ export function SessionHeader(props: ChromeHeaderProps) {
 /** The shared bottom row; see SessionHeader for how the layout picks one. */
 export function SessionFooter(props: ChromeFooterProps) {
   return (
-    <Show
-      when={props.context.ui.sessionLayout() === "trunk"}
-      fallback={<ClassicFooter {...props} />}
-    >
+    <Show when={canopyChrome(props.context)} fallback={<ClassicFooter {...props} />}>
       <TrunkFooter {...props} />
     </Show>
   )
+}
+
+function canopyChrome(context: Context): boolean {
+  if (context.ui.sessionLayout() === "trunk") return true
+  return context.ui.panel.current()?.name === PANEL.agents
 }
 
 const CLASSIC_PILLS_MIN_WIDTH = 72

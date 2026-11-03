@@ -122,6 +122,9 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
   // A small terminal needs every row for the transcript and composer.
   const chrome = () => !fullscreen() && dimensions().height >= 20 && dimensions().width >= 60
   const mainPanel = createMemo(() => (panels.presentation() === "main" ? activePanel() : undefined))
+  // A main panel that asks to bleed takes the whole width: both side columns and
+  // their collapsed rails step aside, and the persisted layout is left alone.
+  const bleed = createMemo(() => mainPanel() !== undefined && panels.bleed())
   createEffect(
     on([activePanel, () => selectedTerminal()?.id], ([panel, terminal], previous) => {
       if (panel && panel !== previous?.[0]) {
@@ -154,6 +157,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
   })
   // Wide terminals dock the sidebar on the left, so only a narrow one still opens it over the session.
   const rightPane = createMemo(() => {
+    if (bleed()) return undefined
     if (activePanel() && !mainPanel()) return "panel"
     if (!trunk() && !wide() && sidebarVisible()) return "sidebar"
     if (selectedTerminal()) return "terminal"
@@ -173,7 +177,10 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
       availableWidth() - sideWidth(sidebarPercent()) - rightWidth() >= SESSION_MIN_WIDTH_BESIDE_PANE,
   )
   /** What occupies the left column: the trunk rail, or the classic docked sidebar. */
-  const leftDocked = createMemo(() => (trunk() ? trunkRailVisible() : sidebarDocked()))
+  const leftDocked = createMemo(() => {
+    if (bleed()) return false
+    return trunk() ? trunkRailVisible() : sidebarDocked()
+  })
   // The Trunk overlay keeps the transcript at its own width: it slides over the
   // right edge instead of taking a column, so nothing reflows underneath it.
   const overlayWidth = createOverlayWidth({
@@ -206,6 +213,9 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
     persistLayout((draft) => void (draft[key] = Math.max(SIDE_MIN_PERCENT, Math.min(max, percent))))
   }
   const toggleSidebar = () => {
+    // The side columns are hidden while a panel bleeds, so there is nothing to
+    // toggle and a hide here would outlive the panel.
+    if (bleed()) return
     // In the Trunk layout the side panels only exist as an overlay, so the same
     // key slides them in and out without reflowing the transcript.
     if (trunk()) {
@@ -314,7 +324,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
         group: "Session",
         palette: true,
         // Trunk has no right inspector: its panels live in the overlay instead.
-        enabled: () => !trunk(),
+        enabled: () => !trunk() && !bleed(),
         run: () => {
           persistLayout((draft) => void (draft.inspectorHidden = !draft.inspectorHidden))
           dialog.clear()
@@ -422,7 +432,12 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
       </Show>
       <Show
         when={
-          !trunk() && wide() && !sidebarVisible() && !fullscreen() && !data.session.get(props.sessionID)?.parentID
+          !bleed() &&
+          !trunk() &&
+          wide() &&
+          !sidebarVisible() &&
+          !fullscreen() &&
+          !data.session.get(props.sessionID)?.parentID
         }
       >
         <CollapsedRail side="left" onExpand={toggleSidebar} />
@@ -464,13 +479,15 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
             visibleTerminalID={rightPane() === "terminal" ? selectedTerminal()?.id : undefined}
             onTerminalPicker={(show) => (showTerminals = show)}
             width={sessionWidth()}
+            bleed={bleed()}
             main={
               <Show keyed when={mainPanel()}>
                 {(item) => (
                   <box position="absolute" left={0} top={0} width="100%" height="100%" zIndex={2}>
                     <PanelHost
                       panel={item}
-                      width={Math.max(0, (sessionWidth() ?? availableWidth()) - 4)}
+                      // A bleeding panel gets the true pane width: no transcript gutter to subtract.
+                      width={Math.max(0, (sessionWidth() ?? availableWidth()) - (bleed() ? 0 : 4))}
                       focused={activePane() === "right"}
                       onFocus={focusRightPane}
                       onTarget={(node) => {
@@ -539,7 +556,12 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
       </Show>
       <Show
         when={
-          !trunk() && wide() && layout.inspectorHidden && !rightPane() && !data.session.get(props.sessionID)?.parentID
+          !bleed() &&
+          !trunk() &&
+          wide() &&
+          layout.inspectorHidden &&
+          !rightPane() &&
+          !data.session.get(props.sessionID)?.parentID
         }
       >
         <CollapsedRail

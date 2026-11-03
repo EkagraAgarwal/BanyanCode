@@ -18,7 +18,7 @@ import { TodoPanel } from "../inspector/todo"
 import { ConfigView } from "./config"
 import { CodegraphCanvas } from "./graph"
 import { createPanelFocus, PanelFocusContext, usePanelKeyMode, usePanelScroll } from "./keys"
-import { SessionTabs, VIEW_TABS, viewKeyForPanel } from "./nav"
+import { SessionTabs, VIEW_TABS, viewKeyForPanel, bleeds } from "./nav"
 import { SessionsView } from "./sessions"
 
 const RAIL_WIDTH = 13
@@ -86,6 +86,7 @@ export function InspectorPanel(props: {
   const select = (name: PanelName) =>
     props.context.ui.panel.open(name, {
       presentation: VIEW_TABS.some((tab) => tab.panel === name) ? "main" : props.panel.presentation,
+      bleed: bleeds(name),
     })
 
   usePanelKeyMode(props.context, () => props.panel.focused)
@@ -189,6 +190,7 @@ export function InspectorPanel(props: {
       context={props.context}
       sessionID={props.panel.sessionID}
       mesh={props.live.mesh}
+      codegraph={props.live.codegraph}
       ticker={props.ticker}
       width={props.panel.width}
     />
@@ -332,7 +334,14 @@ export function InspectorPage(props: {
             </scrollbox>
           }
         >
-          {(id) => <Understory context={props.context} sessionID={id()} mesh={props.live.mesh} />}
+          {(id) => (
+            <Understory
+              context={props.context}
+              sessionID={id()}
+              mesh={props.live.mesh}
+              codegraph={props.live.codegraph}
+            />
+          )}
         </Show>
       </box>
     </PanelFocusContext.Provider>

@@ -164,15 +164,15 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/src/feature-plugins/sidebar/footer.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/feature-plugins/system/stats.tsx` | branding | user-visible text, commands and URLs say BanyanCode | — |
 | `packages/tui/src/logo.ts` | branding | the v1 BanyanCode tree splash and wordmark | — |
-| `packages/tui/src/component/session-frame.tsx` | hook | the v1 layout: header, docked left sidebar, right inspector, footer, tabs over the transcript; the Trunk layout docks a rail in the left column, caps the transcript and slides a panels overlay over the right edge, selected by `session_layout` | — |
-| `packages/tui/src/context/panel.tsx` | hook | a panel can present in place of the transcript; the Trunk panels overlay is separate presentation state | — |
-| `packages/tui/src/routes/session/index.tsx` | hook | takes the element drawn over the transcript; tool settle, diff reveal, token bloom and live subagent rows | — |
+| `packages/tui/src/component/session-frame.tsx` | hook | the v1 layout: header, docked left sidebar, right inspector, footer, tabs over the transcript; the Trunk layout docks a rail in the left column, caps the transcript and slides a panels overlay over the right edge, selected by `session_layout`; a main panel that asks to bleed hides both side columns and their rails without touching the persisted layout | — |
+| `packages/tui/src/context/panel.tsx` | hook | a panel can present in place of the transcript and ask to bleed (take the whole main area); the Trunk panels overlay is separate presentation state | — |
+| `packages/tui/src/routes/session/index.tsx` | hook | takes the element drawn over the transcript; tool settle, diff reveal, token bloom and live subagent rows; drops its reading gutter for a bleeding main panel | — |
 | `packages/tui/src/routes/session/sidebar.tsx` | hook | a docked sidebar has its own width and the v1 border, and its scrolling body reserves the scrollbar's column | — |
 | `packages/tui/src/ui/session-rails.tsx` | hook | v1 resize handle and collapsed rail for the side columns | — |
 | `packages/tui/src/component/prompt/autocomplete.tsx` | fix | a command offered by both client and server is listed once | — |
 | `packages/tui/src/routes/home.tsx` | hook | `home.logo` and `home.bottom` slots, size-only gap and centring rules, and a prompt without its own footer row so the full layout fits 120x40 | — |
-| `packages/plugin/src/tui/context.ts` | hook | declares the `home.logo` slot, `ui.animations`, `ui.sessionLayout` and `slash.forwardToServer` | — |
-| `packages/tui/src/plugin/api.tsx` | hook | wires `ui.animations` from the host's `config.animations` and `ui.sessionLayout` from `config.session_layout` | — |
+| `packages/plugin/src/tui/context.ts` | hook | declares the `home.logo` slot, `ui.animations`, `ui.sessionLayout`, `slash.forwardToServer` and the panel `bleed` option (a panel can take the whole main area) | — |
+| `packages/tui/src/plugin/api.tsx` | hook | wires `ui.animations` from the host's `config.animations`, `ui.sessionLayout` from `config.session_layout`, and passes the panel options through, including `bleed` | — |
 | `packages/tui/src/feature-plugins/home/footer.tsx` | hook | one-row footer: directory and branch status content, the prompt hints the home prompt no longer carries, update notice and version on one line | — |
 | `packages/tui/src/feature-plugins/system/storybook/home.tsx` | hook | fixture-driven home hero story with replay and final-frame controls | — |
 | `packages/tui/src/feature-plugins/system/storybook/index.tsx` | hook | registers the home story | — |
@@ -241,14 +241,15 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/core/src/session/generate.ts` | hook | resolves the explicit generate model | — |
 | `packages/core/test/plugin/goal-settings.test.ts` | hook | proves each goal setting changes behaviour | — |
 | `packages/core/test/session-generate.test.ts` | fix | proves the generate model override reaches the provider | — |
-| `packages/theme/src/tui/schema.ts` | hook | optional `growth` token group for the redesign's roles | — |
-| `packages/theme/src/tui/types.ts` | hook | `growth` on the resolved theme | — |
-| `packages/theme/src/tui/resolve.ts` | hook | passes `growth` through and derives readable fallbacks for themes that omit it | — |
-| `packages/theme/src/tui/index.ts` | hook | exports the `growth` types | — |
-| `packages/theme/test/growth.test.ts` | hook | covers `growth` fallbacks and overrides | — |
-| `packages/tui/src/theme/component.ts` | hook | exposes `growth` on the component theme | — |
+| `packages/theme/src/tui/schema.ts` | hook | optional `growth` and `tool` token groups for the redesign's roles | - |
+| `packages/theme/src/tui/types.ts` | hook | `growth` and `tool` on the resolved theme | - |
+| `packages/theme/src/tui/resolve.ts` | hook | passes `growth` and `tool` through and derives readable fallbacks for themes that omit them | - |
+| `packages/theme/src/tui/index.ts` | hook | exports the `growth` and `tool` types | - |
+| `packages/theme/test/growth.test.ts` | hook | covers `growth` fallbacks and overrides | - |
+| `packages/theme/test/tool.test.ts` | hook | every built-in theme keeps each tool kind readable, and `banyan` names one colour per kind | - |
+| `packages/tui/src/theme/component.ts` | hook | exposes `growth` and the tool-kind roles on the component theme | - |
 | `packages/tui/src/theme/index.ts` | hook | registers the built-in `banyan` theme | — |
-| `packages/tui/src/theme/assets/v2/banyan.json` | hook | the `banyan` theme, dark and light | — |
+| `packages/tui/src/theme/assets/v2/banyan.json` | hook | the `banyan` theme, dark and light, including the violet hue and tool-kind roles | - |
 | `packages/tui/src/context/theme.tsx` | hook | `banyan` is the default when no theme is chosen; `opencode` stays the parse-failure fallback | — |
 | `packages/tui/test/context/theme.test.tsx` | fix | covers the default and a configured theme winning | — |
 | `packages/tui/test/theme/v2/banyan.test.ts` | hook | covers the `banyan` roles and contrast | — |
@@ -268,9 +269,11 @@ Anything else is upstream-owned: adding, editing or deleting it needs a row here
 | `packages/tui/test/component/token-bloom.test.tsx` | hook | covers token bloom | — |
 | `packages/tui/test/component/tool-settle.test.tsx` | hook | covers the tool settle | — |
 | `packages/tui/test/session-panels-overlay.test.ts` | hook | covers the `session_layout` default and setting, and the Trunk panels overlay state and curves | — |
+| `packages/tui/test/panel.test.ts` | hook | covers the panel `bleed` request being kept and released | — |
 | `packages/tui/test/session-layout-default.test.tsx` | hook | pins the classic chat page by default and the opt-in Trunk chrome and rail | — |
 | `packages/tui/test/subagent-rows.test.ts` | hook | covers the live subagent rows | — |
-| `packages/tui/test/banyancode-understory-keys.test.tsx` | hook | drives the Agents tab keys through the real dispatcher, composer focus and Esc order | — |
+| `packages/tui/test/banyancode-understory-keys.test.tsx` | hook | drives the Agents tab keys through the real dispatcher, composer focus and Esc order; the brand assertion follows either chrome | — |
+| `packages/tui/test/banyancode-agents-bleed.test.tsx` | hook | covers the full-bleed Agents tab in both chat layouts at a wide and a narrow size: the side columns vanish and return, and the canopy chrome replaces the classic one | — |
 | `packages/tui/test/feature-plugins/home-footer.test.ts` | hook | pins which footer items show at each width | — |
 | `packages/tui/test/clear-session.test.tsx` | fix | Home's resume list can show a cleared session's title, so the test checks the tab store | — |
 | `packages/tui/test/plugin-keymap.test.tsx` | fix | Home readiness marker follows the redesign | — |

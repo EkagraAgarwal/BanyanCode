@@ -69,3 +69,28 @@ test("releasing a plugin contribution only closes its own selected panel", () =>
     dispose()
   })
 })
+
+test("a panel can ask for the whole main area and gives it back", () => {
+  createRoot((dispose) => {
+    const panels = createPanelState()
+    panels.setWidth(160)
+    panels.open(
+      { plugin: "banyancode.tui", name: "banyancode.agents", sessionID: "session" },
+      { presentation: "main", bleed: true },
+    )
+    expect(panels.presentation()).toBe("main")
+    expect(panels.bleed()).toBe(true)
+    // Re-opening with the same target keeps it; a panel that does not ask gets no bleed.
+    panels.open({ plugin: "banyancode.tui", name: "banyancode.agents", sessionID: "session" })
+    expect(panels.bleed()).toBe(false)
+    panels.open(
+      { plugin: "banyancode.tui", name: "banyancode.agents", sessionID: "session" },
+      { presentation: "main", bleed: true },
+    )
+    panels.close()
+    expect(panels.bleed()).toBe(false)
+    panels.release("banyancode.tui")
+    expect(panels.bleed()).toBe(false)
+    dispose()
+  })
+})

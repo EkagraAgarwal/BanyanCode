@@ -332,3 +332,57 @@ test("narrow Trunk chrome drops the key hint but keeps the attention message", a
     app.renderer.destroy()
   }
 })
+
+/** A context whose selected panel is `name`, with the classic chat layout. */
+function onPanel(name: string): Context {
+  const base = context({ sessions: [root] })
+  return {
+    ...base,
+    ui: { ...base.ui, panel: { ...base.ui.panel, current: () => ({ name }) } },
+  } as unknown as Context
+}
+
+test("the Agents tab wears the canopy chrome even in the classic layout", async () => {
+  const agents = onPanel(PANEL.agents)
+  const header = await renderHeader({ width: 160, ctx: agents })
+  try {
+    const [row0, canopy] = lines(header)
+    // Brand and tabs share row 0, then the canopy rule: no v1 tab row.
+    expect(row0).toContain("banyancode")
+    for (const label of ["CHAT", "SESSIONS", "AGENTS", "CONFIG"]) expect(row0).toContain(label)
+    expect(row0).not.toContain("BANYANCODE")
+    expect(canopy!.replace(/[─━\s]/g, "")).toBe("")
+    expect(canopy).toContain("━")
+    expect(header.captureCharFrame()).not.toContain("ctrl+p commands ctrl+] tabs")
+  } finally {
+    header.renderer.destroy()
+  }
+  const footer = await renderFooter({ width: 120, ctx: agents })
+  try {
+    const frame = footer.captureCharFrame()
+    expect(frame).toContain("^p commands")
+    // The classic "▲ 0 need attention" is not part of the canopy chrome.
+    expect(frame).not.toContain("need attention")
+  } finally {
+    footer.renderer.destroy()
+  }
+})
+
+test("Sessions, Config and Chat keep the classic chrome", async () => {
+  for (const name of [PANEL.sessions, PANEL.config]) {
+    const app = await renderHeader({ width: 160, ctx: onPanel(name) })
+    try {
+      const [row0, tabs] = lines(app)
+      expect(row0).toContain("BANYANCODE")
+      expect(tabs).toContain("AGENTS")
+    } finally {
+      app.renderer.destroy()
+    }
+    const footer = await renderFooter({ width: 120, ctx: onPanel(name) })
+    try {
+      expect(footer.captureCharFrame()).toContain("▲ 0 need attention")
+    } finally {
+      footer.renderer.destroy()
+    }
+  }
+})
