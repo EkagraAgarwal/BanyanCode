@@ -564,8 +564,8 @@ First-run dirs: `packages/opencode/src/cli/cmd/init-banyan.ts:6` called from
 | Project config files `banyancode.json` / `banyancode.jsonc` | packages/opencode/src/config/paths.ts:49 | 1 | todo | |
 | Config schema URL `https://banyan.dev/schema/banyancode.json` | packages/core/src/v1/config/banyan-config.ts:16 | 1 | todo | |
 | Codegraph ignore file `.banyancode/ignore` | packages/core/src/banyancode/codegraph-indexer.ts:289 | 3a | todo | |
-| DB filename `banyancode-<12-char-hash><channel>.db` | packages/core/src/database/banyan-db-path.ts:68 | 1 | todo | |
-| Channel suffix: `latest`/`beta`/`prod` none; other channels `-<channel>` | packages/core/src/database/banyan-db-path.ts:50 | 1 | todo | |
+| DB filename `banyancode-<12-char-hash>.db` (v1 appended `-<channel>`; v2 channels share one database) | packages/core/src/database/banyan-db-path.ts:68 | 1 | done | |
+| Channel suffix: dropped in v2 — every install channel resolves to the plain file, and the newest legacy `-<channel>` file is adopted on first open | packages/core/src/database/banyan-db-path.ts:50 | 1 | done | packages/banyancode/test/storage.test.ts |
 | Legacy DB filename `banyancode.db` | packages/core/src/database/banyan-db-path.ts:13 | 1 | todo | |
 | CLI script name `banyancode` | packages/opencode/src/index.ts:54 | 1 | todo | |
 | CalVer version `26.10.9` | packages/opencode/package.json:3 | 1 | todo | |

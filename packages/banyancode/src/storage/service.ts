@@ -1,5 +1,6 @@
 import { rename } from "node:fs/promises"
 import { Context, Effect, Layer, Schema } from "effect"
+import { adoptLegacyDatabase } from "./adopt.js"
 import { openDatabase } from "./driver.js"
 import { acquireFileLock, withFileLock } from "./lock.js"
 import { applyMigrations, detectFtsTokenizer, type FtsTokenizer } from "./migrate.js"
@@ -31,7 +32,7 @@ export class Service extends Context.Service<Service, Interface>()("@banyancode/
 export interface OpenInput {
   readonly projectRoot: string
   readonly env?: NodeJS.ProcessEnv
-  /** Host installation channel (`ctx.app.channel`); non-stable channels isolate plugin data. */
+  /** Host installation channel (`ctx.app.channel`). Accepted but no longer affects the database path. */
   readonly channel?: string
 }
 
@@ -112,9 +113,19 @@ const openWithRecovery = (dbPath: string): Effect.Effect<NativeDatabase, Storage
  * The database holds derived code-graph rows and mesh messages, so a corrupt
  * file is recoverable: it is moved aside and replaced instead of disabling the
  * whole plugin.
+ *
+ * Every installation channel maps to the same file. When that file is missing
+ * but an older build left a per-channel file behind, the newest one is renamed
+ * into place first, so a chat started on a stable build survives switching to a
+ * dev build.
  */
 export const open = Effect.fn("BanyanStorage.open")(function* (input: OpenInput) {
   const resolved = resolveProjectDbPath(input)
+  const adoption = yield* Effect.promise(() => adoptLegacyDatabase(resolved))
+  if (adoption.adopted !== undefined) {
+    yield* Effect.logInfo(`Adopted legacy BanyanCode database ${adoption.adopted} as ${resolved.filename}`)
+  }
+  if (adoption.warning !== undefined) yield* Effect.logWarning(adoption.warning)
   const live = { db: yield* openWithRecovery(resolved.dbPath) }
   yield* Effect.addFinalizer(() => Effect.sync(() => live.db.close()))
 

@@ -151,7 +151,7 @@ exist are noted in the coverage appendix.
 
 | Row | What is missing | Owner |
 |---|---|---|
-| Channel suffix on `banyancode-<12-char-hash><channel>.db` | The plugin DB is `banyancode-<hash>.db` with no channel suffix; `storage/paths.ts` does not read the host channel. Dev/next builds therefore share one plugin DB. | storage / 1 |
+| Channel suffix on `banyancode-<12-char-hash><channel>.db` | Deliberately dropped (owner decision): every channel shares `banyancode-<hash>.db`, so a chat started on a stable build is still there on a dev build. `Storage.open` adopts the newest legacy `<hash>-<channel>.db` family when the canonical file is missing; `db gc` still parses the old suffixes and protects them. | storage / 1 |
 | CalVer version `26.10.9` | `packages/cli` and `packages/banyancode` still report `2.2.5` / `0.0.0`. | release / 1 |
 | First-run directory creation + default `banyancode.json` | No v1 `init-banyan` equivalent; directories are created lazily and no default config is written. | CLI / 1 |
 

@@ -66,7 +66,7 @@ describe("banyancode.config.update + config.updated", () => {
 })
 
 describe("BANYANCODE_ENABLE=0 gate", () => {
-  test("registers only the core status RPC + tool, and uses the channel-suffixed DB", async () => {
+  test("registers only the core status RPC + tool, and uses the shared project DB", async () => {
     const previous = process.env.BANYANCODE_ENABLE
     process.env.BANYANCODE_ENABLE = "0"
     try {
@@ -141,8 +141,8 @@ describe("BANYANCODE_ENABLE=0 gate", () => {
         expect(emitted[0]!.payload).toMatchObject({ scope: "project" })
         // The plugin reports the host app version, never a workspace placeholder.
         expect(status.version).toBe("26.10.9")
-        // `--no suffix` is only for stable channels; a dev build is isolated.
-        expect(status.database.path.endsWith("-dev.db")).toBe(true)
+        // Every channel shares one project database; a dev build is not isolated.
+        expect(status.database.path).toMatch(/banyancode-[a-f0-9]{12}\.db$/)
       })
     } finally {
       if (previous === undefined) delete process.env.BANYANCODE_ENABLE

@@ -1,19 +1,24 @@
 /**
  * `banyancode db gc` — v1 collected orphaned per-worktree databases from a
  * project's `.banyancode/` directory. v2's plugin keeps one database per
- * project under `<data>/projects/` (`banyancode-<sha256(root)[0..12]><-channel>.db`),
+ * project under `<data>/projects/` (`banyancode-<sha256(root)[0..12]>.db`),
  * so the collector scans that directory instead and deletes only families
  * whose project no longer exists on disk.
  *
- * Classification (v1 semantics: dry-run by default, current worktree in every
- * channel always protected, foreign files never touched):
+ * Classification (v1 semantics: dry-run by default, the current project always
+ * protected, foreign files never touched):
  *
- *   current                 this worktree, this channel        → protected
- *   other-channel-current   this worktree, another channel     → protected
- *   live project            indexed_root still exists on disk  → kept
- *   orphan                  indexed_root is gone / hash mismatch → deletable
- *   unknown                 no meta row, unreadable database   → kept
- *   foreign                 not a banyancode-<12 hex> name      → never deleted
+ *   current                 this worktree, canonical name         → protected
+ *   other-channel-current   this worktree, legacy `-<channel>`    → protected
+ *   live project            indexed_root still exists on disk     → kept
+ *   orphan                  indexed_root is gone / hash mismatch  → deletable
+ *   unknown                 no meta row, unreadable database     → kept
+ *   foreign                 not a banyancode-<12 hex> name        → never deleted
+ *
+ * Every channel now shares the canonical file, so `current` is the plain
+ * `banyancode-<hash>.db` regardless of the installed channel or env. Legacy
+ * per-channel files are still parsed and reported, but they are user data until
+ * `Storage.open` adopts one, so they are protected rather than orphaned.
  */
 import { createHash } from "node:crypto"
 import { existsSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs"
@@ -24,10 +29,8 @@ import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { onError } from "./client"
 import { println, Style } from "./ui"
-import { OPENCODE_CHANNEL } from "../../../version"
 
 const BANYAN_TAGGED_DB = /^banyancode-([0-9a-f]{12})(-.*)?\.db$/
-const STABLE_CHANNELS = ["latest", "beta", "prod"]
 
 export type DbFamilyClass = "current" | "other-channel-current" | "live" | "orphan" | "unknown" | "foreign"
 
@@ -55,12 +58,15 @@ export const canonicalRoot = (input: string) => {
   }
 }
 
-export const channelSuffix = (channel: string | undefined = OPENCODE_CHANNEL, env = process.env) => {
-  if (channel === undefined || channel.trim().length === 0) return ""
-  if (STABLE_CHANNELS.includes(channel)) return ""
-  if (env.BANYANCODE_DISABLE_CHANNEL_DB === "1" || env.OPENCODE_DISABLE_CHANNEL_DB === "1") return ""
-  return `-${channel.replace(/[^a-zA-Z0-9._-]/g, "-")}`
-}
+/**
+ * Legacy, always `""`. Every channel resolves to the canonical
+ * `banyancode-<hash>.db`, so no suffix is ever appended. Kept exported (and with
+ * the old parameters) because callers build the current filename from it and
+ * because `classifyName` needs a definition of "the current suffix"; legacy
+ * `banyancode-<hash>-<channel>.db` files are recognized by the tag parser, not
+ * by this function.
+ */
+export const channelSuffix = (_channel?: string, _env: NodeJS.ProcessEnv = process.env) => ""
 
 export const projectsDirectory = (env = process.env) => {
   const override = env.BANYANCODE_PROJECT_DB_DIR?.trim() || env.OPENCODE_PROJECT_DB_DIR?.trim()
@@ -197,7 +203,7 @@ const label = (classification: DbFamilyClass) => {
     case "current":
       return "current"
     case "other-channel-current":
-      return "current worktree, other channel (protected)"
+      return "legacy channel file (protected)"
     case "live":
       return "live project (kept)"
     case "orphan":
@@ -249,7 +255,7 @@ export async function runDbGc(args: {
   if (args.dryRun === true || !args.yes) {
     println("")
     println("Dry run: nothing deleted. Re-run with `--yes` to delete the orphans above.")
-    println("The current worktree's databases in every channel are always protected.")
+    println("The current project's database is always protected, and legacy per-channel files are kept until adopted.")
     return undefined
   }
   const { deleted, reclaimedBytes } = deleteOrphans(directory, orphans)

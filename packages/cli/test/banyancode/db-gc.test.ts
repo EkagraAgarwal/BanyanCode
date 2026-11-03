@@ -32,10 +32,31 @@ describe("db gc classification", () => {
   test("protects the current worktree in every channel and never touches foreign files", () => {
     const tag = shortHash(path.resolve("."))
     expect(classifyName(`banyancode-${tag}.db`, tag, undefined, "")).toBe("current")
+    // The legacy parser still recognizes an explicit per-channel suffix, so an
+    // old file keeps its old meaning instead of becoming "foreign".
     expect(classifyName(`banyancode-${tag}-dev.db`, tag, undefined, "-dev")).toBe("current")
     expect(classifyName(`banyancode-${tag}-dev.db`, tag, undefined, "")).toBe("other-channel-current")
     expect(classifyName("other.db", tag, undefined, "")).toBe("foreign")
     expect(classifyName(`banyancode-${"0".repeat(12)}.db`, tag, undefined, "")).toBe("unknown")
+  })
+
+  test("every channel and env resolves to the canonical filename", () => {
+    expect(channelSuffix()).toBe("")
+    expect(channelSuffix("dev")).toBe("")
+    expect(channelSuffix("26.11.0-dev.abc1234")).toBe("")
+    expect(channelSuffix("dev", { BANYANCODE_DISABLE_CHANNEL_DB: "1" })).toBe("")
+
+    const tag = shortHash(path.resolve("."))
+    for (const channel of ["dev", "latest", "26.11.0-dev.abc1234", undefined]) {
+      expect(classifyName(`banyancode-${tag}.db`, tag, undefined, channelSuffix(channel))).toBe("current")
+    }
+    // Legacy per-channel files are user data until adopted: protected, and the
+    // parser still recognizes the version-shaped suffixes old canaries wrote.
+    expect(classifyName(`banyancode-${tag}-dev.db`, tag, undefined, channelSuffix("dev"))).toBe(
+      "other-channel-current",
+    )
+    expect(classifyName(`banyancode-${tag}-26.11.0-dev.abc1234.db`, tag, undefined)).toBe("other-channel-current")
+    expect(classifyName(`banyancode-${tag}-local.db`, tag, undefined)).toBe("other-channel-current")
   })
 
   test("honors the project DB dir override", () => {
@@ -62,10 +83,12 @@ describe("db gc command", () => {
     await fs.mkdir(currentRoot, { recursive: true })
     await fs.mkdir(liveRoot, { recursive: true })
 
-    const currentName = `banyancode-${shortHash(currentRoot)}${channelSuffix()}.db`
+    const currentName = `banyancode-${shortHash(currentRoot)}.db`
+    const legacyCurrentName = `banyancode-${shortHash(currentRoot)}-dev.db`
     const liveName = `banyancode-${shortHash(liveRoot)}.db`
     const orphanName = `banyancode-${shortHash(goneRoot)}.db`
     createDb(path.join(projects, currentName))
+    createDb(path.join(projects, legacyCurrentName))
     createDb(path.join(projects, liveName), liveRoot)
     createDb(path.join(projects, orphanName), goneRoot)
     await fs.writeFile(path.join(projects, "unrelated.db"), "")
@@ -77,6 +100,8 @@ describe("db gc command", () => {
     expect(dry.stderr).toContain(`Databases in ${projects}`)
     expect(dry.stderr).toContain(`${currentName}  `)
     expect(dry.stderr).toContain("[current]")
+    expect(dry.stderr).toContain(`${legacyCurrentName}  `)
+    expect(dry.stderr).toContain("[legacy channel file (protected)]")
     expect(dry.stderr).toContain("[live project (kept)]")
     expect(dry.stderr).toContain("[orphan]")
     expect(dry.stderr).toContain("[foreign (never deleted)]")
@@ -93,6 +118,8 @@ describe("db gc command", () => {
     expect(applied.stderr).toContain("Deleted 1 file(s)")
     await expect(fs.stat(path.join(projects, orphanName))).rejects.toThrow()
     expect(await fs.stat(path.join(projects, currentName))).toBeTruthy()
+    // A same-tag legacy file is user data until Storage.open adopts it.
+    expect(await fs.stat(path.join(projects, legacyCurrentName))).toBeTruthy()
     expect(await fs.stat(path.join(projects, liveName))).toBeTruthy()
     expect(await fs.stat(path.join(projects, "unrelated.db"))).toBeTruthy()
   }, 180_000)

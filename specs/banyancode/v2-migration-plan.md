@@ -75,7 +75,7 @@ Ordering: phases 0 → 1 → 2 run in sequence. Then workstreams 3a and 3c–3h,
   - `upgrade`, which installs from npm `banyancode`.
 - **Versioning and channels:**
   - CalVer `YY.MM.PATCH` continues; the upstream base version appears only in `--version --verbose`.
-  - Channel isolation for dev canaries: map v1's per-channel DB onto v2's storage channel.
+  - One project database for every channel (owner decision): stable, dev and canary builds share `banyancode-<hash>.db`. Older builds wrote a per-channel file; `Storage.open` adopts the newest legacy `banyancode-<hash>-<channel>.db` on first open instead of stranding those sessions.
 - **Defaults:** the PostHog telemetry key, BanyanCode default agents, and the default websearch provider (set by the plugin).
 - **Acceptance:**
   - A test that sweeps strings in `--help`, TUI snapshots, the config schema URL and paths finds no user-visible "opencode".

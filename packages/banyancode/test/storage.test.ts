@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
 import { existsSync } from "node:fs"
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Effect } from "effect"
@@ -10,7 +11,7 @@ import { applyMigrations, detectFtsTokenizer } from "../src/storage/migrate.js"
 import { migrations } from "../src/storage/migrations.js"
 import type { NativeDatabase } from "../src/storage/native.js"
 import { resolveProjectDbPath } from "../src/storage/paths.js"
-import { Storage } from "../src/storage/index.js"
+import { adoptFamily, adoptLegacyDatabase, Storage } from "../src/storage/index.js"
 import { Global } from "@opencode/util/global"
 
 const withTemp = async (fn: (directory: string) => Promise<void>) => {
@@ -19,6 +20,44 @@ const withTemp = async (fn: (directory: string) => Promise<void>) => {
     await fn(directory)
   } finally {
     await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+}
+
+const canonicalFor = (directory: string) =>
+  resolveProjectDbPath({ projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } })
+
+/** Legacy per-channel name for a canonical filename (`banyancode-<hash>.db`). */
+const legacyName = (filename: string, channel: string) => filename.replace(/\.db$/, `-${channel}.db`)
+
+/** Renames a database family, sidecars included, the way a rebuild used to. */
+const moveFamily = async (from: string, to: string) => {
+  await rename(from, to)
+  for (const sidecar of ["-wal", "-shm", "-journal"]) {
+    await rename(`${from}${sidecar}`, `${to}${sidecar}`).catch(() => undefined)
+  }
+}
+
+/** Read-only read, so a marker check never rewrites the file. */
+const readMarkers = (file: string): string[] => {
+  const db = new Database(file, { readonly: true })
+  try {
+    return (db.query("SELECT name FROM marker ORDER BY name").all() as ReadonlyArray<{ name: string }>).map(
+      (row) => row.name,
+    )
+  } finally {
+    db.close(true)
+  }
+}
+
+const writeLegacy = async (file: string, markers: ReadonlyArray<string>) => {
+  const db = await openDatabase(file)
+  try {
+    applyMigrations(db)
+    run(db, "CREATE TABLE marker (name TEXT)")
+    for (const marker of markers) run(db, "INSERT INTO marker (name) VALUES (?)", [marker])
+    run(db, "PRAGMA wal_checkpoint(TRUNCATE)")
+  } finally {
+    db.close()
   }
 }
 
@@ -65,46 +104,186 @@ describe("banyancode storage", () => {
     })
   })
 
-  test("non-stable channels add a db suffix; latest/beta/prod and the override do not", async () => {
+  test("every channel resolves to the same canonical database filename", async () => {
     await withTemp(async (directory) => {
-      const latest = resolveProjectDbPath({ projectRoot: directory, env: {}, channel: "latest" })
-      expect(latest.filename).toMatch(/^banyancode-[a-f0-9]{12}\.db$/)
-      expect(latest.channelSuffix).toBe("")
+      const plain = resolveProjectDbPath({ projectRoot: directory, env: {} })
+      expect(plain.filename).toMatch(/^banyancode-[a-f0-9]{12}\.db$/)
+      expect(plain.channelSuffix).toBe("")
 
-      const dev = resolveProjectDbPath({ projectRoot: directory, env: {}, channel: "dev" })
-      expect(dev.filename).toMatch(/^banyancode-[a-f0-9]{12}-dev\.db$/)
-      expect(dev.channelSuffix).toBe("-dev")
+      for (const channel of ["dev", "latest", "26.11.0-dev.abc1234", undefined]) {
+        const resolved = resolveProjectDbPath({ projectRoot: directory, env: {}, channel })
+        expect(resolved.filename).toBe(plain.filename)
+        expect(resolved.dbPath).toBe(plain.dbPath)
+        expect(resolved.channelSuffix).toBe("")
+      }
 
-      const next = resolveProjectDbPath({ projectRoot: directory, env: {}, channel: "26.08.11-dev.abc1234" })
-      expect(next.filename).toMatch(/^banyancode-[a-f0-9]{12}-26\.08\.11-dev\.abc1234\.db$/)
-
-      const sanitized = resolveProjectDbPath({ projectRoot: directory, env: {}, channel: "dev/local" })
-      expect(sanitized.filename.endsWith("-dev-local.db")).toBe(true)
-
+      // The legacy per-channel opt-out no longer changes the filename either.
       const disabled = resolveProjectDbPath({
         projectRoot: directory,
         env: { BANYANCODE_DISABLE_CHANNEL_DB: "1" },
         channel: "dev",
       })
-      expect(disabled.filename).toMatch(/^banyancode-[a-f0-9]{12}\.db$/)
+      expect(disabled.filename).toBe(plain.filename)
     })
   })
 
-  test("Storage.open accepts a channel and opens the suffixed path", async () => {
+  test("Storage.open ignores the channel and opens the canonical path", async () => {
     await withTemp(async (directory) => {
-      const result = await Effect.runPromise(
+      const resolved = canonicalFor(directory)
+      const paths = await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const storage = yield* Storage.open({
+            const stable = yield* Storage.open({ projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } })
+            const dev = yield* Storage.open({
               projectRoot: directory,
               env: { BANYANCODE_PROJECT_DB_DIR: directory },
               channel: "dev",
             })
-            return storage.path
+            return [stable.path, dev.path]
           }),
         ),
       )
-      expect(result.endsWith("-dev.db")).toBe(true)
+      expect(paths).toEqual([resolved.dbPath, resolved.dbPath])
+    })
+  })
+
+  test("a legacy -dev database is adopted when the canonical database is missing", async () => {
+    await withTemp(async (directory) => {
+      const input = { projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } }
+      const resolved = canonicalFor(directory)
+      const legacy = join(directory, legacyName(resolved.filename, "dev"))
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const storage = yield* Storage.open(input)
+            yield* storage.exec("CREATE TABLE marker (name TEXT)")
+            yield* storage.exec("INSERT INTO marker (name) VALUES ('legacy-session')")
+          }),
+        ),
+      )
+      await moveFamily(resolved.dbPath, legacy)
+      expect(existsSync(resolved.dbPath)).toBe(false)
+
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const storage = yield* Storage.open({ ...input, channel: "dev" })
+            const rows = yield* storage.query<{ name: string }>("SELECT name FROM marker")
+            return { path: storage.path, names: rows.map((row) => row.name) }
+          }),
+        ),
+      )
+      expect(result.path).toBe(resolved.dbPath)
+      expect(result.names).toEqual(["legacy-session"])
+      expect(existsSync(resolved.dbPath)).toBe(true)
+      expect(existsSync(legacy)).toBe(false)
+    })
+  })
+
+  test("an existing canonical database wins and the legacy file stays byte-identical", async () => {
+    await withTemp(async (directory) => {
+      const input = { projectRoot: directory, env: { BANYANCODE_PROJECT_DB_DIR: directory } }
+      const resolved = canonicalFor(directory)
+      const legacy = join(directory, legacyName(resolved.filename, "dev"))
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const storage = yield* Storage.open(input)
+            yield* storage.exec("CREATE TABLE marker (name TEXT)")
+            yield* storage.exec("INSERT INTO marker (name) VALUES ('canonical')")
+          }),
+        ),
+      )
+      await writeLegacy(legacy, ["legacy"])
+      const before = await readFile(legacy)
+      const sizeBefore = (await stat(legacy)).size
+
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const storage = yield* Storage.open({ ...input, channel: "dev" })
+            const rows = yield* storage.query<{ name: string }>("SELECT name FROM marker")
+            return { path: storage.path, names: rows.map((row) => row.name) }
+          }),
+        ),
+      )
+      expect(result.path).toBe(resolved.dbPath)
+      expect(result.names).toEqual(["canonical"])
+      expect(existsSync(legacy)).toBe(true)
+      expect((await stat(legacy)).size).toBe(sizeBefore)
+      expect((await readFile(legacy)).equals(before)).toBe(true)
+      expect(readMarkers(legacy)).toEqual(["legacy"])
+    })
+  })
+
+  test("adoption is idempotent and picks the newest legacy family", async () => {
+    await withTemp(async (directory) => {
+      const resolved = canonicalFor(directory)
+      const olderName = legacyName(resolved.filename, "local")
+      const newerName = legacyName(resolved.filename, "dev")
+      const older = join(directory, olderName)
+      const newer = join(directory, newerName)
+
+      await writeLegacy(older, ["older"])
+      await writeLegacy(newer, ["newer"])
+      const past = new Date(Date.now() - 60_000)
+      const now = new Date()
+      await utimes(older, past, past)
+      await utimes(newer, now, now)
+
+      expect(await adoptLegacyDatabase(resolved)).toEqual({ adopted: newerName })
+      expect(readMarkers(resolved.dbPath)).toEqual(["newer"])
+      expect(existsSync(newer)).toBe(false)
+      // The older family is not the newest, so it is left alone.
+      expect(existsSync(older)).toBe(true)
+
+      expect(await adoptLegacyDatabase(resolved)).toEqual({})
+      expect(readMarkers(resolved.dbPath)).toEqual(["newer"])
+    })
+  })
+
+  test("two adopters racing on one project adopt exactly once", async () => {
+    await withTemp(async (directory) => {
+      const resolved = canonicalFor(directory)
+      const legacyNameFor = legacyName(resolved.filename, "dev")
+      await writeLegacy(join(directory, legacyNameFor), ["once"])
+
+      const results = await Promise.all([adoptLegacyDatabase(resolved), adoptLegacyDatabase(resolved)])
+      expect(results.filter((result) => result.adopted !== undefined)).toHaveLength(1)
+      expect(results.map((result) => result.adopted).filter((name) => name !== undefined)).toEqual([legacyNameFor])
+      expect(readMarkers(resolved.dbPath)).toEqual(["once"])
+      expect(existsSync(join(directory, legacyNameFor))).toBe(false)
+    })
+  })
+
+  test("a legacy source that disappears during adoption is success", async () => {
+    await withTemp(async (directory) => {
+      const resolved = canonicalFor(directory)
+      const legacy = join(directory, legacyName(resolved.filename, "dev"))
+      await expect(adoptFamily(legacy, resolved.dbPath)).resolves.toBe("missing")
+      expect(existsSync(resolved.dbPath)).toBe(false)
+      expect(existsSync(legacy)).toBe(false)
+    })
+  })
+
+  test("two connections share one WAL database with a busy timeout", async () => {
+    await withTemp(async (directory) => {
+      const resolved = canonicalFor(directory)
+      const writer = await openDatabase(resolved.dbPath)
+      const reader = await openDatabase(resolved.dbPath)
+      try {
+        applyMigrations(writer)
+        run(writer, "CREATE TABLE marker (name TEXT)")
+        run(writer, "INSERT INTO marker (name) VALUES ('shared')")
+        expect(query<{ timeout: number }>(reader, "PRAGMA busy_timeout")[0]?.timeout).toBe(5000)
+        expect(query<{ journal_mode: string }>(reader, "PRAGMA journal_mode")[0]?.journal_mode).toBe("wal")
+        expect(query<{ name: string }>(reader, "SELECT name FROM marker")).toEqual([{ name: "shared" }])
+      } finally {
+        reader.close()
+        writer.close()
+      }
     })
   })
 

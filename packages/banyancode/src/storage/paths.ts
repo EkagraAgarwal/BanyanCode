@@ -18,26 +18,28 @@ export const canonicalRoot = (input: string): string => {
   }
 }
 
-/**
- * Channels that share one database. v1 `channelSuffix()` treated
- * latest/beta/prod as stable; v2 keeps the same set so a stable install never
- * gets a `-latest` suffix.
- */
+/** Channels that v1 treated as stable. Kept for callers that still name the set. */
 export const STABLE_CHANNELS: ReadonlyArray<string> = ["latest", "beta", "prod"]
 
-export const channelSuffix = (channel: string | undefined, env: NodeJS.ProcessEnv = process.env): string => {
-  if (channel === undefined || channel.trim().length === 0) return ""
-  if (STABLE_CHANNELS.includes(channel)) return ""
-  if (env.BANYANCODE_DISABLE_CHANNEL_DB === "1" || env.BANYANCODE_DISABLE_CHANNEL_DB === "true") return ""
-  return `-${channel.replace(/[^a-zA-Z0-9._-]/g, "-")}`
-}
+/**
+ * Legacy, always `""`. v1 (and early v2) gave every non-stable channel its own
+ * database file, so a dev canary could not touch stable plugin data. Every
+ * channel now shares one project database: a chat started on a stable build is
+ * still there after switching to a dev build. Older builds wrote
+ * `banyancode-<hash>-<channel>.db`; `adoptLegacyDatabase` renames the newest one
+ * to the canonical name on first open, so the argument and the
+ * `BANYANCODE_DISABLE_CHANNEL_DB` opt-out no longer change the path. The export
+ * stays so callers (and `banyancode db gc`) keep one definition of the current
+ * filename.
+ */
+export const channelSuffix = (channel: string | undefined, env: NodeJS.ProcessEnv = process.env): string => ""
 
 export interface ProjectDbPath {
   /** Canonical (realpath'd) project root used for the filename hash. */
   readonly root: string
   /** Directory that holds the database file. */
   readonly directory: string
-  /** Installation-channel suffix including its leading dash, or empty. */
+  /** Installation-channel suffix including its leading dash. Always empty now. */
   readonly channelSuffix: string
   readonly filename: string
   readonly dbPath: string
@@ -46,20 +48,20 @@ export interface ProjectDbPath {
 export interface ProjectDbPathInput {
   readonly projectRoot: string
   readonly env?: NodeJS.ProcessEnv
-  /** Host installation channel (`ctx.app.channel`); `latest` keeps the plain filename. */
+  /** Host installation channel (`ctx.app.channel`). Accepted but no longer affects the path. */
   readonly channel?: string
 }
 
 /**
  * One SQLite file per project, named
- * `banyancode-<sha256(realpath(project)).slice(0,12><-channel>.db` under the
- * product data directory (`<data>/projects/`), not inside the project: v2
- * keeps locations open until shutdown, and an open handle inside the repo
- * would stop Windows users from moving or deleting the repo while BanyanCode
- * runs.
+ * `banyancode-<sha256(realpath(project)).slice(0,12)>.db` under the product data
+ * directory (`<data>/projects/`), not inside the project: v2 keeps locations
+ * open until shutdown, and an open handle inside the repo would stop Windows
+ * users from moving or deleting the repo while BanyanCode runs.
  *
- * Non-stable channels get a `-<channel>` suffix so a dev/canary build never
- * touches stable plugin data (v1 `channelSuffix()` behavior).
+ * The filename does not depend on the installation channel: stable, dev and
+ * canary builds share one database, and legacy per-channel files are adopted on
+ * first open (see `adoptLegacyDatabase`).
  *
  * `BANYANCODE_PROJECT_DB_DIR` overrides the directory and keeps the hashed
  * filename, so two test roots never collide with a real running binary.

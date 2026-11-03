@@ -1,4 +1,6 @@
 export * as Storage from "./service.js"
+export { adoptFamily, adoptLegacyDatabase } from "./adopt.js"
+export type { AdoptResult, FamilyOutcome } from "./adopt.js"
 export { openDatabase, query, run } from "./driver.js"
 export { acquireFileLock, withFileLock } from "./lock.js"
 export { applyMigrations, detectFtsTokenizer } from "./migrate.js"
