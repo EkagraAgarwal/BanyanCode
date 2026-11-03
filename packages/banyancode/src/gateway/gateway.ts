@@ -38,6 +38,8 @@ export interface GatewayDeps {
 interface PendingRoute {
   readonly route: "augment" | "intelligence"
   readonly path?: string
+  /** For `intelligence`, the tool the rewrite aimed at; the host may still run the original. */
+  readonly rewritten?: string
 }
 
 const MAX_PENDING = 1024
@@ -206,6 +208,7 @@ export const register = (ctx: Context, deps: GatewayDeps): Effect.Effect<void, n
           pending.set(event.id, {
             route: effective.route,
             ...(effective.route === "augment" ? { path: readPath(originalArguments) } : {}),
+            ...(rewrite === undefined ? {} : { rewritten: rewrite.tool }),
           })
         }
 
@@ -239,7 +242,12 @@ export const register = (ctx: Context, deps: GatewayDeps): Effect.Effect<void, n
       if (route === undefined) return Effect.void
       if (event.status !== "completed") return Effect.void
       if (route.route === "intelligence") {
-        event.result = markCodegraph(event.result)
+        // The host may have refused the rewrite and run the original tool instead (the target is
+        // not in the request's allowed tools). Only a result the rewritten tool produced may be
+        // stamped as graph-derived, otherwise provenance would lie.
+        if (route.rewritten === undefined || event.tool === route.rewritten) {
+          event.result = markCodegraph(event.result)
+        }
         return Effect.void
       }
       const augmentRead = deps.codegraph?.augmentRead

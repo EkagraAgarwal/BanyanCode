@@ -89,9 +89,25 @@ it.live(
 
       // ── tools ────────────────────────────────────────────────────────────
       const tools = yield* Tool.Service
-      const registered = new Set((yield* tools.list()).map((tool: { id: string }) => tool.id))
+      const registered = new Set<string>((yield* tools.list()).map((tool: { id: string }) => tool.id))
       const missing = TOOL_IDS.filter((id) => !registered.has(id))
       expect(missing).toEqual([])
+
+      // The repository gateway only rewrites an INTELLIGENCE decision onto a tool that is really
+      // registered (`src/server.ts:193-201` builds `availableTools` from this list). Every rewrite
+      // target must be present under exactly this id — a namespace prefix would silently disable
+      // the route at run time.
+      for (const id of [
+        "code_find",
+        "codegraph_callers",
+        "codegraph_dependents",
+        "codegraph_find_implementations",
+        "repository_explain",
+        "repository_ownership",
+        "codegraph_search",
+      ]) {
+        expect(registered.has(id), `gateway rewrite target ${id} is not registered`).toBe(true)
+      }
 
       // ── RPC namespaces ───────────────────────────────────────────────────
       const rpc = yield* Rpc.Service
